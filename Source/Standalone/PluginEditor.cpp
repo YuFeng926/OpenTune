@@ -888,7 +888,7 @@ void OpenTuneAudioProcessorEditor::resized()
 // Shadow margin: reserve space for panel shadow rendering
 // Each component paint() uses reduced(shadowMargin) for background; shadow renders in margin
     const int shadowMargin = 12;
-    const int gap = 6;  // Gap between panels (瑙嗚闂磋窛锛屼笉鍚槾褰?
+    const int gap = 6;  // Gap between panels (视觉间距，不含阴影)
 
     bounds.reduce(gap, gap); // Global padding
 
@@ -1102,6 +1102,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             pianoRoll_.onPitchRevisionChanged();
         }
         if (activeTrack >= 0 && activePlacementIndex >= 0) {
+            pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, activeTrack));
             const DetectedKey resolvedKey =
                 resolveScaleForPlacementContent(activeTrack, activePlacementIndex, nullptr);
             const int resolvedRootNote = static_cast<int>(resolvedKey.root);
@@ -1289,6 +1290,8 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     parameterPanel_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
+    parameterPanel_.setOpenDyneMode(AudioEditingScheme::usesNotesPrimaryScheme(sharedPreferences.audioEditingScheme));
+    parameterPanel_.setActiveTool(static_cast<int>(pianoRoll_.getCurrentTool()));
     arrangementView_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     arrangementView_.setExperimentalReferenceControlsEnabled(experimentalFeaturesEnabled);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
@@ -1351,6 +1354,7 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
         snap ? snap->audioBuffer : nullptr;
     auto curve = snap ? snap->pitchCurve : nullptr;
     pianoRoll_.setEditedContent(contentKey, curve, contentBuffer, sr);
+    pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, trackId));
 
     lastPianoRollContentKey_ = contentKey;
     lastPianoRollOriginalF0State_ = snap
@@ -1414,7 +1418,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::TimeTool)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::Scissors)) {
         return;
     }
 
@@ -2836,9 +2840,9 @@ void OpenTuneAudioProcessorEditor::placementTimingChanged(int trackId, int place
 // Y-axis scroll sync: notify other component when ArrangementView or TrackPanel scrolls
 void OpenTuneAudioProcessorEditor::verticalScrollChanged(int newOffset)
 {
-    // 鍚屾TrackPanel
+    // 同步TrackPanel
     trackPanel_.setVerticalScrollOffset(newOffset);
-    // 鍚屾ArrangementView
+    // 同步ArrangementView
     arrangementView_.setVerticalScrollOffset(newOffset);
 }
 

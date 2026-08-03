@@ -163,7 +163,11 @@ public:
     }
     ScrollMode getScrollMode() const { return scrollMode_; }
     void setScale(int rootNote, int scaleType);
-    void setAudioEditingScheme(AudioEditingScheme::Scheme scheme) { audioEditingScheme_ = scheme; }
+    void setAudioEditingScheme(AudioEditingScheme::Scheme scheme) { applyAudioEditingScheme(scheme); }
+    bool isOpenDyne() const noexcept { return AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_); }
+
+    /** 轨道主题色注入：OpenDyne waveform blob 的填充/描边色。 */
+    void setTrackDisplayColour(juce::Colour colour) { trackDisplayColour_ = colour; }
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
 
@@ -212,6 +216,7 @@ public:
     }
 
     void fitToScreen();
+    void fitToAllNotes();
 
     enum class AutoTuneApplyStatus
     {
@@ -366,6 +371,9 @@ private:
     void drawSelectedNoteHighlights(juce::Graphics& g);
     void drawF0SelectionHighlight(juce::Graphics& g);
     void drawPianoKeysPressed(juce::Graphics& g);
+    // OpenDyne overlay
+    void drawVolumeEnvelopePreview(juce::Graphics& g);
+    void drawScissorsPreview(juce::Graphics& g);
 
     bool shouldShowPianoKeys() const noexcept;
     bool isTimeView() const noexcept { return currentTool_ == ToolId::TimeTool; }
@@ -375,6 +383,15 @@ private:
     void handleVerticalScrollWheel(float deltaY);
     void handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY);
 
+    // OpenDyne Melodyne-style navigation
+    void handleOpenDyneVerticalScrollWheel(float deltaY);
+    void handleOpenDyneHorizontalScrollWheel(float deltaX, float deltaY);
+    void handleOpenDyneZoomAtMouse(const juce::MouseEvent& e, float deltaY);
+    void handleOpenDynePanDrag(const juce::MouseEvent& e);
+    void beginOpenDyneZoomPan(const juce::MouseEvent& e);
+    void updateOpenDyneZoomPan(const juce::MouseEvent& e);
+    void endOpenDyneZoomPan();
+
     TimelineViewportRequest makeViewportRequest(
         TimelineViewportRequest::Kind kind,
         double targetTime,
@@ -383,6 +400,7 @@ private:
 
     void initializeUIComponents();
     void initializeRenderer();
+    void applyAudioEditingScheme(AudioEditingScheme::Scheme scheme);
     PianoRollToolHandler::Context buildToolHandlerContext();
     void initializeToolHandler();
     void applyEditedContentCurve(std::shared_ptr<PitchCurve> curve);
@@ -442,6 +460,7 @@ private:
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity_ = ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
     AudioEditingScheme::Scheme audioEditingScheme_ = AudioEditingScheme::Scheme::CorrectedF0Primary;
     KeyShortcutConfig::KeyShortcutSettings shortcutSettings_ = KeyShortcutConfig::KeyShortcutSettings::getDefault();
+    juce::Colour trackDisplayColour_{0xFF4A90D9};
 
     int scaleRootNote_ = 0;
     int scaleType_ = 1;
@@ -453,6 +472,14 @@ private:
     ToolId currentTool_ = ToolId::Select;
 
     InteractionState interactionState_;
+
+    // OpenDyne navigation: Command+Alt+拖拽 缩放 事务
+    bool openDyneZoomPanActive_ = false;
+    juce::Point<int> openDyneZoomPanStartPos_;
+    double openDyneZoomPanStartPps_ = 0.0;
+    float openDyneZoomPanStartPixelsPerSemitone_ = 25.0f;
+    double openDyneZoomPanAnchorTime_ = 0.0;
+    float openDyneZoomPanAnchorMidi_ = 60.0f;
 
     float dragStartVerticalScrollOffset_ = 0.0f;
 
@@ -547,6 +574,9 @@ private:
 
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
     std::unique_ptr<PianoRollOverlayComponent> overlay_;
+
+    // OpenDyne：双击滚动条 → 缩放到全部音符
+    std::unique_ptr<juce::MouseListener> fitToAllNotesOnDoubleClick_;
 
     double playheadTimeForPaint_ = 0.0;
     double pendingSeekTime_{-1.0};

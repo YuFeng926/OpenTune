@@ -83,6 +83,10 @@ public:
     void setActiveTool(int toolId);
     void setExperimentalFeaturesEnabled(bool enabled);
 
+    /** OpenDyne（NotesPrimary）模式：切换工具在上 / Pitch Shift 在底部布局。 */
+    void setOpenDyneMode(bool enabled);
+    bool isOpenDyneMode() const noexcept { return openDyneMode_; }
+
     /** 设置 AUTO 按钮的模式显示。
      *  @param hasReference  true: 主文本 "AUTO" + 副标题 "(Ref)"（小字在下方）, false: 仅 "AUTO" 居中
      */
@@ -159,6 +163,10 @@ private:
     std::unique_ptr<ToolIconButton> handDrawToolButton_;
     // ⚡️ vocal-time-stretch §8.4 — Time tool palette button (toolId=5)
     std::unique_ptr<ToolIconButton> timeToolButton_;
+    // OpenDyne 工具按钮（toolId=6 Pitch / 7 VolumeEnvelope / 8 Scissors）
+    std::unique_ptr<ToolIconButton> pitchToolButton_;
+    std::unique_ptr<ToolIconButton> volumeEnvelopeToolButton_;
+    std::unique_ptr<ToolIconButton> scissorsToolButton_;
     AutoButtonPresentation autoButtonPresentation_;
     std::unique_ptr<juce::TextButton> pitchShiftButton_;
 
@@ -167,6 +175,7 @@ private:
     float auroraSidebarSurfaceScale_ = 0.0f;
 
     bool experimentalFeaturesEnabled_ = false;
+    bool openDyneMode_ = false;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ParameterPanel)
 };

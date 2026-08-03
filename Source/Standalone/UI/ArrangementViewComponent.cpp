@@ -859,7 +859,7 @@ TimelineViewportRequest ArrangementViewComponent::makeViewportRequest(
 
 void ArrangementViewComponent::setVerticalScrollOffset(int offset)
 {
-    // 璁＄畻鏈€澶ф粴鍔ㄥ亸绉伙紙鍙杞ㄩ亾楂樺害 + ruler楂樺害 - 鍙楂樺害锛?
+    // 计算最大滚动偏移（可见轨道高度 + ruler高度 - 可见高度）
     const int totalContentHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
     const int visibleHeight = getHeight() - UIColors::scrollBarThickness;
     const int maxScrollOffset = juce::jmax(0, totalContentHeight - visibleHeight);
@@ -897,7 +897,7 @@ void ArrangementViewComponent::setVisibleTrackCount(int count)
 
 void ArrangementViewComponent::fitToContent()
 {
-    // 濡傛灉鐢ㄦ埛宸叉墜鍔ㄨ皟鏁磋繃缂╂斁锛屼笉鑷姩瑕嗙洊
+    // 如果用户已手动调整过缩放，不自动覆盖
     if (userHasManuallyZoomed_) {
         return;
     }
@@ -986,7 +986,7 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
     else if (scrollBar == &verticalScrollBar_)
     {
         setVerticalScrollOffset(static_cast<int>(newRangeStart));
-        // 閫氱煡鐩戝惉鍣ㄥ瀭鐩存粴鍔ㄥ亸绉诲彉鍖栵紙鐢ㄤ簬鍚屾TrackPanel锛?
+        // 通知监听器垂直滚动偏移变化（用于同步TrackPanel）
         listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
         }
 }
@@ -2483,7 +2483,7 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
 {
     const auto& settings = zoomSensitivity_;
     
-    // Shift + Wheel = Vertical Zoom (Track Height) - 涓嶵rackPanel鍚屾
+    // Shift + Wheel = Vertical Zoom (Track Height) - 与TrackPanel同步
     if (e.mods.isShiftDown())
     {
         if (wheel.deltaY != 0.0f)

@@ -54,7 +54,7 @@ public:
     // 常量
     // ============================================================================
 
-    static constexpr int kCurrentProjectFormatVersion = 2; // v2 adds time signature to ProjectSettings
+    static constexpr int kCurrentProjectFormatVersion = 3; // v3 adds SibilantGainEnvelope to Content
     static constexpr const char* kRootNodeName = "OpenTuneProject";
     static constexpr const char* kProjectFormatVersionAttr = "projectFormatVersion";
     static constexpr const char* kAppVersionAttr = "appVersion";
@@ -81,6 +81,7 @@ private:
     static std::vector<ProjectPlacementEntry> placementsFromValueTree(const juce::ValueTree& tree);
     static std::vector<ProjectContentEntry::SilentGapEntry> silentGapsFromValueTree(const juce::ValueTree& tree);
     static ProjectContentEntry::ReferenceFeatureEntry referenceFeaturesFromValueTree(const juce::ValueTree& tree);
+    static SibilantGainEnvelope sibilantGainEnvelopeFromValueTree(const juce::ValueTree& tree);
 
     // 子节点序列化
     static juce::ValueTree notesToValueTree(const std::vector<Note>& notes, const juce::String& nodeName);
@@ -89,6 +90,7 @@ private:
     static juce::ValueTree placementsToValueTree(const std::vector<ProjectPlacementEntry>& placements);
     static juce::ValueTree silentGapsToValueTree(const std::vector<ProjectContentEntry::SilentGapEntry>& gaps);
     static juce::ValueTree referenceFeaturesToValueTree(const ProjectContentEntry::ReferenceFeatureEntry& rf);
+    static juce::ValueTree sibilantGainEnvelopeToValueTree(const SibilantGainEnvelope& envelope);
 
     // 属性读写辅助
     static void setOptionalProperty(juce::ValueTree& tree, const juce::Identifier& name, const juce::String& value);

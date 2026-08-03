@@ -4,6 +4,7 @@
 #include "TimeCoordinate.h"
 #include "../Inference/TimeStretchCache.h"
 #include "../Inference/RenderCache.h"
+#include "OutputGainEnvelope.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 
@@ -44,11 +45,39 @@ struct CanonicalReadRequest {
 };
 
 /**
+ * 最终输出增益：preparedOutputGainEnvelope 在 playback rate 空间逐样本乘法。
+ * readStartSample 与目标采样率同空间（与 preparedDry 索引一致）。
+ * 无分配、无锁、无 pow；包络缺失 = 单位增益。
+ */
+inline void applyPreparedOutputGain(juce::AudioBuffer<float>& destination,
+                                    int destinationStartSample,
+                                    int numSamples,
+                                    const std::shared_ptr<const PreparedOutputGainEnvelope>& prepared,
+                                    int64_t readStartSample)
+{
+    if (prepared == nullptr || prepared->linearGains.empty() || numSamples <= 0)
+        return;
+    if (readStartSample < 0 || readStartSample >= static_cast<int64_t>(prepared->linearGains.size()))
+        return;
+
+    const int applySamples = static_cast<int>(juce::jmin<int64_t>(
+        numSamples, static_cast<int64_t>(prepared->linearGains.size()) - readStartSample));
+    const float* gains = prepared->linearGains.data();
+    const int channels = destination.getNumChannels();
+    for (int channel = 0; channel < channels; ++channel) {
+        float* dst = destination.getWritePointer(channel, destinationStartSample);
+        for (int s = 0; s < applySamples; ++s)
+            dst[s] *= gains[static_cast<size_t>(readStartSample + s)];
+    }
+}
+
+/**
  * 实时播放读取 — 纯 direct copy，无插值。
  *
  * 1. TimeStretchCache fast-path：从 prepared 缓存直接整数切片。
  * 2. 否则从 preparedDry buffer 直接 copy（已在 prepare 阶段由 r8brain 重采样）。
  * 3. 然后从 RenderCache prepared chunks overlay（同样直接 copy）。
+ * 4. 两路径汇合到同一 applyPreparedOutputGain() 收尾。
  *
  * 无 canonical fallback。prepared 数据不存在时返回 0。
  */
@@ -94,6 +123,9 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
             writableSamples,
             static_cast<int>(request.targetSampleRate));
         if (wrote > 0) {
+            applyPreparedOutputGain(destination, destinationStartSample, wrote,
+                                    request.source.preparedOutputGainEnvelope,
+                                    request.readStartSample);
             return wrote;
         }
     }
@@ -141,6 +173,13 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
                                                           request.readStartSample,
                                                           static_cast<int>(request.targetSampleRate));
     }
+
+    // ============================================================
+    // 统一最终增益收尾（与 TimeStretchCache fast-path 同一 apply）
+    // ============================================================
+    applyPreparedOutputGain(destination, destinationStartSample, availableSamples,
+                            request.source.preparedOutputGainEnvelope,
+                            request.readStartSample);
 
     return availableSamples;
 }

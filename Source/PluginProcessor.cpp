@@ -19,6 +19,7 @@
 #include "Utils/PitchControlConfig.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PitchShiftEditAction.h"
+#include "Utils/OutputGainEnvelope.h"
 #include "Render/Stage2TimeStretchRebuilder.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
@@ -127,6 +128,31 @@ std::vector<PitchCorrectionSegment> copyPitchCorrectionSegments(const std::share
     return copiedSegments;
 }
 
+// 秒域 range merge：keptBefore + afterNotesInRange + keptAfter，标准化后返回。
+// 拓扑 patch 与 A 层 gain patch 共用同一 merge 语义（时间有序，range 边界处无重叠）。
+std::vector<Note> mergeNotesRange(const std::vector<Note>& existing,
+                                  const ContentNoteRangePatch& patch)
+{
+    std::vector<Note> mergedNotes;
+    mergedNotes.reserve(existing.size() + patch.afterNotesInRange.size());
+
+    for (const auto& note : existing) {
+        if (note.endTime <= patch.affectedRange.startSeconds)
+            mergedNotes.push_back(note);
+    }
+
+    mergedNotes.insert(mergedNotes.end(),
+                       patch.afterNotesInRange.begin(),
+                       patch.afterNotesInRange.end());
+
+    for (const auto& note : existing) {
+        if (note.startTime >= patch.affectedRange.endSeconds)
+            mergedNotes.push_back(note);
+    }
+
+    return normalizeStoredNotes(std::move(mergedNotes));
+}
+
 ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
 {
     ContentPayloadState payload;
@@ -139,12 +165,14 @@ ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
     payload.silentGaps = snap.silentGaps;
     payload.referenceFeatures = snap.referenceFeatures;
     payload.notes = snap.notes;
+    payload.sibilantGainEnvelope = snap.sibilantGainEnvelope;
     payload.timeGrid = snap.timeGrid;
     payload.pitchShiftSettings = snap.pitchShiftSettings;
     payload.notesRevision = snap.notesRevision;
     payload.pitchRevision = snap.pitchRevision;
     payload.timeGridRevision = snap.timeGridRevision;
     payload.pitchShiftRevision = snap.pitchShiftRevision;
+    payload.outputGainRevision = snap.outputGainRevision;
     payload.contentRevision = snap.contentRevision;
     payload.audioRevision = snap.audioRevision;
     payload.lifecycle = ContentLifecycle::Ready;
@@ -165,6 +193,11 @@ void publishStandalonePlaybackSource(ContentRenderService& crs,
     readSource.timeGridRevision = payload.timeGridRevision;
     readSource.pitchShiftRevision = payload.pitchShiftRevision;
     readSource.timeGridIsIdentity = payload.timeGrid == nullptr || payload.timeGrid->isIdentity();
+    if (payload.audioBuffer && payload.audioBuffer->getNumSamples() > 0) {
+        readSource.outputGainEnvelope = buildOutputGainEnvelope(
+            payload.notes, payload.sibilantGainEnvelope, payload.timeGrid,
+            payload.audioBuffer->getNumSamples(), payload.sampleRate);
+    }
     crs.publishPlaybackSource(key, std::move(readSource));
 }
 
@@ -556,6 +589,11 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     }
 
     const float baseGain = trackGain * placement.gain;
+    // 最终输出增益（canonical 采样率、readStartSample 同空间）：export 与实时播放同一包络。
+    // 在 readCanonicalAudio 之后、track/placement/fade 乘法之前，于现有逐样本循环内一次完成。
+    const std::vector<float>* envGains = source.outputGainEnvelope
+        ? &source.outputGainEnvelope->linearGains
+        : nullptr;
     const int64_t fadeInSamples = placement.fadeInDuration > 0.0
         ? TimeCoordinate::secondsToSamples(placement.fadeInDuration, kExportSr)
         : 0;
@@ -576,7 +614,10 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
                                                         requestedPlacementSamples,
                                                         fadeInSamples,
                                                         fadeOutSamples);
-            dst[static_cast<size_t>(dstIndex)] += src[sampleIndex] * baseGain * fade;
+            const float envGain = envGains != nullptr
+                ? (*envGains)[static_cast<size_t>(readRequest.readStartSample + sampleIndex)]
+                : 1.0f;
+            dst[static_cast<size_t>(dstIndex)] += src[sampleIndex] * envGain * baseGain * fade;
         }
     }
 }
@@ -908,9 +949,24 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             return proc_.replaceContentNotesForFullMutation(key, std::move(notes));
         }
 
-        ContentCommitSnapshot commitNotePatch(ContentKey key, ContentNoteRangePatch patch) override
+        ContentCommitSnapshot commitNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch) override
         {
-            return proc_.commitContentNotePatch(key, std::move(patch));
+            return proc_.commitContentNoteTopologyPatch(key, std::move(patch));
+        }
+
+        ContentCommitSnapshot commitNoteOutputGainPatch(ContentKey key, ContentNoteRangePatch patch) override
+        {
+            return proc_.commitNoteOutputGainPatch(key, std::move(patch));
+        }
+
+        ContentCommitSnapshot commitSibilantGainEnvelope(ContentKey key, SibilantGainEnvelope envelope) override
+        {
+            return proc_.commitSibilantGainEnvelope(key, std::move(envelope));
+        }
+
+        void republishPlaybackSource(ContentKey key) override
+        {
+            proc_.republishPlaybackSource(key);
         }
 
         ContentCommitSnapshot commitNotesAndSegments(ContentKey key,
@@ -1070,6 +1126,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             readSource.pitchShiftRevision = 0;
             readSource.timeGridRevision = 0;
             readSource.timeGridIsIdentity = true;
+            if (const auto snap = getContentSnapshot(key)) {
+                readSource.outputGainEnvelope = buildOutputGainEnvelope(
+                    snap->notes, snap->sibilantGainEnvelope, snap->timeGrid,
+                    readSource.audioBuffer->getNumSamples(), sampleRate);
+            }
             contentRenderService_->publishPlaybackSource(key, readSource);
         };
 
@@ -3056,9 +3117,8 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     auto audioBuffer = readSource.audioBuffer;
     if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
 
-    auto renderCache = crs->getOrCreateRenderCache(key);
-    readSource.renderCache = renderCache;
-    crs->publishPlaybackSource(key, readSource);
+    // 无渲染装配：派生字段（renderCache + canonical 最终增益包络）随最新 snapshot 原子发布。
+    republishPlaybackSource(key);
 
     const int64_t totalSamples = audioBuffer->getNumSamples();
     const int64_t startSample = juce::jlimit<int64_t>(
@@ -3070,7 +3130,7 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
 
     RenderJob job;
     job.contentKey = key;
-    job.renderCache = renderCache;
+    job.renderCache = crs->getOrCreateRenderCache(key);
     job.audioBuffer = audioBuffer;
     job.silentGaps = snap->silentGaps;
     job.audioSampleRate = crsSampleRate;
@@ -4429,10 +4489,10 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
     if (!ok)
         return false;
 
-    if (key.domainKind != DomainKind::StandaloneClip)
-        return true;
-
-    refreshCRSMetadata(key);
+    // 发布由调用方统一负责：Scissors 提交后调用 republishPlaybackSource；
+    // requestContentRefresh 经 onContentFullMutationCompleted → render 请求内
+    // requestRenderForLocalMutationRange 的 republishPlaybackSource 重建包络。
+    // 此处不再发布，避免同一变更两次 publish（原 refreshCRSMetadata 不含包络，属中间态双发布）。
     return true;
 }
 
@@ -4444,7 +4504,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return {};
 
-    // Range-scoped notes merge (same logic as commitContentNotePatch)
+    // Range-scoped notes merge (same logic as commitContentNoteTopologyPatch)
     const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
                                  / snap->pitchCurve->getSampleRate();
     const double rangeStartSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
@@ -4603,41 +4663,21 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
     return {};
 }
 
-ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch)
+ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch)
 {
     auto snap = getContentSnapshot(key);
     if (!snap) return {};
 
-    const double rangeStartSec = patch.affectedRange.startSeconds;
-    const double rangeEndSec   = patch.affectedRange.endSeconds;
-
-    // Merge: keptBefore + afterNotesInRange + keptAfter
-    // Notes are time-ordered; split at range boundaries.
-    std::vector<Note> mergedNotes;
-    mergedNotes.reserve(snap->notes.size() + patch.afterNotesInRange.size());
-
-    for (const auto& note : snap->notes) {
-        if (note.endTime <= rangeStartSec)
-            mergedNotes.push_back(note);
-    }
-
-    mergedNotes.insert(mergedNotes.end(),
-                       patch.afterNotesInRange.begin(),
-                       patch.afterNotesInRange.end());
-
-    for (const auto& note : snap->notes) {
-        if (note.startTime >= rangeEndSec)
-            mergedNotes.push_back(note);
-    }
-
-    auto normalizedNotes = normalizeStoredNotes(std::move(mergedNotes));
+    auto normalizedNotes = mergeNotesRange(snap->notes, patch);
 
     bool ok = false;
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return {};
-            clip->applyNotes(std::move(normalizedNotes));
+            // 拓扑编辑（增删/边界变化）改变 A 投影，必须推进 outputGainRevision；
+            // Scissors 例外走 replaceContentNotesForFullMutation（裸 applyNotes）。
+            clip->applyNotesWithOutputGain(std::move(normalizedNotes));
             ok = true;
             break;
         }
@@ -4645,7 +4685,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotePatch(ContentKey 
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return {};
-            ok = dc->applyNotesToModification(key, std::move(normalizedNotes));
+            ok = dc->applyNotesWithOutputGainToModification(key, std::move(normalizedNotes));
             break;
         }
 #else
@@ -4655,7 +4695,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotePatch(ContentKey 
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr) return {};
-            ok = session->applyNotes(key, std::move(normalizedNotes));
+            ok = session->applyNotesWithOutputGain(key, std::move(normalizedNotes));
             break;
         }
         default:
@@ -4663,20 +4703,128 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotePatch(ContentKey 
     }
 
     if (ok) {
-        // Convert seconds-based range to frames for render invalidation
-        ContentEditRangeFrames frameRange;
-        if (snap->pitchCurve && patch.affectedRange.endSeconds > patch.affectedRange.startSeconds) {
-            const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
-                                         / snap->pitchCurve->getSampleRate();
-            frameRange.startFrame = static_cast<int>(patch.affectedRange.startSeconds / secondsPerFrame);
-            frameRange.endFrameExclusive = static_cast<int>(std::ceil(patch.affectedRange.endSeconds / secondsPerFrame));
-        }
-        onContentLocalMutationCompleted(key, frameRange);
+        republishPlaybackSource(key);
         auto committedSnap = getContentSnapshot(key);
         jassert(committedSnap != nullptr);
         return committedSnap;
     }
     return {};
+}
+
+ContentCommitSnapshot OpenTuneAudioProcessor::commitNoteOutputGainPatch(ContentKey key, ContentNoteRangePatch patch)
+{
+    auto snap = getContentSnapshot(key);
+    if (!snap) return {};
+
+    auto normalizedNotes = mergeNotesRange(snap->notes, patch);
+
+    bool ok = false;
+    switch (key.domainKind) {
+        case DomainKind::StandaloneClip: {
+            auto* clip = standaloneContentRepository_->findClip(key);
+            if (!clip) return {};
+            clip->applyNotesWithOutputGain(std::move(normalizedNotes));
+            ok = true;
+            break;
+        }
+#if JucePlugin_Enable_ARA
+        case DomainKind::ARAAudioModification: {
+            auto* dc = getDocumentController();
+            if (!dc) return {};
+            ok = dc->applyNotesWithOutputGainToModification(key, std::move(normalizedNotes));
+            break;
+        }
+#else
+        case DomainKind::ARAAudioModification:
+            break;
+#endif
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr) return {};
+            ok = session->applyNotesWithOutputGain(key, std::move(normalizedNotes));
+            break;
+        }
+        default:
+            break;
+    }
+
+    if (!ok) return {};
+
+    republishPlaybackSource(key);
+    return getContentSnapshot(key);
+}
+
+ContentCommitSnapshot OpenTuneAudioProcessor::commitSibilantGainEnvelope(ContentKey key, SibilantGainEnvelope envelope)
+{
+    bool ok = false;
+    switch (key.domainKind) {
+        case DomainKind::StandaloneClip: {
+            auto* clip = standaloneContentRepository_->findClip(key);
+            if (!clip) return {};
+            clip->applySibilantGainEnvelope(std::move(envelope));
+            ok = true;
+            break;
+        }
+#if JucePlugin_Enable_ARA
+        case DomainKind::ARAAudioModification: {
+            auto* dc = getDocumentController();
+            if (!dc) return {};
+            ok = dc->applySibilantGainEnvelopeToModification(key, std::move(envelope));
+            break;
+        }
+#else
+        case DomainKind::ARAAudioModification:
+            break;
+#endif
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr) return {};
+            ok = session->applySibilantGainEnvelope(key, std::move(envelope));
+            break;
+        }
+        default:
+            break;
+    }
+
+    if (!ok) return {};
+
+    republishPlaybackSource(key);
+    return getContentSnapshot(key);
+}
+
+void OpenTuneAudioProcessor::republishPlaybackSource(ContentKey key)
+{
+#if JucePlugin_Enable_ARA
+    if (key.domainKind == DomainKind::ARAAudioModification)
+    {
+        auto* dc = getDocumentController();
+        if (dc != nullptr)
+            dc->republishPlaybackSourceForModification(key);
+        return;
+    }
+#endif
+
+    auto snap = getContentSnapshot(key);
+    if (!snap) return;
+    auto* crs = resolveMutableLocalContentRenderService(key);
+    if (crs == nullptr) return;
+
+    PlaybackReadSource readSource;
+    if (!crs->getPlaybackReadSource(key, readSource)) return;
+    if (readSource.audioBuffer == nullptr || readSource.audioBuffer->getNumSamples() <= 0) return;
+
+    readSource.renderCache = crs->getOrCreateRenderCache(key);
+    // 与 ARA 版 republishPlaybackSourceForModification 对齐：刷新全部元数据，
+    // 使 republish 完整承接 refreshCRSMetadata 的职责（TimeGrid 编辑后
+    // timeGridRevision/timeGridIsIdentity 必须是最新值，否则 TimeStretch fast-path 失配）。
+    readSource.pitchRevision      = snap->pitchRevision;
+    readSource.timeGridRevision   = snap->timeGridRevision;
+    readSource.pitchShiftRevision = snap->pitchShiftRevision;
+    readSource.timeGridIsIdentity = snap->timeGrid == nullptr || snap->timeGrid->isIdentity();
+    readSource.outputGainEnvelope = buildOutputGainEnvelope(
+        snap->notes, snap->sibilantGainEnvelope, snap->timeGrid,
+        readSource.audioBuffer->getNumSamples(), readSource.audioSampleRate);
+    crs->publishPlaybackSource(key, std::move(readSource));
 }
 
 bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
@@ -4782,20 +4930,23 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             break;
         }
     }
-    if (ok && key.domainKind == DomainKind::StandaloneClip)
-    {
-        // TimeGrid affects only the Stage2 time-stretch path. Refresh CRS
-        // metadata so the latest timeGridRevision is visible, invalidate the
-        // derived TimeStretchCache once, and gate the Stage2 request through
-        // the canonical-settled entry point (Stage1 must be complete before
-        // Stage2 reads its canonical output). If initial Stage1 is not yet
-        // settled here, handleStage1ChunkSettled will enqueue Stage2 when it
-        // completes. Stage2 reads canonical Stage1 and the TimeGrid revision
-        // is independent from contentRevision.
-        refreshCRSMetadata(key);
-        if (auto* crs = resolveMutableLocalContentRenderService(key))
-            crs->getTimeStretchCache().invalidate(key);
-        enqueueStandaloneStage2WhenCanonicalSettled(key);
+    if (ok) {
+        // TimeGrid 变化必须重建输出增益包络（包络沿 TimeGrid 投影到 output time）。
+        // republishPlaybackSource 按 domain 分派并构建 canonical A+B，不限 Standalone。
+        republishPlaybackSource(key);
+        if (key.domainKind == DomainKind::StandaloneClip)
+        {
+            // TimeGrid affects only the Stage2 time-stretch path. Invalidate the
+            // derived TimeStretchCache once, and gate the Stage2 request through
+            // the canonical-settled entry point (Stage1 must be complete before
+            // Stage2 reads its canonical output). If initial Stage1 is not yet
+            // settled here, handleStage1ChunkSettled will enqueue Stage2 when it
+            // completes. Stage2 reads canonical Stage1 and the TimeGrid revision
+            // is independent from contentRevision.
+            if (auto* crs = resolveMutableLocalContentRenderService(key))
+                crs->getTimeStretchCache().invalidate(key);
+            enqueueStandaloneStage2WhenCanonicalSettled(key);
+        }
     }
     return ok;
 }
@@ -5011,7 +5162,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
-            clip->applyNotes(std::move(mergedNotes));
+            clip->applyNotesWithOutputGain(std::move(mergedNotes));
             clip->applyPitchCurve(std::move(derivedCurve));
             ok = true;
             break;
@@ -5020,7 +5171,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            if (!dc->applyNotesToModification(key, std::move(mergedNotes))) return false;
+            if (!dc->applyNotesWithOutputGainToModification(key, std::move(mergedNotes))) return false;
             if (derivedCurve) dc->applyPitchCurveToModification(key, std::move(derivedCurve));
             ok = true;
             break;

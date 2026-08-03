@@ -35,6 +35,10 @@ public:
 
     // ── Apply commands（由 PluginProcessor coordinator 调用）─
     void applyNotes(std::vector<Note> notes);
+    // A 编辑语义：applyNotes + 推进 outputGainRevision（A 投影同步）。
+    void applyNotesWithOutputGain(std::vector<Note> notes);
+    // B 编辑语义：替换 B 层 + 推进 outputGainRevision + contentRevision（不推进 notesRevision）。
+    void applySibilantGainEnvelope(SibilantGainEnvelope envelope);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
     void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot);

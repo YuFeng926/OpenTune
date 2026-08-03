@@ -77,6 +77,12 @@ float ScaleSnapConfig::snapMidi(float midiNote) const noexcept
     return midiNote + adj;
 }
 
+float ScaleSnapConfig::quantizeMidiToActiveScale(float midiNote) const noexcept
+{
+    if (mode == ScaleMode::Chromatic) return std::round(midiNote);
+    return std::round(snapMidi(midiNote));
+}
+
 float LegacyNoteGenerator::representativePitch(
     const float* pitches,
     const float* energyWeights,
@@ -111,13 +117,11 @@ float LegacyNoteGenerator::quantisePitch(float hz)
 
 void ScaleSnapConfig::applyToNotes(std::vector<Note>& notes) const
 {
-    if (mode == ScaleMode::Chromatic) return;
-
     for (auto& note : notes) {
         const float src = (note.originalPitch > 0.0f) ? note.originalPitch : note.pitch;
         if (src <= 0.0f) continue;
         const float midi = PitchUtils::freqToMidi(src);
-        const float snapped = snapMidi(midi);
+        const float snapped = quantizeMidiToActiveScale(midi);
         note.pitch = Note::midiToFrequency(static_cast<int>(std::round(snapped)));
     }
 }

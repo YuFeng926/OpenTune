@@ -39,6 +39,20 @@ std::vector<PitchCorrectionSegment> copyPitchCorrectionSegments(const std::share
     return copiedSegments;
 }
 
+/// OpenDyne：双击滚动条 → 缩放到全部音符
+class FitToAllNotesOnDoubleClick : public juce::MouseListener
+{
+public:
+    explicit FitToAllNotesOnDoubleClick(PianoRollComponent& owner) : owner_(owner) {}
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        if (owner_.isOpenDyne())
+            owner_.fitToAllNotes();
+    }
+private:
+    PianoRollComponent& owner_;
+};
+
 } // namespace
 
 void PianoRollComponent::initializeUIComponents() {
@@ -49,6 +63,11 @@ void PianoRollComponent::initializeUIComponents() {
     verticalScrollBar_.addListener(this);
     horizontalScrollBar_.setAutoHide(false);
     verticalScrollBar_.setAutoHide(false);
+
+    // OpenDyne：双击滚动条 = 缩放到全部音符
+    fitToAllNotesOnDoubleClick_ = std::make_unique<FitToAllNotesOnDoubleClick>(*this);
+    horizontalScrollBar_.addMouseListener(fitToAllNotesOnDoubleClick_.get(), false);
+    verticalScrollBar_.addMouseListener(fitToAllNotesOnDoubleClick_.get(), false);
 
     scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous ? "Cont" : "Page");
     scrollModeToggleButton_.setFontHeight(11.0f);
@@ -108,6 +127,48 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
                                             F0FrameRange affectedRange) {
         return commitEditedContentNotesAndSegments(notes, segments, affectedRange);
     };
+    // ── OpenDyne 契约回调（Pitch/Scissors/Gain 域） ──
+    toolCtx.commitNoteTopologyPatch = [this](ContentNoteRangePatch patch) {
+        return contentCommands_->commitNoteTopologyPatch(editedContentKey_, std::move(patch));
+    };
+    toolCtx.commitNoteOutputGainPatch = [this](ContentNoteRangePatch patch) -> ContentCommitSnapshot {
+        if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return nullptr;
+        const auto committedSnap = contentCommands_->commitNoteOutputGainPatch(editedContentKey_, std::move(patch));
+        refreshEditedContentNotes();
+        requestContentRedraw();
+        overlay_->repaint();
+        return committedSnap;
+    };
+    toolCtx.replaceContentNotesForFullMutation = [this](const std::vector<Note>& notes) {
+        return contentCommands_->replaceContentNotesForFullMutation(editedContentKey_, notes);
+    };
+    toolCtx.republishPlaybackSource = [this]() {
+        if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return;
+        contentCommands_->republishPlaybackSource(editedContentKey_);
+    };
+    toolCtx.getActiveContentKey = [this]() { return editedContentKey_; };
+    toolCtx.pushUndoAction = [this](std::unique_ptr<UndoAction> action) {
+        if (processor_ != nullptr && action != nullptr)
+            processor_->getUndoManager().addAction(std::move(action));
+    };
+    // Pitch 工具与 AUTO 同源的 scale snap：读 AUTO postSnapCfg（4084-4099）同一参数源
+    toolCtx.getActiveScaleSnap = [this]() -> std::optional<ScaleSnapConfig> {
+        if (scaleType_ == 3) // chromatic：无音阶吸附
+            return std::nullopt;
+        ScaleSnapConfig snapCfg;
+        snapCfg.root = scaleRootNote_ % 12;
+        switch (scaleType_) {
+            case 1: snapCfg.mode = ScaleMode::Major; break;
+            case 2: snapCfg.mode = ScaleMode::Minor; break;
+            case 4: snapCfg.mode = ScaleMode::HarmonicMinor; break;
+            case 5: snapCfg.mode = ScaleMode::Dorian; break;
+            case 6: snapCfg.mode = ScaleMode::Mixolydian; break;
+            case 7: snapCfg.mode = ScaleMode::PentatonicMajor; break;
+            case 8: snapCfg.mode = ScaleMode::PentatonicMinor; break;
+            default: snapCfg.mode = ScaleMode::Major; break;
+        }
+        return snapCfg;
+    };
     toolCtx.getPitchCurve = [this]() { return currentCurve_; };
     toolCtx.getEditableContentSnapshot = [this]() { return readEditedSnapshot(); };
     toolCtx.getOriginalF0 = [this]() -> std::vector<float> {
@@ -129,12 +190,22 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.setCurrentTool = [this](ToolId tool) { setCurrentTool(tool); };
     toolCtx.showToolSelectionMenu = [this]() {
         juce::PopupMenu menu;
-        menu.addItem("Select (3)", [this]() { setCurrentTool(ToolId::Select); });
-        menu.addItem("Draw Note (2)", [this]() { setCurrentTool(ToolId::DrawNote); });
-        menu.addItem("Line Anchor (4)", [this]() { setCurrentTool(ToolId::LineAnchor); });
-        menu.addItem("Hand Draw (5)", [this]() { setCurrentTool(ToolId::HandDraw); });
-        if (experimentalFeaturesEnabled_) {
-            menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
+        if (isOpenDyne()) {
+            menu.addItem("Select (F1)", [this]() { setCurrentTool(ToolId::Select); });
+            menu.addItem("Pitch (F2)", [this]() { setCurrentTool(ToolId::Pitch); });
+            menu.addItem("Volume Envelope (F4)", [this]() { setCurrentTool(ToolId::VolumeEnvelope); });
+            menu.addItem("Scissors (F6)", [this]() { setCurrentTool(ToolId::Scissors); });
+            if (experimentalFeaturesEnabled_) {
+                menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
+            }
+        } else {
+            menu.addItem("Select (3)", [this]() { setCurrentTool(ToolId::Select); });
+            menu.addItem("Draw Note (2)", [this]() { setCurrentTool(ToolId::DrawNote); });
+            menu.addItem("Line Anchor (4)", [this]() { setCurrentTool(ToolId::LineAnchor); });
+            menu.addItem("Hand Draw (5)", [this]() { setCurrentTool(ToolId::HandDraw); });
+            if (experimentalFeaturesEnabled_) {
+                menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
+            }
         }
         menu.showMenuAsync(juce::PopupMenu::Options());
     };
@@ -405,7 +476,8 @@ bool PianoRollComponent::commitNoteDraft()
             && a.pitchOffset == b.pitchOffset
             && a.retuneSpeed == b.retuneSpeed
             && a.vibratoDepth == b.vibratoDepth
-            && a.vibratoRate == b.vibratoRate;
+            && a.vibratoRate == b.vibratoRate
+            && a.outputGainDb == b.outputGainDb;
     };
 
     size_t i = 0, j = 0;
@@ -450,7 +522,7 @@ bool PianoRollComponent::commitNoteDraft()
         if (overlapsRange(n)) patch.afterNotesInRange.push_back(n);
     }
 
-    const auto committedSnap = contentCommands_->commitNotePatch(editedContentKey_, patch);
+    const auto committedSnap = contentCommands_->commitNoteTopologyPatch(editedContentKey_, patch);
     if (!committedSnap) {
         return false;
     }
@@ -460,8 +532,8 @@ bool PianoRollComponent::commitNoteDraft()
     syncF0SelectionToSelectedNotes();
 
     // Build the before-patch from baseline notes in the same seconds range.
-    // Note-only undo uses seconds-based PianoRollNotePatchAction 锟?no frame
-    // conversion, no segment involvement, same coordinate system as commitNotePatch().
+    // Note-only undo uses seconds-based PianoRollNotePatchAction — no frame
+    // conversion, no segment involvement, same coordinate system as commitNoteTopologyPatch().
     ContentNoteRangePatch beforePatch;
     beforePatch.affectedRange = patch.affectedRange;
     for (const auto& n : baseline) {
@@ -947,7 +1019,7 @@ bool PianoRollComponent::applyManualCorrectionPatch(const std::vector<PianoRollT
             op.source);
     }
 
-    // dirtyStartFrame/dirtyEndFrame 閺勵垱澧嶉張?manual ops 锟?dirty 鐢冭嫙闂嗗棴绱欓崥顐ゎ伂閻愮櫢绱氶妴?
+    // dirtyStartFrame/dirtyEndFrame 是所有 manual ops 的 dirty 帧并集（含端点）。
     const F0FrameRange affectedRange{dirtyStartFrame,
                                       dirtyEndFrame >= dirtyStartFrame ? dirtyEndFrame + 1 : dirtyStartFrame};
     if (!commitEditedContentPitchCorrectionSegments(copyPitchCorrectionSegments(editedCurve), affectedRange)) {
@@ -964,7 +1036,7 @@ bool PianoRollComponent::applyManualCorrectionPatch(const std::vector<PianoRollT
 }
 
 // ============================================================================
-// drawPlayheadOverlay 鈥?鐩存帴缁樺埗鎾斁澶达紙鍙栦唬 FixedPlayheadComponent 瀛愮粍浠讹級
+// drawPlayheadOverlay — 直接绘制播放头（取代 FixedPlayheadComponent 子组件）
 // ============================================================================
 
 void PianoRollComponent::drawPlayheadOverlay(juce::Graphics& g)
@@ -1019,7 +1091,8 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     juce::Graphics::ScopedSaveState overlaySave(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
 
-    if (currentTool_ != ToolId::TimeTool) {
+    // OpenTune F0 曲线类预览在 OpenDyne 隐藏（blob 是唯一音符表达）
+    if (currentTool_ != ToolId::TimeTool && !isOpenDyne()) {
         if (currentCurve_ != nullptr) {
             drawNoteDragCurvePreview(g);
             drawHandDrawPreview(g);
@@ -1027,7 +1100,13 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
         }
     }
 
-    // 鈿★笍 Cursor preview (璞佸厤璺緞): DrawNote tool 鐨勭粯鍒朵腑 note preview
+    // ── OpenDyne transient previews（Volume Envelope A/B 与 Scissors 预览线） ──
+    if (isOpenDyne()) {
+        drawVolumeEnvelopePreview(g);
+        drawScissorsPreview(g);
+    }
+
+    // ⚡️ Cursor preview (豁免路径): DrawNote tool 的绘制中 note preview
     // 杩欐槸浜や簰 cursor preview锛屼笉锟?committed/draft note body
     // The committed/draft note body is drawn by the direct content pass.
     if (interactionState_.drawing.isDrawingNote
@@ -1059,6 +1138,180 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     }
 
     drawSelectionBox(g, UIColors::currentThemeId());
+}
+
+// ============================================================================
+// drawVolumeEnvelopePreview — OpenDyne Volume Envelope Tool 的 A/B 可视化
+// A：用户控制基线（选中 Note 的 outputGainDb）
+// B：相对 A 的有符号偏移带（snapshot 的 sibilantGainEnvelope，只读）
+// A+B：实际播放增益实线
+// ============================================================================
+namespace {
+float sibilantGainDbAt(const SibilantGainEnvelope& env, double sourceTime) noexcept
+{
+    float value = 0.0f;
+    for (const auto& pt : env) {
+        if (pt.time > sourceTime) break;
+        value = pt.gainDb;
+    }
+    return value;
+}
+} // namespace
+
+void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
+{
+    if (currentTool_ != ToolId::VolumeEnvelope)
+        return;
+
+    const auto& notes = getCommittedNotes();
+    if (notes.empty() || interactionState_.noteSelection.selectedIndices.empty())
+        return;
+
+    auto snap = readEditedSnapshot();
+    if (snap == nullptr)
+        return;
+
+    const auto& sibilant = snap->sibilantGainEnvelope;
+    const auto mapper = makeViewMapper();
+    const float halfH = pixelsPerSemitone_ * 0.5f;
+    constexpr float kMaxGainDb = 12.0f; // 满高 ±12 dB
+    auto yForGain = [&](float gainDb, float centerY) -> float {
+        return centerY - (juce::jlimit(-kMaxGainDb, kMaxGainDb, gainDb) / kMaxGainDb) * halfH;
+    };
+
+    const float previewGainDb = interactionState_.isVolumeDragging
+        ? interactionState_.volumePreviewGainDb
+        : 0.0f;
+
+    for (int idx : interactionState_.noteSelection.selectedIndices)
+    {
+        if (idx < 0 || idx >= static_cast<int>(notes.size())) continue;
+        const auto& note = notes[static_cast<size_t>(idx)];
+        const float adjustedPitch = note.getAdjustedPitch();
+        if (adjustedPitch <= 0.0f) continue;
+
+        const float midi = mapper.freqToMidi(adjustedPitch);
+        const float centerY = mapper.midiToY(midi);
+        const int x1 = sourceTimeToX(note.startTime);
+        const int x2 = sourceTimeToX(note.endTime);
+        if (x2 <= x1) continue;
+
+        const float aGainDb = interactionState_.isVolumeDragging ? previewGainDb : note.outputGainDb;
+        const float yA = yForGain(aGainDb, centerY);
+
+        // B 层：按 source-time 分段常数，构建 A+B 实线与 A↔A+B 偏移带
+        // 采样点先收集（含 TimeGrid 投影），A 基线在带顶、A+B 实线在带底。
+        const int kSampleCount = std::clamp(x2 - x1, 2, 256);
+        std::vector<float> pxSamples(static_cast<size_t>(kSampleCount));
+        std::vector<float> yAbSamples(static_cast<size_t>(kSampleCount));
+
+        juce::Path abLine;
+        for (int s = 0; s < kSampleCount; ++s)
+        {
+            const double sourceTime = note.startTime
+                + (note.endTime - note.startTime) * static_cast<double>(s) / static_cast<double>(kSampleCount - 1);
+            const float bGainDb = sibilantGainDbAt(sibilant, sourceTime);
+            const float abGainDb = aGainDb + bGainDb;
+            const float px = static_cast<float>(sourceTimeToX(sourceTime));
+            const float yAb = yForGain(abGainDb, centerY);
+            pxSamples[static_cast<size_t>(s)] = px;
+            yAbSamples[static_cast<size_t>(s)] = yAb;
+            if (s == 0)
+                abLine.startNewSubPath(px, yAb);
+            else
+                abLine.lineTo(px, yAb);
+        }
+
+        // 偏移带闭合多边形：A 基线 forward → A+B 线 reverse
+        juce::Path band;
+        band.startNewSubPath(pxSamples.front(), yA);
+        for (int s = 0; s < kSampleCount; ++s)
+            band.lineTo(pxSamples[static_cast<size_t>(s)], yA);
+        for (int s = kSampleCount - 1; s >= 0; --s)
+            band.lineTo(pxSamples[static_cast<size_t>(s)], yAbSamples[static_cast<size_t>(s)]);
+        band.closeSubPath();
+
+        // B 偏移带（半透明）
+        g.setColour(juce::Colour(0xFFFF8C42).withAlpha(0.22f));
+        g.fillPath(band);
+
+        // A 基线（虚线）
+        static const float kDash[] = { 4.0f, 4.0f };
+        g.setColour(juce::Colours::white.withAlpha(0.75f));
+        g.drawDashedLine(juce::Line<float>(static_cast<float>(x1), yA, static_cast<float>(x2), yA),
+                         kDash, 2, 1.0f);
+
+        // A+B 实际播放增益实线
+        g.setColour(juce::Colours::white);
+        g.strokePath(abLine, juce::PathStrokeType(1.5f,
+                                                  juce::PathStrokeType::curved,
+                                                  juce::PathStrokeType::rounded));
+    }
+
+    // 鼠标旁 dB 数值提示
+    if (interactionState_.isVolumeDragging)
+    {
+        const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
+            + juce::Point<int>(0, -rulerHeight_);
+        const float aGainDb = previewGainDb;
+        const double sourceTime = xToSourceTime(juce::jlimit(pianoKeyWidth_,
+                                                             getWidth(),
+                                                             mousePos.x));
+        const float bGainDb = sibilantGainDbAt(sibilant, sourceTime);
+        const juce::String text = juce::String::formatted("A %+.1f dB   B %+.1f dB   A+B %+.1f dB",
+                                                          aGainDb, bGainDb, aGainDb + bGainDb);
+        juce::Font font(12.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.75f));
+        g.fillRoundedRectangle(static_cast<float>(mousePos.x + 12), static_cast<float>(mousePos.y + 12),
+                               font.getStringWidth(text) + 12.0f, 20.0f, 4.0f);
+        g.setColour(juce::Colours::white);
+        g.setFont(font);
+        g.drawText(text, mousePos.getX() + 18, mousePos.getY() + 14, font.getStringWidth(text), 14,
+                   juce::Justification::centredLeft);
+    }
+}
+
+// ============================================================================
+// drawScissorsPreview — OpenDyne Scissors Tool 切割预览线
+// 只绘制在目标 blob 内，不贯穿背景波形（避免表达 PCM 被切开）
+// ============================================================================
+void PianoRollComponent::drawScissorsPreview(juce::Graphics& g)
+{
+    if (currentTool_ != ToolId::Scissors)
+        return;
+
+    const double previewTime = interactionState_.scissorsPreviewTime;
+    if (previewTime < 0.0)
+        return;
+
+    const auto& notes = getCommittedNotes();
+    const auto mapper = makeViewMapper();
+
+    // 找到包含该时刻的 Note
+    for (const auto& note : notes)
+    {
+        if (previewTime <= note.startTime || previewTime >= note.endTime)
+            continue;
+        const float adjustedPitch = note.getAdjustedPitch();
+        if (adjustedPitch <= 0.0f) continue;
+
+        const float midi = mapper.freqToMidi(adjustedPitch);
+        const float centerY = mapper.midiToY(midi);
+        const float halfH = pixelsPerSemitone_ * 0.5f;
+        const int px = sourceTimeToX(previewTime);
+        const int x1 = sourceTimeToX(note.startTime);
+        const int x2 = sourceTimeToX(note.endTime);
+        if (px < x1 || px > x2)
+            continue;
+
+        // 只画在 blob 内
+        static const float kDash[] = { 3.0f, 3.0f };
+        g.setColour(juce::Colours::white.withAlpha(0.75f));
+        g.drawDashedLine(juce::Line<float>(static_cast<float>(px), centerY - halfH,
+                                           static_cast<float>(px), centerY + halfH),
+                         kDash, 2, 1.5f);
+        return;
+    }
 }
 
 void PianoRollComponent::drawTimeGridHandles(juce::Graphics& g)
@@ -1664,26 +1917,52 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewState& view, j
 
     const double pps = view.camera.pixelsPerSecond;
 
-    for (const auto& item : renderCtx.contents) {
-        if (showWaveform_ && waveformMipmapCache_.isComplete() && item.audioBuffer != nullptr) {
+    // OpenDyne：注入当前缩放级别的 mipmap level 供 drawNotes 绘制 waveform blob
+    // 数据源是 mipmap：selectBestLevelIndex 只选 complete 非空 level（无完成 level 时
+    // 兜底 0，其 peaks 虽被预分配但未完成，故守卫须同时要求 complete，
+    // 与预览条单 level 门控一致：构建中隐藏，完成即显示）。
+    // 不要求全量 6 级完成、不依赖 audioBuffer（ARA 快照无音频缓冲）。
+    const bool notesPrimary = isOpenDyne();
+    for (auto& item : renderCtx.contents) {
+        item.notesPrimaryScheme = notesPrimary;
+        if (notesPrimary) {
             const auto* mipmap = waveformMipmapCache_.get(item.contentKey);
             if (mipmap != nullptr && mipmap->hasSource()) {
                 const int bestLevel = mipmap->selectBestLevelIndex(pps);
                 const auto& level = mipmap->getLevel(bestLevel);
-                if (!level.peaks.empty())
+                if (level.complete && !level.peaks.empty()) {
+                    item.wfLevel = &level;
+                    item.wfLevelSamplesPerPeak = WaveformMipmap::kSamplesPerPeak[bestLevel];
+                }
+            }
+        }
+    }
+
+    for (const auto& item : renderCtx.contents) {
+        // OpenDyne：F0 曲线/波形仅以 blob 呈现，传统波形与 F0 曲线均隐藏
+        if (!notesPrimary && showWaveform_) {
+            const auto* mipmap = waveformMipmapCache_.get(item.contentKey);
+            if (mipmap != nullptr && mipmap->hasSource()) {
+                const int bestLevel = mipmap->selectBestLevelIndex(pps);
+                const auto& level = mipmap->getLevel(bestLevel);
+                if (level.complete && !level.peaks.empty())
                     renderer_->drawWaveform(g, renderCtx, item, level, bestLevel);
             }
         }
     }
 
-    for (const auto& item : renderCtx.contents)
-        renderer_->drawUnvoicedFrameBands(g, renderCtx, item);
+    if (!notesPrimary) {
+        for (const auto& item : renderCtx.contents)
+            renderer_->drawUnvoicedFrameBands(g, renderCtx, item);
+    }
 
     for (const auto& item : renderCtx.contents)
         renderer_->drawNotes(g, renderCtx, item);
 
-    for (const auto& item : renderCtx.contents)
-        renderer_->drawF0Curve(g, renderCtx, item);
+    if (!notesPrimary) {
+        for (const auto& item : renderCtx.contents)
+            renderer_->drawF0Curve(g, renderCtx, item);
+    }
 
     for (const auto& item : renderCtx.contents)
         renderer_->drawTimeGridAnchors(g, renderCtx, item);
@@ -1911,7 +2190,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             if (overlapsRange(n)) afterPatch.afterNotesInRange.push_back(n);
         }
 
-        const auto committedSnap = contentCommands_->commitNotePatch(editedContentKey_, afterPatch);
+        const auto committedSnap = contentCommands_->commitNoteTopologyPatch(editedContentKey_, afterPatch);
         if (!committedSnap) {
             return false;
         }
@@ -2084,12 +2363,12 @@ bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
 }
 
 bool PianoRollComponent::applyVibratoDepthToSelection(float depth) {
-    pendingUndoDescription_ = TRANS("淇敼棰ら煶娣卞害");
+    pendingUndoDescription_ = TRANS("修改颤音深度");
     return applyVibratoParameterToSelection(VibratoParam::Depth, depth);
 }
 
 bool PianoRollComponent::applyVibratoRateToSelection(float rate) {
-    pendingUndoDescription_ = TRANS("淇敼棰ら煶閫熺巼");
+    pendingUndoDescription_ = TRANS("修改颤音速率");
     return applyVibratoParameterToSelection(VibratoParam::Rate, rate);
 }
 
@@ -2237,14 +2516,14 @@ void PianoRollComponent::clearLineAnchorSegmentSelection()
 }
 
 void PianoRollComponent::setNoteSplit(float value) {
-    // Note Split 閹貉冨煑闂婃娊鐝崚鍡橆唽闂冨牆鈧》绱檆ents锟?
+    // Note Split 控制音高分割阈值（cents）
     segmentationPolicy_.transitionThresholdCents = juce::jlimit(
         OpenTune::PitchControlConfig::kMinNoteSplitCents,
         OpenTune::PitchControlConfig::kMaxNoteSplitCents,
         value);
 
-    // Note Split 娴犲懏娲块弬鏉垮瀻濞堢數鐡ラ悾銉ュ棘閺佸府绱濇稉宥埿曢崣?AUTO 闁插秵鏌婇悽鐔稿灇锟?
-    // AUTO 閹垮秳缍旈悽杈╂暏閹磋渹瀵岄崝銊ㄐ曢崣鎴礉娴ｈ法鏁よぐ鎾冲缁涙牜鏆愰幍褑顢戦崚鍡橆唽锟?
+    // Note Split 仅更新分段策略参数，不触发 AUTO 重新生成
+    // AUTO 操作由用户主动触发，使用当前策略执行分割
     repaint();
 }
 
@@ -2421,7 +2700,11 @@ void PianoRollComponent::deriveSingleTimelineContentPlacement()
 
     std::vector<TimelineContentPlacement> placements;
     if (editedContentKey_.isValid() && pendingSingleContentProjection_.isValid()) {
-        placements.push_back({ editedContentKey_, pendingSingleContentProjection_ });
+        TimelineContentPlacement placement;
+        placement.contentKey = editedContentKey_;
+        placement.projection = pendingSingleContentProjection_;
+        placement.displayColour = trackDisplayColour_;
+        placements.push_back(std::move(placement));
     }
 
     applyTimelineContentPlacements(std::move(placements), false);
@@ -2489,9 +2772,9 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
         interactionState_.selection.selectionEndMidi = 0.0f;
     }
 
-    // notes 锟?pitchCurve 闁俺锟?commitNotesAndPitchCurve 閸氬苯鍟撻崚?store锟?
-    // 鐠囪鏅舵稊鐔风箑妞よ鎮撶拠浼欑窗curveChanged 閺冭泛绻€锟?refresh notes閿涘苯鎯侀崚?undo/redo 锟?
-    // 閸戣櫣锟?curve 閸ョ偤鈧偓锟?notes 鐟欏棜顫庡▓瀣殌閻ㄥ嫪绗夌€靛湱袨閿涘潏achedNotes_ 濠婄偛鎮楅敍澶堚偓?
+    // notes 和 pitchCurve 通过 commitNotesAndPitchCurve 同步写入 store
+    // 读侧也必须同步读：curveChanged 时需 refresh notes，否则 undo/redo 后不一致
+    // 曲线回退后 notes 视觉残留的不对称（cachedNotes_ 滞后）。
     if (contentChanged || curveChanged) {
         refreshEditedContentNotes();
     }
@@ -2700,7 +2983,7 @@ void PianoRollComponent::onHeartbeatTick()
         }
     }
 
-    if (showWaveform_) {
+    if (showWaveform_ || isOpenDyne()) {
         bool progressed = false;
         if (inferenceActive_) {
             waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;
@@ -2820,6 +3103,40 @@ void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
     }
 }
 
+// ── OpenDyne scheme 切换原子重置（计划 §二.3） ──
+void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme scheme)
+{
+    if (audioEditingScheme_ == scheme)
+        return;
+
+    const bool wasOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_);
+    audioEditingScheme_ = scheme;
+    const bool nowOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_);
+
+    // 清除当前 transient drag/resize/drawing/scissors/volume 预览
+    interactionState_.resetTransient();
+    if (interactionState_.isPanning)
+        interactionState_.isPanning = false;
+    if (openDyneZoomPanActive_)
+        endOpenDyneZoomPan();
+
+    // DrawNote ↔ Pitch 互映射；Select/TimeTool 保持当前选择；
+    // OpenDyne-only 工具（VolumeEnvelope/Scissors）退出时回落 Select
+    if (nowOpenDyne && currentTool_ == ToolId::DrawNote)
+        setCurrentTool(ToolId::Pitch);
+    else if (wasOpenDyne) {
+        if (currentTool_ == ToolId::Pitch)
+            setCurrentTool(ToolId::DrawNote);
+        else if (currentTool_ == ToolId::VolumeEnvelope || currentTool_ == ToolId::Scissors)
+            setCurrentTool(ToolId::Select);
+    }
+
+    staticDirty_ = true;
+    contentDirty_ = true;
+    rasterizeDirtySurfaces();
+    overlay_->repaint();
+}
+
 void PianoRollComponent::setCurrentTool(ToolId tool) {
     if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_) {
         tool = ToolId::Select;
@@ -2882,6 +3199,11 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         case ToolId::AutoTune:
             setMouseCursor(juce::MouseCursor::PointingHandCursor);
             break;
+        case ToolId::Pitch:
+        case ToolId::VolumeEnvelope:
+        case ToolId::Scissors:
+            setMouseCursor(juce::MouseCursor::CrosshairCursor);
+            break;
         case ToolId::TimeTool:
             // 锟?.4: Time tool uses normal cursor + per-handle hover hand cursor
             // applied by handleTimeToolMouseMove (via ctx.setMouseCursor).
@@ -2889,7 +3211,7 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             break;
     }
 
-    // 闁氨鐓￠惄鎴濇儔閼板懎浼愰崗宄板嚒閸掑洦宕查敍鍫濆棘閺佷即娼伴弶鍧楁付鐟曚礁鎮撳銉﹀瘻闁筋噣鐝禍顕嗙礆
+    // 通知监听者工具已切换（参数面板需要同步按钮高度）
     if (toolChanged) {
         listeners_.call([tool](Listener& l) { l.currentToolChanged(tool); });
         }
@@ -3010,6 +3332,21 @@ void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent& e) {
 }
 
 void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
+    // ── OpenDyne：Command+Alt+拖拽 = 同时缩放两轴；Command+Shift+拖拽 = 平移视区 ──
+    if (isOpenDyne()) {
+        if (e.mods.isCommandDown() && e.mods.isAltDown() && e.x >= pianoKeyWidth_) {
+            beginOpenDyneZoomPan(e);
+            return;
+        }
+        if (e.mods.isCommandDown() && e.mods.isShiftDown() && e.x >= pianoKeyWidth_) {
+            interactionState_.isPanning = true;
+            interactionState_.dragStartPos = e.getPosition();
+            dragStartVerticalScrollOffset_ = verticalScrollOffset_;
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+            return;
+        }
+    }
+
     // Ctrl+drag panning 锟?only on non-interactive area, so existing
     // Ctrl+click behaviors (note toggle selection, context menu) work.
     if (e.mods.isCtrlDown() && !e.mods.isPopupMenu() && e.x >= pianoKeyWidth_) {
@@ -3049,6 +3386,11 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
 }
 
 void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
+    if (openDyneZoomPanActive_) {
+        updateOpenDyneZoomPan(e);
+        return;
+    }
+
     if (interactionState_.isPanning) {
         int deltaX = e.x - interactionState_.dragStartPos.x;
         int deltaY = e.y - interactionState_.dragStartPos.y;
@@ -3100,6 +3442,12 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
 }
 
 void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {
+    if (openDyneZoomPanActive_) {
+        endOpenDyneZoomPan();
+        grabKeyboardFocus();
+        return;
+    }
+
     if (interactionState_.isPanning) {
         interactionState_.isPanning = false;
         setCurrentTool(currentTool_);
@@ -3205,6 +3553,18 @@ void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::M
 
     if (deltaY == 0.0f && deltaX == 0.0f) return;
 
+    // ── OpenDyne（NotesPrimary）Melodyne 式导航 ──
+    if (isOpenDyne()) {
+        if (e.mods.isCommandDown() && e.mods.isAltDown()) {
+            handleOpenDyneZoomAtMouse(e, deltaY);
+        } else if (e.mods.isShiftDown()) {
+            handleOpenDyneHorizontalScrollWheel(deltaX, deltaY);
+        } else {
+            handleOpenDyneVerticalScrollWheel(deltaY);
+        }
+        return;
+    }
+
     if (e.mods.isShiftDown()) {
         handleVerticalZoomWheel(e, deltaY);
     } else if (e.mods.isCtrlDown()) {
@@ -3214,6 +3574,155 @@ void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::M
     } else {
         handleVerticalScrollWheel(deltaY);
     }
+}
+
+void PianoRollComponent::handleOpenDyneVerticalScrollWheel(float deltaY) {
+    handleVerticalScrollWheel(deltaY);
+}
+
+void PianoRollComponent::handleOpenDyneHorizontalScrollWheel(float deltaX, float deltaY) {
+    handleHorizontalScrollWheel(deltaX != 0.0f ? deltaX : deltaY, 0.0f);
+}
+
+void PianoRollComponent::handleOpenDyneZoomAtMouse(const juce::MouseEvent& e, float deltaY) {
+    // 时间轴与音高轴同时缩放，保持鼠标下的时间与音高不动
+    handleHorizontalZoomWheel(e, deltaY);
+    handleVerticalZoomWheel(e, deltaY);
+}
+
+void PianoRollComponent::beginOpenDyneZoomPan(const juce::MouseEvent& e) {
+    openDyneZoomPanActive_ = true;
+    openDyneZoomPanStartPos_ = e.getPosition();
+    openDyneZoomPanStartPps_ = camera_.pixelsPerSecond;
+    openDyneZoomPanStartPixelsPerSemitone_ = pixelsPerSemitone_;
+    const double mouseX = static_cast<double>(e.x - pianoKeyWidth_);
+    openDyneZoomPanAnchorTime_ = camera_.visibleStartSeconds + mouseX / camera_.pixelsPerSecond;
+    const float contentY = static_cast<float>(e.y - rulerHeight_);
+    openDyneZoomPanAnchorMidi_ = makeViewMapper().yToMidi(contentY);
+    setMouseCursor(juce::MouseCursor::CrosshairCursor);
+}
+
+void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
+    const double dx = static_cast<double>(e.x - openDyneZoomPanStartPos_.x);
+    const double dy = static_cast<double>(e.y - openDyneZoomPanStartPos_.y);
+
+    // 时间轴：保持锚点时间在鼠标 X 下
+    const double zoomFactorH = std::exp(dx * 0.008);
+    const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
+        openDyneZoomPanStartPps_ * zoomFactorH,
+        TimelineViewportRequest::ViewKind::PianoRoll);
+    const double mouseX = static_cast<double>(e.x - pianoKeyWidth_);
+    const double newVisibleStart = openDyneZoomPanAnchorTime_ - mouseX / newPps;
+    userScrollHold_ = true;
+    commitViewportRequest(makeViewportRequest(
+        TimelineViewportRequest::Kind::Manual,
+        newVisibleStart,
+        0.0,
+        newPps));
+
+    // 音高轴：保持锚点 midi 在鼠标 Y 下
+    const float zoomFactorV = static_cast<float>(std::exp(dy * 0.008));
+    const float newPixelsPerSemitone = juce::jlimit(
+        5.0f, 60.0f, openDyneZoomPanStartPixelsPerSemitone_ * zoomFactorV);
+    pixelsPerSemitone_ = newPixelsPerSemitone;
+    const float contentY = static_cast<float>(e.y - rulerHeight_);
+    const float targetY = (maxMidi_ - openDyneZoomPanAnchorMidi_) * pixelsPerSemitone_;
+    verticalScrollOffset_ = targetY - contentY;
+    const float totalHeight = getTotalHeight();
+    const float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    const float maxScroll = totalHeight - visibleHeight;
+    if (maxScroll > 0.0f)
+        verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
+    else
+        verticalScrollOffset_ = 0.0f;
+
+    staticDirty_ = true;
+    contentDirty_ = true;
+    rasterizeDirtySurfaces();
+    updateScrollBars();
+    repaint();
+    overlay_->repaint();
+}
+
+void PianoRollComponent::endOpenDyneZoomPan() {
+    openDyneZoomPanActive_ = false;
+    setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
+void PianoRollComponent::fitToAllNotes() {
+    const auto& notes = getCommittedNotes();
+    if (notes.empty()) return;
+
+    double minSource = notes.front().startTime;
+    double maxSource = notes.front().endTime;
+    float minMidi = std::numeric_limits<float>::max();
+    float maxMidi = std::numeric_limits<float>::lowest();
+    for (const auto& n : notes) {
+        minSource = std::min(minSource, n.startTime);
+        maxSource = std::max(maxSource, n.endTime);
+        const float adjusted = n.getAdjustedPitch();
+        if (adjusted > 0.0f) {
+            const float midi = makeViewMapper().freqToMidi(adjusted);
+            minMidi = std::min(minMidi, midi);
+            maxMidi = std::max(maxMidi, midi);
+        }
+    }
+    if (maxMidi <= minMidi) return;
+
+    // source-time → TimeGrid → timeline 投影
+    double timelineStart = minSource;
+    double timelineEnd = maxSource;
+    if (const auto* placement = findEditedPlacement()) {
+        if (auto snap = readSnapshotFor(placement->contentKey)) {
+            if (snap->timeGrid) {
+                timelineStart = placement->projection.projectContentTimeToTimeline(
+                    snap->timeGrid->tauForward(minSource));
+                timelineEnd = placement->projection.projectContentTimeToTimeline(
+                    snap->timeGrid->tauForward(maxSource));
+            }
+        }
+    }
+    const double duration = std::max(1.0e-6, timelineEnd - timelineStart);
+
+    const int viewportW = getTimelineContentViewportWidth();
+    const int viewportH = getTimelineContentViewportHeight();
+    if (viewportW <= 0 || viewportH <= 0) return;
+
+    const double marginW = viewportW * 0.05;
+    const double marginH = viewportH * 0.10;
+    const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
+        (viewportW - 2.0 * marginW) / duration,
+        TimelineViewportRequest::ViewKind::PianoRoll);
+    const float newPixelsPerSemitone = juce::jlimit(
+        5.0f, 60.0f, static_cast<float>((viewportH - 2.0 * marginH) / (maxMidi - minMidi + 1.0f)));
+
+    // 居中时间范围
+    const double midTime = (timelineStart + timelineEnd) * 0.5;
+    userScrollHold_ = true;
+    commitViewportRequest(makeViewportRequest(
+        TimelineViewportRequest::Kind::Manual,
+        midTime - viewportW * 0.5 / newPps,
+        0.0,
+        newPps));
+
+    // 居中 midi 范围
+    pixelsPerSemitone_ = newPixelsPerSemitone;
+    const float midiCenter = (maxMidi + minMidi) * 0.5f;
+    verticalScrollOffset_ = (maxMidi_ - midiCenter) * pixelsPerSemitone_ - viewportH * 0.5f;
+    const float totalHeight = getTotalHeight();
+    const float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    const float maxScroll = totalHeight - visibleHeight;
+    if (maxScroll > 0.0f)
+        verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
+    else
+        verticalScrollOffset_ = 0.0f;
+
+    staticDirty_ = true;
+    contentDirty_ = true;
+    rasterizeDirtySurfaces();
+    updateScrollBars();
+    repaint();
+    overlay_->repaint();
 }
 
 void PianoRollComponent::beginZoomPreview(const juce::MouseEvent& e, float deltaY) {
@@ -3299,6 +3808,7 @@ std::optional<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildCon
     item.projection = placement.projection;
     item.timeGrid = snap->timeGrid;
     item.active = placement.contentKey == editedContentKey_;
+    item.displayColour = placement.displayColour;
 
     std::shared_ptr<PitchCurve> curve;
     if (item.active) {
@@ -3380,7 +3890,7 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
 }
 
 void PianoRollComponent::fitToScreen() {
-    // 婵″倹鐏夐悽銊﹀煕瀹稿弶澧滈崝銊ㄧ殶閺佺绻冪紓鈺傛杹閿涘奔绗夐懛顏勫З鐟曞棛锟?
+    // 如果用户已手动调整过缩放，不自动覆盖
     if (userHasManuallyZoomed_) {
         return;
     }

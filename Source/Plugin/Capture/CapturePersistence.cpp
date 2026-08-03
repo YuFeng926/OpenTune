@@ -16,11 +16,11 @@
 namespace OpenTune::Capture {
 
 namespace {
-    // CAPz v2: per-segment fixed bytes + embedded PCM audio.
+    // CAPz v4: per-segment fixed bytes + embedded PCM audio + SibilantGainEnvelope.
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 3;
+    constexpr int kCaptureArchiveVersion = 4;
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
     {
@@ -178,8 +178,13 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 stream.writeFloat(note.retuneSpeed);
                 stream.writeFloat(note.vibratoDepth);
                 stream.writeFloat(note.vibratoRate);
-                stream.writeFloat(note.velocity);
+                stream.writeFloat(note.outputGainDb);
                 stream.writeInt(note.isVoiced ? 1 : 0);
+            }
+            stream.writeInt(static_cast<int>(snap->sibilantGainEnvelope.size()));
+            for (const auto& point : snap->sibilantGainEnvelope) {
+                stream.writeDouble(point.time);
+                stream.writeFloat(point.gainDb);
             }
             stream.writeInt(snap->pitchShiftSettings.semitone);
             stream.writeInt(snap->pitchShiftSettings.cents);
@@ -237,6 +242,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         DetectedKey detectedKey;
         std::shared_ptr<PitchCurve> pitchCurve;
         std::vector<Note> notes;
+        SibilantGainEnvelope sibilantGainEnvelope;
         PitchShiftSettings pitchShiftSettings;
     };
     std::vector<PersistedSegment> persisted;
@@ -294,9 +300,19 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             note.retuneSpeed = stream.readFloat();
             note.vibratoDepth = stream.readFloat();
             note.vibratoRate = stream.readFloat();
-            note.velocity = stream.readFloat();
+            note.outputGainDb = stream.readFloat();
             note.isVoiced = stream.readInt() != 0;
             p.notes.push_back(note);
+        }
+        const int envelopeCount = stream.readInt();
+        if (envelopeCount < 0)
+            return false;
+        p.sibilantGainEnvelope.reserve(static_cast<size_t>(envelopeCount));
+        for (int envIndex = 0; envIndex < envelopeCount; ++envIndex) {
+            SibilantGainEnvelopePoint point;
+            point.time = stream.readDouble();
+            point.gainDb = stream.readFloat();
+            p.sibilantGainEnvelope.push_back(point);
         }
         p.pitchShiftSettings.semitone = stream.readInt();
         p.pitchShiftSettings.cents = stream.readInt();
@@ -344,6 +360,9 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             seg->content->applyPitchShiftState(pitchShiftState);
         }
         seg->content->applyOriginalF0State(p.originalF0State);
+
+        // B 层 envelope：revision 不落盘，恢复端由 owner 推进新 revision。
+        seg->content->applySibilantGainEnvelope(std::move(p.sibilantGainEnvelope));
 
         const bool ready = p.originalF0State == OriginalF0State::Ready;
         const auto restoredState = ready ? SegmentState::Edited : p.segmentState;

@@ -934,6 +934,95 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             return note.startTime < visibleContentEndTime;
         });
 
+    // ── OpenDyne waveform blob 模式 ──────────────────────────────
+    if (item.notesPrimaryScheme)
+    {
+        // mipmap 未完成时与整轨 drawWaveform 同一个 isComplete 门控：不绘制
+        if (item.wfLevel == nullptr || item.wfLevel->peaks.empty())
+            return;
+
+        const double timePerPeak = static_cast<double>(item.wfLevelSamplesPerPeak)
+            / WaveformMipmap::kBaseSampleRate;
+        const int64_t numPeaks = static_cast<int64_t>(item.wfLevel->peaks.size());
+
+        for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
+        {
+            const auto& note = *noteIt;
+            float adjustedPitch = note.getAdjustedPitch();
+            if (adjustedPitch <= 0.0f) continue;
+
+            float midi = ctx.coords.freqToMidi(adjustedPitch);
+            float centerY = ctx.coords.midiToY(midi);
+            float halfH = ctx.pixelsPerSemitone * 0.5f;
+
+            int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
+            int x2 = sourceTimeToScreenX(note.endTime,   ctx, item);
+            if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
+                continue;
+
+            // 峰值窗口直接按 Note 的 source-time 范围索引 mipmap
+            int64_t idxStart = std::max<int64_t>(0, static_cast<int64_t>(note.startTime / timePerPeak));
+            int64_t idxEnd = std::min<int64_t>(numPeaks,
+                                               static_cast<int64_t>(note.endTime / timePerPeak) + 1);
+            if (idxEnd <= idxStart)
+                continue;
+
+            // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
+            juce::Path blob;
+            blob.startNewSubPath(static_cast<float>(x1), centerY);
+
+            bool firstPeak = true;
+            for (int64_t i = idxStart; i < idxEnd; ++i)
+            {
+                const auto& peak = item.wfLevel->peaks[static_cast<size_t>(i)];
+                const float mag = peak.getMagnitude();
+                const double sourceTime = static_cast<double>(i) * timePerPeak;
+                const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
+                const float topY = centerY - halfH * mag;
+                const float bottomY = centerY + halfH * mag;
+                if (firstPeak)
+                {
+                    blob.lineTo(px, topY);
+                    firstPeak = false;
+                }
+                else
+                {
+                    blob.lineTo(px, topY);
+                }
+            }
+            blob.lineTo(static_cast<float>(x2), centerY);
+
+            for (int64_t i = idxEnd; i-- > idxStart;)
+            {
+                const auto& peak = item.wfLevel->peaks[static_cast<size_t>(i)];
+                const float mag = peak.getMagnitude();
+                const double sourceTime = static_cast<double>(i) * timePerPeak;
+                const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
+                const float bottomY = centerY + halfH * mag;
+                blob.lineTo(px, bottomY);
+            }
+            blob.closeSubPath();
+
+            // displayColour 派生纵向渐变填充 + 同色高对比描边
+            const auto fillTop = item.displayColour.brighter(0.28f).withAlpha(0.88f);
+            const auto fillMid = item.displayColour.withAlpha(0.80f);
+            const auto fillBottom = item.displayColour.darker(0.32f).withAlpha(0.86f);
+            juce::ColourGradient grad(fillTop, static_cast<float>(x1), centerY - halfH,
+                                      fillBottom, static_cast<float>(x1), centerY + halfH,
+                                      false);
+            grad.addColour(0.45f, fillMid);
+            g.setGradientFill(grad);
+            g.fillPath(blob);
+
+            g.setColour(item.displayColour.brighter(0.50f).withAlpha(0.92f));
+            g.strokePath(blob, juce::PathStrokeType(1.1f,
+                                                    juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
+        }
+        return;
+    }
+
+    // ── OpenTune 矩形音符（原路径保持不变） ──────────────────────
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;

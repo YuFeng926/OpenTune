@@ -209,7 +209,14 @@ public:
     NoteResizeState noteResize;
     DrawingState drawing;
     TimeToolState timeTool;          // ⚡️ §8.3 — Time tool
-    
+
+    // OpenDyne（NotesPrimary）瞬态：
+    // Scissors 预览切点（content-local 绝对秒），-1 = 无预览。
+    double scissorsPreviewTime = -1.0;
+    // Volume Envelope Tool 拖拽：是否正在拖拽 + 预览增益（dB）。
+    bool isVolumeDragging = false;
+    float volumePreviewGainDb = 0.0f;
+
     bool isPanning = false;
     juce::Point<int> dragStartPos;
     
@@ -219,6 +226,10 @@ public:
     EmptySpaceMouseIntent emptySpaceIntent;
     
     std::vector<int> selectedLineAnchorSegmentIds;
+
+    // 清除全部瞬态（drag/resize/drawing/anchors/预览/工具状态），
+    // 保留 noteSelection 与已完成的 selection 区域。
+    void resetTransient() noexcept;
 };
 
 } // namespace OpenTune

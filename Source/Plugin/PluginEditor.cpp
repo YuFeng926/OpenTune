@@ -54,6 +54,8 @@ TimelineContentPlacement makePlacement(ContentKey contentKey,
     TimelineContentPlacement placement;
     placement.contentKey = contentKey;
     placement.projection = projection;
+    // displayColour 契约：单 clip 无 track 主题色，用 noteBlock 默认色
+    placement.displayColour = UIColors::noteBlock;
     return placement;
 }
 
@@ -265,6 +267,8 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
 
     pianoRoll_.setExperimentalFeaturesEnabled(false);
     parameterPanel_.setExperimentalFeaturesEnabled(false);
+    parameterPanel_.setOpenDyneMode(AudioEditingScheme::usesNotesPrimaryScheme(sharedPreferences.audioEditingScheme));
+    parameterPanel_.setActiveTool(static_cast<int>(pianoRoll_.getCurrentTool()));
 }
 
 // =========================================================================
@@ -662,7 +666,7 @@ void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::HandDraw)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::Scissors)) {
         return;
     }
 
@@ -1025,7 +1029,7 @@ bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
         return docController->requestSetPlaybackPosition(timeSeconds);
     }
 #endif
-    // Non-ARA VST3: playhead is host-controlled only. Do NOT call setPosition() �?
+    // Non-ARA VST3: playhead is host-controlled only. Do NOT call setPosition().
     // the host would ignore it and the next processBlock would overwrite the value.
     // PianoRoll click/drag on timeline should not change plugin-internal position.
     juce::ignoreUnused(timeSeconds);

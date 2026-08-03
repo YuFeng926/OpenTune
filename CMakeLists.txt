@@ -644,6 +644,12 @@ target_sources(OpenTune
         Source/Utils/PianoRollEditAction.h
         Source/Utils/PianoRollNotePatchAction.cpp
         Source/Utils/PianoRollNotePatchAction.h
+        Source/Utils/OutputGainEnvelope.cpp
+        Source/Utils/OutputGainEnvelope.h
+        Source/Utils/OutputGainEditActions.cpp
+        Source/Utils/OutputGainEditActions.h
+        Source/Utils/ScissorsUndoAction.cpp
+        Source/Utils/ScissorsUndoAction.h
         Source/Utils/PitchShiftSettings.h
         Source/Utils/PitchShiftEditAction.cpp
         Source/Utils/PitchShiftEditAction.h

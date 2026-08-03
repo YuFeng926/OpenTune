@@ -1,8 +1,9 @@
-﻿#include "PianoRollToolHandler.h"
+#include "PianoRollToolHandler.h"
 #include "../../../Utils/AudioEditingScheme.h"
 #include "../../../Utils/PitchUtils.h"
 #include "../../../Utils/AppLogger.h"
 #include "../../../Utils/KeyShortcutConfig.h"
+#include "../../../Utils/ScissorsUndoAction.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -322,8 +323,8 @@ std::optional<double> PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
 {
     // Pipeline: pixelX 鈫?timeline 鈫?output(content) 鈫?tauInverse 鈫?source.
     // invalid projection 鎰忓懗鐫€娌℃湁 edit target锛岃繑鍥?nullopt銆?
-    // 涓€鏃?projection valid锛孴imeGrid 蹇呴』鍙備笌 output/source 杞崲锛?
-    // identity TimeGrid 鐨?tauInverse 鏈韩灏辨槸 identity锛屾棤闇€鐗瑰垽銆?
+    // 一旦 projection valid，TimeGrid 必须参与 output/source 转换，
+    // identity TimeGrid 的 tauInverse 本身就是 identity，无需特判。
     const auto projection = ctx_.getContentProjection();
     if (!projection.isValid())
         return std::nullopt;
@@ -339,7 +340,7 @@ std::optional<double> PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
 double PianoRollToolHandler::sourceTimeToTimelineTime(double sourceSeconds) const
 {
     // Pipeline: source 鈫?tauForward 鈫?output(content) 鈫?timeline.
-    // projection valid 鏄皟鐢ㄦ柟濂戠害锛堝叆鍙ｅ凡妫€鏌ワ級銆?
+    // projection valid 是调用方契约（入口已检查）。
     const auto projection = ctx_.getContentProjection();
     jassert(projection.isValid());
 
@@ -363,7 +364,7 @@ SourceEditRange PianoRollToolHandler::sourceEditRange(double minDurationSeconds)
 }
 
 void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
-// 榧犳爣绉诲姩澶勭悊锛氭洿鏂板厜鏍囧舰鐘讹紙闊崇杈圭紭璋冩暣銆佺嚎閿氱偣棰勮锟?
+// 鼠标移动处理：更新光标形状（音符边缘调整、线锚点预览）
 {
     if (e.mods.isCtrlDown()) {
         ctx_.setMouseCursor(juce::MouseCursor::DraggingHandCursor);
@@ -382,7 +383,18 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
         return;
     }
 
+    if (currentTool_ == ToolId::Scissors) {
+        updateScissorsPreview(e);
+        return;
+    }
+
     if (currentTool_ != ToolId::Select) {
+        return;
+    }
+
+    // OpenDyne（NotesPrimary）：Main/Select 只做选择/框选，禁止 resize cursor。
+    if (AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+        ctx_.setMouseCursor(juce::MouseCursor::NormalCursor);
         return;
     }
 
@@ -467,7 +479,10 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
             handleSelectTool(e);
             break;
         case ToolId::DrawNote:
-            handleDrawNoteMouseDown(e);
+            // OpenDyne（NotesPrimary）：DrawNote 新建音符路径不进入。
+            if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+                handleDrawNoteMouseDown(e);
+            }
             break;
         case ToolId::HandDraw:
             ctx_.getState().handDrawPendingDrag = true;
@@ -477,6 +492,15 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
             break;
         case ToolId::TimeTool:
             handleTimeToolMouseDown(e);
+            break;
+        case ToolId::Pitch:
+            handlePitchToolMouseDown(e);
+            break;
+        case ToolId::VolumeEnvelope:
+            handleVolumeEnvelopeToolMouseDown(e);
+            break;
+        case ToolId::Scissors:
+            handleScissorsToolMouseDown(e);
             break;
         default:
             AppLogger::warn("[PianoRollToolHandler] mouseDown: unknown tool " + juce::String(static_cast<int>(currentTool_)));
@@ -495,7 +519,10 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
             handleSelectDrag(e);
             break;
         case ToolId::DrawNote:
-            handleDrawNoteDrag(e);
+            // OpenDyne（NotesPrimary）：DrawNote 新建音符路径不进入。
+            if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+                handleDrawNoteDrag(e);
+            }
             break;
         case ToolId::HandDraw:
             if (ctx_.getState().handDrawPendingDrag) {
@@ -516,6 +543,15 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
         case ToolId::TimeTool:
             handleTimeToolMouseDrag(e);
             break;
+        case ToolId::Pitch:
+            dragNotePitch(e);
+            break;
+        case ToolId::VolumeEnvelope:
+            handleVolumeEnvelopeToolDrag(e);
+            break;
+        case ToolId::Scissors:
+            updateScissorsPreview(e);
+            break;
         default:
             break;
     }
@@ -525,6 +561,9 @@ void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
 {
     if (currentTool_ == ToolId::TimeTool) {
         handleTimeToolMouseDoubleClick(e);
+    } else if (currentTool_ == ToolId::Pitch
+               && AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+        handlePitchToolDoubleClick(e);
     }
     // Other tools: no-op (could be extended later for note resize / etc.)
 }
@@ -551,10 +590,22 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
             handleDrawCurveUp(e);
             break;
         case ToolId::DrawNote:
-            handleDrawNoteUp(e);
+            // OpenDyne（NotesPrimary）：DrawNote 新建音符路径不进入。
+            if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+                handleDrawNoteUp(e);
+            }
             break;
         case ToolId::TimeTool:
             handleTimeToolMouseUp(e);
+            break;
+        case ToolId::Pitch:
+            handlePitchToolMouseUp(e);
+            break;
+        case ToolId::VolumeEnvelope:
+            handleVolumeEnvelopeToolUp(e);
+            break;
+        case ToolId::Scissors:
+            handleScissorsToolUp(e);
             break;
         default:
             ctx_.getState().noteDrag.draggedNoteIndex = -1;
@@ -565,6 +616,27 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
 bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
 {
     const auto& shortcutSettings = ctx_.getShortcutSettings();
+
+    // OpenDyne（NotesPrimary）F 键固定映射：F1=Select、F2=Pitch、F4=VolumeEnvelope、
+    // F6=Scissors。不新增 ShortcutId、不进 KeyShortcutConfig。T 继续走现有 ToolTimeTool。
+    if (AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+        if (key.getKeyCode() == juce::KeyPress::F1Key) {
+            ctx_.setCurrentTool(ToolId::Select);
+            return true;
+        }
+        if (key.getKeyCode() == juce::KeyPress::F2Key) {
+            ctx_.setCurrentTool(ToolId::Pitch);
+            return true;
+        }
+        if (key.getKeyCode() == juce::KeyPress::F4Key) {
+            ctx_.setCurrentTool(ToolId::VolumeEnvelope);
+            return true;
+        }
+        if (key.getKeyCode() == juce::KeyPress::F6Key) {
+            ctx_.setCurrentTool(ToolId::Scissors);
+            return true;
+        }
+    }
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::SelectAll, key)) {
         const auto& notes = committedNotes(ctx_);
@@ -664,8 +736,8 @@ bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
         return false;
     }
 
-    // TimeTool 锟?mouseDown 鑷繁澶勭悊 hit-test handle / 绌哄尯涓ょ璇箟锟?
-    // 涓嶈兘琚┖鍖烘剰鍥炬崟鑾凤紝鍚﹀垯 handleTimeToolMouseDown 姘镐笉瑙﹀彂锛宧andle 鏃犳硶鎷栧姩锟?
+    // TimeTool 的 mouseDown 自己处理 hit-test handle / 空区两种语义。
+    // 不能被空区意图捕获，否则 handleTimeToolMouseDown 永不触发，handle 无法拖动。
     if (currentTool_ == ToolId::TimeTool) {
         return false;
     }
@@ -863,8 +935,11 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentDrag(const juce::MouseEvent& e
             handleSelectDrag(e);
             return true;
         case ToolId::DrawNote:
-            handleDrawNoteMouseDown(startEvent);
-            handleDrawNoteDrag(e);
+            // OpenDyne（NotesPrimary）：DrawNote 新建音符路径不进入。
+            if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+                handleDrawNoteMouseDown(startEvent);
+                handleDrawNoteDrag(e);
+            }
             return true;
         case ToolId::HandDraw:
             handleDrawCurveTool(startEvent);
@@ -897,7 +972,10 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
                 handleDrawCurveUp(e);
                 break;
             case ToolId::DrawNote:
-                handleDrawNoteUp(e);
+                // OpenDyne（NotesPrimary）：DrawNote 新建音符路径不进入。
+                if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+                    handleDrawNoteUp(e);
+                }
                 break;
             default:
                 break;
@@ -921,27 +999,12 @@ juce::MouseEvent PianoRollToolHandler::eventAtEmptySpaceMouseDown(const juce::Mo
 void PianoRollToolHandler::cancelActiveMouseGesture()
 {
     auto& state = ctx_.getState();
-    state.emptySpaceIntent.clear();
-    state.drawNoteToolPendingDrag = false;
-    state.handDrawPendingDrag = false;
-    state.noteDrag.clear();
-    state.noteResize.clear();
-    state.selection.isSelectingArea = false;
-    state.selection.isSelectingF0 = false;
-    state.selection.f0SelectionAnchorFrame = -1;
-    state.isPanning = false;
-    state.selectedLineAnchorSegmentIds.clear();
-    state.drawing.isDrawingF0 = false;
-    state.drawing.handDrawBuffer.clear();
-    state.drawing.isDrawingNote = false;
-    state.drawing.isPlacingAnchors = false;
-    state.drawing.pendingAnchors.clear();
-    state.timeTool.clear();
+    state.resetTransient();
     ctx_.clearNoteDraft();
 }
 
 void PianoRollToolHandler::handleDeleteKey()
-// 鍒犻櫎閿鐞嗭細鍒犻櫎閫変腑鐨勯煶绗﹀拰閫夊尯鍐呯殑鍐呭锛屽悓鏃舵竻闄ゅ搴旂殑闊抽珮淇
+// 删除键处理：删除选中的音符和选区内的内容，同时清除对应的音高修正
 {
     const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
     ctx_.beginNoteDraft();
@@ -989,7 +1052,7 @@ void PianoRollToolHandler::handleDeleteKey()
     }
 
     bool handled = false;
-    // 鏈湴绱Н闇€瑕佹竻闄ょ殑淇鑼冨洿锛屼笉绔嬪嵆鎻愪氦锛屾渶鍚庝竴娆℃€т笌闊崇鍘熷瓙鎻愪氦
+    // 本地累积需要清除的修正范围，不立即提交，最后一次性与音符原子提交
     std::vector<F0FrameRange> correctionClearRanges;
 
     if (!selectedIndices.empty()) {
@@ -1042,9 +1105,9 @@ void PianoRollToolHandler::handleDeleteKey()
     if (handled) {
         ctx_.getNoteDraft().contentDirty = true;
         ctx_.getNoteDraft().workingNotes = notes;
-        ctx_.setUndoDescription(juce::String("鍒犻櫎闊崇"));
+        ctx_.setUndoDescription(juce::String::fromUTF8(u8"删除音符"));
 
-        // 鍚屾璁＄畻娓呴櫎淇 + 鍒犻櫎闊崇 锟?涓€娆℃€у師瀛愭彁锟?
+        // 同步计算清除修正 + 删除音符，一次性原子提交
         bool committed = false;
         if (curve && !correctionClearRanges.empty()) {
             auto clonedCurve = curve->clone();
@@ -1052,8 +1115,8 @@ void PianoRollToolHandler::handleDeleteKey()
                 clonedCurve->clearCorrectionRange(range.startFrame, range.endFrameExclusive);
             }
             auto snap = clonedCurve->getSnapshot();
-            // delete 璺緞锛歛ffectedRange = globalDirty*Frame 鐨勮鐩栬寖鍥达紙鍚鐐癸級锟?
-            // 锟?F0FrameRange 锟?endFrameExclusive 璇箟锟?
+            // delete 路径：affectedRange = globalDirty*Frame 的覆盖范围（含端点）。
+            // F0FrameRange 的 endFrameExclusive 语义。
             const F0FrameRange affectedRange{globalDirtyStartFrame, globalDirtyEndFrame + 1};
 
             // Extract segments overlapping the affected range (range-scoped, not full)
@@ -1083,7 +1146,7 @@ void PianoRollToolHandler::handleDeleteKey()
 }
 
 void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
-// 閫夋嫨宸ュ叿榧犳爣鎸変笅澶勭悊锛氭娴嬮煶绗﹁竟缂樿皟鏁淬€侀煶绗﹂€変腑/鍙栨秷閫変腑銆佹閫夊尯鍩熷紑锟?
+// 选择工具鼠标按下处理：检测音符边缘调整、音符选中/取消选中、框选区域开始
 {
     const auto& notes = committedNotes(ctx_);
 
@@ -1107,39 +1170,43 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
     bool isCtrlDown = e.mods.isCtrlDown() || e.mods.isCommandDown();
 
+    bool isOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
     int edgeThreshold = 6;
     float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
     bool isShiftDown = e.mods.isShiftDown();
 
-    for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
-        const auto& note = notes[static_cast<size_t>(noteIndex)];
-        const int x1 = sourceTimeToScreenX(note.startTime);
-        const int x2 = sourceTimeToScreenX(note.endTime);
+    // OpenDyne（NotesPrimary）：Main/Select 只做选择/框选，禁止 note resize。
+    if (!isOpenDyne) {
+        for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
+            const auto& note = notes[static_cast<size_t>(noteIndex)];
+            const int x1 = sourceTimeToScreenX(note.startTime);
+            const int x2 = sourceTimeToScreenX(note.endTime);
 
-        bool nearLeft = std::abs(e.x - x1) <= edgeThreshold;
-        bool nearRight = std::abs(e.x - x2) <= edgeThreshold;
+            bool nearLeft = std::abs(e.x - x1) <= edgeThreshold;
+            bool nearRight = std::abs(e.x - x2) <= edgeThreshold;
 
-        if (nearLeft || nearRight) {
-            float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
-            if (std::abs(mouseMidi - noteMidi) < 1.0f) {
-                ctx_.getState().noteResize.isResizing = true;
-                ctx_.getState().noteResize.isDirty = false;
-                ctx_.getState().noteResize.noteIndex = noteIndex;
-                ctx_.getState().noteResize.edge = nearLeft ? NoteResizeEdge::Left : NoteResizeEdge::Right;
-                ctx_.getState().noteResize.originalStartTime = note.startTime;
-                ctx_.getState().noteResize.originalEndTime = note.endTime;
+            if (nearLeft || nearRight) {
+                float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
+                if (std::abs(mouseMidi - noteMidi) < 1.0f) {
+                    ctx_.getState().noteResize.isResizing = true;
+                    ctx_.getState().noteResize.isDirty = false;
+                    ctx_.getState().noteResize.noteIndex = noteIndex;
+                    ctx_.getState().noteResize.edge = nearLeft ? NoteResizeEdge::Left : NoteResizeEdge::Right;
+                    ctx_.getState().noteResize.originalStartTime = note.startTime;
+                    ctx_.getState().noteResize.originalEndTime = note.endTime;
 
-                auto& noteSelection = ctx_.getState().noteSelection;
-                const int noteCount = static_cast<int>(notes.size());
-                if (!noteSelection.isSelected(noteIndex) && !isCtrlDown && !isShiftDown) {
-                    noteSelection.setSingle(noteIndex, noteCount);
-                } else {
-                    noteSelection.add(noteIndex, noteCount);
+                    auto& noteSelection = ctx_.getState().noteSelection;
+                    const int noteCount = static_cast<int>(notes.size());
+                    if (!noteSelection.isSelected(noteIndex) && !isCtrlDown && !isShiftDown) {
+                        noteSelection.setSingle(noteIndex, noteCount);
+                    } else {
+                        noteSelection.add(noteIndex, noteCount);
+                    }
+
+                    updateF0SelectionFromNotes(notes);
+                    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+                    return;
                 }
-
-                updateF0SelectionFromNotes(notes);
-                if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
-                return;
             }
         }
     }
@@ -1163,83 +1230,14 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
         updateF0SelectionFromNotes(notes);
 
         if (noteSelection.isSelected(clickedNoteIndex)) {
-            ctx_.getState().noteDrag.draggedNoteIndex = clickedNoteIndex;
-            ctx_.getState().noteDrag.draggedNoteIndices = collectSelectedNoteIndices(notes);
-            clearNoteDragPreview(ctx_);
-
-            ctx_.setNoteDragManualStartFrame(-1);
-            ctx_.setNoteDragManualEndFrameExclusive(-1);
-            ctx_.getNoteDragInitialManualTargets().clear();
-
-            auto pitchCurve = ctx_.getPitchCurve();
-            if (pitchCurve && !ctx_.getState().noteDrag.draggedNoteIndices.empty()) {
-                double rangeStart = 0;
-                double rangeEnd = 0;
-
-                if (ctx_.getState().selection.hasSelectionArea) {
-                    rangeStart = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
-                    rangeEnd = std::max(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
-                } else {
-                    rangeStart = 1e30;
-                    rangeEnd = -1e30;
-                    for (int selectedIndex : ctx_.getState().noteDrag.draggedNoteIndices) {
-                        const auto& selectedNote = notes[static_cast<size_t>(selectedIndex)];
-                        rangeStart = std::min(rangeStart, selectedNote.startTime);
-                        rangeEnd = std::max(rangeEnd, selectedNote.endTime);
-                    }
-                }
-
-                if (rangeStart < 0) rangeStart = 0;
-                
-                if (rangeEnd < rangeStart) std::swap(rangeStart, rangeEnd);
-
-                const auto f0tl = ctx_.getF0Timeline();
-                const auto manualRange = f0tl.rangeForTimes(rangeStart, rangeEnd);
-                const auto contentSnapshot = ctx_.getEditableContentSnapshot();
-
-                if (contentSnapshot
-                    && !manualRange.isEmpty()
-                    && pitchCurve->hasCorrectionInRange(manualRange.startFrame, manualRange.endFrameExclusive)) {
-                        int rangeSize = manualRange.endFrameExclusive - manualRange.startFrame;
-                        std::vector<float> renderedF0(rangeSize, -1.0f);
-
-                        contentSnapshot->forEachEffectiveF0Span(manualRange.startFrame, manualRange.endFrameExclusive,
-                            [&](int frameIndex, const float* data, int length, float gain) {
-                                if (data == nullptr || length <= 0) return;
-
-                                int relStart = frameIndex - manualRange.startFrame;
-                                int copyOffset = 0;
-                                if (relStart < 0) {
-                                    copyOffset = -relStart;
-                                    relStart = 0;
-                                }
-
-                                if (relStart >= rangeSize || copyOffset >= length) return;
-
-                                int copyLength = std::min(length - copyOffset, rangeSize - relStart);
-                                if (copyLength <= 0) return;
-
-                                for (int i = 0; i < copyLength; ++i)
-                                    renderedF0[static_cast<size_t>(relStart + i)] = data[copyOffset + i] * gain;
-                            });
-
-                        ctx_.setNoteDragManualStartFrame(manualRange.startFrame);
-                        ctx_.setNoteDragManualEndFrameExclusive(manualRange.endFrameExclusive);
-
-                        auto& manualTargets = ctx_.getNoteDragInitialManualTargets();
-                        for (int relIdx = 0; relIdx < rangeSize; ++relIdx) {
-                            int f = manualRange.startFrame + relIdx;
-                            float v = renderedF0[relIdx];
-                            if (v <= 0.0f) continue;
-                            manualTargets.push_back({ f, v });
-                        }
-
-                        if (manualTargets.empty()) {
-                            ctx_.setNoteDragManualStartFrame(-1);
-                            ctx_.setNoteDragManualEndFrameExclusive(-1);
-                        }
-                    }
-                }
+            if (isOpenDyne) {
+                // OpenDyne Main/Select 只做选择，不做 pitch 拖拽。
+                ctx_.getState().noteDrag.draggedNoteIndex = -1;
+                ctx_.getState().noteDrag.draggedNoteIndices.clear();
+                clearNoteDragPreview(ctx_);
+            } else {
+                beginNotePitchDrag(clickedNoteIndex, notes);
+            }
         } else {
             // Note was not selected - start selection area or clear
             if (!isCtrlDown) {
@@ -1285,7 +1283,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
-// 鎵嬬粯鏇茬嚎宸ュ叿澶勭悊锛氬皢榧犳爣浣嶇疆杞崲涓篎0鍊硷紝鍦ㄥ抚闂磋繘琛屽鏁版彃鍊硷紝璁板綍鑴忓尯锟?
+// 手绘曲线工具处理：将鼠标位置转换为F0值，在帧间进行对数插值，记录脏区
 {
     auto pitchCurve = ctx_.getPitchCurve();
     if (!pitchCurve) {
@@ -1369,7 +1367,7 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
-// 缁樺埗闊崇宸ュ叿榧犳爣鎸変笅澶勭悊锛氭娴嬫槸鍚︾偣鍑诲凡鏈夐煶绗﹁繘琛岄€夋嫨锛岃缃緟鎷栨嫿鐘讹拷?
+// 绘制音符工具鼠标按下处理：检测是否点击已有音符进行选择，设置待拖拽状态
 {
     const auto projection = ctx_.getContentProjection();
     if (!projection.isValid())
@@ -1413,7 +1411,7 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
-// 缁樺埗闊崇宸ュ叿澶勭悊锛氭洿锟?DrawingState 棰勮鐘舵€侊紙涓嶅垱锟?noteDraft锛夛紝overlay 璐熻矗娓叉煋
+// 绘制音符工具处理：更新 DrawingState 预览状态（不创建 noteDraft），overlay 负责渲染
 {
     const auto projection = ctx_.getContentProjection();
     if (!projection.isValid())
@@ -1430,7 +1428,10 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
 
     float targetF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
     float midiNote = 69.0f + 12.0f * std::log2(targetF0 / 440.0f);
-    int roundedMidi = static_cast<int>(std::round(midiNote));
+    // 唯一投影入口：无配置时用默认 Chromatic（quantize 内部 round 半音）。
+    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+    int roundedMidi = static_cast<int>(std::lround(snap.quantizeMidiToActiveScale(midiNote)));
     float snappedF0 = 440.0f * std::pow(2.0f, (roundedMidi - 69) / 12.0f);
 
     // Compute before bounds from current drawing state
@@ -1477,14 +1478,14 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleAutoTuneTool(const juce::MouseEvent& e)
-// 鑷姩闊宠皟宸ュ叿澶勭悊锛氳Е鍙戣嚜鍔ㄩ煶璋冪敓鎴愯锟?
+// 自动音调工具处理：触发自动音调生成请求
 {
     juce::ignoreUnused(e);
     ctx_.notifyAutoTuneRequested();
 }
 
 void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
-// 閫夋嫨宸ュ叿鎷栨嫿澶勭悊锛氭閫夊尯鍩熴€侀煶绗﹁竟缂樿皟鏁淬€侀煶绗︽嫋鎷界Щ锟?
+// 选择工具拖拽处理：框选区域、音符边缘调整、音符拖拽移动
 {
     const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
 
@@ -1576,47 +1577,12 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
     }
 
     if (ctx_.getState().noteDrag.draggedNoteIndex >= 0) {
-        if (ctx_.getState().noteDrag.draggedNoteIndices.empty()) {
-            return;
-        }
+        dragNotePitch(e);
+        return;
+    }
 
-        if (!ctx_.getState().noteDrag.isDraggingNotes) {
-            ctx_.getState().noteDrag.isDraggingNotes = true;
-        }
-        if (!ctx_.getNoteDraft().active) {
-            ctx_.beginNoteDraft();
-        }
-        ctx_.getNoteDraft().contentDirty = true;
-
-        float startF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(dragStartPos_.y - ctx_.contentOriginY));
-        float currentF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-
-        float deltaSemitones = 0.0f;
-        if (startF0 > 0.0f && currentF0 > 0.0f) {
-            deltaSemitones = 12.0f * std::log2(currentF0 / startF0);
-        }
-
-        auto& notes = workingDraftNotes(ctx_);
-        resetDraftNotesToBaseline(ctx_);
-        for (int noteIndex : ctx_.getState().noteDrag.draggedNoteIndices) {
-            auto& note = notes[static_cast<size_t>(noteIndex)];
-            float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
-            int baseMidi = note.getBaseMidiNote();
-            float targetMidi = static_cast<float>(baseMidi) + initialOffset + deltaSemitones;
-            float snappedOffset = std::round(targetMidi) - static_cast<float>(baseMidi);
-            note.pitchOffset = snappedOffset;
-            note.dirty = true;
-        }
-
-        float appliedDeltaSemitones = 0.0f;
-        if (!ctx_.getState().noteDrag.draggedNoteIndices.empty()) {
-            const int firstIndex = ctx_.getState().noteDrag.draggedNoteIndices.front();
-            appliedDeltaSemitones = notes[static_cast<size_t>(firstIndex)].pitchOffset
-                - draftBaselineNotes(ctx_)[static_cast<size_t>(firstIndex)].pitchOffset;
-        }
-
-        updateNoteDragPreview(ctx_, std::pow(2.0f, appliedDeltaSemitones / 12.0f));
-        if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, notes);
+    // OpenDyne（NotesPrimary）：Main/Select 不做 pitch 拖拽，禁止选中音符的兜底启动。
+    if (AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
         return;
     }
 
@@ -1647,97 +1613,18 @@ void PianoRollToolHandler::handleDrawNoteDrag(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
-// 閫夋嫨宸ュ叿榧犳爣閲婃斁澶勭悊锛氬畬鎴愰煶绗︽嫋锟?璋冩暣/妗嗛€夛紝鎻愪氦闊抽珮淇
+// 选择工具鼠标释放处理：完成音符拖动/调整/框选，提交音高修正
 {
     juce::ignoreUnused(e);
 
-    const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
     bool suppressFinalNoteDraftCommit = false;
 
-    auto notes = beforeNotes;
-    if (ctx_.getNoteDraft().active) {
-        notes = ctx_.getNoteDraft().workingNotes;
-    }
-    const auto f0tl = ctx_.getF0Timeline();
-
     if (ctx_.getState().noteDrag.draggedNoteIndex >= 0 && ctx_.getState().noteDrag.isDraggingNotes) {
-        double dirtyStartTime = 1e30;
-        double dirtyEndTime = -1e30;
-
-        for (int noteIndex : ctx_.getState().noteDrag.draggedNoteIndices) {
-            float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
-            float finalOffset = notes[static_cast<size_t>(noteIndex)].pitchOffset;
-
-            if (std::abs(finalOffset - initialOffset) > 0.001f) {
-                dirtyStartTime = std::min(dirtyStartTime, notes[static_cast<size_t>(noteIndex)].startTime);
-                dirtyEndTime = std::max(dirtyEndTime, notes[static_cast<size_t>(noteIndex)].endTime);
-                ctx_.notifyNoteOffsetChanged(static_cast<size_t>(noteIndex), initialOffset, finalOffset);
-                float newPip = ctx_.recalculatePIP(notes[static_cast<size_t>(noteIndex)]);
-                if (newPip > 0.0f) {
-                    notes[static_cast<size_t>(noteIndex)].originalPitch = newPip;
-                }
-            }
-        }
-
-        const bool hasManualTargets = hasNoteDragPreview(ctx_);
-        if (dirtyEndTime > dirtyStartTime || hasManualTargets) {
-            auto pitchCurve = ctx_.getPitchCurve();
-            F0FrameRange editRange;
-            if (pitchCurve) {
-                if (hasManualTargets) {
-                    const int manualStartFrame = ctx_.getNoteDragManualStartFrame();
-                    const int manualEndFrameExclusive = ctx_.getNoteDragManualEndFrameExclusive();
-                    if (dirtyEndTime > dirtyStartTime) {
-                        const auto noteDirtyRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
-                        editRange.startFrame = std::min(manualStartFrame, noteDirtyRange.startFrame);
-                        editRange.endFrameExclusive = std::max(manualEndFrameExclusive, noteDirtyRange.endFrameExclusive);
-                    } else {
-                        editRange = F0FrameRange{manualStartFrame, manualEndFrameExclusive};
-                    }
-                } else {
-                    editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
-                }
-            }
-
-            if (hasManualTargets) {
-                suppressFinalNoteDraftCommit = true;
-
-                std::vector<ManualOp> ops;
-                ManualOp op;
-                op.startFrame = ctx_.getNoteDragPreviewStartFrame();
-                op.endFrameExclusive = ctx_.getNoteDragPreviewEndFrameExclusive();
-                op.f0Data = ctx_.getNoteDragPreviewF0();
-                op.source = PitchCorrectionSegment::Source::HandDraw;
-                ops.push_back(std::move(op));
-
-                if (pitchCurve != nullptr && ctx_.commitNotesAndSegments) {
-                    const auto updatedSegments = buildSegmentsWithManualOps(pitchCurve, ops);
-                    ctx_.setUndoDescription(juce::String("绉诲姩闊崇"));
-                    if (ctx_.commitNotesAndSegments(notes, updatedSegments, editRange)) {
-                        ctx_.notifyPitchCurveEdited(editRange.startFrame,
-                                                    editRange.endFrameExclusive - 1);
-                    }
-                }
-            } else {
-                ctx_.getNoteDraft().workingNotes = notes;
-                ctx_.setUndoDescription(juce::String("绉诲姩闊崇"));
-
-                // 鍚屾璁＄畻淇骞朵竴娆℃€ф彁浜ら煶绗﹀拰F0锟?
-                if (pitchCurve && !editRange.isEmpty()) {
-                    commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
-                } else {
-                    ctx_.commitNoteDraft();
-                }
-                suppressFinalNoteDraftCommit = true;
-            }
-        }
-
-        ctx_.getState().noteDrag.draggedNoteIndices.clear();
-        ctx_.setNoteDragManualStartFrame(-1);
-        ctx_.setNoteDragManualEndFrameExclusive(-1);
-        ctx_.getNoteDragInitialManualTargets().clear();
-        clearNoteDragPreview(ctx_);
+        suppressFinalNoteDraftCommit = endNotePitchDrag(e);
     }
+
+    auto notes = std::vector<Note>(displayNotes(ctx_));
+    const auto f0tl = ctx_.getF0Timeline();
 
     bool resizeWasDirty = false;
     double resizedStartTime = 0.0;
@@ -1767,9 +1654,9 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
         }
 
         ctx_.getNoteDraft().workingNotes = notes;
-        ctx_.setUndoDescription(juce::String("璋冩暣闊崇闀垮害"));
+        ctx_.setUndoDescription(juce::String::fromUTF8(u8"调整音符长度"));
 
-        // 鍚屾璁＄畻淇骞朵竴娆℃€ф彁浜ら煶绗﹀拰F0锟?
+        // 同步计算修正并一次性提交音符和F0
         if (pitchCurve && !editRange.isEmpty()) {
             commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
             suppressFinalNoteDraftCommit = true;
@@ -1780,7 +1667,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 
     if (ctx_.getNoteDraft().active && !suppressFinalNoteDraftCommit) {
         ctx_.getNoteDraft().workingNotes = notes;
-        ctx_.setUndoDescription(juce::String("缂栬緫闊崇"));
+        ctx_.setUndoDescription(juce::String::fromUTF8(u8"编辑音符"));
         ctx_.commitNoteDraft();
     }
 
@@ -1806,8 +1693,508 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 }
 
+// ============================================================================
+// OpenDyne（NotesPrimary）工具
+//
+// 唯一 pitch-drag 内部流程：OpenTune Select 与 OpenDyne Pitch Tool 共用。
+// 吸附只走 ScaleSnapConfig::quantizeMidiToActiveScale 单一入口；
+// nullopt（未绑定/无配置）≡ Chromatic（round 半音），OpenTune 无产品变化。
+// ============================================================================
+
+void PianoRollToolHandler::beginNotePitchDrag(int clickedNoteIndex, const std::vector<Note>& notes)
+{
+    auto& state = ctx_.getState();
+    state.noteDrag.draggedNoteIndex = clickedNoteIndex;
+    state.noteDrag.draggedNoteIndices = collectSelectedNoteIndices(notes);
+    clearNoteDragPreview(ctx_);
+
+    ctx_.setNoteDragManualStartFrame(-1);
+    ctx_.setNoteDragManualEndFrameExclusive(-1);
+    ctx_.getNoteDragInitialManualTargets().clear();
+
+    auto pitchCurve = ctx_.getPitchCurve();
+    if (pitchCurve && !state.noteDrag.draggedNoteIndices.empty()) {
+        double rangeStart = 0;
+        double rangeEnd = 0;
+
+        if (state.selection.hasSelectionArea) {
+            rangeStart = std::min(state.selection.selectionStartTime, state.selection.selectionEndTime);
+            rangeEnd = std::max(state.selection.selectionStartTime, state.selection.selectionEndTime);
+        } else {
+            rangeStart = 1e30;
+            rangeEnd = -1e30;
+            for (int selectedIndex : state.noteDrag.draggedNoteIndices) {
+                const auto& selectedNote = notes[static_cast<size_t>(selectedIndex)];
+                rangeStart = std::min(rangeStart, selectedNote.startTime);
+                rangeEnd = std::max(rangeEnd, selectedNote.endTime);
+            }
+        }
+
+        if (rangeStart < 0) rangeStart = 0;
+        if (rangeEnd < rangeStart) std::swap(rangeStart, rangeEnd);
+
+        const auto f0tl = ctx_.getF0Timeline();
+        const auto manualRange = f0tl.rangeForTimes(rangeStart, rangeEnd);
+        const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+
+        if (contentSnapshot
+            && !manualRange.isEmpty()
+            && pitchCurve->hasCorrectionInRange(manualRange.startFrame, manualRange.endFrameExclusive)) {
+            int rangeSize = manualRange.endFrameExclusive - manualRange.startFrame;
+            std::vector<float> renderedF0(rangeSize, -1.0f);
+
+            contentSnapshot->forEachEffectiveF0Span(manualRange.startFrame, manualRange.endFrameExclusive,
+                [&](int frameIndex, const float* data, int length, float gain) {
+                    if (data == nullptr || length <= 0) return;
+                    int relStart = frameIndex - manualRange.startFrame;
+                    int copyOffset = 0;
+                    if (relStart < 0) {
+                        copyOffset = -relStart;
+                        relStart = 0;
+                    }
+                    if (relStart >= rangeSize || copyOffset >= length) return;
+                    int copyLength = std::min(length - copyOffset, rangeSize - relStart);
+                    if (copyLength <= 0) return;
+                    for (int i = 0; i < copyLength; ++i)
+                        renderedF0[static_cast<size_t>(relStart + i)] = data[copyOffset + i] * gain;
+                });
+
+            ctx_.setNoteDragManualStartFrame(manualRange.startFrame);
+            ctx_.setNoteDragManualEndFrameExclusive(manualRange.endFrameExclusive);
+
+            auto& manualTargets = ctx_.getNoteDragInitialManualTargets();
+            for (int relIdx = 0; relIdx < rangeSize; ++relIdx) {
+                int f = manualRange.startFrame + relIdx;
+                float v = renderedF0[relIdx];
+                if (v <= 0.0f) continue;
+                manualTargets.push_back({ f, v });
+            }
+
+            if (manualTargets.empty()) {
+                ctx_.setNoteDragManualStartFrame(-1);
+                ctx_.setNoteDragManualEndFrameExclusive(-1);
+            }
+        }
+    }
+}
+
+void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
+{
+    auto& state = ctx_.getState();
+    if (state.noteDrag.draggedNoteIndex < 0 || state.noteDrag.draggedNoteIndices.empty()) {
+        return;
+    }
+
+    const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
+
+    if (!state.noteDrag.isDraggingNotes) {
+        state.noteDrag.isDraggingNotes = true;
+    }
+    if (!ctx_.getNoteDraft().active) {
+        ctx_.beginNoteDraft();
+    }
+    ctx_.getNoteDraft().contentDirty = true;
+
+    const float startF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(dragStartPos_.y - ctx_.contentOriginY));
+    const float currentF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+
+    float deltaSemitones = 0.0f;
+    if (startF0 > 0.0f && currentF0 > 0.0f) {
+        deltaSemitones = 12.0f * std::log2(currentF0 / startF0);
+    }
+
+    // OpenDyne Pitch Tool：Alt 拖拽期间临时解除吸附（保留连续 cents）；
+    // OpenTune Select 保持现有半音吸附，无产品变化。
+    const bool altBypass = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())
+        && e.mods.isAltDown();
+    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+
+    auto& notes = workingDraftNotes(ctx_);
+    resetDraftNotesToBaseline(ctx_);
+    for (int noteIndex : state.noteDrag.draggedNoteIndices) {
+        auto& note = notes[static_cast<size_t>(noteIndex)];
+        const float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
+        const int baseMidi = note.getBaseMidiNote();
+        const float targetMidi = static_cast<float>(baseMidi) + initialOffset + deltaSemitones;
+        float snappedMidi = targetMidi;
+        if (!altBypass) {
+            // 唯一投影入口：无配置时用默认 Chromatic（quantize 内部 round 半音）。
+            const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+            snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
+        }
+        note.pitchOffset = snappedMidi - static_cast<float>(baseMidi);
+        note.dirty = true;
+    }
+
+    float appliedDeltaSemitones = 0.0f;
+    if (!state.noteDrag.draggedNoteIndices.empty()) {
+        const int firstIndex = state.noteDrag.draggedNoteIndices.front();
+        appliedDeltaSemitones = notes[static_cast<size_t>(firstIndex)].pitchOffset
+            - draftBaselineNotes(ctx_)[static_cast<size_t>(firstIndex)].pitchOffset;
+    }
+
+    updateNoteDragPreview(ctx_, std::pow(2.0f, appliedDeltaSemitones / 12.0f));
+    if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, notes);
+}
+
+bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
+{
+    auto& state = ctx_.getState();
+    if (state.noteDrag.draggedNoteIndex < 0 || !state.noteDrag.isDraggingNotes) {
+        return false;
+    }
+
+    // 以 mouseUp 时刻的 Alt 状态重算最终吸附（Alt 状态变化瞬间生效）。
+    dragNotePitch(e);
+
+    auto notes = std::vector<Note>(displayNotes(ctx_));
+    const auto f0tl = ctx_.getF0Timeline();
+
+    double dirtyStartTime = 1e30;
+    double dirtyEndTime = -1e30;
+
+    for (int noteIndex : state.noteDrag.draggedNoteIndices) {
+        float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
+        float finalOffset = notes[static_cast<size_t>(noteIndex)].pitchOffset;
+
+        if (std::abs(finalOffset - initialOffset) > 0.001f) {
+            dirtyStartTime = std::min(dirtyStartTime, notes[static_cast<size_t>(noteIndex)].startTime);
+            dirtyEndTime = std::max(dirtyEndTime, notes[static_cast<size_t>(noteIndex)].endTime);
+            ctx_.notifyNoteOffsetChanged(static_cast<size_t>(noteIndex), initialOffset, finalOffset);
+            float newPip = ctx_.recalculatePIP(notes[static_cast<size_t>(noteIndex)]);
+            if (newPip > 0.0f) {
+                notes[static_cast<size_t>(noteIndex)].originalPitch = newPip;
+            }
+        }
+    }
+
+    bool suppressFinalNoteDraftCommit = false;
+    const bool hasManualTargets = hasNoteDragPreview(ctx_);
+    if (dirtyEndTime > dirtyStartTime || hasManualTargets) {
+        auto pitchCurve = ctx_.getPitchCurve();
+        F0FrameRange editRange;
+        if (pitchCurve) {
+            if (hasManualTargets) {
+                const int manualStartFrame = ctx_.getNoteDragManualStartFrame();
+                const int manualEndFrameExclusive = ctx_.getNoteDragManualEndFrameExclusive();
+                if (dirtyEndTime > dirtyStartTime) {
+                    const auto noteDirtyRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
+                    editRange.startFrame = std::min(manualStartFrame, noteDirtyRange.startFrame);
+                    editRange.endFrameExclusive = std::max(manualEndFrameExclusive, noteDirtyRange.endFrameExclusive);
+                } else {
+                    editRange = F0FrameRange{manualStartFrame, manualEndFrameExclusive};
+                }
+            } else {
+                editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
+            }
+        }
+
+        if (hasManualTargets) {
+            suppressFinalNoteDraftCommit = true;
+
+            std::vector<ManualOp> ops;
+            ManualOp op;
+            op.startFrame = ctx_.getNoteDragPreviewStartFrame();
+            op.endFrameExclusive = ctx_.getNoteDragPreviewEndFrameExclusive();
+            op.f0Data = ctx_.getNoteDragPreviewF0();
+            op.source = PitchCorrectionSegment::Source::HandDraw;
+            ops.push_back(std::move(op));
+
+            if (pitchCurve != nullptr && ctx_.commitNotesAndSegments) {
+                const auto updatedSegments = buildSegmentsWithManualOps(pitchCurve, ops);
+                ctx_.setUndoDescription(juce::String::fromUTF8(u8"移动音符"));
+                if (ctx_.commitNotesAndSegments(notes, updatedSegments, editRange)) {
+                    ctx_.notifyPitchCurveEdited(editRange.startFrame,
+                                                editRange.endFrameExclusive - 1);
+                }
+            }
+        } else {
+            ctx_.getNoteDraft().workingNotes = notes;
+            ctx_.setUndoDescription(juce::String::fromUTF8(u8"移动音符"));
+
+            // 音高编辑失败（无 PitchCurve / 空范围）不再退化为 note-only 提交。
+            if (pitchCurve != nullptr && !editRange.isEmpty()) {
+                commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
+            }
+            suppressFinalNoteDraftCommit = true;
+        }
+    }
+
+    state.noteDrag.draggedNoteIndices.clear();
+    ctx_.setNoteDragManualStartFrame(-1);
+    ctx_.setNoteDragManualEndFrameExclusive(-1);
+    ctx_.getNoteDragInitialManualTargets().clear();
+    clearNoteDragPreview(ctx_);
+    return suppressFinalNoteDraftCommit;
+}
+
+void PianoRollToolHandler::handlePitchToolMouseDown(const juce::MouseEvent& e)
+{
+    if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme()))
+        return;
+
+    const auto& notes = committedNotes(ctx_);
+    const auto sourceTime = pixelXToSourceTime(e.x);
+    if (!sourceTime)
+        return;
+    const auto editRange = sourceEditRange();
+    if (!editRange.contains(*sourceTime))
+        return;
+
+    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+    const int clickedNoteIndex = findNoteIndexAt(notes, *sourceTime, clickedPitch, 100.0f);
+    if (clickedNoteIndex < 0)
+        return;
+
+    auto& noteSelection = ctx_.getState().noteSelection;
+    const int noteCount = static_cast<int>(notes.size());
+    if (e.mods.isCtrlDown() || e.mods.isCommandDown()) {
+        noteSelection.toggle(clickedNoteIndex, noteCount);
+    } else {
+        noteSelection.setSingle(clickedNoteIndex, noteCount);
+    }
+    updateF0SelectionFromNotes(notes);
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+
+    if (noteSelection.isSelected(clickedNoteIndex)) {
+        beginNotePitchDrag(clickedNoteIndex, notes);
+    }
+}
+
+void PianoRollToolHandler::handlePitchToolMouseUp(const juce::MouseEvent& e)
+{
+    endNotePitchDrag(e);
+    ctx_.getState().noteDrag.draggedNoteIndex = -1;
+    ctx_.clearNoteDraft();
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+}
+
+void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
+{
+    const auto& notes = committedNotes(ctx_);
+    const auto sourceTime = pixelXToSourceTime(e.x);
+    if (!sourceTime)
+        return;
+    const auto editRange = sourceEditRange();
+    if (!editRange.contains(*sourceTime))
+        return;
+
+    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+    const int clickedNoteIndex = findNoteIndexAt(notes, *sourceTime, clickedPitch, 100.0f);
+    if (clickedNoteIndex < 0)
+        return;
+
+    // 双击：把音符吸附到当前音阶（与拖拽共用 quantizeMidiToActiveScale）。
+    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    if (!scaleSnap.has_value())
+        return;   // 无音阶配置（默认 Chromatic）：音符已半音吸附，无需动作
+
+    const Note& original = notes[static_cast<size_t>(clickedNoteIndex)];
+    const float targetMidi = static_cast<float>(original.getBaseMidiNote()) + original.pitchOffset;
+    const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(targetMidi)
+        - static_cast<float>(original.getBaseMidiNote());
+    if (std::abs(snappedOffset - original.pitchOffset) < 0.001f)
+        return;
+
+    ctx_.beginNoteDraft();
+    auto& draft = ctx_.getNoteDraft();
+    draft.contentDirty = true;
+    auto work = draft.workingNotes;
+    work[static_cast<size_t>(clickedNoteIndex)].pitchOffset = snappedOffset;
+    work[static_cast<size_t>(clickedNoteIndex)].dirty = true;
+    draft.workingNotes = work;
+    ctx_.setUndoDescription(juce::String::fromUTF8(u8"音高吸附"));
+
+    auto pitchCurve = ctx_.getPitchCurve();
+    const auto f0tl = ctx_.getF0Timeline();
+    const F0FrameRange noteRange = f0tl.rangeForTimes(original.startTime, original.endTime);
+    if (pitchCurve != nullptr && !noteRange.isEmpty()) {
+        commitNoteBasedCorrection(ctx_, work, pitchCurve, noteRange);
+    } else {
+        ctx_.clearNoteDraft();   // 音高编辑失败不退化提交
+    }
+}
+
+void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEvent& e)
+{
+    if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme()))
+        return;
+
+    const auto& notes = committedNotes(ctx_);
+    const auto sourceTime = pixelXToSourceTime(e.x);
+    if (!sourceTime)
+        return;
+    const auto editRange = sourceEditRange();
+    if (!editRange.contains(*sourceTime))
+        return;
+
+    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+    const int clickedNoteIndex = findNoteIndexAt(notes, *sourceTime, clickedPitch, 100.0f);
+    if (clickedNoteIndex < 0)
+        return;
+
+    auto& state = ctx_.getState();
+    state.noteSelection.setSingle(clickedNoteIndex, static_cast<int>(notes.size()));
+    updateF0SelectionFromNotes(notes);
+
+    state.isVolumeDragging = true;
+    volumeDragBaselineGainDb_ = notes[static_cast<size_t>(clickedNoteIndex)].outputGainDb;
+    state.volumePreviewGainDb = volumeDragBaselineGainDb_;
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+}
+
+void PianoRollToolHandler::handleVolumeEnvelopeToolDrag(const juce::MouseEvent& e)
+{
+    auto& state = ctx_.getState();
+    if (!state.isVolumeDragging)
+        return;
+
+    // 垂直拖拽改 A 层增益：向上 = 增益增大；1 半音高度 = 12 dB。
+    const float dbPerPixel = 12.0f / ctx_.getViewMapper().pixelsPerSemitone;
+    state.volumePreviewGainDb = volumeDragBaselineGainDb_
+        + static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+}
+
+void PianoRollToolHandler::handleVolumeEnvelopeToolUp(const juce::MouseEvent& e)
+{
+    auto& state = ctx_.getState();
+    if (!state.isVolumeDragging)
+        return;
+    state.isVolumeDragging = false;
+
+    const float dbPerPixel = 12.0f / ctx_.getViewMapper().pixelsPerSemitone;
+    const float finalGainDb = volumeDragBaselineGainDb_
+        + static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
+    state.volumePreviewGainDb = 0.0f;
+
+    if (std::abs(finalGainDb - volumeDragBaselineGainDb_) < 0.001f)
+        return;
+
+    const auto& notes = committedNotes(ctx_);
+    const auto selected = collectSelectedNoteIndices(notes);
+    if (selected.empty())
+        return;
+
+    double minStart = 1e30;
+    double maxEnd = -1e30;
+    ContentNoteRangePatch patch;
+    for (int index : selected) {
+        Note updated = notes[static_cast<size_t>(index)];
+        updated.outputGainDb = finalGainDb;
+        patch.afterNotesInRange.push_back(updated);
+        minStart = std::min(minStart, updated.startTime);
+        maxEnd = std::max(maxEnd, updated.endTime);
+    }
+    patch.affectedRange.startSeconds = minStart;
+    patch.affectedRange.endSeconds = maxEnd;
+
+    if (ctx_.commitNoteOutputGainPatch)
+        ctx_.commitNoteOutputGainPatch(patch);
+}
+
+void PianoRollToolHandler::updateScissorsPreview(const juce::MouseEvent& e)
+{
+    auto& state = ctx_.getState();
+    double newPreview = -1.0;
+    const auto sourceTime = pixelXToSourceTime(e.x);
+    if (sourceTime) {
+        const auto editRange = sourceEditRange();
+        if (editRange.contains(*sourceTime)) {
+            // 光标只命中 note blob 时显示预览线。
+            const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+            const int noteIndex = findNoteIndexAt(displayNotes(ctx_), *sourceTime, clickedPitch, 100.0f);
+            if (noteIndex >= 0) {
+                newPreview = *sourceTime;
+            }
+        }
+    }
+    if (state.scissorsPreviewTime != newPreview) {
+        state.scissorsPreviewTime = newPreview;
+        if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+    }
+}
+
+void PianoRollToolHandler::handleScissorsToolMouseDown(const juce::MouseEvent& e)
+{
+    juce::ignoreUnused(e);
+    // 切点以 mouseUp 时刻为准提交；此处只清除旧预览。
+    ctx_.getState().scissorsPreviewTime = -1.0;
+}
+
+void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
+{
+    auto& state = ctx_.getState();
+    state.scissorsPreviewTime = -1.0;
+
+    const auto beforeNotes = committedNotes(ctx_);
+    const auto sourceTime = pixelXToSourceTime(e.x);
+    if (!sourceTime)
+        return;
+    const auto editRange = sourceEditRange();
+    if (!editRange.contains(*sourceTime))
+        return;
+
+    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+    const int noteIndex = findNoteIndexAt(beforeNotes, *sourceTime, clickedPitch, 100.0f);
+    if (noteIndex < 0)
+        return;
+
+    // 合法切点严格满足 note.startTime < t < note.endTime（计划 §四/不变量）。
+    const double splitTime = *sourceTime;
+    const Note& original = beforeNotes[static_cast<size_t>(noteIndex)];
+    if (!(original.startTime < splitTime && splitTime < original.endTime))
+        return;
+
+    // 左右继承全部字段，只改 endTime/startTime。
+    Note left = original;
+    left.endTime = splitTime;
+    left.dirty = true;
+    Note right = original;
+    right.startTime = splitTime;
+    right.dirty = true;
+
+    std::vector<Note> newNotes;
+    newNotes.reserve(beforeNotes.size() + 1);
+    for (size_t i = 0; i < beforeNotes.size(); ++i) {
+        if (static_cast<int>(i) == noteIndex) {
+            newNotes.push_back(left);
+            newNotes.push_back(right);
+        } else {
+            newNotes.push_back(beforeNotes[i]);
+        }
+    }
+
+    if (!ctx_.replaceContentNotesForFullMutation || !ctx_.replaceContentNotesForFullMutation(newNotes)) {
+        return;
+    }
+    if (ctx_.republishPlaybackSource)
+        ctx_.republishPlaybackSource();
+
+    // 右侧 Note 成为唯一选中项（原 note 索引 + 1），避免下次拖拽同时移动两侧。
+    const int rightIndex = noteIndex + 1;
+    if (rightIndex < static_cast<int>(newNotes.size())) {
+        state.noteSelection.setSingle(rightIndex, static_cast<int>(newNotes.size()));
+        updateF0SelectionFromNotes(newNotes);
+    }
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+
+    if (ctx_.getActiveContentKey && ctx_.pushUndoAction) {
+        const auto key = ctx_.getActiveContentKey();
+        if (key.isValid()) {
+            auto action = std::make_unique<ScissorsUndoAction>(
+                key,
+                juce::String::fromUTF8(u8"鍓噾鍒嗗壊"),
+                beforeNotes,
+                newNotes,
+                ctx_.replaceContentNotesForFullMutation);
+            ctx_.pushUndoAction(std::move(action));
+        }
+    }
+}
+
 void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
-// 鎵嬬粯鏇茬嚎宸ュ叿榧犳爣閲婃斁澶勭悊锛氬皢缁樺埗鐨凢0鏁版嵁鎻愪氦鍒伴煶楂樹慨姝ｉ槦锟?
+// 手绘曲线宸ュ叿榧犳爣閲婃斁澶勭悊锛氬皢缁樺埗鐨凢0鏁版嵁鎻愪氦鍒伴煶楂樹慨姝ｉ槦锟?
 {
     juce::ignoreUnused(e);
     const auto dirtyBefore = ctx_.getHandDrawPreviewBounds();
@@ -1851,7 +2238,7 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
         if (!ops.empty()) {
             const int editedStartFrame = ops.front().startFrame;
             const int editedEndFrameExclusive = ops.back().endFrameExclusive;
-            ctx_.setUndoDescription(juce::String("鎵嬬粯鏇茬嚎"));
+            ctx_.setUndoDescription(juce::String::fromUTF8(u8"手绘曲线"));
             ctx_.applyManualCorrection(std::move(ops), editedStartFrame, editedEndFrameExclusive - 1, false);
             ctx_.notifyPitchCurveEdited(editedStartFrame, editedEndFrameExclusive - 1);
             selectNotesForEditedFrameRange(ctx_, editedStartFrame, editedEndFrameExclusive);
@@ -1867,7 +2254,7 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
-// 缁樺埗闊崇宸ュ叿榧犳爣閲婃斁澶勭悊锛氬畬鎴愰煶绗︾粯鍒讹紝鍒嗗壊閲嶅彔闊崇锛屽簲鐢ㄦ渶灏忔椂锟?
+// 绘制音符工具鼠标释放处理：完成音符绘制，分割重叠音符，应用最小时间
 // Option B: noteDraft 浠呭湪 mouseUp 鏃朵竴娆℃€у垱寤哄苟鎻愪氦
 {
     const auto beforeNotes = std::vector<Note>(committedNotes(ctx_));
@@ -1987,10 +2374,10 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 
     ctx_.getNoteDraft().contentDirty = true;
     ctx_.getNoteDraft().workingNotes = notes;
-    ctx_.setUndoDescription(juce::String("缁樺埗闊崇"));
+    ctx_.setUndoDescription(juce::String::fromUTF8(u8"绘制音符"));
     ctx_.setDrawingNoteIndex(-1);
 
-    // 鍚屾璁＄畻淇骞朵竴娆℃€ф彁浜ら煶绗﹀拰F0娈碉紝閬垮厤浜х敓涓や釜Undo Action
+    // 同步计算修正并一次性提交音符和F0段，避免产生两个Undo Action
     auto pitchCurve = ctx_.getPitchCurve();
     if (pitchCurve) {
         const auto f0tl = ctx_.getF0Timeline();
@@ -2043,7 +2430,7 @@ void PianoRollToolHandler::deleteSelectedNotes(std::vector<Note>& notes)
 }
 
 void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
-// 绾块敋鐐瑰伐鍏烽紶鏍囨寜涓嬪鐞嗭細鏀剧疆閿氱偣锛屽湪閿氱偣闂寸敓鎴愮嚎鎬ф彃鍊肩殑F0鏇茬嚎
+// 线锚点工具鼠标按下处理：放置锚点，在锚点间生成线性插值的F0曲线
 {
     const auto editRange = sourceEditRange();
     // 搂8.5 鈥?LineAnchor places anchors at SOURCE time (PitchCurve indexing).
@@ -2066,7 +2453,10 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     if (f0tl.isEmpty()) return;
 
     float midiNote = 69.0f + 12.0f * std::log2(clickFreq / 440.0f);
-    int roundedMidi = static_cast<int>(std::round(midiNote));
+    // 唯一投影入口：无配置时用默认 Chromatic（quantize 内部 round 半音）。
+    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+    int roundedMidi = static_cast<int>(std::lround(snap.quantizeMidiToActiveScale(midiNote)));
     float snappedFreq = 440.0f * std::pow(2.0f, static_cast<float>(roundedMidi - 69) / 12.0f);
 
     int clickFrame = f0tl.frameAtOrBefore(*clickTime);
@@ -2144,7 +2534,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
 
     const int editedStartFrame = ops.front().startFrame;
     const int editedEndFrameExclusive = ops.back().endFrameExclusive;
-    ctx_.setUndoDescription(juce::String("閿氱偣淇"));
+    ctx_.setUndoDescription(juce::String::fromUTF8(u8"锚点修正"));
     ctx_.applyManualCorrection(std::move(ops), editedStartFrame, editedEndFrameExclusive - 1, false);
     ctx_.notifyPitchCurveEdited(editedStartFrame, editedEndFrameExclusive - 1);
     selectNotesForEditedFrameRange(ctx_, editedStartFrame, editedEndFrameExclusive);
@@ -2324,7 +2714,7 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
 
     if (hitId == 0) {
         // Clicked empty space 锟?seek playhead + clear selection.
-        // 搂8.4 (Phase I): TimeTool 涓嬩富鍖虹┖鐧界偣鍑荤幇鍦ㄤ篃浼氶噸瀹氫綅鎾斁澶达紝
+        // §8.4 (Phase I): TimeTool 下主区空白点击现在也会重定位播放头，
         // 涓庢爣灏哄尯鐐瑰嚮琛屼负涓€鑷达紝娑堥櫎"鐐瑰嚮鏃犲搷锟?鐨勭敤鎴峰洶鎯戯拷?
         // 搂8.4 (Phase I bugfix): playhead seek must use TIMELINE time
         // (host-absolute), NOT content-local time.  As a general
@@ -2385,7 +2775,7 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
     }
 
     // 搂8.4 (Phase I): 鍛戒腑 handle 鍚庡厛杩涘叆 pending 鐘舵€侊拷?
-    // mouseDrag 瓒婅繃闃堝€煎悗鎵嶈浆涓虹湡姝ｆ嫋鎷斤紝闃叉杞诲井鎶栧姩瑙﹀彂 undo锟?
+    // mouseDrag 越过阈值后才转为真正拖拽，防止轻微抖动触发 undo。
     tt.dragPending = true;
     tt.isDraggingHandle = false;
     tt.draggedHandleId = hitId;
@@ -2524,7 +2914,7 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
         && ctx_.commitTimeGrid) {
         ctx_.commitTimeGrid(tt.dragWorkingSnapshot,
                              tt.dragOriginalSnapshot,
-                             juce::String("鎷栧姩鏃堕棿鎵嬫焺"));
+                             juce::String::fromUTF8(u8"鎷栧姩鏃堕棿鎵嬫焺"));
     }
 
     tt.isDraggingHandle = false;
@@ -2614,7 +3004,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
         return;
     }
 
-    ctx_.commitTimeGrid(newSnap, snap, juce::String("鎻掑叆鏃堕棿鎵嬫焺"));
+    ctx_.commitTimeGrid(newSnap, snap, juce::String::fromUTF8(u8"鎻掑叆鏃堕棿鎵嬫焺"));
 
     // Auto-select the newly-inserted handle so user can immediately drag.
     // commitTimeGrid already triggers cache dirty internally.
@@ -2667,7 +3057,7 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
         return false;
     }
 
-    ctx_.commitTimeGrid(newSnap, snap, juce::String("鍒犻櫎鏃堕棿鎵嬫焺"));
+    ctx_.commitTimeGrid(newSnap, snap, juce::String::fromUTF8(u8"鍒犻櫎鏃堕棿鎵嬫焺"));
 
     tt.selectedHandleId = 0;
     tt.hoveredHandleId  = 0;

@@ -34,10 +34,12 @@ std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotCo
     snap->detectedKey = content_.detectedKey;
     snap->silentGaps = content_.silentGaps;
     snap->referenceFeatures = content_.referenceFeatures;
+    snap->sibilantGainEnvelope = content_.sibilantGainEnvelope;
     snap->notesRevision = content_.notesRevision;
     snap->pitchRevision = content_.pitchRevision;
     snap->timeGridRevision = content_.timeGridRevision;
     snap->pitchShiftRevision = content_.pitchShiftRevision;
+    snap->outputGainRevision = content_.outputGainRevision;
     snap->contentRevision = content_.contentRevision;
     return snap;
 }
@@ -105,6 +107,21 @@ void StandaloneClipContent::applyNotes(std::vector<Note> notes)
 {
     content_.notes = std::move(notes);
     ++content_.notesRevision;
+    bumpContentRevision();
+}
+
+void StandaloneClipContent::applyNotesWithOutputGain(std::vector<Note> notes)
+{
+    content_.notes = std::move(notes);
+    ++content_.notesRevision;
+    ++content_.outputGainRevision;
+    bumpContentRevision();
+}
+
+void StandaloneClipContent::applySibilantGainEnvelope(SibilantGainEnvelope envelope)
+{
+    content_.sibilantGainEnvelope = std::move(envelope);
+    ++content_.outputGainRevision;
     bumpContentRevision();
 }
 

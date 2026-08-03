@@ -37,6 +37,8 @@ std::shared_ptr<const EditableContentSnapshot> CaptureSegmentContent::snapshotCo
     snap->pitchShiftRevision = editable_.pitchShiftRevision;
     snap->contentRevision = editable_.contentRevision;
     snap->referenceFeatures = editable_.referenceFeatures;
+    snap->sibilantGainEnvelope = editable_.sibilantGainEnvelope;
+    snap->outputGainRevision = editable_.outputGainRevision;
     return snap;
 }
 
@@ -110,6 +112,19 @@ void CaptureSegmentContent::applyNotes(std::vector<Note> notes)
 {
     editable_.notes = std::move(notes);
     ++editable_.notesRevision;
+    ++editable_.contentRevision;
+}
+
+void CaptureSegmentContent::applyNotesWithOutputGain(std::vector<Note> notes)
+{
+    applyNotes(std::move(notes));
+    ++editable_.outputGainRevision;
+}
+
+void CaptureSegmentContent::applySibilantGainEnvelope(SibilantGainEnvelope envelope)
+{
+    editable_.sibilantGainEnvelope = std::move(envelope);
+    ++editable_.outputGainRevision;
     ++editable_.contentRevision;
 }
 

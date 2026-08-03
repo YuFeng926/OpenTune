@@ -188,4 +188,30 @@ void EmptySpaceMouseIntent::clear()
     mouseDownTime = 0.0;
 }
 
+void InteractionState::resetTransient() noexcept
+{
+    selection.isSelectingArea = false;
+    selection.isSelectingF0 = false;
+    selection.f0SelectionAnchorFrame = -1;
+    noteDraft.clear();
+    noteDrag.clear();
+    noteResize.clear();
+    drawing.isDrawingF0 = false;
+    drawing.handDrawBuffer.clear();
+    drawing.isDrawingNote = false;
+    drawing.isPlacingAnchors = false;
+    drawing.pendingAnchors.clear();
+    timeTool.clear();
+    scissorsPreviewTime = -1.0;
+    isVolumeDragging = false;
+    volumePreviewGainDb = 0.0f;
+    isPanning = false;
+    dragStartPos = {};
+    drawNoteToolPendingDrag = false;
+    drawNoteToolMouseDownPos = {};
+    handDrawPendingDrag = false;
+    emptySpaceIntent.clear();
+    selectedLineAnchorSegmentIds.clear();
+}
+
 } // namespace OpenTune
