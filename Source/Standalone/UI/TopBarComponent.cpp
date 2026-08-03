@@ -91,25 +91,39 @@ void TopBarComponent::paint(juce::Graphics& g)
         juce::Path tray;
         tray.addRoundedRectangle(bounds, style.panelRadius);
 
-        // 玻璃拟态托盘：白→淡紫渐变（与 fillOverdosePanelBackground 面板规范一致）
+        // 玻璃拟态托盘：横向渐变（参考图：左 #B8B0D4 右 #BFB9D9，中下部略压暗）
         juce::ColourGradient panelGrad(
-            juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.96f),
-            bounds.getX(), bounds.getY(),
-            juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(0.96f),
-            bounds.getX(), bounds.getBottom(), false);
-        panelGrad.addColour(0.40f, juce::Colour(Overdose::Colors::PanelOpaqueMid).withAlpha(0.92f));
+            juce::Colour(0xFFBDB6DA).withAlpha(0.98f),
+            bounds.getX(), bounds.getCentreY(),
+            juce::Colour(0xFFC6C0E2).withAlpha(0.98f),
+            bounds.getRight(), bounds.getCentreY(), false);
+        panelGrad.addColour(0.5f, juce::Colour(0xFFB9B2D6).withAlpha(0.96f));
         g.setGradientFill(panelGrad);
         g.fillPath(tray);
 
         g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.48f));
         g.strokePath(tray, juce::PathStrokeType(1.0f));
 
+        // 顶部高光（参考图：细亮顶边）
         g.setColour(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.38f));
         g.drawLine(bounds.getX() + style.panelRadius,
                    bounds.getY() + 1.0f,
                    bounds.getRight() - style.panelRadius,
                    bounds.getY() + 1.0f,
                    1.0f);
+
+        // 底部紫灰压暗（参考图：底部阴影 #6D649C 渐隐，柔和）
+        {
+            juce::Graphics::ScopedSaveState clipState(g);
+            g.reduceClipRegion(tray);
+            auto bottomBand = bounds.withTrimmedTop(bounds.getHeight() * 0.62f);
+            juce::ColourGradient bs(juce::Colours::transparentBlack,
+                                    bottomBand.getCentreX(), bottomBand.getY(),
+                                    juce::Colour(0xFF6D649C).withAlpha(0.20f),
+                                    bottomBand.getCentreX(), bottomBand.getBottom(), false);
+            g.setGradientFill(bs);
+            g.fillRect(bottomBand);
+        }
     }
     else if (UIColors::currentThemeId() == ThemeId::Aurora)
     {
