@@ -6,8 +6,9 @@
  * include cycle between Source/Inference/INoteGenerator.h and
  * Source/Utils/LegacyNoteGenerator.h.
  *
- * Method bodies (e.g. ScaleSnapConfig::semitones, snapMidi, applyToNotes)
- * live in Source/Utils/LegacyNoteGenerator.cpp.
+ * Method bodies (e.g. ScaleSnapConfig::semitones, snapMidi,
+ * quantizeMidiToActiveScale, applyToNotes) live in
+ * Source/Utils/LegacyNoteGenerator.cpp.
  *
  * Design note: ScaleSnap is intentionally NOT a field of NoteGeneratorParams.
  * Note generation produces chromatic-quantized notes; scale snapping is a
@@ -44,10 +45,21 @@ struct ScaleSnapConfig {
     static const int* semitones(ScaleMode mode, int& outCount) noexcept;
     float snapMidi(float midiNote) const noexcept;
 
+    /// The single scale-projection entry point shared by AutoTune's
+    /// `applyToNotes` and the Pitch Tool (note drag and double-click).
+    ///
+    /// Semantics:
+    ///  - Chromatic: projects to the nearest semitone (`std::round`).
+    ///    Chromatic no longer doubles as "disable snapping".
+    ///  - Other modes: projects to the nearest tone of the current root/mode.
+    ///
+    /// `applyToNotes` (AUTO) and the Pitch Tool both call this method.
+    float quantizeMidiToActiveScale(float midiNote) const noexcept;
+
     /// Applies scale snap in-place to a vector of notes. For each note, takes
     /// `originalPitch` (continuous Hz from the segmenter) — falling back to
-    /// `pitch` if `originalPitch` is unset — runs it through `snapMidi`, rounds
-    /// to the nearest integer MIDI, and writes the resulting Hz back into
+    /// `pitch` if `originalPitch` is unset — converts to MIDI, runs it through
+    /// `quantizeMidiToActiveScale`, and writes the resulting Hz back into
     /// `note.pitch`. `originalPitch` is left unchanged.
     ///
     /// This is the post-generation step that lets AutoTune (and only AutoTune)
@@ -56,7 +68,8 @@ struct ScaleSnapConfig {
     /// because both `snapMidi` and rounding project onto the same integer
     /// MIDI lattice, so order does not matter.
     ///
-    /// No-op when `mode == ScaleMode::Chromatic`.
+    /// Idempotent in Chromatic mode: generated notes are already
+    /// half-tone-quantized, so `std::round` changes nothing.
     void applyToNotes(std::vector<Note>& notes) const;
 };
 

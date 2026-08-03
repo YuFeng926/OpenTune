@@ -4,6 +4,7 @@
 #include "../../Utils/LocalizationManager.h"
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
 namespace OpenTune {
 
@@ -520,6 +521,28 @@ ParameterPanel::ParameterPanel()
     timeToolButton_->onClick = [this] { onToolClicked(5); };
     addAndMakeVisible(*timeToolButton_);
     timeToolButton_->setVisible(experimentalFeaturesEnabled_);
+
+    // ── OpenDyne 工具按钮（默认隐藏，由 setOpenDyneMode 切换） ──
+    pitchToolButton_ = std::make_unique<ToolIconButton>(6, "Pitch", juce::String::fromUTF8(u8"Pitch 音高编辑\nF2"));
+    pitchToolButton_->setRadioGroupId(1001);
+    pitchToolButton_->setIcon(ToolbarIcons::getPitchToolIcon(), false);
+    pitchToolButton_->onClick = [this] { onToolClicked(6); };
+    addAndMakeVisible(*pitchToolButton_);
+    pitchToolButton_->setVisible(false);
+
+    volumeEnvelopeToolButton_ = std::make_unique<ToolIconButton>(7, "VolumeEnvelope", juce::String::fromUTF8(u8"Volume Envelope 音量包络\nF4"));
+    volumeEnvelopeToolButton_->setRadioGroupId(1001);
+    volumeEnvelopeToolButton_->setIcon(ToolbarIcons::getVolumeEnvelopeToolIcon(), false);
+    volumeEnvelopeToolButton_->onClick = [this] { onToolClicked(7); };
+    addAndMakeVisible(*volumeEnvelopeToolButton_);
+    volumeEnvelopeToolButton_->setVisible(false);
+
+    scissorsToolButton_ = std::make_unique<ToolIconButton>(8, "Scissors", juce::String::fromUTF8(u8"Scissors 切割音符\nF6"));
+    scissorsToolButton_->setRadioGroupId(1001);
+    scissorsToolButton_->setIcon(ToolbarIcons::getScissorsToolIcon(), false);
+    scissorsToolButton_->onClick = [this] { onToolClicked(8); };
+    addAndMakeVisible(*scissorsToolButton_);
+    scissorsToolButton_->setVisible(false);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -628,7 +651,7 @@ void ParameterPanel::resized()
     const int shadowMargin = 12;
     const int innerPadding = 8;
     auto mainArea = getLocalBounds().reduced(shadowMargin + innerPadding);
-    
+
     const int headerHeight = 24;
     const int labelHeight = 20;
     const int spacing = 12;
@@ -636,6 +659,71 @@ void ParameterPanel::resized()
     const int toolButtonGap = 10;   // 相应增大间距
     const int toolButtonHorizontalGap = 12; // 列间距相应增大
     const int toolHeaderGap = 8;
+    const int pitchShiftButtonHeight = 28;
+
+    // ── OpenDyne 布局：工具在上，Pitch Shift 按钮在底部 ──
+    if (openDyneMode_)
+    {
+        mainArea.removeFromTop(spacing);
+        toolsHeader_.setBounds(mainArea.removeFromTop(headerHeight));
+        mainArea.removeFromTop(toolHeaderGap);
+
+        const int rows = 3; // 5 个工具按钮：2 行 + 1 行（Time 居中）
+        const int toolsHeight = rows * toolButtonSize + (rows - 1) * toolButtonGap;
+        auto toolsArea = mainArea.removeFromTop(toolsHeight);
+        mainArea.removeFromTop(spacing);
+
+        std::vector<juce::Component*> buttons;
+        if (selectToolButton_)          buttons.push_back(selectToolButton_.get());          // 行1列1
+        if (pitchToolButton_)           buttons.push_back(pitchToolButton_.get());           // 行1列2
+        if (volumeEnvelopeToolButton_)  buttons.push_back(volumeEnvelopeToolButton_.get());  // 行2列1
+        if (scissorsToolButton_)        buttons.push_back(scissorsToolButton_.get());        // 行2列2
+        if (timeToolButton_)            buttons.push_back(timeToolButton_.get());            // 行3列1
+
+        // 过滤不可见按钮
+        buttons.erase(std::remove_if(buttons.begin(), buttons.end(),
+                                     [](const juce::Component* b) { return !b->isVisible(); }),
+                      buttons.end());
+
+        auto toolsColumn = toolsArea.reduced(5, 0);
+        int startY = toolsColumn.getY();
+        const int visibleCount = static_cast<int>(buttons.size());
+        const int totalWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
+        const int gridStartX = toolsColumn.getCentreX() - totalWidth / 2;
+        for (int i = 0; i < visibleCount; ++i) {
+            const int row = i / 2;
+            const int col = i % 2;
+            const int x = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
+            const int y = startY + row * (toolButtonSize + toolButtonGap);
+            buttons[static_cast<size_t>(i)]->setBounds(x, y, toolButtonSize, toolButtonSize);
+        }
+
+        // Pitch Correction knobs（旋钮区保留，控制 Pitch 工具的修音参数）
+        pitchCorrectionHeader_.setBounds(mainArea.removeFromTop(headerHeight));
+        mainArea.removeFromTop(spacing);
+
+        const int rowHeight = labelHeight + knobSize + 8;
+        const int colWidth = mainArea.getWidth() / 2;
+
+        auto row1 = mainArea.removeFromTop(rowHeight);
+        mainArea.removeFromTop(spacing);
+        auto row2 = mainArea.removeFromTop(rowHeight);
+        mainArea.removeFromTop(spacing);
+
+        auto layoutKnobCell = [&](juce::Rectangle<int> area, juce::Label& label, juce::Slider& slider) {
+            label.setBounds(area.removeFromTop(labelHeight));
+            slider.setBounds(area.reduced(4, 0));
+        };
+        layoutKnobCell(row1.removeFromLeft(colWidth), retuneSpeedLabel_, retuneSpeedSlider_);
+        layoutKnobCell(row1, vibratoDepthLabel_, vibratoDepthSlider_);
+        layoutKnobCell(row2.removeFromLeft(colWidth), vibratoRateLabel_, vibratoRateSlider_);
+        layoutKnobCell(row2, noteSplitLabel_, noteSplitSlider_);
+
+        // Pitch Shift 按钮在底部
+        pitchShiftButton_->setBounds(mainArea.removeFromBottom(pitchShiftButtonHeight).reduced(4, 0));
+        return;
+    }
+
     const int rows = 3; // 使用3行布局（2×2网格 + 1个居中按钮）
     // Tools区域高度计算：header + gap + 3行按钮 + 2个行间距
     const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
@@ -650,7 +738,7 @@ void ParameterPanel::resized()
 
     // 2x2 Grid Layout for Knobs
     const int rowHeight = labelHeight + knobSize + 8;
-    
+
     auto layoutKnobCell = [&](juce::Rectangle<int> area, juce::Label& label, juce::Slider& slider) {
         label.setBounds(area.removeFromTop(labelHeight));
         slider.setBounds(area.reduced(4, 0));
@@ -659,7 +747,7 @@ void ParameterPanel::resized()
     // Row 1 (Retune Speed | Vibrato Depth)
     auto row1 = mainArea.removeFromTop(rowHeight);
     mainArea.removeFromTop(spacing);
-    
+
     // Row 2 (Vibrato Rate | Note Split)
     auto row2 = mainArea.removeFromTop(rowHeight);
     mainArea.removeFromTop(spacing);
@@ -668,12 +756,11 @@ void ParameterPanel::resized()
 
     layoutKnobCell(row1.removeFromLeft(colWidth), retuneSpeedLabel_, retuneSpeedSlider_);
     layoutKnobCell(row1, vibratoDepthLabel_, vibratoDepthSlider_);
-    
+
     layoutKnobCell(row2.removeFromLeft(colWidth), vibratoRateLabel_, vibratoRateSlider_);
     layoutKnobCell(row2, noteSplitLabel_, noteSplitSlider_);
 
     // Pitch Shift button — between knobs and tools
-    const int pitchShiftButtonHeight = 28;
     pitchShiftButton_->setBounds(mainArea.removeFromTop(pitchShiftButtonHeight).reduced(4, 0));
     mainArea.removeFromTop(spacing);
 
@@ -766,6 +853,12 @@ void ParameterPanel::refreshLocalizedText()
         handDrawToolButton_->setTooltip(LOC(kTooltipHandDraw) + "\n5");
     if (timeToolButton_)
         timeToolButton_->setTooltip(LOC(kTooltipTimeTool) + "\nT");
+    if (pitchToolButton_)
+        pitchToolButton_->setTooltip(juce::String::fromUTF8(u8"Pitch 音高编辑\nF2"));
+    if (volumeEnvelopeToolButton_)
+        volumeEnvelopeToolButton_->setTooltip(juce::String::fromUTF8(u8"Volume Envelope 音量包络\nF4"));
+    if (scissorsToolButton_)
+        scissorsToolButton_->setTooltip(juce::String::fromUTF8(u8"Scissors 切割音符\nF6"));
 
     repaint();
 }
@@ -830,8 +923,11 @@ void ParameterPanel::setActiveTool(int toolId)
     if (drawNoteToolButton_) drawNoteToolButton_->setToggleState(toolId == 2, juce::dontSendNotification);
     if (lineAnchorToolButton_) lineAnchorToolButton_->setToggleState(toolId == 3, juce::dontSendNotification);
     if (handDrawToolButton_) handDrawToolButton_->setToggleState(toolId == 4, juce::dontSendNotification);
-    if (timeToolButton_) timeToolButton_->setToggleState(experimentalFeaturesEnabled_ && toolId == 5,
-                                                         juce::dontSendNotification);
+    if (timeToolButton_) timeToolButton_->setToggleState(toolId == 5, juce::dontSendNotification);
+    // OpenDyne 工具
+    if (pitchToolButton_) pitchToolButton_->setToggleState(toolId == 6, juce::dontSendNotification);
+    if (volumeEnvelopeToolButton_) volumeEnvelopeToolButton_->setToggleState(toolId == 7, juce::dontSendNotification);
+    if (scissorsToolButton_) scissorsToolButton_->setToggleState(toolId == 8, juce::dontSendNotification);
 }
 
 void ParameterPanel::setExperimentalFeaturesEnabled(bool enabled)
@@ -846,8 +942,45 @@ void ParameterPanel::setExperimentalFeaturesEnabled(bool enabled)
             timeToolButton_->setToggleState(false, juce::dontSendNotification);
             timeToolButton_->setBounds({});
         }
-        timeToolButton_->setVisible(enabled);
+        timeToolButton_->setVisible(enabled && !openDyneMode_);
     }
+    resized();
+    repaint();
+}
+
+void ParameterPanel::setOpenDyneMode(bool enabled)
+{
+    if (openDyneMode_ == enabled) {
+        return;
+    }
+
+    openDyneMode_ = enabled;
+
+    // OpenTune 工具按钮：Select/DrawNote/LineAnchor/HandDraw 只在 OpenTune 布局显示
+    if (selectToolButton_)      selectToolButton_->setVisible(!enabled);
+    if (drawNoteToolButton_)    drawNoteToolButton_->setVisible(!enabled);
+    if (lineAnchorToolButton_)  lineAnchorToolButton_->setVisible(!enabled);
+    if (handDrawToolButton_)    handDrawToolButton_->setVisible(!enabled);
+    if (autoTuneToolButton_)    autoTuneToolButton_->setVisible(!enabled);
+
+    // OpenDyne 工具按钮：Pitch/VolumeEnvelope/Scissors 只在 OpenDyne 布局显示
+    if (pitchToolButton_)           pitchToolButton_->setVisible(enabled);
+    if (volumeEnvelopeToolButton_)  volumeEnvelopeToolButton_->setVisible(enabled);
+    if (scissorsToolButton_)        scissorsToolButton_->setVisible(enabled);
+
+    // TimeTool 在两种布局都可用（受实验开关控制）
+    if (timeToolButton_) {
+        timeToolButton_->setVisible(enabled || experimentalFeaturesEnabled_);
+        timeToolButton_->setToggleState(false, juce::dontSendNotification);
+    }
+
+    // 切回 OpenTune 时，把当前激活的 OpenDyne 工具按钮复位
+    if (!enabled) {
+        if (pitchToolButton_)          pitchToolButton_->setToggleState(false, juce::dontSendNotification);
+        if (volumeEnvelopeToolButton_) volumeEnvelopeToolButton_->setToggleState(false, juce::dontSendNotification);
+        if (scissorsToolButton_)       scissorsToolButton_->setToggleState(false, juce::dontSendNotification);
+    }
+
     resized();
     repaint();
 }

@@ -268,6 +268,60 @@ public:
         return path;
     }
 
+    // ── OpenDyne 工具图标（原创，非 Melodyne 复制） ────────────
+    /**
+     * @brief Pitch Tool icon: note block with waving pitch line above
+     * 表示音高可编辑的波浪线 + 音符块
+     */
+    static juce::Path getPitchToolIcon() {
+        juce::Path p;
+        // 底部音符块
+        p.addRoundedRectangle(4.0f, 14.0f, 16.0f, 6.0f, 2.0f);
+        // 顶部波浪（音高线）
+        p.startNewSubPath(4.0f, 8.0f);
+        p.cubicTo(8.0f, 4.0f, 12.0f, 12.0f, 16.0f, 8.0f);
+        p.cubicTo(18.0f, 6.0f, 20.0f, 10.0f, 20.0f, 8.0f);
+        return p;
+    }
+
+    /**
+     * @brief Volume Envelope Tool icon: note with amplitude envelope curve
+     * 音符 + 振幅包络线（上下对称衰减曲线）
+     */
+    static juce::Path getVolumeEnvelopeToolIcon() {
+        juce::Path p;
+        // 音符轮廓
+        p.addRoundedRectangle(2.0f, 6.0f, 20.0f, 14.0f, 2.0f);
+        // 内部包络线
+        p.startNewSubPath(4.0f, 13.0f);
+        p.cubicTo(8.0f, 13.0f, 10.0f, 9.0f, 12.0f, 9.0f);
+        p.cubicTo(16.0f, 9.0f, 18.0f, 13.0f, 20.0f, 13.0f);
+        return p;
+    }
+
+    /**
+     * @brief Scissors Tool icon: scissors + split note halves
+     * 剪刀 + 切割示意（音符被切为左右两半）
+     */
+    static juce::Path getScissorsToolIcon() {
+        juce::Path p;
+        // 左刀刃
+        p.addEllipse(3.0f, 3.0f, 5.0f, 5.0f);
+        p.startNewSubPath(5.0f, 8.0f);
+        p.lineTo(12.0f, 14.0f);
+        // 右刀刃
+        p.addEllipse(3.0f, 16.0f, 5.0f, 5.0f);
+        p.startNewSubPath(5.0f, 16.0f);
+        p.lineTo(12.0f, 10.0f);
+        // 切割线
+        p.startNewSubPath(12.0f, 6.0f);
+        p.lineTo(12.0f, 18.0f);
+        // 被切音符块（两侧）
+        p.addRoundedRectangle(14.0f, 8.0f, 4.0f, 4.0f, 1.0f);
+        p.addRoundedRectangle(18.0f, 8.0f, 4.0f, 4.0f, 1.0f);
+        return p;
+    }
+
     /**
      * @brief Get waveform/track icon path
      * Bars representing audio waveform

@@ -317,6 +317,11 @@ juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry
         tree.addChild(notesToValueTree(mat.notes, "Notes"), -1, nullptr);
     }
 
+    // Sibilant gain envelope (B 层)
+    if (!mat.sibilantGainEnvelope.empty()) {
+        tree.addChild(sibilantGainEnvelopeToValueTree(mat.sibilantGainEnvelope), -1, nullptr);
+    }
+
     // CorrectedSegments
     if (!mat.correctionSegments.empty()) {
         tree.addChild(segmentsToValueTree(mat.correctionSegments), -1, nullptr);
@@ -375,6 +380,9 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
     // Notes
     m.notes = notesFromValueTree(tree.getChildWithName("Notes"));
 
+    // Sibilant gain envelope (B 层)
+    m.sibilantGainEnvelope = sibilantGainEnvelopeFromValueTree(tree.getChildWithName("SibilantGainEnvelope"));
+
     // CorrectedSegments
     m.correctionSegments = segmentsFromValueTree(tree.getChildWithName("CorrectedSegments"));
 
@@ -420,7 +428,7 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
         nt.setProperty("retuneSpeed", note.retuneSpeed, nullptr);
         nt.setProperty("vibratoDepth", note.vibratoDepth, nullptr);
         nt.setProperty("vibratoRate", note.vibratoRate, nullptr);
-        nt.setProperty("velocity", note.velocity, nullptr);
+        nt.setProperty("outputGainDb", note.outputGainDb, nullptr);
         nt.setProperty("isVoiced", note.isVoiced ? 1 : 0, nullptr);
         tree.addChild(nt, -1, nullptr);
     }
@@ -443,11 +451,45 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
         note.retuneSpeed = child.getProperty("retuneSpeed", -1.0f);
         note.vibratoDepth = child.getProperty("vibratoDepth", -1.0f);
         note.vibratoRate = child.getProperty("vibratoRate", -1.0f);
-        note.velocity = child.getProperty("velocity", 1.0f);
+        note.outputGainDb = child.getProperty("outputGainDb", 0.0f);
         note.isVoiced = static_cast<int>(child.getProperty("isVoiced", 1)) != 0;
         notes.push_back(note);
     }
     return notes;
+}
+
+// ============================================================================
+// SibilantGainEnvelope 序列化（B 层：点数 + 每点 time/gainDb）
+// ============================================================================
+
+juce::ValueTree ProjectPersistence::sibilantGainEnvelopeToValueTree(const SibilantGainEnvelope& envelope)
+{
+    juce::ValueTree tree("SibilantGainEnvelope");
+    tree.setProperty("pointCount", static_cast<int>(envelope.size()), nullptr);
+    for (const auto& point : envelope) {
+        juce::ValueTree pt("Point");
+        pt.setProperty("time", point.time, nullptr);
+        pt.setProperty("gainDb", point.gainDb, nullptr);
+        tree.addChild(pt, -1, nullptr);
+    }
+    return tree;
+}
+
+SibilantGainEnvelope ProjectPersistence::sibilantGainEnvelopeFromValueTree(const juce::ValueTree& tree)
+{
+    SibilantGainEnvelope envelope;
+    if (!tree.isValid()) { return envelope; }
+    const int count = static_cast<int>(tree.getProperty("pointCount", 0));
+    envelope.reserve(static_cast<size_t>(juce::jmax(0, count)));
+    for (int i = 0; i < tree.getNumChildren(); ++i) {
+        auto child = tree.getChild(i);
+        if (!child.hasType("Point")) { continue; }
+        SibilantGainEnvelopePoint point;
+        point.time = child.getProperty("time", 0.0);
+        point.gainDb = static_cast<float>(child.getProperty("gainDb", 0.0));
+        envelope.push_back(point);
+    }
+    return envelope;
 }
 
 // ============================================================================

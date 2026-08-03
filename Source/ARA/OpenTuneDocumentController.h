@@ -207,6 +207,13 @@ private:
 public:
     // ARA mutation API — Processor delegates ARA writes here
     bool applyNotesToModification(const ContentKey& key, std::vector<Note> notes);
+    // A 编辑语义：委托 owner applyNotesWithOutputGain（推进 notes/outputGain/content revision）。
+    bool applyNotesWithOutputGainToModification(const ContentKey& key, std::vector<Note> notes);
+    // B 编辑语义：委托 owner applySibilantGainEnvelope（推进 outputGain/content revision）。
+    bool applySibilantGainEnvelopeToModification(const ContentKey& key, SibilantGainEnvelope envelope);
+    // 无渲染 republish：从最新 owner snapshot 构建 canonical A+B 包络并原子发布。
+    // 不 enqueue render、不失效 RenderCache、不重建 TimeStretchCache。
+    void republishPlaybackSourceForModification(ContentKey key);
     bool applyPitchCurveToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
     bool applyOriginalF0ToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
     bool applyTimeGridToModification(const ContentKey& key, std::shared_ptr<const TimeGridSnapshot> grid);

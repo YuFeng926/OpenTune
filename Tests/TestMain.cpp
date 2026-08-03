@@ -229,6 +229,91 @@ void testEffectiveF0Contract()
            "ARA and Capture persist complete pitch-shift state");
 }
 
+void testOpenDyneContract()
+{
+    const auto noteHeader = readSource("Source/Utils/Note.h");
+    const auto araArchive = readSource("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto projectPersistence = readSource("Source/Utils/ProjectPersistence.cpp");
+    const auto capturePersistence = readSource("Source/Plugin/Capture/CapturePersistence.cpp");
+    const auto toolHandler = readSource("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto toolHandlerHeader = readSource("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h");
+    const auto processor = readSource("Source/PluginProcessor.cpp");
+    const auto commands = readSource("Source/Content/ContentEditCommands.h");
+    const auto reader = readSource("Source/Utils/PlaybackAudioReader.h");
+    const auto keyShortcut = readSource("Source/Utils/KeyShortcutConfig.h");
+    const auto pianoRollHeader = readSource("Source/Standalone/UI/PianoRollComponent.h");
+    const auto rendererHeader = readSource("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+
+    // 旧 velocity 字段与持久化键一次性删除，无兼容层
+    expect(!contains(noteHeader, "velocity")
+               && !contains(araArchive, "\"velocity\"")
+               && !contains(projectPersistence, "\"velocity\"")
+               && !contains(capturePersistence, "velocity"),
+           "Note::velocity and legacy velocity persistence keys are removed");
+
+    // 音高拖拽无裸 round(targetMidi) 吸附；统一走 quantizeMidiToActiveScale
+    expect(!contains(toolHandler, "std::round(targetMidi)"),
+           "Pitch drag uses the single quantizeMidiToActiveScale entry");
+    expect(contains(toolHandler, "quantizeMidiToActiveScale"),
+           "Pitch drag calls quantizeMidiToActiveScale");
+
+    // topology command 不触发 render mutation completion
+    expect(!contains(processor, "commitContentNoteTopologyPatch")
+               || !contains(functionBlock(processor, "OpenTuneAudioProcessor::commitContentNoteTopologyPatch"),
+                            "onContentLocalMutationCompleted"),
+           "Topology command never triggers render mutation completion");
+
+    // gain command 只走 republishPlaybackSource，不 enqueue render
+    const auto gainPatch = functionBlock(processor, "OpenTuneAudioProcessor::commitNoteOutputGainPatch");
+    const auto envelopePatch = functionBlock(processor, "OpenTuneAudioProcessor::commitSibilantGainEnvelope");
+    expect(!contains(gainPatch, "enqueueRender")
+               && !contains(gainPatch, "onContentLocalMutationCompleted")
+               && contains(gainPatch, "republishPlaybackSource"),
+           "A-layer command republishes without render enqueue");
+    expect(!contains(envelopePatch, "enqueueRender")
+               && !contains(envelopePatch, "onContentLocalMutationCompleted")
+               && contains(envelopePatch, "republishPlaybackSource"),
+           "B-layer command republishes without render enqueue");
+    expect(contains(commands, "republishPlaybackSource"),
+           "ContentEditCommands exposes the no-render republish entry");
+
+    // readPlaybackAudio 的 TimeStretch 与普通路径汇合到同一 gain apply；canonical 读取无包络
+    const auto readPlayback = functionBlock(reader, "inline int readPlaybackAudio");
+    const auto readCanonical = functionBlock(reader, "inline int readCanonicalAudio");
+    expect(contains(readPlayback, "applyPreparedOutputGain")
+               && !contains(readCanonical, "applyPreparedOutputGain"),
+           "Playback gain applies once after both read paths; canonical read stays ungained");
+
+    // OpenDyne F 键为 scheme 固定映射，不写入 KeyShortcutConfig / 无新 ShortcutId
+    expect(contains(toolHandler, "F2Key") && contains(toolHandler, "F6Key")
+               && !contains(keyShortcut, "Pitch")
+               && !contains(keyShortcut, "Scissors")
+               && !contains(keyShortcut, "VolumeEnvelope"),
+           "OpenDyne F-keys are scheme-fixed, not user-configurable shortcuts");
+
+    // 无第二波形缓存 / 独立 OpenDyne renderer 或 tool handler
+    expect(!contains(pianoRollHeader, "OpenDyneRenderer")
+               && !contains(pianoRollHeader, "OpenDyneToolHandler")
+               && !contains(rendererHeader, "OpenDyneRenderer"),
+           "No parallel OpenDyne renderer/tool-handler structures exist");
+
+    // AUTO 提交推进 outputGainRevision（A 投影逐点变化，计划五.3）
+    const auto autoCommit = functionBlock(processor, "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey");
+    expect(contains(processor, "applyNotesWithOutputGain")
+               && contains(autoCommit, "applyNotesWithOutputGain")
+               && !contains(autoCommit, "clip->applyNotes("),
+           "AUTO note commit advances outputGainRevision, no bare applyNotes");
+
+    // export 使用与 playback 同一 outputGain 包络
+    const auto exportRender = functionBlock(processor, "void renderPlacementForExport");
+    expect(contains(exportRender, "outputGainEnvelope->linearGains"),
+           "Export bakes the same outputGain envelope as playback");
+
+    // DrawNote/LineAnchor 吸附根除裸 round(midiNote)，统一 quantizeMidiToActiveScale 入口
+    expect(!contains(toolHandler, "std::round(midiNote)"),
+           "DrawNote/LineAnchor snap through the single quantizeMidiToActiveScale entry");
+}
+
 void testKillListContract()
 {
     const auto owner = readSource("Source/Content/DomainContentOwner.h");
@@ -460,6 +545,7 @@ int main()
     testEditorStateProjectionContract();
     testChunkBlankCorrectionContract();
     testRenderWorkerPauseContract();
+    testOpenDyneContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";

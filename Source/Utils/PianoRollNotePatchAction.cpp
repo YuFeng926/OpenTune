@@ -17,12 +17,12 @@ PianoRollNotePatchAction::PianoRollNotePatchAction(std::shared_ptr<ContentEditCo
 
 void PianoRollNotePatchAction::undo()
 {
-    commands_->commitNotePatch(contentKey_, beforePatch_);
+    commands_->commitNoteTopologyPatch(contentKey_, beforePatch_);
 }
 
 void PianoRollNotePatchAction::redo()
 {
-    commands_->commitNotePatch(contentKey_, afterPatch_);
+    commands_->commitNoteTopologyPatch(contentKey_, afterPatch_);
 }
 
 } // namespace OpenTune

@@ -10,7 +10,7 @@
 namespace OpenTune {
 
 // Seconds-based note-only undo action. Stores before/after ContentNoteRangePatch
-// and calls commitNotePatch() on undo/redo — no frame conversion, no segments.
+// and calls commitNoteTopologyPatch() on undo/redo — no frame conversion, no segments.
 // Separate from PianoRollEditAction which handles frame-based pitch+note edits.
 class PianoRollNotePatchAction : public UndoAction {
 public:

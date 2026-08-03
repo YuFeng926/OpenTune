@@ -789,7 +789,16 @@ public:
                                         std::vector<Note> notes,
                                         std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange);
-    ContentCommitSnapshot commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch);
+    ContentCommitSnapshot commitContentNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch);
+    // A 层：只修改选定 Note 的 outputGainDb，推进 notes/outputGain/content revision，
+    // 只走 republishPlaybackSource()（零 render enqueue）。
+    ContentCommitSnapshot commitNoteOutputGainPatch(ContentKey key, ContentNoteRangePatch patch);
+    // B 层：一次替换 SibilantGainEnvelope，推进 outputGain/content revision，
+    // 只走 republishPlaybackSource()（零 render enqueue）。
+    ContentCommitSnapshot commitSibilantGainEnvelope(ContentKey key, SibilantGainEnvelope envelope);
+    // 无渲染发布入口：按 content domain 调现有装配函数，只读最新 snapshot、
+    // 构建 canonical A+B、交给 Publisher 准备目标采样率增益并原子 publish。
+    void republishPlaybackSource(ContentKey key);
     bool setContentPitchCurve(ContentKey key,
                               std::shared_ptr<PitchCurve> curve,
                               ContentEditRangeFrames affectedRange);

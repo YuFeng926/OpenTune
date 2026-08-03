@@ -311,7 +311,7 @@ public:
 
     juce::Font getTextButtonFont(juce::TextButton& button, int height) override
     {
-        // 閲嶈锛氫笉瑕佺敤鎸夐挳楂樺害鎺ㄥ瀛椾綋澶у皬锛屽惁鍒欎細鍑虹幇鈥滀竴澶т竴灏忊€濄€?        // 绾﹀畾锛氶渶瑕佺粺涓€瀛楀彿鐨勬寜閽缃?properties["fontHeight"].
+        // 重要：不要用按钮高度推导字体大小，否则会出现“一大一小”。需要统一字号的按钮请在 properties 中设置 fontHeight 属性。
         if (button.getProperties().contains("fontHeight"))
         {
             const auto v = static_cast<double>(button.getProperties()["fontHeight"]);
@@ -574,11 +574,11 @@ public:
     {
         juce::ignoreUnused(base);
 
-        // Dark Blue-Grey锛氭竻鐖姐€佺嚎鏉℃槑蹇€?        // 璁捐鍘熷垯锛?        // - 涓嶇敤鈥滃ぇ闈㈢Н绾己璋冭壊濉厖鈥濓紝鑰屾槸鐢ㄢ€滅粏鎻忚竟 + 杞绘礂鑹测€濊〃杈炬縺娲?        // - 闃村奖浣跨敤鍐疯壊鐜闃村奖锛屽噺灏戝帤閲嶇函榛?
+        // Dark Blue-Grey：清爽、线条明快。设计原则：不用“大面积纯强调色填充”，而是用“细描边 + 轻洗色”表达激活；阴影使用冷色环境阴影，减少厚重纯黑。
         const auto themeId = UIColors::currentThemeId();
         if (themeId != ThemeId::DarkBlueGrey)
         {
-            // 闃插尽鎬э細鏈嚱鏁板彧涓?DarkBlueGrey 璁捐
+            // 防御性：本函数只为 DarkBlueGrey 设计
             return;
         }
 
@@ -599,7 +599,7 @@ public:
             ds.drawForPath(g, p);
         }
 
-        // 2) 鑳屾櫙濉厖锛堣交娓愬彉锛屽埗閫犱綋绉級
+        // 2) 背景填充（轻渐变，制造体积）
         juce::Colour bg;
         if (isDown)
             bg = UIColors::buttonPressed;
@@ -617,7 +617,7 @@ public:
         g.setGradientFill(bgGrad);
         g.fillRoundedRectangle(bounds, radius);
 
-        // 3) 杞绘礂鑹诧紙鍙湪閫変腑鎬侊級
+        // 3) 轻洗色（只在选中态）
         if (toggled && !isDown)
         {
             g.setColour(UIColors::accent.withAlpha(0.10f));
@@ -631,7 +631,7 @@ public:
                        bounds.getRight() - radius, bounds.getY() + 1.0f, 1.0f);
         }
 
-        // 5) 鎸変笅鎬佸唴闃村奖锛堣交寰級
+        // 5) 按下态内阴影（轻微）
         if (isDown)
         {
             g.setColour(UIColors::bevelDark.withAlpha(0.26f));
@@ -640,7 +640,7 @@ public:
             g.strokePath(innerShadow, juce::PathStrokeType(2.0f));
         }
 
-        // 6) 杈规
+        // 6) 边框
         juce::Colour border = toggled ? UIColors::accent.withAlpha(0.85f)
                                       : UIColors::panelBorder.withAlpha(isHighlighted ? 0.70f : 0.55f);
         g.setColour(border);
@@ -1014,7 +1014,7 @@ public:
     void drawDarkBlueGreySliderThumb(juce::Graphics& g, juce::Rectangle<float> thumb, const ThemeStyle& themeStyle)
     {
         // Soothe 2 Style: Soft pill-shaped handle with gentle shadow
-        float r = thumb.getHeight() * 0.5f; // 浣跨敤楂樺害璁＄畻鍦嗚锛屽舰鎴愯兌鍥婂舰鐘?
+        float r = thumb.getHeight() * 0.5f; // 使用高度计算圆角，形成胶囊形状。
         // 1. Soft Drop Shadow - 鏌斿拰鐨勫ぇ鍗婂緞闃村奖
         juce::DropShadow ds;
         ds.colour = juce::Colours::black.withAlpha(0.22f);
@@ -1745,7 +1745,7 @@ public:
             return;
         }
         
-        // 鏍规嵁涓婚閫夋嫨鐏拌壊閰嶈壊鏂规
+        // 根据主题选择灰色配色方案
         juce::Colour trackBg, thumbBg, thumbHover, thumbPressed, highlight;
         
         if (themeId == ThemeId::BlueBreeze)
@@ -1773,11 +1773,11 @@ public:
             thumbPressed = juce::Colour(0xFF7A8F9E);
             highlight = juce::Colour(0xFFC6D4DD);
         }
-        // 涓嶇粯鍒惰建閬撹儗鏅?- 閫忔槑鑳屾櫙璁╂粦鍧楃洿鎺ユ诞鍔ㄥ湪鍐呭涔嬩笂
+        // 不绘制轨道背景 - 透明背景让滑块直接浮动在内容之上
         juce::ignoreUnused(trackBg);
         
         // 缁樺埗婊戝潡 (thumb) - 澶у渾瑙?+ 纾ㄧ爞璐ㄦ劅
-        float cornerRadius = 5.0f; // 澶ц搴﹀渾瑙掞紝寰井鍦嗘鼎
+        float cornerRadius = 5.0f; // 大角度圆角，微微圆润
         juce::Rectangle<float> thumbBounds;
         
         if (isScrollbarVertical)
@@ -1829,7 +1829,7 @@ public:
         g.setGradientFill(thumbGrad);
         g.fillRoundedRectangle(thumbBounds, cornerRadius);
         
-        // 婊戝潡椤堕儴/宸︿晶楂樺厜绾?- 鏅惰幑鍓旈€忔劅
+        // 滑块顶部/左侧高光线条 - 晶莹剔透感
         g.setColour(highlight.withAlpha(0.25f));
         if (isScrollbarVertical)
         {
@@ -1842,7 +1842,7 @@ public:
                        thumbBounds.getX() + 1.0f, thumbBounds.getBottom() - cornerRadius, 1.5f);
         }
         
-        // 鎮仠鏃剁殑鏌斿拰鍙戝厜鏁堟灉
+        // 悬停时的柔和发光效果
         if (isMouseOver && !isMouseDown)
         {
             float glowAlpha = 0.12f;

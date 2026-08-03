@@ -1,6 +1,7 @@
 #pragma once
 #include "../Utils/SourceWindow.h"
 #include "../Utils/Note.h"
+#include "../Utils/OutputGainEnvelope.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
@@ -37,11 +38,13 @@ struct EditableContentSnapshot
     DetectedKey detectedKey;
     std::vector<SilentGap> silentGaps;
     ReferenceFeatureSet referenceFeatures;
+    SibilantGainEnvelope sibilantGainEnvelope;
 
     uint64_t notesRevision{0};
     uint64_t pitchRevision{0};
     uint64_t timeGridRevision{0};
     uint64_t pitchShiftRevision{0};
+    uint64_t outputGainRevision{0};
     uint64_t contentRevision{0};
 
     template <typename Sink>

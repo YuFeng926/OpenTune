@@ -842,7 +842,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     // 2. Icon
     juce::Path& path = (isToggled && !toggledIconPath_.isEmpty()) ? toggledIconPath_ : iconPath_;
 
-    // 鑾峰彇鎸夐挳鍚嶇О锛岀敤浜庡垽鏂槸鍚︽槸 Play/Pause/Stop
+    // 获取按钮名称，用于判断是否是 Play/Pause/Stop
     juce::String buttonName = getName();
     bool isTransportButton = (buttonName == "Play" || buttonName == "Pause" || buttonName == "Stop");
 
@@ -1247,7 +1247,7 @@ void TransportBarComponent::paint(juce::Graphics& g)
 
 void TransportBarComponent::mouseDown(const juce::MouseEvent& e)
 {
-    // 濡傛灉鐐瑰嚮鐨勪笉鏄疊pmField锛岃BpmField澶卞幓鐒︾偣
+    // 如果点击的不是BpmField，让BpmField失去焦点
     if (!bpmField_.getBounds().contains(e.getPosition()))
     {
         if (bpmField_.hasKeyboardFocus(true))

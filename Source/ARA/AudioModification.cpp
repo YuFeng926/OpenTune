@@ -117,10 +117,12 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
     snap->detectedKey = content->analysis.detectedKey;
     snap->silentGaps = content->analysis.silentGaps;
     snap->referenceFeatures = content->analysis.referenceFeatures;
+    snap->sibilantGainEnvelope = content->editable.sibilantGainEnvelope;
     snap->notesRevision = content->editable.notesRevision;
     snap->pitchRevision = content->editable.pitchRevision;
     snap->timeGridRevision = content->editable.timeGridRevision;
     snap->pitchShiftRevision = content->editable.pitchShiftRevision;
+    snap->outputGainRevision = content->editable.outputGainRevision;
     snap->contentRevision = content->contentRevision;
     return snap;
 }
@@ -129,6 +131,20 @@ void AudioModification::applyNotes(const std::vector<Note>& notes)
 {
     content->editable.notes = notes;
     ++content->editable.notesRevision;
+    ++content->editable.contentRevision;
+    ++content->contentRevision;
+}
+
+void AudioModification::applyNotesWithOutputGain(const std::vector<Note>& notes)
+{
+    applyNotes(notes);
+    ++content->editable.outputGainRevision;
+}
+
+void AudioModification::applySibilantGainEnvelope(const SibilantGainEnvelope& envelope)
+{
+    content->editable.sibilantGainEnvelope = envelope;
+    ++content->editable.outputGainRevision;
     ++content->editable.contentRevision;
     ++content->contentRevision;
 }

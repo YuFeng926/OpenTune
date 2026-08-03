@@ -15,6 +15,8 @@
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/Note.h"
 #include "Utils/PitchCurve.h"
+#include "Utils/NoteGeneratorTypes.h"   // ScaleSnapConfig — OpenDyne Pitch 吸附
+#include "Utils/UndoManager.h"          // UndoAction — OpenDyne Scissors undo
 #include "UI/ToolIds.h"
 #include "InteractionState.h"
 #include "UI/ViewMapper.h"
@@ -104,6 +106,23 @@ public:
         // 第三参 affectedRange 来自 ToolHandler 编辑时计算的精确范围，用于
         // undo/redo 时只重渲染该范围（而不是 segments 列表反推的并集 = 全长）。
         std::function<ContentCommitSnapshot(const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)> commitNotesAndSegments;
+
+        // === OpenDyne（NotesPrimary）提交与配置回调 ===
+        // 拓扑提交：只替换 notes、推进 notes/content revision，零 render。
+        std::function<ContentCommitSnapshot(ContentNoteRangePatch)> commitNoteTopologyPatch;
+        // A 层提交：只修改 outputGainDb，推进 notes/outputGain/content revision，
+        // 内部 republish，零 render。
+        std::function<ContentCommitSnapshot(ContentNoteRangePatch)> commitNoteOutputGainPatch;
+        // 全量替换 notes（Scissors 分割）：只推进 notes/content revision，零 render。
+        std::function<bool(const std::vector<Note>&)> replaceContentNotesForFullMutation;
+        // 无渲染发布 playback source（A/B 提交后调用）。
+        std::function<void()> republishPlaybackSource;
+        // Pitch Tool 拖拽吸附配置；nullopt = 无配置（默认 Chromatic，即 round 半音）。
+        std::function<std::optional<ScaleSnapConfig>()> getActiveScaleSnap;
+        // 当前编辑内容 key（OpenDyne 提交与 undo action 构造）。
+        std::function<ContentKey()> getActiveContentKey;
+        // 把 undo action 推入组件 UndoManager。
+        std::function<void(std::unique_ptr<UndoAction>)> pushUndoAction;
 
         std::function<std::shared_ptr<PitchCurve>()> getPitchCurve;
         std::function<std::shared_ptr<const EditableContentSnapshot>()> getEditableContentSnapshot;
@@ -228,6 +247,21 @@ private:
     void handleLineAnchorMouseDrag(const juce::MouseEvent& e);
     void clearLineAnchorPreview();
 
+    // === OpenDyne（NotesPrimary）工具 ===
+    // 唯一 pitch-drag 内部流程：OpenTune Select 与 OpenDyne Pitch 共用。
+    void beginNotePitchDrag(int clickedNoteIndex, const std::vector<Note>& notes);
+    void dragNotePitch(const juce::MouseEvent& e);
+    bool endNotePitchDrag(const juce::MouseEvent& e);
+    void handlePitchToolMouseDown(const juce::MouseEvent& e);
+    void handlePitchToolDoubleClick(const juce::MouseEvent& e);
+    void handlePitchToolMouseUp(const juce::MouseEvent& e);
+    void handleVolumeEnvelopeToolMouseDown(const juce::MouseEvent& e);
+    void handleVolumeEnvelopeToolDrag(const juce::MouseEvent& e);
+    void handleVolumeEnvelopeToolUp(const juce::MouseEvent& e);
+    void updateScissorsPreview(const juce::MouseEvent& e);
+    void handleScissorsToolMouseDown(const juce::MouseEvent& e);
+    void handleScissorsToolUp(const juce::MouseEvent& e);
+
     // ⚡️ §8.4 — Time tool handlers (Phase F minimal scaffolding;
     // Phase G adds full drag math + double-click insert + Alt-snap-disable).
     void handleTimeToolMouseMove(const juce::MouseEvent& e);
@@ -298,6 +332,8 @@ private:
 
     juce::Point<int> dragStartPos_;
     juce::Point<float> lastDrawPoint_;
+    // Volume Envelope Tool 拖拽起点增益（dB）。
+    float volumeDragBaselineGainDb_ = 0.0f;
 };
 
 } // namespace OpenTune

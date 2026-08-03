@@ -27,7 +27,7 @@ namespace OpenTune {
 namespace {
 
 constexpr int kContentPayloadArchiveMagic = 0x4F544143;
-constexpr int kContentPayloadArchiveVersion = 2;
+constexpr int kContentPayloadArchiveVersion = 3; // v3 adds SibilantGainEnvelope to EditableContent
 constexpr int kMaxContentPayloadRecords = 4096;
 
 } // namespace
@@ -109,10 +109,22 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         n->setAttribute("retuneSpeed", note.retuneSpeed);
         n->setAttribute("vibratoDepth", note.vibratoDepth);
         n->setAttribute("vibratoRate", note.vibratoRate);
-        n->setAttribute("velocity", note.velocity);
+        n->setAttribute("outputGainDb", note.outputGainDb);
         n->setAttribute("isVoiced", note.isVoiced ? 1 : 0);
         editable->addChildElement(n);
     }
+
+    // B 层：Sibilant Balance 结果（revision 不落盘）
+    auto* sib = new juce::XmlElement("SibilantGainEnvelope");
+    sib->setAttribute("pointCount", static_cast<int>(mod.content->editable.sibilantGainEnvelope.size()));
+    for (const auto& point : mod.content->editable.sibilantGainEnvelope)
+    {
+        auto* p = new juce::XmlElement("Point");
+        p->setAttribute("time", point.time);
+        p->setAttribute("gainDb", point.gainDb);
+        sib->addChildElement(p);
+    }
+    editable->addChildElement(sib);
 
     if (mod.content->analysis.pitchCurve != nullptr)
     {
@@ -202,7 +214,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
             n->setAttribute("retuneSpeed", note.retuneSpeed);
             n->setAttribute("vibratoDepth", note.vibratoDepth);
             n->setAttribute("vibratoRate", note.vibratoRate);
-            n->setAttribute("velocity", note.velocity);
+            n->setAttribute("outputGainDb", note.outputGainDb);
             rf->addChildElement(n);
         }
         
@@ -350,11 +362,25 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 !std::isfinite(note.vibratoDepth) || !std::isfinite(note.vibratoRate))
                 return std::nullopt;
 
-            note.velocity = static_cast<float>(n->getDoubleAttribute("velocity"));
-            if (!std::isfinite(note.velocity))
+            note.outputGainDb = static_cast<float>(n->getDoubleAttribute("outputGainDb"));
+            if (!std::isfinite(note.outputGainDb))
                 return std::nullopt;
             note.isVoiced = n->getIntAttribute("isVoiced") != 0;
             content.editable.notes.push_back(note);
+        }
+
+        // B 层：Sibilant Balance 结果（revision 不落盘，恢复端由 owner 推进新 revision）
+        if (auto* sib = editable->getChildByName("SibilantGainEnvelope"))
+        {
+            for (auto* p : sib->getChildWithTagNameIterator("Point"))
+            {
+                SibilantGainEnvelopePoint point;
+                point.time = p->getDoubleAttribute("time");
+                point.gainDb = static_cast<float>(p->getDoubleAttribute("gainDb"));
+                if (!std::isfinite(point.time) || !std::isfinite(point.gainDb))
+                    return std::nullopt;
+                content.editable.sibilantGainEnvelope.push_back(point);
+            }
         }
 
         for (auto* s : editable->getChildWithTagNameIterator("PitchCorrectionSegment"))
@@ -552,13 +578,13 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 note.retuneSpeed = static_cast<float>(n->getDoubleAttribute("retuneSpeed"));
                 note.vibratoDepth = static_cast<float>(n->getDoubleAttribute("vibratoDepth"));
                 note.vibratoRate = static_cast<float>(n->getDoubleAttribute("vibratoRate"));
-                note.velocity = static_cast<float>(n->getDoubleAttribute("velocity"));
+                note.outputGainDb = static_cast<float>(n->getDoubleAttribute("outputGainDb"));
 
                 if (!std::isfinite(note.startTime) || !std::isfinite(note.endTime) ||
                     !std::isfinite(note.pitch) || !std::isfinite(note.originalPitch) ||
                     !std::isfinite(note.pitchOffset) || !std::isfinite(note.retuneSpeed) ||
                     !std::isfinite(note.vibratoDepth) || !std::isfinite(note.vibratoRate) ||
-                    !std::isfinite(note.velocity) || note.endTime <= note.startTime)
+                    !std::isfinite(note.outputGainDb) || note.endTime <= note.startTime)
                     return std::nullopt;
 
                 content.analysis.referenceFeatures.pitch.notes.push_back(note);
@@ -1431,6 +1457,9 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
     readSource.timeGridRevision = content.editable.timeGridRevision;
     readSource.timeGridIsIdentity = content.editable.timeGrid->isIdentity();
+    readSource.outputGainEnvelope = buildOutputGainEnvelope(
+        content.editable.notes, content.editable.sibilantGainEnvelope, content.editable.timeGrid,
+        readSource.audioBuffer->getNumSamples(), readSource.audioSampleRate);
 
     contentRenderService_->publishPlaybackSource(key, readSource);
     return true;
@@ -2081,6 +2110,62 @@ bool OpenTuneDocumentController::applyNotesToModification(const ContentKey& key,
     
     refreshRegisteredRenderers(publishModelChange());
     return true;
+}
+
+bool OpenTuneDocumentController::applyNotesWithOutputGainToModification(const ContentKey& key, std::vector<Note> notes)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr || !mod->hasContentState()) return false;
+    mod->applyNotesWithOutputGain(std::move(notes));
+
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+bool OpenTuneDocumentController::applySibilantGainEnvelopeToModification(const ContentKey& key,
+                                                                          SibilantGainEnvelope envelope)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr || !mod->hasContentState()) return false;
+    mod->applySibilantGainEnvelope(envelope);
+
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+void OpenTuneDocumentController::republishPlaybackSourceForModification(ContentKey key)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr || !mod->hasContentState())
+        return;
+    if (contentRenderService_ == nullptr)
+        return;
+
+    PlaybackReadSource readSource;
+    if (!contentRenderService_->getPlaybackReadSource(key, readSource))
+        return;
+    if (readSource.audioBuffer == nullptr || readSource.audioBuffer->getNumSamples() <= 0)
+        return;
+
+    const auto& content = *mod->content;
+    readSource.renderCache = contentRenderService_->getOrCreateRenderCache(key);
+    readSource.pitchRevision = content.editable.pitchRevision;
+    readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
+    readSource.timeGridRevision = content.editable.timeGridRevision;
+    readSource.timeGridIsIdentity = content.editable.timeGrid->isIdentity();
+    readSource.outputGainEnvelope = buildOutputGainEnvelope(
+        content.editable.notes, content.editable.sibilantGainEnvelope, content.editable.timeGrid,
+        readSource.audioBuffer->getNumSamples(), readSource.audioSampleRate);
+
+    contentRenderService_->publishPlaybackSource(key, std::move(readSource));
 }
 
 bool OpenTuneDocumentController::applyPitchCurveToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve)
