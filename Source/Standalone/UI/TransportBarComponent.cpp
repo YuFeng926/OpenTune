@@ -617,6 +617,12 @@ void UnifiedToolbarButton::setConnectedEdges(int edges)
     repaint();
 }
 
+void UnifiedToolbarButton::setSolidIcon(bool solid)
+{
+    solidIcon_ = solid;
+    repaint();
+}
+
 void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
@@ -668,7 +674,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(p);
             juce::ColourGradient idle(
-                juce::Colour(0xFFF2EEF6),
+                juce::Colour(0xFFEDE9F3),
                 bounds.getX(), bounds.getY(),
                 juce::Colour(0xFFAFA7CD),
                 bounds.getX(), bounds.getBottom(),
@@ -682,12 +688,12 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             g.drawLine(bounds.getX() + radius, bounds.getY() + 1.0f,
                        bounds.getRight() - radius, bounds.getY() + 1.0f, 1.0f);
 
-            // 底部紫灰压暗（浮雕收边）
+            // 底部紫灰压暗（浮雕收边，柔和）
             auto bottomShade = bounds.withTrimmedTop(bounds.getHeight() * 0.62f);
             juce::ColourGradient bs(
                 juce::Colours::transparentBlack,
                 bottomShade.getCentreX(), bottomShade.getY(),
-                juce::Colour(0xFF51406F).withAlpha(0.16f),
+                juce::Colour(0xFF51406F).withAlpha(0.10f),
                 bottomShade.getCentreX(), bottomShade.getBottom(), false);
             g.setGradientFill(bs);
             g.fillRect(bottomShade);
@@ -705,14 +711,14 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                 bounds.getX(), bounds.getBottom(),
                 false);
             activeFill.addColour(0.45f, juce::Colour(0xFFE7D7ED));
-            activeFill.addColour(0.78f, juce::Colour(0xFFE0C2E6));
+            activeFill.addColour(0.78f, juce::Colour(0xFFDDC0E2));
             g.setGradientFill(activeFill);
             g.fillPath(p);
 
             // 顶部柔和高光（克制，以浅粉紫渐变为主）
             auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.38f);
             juce::ColourGradient hl(
-                juce::Colour(0xFFFFFFFF).withAlpha(0.30f),
+                juce::Colour(0xFFFFFFFF).withAlpha(0.28f),
                 topHighlight.getCentreX(), topHighlight.getY(),
                 juce::Colours::transparentWhite,
                 topHighlight.getCentreX(), topHighlight.getBottom(),
@@ -720,12 +726,12 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             g.setGradientFill(hl);
             g.fillRect(topHighlight);
 
-            // 底部微压暗（浮雕收边）
+            // 底部微压暗（浮雕收边，柔和）
             auto bottomShade = bounds.withTrimmedTop(bounds.getHeight() * 0.60f);
             juce::ColourGradient bs(
                 juce::Colours::transparentBlack,
                 bottomShade.getCentreX(), bottomShade.getY(),
-                juce::Colour(0xFF803090).withAlpha(0.14f),
+                juce::Colour(0xFF803090).withAlpha(0.10f),
                 bottomShade.getCentreX(), bottomShade.getBottom(), false);
             g.setGradientFill(bs);
             g.fillRect(bottomShade);
@@ -891,7 +897,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     }
 
     // Draw Icon centered with hover scale animation
-    auto iconArea = bounds.reduced(bounds.getWidth() * 0.13f, bounds.getHeight() * 0.13f);
+    auto iconArea = bounds.reduced(bounds.getWidth() * 0.06f, bounds.getHeight() * 0.06f);
 
     // Hover: subtle scale-up (1.08x) and brightness boost
     if (shouldDrawButtonAsHighlighted && !shouldDrawButtonAsDown)
@@ -904,8 +910,19 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     // 参考图图标特征：深紫黑描边 + 鲜艳粉色主体
     if (themeId == ThemeId::Overdose)
     {
-        ToolbarIcons::drawIcon(g, path, iconArea, juce::Colour(0xFF2A0020).withAlpha(isActive ? 0.85f : 0.70f), 3.2f, false);
-        ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.5f, false);
+        const auto deepOutline = juce::Colour(0xFF0C0010).withAlpha(isActive ? 0.95f : 0.80f);
+        if (solidIcon_)
+        {
+            // 实心图标（播放三角/暂停条/停止方块）：粉色填充 + 深紫黑描边
+            ToolbarIcons::drawIcon(g, path, iconArea, deepOutline, 2.2f, false);
+            ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.0f, true);
+        }
+        else
+        {
+            // 线条型图标（文件/铅笔/眼睛/循环）：深紫黑粗线 + 粉色细芯
+            ToolbarIcons::drawIcon(g, path, iconArea, deepOutline, 3.6f, false);
+            ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.7f, false);
+        }
     }
     else
     {
@@ -943,6 +960,7 @@ TransportBarComponent::TransportBarComponent()
     playButton_.onClick = [this] { onPlayClicked(); };
     playButton_.setTooltip(LOC(kTooltipPlay) + "\nSpace");
     playButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
+    playButton_.setSolidIcon(true);
     addAndMakeVisible(playButton_);
 
     // Setup Pause Button
@@ -950,12 +968,14 @@ TransportBarComponent::TransportBarComponent()
     pauseButton_.setEnabled(false);
     pauseButton_.setTooltip(LOC(kTooltipPause) + "\nSpace");
     pauseButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
+    pauseButton_.setSolidIcon(true);
     addAndMakeVisible(pauseButton_);
 
     // Setup Stop Button
     stopButton_.onClick = [this] { onStopClicked(); };
     stopButton_.setTooltip(LOC(kTooltipStop));
     stopButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
+    stopButton_.setSolidIcon(true);
     addAndMakeVisible(stopButton_);
 
     // Setup Loop Button
@@ -1242,12 +1262,12 @@ void TransportBarComponent::mouseDown(const juce::MouseEvent& e)
 
 void TransportBarComponent::resized()
 {
-    auto bounds = getLocalBounds().reduced(12, 4);
+    auto bounds = getLocalBounds().reduced(4, 4);
 
     const int controlHeight = 40;
     const int buttonWidth = 50;
-    const int spacing = 5;
-    const int groupGap = 10;
+    const int spacing = 3;
+    const int groupGap = 5;
 
     auto row = bounds.withHeight(controlHeight).withY(bounds.getCentreY() - controlHeight / 2);
 
