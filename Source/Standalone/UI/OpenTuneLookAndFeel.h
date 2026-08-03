@@ -703,21 +703,21 @@ public:
             const bool focused = label.hasKeyboardFocus(true) && label.isEditable();
 
             // 药丸形玻璃质感（更圆润，radius 更大，更接近纯药丸）
-            const float pillRadius = juce::jmax(style.fieldRadius, bounds.getHeight() * 0.60f);
+            const float pillRadius = juce::jmax(style.fieldRadius, bounds.getHeight() * 0.70f);
             
             // 阴影（更柔和）
             juce::DropShadow softShadow;
-            softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(0.12f);
-            softShadow.radius = 5;
-            softShadow.offset = { 0, 2 };
+            softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(0.10f);
+            softShadow.radius = 4;
+            softShadow.offset = { 0, 1 };
             juce::Path shape;
             shape.addRoundedRectangle(bounds, pillRadius);
             softShadow.drawForPath(g, shape);
 
             // 主体渐变（更通透的白→淡紫）
-            juce::ColourGradient bg(juce::Colour(0xFFFFFCFF).withAlpha(0.90f),  // 更通透的粉白
+            juce::ColourGradient bg(juce::Colour(0xFFFFFCFF).withAlpha(0.88f),  // 更通透的粉白
                                      bounds.getX(), bounds.getY(),
-                                     juce::Colour(0xFFF0E8F8).withAlpha(0.86f),
+                                     juce::Colour(0xFFF0E8F8).withAlpha(0.84f),
                                      bounds.getX(), bounds.getBottom(), false);
             g.setGradientFill(bg);
             g.fillPath(shape);
@@ -726,8 +726,8 @@ public:
             {
                 juce::Graphics::ScopedSaveState clip(g);
                 g.reduceClipRegion(shape);
-                auto topBand = bounds.withHeight(bounds.getHeight() * 0.45f);
-                juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.55f),
+                auto topBand = bounds.withHeight(bounds.getHeight() * 0.50f);
+                juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.60f),
                                          topBand.getCentreX(), topBand.getY(),
                                          juce::Colours::transparentWhite,
                                          topBand.getCentreX(), topBand.getBottom(), false);
@@ -738,13 +738,13 @@ public:
             // 边框（粉色，更精致更淡）
             if (label.isMouseOver() || focused)
             {
-                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(focused ? 0.60f : 0.38f));
-                g.strokePath(shape, juce::PathStrokeType(focused ? style.focusRingThickness : 0.9f));
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(focused ? 0.55f : 0.35f));
+                g.strokePath(shape, juce::PathStrokeType(focused ? style.focusRingThickness : 0.8f));
             }
             else
             {
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.28f));
-                g.strokePath(shape, juce::PathStrokeType(0.7f));
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.25f));
+                g.strokePath(shape, juce::PathStrokeType(0.6f));
             }
 
             // 文字

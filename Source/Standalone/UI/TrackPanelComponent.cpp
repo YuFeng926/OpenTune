@@ -22,10 +22,10 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
         // Overdose 主题：使用粉色系
         activeBase = juce::Colour(Overdose::Colors::PrimaryPink);
         
-        // 圆角方形（参考图：M/S按钮非常小巧精致）
-        const float msRadius = 4.0f;
+        // 圆角方形（参考图：M/S按钮非常小巧精致，极紧凑）
+        const float msRadius = 0.8f;
         // 缩小按钮区域（更紧凑）
-        auto smallBounds = bounds.reduced(bounds.getWidth() * 0.20f, bounds.getHeight() * 0.14f);
+        auto smallBounds = bounds.reduced(bounds.getWidth() * 0.38f, bounds.getHeight() * 0.30f);
         UIColors::fillOverdoseButtonShell(g, smallBounds, msRadius);
 
         if (isToggled || shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown)

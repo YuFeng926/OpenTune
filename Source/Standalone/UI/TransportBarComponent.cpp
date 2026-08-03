@@ -632,7 +632,6 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     bool isActive = isToggled || shouldDrawButtonAsDown;
     bool isHover = shouldDrawButtonAsHighlighted;
     const auto overdoseRole = getProperties()[kOverdoseUiRoleKey].toString();
-    const bool isTransportRole = overdoseRole == kOverdoseUiRoleTransport;
     const bool isSegmentRole = overdoseRole == kOverdoseUiRoleSegment;
 
     auto createRoundedRectPath = [](juce::Rectangle<float> rect, float r,
@@ -663,26 +662,57 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                                       roundBottomLeft, roundBottomRight);
         }
 
-        // 激活态粉渐变（玻璃质感粉色，参考图：饱满圆润）
+        // 普通按钮底色：低饱和紫灰渐变（参考图：#EDE9F3 → #C6C0DE → #AFA7CD，与托盘融合）
+        const auto drawIdleFill = [&]()
+        {
+            juce::Graphics::ScopedSaveState clipState(g);
+            g.reduceClipRegion(p);
+            juce::ColourGradient idle(
+                juce::Colour(0xFFF2EEF6),
+                bounds.getX(), bounds.getY(),
+                juce::Colour(0xFFAFA7CD),
+                bounds.getX(), bounds.getBottom(),
+                false);
+            idle.addColour(0.45f, juce::Colour(0xFFC6C0DE));
+            g.setGradientFill(idle);
+            g.fillPath(p);
+
+            // 顶部细高光（参考图：EDE9F3 亮顶）
+            g.setColour(juce::Colour(0xFFFFFFFF).withAlpha(0.35f));
+            g.drawLine(bounds.getX() + radius, bounds.getY() + 1.0f,
+                       bounds.getRight() - radius, bounds.getY() + 1.0f, 1.0f);
+
+            // 底部紫灰压暗（浮雕收边）
+            auto bottomShade = bounds.withTrimmedTop(bounds.getHeight() * 0.62f);
+            juce::ColourGradient bs(
+                juce::Colours::transparentBlack,
+                bottomShade.getCentreX(), bottomShade.getY(),
+                juce::Colour(0xFF51406F).withAlpha(0.16f),
+                bottomShade.getCentreX(), bottomShade.getBottom(), false);
+            g.setGradientFill(bs);
+            g.fillRect(bottomShade);
+        };
+
+        // 激活态：浅粉紫渐变（参考图：#F9E4F2 → #E7D7ED → #D2B3DB）+ 清晰粉紫描边
         const auto drawActiveFill = [&]()
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(p);
             juce::ColourGradient activeFill(
-                juce::Colour(0xFFFFD0E8).withAlpha(0.97f),  // 顶部更亮粉
+                juce::Colour(0xFFF9E4F2),
                 bounds.getX(), bounds.getY(),
-                juce::Colour(0xFFFF40A8).withAlpha(0.97f),  // 底部深粉
+                juce::Colour(0xFFD2B3DB),
                 bounds.getX(), bounds.getBottom(),
                 false);
-            activeFill.addColour(0.35f, juce::Colour(0xFFFF98D0).withAlpha(0.94f));
-            activeFill.addColour(0.65f, juce::Colour(0xFFFF68B8).withAlpha(0.95f));
+            activeFill.addColour(0.45f, juce::Colour(0xFFE7D7ED));
+            activeFill.addColour(0.78f, juce::Colour(0xFFE0C2E6));
             g.setGradientFill(activeFill);
             g.fillPath(p);
 
-            // 顶部玻璃高光（更强，明显反光）
-            auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.55f);
+            // 顶部柔和高光（克制，以浅粉紫渐变为主）
+            auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.38f);
             juce::ColourGradient hl(
-                juce::Colour(0xFFFFFFFF).withAlpha(0.75f),
+                juce::Colour(0xFFFFFFFF).withAlpha(0.30f),
                 topHighlight.getCentreX(), topHighlight.getY(),
                 juce::Colours::transparentWhite,
                 topHighlight.getCentreX(), topHighlight.getBottom(),
@@ -690,78 +720,48 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             g.setGradientFill(hl);
             g.fillRect(topHighlight);
 
-            // 顶部镜面高光点（增强玻璃感）
-            auto specular = juce::Rectangle<float>(bounds.getX() + bounds.getWidth() * 0.12f,
-                                                   bounds.getY() + bounds.getHeight() * 0.05f,
-                                                   bounds.getWidth() * 0.55f,
-                                                   bounds.getHeight() * 0.22f);
-            juce::ColourGradient spec(
-                juce::Colour(0xFFFFFFFF).withAlpha(0.85f),
-                specular.getTopLeft(),
-                juce::Colours::transparentWhite,
-                specular.getBottomRight(), false);
-            g.setGradientFill(spec);
-            g.fillEllipse(specular);
+            // 底部微压暗（浮雕收边）
+            auto bottomShade = bounds.withTrimmedTop(bounds.getHeight() * 0.60f);
+            juce::ColourGradient bs(
+                juce::Colours::transparentBlack,
+                bottomShade.getCentreX(), bottomShade.getY(),
+                juce::Colour(0xFF803090).withAlpha(0.14f),
+                bottomShade.getCentreX(), bottomShade.getBottom(), false);
+            g.setGradientFill(bs);
+            g.fillRect(bottomShade);
         };
 
         if (isSegmentRole)
         {
-            // 段按钮：激活时粉渐变，空闲时保持透明
-            if (isActive)
-                drawActiveFill();
-        }
-        else
-        {
-            // 玻璃壳：白→淡紫渐变 + 顶部白高光 + 底部淡紫内阴影 + 粉边
-            UIColors::fillOverdoseButtonShell(g, bounds, radius, &p);
-
+            // 段按钮：普通态紫灰渐变，激活态浅粉紫渐变
             if (isActive)
                 drawActiveFill();
             else
-            {
-                // 非激活状态增强玻璃质感（参考图：明显的玻璃反光）
-                juce::Graphics::ScopedSaveState clipState(g);
-                g.reduceClipRegion(p);
-                
-                // 顶部玻璃反光（更亮，覆盖更大区域）
-                auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.60f);
-                juce::ColourGradient topGlow(
-                    juce::Colour(0xFFFFFFFF).withAlpha(0.60f),
-                    topHighlight.getCentreX(), topHighlight.getY(),
-                    juce::Colours::transparentWhite,
-                    topHighlight.getCentreX(), topHighlight.getBottom(),
-                    false);
-                g.setGradientFill(topGlow);
-                g.fillRect(topHighlight);
-                
-                // 底部内阴影（更深，增强立体感）
-                auto bottomShadow = bounds.withTrimmedTop(bounds.getHeight() * 0.50f);
-                juce::ColourGradient bottomGlow(
-                    juce::Colours::transparentBlack,
-                    bottomShadow.getCentreX(), bottomShadow.getY(),
-                    juce::Colour(0xFF3828A0).withAlpha(0.22f),
-                    bottomShadow.getCentreX(), bottomShadow.getBottom(),
-                    false);
-                g.setGradientFill(bottomGlow);
-                g.fillRect(bottomShadow);
-            }
+                drawIdleFill();
+        }
+        else
+        {
+            if (isActive)
+                drawActiveFill();
+            else
+                drawIdleFill();
         }
 
         if (isHover && !isActive)
         {
             juce::Graphics::ScopedSaveState clip(g);
             g.reduceClipRegion(p);
-            g.setColour(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(isSegmentRole ? 0.12f : 0.18f));
+            g.setColour(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(isSegmentRole ? 0.12f : 0.16f));
             g.fillRect(bounds);
         }
 
-        if (isActive || isHover)
+        // 粉紫描边：激活时清晰（参考图 #B951A7），普通时低透明
         {
-            const auto outlineAlpha = isSegmentRole
-                ? (isActive ? 0.54f : 0.18f)
-                : (isActive ? 0.62f : 0.24f);
-            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(outlineAlpha));
-            g.strokePath(p, juce::PathStrokeType(isActive ? 1.55f : 1.0f));
+            const float outlineAlpha = isActive ? (isSegmentRole ? 0.85f : 0.95f)
+                                                : (isHover ? 0.45f : 0.28f);
+            const float outlineWidth = isActive ? 1.3f : (isHover ? 1.0f : 0.8f);
+            g.setColour(juce::Colour(0xFFB951A7).withAlpha(outlineAlpha));
+            g.strokePath(p, juce::PathStrokeType(outlineWidth));
         }
 
         if (connectedEdges_ != None && !isSegmentRole)
@@ -863,11 +863,11 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     else if (themeId == ThemeId::Overdose)
     {
         if (isActive)
-            iconColor = isSegmentRole ? UIColors::textPrimary : UIColors::accent;
+            iconColor = juce::Colour(0xFFEC4BAB);       // 激活：亮粉（参考图 #EC4BAB）
         else if (isHover)
-            iconColor = UIColors::textPrimary;
+            iconColor = juce::Colour(0xFFEC4BAB).brighter(0.12f);
         else
-            iconColor = (isTransportRole || isTransportButton) ? UIColors::textPrimary : UIColors::textSecondary;
+            iconColor = juce::Colour(0xFFE443A1);       // 普通：粉红（参考图 #E443A1）
     }
     else if (themeId == ThemeId::Aurora)
     {
@@ -891,7 +891,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     }
 
     // Draw Icon centered with hover scale animation
-    auto iconArea = bounds.reduced(bounds.getWidth() * 0.22f, bounds.getHeight() * 0.22f);
+    auto iconArea = bounds.reduced(bounds.getWidth() * 0.13f, bounds.getHeight() * 0.13f);
 
     // Hover: subtle scale-up (1.08x) and brightness boost
     if (shouldDrawButtonAsHighlighted && !shouldDrawButtonAsDown)
@@ -901,8 +901,16 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         iconColor = iconColor.brighter(0.15f);
     }
 
-    // Use ToolbarIcons helper
-    ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.5f, false);
+    // 参考图图标特征：深紫黑描边 + 鲜艳粉色主体
+    if (themeId == ThemeId::Overdose)
+    {
+        ToolbarIcons::drawIcon(g, path, iconArea, juce::Colour(0xFF2A0020).withAlpha(isActive ? 0.85f : 0.70f), 3.2f, false);
+        ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.5f, false);
+    }
+    else
+    {
+        ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.5f, false);
+    }
 }
 
 TransportBarComponent::TransportBarComponent()
@@ -1238,8 +1246,8 @@ void TransportBarComponent::resized()
 
     const int controlHeight = 40;
     const int buttonWidth = 50;
-    const int spacing = 10;
-    const int groupGap = 20;
+    const int spacing = 5;
+    const int groupGap = 10;
 
     auto row = bounds.withHeight(controlHeight).withY(bounds.getCentreY() - controlHeight / 2);
 

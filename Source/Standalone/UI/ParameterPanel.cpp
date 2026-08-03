@@ -128,20 +128,20 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
         // 主体渐变
         if (active)
         {
-            // 激活：粉色玻璃渐变（参考图：饱满的玻璃质感粉色，更强渐变）
-            juce::ColourGradient fill(juce::Colour(0xFFFFD8F0),  // 顶部更亮粉
+            // 激活：粉色玻璃渐变（参考图：饱满的玻璃质感粉色，更强渐变，极饱和）
+            juce::ColourGradient fill(juce::Colour(0xFFFFFAFE),  // 顶部极亮粉
                                        bounds.getX(), bounds.getY(),
-                                       juce::Colour(0xFFFF30A0),  // 底部深粉
+                                       juce::Colour(0xFFD80050),  // 底部深粉
                                        bounds.getX(), bounds.getBottom(),
                                        false);
-            fill.addColour(0.30f, juce::Colour(0xFFFFA0D8));
-            fill.addColour(0.60f, juce::Colour(0xFFFF70C0));
+            fill.addColour(0.05f, juce::Colour(0xFFFFD0F8));
+            fill.addColour(0.35f, juce::Colour(0xFFFFA0E8));
             g.setGradientFill(fill);
             g.fillRoundedRectangle(bounds, radius);
 
             // 顶部玻璃高光（更强，覆盖上半部分，明显反光）
-            auto highlightRect = bounds.reduced(1.0f).withHeight(bounds.getHeight() * 0.60f);
-            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.85f),
+            auto highlightRect = bounds.reduced(1.0f).withHeight(bounds.getHeight() * 0.65f);
+            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.90f),
                                      highlightRect.getX(), highlightRect.getY(),
                                      juce::Colours::transparentWhite,
                                      highlightRect.getX(), highlightRect.getBottom(), false);
@@ -154,12 +154,12 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
                 juce::Path clipPath;
                 clipPath.addRoundedRectangle(bounds, radius);
                 g.reduceClipRegion(clipPath);
-                auto specular = juce::Rectangle<float>(bounds.getX() + bounds.getWidth() * 0.12f,
-                                                       bounds.getY() + bounds.getHeight() * 0.05f,
-                                                       bounds.getWidth() * 0.55f,
-                                                       bounds.getHeight() * 0.25f);
+                auto specular = juce::Rectangle<float>(bounds.getX() + bounds.getWidth() * 0.10f,
+                                                       bounds.getY() + bounds.getHeight() * 0.04f,
+                                                       bounds.getWidth() * 0.60f,
+                                                       bounds.getHeight() * 0.28f);
                 juce::ColourGradient spec(
-                    juce::Colour(0xFFFFFFFF).withAlpha(0.95f),
+                    juce::Colour(0xFFFFFFFF).withAlpha(0.98f),
                     specular.getTopLeft(),
                     juce::Colours::transparentWhite,
                     specular.getBottomRight(), false);
@@ -168,7 +168,7 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
             }
 
             // 边框（深粉，更强）
-            g.setColour(juce::Colour(0xFFE01080).withAlpha(0.65f));
+            g.setColour(juce::Colour(0xFFE01080).withAlpha(0.70f));
             g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
         }
         else
