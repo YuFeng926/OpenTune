@@ -193,7 +193,6 @@ private:
     void clearMoveDragOverlay();
     void drawPlayhead(juce::Graphics& g);
     void drawImportDropPreview(juce::Graphics& g);
-    void drawSelectionOverlay(juce::Graphics& g);
     void drawMoveDragOverlay(juce::Graphics& g);
     void drawReferenceHoverOverlay(juce::Graphics& g);
 

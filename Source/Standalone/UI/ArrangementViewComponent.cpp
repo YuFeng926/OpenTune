@@ -1205,7 +1205,9 @@ void ArrangementViewComponent::buildCompositeForeground(
     const ArrangementVerticalWindow vwin{trackHeight, worldTopY, tileBounds.getHeight()};
     auto& arrangement = *processor_.getStandaloneArrangement();
     auto clips = collectVisibleArrangementClips(arrangement, tileStartSec, tileEndSec, vwin, camera_.pixelsPerSecond,
-        tileBounds.getWidth(), [](int, uint64_t) { return false; });
+        tileBounds.getWidth(), [this](int trackId, uint64_t placementId) {
+            return isPlacementSelected(trackId, placementId);
+        });
     paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
     if (experimentalReferenceControlsEnabled_)
     {
@@ -1543,55 +1545,6 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
             invalidateStableScene();
         }
 
-void ArrangementViewComponent::drawSelectionOverlay(juce::Graphics& g)
-{
-    if (selectedPlacements_.empty())
-        return;
-
-    const auto viewport = getContentViewportBounds();
-    const double pps = camera_.pixelsPerSecond;
-    const int trackHeight = processor_.getTrackHeight();
-
-    for (const auto& sel : selectedPlacements_) {
-        StandaloneArrangement::Placement placement;
-        if (!getStandalonePlacementById(processor_, sel.trackId, sel.placementId, placement))
-            continue;
-
-        const double placementStart = placement.timelineStartSeconds;
-        const double placementEnd = placement.timelineEndSeconds();
-
-        // Early out if completely off-screen
-        if (placementEnd <= camera_.visibleStartSeconds
-            || placementStart >= camera_.visibleStartSeconds + viewport.getWidth() / pps)
-            continue;
-
-        const int x = absoluteTimeToViewportX(placementStart);
-        const int width = juce::jmax(8, static_cast<int>(std::llround(placement.durationSeconds * pps)));
-        const int y = rulerHeight_ + sel.trackId * trackHeight - verticalScrollOffset_ + 2;
-        const int height = trackHeight - 4;
-
-        juce::Rectangle<float> bounds(static_cast<float>(x), static_cast<float>(y),
-                                      static_cast<float>(width), static_cast<float>(height));
-
-        // Skip if entirely outside clip
-        if (bounds.getBottom() < static_cast<float>(rulerHeight_) || bounds.getY() > viewport.getBottom())
-            continue;
-
-        const auto themeId = UIColors::currentThemeId();
-        if (themeId == ThemeId::Aurora) {
-            g.setColour(juce::Colour(Aurora::Colors::Cyan).withAlpha(0.35f));
-            g.fillRoundedRectangle(bounds, 6.0f);
-            g.setColour(juce::Colour(Aurora::Colors::Cyan).withAlpha(0.85f));
-            g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 2.0f);
-        } else {
-            g.setColour(UIColors::accent.withAlpha(0.12f));
-            g.fillRoundedRectangle(bounds, 6.0f);
-            g.setColour(UIColors::accent.withAlpha(0.65f));
-            g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.5f);
-        }
-    }
-}
-
 void ArrangementViewComponent::drawImportDropPreview(juce::Graphics& g)
 {
     // ---- Import drop preview highlight (transient, UI-only) ----
@@ -1817,13 +1770,6 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         g.reduceClipRegion(axis);
         if (viewportSurface_.isValid())
             g.drawImageAt(viewportSurface_, axis.getX(), axis.getY(), false);
-
-        // Selection overlay
-        {
-            juce::Graphics::ScopedSaveState selSave(g);
-            g.reduceClipRegion(axis);
-            drawSelectionOverlay(g);
-        }
 
         // Import/move overlays
         {
@@ -3081,8 +3027,8 @@ void ArrangementViewComponent::commitPlacementSelection(PlacementSelectionKey pr
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
 
-    // Selection is transient overlay — just repaint, don't rebuild tiles
-    repaint();
+    // Selection is baked into tile shells — rebuild the stable scene
+    invalidateStableScene();
     }
 
 void ArrangementViewComponent::commitEmptyPlacementSelection()
@@ -3096,8 +3042,8 @@ void ArrangementViewComponent::commitEmptyPlacementSelection()
     listeners_.call([this](Listener& l) {
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
-    // Selection is transient overlay — just repaint, don't rebuild tiles
-    repaint();
+    // Selection is baked into tile shells — rebuild the stable scene
+    invalidateStableScene();
     }
 
 // ============================================================================
