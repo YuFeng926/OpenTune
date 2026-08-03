@@ -320,9 +320,12 @@ private:
 class SharedEditingPage final : public juce::Component
 {
 public:
-    SharedEditingPage(AppPreferences& appPreferences, std::function<void()> onPreferencesChanged)
+    SharedEditingPage(AppPreferences& appPreferences,
+                      std::function<void()> onPreferencesChanged,
+                      bool isVst3Plugin)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
+        , isVst3Plugin_(isVst3Plugin)
         , zoomSettings_(appPreferences_.getState().shared.zoomSensitivity)
     {
         initialiseLabel(schemeLabel_, LOC(kAudioEditingScheme));
@@ -330,8 +333,13 @@ public:
         addAndMakeVisible(schemeLabel_);
 
         const auto state = appPreferences_.getState();
-        schemeSelector_.addItem(LOC(kCorrectedF0First), 1);
-        schemeSelector_.addItem(LOC(kNotesFirst), 2);
+        if (isVst3Plugin_) {
+            schemeSelector_.addItem(LOC(kSchemeOpenTune), 1);
+            schemeSelector_.addItem(LOC(kSchemeOpenDyne), 2);
+        } else {
+            schemeSelector_.addItem(LOC(kCorrectedF0First), 1);
+            schemeSelector_.addItem(LOC(kNotesFirst), 2);
+        }
         schemeSelector_.setSelectedId(state.shared.audioEditingScheme == AudioEditingScheme::Scheme::NotesPrimary ? 2 : 1,
                                       juce::dontSendNotification);
         schemeSelector_.onChange = [this] {
@@ -446,6 +454,7 @@ private:
 
     AppPreferences& appPreferences_;
     std::function<void()> onPreferencesChanged_;
+    bool isVst3Plugin_ = false;
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSettings_;
     juce::Label schemeLabel_;
     juce::ComboBox schemeSelector_;
@@ -772,11 +781,12 @@ private:
 
 std::vector<TabbedPreferencesDialog::PageSpec> SharedPreferencePages::create(
     AppPreferences& appPreferences,
-    std::function<void()> onPreferencesChanged)
+    std::function<void()> onPreferencesChanged,
+    bool isVst3Plugin)
 {
     std::vector<TabbedPreferencesDialog::PageSpec> pages;
     pages.push_back({ LOC(kTheme), std::make_unique<SharedGeneralPage>(appPreferences, onPreferencesChanged) });
-    pages.push_back({ LOC(kEditing), std::make_unique<SharedEditingPage>(appPreferences, onPreferencesChanged) });
+    pages.push_back({ LOC(kEditing), std::make_unique<SharedEditingPage>(appPreferences, onPreferencesChanged, isVst3Plugin) });
     pages.push_back({ LOC(kView), std::make_unique<SharedVisualPage>(appPreferences, onPreferencesChanged) });
     pages.push_back({ LOC(kKeyswitch), std::make_unique<ShortcutSettingsPage>(appPreferences, onPreferencesChanged) });
     return pages;
