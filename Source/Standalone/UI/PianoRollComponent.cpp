@@ -1982,6 +1982,10 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewState& view, j
     renderCtx.coords = mapper;
     renderCtx.rasterBounds = clipArea;
 
+    // Modulation/Drift 拖拽临时预览曲线
+    if (toolHandler_)
+        renderer_->setTempPitchCurves(toolHandler_->getTempPitchCurves());
+
     renderCtx.contents = buildContentRenderItems();
 
     const double pps = view.camera.pixelsPerSecond;

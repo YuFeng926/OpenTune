@@ -1570,12 +1570,54 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     }
 
     // Draw effective corrected F0 (thicker).
+    // Modulation/Drift 拖拽期间：tempPitchCurves 覆盖已提交曲线，实时预览。
+    const bool hasTempPreview = tempPitchCurves != nullptr
+        && !tempPitchCurves->empty()
+        && item.active
+        && item.displayNotes != nullptr;
     if (ctx.showCorrectedF0
         && item.ownerSnapshot
         && (item.pitchSnapshot->hasCorrectionLayer()
-            || !item.ownerSnapshot->pitchShiftSettings.isIdentity())) {
+            || !item.ownerSnapshot->pitchShiftSettings.isIdentity()
+            || hasTempPreview)) {
+        bool previewBufferReady = false;
+        std::vector<float> previewBuffer;
         auto correctedProducer = [&](auto&& sink) {
-            item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
+            if (hasTempPreview) {
+                // 合并：先取已提交 effective F0，再用临时预览曲线覆盖拖拽 note 的帧。
+                // buildF0VisualSegments 会多次调用 producer，buffer 只构建一次。
+                if (!previewBufferReady) {
+                    previewBufferReady = true;
+                    previewBuffer.assign(static_cast<size_t>(endFrame - startFrame), 0.0f);
+                    item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame,
+                        [&](int frameIndex, const float* data, int length, float gain) {
+                            if (data == nullptr || length <= 0) return;
+                            const int relStart = frameIndex - startFrame;
+                            if (relStart < 0 || relStart >= static_cast<int>(previewBuffer.size())) return;
+                            const int copyLength = std::min(length, static_cast<int>(previewBuffer.size()) - relStart);
+                            for (int i = 0; i < copyLength; ++i)
+                                previewBuffer[static_cast<size_t>(relStart + i)] = data[i] * gain;
+                        });
+                    for (const auto& entry : *tempPitchCurves) {
+                        const size_t noteIndex = entry.first;
+                        if (noteIndex >= item.displayNotes->size()) continue;
+                        const auto& note = (*item.displayNotes)[noteIndex];
+                        const int noteStart = item.f0Timeline.frameAtOrBefore(note.startTime);
+                        const int noteEnd = item.f0Timeline.exclusiveFrameAt(note.endTime);
+                        const auto& curve = entry.second;
+                        for (int f = juce::jmax(startFrame, noteStart); f < juce::jmin(endFrame, noteEnd); ++f) {
+                            const int local = f - noteStart;
+                            if (local < 0 || local >= static_cast<int>(curve.size())) continue;
+                            const float value = curve[static_cast<size_t>(local)];
+                            if (value > 0.0f)
+                                previewBuffer[static_cast<size_t>(f - startFrame)] = value;
+                        }
+                    }
+                }
+                sink(startFrame, previewBuffer.data(), static_cast<int>(previewBuffer.size()), 1.0f);
+            } else {
+                item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
+            }
         };
 
         const auto visualSegments = buildF0VisualSegments(

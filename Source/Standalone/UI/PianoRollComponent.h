@@ -147,6 +147,7 @@ public:
     void setCurrentTool(ToolId tool);
     void setExperimentalFeaturesEnabled(bool enabled);
     ToolId getCurrentTool() const { return currentTool_; }
+    PianoRollToolHandler* getToolHandler() const { return toolHandler_.get(); }
     void setShowWaveform(bool shouldShow);
     void setShowLanes(bool shouldShow);
     void setNoteNameMode(NoteNameMode noteNameMode);
