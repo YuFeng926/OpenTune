@@ -229,8 +229,6 @@ constexpr const char* kKeyswitch = "Keyswitch";
 constexpr const char* kLanguage = "Language";
 constexpr const char* kLanguageLabel = "Interface Language";
 constexpr const char* kAudioEditingScheme = "Audio Editing Scheme";
-constexpr const char* kCorrectedF0First = "Corrected F0 First";
-constexpr const char* kNotesFirst = "Notes First";
 constexpr const char* kSchemeOpenTune = "OpenTune";
 constexpr const char* kSchemeOpenDyne = "OpenDyne";
 
@@ -409,8 +407,6 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kLanguage, "Language", "语言", "言語", "Язык", "Idioma" },
         { Keys::kLanguageLabel, "Interface Language", "界面语言", "インターフェース言語", "Язык", "Idioma" },
         { Keys::kAudioEditingScheme, "Audio Editing Scheme", "音频编辑方案", "音声編集方式", "Схема аудиоредактирования", "Esquema de edicion de audio" },
-        { Keys::kCorrectedF0First, "曲线优先编辑", "曲线优先编辑", "曲线优先编辑", "曲线优先编辑", "曲线优先编辑" },
-        { Keys::kNotesFirst, "音符优先编辑", "音符优先编辑", "音符优先编辑", "音符优先编辑", "音符优先编辑" },
         { Keys::kSchemeOpenTune, "OpenTune", "OpenTune", "OpenTune", "OpenTune", "OpenTune" },
         { Keys::kSchemeOpenDyne, "OpenDyne", "OpenDyne", "OpenDyne", "OpenDyne", "OpenDyne" },
         

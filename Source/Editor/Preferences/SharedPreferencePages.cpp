@@ -333,13 +333,8 @@ public:
         addAndMakeVisible(schemeLabel_);
 
         const auto state = appPreferences_.getState();
-        if (isVst3Plugin_) {
-            schemeSelector_.addItem(LOC(kSchemeOpenTune), 1);
-            schemeSelector_.addItem(LOC(kSchemeOpenDyne), 2);
-        } else {
-            schemeSelector_.addItem(LOC(kCorrectedF0First), 1);
-            schemeSelector_.addItem(LOC(kNotesFirst), 2);
-        }
+        schemeSelector_.addItem(LOC(kSchemeOpenTune), 1);
+        schemeSelector_.addItem(LOC(kSchemeOpenDyne), 2);
         schemeSelector_.setSelectedId(state.shared.audioEditingScheme == AudioEditingScheme::Scheme::NotesPrimary ? 2 : 1,
                                       juce::dontSendNotification);
         schemeSelector_.onChange = [this] {

@@ -52,7 +52,7 @@ bool WaveformMipmap::buildIncremental(double timeBudgetMs)
         return false;
     
     const double startMs = juce::Time::getMillisecondCounterHiRes();
-    bool progressed = false;
+    bool levelCompleted = false;
     
     for (int level = 0; level < kNumLevels; ++level)
     {
@@ -64,16 +64,19 @@ bool WaveformMipmap::buildIncremental(double timeBudgetMs)
         if (remain <= 0.0)
             break;
         
-        if (buildLevelSlice(level, remain))
-            progressed = true;
+        buildLevelSlice(level, remain);
         
         if (levels_[level].complete)
+        {
+            levelCompleted = true;
             continue;
+        }
         
         break;
     }
     
-    return progressed;
+    // 返回值语义：是否有新 level 从 incomplete 转为 complete（可绘制事件）
+    return levelCompleted;
 }
 
 bool WaveformMipmap::buildLevelSlice(int level, double timeBudgetMs)
@@ -278,7 +281,7 @@ bool WaveformMipmapCache::buildIncremental(double timeBudgetMs)
         return false;
     
     const double startMs = juce::Time::getMillisecondCounterHiRes();
-    bool progressed = false;
+    bool levelCompleted = false;
     bool allComplete = true;
     
     for (auto& kv : caches_)
@@ -292,13 +295,14 @@ bool WaveformMipmapCache::buildIncremental(double timeBudgetMs)
         }
         
         if (kv.second->buildIncremental(remain))
-            progressed = true;
+            levelCompleted = true;
         if (!kv.second->isComplete())
             allComplete = false;
     }
     
     allMipmapsComplete_ = allComplete;
-    return progressed;
+    // 返回值语义：是否有新 level 完成（可绘制事件）
+    return levelCompleted;
 }
 
 } // namespace OpenTune
