@@ -195,9 +195,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             menu.addItem("Pitch (F2)", [this]() { setCurrentTool(ToolId::Pitch); });
             menu.addItem("Volume Envelope (F4)", [this]() { setCurrentTool(ToolId::VolumeEnvelope); });
             menu.addItem("Scissors (F6)", [this]() { setCurrentTool(ToolId::Scissors); });
-            if (experimentalFeaturesEnabled_) {
-                menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
-            }
+            menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
         } else {
             menu.addItem("Select (3)", [this]() { setCurrentTool(ToolId::Select); });
             menu.addItem("Draw Note (2)", [this]() { setCurrentTool(ToolId::DrawNote); });
@@ -1091,13 +1089,11 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     juce::Graphics::ScopedSaveState overlaySave(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
 
-    // OpenTune F0 曲线类预览在 OpenDyne 隐藏（blob 是唯一音符表达）
-    if (currentTool_ != ToolId::TimeTool && !isOpenDyne()) {
-        if (currentCurve_ != nullptr) {
-            drawNoteDragCurvePreview(g);
-            drawHandDrawPreview(g);
-            drawLineAnchorPreview(g);
-        }
+    // note-drag Corrected F0 预览：两种 scheme 共用；HandDraw/LineAnchor 预览仅 OpenTune
+    drawNoteDragCurvePreview(g);
+    if (!isOpenDyne()) {
+        drawHandDrawPreview(g);
+        drawLineAnchorPreview(g);
     }
 
     // ── OpenDyne transient previews（Volume Envelope A/B 与 Scissors 预览线） ──
@@ -1485,8 +1481,7 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
 
 void PianoRollComponent::drawNoteDragCurvePreview(juce::Graphics& g)
 {
-    if (audioEditingScheme_ != AudioEditingScheme::Scheme::CorrectedF0Primary
-        || !showCorrectedF0_
+    if (!showCorrectedF0_
         || interactionState_.noteDrag.previewStartFrame < 0
         || interactionState_.noteDrag.previewEndFrameExclusive <= interactionState_.noteDrag.previewStartFrame
         || interactionState_.noteDrag.previewF0.empty()) {
@@ -1917,52 +1912,48 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewState& view, j
 
     const double pps = view.camera.pixelsPerSecond;
 
-    // OpenDyne：注入当前缩放级别的 mipmap level 供 drawNotes 绘制 waveform blob
-    // 数据源是 mipmap：selectBestLevelIndex 只选 complete 非空 level（无完成 level 时
-    // 兜底 0，其 peaks 虽被预分配但未完成，故守卫须同时要求 complete，
-    // 与预览条单 level 门控一致：构建中隐藏，完成即显示）。
-    // 不要求全量 6 级完成、不依赖 audioBuffer（ARA 快照无音频缓冲）。
+    // OpenDyne：注入当前缩放级别的 mipmap level 供 drawNotes 绘制 waveform blob。
+    // 数据源是 mipmap：selectBestLevelIndex 只选 complete 非空 level（无可用 level 时
+    // 返回 -1）。不要求全量 6 级完成、不依赖 audioBuffer（ARA 快照无音频缓冲）。
     const bool notesPrimary = isOpenDyne();
     for (auto& item : renderCtx.contents) {
         item.notesPrimaryScheme = notesPrimary;
         if (notesPrimary) {
             const auto* mipmap = waveformMipmapCache_.get(item.contentKey);
-            if (mipmap != nullptr && mipmap->hasSource()) {
-                const int bestLevel = mipmap->selectBestLevelIndex(pps);
-                const auto& level = mipmap->getLevel(bestLevel);
-                if (level.complete && !level.peaks.empty()) {
-                    item.wfLevel = &level;
-                    item.wfLevelSamplesPerPeak = WaveformMipmap::kSamplesPerPeak[bestLevel];
-                }
-            }
+            if (mipmap == nullptr || !mipmap->hasSource())
+                continue;
+            const int bestLevel = mipmap->selectBestLevelIndex(pps);
+            if (bestLevel < 0)
+                continue;
+            item.wfLevel = &mipmap->getLevel(bestLevel);
+            item.wfLevelSamplesPerPeak = WaveformMipmap::kSamplesPerPeak[bestLevel];
         }
     }
 
-    for (const auto& item : renderCtx.contents) {
-        // OpenDyne：F0 曲线/波形仅以 blob 呈现，传统波形与 F0 曲线均隐藏
-        if (!notesPrimary && showWaveform_) {
+    // 背景波形：OpenDyne 与 OpenTune 共用同一条绘制路径，由 showWaveform_ 开关控制
+    if (showWaveform_) {
+        for (const auto& item : renderCtx.contents) {
             const auto* mipmap = waveformMipmapCache_.get(item.contentKey);
-            if (mipmap != nullptr && mipmap->hasSource()) {
-                const int bestLevel = mipmap->selectBestLevelIndex(pps);
-                const auto& level = mipmap->getLevel(bestLevel);
-                if (level.complete && !level.peaks.empty())
-                    renderer_->drawWaveform(g, renderCtx, item, level, bestLevel);
-            }
+            if (mipmap == nullptr || !mipmap->hasSource())
+                continue;
+            const int bestLevel = mipmap->selectBestLevelIndex(pps);
+            if (bestLevel < 0)
+                continue;
+            const auto& level = mipmap->getLevel(bestLevel);
+            renderer_->drawWaveform(g, renderCtx, item, level, bestLevel);
         }
     }
 
-    if (!notesPrimary) {
-        for (const auto& item : renderCtx.contents)
-            renderer_->drawUnvoicedFrameBands(g, renderCtx, item);
-    }
+    // unvoiced bands 与 F0 curve 由 RenderContext 显示开关
+    // （showUnvoicedFrames_/showOriginalF0_/showCorrectedF0_）决定，与 scheme 无关
+    for (const auto& item : renderCtx.contents)
+        renderer_->drawUnvoicedFrameBands(g, renderCtx, item);
 
     for (const auto& item : renderCtx.contents)
         renderer_->drawNotes(g, renderCtx, item);
 
-    if (!notesPrimary) {
-        for (const auto& item : renderCtx.contents)
-            renderer_->drawF0Curve(g, renderCtx, item);
-    }
+    for (const auto& item : renderCtx.contents)
+        renderer_->drawF0Curve(g, renderCtx, item);
 
     for (const auto& item : renderCtx.contents)
         renderer_->drawTimeGridAnchors(g, renderCtx, item);
@@ -2994,7 +2985,9 @@ void PianoRollComponent::onHeartbeatTick()
             progressed = waveformMipmapCache_.buildIncremental(0.75);
         }
 
-        if (progressed && waveformMipmapCache_.isComplete()) {
+        // 每次产生构建进度即重栅格 content surface：任一 complete 非空 level
+        // 出现即可显示，不等待全量 6 级完成
+        if (progressed) {
             contentDirty_ = true;
             rasterizeDirtySurfaces();
             repaint();
@@ -3120,11 +3113,14 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
     if (openDyneZoomPanActive_)
         endOpenDyneZoomPan();
 
-    // DrawNote ↔ Pitch 互映射；Select/TimeTool 保持当前选择；
-    // OpenDyne-only 工具（VolumeEnvelope/Scissors）退出时回落 Select
-    if (nowOpenDyne && currentTool_ == ToolId::DrawNote)
-        setCurrentTool(ToolId::Pitch);
-    else if (wasOpenDyne) {
+    // 切入 OpenDyne：DrawNote→Pitch，LineAnchor/HandDraw→Select；Select/TimeTool 保持
+    // 切回 OpenTune：Pitch→DrawNote，OpenDyne-only 工具（VolumeEnvelope/Scissors）→Select
+    if (nowOpenDyne) {
+        if (currentTool_ == ToolId::DrawNote)
+            setCurrentTool(ToolId::Pitch);
+        else if (currentTool_ == ToolId::LineAnchor || currentTool_ == ToolId::HandDraw)
+            setCurrentTool(ToolId::Select);
+    } else if (wasOpenDyne) {
         if (currentTool_ == ToolId::Pitch)
             setCurrentTool(ToolId::DrawNote);
         else if (currentTool_ == ToolId::VolumeEnvelope || currentTool_ == ToolId::Scissors)
@@ -3138,7 +3134,8 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {
-    if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_) {
+    // OpenDyne：Time 始终有效；OpenTune：Time 受 experimental 门控
+    if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_ && !isOpenDyne()) {
         tool = ToolId::Select;
     }
 
@@ -3236,7 +3233,8 @@ void PianoRollComponent::setExperimentalFeaturesEnabled(bool enabled)
     }
 
     experimentalFeaturesEnabled_ = enabled;
-    if (!enabled && currentTool_ == ToolId::TimeTool) {
+    // 关闭 experimental 仅令 OpenTune 的 Time 回落 Select；OpenDyne 的 Time 保持
+    if (!enabled && !isOpenDyne() && currentTool_ == ToolId::TimeTool) {
         setCurrentTool(ToolId::Select);
         return;
     }

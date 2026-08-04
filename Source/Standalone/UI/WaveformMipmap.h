@@ -68,7 +68,8 @@ public:
     bool isComplete() const noexcept;
     float getBuildProgress() const noexcept;
     
-    const Level& selectBestLevel(double pixelsPerSecond) const;
+    /// 返回适合当前缩放的 complete 非空 level 索引；无可用 level 时返回 -1，
+    /// 调用方必须以索引 >= 0 为前提，禁止访问伪就绪的 level 0。
     int selectBestLevelIndex(double pixelsPerSecond) const;
     
     void clear();

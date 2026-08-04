@@ -619,7 +619,8 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
 
     // OpenDyne（NotesPrimary）F 键固定映射：F1=Select、F2=Pitch、F4=VolumeEnvelope、
     // F6=Scissors。不新增 ShortcutId、不进 KeyShortcutConfig。T 继续走现有 ToolTimeTool。
-    if (AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+    const bool isOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
+    if (isOpenDyne) {
         if (key.getKeyCode() == juce::KeyPress::F1Key) {
             ctx_.setCurrentTool(ToolId::Select);
             return true;
@@ -676,24 +677,29 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
     }
 
     // ==== Tool switching (via configurable shortcuts) ====
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolDrawNote, key)) {
-        ctx_.setCurrentTool(ToolId::DrawNote);
-        return true;
-    }
+    // OpenTune（PitchPrimary）工具切换走可配置快捷键；OpenDyne（NotesPrimary）用固定 F1/F2/F4/F6，
+    // 这四个可配置入口（ToolDrawNote/ToolSelect/ToolLineAnchor/ToolHandDraw）只在 OpenTune 分支生效，
+    // 绝不穿透到 OpenDyne。ToolTimeTool/ToolAutoTune 与通用 SelectAll/Delete/CancelSelection 两 scheme 共用。
+    if (!isOpenDyne) {
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolDrawNote, key)) {
+            ctx_.setCurrentTool(ToolId::DrawNote);
+            return true;
+        }
 
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolSelect, key)) {
-        ctx_.setCurrentTool(ToolId::Select);
-        return true;
-    }
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolSelect, key)) {
+            ctx_.setCurrentTool(ToolId::Select);
+            return true;
+        }
 
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolLineAnchor, key)) {
-        ctx_.setCurrentTool(ToolId::LineAnchor);
-        return true;
-    }
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolLineAnchor, key)) {
+            ctx_.setCurrentTool(ToolId::LineAnchor);
+            return true;
+        }
 
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolHandDraw, key)) {
-        ctx_.setCurrentTool(ToolId::HandDraw);
-        return true;
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolHandDraw, key)) {
+            ctx_.setCurrentTool(ToolId::HandDraw);
+            return true;
+        }
     }
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolTimeTool, key)) {
@@ -2034,7 +2040,8 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEv
         return;
 
     auto& state = ctx_.getState();
-    state.noteSelection.setSingle(clickedNoteIndex, static_cast<int>(notes.size()));
+    if (!state.noteSelection.isSelected(clickedNoteIndex))
+        state.noteSelection.setSingle(clickedNoteIndex, static_cast<int>(notes.size()));
     updateF0SelectionFromNotes(notes);
 
     state.isVolumeDragging = true;
@@ -2178,6 +2185,7 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
         updateF0SelectionFromNotes(newNotes);
     }
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+    ctx_.setCurrentTool(ToolId::Pitch);
 
     if (ctx_.getActiveContentKey && ctx_.pushUndoAction) {
         const auto key = ctx_.getActiveContentKey();
