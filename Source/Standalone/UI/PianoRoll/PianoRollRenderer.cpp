@@ -1490,7 +1490,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const bool isOverdose = themeId == ThemeId::Overdose;
 
     // Draw original F0 (thin) — single contiguous span producer
-    if (ctx.showOriginalF0) {
+    if (ctx.showOriginalF0 && !item.notesPrimaryScheme) {
         const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
         const int origStart = startFrame;
         const int origEnd = std::min(endFrame, static_cast<int>(originalF0.size()));

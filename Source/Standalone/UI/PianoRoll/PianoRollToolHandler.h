@@ -26,6 +26,7 @@
 #include <functional>
 #include <cstdint>
 #include <optional>
+#include <chrono>
 
 namespace OpenTune {
 
@@ -140,6 +141,7 @@ public:
         std::function<float()> getRetuneSpeed;
         std::function<float()> getVibratoDepth;
         std::function<float()> getVibratoRate;
+        std::function<float()> getPitchDriftScale;
         std::function<AudioEditingScheme::Scheme()> getAudioEditingScheme;
         std::function<const KeyShortcutConfig::KeyShortcutSettings&()> getShortcutSettings;
         std::function<float(Note&)> recalculatePIP;
@@ -255,6 +257,10 @@ private:
     void handlePitchToolMouseDown(const juce::MouseEvent& e);
     void handlePitchToolDoubleClick(const juce::MouseEvent& e);
     void handlePitchToolMouseUp(const juce::MouseEvent& e);
+    void handlePitchModulationToolMouseDown(const juce::MouseEvent& e);
+    void handlePitchModulationToolDoubleClick(const juce::MouseEvent& e);
+    void handlePitchDriftToolMouseDown(const juce::MouseEvent& e);
+    void handlePitchDriftToolDoubleClick(const juce::MouseEvent& e);
     void handleVolumeEnvelopeToolMouseDown(const juce::MouseEvent& e);
     void handleVolumeEnvelopeToolDrag(const juce::MouseEvent& e);
     void handleVolumeEnvelopeToolUp(const juce::MouseEvent& e);
@@ -327,6 +333,11 @@ private:
 
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;
+
+    // F2 连按计数（Melodyne-style: F2×1=Pitch, F2×2=Modulation, F2×3=Drift）
+    int f2PressCount_ = 0;
+    std::chrono::steady_clock::time_point lastF2PressTime_{};
+    static constexpr int kF2DoubleClickMs = 400;
 
     static constexpr int kEmptySpaceDragThreshold = 12;
 

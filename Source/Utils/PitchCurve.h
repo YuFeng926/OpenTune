@@ -28,6 +28,7 @@ struct PitchCorrectionSegment {
     float retuneSpeed = -1.0f;
     float vibratoDepth = -1.0f;
     float vibratoRate = -1.0f;
+    float pitchDriftScale = 1.0f;
 
     PitchCorrectionSegment() = default;
     PitchCorrectionSegment(int start, int end, const std::vector<float>& data, Source src = Source::None)
@@ -239,7 +240,8 @@ public:
         float sourcePitchRatio,
         float retuneSpeed,
         float vibratoDepth = 0.0f,
-        float vibratoRate = 7.5f);
+        float vibratoRate = 7.5f,
+        float pitchDriftScale = 1.0f);
 
     static constexpr int getCorrectedF0BoundaryContextFrames() noexcept { return 8; }
     static F0FrameRange expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept;

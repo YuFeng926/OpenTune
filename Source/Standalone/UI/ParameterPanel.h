@@ -163,8 +163,10 @@ private:
     std::unique_ptr<ToolIconButton> handDrawToolButton_;
     // ⚡️ vocal-time-stretch §8.4 — Time tool palette button (toolId=5)
     std::unique_ptr<ToolIconButton> timeToolButton_;
-    // OpenDyne 工具按钮（toolId=6 Pitch / 7 VolumeEnvelope / 8 Scissors）
+    // OpenDyne 工具按钮（toolId=6 Pitch / 7 VolumeEnvelope / 8 Scissors / 9 PitchModulation / 10 PitchDrift）
     std::unique_ptr<ToolIconButton> pitchToolButton_;
+    std::unique_ptr<ToolIconButton> pitchModulationToolButton_;
+    std::unique_ptr<ToolIconButton> pitchDriftToolButton_;
     std::unique_ptr<ToolIconButton> volumeEnvelopeToolButton_;
     std::unique_ptr<ToolIconButton> scissorsToolButton_;
     AutoButtonPresentation autoButtonPresentation_;

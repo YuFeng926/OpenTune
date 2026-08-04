@@ -426,6 +426,7 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
         nt.setProperty("originalPitch", note.originalPitch, nullptr);
         nt.setProperty("pitchOffset", note.pitchOffset, nullptr);
         nt.setProperty("retuneSpeed", note.retuneSpeed, nullptr);
+        nt.setProperty("pitchDriftScale", note.pitchDriftScale, nullptr);
         nt.setProperty("vibratoDepth", note.vibratoDepth, nullptr);
         nt.setProperty("vibratoRate", note.vibratoRate, nullptr);
         nt.setProperty("outputGainDb", note.outputGainDb, nullptr);
@@ -449,6 +450,7 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
         note.originalPitch = child.getProperty("originalPitch", 0.0f);
         note.pitchOffset = child.getProperty("pitchOffset", 0.0f);
         note.retuneSpeed = child.getProperty("retuneSpeed", -1.0f);
+        note.pitchDriftScale = child.getProperty("pitchDriftScale", 1.0f);
         note.vibratoDepth = child.getProperty("vibratoDepth", -1.0f);
         note.vibratoRate = child.getProperty("vibratoRate", -1.0f);
         note.outputGainDb = child.getProperty("outputGainDb", 0.0f);
@@ -506,6 +508,7 @@ juce::ValueTree ProjectPersistence::segmentsToValueTree(
         st.setProperty("endFrame", seg.endFrame, nullptr);
         st.setProperty("source", static_cast<int>(seg.source), nullptr);
         st.setProperty("retuneSpeed", seg.retuneSpeed, nullptr);
+        st.setProperty("pitchDriftScale", seg.pitchDriftScale, nullptr);
         st.setProperty("vibratoDepth", seg.vibratoDepth, nullptr);
         st.setProperty("vibratoRate", seg.vibratoRate, nullptr);
         if (!seg.f0Data.empty()) {
@@ -530,6 +533,7 @@ std::vector<ProjectContentEntry::SegmentEntry> ProjectPersistence::segmentsFromV
         seg.endFrame = static_cast<int>(child.getProperty("endFrame", 0));
         seg.source = static_cast<uint8_t>(static_cast<int>(child.getProperty("source", 0)));
         seg.retuneSpeed = child.getProperty("retuneSpeed", -1.0f);
+        seg.pitchDriftScale = child.getProperty("pitchDriftScale", 1.0f);
         seg.vibratoDepth = child.getProperty("vibratoDepth", -1.0f);
         seg.vibratoRate = child.getProperty("vibratoRate", -1.0f);
         // Deserialize f0Data

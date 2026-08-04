@@ -5143,8 +5143,10 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     for (const auto& note : existingNotes)
         if (note.endTime <= rangeStartTime || note.startTime >= rangeEndTime)
             mergedNotes.push_back(note);
-    for (const auto& note : normalizedNotes)
+    for (auto& note : normalizedNotes) {
+        note.pitchDriftScale = 1.0f;
         mergedNotes.push_back(note);
+    }
     std::sort(mergedNotes.begin(), mergedNotes.end(),
         [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
 

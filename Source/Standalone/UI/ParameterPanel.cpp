@@ -539,6 +539,18 @@ ParameterPanel::ParameterPanel()
     scissorsToolButton_->setIcon(ToolbarIcons::getScissorsToolIcon(), false);
     scissorsToolButton_->onClick = [this] { onToolClicked(8); };
     addChildComponent(*scissorsToolButton_);
+
+    pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", juce::String::fromUTF8(u8"Modulation 颤音深度\nF2×2"));
+    pitchModulationToolButton_->setRadioGroupId(1001);
+    pitchModulationToolButton_->setIcon(ToolbarIcons::getPitchToolIcon(), false);
+    pitchModulationToolButton_->onClick = [this] { onToolClicked(9); };
+    addChildComponent(*pitchModulationToolButton_);
+
+    pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", juce::String::fromUTF8(u8"Drift 漂移修正\nF2×3"));
+    pitchDriftToolButton_->setRadioGroupId(1001);
+    pitchDriftToolButton_->setIcon(ToolbarIcons::getPitchToolIcon(), false);
+    pitchDriftToolButton_->onClick = [this] { onToolClicked(10); };
+    addChildComponent(*pitchDriftToolButton_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -669,11 +681,14 @@ void ParameterPanel::resized()
         auto toolsArea = mainArea.removeFromTop(toolsHeight);
         mainArea.removeFromTop(spacing);
 
-        // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾
-        // 六按钮在 OpenDyne 布局恒为可见，无可见性过滤
+        // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、Modulation(F2×2)、Drift(F2×3)、
+        // VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾
+        // 八按钮在 OpenDyne 布局恒为可见，无可见性过滤
         std::vector<juce::Component*> buttons = {
             selectToolButton_.get(),
             pitchToolButton_.get(),
+            pitchModulationToolButton_.get(),
+            pitchDriftToolButton_.get(),
             volumeEnvelopeToolButton_.get(),
             timeToolButton_.get(),
             scissorsToolButton_.get(),
@@ -956,10 +971,12 @@ void ParameterPanel::setOpenDyneMode(bool enabled)
     if (lineAnchorToolButton_)  lineAnchorToolButton_->setVisible(!enabled);
     if (handDrawToolButton_)    handDrawToolButton_->setVisible(!enabled);
 
-    // OpenDyne 专属工具：Pitch/VolumeEnvelope/Scissors 只在 OpenDyne 布局显示
-    if (pitchToolButton_)           pitchToolButton_->setVisible(enabled);
-    if (volumeEnvelopeToolButton_)  volumeEnvelopeToolButton_->setVisible(enabled);
-    if (scissorsToolButton_)        scissorsToolButton_->setVisible(enabled);
+    // OpenDyne 专属工具：Pitch/PitchModulation/PitchDrift/VolumeEnvelope/Scissors 只在 OpenDyne 布局显示
+    if (pitchToolButton_)                pitchToolButton_->setVisible(enabled);
+    if (pitchModulationToolButton_)      pitchModulationToolButton_->setVisible(enabled);
+    if (pitchDriftToolButton_)           pitchDriftToolButton_->setVisible(enabled);
+    if (volumeEnvelopeToolButton_)       volumeEnvelopeToolButton_->setVisible(enabled);
+    if (scissorsToolButton_)             scissorsToolButton_->setVisible(enabled);
 
     // Time 在 OpenDyne 始终可见可选；在 OpenTune 受 experimental 开关控制；切换时保持当前选择
     if (timeToolButton_)
