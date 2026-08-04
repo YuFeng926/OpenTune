@@ -208,6 +208,7 @@ void InteractionState::resetTransient() noexcept
     isModDriftDragging = false;
     modDriftPreviewValue = 0.0f;
     modDriftTool = ToolId::PitchModulation;
+    clearTempPitchCurves();
     isPanning = false;
     dragStartPos = {};
     drawNoteToolPendingDrag = false;

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <vector>
 #include <array>
+#include <unordered_map>
 #include <cmath>
 #include <cstdint>
 
@@ -43,6 +44,17 @@ class PianoRollRenderer
 {
 public:
     PianoRollRenderer() = default;
+
+    // Modulation/Drift 拖拽期间的临时 pitch curve 快照（由组件注入，指向
+    // InteractionState::tempPitchCurves；指针生命周期 = 组件生命周期，内容由
+    // ToolHandler 拖拽期间维护）。非拖拽期间为 nullptr 或空 map，drawF0Curve 走
+    // 已提交 PitchCurve 原路径。
+    const std::unordered_map<size_t, std::vector<float>>* tempPitchCurves = nullptr;
+
+    void setTempPitchCurves(const std::unordered_map<size_t, std::vector<float>>* curves) noexcept
+    {
+        tempPitchCurves = curves;
+    }
 
     /**
      * 渲染上下文结构体

@@ -542,15 +542,34 @@ ParameterPanel::ParameterPanel()
 
     pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", juce::String::fromUTF8(u8"Modulation 颤音深度\nF2×2"));
     pitchModulationToolButton_->setRadioGroupId(1001);
-    pitchModulationToolButton_->setIcon(ToolbarIcons::getPitchToolIcon(), false);
+    pitchModulationToolButton_->setIcon(ToolbarIcons::getPitchModulationToolIcon(), false);
     pitchModulationToolButton_->onClick = [this] { onToolClicked(9); };
     addChildComponent(*pitchModulationToolButton_);
 
     pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", juce::String::fromUTF8(u8"Drift 漂移修正\nF2×3"));
     pitchDriftToolButton_->setRadioGroupId(1001);
-    pitchDriftToolButton_->setIcon(ToolbarIcons::getPitchToolIcon(), false);
+    pitchDriftToolButton_->setIcon(ToolbarIcons::getPitchDriftToolIcon(), false);
     pitchDriftToolButton_->onClick = [this] { onToolClicked(10); };
     addChildComponent(*pitchDriftToolButton_);
+
+    // ── Pitch Grid 模式选择器（OpenDyne 专属，初态隐藏） ──
+    pitchGridSelector_.addItem(u8"No Snap", 1);
+    pitchGridSelector_.addItem(u8"Chromatic", 2);
+    pitchGridSelector_.addItem(u8"Key Scale", 3);
+    pitchGridSelector_.setSelectedId(3, juce::dontSendNotification);  // 默认 Key Scale
+    pitchGridSelector_.onChange = [this] {
+        if (onPitchGridModeChanged) {
+            int id = pitchGridSelector_.getSelectedId();
+            onPitchGridModeChanged(static_cast<PitchGridMode>(id - 1));
+        }
+    };
+    pitchGridSelector_.setColour(juce::ComboBox::backgroundColourId, UIColors::backgroundLight);
+    pitchGridSelector_.setColour(juce::ComboBox::textColourId, UIColors::textPrimary);
+    pitchGridSelector_.setColour(juce::ComboBox::outlineColourId, UIColors::panelBorder);
+    pitchGridSelector_.getProperties().set("noArrow", true);
+    pitchGridSelector_.getProperties().set("fontHeight", UIColors::navFontHeight);
+    pitchGridSelector_.setJustificationType(juce::Justification::centred);
+    addChildComponent(pitchGridSelector_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -735,6 +754,11 @@ void ParameterPanel::resized()
             buttons[static_cast<size_t>(i)]->setBounds(x, y, toolButtonSize, toolButtonSize);
         }
 
+        // Pitch Grid 选择器：放在工具按钮网格下方
+        const int gridRows = (static_cast<int>(buttons.size()) + 1) / 2;
+        const int gridBottom = startY + gridRows * toolButtonSize + (gridRows - 1) * toolButtonGap;
+        pitchGridSelector_.setBounds(toolsColumn.getX(), gridBottom + 4, toolsColumn.getWidth(), 22);
+
         return;
     }
 
@@ -839,6 +863,10 @@ void ParameterPanel::applyTheme()
         pitchShiftButton_->setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
     }
 
+    pitchGridSelector_.setColour(juce::ComboBox::backgroundColourId, UIColors::backgroundLight);
+    pitchGridSelector_.setColour(juce::ComboBox::textColourId, UIColors::textPrimary);
+    pitchGridSelector_.setColour(juce::ComboBox::outlineColourId, UIColors::panelBorder);
+
     resized();
     repaint();
 }
@@ -942,6 +970,8 @@ void ParameterPanel::setActiveTool(int toolId)
     if (pitchToolButton_) pitchToolButton_->setToggleState(toolId == 6, juce::dontSendNotification);
     if (volumeEnvelopeToolButton_) volumeEnvelopeToolButton_->setToggleState(toolId == 7, juce::dontSendNotification);
     if (scissorsToolButton_) scissorsToolButton_->setToggleState(toolId == 8, juce::dontSendNotification);
+    if (pitchModulationToolButton_) pitchModulationToolButton_->setToggleState(toolId == 9, juce::dontSendNotification);
+    if (pitchDriftToolButton_) pitchDriftToolButton_->setToggleState(toolId == 10, juce::dontSendNotification);
 }
 
 void ParameterPanel::setExperimentalFeaturesEnabled(bool enabled)
@@ -983,6 +1013,7 @@ void ParameterPanel::setOpenDyneMode(bool enabled)
     if (pitchDriftToolButton_)           pitchDriftToolButton_->setVisible(enabled);
     if (volumeEnvelopeToolButton_)       volumeEnvelopeToolButton_->setVisible(enabled);
     if (scissorsToolButton_)             scissorsToolButton_->setVisible(enabled);
+    pitchGridSelector_.setVisible(enabled);
 
     // Time 在 OpenDyne 始终可见可选；在 OpenTune 受 experimental 开关控制；切换时保持当前选择
     if (timeToolButton_)

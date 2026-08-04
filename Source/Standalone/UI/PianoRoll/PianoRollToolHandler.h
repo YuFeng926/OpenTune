@@ -229,6 +229,16 @@ public:
     explicit PianoRollToolHandler(Context context);
 
     void setTool(ToolId tool);
+    void setPitchGridMode(PitchGridMode mode) { pitchGridMode_ = mode; }
+    PitchGridMode getPitchGridMode() const { return pitchGridMode_; }
+    const std::unordered_map<size_t, std::vector<float>>* getTempPitchCurves() const
+    {
+        if (ctx_.getState) {
+            const auto& s = ctx_.getState();
+            return s.tempPitchCurves.empty() ? nullptr : &s.tempPitchCurves;
+        }
+        return nullptr;
+    }
     void mouseMove(const juce::MouseEvent& e);
     void mouseDown(const juce::MouseEvent& e);
     void mouseDrag(const juce::MouseEvent& e);
@@ -333,6 +343,7 @@ private:
 
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;
+    PitchGridMode pitchGridMode_ = PitchGridMode::KeyScale;
 
     // F2 连按计数（Melodyne-style: F2×1=Pitch, F2×2=Modulation, F2×3=Drift）
     int f2PressCount_ = 0;
