@@ -285,6 +285,36 @@ public:
     }
 
     /**
+     * @brief Pitch Modulation Tool icon: note block with symmetric sine wave
+     * 音符块 + 对称正弦波（2个完整周期，表示 vibrato 颤音深度）
+     */
+    static juce::Path getPitchModulationToolIcon() {
+        juce::Path p;
+        // 底部音符块（与 getPitchToolIcon 相同位置）
+        p.addRoundedRectangle(4.0f, 14.0f, 16.0f, 6.0f, 2.0f);
+        // 顶部：对称正弦波（2个完整周期，表示 vibrato）
+        p.startNewSubPath(4.0f, 10.0f);
+        p.cubicTo(6.0f, 4.0f, 8.0f, 4.0f, 10.0f, 10.0f);   // 第一个周期上半
+        p.cubicTo(12.0f, 16.0f, 14.0f, 16.0f, 16.0f, 10.0f); // 第一个周期下半
+        p.cubicTo(18.0f, 4.0f, 20.0f, 4.0f, 20.0f, 10.0f);   // 第二个周期上半（缩短）
+        return p;
+    }
+
+    /**
+     * @brief Pitch Drift Tool icon: note block with slow ascending slope line
+     * 音符块 + 缓慢上升倾斜线（表示 pitch drift 慢漂移趋势）
+     */
+    static juce::Path getPitchDriftToolIcon() {
+        juce::Path p;
+        // 底部音符块（与 getPitchToolIcon 相同位置）
+        p.addRoundedRectangle(4.0f, 14.0f, 16.0f, 6.0f, 2.0f);
+        // 顶部：缓慢上升倾斜线（表示 pitch drift 趋势）
+        p.startNewSubPath(4.0f, 12.0f);
+        p.lineTo(20.0f, 5.0f);
+        return p;
+    }
+
+    /**
      * @brief Volume Envelope Tool icon: note with amplitude envelope curve
      * 音符 + 振幅包络线（上下对称衰减曲线）
      */

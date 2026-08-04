@@ -1577,17 +1577,86 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
                                                  *currentTime);
 
         double minDuration = 0.02;
+        const int resizeIdx = static_cast<int>(ctx_.getState().noteResize.noteIndex);
 
         if (ctx_.getState().noteResize.edge == NoteResizeEdge::Left) {
-            double newStart = std::min(clampedTime, notes[static_cast<size_t>(ctx_.getState().noteResize.noteIndex)].endTime - minDuration);
+            double newStart = std::min(clampedTime, notes[static_cast<size_t>(resizeIdx)].endTime - minDuration);
             newStart = std::max(0.0, newStart);
-            notes[static_cast<size_t>(ctx_.getState().noteResize.noteIndex)].startTime = newStart;
+            notes[static_cast<size_t>(resizeIdx)].startTime = newStart;
         } else if (ctx_.getState().noteResize.edge == NoteResizeEdge::Right) {
-            double newEnd = std::max(clampedTime, notes[static_cast<size_t>(ctx_.getState().noteResize.noteIndex)].startTime + minDuration);
-            notes[static_cast<size_t>(ctx_.getState().noteResize.noteIndex)].endTime = newEnd;
+            double newEnd = std::max(clampedTime, notes[static_cast<size_t>(resizeIdx)].startTime + minDuration);
+            notes[static_cast<size_t>(resizeIdx)].endTime = newEnd;
         }
 
-        notes[static_cast<size_t>(ctx_.getState().noteResize.noteIndex)].dirty = true;
+        // ── 邻居压缩退让：A 扩展侵入同音高行邻居时，邻居边界被推让，A 的扩展受限 ──
+        {
+            const auto edge = ctx_.getState().noteResize.edge;
+            const float notePitch = notes[static_cast<size_t>(resizeIdx)].getAdjustedPitch();
+            const double originalStart = ctx_.getState().noteResize.originalStartTime;
+            const double originalEnd = ctx_.getState().noteResize.originalEndTime;
+            const double newBoundary = (edge == NoteResizeEdge::Left)
+                ? notes[static_cast<size_t>(resizeIdx)].startTime
+                : notes[static_cast<size_t>(resizeIdx)].endTime;
+            const double delta = (edge == NoteResizeEdge::Left)
+                ? (originalStart - newBoundary)   // 向左扩展的量（正值）
+                : (newBoundary - originalEnd);    // 向右扩展的量（正值）
+
+            if (delta > 0.0) {
+                // 收集同音高行上的其他 notes（排除当前 note）
+                struct NeighborInfo { size_t index; double startTime; double endTime; };
+                std::vector<NeighborInfo> samePitchNotes;
+                for (size_t i = 0; i < notes.size(); ++i) {
+                    if (static_cast<int>(i) == resizeIdx) continue;
+                    if (std::abs(notes[i].getAdjustedPitch() - notePitch) < 0.01f) {
+                        samePitchNotes.push_back({ i, notes[i].startTime, notes[i].endTime });
+                    }
+                }
+                // 按 startTime 排序
+                std::sort(samePitchNotes.begin(), samePitchNotes.end(),
+                    [](const NeighborInfo& a, const NeighborInfo& b) { return a.startTime < b.startTime; });
+
+                if (edge == NoteResizeEdge::Right) {
+                    // 向右扩展：找 A 之后的邻居，逐个压缩（B 的 startTime 被推后，endTime 不变）
+                    double remaining = delta;
+                    for (auto& nb : samePitchNotes) {
+                        if (remaining <= 0.0) break;
+                        // 只处理 A 右边界右侧的邻居
+                        if (nb.startTime < newBoundary - 0.001) continue;  // 在 A 内部的，跳过
+                        // 压缩量 = min(remaining, 邻居长度)
+                        double nbLen = nb.endTime - nb.startTime;
+                        double compress = juce::jmin(remaining, nbLen - 0.02);  // 保留最小长度 0.02
+                        if (compress <= 0.0) break;
+                        notes[nb.index].startTime += compress;
+                        remaining -= compress;
+                    }
+                    // 邻居链总空间不足时，限制 A 的扩展
+                    if (remaining > 0.0) {
+                        notes[static_cast<size_t>(resizeIdx)].endTime = newBoundary - remaining;
+                    }
+                } else {
+                    // 向左扩展：找 A 之前的邻居，逐个压缩（B 的 endTime 被提前，startTime 不变）
+                    double remaining = delta;
+                    for (auto it = samePitchNotes.rbegin(); it != samePitchNotes.rend(); ++it) {
+                        if (remaining <= 0.0) break;
+                        const auto& nb = *it;
+                        // 只处理 A 左边界左侧的邻居
+                        if (nb.endTime > newBoundary + 0.001) continue;  // 在 A 内部的，跳过
+                        // 压缩量 = min(remaining, 邻居长度)
+                        double nbLen = nb.endTime - nb.startTime;
+                        double compress = juce::jmin(remaining, nbLen - 0.02);  // 保留最小长度 0.02
+                        if (compress <= 0.0) break;
+                        notes[nb.index].endTime -= compress;
+                        remaining -= compress;
+                    }
+                    // 邻居链总空间不足时，限制 A 的扩展
+                    if (remaining > 0.0) {
+                        notes[static_cast<size_t>(resizeIdx)].startTime = newBoundary + remaining;
+                    }
+                }
+            }
+        }
+
+        notes[static_cast<size_t>(resizeIdx)].dirty = true;
         if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, notes);
         return;
     }
@@ -1829,6 +1898,80 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
             note.dirty = true;
         }
 
+        // 临时计算 pitch curve 用于实时预览：以拖拽后的 retuneSpeed/pitchDriftScale
+        // 计算选中 note 的帧级 corrected F0，供 renderer 拖拽期间覆盖已提交曲线。
+        // 未选中/无声帧保持原值，非拖拽期间 map 为空，drawF0Curve 走原路径。
+        state.tempPitchCurves.clear();
+        const auto f0tl = ctx_.getF0Timeline();
+        const auto pitchCurve = ctx_.getPitchCurve();
+        if (pitchCurve != nullptr && !f0tl.isEmpty()) {
+            const auto snap = pitchCurve->getSnapshot();
+            if (snap != nullptr && snap->size() > 0) {
+                const auto& originalF0 = snap->getOriginalF0();
+                const int numFrames = static_cast<int>(originalF0.size());
+
+                for (int noteIndex : state.noteDrag.draggedNoteIndices) {
+                    if (noteIndex < 0 || noteIndex >= static_cast<int>(notes.size())) continue;
+                    const auto& note = notes[static_cast<size_t>(noteIndex)];
+
+                    const int noteStart = juce::jmax(0, f0tl.frameAtOrBefore(note.startTime));
+                    const int noteEnd = juce::jmin(numFrames, f0tl.exclusiveFrameAt(note.endTime));
+                    if (noteStart >= noteEnd) continue;
+
+                    const float targetF0 = note.getAdjustedPitch();
+                    if (targetF0 <= 0.0f) continue;
+
+                    const float retuneSpeed = note.retuneSpeed >= 0.0f ? note.retuneSpeed : ctx_.getRetuneSpeed();
+
+                    std::vector<float> curve(static_cast<size_t>(noteEnd - noteStart), 0.0f);
+                    if (currentTool_ == ToolId::PitchModulation) {
+                        // 简化实时预览：与提交路径一致的 mixRetune 混合
+                        for (int f = noteStart; f < noteEnd; ++f) {
+                            const float original = originalF0[static_cast<size_t>(f)];
+                            if (original > 0.0f)
+                                curve[static_cast<size_t>(f - noteStart)] =
+                                    PitchUtils::mixRetune(original, targetF0, retuneSpeed);
+                        }
+                    } else {
+                        // PitchDrift：复刻提交路径的线性趋势缩放（PitchCurve.cpp 漂移段）
+                        const float driftScale = note.pitchDriftScale;
+                        const int noteFrames = noteEnd - noteStart;
+                        float slopeSemitones = 0.0f;
+                        if (driftScale != 1.0f && noteFrames > 1) {
+                            float sumT = 0.0f, sumD = 0.0f, sumTT = 0.0f, sumTD = 0.0f;
+                            for (int f = noteStart; f < noteEnd; ++f) {
+                                const float fi = originalF0[static_cast<size_t>(f)];
+                                const float ti = static_cast<float>(f - noteStart) / static_cast<float>(noteFrames);
+                                const float di = 12.0f * (std::log2(std::max(1.0f, fi)) - std::log2(std::max(1.0f, targetF0)));
+                                sumT += ti; sumD += di; sumTT += ti * ti; sumTD += ti * di;
+                            }
+                            const float det = static_cast<float>(noteFrames) * sumTT - sumT * sumT;
+                            if (std::abs(det) > 1e-10f)
+                                slopeSemitones = (static_cast<float>(noteFrames) * sumTD - sumT * sumD) / det;
+                        }
+                        for (int f = noteStart; f < noteEnd; ++f) {
+                            const float original = originalF0[static_cast<size_t>(f)];
+                            if (original <= 0.0f) continue;
+                            if (driftScale == 1.0f) {
+                                curve[static_cast<size_t>(f - noteStart)] =
+                                    PitchUtils::mixRetune(original, targetF0, retuneSpeed);
+                            } else {
+                                const float tNorm = static_cast<float>(f - noteStart) / static_cast<float>(noteFrames);
+                                const float devSemitones = 12.0f * (std::log2(original) - std::log2(targetF0));
+                                const float trendAtT = slopeSemitones * (tNorm - 0.5f);
+                                const float trendDeviation = devSemitones - trendAtT;
+                                const float scaledOffset = trendDeviation * (driftScale - 1.0f);
+                                const float shiftedF0 = PitchUtils::midiToFreq(PitchUtils::freqToMidi(original) + scaledOffset);
+                                curve[static_cast<size_t>(f - noteStart)] =
+                                    PitchUtils::mixRetune(shiftedF0, targetF0, retuneSpeed);
+                            }
+                        }
+                    }
+                    state.tempPitchCurves[static_cast<size_t>(noteIndex)] = std::move(curve);
+                }
+            }
+        }
+
         if (ctx_.invalidateLiveNotes) {
             const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
             ctx_.invalidateLiveNotes(beforeNotes, notes);
@@ -1878,11 +2021,23 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
         const float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
         const int baseMidi = note.getBaseMidiNote();
         const float targetMidi = static_cast<float>(baseMidi) + initialOffset + deltaSemitones;
+        // Pitch Grid 全局开关决定吸附方式；Alt 拖拽临时解除吸附（保留连续 cents）
         float snappedMidi = targetMidi;
         if (!altBypass) {
-            // 唯一投影入口：无配置时用默认 Chromatic（quantize 内部 round 半音）。
-            const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-            snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
+            switch (pitchGridMode_) {
+                case PitchGridMode::NoSnap:
+                    // 自由模式：不吸附，保留连续 cents
+                    break;
+                case PitchGridMode::Chromatic:
+                    snappedMidi = std::round(targetMidi);  // 吸附到最近半音
+                    break;
+                case PitchGridMode::KeyScale: {
+                    // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
+                    const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+                    snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
+                    break;
+                }
+            }
         }
         note.pitchOffset = snappedMidi - static_cast<float>(baseMidi);
         note.dirty = true;
@@ -1917,6 +2072,7 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
         ctx_.clearNoteDraft();
         state.noteDrag.draggedNoteIndices.clear();
         state.isModDriftDragging = false;
+        state.clearTempPitchCurves();
         return true;
     }
 

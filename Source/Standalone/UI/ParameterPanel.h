@@ -12,8 +12,10 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <memory>
+#include <functional>
 #include "OpenTuneLookAndFeel.h"
 #include "UIColors.h"
+#include "ToolIds.h"
 
 namespace OpenTune {
 
@@ -86,6 +88,9 @@ public:
     /** OpenDyne（NotesPrimary）模式：切换工具在上 / Pitch Shift 在底部布局。 */
     void setOpenDyneMode(bool enabled);
     bool isOpenDyneMode() const noexcept { return openDyneMode_; }
+
+    /** Pitch Grid 全局开关回调：切换 No Snap / Chromatic / Key Scale 吸附模式。 */
+    std::function<void(PitchGridMode)> onPitchGridModeChanged;
 
     /** 设置 AUTO 按钮的模式显示。
      *  @param hasReference  true: 主文本 "AUTO" + 副标题 "(Ref)"（小字在下方）, false: 仅 "AUTO" 居中
@@ -171,6 +176,8 @@ private:
     std::unique_ptr<ToolIconButton> scissorsToolButton_;
     AutoButtonPresentation autoButtonPresentation_;
     std::unique_ptr<juce::TextButton> pitchShiftButton_;
+    // OpenDyne Pitch Grid 全局开关（No Snap / Chromatic / Key Scale）
+    juce::ComboBox pitchGridSelector_;
 
     LargeKnobLookAndFeel largeKnobLookAndFeel_;
     juce::Image auroraSidebarSurface_;

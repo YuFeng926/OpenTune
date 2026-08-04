@@ -23,5 +23,12 @@ enum class ToolId : int
     PitchDrift = 10
 };
 
+// Pitch Grid 全局开关：控制 Pitch 工具拖拽时的吸附行为（OpenDyne 模式）
+enum class PitchGridMode : int {
+    NoSnap = 0,      // 自由拖动，音分级精度
+    Chromatic = 1,   // 吸附到最近半音
+    KeyScale = 2     // 吸附到活动调式音阶（默认）
+};
+
 } // namespace OpenTune
 

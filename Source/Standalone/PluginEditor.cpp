@@ -384,6 +384,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // Setup Parameter Panel
     parameterPanel_.addListener(this);
+    // Pitch Grid 全局开关 → PianoRollToolHandler 吸附模式
+    parameterPanel_.onPitchGridModeChanged = [this](PitchGridMode mode) {
+        if (auto* handler = pianoRoll_.getToolHandler())
+            handler->setPitchGridMode(mode);
+    };
     // parameterPanel_.setRetuneSpeed(processorRef_.getRetuneSpeed());
     parameterPanel_.setRetuneSpeed(PitchControlConfig::kDefaultRetuneSpeedPercent);
     pianoRoll_.setRetuneSpeed(PitchControlConfig::kDefaultRetuneSpeedNormalized);
