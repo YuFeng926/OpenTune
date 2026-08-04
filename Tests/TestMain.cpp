@@ -50,6 +50,15 @@ bool contains(const std::string& text, const char* token)
     return text.find(token) != std::string::npos;
 }
 
+std::size_t countOccurrences(const std::string& text, const char* token)
+{
+    std::size_t count = 0;
+    for (std::size_t pos = text.find(token); pos != std::string::npos;
+         pos = text.find(token, pos + 1))
+        ++count;
+    return count;
+}
+
 void testVisibleEntryContract()
 {
     const auto source = readSource("Source/Standalone/UI/ArrangementViewComponent.cpp");
@@ -297,6 +306,22 @@ void testOpenDyneContract()
                && !contains(rendererHeader, "OpenDyneRenderer"),
            "No parallel OpenDyne renderer/tool-handler structures exist");
 
+    // 主视图波形/F0/unvoiced 与 OpenDyne 共用单一路径：无 scheme 级硬隐藏
+    const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto drawContent = functionBlock(pianoRoll, "void PianoRollComponent::drawContent");
+    const auto heartbeat = functionBlock(pianoRoll, "void PianoRollComponent::onHeartbeatTick");
+    const auto mipmapSource = readSource("Source/Standalone/UI/WaveformMipmap.cpp");
+
+    expect(!contains(drawContent, "!notesPrimary && showWaveform_")
+               && !contains(drawContent, "if (!notesPrimary)"),
+           "drawContent shares one waveform/unvoiced/F0 path; no scheme-level hiding");
+    expect(contains(heartbeat, "if (progressed)")
+               && contains(heartbeat, "rasterizeDirtySurfaces()")
+               && !contains(heartbeat, "isComplete()"),
+           "Heartbeat re-rasterizes on mipmap progress without waiting for full cache completion");
+    expect(contains(mipmapSource, "return -1;"),
+           "selectBestLevelIndex returns -1 when no complete non-empty level exists");
+
     // AUTO 提交推进 outputGainRevision（A 投影逐点变化，计划五.3）
     const auto autoCommit = functionBlock(processor, "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey");
     expect(contains(processor, "applyNotesWithOutputGain")
@@ -312,6 +337,100 @@ void testOpenDyneContract()
     // DrawNote/LineAnchor 吸附根除裸 round(midiNote)，统一 quantizeMidiToActiveScale 入口
     expect(!contains(toolHandler, "std::round(midiNote)"),
            "DrawNote/LineAnchor snap through the single quantizeMidiToActiveScale entry");
+}
+
+void testOpenDyneRenderPreviewContract()
+{
+    const auto renderer = readSource("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto drawWaveform = functionBlock(renderer, "void PianoRollRenderer::drawWaveform");
+    const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto transientOverlay = functionBlock(
+        pianoRoll, "void PianoRollComponent::drawTransientOverlay");
+    const auto dragPreview = functionBlock(
+        pianoRoll, "void PianoRollComponent::drawNoteDragCurvePreview");
+
+    expect(!contains(drawWaveform, "audioBuffer"),
+           "drawWaveform draws the injected mipmap level without item.audioBuffer");
+    // drawNoteDragCurvePreview 必须无条件调用（两种 scheme 共用），
+    // !isOpenDyne() 仅用于 HandDraw/LineAnchor 预览守卫，不包裹 note-drag F0
+    expect(contains(transientOverlay, "drawNoteDragCurvePreview(g);"),
+           "Note-drag F0 preview is always called");
+    {
+        const auto dragPos = transientOverlay.find("drawNoteDragCurvePreview(g);");
+        const auto dyneGuard = transientOverlay.find("!isOpenDyne()");
+        expect(dragPos != std::string::npos && (dyneGuard == std::string::npos || dragPos < dyneGuard),
+               "Note-drag F0 preview call precedes any !isOpenDyne guard");
+    }
+    expect(contains(transientOverlay, "drawVolumeEnvelopePreview(g)")
+               && contains(transientOverlay, "drawScissorsPreview(g)"),
+           "OpenDyne transient previews stay scheme-specific");
+    expect(!contains(dragPreview, "CorrectedF0Primary"),
+           "Note-drag F0 preview is not restricted to the CorrectedF0Primary scheme");
+}
+
+void testOpenDyneToolSwitchingContract()
+{
+    const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
+    std::string menu;
+    const auto menuPos = pianoRoll.find("showToolSelectionMenu");
+    if (menuPos != std::string::npos) {
+        const auto menuEnd = pianoRoll.find("menu.showMenuAsync", menuPos);
+        if (menuEnd != std::string::npos)
+            menu = pianoRoll.substr(menuPos, menuEnd - menuPos);
+    }
+    const auto setCurrentTool = functionBlock(
+        pianoRoll, "void PianoRollComponent::setCurrentTool");
+    const auto applyScheme = functionBlock(
+        pianoRoll, "void PianoRollComponent::applyAudioEditingScheme");
+
+    expect(countOccurrences(menu, "Time Tool (T)") == 2
+               && countOccurrences(menu, "experimentalFeaturesEnabled_") == 1,
+           "OpenDyne menu lists Time unconditionally; experimental gates only the OpenTune branch");
+    expect(contains(setCurrentTool, "!isOpenDyne()")
+               && contains(setCurrentTool, "!experimentalFeaturesEnabled_"),
+           "TimeTool gate applies only outside OpenDyne and stays behind the experimental switch");
+    expect(contains(applyScheme, "currentTool_ == ToolId::LineAnchor")
+               && contains(applyScheme, "currentTool_ == ToolId::HandDraw")
+               && contains(applyScheme, "setCurrentTool(ToolId::Select)"),
+           "Scheme entry falls LineAnchor/HandDraw back to Select");
+
+    const auto parameterPanel = readSource("Source/Standalone/UI/ParameterPanel.cpp");
+    const auto setOpenDyneMode = functionBlock(
+        parameterPanel, "void ParameterPanel::setOpenDyneMode");
+    const auto resized = functionBlock(parameterPanel, "void ParameterPanel::resized");
+    const auto refreshText = functionBlock(
+        parameterPanel, "void ParameterPanel::refreshLocalizedText");
+    const auto layoutPos = resized.find("if (openDyneMode_)");
+    const auto layoutEnd = resized.find("return;", layoutPos);
+
+    // Select 与 AUTO 使用 addAndMakeVisible 恒可见，setOpenDyneMode 不再隐藏它们
+    expect(!contains(setOpenDyneMode, "selectToolButton_->setVisible(!enabled)")
+               && !contains(setOpenDyneMode, "autoTuneToolButton_->setVisible(!enabled)"),
+           "Select and AUTO are never hidden by setOpenDyneMode");
+    expect(layoutPos != std::string::npos && layoutEnd != std::string::npos
+               && contains(resized.substr(layoutPos, layoutEnd - layoutPos),
+                           "autoTuneToolButton_"),
+           "OpenDyne layout includes the AUTO button");
+    expect(contains(refreshText, "\\nF1"),
+           "Select tooltip shows F1 in OpenDyne");
+
+    const auto toolHandler = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto keyPressed = functionBlock(
+        toolHandler, "bool PianoRollToolHandler::keyPressed");
+    const auto gate = keyPressed.find("if (!isOpenDyne)");
+    const auto timeTool = keyPressed.find("ShortcutId::ToolTimeTool");
+    expect(gate != std::string::npos
+               && timeTool != std::string::npos
+               && keyPressed.find("ShortcutId::ToolDrawNote") > gate
+               && keyPressed.find("ShortcutId::ToolSelect") > gate
+               && keyPressed.find("ShortcutId::ToolLineAnchor") > gate
+               && keyPressed.find("ShortcutId::ToolHandDraw") > gate
+               && keyPressed.find("ShortcutId::ToolDrawNote") < timeTool
+               && keyPressed.find("ShortcutId::ToolSelect") < timeTool
+               && keyPressed.find("ShortcutId::ToolLineAnchor") < timeTool
+               && keyPressed.find("ShortcutId::ToolHandDraw") < timeTool,
+           "Configurable tool shortcuts stay inside the !isOpenDyne gate; TimeTool remains shared");
 }
 
 void testKillListContract()
@@ -546,6 +665,8 @@ int main()
     testChunkBlankCorrectionContract();
     testRenderWorkerPauseContract();
     testOpenDyneContract();
+    testOpenDyneRenderPreviewContract();
+    testOpenDyneToolSwitchingContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";

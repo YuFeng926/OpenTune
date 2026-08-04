@@ -35,9 +35,9 @@ void paintOverviewClipWaveform(juce::Graphics& g,
         return;
 
     const int levelIndex = mipmap->selectBestLevelIndex(pixelsPerSecond);
-    const auto& level = mipmap->getLevel(levelIndex);
-    if (!level.complete || level.peaks.empty())
+    if (levelIndex < 0)
         return;
+    const auto& level = mipmap->getLevel(levelIndex);
 
     const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
     const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
@@ -215,15 +215,22 @@ void TimelineOverviewComponent::onHeartbeatTick(ContentKey contentKey,
     viewportWidthPx_ = viewportWidthPx;
 
     const uint64_t signature = calculateContentSignature();
+
+    // mipmap 构建进度变化 → 重绘：任一 complete 非空 level 出现即显示，不等待全量完成
+    float buildProgress = 0.0f;
+    if (const auto* mipmap = waveformMipmapCache_.get(contentKey_))
+        buildProgress = mipmap->getBuildProgress();
+
     const bool dirty = camera_ != lastCamera_
         || signature != lastSignature_
-        || !waveformMipmapCache_.isComplete();
+        || buildProgress != lastBuildProgress_;
 
     if (!dirty)
         return;
 
     lastCamera_ = camera_;
     lastSignature_ = signature;
+    lastBuildProgress_ = buildProgress;
     repaint();
 }
 

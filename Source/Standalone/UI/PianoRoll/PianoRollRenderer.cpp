@@ -460,7 +460,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
                                       const WaveformMipmap::Level& wfLevel,
                                       int wfLevelIndex)
 {
-    if (item.audioBuffer == nullptr || wfLevel.peaks.empty())
+    if (wfLevel.peaks.empty())
         return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
@@ -937,7 +937,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     // ── OpenDyne waveform blob 模式 ──────────────────────────────
     if (item.notesPrimaryScheme)
     {
-        // mipmap 未完成时与整轨 drawWaveform 同一个 isComplete 门控：不绘制
+        // 没有 complete 非空 mipmap level 时，装配阶段不会注入 wfLevel。
         if (item.wfLevel == nullptr || item.wfLevel->peaks.empty())
             return;
 
@@ -979,7 +979,6 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 const double sourceTime = static_cast<double>(i) * timePerPeak;
                 const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
                 const float topY = centerY - halfH * mag;
-                const float bottomY = centerY + halfH * mag;
                 if (firstPeak)
                 {
                     blob.lineTo(px, topY);

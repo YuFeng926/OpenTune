@@ -185,12 +185,6 @@ float WaveformMipmap::getBuildProgress() const noexcept
     return static_cast<float>(completedPeaks) / static_cast<float>(totalPeaks);
 }
 
-const WaveformMipmap::Level& WaveformMipmap::selectBestLevel(double pixelsPerSecond) const
-{
-    const int idx = selectBestLevelIndex(pixelsPerSecond);
-    return levels_[idx];
-}
-
 int WaveformMipmap::selectBestLevelIndex(double pixelsPerSecond) const
 {
     const double secondsPerPixel = 1.0 / pixelsPerSecond;
@@ -211,7 +205,7 @@ int WaveformMipmap::selectBestLevelIndex(double pixelsPerSecond) const
             return i;
     }
     
-    return 0;
+    return -1;
 }
 
 void WaveformMipmap::clear()

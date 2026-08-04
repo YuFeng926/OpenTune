@@ -4,7 +4,6 @@
 #include "../../Utils/LocalizationManager.h"
 #include <cmath>
 #include <vector>
-#include <algorithm>
 
 namespace OpenTune {
 
@@ -519,30 +518,27 @@ ParameterPanel::ParameterPanel()
     timeToolButton_->setRadioGroupId(1001);
     timeToolButton_->setIcon(ToolbarIcons::getTimeToolIcon(), false);
     timeToolButton_->onClick = [this] { onToolClicked(5); };
-    addAndMakeVisible(*timeToolButton_);
-    timeToolButton_->setVisible(experimentalFeaturesEnabled_);
+    // OpenTune 初态隐藏：OpenDyne 始终可见可选，OpenTune 受 experimental 控制
+    addChildComponent(*timeToolButton_);
 
-    // ── OpenDyne 工具按钮（默认隐藏，由 setOpenDyneMode 切换） ──
+    // ── OpenDyne 工具按钮（OpenDyne 专属，OpenTune 初态隐藏） ──
     pitchToolButton_ = std::make_unique<ToolIconButton>(6, "Pitch", juce::String::fromUTF8(u8"Pitch 音高编辑\nF2"));
     pitchToolButton_->setRadioGroupId(1001);
     pitchToolButton_->setIcon(ToolbarIcons::getPitchToolIcon(), false);
     pitchToolButton_->onClick = [this] { onToolClicked(6); };
-    addAndMakeVisible(*pitchToolButton_);
-    pitchToolButton_->setVisible(false);
+    addChildComponent(*pitchToolButton_);
 
     volumeEnvelopeToolButton_ = std::make_unique<ToolIconButton>(7, "VolumeEnvelope", juce::String::fromUTF8(u8"Volume Envelope 音量包络\nF4"));
     volumeEnvelopeToolButton_->setRadioGroupId(1001);
     volumeEnvelopeToolButton_->setIcon(ToolbarIcons::getVolumeEnvelopeToolIcon(), false);
     volumeEnvelopeToolButton_->onClick = [this] { onToolClicked(7); };
-    addAndMakeVisible(*volumeEnvelopeToolButton_);
-    volumeEnvelopeToolButton_->setVisible(false);
+    addChildComponent(*volumeEnvelopeToolButton_);
 
     scissorsToolButton_ = std::make_unique<ToolIconButton>(8, "Scissors", juce::String::fromUTF8(u8"Scissors 切割音符\nF6"));
     scissorsToolButton_->setRadioGroupId(1001);
     scissorsToolButton_->setIcon(ToolbarIcons::getScissorsToolIcon(), false);
     scissorsToolButton_->onClick = [this] { onToolClicked(8); };
-    addAndMakeVisible(*scissorsToolButton_);
-    scissorsToolButton_->setVisible(false);
+    addChildComponent(*scissorsToolButton_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -668,33 +664,30 @@ void ParameterPanel::resized()
         toolsHeader_.setBounds(mainArea.removeFromTop(headerHeight));
         mainArea.removeFromTop(toolHeaderGap);
 
-        const int rows = 3; // 5 个工具按钮：2 行 + 1 行（Time 居中）
+        const int rows = 3;
         const int toolsHeight = rows * toolButtonSize + (rows - 1) * toolButtonGap;
         auto toolsArea = mainArea.removeFromTop(toolsHeight);
         mainArea.removeFromTop(spacing);
 
-        std::vector<juce::Component*> buttons;
-        if (selectToolButton_)          buttons.push_back(selectToolButton_.get());          // 行1列1
-        if (pitchToolButton_)           buttons.push_back(pitchToolButton_.get());           // 行1列2
-        if (volumeEnvelopeToolButton_)  buttons.push_back(volumeEnvelopeToolButton_.get());  // 行2列1
-        if (scissorsToolButton_)        buttons.push_back(scissorsToolButton_.get());        // 行2列2
-        if (timeToolButton_)            buttons.push_back(timeToolButton_.get());            // 行3列1
-
-        // 过滤不可见按钮
-        buttons.erase(std::remove_if(buttons.begin(), buttons.end(),
-                                     [](const juce::Component* b) { return !b->isVisible(); }),
-                      buttons.end());
+        // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾
+        // 六按钮在 OpenDyne 布局恒为可见，无可见性过滤
+        std::vector<juce::Component*> buttons = {
+            selectToolButton_.get(),
+            pitchToolButton_.get(),
+            volumeEnvelopeToolButton_.get(),
+            timeToolButton_.get(),
+            scissorsToolButton_.get(),
+            autoTuneToolButton_.get(),
+        };
 
         auto toolsColumn = toolsArea.reduced(5, 0);
-        int startY = toolsColumn.getY();
-        const int visibleCount = static_cast<int>(buttons.size());
         const int totalWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
         const int gridStartX = toolsColumn.getCentreX() - totalWidth / 2;
-        for (int i = 0; i < visibleCount; ++i) {
+        for (int i = 0; i < static_cast<int>(buttons.size()); ++i) {
             const int row = i / 2;
             const int col = i % 2;
             const int x = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
-            const int y = startY + row * (toolButtonSize + toolButtonGap);
+            const int y = toolsColumn.getY() + row * (toolButtonSize + toolButtonGap);
             buttons[static_cast<size_t>(i)]->setBounds(x, y, toolButtonSize, toolButtonSize);
         }
 
@@ -844,7 +837,7 @@ void ParameterPanel::refreshLocalizedText()
     // 更新工具按钮 tooltip
     setAutoButtonPresentation(autoButtonPresentation_);
     if (selectToolButton_)
-        selectToolButton_->setTooltip(LOC(kTooltipSelect) + "\n3");
+        selectToolButton_->setTooltip(LOC(kTooltipSelect) + (openDyneMode_ ? "\nF1" : "\n3"));
     if (drawNoteToolButton_)
         drawNoteToolButton_->setTooltip(LOC(kTooltipDrawNote) + "\n2");
     if (lineAnchorToolButton_)
@@ -938,11 +931,12 @@ void ParameterPanel::setExperimentalFeaturesEnabled(bool enabled)
 
     experimentalFeaturesEnabled_ = enabled;
     if (timeToolButton_ != nullptr) {
-        if (!enabled) {
+        // Time 在 OpenDyne 始终可见可选，不受 experimental 影响；OpenTune 继续受 experimental 控制
+        if (!enabled && !openDyneMode_) {
             timeToolButton_->setToggleState(false, juce::dontSendNotification);
             timeToolButton_->setBounds({});
         }
-        timeToolButton_->setVisible(enabled && !openDyneMode_);
+        timeToolButton_->setVisible(openDyneMode_ || enabled);
     }
     resized();
     repaint();
@@ -956,31 +950,23 @@ void ParameterPanel::setOpenDyneMode(bool enabled)
 
     openDyneMode_ = enabled;
 
-    // OpenTune 工具按钮：Select/DrawNote/LineAnchor/HandDraw 只在 OpenTune 布局显示
-    if (selectToolButton_)      selectToolButton_->setVisible(!enabled);
+    // Select 与 AUTO 在两种布局均保留，恒可见
+    // OpenTune 专属工具：DrawNote/LineAnchor/HandDraw 只在 OpenTune 布局显示
     if (drawNoteToolButton_)    drawNoteToolButton_->setVisible(!enabled);
     if (lineAnchorToolButton_)  lineAnchorToolButton_->setVisible(!enabled);
     if (handDrawToolButton_)    handDrawToolButton_->setVisible(!enabled);
-    if (autoTuneToolButton_)    autoTuneToolButton_->setVisible(!enabled);
 
-    // OpenDyne 工具按钮：Pitch/VolumeEnvelope/Scissors 只在 OpenDyne 布局显示
+    // OpenDyne 专属工具：Pitch/VolumeEnvelope/Scissors 只在 OpenDyne 布局显示
     if (pitchToolButton_)           pitchToolButton_->setVisible(enabled);
     if (volumeEnvelopeToolButton_)  volumeEnvelopeToolButton_->setVisible(enabled);
     if (scissorsToolButton_)        scissorsToolButton_->setVisible(enabled);
 
-    // TimeTool 在两种布局都可用（受实验开关控制）
-    if (timeToolButton_) {
+    // Time 在 OpenDyne 始终可见可选；在 OpenTune 受 experimental 开关控制；切换时保持当前选择
+    if (timeToolButton_)
         timeToolButton_->setVisible(enabled || experimentalFeaturesEnabled_);
-        timeToolButton_->setToggleState(false, juce::dontSendNotification);
-    }
 
-    // 切回 OpenTune 时，把当前激活的 OpenDyne 工具按钮复位
-    if (!enabled) {
-        if (pitchToolButton_)          pitchToolButton_->setToggleState(false, juce::dontSendNotification);
-        if (volumeEnvelopeToolButton_) volumeEnvelopeToolButton_->setToggleState(false, juce::dontSendNotification);
-        if (scissorsToolButton_)       scissorsToolButton_->setToggleState(false, juce::dontSendNotification);
-    }
-
+    // Select tooltip 的快捷键随 scheme 切换（OpenDyne F1 / OpenTune 3）
+    refreshLocalizedText();
     resized();
     repaint();
 }

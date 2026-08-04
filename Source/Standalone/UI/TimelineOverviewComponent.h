@@ -64,6 +64,7 @@ private:
     TimelineViewportCamera lastCamera_{};
     int viewportWidthPx_ = 0;
     uint64_t lastSignature_ = 0;
+    float lastBuildProgress_ = 0.0f;
 
     bool isDragging_ = false;
     double dragPointerOffsetSeconds_ = 0.0;

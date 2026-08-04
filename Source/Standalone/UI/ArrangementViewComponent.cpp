@@ -142,13 +142,10 @@ static void paintHistoricalClipWaveform(juce::Graphics& g,
     if (mipmap == nullptr || !mipmap->hasSource() || visibleWaveformBounds.isEmpty() || clip.durationSeconds <= 0.0)
         return;
 
-    if (!waveformMipmapCache.isComplete())
-        return;
-
     const int levelIndex = mipmap->selectBestLevelIndex(clip.pixelsPerSecond);
-    const auto& level = mipmap->getLevel(levelIndex);
-    if (level.peaks.empty())
+    if (levelIndex < 0)
         return;
+    const auto& level = mipmap->getLevel(levelIndex);
 
     const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
 
@@ -1861,7 +1858,9 @@ void ArrangementViewComponent::onHeartbeatTick()
         progressed = buildWaveformCaches(0.75);
     }
 
-    if (progressed && waveformMipmapCache_.isComplete()) {
+    // 每次产生构建进度即刷新场景：任一 complete 非空 level 出现即可显示，
+    // 不等待全量 6 级完成
+    if (progressed) {
         ++waveformRevision_;
         if (playingNow) {
             waveformVisualRefreshPending_ = true;
