@@ -1584,7 +1584,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         const juce::Colour colour = UIColors::correctedF0;
         static const juce::Colour kLevelHotGold { 0xFFFFC24A };
         const auto blendLevelHotColour = [&](juce::Colour base, float hm) {
-            return base.interpolatedWith(kLevelHotGold, juce::jlimit(0.0f, 0.42f, hm));
+            const auto candidate = base.interpolatedWith(
+                kLevelHotGold, juce::jlimit(0.0f, 0.42f, hm));
+            return item.notesPrimaryScheme
+                ? item.displayColour.contrasting(candidate, 0.50f)
+                : candidate;
         };
         const float alpha = 1.0f;
 
