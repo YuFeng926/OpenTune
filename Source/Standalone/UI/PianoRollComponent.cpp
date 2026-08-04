@@ -2728,6 +2728,7 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
         || !std::equal(placements.begin(), placements.end(), timelineContentPlacements_.begin(),
             [](const auto& lhs, const auto& rhs) {
                 return lhs.contentKey == rhs.contentKey
+                    && lhs.displayColour == rhs.displayColour
                     && std::abs(lhs.projection.timelineStartSeconds - rhs.projection.timelineStartSeconds) <= 1.0e-9
                     && std::abs(lhs.projection.timelineDurationSeconds - rhs.projection.timelineDurationSeconds) <= 1.0e-9
                     && std::abs(lhs.projection.contentStartSeconds - rhs.projection.contentStartSeconds) <= 1.0e-9
@@ -2755,6 +2756,18 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
     userScrollHold_ = false;
     updateScrollBars();
     return true;
+}
+
+void PianoRollComponent::setTrackDisplayColour(juce::Colour colour)
+{
+    if (trackDisplayColour_ == colour)
+        return;
+    trackDisplayColour_ = colour;
+    if (!explicitTimelineContentPlacements_)
+    {
+        deriveSingleTimelineContentPlacement();
+        requestContentRedraw();
+    }
 }
 
 void PianoRollComponent::deriveSingleTimelineContentPlacement()

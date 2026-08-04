@@ -167,7 +167,7 @@ public:
     bool isOpenDyne() const noexcept { return AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_); }
 
     /** 轨道主题色注入：OpenDyne waveform blob 的填充/描边色。 */
-    void setTrackDisplayColour(juce::Colour colour) { trackDisplayColour_ = colour; }
+    void setTrackDisplayColour(juce::Colour colour);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
 
