@@ -669,44 +669,18 @@ void ParameterPanel::resized()
     const int toolHeaderGap = 8;
     const int pitchShiftButtonHeight = 28;
 
-    // ── OpenDyne 布局：工具在上，Pitch Shift 按钮在底部 ──
+    // ── OpenDyne 布局：旋钮在上，工具在下（与 OpenTune 相同顺序） ──
     if (openDyneMode_)
     {
-        mainArea.removeFromTop(spacing);
-        toolsHeader_.setBounds(mainArea.removeFromTop(headerHeight));
-        mainArea.removeFromTop(toolHeaderGap);
-
         const int rows = 3;
         const int toolsHeight = rows * toolButtonSize + (rows - 1) * toolButtonGap;
-        auto toolsArea = mainArea.removeFromTop(toolsHeight);
-        mainArea.removeFromTop(spacing);
 
-        // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、Modulation(F2×2)、Drift(F2×3)、
-        // VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾
-        // 八按钮在 OpenDyne 布局恒为可见，无可见性过滤
-        std::vector<juce::Component*> buttons = {
-            selectToolButton_.get(),
-            pitchToolButton_.get(),
-            pitchModulationToolButton_.get(),
-            pitchDriftToolButton_.get(),
-            volumeEnvelopeToolButton_.get(),
-            timeToolButton_.get(),
-            scissorsToolButton_.get(),
-            autoTuneToolButton_.get(),
-        };
-
-        auto toolsColumn = toolsArea.reduced(5, 0);
-        const int totalWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
-        const int gridStartX = toolsColumn.getCentreX() - totalWidth / 2;
-        for (int i = 0; i < static_cast<int>(buttons.size()); ++i) {
-            const int row = i / 2;
-            const int col = i % 2;
-            const int x = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
-            const int y = toolsColumn.getY() + row * (toolButtonSize + toolButtonGap);
-            buttons[static_cast<size_t>(i)]->setBounds(x, y, toolButtonSize, toolButtonSize);
-        }
+        // 向上平移：先预留底部空间，再取出 Tools 区域
+        mainArea.removeFromBottom(150);
+        auto toolsArea = mainArea.removeFromBottom(toolsHeight);
 
         // Pitch Correction knobs（旋钮区保留，控制 Pitch 工具的修音参数）
+        mainArea.removeFromTop(spacing);
         pitchCorrectionHeader_.setBounds(mainArea.removeFromTop(headerHeight));
         mainArea.removeFromTop(spacing);
 
@@ -727,8 +701,40 @@ void ParameterPanel::resized()
         layoutKnobCell(row2.removeFromLeft(colWidth), vibratoRateLabel_, vibratoRateSlider_);
         layoutKnobCell(row2, noteSplitLabel_, noteSplitSlider_);
 
-        // Pitch Shift 按钮在底部
-        pitchShiftButton_->setBounds(mainArea.removeFromBottom(pitchShiftButtonHeight).reduced(4, 0));
+        // Pitch Shift 按钮在旋钮和工具之间
+        pitchShiftButton_->setBounds(mainArea.removeFromTop(pitchShiftButtonHeight).reduced(4, 0));
+        mainArea.removeFromTop(spacing);
+
+        // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、Modulation(F2×2)、Drift(F2×3)、
+        // VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾
+        std::vector<juce::Component*> buttons = {
+            selectToolButton_.get(),
+            pitchToolButton_.get(),
+            pitchModulationToolButton_.get(),
+            pitchDriftToolButton_.get(),
+            volumeEnvelopeToolButton_.get(),
+            timeToolButton_.get(),
+            scissorsToolButton_.get(),
+            autoTuneToolButton_.get(),
+        };
+
+        // Header
+        toolsHeader_.setBounds(toolsArea.removeFromTop(headerHeight));
+        toolsArea.removeFromTop(toolHeaderGap);
+
+        auto toolsColumn = toolsArea.reduced(5, 0);
+        int startY = toolsColumn.getY();
+
+        const int totalWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
+        const int gridStartX = toolsColumn.getCentreX() - totalWidth / 2;
+        for (int i = 0; i < static_cast<int>(buttons.size()); ++i) {
+            const int row = i / 2;
+            const int col = i % 2;
+            const int x = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
+            const int y = startY + row * (toolButtonSize + toolButtonGap);
+            buttons[static_cast<size_t>(i)]->setBounds(x, y, toolButtonSize, toolButtonSize);
+        }
+
         return;
     }
 

@@ -1374,12 +1374,13 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
 
     waveformMipmapCache_.prune(alive);
 
-    const bool progressed = waveformMipmapCache_.buildIncremental(timeBudgetMs);
+    const bool levelCompleted = waveformMipmapCache_.buildIncremental(timeBudgetMs);
 
-    if (!progressed && waveformMipmapCache_.isComplete())
+    if (!levelCompleted && waveformMipmapCache_.isComplete())
         lastWaveformSyncRevision_ = contentMetrics_.revision;
 
-    return progressed;
+    // buildIncremental 返回 true 当且仅当有新 level 从 incomplete→complete
+    return levelCompleted;
 }
 
 int ArrangementViewComponent::trackIdForViewportY(int y) const noexcept
