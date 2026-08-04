@@ -488,6 +488,12 @@ private:
     double openDyneZoomPanAnchorTime_ = 0.0;
     float openDyneZoomPanAnchorMidi_ = 60.0f;
 
+    // OpenDyne: Cmd+Alt+double-click → zoom to note / restore zoom
+    std::optional<ViewState> savedOpenDyneZoomState_;
+    void saveOpenDyneZoomState();
+    void restoreOpenDyneZoomState();
+    void fitToNote(const Note& note);
+
     float dragStartVerticalScrollOffset_ = 0.0f;
 
     float recalculatePIP(Note& note);

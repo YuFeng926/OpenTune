@@ -3394,13 +3394,30 @@ void PianoRollComponent::removeListener(Listener* listener) {
 }
 
 void PianoRollComponent::mouseMove(const juce::MouseEvent& e) {
+    if (isOpenDyne() && e.mods.isCommandDown() && e.mods.isAltDown() && e.x >= pianoKeyWidth_) {
+        setMouseCursor(juce::MouseCursor::CrosshairCursor);
+    } else if (!openDyneZoomPanActive_ && !interactionState_.isPanning) {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
     toolHandler_->mouseMove(e);
 }
 
 void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent& e) {
-    // 閳库槄锟?vocal-time-stretch 锟?.4 锟?Time tool double-click forwarded to handler.
-    // Other tools currently have no double-click semantics, so the handler
-    // ignores them by switching on currentTool_.
+    // OpenDyne: Cmd+Alt+double-click → zoom to note / restore zoom
+    if (isOpenDyne() && e.mods.isCommandDown() && e.mods.isAltDown() && e.x >= pianoKeyWidth_) {
+        // Find note under cursor
+        const auto& notes = getCommittedNotes();
+        for (const auto& note : notes) {
+            if (getNoteBounds(note).contains(e.getPosition())) {
+                saveOpenDyneZoomState();
+                fitToNote(note);
+                return;
+            }
+        }
+        // No note found → restore previous zoom
+        restoreOpenDyneZoomState();
+        return;
+    }
     toolHandler_->mouseDoubleClick(e);
 }
 
@@ -3658,12 +3675,14 @@ void PianoRollComponent::handleOpenDyneHorizontalScrollWheel(float deltaX, float
 }
 
 void PianoRollComponent::handleOpenDyneZoomAtMouse(const juce::MouseEvent& e, float deltaY) {
+    saveOpenDyneZoomState();
     // 时间轴与音高轴同时缩放，保持鼠标下的时间与音高不动
     handleHorizontalZoomWheel(e, deltaY);
     handleVerticalZoomWheel(e, deltaY);
 }
 
 void PianoRollComponent::beginOpenDyneZoomPan(const juce::MouseEvent& e) {
+    saveOpenDyneZoomState();
     openDyneZoomPanActive_ = true;
     openDyneZoomPanStartPos_ = e.getPosition();
     openDyneZoomPanStartPps_ = camera_.pixelsPerSecond;
@@ -3720,6 +3739,87 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
 void PianoRollComponent::endOpenDyneZoomPan() {
     openDyneZoomPanActive_ = false;
     setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
+void PianoRollComponent::saveOpenDyneZoomState() {
+    if (!savedOpenDyneZoomState_.has_value())
+        savedOpenDyneZoomState_ = ViewState{camera_, pixelsPerSemitone_, verticalScrollOffset_};
+}
+
+void PianoRollComponent::restoreOpenDyneZoomState() {
+    if (!savedOpenDyneZoomState_.has_value()) return;
+    camera_ = savedOpenDyneZoomState_->camera;
+    pixelsPerSemitone_ = savedOpenDyneZoomState_->pixelsPerSemitone;
+    verticalScrollOffset_ = savedOpenDyneZoomState_->verticalScrollOffset;
+    savedOpenDyneZoomState_.reset();
+    staticDirty_ = true;
+    contentDirty_ = true;
+    rasterizeDirtySurfaces();
+    updateScrollBars();
+    repaint();
+    overlay_->repaint();
+}
+
+void PianoRollComponent::fitToNote(const Note& note) {
+    double minSource = note.startTime;
+    double maxSource = note.endTime;
+    float adjusted = note.getAdjustedPitch();
+    if (adjusted <= 0.0f) return;
+    float noteMidi = makeViewMapper().freqToMidi(adjusted);
+    float minMidi = noteMidi - 1.0f;  // 1 semitone margin
+    float maxMidi = noteMidi + 1.0f;
+
+    // source-time → timeline projection (same as fitToAllNotes)
+    double timelineStart = minSource;
+    double timelineEnd = maxSource;
+    if (const auto* placement = findEditedPlacement()) {
+        if (auto snap = readSnapshotFor(placement->contentKey)) {
+            if (snap->timeGrid) {
+                timelineStart = placement->projection.projectContentTimeToTimeline(
+                    snap->timeGrid->tauForward(minSource));
+                timelineEnd = placement->projection.projectContentTimeToTimeline(
+                    snap->timeGrid->tauForward(maxSource));
+            }
+        }
+    }
+    const double duration = std::max(1.0e-6, timelineEnd - timelineStart);
+    const int viewportW = getTimelineContentViewportWidth();
+    const int viewportH = getTimelineContentViewportHeight();
+    if (viewportW <= 0 || viewportH <= 0) return;
+
+    const double marginW = viewportW * 0.10;
+    const double marginH = viewportH * 0.20;
+    const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
+        (viewportW - 2.0 * marginW) / duration,
+        TimelineViewportRequest::ViewKind::PianoRoll);
+    const float newPixelsPerSemitone = juce::jlimit(
+        5.0f, 60.0f, static_cast<float>((viewportH - 2.0 * marginH) / (maxMidi - minMidi + 1.0f)));
+
+    const double midTime = (timelineStart + timelineEnd) * 0.5;
+    userScrollHold_ = true;
+    commitViewportRequest(makeViewportRequest(
+        TimelineViewportRequest::Kind::Manual,
+        midTime - viewportW * 0.5 / newPps,
+        0.0,
+        newPps));
+
+    pixelsPerSemitone_ = newPixelsPerSemitone;
+    const float midiCenter = (maxMidi + minMidi) * 0.5f;
+    verticalScrollOffset_ = (maxMidi_ - midiCenter) * pixelsPerSemitone_ - viewportH * 0.5f;
+    const float totalHeight = getTotalHeight();
+    const float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    const float maxScroll = totalHeight - visibleHeight;
+    if (maxScroll > 0.0f)
+        verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
+    else
+        verticalScrollOffset_ = 0.0f;
+
+    staticDirty_ = true;
+    contentDirty_ = true;
+    rasterizeDirtySurfaces();
+    updateScrollBars();
+    repaint();
+    overlay_->repaint();
 }
 
 void PianoRollComponent::fitToAllNotes() {
@@ -4047,6 +4147,42 @@ bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::DuplicateClip, key)) {
         duplicateNotes();
         return true;
+    }
+    // OpenDyne: Cmd+Alt+Arrow = precise keyboard zoom
+    if (isOpenDyne() && key.getModifiers().isCommandDown() && key.getModifiers().isAltDown()) {
+        float zoomFactor = 1.15f; // ~15% per keypress
+        const double visibleWidthSeconds = getTimelineContentViewportWidth() / camera_.pixelsPerSecond;
+        const int keyCode = key.getKeyCode();
+        if (keyCode == juce::KeyPress::leftKey) {
+            commitViewportRequest(makeViewportRequest(
+                TimelineViewportRequest::Kind::Manual,
+                camera_.visibleStartSeconds + visibleWidthSeconds * 0.5 * (1.0 - 1.0/zoomFactor),
+                0.0, camera_.pixelsPerSecond / zoomFactor));
+            return true;
+        }
+        if (keyCode == juce::KeyPress::rightKey) {
+            commitViewportRequest(makeViewportRequest(
+                TimelineViewportRequest::Kind::Manual,
+                camera_.visibleStartSeconds + visibleWidthSeconds * 0.5 * (1.0 - zoomFactor),
+                0.0, camera_.pixelsPerSecond * zoomFactor));
+            return true;
+        }
+        if (keyCode == juce::KeyPress::upKey) {
+            float centerMidi = maxMidi_ - (verticalScrollOffset_ + getHeight() * 0.5f) / pixelsPerSemitone_;
+            pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_ * zoomFactor);
+            verticalScrollOffset_ = (maxMidi_ - centerMidi) * pixelsPerSemitone_ - getHeight() * 0.5f;
+            staticDirty_ = true; contentDirty_ = true;
+            rasterizeDirtySurfaces(); updateScrollBars(); repaint(); overlay_->repaint();
+            return true;
+        }
+        if (keyCode == juce::KeyPress::downKey) {
+            float centerMidi = maxMidi_ - (verticalScrollOffset_ + getHeight() * 0.5f) / pixelsPerSemitone_;
+            pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_ / zoomFactor);
+            verticalScrollOffset_ = (maxMidi_ - centerMidi) * pixelsPerSemitone_ - getHeight() * 0.5f;
+            staticDirty_ = true; contentDirty_ = true;
+            rasterizeDirtySurfaces(); updateScrollBars(); repaint(); overlay_->repaint();
+            return true;
+        }
     }
     // Cmd+0: Zoom to selected notes (or all if none selected)
     if (key.getKeyCode() == '0' && (key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown())) {
