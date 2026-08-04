@@ -216,6 +216,10 @@ public:
     // Volume Envelope Tool 拖拽：是否正在拖拽 + 预览增益（dB）。
     bool isVolumeDragging = false;
     float volumePreviewGainDb = 0.0f;
+    // Modulation / Drift Tool 拖拽预览：参数值 + 哪个工具
+    bool isModDriftDragging = false;
+    float modDriftPreviewValue = 0.0f;
+    ToolId modDriftTool = ToolId::PitchModulation;
 
     bool isPanning = false;
     juce::Point<int> dragStartPos;

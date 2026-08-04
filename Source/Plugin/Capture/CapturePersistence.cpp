@@ -16,11 +16,12 @@
 namespace OpenTune::Capture {
 
 namespace {
-    // CAPz v4: per-segment fixed bytes + embedded PCM audio + SibilantGainEnvelope.
+    // CAPz v5: per-segment fixed bytes + embedded PCM audio + SibilantGainEnvelope + pitchDriftScale.
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 4;
+    constexpr int kCaptureArchiveVersion = 5;
+    constexpr int kCaptureArchiveVersionMin = 4;  // v4 files load with pitchDriftScale=1.0
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
     {
@@ -60,12 +61,13 @@ namespace {
             writeFloatVector(stream, segment.f0Data);
             stream.writeInt(static_cast<int>(segment.source));
             stream.writeFloat(segment.retuneSpeed);
+            stream.writeFloat(segment.pitchDriftScale);
             stream.writeFloat(segment.vibratoDepth);
             stream.writeFloat(segment.vibratoRate);
         }
     }
 
-    std::shared_ptr<PitchCurve> readPitchCurve(juce::MemoryInputStream& stream)
+    std::shared_ptr<PitchCurve> readPitchCurve(juce::MemoryInputStream& stream, bool hasPitchDriftScale)
     {
         if (stream.readInt() == 0)
             return nullptr;
@@ -86,6 +88,8 @@ namespace {
             segment.f0Data = readFloatVector(stream);
             segment.source = static_cast<PitchCorrectionSegment::Source>(stream.readInt());
             segment.retuneSpeed = stream.readFloat();
+            if (hasPitchDriftScale)
+                segment.pitchDriftScale = stream.readFloat();
             segment.vibratoDepth = stream.readFloat();
             segment.vibratoRate = stream.readFloat();
             segments.push_back(std::move(segment));
@@ -176,6 +180,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 stream.writeFloat(note.originalPitch);
                 stream.writeFloat(note.pitchOffset);
                 stream.writeFloat(note.retuneSpeed);
+                stream.writeFloat(note.pitchDriftScale);
                 stream.writeFloat(note.vibratoDepth);
                 stream.writeFloat(note.vibratoRate);
                 stream.writeFloat(note.outputGainDb);
@@ -209,8 +214,10 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         ChannelLayoutLog::logPersistenceDeserializeReject(magic);
         return false;
     }
-    if (stream.readInt() != kCaptureArchiveVersion)
+    const int fileVersion = stream.readInt();
+    if (fileVersion < kCaptureArchiveVersionMin || fileVersion > kCaptureArchiveVersion)
         return false;
+    const bool hasPitchDriftScale = (fileVersion >= 5);
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -284,7 +291,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         p.detectedKey.root = static_cast<Key>(stream.readInt());
         p.detectedKey.scale = static_cast<Scale>(stream.readInt());
         p.detectedKey.confidence = stream.readFloat();
-        p.pitchCurve = readPitchCurve(stream);
+        p.pitchCurve = readPitchCurve(stream, hasPitchDriftScale);
 
         const int noteCount = stream.readInt();
         if (noteCount < 0)
@@ -298,6 +305,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             note.originalPitch = stream.readFloat();
             note.pitchOffset = stream.readFloat();
             note.retuneSpeed = stream.readFloat();
+            if (hasPitchDriftScale)
+                note.pitchDriftScale = stream.readFloat();
             note.vibratoDepth = stream.readFloat();
             note.vibratoRate = stream.readFloat();
             note.outputGainDb = stream.readFloat();

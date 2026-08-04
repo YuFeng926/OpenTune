@@ -205,6 +205,9 @@ void InteractionState::resetTransient() noexcept
     scissorsPreviewTime = -1.0;
     isVolumeDragging = false;
     volumePreviewGainDb = 0.0f;
+    isModDriftDragging = false;
+    modDriftPreviewValue = 0.0f;
+    modDriftTool = ToolId::PitchModulation;
     isPanning = false;
     dragStartPos = {};
     drawNoteToolPendingDrag = false;

@@ -89,6 +89,7 @@ struct NoteGeneratorParams {
     float retuneSpeed  = -1.0f;
     float vibratoDepth = -1.0f;
     float vibratoRate  = -1.0f;
+    float pitchDriftScale = 1.0f;
 };
 
 } // namespace OpenTune

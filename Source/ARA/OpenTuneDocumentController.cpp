@@ -107,6 +107,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         n->setAttribute("originalPitch", note.originalPitch);
         n->setAttribute("pitchOffset", note.pitchOffset);
         n->setAttribute("retuneSpeed", note.retuneSpeed);
+        n->setAttribute("pitchDriftScale", note.pitchDriftScale);
         n->setAttribute("vibratoDepth", note.vibratoDepth);
         n->setAttribute("vibratoRate", note.vibratoRate);
         n->setAttribute("outputGainDb", note.outputGainDb);
@@ -136,6 +137,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
             s->setAttribute("endFrame", seg.endFrame);
             s->setAttribute("source", static_cast<int>(seg.source));
             s->setAttribute("retuneSpeed", seg.retuneSpeed);
+            s->setAttribute("pitchDriftScale", seg.pitchDriftScale);
             s->setAttribute("vibratoDepth", seg.vibratoDepth);
             s->setAttribute("vibratoRate", seg.vibratoRate);
             const juce::MemoryBlock f0Data(seg.f0Data.data(), seg.f0Data.size() * sizeof(float));
@@ -212,6 +214,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
             n->setAttribute("originalPitch", note.originalPitch);
             n->setAttribute("pitchOffset", note.pitchOffset);
             n->setAttribute("retuneSpeed", note.retuneSpeed);
+            n->setAttribute("pitchDriftScale", note.pitchDriftScale);
             n->setAttribute("vibratoDepth", note.vibratoDepth);
             n->setAttribute("vibratoRate", note.vibratoRate);
             n->setAttribute("outputGainDb", note.outputGainDb);
@@ -353,13 +356,15 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             note.originalPitch = static_cast<float>(n->getDoubleAttribute("originalPitch"));
             note.pitchOffset = static_cast<float>(n->getDoubleAttribute("pitchOffset"));
             note.retuneSpeed = static_cast<float>(n->getDoubleAttribute("retuneSpeed"));
+            note.pitchDriftScale = static_cast<float>(n->getDoubleAttribute("pitchDriftScale", 1.0));
             note.vibratoDepth = static_cast<float>(n->getDoubleAttribute("vibratoDepth"));
             note.vibratoRate = static_cast<float>(n->getDoubleAttribute("vibratoRate"));
 
             // 验证浮点值的有效性，时间长度与速度、振幅率都必须为有限值
             if (!std::isfinite(note.pitch) || !std::isfinite(note.originalPitch) ||
                 !std::isfinite(note.pitchOffset) || !std::isfinite(note.retuneSpeed) ||
-                !std::isfinite(note.vibratoDepth) || !std::isfinite(note.vibratoRate))
+                !std::isfinite(note.vibratoDepth) || !std::isfinite(note.vibratoRate) ||
+                !std::isfinite(note.pitchDriftScale))
                 return std::nullopt;
 
             note.outputGainDb = static_cast<float>(n->getDoubleAttribute("outputGainDb"));
@@ -398,11 +403,12 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 return std::nullopt;
 
             seg.retuneSpeed = static_cast<float>(s->getDoubleAttribute("retuneSpeed"));
+            seg.pitchDriftScale = static_cast<float>(s->getDoubleAttribute("pitchDriftScale", 1.0));
             seg.vibratoDepth = static_cast<float>(s->getDoubleAttribute("vibratoDepth"));
             seg.vibratoRate = static_cast<float>(s->getDoubleAttribute("vibratoRate"));
 
             // 再次验证浮点值的有效性
-            if (!std::isfinite(seg.retuneSpeed) || !std::isfinite(seg.vibratoDepth) || !std::isfinite(seg.vibratoRate))
+            if (!std::isfinite(seg.retuneSpeed) || !std::isfinite(seg.vibratoDepth) || !std::isfinite(seg.vibratoRate) || !std::isfinite(seg.pitchDriftScale))
                 return std::nullopt;
 
             juce::MemoryBlock f0Data;
@@ -576,6 +582,7 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 note.originalPitch = static_cast<float>(n->getDoubleAttribute("originalPitch"));
                 note.pitchOffset = static_cast<float>(n->getDoubleAttribute("pitchOffset"));
                 note.retuneSpeed = static_cast<float>(n->getDoubleAttribute("retuneSpeed"));
+                note.pitchDriftScale = static_cast<float>(n->getDoubleAttribute("pitchDriftScale", 1.0));
                 note.vibratoDepth = static_cast<float>(n->getDoubleAttribute("vibratoDepth"));
                 note.vibratoRate = static_cast<float>(n->getDoubleAttribute("vibratoRate"));
                 note.outputGainDb = static_cast<float>(n->getDoubleAttribute("outputGainDb"));
@@ -584,7 +591,8 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                     !std::isfinite(note.pitch) || !std::isfinite(note.originalPitch) ||
                     !std::isfinite(note.pitchOffset) || !std::isfinite(note.retuneSpeed) ||
                     !std::isfinite(note.vibratoDepth) || !std::isfinite(note.vibratoRate) ||
-                    !std::isfinite(note.outputGainDb) || note.endTime <= note.startTime)
+                    !std::isfinite(note.pitchDriftScale) || !std::isfinite(note.outputGainDb) ||
+                    note.endTime <= note.startTime)
                     return std::nullopt;
 
                 content.analysis.referenceFeatures.pitch.notes.push_back(note);

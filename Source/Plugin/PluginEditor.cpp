@@ -666,7 +666,7 @@ void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::Scissors)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::PitchDrift)) {
         return;
     }
 

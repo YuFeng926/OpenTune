@@ -17,7 +17,10 @@ enum class ToolId : int
     // OpenDyne 工具；F1 显示为 Main/Select 复用 Select，TimeTool 保持
     Pitch = 6,
     VolumeEnvelope = 7,
-    Scissors = 8
+    Scissors = 8,
+    // OpenDyne F2 sub-tools (Melodyne-style pitch editing)
+    PitchModulation = 9,
+    PitchDrift = 10
 };
 
 } // namespace OpenTune

@@ -217,6 +217,7 @@ public:
 
     void fitToScreen();
     void fitToAllNotes();
+    void fitToSelectedNotes();
 
     enum class AutoTuneApplyStatus
     {
@@ -242,6 +243,11 @@ public:
     };
 
     AutoTuneApplyResult applyAutoTuneToSelection();
+
+    // Note Copy / Paste / Duplicate
+    void copySelectedNotes();
+    void pasteNotes();
+    void duplicateNotes();
 
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
@@ -374,6 +380,7 @@ private:
     // OpenDyne overlay
     void drawVolumeEnvelopePreview(juce::Graphics& g);
     void drawScissorsPreview(juce::Graphics& g);
+    void drawModDriftDragPreview(juce::Graphics& g);
 
     bool shouldShowPianoKeys() const noexcept;
     bool isTimeView() const noexcept { return currentTool_ == ToolId::TimeTool; }
@@ -494,6 +501,7 @@ private:
     bool showOriginalF0_ = true;
     bool showCorrectedF0_ = true;
     float currentRetuneSpeed_ = PitchControlConfig::kDefaultRetuneSpeedNormalized;
+    float currentPitchDriftScale_ = 1.0f;
     float currentVibratoDepth_ = PitchControlConfig::kDefaultVibratoDepth;
     float currentVibratoRate_ = PitchControlConfig::kDefaultVibratoRateHz;
 
@@ -530,6 +538,7 @@ private:
     std::set<ContentKey> pendingInitialF0ViewRequests_;
     bool experimentalFeaturesEnabled_ = false;
     std::vector<Note> cachedNotes_;
+    std::vector<Note> notesClipboard_;   // Note Copy/Paste 剪贴板
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
 

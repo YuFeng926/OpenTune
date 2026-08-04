@@ -151,6 +151,7 @@ void LegacyNoteGenerator::commitNote(
             current.originalPitch = rep;
             current.pitch         = quantisePitch(rep);
             current.retuneSpeed   = params.retuneSpeed;
+            current.pitchDriftScale = params.pitchDriftScale;
             current.vibratoDepth  = params.vibratoDepth;
             current.vibratoRate   = params.vibratoRate;
             out.push_back(current);

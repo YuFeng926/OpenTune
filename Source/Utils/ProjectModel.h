@@ -105,6 +105,7 @@ struct ProjectContentEntry {
         int endFrame{0};
         uint8_t source{0};              // PitchCorrectionSegment::Source 枚举值
         float retuneSpeed{-1.0f};
+        float pitchDriftScale = 1.0f;
         float vibratoDepth{-1.0f};
         float vibratoRate{-1.0f};
         std::vector<float> f0Data;

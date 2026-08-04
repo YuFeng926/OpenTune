@@ -650,6 +650,66 @@ void testRenderWorkerPauseContract()
 
 } // namespace
 
+void testPitchModulationDriftContract()
+{
+    const auto toolHandler = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto keyPressed = functionBlock(
+        toolHandler, "bool PianoRollToolHandler::keyPressed");
+
+    // F2 cycling: F2×1=Pitch, F2×2=PitchModulation, F2×3=PitchDrift
+    expect(contains(keyPressed, "f2PressCount_")
+               && contains(keyPressed, "kF2DoubleClickMs"),
+           "F2 cycling uses press count and time window");
+    expect(contains(keyPressed, "PitchModulation")
+               && contains(keyPressed, "PitchDrift"),
+           "F2 cycling dispatches PitchModulation and PitchDrift");
+
+    // PitchModulation/PitchDrift share mouse dispatch with Pitch
+    const auto mouseDown = functionBlock(
+        toolHandler, "void PianoRollToolHandler::mouseDown");
+    expect(contains(mouseDown, "case ToolId::PitchModulation:")
+               || (contains(mouseDown, "ToolId::PitchModulation")
+                   && contains(mouseDown, "ToolId::PitchDrift")),
+           "mouseDown switch includes PitchModulation and PitchDrift");
+
+    // PitchDriftScale field on Note with default 1.0
+    const auto noteHeader = readSource("Source/Utils/Note.h");
+    expect(contains(noteHeader, "float pitchDriftScale = 1.0f"),
+           "Note has pitchDriftScale field with default 1.0");
+
+    // ToolId enum has PitchModulation=9 and PitchDrift=10
+    const auto toolIds = readSource("Source/Standalone/UI/ToolIds.h");
+    expect(contains(toolIds, "PitchModulation = 9")
+               && contains(toolIds, "PitchDrift = 10"),
+           "ToolId enum has PitchModulation=9 and PitchDrift=10");
+
+    // PitchCurve::applyCorrectionToRange accepts pitchDriftScale
+    const auto pitchCurve = readSource("Source/Utils/PitchCurve.h");
+    expect(contains(pitchCurve, "float pitchDriftScale = 1.0f"),
+           "PitchCurve applyCorrectionToRange accepts pitchDriftScale parameter");
+
+    // OpenDyne hides Original F0
+    const auto renderer = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    expect(contains(renderer, "notesPrimaryScheme")
+               && contains(renderer, "showOriginalF0"),
+           "Renderer skips Original F0 in OpenDyne mode");
+
+    // PitchDriftScale persisted in ProjectPersistence
+    const auto persistence = readSource("Source/Utils/ProjectPersistence.cpp");
+    expect(contains(persistence, "\"pitchDriftScale\""),
+           "ProjectPersistence serializes pitchDriftScale");
+
+    // Migration mapping includes PitchModulation/PitchDrift
+    const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto applyScheme = functionBlock(
+        pianoRoll, "void PianoRollComponent::applyAudioEditingScheme");
+    expect(contains(applyScheme, "PitchModulation")
+               && contains(applyScheme, "PitchDrift"),
+           "Scheme migration includes PitchModulation and PitchDrift");
+}
+
 int main()
 {
     testVisibleEntryContract();
@@ -667,6 +727,7 @@ int main()
     testOpenDyneContract();
     testOpenDyneRenderPreviewContract();
     testOpenDyneToolSwitchingContract();
+    testPitchModulationDriftContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";
