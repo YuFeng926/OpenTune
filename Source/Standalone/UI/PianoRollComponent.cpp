@@ -192,20 +192,21 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.showToolSelectionMenu = [this]() {
         juce::PopupMenu menu;
         if (isOpenDyne()) {
-            menu.addItem("Select (F1)", [this]() { setCurrentTool(ToolId::Select); });
-            menu.addItem("Pitch (F2)", [this]() { setCurrentTool(ToolId::Pitch); });
-            menu.addItem("Modulation (F2×2)", [this]() { setCurrentTool(ToolId::PitchModulation); });
-            menu.addItem("Drift (F2×3)", [this]() { setCurrentTool(ToolId::PitchDrift); });
-            menu.addItem("Volume Envelope (F4)", [this]() { setCurrentTool(ToolId::VolumeEnvelope); });
-            menu.addItem("Scissors (F6)", [this]() { setCurrentTool(ToolId::Scissors); });
-            menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
+            juce::String times(juce::CharPointer_UTF8("\xC3\x97"));
+            menu.addItem(LOC(kToolSelect) + " (F1)", [this]() { setCurrentTool(ToolId::Select); });
+            menu.addItem(LOC(kToolPitch) + " (F2)", [this]() { setCurrentTool(ToolId::Pitch); });
+            menu.addItem(LOC(kToolModulation) + " (F2" + times + "2)", [this]() { setCurrentTool(ToolId::PitchModulation); });
+            menu.addItem(LOC(kToolDrift) + " (F2" + times + "3)", [this]() { setCurrentTool(ToolId::PitchDrift); });
+            menu.addItem(LOC(kToolVolumeEnvelope) + " (F4)", [this]() { setCurrentTool(ToolId::VolumeEnvelope); });
+            menu.addItem(LOC(kToolScissors) + " (F6)", [this]() { setCurrentTool(ToolId::Scissors); });
+            menu.addItem(LOC(kToolTimeTool) + " (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
         } else {
-            menu.addItem("Select (3)", [this]() { setCurrentTool(ToolId::Select); });
-            menu.addItem("Draw Note (2)", [this]() { setCurrentTool(ToolId::DrawNote); });
-            menu.addItem("Line Anchor (4)", [this]() { setCurrentTool(ToolId::LineAnchor); });
-            menu.addItem("Hand Draw (5)", [this]() { setCurrentTool(ToolId::HandDraw); });
+            menu.addItem(LOC(kToolSelect) + " (3)", [this]() { setCurrentTool(ToolId::Select); });
+            menu.addItem(LOC(kToolDrawNote) + " (2)", [this]() { setCurrentTool(ToolId::DrawNote); });
+            menu.addItem(LOC(kToolLineAnchor) + " (4)", [this]() { setCurrentTool(ToolId::LineAnchor); });
+            menu.addItem(LOC(kToolHandDraw) + " (5)", [this]() { setCurrentTool(ToolId::HandDraw); });
             if (experimentalFeaturesEnabled_) {
-                menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
+                menu.addItem(LOC(kToolTimeTool) + " (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
             }
         }
         menu.showMenuAsync(juce::PopupMenu::Options());

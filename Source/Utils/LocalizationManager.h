@@ -275,6 +275,11 @@ constexpr const char* kToolLineAnchor = "Tool: Line Anchor";
 constexpr const char* kToolHandDraw = "Tool: Hand Draw";
 constexpr const char* kToolAutoTune = "Tool: AutoTune";
 constexpr const char* kToolTimeTool = "Tool: Time";
+constexpr const char* kToolPitch = "Tool: Pitch";
+constexpr const char* kToolModulation = "Tool: Modulation";
+constexpr const char* kToolDrift = "Tool: Drift";
+constexpr const char* kToolVolumeEnvelope = "Tool: Volume Envelope";
+constexpr const char* kToolScissors = "Tool: Scissors";
 constexpr const char* kCancelSelection = "Cancel Selection";
 
 constexpr const char* kPitchCorrection = "Pitch correction";
@@ -512,6 +517,11 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTooltipVibratoDepth, "Vibrato Depth - Controls vibrato amplitude", "颤音深度 - 控制颤音幅度", "ビブラート深さ - ビブラートの振幅を制御", "Глубина вибрато - амплитуда вибрато", "Prof. vibrato - Controla la amplitud" },
         { Keys::kTooltipVibratoRate, "Vibrato Rate - Controls vibrato speed", "颤音速率 - 控制颤音频率", "ビブラート速度 - ビブラートの速さを制御", "Скорость вибрато - частота вибрато", "Tasa vibrato - Controla la velocidad" },
         { Keys::kTooltipNoteSplit, "Note Split - Threshold for splitting notes", "音符分割 - 控制音符分割阈值", "ノート分割 - ノート分割の閾値を制御", "Разделение нот - порог разделения", "Div. notas - Umbral de división" },
+        { Keys::kToolPitch, "Pitch", "音高", "ピッチ", "Высота тона", "Tono" },
+        { Keys::kToolModulation, "Modulation", "调制", "モジュレーション", "Модуляция", "Modulación" },
+        { Keys::kToolDrift, "Drift", "漂移", "ドリフト", "Дрейф", "Deriva" },
+        { Keys::kToolVolumeEnvelope, "Volume Envelope", "音量包络", "ボリュームエンベロープ", "Огибающая громкости", "Sobre volumen" },
+        { Keys::kToolScissors, "Scissors", "剪刀", "ハサミ", "Ножницы", "Tijeras" },
     };
     
     for (const auto& t : translations)
