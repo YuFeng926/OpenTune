@@ -259,7 +259,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // Set larger default size for the complete UI (increased height for menu bar)
     setResizable(true, true);
-    setResizeLimits(1000, 700, 3000, 2000);
+    // 最小宽度 1140 = TransportBar 固定内容 1056（按钮链 1048 + reduced(4,4) 8）+ TopBar 边距 83（reduced 12×2 + pad 3×2 + 参数面板切换钮 53；轨道面板切换钮恒隐藏不占用）
+    setResizeLimits(1140, ParameterPanel::kMinimumPanelHeight + TRANSPORT_BAR_HEIGHT + 24 + 12, 3000, 2000);
     setSize(1200, 900);
 
     UIColors::applyTheme(resolveEffectiveTheme(appPreferences_.getState().shared.theme));

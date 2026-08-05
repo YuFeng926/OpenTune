@@ -119,8 +119,6 @@ public:
         std::function<void()> republishPlaybackSource;
         // Pitch Tool 拖拽吸附配置；nullopt = 无配置（默认 Chromatic，即 round 半音）。
         std::function<std::optional<ScaleSnapConfig>()> getActiveScaleSnap;
-        // 当前编辑内容 key（OpenDyne 提交与 undo action 构造）。
-        std::function<ContentKey()> getActiveContentKey;
         // 把 undo action 推入组件 UndoManager。
         std::function<void(std::unique_ptr<UndoAction>)> pushUndoAction;
 
