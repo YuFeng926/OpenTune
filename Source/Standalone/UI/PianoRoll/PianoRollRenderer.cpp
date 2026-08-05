@@ -1625,12 +1625,20 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
         const juce::Colour colour = UIColors::correctedF0;
         static const juce::Colour kLevelHotGold { 0xFFFFC24A };
+        static const juce::Colour kOpenDyneBrightCurve { 0xFFFFC24A }; // 暗轨→亮金
+        static const juce::Colour kOpenDyneDarkCurve   { 0xFF196FC4 }; // 亮轨→主题蓝
         const auto blendLevelHotColour = [&](juce::Colour base, float hm) {
-            const auto candidate = base.interpolatedWith(
-                kLevelHotGold, juce::jlimit(0.0f, 0.42f, hm));
-            return item.notesPrimaryScheme
-                ? item.displayColour.contrasting(candidate, 0.50f)
-                : candidate;
+            if (!item.notesPrimaryScheme)
+                return base.interpolatedWith(kLevelHotGold,
+                    juce::jlimit(0.0f, 0.42f, hm));
+            // OpenDyne：HSL 感知亮度决定对比色基调，再叠 levelHotMix 暖化
+            const float lum = (0.299f * item.displayColour.getRed()
+                             + 0.587f * item.displayColour.getGreen()
+                             + 0.114f * item.displayColour.getBlue()) / 255.0f;
+            const auto contrastBase = lum < 0.5f
+                ? kOpenDyneBrightCurve : kOpenDyneDarkCurve;
+            return contrastBase.interpolatedWith(kLevelHotGold,
+                juce::jlimit(0.0f, 0.42f, hm));
         };
         const float alpha = 1.0f;
 
