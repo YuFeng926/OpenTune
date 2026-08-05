@@ -2,9 +2,7 @@
 
 #include "UndoManager.h"
 #include "Note.h"
-#include "Content/ContentKey.h"
 #include <functional>
-#include <memory>
 #include <vector>
 
 namespace OpenTune {
@@ -14,8 +12,7 @@ namespace OpenTune {
 // 不重新计算切点、不触发 render、不失效 RenderCache。
 class ScissorsUndoAction : public UndoAction {
 public:
-    ScissorsUndoAction(ContentKey key,
-                       juce::String description,
+    ScissorsUndoAction(juce::String description,
                        std::vector<Note> beforeNotes,
                        std::vector<Note> afterNotes,
                        std::function<bool(const std::vector<Note>&)> applyNotes,
@@ -26,7 +23,6 @@ public:
     juce::String getDescription() const override { return description_; }
 
 private:
-    ContentKey contentKey_;
     juce::String description_;
     std::vector<Note> beforeNotes_, afterNotes_;
     std::function<bool(const std::vector<Note>&)> applyNotes_;

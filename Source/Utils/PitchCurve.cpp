@@ -378,42 +378,18 @@ void PitchCurve::applyCorrectionToRange(
                 shiftedF0 = baseF0 * shiftRatio;
             }
 
-            // --- Pitch Drift: scale the linear trend of original F0 ---
+            // --- Pitch Drift: scale the deviation from the target base (mirror axis) ---
             {
                 float framePitchDriftScale = pitchDriftScale;
                 if (activeNote->pitchDriftScale != 1.0f) {
                     framePitchDriftScale = activeNote->pitchDriftScale;
                 }
                 if (framePitchDriftScale != 1.0f && activeNote->startTime < activeNote->endTime) {
-                    const float noteDuration = static_cast<float>(activeNote->endTime - activeNote->startTime);
-                    const float tNorm = static_cast<float>(timeSeconds - activeNote->startTime) / noteDuration;
-                    // Deviation in semitone space: log2(f0/targetF0) * 12
-                    const float devSemitones = 12.0f * (std::log2(std::max(1.0f, f0)) - std::log2(std::max(1.0f, targetF0)));
-                    // Linear trend slope pre-computed for this note (least-squares fit of deviation over t ∈ [0,1])
-                    float slopeSemitones = 0.0f;
-                    const int noteStartFrame = std::max(calculationStartFrame,
-                        static_cast<int>(std::lround(activeNote->startTime * framePerSecond)));
-                    const int noteEndFrame = std::min(calculationEndFrame,
-                        static_cast<int>(std::lround(activeNote->endTime * framePerSecond)));
-                    const int noteFrames = noteEndFrame - noteStartFrame;
-                    if (noteFrames > 1) {
-                        float sumT = 0, sumD = 0, sumTT = 0, sumTD = 0;
-                        for (int nf = noteStartFrame; nf < noteEndFrame; ++nf) {
-                            const float ti = static_cast<float>(nf - noteStartFrame) / static_cast<float>(noteFrames);
-                            const float fi = originalF0[static_cast<size_t>(nf)];
-                            const float di = 12.0f * (std::log2(std::max(1.0f, fi)) - std::log2(std::max(1.0f, targetF0)));
-                            sumT += ti; sumD += di; sumTT += ti * ti; sumTD += ti * di;
-                        }
-                        const float det = static_cast<float>(noteFrames) * sumTT - sumT * sumT;
-                        if (std::abs(det) > 1e-10f)
-                            slopeSemitones = (static_cast<float>(noteFrames) * sumTD - sumT * sumD) / det;
-                    }
-                    // Trend deviation: actual drift minus linear trend at this time position
-                    const float trendAtT = slopeSemitones * (tNorm - 0.5f);
-                    const float trendDeviation = devSemitones - trendAtT;
-                    // Scale: 1.0=original, 0.0=straight, -1.0=inverted
-                    const float scaledOffset = trendDeviation * (framePitchDriftScale - 1.0f);
-                    shiftedF0 = PitchUtils::midiToFreq(PitchUtils::freqToMidi(shiftedF0) + scaledOffset);
+                    // Deviation of the current curve from the target base, in semitones
+                    const float devSemitones = PitchUtils::freqToMidi(shiftedF0) - PitchUtils::freqToMidi(targetF0);
+                    // Scale around the target base as the mirror axis:
+                    // 1.0 = original, 0.0 = back to targetF0 (vibrato retained), -1.0 = full mirror
+                    shiftedF0 = PitchUtils::midiToFreq(PitchUtils::freqToMidi(targetF0) + devSemitones * framePitchDriftScale);
                 }
             }
 

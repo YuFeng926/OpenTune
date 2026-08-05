@@ -682,47 +682,61 @@ void ParameterPanel::resized()
     const int headerHeight = 24;
     const int labelHeight = 20;
     const int spacing = 12;
-    const int toolButtonSize = 60;  // 放大 0.25 倍：48 * 1.25 = 60
-    const int toolButtonGap = 10;   // 相应增大间距
-    const int toolButtonHorizontalGap = 12; // 列间距相应增大
+    const int toolButtonSize = 60;
+    const int toolButtonGap = 10;
+    const int toolButtonHorizontalGap = 12;
     const int toolHeaderGap = 8;
     const int pitchShiftButtonHeight = 28;
+    const int rowHeight = labelHeight + knobSize + 8;
 
-    // ── OpenDyne 布局：旋钮在上，工具在下，复用 OpenTune 布局结构 ──
+    const int contentLeft = mainArea.getX();
+    const int contentWidth = mainArea.getWidth();
+    const int contentCentre = mainArea.getCentreX();
+    const int colWidth = contentWidth / 2;
+
+    // ══════════════════════════════════════════════════════════════════
+    // 绝对坐标 y 游标排布 —— 不消费矩形、不 clamp 尺寸
+    // 控件 setBounds 永远给完整尺寸，高度不足时超出部分被父组件裁切
+    // ══════════════════════════════════════════════════════════════════
+    int y = mainArea.getY();
+
+    // ── Pitch Correction 标题 ──
+    pitchCorrectionHeader_.setBounds(contentLeft, y, contentWidth, headerHeight);
+    y += headerHeight + spacing;
+
+    // ── Row 1: Retune Speed | Vibrato Depth ──
+    retuneSpeedLabel_.setBounds(contentLeft, y, colWidth, labelHeight);
+    retuneSpeedSlider_.setBounds(contentLeft + 4, y + labelHeight, colWidth - 8, rowHeight - labelHeight);
+
+    vibratoDepthLabel_.setBounds(contentLeft + colWidth, y, contentWidth - colWidth, labelHeight);
+    vibratoDepthSlider_.setBounds(contentLeft + colWidth + 4, y + labelHeight, contentWidth - colWidth - 8, rowHeight - labelHeight);
+
+    y += rowHeight + spacing;
+
+    // ── Row 2: Vibrato Rate | Note Split ──
+    vibratoRateLabel_.setBounds(contentLeft, y, colWidth, labelHeight);
+    vibratoRateSlider_.setBounds(contentLeft + 4, y + labelHeight, colWidth - 8, rowHeight - labelHeight);
+
+    noteSplitLabel_.setBounds(contentLeft + colWidth, y, contentWidth - colWidth, labelHeight);
+    noteSplitSlider_.setBounds(contentLeft + colWidth + 4, y + labelHeight, contentWidth - colWidth - 8, rowHeight - labelHeight);
+
+    y += rowHeight + spacing;
+
+    // ── Pitch Shift 按钮 ──
+    pitchShiftButton_->setBounds(contentLeft + 4, y, contentWidth - 8, pitchShiftButtonHeight);
+    y += pitchShiftButtonHeight + spacing;
+
+    // ── 工具区标题 ──
+    toolsHeader_.setBounds(contentLeft, y, contentWidth, headerHeight);
+    y += headerHeight + toolHeaderGap;
+
+    // ── 工具按钮网格：2 列居中 ──
+    const int totalGridWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
+    const int gridStartX = contentCentre - totalGridWidth / 2;
+
     if (openDyneMode_)
     {
-        const int rows = 4; // 8 按钮 = 4 行 × 2 列
-        const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
-
-        // 向上平移：先预留底部空间，再取出 Tools 区域
-        mainArea.removeFromBottom(150);
-        auto toolsArea = mainArea.removeFromBottom(toolsHeight);
-
-        // Pitch Correction knobs（旋钮区保留，控制 Pitch 工具的修音参数）
-        pitchCorrectionHeader_.setBounds(mainArea.removeFromTop(headerHeight));
-        mainArea.removeFromTop(spacing);
-
-        const int rowHeight = labelHeight + knobSize + 8;
-        const int colWidth = mainArea.getWidth() / 2;
-
-        auto row1 = mainArea.removeFromTop(rowHeight);
-        mainArea.removeFromTop(spacing);
-        auto row2 = mainArea.removeFromTop(rowHeight);
-        mainArea.removeFromTop(spacing);
-
-        auto layoutKnobCell = [&](juce::Rectangle<int> area, juce::Label& label, juce::Slider& slider) {
-            label.setBounds(area.removeFromTop(labelHeight));
-            slider.setBounds(area.reduced(4, 0));
-        };
-        layoutKnobCell(row1.removeFromLeft(colWidth), retuneSpeedLabel_, retuneSpeedSlider_);
-        layoutKnobCell(row1, vibratoDepthLabel_, vibratoDepthSlider_);
-        layoutKnobCell(row2.removeFromLeft(colWidth), vibratoRateLabel_, vibratoRateSlider_);
-        layoutKnobCell(row2, noteSplitLabel_, noteSplitSlider_);
-
-        // Pitch Shift 按钮在旋钮和工具之间
-        pitchShiftButton_->setBounds(mainArea.removeFromTop(pitchShiftButtonHeight).reduced(4, 0));
-        mainArea.removeFromTop(spacing);
-
+        // OpenDyne：8 个按钮 = 4 行 × 2 列
         // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、Modulation(F2×2)、Drift(F2×3)、
         // VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾
         std::vector<juce::Component*> buttons = {
@@ -736,110 +750,51 @@ void ParameterPanel::resized()
             autoTuneToolButton_.get(),
         };
 
-        // Header
-        toolsHeader_.setBounds(toolsArea.removeFromTop(headerHeight));
-        toolsArea.removeFromTop(toolHeaderGap);
-
-        auto toolsColumn = toolsArea.reduced(5, 0);
-        int startY = toolsColumn.getY();
-
-        const int totalWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
-        const int gridStartX = toolsColumn.getCentreX() - totalWidth / 2;
-        for (int i = 0; i < static_cast<int>(buttons.size()); ++i) {
+        for (int i = 0; i < static_cast<int>(buttons.size()); ++i)
+        {
             const int row = i / 2;
             const int col = i % 2;
-            const int x = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
-            const int y = startY + row * (toolButtonSize + toolButtonGap);
-            buttons[static_cast<size_t>(i)]->setBounds(x, y, toolButtonSize, toolButtonSize);
+            const int bx = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
+            const int by = y + row * (toolButtonSize + toolButtonGap);
+            buttons[static_cast<size_t>(i)]->setBounds(bx, by, toolButtonSize, toolButtonSize);
         }
 
-        // Pitch Grid 选择器：放在工具按钮网格下方
+        // Pitch Grid 选择器：网格最后一行下方 4px
         const int gridRows = (static_cast<int>(buttons.size()) + 1) / 2;
-        const int gridBottom = startY + gridRows * toolButtonSize + (gridRows - 1) * toolButtonGap;
-        pitchGridSelector_.setBounds(toolsColumn.getX(), gridBottom + 4, toolsColumn.getWidth(), 22);
-
-        return;
+        const int gridBottom = y + gridRows * toolButtonSize + (gridRows - 1) * toolButtonGap;
+        pitchGridSelector_.setBounds(contentLeft + 5, gridBottom + 4, contentWidth - 10, 22);
     }
+    else
+    {
+        // OpenTune：按钮数组构造（与 experimental 过滤逻辑保持现状）
+        std::vector<juce::Component*> buttons;
+        if (selectToolButton_) buttons.push_back(selectToolButton_.get());
+        if (drawNoteToolButton_) buttons.push_back(drawNoteToolButton_.get());
+        if (lineAnchorToolButton_) buttons.push_back(lineAnchorToolButton_.get());
+        if (handDrawToolButton_) buttons.push_back(handDrawToolButton_.get());
+        if (timeToolButton_) buttons.push_back(timeToolButton_.get());
+        if (autoTuneToolButton_) buttons.push_back(autoTuneToolButton_.get());
 
-    const int rows = 3; // 使用3行布局（2×2网格 + 1个居中按钮）
-    // Tools区域高度计算：header + gap + 3行按钮 + 2个行间距
-    const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
-
-    // 向上平移 150px：先预留底部空间，再取出 Tools 区域
-    mainArea.removeFromBottom(150);
-    auto toolsArea = mainArea.removeFromBottom(toolsHeight);
-
-    // Pitch Correction
-    pitchCorrectionHeader_.setBounds(mainArea.removeFromTop(headerHeight));
-    mainArea.removeFromTop(spacing);
-
-    // 2x2 Grid Layout for Knobs
-    const int rowHeight = labelHeight + knobSize + 8;
-
-    auto layoutKnobCell = [&](juce::Rectangle<int> area, juce::Label& label, juce::Slider& slider) {
-        label.setBounds(area.removeFromTop(labelHeight));
-        slider.setBounds(area.reduced(4, 0));
-    };
-
-    // Row 1 (Retune Speed | Vibrato Depth)
-    auto row1 = mainArea.removeFromTop(rowHeight);
-    mainArea.removeFromTop(spacing);
-
-    // Row 2 (Vibrato Rate | Note Split)
-    auto row2 = mainArea.removeFromTop(rowHeight);
-    mainArea.removeFromTop(spacing);
-
-    const int colWidth = row1.getWidth() / 2;
-
-    layoutKnobCell(row1.removeFromLeft(colWidth), retuneSpeedLabel_, retuneSpeedSlider_);
-    layoutKnobCell(row1, vibratoDepthLabel_, vibratoDepthSlider_);
-
-    layoutKnobCell(row2.removeFromLeft(colWidth), vibratoRateLabel_, vibratoRateSlider_);
-    layoutKnobCell(row2, noteSplitLabel_, noteSplitSlider_);
-
-    // Pitch Shift button — between knobs and tools
-    pitchShiftButton_->setBounds(mainArea.removeFromTop(pitchShiftButtonHeight).reduced(4, 0));
-    mainArea.removeFromTop(spacing);
-
-    // Header
-    toolsHeader_.setBounds(toolsArea.removeFromTop(headerHeight));
-    toolsArea.removeFromTop(toolHeaderGap);
-
-    // 工具按钮布局：2列×3行网格，AUTO居中在第3行
-    auto toolsColumn = toolsArea.reduced(5, 0);
-    int startY = toolsColumn.getY();
-
-    // 按钮数组（vocal-time-stretch §8.4: 6 个按钮 = 3 行 × 2 列网格）
-    std::vector<juce::Component*> buttons;
-    if (selectToolButton_) buttons.push_back(selectToolButton_.get());        // 第1行第1列
-    if (drawNoteToolButton_) buttons.push_back(drawNoteToolButton_.get());    // 第1行第2列
-    if (lineAnchorToolButton_) buttons.push_back(lineAnchorToolButton_.get()); // 第2行第1列
-    if (handDrawToolButton_) buttons.push_back(handDrawToolButton_.get());    // 第2行第2列
-    if (timeToolButton_) buttons.push_back(timeToolButton_.get());            // 第3行第1列
-    if (autoTuneToolButton_) buttons.push_back(autoTuneToolButton_.get());    // 第3行第2列
-
-    // 2列×3行网格布局
-    if (!experimentalFeaturesEnabled_ && timeToolButton_) {
-        for (auto it = buttons.begin(); it != buttons.end();) {
-            if (*it == timeToolButton_.get()) {
-                it = buttons.erase(it);
-            } else {
-                ++it;
+        if (!experimentalFeaturesEnabled_ && timeToolButton_)
+        {
+            for (auto it = buttons.begin(); it != buttons.end();)
+            {
+                if (*it == timeToolButton_.get())
+                    it = buttons.erase(it);
+                else
+                    ++it;
             }
         }
-    }
 
-    for (int i = 0; i < static_cast<int>(buttons.size()); ++i) {
-        int row = i / 2;
-        int col = i % 2;
-        // 计算2列网格的起始X坐标（居中对齐）
-        int totalWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
-        int gridStartX = toolsColumn.getCentreX() - totalWidth / 2;
-        int x = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
-        int y = startY + row * (toolButtonSize + toolButtonGap);
-        buttons[i]->setBounds(x, y, toolButtonSize, toolButtonSize);
+        for (int i = 0; i < static_cast<int>(buttons.size()); ++i)
+        {
+            const int row = i / 2;
+            const int col = i % 2;
+            const int bx = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
+            const int by = y + row * (toolButtonSize + toolButtonGap);
+            buttons[i]->setBounds(bx, by, toolButtonSize, toolButtonSize);
+        }
     }
-
 }
 
 void ParameterPanel::applyTheme()

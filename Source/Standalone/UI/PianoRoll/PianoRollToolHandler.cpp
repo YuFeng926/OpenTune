@@ -7,7 +7,6 @@
 #include <cmath>
 #include <limits>
 #include <optional>
-#include <set>
 
 namespace OpenTune {
 
@@ -2415,11 +2414,13 @@ void PianoRollToolHandler::updateScissorsPreview(const juce::MouseEvent& e)
     if (sourceTime) {
         const auto editRange = sourceEditRange();
         if (editRange.contains(*sourceTime)) {
-            // 光标只命中 note blob 时显示预览线。
-            const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-            const int noteIndex = findNoteIndexAt(displayNotes(ctx_), *sourceTime, clickedPitch, 100.0f);
-            if (noteIndex >= 0) {
-                newPreview = *sourceTime;
+            // 预览与提交语义一致：切点时间穿过任意音符即显示预览（不检查音高），
+            // 具体命中音符由 drawScissorsPreview 过滤。
+            for (const auto& note : committedNotes(ctx_)) {
+                if (note.startTime < *sourceTime && *sourceTime < note.endTime) {
+                    newPreview = *sourceTime;
+                    break;
+                }
             }
         }
     }
@@ -2451,30 +2452,17 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
 
     const double splitTime = *sourceTime;
 
-    // 确定要切割的 note 索引集合：多选模式切所有切点在内的选中 note；
-    // 无选中时切光标下的 note。
-    std::vector<int> noteIndicesToCut;
-    const auto& selectedIndices = state.noteSelection.selectedIndices;
-    if (!selectedIndices.empty()) {
-        for (int idx : selectedIndices) {
-            if (idx < 0 || idx >= static_cast<int>(beforeNotes.size()))
-                continue;
-            const auto& note = beforeNotes[static_cast<size_t>(idx)];
-            if (note.startTime < splitTime && splitTime < note.endTime)
-                noteIndicesToCut.push_back(idx);
-        }
-    } else {
-        const float clickedPitch = ctx_.getViewMapper().yToFreq(
-            static_cast<float>(e.y - ctx_.contentOriginY));
-        const int noteIndex = findNoteIndexAt(beforeNotes, splitTime, clickedPitch, 100.0f);
-        if (noteIndex >= 0) {
-            const auto& note = beforeNotes[static_cast<size_t>(noteIndex)];
-            if (note.startTime < splitTime && splitTime < note.endTime)
-                noteIndicesToCut.push_back(noteIndex);
-        }
+    // 切点时间竖线穿过的所有音符一律切割，与选中状态无关（Melodyne 行为）。
+    auto isCutBySplitTime = [&](const Note& note) {
+        return note.startTime < splitTime && splitTime < note.endTime;
+    };
+    size_t cutCount = 0;
+    for (const auto& note : beforeNotes) {
+        if (isCutBySplitTime(note))
+            ++cutCount;
     }
 
-    if (noteIndicesToCut.empty())
+    if (cutCount == 0)
         return;
 
     // 获取 effective (corrected) F0 数据用于 pitch center 重算；
@@ -2486,31 +2474,28 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
     if (hasF0) {
         effectiveF0.assign(static_cast<size_t>(f0tl.endFrameExclusive()), 0.0f);
         contentSnapshot->forEachEffectiveF0Span(0, f0tl.endFrameExclusive(),
-            [&](int frameIndex, const float* data, int length, float) {
+            [&](int frameIndex, const float* data, int length, float gain) {
                 if (data == nullptr || frameIndex < 0)
                     return;
                 for (int i = 0; i < length; ++i) {
                     const int idx = frameIndex + i;
                     if (idx < static_cast<int>(effectiveF0.size()))
-                        effectiveF0[static_cast<size_t>(idx)] = data[i];
+                        effectiveF0[static_cast<size_t>(idx)] = data[i] * gain;
                 }
             });
     }
 
     // 构建新 notes 向量：每个待切割 note 生成左右两段，其余原样保留。
     std::vector<Note> newNotes;
-    newNotes.reserve(beforeNotes.size() + noteIndicesToCut.size());
-
-    std::set<int> cutSet(noteIndicesToCut.begin(), noteIndicesToCut.end());
+    newNotes.reserve(beforeNotes.size() + cutCount);
 
     for (size_t i = 0; i < beforeNotes.size(); ++i) {
-        const int idx = static_cast<int>(i);
-        if (cutSet.find(idx) == cutSet.end()) {
-            newNotes.push_back(beforeNotes[i]);
+        const Note& original = beforeNotes[i];
+        if (!isCutBySplitTime(original)) {
+            newNotes.push_back(original);
             continue;
         }
 
-        const Note& original = beforeNotes[i];
         Note left = original;
         Note right = original;
         left.endTime = splitTime;
@@ -2565,7 +2550,7 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
     int lastRightIdx = -1;
     int newIdx = 0;
     for (size_t i = 0; i < beforeNotes.size(); ++i) {
-        const bool isCut = cutSet.find(static_cast<int>(i)) != cutSet.end();
+        const bool isCut = isCutBySplitTime(beforeNotes[i]);
         if (isCut)
             lastRightIdx = newIdx + 1;
         newIdx += isCut ? 2 : 1;
@@ -2578,18 +2563,14 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
 
     // 不切换工具 —— 保持 Scissors，与 Melodyne 一致。
 
-    if (ctx_.getActiveContentKey && ctx_.pushUndoAction) {
-        const auto key = ctx_.getActiveContentKey();
-        if (key.isValid()) {
-            auto action = std::make_unique<ScissorsUndoAction>(
-                key,
-                juce::String::fromUTF8(u8"音符分割"),
-                beforeNotes,
-                newNotes,
-                ctx_.replaceContentNotesForFullMutation,
-                ctx_.republishPlaybackSource);
-            ctx_.pushUndoAction(std::move(action));
-        }
+    if (ctx_.pushUndoAction) {
+        auto action = std::make_unique<ScissorsUndoAction>(
+            juce::String::fromUTF8(u8"音符分割"),
+            beforeNotes,
+            newNotes,
+            ctx_.replaceContentNotesForFullMutation,
+            ctx_.republishPlaybackSource);
+        ctx_.pushUndoAction(std::move(action));
     }
 }
 
