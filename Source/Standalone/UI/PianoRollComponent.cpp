@@ -137,6 +137,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
                 std::move(before), std::move(after)));
         }
         refreshEditedContentNotes();
+        contentDirty_ = true;
+        rasterizeDirtySurfaces();
         overlay_->repaint();
         if (committedSnap != nullptr)
             listeners_.call([](Listener& listener) { listener.contentEdited(); });
@@ -1120,6 +1122,12 @@ void PianoRollComponent::invalidateLiveNotes(const std::vector<Note>& beforeNote
     auto beforeBounds = getNotesBounds(beforeNotes);
     auto afterBounds = getNotesBounds(afterNotes);
     auto dirty = beforeBounds.getUnion(afterBounds);
+    // OpenDyne 拖拽（Mod/Drift 的 F0 预览曲线、VolumeEnvelope 的 blob 缩放）会超出
+    // note 的 1 个半音高度，dirty 必须扩展为全视口高度，否则 content 缓存残留旧曲线。
+    if (isOpenDyne() && (interactionState_.isModDriftDragging || interactionState_.isVolumeDragging)) {
+        const auto viewport = getTimelineViewportBounds();
+        dirty = dirty.withY(viewport.getY()).withHeight(viewport.getHeight());
+    }
     if (!dirty.isEmpty()) {
         if (zoomPreviewActive_) {
             // 缩放事务期间冻结 Image，仅标记脏，由 endZoomPreview 最终重建
@@ -1243,9 +1251,8 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
         drawLineAnchorPreview(g);
     }
 
-    // ── OpenDyne transient previews（Volume Envelope 与 Scissors 预览线） ──
+    // ── OpenDyne transient previews（Scissors 预览线与 Mod/Drift tooltip） ──
     if (isOpenDyne()) {
-        drawVolumeEnvelopePreview(g);
         drawScissorsPreview(g);
         drawModDriftDragPreview(g);
     }
@@ -1282,192 +1289,6 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     }
 
     drawSelectionBox(g, UIColors::currentThemeId());
-}
-
-// ============================================================================
-// drawVolumeEnvelopePreview — Single automation lane envelope line
-// ============================================================================
-void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
-{
-    if (currentTool_ != ToolId::VolumeEnvelope)
-        return;
-
-    auto snap = readEditedSnapshot();
-    if (snap == nullptr)
-        return;
-
-    const auto& envelope = interactionState_.isVolumeDragging
-        ? interactionState_.volumePreviewEnvelope
-        : snap->volumeEnvelope;
-
-    const auto mapper = makeViewMapper();
-    const float halfH = pixelsPerSemitone_ * 0.5f;
-    constexpr float kMaxGainDb = 12.0f;
-
-    // Center Y = middle of the content area (use first selected note's Y, or midpoint)
-    float centerY = static_cast<float>(getHeight()) * 0.5f;
-    const auto& notes = getCommittedNotes();
-    if (!interactionState_.noteSelection.selectedIndices.empty()) {
-        const int firstIdx = interactionState_.noteSelection.selectedIndices.front();
-        if (firstIdx >= 0 && firstIdx < static_cast<int>(notes.size())) {
-            const auto& note = notes[static_cast<size_t>(firstIdx)];
-            const float adjustedPitch = note.getAdjustedPitch();
-            if (adjustedPitch > 0.0f) {
-                const float midi = mapper.freqToMidi(adjustedPitch);
-                centerY = mapper.midiToY(midi);
-            }
-        }
-    }
-
-    auto yForGain = [&](float gainDb) -> float {
-        return centerY - (juce::jlimit(-kMaxGainDb, kMaxGainDb, gainDb) / kMaxGainDb) * halfH;
-    };
-
-    const auto projection = activeContentProjection();
-
-    const auto viewportBounds = getTimelineViewportBounds();
-    const juce::Rectangle<int> timelineBounds(
-        pianoKeyWidth_,
-        0,
-        juce::jmax(0, viewportBounds.getRight() - pianoKeyWidth_),
-        juce::jmax(0, viewportBounds.getBottom() - rulerHeight_));
-    const int clipLeftX = mapper.timeToX(projection.timelineStartSeconds);
-    const int clipRightX = mapper.timeToX(projection.timelineEndSeconds());
-    const juce::Rectangle<int> clipBounds(
-        juce::jmin(clipLeftX, clipRightX),
-        timelineBounds.getY(),
-        std::abs(clipRightX - clipLeftX),
-        timelineBounds.getHeight());
-    const auto envelopeBounds = timelineBounds.getIntersection(clipBounds);
-    if (envelopeBounds.isEmpty())
-        return;
-    const float leftX = static_cast<float>(envelopeBounds.getX());
-    const float rightX = static_cast<float>(envelopeBounds.getRight());
-
-    // Build one Path directly from stored breakpoints, including evalAt's
-    // first/last value hold across the visible range.
-    juce::Path envelopePath;
-    envelopePath.startNewSubPath(
-        leftX, yForGain(envelope.evalAt(xToSourceTime(envelopeBounds.getX()))));
-
-    const auto& points = envelope.points();
-    const auto& handles = snap->timeGrid->handles();
-    size_t pointIndex = 0;
-    size_t handleIndex = 0;
-    while (pointIndex < points.size() || handleIndex < handles.size()) {
-        const double pointTime = pointIndex < points.size()
-            ? points[pointIndex].timeSeconds
-            : std::numeric_limits<double>::infinity();
-        const double handleTime = handleIndex < handles.size()
-            ? handles[handleIndex].source_seconds
-            : std::numeric_limits<double>::infinity();
-        const double sourceTime = std::min(pointTime, handleTime);
-        const float x = static_cast<float>(sourceTimeToX(sourceTime));
-        if (x >= leftX && x <= rightX)
-            envelopePath.lineTo(x, yForGain(envelope.evalAt(sourceTime)));
-        if (pointTime == sourceTime)
-            ++pointIndex;
-        if (handleTime == sourceTime)
-            ++handleIndex;
-    }
-    envelopePath.lineTo(
-        rightX, yForGain(envelope.evalAt(xToSourceTime(envelopeBounds.getRight()))));
-
-    {
-        juce::Graphics::ScopedSaveState envelopeClip(g);
-        g.reduceClipRegion(envelopeBounds);
-
-        const float y0 = yForGain(0.0f);
-        static const float kDash[] = { 4.0f, 4.0f };
-        g.setColour(juce::Colours::white.withAlpha(0.3f));
-        g.drawDashedLine(
-            juce::Line<float>(leftX, y0, rightX, y0),
-            kDash, 2, 1.0f);
-
-        g.setColour(juce::Colours::white);
-        g.strokePath(envelopePath, juce::PathStrokeType(2.0f,
-                                                         juce::PathStrokeType::curved,
-                                                         juce::PathStrokeType::rounded));
-
-        for (const auto& point : points) {
-            if (std::abs(point.gainDb) > 0.01f) {
-                const float x = static_cast<float>(sourceTimeToX(point.timeSeconds));
-                const float y = yForGain(point.gainDb);
-                g.setColour(juce::Colour(0xFFFF8C42));
-                g.fillEllipse(x - 4.0f, y - 4.0f, 8.0f, 8.0f);
-            }
-        }
-
-        // Highlight envelope segment under each selected note
-        if (!interactionState_.noteSelection.selectedIndices.empty()) {
-            for (const int idx : interactionState_.noteSelection.selectedIndices) {
-                if (idx < 0 || idx >= static_cast<int>(notes.size()))
-                    continue;
-                const auto& note = notes[static_cast<size_t>(idx)];
-                const double t0 = note.startTime;
-                const double t1 = note.endTime;
-                if (t1 <= t0)
-                    continue;
-
-                const float x0 = static_cast<float>(sourceTimeToX(t0));
-                const float x1 = static_cast<float>(sourceTimeToX(t1));
-                if (x1 < leftX || x0 > rightX)
-                    continue;
-
-                juce::Path seg;
-                seg.startNewSubPath(x0, yForGain(envelope.evalAt(t0)));
-
-                // Insert breakpoints + TimeGrid handles that fall within [t0, t1]
-                size_t pi = 0, hi = 0;
-                while (pi < points.size() || hi < handles.size()) {
-                    const double pt = pi < points.size()
-                        ? points[pi].timeSeconds : std::numeric_limits<double>::infinity();
-                    const double ht = hi < handles.size()
-                        ? handles[hi].source_seconds : std::numeric_limits<double>::infinity();
-                    const double st = std::min(pt, ht);
-                    if (st >= t1) break;
-                    if (st > t0)
-                        seg.lineTo(static_cast<float>(sourceTimeToX(st)),
-                                   yForGain(envelope.evalAt(st)));
-                    if (pt == st) ++pi;
-                    if (ht == st) ++hi;
-                }
-
-                seg.lineTo(x1, yForGain(envelope.evalAt(t1)));
-                g.setColour(juce::Colour(0xFFFF8C42));
-                g.strokePath(seg, juce::PathStrokeType(3.5f,
-                                                       juce::PathStrokeType::curved,
-                                                       juce::PathStrokeType::rounded));
-            }
-        }
-    }
-
-    // Mouse tooltip during drag
-    if (interactionState_.isVolumeDragging) {
-        const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
-            + juce::Point<int>(0, -rulerHeight_);
-        const int queryX = juce::jlimit(envelopeBounds.getX(), envelopeBounds.getRight(), mousePos.x);
-        const double sourceTime = xToSourceTime(queryX);
-        const juce::String text = juce::String::formatted("%+.1f dB", envelope.evalAt(sourceTime));
-        const juce::Font font(juce::FontOptions(12.0f));
-        juce::GlyphArrangement glyphs;
-        glyphs.addLineOfText(font, text, 0.0f, 0.0f);
-        const float textWidth = glyphs.getBoundingBox(0, 0, true).getWidth();
-        const float boxWidth = textWidth + 12.0f;
-        const float boxX = juce::jlimit(
-            static_cast<float>(envelopeBounds.getX()),
-            static_cast<float>(envelopeBounds.getRight()) - boxWidth,
-            static_cast<float>(mousePos.x + 12));
-        const float boxY = static_cast<float>(juce::jlimit(
-            envelopeBounds.getY(), envelopeBounds.getBottom() - 20, mousePos.y + 12));
-        g.setColour(juce::Colours::black.withAlpha(0.75f));
-        g.fillRoundedRectangle(boxX, boxY, boxWidth, 20.0f, 4.0f);
-        g.setColour(juce::Colours::white);
-        g.setFont(font);
-        g.drawText(text, juce::roundToInt(boxX + 6.0f), juce::roundToInt(boxY + 2.0f),
-                   juce::roundToInt(textWidth), 14,
-                   juce::Justification::centredLeft);
-    }
 }
 
 // ============================================================================
@@ -1514,7 +1335,7 @@ void PianoRollComponent::drawScissorsPreview(juce::Graphics& g)
 
 // ============================================================================
 // drawModDriftDragPreview — OpenDyne Modulation/Drift Tool 拖拽参数预览
-// 在每个选中 note 上画水平参数线 + 鼠标旁 tooltip
+// 参数视觉反馈由 F0 预览曲线表达，此处仅显示鼠标旁百分比 tooltip
 // ============================================================================
 void PianoRollComponent::drawModDriftDragPreview(juce::Graphics& g)
 {
@@ -1523,46 +1344,8 @@ void PianoRollComponent::drawModDriftDragPreview(juce::Graphics& g)
     if (currentTool_ != ToolId::PitchModulation && currentTool_ != ToolId::PitchDrift)
         return;
 
-    const auto& notes = getCommittedNotes();
-    if (notes.empty() || interactionState_.noteSelection.selectedIndices.empty())
-        return;
-
-    const auto mapper = makeViewMapper();
     const float value = interactionState_.modDriftPreviewValue;
     const bool isModulation = (interactionState_.modDriftTool == ToolId::PitchModulation);
-
-    for (int idx : interactionState_.noteSelection.selectedIndices)
-    {
-        if (idx < 0 || idx >= static_cast<int>(notes.size())) continue;
-        const auto& note = notes[static_cast<size_t>(idx)];
-        const float adjustedPitch = note.getAdjustedPitch();
-        if (adjustedPitch <= 0.0f) continue;
-
-        const float midi = mapper.freqToMidi(adjustedPitch);
-        const float centerY = mapper.midiToY(midi);
-        const int x1 = sourceTimeToX(note.startTime);
-        const int x2 = sourceTimeToX(note.endTime);
-        if (x2 <= x1) continue;
-
-        // 参数线在 note 垂直中心：Modulation 0-100% 映射到底-顶，Drift -100%~100% 映射到下-上
-        float lineY;
-        if (isModulation) {
-            // 0% → centerY+halfH, 100% → centerY-halfH
-            const float halfH = pixelsPerSemitone_ * 0.5f;
-            lineY = centerY + halfH - value * pixelsPerSemitone_;
-        } else {
-            // -1 → bottom, 0 → center, +1 → top
-            const float halfH = pixelsPerSemitone_ * 0.5f;
-            lineY = centerY - value * halfH;
-        }
-
-        g.setColour(juce::Colour(0xFFFF8C42).withAlpha(0.9f));
-        g.drawLine(static_cast<float>(x1), lineY, static_cast<float>(x2), lineY, 2.0f);
-
-        // 端点小圆
-        g.fillEllipse(static_cast<float>(x1) - 2.0f, lineY - 2.0f, 4.0f, 4.0f);
-        g.fillEllipse(static_cast<float>(x2) - 2.0f, lineY - 2.0f, 4.0f, 4.0f);
-    }
 
     // 鼠标旁 tooltip
     const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
@@ -2180,6 +1963,10 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewState& view, j
     // Modulation/Drift 拖拽临时预览曲线
     if (toolHandler_)
         renderer_->setTempPitchCurves(toolHandler_->getTempPitchCurves());
+
+    // VolumeEnvelope 拖拽：blob 大小反馈使用预览包络
+    renderer_->setVolumePreviewEnvelope(interactionState_.isVolumeDragging
+        ? &interactionState_.volumePreviewEnvelope : nullptr);
 
     renderCtx.contents = buildContentRenderItems();
 
@@ -3433,8 +3220,18 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
     }
 
     currentTool_ = tool;
+    // 工具切换会 cancelActiveMouseGesture 清空拖拽预览瞬态（tempPitchCurves/volumePreviewEnvelope），
+    // content surface 上残留的预览曲线必须立即重绘，否则旧 F0 预览曲线永久残留。
+    const bool hadTransientPreview = isOpenDyne()
+        && (!interactionState_.tempPitchCurves.empty()
+            || interactionState_.isModDriftDragging
+            || interactionState_.isVolumeDragging);
     if (toolHandler_) {
         toolHandler_->setTool(tool);
+    }
+    if (hadTransientPreview) {
+        contentDirty_ = true;
+        rasterizeDirtySurfaces();
     }
 
     switch (tool) {

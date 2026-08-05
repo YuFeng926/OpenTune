@@ -388,7 +388,6 @@ private:
     void drawF0SelectionHighlight(juce::Graphics& g);
     void drawPianoKeysPressed(juce::Graphics& g);
     // OpenDyne overlay
-    void drawVolumeEnvelopePreview(juce::Graphics& g);
     void drawScissorsPreview(juce::Graphics& g);
     void drawModDriftDragPreview(juce::Graphics& g);
 
