@@ -1598,6 +1598,16 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     }
                 }
                 sink(startFrame, previewBuffer.data(), static_cast<int>(previewBuffer.size()), 1.0f);
+            } else if (item.notesPrimaryScheme) {
+                // OpenDyne：仅绘制 correction 覆盖帧，不回退 OriginalF0
+                const auto curveSnap = item.ownerSnapshot->pitchCurve->getSnapshot();
+                if (curveSnap) {
+                    curveSnap->forEachCorrectionF0Span(startFrame, endFrame,
+                        [&](int spanStartFrame, const float* values, int count) {
+                            if (values != nullptr)
+                                sink(spanStartFrame, values, count, 1.0f);
+                        });
+                }
             } else {
                 item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
             }
