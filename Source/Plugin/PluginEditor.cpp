@@ -100,8 +100,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , pianoRoll_(processor.getPlayHeadState())
 {
     setResizable(true, true);
-    // 最小宽度 802 = TransportBar 固定内容 711 + reduced(4,4) 8 + TopBar 边距 83（reduced 12×2 + pad 3×2 + 参数面板切换钮 53）
-    setResizeLimits(802, ParameterPanel::kMinimumPanelHeight + TOP_BAR_HEIGHT + 12, 2000, 1400);
+    // 最小宽度 855 = TransportBar 固定内容 711 + reduced(4,4) 8 + TopBar 边距 136（reduced 12×2 + pad 3×2 + 左右侧栏切换钮各 53）
+    setResizeLimits(855, ParameterPanel::kMinimumPanelHeight + TOP_BAR_HEIGHT + 12, 2000, 1400);
     setSize(1000, 900);
 
     UIColors::applyTheme(appPreferences_.getState().shared.theme);
