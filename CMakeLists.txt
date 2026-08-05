@@ -1411,6 +1411,7 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         Source/Utils/SilentGapDetector.cpp
         Source/Utils/AutomationLane.cpp
         Source/Utils/VolumeEnvelopeEditAction.cpp
+        Source/Utils/ScissorsUndoAction.cpp
 
         # Content Layer
         Source/Content/StandaloneClipContent.cpp
