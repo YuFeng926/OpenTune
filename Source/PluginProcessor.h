@@ -677,7 +677,6 @@ private:
                             const char* serviceName,
                             std::function<bool(const std::string&)> initFunc);
 
-    void detectContentKeyIfUnset(ContentKey key);
     ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
     void configureReferenceAnalysisService();
 
@@ -798,6 +797,8 @@ public:
                               ContentEditRangeFrames affectedRange);
     bool setContentTimeGrid(ContentKey key,
                             std::shared_ptr<const TimeGridSnapshot> grid);
+    // 惰性调性检测：detectedKey 未设置时分析音频并写入（F0 Ready 后 AUTO 消费前统一调用）
+    void detectContentKeyIfUnset(ContentKey key);
     bool setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey);
     bool setContentOriginalF0State(ContentKey key, OriginalF0State state);
     bool applyContentPitchShiftState(ContentKey key, const PitchShiftEditState& state);
