@@ -222,6 +222,57 @@ inline int sourceTimeToScreenX(double sourceTime,
     return ctx.coords.timeToX(timelineTime);
 }
 
+// OpenDyne waveform blob：按 Note source-time 窗口索引 mipmap 峰值，构建闭合波形 Path。
+// drawNotes 与选中高亮共用，保证 blob 几何完全一致。
+static bool buildNoteBlobPath(
+    const Note& note,
+    const PianoRollRenderer::RenderContext& ctx,
+    const PianoRollRenderer::ContentRenderItem& item,
+    const WaveformMipmap::Level& wfLevel,
+    double timePerPeak,
+    int64_t numPeaks,
+    float clipRefMag,
+    float centerY,
+    float halfH,
+    int x1,
+    int x2,
+    juce::Path& outPath)
+{
+    int64_t idxStart = std::max<int64_t>(0, static_cast<int64_t>(note.startTime / timePerPeak));
+    int64_t idxEnd = std::min<int64_t>(numPeaks,
+                                       static_cast<int64_t>(note.endTime / timePerPeak) + 1);
+    if (idxEnd <= idxStart)
+        return false;
+
+    juce::Path blob;
+    blob.startNewSubPath(static_cast<float>(x1), centerY);
+
+    for (int64_t i = idxStart; i < idxEnd; ++i)
+    {
+        const auto& peak = wfLevel.peaks[static_cast<size_t>(i)];
+        const float normMag = peak.getMagnitude() / clipRefMag;
+        const double sourceTime = static_cast<double>(i) * timePerPeak;
+        const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
+        const float topY = centerY - halfH * normMag;
+        blob.lineTo(px, topY);
+    }
+    blob.lineTo(static_cast<float>(x2), centerY);
+
+    for (int64_t i = idxEnd; i-- > idxStart;)
+    {
+        const auto& peak = wfLevel.peaks[static_cast<size_t>(i)];
+        const float normMag = peak.getMagnitude() / clipRefMag;
+        const double sourceTime = static_cast<double>(i) * timePerPeak;
+        const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
+        const float bottomY = centerY + halfH * normMag;
+        blob.lineTo(px, bottomY);
+    }
+    blob.closeSubPath();
+
+    outPath = std::move(blob);
+    return true;
+}
+
 /// Span-stream F0 visual builder: replays the span producer twice.
 /// Pass 1 computes energy min/max across valid F0 frequencies.
 /// Pass 2 builds visual segments with bucket min/max envelope for LOD, linear path for downsampled, Bézier for full-resolution.
@@ -951,38 +1002,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
                 continue;
 
-            // 峰值窗口直接按 Note 的 source-time 范围索引 mipmap
-            int64_t idxStart = std::max<int64_t>(0, static_cast<int64_t>(note.startTime / timePerPeak));
-            int64_t idxEnd = std::min<int64_t>(numPeaks,
-                                               static_cast<int64_t>(note.endTime / timePerPeak) + 1);
-            if (idxEnd <= idxStart)
-                continue;
-
             // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
             juce::Path blob;
-            blob.startNewSubPath(static_cast<float>(x1), centerY);
-
-            for (int64_t i = idxStart; i < idxEnd; ++i)
-            {
-                const auto& peak = item.wfLevel->peaks[static_cast<size_t>(i)];
-                const float normMag = peak.getMagnitude() / clipRefMag;
-                const double sourceTime = static_cast<double>(i) * timePerPeak;
-                const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
-                const float topY = centerY - halfH * normMag;
-                blob.lineTo(px, topY);
-            }
-            blob.lineTo(static_cast<float>(x2), centerY);
-
-            for (int64_t i = idxEnd; i-- > idxStart;)
-            {
-                const auto& peak = item.wfLevel->peaks[static_cast<size_t>(i)];
-                const float normMag = peak.getMagnitude() / clipRefMag;
-                const double sourceTime = static_cast<double>(i) * timePerPeak;
-                const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
-                const float bottomY = centerY + halfH * normMag;
-                blob.lineTo(px, bottomY);
-            }
-            blob.closeSubPath();
+            if (!buildNoteBlobPath(note, ctx, item, *item.wfLevel, timePerPeak, numPeaks,
+                                   clipRefMag, centerY, halfH, x1, x2, blob))
+                continue;
 
             // displayColour 派生纵向渐变填充 + 同色高对比描边
             const auto fillTop = item.displayColour.brighter(0.28f).withAlpha(0.88f);
@@ -1106,6 +1130,67 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
 
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
+
+    // ── OpenDyne：选中高亮直接叠加在波形 blob 上（blob 几何与 drawNotes 完全一致） ──
+    if (item.notesPrimaryScheme)
+    {
+        if (item.wfLevel == nullptr || item.wfLevel->peaks.empty())
+            return;
+
+        const double timePerPeak = static_cast<double>(item.wfLevelSamplesPerPeak)
+            / WaveformMipmap::kBaseSampleRate;
+        const int64_t numPeaks = static_cast<int64_t>(item.wfLevel->peaks.size());
+
+        // clip 级振幅参考值：与 drawNotes 一致
+        float clipRefMag = 0.0f;
+        for (const auto& peak : item.wfLevel->peaks) {
+            const float m = peak.getMagnitude();
+            if (m > clipRefMag) clipRefMag = m;
+        }
+        if (clipRefMag <= 0.0f)
+            return;  // 静音 clip，无 blob 可高亮
+
+        constexpr float kBlobHalfKeys = 1.5f;
+        const float halfH = ctx.pixelsPerSemitone * kBlobHalfKeys;
+
+        for (int idx : selectedNoteIndices)
+        {
+            if (idx < 0 || idx >= static_cast<int>(notes.size()))
+                continue;
+
+            const auto& note = notes[static_cast<size_t>(idx)];
+            float adjustedPitch = note.getAdjustedPitch();
+            if (adjustedPitch <= 0.0f)
+                continue;
+
+            float midi = ctx.coords.freqToMidi(adjustedPitch);
+            float centerY = ctx.coords.midiToY(midi);
+
+            int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
+            int x2 = sourceTimeToScreenX(note.endTime, ctx, item);
+            if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
+                continue;
+
+            // Clip to content viewport to prevent drawing into piano key area
+            x1 = juce::jmax(x1, visibleWindow.viewportStartX);
+            x2 = juce::jmin(x2, visibleWindow.viewportEndX);
+
+            juce::Path blob;
+            if (!buildNoteBlobPath(note, ctx, item, *item.wfLevel, timePerPeak, numPeaks,
+                                   clipRefMag, centerY, halfH, x1, x2, blob))
+                continue;
+
+            // 选中态：亮色透明填充叠加 + 高亮描边
+            g.setColour(item.displayColour.brighter(0.55f).withAlpha(0.28f));
+            g.fillPath(blob);
+
+            g.setColour(item.displayColour.brighter(0.75f).withAlpha(0.95f));
+            g.strokePath(blob, juce::PathStrokeType(2.0f,
+                                                    juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
+        }
+        return;
+    }
 
     for (int idx : selectedNoteIndices)
     {
