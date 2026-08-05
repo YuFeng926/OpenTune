@@ -124,15 +124,12 @@ public:
     void onNotesRevisionChanged();
     void onPitchRevisionChanged();
     void setPianoKeyAudition(PianoKeyAudition* audition) { pianoKeyAudition_ = audition; }
-    int getPressedPianoKey() const { return pressedPianoKey_; }
 
     void setProcessor(OpenTuneAudioProcessor* processor);
 
-    /** Phase 4: Inject read callback that takes ContentKey → EditableContentSnapshot. */
     using ReadContentSnapshotFn = std::function<std::shared_ptr<const EditableContentSnapshot>(ContentKey)>;
     void setReadContentSnapshot(ReadContentSnapshotFn fn) { readContentSnapshot_ = std::move(fn); }
 
-    /** Inject content commands (Phase 4: ContentEditCommands, write path with ContentKey). */
     void setContentCommands(std::shared_ptr<ContentEditCommands> commands);
 
     ContentKey editedContentKey() const { return editedContentKey_; }
@@ -210,7 +207,6 @@ public:
 
     bool applyCorrectionToEntireClip(float retuneSpeed, float vibratoDepth, float vibratoRate);
     double getContentDurationSeconds() const;
-    bool hasSelectionRange() const { return interactionState_.selection.hasSelectionArea && interactionState_.selection.selectionStartTime != interactionState_.selection.selectionEndTime; }
     std::pair<double, double> getSelectionTimeRange() const
     {
         return { std::min(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime),
@@ -405,10 +401,8 @@ private:
     void handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY);
 
     // OpenDyne Melodyne-style navigation
-    void handleOpenDyneVerticalScrollWheel(float deltaY);
     void handleOpenDyneHorizontalScrollWheel(float deltaX, float deltaY);
     void handleOpenDyneZoomAtMouse(const juce::MouseEvent& e, float deltaY);
-    void handleOpenDynePanDrag(const juce::MouseEvent& e);
     void beginOpenDyneZoomPan(const juce::MouseEvent& e);
     void updateOpenDyneZoomPan(const juce::MouseEvent& e);
     void endOpenDyneZoomPan();
@@ -461,7 +455,6 @@ private:
     }
 
     const TimelineContentPlacement* findEditedPlacement() const noexcept;
-    bool hasTimelineContentPlacement() const noexcept;
     double sourceTimeToTimelineTime(double sourceSeconds) const;
     int  sourceTimeToX(double sourceSeconds) const;
     double xToSourceTime(int x) const;
@@ -491,6 +484,11 @@ private:
     float pixelsPerSemitone_ = 25.0f;
 
     ToolId currentTool_ = ToolId::Select;
+
+    // OpenDyne 右键工具选择弹出条
+    std::unique_ptr<juce::Component> toolSelectionBar_;
+    void showToolSelectionBar(juce::Point<int> screenPos);
+    void dismissToolPopup();
 
     InteractionState interactionState_;
 

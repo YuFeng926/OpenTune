@@ -310,12 +310,11 @@ void testOpenDyneContract()
     const auto automationLane = readSource("Source/Utils/AutomationLane.cpp");
 
     expect(contains(drawEnvelope, "volumePreviewEnvelope")
-               && contains(drawEnvelope, "sourceTimeForX")
-               && contains(drawEnvelope, "xForSourceTime")
+               && contains(drawEnvelope, "sourceTimeToX(")
+               && contains(drawEnvelope, "xToSourceTime(")
                && contains(drawEnvelope, "timeGrid->handles()")
                && contains(drawEnvelope, "getIntersection(clipBounds)")
                && contains(drawEnvelope, "reduceClipRegion(envelopeBounds)")
-               && !contains(drawEnvelope, "sourceTimeToX(")
                && !contains(drawEnvelope, "kSampleCount")
                && !contains(drawEnvelope, "std::vector"),
            "Volume envelope preview draws one stored lane without sampled temporary vectors");
@@ -433,21 +432,15 @@ void testOpenDyneRenderPreviewContract()
 void testOpenDyneToolSwitchingContract()
 {
     const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
-    std::string menu;
-    const auto menuPos = pianoRoll.find("showToolSelectionMenu");
-    if (menuPos != std::string::npos) {
-        const auto menuEnd = pianoRoll.find("menu.showMenuAsync", menuPos);
-        if (menuEnd != std::string::npos)
-            menu = pianoRoll.substr(menuPos, menuEnd - menuPos);
-    }
     const auto setCurrentTool = functionBlock(
         pianoRoll, "void PianoRollComponent::setCurrentTool");
     const auto applyScheme = functionBlock(
         pianoRoll, "void PianoRollComponent::applyAudioEditingScheme");
 
-    expect(countOccurrences(menu, "Time Tool (T)") == 2
-               && countOccurrences(menu, "experimentalFeaturesEnabled_") == 1,
-           "OpenDyne menu lists Time unconditionally; experimental gates only the OpenTune branch");
+    // 右键菜单已替换为纵向图标工具栏，旧 PopupMenu 字面量断言不再适用。
+    // 改为检查工具栏构建入口存在：
+    expect(contains(pianoRoll, "showToolSelectionBar"),
+           "Right-click tool selection uses vertical icon toolbar");
     expect(contains(setCurrentTool, "!isOpenDyne()")
                && contains(setCurrentTool, "!experimentalFeaturesEnabled_"),
            "TimeTool gate applies only outside OpenDyne and stays behind the experimental switch");

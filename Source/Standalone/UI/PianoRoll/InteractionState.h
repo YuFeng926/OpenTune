@@ -111,8 +111,7 @@ struct DrawingState
     double drawingNoteStartTime = 0.0;
     double drawingNoteEndTime = 0.0;
     float drawingNotePitch = 0.0f;
-    int drawingNoteIndex = -1;
-    
+
     bool isPlacingAnchors = false;
     std::vector<LineAnchor> pendingAnchors;
     juce::Point<float> currentMousePos;
@@ -136,8 +135,8 @@ struct EmptySpaceMouseIntent
 //
 // Selection model:
 //   - Single click → selectedHandleId is the primary selection
-//   - Shift+click → add/toggle in additionalSelectedIds (Phase H)
-//   - Group drag → all selected handles move by the same delta
+//   - Shift+click → add/toggle in additionalSelectedIds
+// Group drag → all selected handles move by the same delta
 // Endpoint handles (ClipStart / ClipEnd) are not selectable / not draggable.
 struct TimeToolState
 {
@@ -149,7 +148,7 @@ struct TimeToolState
     // cleared on Escape, click-empty, or tool change.
     uint64_t selectedHandleId = 0;
 
-    // §8.4 (Phase H) — additional handle ids selected via Shift+click.
+    // Additional handle ids selected via Shift+click.
     // Group drag uses (selectedHandleId ∪ additionalSelectedIds) to compute
     // a uniform output-seconds delta that's applied to every member.
     std::vector<uint64_t> additionalSelectedIds;
@@ -158,8 +157,8 @@ struct TimeToolState
     bool   isDraggingHandle = false;
     uint64_t draggedHandleId = 0;
 
-    // §8.4 (Phase H): Alt modifier at drag start disables output-spacing
-    // clamp + future snap-to-grid behavior.
+    // Alt modifier at drag start disables output-spacing clamp + future
+    // snap-to-grid behavior.
     bool dragSnapDisabled = false;
 
     // Snapshot of the TimeGrid at drag start — used to recompute working
@@ -172,7 +171,7 @@ struct TimeToolState
     // mouseUp via TimeGridEditAction.
     std::shared_ptr<const TimeGridSnapshot> dragWorkingSnapshot;
 
-    // §8.4 (Phase I) — 拖动待定状态。handleMouseDown 命中 handle 后设为 true，
+    // 拖动待定状态。handleMouseDown 命中 handle 后设为 true，
     // 但直到 mouseDrag 距离超过阈值才进入 isDraggingHandle。如果 mouseUp 时仍
     // 处于 dragPending（未越过阈值），则仅保留 selection 不提交 undo。
     bool dragPending = false;

@@ -12,7 +12,7 @@
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/Note.h"
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles
-#include "UI/ToolIds.h"       // ⚡️ vocal-time-stretch §8.5 (Phase J) — currentTool
+#include "UI/ToolIds.h"
 #include "UI/ViewMapper.h"
 #include "Content/EditableContentSnapshot.h"
 #include <algorithm>
@@ -122,7 +122,6 @@ public:
 
         ViewMapper coords;
 
-        int pressedPianoKey = -1;
         ToolId currentTool = ToolId::Select;
         bool isTimeView() const { return currentTool == ToolId::TimeTool; }
         uint64_t timeGridHoveredHandleId = 0;

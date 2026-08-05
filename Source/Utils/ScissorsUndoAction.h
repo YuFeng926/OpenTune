@@ -18,7 +18,8 @@ public:
                        juce::String description,
                        std::vector<Note> beforeNotes,
                        std::vector<Note> afterNotes,
-                       std::function<bool(const std::vector<Note>&)> applyNotes);
+                       std::function<bool(const std::vector<Note>&)> applyNotes,
+                       std::function<void()> republishPlaybackSource = nullptr);
 
     void undo() override;
     void redo() override;
@@ -29,6 +30,7 @@ private:
     juce::String description_;
     std::vector<Note> beforeNotes_, afterNotes_;
     std::function<bool(const std::vector<Note>&)> applyNotes_;
+    std::function<void()> republishPlaybackSource_;
 };
 
 } // namespace OpenTune
