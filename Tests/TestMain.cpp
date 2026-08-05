@@ -272,25 +272,20 @@ void testOpenDyneContract()
                             "onContentLocalMutationCompleted"),
            "Topology command never triggers render mutation completion");
 
-    // gain command 只走 republishPlaybackSource，不 enqueue render
-    const auto gainPatch = functionBlock(processor, "OpenTuneAudioProcessor::commitNoteOutputGainPatch");
-    const auto envelopePatch = functionBlock(processor, "OpenTuneAudioProcessor::commitSibilantGainEnvelope");
-    expect(!contains(gainPatch, "enqueueRender")
-               && !contains(gainPatch, "onContentLocalMutationCompleted")
-               && contains(gainPatch, "republishPlaybackSource"),
-           "A-layer command republishes without render enqueue");
+    // gain 命令只走 republishPlaybackSource，不 enqueue render
+    const auto envelopePatch = functionBlock(processor, "OpenTuneAudioProcessor::commitVolumeEnvelope");
     expect(!contains(envelopePatch, "enqueueRender")
                && !contains(envelopePatch, "onContentLocalMutationCompleted")
                && contains(envelopePatch, "republishPlaybackSource"),
-           "B-layer command republishes without render enqueue");
+           "Volume envelope command republishes without render enqueue");
     expect(contains(commands, "republishPlaybackSource"),
            "ContentEditCommands exposes the no-render republish entry");
 
     // readPlaybackAudio 的 TimeStretch 与普通路径汇合到同一 gain apply；canonical 读取无包络
     const auto readPlayback = functionBlock(reader, "inline int readPlaybackAudio");
     const auto readCanonical = functionBlock(reader, "inline int readCanonicalAudio");
-    expect(contains(readPlayback, "applyPreparedOutputGain")
-               && !contains(readCanonical, "applyPreparedOutputGain"),
+    expect(contains(readPlayback, "applyAutomationGain")
+               && !contains(readCanonical, "applyAutomationGain"),
            "Playback gain applies once after both read paths; canonical read stays ungained");
 
     // OpenDyne F 键为 scheme 固定映射，不写入 KeyShortcutConfig / 无新 ShortcutId
@@ -309,8 +304,38 @@ void testOpenDyneContract()
     // 主视图波形/F0/unvoiced 与 OpenDyne 共用单一路径：无 scheme 级硬隐藏
     const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto drawContent = functionBlock(pianoRoll, "void PianoRollComponent::drawContent");
+    const auto drawEnvelope = functionBlock(pianoRoll, "void PianoRollComponent::drawVolumeEnvelopePreview");
     const auto heartbeat = functionBlock(pianoRoll, "void PianoRollComponent::onHeartbeatTick");
     const auto mipmapSource = readSource("Source/Standalone/UI/WaveformMipmap.cpp");
+    const auto automationLane = readSource("Source/Utils/AutomationLane.cpp");
+
+    expect(contains(drawEnvelope, "volumePreviewEnvelope")
+               && contains(drawEnvelope, "sourceTimeForX")
+               && contains(drawEnvelope, "xForSourceTime")
+               && contains(drawEnvelope, "timeGrid->handles()")
+               && contains(drawEnvelope, "getIntersection(clipBounds)")
+               && contains(drawEnvelope, "reduceClipRegion(envelopeBounds)")
+               && !contains(drawEnvelope, "sourceTimeToX(")
+               && !contains(drawEnvelope, "kSampleCount")
+               && !contains(drawEnvelope, "std::vector"),
+           "Volume envelope preview draws one stored lane without sampled temporary vectors");
+    expect(contains(toolHandler, "evalAt(note.startTime) + deltaGainDb")
+               && contains(toolHandler, "handleVolumeEnvelopeToolDoubleClick")
+               && !contains(toolHandler, "volumePreviewGainDb"),
+           "Volume envelope interaction previews relative multi-note edits and supports reset");
+    expect(contains(reader, "timeGrid->tauInverse(outputSeconds)")
+               && !contains(reader, "linearGains")
+               && !contains(reader, "fallbackGains"),
+           "Playback evaluates the source-time AutomationLane directly at every output sample");
+    expect(contains(automationLane, "gainAfter = evalAt(rampEnd)")
+               && contains(automationLane, "setRegionGain")
+               && contains(automationLane, "fromLegacyNoteGains")
+               && contains(automationLane, "fromLegacyStepPoints")
+               && contains(automationLane, "AutomationLane::sum"),
+           "AutomationLane preserves both ramp boundaries and owns legacy migration");
+    expect(contains(projectPersistence, "fromLegacyNoteGains")
+               && contains(capturePersistence, "hasUnifiedVolumeEnvelope"),
+           "Project and capture loaders migrate the old note-plus-sibilant gain model once");
 
     expect(!contains(drawContent, "!notesPrimary && showWaveform_")
                && !contains(drawContent, "if (!notesPrimary)"),
@@ -322,17 +347,54 @@ void testOpenDyneContract()
     expect(contains(mipmapSource, "return -1;"),
            "selectBestLevelIndex returns -1 when no complete non-empty level exists");
 
-    // AUTO 提交推进 outputGainRevision（A 投影逐点变化，计划五.3）
+    // Note 拓扑和 AUTO 不再维护独立 A 层增益路径。
     const auto autoCommit = functionBlock(processor, "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey");
-    expect(contains(processor, "applyNotesWithOutputGain")
-               && contains(autoCommit, "applyNotesWithOutputGain")
-               && !contains(autoCommit, "clip->applyNotes("),
-           "AUTO note commit advances outputGainRevision, no bare applyNotes");
+    expect(!contains(processor, "applyNotesWithOutputGain")
+               && contains(autoCommit, "clip->applyNotes("),
+           "Notes and volume envelope have no parallel gain mutation path");
 
-    // export 使用与 playback 同一 outputGain 包络
+    // ContentEditCommands 只暴露 autoTuneContentRange，旧 commitAutoTuneGeneratedNotes 接口零残留
+    expect(contains(commands, "autoTuneContentRange")
+               && !contains(commands, "commitAutoTuneGeneratedNotes("),
+           "ContentEditCommands exposes autoTuneContentRange without the legacy AUTO commit");
+
+    // 普通 AUTO 生成入口唯一：LegacyNoteGenerator::generate 只存在于核心完成链
+    const auto autoTuneCore = functionBlock(processor, "OpenTuneAudioProcessor::autoTuneContentRangeByContentKey");
+    expect(countOccurrences(autoTuneCore, "LegacyNoteGenerator::generate") == 1
+               && contains(autoTuneCore, "scaleSnap->applyToNotes")
+               && contains(autoTuneCore, "commitAutoTuneGeneratedNotesByContentKey"),
+           "AUTO core chains generate -> scaleSnap apply -> commit once");
+
+    // 手动 AUTO 走 ContentEditCommands，不直接调 processor、不内联生成
+    const auto applyAutoTune = functionBlock(pianoRoll, "PianoRollComponent::applyAutoTuneToSelection");
+    expect(contains(applyAutoTune, "contentCommands_->autoTuneContentRange")
+               && !contains(applyAutoTune, "LegacyNoteGenerator::generate"),
+           "Manual AUTO routes through ContentEditCommands without inline generation");
+
+    // OpenDyne import 一次性整段 AUTO：requestContentRefresh 完成链驱动唯一核心
+    const auto contentRefresh = functionBlock(processor, "OpenTuneAudioProcessor::requestContentRefresh");
+    expect(contains(contentRefresh, "autoTuneWholeContentOnReady")
+               && contains(contentRefresh, "autoTuneContentRangeByContentKey")
+               && contains(contentRefresh, "onAutoTuneCommitted"),
+           "Import one-shot AUTO runs the unique core in the F0 completion chain");
+
+    // Standalone import 只在 OpenDyne 模式设置整段 AUTO
+    const auto startImport = functionBlock(readSource("Source/Standalone/PluginEditor.cpp"),
+                                           "void OpenTuneAudioProcessorEditor::startPendingImport");
+    expect(contains(startImport, "isOpenDyne()")
+               && contains(startImport, "autoTuneWholeContentOnReady"),
+           "OpenDyne import sets the whole-content AUTO flag");
+
+    // UI 与 DetectedKey 音阶吸附收敛到 ScaleUiMapping 唯一映射入口
+    const auto scaleUiMapping = readSource("Source/Utils/ScaleUiMapping.h");
+    expect(contains(scaleUiMapping, "makeScaleSnapConfigFromUi")
+               && contains(scaleUiMapping, "makeScaleSnapConfig(const DetectedKey&"),
+           "Scale snapping maps through the single ScaleUiMapping entry");
+
+    // export 使用与 playback 同一 AutomationLane 包络（evalAt 逐样本求值）
     const auto exportRender = functionBlock(processor, "void renderPlacementForExport");
-    expect(contains(exportRender, "outputGainEnvelope->linearGains"),
-           "Export bakes the same outputGain envelope as playback");
+    expect(contains(exportRender, "volumeEnvelope->evalAt"),
+           "Export bakes the same volume envelope as playback via evalAt");
 
     // DrawNote/LineAnchor 吸附根除裸 round(midiNote)，统一 quantizeMidiToActiveScale 入口
     expect(!contains(toolHandler, "std::round(midiNote)"),

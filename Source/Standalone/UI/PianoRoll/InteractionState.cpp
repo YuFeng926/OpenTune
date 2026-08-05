@@ -204,7 +204,7 @@ void InteractionState::resetTransient() noexcept
     timeTool.clear();
     scissorsPreviewTime = -1.0;
     isVolumeDragging = false;
-    volumePreviewGainDb = 0.0f;
+    volumePreviewEnvelope.clear();
     isModDriftDragging = false;
     modDriftPreviewValue = 0.0f;
     modDriftTool = ToolId::PitchModulation;

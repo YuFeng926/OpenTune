@@ -21,7 +21,7 @@
 
 #include "../DSP/ChromaKeyDetector.h"
 #include "../Utils/Note.h"
-#include "../Utils/OutputGainEnvelope.h"
+#include "../Utils/AutomationLane.h"
 #include "../Utils/SourceWindow.h"
 #include "../Content/ContentKey.h"
 
@@ -32,7 +32,7 @@ namespace OpenTune {
 // ============================================================================
 
 struct ProjectHeader {
-    int projectFormatVersion{3};
+    int projectFormatVersion{4};
     juce::String appVersion;
     juce::String projectName{"Untitled"};
     juce::String projectId;
@@ -96,8 +96,8 @@ struct ProjectContentEntry {
     // Notes (user-edited)
     std::vector<Note> notes;
 
-    // B 层：Sibilant Balance 结果（content-local 绝对时间，dB）
-    SibilantGainEnvelope sibilantGainEnvelope;
+    // Volume Envelope（content-local 绝对时间，dB）
+    AutomationLane volumeEnvelope;
 
     // Corrected segments (F0 corrections)
     struct SegmentEntry {

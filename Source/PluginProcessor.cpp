@@ -17,9 +17,9 @@
 #include "Inference/GameNoteGenerator.h"      // GAME backend (Standalone / regular VST3)
 #include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
+#include "Utils/ScaleUiMapping.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PitchShiftEditAction.h"
-#include "Utils/OutputGainEnvelope.h"
 #include "Render/Stage2TimeStretchRebuilder.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
@@ -129,7 +129,7 @@ std::vector<PitchCorrectionSegment> copyPitchCorrectionSegments(const std::share
 }
 
 // 秒域 range merge：keptBefore + afterNotesInRange + keptAfter，标准化后返回。
-// 拓扑 patch 与 A 层 gain patch 共用同一 merge 语义（时间有序，range 边界处无重叠）。
+// Note 拓扑 patch 的唯一 range merge 语义（时间有序，range 边界处无重叠）。
 std::vector<Note> mergeNotesRange(const std::vector<Note>& existing,
                                   const ContentNoteRangePatch& patch)
 {
@@ -165,7 +165,7 @@ ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
     payload.silentGaps = snap.silentGaps;
     payload.referenceFeatures = snap.referenceFeatures;
     payload.notes = snap.notes;
-    payload.sibilantGainEnvelope = snap.sibilantGainEnvelope;
+    payload.volumeEnvelope = snap.volumeEnvelope;
     payload.timeGrid = snap.timeGrid;
     payload.pitchShiftSettings = snap.pitchShiftSettings;
     payload.notesRevision = snap.notesRevision;
@@ -192,11 +192,11 @@ void publishStandalonePlaybackSource(ContentRenderService& crs,
     readSource.pitchRevision = payload.pitchRevision;
     readSource.timeGridRevision = payload.timeGridRevision;
     readSource.pitchShiftRevision = payload.pitchShiftRevision;
-    readSource.timeGridIsIdentity = payload.timeGrid == nullptr || payload.timeGrid->isIdentity();
+    readSource.timeGrid = payload.timeGrid != nullptr && !payload.timeGrid->isIdentity()
+        ? payload.timeGrid
+        : nullptr;
     if (payload.audioBuffer && payload.audioBuffer->getNumSamples() > 0) {
-        readSource.outputGainEnvelope = buildOutputGainEnvelope(
-            payload.notes, payload.sibilantGainEnvelope, payload.timeGrid,
-            payload.audioBuffer->getNumSamples(), payload.sampleRate);
+        readSource.volumeEnvelope = std::make_shared<const AutomationLane>(payload.volumeEnvelope);
     }
     crs.publishPlaybackSource(key, std::move(readSource));
 }
@@ -589,11 +589,10 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     }
 
     const float baseGain = trackGain * placement.gain;
-    // 最终输出增益（canonical 采样率、readStartSample 同空间）：export 与实时播放同一包络。
-    // 在 readCanonicalAudio 之后、track/placement/fade 乘法之前，于现有逐样本循环内一次完成。
-    const std::vector<float>* envGains = source.outputGainEnvelope
-        ? &source.outputGainEnvelope->linearGains
-        : nullptr;
+    // 最终输出增益：export 与实时播放同一包络。
+    // 直接用 AutomationLane::evalAt 逐样本求值，消除预计算数组依赖。
+    constexpr float kDbToLinear = 0.11512925465f; // ln(10) / 20
+    const bool hasEnvelope = source.volumeEnvelope != nullptr && !source.volumeEnvelope->empty();
     const int64_t fadeInSamples = placement.fadeInDuration > 0.0
         ? TimeCoordinate::secondsToSamples(placement.fadeInDuration, kExportSr)
         : 0;
@@ -601,23 +600,28 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
         ? TimeCoordinate::secondsToSamples(placement.fadeOutDuration, kExportSr)
         : 0;
 
-    for (int ch = 0; ch < out.getNumChannels(); ++ch) {
-        const float* src = placementBuffer.getReadPointer(ch);
-        float* dst = out.getWritePointer(ch);
-        for (int sampleIndex = 0; sampleIndex < renderedSamples; ++sampleIndex) {
-            const int64_t dstIndex = placementStartInOutput + sampleIndex;
-            if (dstIndex < 0 || dstIndex >= totalLen) {
-                continue;
-            }
+    for (int sampleIndex = 0; sampleIndex < renderedSamples; ++sampleIndex) {
+        const int64_t dstIndex = placementStartInOutput + sampleIndex;
+        if (dstIndex < 0 || dstIndex >= totalLen)
+            continue;
 
-            const float fade = computePlacementFadeGain(sampleIndex,
-                                                        requestedPlacementSamples,
-                                                        fadeInSamples,
-                                                        fadeOutSamples);
-            const float envGain = envGains != nullptr
-                ? (*envGains)[static_cast<size_t>(readRequest.readStartSample + sampleIndex)]
-                : 1.0f;
-            dst[static_cast<size_t>(dstIndex)] += src[sampleIndex] * envGain * baseGain * fade;
+        const float fade = computePlacementFadeGain(sampleIndex,
+                                                    requestedPlacementSamples,
+                                                    fadeInSamples,
+                                                    fadeOutSamples);
+        const double outputSeconds =
+            static_cast<double>(readRequest.readStartSample + sampleIndex) / kExportSr;
+        const double sourceSeconds = source.timeGrid != nullptr
+            ? source.timeGrid->tauInverse(outputSeconds)
+            : outputSeconds;
+        const float envGain = hasEnvelope
+            ? std::exp(source.volumeEnvelope->evalAt(sourceSeconds) * kDbToLinear)
+            : 1.0f;
+        const float finalGain = envGain * baseGain * fade;
+        for (int ch = 0; ch < out.getNumChannels(); ++ch) {
+            const float* src = placementBuffer.getReadPointer(ch);
+            float* dst = out.getWritePointer(ch);
+            dst[static_cast<size_t>(dstIndex)] += src[sampleIndex] * finalGain;
         }
     }
 }
@@ -933,15 +937,13 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             return proc_.commitPitchShiftEdit(key, newSettings);
         }
 
-        bool commitAutoTuneGeneratedNotes(ContentKey key,
-                                           std::vector<Note> generatedNotes,
-                                           int startFrame, int endFrameExclusive,
-                                           float retuneSpeed, float vibratoDepth,
-                                           float vibratoRate) override
+        bool autoTuneContentRange(ContentKey key,
+                                   int startFrame, int endFrameExclusive,
+                                   const NoteGeneratorParams& params,
+                                   const std::optional<ScaleSnapConfig>& scaleSnap) override
         {
-            return proc_.commitAutoTuneGeneratedNotesByContentKey(
-                key, std::move(generatedNotes), startFrame, endFrameExclusive,
-                retuneSpeed, vibratoDepth, vibratoRate);
+            return proc_.autoTuneContentRangeByContentKey(
+                key, startFrame, endFrameExclusive, params, scaleSnap);
         }
 
         bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes) override
@@ -954,14 +956,9 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             return proc_.commitContentNoteTopologyPatch(key, std::move(patch));
         }
 
-        ContentCommitSnapshot commitNoteOutputGainPatch(ContentKey key, ContentNoteRangePatch patch) override
+        ContentCommitSnapshot commitVolumeEnvelope(ContentKey key, AutomationLane envelope) override
         {
-            return proc_.commitNoteOutputGainPatch(key, std::move(patch));
-        }
-
-        ContentCommitSnapshot commitSibilantGainEnvelope(ContentKey key, SibilantGainEnvelope envelope) override
-        {
-            return proc_.commitSibilantGainEnvelope(key, std::move(envelope));
+            return proc_.commitVolumeEnvelope(key, std::move(envelope));
         }
 
         void republishPlaybackSource(ContentKey key) override
@@ -1125,11 +1122,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             readSource.pitchRevision = 0;
             readSource.pitchShiftRevision = 0;
             readSource.timeGridRevision = 0;
-            readSource.timeGridIsIdentity = true;
             if (const auto snap = getContentSnapshot(key)) {
-                readSource.outputGainEnvelope = buildOutputGainEnvelope(
-                    snap->notes, snap->sibilantGainEnvelope, snap->timeGrid,
-                    readSource.audioBuffer->getNumSamples(), sampleRate);
+                readSource.volumeEnvelope = std::make_shared<const AutomationLane>(snap->volumeEnvelope);
+                readSource.timeGrid = snap->timeGrid != nullptr && !snap->timeGrid->isIdentity()
+                    ? snap->timeGrid
+                    : nullptr;
             }
             contentRenderService_->publishPlaybackSource(key, readSource);
         };
@@ -1261,13 +1258,6 @@ bool OpenTuneAudioProcessor::ensureF0Ready()
         return true;
     const auto modelsDir = ModelPathResolver::getModelsDirectory();
     return ProcessF0Runtime::getInstance().initialize(modelsDir);
-}
-
-bool OpenTuneAudioProcessor::isNoteGenInFlightForContent(ContentKey contentKey) const
-{
-    if (!contentKey.isValid()) return false;
-    std::lock_guard<std::mutex> lk(noteGenInFlightMutex_);
-    return noteGenInFlightContentKeys_.count(contentKey) > 0;
 }
 
 OpenTuneAudioProcessor::AutoRefAvailability
@@ -3117,7 +3107,7 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     auto audioBuffer = readSource.audioBuffer;
     if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
 
-    // 无渲染装配：派生字段（renderCache + canonical 最终增益包络）随最新 snapshot 原子发布。
+    // 无渲染装配：renderCache、AutomationLane 与 TimeGrid 随最新 snapshot 原子发布。
     republishPlaybackSource(key);
 
     const int64_t totalSamples = audioBuffer->getNumSamples();
@@ -3187,7 +3177,9 @@ void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
     src.pitchRevision      = snap->pitchRevision;
     src.timeGridRevision   = snap->timeGridRevision;
     src.pitchShiftRevision = snap->pitchShiftRevision;
-    src.timeGridIsIdentity = snap->timeGrid == nullptr || snap->timeGrid->isIdentity();
+    src.timeGrid = snap->timeGrid != nullptr && !snap->timeGrid->isIdentity()
+        ? snap->timeGrid
+        : nullptr;
 
     crs.publishPlaybackSource(key, src);
 }
@@ -3735,7 +3727,9 @@ uint64_t OpenTuneAudioProcessor::commitPreparedImportAsContent(PreparedImport&& 
 
 // ============================================================================
 // requestContentRefresh -- Standalone / regular VST3 F0 refresh.
-// F0 only -- does NOT run GAME note generation.
+// Normally refreshes F0 only -- does NOT run GAME note generation.
+// An OpenDyne import request may additionally carry a one-shot whole-content
+// AUTO intent (autoTuneWholeContentOnReady), executed here once F0 is Ready.
 // ============================================================================
 
 bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor::ContentRefreshRequest& request)
@@ -3924,6 +3918,32 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             }
 
             processor->detectContentKeyIfUnset(capturedRequest.contentKey);
+
+            if (capturedRequest.autoTuneWholeContentOnReady) {
+                // OpenDyne import 一次性整段 AUTO：复用唯一核心
+                // autoTuneContentRangeByContentKey -> commitAutoTuneGeneratedNotesByContentKey
+                // -> applyNotes -> notesRevision -> editor heartbeat 单一路径。
+                // 不创建独立 Undo；成功回调（onAutoTuneCommitted）推进调用方 dirty。
+                std::optional<ScaleSnapConfig> scaleSnap;
+                auto detectedSnap = processor->getContentSnapshot(capturedRequest.contentKey);
+                if (detectedSnap) {
+                    scaleSnap = makeScaleSnapConfig(detectedSnap->detectedKey);
+                }
+
+                if (processor->autoTuneContentRangeByContentKey(
+                        capturedRequest.contentKey,
+                        0,
+                        static_cast<int>(result.f0.size()),
+                        capturedRequest.autoTuneParams,
+                        scaleSnap)) {
+                    if (capturedRequest.onAutoTuneCommitted) {
+                        capturedRequest.onAutoTuneCommitted();
+                    }
+                } else {
+                    AppLogger::log("ContentRefresh: auto AUTO commit failed contentKey objectId="
+                        + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
+                }
+            }
 
             processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Ready);
             if (processor->pendingTimeToolSeedKeys_.count(capturedRequest.contentKey) != 0)
@@ -4675,9 +4695,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return {};
-            // 拓扑编辑（增删/边界变化）改变 A 投影，必须推进 outputGainRevision；
-            // Scissors 例外走 replaceContentNotesForFullMutation（裸 applyNotes）。
-            clip->applyNotesWithOutputGain(std::move(normalizedNotes));
+            clip->applyNotes(std::move(normalizedNotes));
             ok = true;
             break;
         }
@@ -4685,7 +4703,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return {};
-            ok = dc->applyNotesWithOutputGainToModification(key, std::move(normalizedNotes));
+            ok = dc->applyNotesToModification(key, std::move(normalizedNotes));
             break;
         }
 #else
@@ -4695,7 +4713,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr) return {};
-            ok = session->applyNotesWithOutputGain(key, std::move(normalizedNotes));
+            ok = session->applyNotes(key, std::move(normalizedNotes));
             break;
         }
         default:
@@ -4711,19 +4729,14 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
     return {};
 }
 
-ContentCommitSnapshot OpenTuneAudioProcessor::commitNoteOutputGainPatch(ContentKey key, ContentNoteRangePatch patch)
+ContentCommitSnapshot OpenTuneAudioProcessor::commitVolumeEnvelope(ContentKey key, AutomationLane envelope)
 {
-    auto snap = getContentSnapshot(key);
-    if (!snap) return {};
-
-    auto normalizedNotes = mergeNotesRange(snap->notes, patch);
-
     bool ok = false;
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return {};
-            clip->applyNotesWithOutputGain(std::move(normalizedNotes));
+            clip->applyVolumeEnvelope(std::move(envelope));
             ok = true;
             break;
         }
@@ -4731,7 +4744,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitNoteOutputGainPatch(ContentK
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return {};
-            ok = dc->applyNotesWithOutputGainToModification(key, std::move(normalizedNotes));
+            ok = dc->applyVolumeEnvelopeToModification(key, std::move(envelope));
             break;
         }
 #else
@@ -4741,45 +4754,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitNoteOutputGainPatch(ContentK
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr) return {};
-            ok = session->applyNotesWithOutputGain(key, std::move(normalizedNotes));
-            break;
-        }
-        default:
-            break;
-    }
-
-    if (!ok) return {};
-
-    republishPlaybackSource(key);
-    return getContentSnapshot(key);
-}
-
-ContentCommitSnapshot OpenTuneAudioProcessor::commitSibilantGainEnvelope(ContentKey key, SibilantGainEnvelope envelope)
-{
-    bool ok = false;
-    switch (key.domainKind) {
-        case DomainKind::StandaloneClip: {
-            auto* clip = standaloneContentRepository_->findClip(key);
-            if (!clip) return {};
-            clip->applySibilantGainEnvelope(std::move(envelope));
-            ok = true;
-            break;
-        }
-#if JucePlugin_Enable_ARA
-        case DomainKind::ARAAudioModification: {
-            auto* dc = getDocumentController();
-            if (!dc) return {};
-            ok = dc->applySibilantGainEnvelopeToModification(key, std::move(envelope));
-            break;
-        }
-#else
-        case DomainKind::ARAAudioModification:
-            break;
-#endif
-        case DomainKind::RegularVST3Capture: {
-            auto* session = getCaptureSession();
-            if (session == nullptr) return {};
-            ok = session->applySibilantGainEnvelope(key, std::move(envelope));
+            ok = session->applyVolumeEnvelope(key, std::move(envelope));
             break;
         }
         default:
@@ -4815,15 +4790,14 @@ void OpenTuneAudioProcessor::republishPlaybackSource(ContentKey key)
 
     readSource.renderCache = crs->getOrCreateRenderCache(key);
     // 与 ARA 版 republishPlaybackSourceForModification 对齐：刷新全部元数据，
-    // 使 republish 完整承接 refreshCRSMetadata 的职责（TimeGrid 编辑后
-    // timeGridRevision/timeGridIsIdentity 必须是最新值，否则 TimeStretch fast-path 失配）。
+    // 使 republish 完整承接 refreshCRSMetadata 的职责。
     readSource.pitchRevision      = snap->pitchRevision;
     readSource.timeGridRevision   = snap->timeGridRevision;
     readSource.pitchShiftRevision = snap->pitchShiftRevision;
-    readSource.timeGridIsIdentity = snap->timeGrid == nullptr || snap->timeGrid->isIdentity();
-    readSource.outputGainEnvelope = buildOutputGainEnvelope(
-        snap->notes, snap->sibilantGainEnvelope, snap->timeGrid,
-        readSource.audioBuffer->getNumSamples(), readSource.audioSampleRate);
+    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(snap->volumeEnvelope);
+    readSource.timeGrid = snap->timeGrid != nullptr && !snap->timeGrid->isIdentity()
+        ? snap->timeGrid
+        : nullptr;
     crs->publishPlaybackSource(key, std::move(readSource));
 }
 
@@ -4932,7 +4906,7 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
     }
     if (ok) {
         // TimeGrid 变化必须重建输出增益包络（包络沿 TimeGrid 投影到 output time）。
-        // republishPlaybackSource 按 domain 分派并构建 canonical A+B，不限 Standalone。
+        // republishPlaybackSource 按 domain 分派并发布最新不可变播放源。
         republishPlaybackSource(key);
         if (key.domainKind == DomainKind::StandaloneClip)
         {
@@ -5117,6 +5091,47 @@ std::unique_ptr<PitchShiftEditAction> OpenTuneAudioProcessor::commitPitchShiftEd
         contentCommands_, key, std::move(before), std::move(after));
 }
 
+bool OpenTuneAudioProcessor::autoTuneContentRangeByContentKey(
+    ContentKey key,
+    int startFrame,
+    int endFrameExclusive,
+    const NoteGeneratorParams& params,
+    const std::optional<ScaleSnapConfig>& scaleSnap)
+{
+    auto snap = getContentSnapshot(key);
+    if (snap == nullptr || snap->pitchCurve == nullptr) return false;
+
+    const auto curveSnapshot = snap->pitchCurve->getSnapshot();
+    const auto& originalF0 = curveSnapshot->getOriginalF0();
+    const int f0Count = static_cast<int>(originalF0.size());
+    if (f0Count == 0) return false;
+    if (startFrame < 0 || endFrameExclusive <= startFrame || endFrameExclusive > f0Count) return false;
+
+    auto generatedNotes = LegacyNoteGenerator::generate(
+        originalF0.data(),
+        f0Count,
+        nullptr, // energy：与现有手动 AUTO 行为一致
+        startFrame,
+        endFrameExclusive,
+        curveSnapshot->getHopSize(),
+        curveSnapshot->getSampleRate(),
+        params);
+
+    if (scaleSnap.has_value()) {
+        scaleSnap->applyToNotes(generatedNotes);
+    }
+    LegacyNoteGenerator::validate(generatedNotes);
+
+    return commitAutoTuneGeneratedNotesByContentKey(
+        key,
+        std::move(generatedNotes),
+        startFrame,
+        endFrameExclusive,
+        params.retuneSpeed,
+        params.vibratoDepth,
+        params.vibratoRate);
+}
+
 bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
                                                                         std::vector<Note> generatedNotes,
                                                                         int startFrame,
@@ -5164,7 +5179,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
-            clip->applyNotesWithOutputGain(std::move(mergedNotes));
+            clip->applyNotes(std::move(mergedNotes));
             clip->applyPitchCurve(std::move(derivedCurve));
             ok = true;
             break;
@@ -5173,7 +5188,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            if (!dc->applyNotesWithOutputGainToModification(key, std::move(mergedNotes))) return false;
+            if (!dc->applyNotesToModification(key, std::move(mergedNotes))) return false;
             if (derivedCurve) dc->applyPitchCurveToModification(key, std::move(derivedCurve));
             ok = true;
             break;

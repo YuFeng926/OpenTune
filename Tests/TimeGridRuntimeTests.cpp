@@ -144,12 +144,54 @@ void testProjectPersistenceRoundTrip()
     }
 }
 
+void testLegacyVolumeEnvelopeMigration()
+{
+    using namespace OpenTune;
+
+    ProjectContentEntry content;
+    content.contentKey.domainKind = DomainKind::StandaloneClip;
+    content.contentKey.objectId = 42;
+    Note note;
+    note.startTime = 1.5;
+    note.endTime = 2.5;
+    note.outputGainDb = 4.0f;
+    content.notes.push_back(note);
+
+    ProjectSnapshot project;
+    project.contents.push_back(content);
+    ProjectPersistence persistence;
+    auto tree = persistence.toValueTree(project);
+    tree.setProperty(ProjectPersistence::kProjectFormatVersionAttr, 3, nullptr);
+
+    auto contentTree = tree.getChildWithName("Contents").getChild(0);
+    juce::ValueTree legacy("SibilantGainEnvelope");
+    legacy.setProperty("pointCount", 3, nullptr);
+    for (int i = 1; i <= 3; ++i) {
+        juce::ValueTree point("Point");
+        point.setProperty("time", static_cast<double>(i), nullptr);
+        point.setProperty("gainDb", static_cast<float>(i), nullptr);
+        legacy.addChild(point, -1, nullptr);
+    }
+    contentTree.addChild(legacy, -1, nullptr);
+
+    const auto result = persistence.fromValueTree(tree);
+    expect(result.ok(), "v3 project migrates to the unified VolumeEnvelope");
+    if (!result.ok())
+        return;
+    const auto& migrated = result.value().contents.front().volumeEnvelope;
+    expect(std::abs(migrated.evalAt(2.0) - 6.0f) < 1.0e-4f,
+           "v3 migration preserves the middle sibilant event and adds note gain");
+    expect(result.value().header.projectFormatVersion == 4,
+           "loaded v3 project is promoted to project format v4");
+}
+
 } // namespace
 
 int main()
 {
     testSnapshotAndValidation();
     testProjectPersistenceRoundTrip();
+    testLegacyVolumeEnvelopeMigration();
 
     if (failures != 0) {
         std::cerr << failures << " TimeGrid runtime test(s) failed\n";

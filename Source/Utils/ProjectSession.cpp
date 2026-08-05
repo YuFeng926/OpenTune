@@ -6,7 +6,6 @@
 #include "../PluginProcessor.h"
 #include "../Render/PlaybackReadSource.h"
 #include "../Standalone/StandaloneArrangementHelpers.h"
-#include "../Utils/OutputGainEnvelope.h"
 #include "AppLogger.h"
 #include "AppPreferences.h"
 #include "ProjectPersistence.h"
@@ -145,7 +144,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         entry.sourceWindow = payload.sourceWindow;
         entry.detectedKey = payload.detectedKey;
         entry.notes = payload.notes;
-        entry.sibilantGainEnvelope = payload.sibilantGainEnvelope;
+        entry.volumeEnvelope = payload.volumeEnvelope;
 
         // Extract corrected segments from pitch curve
         if (payload.pitchCurve) {
@@ -452,8 +451,8 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         // 应用 notes
         clip->applyNotes(contentEntry.notes);
 
-        // 恢复 B 层 envelope（revision 不落盘，恢复端由 owner 推进新 revision）
-        clip->applySibilantGainEnvelope(contentEntry.sibilantGainEnvelope);
+        // 恢复 envelope（revision 不落盘，恢复端由 owner 推进新 revision）
+        clip->applyVolumeEnvelope(contentEntry.volumeEnvelope);
 
         // 应用 detectedKey
         clip->applyDetectedKey(contentEntry.detectedKey);
@@ -627,10 +626,10 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
                     readSource.pitchRevision = snap->pitchRevision;
                     readSource.timeGridRevision = snap->timeGridRevision;
                     readSource.pitchShiftRevision = snap->pitchShiftRevision;
-                    readSource.timeGridIsIdentity = snap->timeGrid == nullptr || snap->timeGrid->isIdentity();
-                    readSource.outputGainEnvelope = buildOutputGainEnvelope(
-                        snap->notes, snap->sibilantGainEnvelope, snap->timeGrid,
-                        snap->audioBuffer->getNumSamples(), snap->audioSampleRate);
+                    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(snap->volumeEnvelope);
+                    readSource.timeGrid = snap->timeGrid != nullptr && !snap->timeGrid->isIdentity()
+                        ? snap->timeGrid
+                        : nullptr;
 
                     crs->publishPlaybackSource(key, std::move(readSource));
                 }

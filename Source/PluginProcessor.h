@@ -438,6 +438,12 @@ public:
         bool preserveCorrectionsOutsideChangedRange{false};
         double changedStartSeconds{0.0};
         double changedEndSeconds{0.0};
+        // OpenDyne standalone import: when true, requestContentRefresh also runs
+        // a one-shot whole-content AUTO once F0 extraction completes.
+        bool autoTuneWholeContentOnReady{false};
+        NoteGeneratorParams autoTuneParams;
+        // 自动 AUTO 提交成功后的回调（message-thread，导入派生事务的 dirty 推进）。
+        std::function<void()> onAutoTuneCommitted;
     };
 
     bool requestContentRefresh(const ContentRefreshRequest& request);
@@ -638,15 +644,6 @@ private:
     ExperimentalReferenceAlignMode experimentalReferenceAlignMode_ = ExperimentalReferenceAlignMode::StandardAuto;
     std::unordered_set<ContentKey> pendingTimeToolSeedKeys_; // message-thread only
 
-    // Set of ContentKeys with a note-generation job pending or running.
-    // Editors poll `isNoteGenInFlightForContent`
-    // to drive the shared "正在处理音频" overlay (covers F0 + note-gen).
-    mutable std::mutex                  noteGenInFlightMutex_;
-    std::unordered_set<ContentKey>      noteGenInFlightContentKeys_;
-
-public:
-    bool isNoteGenInFlightForContent(ContentKey contentKey) const;
-private:
     // 运行时惰性解析进程级 F0 服务，消除冷启动空快照
     F0ExtractionService f0ExtractionService_{1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }};
 
@@ -790,14 +787,11 @@ public:
                                         std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange);
     ContentCommitSnapshot commitContentNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch);
-    // A 层：只修改选定 Note 的 outputGainDb，推进 notes/outputGain/content revision，
-    // 只走 republishPlaybackSource()（零 render enqueue）。
-    ContentCommitSnapshot commitNoteOutputGainPatch(ContentKey key, ContentNoteRangePatch patch);
-    // B 层：一次替换 SibilantGainEnvelope，推进 outputGain/content revision，
-    // 只走 republishPlaybackSource()（零 render enqueue）。
-    ContentCommitSnapshot commitSibilantGainEnvelope(ContentKey key, SibilantGainEnvelope envelope);
+    // 一次替换整个 VolumeEnvelope，推进
+    // outputGain/content revision，只走 republishPlaybackSource()（零 render enqueue）。
+    ContentCommitSnapshot commitVolumeEnvelope(ContentKey key, AutomationLane envelope);
     // 无渲染发布入口：按 content domain 调现有装配函数，只读最新 snapshot、
-    // 构建 canonical A+B、交给 Publisher 准备目标采样率增益并原子 publish。
+    // 发布包含最新 AutomationLane 与 TimeGrid 的不可变播放源。
     void republishPlaybackSource(ContentKey key);
     bool setContentPitchCurve(ContentKey key,
                               std::shared_ptr<PitchCurve> curve,
@@ -810,6 +804,9 @@ public:
     std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
         ContentKey key,
         const PitchShiftSettings& newSettings);
+private:
+    // AUTO 提交底层：合并/吸附后的音符 + 派生曲线一次性写回。
+    // 唯一核心调用方是 autoTuneContentRangeByContentKey；不创建 undo、不 mark dirty。
     bool commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
                                                    std::vector<Note> generatedNotes,
                                                    int startFrame,
@@ -817,6 +814,17 @@ public:
                                                    float retuneSpeed,
                                                    float vibratoDepth,
                                                    float vibratoRate);
+public:
+    // 普通 AUTO 唯一核心：读 snapshot OriginalF0 → LegacyNoteGenerator::generate
+    // (energy=nullptr，与现有手动 AUTO 行为一致) → scaleSnap apply → validate →
+    // commitAutoTuneGeneratedNotesByContentKey。不创建 undo、不 mark dirty——
+    // 事务与 dirty 归属调用方。scaleSnap 为空表示不做音阶吸附。
+    bool autoTuneContentRangeByContentKey(
+        ContentKey key,
+        int startFrame,
+        int endFrameExclusive,
+        const NoteGeneratorParams& params,
+        const std::optional<ScaleSnapConfig>& scaleSnap);
 public:
 
 #if defined(OPENTUNE_TEST_BUILD)

@@ -25,7 +25,7 @@ struct Note {
     float retuneSpeed = -1.0f;      // 重调速度（-1表示使用默认值）
     float vibratoDepth = -1.0f;     // 颤音深度（-1表示使用默认值）
     float vibratoRate = -1.0f;      // 颤音速率（-1表示使用默认值）
-    float outputGainDb = 0.0f;    // NSF-HiFiGAN 输出后的音符级 dB 增益（0 dB = 单位增益）
+    float outputGainDb = 0.0f;     // 旧工程兼容字段；由 VolumeEnvelope 在 note.startTime 处派生
     float pitchDriftScale = 1.0f;    // 漂移修正比例（1.0=原始漂移，0.0=消除漂移，-1.0=反转）
     bool isVoiced = true;           // 是否为有声段
     bool dirty = false;             // 脏标记，用于增量渲染

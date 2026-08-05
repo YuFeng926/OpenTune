@@ -37,7 +37,7 @@ std::shared_ptr<const EditableContentSnapshot> CaptureSegmentContent::snapshotCo
     snap->pitchShiftRevision = editable_.pitchShiftRevision;
     snap->contentRevision = editable_.contentRevision;
     snap->referenceFeatures = editable_.referenceFeatures;
-    snap->sibilantGainEnvelope = editable_.sibilantGainEnvelope;
+    snap->volumeEnvelope = editable_.volumeEnvelope;
     snap->outputGainRevision = editable_.outputGainRevision;
     return snap;
 }
@@ -111,19 +111,18 @@ void CaptureSegmentContent::applyDetectedKey(const DetectedKey& key)
 void CaptureSegmentContent::applyNotes(std::vector<Note> notes)
 {
     editable_.notes = std::move(notes);
+    for (auto& note : editable_.notes)
+        note.outputGainDb = editable_.volumeEnvelope.evalAt(note.startTime);
     ++editable_.notesRevision;
     ++editable_.contentRevision;
 }
 
-void CaptureSegmentContent::applyNotesWithOutputGain(std::vector<Note> notes)
+void CaptureSegmentContent::applyVolumeEnvelope(AutomationLane envelope)
 {
-    applyNotes(std::move(notes));
-    ++editable_.outputGainRevision;
-}
-
-void CaptureSegmentContent::applySibilantGainEnvelope(SibilantGainEnvelope envelope)
-{
-    editable_.sibilantGainEnvelope = std::move(envelope);
+    editable_.volumeEnvelope = std::move(envelope);
+    for (auto& note : editable_.notes)
+        note.outputGainDb = editable_.volumeEnvelope.evalAt(note.startTime);
+    ++editable_.notesRevision;
     ++editable_.outputGainRevision;
     ++editable_.contentRevision;
 }

@@ -2,14 +2,16 @@
 
 #include "ContentKey.h"
 #include "../Utils/Note.h"
-#include "../Utils/OutputGainEnvelope.h"
+#include "../Utils/AutomationLane.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
+#include "../Utils/NoteGeneratorTypes.h"
 #include "../DSP/ChromaKeyDetector.h"
 #include "../DSP/ReferenceFeatures.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace OpenTune {
@@ -70,26 +72,24 @@ public:
         ContentKey key,
         const PitchShiftSettings& newSettings) = 0;
 
-    virtual bool commitAutoTuneGeneratedNotes(ContentKey key,
-                                               std::vector<Note> generatedNotes,
-                                               int startFrame,
-                                               int endFrameExclusive,
-                                               float retuneSpeed,
-                                               float vibratoDepth,
-                                               float vibratoRate) = 0;
+    // 普通 AUTO 唯一入口：生成并提交 startFrame..endFrameExclusive 范围音符。
+    // 底层执行 LegacyNoteGenerator::generate → scaleSnap apply → validate → commit。
+    // 不创建 undo、不 mark dirty——事务与 dirty 归属调用方。
+    virtual bool autoTuneContentRange(
+        ContentKey key,
+        int startFrame,
+        int endFrameExclusive,
+        const NoteGeneratorParams& params,
+        const std::optional<ScaleSnapConfig>& scaleSnap) = 0;
 
-    // A 层：只修改选定 Note 的 outputGainDb，推进 notes/outputGain/content revision，
-    // 调用 republishPlaybackSource()；不 enqueue render、不失效 RenderCache。
-    virtual ContentCommitSnapshot commitNoteOutputGainPatch(ContentKey key,
-                                                            ContentNoteRangePatch patch) = 0;
-
-    // B 层：一次替换 SibilantGainEnvelope，推进 outputGain/content revision，
-    // 调用 republishPlaybackSource()；不 enqueue render、不失效 RenderCache。
-    virtual ContentCommitSnapshot commitSibilantGainEnvelope(ContentKey key,
-                                                             SibilantGainEnvelope envelope) = 0;
+    // 一次替换整个 AutomationLane，推进
+    // outputGain/content revision，调用 republishPlaybackSource()；
+    // 不 enqueue render、不失效 RenderCache。
+    virtual ContentCommitSnapshot commitVolumeEnvelope(ContentKey key,
+                                                       AutomationLane envelope) = 0;
 
     // 无渲染发布入口：按 content domain 调现有装配函数，只读最新 snapshot、
-    // 构建 canonical A+B、交给 Publisher 准备目标采样率增益并原子 publish。
+    // 发布包含最新 AutomationLane 与 TimeGrid 的不可变播放源。
     virtual void republishPlaybackSource(ContentKey key) = 0;
 };
 

@@ -1,6 +1,6 @@
 #pragma once
 #include "../Utils/Note.h"
-#include "../Utils/OutputGainEnvelope.h"
+#include "../Utils/AutomationLane.h"
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
 #include <vector>
@@ -18,7 +18,7 @@ struct ARAEditableContentState
     std::vector<Note> notes;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;
-    SibilantGainEnvelope sibilantGainEnvelope;
+    AutomationLane volumeEnvelope;
     
     // Revisions
     uint64_t notesRevision{0};

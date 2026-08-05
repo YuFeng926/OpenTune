@@ -515,7 +515,7 @@ bool CaptureSession::applyAutoTuneGeneratedNotes(ContentKey segmentContentKey,
     if (seg == nullptr || !seg->content)
         return false;
 
-    seg->content->applyNotesWithOutputGain(std::move(notes));
+    seg->content->applyNotes(std::move(notes));
     if (pitchCurve)
         seg->content->applyPitchCurve(std::move(pitchCurve));
     return true;
@@ -532,25 +532,14 @@ bool CaptureSession::applyNotes(ContentKey segmentContentKey, std::vector<Note> 
     return true;
 }
 
-bool CaptureSession::applyNotesWithOutputGain(ContentKey segmentContentKey, std::vector<Note> notes)
+bool CaptureSession::applyVolumeEnvelope(ContentKey segmentContentKey, AutomationLane envelope)
 {
     std::lock_guard<std::mutex> lock(mutableMutex_);
     auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
     if (seg == nullptr || !seg->content)
         return false;
 
-    seg->content->applyNotesWithOutputGain(std::move(notes));
-    return true;
-}
-
-bool CaptureSession::applySibilantGainEnvelope(ContentKey segmentContentKey, SibilantGainEnvelope envelope)
-{
-    std::lock_guard<std::mutex> lock(mutableMutex_);
-    auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
-    if (seg == nullptr || !seg->content)
-        return false;
-
-    seg->content->applySibilantGainEnvelope(std::move(envelope));
+    seg->content->applyVolumeEnvelope(std::move(envelope));
     return true;
 }
 

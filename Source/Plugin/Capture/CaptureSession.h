@@ -168,10 +168,8 @@ public:
                                      std::vector<Note> notes,
                                      std::shared_ptr<PitchCurve> pitchCurve);
     bool applyNotes(ContentKey segmentContentKey, std::vector<Note> notes);
-    // A 编辑语义：透传 owner applyNotesWithOutputGain（推进 notes/outputGain/content revision）。
-    bool applyNotesWithOutputGain(ContentKey segmentContentKey, std::vector<Note> notes);
-    // B 编辑语义：透传 owner applySibilantGainEnvelope（推进 outputGain/content revision）。
-    bool applySibilantGainEnvelope(ContentKey segmentContentKey, SibilantGainEnvelope envelope);
+    // Volume envelope 编辑不触发神经渲染。
+    bool applyVolumeEnvelope(ContentKey segmentContentKey, AutomationLane envelope);
     bool applyNotesAndPitchCurve(ContentKey segmentContentKey,
                                  std::vector<Note> notes,
                                  std::shared_ptr<PitchCurve> pitchCurve);

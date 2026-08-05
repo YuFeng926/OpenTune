@@ -562,6 +562,9 @@ void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
     } else if ((currentTool_ == ToolId::Pitch || currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift)
                && AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
         handlePitchToolDoubleClick(e);
+    } else if (currentTool_ == ToolId::VolumeEnvelope
+               && AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+        handleVolumeEnvelopeToolDoubleClick(e);
     }
     // Other tools: no-op (could be extended later for note resize / etc.)
 }
@@ -2316,9 +2319,25 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEv
     updateF0SelectionFromNotes(notes);
 
     state.isVolumeDragging = true;
-    volumeDragBaselineGainDb_ = notes[static_cast<size_t>(clickedNoteIndex)].outputGainDb;
-    state.volumePreviewGainDb = volumeDragBaselineGainDb_;
+    const auto snap = ctx_.getEditableContentSnapshot();
+    volumeDragBaselineEnvelope_ = snap->volumeEnvelope;
+    state.volumePreviewEnvelope = volumeDragBaselineEnvelope_;
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+}
+
+AutomationLane PianoRollToolHandler::buildVolumeEnvelopeDragPreview(const std::vector<Note>& notes,
+                                                                     float deltaGainDb)
+{
+    const auto selected = collectSelectedNoteIndices(notes);
+    AutomationLane envelope = volumeDragBaselineEnvelope_;
+    for (int index : selected) {
+        const auto& note = notes[static_cast<size_t>(index)];
+        envelope.setRegionGain(
+            note.startTime,
+            note.endTime,
+            volumeDragBaselineEnvelope_.evalAt(note.startTime) + deltaGainDb);
+    }
+    return envelope;
 }
 
 void PianoRollToolHandler::handleVolumeEnvelopeToolDrag(const juce::MouseEvent& e)
@@ -2327,10 +2346,10 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolDrag(const juce::MouseEvent& 
     if (!state.isVolumeDragging)
         return;
 
-    // 垂直拖拽改 A 层增益：向上 = 增益增大；1 半音高度 = 12 dB。
     const float dbPerPixel = 12.0f / ctx_.getViewMapper().pixelsPerSemitone;
-    state.volumePreviewGainDb = volumeDragBaselineGainDb_
-        + static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
+    const float deltaGainDb = static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
+    const auto& notes = committedNotes(ctx_);
+    state.volumePreviewEnvelope = buildVolumeEnvelopeDragPreview(notes, deltaGainDb);
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 }
 
@@ -2342,33 +2361,48 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolUp(const juce::MouseEvent& e)
     state.isVolumeDragging = false;
 
     const float dbPerPixel = 12.0f / ctx_.getViewMapper().pixelsPerSemitone;
-    const float finalGainDb = volumeDragBaselineGainDb_
-        + static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
-    state.volumePreviewGainDb = 0.0f;
+    const float deltaGainDb = static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
 
-    if (std::abs(finalGainDb - volumeDragBaselineGainDb_) < 0.001f)
+    if (std::abs(deltaGainDb) < 0.001f) {
+        state.volumePreviewEnvelope.clear();
+        return;
+    }
+
+    const auto& notes = committedNotes(ctx_);
+    AutomationLane envelope = buildVolumeEnvelopeDragPreview(notes, deltaGainDb);
+    state.volumePreviewEnvelope.clear();
+    if (ctx_.commitVolumeEnvelope)
+        ctx_.commitVolumeEnvelope(volumeDragBaselineEnvelope_, std::move(envelope));
+}
+
+void PianoRollToolHandler::handleVolumeEnvelopeToolDoubleClick(const juce::MouseEvent& e)
+{
+    const auto sourceTime = pixelXToSourceTime(e.x);
+    if (!sourceTime)
         return;
 
     const auto& notes = committedNotes(ctx_);
-    const auto selected = collectSelectedNoteIndices(notes);
-    if (selected.empty())
+    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+    const int noteIndex = findNoteIndexAt(notes, *sourceTime, clickedPitch, 100.0f);
+    if (noteIndex < 0)
         return;
 
-    double minStart = 1e30;
-    double maxEnd = -1e30;
-    ContentNoteRangePatch patch;
-    for (int index : selected) {
-        Note updated = notes[static_cast<size_t>(index)];
-        updated.outputGainDb = finalGainDb;
-        patch.afterNotesInRange.push_back(updated);
-        minStart = std::min(minStart, updated.startTime);
-        maxEnd = std::max(maxEnd, updated.endTime);
-    }
-    patch.affectedRange.startSeconds = minStart;
-    patch.affectedRange.endSeconds = maxEnd;
+    auto& state = ctx_.getState();
+    state.isVolumeDragging = false;
+    state.volumePreviewEnvelope.clear();
+    state.noteSelection.setSingle(noteIndex, static_cast<int>(notes.size()));
+    updateF0SelectionFromNotes(notes);
+    if (ctx_.invalidateSelectionFeedback)
+        ctx_.invalidateSelectionFeedback();
 
-    if (ctx_.commitNoteOutputGainPatch)
-        ctx_.commitNoteOutputGainPatch(patch);
+    const auto snap = ctx_.getEditableContentSnapshot();
+    const auto& note = notes[static_cast<size_t>(noteIndex)];
+    AutomationLane envelope = snap->volumeEnvelope;
+    envelope.setRegionGain(note.startTime, note.endTime, 0.0f);
+    if (envelope == snap->volumeEnvelope)
+        return;
+    if (ctx_.commitVolumeEnvelope)
+        ctx_.commitVolumeEnvelope(snap->volumeEnvelope, std::move(envelope));
 }
 
 void PianoRollToolHandler::updateScissorsPreview(const juce::MouseEvent& e)

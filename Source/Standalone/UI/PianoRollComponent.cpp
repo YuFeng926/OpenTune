@@ -4,19 +4,21 @@
 #include "../Utils/AppLogger.h"
 #include "../../Utils/PianoRollEditAction.h"
 #include "../../Utils/PianoRollNotePatchAction.h"
+#include "../../Utils/VolumeEnvelopeEditAction.h"
 #include "../../Utils/TimeGridEditAction.h"   // 閳库槄?vocal-time-stretch ?.7
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <set>
 #include "../DSP/ChromaKeyDetector.h"
-#include "../Utils/LegacyNoteGenerator.h"
 #include "../Utils/SimdPerceptualPitchEstimator.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "UiAssets.h"
 #include "UiText.h"
 #include "ToolbarIcons.h"
 #include "../../Utils/AudioEditingScheme.h"
+#include "../../Utils/AutomationLane.h"
+#include "../../Utils/ScaleUiMapping.h"
 #include "Utils/PianoKeyAudition.h"
 #include "TimelineViewportPolicy.h"
 #include "TimelineLayerComposer.h"
@@ -131,12 +133,18 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.commitNoteTopologyPatch = [this](ContentNoteRangePatch patch) {
         return contentCommands_->commitNoteTopologyPatch(editedContentKey_, std::move(patch));
     };
-    toolCtx.commitNoteOutputGainPatch = [this](ContentNoteRangePatch patch) -> ContentCommitSnapshot {
+    toolCtx.commitVolumeEnvelope = [this](AutomationLane before, AutomationLane after) -> ContentCommitSnapshot {
         if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return nullptr;
-        const auto committedSnap = contentCommands_->commitNoteOutputGainPatch(editedContentKey_, std::move(patch));
+        const auto committedSnap = contentCommands_->commitVolumeEnvelope(editedContentKey_, after);
+        if (committedSnap != nullptr && processor_ != nullptr) {
+            processor_->getUndoManager().addAction(std::make_unique<VolumeEnvelopeEditAction>(
+                contentCommands_, editedContentKey_, juce::String::fromUTF8(u8"音量包络"),
+                std::move(before), std::move(after)));
+        }
         refreshEditedContentNotes();
-        requestContentRedraw();
         overlay_->repaint();
+        if (committedSnap != nullptr)
+            listeners_.call([](Listener& listener) { listener.contentEdited(); });
         return committedSnap;
     };
     toolCtx.replaceContentNotesForFullMutation = [this](const std::vector<Note>& notes) {
@@ -151,23 +159,9 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         if (processor_ != nullptr && action != nullptr)
             processor_->getUndoManager().addAction(std::move(action));
     };
-    // Pitch 工具与 AUTO 同源的 scale snap：读 AUTO postSnapCfg（4084-4099）同一参数源
+    // Pitch 工具与 AUTO 同源的 scale snap：唯一映射入口 ScaleUiMapping
     toolCtx.getActiveScaleSnap = [this]() -> std::optional<ScaleSnapConfig> {
-        if (scaleType_ == 3) // chromatic：无音阶吸附
-            return std::nullopt;
-        ScaleSnapConfig snapCfg;
-        snapCfg.root = scaleRootNote_ % 12;
-        switch (scaleType_) {
-            case 1: snapCfg.mode = ScaleMode::Major; break;
-            case 2: snapCfg.mode = ScaleMode::Minor; break;
-            case 4: snapCfg.mode = ScaleMode::HarmonicMinor; break;
-            case 5: snapCfg.mode = ScaleMode::Dorian; break;
-            case 6: snapCfg.mode = ScaleMode::Mixolydian; break;
-            case 7: snapCfg.mode = ScaleMode::PentatonicMajor; break;
-            case 8: snapCfg.mode = ScaleMode::PentatonicMinor; break;
-            default: snapCfg.mode = ScaleMode::Major; break;
-        }
-        return snapCfg;
+        return makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
     };
     toolCtx.getPitchCurve = [this]() { return currentCurve_; };
     toolCtx.getEditableContentSnapshot = [this]() { return readEditedSnapshot(); };
@@ -479,8 +473,7 @@ bool PianoRollComponent::commitNoteDraft()
             && a.retuneSpeed == b.retuneSpeed
             && a.pitchDriftScale == b.pitchDriftScale
             && a.vibratoDepth == b.vibratoDepth
-            && a.vibratoRate == b.vibratoRate
-            && a.outputGainDb == b.outputGainDb;
+            && a.vibratoRate == b.vibratoRate;
     };
 
     size_t i = 0, j = 0;
@@ -1101,7 +1094,7 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
         drawLineAnchorPreview(g);
     }
 
-    // ── OpenDyne transient previews（Volume Envelope A/B 与 Scissors 预览线） ──
+    // ── OpenDyne transient previews（Volume Envelope 与 Scissors 预览线） ──
     if (isOpenDyne()) {
         drawVolumeEnvelopePreview(g);
         drawScissorsPreview(g);
@@ -1143,132 +1136,200 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
 }
 
 // ============================================================================
-// drawVolumeEnvelopePreview — OpenDyne Volume Envelope Tool 的 A/B 可视化
-// A：用户控制基线（选中 Note 的 outputGainDb）
-// B：相对 A 的有符号偏移带（snapshot 的 sibilantGainEnvelope，只读）
-// A+B：实际播放增益实线
+// drawVolumeEnvelopePreview — Single automation lane envelope line
 // ============================================================================
-namespace {
-float sibilantGainDbAt(const SibilantGainEnvelope& env, double sourceTime) noexcept
-{
-    float value = 0.0f;
-    for (const auto& pt : env) {
-        if (pt.time > sourceTime) break;
-        value = pt.gainDb;
-    }
-    return value;
-}
-} // namespace
-
 void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
 {
     if (currentTool_ != ToolId::VolumeEnvelope)
-        return;
-
-    const auto& notes = getCommittedNotes();
-    if (notes.empty() || interactionState_.noteSelection.selectedIndices.empty())
         return;
 
     auto snap = readEditedSnapshot();
     if (snap == nullptr)
         return;
 
-    const auto& sibilant = snap->sibilantGainEnvelope;
+    const auto& envelope = interactionState_.isVolumeDragging
+        ? interactionState_.volumePreviewEnvelope
+        : snap->volumeEnvelope;
+
     const auto mapper = makeViewMapper();
     const float halfH = pixelsPerSemitone_ * 0.5f;
-    constexpr float kMaxGainDb = 12.0f; // 满高 ±12 dB
-    auto yForGain = [&](float gainDb, float centerY) -> float {
+    constexpr float kMaxGainDb = 12.0f;
+
+    // Center Y = middle of the content area (use first selected note's Y, or midpoint)
+    float centerY = static_cast<float>(getHeight()) * 0.5f;
+    const auto& notes = getCommittedNotes();
+    if (!interactionState_.noteSelection.selectedIndices.empty()) {
+        const int firstIdx = interactionState_.noteSelection.selectedIndices.front();
+        if (firstIdx >= 0 && firstIdx < static_cast<int>(notes.size())) {
+            const auto& note = notes[static_cast<size_t>(firstIdx)];
+            const float adjustedPitch = note.getAdjustedPitch();
+            if (adjustedPitch > 0.0f) {
+                const float midi = mapper.freqToMidi(adjustedPitch);
+                centerY = mapper.midiToY(midi);
+            }
+        }
+    }
+
+    auto yForGain = [&](float gainDb) -> float {
         return centerY - (juce::jlimit(-kMaxGainDb, kMaxGainDb, gainDb) / kMaxGainDb) * halfH;
     };
 
-    const float previewGainDb = interactionState_.isVolumeDragging
-        ? interactionState_.volumePreviewGainDb
-        : 0.0f;
+    const auto projection = activeContentProjection();
+    auto xForSourceTime = [&](double sourceTime) {
+        const double outputTime = snap->timeGrid != nullptr
+            ? snap->timeGrid->tauForward(sourceTime)
+            : sourceTime;
+        return mapper.timeToX(projection.projectContentTimeToTimeline(outputTime));
+    };
+    auto sourceTimeForX = [&](int x) {
+        const double timelineTime = mapper.xToTime(x);
+        const double outputTime = projection.projectTimelineTimeToContent(timelineTime);
+        return snap->timeGrid != nullptr
+            ? snap->timeGrid->tauInverse(outputTime)
+            : outputTime;
+    };
 
-    for (int idx : interactionState_.noteSelection.selectedIndices)
+    const auto viewportBounds = getTimelineViewportBounds();
+    const juce::Rectangle<int> timelineBounds(
+        pianoKeyWidth_,
+        0,
+        juce::jmax(0, viewportBounds.getRight() - pianoKeyWidth_),
+        juce::jmax(0, viewportBounds.getBottom() - rulerHeight_));
+    const int clipLeftX = mapper.timeToX(projection.timelineStartSeconds);
+    const int clipRightX = mapper.timeToX(projection.timelineEndSeconds());
+    const juce::Rectangle<int> clipBounds(
+        juce::jmin(clipLeftX, clipRightX),
+        timelineBounds.getY(),
+        std::abs(clipRightX - clipLeftX),
+        timelineBounds.getHeight());
+    const auto envelopeBounds = timelineBounds.getIntersection(clipBounds);
+    if (envelopeBounds.isEmpty())
+        return;
+    const float leftX = static_cast<float>(envelopeBounds.getX());
+    const float rightX = static_cast<float>(envelopeBounds.getRight());
+
+    // Build one Path directly from stored breakpoints, including evalAt's
+    // first/last value hold across the visible range.
+    juce::Path envelopePath;
+    envelopePath.startNewSubPath(
+        leftX, yForGain(envelope.evalAt(sourceTimeForX(envelopeBounds.getX()))));
+
+    const auto& points = envelope.points();
+    const auto& handles = snap->timeGrid->handles();
+    size_t pointIndex = 0;
+    size_t handleIndex = 0;
+    while (pointIndex < points.size() || handleIndex < handles.size()) {
+        const double pointTime = pointIndex < points.size()
+            ? points[pointIndex].timeSeconds
+            : std::numeric_limits<double>::infinity();
+        const double handleTime = handleIndex < handles.size()
+            ? handles[handleIndex].source_seconds
+            : std::numeric_limits<double>::infinity();
+        const double sourceTime = std::min(pointTime, handleTime);
+        const float x = static_cast<float>(xForSourceTime(sourceTime));
+        if (x >= leftX && x <= rightX)
+            envelopePath.lineTo(x, yForGain(envelope.evalAt(sourceTime)));
+        if (pointTime == sourceTime)
+            ++pointIndex;
+        if (handleTime == sourceTime)
+            ++handleIndex;
+    }
+    envelopePath.lineTo(
+        rightX, yForGain(envelope.evalAt(sourceTimeForX(envelopeBounds.getRight()))));
+
     {
-        if (idx < 0 || idx >= static_cast<int>(notes.size())) continue;
-        const auto& note = notes[static_cast<size_t>(idx)];
-        const float adjustedPitch = note.getAdjustedPitch();
-        if (adjustedPitch <= 0.0f) continue;
+        juce::Graphics::ScopedSaveState envelopeClip(g);
+        g.reduceClipRegion(envelopeBounds);
 
-        const float midi = mapper.freqToMidi(adjustedPitch);
-        const float centerY = mapper.midiToY(midi);
-        const int x1 = sourceTimeToX(note.startTime);
-        const int x2 = sourceTimeToX(note.endTime);
-        if (x2 <= x1) continue;
+        const float y0 = yForGain(0.0f);
+        static const float kDash[] = { 4.0f, 4.0f };
+        g.setColour(juce::Colours::white.withAlpha(0.3f));
+        g.drawDashedLine(
+            juce::Line<float>(leftX, y0, rightX, y0),
+            kDash, 2, 1.0f);
 
-        const float aGainDb = interactionState_.isVolumeDragging ? previewGainDb : note.outputGainDb;
-        const float yA = yForGain(aGainDb, centerY);
+        g.setColour(juce::Colours::white);
+        g.strokePath(envelopePath, juce::PathStrokeType(2.0f,
+                                                         juce::PathStrokeType::curved,
+                                                         juce::PathStrokeType::rounded));
 
-        // B 层：按 source-time 分段常数，构建 A+B 实线与 A↔A+B 偏移带
-        // 采样点先收集（含 TimeGrid 投影），A 基线在带顶、A+B 实线在带底。
-        const int kSampleCount = std::clamp(x2 - x1, 2, 256);
-        std::vector<float> pxSamples(static_cast<size_t>(kSampleCount));
-        std::vector<float> yAbSamples(static_cast<size_t>(kSampleCount));
-
-        juce::Path abLine;
-        for (int s = 0; s < kSampleCount; ++s)
-        {
-            const double sourceTime = note.startTime
-                + (note.endTime - note.startTime) * static_cast<double>(s) / static_cast<double>(kSampleCount - 1);
-            const float bGainDb = sibilantGainDbAt(sibilant, sourceTime);
-            const float abGainDb = aGainDb + bGainDb;
-            const float px = static_cast<float>(sourceTimeToX(sourceTime));
-            const float yAb = yForGain(abGainDb, centerY);
-            pxSamples[static_cast<size_t>(s)] = px;
-            yAbSamples[static_cast<size_t>(s)] = yAb;
-            if (s == 0)
-                abLine.startNewSubPath(px, yAb);
-            else
-                abLine.lineTo(px, yAb);
+        for (const auto& point : points) {
+            if (std::abs(point.gainDb) > 0.01f) {
+                const float x = static_cast<float>(xForSourceTime(point.timeSeconds));
+                const float y = yForGain(point.gainDb);
+                g.setColour(juce::Colour(0xFFFF8C42));
+                g.fillEllipse(x - 4.0f, y - 4.0f, 8.0f, 8.0f);
+            }
         }
 
-        // 偏移带闭合多边形：A 基线 forward → A+B 线 reverse
-        juce::Path band;
-        band.startNewSubPath(pxSamples.front(), yA);
-        for (int s = 0; s < kSampleCount; ++s)
-            band.lineTo(pxSamples[static_cast<size_t>(s)], yA);
-        for (int s = kSampleCount - 1; s >= 0; --s)
-            band.lineTo(pxSamples[static_cast<size_t>(s)], yAbSamples[static_cast<size_t>(s)]);
-        band.closeSubPath();
+        // Highlight envelope segment under each selected note
+        if (!interactionState_.noteSelection.selectedIndices.empty()) {
+            for (const int idx : interactionState_.noteSelection.selectedIndices) {
+                if (idx < 0 || idx >= static_cast<int>(notes.size()))
+                    continue;
+                const auto& note = notes[static_cast<size_t>(idx)];
+                const double t0 = note.startTime;
+                const double t1 = note.endTime;
+                if (t1 <= t0)
+                    continue;
 
-        // B 偏移带（半透明）
-        g.setColour(juce::Colour(0xFFFF8C42).withAlpha(0.22f));
-        g.fillPath(band);
+                const float x0 = static_cast<float>(xForSourceTime(t0));
+                const float x1 = static_cast<float>(xForSourceTime(t1));
+                if (x1 < leftX || x0 > rightX)
+                    continue;
 
-        // A 基线（虚线）
-        static const float kDash[] = { 4.0f, 4.0f };
-        g.setColour(juce::Colours::white.withAlpha(0.75f));
-        g.drawDashedLine(juce::Line<float>(static_cast<float>(x1), yA, static_cast<float>(x2), yA),
-                         kDash, 2, 1.0f);
+                juce::Path seg;
+                seg.startNewSubPath(x0, yForGain(envelope.evalAt(t0)));
 
-        // A+B 实际播放增益实线
-        g.setColour(juce::Colours::white);
-        g.strokePath(abLine, juce::PathStrokeType(1.5f,
-                                                  juce::PathStrokeType::curved,
-                                                  juce::PathStrokeType::rounded));
+                // Insert breakpoints + TimeGrid handles that fall within [t0, t1]
+                size_t pi = 0, hi = 0;
+                while (pi < points.size() || hi < handles.size()) {
+                    const double pt = pi < points.size()
+                        ? points[pi].timeSeconds : std::numeric_limits<double>::infinity();
+                    const double ht = hi < handles.size()
+                        ? handles[hi].source_seconds : std::numeric_limits<double>::infinity();
+                    const double st = std::min(pt, ht);
+                    if (st >= t1) break;
+                    if (st > t0)
+                        seg.lineTo(static_cast<float>(xForSourceTime(st)),
+                                   yForGain(envelope.evalAt(st)));
+                    if (pt == st) ++pi;
+                    if (ht == st) ++hi;
+                }
+
+                seg.lineTo(x1, yForGain(envelope.evalAt(t1)));
+                g.setColour(juce::Colour(0xFFFF8C42));
+                g.strokePath(seg, juce::PathStrokeType(3.5f,
+                                                       juce::PathStrokeType::curved,
+                                                       juce::PathStrokeType::rounded));
+            }
+        }
     }
 
-    // 鼠标旁 dB 数值提示
-    if (interactionState_.isVolumeDragging)
-    {
+    // Mouse tooltip during drag
+    if (interactionState_.isVolumeDragging) {
         const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
             + juce::Point<int>(0, -rulerHeight_);
-        const float aGainDb = previewGainDb;
-        const double sourceTime = xToSourceTime(juce::jlimit(pianoKeyWidth_,
-                                                             getWidth(),
-                                                             mousePos.x));
-        const float bGainDb = sibilantGainDbAt(sibilant, sourceTime);
-        const juce::String text = juce::String::formatted("A %+.1f dB   B %+.1f dB   A+B %+.1f dB",
-                                                          aGainDb, bGainDb, aGainDb + bGainDb);
-        juce::Font font(12.0f);
+        const int queryX = juce::jlimit(envelopeBounds.getX(), envelopeBounds.getRight(), mousePos.x);
+        const double sourceTime = sourceTimeForX(queryX);
+        const juce::String text = juce::String::formatted("%+.1f dB", envelope.evalAt(sourceTime));
+        const juce::Font font(juce::FontOptions(12.0f));
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText(font, text, 0.0f, 0.0f);
+        const float textWidth = glyphs.getBoundingBox(0, 0, true).getWidth();
+        const float boxWidth = textWidth + 12.0f;
+        const float boxX = juce::jlimit(
+            static_cast<float>(envelopeBounds.getX()),
+            static_cast<float>(envelopeBounds.getRight()) - boxWidth,
+            static_cast<float>(mousePos.x + 12));
+        const float boxY = static_cast<float>(juce::jlimit(
+            envelopeBounds.getY(), envelopeBounds.getBottom() - 20, mousePos.y + 12));
         g.setColour(juce::Colours::black.withAlpha(0.75f));
-        g.fillRoundedRectangle(static_cast<float>(mousePos.x + 12), static_cast<float>(mousePos.y + 12),
-                               font.getStringWidth(text) + 12.0f, 20.0f, 4.0f);
+        g.fillRoundedRectangle(boxX, boxY, boxWidth, 20.0f, 4.0f);
         g.setColour(juce::Colours::white);
         g.setFont(font);
-        g.drawText(text, mousePos.getX() + 18, mousePos.getY() + 14, font.getStringWidth(text), 14,
+        g.drawText(text, juce::roundToInt(boxX + 6.0f), juce::roundToInt(boxY + 2.0f),
+                   juce::roundToInt(textWidth), 14,
                    juce::Justification::centredLeft);
     }
 }
@@ -4510,58 +4571,17 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     const int startFrame = targetRange.startFrame;
     const int endFrame = targetRange.endFrameExclusive - 1;
 
-    const bool useScaleSnap = (scaleType_ != 3);
-
-    NoteGeneratorParams genParams;
-    genParams.policy = segmentationPolicy_;
-    genParams.retuneSpeed = currentRetuneSpeed_;
-    genParams.vibratoDepth = currentVibratoDepth_;
-    genParams.vibratoRate = currentVibratoRate_;
-
-    std::optional<ScaleSnapConfig> postSnapCfg;
-    if (useScaleSnap) {
-        ScaleSnapConfig snapCfg;
-        snapCfg.root = scaleRootNote_ % 12;
-        switch (scaleType_) {
-            case 1: snapCfg.mode = ScaleMode::Major; break;
-            case 2: snapCfg.mode = ScaleMode::Minor; break;
-            case 4: snapCfg.mode = ScaleMode::HarmonicMinor; break;
-            case 5: snapCfg.mode = ScaleMode::Dorian; break;
-            case 6: snapCfg.mode = ScaleMode::Mixolydian; break;
-            case 7: snapCfg.mode = ScaleMode::PentatonicMajor; break;
-            case 8: snapCfg.mode = ScaleMode::PentatonicMinor; break;
-            default: snapCfg.mode = ScaleMode::Major; break;
-        }
-        postSnapCfg = snapCfg;
-    }
-
-    // Synchronous generation (no worker)
-    auto generatedNotes = LegacyNoteGenerator::generate(
-        originalF0.data(),
-        static_cast<int>(originalF0.size()),
-        nullptr,
-        startFrame,
-        endFrame + 1,
-        currentCurve_->getHopSize(),
-        static_cast<float>(currentCurve_->getSampleRate()),
-        genParams);
-
-    if (postSnapCfg.has_value()) {
-        postSnapCfg->applyToNotes(generatedNotes);
-    }
-    LegacyNoteGenerator::validate(generatedNotes);
+    const std::optional<ScaleSnapConfig> postSnapCfg = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
 
     captureBeforeUndoSnapshot();
     pendingUndoDescription_ = TRANS("自动调音");
 
-    if (!contentCommands_->commitAutoTuneGeneratedNotes(
+    if (!contentCommands_->autoTuneContentRange(
             editedContentKey_,
-            generatedNotes,
             startFrame,
             endFrame + 1,
-            currentRetuneSpeed_,
-            currentVibratoDepth_,
-            currentVibratoRate_)) {
+            getCurrentAutoTuneParams(),
+            postSnapCfg)) {
         return { AutoTuneApplyStatus::NoContent };
     }
 

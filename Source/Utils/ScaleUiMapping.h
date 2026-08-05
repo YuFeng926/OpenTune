@@ -8,6 +8,8 @@
  */
 
 #include "../DSP/ChromaKeyDetector.h"
+#include "NoteGeneratorTypes.h"
+#include <optional>
 
 namespace OpenTune {
 
@@ -54,6 +56,36 @@ inline DetectedKey makeDetectedKeyFromUi(int rootNote, int scaleType, float conf
     key.scale = uiScaleTypeToScale(scaleType);
     key.confidence = confidence;
     return key;
+}
+
+/**
+ * UI scaleType (1..8) + rootNote → ScaleSnapConfig（AUTO/Pitch 工具唯一映射入口）。
+ * Chromatic（scaleType==3）返回 nullopt，表示不做音阶吸附。
+ */
+inline std::optional<ScaleSnapConfig> makeScaleSnapConfigFromUi(int rootNote, int scaleType) {
+    if (scaleType == 3) // chromatic：无音阶吸附
+        return std::nullopt;
+    ScaleSnapConfig snapCfg;
+    snapCfg.root = juce::jlimit(0, 11, rootNote);
+    switch (scaleType) {
+        case 1: snapCfg.mode = ScaleMode::Major; break;
+        case 2: snapCfg.mode = ScaleMode::Minor; break;
+        case 4: snapCfg.mode = ScaleMode::HarmonicMinor; break;
+        case 5: snapCfg.mode = ScaleMode::Dorian; break;
+        case 6: snapCfg.mode = ScaleMode::Mixolydian; break;
+        case 7: snapCfg.mode = ScaleMode::PentatonicMajor; break;
+        case 8: snapCfg.mode = ScaleMode::PentatonicMinor; break;
+        default: snapCfg.mode = ScaleMode::Major; break;
+    }
+    return snapCfg;
+}
+
+/**
+ * DetectedKey → ScaleSnapConfig（F0 完成链整段 AUTO 唯一映射入口）。
+ * Chromatic 或未知 scale 返回 nullopt，表示不做音阶吸附。
+ */
+inline std::optional<ScaleSnapConfig> makeScaleSnapConfig(const DetectedKey& key) {
+    return makeScaleSnapConfigFromUi(static_cast<int>(key.root), scaleToUiScaleType(key.scale));
 }
 
 } // namespace OpenTune

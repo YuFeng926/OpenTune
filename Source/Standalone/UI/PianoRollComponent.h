@@ -91,6 +91,7 @@ public:
         virtual bool playheadPositionChangeRequested(double timeSeconds) = 0;
         virtual void pitchCurveEdited(int startFrame, int endFrame) { (void)startFrame; (void)endFrame; }
         virtual void noteOffsetChanged(size_t noteIndex, float oldOffset, float newOffset) { (void)noteIndex; (void)oldOffset; (void)newOffset; }
+        virtual void contentEdited() {}
         virtual void autoTuneRequested() {}
         virtual void escapeKeyPressed() {}
         virtual void undoRequested() {}
@@ -189,6 +190,18 @@ public:
     float getCurrentVibratoRate() const { return currentVibratoRate_; }
     bool applyVibratoRateToSelection(float rate);
     bool getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const;
+
+    // 手动 AUTO / OpenDyne 导入 AUTO 共用的 canonical 参数源：
+    // segmentationPolicy_ + currentRetuneSpeed_/currentVibratoDepth_/currentVibratoRate_。
+    NoteGeneratorParams getCurrentAutoTuneParams() const noexcept
+    {
+        NoteGeneratorParams params;
+        params.policy = segmentationPolicy_;
+        params.retuneSpeed = currentRetuneSpeed_;
+        params.vibratoDepth = currentVibratoDepth_;
+        params.vibratoRate = currentVibratoRate_;
+        return params;
+    }
     int findLineAnchorSegmentNear(int x, int y) const;
     void selectLineAnchorSegment(int idx);
     void toggleLineAnchorSegmentSelection(int idx);

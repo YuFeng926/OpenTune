@@ -1,6 +1,5 @@
 #include "PlaybackSourcePublisher.h"
 #include "../Inference/RenderCache.h"
-#include "../Utils/OutputGainEnvelope.h"
 #include <algorithm>
 #include <set>
 
@@ -175,13 +174,6 @@ void PlaybackSourcePublisher::prepareSourceDry(PlaybackReadSource& src, double t
     if (targetSr <= 0.0) return;
     if (!src.audioBuffer || src.audioBuffer->getNumSamples() <= 0) return;
     if (src.audioSampleRate <= 0.0) return;
-
-    // Prepared gain 与 preparedDry 同一事务：canonical identity 与目标采样率均未变时复用。
-    if (src.preparedOutputGainEnvelope == nullptr
-        || src.preparedOutputGainEnvelope->canonicalIdentity != src.outputGainEnvelope
-        || std::abs(src.preparedOutputGainEnvelope->sampleRate - targetSr) >= 1.0) {
-        src.preparedOutputGainEnvelope = prepareOutputGainEnvelope(src.outputGainEnvelope, targetSr);
-    }
 
     // Reuse existing prepared buffer when canonical source buffer and target rate unchanged.
     if (src.preparedDry.buffer != nullptr
