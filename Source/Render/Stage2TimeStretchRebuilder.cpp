@@ -69,7 +69,7 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
 
     // Stage2 must read Stage1 raw PCM, never its own cached TimeStretch output.
     stage1Source.timeStretchCache = nullptr;
-    stage1Source.timeGridIsIdentity = true;
+    stage1Source.timeGrid.reset();
 
     const int totalSamples = stage1Source.audioBuffer->getNumSamples();
     constexpr int kBlock = 4096;

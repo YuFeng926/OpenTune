@@ -644,10 +644,10 @@ target_sources(OpenTune
         Source/Utils/PianoRollEditAction.h
         Source/Utils/PianoRollNotePatchAction.cpp
         Source/Utils/PianoRollNotePatchAction.h
-        Source/Utils/OutputGainEnvelope.cpp
-        Source/Utils/OutputGainEnvelope.h
-        Source/Utils/OutputGainEditActions.cpp
-        Source/Utils/OutputGainEditActions.h
+        Source/Utils/AutomationLane.cpp
+        Source/Utils/AutomationLane.h
+        Source/Utils/VolumeEnvelopeEditAction.cpp
+        Source/Utils/VolumeEnvelopeEditAction.h
         Source/Utils/ScissorsUndoAction.cpp
         Source/Utils/ScissorsUndoAction.h
         Source/Utils/PitchShiftSettings.h
@@ -1286,6 +1286,7 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         Tests/TimeGridRuntimeTests.cpp
         Source/Utils/TimeGrid.cpp
         Source/Utils/AppLogger.cpp
+        Source/Utils/AutomationLane.cpp
         Source/Utils/ProjectPersistence.cpp
     )
     target_compile_features(OpenTuneTimeGridRuntimeTests PRIVATE cxx_std_17)
@@ -1301,6 +1302,18 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         target_compile_options(OpenTuneTimeGridRuntimeTests PRIVATE /utf-8)
     endif()
     add_test(NAME OpenTuneTimeGridRuntimeTests COMMAND OpenTuneTimeGridRuntimeTests)
+
+    add_executable(OpenTuneAutomationLaneRuntimeTests
+        Tests/AutomationLaneRuntimeTests.cpp
+        Source/Utils/AutomationLane.cpp
+    )
+    target_compile_features(OpenTuneAutomationLaneRuntimeTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneAutomationLaneRuntimeTests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    if(MSVC)
+        target_compile_options(OpenTuneAutomationLaneRuntimeTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneAutomationLaneRuntimeTests COMMAND OpenTuneAutomationLaneRuntimeTests)
 
     # ==============================================================================
     # OpenTuneThemeScreenshots — 后台静默主题截图工具
@@ -1396,6 +1409,8 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         Source/Utils/TimeGridEditAction.cpp
         Source/Utils/PlacementActions.cpp
         Source/Utils/SilentGapDetector.cpp
+        Source/Utils/AutomationLane.cpp
+        Source/Utils/VolumeEnvelopeEditAction.cpp
 
         # Content Layer
         Source/Content/StandaloneClipContent.cpp

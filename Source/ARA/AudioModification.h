@@ -53,10 +53,8 @@ private:
 public:
     // 编辑入口：应用命令并推高 revision
     void applyNotes(const std::vector<Note>& notes);
-    // A 编辑语义：applyNotes + 推进 outputGainRevision（A 投影同步）。
-    void applyNotesWithOutputGain(const std::vector<Note>& notes);
-    // B 编辑语义：替换 B 层 + 推进 outputGain/content revision（不推进 notesRevision）。
-    void applySibilantGainEnvelope(const SibilantGainEnvelope& envelope);
+    // 替换唯一音量包络，并同步 Note::outputGainDb 派生值。
+    void applyVolumeEnvelope(const AutomationLane& envelope);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
     bool applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> grid);
     bool applyPitchShiftState(const PitchShiftEditState& state);

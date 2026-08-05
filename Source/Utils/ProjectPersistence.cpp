@@ -5,6 +5,27 @@
 
 namespace OpenTune {
 
+namespace {
+
+std::vector<AutomationPoint> automationPointsFromValueTree(const juce::ValueTree& tree)
+{
+    std::vector<AutomationPoint> points;
+    const int count = static_cast<int>(tree.getProperty("pointCount", 0));
+    points.reserve(static_cast<size_t>(juce::jmax(0, count)));
+    for (int i = 0; i < tree.getNumChildren(); ++i) {
+        const auto child = tree.getChild(i);
+        if (child.hasType("Point")) {
+            points.push_back({
+                child.getProperty("time", 0.0),
+                static_cast<float>(child.getProperty("gainDb", 0.0))
+            });
+        }
+    }
+    return points;
+}
+
+} // namespace
+
 // ============================================================================
 // 属性读写辅助
 // ============================================================================
@@ -47,7 +68,7 @@ juce::ValueTree ProjectPersistence::toValueTree(const ProjectSnapshot& snapshot)
 {
     juce::ValueTree root(kRootNodeName);
 
-    root.setProperty(kProjectFormatVersionAttr, snapshot.header.projectFormatVersion, nullptr);
+    root.setProperty(kProjectFormatVersionAttr, kCurrentProjectFormatVersion, nullptr);
     setOptionalProperty(root, juce::Identifier(kAppVersionAttr), snapshot.header.appVersion);
     setOptionalProperty(root, "projectName", snapshot.header.projectName);
     setOptionalProperty(root, "projectId", snapshot.header.projectId);
@@ -96,16 +117,17 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
     }
 
     const auto version = static_cast<int>(tree.getProperty(kProjectFormatVersionAttr, 0));
-    if (version != kCurrentProjectFormatVersion) {
+    if (version < kMinimumProjectFormatVersion || version > kCurrentProjectFormatVersion) {
         const auto msg = "Unsupported project format version: " + juce::String(version)
-            + " (expected " + juce::String(kCurrentProjectFormatVersion) + ")";
+            + " (supported " + juce::String(kMinimumProjectFormatVersion)
+            + "-" + juce::String(kCurrentProjectFormatVersion) + ")";
         return Result<ProjectSnapshot>::failure(Error::fromCode(ErrorCode::InvalidParameter, msg.toStdString()));
     }
 
     ProjectSnapshot snapshot;
 
     // Header
-    snapshot.header.projectFormatVersion = version;
+    snapshot.header.projectFormatVersion = kCurrentProjectFormatVersion;
     snapshot.header.appVersion = getOptionalProperty(tree, juce::Identifier(kAppVersionAttr), "");
     snapshot.header.projectName = getOptionalProperty(tree, "projectName", "Untitled");
     snapshot.header.projectId = getOptionalProperty(tree, "projectId", "");
@@ -317,9 +339,9 @@ juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry
         tree.addChild(notesToValueTree(mat.notes, "Notes"), -1, nullptr);
     }
 
-    // Sibilant gain envelope (B 层)
-    if (!mat.sibilantGainEnvelope.empty()) {
-        tree.addChild(sibilantGainEnvelopeToValueTree(mat.sibilantGainEnvelope), -1, nullptr);
+    // Volume envelope
+    if (!mat.volumeEnvelope.empty()) {
+        tree.addChild(volumeEnvelopeToValueTree(mat.volumeEnvelope), -1, nullptr);
     }
 
     // CorrectedSegments
@@ -380,8 +402,17 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
     // Notes
     m.notes = notesFromValueTree(tree.getChildWithName("Notes"));
 
-    // Sibilant gain envelope (B 层)
-    m.sibilantGainEnvelope = sibilantGainEnvelopeFromValueTree(tree.getChildWithName("SibilantGainEnvelope"));
+    const auto volumeEnvelopeTree = tree.getChildWithName("VolumeEnvelope");
+    if (volumeEnvelopeTree.isValid()) {
+        m.volumeEnvelope = volumeEnvelopeFromValueTree(volumeEnvelopeTree);
+    } else {
+        const auto noteGainLane = AutomationLane::fromLegacyNoteGains(m.notes);
+        const auto sibilantTree = tree.getChildWithName("SibilantGainEnvelope");
+        m.volumeEnvelope = sibilantTree.isValid()
+            ? AutomationLane::sum(noteGainLane, AutomationLane::fromLegacyStepPoints(
+                automationPointsFromValueTree(sibilantTree)))
+            : noteGainLane;
+    }
 
     // CorrectedSegments
     m.correctionSegments = segmentsFromValueTree(tree.getChildWithName("CorrectedSegments"));
@@ -461,37 +492,27 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
 }
 
 // ============================================================================
-// SibilantGainEnvelope 序列化（B 层：点数 + 每点 time/gainDb）
+// VolumeEnvelope 序列化（点数 + 每点 time/gainDb）
 // ============================================================================
 
-juce::ValueTree ProjectPersistence::sibilantGainEnvelopeToValueTree(const SibilantGainEnvelope& envelope)
+juce::ValueTree ProjectPersistence::volumeEnvelopeToValueTree(const AutomationLane& envelope)
 {
-    juce::ValueTree tree("SibilantGainEnvelope");
-    tree.setProperty("pointCount", static_cast<int>(envelope.size()), nullptr);
-    for (const auto& point : envelope) {
+    juce::ValueTree tree("VolumeEnvelope");
+    const auto& points = envelope.points();
+    tree.setProperty("pointCount", static_cast<int>(points.size()), nullptr);
+    for (const auto& point : points) {
         juce::ValueTree pt("Point");
-        pt.setProperty("time", point.time, nullptr);
+        pt.setProperty("time", point.timeSeconds, nullptr);
         pt.setProperty("gainDb", point.gainDb, nullptr);
         tree.addChild(pt, -1, nullptr);
     }
     return tree;
 }
 
-SibilantGainEnvelope ProjectPersistence::sibilantGainEnvelopeFromValueTree(const juce::ValueTree& tree)
+AutomationLane ProjectPersistence::volumeEnvelopeFromValueTree(const juce::ValueTree& tree)
 {
-    SibilantGainEnvelope envelope;
-    if (!tree.isValid()) { return envelope; }
-    const int count = static_cast<int>(tree.getProperty("pointCount", 0));
-    envelope.reserve(static_cast<size_t>(juce::jmax(0, count)));
-    for (int i = 0; i < tree.getNumChildren(); ++i) {
-        auto child = tree.getChild(i);
-        if (!child.hasType("Point")) { continue; }
-        SibilantGainEnvelopePoint point;
-        point.time = child.getProperty("time", 0.0);
-        point.gainDb = static_cast<float>(child.getProperty("gainDb", 0.0));
-        envelope.push_back(point);
-    }
-    return envelope;
+    if (!tree.isValid()) { return {}; }
+    return AutomationLane::fromSnapshot(automationPointsFromValueTree(tree));
 }
 
 // ============================================================================

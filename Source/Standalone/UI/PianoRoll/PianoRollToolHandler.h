@@ -14,6 +14,7 @@
 #include "Utils/ContentTimelineProjection.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/Note.h"
+#include "../../../Utils/AutomationLane.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/NoteGeneratorTypes.h"   // ScaleSnapConfig — OpenDyne Pitch 吸附
 #include "Utils/UndoManager.h"          // UndoAction — OpenDyne Scissors undo
@@ -111,12 +112,12 @@ public:
         // === OpenDyne（NotesPrimary）提交与配置回调 ===
         // 拓扑提交：只替换 notes、推进 notes/content revision，零 render。
         std::function<ContentCommitSnapshot(ContentNoteRangePatch)> commitNoteTopologyPatch;
-        // A 层提交：只修改 outputGainDb，推进 notes/outputGain/content revision，
-        // 内部 republish，零 render。
-        std::function<ContentCommitSnapshot(ContentNoteRangePatch)> commitNoteOutputGainPatch;
+        // Volume Envelope 提交：整体替换 AutomationLane，推进 outputGain/content
+        // revision，内部 republish，零 render。
+        std::function<ContentCommitSnapshot(AutomationLane, AutomationLane)> commitVolumeEnvelope;
         // 全量替换 notes（Scissors 分割）：只推进 notes/content revision，零 render。
         std::function<bool(const std::vector<Note>&)> replaceContentNotesForFullMutation;
-        // 无渲染发布 playback source（A/B 提交后调用）。
+        // 无渲染发布 playback source。
         std::function<void()> republishPlaybackSource;
         // Pitch Tool 拖拽吸附配置；nullopt = 无配置（默认 Chromatic，即 round 半音）。
         std::function<std::optional<ScaleSnapConfig>()> getActiveScaleSnap;
@@ -274,6 +275,9 @@ private:
     void handleVolumeEnvelopeToolMouseDown(const juce::MouseEvent& e);
     void handleVolumeEnvelopeToolDrag(const juce::MouseEvent& e);
     void handleVolumeEnvelopeToolUp(const juce::MouseEvent& e);
+    void handleVolumeEnvelopeToolDoubleClick(const juce::MouseEvent& e);
+    AutomationLane buildVolumeEnvelopeDragPreview(const std::vector<Note>& notes,
+                                                   float deltaGainDb);
     void updateScissorsPreview(const juce::MouseEvent& e);
     void handleScissorsToolMouseDown(const juce::MouseEvent& e);
     void handleScissorsToolUp(const juce::MouseEvent& e);
@@ -354,8 +358,7 @@ private:
 
     juce::Point<int> dragStartPos_;
     juce::Point<float> lastDrawPoint_;
-    // Volume Envelope Tool 拖拽起点增益（dB）。
-    float volumeDragBaselineGainDb_ = 0.0f;
+    AutomationLane volumeDragBaselineEnvelope_;
 };
 
 } // namespace OpenTune

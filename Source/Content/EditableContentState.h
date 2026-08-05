@@ -2,7 +2,7 @@
 #include "../DSP/ChromaKeyDetector.h"
 #include "../Utils/ContentAnalysisState.h"
 #include "../Utils/Note.h"
-#include "../Utils/OutputGainEnvelope.h"
+#include "../Utils/AutomationLane.h"
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
 #include "../DSP/ReferenceFeatures.h"
@@ -30,7 +30,7 @@ struct EditableContentState
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;
     ReferenceFeatureSet referenceFeatures;
-    SibilantGainEnvelope sibilantGainEnvelope;
+    AutomationLane volumeEnvelope;
     uint64_t notesRevision{0};
     uint64_t pitchRevision{0};
     uint64_t timeGridRevision{0};

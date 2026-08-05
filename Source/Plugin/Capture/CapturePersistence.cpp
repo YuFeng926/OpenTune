@@ -16,11 +16,11 @@
 namespace OpenTune::Capture {
 
 namespace {
-    // CAPz v5: per-segment fixed bytes + embedded PCM audio + SibilantGainEnvelope + pitchDriftScale.
+    // CAPz v6: per-segment fixed bytes + embedded PCM audio + unified VolumeEnvelope.
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 5;
+    constexpr int kCaptureArchiveVersion = 6;
     constexpr int kCaptureArchiveVersionMin = 4;  // v4 files load with pitchDriftScale=1.0
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
@@ -186,9 +186,10 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 stream.writeFloat(note.outputGainDb);
                 stream.writeInt(note.isVoiced ? 1 : 0);
             }
-            stream.writeInt(static_cast<int>(snap->sibilantGainEnvelope.size()));
-            for (const auto& point : snap->sibilantGainEnvelope) {
-                stream.writeDouble(point.time);
+            const auto& envelopePoints = snap->volumeEnvelope.points();
+            stream.writeInt(static_cast<int>(envelopePoints.size()));
+            for (const auto& point : envelopePoints) {
+                stream.writeDouble(point.timeSeconds);
                 stream.writeFloat(point.gainDb);
             }
             stream.writeInt(snap->pitchShiftSettings.semitone);
@@ -218,6 +219,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     if (fileVersion < kCaptureArchiveVersionMin || fileVersion > kCaptureArchiveVersion)
         return false;
     const bool hasPitchDriftScale = (fileVersion >= 5);
+    const bool hasUnifiedVolumeEnvelope = (fileVersion >= 6);
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -249,7 +251,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         DetectedKey detectedKey;
         std::shared_ptr<PitchCurve> pitchCurve;
         std::vector<Note> notes;
-        SibilantGainEnvelope sibilantGainEnvelope;
+        AutomationLane volumeEnvelope;
         PitchShiftSettings pitchShiftSettings;
     };
     std::vector<PersistedSegment> persisted;
@@ -316,12 +318,20 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         const int envelopeCount = stream.readInt();
         if (envelopeCount < 0)
             return false;
-        p.sibilantGainEnvelope.reserve(static_cast<size_t>(envelopeCount));
+        std::vector<AutomationPoint> envelopePoints;
+        envelopePoints.reserve(static_cast<size_t>(envelopeCount));
         for (int envIndex = 0; envIndex < envelopeCount; ++envIndex) {
-            SibilantGainEnvelopePoint point;
-            point.time = stream.readDouble();
+            AutomationPoint point;
+            point.timeSeconds = stream.readDouble();
             point.gainDb = stream.readFloat();
-            p.sibilantGainEnvelope.push_back(point);
+            envelopePoints.push_back(point);
+        }
+        if (hasUnifiedVolumeEnvelope) {
+            p.volumeEnvelope = AutomationLane::fromSnapshot(envelopePoints);
+        } else {
+            p.volumeEnvelope = AutomationLane::sum(
+                AutomationLane::fromLegacyNoteGains(p.notes),
+                AutomationLane::fromLegacyStepPoints(envelopePoints));
         }
         p.pitchShiftSettings.semitone = stream.readInt();
         p.pitchShiftSettings.cents = stream.readInt();
@@ -370,8 +380,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         }
         seg->content->applyOriginalF0State(p.originalF0State);
 
-        // B 层 envelope：revision 不落盘，恢复端由 owner 推进新 revision。
-        seg->content->applySibilantGainEnvelope(std::move(p.sibilantGainEnvelope));
+        // Envelope revision 不落盘，恢复端由 owner 推进新 revision。
+        seg->content->applyVolumeEnvelope(std::move(p.volumeEnvelope));
 
         const bool ready = p.originalF0State == OriginalF0State::Ready;
         const auto restoredState = ready ? SegmentState::Edited : p.segmentState;

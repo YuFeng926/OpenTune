@@ -34,7 +34,7 @@ std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotCo
     snap->detectedKey = content_.detectedKey;
     snap->silentGaps = content_.silentGaps;
     snap->referenceFeatures = content_.referenceFeatures;
-    snap->sibilantGainEnvelope = content_.sibilantGainEnvelope;
+    snap->volumeEnvelope = content_.volumeEnvelope;
     snap->notesRevision = content_.notesRevision;
     snap->pitchRevision = content_.pitchRevision;
     snap->timeGridRevision = content_.timeGridRevision;
@@ -106,21 +106,18 @@ bool StandaloneClipContent::hasActiveContent() const
 void StandaloneClipContent::applyNotes(std::vector<Note> notes)
 {
     content_.notes = std::move(notes);
+    for (auto& note : content_.notes)
+        note.outputGainDb = content_.volumeEnvelope.evalAt(note.startTime);
     ++content_.notesRevision;
     bumpContentRevision();
 }
 
-void StandaloneClipContent::applyNotesWithOutputGain(std::vector<Note> notes)
+void StandaloneClipContent::applyVolumeEnvelope(AutomationLane envelope)
 {
-    content_.notes = std::move(notes);
+    content_.volumeEnvelope = std::move(envelope);
+    for (auto& note : content_.notes)
+        note.outputGainDb = content_.volumeEnvelope.evalAt(note.startTime);
     ++content_.notesRevision;
-    ++content_.outputGainRevision;
-    bumpContentRevision();
-}
-
-void StandaloneClipContent::applySibilantGainEnvelope(SibilantGainEnvelope envelope)
-{
-    content_.sibilantGainEnvelope = std::move(envelope);
     ++content_.outputGainRevision;
     bumpContentRevision();
 }

@@ -4,7 +4,7 @@
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
 #include "../Utils/Note.h"
-#include "../Utils/OutputGainEnvelope.h"
+#include "../Utils/AutomationLane.h"
 #include "../Utils/SilentGapDetector.h"
 #include "../Utils/ContentAnalysisState.h"   // OriginalF0State
 #include "../DSP/ChromaKeyDetector.h"         // DetectedKey
@@ -42,7 +42,7 @@ struct ContentPayloadState
     std::vector<Note> notes;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;
-    SibilantGainEnvelope sibilantGainEnvelope;
+    AutomationLane volumeEnvelope;
 
     // ── Revisions ───────────────────────────────────────────
     uint64_t notesRevision{0};

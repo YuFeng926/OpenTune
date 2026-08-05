@@ -4,9 +4,9 @@
 #include "TimeCoordinate.h"
 #include "../Inference/TimeStretchCache.h"
 #include "../Inference/RenderCache.h"
-#include "OutputGainEnvelope.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <cmath>
 
 namespace OpenTune {
 
@@ -45,29 +45,31 @@ struct CanonicalReadRequest {
 };
 
 /**
- * 最终输出增益：preparedOutputGainEnvelope 在 playback rate 空间逐样本乘法。
- * readStartSample 与目标采样率同空间（与 preparedDry 索引一致）。
- * 无分配、无锁、无 pow；包络缺失 = 单位增益。
+ * AutomationLane 增益应用：output-time 经 TimeGrid 映射到 source-time 后逐样本 evalAt。
+ * 无分配、无锁；包络为空 = 单位增益。
  */
-inline void applyPreparedOutputGain(juce::AudioBuffer<float>& destination,
-                                    int destinationStartSample,
-                                    int numSamples,
-                                    const std::shared_ptr<const PreparedOutputGainEnvelope>& prepared,
-                                    int64_t readStartSample)
+inline void applyAutomationGain(juce::AudioBuffer<float>& destination,
+                                int destinationStartSample,
+                                int numSamples,
+                                const std::shared_ptr<const AutomationLane>& envelope,
+                                const std::shared_ptr<const TimeGridSnapshot>& timeGrid,
+                                int64_t readStartSample,
+                                double targetSampleRate)
 {
-    if (prepared == nullptr || prepared->linearGains.empty() || numSamples <= 0)
-        return;
-    if (readStartSample < 0 || readStartSample >= static_cast<int64_t>(prepared->linearGains.size()))
+    if (envelope == nullptr || envelope->empty())
         return;
 
-    const int applySamples = static_cast<int>(juce::jmin<int64_t>(
-        numSamples, static_cast<int64_t>(prepared->linearGains.size()) - readStartSample));
-    const float* gains = prepared->linearGains.data();
+    constexpr float kDbToLinear = 0.11512925465f; // ln(10) / 20
     const int channels = destination.getNumChannels();
-    for (int channel = 0; channel < channels; ++channel) {
-        float* dst = destination.getWritePointer(channel, destinationStartSample);
-        for (int s = 0; s < applySamples; ++s)
-            dst[s] *= gains[static_cast<size_t>(readStartSample + s)];
+    for (int s = 0; s < numSamples; ++s) {
+        const double outputSeconds = static_cast<double>(readStartSample + s) / targetSampleRate;
+        const double sourceSeconds = timeGrid != nullptr
+            ? timeGrid->tauInverse(outputSeconds)
+            : outputSeconds;
+        const float gainLinear = std::exp(envelope->evalAt(sourceSeconds) * kDbToLinear);
+        for (int channel = 0; channel < channels; ++channel) {
+            destination.getWritePointer(channel, destinationStartSample + s)[0] *= gainLinear;
+        }
     }
 }
 
@@ -77,7 +79,7 @@ inline void applyPreparedOutputGain(juce::AudioBuffer<float>& destination,
  * 1. TimeStretchCache fast-path：从 prepared 缓存直接整数切片。
  * 2. 否则从 preparedDry buffer 直接 copy（已在 prepare 阶段由 r8brain 重采样）。
  * 3. 然后从 RenderCache prepared chunks overlay（同样直接 copy）。
- * 4. 两路径汇合到同一 applyPreparedOutputGain() 收尾。
+ * 4. 两路径汇合到同一 applyAutomationGain() 收尾。
  *
  * 无 canonical fallback。prepared 数据不存在时返回 0。
  */
@@ -109,7 +111,7 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
     // TimeStretchCache fast-path — 直接从 prepared 缓存整数切片
     // ============================================================
     const uint64_t objectId = request.source.contentKey.objectId;
-    if (!request.source.timeGridIsIdentity
+    if (request.source.timeGrid != nullptr
         && request.source.timeStretchCache != nullptr
         && objectId != 0) {
         const int wrote = request.source.timeStretchCache->sliceForOutputRange(
@@ -123,9 +125,11 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
             writableSamples,
             static_cast<int>(request.targetSampleRate));
         if (wrote > 0) {
-            applyPreparedOutputGain(destination, destinationStartSample, wrote,
-                                    request.source.preparedOutputGainEnvelope,
-                                    request.readStartSample);
+            applyAutomationGain(destination, destinationStartSample, wrote,
+                                request.source.volumeEnvelope,
+                                request.source.timeGrid,
+                                request.readStartSample,
+                                request.targetSampleRate);
             return wrote;
         }
     }
@@ -175,11 +179,13 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
     }
 
     // ============================================================
-    // 统一最终增益收尾（与 TimeStretchCache fast-path 同一 apply）
+    // 统一最终增益收尾
     // ============================================================
-    applyPreparedOutputGain(destination, destinationStartSample, availableSamples,
-                            request.source.preparedOutputGainEnvelope,
-                            request.readStartSample);
+    applyAutomationGain(destination, destinationStartSample, availableSamples,
+                        request.source.volumeEnvelope,
+                        request.source.timeGrid,
+                        request.readStartSample,
+                        request.targetSampleRate);
 
     return availableSamples;
 }
@@ -217,7 +223,7 @@ inline int readCanonicalAudio(const CanonicalReadRequest& request,
     // TimeStretchCache canonical path
     // ============================================================
     const uint64_t objectId = request.source.contentKey.objectId;
-    if (!request.source.timeGridIsIdentity
+    if (request.source.timeGrid != nullptr
         && request.source.timeStretchCache != nullptr
         && objectId != 0) {
         const int wrote = request.source.timeStretchCache->sliceCanonicalForOutputRange(

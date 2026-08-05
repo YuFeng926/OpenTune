@@ -3,7 +3,8 @@
 #include "../Content/ContentKey.h"
 #include "../Inference/RenderCache.h"
 #include "../Inference/TimeStretchCache.h"
-#include "../Utils/OutputGainEnvelope.h"
+#include "../Utils/AutomationLane.h"
+#include "../Utils/TimeGrid.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
 #include <cstdint>
@@ -56,16 +57,13 @@ struct PlaybackReadSource
     // Immutable prepared dry at active playback rate
     PlaybackPreparedDry preparedDry;
 
-    // Canonical 最终增益包络（A+B 合成，canonical 采样率）与目标播放采样率 prepared 版本。
-    // 由各装配点 builder 构建；Publisher 只做 prepared 准备与原子发布。
-    std::shared_ptr<const OutputGainEnvelopeSnapshot> outputGainEnvelope;
-    std::shared_ptr<const PreparedOutputGainEnvelope> preparedOutputGainEnvelope;
+    // 唯一音量真相与 output-time -> source-time 映射。
+    std::shared_ptr<const AutomationLane> volumeEnvelope;
+    std::shared_ptr<const TimeGridSnapshot> timeGrid;
 
     uint64_t pitchRevision{0};
     uint64_t timeGridRevision{0};
     uint64_t pitchShiftRevision{0};
-
-    bool timeGridIsIdentity{true};
 
     PlaybackReadSource() = default;
     PlaybackReadSource(const PlaybackReadSource&) = default;
@@ -90,12 +88,11 @@ struct PlaybackReadSource
         swap(a.audioSampleRate, b.audioSampleRate);
         swap(a.timeStretchCache, b.timeStretchCache);
         swap(a.preparedDry, b.preparedDry);
-        swap(a.outputGainEnvelope, b.outputGainEnvelope);
-        swap(a.preparedOutputGainEnvelope, b.preparedOutputGainEnvelope);
+        swap(a.volumeEnvelope, b.volumeEnvelope);
+        swap(a.timeGrid, b.timeGrid);
         swap(a.pitchRevision, b.pitchRevision);
         swap(a.timeGridRevision, b.timeGridRevision);
         swap(a.pitchShiftRevision, b.pitchShiftRevision);
-        swap(a.timeGridIsIdentity, b.timeGridIsIdentity);
     }
 
     bool hasAudio() const noexcept

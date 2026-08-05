@@ -117,7 +117,7 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
     snap->detectedKey = content->analysis.detectedKey;
     snap->silentGaps = content->analysis.silentGaps;
     snap->referenceFeatures = content->analysis.referenceFeatures;
-    snap->sibilantGainEnvelope = content->editable.sibilantGainEnvelope;
+    snap->volumeEnvelope = content->editable.volumeEnvelope;
     snap->notesRevision = content->editable.notesRevision;
     snap->pitchRevision = content->editable.pitchRevision;
     snap->timeGridRevision = content->editable.timeGridRevision;
@@ -130,20 +130,19 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
 void AudioModification::applyNotes(const std::vector<Note>& notes)
 {
     content->editable.notes = notes;
+    for (auto& note : content->editable.notes)
+        note.outputGainDb = content->editable.volumeEnvelope.evalAt(note.startTime);
     ++content->editable.notesRevision;
     ++content->editable.contentRevision;
     ++content->contentRevision;
 }
 
-void AudioModification::applyNotesWithOutputGain(const std::vector<Note>& notes)
+void AudioModification::applyVolumeEnvelope(const AutomationLane& envelope)
 {
-    applyNotes(notes);
-    ++content->editable.outputGainRevision;
-}
-
-void AudioModification::applySibilantGainEnvelope(const SibilantGainEnvelope& envelope)
-{
-    content->editable.sibilantGainEnvelope = envelope;
+    content->editable.volumeEnvelope = envelope;
+    for (auto& note : content->editable.notes)
+        note.outputGainDb = content->editable.volumeEnvelope.evalAt(note.startTime);
+    ++content->editable.notesRevision;
     ++content->editable.outputGainRevision;
     ++content->editable.contentRevision;
     ++content->contentRevision;

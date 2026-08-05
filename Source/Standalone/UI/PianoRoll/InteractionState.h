@@ -6,6 +6,7 @@
 #include <memory>
 #include <unordered_map>
 #include "Utils/Note.h"
+#include "Utils/AutomationLane.h"
 #include "UI/ToolIds.h"
 #include "Utils/TimeGrid.h"   // vocal-time-stretch §8.3 — Time tool
 
@@ -214,9 +215,9 @@ public:
     // OpenDyne（NotesPrimary）瞬态：
     // Scissors 预览切点（content-local 绝对秒），-1 = 无预览。
     double scissorsPreviewTime = -1.0;
-    // Volume Envelope Tool 拖拽：是否正在拖拽 + 预览增益（dB）。
+    // Volume Envelope Tool 拖拽预览。
     bool isVolumeDragging = false;
-    float volumePreviewGainDb = 0.0f;
+    AutomationLane volumePreviewEnvelope;
     // Modulation / Drift Tool 拖拽预览：参数值 + 哪个工具
     bool isModDriftDragging = false;
     float modDriftPreviewValue = 0.0f;

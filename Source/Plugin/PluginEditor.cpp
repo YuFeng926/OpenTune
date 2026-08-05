@@ -393,9 +393,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             auto snap = processorRef_.getContentSnapshot(key);
             if (snap == nullptr)
                 continue;  // content 已被移除，视为完成
-            if ((snap->originalF0State != OriginalF0State::Ready
-                    && snap->originalF0State != OriginalF0State::Failed)
-                || processorRef_.isNoteGenInFlightForContent(key)) {
+            // 普通 AUTO 在 F0 Ready 发布前同步完成（唯一核心在 F0 完成链内），
+            // overlay 仅需跟踪 OriginalF0State。
+            if (snap->originalF0State != OriginalF0State::Ready
+                    && snap->originalF0State != OriginalF0State::Failed) {
                 allDone = false;
                 break;
             }

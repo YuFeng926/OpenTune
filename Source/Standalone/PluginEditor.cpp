@@ -1146,14 +1146,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         } else {
             auto snap = processorRef_.getContentSnapshot(targetContentKey);
             const auto f0State = snap ? snap->originalF0State : OriginalF0State::NotRequested;
-            const bool f0Done = (f0State == OriginalF0State::Ready
-                                  || f0State == OriginalF0State::Failed);
-            const bool noteGenBusy = processorRef_.isNoteGenInFlightForContent(targetContentKey);
-            // Only unlatch when BOTH F0 and note generation are finished —
-            // shared "正在处理音高" overlay covers the whole import pipeline.
-            if (f0Done && !noteGenBusy) {
-                shouldUnlatch = true;
-            }
+            // AUTO 在 F0 Ready 发布前由 F0 完成链同步提交（唯一核心），
+            // overlay 只需等待 F0 状态即可覆盖整个导入管线。
+            shouldUnlatch = (f0State == OriginalF0State::Ready
+                             || f0State == OriginalF0State::Failed);
         }
 
         if (shouldUnlatch) {
@@ -1777,6 +1773,16 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
 
                     OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
                     refreshRequest.contentKey = committedPlacement.contentKey;
+                    if (safeThis->pianoRoll_.isOpenDyne()) {
+                        refreshRequest.autoTuneWholeContentOnReady = true;
+                        // 导入 AUTO 使用 canonical PianoRoll 参数（与手动 AUTO 同一来源）
+                        refreshRequest.autoTuneParams = safeThis->pianoRoll_.getCurrentAutoTuneParams();
+                        // 自动导入 AUTO 作为导入派生事务：不创建独立 Undo，
+                        // 提交成功回调推进 dirty generation（message-thread）。
+                        refreshRequest.onAutoTuneCommitted = [safeThis]() {
+                            if (safeThis != nullptr) safeThis->projectSession_.markDirty();
+                        };
+                    }
                     if (!safeThis->processorRef_.requestContentRefresh(refreshRequest)) {
                         AppLogger::log("ClipDerivedRefresh: standalone request rejected contentKey.objectId="
                             + juce::String(static_cast<juce::int64>(committedPlacement.contentKey.objectId)));
@@ -2987,6 +2993,11 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
 {
     DBG("Editor: Pitch curve edited frames " + juce::String(startFrame) + " to " + juce::String(endFrame));
 
+    projectSession_.markDirty();
+}
+
+void OpenTuneAudioProcessorEditor::contentEdited()
+{
     projectSession_.markDirty();
 }
 

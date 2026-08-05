@@ -30,10 +30,8 @@ public:
     void applyOriginalF0State(OriginalF0State state);
     void applyDetectedKey(const DetectedKey& key);
     void applyNotes(std::vector<Note> notes);
-    // A 编辑语义：applyNotes + 推进 outputGainRevision（A 投影同步）。
-    void applyNotesWithOutputGain(std::vector<Note> notes);
-    // B 编辑语义：替换 B 层 + 推进 outputGain/content revision（不推进 notesRevision）。
-    void applySibilantGainEnvelope(SibilantGainEnvelope envelope);
+    // 替换唯一音量包络，并同步 Note::outputGainDb 派生值。
+    void applyVolumeEnvelope(AutomationLane envelope);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
     void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot);

@@ -27,7 +27,8 @@ namespace OpenTune {
 namespace {
 
 constexpr int kContentPayloadArchiveMagic = 0x4F544143;
-constexpr int kContentPayloadArchiveVersion = 3; // v3 adds SibilantGainEnvelope to EditableContent
+constexpr int kContentPayloadArchiveVersion = 4; // v4 unifies note gain and sibilant gain into VolumeEnvelope
+constexpr int kContentPayloadArchiveVersionMin = 3;
 constexpr int kMaxContentPayloadRecords = 4096;
 
 } // namespace
@@ -115,17 +116,17 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         editable->addChildElement(n);
     }
 
-    // B 层：Sibilant Balance 结果（revision 不落盘）
-    auto* sib = new juce::XmlElement("SibilantGainEnvelope");
-    sib->setAttribute("pointCount", static_cast<int>(mod.content->editable.sibilantGainEnvelope.size()));
-    for (const auto& point : mod.content->editable.sibilantGainEnvelope)
+    // Volume Envelope（AutomationLane，revision 不落盘）
+    auto* env = new juce::XmlElement("VolumeEnvelope");
+    env->setAttribute("pointCount", static_cast<int>(mod.content->editable.volumeEnvelope.points().size()));
+    for (const auto& point : mod.content->editable.volumeEnvelope.points())
     {
         auto* p = new juce::XmlElement("Point");
-        p->setAttribute("time", point.time);
+        p->setAttribute("time", point.timeSeconds);
         p->setAttribute("gainDb", point.gainDb);
-        sib->addChildElement(p);
+        env->addChildElement(p);
     }
-    editable->addChildElement(sib);
+    editable->addChildElement(env);
 
     if (mod.content->analysis.pitchCurve != nullptr)
     {
@@ -374,19 +375,39 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             content.editable.notes.push_back(note);
         }
 
-        // B 层：Sibilant Balance 结果（revision 不落盘，恢复端由 owner 推进新 revision）
-        if (auto* sib = editable->getChildByName("SibilantGainEnvelope"))
-        {
-            for (auto* p : sib->getChildWithTagNameIterator("Point"))
+        if (auto* env = editable->getChildByName("VolumeEnvelope")) {
+            std::vector<AutomationPoint> points;
+            for (auto* p : env->getChildWithTagNameIterator("Point"))
             {
-                SibilantGainEnvelopePoint point;
-                point.time = p->getDoubleAttribute("time");
+                AutomationPoint point;
+                point.timeSeconds = p->getDoubleAttribute("time");
                 point.gainDb = static_cast<float>(p->getDoubleAttribute("gainDb"));
-                if (!std::isfinite(point.time) || !std::isfinite(point.gainDb))
+                if (!std::isfinite(point.timeSeconds) || !std::isfinite(point.gainDb))
                     return std::nullopt;
-                content.editable.sibilantGainEnvelope.push_back(point);
+                points.push_back(point);
+            }
+            content.editable.volumeEnvelope = AutomationLane::fromSnapshot(points);
+        } else {
+            const auto noteGainLane = AutomationLane::fromLegacyNoteGains(content.editable.notes);
+            if (auto* legacyEnvelope = editable->getChildByName("SibilantGainEnvelope")) {
+                std::vector<AutomationPoint> points;
+                for (auto* p : legacyEnvelope->getChildWithTagNameIterator("Point")) {
+                    const AutomationPoint point {
+                        p->getDoubleAttribute("time"),
+                        static_cast<float>(p->getDoubleAttribute("gainDb"))
+                    };
+                    if (!std::isfinite(point.timeSeconds) || !std::isfinite(point.gainDb))
+                        return std::nullopt;
+                    points.push_back(point);
+                }
+                content.editable.volumeEnvelope = AutomationLane::sum(
+                    noteGainLane, AutomationLane::fromLegacyStepPoints(points));
+            } else {
+                content.editable.volumeEnvelope = noteGainLane;
             }
         }
+        for (auto& note : content.editable.notes)
+            note.outputGainDb = content.editable.volumeEnvelope.evalAt(note.startTime);
 
         for (auto* s : editable->getChildWithTagNameIterator("PitchCorrectionSegment"))
         {
@@ -1019,7 +1040,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         return false;
 
     const int version = input.readInt();
-    if (version != kContentPayloadArchiveVersion)
+    if (version < kContentPayloadArchiveVersionMin || version > kContentPayloadArchiveVersion)
         return false;
 
     const int bindingCount = input.readInt();
@@ -1464,10 +1485,10 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     readSource.pitchRevision = content.editable.pitchRevision;
     readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
     readSource.timeGridRevision = content.editable.timeGridRevision;
-    readSource.timeGridIsIdentity = content.editable.timeGrid->isIdentity();
-    readSource.outputGainEnvelope = buildOutputGainEnvelope(
-        content.editable.notes, content.editable.sibilantGainEnvelope, content.editable.timeGrid,
-        readSource.audioBuffer->getNumSamples(), readSource.audioSampleRate);
+    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(content.editable.volumeEnvelope);
+    readSource.timeGrid = content.editable.timeGrid->isIdentity()
+        ? nullptr
+        : content.editable.timeGrid;
 
     contentRenderService_->publishPlaybackSource(key, readSource);
     return true;
@@ -1855,7 +1876,7 @@ void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
     const auto& content = *mod->content;
 
     // 刷新 CRS 的 PlaybackReadSource metadata（不重新发布 audio buffer）
-    // PlaybackReadSource 只承载元数据：revision 系列、timeGridIsIdentity
+    // PlaybackReadSource 只承载播放所需的不可变元数据。
     // 真正的分析态（pitchCurve/timeGrid/silentGaps）由 AudioModification.content 持有，
     // 渲染时通过 snapshotAudioModification 注入到 EditableContentSnapshot，再交给 ProcessRenderRuntime。
     PlaybackReadSource readSource;
@@ -1864,7 +1885,9 @@ void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
         readSource.pitchRevision = content.editable.pitchRevision;
         readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
         readSource.timeGridRevision = content.editable.timeGridRevision;
-        readSource.timeGridIsIdentity = content.editable.timeGrid->isIdentity();
+        readSource.timeGrid = content.editable.timeGrid->isIdentity()
+            ? nullptr
+            : content.editable.timeGrid;
         contentRenderService_->publishPlaybackSource(key, std::move(readSource));
     }
 }
@@ -2120,26 +2143,12 @@ bool OpenTuneDocumentController::applyNotesToModification(const ContentKey& key,
     return true;
 }
 
-bool OpenTuneDocumentController::applyNotesWithOutputGainToModification(const ContentKey& key, std::vector<Note> notes)
+bool OpenTuneDocumentController::applyVolumeEnvelopeToModification(const ContentKey& key,
+                                                                   AutomationLane envelope)
 {
     auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return false;
-    mod->applyNotesWithOutputGain(std::move(notes));
-
-    // Notify ARA host of content change for cache/save state invalidation
-    if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-
-    refreshRegisteredRenderers(publishModelChange());
-    return true;
-}
-
-bool OpenTuneDocumentController::applySibilantGainEnvelopeToModification(const ContentKey& key,
-                                                                          SibilantGainEnvelope envelope)
-{
-    auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState()) return false;
-    mod->applySibilantGainEnvelope(envelope);
+    mod->applyVolumeEnvelope(envelope);
 
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
@@ -2168,10 +2177,10 @@ void OpenTuneDocumentController::republishPlaybackSourceForModification(ContentK
     readSource.pitchRevision = content.editable.pitchRevision;
     readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
     readSource.timeGridRevision = content.editable.timeGridRevision;
-    readSource.timeGridIsIdentity = content.editable.timeGrid->isIdentity();
-    readSource.outputGainEnvelope = buildOutputGainEnvelope(
-        content.editable.notes, content.editable.sibilantGainEnvelope, content.editable.timeGrid,
-        readSource.audioBuffer->getNumSamples(), readSource.audioSampleRate);
+    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(content.editable.volumeEnvelope);
+    readSource.timeGrid = content.editable.timeGrid->isIdentity()
+        ? nullptr
+        : content.editable.timeGrid;
 
     contentRenderService_->publishPlaybackSource(key, std::move(readSource));
 }
