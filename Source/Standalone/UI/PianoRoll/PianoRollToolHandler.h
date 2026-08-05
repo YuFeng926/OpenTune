@@ -110,8 +110,6 @@ public:
         std::function<ContentCommitSnapshot(const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)> commitNotesAndSegments;
 
         // === OpenDyne（NotesPrimary）提交与配置回调 ===
-        // 拓扑提交：只替换 notes、推进 notes/content revision，零 render。
-        std::function<ContentCommitSnapshot(ContentNoteRangePatch)> commitNoteTopologyPatch;
         // Volume Envelope 提交：整体替换 AutomationLane，推进 outputGain/content
         // revision，内部 republish，零 render。
         std::function<ContentCommitSnapshot(AutomationLane, AutomationLane)> commitVolumeEnvelope;
@@ -131,18 +129,14 @@ public:
 
         std::function<int()> getPianoKeyWidth;
         std::function<ContentTimelineProjection()> getContentProjection;
-        std::function<juce::Rectangle<int>(const std::vector<Note>&)> getNotesBounds;
-        std::function<juce::Rectangle<int>()> getSelectionBounds;
         std::function<juce::Rectangle<int>()> getHandDrawPreviewBounds;
         std::function<juce::Rectangle<int>()> getLineAnchorPreviewBounds;
-        std::function<juce::Rectangle<int>()> getNoteDragCurvePreviewBounds;
 
         std::function<float()> getMinMidi;
         std::function<float()> getMaxMidi;
         std::function<float()> getRetuneSpeed;
         std::function<float()> getVibratoDepth;
         std::function<float()> getVibratoRate;
-        std::function<float()> getPitchDriftScale;
         std::function<AudioEditingScheme::Scheme()> getAudioEditingScheme;
         std::function<const KeyShortcutConfig::KeyShortcutSettings&()> getShortcutSettings;
         std::function<float(Note&)> recalculatePIP;
@@ -158,8 +152,6 @@ public:
         std::function<void(double)> setDrawingNoteEndTime;
         std::function<float()> getDrawingNotePitch;
         std::function<void(float)> setDrawingNotePitch;
-        std::function<int()> getDrawingNoteIndex;
-        std::function<void(int)> setDrawingNoteIndex;
 
         std::function<bool()> getDrawNoteToolPendingDrag;
         std::function<void(bool)> setDrawNoteToolPendingDrag;
@@ -231,7 +223,6 @@ public:
 
     void setTool(ToolId tool);
     void setPitchGridMode(PitchGridMode mode) { pitchGridMode_ = mode; }
-    PitchGridMode getPitchGridMode() const { return pitchGridMode_; }
     const std::unordered_map<size_t, std::vector<float>>* getTempPitchCurves() const
     {
         if (ctx_.getState) {
@@ -244,7 +235,7 @@ public:
     void mouseDown(const juce::MouseEvent& e);
     void mouseDrag(const juce::MouseEvent& e);
     void mouseUp(const juce::MouseEvent& e);
-    // ⚡️ §8.4 — Phase G: double-click insert (Time tool only)
+    // ⚡️ §8.4 — double-click insert (Time tool only)
     void mouseDoubleClick(const juce::MouseEvent& e);
 
     bool keyPressed(const juce::KeyPress& key);
@@ -268,10 +259,6 @@ private:
     void handlePitchToolMouseDown(const juce::MouseEvent& e);
     void handlePitchToolDoubleClick(const juce::MouseEvent& e);
     void handlePitchToolMouseUp(const juce::MouseEvent& e);
-    void handlePitchModulationToolMouseDown(const juce::MouseEvent& e);
-    void handlePitchModulationToolDoubleClick(const juce::MouseEvent& e);
-    void handlePitchDriftToolMouseDown(const juce::MouseEvent& e);
-    void handlePitchDriftToolDoubleClick(const juce::MouseEvent& e);
     void handleVolumeEnvelopeToolMouseDown(const juce::MouseEvent& e);
     void handleVolumeEnvelopeToolDrag(const juce::MouseEvent& e);
     void handleVolumeEnvelopeToolUp(const juce::MouseEvent& e);
@@ -282,15 +269,15 @@ private:
     void handleScissorsToolMouseDown(const juce::MouseEvent& e);
     void handleScissorsToolUp(const juce::MouseEvent& e);
 
-    // ⚡️ §8.4 — Time tool handlers (Phase F minimal scaffolding;
-    // Phase G adds full drag math + double-click insert + Alt-snap-disable).
+    // ⚡️ §8.4 — Time tool handlers (drag math, double-click insert,
+    // Alt-snap-disable, group multi-handle drag, output spacing clamp).
     void handleTimeToolMouseMove(const juce::MouseEvent& e);
     void handleTimeToolMouseDown(const juce::MouseEvent& e);
     void handleTimeToolMouseDrag(const juce::MouseEvent& e);
     void handleTimeToolMouseUp(const juce::MouseEvent& e);
-    // §8.4 Phase G: double-click empty area to insert UserAdded handle.
+    // §8.4: double-click empty area to insert UserAdded handle.
     void handleTimeToolMouseDoubleClick(const juce::MouseEvent& e);
-    // §8.4 Phase G: Delete key removes selected handle (non-endpoint).
+    // §8.4: Delete key removes selected handle (non-endpoint).
     bool handleTimeToolDeleteSelected();
     // Hit-test handles within ±5 px of a TimeGrid handle's output_seconds.
     // Returns 0 if no hit.

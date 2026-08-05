@@ -488,8 +488,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
 
     juce::Path waveformPath;
 
-    // vocal-time-stretch 搂8.5 (Phase H) 鈥?waveform stretching.
-    // Invert the output 鈫?source mapping (tau_inverse) so the screen X axis
+    // Invert the output -> source mapping (tau_inverse) so the screen X axis
     // (output time) reads from the SOURCE peaks at the tau-inverted time.
     jassert(item.timeGrid);
 
@@ -631,9 +630,6 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     juce::Colour cBlackBottom = isOverdose ? juce::Colour { Overdose::Colors::KeyBedBlackBottom }
                              : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBlackBottom } : juce::Colour(0xFF1B2026));
 
-    juce::Colour keyPressedGlowColor = isOverdose ? juce::Colour { Overdose::Colors::KeyPressedGlow }
-                                    : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyPressedGlow } : juce::Colour(0x500078D7));
-
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
@@ -673,14 +669,6 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
                 g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
-                g.fillRect(keyRect);
-            }
-
-            // Pressed key highlight
-            if (drawMidi == ctx.pressedPianoKey)
-            {
-                g.setColour(isLightTheme ? keyPressedGlowColor.withAlpha(0.22f)
-                                         : juce::Colour(0x500078D7));
                 g.fillRect(keyRect);
             }
 
@@ -862,14 +850,6 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                 g.fillRoundedRectangle(keyRect, 2.0f);
             }
 
-            // Pressed key highlight for black keys
-            if (drawMidi == ctx.pressedPianoKey)
-            {
-                g.setColour(isLightTheme ? keyPressedGlowColor.withAlpha(0.30f)
-                                         : juce::Colour(0x500078D7));
-                g.fillRoundedRectangle(keyRect, 2.0f);
-            }
-
             // Note name labels for black keys (drawn on top of the black key body with outline)
             if (effectiveNoteNameMode == 0)
             {
@@ -945,6 +925,15 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             / WaveformMipmap::kBaseSampleRate;
         const int64_t numPeaks = static_cast<int64_t>(item.wfLevel->peaks.size());
 
+        // ── clip 级振幅参考值：扫描 mipmap 全部峰值，取最大 magnitude ──
+        float clipRefMag = 0.0f;
+        for (const auto& peak : item.wfLevel->peaks) {
+            const float m = peak.getMagnitude();
+            if (m > clipRefMag) clipRefMag = m;
+        }
+        if (clipRefMag <= 0.0f)
+            return;  // 静音 clip，跳过 blob 绘制
+
         for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
         {
             const auto& note = *noteIt;
@@ -953,7 +942,9 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             float midi = ctx.coords.freqToMidi(adjustedPitch);
             float centerY = ctx.coords.midiToY(midi);
-            float halfH = ctx.pixelsPerSemitone * 0.5f;
+            // 正常响度音频在 clipRefMag=1.0 时占 3 个 key（1.5 semitones × 2）
+            constexpr float kBlobHalfKeys = 1.5f;
+            const float halfH = ctx.pixelsPerSemitone * kBlobHalfKeys;
 
             int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
             int x2 = sourceTimeToScreenX(note.endTime,   ctx, item);
@@ -971,33 +962,24 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             juce::Path blob;
             blob.startNewSubPath(static_cast<float>(x1), centerY);
 
-            bool firstPeak = true;
             for (int64_t i = idxStart; i < idxEnd; ++i)
             {
                 const auto& peak = item.wfLevel->peaks[static_cast<size_t>(i)];
-                const float mag = peak.getMagnitude();
+                const float normMag = peak.getMagnitude() / clipRefMag;
                 const double sourceTime = static_cast<double>(i) * timePerPeak;
                 const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
-                const float topY = centerY - halfH * mag;
-                if (firstPeak)
-                {
-                    blob.lineTo(px, topY);
-                    firstPeak = false;
-                }
-                else
-                {
-                    blob.lineTo(px, topY);
-                }
+                const float topY = centerY - halfH * normMag;
+                blob.lineTo(px, topY);
             }
             blob.lineTo(static_cast<float>(x2), centerY);
 
             for (int64_t i = idxEnd; i-- > idxStart;)
             {
                 const auto& peak = item.wfLevel->peaks[static_cast<size_t>(i)];
-                const float mag = peak.getMagnitude();
+                const float normMag = peak.getMagnitude() / clipRefMag;
                 const double sourceTime = static_cast<double>(i) * timePerPeak;
                 const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
-                const float bottomY = centerY + halfH * mag;
+                const float bottomY = centerY + halfH * normMag;
                 blob.lineTo(px, bottomY);
             }
             blob.closeSubPath();
@@ -1316,6 +1298,7 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
 {
     if (item.f0Timeline.isEmpty()) return;
     if (!item.pitchSnapshot || item.pitchSnapshot->size() == 0) return;
+    if (item.notesPrimaryScheme) return;   // OpenDyne：notes-primary 无 F0 框选
     if (!ctx.showOriginalF0) return;
     if (!ctx.hasF0Selection) return;
 

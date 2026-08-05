@@ -10,8 +10,6 @@
 #include <cmath>
 #include <limits>
 #include <set>
-#include "../DSP/ChromaKeyDetector.h"
-#include "../Utils/SimdPerceptualPitchEstimator.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "UiAssets.h"
 #include "UiText.h"
@@ -130,9 +128,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         return commitEditedContentNotesAndSegments(notes, segments, affectedRange);
     };
     // ── OpenDyne 契约回调（Pitch/Scissors/Gain 域） ──
-    toolCtx.commitNoteTopologyPatch = [this](ContentNoteRangePatch patch) {
-        return contentCommands_->commitNoteTopologyPatch(editedContentKey_, std::move(patch));
-    };
     toolCtx.commitVolumeEnvelope = [this](AutomationLane before, AutomationLane after) -> ContentCommitSnapshot {
         if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return nullptr;
         const auto committedSnap = contentCommands_->commitVolumeEnvelope(editedContentKey_, after);
@@ -179,31 +174,13 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.getRetuneSpeed = [this]() { return currentRetuneSpeed_; };
     toolCtx.getVibratoDepth = [this]() { return currentVibratoDepth_; };
     toolCtx.getVibratoRate = [this]() { return currentVibratoRate_; };
-    toolCtx.getPitchDriftScale = [this]() { return currentPitchDriftScale_; };
     toolCtx.recalculatePIP = [this](Note& note) -> float { return recalculatePIP(note); };
     toolCtx.getShortcutSettings = [this]() -> const KeyShortcutConfig::KeyShortcutSettings& { return shortcutSettings_; };
     toolCtx.setCurrentTool = [this](ToolId tool) { setCurrentTool(tool); };
     toolCtx.showToolSelectionMenu = [this]() {
-        juce::PopupMenu menu;
-        if (isOpenDyne()) {
-            juce::String times(juce::CharPointer_UTF8("\xC3\x97"));
-            menu.addItem(LOC(kToolSelect) + " (F1)", [this]() { setCurrentTool(ToolId::Select); });
-            menu.addItem(LOC(kToolPitch) + " (F2)", [this]() { setCurrentTool(ToolId::Pitch); });
-            menu.addItem(LOC(kToolModulation) + " (F2" + times + "2)", [this]() { setCurrentTool(ToolId::PitchModulation); });
-            menu.addItem(LOC(kToolDrift) + " (F2" + times + "3)", [this]() { setCurrentTool(ToolId::PitchDrift); });
-            menu.addItem(LOC(kToolVolumeEnvelope) + " (F4)", [this]() { setCurrentTool(ToolId::VolumeEnvelope); });
-            menu.addItem(LOC(kToolScissors) + " (F6)", [this]() { setCurrentTool(ToolId::Scissors); });
-            menu.addItem(LOC(kToolTimeTool) + " (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
-        } else {
-            menu.addItem(LOC(kToolSelect) + " (3)", [this]() { setCurrentTool(ToolId::Select); });
-            menu.addItem(LOC(kToolDrawNote) + " (2)", [this]() { setCurrentTool(ToolId::DrawNote); });
-            menu.addItem(LOC(kToolLineAnchor) + " (4)", [this]() { setCurrentTool(ToolId::LineAnchor); });
-            menu.addItem(LOC(kToolHandDraw) + " (5)", [this]() { setCurrentTool(ToolId::HandDraw); });
-            if (experimentalFeaturesEnabled_) {
-                menu.addItem(LOC(kToolTimeTool) + " (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
-            }
-        }
-        menu.showMenuAsync(juce::PopupMenu::Options());
+        // 在当前鼠标屏幕位置弹出纵向图标工具栏
+        auto mousePos = juce::Desktop::getInstance().getMousePosition();
+        showToolSelectionBar(mousePos);
     };
     toolCtx.notifyAutoTuneRequested = [this]() { listeners_.call([](Listener& l) { l.autoTuneRequested(); }); };
     toolCtx.notifyEscapeKey = [this]() { listeners_.call([](Listener& l) { l.escapeKeyPressed(); }); };
@@ -212,11 +189,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     };
     toolCtx.getPianoKeyWidth = [this]() { return pianoKeyWidth_; };
     toolCtx.getContentProjection = [this]() { return activeContentProjection(); };
-    toolCtx.getNotesBounds = [this](const std::vector<Note>& notes) { return getNotesBounds(notes); };
-    toolCtx.getSelectionBounds = [this]() { return getSelectionBounds(); };
     toolCtx.getHandDrawPreviewBounds = [this]() { return getHandDrawPreviewBounds(); };
     toolCtx.getLineAnchorPreviewBounds = [this]() { return getLineAnchorPreviewBounds(); };
-    toolCtx.getNoteDragCurvePreviewBounds = [this]() { return getNoteDragCurvePreviewBounds(); };
 
     toolCtx.getDirtyStartTime = [this]() { return interactionState_.drawing.dirtyStartTime; };
     toolCtx.setDirtyStartTime = [this](double v) { interactionState_.drawing.dirtyStartTime = v; };
@@ -229,8 +203,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.setDrawingNoteEndTime = [this](double v) { interactionState_.drawing.drawingNoteEndTime = v; };
     toolCtx.getDrawingNotePitch = [this]() { return interactionState_.drawing.drawingNotePitch; };
     toolCtx.setDrawingNotePitch = [this](float v) { interactionState_.drawing.drawingNotePitch = v; };
-    toolCtx.getDrawingNoteIndex = [this]() { return interactionState_.drawing.drawingNoteIndex; };
-    toolCtx.setDrawingNoteIndex = [this](int v) { interactionState_.drawing.drawingNoteIndex = v; };
 
     toolCtx.getDrawNoteToolPendingDrag = [this]() { return interactionState_.drawNoteToolPendingDrag; };
     toolCtx.setDrawNoteToolPendingDrag = [this](bool v) { interactionState_.drawNoteToolPendingDrag = v; };
@@ -330,6 +302,184 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     };
 
     return toolCtx;
+}
+
+// ============================================================================
+// OpenDyne 右键纵向图标工具栏
+// ============================================================================
+
+namespace {
+
+struct ToolBarItem {
+    ToolId id;
+    const char* name;
+    const char* shortcut;
+    std::function<juce::Path()> iconFactory;
+};
+
+juce::Path makeToolIcon(ToolId id) {
+    switch (id) {
+        case ToolId::Select:          return ToolbarIcons::getSelectIcon();
+        case ToolId::Pitch:           return ToolbarIcons::getPitchToolIcon();
+        case ToolId::PitchModulation: return ToolbarIcons::getPitchModulationToolIcon();
+        case ToolId::PitchDrift:      return ToolbarIcons::getPitchDriftToolIcon();
+        case ToolId::VolumeEnvelope:  return ToolbarIcons::getVolumeEnvelopeToolIcon();
+        case ToolId::TimeTool:        return ToolbarIcons::getTimeToolIcon();
+        case ToolId::Scissors:        return ToolbarIcons::getScissorsToolIcon();
+        default:                      return {};
+    }
+}
+
+} // namespace
+
+void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
+{
+    dismissToolPopup();
+
+    // 构建工具列表
+    std::vector<ToolBarItem> items;
+    if (isOpenDyne()) {
+        items = {
+            { ToolId::Select,          "Select",     "F1",    []{ return makeToolIcon(ToolId::Select); } },
+            { ToolId::Pitch,           "Pitch",      "F2",    []{ return makeToolIcon(ToolId::Pitch); } },
+            { ToolId::PitchModulation, "Modulation", "F2×2",  []{ return makeToolIcon(ToolId::PitchModulation); } },
+            { ToolId::PitchDrift,      "Drift",      "F2×3",  []{ return makeToolIcon(ToolId::PitchDrift); } },
+            { ToolId::VolumeEnvelope,  "Volume",     "F4",    []{ return makeToolIcon(ToolId::VolumeEnvelope); } },
+            { ToolId::TimeTool,        "Time",       "T",     []{ return makeToolIcon(ToolId::TimeTool); } },
+            { ToolId::Scissors,        "Scissors",   "F6",    []{ return makeToolIcon(ToolId::Scissors); } },
+        };
+    } else {
+        items = {
+            { ToolId::Select,     "Select",      "3", []{ return makeToolIcon(ToolId::Select); } },
+            { ToolId::DrawNote,   "Draw Note",   "2", []{ return ToolbarIcons::getDrawNoteIcon(); } },
+            { ToolId::LineAnchor, "Line Anchor", "4", []{ return ToolbarIcons::getLineAnchorIcon(); } },
+            { ToolId::HandDraw,   "Hand Draw",   "5", []{ return ToolbarIcons::getHandDrawIcon(); } },
+            { ToolId::TimeTool,   "Time",        "T", []{ return makeToolIcon(ToolId::TimeTool); } },
+        };
+    }
+
+    const int btnSize = 36;
+    const int gap = 2;
+    const int pad = 4;
+    const int totalH = static_cast<int>(items.size()) * btnSize
+                     + static_cast<int>(items.size() - 1) * gap + pad * 2;
+    const int totalW = btnSize + pad * 2;
+
+    // 自绘图标按钮（局部类，与外围成员同访问权限）
+    class ToolIconButton : public juce::Button {
+    public:
+        ToolIconButton(PianoRollComponent& owner, ToolId tid,
+                       juce::Path iconPath, const juce::String& tooltip)
+            : juce::Button(tooltip), owner_(owner), tid_(tid),
+              iconPath_(std::move(iconPath)) {
+            setTooltip(tooltip);
+            setClickingTogglesState(false);
+            setToggleState(owner_.currentTool_ == tid_, juce::dontSendNotification);
+            setColour(juce::ToggleButton::textColourId, juce::Colours::white);
+            onClick = [this]() {
+                owner_.setCurrentTool(tid_);
+                owner_.dismissToolPopup();
+            };
+        }
+
+        void paintButton(juce::Graphics& g, bool highlighted, bool) override {
+            auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+            const bool active = getToggleState();
+            const auto themeId = UIColors::currentThemeId();
+            const auto radius = UIColors::currentThemeStyle().controlRadius;
+
+            // 背景
+            if (active) {
+                if (themeId == ThemeId::Overdose) {
+                    juce::ColourGradient fill(juce::Colour(0xFFFFFAFE), bounds.getX(), bounds.getY(),
+                                               juce::Colour(0xFFD80050), bounds.getX(), bounds.getBottom(), false);
+                    fill.addColour(0.35f, juce::Colour(0xFFFFA0E8));
+                    g.setGradientFill(fill);
+                } else {
+                    g.setColour(UIColors::accent.withAlpha(0.85f));
+                }
+                g.fillRoundedRectangle(bounds, radius);
+            } else if (highlighted) {
+                g.setColour(juce::Colours::white.withAlpha(0.12f));
+                g.fillRoundedRectangle(bounds, radius);
+            }
+
+            // 图标
+            if (!iconPath_.isEmpty()) {
+                const float iconSz = bounds.getWidth() * 0.55f;
+                auto iconRect = bounds.withSizeKeepingCentre(iconSz, iconSz);
+                auto iconColor = active ? juce::Colours::white : UIColors::textPrimary;
+                if (themeId == ThemeId::Overdose)
+                    iconColor = active ? juce::Colours::white
+                                       : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f);
+                ToolbarIcons::drawIcon(g, iconPath_, iconRect, iconColor, 2.0f, false);
+            }
+        }
+
+    private:
+        PianoRollComponent& owner_;
+        ToolId tid_;
+        juce::Path iconPath_;
+    };
+
+    // 自绘弹出条组件（无背景，按钮自带高亮；定位由外层完成）
+    class ToolBarPopup : public juce::Component {
+    public:
+        ToolBarPopup(PianoRollComponent& owner,
+                     std::vector<ToolBarItem> items,
+                     int btnSize, int gap, int pad)
+            : owner_(owner) {
+            for (const auto& item : items) {
+                auto btn = std::make_unique<ToolIconButton>(
+                    owner_, item.id, item.iconFactory(),
+                    juce::String(item.name) + "\n" + item.shortcut);
+                addAndMakeVisible(*btn);
+                buttons_.push_back(std::move(btn));
+            }
+
+            int y = pad;
+            for (auto& b : buttons_) {
+                b->setBounds(pad, y, btnSize, btnSize);
+                y += btnSize + gap;
+            }
+        }
+
+        void mouseExit(const juce::MouseEvent&) override {
+            // 鼠标离开后延迟检查，允许移到按钮上
+            juce::Timer::callAfterDelay(180, [weak = juce::Component::SafePointer<ToolBarPopup>(this)]() {
+                if (weak != nullptr && !weak->getLocalBounds().contains(weak->getMouseXYRelative())) {
+                    weak->owner_.dismissToolPopup();
+                }
+            });
+        }
+
+    private:
+        PianoRollComponent& owner_;
+        std::vector<std::unique_ptr<ToolIconButton>> buttons_;
+    };
+
+    auto popup = std::make_unique<ToolBarPopup>(*this, std::move(items), btnSize, gap, pad);
+
+    // 定位到鼠标处，确保不超出组件边界
+    auto localPos = getLocalPoint(nullptr, screenPos);
+    int px = localPos.x;
+    int py = localPos.y;
+    px = juce::jlimit(0, getWidth() - totalW, px);
+    py = juce::jlimit(0, getHeight() - totalH, py);
+    popup->setBounds(px, py, totalW, totalH);
+
+    addAndMakeVisible(popup.get());
+    popup->setVisible(true);
+    popup->toFront(true);
+    toolSelectionBar_ = std::move(popup);
+}
+
+void PianoRollComponent::dismissToolPopup()
+{
+    if (toolSelectionBar_) {
+        toolSelectionBar_->setVisible(false);
+        toolSelectionBar_.reset();
+    }
 }
 
 void PianoRollComponent::initializeToolHandler() {
@@ -1175,19 +1325,6 @@ void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
     };
 
     const auto projection = activeContentProjection();
-    auto xForSourceTime = [&](double sourceTime) {
-        const double outputTime = snap->timeGrid != nullptr
-            ? snap->timeGrid->tauForward(sourceTime)
-            : sourceTime;
-        return mapper.timeToX(projection.projectContentTimeToTimeline(outputTime));
-    };
-    auto sourceTimeForX = [&](int x) {
-        const double timelineTime = mapper.xToTime(x);
-        const double outputTime = projection.projectTimelineTimeToContent(timelineTime);
-        return snap->timeGrid != nullptr
-            ? snap->timeGrid->tauInverse(outputTime)
-            : outputTime;
-    };
 
     const auto viewportBounds = getTimelineViewportBounds();
     const juce::Rectangle<int> timelineBounds(
@@ -1212,7 +1349,7 @@ void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
     // first/last value hold across the visible range.
     juce::Path envelopePath;
     envelopePath.startNewSubPath(
-        leftX, yForGain(envelope.evalAt(sourceTimeForX(envelopeBounds.getX()))));
+        leftX, yForGain(envelope.evalAt(xToSourceTime(envelopeBounds.getX()))));
 
     const auto& points = envelope.points();
     const auto& handles = snap->timeGrid->handles();
@@ -1226,7 +1363,7 @@ void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
             ? handles[handleIndex].source_seconds
             : std::numeric_limits<double>::infinity();
         const double sourceTime = std::min(pointTime, handleTime);
-        const float x = static_cast<float>(xForSourceTime(sourceTime));
+        const float x = static_cast<float>(sourceTimeToX(sourceTime));
         if (x >= leftX && x <= rightX)
             envelopePath.lineTo(x, yForGain(envelope.evalAt(sourceTime)));
         if (pointTime == sourceTime)
@@ -1235,7 +1372,7 @@ void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
             ++handleIndex;
     }
     envelopePath.lineTo(
-        rightX, yForGain(envelope.evalAt(sourceTimeForX(envelopeBounds.getRight()))));
+        rightX, yForGain(envelope.evalAt(xToSourceTime(envelopeBounds.getRight()))));
 
     {
         juce::Graphics::ScopedSaveState envelopeClip(g);
@@ -1255,7 +1392,7 @@ void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
 
         for (const auto& point : points) {
             if (std::abs(point.gainDb) > 0.01f) {
-                const float x = static_cast<float>(xForSourceTime(point.timeSeconds));
+                const float x = static_cast<float>(sourceTimeToX(point.timeSeconds));
                 const float y = yForGain(point.gainDb);
                 g.setColour(juce::Colour(0xFFFF8C42));
                 g.fillEllipse(x - 4.0f, y - 4.0f, 8.0f, 8.0f);
@@ -1273,8 +1410,8 @@ void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
                 if (t1 <= t0)
                     continue;
 
-                const float x0 = static_cast<float>(xForSourceTime(t0));
-                const float x1 = static_cast<float>(xForSourceTime(t1));
+                const float x0 = static_cast<float>(sourceTimeToX(t0));
+                const float x1 = static_cast<float>(sourceTimeToX(t1));
                 if (x1 < leftX || x0 > rightX)
                     continue;
 
@@ -1291,7 +1428,7 @@ void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
                     const double st = std::min(pt, ht);
                     if (st >= t1) break;
                     if (st > t0)
-                        seg.lineTo(static_cast<float>(xForSourceTime(st)),
+                        seg.lineTo(static_cast<float>(sourceTimeToX(st)),
                                    yForGain(envelope.evalAt(st)));
                     if (pt == st) ++pi;
                     if (ht == st) ++hi;
@@ -1311,7 +1448,7 @@ void PianoRollComponent::drawVolumeEnvelopePreview(juce::Graphics& g)
         const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
             + juce::Point<int>(0, -rulerHeight_);
         const int queryX = juce::jlimit(envelopeBounds.getX(), envelopeBounds.getRight(), mousePos.x);
-        const double sourceTime = sourceTimeForX(queryX);
+        const double sourceTime = xToSourceTime(queryX);
         const juce::String text = juce::String::formatted("%+.1f dB", envelope.evalAt(sourceTime));
         const juce::Font font(juce::FontOptions(12.0f));
         juce::GlyphArrangement glyphs;
@@ -2069,8 +2206,8 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewState& view, j
         }
     }
 
-    // 背景波形：OpenDyne 与 OpenTune 共用同一条绘制路径，由 showWaveform_ 开关控制
-    if (showWaveform_) {
+    // 背景波形：OpenDyne 模式下 blob 即波形表达，不叠加背景 PCM
+    if (showWaveform_ && !notesPrimary) {
         for (const auto& item : renderCtx.contents) {
             const auto* mipmap = waveformMipmapCache_.get(item.contentKey);
             if (mipmap == nullptr || !mipmap->hasSource())
@@ -2729,16 +2866,6 @@ const PianoRollComponent::TimelineContentPlacement* PianoRollComponent::findEdit
     return nullptr;
 }
 
-bool PianoRollComponent::hasTimelineContentPlacement() const noexcept
-{
-    for (const auto& placement : timelineContentPlacements_) {
-        if (placement.isValid()) {
-            return true;
-        }
-    }
-    return false;
-}
-
 ContentTimelineProjection PianoRollComponent::activeContentProjection() const noexcept
 {
     if (const auto* placement = findEditedPlacement())
@@ -3308,11 +3435,6 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         clearedAnchorPreview = true;
     }
 
-    // 閳库槄锟?vocal-time-stretch 锟?.4 (Phase F) 锟?Time tool is mutually exclusive
-    // with the Note family of tools.  Switching INTO TimeTool drops any
-    // inflight note-side state so the user's next mouseDown is interpreted
-    // strictly as a TimeGrid handle action; switching OUT clears Time-tool
-    // selection so a stale handle highlight doesn't persist into Note tools.
     if (toolChanged) {
         if (tool == ToolId::TimeTool) {
             if (pressedPianoKey_ >= 0) {
@@ -3729,7 +3851,7 @@ void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::M
         } else if (e.mods.isShiftDown()) {
             handleOpenDyneHorizontalScrollWheel(deltaX, deltaY);
         } else {
-            handleOpenDyneVerticalScrollWheel(deltaY);
+            handleVerticalScrollWheel(deltaY);
         }
         return;
     }
@@ -3743,10 +3865,6 @@ void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::M
     } else {
         handleVerticalScrollWheel(deltaY);
     }
-}
-
-void PianoRollComponent::handleOpenDyneVerticalScrollWheel(float deltaY) {
-    handleVerticalScrollWheel(deltaY);
 }
 
 void PianoRollComponent::handleOpenDyneHorizontalScrollWheel(float deltaX, float deltaY) {

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <set>
 
 namespace OpenTune {
 
@@ -400,7 +401,7 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
 
     bool cursorSet = false;
     float mousePitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-    float mouseMidiVal = 69.0f + 12.0f * std::log2(mousePitch / 440.0f) - 0.5f;
+    float mouseMidiVal = ctx_.getViewMapper().freqToMidi(mousePitch);
 
     for (const auto& note : displayNotes(ctx_)) {
         const int x1 = sourceTimeToScreenX(note.startTime);
@@ -409,7 +410,7 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
         bool nearLeft = std::abs(e.x - x1) <= edgeThreshold;
         bool nearRight = std::abs(e.x - x2) <= edgeThreshold;
         
-        float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
+        float noteMidi = ctx_.getViewMapper().freqToMidi(note.getAdjustedPitch());
         bool onNote = std::abs(mouseMidiVal - noteMidi) < 1.0f;
         
         if ((nearLeft || nearRight) && onNote) {
@@ -565,6 +566,9 @@ void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
     } else if (currentTool_ == ToolId::VolumeEnvelope
                && AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
         handleVolumeEnvelopeToolDoubleClick(e);
+    } else if (currentTool_ == ToolId::Scissors) {
+        // 双击切割：复用 mouseUp 的提交逻辑，与 Melodyne 双击交互一致。
+        handleScissorsToolUp(e);
     }
     // Other tools: no-op (could be extended later for note resize / etc.)
 }
@@ -786,11 +790,11 @@ bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
         return false;
 
     const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-    const float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
+    const float mouseMidi = ctx_.getViewMapper().freqToMidi(clickedPitch);
     constexpr int edgeThreshold = 6;
 
     for (const auto& note : displayNotes(ctx_)) {
-        const float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
+        const float noteMidi = ctx_.getViewMapper().freqToMidi(note.getAdjustedPitch());
         if (std::abs(mouseMidi - noteMidi) >= 1.0f) {
             continue;
         }
@@ -1194,7 +1198,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
     bool isOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
     int edgeThreshold = 6;
-    float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
+    float mouseMidi = ctx_.getViewMapper().freqToMidi(clickedPitch);
     bool isShiftDown = e.mods.isShiftDown();
 
     for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
@@ -1206,7 +1210,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
         bool nearRight = std::abs(e.x - x2) <= edgeThreshold;
 
         if (nearLeft || nearRight) {
-            float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
+            float noteMidi = ctx_.getViewMapper().freqToMidi(note.getAdjustedPitch());
             if (std::abs(mouseMidi - noteMidi) < 1.0f) {
                 ctx_.getState().noteResize.isResizing = true;
                 ctx_.getState().noteResize.isDirty = false;
@@ -1287,7 +1291,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
                 ctx_.getState().selection.hasSelectionArea = true;
                 ctx_.getState().selection.selectionStartTime = std::max(0.0, trackRelativeTime);
                 ctx_.getState().selection.selectionEndTime = ctx_.getState().selection.selectionStartTime;
-                float midiVal = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
+                float midiVal = ctx_.getViewMapper().freqToMidi(clickedPitch);
                 ctx_.getState().selection.selectionStartMidi = midiVal;
                 ctx_.getState().selection.selectionEndMidi = midiVal;
             } else {
@@ -1395,14 +1399,14 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
     // Clicking an existing note changes only the editor-local selection model.
     const auto& committedNotes = ctx_.getCommittedNotes();
     float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-    float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
+    float mouseMidi = ctx_.getViewMapper().freqToMidi(clickedPitch);
 
     int existingNoteIndex = -1;
     for (int noteIndex = 0; noteIndex < static_cast<int>(committedNotes.size()); ++noteIndex) {
         const auto& note = committedNotes[static_cast<size_t>(noteIndex)];
         int x1 = sourceTimeToScreenX(note.startTime);
         int x2 = sourceTimeToScreenX(note.endTime);
-        float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
+        float noteMidi = ctx_.getViewMapper().freqToMidi(note.getAdjustedPitch());
         
         if (e.x >= x1 && e.x <= x2 && std::abs(mouseMidi - noteMidi) < 1.0f) {
             existingNoteIndex = noteIndex;
@@ -1474,7 +1478,6 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
         ctx_.setDrawingNoteStartTime(clampedTime);
         ctx_.setDrawingNoteEndTime(clampedTime);
         ctx_.setDrawingNotePitch(snappedF0);
-        ctx_.setDrawingNoteIndex(-1);
     } else {
         // Subsequent drag frames: update end time
         ctx_.setDrawingNoteEndTime(clampedTime);
@@ -1521,8 +1524,8 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
 
         ctx_.getState().selection.selectionEndTime = std::max(0.0, clampedTime);
 
-        float currentMidi = 69.0f + 12.0f * std::log2(
-            ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY)) / 440.0f) - 0.5f;
+        float currentMidi = ctx_.getViewMapper().freqToMidi(
+            ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY)));
         ctx_.getState().selection.selectionEndMidi = currentMidi;
 
         double selStartTime = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
@@ -1535,7 +1538,7 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         selectedIndices.reserve(notes.size());
         for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
             const auto& note = notes[static_cast<size_t>(noteIndex)];
-            float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
+            float noteMidi = ctx_.getViewMapper().freqToMidi(note.getAdjustedPitch());
             bool timeOverlap = (note.endTime > selStartTime && note.startTime < selEndTime);
             bool pitchOverlap = (noteMidi >= selMinMidi - 0.5f && noteMidi <= selMaxMidi + 0.5f);
             if (timeOverlap && pitchOverlap) {
@@ -1703,8 +1706,6 @@ void PianoRollToolHandler::handleDrawNoteDrag(const juce::MouseEvent& e)
 void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 // 选择工具鼠标释放处理：完成音符拖动/调整/框选，提交音高修正
 {
-    juce::ignoreUnused(e);
-
     bool suppressFinalNoteDraftCommit = false;
 
     if (ctx_.getState().noteDrag.draggedNoteIndex >= 0 && ctx_.getState().noteDrag.isDraggingNotes) {
@@ -2447,34 +2448,110 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
     if (!editRange.contains(*sourceTime))
         return;
 
-    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-    const int noteIndex = findNoteIndexAt(beforeNotes, *sourceTime, clickedPitch, 100.0f);
-    if (noteIndex < 0)
-        return;
-
-    // 合法切点严格满足 note.startTime < t < note.endTime（计划 §四/不变量）。
     const double splitTime = *sourceTime;
-    const Note& original = beforeNotes[static_cast<size_t>(noteIndex)];
-    if (!(original.startTime < splitTime && splitTime < original.endTime))
+
+    // 确定要切割的 note 索引集合：多选模式切所有切点在内的选中 note；
+    // 无选中时切光标下的 note。
+    std::vector<int> noteIndicesToCut;
+    const auto& selectedIndices = state.noteSelection.selectedIndices;
+    if (!selectedIndices.empty()) {
+        for (int idx : selectedIndices) {
+            if (idx < 0 || idx >= static_cast<int>(beforeNotes.size()))
+                continue;
+            const auto& note = beforeNotes[static_cast<size_t>(idx)];
+            if (note.startTime < splitTime && splitTime < note.endTime)
+                noteIndicesToCut.push_back(idx);
+        }
+    } else {
+        const float clickedPitch = ctx_.getViewMapper().yToFreq(
+            static_cast<float>(e.y - ctx_.contentOriginY));
+        const int noteIndex = findNoteIndexAt(beforeNotes, splitTime, clickedPitch, 100.0f);
+        if (noteIndex >= 0) {
+            const auto& note = beforeNotes[static_cast<size_t>(noteIndex)];
+            if (note.startTime < splitTime && splitTime < note.endTime)
+                noteIndicesToCut.push_back(noteIndex);
+        }
+    }
+
+    if (noteIndicesToCut.empty())
         return;
 
-    // 左右继承全部字段，只改 endTime/startTime。
-    Note left = original;
-    left.endTime = splitTime;
-    left.dirty = true;
-    Note right = original;
-    right.startTime = splitTime;
-    right.dirty = true;
+    // 获取 effective (corrected) F0 数据用于 pitch center 重算；
+    // F0 数据不可用时保持原 pitch（不重算）。
+    std::vector<float> effectiveF0;
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    const auto f0tl = ctx_.getF0Timeline();
+    const bool hasF0 = contentSnapshot && !f0tl.isEmpty();
+    if (hasF0) {
+        effectiveF0.assign(static_cast<size_t>(f0tl.endFrameExclusive()), 0.0f);
+        contentSnapshot->forEachEffectiveF0Span(0, f0tl.endFrameExclusive(),
+            [&](int frameIndex, const float* data, int length, float) {
+                if (data == nullptr || frameIndex < 0)
+                    return;
+                for (int i = 0; i < length; ++i) {
+                    const int idx = frameIndex + i;
+                    if (idx < static_cast<int>(effectiveF0.size()))
+                        effectiveF0[static_cast<size_t>(idx)] = data[i];
+                }
+            });
+    }
 
+    // 构建新 notes 向量：每个待切割 note 生成左右两段，其余原样保留。
     std::vector<Note> newNotes;
-    newNotes.reserve(beforeNotes.size() + 1);
+    newNotes.reserve(beforeNotes.size() + noteIndicesToCut.size());
+
+    std::set<int> cutSet(noteIndicesToCut.begin(), noteIndicesToCut.end());
+
     for (size_t i = 0; i < beforeNotes.size(); ++i) {
-        if (static_cast<int>(i) == noteIndex) {
-            newNotes.push_back(left);
-            newNotes.push_back(right);
-        } else {
+        const int idx = static_cast<int>(i);
+        if (cutSet.find(idx) == cutSet.end()) {
             newNotes.push_back(beforeNotes[i]);
+            continue;
         }
+
+        const Note& original = beforeNotes[i];
+        Note left = original;
+        Note right = original;
+        left.endTime = splitTime;
+        left.dirty = true;
+        right.startTime = splitTime;
+        right.dirty = true;
+
+        // pitch center 重算：用 effective F0 在各自时间范围内的平均值，
+        // pitch 设为均值、pitchOffset=0，使 getAdjustedPitch() 直接返回该频率。
+        if (hasF0 && !effectiveF0.empty()) {
+            auto computeAvgF0 = [&](double tStart, double tEnd) -> float {
+                const int startFrame = f0tl.frameAtOrBefore(tStart);
+                const int endFrame = f0tl.exclusiveFrameAt(tEnd);
+                float sum = 0.0f;
+                int count = 0;
+                for (int f = startFrame; f < endFrame; ++f) {
+                    if (f < 0 || f >= static_cast<int>(effectiveF0.size()))
+                        continue;
+                    const float f0 = effectiveF0[static_cast<size_t>(f)];
+                    if (f0 > 0.0f) {
+                        sum += f0;
+                        ++count;
+                    }
+                }
+                return count > 0 ? sum / static_cast<float>(count) : 0.0f;
+            };
+
+            const float leftAvgF0 = computeAvgF0(original.startTime, splitTime);
+            if (leftAvgF0 > 0.0f) {
+                left.pitch = leftAvgF0;
+                left.pitchOffset = 0.0f;
+            }
+
+            const float rightAvgF0 = computeAvgF0(splitTime, original.endTime);
+            if (rightAvgF0 > 0.0f) {
+                right.pitch = rightAvgF0;
+                right.pitchOffset = 0.0f;
+            }
+        }
+
+        newNotes.push_back(left);
+        newNotes.push_back(right);
     }
 
     if (!ctx_.replaceContentNotesForFullMutation || !ctx_.replaceContentNotesForFullMutation(newNotes)) {
@@ -2483,24 +2560,33 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
     if (ctx_.republishPlaybackSource)
         ctx_.republishPlaybackSource();
 
-    // 右侧 Note 成为唯一选中项（原 note 索引 + 1），避免下次拖拽同时移动两侧。
-    const int rightIndex = noteIndex + 1;
-    if (rightIndex < static_cast<int>(newNotes.size())) {
-        state.noteSelection.setSingle(rightIndex, static_cast<int>(newNotes.size()));
+    // 选中切割后的右侧段（最后一个被切割 note 的右段），避免下次拖拽同时移动两侧。
+    int lastRightIdx = -1;
+    int newIdx = 0;
+    for (size_t i = 0; i < beforeNotes.size(); ++i) {
+        const bool isCut = cutSet.find(static_cast<int>(i)) != cutSet.end();
+        if (isCut)
+            lastRightIdx = newIdx + 1;
+        newIdx += isCut ? 2 : 1;
+    }
+    if (lastRightIdx >= 0 && lastRightIdx < static_cast<int>(newNotes.size())) {
+        state.noteSelection.setSingle(lastRightIdx, static_cast<int>(newNotes.size()));
         updateF0SelectionFromNotes(newNotes);
     }
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
-    ctx_.setCurrentTool(ToolId::Pitch);
+
+    // 不切换工具 —— 保持 Scissors，与 Melodyne 一致。
 
     if (ctx_.getActiveContentKey && ctx_.pushUndoAction) {
         const auto key = ctx_.getActiveContentKey();
         if (key.isValid()) {
             auto action = std::make_unique<ScissorsUndoAction>(
                 key,
-                juce::String::fromUTF8(u8"鍓噾鍒嗗壊"),
+                juce::String::fromUTF8(u8"音符分割"),
                 beforeNotes,
                 newNotes,
-                ctx_.replaceContentNotesForFullMutation);
+                ctx_.replaceContentNotesForFullMutation,
+                ctx_.republishPlaybackSource);
             ctx_.pushUndoAction(std::move(action));
         }
     }
@@ -2688,7 +2774,6 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
     ctx_.getNoteDraft().contentDirty = true;
     ctx_.getNoteDraft().workingNotes = notes;
     ctx_.setUndoDescription(juce::String::fromUTF8(u8"绘制音符"));
-    ctx_.setDrawingNoteIndex(-1);
 
     // 同步计算修正并一次性提交音符和F0段，避免产生两个Undo Action
     auto pitchCurve = ctx_.getPitchCurve();
@@ -2966,11 +3051,7 @@ void PianoRollToolHandler::updateF0SelectionFromNotes(const std::vector<Note>& n
 }
 
 // ============================================================================
-// vocal-time-stretch 搂8.4 (Phase F) 锟?Time tool handlers
-//
-// Minimal scaffolding: hover detection + selection + drag + commit.
-// Phase G will add: double-click-insert, delete-handle, Alt-snap-disable,
-// group multi-handle drag, and output spacing clamp.
+// vocal-time-stretch §8.4 — Time tool handlers
 // ============================================================================
 
 uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) const
@@ -3027,9 +3108,9 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
 
     if (hitId == 0) {
         // Clicked empty space 锟?seek playhead + clear selection.
-        // §8.4 (Phase I): TimeTool 下主区空白点击现在也会重定位播放头，
+        // §8.4: TimeTool 下主区空白点击现在也会重定位播放头，
         // 涓庢爣灏哄尯鐐瑰嚮琛屼负涓€鑷达紝娑堥櫎"鐐瑰嚮鏃犲搷锟?鐨勭敤鎴峰洶鎯戯拷?
-        // 搂8.4 (Phase I bugfix): playhead seek must use TIMELINE time
+        // 搂8.4 (bugfix): playhead seek must use TIMELINE time
         // (host-absolute), NOT content-local time.  As a general
         // rule, everything that's "seek/play/pause/transport" operates in
         // timeline time; everything that's "edit handle/grid" operates in
@@ -3063,7 +3144,7 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
     }
     if (hitHandle == nullptr || hitHandle->isEndpoint()) return;
 
-    // 鈿★笍 搂8.4 (Phase H) 锟?Shift+click toggles in additionalSelectedIds
+    // 鈿★笍 搂8.4 锟?Shift+click toggles in additionalSelectedIds
     // (multi-select).  Bare click replaces the selection.
     if (e.mods.isShiftDown()) {
         if (tt.selectedHandleId == 0) {
@@ -3087,12 +3168,12 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
         tt.additionalSelectedIds.clear();
     }
 
-    // 搂8.4 (Phase I): 鍛戒腑 handle 鍚庡厛杩涘叆 pending 鐘舵€侊拷?
+    // 搂8.4: 鍛戒腑 handle 鍚庡厛杩涘叆 pending 鐘舵€侊拷?
     // mouseDrag 越过阈值后才转为真正拖拽，防止轻微抖动触发 undo。
     tt.dragPending = true;
     tt.isDraggingHandle = false;
     tt.draggedHandleId = hitId;
-    tt.dragSnapDisabled = e.mods.isAltDown();   // Phase H: Alt disables clamp
+    tt.dragSnapDisabled = e.mods.isAltDown();   // Alt disables clamp
     tt.dragOriginalSnapshot = snap;
     tt.dragWorkingSnapshot = snap;   // identity at drag start
     tt.dragStartOutputSeconds = hitHandle->output_seconds;
@@ -3105,7 +3186,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
 {
     auto& tt = ctx_.getState().timeTool;
 
-    // 搂8.4 (Phase I): 妫€锟?dragPending 闃堝€硷拷?
+    // 搂8.4: 妫€锟?dragPending 闃堝€硷拷?
     // Time handles only move horizontally; use X-axis-only threshold so
     // vertical jitter does not start a drag that produces an identical output.
     if (tt.dragPending) {
@@ -3138,14 +3219,14 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
         return;   // endpoints can't be dragged
     }
 
-    // 鈿★笍 搂8.4 (Phase H) 锟?group-drag detection.
+    // 鈿★笍 搂8.4 锟?group-drag detection.
     // If the user has multi-selected handles AND the dragged handle is part
     // of that selection, every selected handle moves by the same delta
     // (uniformDelta).  Otherwise only the dragged handle moves.
     const bool isGroupDrag = (!tt.additionalSelectedIds.empty())
                               && tt.isSelected(tt.draggedHandleId);
 
-    // Phase G/H spacing rule between adjacent outputs.
+    // Spacing rule between adjacent outputs.
     // Alt held at drag start (`dragSnapDisabled`) bypasses the clamp for
     // power-user nudging into tight regions.
     const double kMinSpacingSec = tt.dragSnapDisabled ? 0.000 : TimeGridSnapshot::kMinOutputSpacingSeconds;
@@ -3212,7 +3293,7 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
 {
     auto& tt = ctx_.getState().timeTool;
 
-    // 搂8.4 (Phase I): 濡傛灉浠庢湭瓒婅繃鎷栧姩闃堝€硷紝浠呬繚锟?selection 涓嶆彁浜わ拷?
+    // 搂8.4: 濡傛灉浠庢湭瓒婅繃鎷栧姩闃堝€硷紝浠呬繚锟?selection 涓嶆彁浜わ拷?
     if (tt.dragPending) {
         tt.dragPending = false;
         tt.dragOriginalSnapshot.reset();
@@ -3237,7 +3318,7 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
 }
 
 // ============================================================================
-// 搂8.4 (Phase G) 锟?Double-click to insert UserAdded handle
+// 搂8.4 锟?Double-click to insert UserAdded handle
 //
 // Constraints (per spec time-tool-interaction.md):
 //   - Click must be on empty area (no existing handle within 卤5 px)
@@ -3262,7 +3343,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
 
     // Reject if too close to existing handle in output or source time.
     //
-    // 搂 Phase I bugfix: clickedTime is output/content time.
+    // 搂8.4 bugfix: clickedTime is output/content time.
     // Source spacing check must compare against source_seconds, so
     // compute clickedOutput 锟?clickedSource via tauInverse.
     // Identity grid 锟?tauInverse is identity 锟?same value.
@@ -3326,7 +3407,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
 }
 
 // ============================================================================
-// 搂8.4 (Phase G) 锟?Delete key removes selected handle (non-endpoint only)
+// 搂8.4 锟?Delete key removes selected handle (non-endpoint only)
 //
 // Returns true when a handle was deleted (caller should not fall through to
 // note-delete logic).  Returns false when nothing was selected or the only
