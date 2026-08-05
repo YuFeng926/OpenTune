@@ -3846,12 +3846,14 @@ void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::M
 
     // ── OpenDyne（NotesPrimary）Melodyne 式导航 ──
     if (isOpenDyne()) {
-        if (e.mods.isCommandDown() && e.mods.isAltDown()) {
-            handleOpenDyneZoomAtMouse(e, deltaY);
+        if (e.mods.isCommandDown()) {
+            handleOpenDyneZoomAtMouse(e, deltaY); // Windows Ctrl / macOS Command：横纵向同步缩放
+        } else if (e.mods.isAltDown()) {
+            handleVerticalZoomWheel(e, deltaY); // 纵向缩放音高轴
         } else if (e.mods.isShiftDown()) {
-            handleOpenDyneHorizontalScrollWheel(deltaX, deltaY);
+            handleOpenDyneHorizontalScrollWheel(deltaX, deltaY); // 横向滚动
         } else {
-            handleVerticalScrollWheel(deltaY);
+            handleVerticalScrollWheel(deltaY); // 纵向滚动
         }
         return;
     }

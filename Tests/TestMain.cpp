@@ -260,11 +260,20 @@ void testOpenDyneContract()
                && !contains(capturePersistence, "velocity"),
            "Note::velocity and legacy velocity persistence keys are removed");
 
-    // 音高拖拽无裸 round(targetMidi) 吸附；统一走 quantizeMidiToActiveScale
-    expect(!contains(toolHandler, "std::round(targetMidi)"),
-           "Pitch drag uses the single quantizeMidiToActiveScale entry");
-    expect(contains(toolHandler, "quantizeMidiToActiveScale"),
-           "Pitch drag calls quantizeMidiToActiveScale");
+    // 音高拖拽按 pitchGridMode_ 三分支投影：NoSnap 自由连续 cents、Chromatic 最近半音、
+    // KeyScale 统一走 quantizeMidiToActiveScale 音阶吸附（Alt 拖拽临时解除吸附）。
+    const auto dragPitch = functionBlock(
+        toolHandler, "void PianoRollToolHandler::dragNotePitch");
+    expect(contains(dragPitch, "switch (pitchGridMode_)"),
+           "Pitch drag projects by the pitchGridMode_ branch");
+    expect(contains(dragPitch, "case PitchGridMode::NoSnap:")
+               && contains(dragPitch, "case PitchGridMode::Chromatic:")
+               && contains(dragPitch, "case PitchGridMode::KeyScale"),
+           "Pitch grid branches cover NoSnap, Chromatic, and KeyScale");
+    expect(contains(dragPitch, "snappedMidi = std::round(targetMidi)"),
+           "Chromatic branch snaps to the nearest semitone via round");
+    expect(contains(dragPitch, "quantizeMidiToActiveScale"),
+           "KeyScale pitch drag snaps through the single quantizeMidiToActiveScale entry");
 
     // topology command 不触发 render mutation completion
     expect(!contains(processor, "commitContentNoteTopologyPatch")
@@ -398,6 +407,60 @@ void testOpenDyneContract()
     // DrawNote/LineAnchor 吸附根除裸 round(midiNote)，统一 quantizeMidiToActiveScale 入口
     expect(!contains(toolHandler, "std::round(midiNote)"),
            "DrawNote/LineAnchor snap through the single quantizeMidiToActiveScale entry");
+
+    // OpenDyne 滚轮导航固定契约：
+    // Ctrl(Command)=横纵向同步缩放、Alt=纵向缩放、Shift=横向滚动、默认=纵向滚动
+    const auto wheelMove = functionBlock(pianoRoll, "void PianoRollComponent::mouseWheelMove");
+    const auto zoomAtMouse = functionBlock(
+        pianoRoll, "void PianoRollComponent::handleOpenDyneZoomAtMouse");
+    {
+        // 完整 OpenDyne 分支块（含 return 收尾），不再按 return; 截断
+        const auto dyneBlock = functionBlock(wheelMove, "if (isOpenDyne())");
+        // Command/Alt/Shift 分支体按各自签名提取，默认块直接锁定 else 分支源码片段
+        const auto commandBlock = functionBlock(dyneBlock, "if (e.mods.isCommandDown())");
+        const auto altBlock = functionBlock(dyneBlock, "else if (e.mods.isAltDown())");
+        const auto shiftBlock = functionBlock(dyneBlock, "else if (e.mods.isShiftDown())");
+        const auto commandPos = dyneBlock.find("if (e.mods.isCommandDown())");
+        const auto altPos = dyneBlock.find("else if (e.mods.isAltDown())");
+        const auto shiftPos = dyneBlock.find("else if (e.mods.isShiftDown())");
+        const auto defaultPos = shiftPos != std::string::npos
+            ? shiftPos + shiftBlock.size() : std::string::npos;
+        const auto defaultBlock = shiftPos != std::string::npos
+            ? dyneBlock.substr(shiftPos + shiftBlock.size()) : std::string();
+
+        expect(!dyneBlock.empty() && !commandBlock.empty() && !altBlock.empty()
+                   && !shiftBlock.empty() && !defaultBlock.empty()
+                   && commandPos < altPos && altPos < shiftPos && shiftPos < defaultPos,
+               "OpenDyne wheel branch has four ordered blocks: Command, Alt, Shift, default");
+        expect(contains(commandBlock, "handleOpenDyneZoomAtMouse")
+                   && !contains(commandBlock, "handleVerticalZoomWheel")
+                   && !contains(commandBlock, "handleOpenDyneHorizontalScrollWheel")
+                   && !contains(commandBlock, "handleVerticalScrollWheel"),
+               "Command branch calls only handleOpenDyneZoomAtMouse (sync zoom)");
+        expect(contains(altBlock, "handleVerticalZoomWheel")
+                   && !contains(altBlock, "handleOpenDyneZoomAtMouse")
+                   && !contains(altBlock, "handleOpenDyneHorizontalScrollWheel")
+                   && !contains(altBlock, "handleVerticalScrollWheel"),
+               "Alt branch calls only handleVerticalZoomWheel");
+        expect(contains(shiftBlock, "handleOpenDyneHorizontalScrollWheel")
+                   && !contains(shiftBlock, "handleOpenDyneZoomAtMouse")
+                   && !contains(shiftBlock, "handleVerticalZoomWheel")
+                   && !contains(shiftBlock, "handleVerticalScrollWheel"),
+               "Shift branch calls only handleOpenDyneHorizontalScrollWheel");
+        expect(contains(defaultBlock, "handleVerticalScrollWheel")
+                   && !contains(defaultBlock, "handleOpenDyneZoomAtMouse")
+                   && !contains(defaultBlock, "handleVerticalZoomWheel")
+                   && !contains(defaultBlock, "handleOpenDyneHorizontalScrollWheel"),
+               "Default branch calls only handleVerticalScrollWheel");
+        // Command 分支含 isCommandDown() 且不含 isAltDown()，证明旧复合条件已不存在
+        expect(contains(commandBlock, "isCommandDown()") && !contains(commandBlock, "isAltDown()"),
+               "No legacy combined Command+Alt wheel condition remains inside the OpenDyne branch");
+        expect(!contains(dyneBlock, "handleOpenDyneVerticalScrollWheel"),
+               "No legacy OpenDyne vertical-scroll-only wheel path remains");
+        expect(contains(zoomAtMouse, "handleHorizontalZoomWheel")
+                   && contains(zoomAtMouse, "handleVerticalZoomWheel"),
+               "handleOpenDyneZoomAtMouse zooms the time and pitch axes together");
+    }
 }
 
 void testOpenDyneRenderPreviewContract()
@@ -486,6 +549,65 @@ void testOpenDyneToolSwitchingContract()
                && keyPressed.find("ShortcutId::ToolLineAnchor") < timeTool
                && keyPressed.find("ShortcutId::ToolHandDraw") < timeTool,
            "Configurable tool shortcuts stay inside the !isOpenDyne gate; TimeTool remains shared");
+}
+
+void testOpenDyneNoteEdgeRetreatContract()
+{
+    // OpenDyne 音符边缘退让：邻居按时间序列相邻项（resizeIdx+1/resizeIdx-1）选择，
+    // 不做音高匹配；右扩展推后继 startTime、左扩展提前前驱 endTime；
+    // 提交 affectedRange 覆盖被推让邻居的旧/新边界。
+    const auto toolHandler = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto handleSelectDrag = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handleSelectDrag");
+    const auto resizeStart = handleSelectDrag.find(
+        "const int resizeIdx = static_cast<int>(ctx_.getState().noteResize.noteIndex);");
+    const auto resizeEnd = handleSelectDrag.find("notes[static_cast<size_t>(resizeIdx)].dirty = true;");
+    const auto resizeRegion = (resizeStart != std::string::npos && resizeEnd != std::string::npos)
+        ? handleSelectDrag.substr(resizeStart, resizeEnd - resizeStart)
+        : std::string();
+
+    expect(resizeStart != std::string::npos && resizeEnd != std::string::npos,
+           "Resize core block exists in handleSelectDrag");
+    expect(!contains(toolHandler, "samePitchNotes") && !contains(toolHandler, "NeighborInfo"),
+           "samePitchNotes neighbor collection is fully removed from the tool handler");
+    expect(!contains(resizeRegion, "getAdjustedPitch"),
+           "Resize retreat never matches neighbors by adjusted pitch");
+    expect(contains(resizeRegion, "resizeIdx + 1"),
+           "Right retreat addresses the immediate time-series successor");
+    expect(contains(resizeRegion, "resizeIdx - 1"),
+           "Left retreat addresses the immediate time-series predecessor");
+    expect(contains(resizeRegion, "notes[static_cast<size_t>(resizeIdx + 1)].startTime = newEnd;"),
+           "Right extension pushes the successor startTime");
+    expect(contains(resizeRegion, "notes[static_cast<size_t>(resizeIdx - 1)].endTime = newStart;"),
+           "Left extension pulls the predecessor endTime");
+    expect(contains(resizeRegion, "std::max(next.startTime, next.endTime - minDuration)"),
+           "Right retreat clamps the target end so even a short successor keeps minDuration");
+    expect(contains(resizeRegion, "std::min(prev.endTime, prev.startTime + minDuration)"),
+           "Left retreat clamps the target start so even a short predecessor keeps minDuration");
+
+    // 退让只移动 edge 对应的唯一时间邻居（左 resizeIdx-1、右 resizeIdx+1）：
+    // 提交 affectedRange 以 baselineTarget 的 startTime/endTime 与 resized 边界初始化，
+    // 只折叠目标自身与该唯一邻居的 baseline/working 旧/新边界，
+    // 不做全量 notes 扫描、不链式扩展。
+    const auto handleSelectUp = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handleSelectUp");
+    expect(contains(handleSelectUp, "baselineTarget.startTime != resizedNote.startTime")
+               && contains(handleSelectUp, "baselineTarget.endTime != resizedNote.endTime"),
+           "Resize move detection compares the baseline target against the current boundaries");
+    expect(contains(handleSelectUp, "std::min(baseline[static_cast<size_t>(resizeIdx)].startTime, resizedStartTime)")
+               && contains(handleSelectUp, "std::max(baseline[static_cast<size_t>(resizeIdx)].endTime, resizedEndTime)"),
+           "Resize commit seeds the affected range with the target's baseline and new boundaries");
+    expect(contains(handleSelectUp, "resizeIdx - 1") && contains(handleSelectUp, "resizeIdx + 1")
+               && contains(handleSelectUp, "std::min(oldNeighbor.startTime, newNeighbor.startTime)")
+               && contains(handleSelectUp, "std::max(oldNeighbor.endTime, newNeighbor.endTime)"),
+           "Affected range folds only the edge's unique neighbor via its baseline/working old and new boundaries");
+    expect(!contains(handleSelectUp, "if (!notes[i].dirty) continue;")
+               && !contains(handleSelectUp, "for (size_t i = 0; i < notes.size(); ++i)"),
+           "No whole-notes dirty scan contributes to the affected range");
+    expect(contains(handleSelectUp, "f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime)")
+               && contains(handleSelectUp, "commitNoteBasedCorrection"),
+           "The merged target/neighbor range feeds the F0 affected range of the resize commit");
 }
 
 void testKillListContract()
@@ -763,6 +885,53 @@ void testPitchModulationDriftContract()
     expect(contains(applyScheme, "PitchModulation")
                && contains(applyScheme, "PitchDrift"),
            "Scheme migration includes PitchModulation and PitchDrift");
+
+    // Mod/Drift 拖拽统一走 pitch drag 路径：mouseDown 的 Modulation/Drift
+    // 分支以 beginNotePitchDrag(clickedNoteIndex, notes) 启动选中音符的拖拽。
+    const auto handlePitchDown = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handlePitchToolMouseDown");
+    const auto modDriftDownStart = handlePitchDown.find(
+        "ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift");
+    const auto modDriftDownEnd = handlePitchDown.find("return;", modDriftDownStart);
+    const auto modDriftDownRegion = (modDriftDownStart != std::string::npos
+                                     && modDriftDownEnd != std::string::npos)
+        ? handlePitchDown.substr(modDriftDownStart, modDriftDownEnd - modDriftDownStart)
+        : std::string();
+    expect(modDriftDownStart != std::string::npos && modDriftDownEnd != std::string::npos,
+           "handlePitchToolMouseDown keeps a Modulation/Drift branch");
+    expect(contains(modDriftDownRegion, "beginNotePitchDrag(clickedNoteIndex, notes)"),
+           "Modulation/Drift mouseDown starts the shared pitch drag via beginNotePitchDrag");
+
+    // Mod/Drift 提交路径：endNotePitchDrag 的 Modulation/Drift 分支先对最终
+    // 拖拽采样（dragNotePitch），再走曲线提交（commitNoteBasedCorrection），
+    // 不再用 note-only 的 commitNoteDraft；提交后清理 isModDriftDragging 与
+    // tempPitchCurves，采样必须先于曲线提交。
+    const auto endDrag = functionBlock(
+        toolHandler, "bool PianoRollToolHandler::endNotePitchDrag");
+    const auto modDriftUpStart = endDrag.find(
+        "ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift");
+    const auto modDriftUpEnd = endDrag.find("return true;", modDriftUpStart);
+    const auto modDriftUpRegion = (modDriftUpStart != std::string::npos
+                                   && modDriftUpEnd != std::string::npos)
+        ? endDrag.substr(modDriftUpStart, modDriftUpEnd - modDriftUpStart)
+        : std::string();
+    expect(modDriftUpStart != std::string::npos && modDriftUpEnd != std::string::npos,
+           "endNotePitchDrag keeps a Modulation/Drift branch ending in return true");
+    expect(countOccurrences(modDriftUpRegion, "dragNotePitch(e);") == 1
+               && countOccurrences(modDriftUpRegion,
+                                   "commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);") == 1,
+           "Modulation/Drift mouseUp samples the final drag once then commits the pitch curve exactly once");
+    expect(!contains(modDriftUpRegion, "commitNoteDraft"),
+           "Modulation/Drift mouseUp no longer commits via the note-only commitNoteDraft");
+    const auto finalDragPos = modDriftUpRegion.find("dragNotePitch(e);");
+    const auto curveCommitPos =
+        modDriftUpRegion.find("commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);");
+    expect(finalDragPos != std::string::npos && curveCommitPos != std::string::npos
+               && finalDragPos < curveCommitPos,
+           "Modulation/Drift commit order: final drag sampling precedes the curve commit");
+    expect(contains(modDriftUpRegion, "isModDriftDragging = false")
+               && contains(modDriftUpRegion, "clearTempPitchCurves"),
+           "Modulation/Drift mouseUp clears isModDriftDragging and tempPitchCurves");
 }
 
 int main()
@@ -782,6 +951,7 @@ int main()
     testOpenDyneContract();
     testOpenDyneRenderPreviewContract();
     testOpenDyneToolSwitchingContract();
+    testOpenDyneNoteEdgeRetreatContract();
     testPitchModulationDriftContract();
 
     if (failures != 0) {
