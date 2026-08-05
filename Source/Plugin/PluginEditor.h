@@ -175,6 +175,8 @@ private:
     // can pull fresh notes when an async note generator (GAME) commits late.
     ContentKey lastActiveContentKey_;
     std::map<ContentKey, OriginalF0State> lastObservedOriginalF0States_;
+    // Read 读取音频时捕获的 OpenDyne 一次性 AUTO 意图（F0 Ready 后消费）
+    std::map<ContentKey, NoteGeneratorParams> pendingAutoTuneOnReady_;
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollTimeGridRevision_{0};
     uint64_t lastPianoRollPitchRevision_{0};

@@ -1765,8 +1765,27 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
             if (leaseToken && !leaseToken->load(std::memory_order_acquire))
                 return;
 
-            if (crs == nullptr || !result.success || result.f0.empty())
+            if (crs == nullptr)
                 return;
+
+            if (!result.success || result.f0.empty())
+            {
+                // Completion only if Host pointer matches and content still exists with same birthRevision (#B.3)
+                if (auto* mod = findAudioModificationByContentKey(key))
+                {
+                    if (!mod->hasContentState())
+                        return;
+                    if (mod->birthRevision != birthRevision)
+                        return; // Stale completion - modification restarted
+                    if (mod->audioModification != hostModification)
+                        return; // Stale completion - new Host AudioModification reused same ContentKey + birthRevision
+
+                    mod->applyOriginalF0State(OriginalF0State::Failed);
+                    if (mod->audioModification != nullptr)
+                        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+                }
+                return;
+            }
 
             // Completion only if Host pointer matches and content still exists with same birthRevision (#B.3)
             if (auto* mod = findAudioModificationByContentKey(key))

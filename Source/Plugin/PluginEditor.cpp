@@ -322,6 +322,24 @@ void OpenTuneAudioProcessorEditor::timerCallback()
                 || previous->second == OriginalF0State::NotRequested)
             && currentState == OriginalF0State::Ready) {
             pianoRoll_.requestInitialF0View(contentKey);
+            const auto intentIt = pendingAutoTuneOnReady_.find(contentKey);
+            if (intentIt != pendingAutoTuneOnReady_.end()) {
+                // 统一调性检测（复用 processor 唯一实现；失败静默）
+                processorRef_.detectContentKeyIfUnset(contentKey);
+                auto intentSnap = processorRef_.getContentSnapshot(contentKey);
+                if (intentSnap != nullptr && intentSnap->pitchCurve != nullptr) {
+                    const auto curveSnap = intentSnap->pitchCurve->getSnapshot();
+                    const int f0Count = curveSnap != nullptr ? static_cast<int>(curveSnap->getOriginalF0().size()) : 0;
+                    if (f0Count > 0) {
+                        std::optional<ScaleSnapConfig> scaleSnap;
+                        if (intentSnap->detectedKey.confidence > 0.0f)
+                            scaleSnap = makeScaleSnapConfig(intentSnap->detectedKey);
+                        contentCommands_->autoTuneContentRange(contentKey, 0, f0Count,
+                                                               intentIt->second, scaleSnap);
+                    }
+                }
+                pendingAutoTuneOnReady_.erase(intentIt);
+            }
         }
         lastObservedOriginalF0States_[contentKey] = currentState;
     };
@@ -394,7 +412,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             auto snap = processorRef_.getContentSnapshot(key);
             if (snap == nullptr)
                 continue;  // content 已被移除，视为完成
-            // 普通 AUTO 在 F0 Ready 发布前同步完成（唯一核心在 F0 完成链内），
+            // AUTO 由 Read 意图在 F0 Ready 跳变时消费（唯一核心），
             // overlay 仅需跟踪 OriginalF0State。
             if (snap->originalF0State != OriginalF0State::Ready
                     && snap->originalF0State != OriginalF0State::Failed) {
@@ -1016,8 +1034,16 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         // 遮罩覆盖本次读取的全部 modification：F0 提取 + note 生成完成前保持"正在处理音频"
         rmvpeOverlayTargetContentKeys_.clear();
         for (const auto& projection : dc->getPlaybackRegionProjections()) {
-            if (projection.contentKey.isValid())
+            if (projection.contentKey.isValid()) {
                 rmvpeOverlayTargetContentKeys_.push_back(projection.contentKey);
+                // F0 状态机基线重置：防止 F0 完成早于首次 timer 观察导致跳变丢失
+                lastObservedOriginalF0States_[projection.contentKey] = OriginalF0State::NotRequested;
+                // 捕获 OpenDyne 一次性 AUTO 意图，F0 Ready 跳变时消费
+                if (pianoRoll_.isOpenDyne())
+                    pendingAutoTuneOnReady_[projection.contentKey] = pianoRoll_.getCurrentAutoTuneParams();
+                else
+                    pendingAutoTuneOnReady_.erase(projection.contentKey);
+            }
         }
         rmvpeOverlayLatched_ = true;
     });
