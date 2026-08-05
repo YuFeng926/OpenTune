@@ -688,18 +688,17 @@ void ParameterPanel::resized()
     const int toolHeaderGap = 8;
     const int pitchShiftButtonHeight = 28;
 
-    // ── OpenDyne 布局：旋钮在上，工具在下（与 OpenTune 相同顺序） ──
+    // ── OpenDyne 布局：旋钮在上，工具在下，复用 OpenTune 布局结构 ──
     if (openDyneMode_)
     {
-        const int rows = 3;
-        const int toolsHeight = rows * toolButtonSize + (rows - 1) * toolButtonGap;
+        const int rows = 4; // 8 按钮 = 4 行 × 2 列
+        const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
 
         // 向上平移：先预留底部空间，再取出 Tools 区域
         mainArea.removeFromBottom(150);
         auto toolsArea = mainArea.removeFromBottom(toolsHeight);
 
         // Pitch Correction knobs（旋钮区保留，控制 Pitch 工具的修音参数）
-        mainArea.removeFromTop(spacing);
         pitchCorrectionHeader_.setBounds(mainArea.removeFromTop(headerHeight));
         mainArea.removeFromTop(spacing);
 
