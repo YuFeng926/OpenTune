@@ -1862,6 +1862,11 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
             ctx_.beginNoteDraft();
         ctx_.getNoteDraft().contentDirty = true;
 
+        // 设置 Modulation/Drift 拖拽预览状态（必须在 invalidateLiveNotes 之前，
+        // 组件侧据此扩展 dirty 区域，否则 F0 预览曲线超出 note 高度的部分残留）
+        state.isModDriftDragging = true;
+        state.modDriftTool = currentTool_;
+
         auto& notes = workingDraftNotes(ctx_);
         resetDraftNotesToBaseline(ctx_);
 
@@ -1943,9 +1948,6 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
             ctx_.invalidateLiveNotes(beforeNotes, notes);
         }
 
-        // 设置 Modulation/Drift 拖拽预览状态
-        state.isModDriftDragging = true;
-        state.modDriftTool = currentTool_;
         if (ctx_.invalidateInteractionPreview) {
             ctx_.invalidateInteractionPreview(juce::Rectangle<int>());
         }
@@ -2351,6 +2353,8 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolDrag(const juce::MouseEvent& 
     const float deltaGainDb = static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
     const auto& notes = committedNotes(ctx_);
     state.volumePreviewEnvelope = buildVolumeEnvelopeDragPreview(notes, deltaGainDb);
+    // blob 大小变化绘制在 content surface，需触发 rasterizeContent 重绘
+    if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(notes, notes);
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 }
 

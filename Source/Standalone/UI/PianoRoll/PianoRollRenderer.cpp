@@ -232,6 +232,7 @@ static bool buildNoteBlobPath(
     double timePerPeak,
     int64_t numPeaks,
     float clipRefMag,
+    const AutomationLane* volumeEnvelope,
     float centerY,
     float halfH,
     int x1,
@@ -253,7 +254,10 @@ static bool buildNoteBlobPath(
         const float normMag = peak.getMagnitude() / clipRefMag;
         const double sourceTime = static_cast<double>(i) * timePerPeak;
         const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
-        const float topY = centerY - halfH * normMag;
+        const float gainDb = volumeEnvelope ? volumeEnvelope->evalAt(sourceTime) : 0.0f;
+        // 视觉范围 -14dB ~ +8dB：0dB=1.0 原始大小，超出后饱和（防遮挡/防消失）
+        const float gainFactor = juce::jlimit(0.2f, 2.5f, std::pow(10.0f, gainDb / 20.0f));
+        const float topY = centerY - halfH * normMag * gainFactor;
         blob.lineTo(px, topY);
     }
     blob.lineTo(static_cast<float>(x2), centerY);
@@ -264,7 +268,10 @@ static bool buildNoteBlobPath(
         const float normMag = peak.getMagnitude() / clipRefMag;
         const double sourceTime = static_cast<double>(i) * timePerPeak;
         const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
-        const float bottomY = centerY + halfH * normMag;
+        const float gainDb = volumeEnvelope ? volumeEnvelope->evalAt(sourceTime) : 0.0f;
+        // 视觉范围 -14dB ~ +8dB：0dB=1.0 原始大小，超出后饱和（防遮挡/防消失）
+        const float gainFactor = juce::jlimit(0.2f, 2.5f, std::pow(10.0f, gainDb / 20.0f));
+        const float bottomY = centerY + halfH * normMag * gainFactor;
         blob.lineTo(px, bottomY);
     }
     blob.closeSubPath();
@@ -972,6 +979,13 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         if (item.wfLevel == nullptr || item.wfLevel->peaks.empty())
             return;
 
+        // blob 音量缩放：拖拽预览包络优先，否则回退到已提交音量包络
+        const AutomationLane* volumeEnvelope = nullptr;
+        if (item.ownerSnapshot != nullptr) {
+            volumeEnvelope = (item.active && volumePreviewEnvelope_ != nullptr)
+                ? volumePreviewEnvelope_ : &item.ownerSnapshot->volumeEnvelope;
+        }
+
         const double timePerPeak = static_cast<double>(item.wfLevelSamplesPerPeak)
             / WaveformMipmap::kBaseSampleRate;
         const int64_t numPeaks = static_cast<int64_t>(item.wfLevel->peaks.size());
@@ -1005,13 +1019,13 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
             juce::Path blob;
             if (!buildNoteBlobPath(note, ctx, item, *item.wfLevel, timePerPeak, numPeaks,
-                                   clipRefMag, centerY, halfH, x1, x2, blob))
+                                   clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
             // displayColour 派生纵向渐变填充 + 同色高对比描边
-            const auto fillTop = item.displayColour.brighter(0.28f).withAlpha(0.88f);
-            const auto fillMid = item.displayColour.withAlpha(0.80f);
-            const auto fillBottom = item.displayColour.darker(0.32f).withAlpha(0.86f);
+            const auto fillTop = item.displayColour.brighter(0.35f).withAlpha(0.60f);
+            const auto fillMid = item.displayColour.withAlpha(0.52f);
+            const auto fillBottom = item.displayColour.darker(0.40f).withAlpha(0.56f);
             juce::ColourGradient grad(fillTop, static_cast<float>(x1), centerY - halfH,
                                       fillBottom, static_cast<float>(x1), centerY + halfH,
                                       false);
@@ -1019,8 +1033,8 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(grad);
             g.fillPath(blob);
 
-            g.setColour(item.displayColour.brighter(0.50f).withAlpha(0.92f));
-            g.strokePath(blob, juce::PathStrokeType(1.1f,
+            g.setColour(item.displayColour.brighter(0.45f).withAlpha(0.55f));
+            g.strokePath(blob, juce::PathStrokeType(0.9f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
         }
@@ -1137,6 +1151,13 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
         if (item.wfLevel == nullptr || item.wfLevel->peaks.empty())
             return;
 
+        // blob 音量缩放：与 drawNotes 一致——拖拽预览包络优先，否则回退到已提交音量包络
+        const AutomationLane* volumeEnvelope = nullptr;
+        if (item.ownerSnapshot != nullptr) {
+            volumeEnvelope = (item.active && volumePreviewEnvelope_ != nullptr)
+                ? volumePreviewEnvelope_ : &item.ownerSnapshot->volumeEnvelope;
+        }
+
         const double timePerPeak = static_cast<double>(item.wfLevelSamplesPerPeak)
             / WaveformMipmap::kBaseSampleRate;
         const int64_t numPeaks = static_cast<int64_t>(item.wfLevel->peaks.size());
@@ -1177,15 +1198,15 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
 
             juce::Path blob;
             if (!buildNoteBlobPath(note, ctx, item, *item.wfLevel, timePerPeak, numPeaks,
-                                   clipRefMag, centerY, halfH, x1, x2, blob))
+                                   clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
             // 选中态：亮色透明填充叠加 + 高亮描边
             g.setColour(item.displayColour.brighter(0.55f).withAlpha(0.28f));
             g.fillPath(blob);
 
-            g.setColour(item.displayColour.brighter(0.75f).withAlpha(0.95f));
-            g.strokePath(blob, juce::PathStrokeType(2.0f,
+            g.setColour(item.displayColour.brighter(0.75f).withAlpha(0.75f));
+            g.strokePath(blob, juce::PathStrokeType(1.5f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
         }
@@ -1676,9 +1697,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                         for (int f = juce::jmax(startFrame, noteStart); f < juce::jmin(endFrame, noteEnd); ++f) {
                             const int local = f - noteStart;
                             if (local < 0 || local >= static_cast<int>(curve.size())) continue;
-                            const float value = curve[static_cast<size_t>(local)];
-                            if (value > 0.0f)
-                                previewBuffer[static_cast<size_t>(f - startFrame)] = value;
+                            // 无条件覆盖：0 值帧 = 无声帧，也覆盖掉已提交旧曲线，避免拖拽时新旧两段曲线叠加
+                            previewBuffer[static_cast<size_t>(f - startFrame)] = curve[static_cast<size_t>(local)];
                         }
                     }
                 }

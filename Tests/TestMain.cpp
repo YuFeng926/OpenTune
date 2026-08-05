@@ -313,20 +313,18 @@ void testOpenDyneContract()
     // 主视图波形/F0/unvoiced 与 OpenDyne 共用单一路径：无 scheme 级硬隐藏
     const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto drawContent = functionBlock(pianoRoll, "void PianoRollComponent::drawContent");
-    const auto drawEnvelope = functionBlock(pianoRoll, "void PianoRollComponent::drawVolumeEnvelopePreview");
     const auto heartbeat = functionBlock(pianoRoll, "void PianoRollComponent::onHeartbeatTick");
     const auto mipmapSource = readSource("Source/Standalone/UI/WaveformMipmap.cpp");
     const auto automationLane = readSource("Source/Utils/AutomationLane.cpp");
+    const auto rendererSource = readSource("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
 
-    expect(contains(drawEnvelope, "volumePreviewEnvelope")
-               && contains(drawEnvelope, "sourceTimeToX(")
-               && contains(drawEnvelope, "xToSourceTime(")
-               && contains(drawEnvelope, "timeGrid->handles()")
-               && contains(drawEnvelope, "getIntersection(clipBounds)")
-               && contains(drawEnvelope, "reduceClipRegion(envelopeBounds)")
-               && !contains(drawEnvelope, "kSampleCount")
-               && !contains(drawEnvelope, "std::vector"),
-           "Volume envelope preview draws one stored lane without sampled temporary vectors");
+    expect(!contains(pianoRoll, "drawVolumeEnvelopePreview"),
+           "Volume envelope line drawing is fully removed");
+    expect(contains(rendererSource, "volumeEnvelope->evalAt(sourceTime)")
+               && contains(rendererSource, "gainFactor"),
+           "Blob height scales with volume gain envelope");
+    expect(!contains(pianoRoll, "0xFFFF8C42"),
+           "No orange parameter lines remain in PianoRollComponent");
     expect(contains(toolHandler, "evalAt(note.startTime) + deltaGainDb")
                && contains(toolHandler, "handleVolumeEnvelopeToolDoubleClick")
                && !contains(toolHandler, "volumePreviewGainDb"),
@@ -485,9 +483,9 @@ void testOpenDyneRenderPreviewContract()
         expect(dragPos != std::string::npos && (dyneGuard == std::string::npos || dragPos < dyneGuard),
                "Note-drag F0 preview call precedes any !isOpenDyne guard");
     }
-    expect(contains(transientOverlay, "drawVolumeEnvelopePreview(g)")
+    expect(!contains(transientOverlay, "drawVolumeEnvelopePreview")
                && contains(transientOverlay, "drawScissorsPreview(g)"),
-           "OpenDyne transient previews stay scheme-specific");
+           "OpenDyne transient previews stay scheme-specific; envelope line is gone");
     expect(!contains(dragPreview, "CorrectedF0Primary"),
            "Note-drag F0 preview is not restricted to the CorrectedF0Primary scheme");
 }
@@ -519,15 +517,14 @@ void testOpenDyneToolSwitchingContract()
     const auto refreshText = functionBlock(
         parameterPanel, "void ParameterPanel::refreshLocalizedText");
     const auto layoutPos = resized.find("if (openDyneMode_)");
-    const auto layoutEnd = resized.find("return;", layoutPos);
 
     // Select 与 AUTO 使用 addAndMakeVisible 恒可见，setOpenDyneMode 不再隐藏它们
     expect(!contains(setOpenDyneMode, "selectToolButton_->setVisible(!enabled)")
                && !contains(setOpenDyneMode, "autoTuneToolButton_->setVisible(!enabled)"),
            "Select and AUTO are never hidden by setOpenDyneMode");
-    expect(layoutPos != std::string::npos && layoutEnd != std::string::npos
-               && contains(resized.substr(layoutPos, layoutEnd - layoutPos),
-                           "autoTuneToolButton_"),
+    // resized() 的 OpenDyne 分支从 if (openDyneMode_) 到函数尾之间布局 8 个工具按钮（含 AUTO）
+    expect(layoutPos != std::string::npos
+               && contains(resized.substr(layoutPos), "autoTuneToolButton_"),
            "OpenDyne layout includes the AUTO button");
     expect(contains(refreshText, "\\nF1"),
            "Select tooltip shows F1 in OpenDyne");

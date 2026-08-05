@@ -56,6 +56,11 @@ public:
         tempPitchCurves = curves;
     }
 
+    // OpenDyne blob 音量预览：拖拽期间由组件注入（指向 InteractionState::volumePreviewEnvelope）。
+    // 非拖拽时为 nullptr，drawNotes 回退到 ownerSnapshot->volumeEnvelope。
+    const AutomationLane* volumePreviewEnvelope_ = nullptr;
+    void setVolumePreviewEnvelope(const AutomationLane* env) noexcept { volumePreviewEnvelope_ = env; }
+
     /**
      * 渲染上下文结构体
      * 包含渲染所需的所有参数
