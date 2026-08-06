@@ -241,6 +241,7 @@ public:
 private:
     // === 各工具的 mouseDown/mouseDrag/mouseUp 分派 ===
     void handleSelectTool(const juce::MouseEvent& e);
+    void beginAreaSelection(const juce::MouseEvent& e);
     void handleDrawCurveTool(const juce::MouseEvent& e);
     void handleDrawNoteTool(const juce::MouseEvent& e);
     void handleDrawNoteMouseDown(const juce::MouseEvent& e);
@@ -305,7 +306,7 @@ private:
     void handleDeleteKey();
 
     // === Note 选择辅助 ===
-    static int findNoteIndexAt(const std::vector<Note>& notes, double time, float targetPitchHz, float pitchToleranceHz);
+    int findNoteIndexAt(const std::vector<Note>& notes, double time, float targetPitchHz, float pitchToleranceSemitones);
     std::vector<int> collectSelectedNoteIndices(const std::vector<Note>& notes);
     void deselectAllNotes();
     void selectAllNotes(const std::vector<Note>& notes);
@@ -339,10 +340,9 @@ private:
     std::chrono::steady_clock::time_point lastF2PressTime_{};
     static constexpr int kF2DoubleClickMs = 400;
 
-    static constexpr int kEmptySpaceDragThreshold = 12;
-
     juce::Point<int> dragStartPos_;
-    juce::Point<float> lastDrawPoint_;
+    double lastDrawTime_ = 0.0;
+    float lastDrawF0_ = 0.0f;
     AutomationLane volumeDragBaselineEnvelope_;
 };
 
