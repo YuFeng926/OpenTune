@@ -445,10 +445,9 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    constexpr int inset = 12;
     const int rulerHeight = ctx_.contentOriginY;
     constexpr int timelineExtendedHitArea = 20;
-    const int timelineBottomExtended = inset + rulerHeight + timelineExtendedHitArea;
+    const int timelineBottomExtended = rulerHeight + timelineExtendedHitArea;
     if (e.y < timelineBottomExtended && e.x > ctx_.getPianoKeyWidth()) {
         double clickedTime = ctx_.getViewMapper().xToTime(e.x);
         if (clickedTime >= 0) {
