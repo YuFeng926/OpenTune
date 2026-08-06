@@ -130,9 +130,6 @@ void F0ExtractionService::workerLoop()
         Result result;
         try {
             result = task.execute(runOwnerState_);
-        } catch (const std::exception& e) {
-            result.success = false;
-            result.errorMessage = e.what();
         } catch (...) {
             AppLogger::error("[F0ExtractionService] Unknown exception during task execution");
             result.success = false;

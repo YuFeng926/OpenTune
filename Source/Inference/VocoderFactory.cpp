@@ -71,9 +71,6 @@ VocoderCreationResult VocoderFactory::create(
             sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
             selectedBackend = VocoderBackend::CoreML;
             AppLogger::info("[VocoderFactory] Vocoder session: CoreML EP added (macOS)");
-        } catch (const Ort::Exception& e) {
-            AppLogger::warn("[VocoderFactory] Failed to add CoreML EP for vocoder: " + juce::String(e.what()));
-            AppLogger::info("[VocoderFactory] Vocoder session: falling back to CPU");
         } catch (...) {
             AppLogger::warn("[VocoderFactory] Failed to add CoreML EP for vocoder (unknown error)");
             AppLogger::info("[VocoderFactory] Vocoder session: falling back to CPU");

@@ -75,12 +75,6 @@ ModelFactory::F0ExtractorResult ModelFactory::createF0Extractor(
         return F0ExtractorResult::failure(ErrorCode::InvalidModelType,
             "Unknown F0 model type");
 
-    } catch (const Ort::Exception& e) {
-        return F0ExtractorResult::failure(ErrorCode::ModelLoadFailed,
-            "ONNX error loading F0 model: " + std::string(e.what()));
-    } catch (const std::exception& e) {
-        return F0ExtractorResult::failure(ErrorCode::ModelLoadFailed,
-            "Error loading F0 model: " + std::string(e.what()));
     } catch (...) {
         return F0ExtractorResult::failure(ErrorCode::ModelLoadFailed,
             "Unknown error loading F0 model");
@@ -148,12 +142,6 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
         sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
         gpuMode = true;
         AppLogger::info("[ModelFactory] F0 session: CoreML EP added (macOS, MLProgram+CPUAndGPU)");
-    } catch (const Ort::Exception& e) {
-        AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0: " + juce::String(e.what()));
-        AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
-    } catch (const std::exception& e) {
-        AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0: " + juce::String(e.what()));
-        AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
     } catch (...) {
         AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0 (unknown error)");
         AppLogger::info("[ModelFactory] F0 session: falling back to CPU");

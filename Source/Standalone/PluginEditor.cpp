@@ -138,7 +138,11 @@ static bool runDebugSelfTests() {
         NoteGeneratorParams params;
         params.policy.transitionThresholdCents = 512.0f;
         params.policy.minDurationMs = 100.0f;
-        auto notes = LegacyNoteGenerator::generate(f0, energy, kHopSize, kF0SampleRate, params);
+        auto notes = LegacyNoteGenerator::generate(
+            f0.data(), static_cast<int>(f0.size()),
+            energy.size() == f0.size() ? energy.data() : nullptr,
+            0, static_cast<int>(f0.size()),
+            kHopSize, kF0SampleRate, params);
         if (notes.empty()) {
             return false;
         }
@@ -582,7 +586,7 @@ void OpenTuneAudioProcessorEditor::launchBackgroundUiTask(std::function<void()> 
     {
         if (it->valid() && it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
         {
-            try { it->get(); } catch (const std::exception& e) { AppLogger::error("[PluginEditor] Background task exception: " + juce::String(e.what())); } catch (...) { AppLogger::error("[PluginEditor] Background task unknown exception"); }
+            try { it->get(); } catch (...) { AppLogger::error("[PluginEditor] Background task unknown exception"); }
             it = backgroundTasks_.erase(it);
         }
         else
@@ -605,7 +609,7 @@ void OpenTuneAudioProcessorEditor::waitForBackgroundUiTasks()
         if (!future.valid())
             continue;
 
-        try { future.get(); } catch (const std::exception& e) { AppLogger::error("[PluginEditor] Wait for background task exception: " + juce::String(e.what())); } catch (...) { AppLogger::error("[PluginEditor] Wait for background task unknown exception"); }
+        try { future.get(); } catch (...) { AppLogger::error("[PluginEditor] Wait for background task unknown exception"); }
     }
 }
 

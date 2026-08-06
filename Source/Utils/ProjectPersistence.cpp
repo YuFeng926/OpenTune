@@ -204,7 +204,7 @@ Result<ProjectSnapshot> ProjectPersistence::readProjectFile(const juce::File& fi
 {
     if (!file.existsAsFile()) {
         return Result<ProjectSnapshot>::failure(
-            Error::fromCode(ErrorCode::ModelNotFound,
+            Error::fromCode(ErrorCode::UnknownError,
                 ("Project file not found: " + file.getFullPathName()).toStdString()));
     }
 

@@ -112,7 +112,7 @@ float LegacyNoteGenerator::quantisePitch(float hz)
     if (hz <= 0.0f) return 0.0f;
 
     const float midi = PitchUtils::freqToMidi(hz);
-    return Note::midiToFrequency(static_cast<int>(std::round(midi)));
+    return PitchUtils::midiToFreq(std::round(midi));
 }
 
 void ScaleSnapConfig::applyToNotes(std::vector<Note>& notes) const
@@ -122,7 +122,7 @@ void ScaleSnapConfig::applyToNotes(std::vector<Note>& notes) const
         if (src <= 0.0f) continue;
         const float midi = PitchUtils::freqToMidi(src);
         const float snapped = quantizeMidiToActiveScale(midi);
-        note.pitch = Note::midiToFrequency(static_cast<int>(std::round(snapped)));
+        note.pitch = PitchUtils::midiToFreq(std::round(snapped));
     }
 }
 
@@ -248,7 +248,7 @@ std::vector<Note> LegacyNoteGenerator::generate(
             }
 
             pitches.push_back(f0val);
-            if (energy != nullptr) energyBuf.push_back(energy[i]);
+            energyBuf.push_back(energy[i]);
             segmentPitchSum += static_cast<double>(f0val);
             ++segmentPitchCount;
             lastVoicedFrame = i;
@@ -294,46 +294,6 @@ std::vector<Note> LegacyNoteGenerator::generate(
         out.end());
 
     return out;
-}
-
-std::vector<Note> LegacyNoteGenerator::generate(
-    const std::vector<float>&  f0,
-    const std::vector<float>&  energy,
-    int                        hopSize,
-    double                     f0SampleRate,
-    const NoteGeneratorParams& params)
-{
-    const float* energyPtr = (energy.size() == f0.size() && !energy.empty()) ? energy.data() : nullptr;
-    return generate(
-        f0.data(),
-        static_cast<int>(f0.size()),
-        energyPtr,
-        0,
-        static_cast<int>(f0.size()),
-        hopSize,
-        f0SampleRate,
-        params);
-}
-
-// INoteGenerator override — forwards to the static frame-domain API using
-// the Legacy fields of NoteGeneratorInput. The audio fields are ignored.
-std::vector<Note> LegacyNoteGenerator::generate(const NoteGeneratorInput& input)
-{
-    const float* energyPtr = (input.energy.size() == input.f0.size() && !input.energy.empty())
-                             ? input.energy.data()
-                             : nullptr;
-    const int endFrame = (input.endFrameExclusive > 0)
-                         ? input.endFrameExclusive
-                         : static_cast<int>(input.f0.size());
-    return generate(
-        input.f0.data(),
-        static_cast<int>(input.f0.size()),
-        energyPtr,
-        input.startFrame,
-        endFrame,
-        input.hopSize,
-        input.f0SampleRate,
-        input.params);
 }
 
 bool LegacyNoteGenerator::validate(const std::vector<Note>& notes)

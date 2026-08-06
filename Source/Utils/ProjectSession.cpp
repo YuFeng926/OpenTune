@@ -815,7 +815,7 @@ Result<void> ProjectSession::copyMediaToProjectDirectory(ProjectSnapshot& snapsh
 
         if (!sourceFile.existsAsFile()) {
             return Result<void>::failure(
-                Error::fromCode(ErrorCode::ModelNotFound,
+                Error::fromCode(ErrorCode::UnknownError,
                     ("Source file not found for copy: " + srcEntry.originalImportPath).toStdString()));
         }
 

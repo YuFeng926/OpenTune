@@ -38,25 +38,6 @@ struct Note {
         if (pitch <= 0.0f) return 0.0f;
         return pitch * std::pow(2.0f, pitchOffset / 12.0f);
     }
-
-    int getMidiNote() const {
-        float adjustedPitch = getAdjustedPitch();
-        if (adjustedPitch <= 0.0f) {
-            return 0;
-        }
-        return static_cast<int>(std::round(69.0f + 12.0f * std::log2(adjustedPitch / 440.0f)));
-    }
-
-    static float midiToFrequency(int midiNote) {
-        return 440.0f * std::pow(2.0f, (static_cast<float>(midiNote) - 69.0f) / 12.0f);
-    }
-
-    static int frequencyToMidi(float frequency) {
-        if (frequency <= 0.0f) {
-            return 0;
-        }
-        return static_cast<int>(std::round(69.0f + 12.0f * std::log2(frequency / 440.0f)));
-    }
 };
 
 class NoteSequence {

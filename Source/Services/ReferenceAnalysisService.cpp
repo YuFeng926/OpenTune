@@ -12,8 +12,6 @@ ReferenceAnalysisService::ReferenceAnalysisService()
     workerThread_ = std::thread([this]() {
         try {
             workerLoop();
-        } catch (const std::exception& e) {
-            AppLogger::error("[ReferenceAnalysisService] workerLoop threw: " + juce::String(e.what()));
         } catch (...) {
             AppLogger::error("[ReferenceAnalysisService] workerLoop threw unknown exception");
         }
@@ -145,11 +143,6 @@ void ReferenceAnalysisService::workerLoop()
                 result.status = ReferenceFeatureStatus::Failed;
                 result.errorMessage = "Reference analysis function is not configured";
             }
-        } catch (const std::exception& e) {
-            AppLogger::error("[ReferenceAnalysisService] Exception during analysis for contentKey objId="
-                + juce::String(static_cast<juce::int64>(key.objectId)) + ": " + juce::String(e.what()));
-            result.status = ReferenceFeatureStatus::Failed;
-            result.errorMessage = e.what();
         } catch (...) {
             AppLogger::error("[ReferenceAnalysisService] Unknown exception during analysis for contentKey objId="
                 + juce::String(static_cast<juce::int64>(key.objectId)));
