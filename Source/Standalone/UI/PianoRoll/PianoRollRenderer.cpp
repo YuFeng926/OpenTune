@@ -790,7 +790,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                 g.fillRect(extensionRect);
             }
 
-            g.setColour(UIColors::panelBorder.withAlpha(isLightTheme ? 0.22f : 1.0f));
+            g.setColour(isLightTheme ? UIColors::panelBorder.withAlpha(0.22f) : juce::Colour(0xFFB0B0B0).withAlpha(0.55f));
             g.drawLine(blackKeyW, y + h * 0.5f, static_cast<float>(w), y + h * 0.5f, 1.0f);
         }
     }
