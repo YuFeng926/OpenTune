@@ -17,6 +17,7 @@
 #include "../../Utils/AudioEditingScheme.h"
 #include "../../Utils/AutomationLane.h"
 #include "../../Utils/ScaleUiMapping.h"
+#include "../../Utils/PitchUtils.h"
 #include "Utils/PianoKeyAudition.h"
 #include "TimelineViewportPolicy.h"
 #include "TimelineLayerComposer.h"
@@ -4588,9 +4589,10 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
     double dirtyStartTime = 1e30, dirtyEndTime = -1e30;
     bool anyPitchChanged = false;
     for (auto& note : notes) {
-        const float targetMidi = static_cast<float>(note.getBaseMidiNote()) + note.pitchOffset;
-        const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(targetMidi)
-            - static_cast<float>(note.getBaseMidiNote());
+        // 连续基准 MIDI（不提前取整），与拖拽 SNAP 同一数学路径
+        const float baseMidi = PitchUtils::freqToMidi(note.pitch);
+        const float targetMidi = baseMidi + note.pitchOffset;
+        const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(targetMidi) - baseMidi;
         if (std::abs(snappedOffset - note.pitchOffset) < 0.001f)
             continue;
         note.pitchOffset = snappedOffset;
