@@ -197,8 +197,6 @@ void OpenTuneAudioProcessorEditor::applyScaleToUi(int rootNote, int scaleType)
     suppressScaleChangedCallback_ = false;
 
     pianoRoll_.setScale(clampedRoot, clampedType);
-    lastScaleRootNote_ = clampedRoot;
-    lastScaleType_ = clampedType;
 }
 
 void OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent(int trackId, int placementIndex)
@@ -208,6 +206,9 @@ void OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent(int tra
     const int rootNote = static_cast<int>(key.root);
     const int scaleType = OpenTune::scaleToUiScaleType(key.scale);
     applyScaleToUi(rootNote, scaleType);
+    // content→UI 回显的唯一入口：同步观察基线，timer 轮询以此为比较基准
+    lastResolvedScaleRootNote_ = rootNote;
+    lastResolvedScaleType_ = scaleType;
 
     const ContentKey contentKey = (trackId >= 0 && placementIndex >= 0)
         ? getStandaloneContentKey(processorRef_, trackId, placementIndex)
@@ -1111,11 +1112,13 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
         if (activeTrack >= 0 && activePlacementIndex >= 0) {
             pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, activeTrack));
+            // 仅当 content 的 detectedKey 与上次观察值不同才回显（导入检测写入/手动设置写入/切换 content）。
+            // 比较基准是 content 观察值而非 UI 显示值：手动设置未持久化时不会被回读覆盖。
             const DetectedKey resolvedKey =
                 resolveScaleForPlacementContent(activeTrack, activePlacementIndex, nullptr);
             const int resolvedRootNote = static_cast<int>(resolvedKey.root);
             const int resolvedScaleType = OpenTune::scaleToUiScaleType(resolvedKey.scale);
-            if (resolvedRootNote != lastScaleRootNote_ || resolvedScaleType != lastScaleType_) {
+            if (resolvedRootNote != lastResolvedScaleRootNote_ || resolvedScaleType != lastResolvedScaleType_) {
                 applyResolvedScaleForPlacementContent(activeTrack, activePlacementIndex);
             }
         }

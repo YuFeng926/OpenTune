@@ -308,8 +308,10 @@ private:
     bool showingSingleNoteParams_ = false;
 
     // Undo 状态追踪
-    int lastScaleRootNote_ = 0;
-    int lastScaleType_ = 1;  // 1=Major
+    // content detectedKey 的上次观察值（content→UI 回显基线，与 UI 显示值分离：
+    // 手动设置未持久化时不会被回读覆盖）
+    int lastResolvedScaleRootNote_ = 0;
+    int lastResolvedScaleType_ = 1;  // 1=Major
     uint32_t lastUndoRedoShortcutMs_ = 0;
     bool suppressScaleChangedCallback_ = false;
     std::array<float, OpenTuneAudioProcessor::MAX_TRACKS> lastTrackVolumes_;
