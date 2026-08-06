@@ -82,6 +82,11 @@ public:
         const NoteGeneratorParams& params,
         const std::optional<ScaleSnapConfig>& scaleSnap) = 0;
 
+    // 仅生成音符唯一入口：generate → validate → 拓扑提交。
+    // 全内容范围（0..f0Count，内部从同一 snapshot 派生）。不写 correction segments、
+    // 不吸附、不请求 render。不创建 undo、不 mark dirty。
+    virtual bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) = 0;
+
     // 一次替换整个 AutomationLane，推进
     // outputGain/content revision，调用 republishPlaybackSource()；
     // 不 enqueue render、不失效 RenderCache。

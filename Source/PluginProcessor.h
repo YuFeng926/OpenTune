@@ -439,11 +439,12 @@ public:
         double changedStartSeconds{0.0};
         double changedEndSeconds{0.0};
         // OpenDyne standalone import: when true, requestContentRefresh also runs
-        // a one-shot whole-content AUTO once F0 extraction completes.
-        bool autoTuneWholeContentOnReady{false};
-        NoteGeneratorParams autoTuneParams;
-        // 自动 AUTO 提交成功后的回调（message-thread，导入派生事务的 dirty 推进）。
-        std::function<void()> onAutoTuneCommitted;
+        // a one-shot whole-content note generation once F0 extraction completes.
+        // 仅生成音符（不写修正曲线、不吸附），不请求 render。
+        bool generateNotesWholeContentOnReady{false};
+        NoteGeneratorParams noteGenerationParams;
+        // 音符生成成功后的回调（message-thread，导入派生事务的 dirty 推进）。
+        std::function<void()> onNotesGenerated;
     };
 
     bool requestContentRefresh(const ContentRefreshRequest& request);
@@ -815,17 +816,30 @@ private:
                                                    float retuneSpeed,
                                                    float vibratoDepth,
                                                    float vibratoRate);
+
+    // 从不可变 PitchCurveSnapshot 的 OriginalF0 生成音符（generate + validate）。
+    // nullopt = 输入无效/生成失败；空 vector = 生成成功但无音符（全静音是合法结果）。
+    // 不写 correction segments、不吸附、不请求 render。
+    std::optional<std::vector<Note>> generateNotesFromOriginalF0(
+        const std::shared_ptr<const PitchCurveSnapshot>& curveSnapshot,
+        int startFrame, int endFrameExclusive, const NoteGeneratorParams& params);
 public:
-    // 普通 AUTO 唯一核心：读 snapshot OriginalF0 → LegacyNoteGenerator::generate
-    // (energy=nullptr，与现有手动 AUTO 行为一致) → scaleSnap apply → validate →
-    // commitAutoTuneGeneratedNotesByContentKey。不创建 undo、不 mark dirty——
-    // 事务与 dirty 归属调用方。scaleSnap 为空表示不做音阶吸附。
+    // 普通 AUTO 唯一核心：读 snapshot OriginalF0 → generateNotesFromOriginalF0
+    // (energy=nullptr，与现有手动 AUTO 行为一致；nullopt/空 → 返回 false) →
+    // scaleSnap apply → commitAutoTuneGeneratedNotesByContentKey。
+    // 不创建 undo、不 mark dirty——事务与 dirty 归属调用方。scaleSnap 为空表示不做音阶吸附。
     bool autoTuneContentRangeByContentKey(
         ContentKey key,
         int startFrame,
         int endFrameExclusive,
         const NoteGeneratorParams& params,
         const std::optional<ScaleSnapConfig>& scaleSnap);
+
+    // 仅生成音符唯一入口（单一快照）：读一次 getContentSnapshot →
+    // generateNotesFromOriginalF0(0..f0Count) → 拓扑提交（commitContentNoteTopologyPatch）。
+    // 不写 correction segments、不吸附、不请求 render。不创建 undo、不 mark dirty。
+    // 空音符（全静音）是合法结果：仍提交拓扑 patch 清除该 range 音符。
+    bool generateNotesOnlyByContentKey(ContentKey key, const NoteGeneratorParams& params);
 public:
 
 #if defined(OPENTUNE_TEST_BUILD)

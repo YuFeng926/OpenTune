@@ -936,15 +936,19 @@ void OpenTuneAudioProcessorEditor::resized()
     }
 
 // Center area (PianoRoll / ArrangementView)
-// PianoRoll uses reduced(12) and reserves both scrollbars inside its own bounds.
+// PianoRoll reserves its scrollbars inside its own bounds; the overview strip
+// aligns its right/bottom edges with the piano roll timeline viewport.
+    pianoRoll_.setBounds(bounds);
+
     if (!isWorkspaceView_)
     {
+        const auto timelineViewport = pianoRoll_.getTimelineViewportBounds();
         const int overviewX = bounds.getX() + 12;
-        const int overviewWidth = bounds.getWidth() - 24 - UIColors::scrollBarThickness;
-        const int overviewBottom = bounds.getBottom() - 12 - UIColors::scrollBarThickness;
+        const int overviewRight = bounds.getX() + timelineViewport.getRight();
+        const int overviewBottom = bounds.getY() + timelineViewport.getBottom();
         overviewStrip_.setBounds(overviewX,
                                  overviewBottom - OVERVIEW_STRIP_HEIGHT,
-                                 overviewWidth,
+                                 overviewRight - overviewX,
                                  OVERVIEW_STRIP_HEIGHT);
     }
     else
@@ -953,7 +957,6 @@ void OpenTuneAudioProcessorEditor::resized()
     }
 
     arrangementView_.setBounds(bounds);
-    pianoRoll_.setBounds(bounds);
     
 // AutoRenderOverlay covers entire PianoRoll area
     autoRenderOverlay_.setBounds(bounds);
@@ -1775,12 +1778,12 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
                     refreshRequest.contentKey = committedPlacement.contentKey;
                     if (safeThis->pianoRoll_.isOpenDyne()) {
-                        refreshRequest.autoTuneWholeContentOnReady = true;
-                        // 导入 AUTO 使用 canonical PianoRoll 参数（与手动 AUTO 同一来源）
-                        refreshRequest.autoTuneParams = safeThis->pianoRoll_.getCurrentAutoTuneParams();
-                        // 自动导入 AUTO 作为导入派生事务：不创建独立 Undo，
+                        refreshRequest.generateNotesWholeContentOnReady = true;
+                        // 导入音符生成使用 canonical PianoRoll 参数（与手动 AUTO 同一来源）
+                        refreshRequest.noteGenerationParams = safeThis->pianoRoll_.getCurrentAutoTuneParams();
+                        // 自动导入音符生成作为导入派生事务：不创建独立 Undo，
                         // 提交成功回调推进 dirty generation（message-thread）。
-                        refreshRequest.onAutoTuneCommitted = [safeThis]() {
+                        refreshRequest.onNotesGenerated = [safeThis]() {
                             if (safeThis != nullptr) safeThis->projectSession_.markDirty();
                         };
                     }
@@ -2935,9 +2938,11 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
 
     const auto result = pianoRoll_.applyAutoTuneToSelection();
     if (!result.applied()) {
-        ConfirmDialogContent::showMessage(this,
-                                          juce::String("AUTO"),
-                                          result.message());
+        if (result.status != PianoRollComponent::AutoTuneApplyStatus::NoChange) {
+            ConfirmDialogContent::showMessage(this,
+                                              juce::String("AUTO"),
+                                              result.message());
+        }
         return;
     }
 

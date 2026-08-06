@@ -364,12 +364,14 @@ void testOpenDyneContract()
                && !contains(commands, "commitAutoTuneGeneratedNotes("),
            "ContentEditCommands exposes autoTuneContentRange without the legacy AUTO commit");
 
-    // 普通 AUTO 生成入口唯一：LegacyNoteGenerator::generate 只存在于核心完成链
+    // 普通 AUTO 生成入口唯一：LegacyNoteGenerator::generate 只存在于 helper，
+    // AUTO core 通过 generateNotesFromOriginalF0 委托后 scaleSnap apply -> commit
     const auto autoTuneCore = functionBlock(processor, "OpenTuneAudioProcessor::autoTuneContentRangeByContentKey");
-    expect(countOccurrences(autoTuneCore, "LegacyNoteGenerator::generate") == 1
+    expect(contains(autoTuneCore, "generateNotesFromOriginalF0")
+               && !contains(autoTuneCore, "LegacyNoteGenerator::generate")
                && contains(autoTuneCore, "scaleSnap->applyToNotes")
                && contains(autoTuneCore, "commitAutoTuneGeneratedNotesByContentKey"),
-           "AUTO core chains generate -> scaleSnap apply -> commit once");
+           "AUTO core delegates generation to the helper, then scaleSnap apply -> commit once");
 
     // 手动 AUTO 走 ContentEditCommands，不直接调 processor、不内联生成
     const auto applyAutoTune = functionBlock(pianoRoll, "PianoRollComponent::applyAutoTuneToSelection");
@@ -377,19 +379,20 @@ void testOpenDyneContract()
                && !contains(applyAutoTune, "LegacyNoteGenerator::generate"),
            "Manual AUTO routes through ContentEditCommands without inline generation");
 
-    // OpenDyne import 一次性整段 AUTO：requestContentRefresh 完成链驱动唯一核心
+    // OpenDyne import 一次性整段音符生成：requestContentRefresh 完成链走 notes-only
     const auto contentRefresh = functionBlock(processor, "OpenTuneAudioProcessor::requestContentRefresh");
-    expect(contains(contentRefresh, "autoTuneWholeContentOnReady")
-               && contains(contentRefresh, "autoTuneContentRangeByContentKey")
-               && contains(contentRefresh, "onAutoTuneCommitted"),
-           "Import one-shot AUTO runs the unique core in the F0 completion chain");
+    expect(contains(contentRefresh, "generateNotesWholeContentOnReady")
+               && contains(contentRefresh, "generateNotesOnlyByContentKey")
+               && contains(contentRefresh, "onNotesGenerated")
+               && !contains(contentRefresh, "autoTuneContentRangeByContentKey"),
+           "Import one-shot note generation runs the notes-only path in the F0 completion chain");
 
-    // Standalone import 只在 OpenDyne 模式设置整段 AUTO
+    // Standalone import 只在 OpenDyne 模式设置整段音符生成
     const auto startImport = functionBlock(readSource("Source/Standalone/PluginEditor.cpp"),
                                            "void OpenTuneAudioProcessorEditor::startPendingImport");
     expect(contains(startImport, "isOpenDyne()")
-               && contains(startImport, "autoTuneWholeContentOnReady"),
-           "OpenDyne import sets the whole-content AUTO flag");
+               && contains(startImport, "generateNotesWholeContentOnReady"),
+           "OpenDyne import sets the whole-content note-generation flag");
 
     // UI 与 DetectedKey 音阶吸附收敛到 ScaleUiMapping 唯一映射入口
     const auto scaleUiMapping = readSource("Source/Utils/ScaleUiMapping.h");
@@ -931,6 +934,132 @@ void testPitchModulationDriftContract()
            "Modulation/Drift mouseUp clears isModDriftDragging and tempPitchCurves");
 }
 
+void testAutoSnapRefactorContract()
+{
+    const auto processor = readSource("Source/PluginProcessor.cpp");
+    const auto processorHeader = readSource("Source/PluginProcessor.h");
+    const auto commands = readSource("Source/Content/ContentEditCommands.h");
+    const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto pianoRollHeader = readSource("Source/Standalone/UI/PianoRollComponent.h");
+    const auto standaloneEditor = readSource("Source/Standalone/PluginEditor.cpp");
+    const auto pluginEditorHeader = readSource("Source/Plugin/PluginEditor.h");
+    const auto pluginEditor = readSource("Source/Plugin/PluginEditor.cpp");
+    const auto f0Extraction = readSource("Source/Services/ImportedClipF0Extraction.h");
+
+    // 1. ContentEditCommands 暴露仅生成音符唯一入口
+    expect(contains(commands, "generateNotesOnly(ContentKey key, const NoteGeneratorParams& params)"),
+           "ContentEditCommands exposes the notes-only generation interface");
+
+    // 2. 生成收敛进 helper：一次 generate + validate；AUTO core 只调 helper
+    const auto helper = functionBlock(processor, "OpenTuneAudioProcessor::generateNotesFromOriginalF0");
+    const auto autoTuneCore = functionBlock(processor, "OpenTuneAudioProcessor::autoTuneContentRangeByContentKey");
+    expect(countOccurrences(helper, "LegacyNoteGenerator::generate") == 1
+               && contains(helper, "LegacyNoteGenerator::validate"),
+           "Generate helper performs exactly one generator call plus validation");
+    expect(contains(autoTuneCore, "generateNotesFromOriginalF0")
+               && !contains(autoTuneCore, "LegacyNoteGenerator::generate"),
+           "AUTO core delegates generation to the shared helper without direct generator calls");
+
+    // 3. 导入完成链走 notes-only，禁止 AUTO core
+    const auto contentRefresh = functionBlock(processor, "OpenTuneAudioProcessor::requestContentRefresh");
+    expect(contains(contentRefresh, "generateNotesWholeContentOnReady")
+               && contains(contentRefresh, "generateNotesOnlyByContentKey")
+               && contains(contentRefresh, "onNotesGenerated")
+               && !contains(contentRefresh, "autoTuneContentRangeByContentKey"),
+           "Import one-shot note generation runs the notes-only path in the F0 completion chain");
+
+    // 4. notes-only 路径契约：拓扑提交、无 correction/mutation、无冗余 drift 赋值
+    const auto notesOnly = functionBlock(processor, "OpenTuneAudioProcessor::generateNotesOnlyByContentKey");
+    expect(contains(notesOnly, "commitContentNoteTopologyPatch")
+               && !contains(notesOnly, "applyCorrectionToRange")
+               && !contains(notesOnly, "onContentLocalMutationCompleted"),
+           "Notes-only path commits topology without corrections or render mutation");
+    const auto autoCommit = functionBlock(processor, "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey");
+    expect(!contains(autoCommit, "pitchDriftScale = 1.0f"),
+           "AUTO commit core leaves pitchDriftScale to the generator");
+    const auto applyAutoTune = functionBlock(pianoRoll, "PianoRollComponent::applyAutoTuneToSelection");
+    // Verify dispatch ordering by scanning the source area after the function signature.
+    // "getSelectedNotesFrameRange" also appears in a comment; search for the actual call
+    // pattern "getSelectedNotesFrameRange(" to skip the comment.
+    const auto fnDefPos = pianoRoll.find("PianoRollComponent::applyAutoTuneToSelection()");
+    if (fnDefPos != std::string::npos) {
+        const auto snapDispatch = pianoRoll.find("applyAutoSnapToAllNotes", fnDefPos);
+        const auto rangeParse = pianoRoll.find("getSelectedNotesFrameRange(", fnDefPos);
+        expect(snapDispatch != std::string::npos
+                   && rangeParse != std::string::npos
+                   && snapDispatch < rangeParse,
+               "Auto Snap dispatch precedes selection-range parsing in applyAutoTuneToSelection");
+    } else {
+        expect(false, "Auto Snap dispatch precedes selection-range parsing in applyAutoTuneToSelection");
+    }
+    const auto autoSnap = functionBlock(pianoRoll, "PianoRollComponent::applyAutoSnapToAllNotes");
+    expect(contains(autoSnap, "quantizeMidiToActiveScale")
+               && contains(autoSnap, "commitEditedContentNotesAndSegments"),
+           "Auto Snap snaps via scale quantize and commits notes+segments once");
+    expect(!contains(autoSnap, "pitchCurveEdited"),
+           "Auto Snap never fires pitchCurveEdited listeners");
+    expect(!contains(f0Extraction, "voicedFrames == 0"),
+           "Silent clips are legal F0 extraction results");
+
+    // 5. 前置检查单一快照 + commit 签名 + 5 个调用方（3 复用 + 2 新读）
+    expect(!contains(applyAutoTune, "currentCurve_->getSnapshot()")
+               && !contains(applyAutoTune, "currentF0Timeline()"),
+           "AUTO preflight derives everything from the single read snapshot");
+    expect(contains(pianoRollHeader,
+                    "commitEditedContentNotesAndSegments(const EditableContentSnapshot& snapshot"),
+           "Notes+segments commit takes the editable snapshot by const reference");
+    expect(contains(functionBlock(pianoRoll, "PianoRollComponent::applyCorrectionToEntireClip"),
+                    "commitEditedContentNotesAndSegments(*contentSnapshot"),
+           "applyCorrectionToEntireClip reuses the read contentSnapshot at its commit call");
+    expect(contains(functionBlock(pianoRoll, "PianoRollComponent::applyNoteParameterToSelectedNotes"),
+                    "commitEditedContentNotesAndSegments(*contentSnapshot"),
+           "applyNoteParameterToSelectedNotes reuses the read contentSnapshot at its commit call");
+    expect(contains(functionBlock(pianoRoll, "PianoRollComponent::applyParameterToFrameRange"),
+                    "commitEditedContentNotesAndSegments(*contentSnapshot"),
+           "applyParameterToFrameRange reuses the read contentSnapshot at its commit call");
+    expect(contains(functionBlock(pianoRoll, "PianoRollComponent::buildToolHandlerContext"),
+                    "commitEditedContentNotesAndSegments(*snap"),
+           "buildToolHandlerContext commit lambda reads its own snapshot");
+    expect(contains(functionBlock(pianoRoll, "PianoRollComponent::commitEditedContentPitchCorrectionSegments"),
+                    "commitEditedContentNotesAndSegments(*snap"),
+           "commitEditedContentPitchCorrectionSegments reads its own snapshot");
+
+    // 6. notes-only 单一快照读取 + affected range 覆盖生成音符实际边界
+    expect(countOccurrences(notesOnly, "getContentSnapshot") == 1,
+           "Notes-only generation reads the content snapshot exactly once");
+    expect(contains(notesOnly, "rangeStartSec")
+               && contains(notesOnly, "n.startTime")
+               && contains(notesOnly, "n.endTime"),
+           "Notes-only affected range expands over generated note boundaries");
+
+    // 7. 全仓旧命名零残留（grep 断言旧名不存在，而非仅检查新名存在）
+    expect(!contains(processorHeader, "autoTuneWholeContentOnReady")
+               && !contains(processor, "autoTuneWholeContentOnReady")
+               && !contains(standaloneEditor, "autoTuneWholeContentOnReady")
+               && !contains(pluginEditorHeader, "autoTuneWholeContentOnReady")
+               && !contains(pluginEditor, "autoTuneWholeContentOnReady"),
+           "autoTuneWholeContentOnReady has zero residual across processor and editors");
+    // getCurrentAutoTuneParams 保留，故用字段形态 .autoTuneParams 精确判定
+    expect(!contains(processorHeader, "autoTuneParams")
+               && !contains(processor, "autoTuneParams")
+               && !contains(standaloneEditor, ".autoTuneParams")
+               && !contains(pluginEditorHeader, "autoTuneParams")
+               && !contains(pluginEditor, ".autoTuneParams"),
+           "autoTuneParams field has zero residual (getCurrentAutoTuneParams stays)");
+    expect(!contains(processorHeader, "onAutoTuneCommitted")
+               && !contains(processor, "onAutoTuneCommitted")
+               && !contains(standaloneEditor, "onAutoTuneCommitted")
+               && !contains(pluginEditorHeader, "onAutoTuneCommitted")
+               && !contains(pluginEditor, "onAutoTuneCommitted"),
+           "onAutoTuneCommitted has zero residual across processor and editors");
+    expect(!contains(processorHeader, "pendingAutoTuneOnReady_")
+               && !contains(processor, "pendingAutoTuneOnReady_")
+               && !contains(standaloneEditor, "pendingAutoTuneOnReady_")
+               && !contains(pluginEditorHeader, "pendingAutoTuneOnReady_")
+               && !contains(pluginEditor, "pendingAutoTuneOnReady_"),
+           "pendingAutoTuneOnReady_ has zero residual across processor and editors");
+}
+
 int main()
 {
     testVisibleEntryContract();
@@ -950,6 +1079,7 @@ int main()
     testOpenDyneToolSwitchingContract();
     testOpenDyneNoteEdgeRetreatContract();
     testPitchModulationDriftContract();
+    testAutoSnapRefactorContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";
