@@ -5119,6 +5119,13 @@ bool OpenTuneAudioProcessor::generateNotesOnlyByContentKey(
     auto generatedNotes = generateNotesFromOriginalF0(curveSnapshot, 0, f0Count, params);
     if (!generatedNotes.has_value()) return false;
 
+    // 初始状态不量化：保持 originalPitch，用户点击 SNAP 时再吸附到音阶。
+    // Melodyne 工作流：导入后 only note creation, no pitch shift.
+    for (auto& note : *generatedNotes) {
+        if (note.originalPitch > 0.0f)
+            note.pitch = note.originalPitch;
+    }
+
     const double secondsPerFrame = static_cast<double>(curveSnapshot->getHopSize())
                                  / curveSnapshot->getSampleRate();
     // 生成音符可能因 tailExtendMs 超出 f0Count 秒域范围：

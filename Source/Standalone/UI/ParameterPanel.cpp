@@ -468,9 +468,9 @@ ParameterPanel::ParameterPanel()
     setupHeader(toolsHeader_, LOC(kTools));
     addAndMakeVisible(toolsHeader_);
 
-    autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Auto", LOC(kTooltipAutoTune) + "\n6");
+    autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Snap", LOC(kTooltipAutoTune) + "\n6");
     autoTuneToolButton_->setClickingTogglesState(false);
-    autoTuneToolButton_->setTextIcon("AUTO");
+    autoTuneToolButton_->setTextIcon("SNAP");
     autoTuneToolButton_->onClick = [this] {
         listeners_.call([](Listener& l) { l.autoTuneRequested(); });
     };
@@ -986,7 +986,7 @@ void ParameterPanel::setAutoButtonPresentation(const AutoButtonPresentation& pre
         return;
     }
 
-    autoTuneToolButton_->setTextIcon("AUTO");
+    autoTuneToolButton_->setTextIcon("SNAP");
     const bool hasReference = autoButtonPresentation_.mode == AutoButtonPresentation::Mode::ReferenceAuto;
     const auto resolvedTooltip = buildAutoButtonTooltip(autoButtonPresentation_);
     {
