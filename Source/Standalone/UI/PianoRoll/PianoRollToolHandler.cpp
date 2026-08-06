@@ -508,6 +508,13 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
         return;
     }
 
+    // 框选进行中（含 Pitch 工具空区拖拽启动的框选），统一走 Select drag 处理，
+    // 确保框选终点持续跟随鼠标。
+    if (ctx_.getState().selection.isSelectingArea) {
+        handleSelectDrag(e);
+        return;
+    }
+
     switch (currentTool_) {
         case ToolId::Select:
             handleSelectDrag(e);
@@ -573,6 +580,12 @@ void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
 void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
 {
     if (consumeEmptySpaceIntentUp(e)) {
+        return;
+    }
+
+    // 框选完成时（含 Pitch 工具空区拖拽启动的框选），统一走 Select up 处理提交选择。
+    if (ctx_.getState().selection.isSelectingArea) {
+        handleSelectUp(e);
         return;
     }
 
@@ -968,6 +981,12 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentDrag(const juce::MouseEvent& e
             handleDrawCurveTool(startEvent);
             handleDrawCurveTool(e);
             return true;
+        case ToolId::Pitch:
+        case ToolId::PitchModulation:
+        case ToolId::PitchDrift:
+            handleSelectTool(startEvent);
+            handleSelectDrag(e);
+            return true;
         default:
             return true;
     }
@@ -999,6 +1018,11 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
                 if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
                     handleDrawNoteUp(e);
                 }
+                break;
+            case ToolId::Pitch:
+            case ToolId::PitchModulation:
+            case ToolId::PitchDrift:
+                handleSelectUp(e);
                 break;
             default:
                 break;
@@ -2188,11 +2212,14 @@ void PianoRollToolHandler::handlePitchToolMouseDown(const juce::MouseEvent& e)
 
     auto& noteSelection = ctx_.getState().noteSelection;
     const int noteCount = static_cast<int>(notes.size());
-    if (e.mods.isCtrlDown() || e.mods.isCommandDown()) {
-        noteSelection.toggle(clickedNoteIndex, noteCount);
+    if (noteSelection.isSelected(clickedNoteIndex)) {
+        // 点击已选中音符：保留多选，准备批量拖拽
     } else {
+        // 点击未选中音符：单选该音符
         noteSelection.setSingle(clickedNoteIndex, noteCount);
     }
+    // 清除旧框选矩形，F0 编辑范围由实际 draggedNoteIndices 计算
+    ctx_.getState().selection.hasSelectionArea = false;
     updateF0SelectionFromNotes(notes);
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 
