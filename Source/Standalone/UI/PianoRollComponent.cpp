@@ -326,7 +326,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
 }
 
 // ============================================================================
-// OpenDyne 右键纵向图标工具栏
+// OpenDyne 右键横向工具选择弹出条
 // ============================================================================
 
 namespace {
@@ -357,42 +357,52 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
 {
     dismissToolPopup();
 
-    // 构建工具列表
-    std::vector<ToolBarItem> items;
-    if (isOpenDyne()) {
-        items = {
-            { ToolId::Select,          "Select",     "F1",    []{ return makeToolIcon(ToolId::Select); } },
-            { ToolId::Pitch,           "Pitch",      "F2",    []{ return makeToolIcon(ToolId::Pitch); } },
-            { ToolId::PitchModulation, "Modulation", "F2×2",  []{ return makeToolIcon(ToolId::PitchModulation); } },
-            { ToolId::PitchDrift,      "Drift",      "F2×3",  []{ return makeToolIcon(ToolId::PitchDrift); } },
-            { ToolId::VolumeEnvelope,  "Volume",     "F4",    []{ return makeToolIcon(ToolId::VolumeEnvelope); } },
-            { ToolId::TimeTool,        "Time",       "T",     []{ return makeToolIcon(ToolId::TimeTool); } },
-            { ToolId::Scissors,        "Scissors",   "F6",    []{ return makeToolIcon(ToolId::Scissors); } },
+    const bool isDyne = isOpenDyne();
+
+    struct MainItem {
+        ToolBarItem tool;
+        bool hasDropdown = false;
+    };
+
+    std::vector<MainItem> mainItems;
+    std::vector<ToolBarItem> subItems;
+
+    if (isDyne) {
+        mainItems = {
+            { { ToolId::Select,    "Select",   "F1",  []{ return makeToolIcon(ToolId::Select); } } },
+            { { ToolId::Pitch,     "Pitch",    "F2",  []{ return makeToolIcon(ToolId::Pitch); } }, true },
+            { { ToolId::VolumeEnvelope, "Volume", "F4", []{ return makeToolIcon(ToolId::VolumeEnvelope); } } },
+            { { ToolId::TimeTool,  "Time",     "T",   []{ return makeToolIcon(ToolId::TimeTool); } } },
+            { { ToolId::Scissors,  "Scissors", "F6",  []{ return makeToolIcon(ToolId::Scissors); } } },
+        };
+        subItems = {
+            { ToolId::PitchModulation, "Modulation", "F2×2", []{ return makeToolIcon(ToolId::PitchModulation); } },
+            { ToolId::PitchDrift,      "Drift",      "F2×3", []{ return makeToolIcon(ToolId::PitchDrift); } },
         };
     } else {
-        items = {
-            { ToolId::Select,     "Select",      "3", []{ return makeToolIcon(ToolId::Select); } },
-            { ToolId::DrawNote,   "Draw Note",   "2", []{ return ToolbarIcons::getDrawNoteIcon(); } },
-            { ToolId::LineAnchor, "Line Anchor", "4", []{ return ToolbarIcons::getLineAnchorIcon(); } },
-            { ToolId::HandDraw,   "Hand Draw",   "5", []{ return ToolbarIcons::getHandDrawIcon(); } },
-            { ToolId::TimeTool,   "Time",        "T", []{ return makeToolIcon(ToolId::TimeTool); } },
+        mainItems = {
+            { { ToolId::Select,     "Select",      "3", []{ return makeToolIcon(ToolId::Select); } } },
+            { { ToolId::DrawNote,   "Draw Note",   "2", []{ return ToolbarIcons::getDrawNoteIcon(); } } },
+            { { ToolId::LineAnchor, "Line Anchor", "4", []{ return ToolbarIcons::getLineAnchorIcon(); } } },
+            { { ToolId::HandDraw,   "Hand Draw",   "5", []{ return ToolbarIcons::getHandDrawIcon(); } } },
+            { { ToolId::TimeTool,   "Time",        "T", []{ return makeToolIcon(ToolId::TimeTool); } } },
         };
     }
 
-    const int btnSize = 36;
-    const int gap = 2;
-    const int pad = 4;
-    const int totalH = static_cast<int>(items.size()) * btnSize
-                     + static_cast<int>(items.size() - 1) * gap + pad * 2;
-    const int totalW = btnSize + pad * 2;
+    // 布局常量
+    const int btnSize = 32;
+    const int gap = 4;
+    const int pad = 6;
+    const int pitchExtraW = 10;
 
-    // 自绘图标按钮（局部类，与外围成员同访问权限）
+    // ── 自绘图标按钮 ──────────────────────────────────────────────
     class ToolIconButton : public juce::Button {
     public:
         ToolIconButton(PianoRollComponent& owner, ToolId tid,
-                       juce::Path iconPath, const juce::String& tooltip)
+                       juce::Path iconPath, const juce::String& tooltip,
+                       bool showArrow = false)
             : juce::Button(tooltip), owner_(owner), tid_(tid),
-              iconPath_(std::move(iconPath)) {
+              iconPath_(std::move(iconPath)), showArrow_(showArrow) {
             setTooltip(tooltip);
             setClickingTogglesState(false);
             setToggleState(owner_.currentTool_ == tid_, juce::dontSendNotification);
@@ -409,7 +419,6 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             const auto themeId = UIColors::currentThemeId();
             const auto radius = UIColors::currentThemeStyle().controlRadius;
 
-            // 背景
             if (active) {
                 if (themeId == ThemeId::Overdose) {
                     juce::ColourGradient fill(juce::Colour(0xFFFFFAFE), bounds.getX(), bounds.getY(),
@@ -421,11 +430,10 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
                 }
                 g.fillRoundedRectangle(bounds, radius);
             } else if (highlighted) {
-                g.setColour(juce::Colours::white.withAlpha(0.12f));
+                g.setColour(juce::Colours::white.withAlpha(0.22f));
                 g.fillRoundedRectangle(bounds, radius);
             }
 
-            // 图标
             if (!iconPath_.isEmpty()) {
                 const float iconSz = bounds.getWidth() * 0.55f;
                 auto iconRect = bounds.withSizeKeepingCentre(iconSz, iconSz);
@@ -435,38 +443,153 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
                                        : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f);
                 ToolbarIcons::drawIcon(g, iconPath_, iconRect, iconColor, 2.0f, false);
             }
+
+            // Pitch 下拉小三角
+            if (showArrow_) {
+                const float arrowSz = 5.0f;
+                auto arrowBounds = juce::Rectangle<float>(
+                    bounds.getRight() - arrowSz - 1.0f,
+                    bounds.getBottom() - arrowSz - 1.0f,
+                    arrowSz, arrowSz);
+                juce::Path arrow;
+                arrow.addTriangle(arrowBounds.getX(), arrowBounds.getY(),
+                                  arrowBounds.getRight(), arrowBounds.getY(),
+                                  arrowBounds.getCentreX(), arrowBounds.getBottom());
+                auto arrowColor = active ? juce::Colours::white : UIColors::textPrimary;
+                g.setColour(arrowColor.withAlpha(0.7f));
+                g.fillPath(arrow);
+            }
         }
 
     private:
         PianoRollComponent& owner_;
         ToolId tid_;
         juce::Path iconPath_;
+        bool showArrow_;
     };
 
-    // 自绘弹出条组件（无背景，按钮自带高亮；定位由外层完成）
+    // ── 弹出条容器 ────────────────────────────────────────────────
     class ToolBarPopup : public juce::Component {
     public:
         ToolBarPopup(PianoRollComponent& owner,
-                     std::vector<ToolBarItem> items,
-                     int btnSize, int gap, int pad)
-            : owner_(owner) {
-            for (const auto& item : items) {
+                     const std::vector<MainItem>& mainItems,
+                     const std::vector<ToolBarItem>& subItems,
+                     bool isDyne,
+                     int btnSize, int gap, int pad,
+                     int pitchExtraW)
+            : owner_(owner), isDyne_(isDyne),
+              btnSize_(btnSize), gap_(gap), pad_(pad), pitchExtraW_(pitchExtraW),
+              subExpanded_(false)
+        {
+            int pitchIdx = -1;
+            for (int i = 0; i < static_cast<int>(mainItems.size()); ++i) {
+                const auto& mi = mainItems[i];
+                int w = mi.hasDropdown ? btnSize + pitchExtraW : btnSize;
                 auto btn = std::make_unique<ToolIconButton>(
-                    owner_, item.id, item.iconFactory(),
-                    juce::String(item.name) + "\n" + item.shortcut);
+                    owner_, mi.tool.id, mi.tool.iconFactory(),
+                    juce::String(mi.tool.name) + "\n" + mi.tool.shortcut,
+                    mi.hasDropdown);
                 addAndMakeVisible(*btn);
-                buttons_.push_back(std::move(btn));
+
+                if (mi.hasDropdown) {
+                    pitchIdx = i;
+                    btn->onClick = [this, tid = mi.tool.id]() {
+                        if (subExpanded_) {
+                            // 已展开：选中 Pitch 工具并关闭
+                            owner_.setCurrentTool(tid);
+                            owner_.dismissToolPopup();
+                        } else {
+                            // 未展开：展开子行
+                            subExpanded_ = true;
+                            updateLayout();
+                        }
+                    };
+                }
+
+                mainButtons_.push_back(std::move(btn));
+                mainWidths_.push_back(w);
+            }
+            pitchButtonIdx_ = pitchIdx;
+
+            for (const auto& si : subItems) {
+                auto btn = std::make_unique<ToolIconButton>(
+                    owner_, si.id, si.iconFactory(),
+                    juce::String(si.name) + "\n" + si.shortcut);
+                addAndMakeVisible(*btn);
+                btn->setVisible(false);
+                subButtons_.push_back(std::move(btn));
             }
 
-            int y = pad;
-            for (auto& b : buttons_) {
-                b->setBounds(pad, y, btnSize, btnSize);
-                y += btnSize + gap;
+            updateLayout();
+        }
+
+        void updateLayout()
+        {
+            const bool showSub = isDyne_ && subExpanded_ && !subButtons_.empty();
+            const int subH = showSub ? (btnSize_ + gap_) : 0;
+            const int totalH = pad_ + btnSize_ + subH + pad_;
+
+            int x = pad_;
+            for (int i = 0; i < static_cast<int>(mainButtons_.size()); ++i) {
+                mainButtons_[i]->setBounds(x, pad_, mainWidths_[i], btnSize_);
+                x += mainWidths_[i] + gap_;
             }
+
+            if (showSub) {
+                int sx;
+                if (pitchButtonIdx_ >= 0) {
+                    sx = mainButtons_[pitchButtonIdx_]->getX();
+                } else {
+                    sx = pad_;
+                }
+                int sy = pad_ + btnSize_ + gap_;
+                for (auto& sb : subButtons_) {
+                    sb->setBounds(sx, sy, btnSize_, btnSize_);
+                    sb->setVisible(true);
+                    sx += btnSize_ + gap_;
+                }
+            } else {
+                for (auto& sb : subButtons_)
+                    sb->setVisible(false);
+            }
+
+            int totalW = pad_ * 2;
+            for (int i = 0; i < static_cast<int>(mainButtons_.size()); ++i)
+                totalW += mainWidths_[i] + gap_;
+            if (!mainButtons_.empty()) totalW -= gap_;
+
+            setSize(totalW, totalH);
+        }
+
+        void paint(juce::Graphics& g) override {
+            auto bounds = getLocalBounds().toFloat();
+            const auto radius = UIColors::currentThemeStyle().controlRadius;
+            const auto themeId = UIColors::currentThemeId();
+
+            // 深色背景 + 圆角 + 阴影
+            {
+                const auto& style = UIColors::currentThemeStyle();
+                g.setColour(juce::Colours::black.withAlpha(style.shadowAlpha * 0.5f));
+                g.fillRoundedRectangle(bounds.translated(0, 2).expanded(0, 2), radius + 2.0f);
+            }
+
+            if (themeId == ThemeId::Overdose) {
+                juce::ColourGradient bg(
+                    UIColors::backgroundDark.brighter(0.06f), bounds.getX(), bounds.getY(),
+                    UIColors::backgroundDark.darker(0.08f), bounds.getX(), bounds.getBottom(), false);
+                g.setGradientFill(bg);
+            } else {
+                g.setColour(UIColors::backgroundDark);
+            }
+            g.fillRoundedRectangle(bounds, radius);
+
+            // 顶部内边缘线
+            g.setColour(UIColors::panelBorder.withAlpha(0.1f));
+            g.drawLine(bounds.getX() + radius, bounds.getY() + 0.5f,
+                       bounds.getRight() - radius, bounds.getY() + 0.5f, 1.0f);
         }
 
         void mouseExit(const juce::MouseEvent&) override {
-            // 鼠标离开后延迟检查，允许移到按钮上
             juce::Timer::callAfterDelay(180, [weak = juce::Component::SafePointer<ToolBarPopup>(this)]() {
                 if (weak != nullptr && !weak->getLocalBounds().contains(weak->getMouseXYRelative())) {
                     weak->owner_.dismissToolPopup();
@@ -476,18 +599,28 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
 
     private:
         PianoRollComponent& owner_;
-        std::vector<std::unique_ptr<ToolIconButton>> buttons_;
+        bool isDyne_;
+        int btnSize_, gap_, pad_, pitchExtraW_;
+        int pitchButtonIdx_ = -1;
+        bool subExpanded_;
+
+        std::vector<std::unique_ptr<ToolIconButton>> mainButtons_;
+        std::vector<int> mainWidths_;
+        std::vector<std::unique_ptr<ToolIconButton>> subButtons_;
     };
 
-    auto popup = std::make_unique<ToolBarPopup>(*this, std::move(items), btnSize, gap, pad);
+    auto popup = std::make_unique<ToolBarPopup>(
+        *this, mainItems, subItems, isDyne, btnSize, gap, pad, pitchExtraW);
 
     // 定位到鼠标处，确保不超出组件边界
     auto localPos = getLocalPoint(nullptr, screenPos);
+    int pw = popup->getWidth();
+    int ph = popup->getHeight();
     int px = localPos.x;
     int py = localPos.y;
-    px = juce::jlimit(0, getWidth() - totalW, px);
-    py = juce::jlimit(0, getHeight() - totalH, py);
-    popup->setBounds(px, py, totalW, totalH);
+    px = juce::jlimit(0, getWidth() - pw, px);
+    py = juce::jlimit(0, getHeight() - ph, py);
+    popup->setBounds(px, py, pw, ph);
 
     addAndMakeVisible(popup.get());
     popup->setVisible(true);
