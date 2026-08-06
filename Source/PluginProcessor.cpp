@@ -946,6 +946,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 key, startFrame, endFrameExclusive, params, scaleSnap);
         }
 
+        bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) override
+        {
+            return proc_.generateNotesOnlyByContentKey(key, params);
+        }
+
         bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes) override
         {
             return proc_.replaceContentNotesForFullMutation(key, std::move(notes));
@@ -3729,7 +3734,8 @@ uint64_t OpenTuneAudioProcessor::commitPreparedImportAsContent(PreparedImport&& 
 // requestContentRefresh -- Standalone / regular VST3 F0 refresh.
 // Normally refreshes F0 only -- does NOT run GAME note generation.
 // An OpenDyne import request may additionally carry a one-shot whole-content
-// AUTO intent (autoTuneWholeContentOnReady), executed here once F0 is Ready.
+// note generation intent (generateNotesWholeContentOnReady), executed here
+// once F0 is Ready.
 // ============================================================================
 
 bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor::ContentRefreshRequest& request)
@@ -3919,28 +3925,17 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
             processor->detectContentKeyIfUnset(capturedRequest.contentKey);
 
-            if (capturedRequest.autoTuneWholeContentOnReady) {
-                // OpenDyne import 一次性整段 AUTO：复用唯一核心
-                // autoTuneContentRangeByContentKey -> commitAutoTuneGeneratedNotesByContentKey
-                // -> applyNotes -> notesRevision -> editor heartbeat 单一路径。
-                // 不创建独立 Undo；成功回调（onAutoTuneCommitted）推进调用方 dirty。
-                std::optional<ScaleSnapConfig> scaleSnap;
-                auto detectedSnap = processor->getContentSnapshot(capturedRequest.contentKey);
-                if (detectedSnap) {
-                    scaleSnap = makeScaleSnapConfig(detectedSnap->detectedKey);
-                }
-
-                if (processor->autoTuneContentRangeByContentKey(
+            if (capturedRequest.generateNotesWholeContentOnReady) {
+                // OpenDyne 导入：仅生成音符，不写修正曲线（还原 Melodyne 初始状态）。
+                // 不吸附、不请求 render；成功回调（onNotesGenerated）推进调用方 dirty。
+                if (processor->generateNotesOnlyByContentKey(
                         capturedRequest.contentKey,
-                        0,
-                        static_cast<int>(result.f0.size()),
-                        capturedRequest.autoTuneParams,
-                        scaleSnap)) {
-                    if (capturedRequest.onAutoTuneCommitted) {
-                        capturedRequest.onAutoTuneCommitted();
+                        capturedRequest.noteGenerationParams)) {
+                    if (capturedRequest.onNotesGenerated) {
+                        capturedRequest.onNotesGenerated();
                     }
                 } else {
-                    AppLogger::log("ContentRefresh: auto AUTO commit failed contentKey objectId="
+                    AppLogger::log("ContentRefresh: note generation failed contentKey objectId="
                         + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
                 }
             }
@@ -5091,6 +5086,60 @@ std::unique_ptr<PitchShiftEditAction> OpenTuneAudioProcessor::commitPitchShiftEd
         contentCommands_, key, std::move(before), std::move(after));
 }
 
+std::optional<std::vector<Note>> OpenTuneAudioProcessor::generateNotesFromOriginalF0(
+    const std::shared_ptr<const PitchCurveSnapshot>& curveSnapshot,
+    int startFrame, int endFrameExclusive, const NoteGeneratorParams& params)
+{
+    if (curveSnapshot == nullptr) return std::nullopt;
+    const auto& originalF0 = curveSnapshot->getOriginalF0();
+    const int f0Count = static_cast<int>(originalF0.size());
+    if (f0Count == 0) return std::nullopt;
+    if (startFrame < 0 || endFrameExclusive <= startFrame || endFrameExclusive > f0Count) return std::nullopt;
+    const int hopSize = curveSnapshot->getHopSize();
+    const double sampleRate = curveSnapshot->getSampleRate();
+    if (hopSize <= 0 || sampleRate <= 0.0) return std::nullopt;
+    auto generatedNotes = LegacyNoteGenerator::generate(
+        originalF0.data(), f0Count, nullptr, startFrame, endFrameExclusive,
+        hopSize, sampleRate, params);
+    if (!LegacyNoteGenerator::validate(generatedNotes)) return std::nullopt;
+    return generatedNotes;   // 空 vector 通过验证，作为合法结果返回
+}
+
+bool OpenTuneAudioProcessor::generateNotesOnlyByContentKey(
+    ContentKey key, const NoteGeneratorParams& params)
+{
+    // 单一快照：读取一次，curveSnapshot 贯穿生成、秒域范围、拓扑提交
+    auto snap = getContentSnapshot(key);
+    if (snap == nullptr || snap->pitchCurve == nullptr) return false;
+    const auto curveSnapshot = snap->pitchCurve->getSnapshot();
+    if (curveSnapshot == nullptr) return false;
+    const int f0Count = static_cast<int>(curveSnapshot->getOriginalF0().size());
+    if (f0Count == 0) return false;
+
+    auto generatedNotes = generateNotesFromOriginalF0(curveSnapshot, 0, f0Count, params);
+    if (!generatedNotes.has_value()) return false;
+
+    const double secondsPerFrame = static_cast<double>(curveSnapshot->getHopSize())
+                                 / curveSnapshot->getSampleRate();
+    // 生成音符可能因 tailExtendMs 超出 f0Count 秒域范围：
+    // affected range 必须覆盖生成音符实际范围，mergeNotesRange 不做范围过滤
+    double rangeStartSec = 0.0;
+    double rangeEndSec = static_cast<double>(f0Count) * secondsPerFrame;
+    for (const auto& n : *generatedNotes) {
+        rangeStartSec = std::min(rangeStartSec, n.startTime);
+        rangeEndSec = std::max(rangeEndSec, n.endTime);
+    }
+
+    ContentNoteRangePatch patch;
+    patch.affectedRange.startSeconds = rangeStartSec;
+    patch.affectedRange.endSeconds = rangeEndSec;
+    patch.afterNotesInRange = std::move(*generatedNotes);   // 空 vector 也提交（清除该 range 音符）
+
+    // 拓扑提交：merge notes + 推进 notes/content revision + republish，
+    // 不推进 pitchRevision、不请求 render（ContentEditCommands.h 契约）
+    return commitContentNoteTopologyPatch(key, std::move(patch)) != nullptr;
+}
+
 bool OpenTuneAudioProcessor::autoTuneContentRangeByContentKey(
     ContentKey key,
     int startFrame,
@@ -5102,29 +5151,18 @@ bool OpenTuneAudioProcessor::autoTuneContentRangeByContentKey(
     if (snap == nullptr || snap->pitchCurve == nullptr) return false;
 
     const auto curveSnapshot = snap->pitchCurve->getSnapshot();
-    const auto& originalF0 = curveSnapshot->getOriginalF0();
-    const int f0Count = static_cast<int>(originalF0.size());
-    if (f0Count == 0) return false;
-    if (startFrame < 0 || endFrameExclusive <= startFrame || endFrameExclusive > f0Count) return false;
 
-    auto generatedNotes = LegacyNoteGenerator::generate(
-        originalF0.data(),
-        f0Count,
-        nullptr, // energy：与现有手动 AUTO 行为一致
-        startFrame,
-        endFrameExclusive,
-        curveSnapshot->getHopSize(),
-        curveSnapshot->getSampleRate(),
-        params);
+    auto generatedNotes = generateNotesFromOriginalF0(
+        curveSnapshot, startFrame, endFrameExclusive, params);
+    if (!generatedNotes.has_value()) return false;
 
     if (scaleSnap.has_value()) {
-        scaleSnap->applyToNotes(generatedNotes);
+        scaleSnap->applyToNotes(*generatedNotes);
     }
-    LegacyNoteGenerator::validate(generatedNotes);
 
     return commitAutoTuneGeneratedNotesByContentKey(
         key,
-        std::move(generatedNotes),
+        std::move(*generatedNotes),
         startFrame,
         endFrameExclusive,
         params.retuneSpeed,
@@ -5159,7 +5197,6 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
         if (note.endTime <= rangeStartTime || note.startTime >= rangeEndTime)
             mergedNotes.push_back(note);
     for (auto& note : normalizedNotes) {
-        note.pitchDriftScale = 1.0f;
         mergedNotes.push_back(note);
     }
     std::sort(mergedNotes.begin(), mergedNotes.end(),

@@ -232,6 +232,7 @@ public:
     enum class AutoTuneApplyStatus
     {
         Applied,
+        NoChange,   // 新增：最终修正已达成（无音符 / 无音阶配置 / 全部音符已吸附且修正曲线无空洞覆盖）
         NoCurve,
         NoProcessor,
         NoContent,
@@ -365,9 +366,12 @@ public:
     /// Re-read notes from the content store and update the cache.
     void refreshEditedContentNotes();
 
+    /// Timeline viewport geometry in local coordinates.
+    /// Shared with the Standalone PluginEditor for the overview strip layout.
+    juce::Rectangle<int> getTimelineViewportBounds() const;
+
 private:
     void onScrollVBlankCallback(double timestampSec);
-    juce::Rectangle<int> getTimelineViewportBounds() const;
     int getTimelineContentViewportWidth() const;
     int getTimelineContentViewportHeight() const;
 
@@ -428,9 +432,12 @@ private:
     void beginNoteDraft();
     bool commitNoteDraft();
     void clearNoteDraft();
-    ContentCommitSnapshot commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
+    ContentCommitSnapshot commitEditedContentNotesAndSegments(const EditableContentSnapshot& snapshot,
+                                             const std::vector<Note>& notes,
                                              const std::vector<PitchCorrectionSegment>& segments,
                                              F0FrameRange affectedRange);
+    AutoTuneApplyResult applyAutoSnapToAllNotes(const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot,
+                                                const F0Timeline& f0tl);
     ContentCommitSnapshot commitEditedContentPitchCorrectionSegments(const std::vector<PitchCorrectionSegment>& segments,
                                                        F0FrameRange affectedRange);
     bool selectNotesOverlappingFrames(int startFrame, int endFrameExclusive);

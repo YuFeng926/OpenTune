@@ -322,23 +322,14 @@ void OpenTuneAudioProcessorEditor::timerCallback()
                 || previous->second == OriginalF0State::NotRequested)
             && currentState == OriginalF0State::Ready) {
             pianoRoll_.requestInitialF0View(contentKey);
-            const auto intentIt = pendingAutoTuneOnReady_.find(contentKey);
-            if (intentIt != pendingAutoTuneOnReady_.end()) {
+            const auto intentIt = pendingNoteGenerationOnReady_.find(contentKey);
+            if (intentIt != pendingNoteGenerationOnReady_.end()) {
                 // 统一调性检测（复用 processor 唯一实现；失败静默）
                 processorRef_.detectContentKeyIfUnset(contentKey);
-                auto intentSnap = processorRef_.getContentSnapshot(contentKey);
-                if (intentSnap != nullptr && intentSnap->pitchCurve != nullptr) {
-                    const auto curveSnap = intentSnap->pitchCurve->getSnapshot();
-                    const int f0Count = curveSnap != nullptr ? static_cast<int>(curveSnap->getOriginalF0().size()) : 0;
-                    if (f0Count > 0) {
-                        std::optional<ScaleSnapConfig> scaleSnap;
-                        if (intentSnap->detectedKey.confidence > 0.0f)
-                            scaleSnap = makeScaleSnapConfig(intentSnap->detectedKey);
-                        contentCommands_->autoTuneContentRange(contentKey, 0, f0Count,
-                                                               intentIt->second, scaleSnap);
-                    }
-                }
-                pendingAutoTuneOnReady_.erase(intentIt);
+                // 仅生成音符，不写修正曲线（还原 Melodyne 初始状态）。
+                // f0Count 由 generateNotesOnly 内部从同一 snapshot 派生，调用方不传范围。
+                contentCommands_->generateNotesOnly(contentKey, intentIt->second);
+                pendingNoteGenerationOnReady_.erase(intentIt);
             }
         }
         lastObservedOriginalF0States_[contentKey] = currentState;
@@ -1038,11 +1029,11 @@ void OpenTuneAudioProcessorEditor::recordRequested()
                 rmvpeOverlayTargetContentKeys_.push_back(projection.contentKey);
                 // F0 状态机基线重置：防止 F0 完成早于首次 timer 观察导致跳变丢失
                 lastObservedOriginalF0States_[projection.contentKey] = OriginalF0State::NotRequested;
-                // 捕获 OpenDyne 一次性 AUTO 意图，F0 Ready 跳变时消费
+                // 捕获 OpenDyne 一次性音符生成意图，F0 Ready 跳变时消费
                 if (pianoRoll_.isOpenDyne())
-                    pendingAutoTuneOnReady_[projection.contentKey] = pianoRoll_.getCurrentAutoTuneParams();
+                    pendingNoteGenerationOnReady_[projection.contentKey] = pianoRoll_.getCurrentAutoTuneParams();
                 else
-                    pendingAutoTuneOnReady_.erase(projection.contentKey);
+                    pendingNoteGenerationOnReady_.erase(projection.contentKey);
             }
         }
         rmvpeOverlayLatched_ = true;
@@ -1112,10 +1103,13 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     AppLogger::log("AutoTune: vst3 apply result=" + juce::String(result.applied() ? "true" : "false")
         + " message=" + result.message());
     if (!result.applied()) {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon,
-            "AUTO",
-            result.message());
+        // NoChange = 最终修正已达成：静默，不弹窗
+        if (result.status != PianoRollComponent::AutoTuneApplyStatus::NoChange) {
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon,
+                "AUTO",
+                result.message());
+        }
         return;
     }
 

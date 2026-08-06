@@ -108,17 +108,6 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
         }
     }
 
-    int voicedFrames = 0;
-    for (float value : out.f0) {
-        if (std::isfinite(value) && value > 0.0f)
-            ++voicedFrames;
-    }
-
-    if (voicedFrames == 0) {
-        errorMessage = "f0_empty_or_unvoiced";
-        return false;
-    }
-
     return true;
 }
 

@@ -53,6 +53,23 @@ private:
     PianoRollComponent& owner_;
 };
 
+// 检查 [startFrame, endFrameExclusive) 内每帧都被 correction 覆盖（无空洞）。
+// 与播放路径一致：基于 forEachCorrectionF0Span 的 span 遍历，
+// f0Data 长度不足的 segment 视为无覆盖。合法范围：0 <= startFrame <= endFrameExclusive <= size()。
+bool isFullyCorrectedInRange(const PitchCurveSnapshot& curve, int startFrame, int endFrameExclusive)
+{
+    if (startFrame < 0 || endFrameExclusive > static_cast<int>(curve.size())
+        || endFrameExclusive <= startFrame)
+        return false;
+    bool fullyCorrected = true;
+    curve.forEachCorrectionF0Span(startFrame, endFrameExclusive,
+        [&](int, const float* values, int) {
+            if (values == nullptr)
+                fullyCorrected = false;
+        });
+    return fullyCorrected;
+}
+
 } // namespace
 
 void PianoRollComponent::initializeUIComponents() {
@@ -125,7 +142,9 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.commitNotesAndSegments = [this](const std::vector<Note>& notes,
                                             const std::vector<PitchCorrectionSegment>& segments,
                                             F0FrameRange affectedRange) {
-        return commitEditedContentNotesAndSegments(notes, segments, affectedRange);
+        const auto snap = readEditedSnapshot();
+        if (snap == nullptr) return ContentCommitSnapshot{};
+        return commitEditedContentNotesAndSegments(*snap, notes, segments, affectedRange);
     };
     // ── OpenDyne 契约回调（Pitch/Scissors/Gain 域） ──
     toolCtx.commitVolumeEnvelope = [this](AutomationLane before, AutomationLane after) -> ContentCommitSnapshot {
@@ -530,7 +549,7 @@ bool PianoRollComponent::applyCorrectionToEntireClip(float retuneSpeed, float vi
     captureBeforeUndoSnapshot();
     pendingUndoDescription_ = TRANS("自动调音");
 
-    if (!commitEditedContentNotesAndSegments(notes, allSegments, affectedRange)) {
+    if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, allSegments, affectedRange)) {
         return false;
     }
     return true;
@@ -717,19 +736,27 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentPitchCorrectionSegm
     // full replacement which would discard segments outside affectedRange.
     // commitEditedContentNotesAndSegments 锟?commitContentNotesAndSegments
     // performs range-scoped merge (keptBefore + incoming + keptAfter).
-    return commitEditedContentNotesAndSegments(cachedNotes_, segments, affectedRange);
+    const auto snap = readEditedSnapshot();
+    if (snap == nullptr) return {};
+    return commitEditedContentNotesAndSegments(*snap, cachedNotes_, segments, affectedRange);
 }
 
-ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
+ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(const EditableContentSnapshot& snapshot,
+                                                               const std::vector<Note>& notes,
                                                                const std::vector<PitchCorrectionSegment>& segments,
                                                                F0FrameRange affectedRange)
 {
-    if (processor_ == nullptr || !editedContentKey_.isValid()) {
+    if (processor_ == nullptr || !editedContentKey_.isValid() || snapshot.pitchCurve == nullptr) {
         return {};
     }
 
-    // Capture range-scoped before data directly 锟?no full snapshot.
-    const auto f0tl = currentF0Timeline();
+    // Capture range-scoped before data directly from the single snapshot (no full re-read).
+    const auto curveSnapshot = snapshot.pitchCurve->getSnapshot();
+    if (curveSnapshot == nullptr) {
+        return {};
+    }
+    const F0Timeline f0tl{ curveSnapshot->getHopSize(), curveSnapshot->getSampleRate(),
+                           static_cast<int>(curveSnapshot->size()) };
     const double rangeStartSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.startFrame);
     const double rangeEndSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.endFrameExclusive);
 
@@ -767,8 +794,8 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
         return result;
     };
 
-    auto beforeNotes = extractNotesInRange(cachedNotes_, rangeStartSec, rangeEndSec);
-    auto beforeSegments = extractSegmentsInRange(getCurrentSegments(), affectedRange.startFrame, affectedRange.endFrameExclusive);
+    auto beforeNotes = extractNotesInRange(snapshot.notes, rangeStartSec, rangeEndSec);
+    auto beforeSegments = extractSegmentsInRange(curveSnapshot->getCorrectionSegments(), affectedRange.startFrame, affectedRange.endFrameExclusive);
 
     // Enforce range-scoped contract: filter incoming data so sink never
     // receives notes/segments outside the affected range.
@@ -2201,7 +2228,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
                     segmentsInRange.push_back(seg);
             }
 
-            if (!commitEditedContentNotesAndSegments(notesInRange, segmentsInRange, affectedRange)) {
+            if (!commitEditedContentNotesAndSegments(*contentSnapshot, notesInRange, segmentsInRange, affectedRange)) {
                 return false;
             }
 
@@ -2279,7 +2306,7 @@ bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vib
                                                                           endFrameExclusive,
                                                                           currentF0Timeline().endFrameExclusive());
 
-    if (!commitEditedContentNotesAndSegments(notes, allSegments, affectedRange)) {
+    if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, allSegments, affectedRange)) {
         return false;
     }
 
@@ -2564,11 +2591,14 @@ void PianoRollComponent::setNoteSplit(float value) {
 
 void PianoRollComponent::resized() {
 
-    auto bounds = getLocalBounds().reduced(12);
+    auto bounds = getLocalBounds();
 
     // Reserve space for scrollbars
     horizontalScrollBar_.setBounds(bounds.removeFromBottom(UIColors::scrollBarThickness));
     verticalScrollBar_.setBounds(bounds.removeFromRight(UIColors::scrollBarThickness));
+
+    const float maxVerticalScroll = juce::jmax(0.0f, getTotalHeight() - static_cast<float>(getTimelineContentViewportHeight()));
+    verticalScrollOffset_ = juce::jlimit(0.0f, maxVerticalScroll, verticalScrollOffset_);
 
     // Position toggle buttons in top right of ruler
     // 历史布局：timeUnit 在左，scrollMode 在右，间距 5，y=5，btnW=50，btnH=20
@@ -2893,9 +2923,8 @@ void PianoRollComponent::requestThemeRedraw() {
 
 juce::Rectangle<int> PianoRollComponent::getTimelineViewportBounds() const
 {
-    constexpr int panelInset = 12;
-    const int viewportWidth = juce::jmax(0, getWidth() - panelInset - verticalScrollBar_.getWidth());
-    const int viewportHeight = juce::jmax(0, getHeight() - panelInset - horizontalScrollBar_.getHeight());
+    const int viewportWidth = juce::jmax(0, getWidth() - verticalScrollBar_.getWidth());
+    const int viewportHeight = juce::jmax(0, getHeight() - horizontalScrollBar_.getHeight());
     return { 0, 0, viewportWidth, viewportHeight };
 }
 
@@ -2985,7 +3014,7 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
     const auto mapper = makeViewMapper();
     const float startMidi = mapper.freqToMidi(startFrequency);
     verticalScrollOffset_ = (maxMidi_ - startMidi) * pixelsPerSemitone_ - contentHeight * 0.5f;
-    verticalScrollOffset_ = std::clamp(verticalScrollOffset_, 0.0f, getTotalHeight() - contentHeight);
+    verticalScrollOffset_ = std::clamp(verticalScrollOffset_, 0.0f, juce::jmax(0.0f, getTotalHeight() - static_cast<float>(contentHeight)));
 
     // 纵向变化 + 相机定位 → 标记脏让 applyRasterCamera 全量重建
     staticDirty_ = true;
@@ -3467,7 +3496,7 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
 
         // 先计算并钳制纵向偏移
         float newScrollY = dragStartVerticalScrollOffset_ - (float)deltaY;
-        float maxScroll = getTotalHeight() - getHeight();
+        float maxScroll = getTotalHeight() - getTimelineContentViewportHeight();
         newScrollY = juce::jlimit(0.0f, std::max(0.0f, maxScroll), newScrollY);
         const bool verticalChanged = (newScrollY != verticalScrollOffset_);
 
@@ -3550,7 +3579,7 @@ void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, floa
     verticalScrollOffset_ = targetY - contentY;
     
     float totalHeight = getTotalHeight();
-    float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
     float maxScroll = totalHeight - visibleHeight;
     if (maxScroll > 0.0f) {
         verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
@@ -3587,7 +3616,7 @@ void PianoRollComponent::handleVerticalScrollWheel(float deltaY) {
     float scrollDelta = deltaY * settings.scrollSpeed;
     verticalScrollOffset_ -= scrollDelta;
     float totalHeight = getTotalHeight();
-    float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
     float maxScroll = totalHeight - visibleHeight;
     if (maxScroll > 0.0f) {
         verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
@@ -3698,7 +3727,7 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
     const float targetY = (maxMidi_ - openDyneZoomPanAnchorMidi_) * pixelsPerSemitone_;
     verticalScrollOffset_ = targetY - contentY;
     const float totalHeight = getTotalHeight();
-    const float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    const float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
     const float maxScroll = totalHeight - visibleHeight;
     if (maxScroll > 0.0f)
         verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
@@ -3728,6 +3757,8 @@ void PianoRollComponent::restoreOpenDyneZoomState() {
     camera_ = savedOpenDyneZoomState_->camera;
     pixelsPerSemitone_ = savedOpenDyneZoomState_->pixelsPerSemitone;
     verticalScrollOffset_ = savedOpenDyneZoomState_->verticalScrollOffset;
+    const float maxScroll = juce::jmax(0.0f, getTotalHeight() - static_cast<float>(getTimelineContentViewportHeight()));
+    verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
     savedOpenDyneZoomState_.reset();
     staticDirty_ = true;
     contentDirty_ = true;
@@ -3784,7 +3815,7 @@ void PianoRollComponent::fitToNote(const Note& note) {
     const float midiCenter = (maxMidi + minMidi) * 0.5f;
     verticalScrollOffset_ = (maxMidi_ - midiCenter) * pixelsPerSemitone_ - viewportH * 0.5f;
     const float totalHeight = getTotalHeight();
-    const float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    const float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
     const float maxScroll = totalHeight - visibleHeight;
     if (maxScroll > 0.0f)
         verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
@@ -3860,7 +3891,7 @@ void PianoRollComponent::fitToAllNotes() {
     const float midiCenter = (maxMidi + minMidi) * 0.5f;
     verticalScrollOffset_ = (maxMidi_ - midiCenter) * pixelsPerSemitone_ - viewportH * 0.5f;
     const float totalHeight = getTotalHeight();
-    const float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    const float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
     const float maxScroll = totalHeight - visibleHeight;
     if (maxScroll > 0.0f)
         verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
@@ -3942,7 +3973,7 @@ void PianoRollComponent::fitToSelectedNotes()
     const float midiCenter = (maxMidi + minMidi) * 0.5f;
     verticalScrollOffset_ = (maxMidi_ - midiCenter) * pixelsPerSemitone_ - viewportH * 0.5f;
     const float totalHeight = getTotalHeight();
-    const float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
+    const float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
     const float maxScroll = totalHeight - visibleHeight;
     if (maxScroll > 0.0f)
         verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
@@ -4145,17 +4176,23 @@ bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
             return true;
         }
         if (keyCode == juce::KeyPress::upKey) {
-            float centerMidi = maxMidi_ - (verticalScrollOffset_ + getHeight() * 0.5f) / pixelsPerSemitone_;
+            const float contentViewportHeight = static_cast<float>(getTimelineContentViewportHeight());
+            float centerMidi = maxMidi_ - (verticalScrollOffset_ + contentViewportHeight * 0.5f) / pixelsPerSemitone_;
             pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_ * zoomFactor);
-            verticalScrollOffset_ = (maxMidi_ - centerMidi) * pixelsPerSemitone_ - getHeight() * 0.5f;
+            verticalScrollOffset_ = (maxMidi_ - centerMidi) * pixelsPerSemitone_ - contentViewportHeight * 0.5f;
+            const float maxScroll = juce::jmax(0.0f, getTotalHeight() - contentViewportHeight);
+            verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
             staticDirty_ = true; contentDirty_ = true;
             rasterizeDirtySurfaces(); updateScrollBars(); repaint(); overlay_->repaint();
             return true;
         }
         if (keyCode == juce::KeyPress::downKey) {
-            float centerMidi = maxMidi_ - (verticalScrollOffset_ + getHeight() * 0.5f) / pixelsPerSemitone_;
+            const float contentViewportHeight = static_cast<float>(getTimelineContentViewportHeight());
+            float centerMidi = maxMidi_ - (verticalScrollOffset_ + contentViewportHeight * 0.5f) / pixelsPerSemitone_;
             pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_ / zoomFactor);
-            verticalScrollOffset_ = (maxMidi_ - centerMidi) * pixelsPerSemitone_ - getHeight() * 0.5f;
+            verticalScrollOffset_ = (maxMidi_ - centerMidi) * pixelsPerSemitone_ - contentViewportHeight * 0.5f;
+            const float maxScroll = juce::jmax(0.0f, getTotalHeight() - contentViewportHeight);
+            verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
             staticDirty_ = true; contentDirty_ = true;
             rasterizeDirtySurfaces(); updateScrollBars(); repaint(); overlay_->repaint();
             return true;
@@ -4289,11 +4326,12 @@ void PianoRollComponent::fitToScreen() {
 
     // 1. Vertical Fit: Show C1 to C8 (minMidi_ to maxMidi_)
     // Total range: maxMidi_ - minMidi_
-    // Available height: getHeight()
+    // Available height: getTimelineContentViewportHeight()
     const auto timelineViewportBounds = getTimelineViewportBounds();
+    const int contentViewportHeight = getTimelineContentViewportHeight();
     float range = maxMidi_ - minMidi_ + 1.0f;
-    if (range > 0 && timelineViewportBounds.getHeight() > 0) {
-        pixelsPerSemitone_ = static_cast<float>(timelineViewportBounds.getHeight()) / range;
+    if (range > 0 && contentViewportHeight > 0) {
+        pixelsPerSemitone_ = static_cast<float>(contentViewportHeight) / range;
         
         // Reset scroll to show top
         verticalScrollOffset_ = 0; 
@@ -4380,6 +4418,8 @@ juce::String PianoRollComponent::AutoTuneApplyResult::message() const
     switch (status) {
         case AutoTuneApplyStatus::Applied:
             return juce::String("AUTO has been queued.");
+        case AutoTuneApplyStatus::NoChange:
+            return juce::String();   // 最终修正已达成：静默，不弹窗
         case AutoTuneApplyStatus::NoCurve:
             return juce::String("AUTO needs an active pitch curve. Run audio analysis first.");
         case AutoTuneApplyStatus::NoProcessor:
@@ -4429,20 +4469,33 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::OriginalF0NotReady };
     }
 
-    auto snapshot = currentCurve_->getSnapshot();
-    if (!snapshot) {
+    if (snap->pitchCurve == nullptr) {
         return { AutoTuneApplyStatus::MissingCurveSnapshot };
     }
 
-    const auto& originalF0 = snapshot->getOriginalF0();
+    // 单一快照读取：前置检查全部从 snap->pitchCurve->getSnapshot() 派生
+    const auto curveSnap = snap->pitchCurve->getSnapshot();
+    if (curveSnap == nullptr) {
+        return { AutoTuneApplyStatus::MissingCurveSnapshot };
+    }
+
+    const auto& originalF0 = curveSnap->getOriginalF0();
     if (originalF0.empty()) {
         return { AutoTuneApplyStatus::EmptyOriginalF0 };
     }
-    const auto f0tl = currentF0Timeline();
+    const F0Timeline f0tl{ curveSnap->getHopSize(), curveSnap->getSampleRate(),
+                           static_cast<int>(curveSnap->size()) };
     if (f0tl.isEmpty()) {
         return { AutoTuneApplyStatus::EmptyTimeline };
     }
 
+    // ── OpenDyne：AUTO 按钮 = Auto Snap 一键吸附全部音符（Melodyne 语义）──
+    // 分流位于选区解析（getSelectedNotesFrameRange）之前，全部音符处理
+    if (AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_)) {
+        return applyAutoSnapToAllNotes(snap, f0tl);
+    }
+
+    // ── OpenTune：原选区解析 + autoTuneContentRange 逻辑 ──
     int selectedNotesStartFrame = 0;
     int selectedNotesEndFrameExclusive = 0;
     const bool hasSelectedNotesRange = getSelectedNotesFrameRange(selectedNotesStartFrame,
@@ -4520,6 +4573,92 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     return { AutoTuneApplyStatus::Applied };
 }
 
+PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNotes(
+    const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot,
+    const F0Timeline& f0tl)
+{
+    const auto scaleSnap = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
+    if (!scaleSnap.has_value())
+        return { AutoTuneApplyStatus::NoChange };   // Chromatic：无音阶吸附
+
+    // 单一快照来源：notes/curve 全部从 contentSnapshot 派生
+    auto notes = contentSnapshot->notes;
+    const auto curveSnap = contentSnapshot->pitchCurve->getSnapshot();
+
+    double dirtyStartTime = 1e30, dirtyEndTime = -1e30;
+    bool anyPitchChanged = false;
+    for (auto& note : notes) {
+        const float targetMidi = static_cast<float>(note.getBaseMidiNote()) + note.pitchOffset;
+        const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(targetMidi)
+            - static_cast<float>(note.getBaseMidiNote());
+        if (std::abs(snappedOffset - note.pitchOffset) < 0.001f)
+            continue;
+        note.pitchOffset = snappedOffset;
+        note.dirty = true;
+        anyPitchChanged = true;
+        dirtyStartTime = std::min(dirtyStartTime, note.startTime);
+        dirtyEndTime = std::max(dirtyEndTime, note.endTime);
+    }
+
+    // 无音符 → NoChange
+    if (notes.empty())
+        return { AutoTuneApplyStatus::NoChange };
+
+    // 全部音符帧范围（F0Timeline 无 frameAtTime，用 rangeForTimes）
+    double minStartTime = 1e30, maxEndTime = -1e30;
+    for (const auto& n : notes) {
+        minStartTime = std::min(minStartTime, n.startTime);
+        maxEndTime = std::max(maxEndTime, n.endTime);
+    }
+    const auto notesRange = f0tl.rangeForTimes(minStartTime, maxEndTime);
+
+    // NoChange 判据 = 最终修正结果已达成（无覆盖空洞）：
+    // 全部音符帧范围被 correction 完全覆盖（无空洞）且 pitchOffset 无变化。
+    // 新导入音符已全部在音阶、pitchOffset 无变化、但 correction 为空时，
+    // 播放仍走 OriginalF0，Auto Snap 未产生任何修正 → 必须提交修正曲线。
+    const bool fullyCorrected = isFullyCorrectedInRange(
+        *curveSnap, notesRange.startFrame, notesRange.endFrameExclusive);
+    if (!anyPitchChanged && fullyCorrected)
+        return { AutoTuneApplyStatus::NoChange };
+
+    if (anyPitchChanged) {
+        dirtyStartTime = std::min(dirtyStartTime, minStartTime);
+        dirtyEndTime = std::max(dirtyEndTime, maxEndTime);
+    } else {
+        // 仅写修正曲线：覆盖全部音符范围
+        dirtyStartTime = minStartTime;
+        dirtyEndTime = maxEndTime;
+    }
+    const auto editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
+    if (editRange.isEmpty())
+        return { AutoTuneApplyStatus::EmptyTargetRange };
+
+    // 一次性保存全局参数（音符自身参数优先，PitchCurve.cpp:335-346）
+    const auto params = getCurrentAutoTuneParams();
+    auto clonedCurve = contentSnapshot->pitchCurve->clone();
+    clonedCurve->applyCorrectionToRange(
+        notes, editRange.startFrame, editRange.endFrameExclusive,
+        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
+        params.retuneSpeed, params.vibratoDepth, params.vibratoRate);
+
+    const auto snap = clonedCurve->getSnapshot();
+    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
+        editRange.startFrame, editRange.endFrameExclusive, f0tl.endFrameExclusive());
+
+    std::vector<PitchCorrectionSegment> segmentsInRange;
+    for (const auto& seg : snap->getCorrectionSegments()) {
+        if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
+            segmentsInRange.push_back(seg);
+    }
+
+    pendingUndoDescription_ = TRANS("音高吸附");   // 与双击吸附语义一致
+    if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, segmentsInRange, affectedRange)) {
+        pendingUndoDescription_ = {};   // 提交失败清理本次事务的临时 undo 状态
+        return { AutoTuneApplyStatus::NoContent };
+    }
+    return { AutoTuneApplyStatus::Applied };
+}
+
 void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) {
     if (scrollBar == &horizontalScrollBar_) {
         const double pps = camera_.pixelsPerSecond;
@@ -4572,7 +4711,7 @@ void PianoRollComponent::updateScrollBars() {
 
     // Vertical
     float totalHeight = getTotalHeight();
-    int visibleHeight = getHeight() - rulerHeight_ - UIColors::scrollBarThickness;
+    int visibleHeight = getTimelineContentViewportHeight();
     visibleHeight = juce::jmax(1, visibleHeight);
 
     verticalScrollBar_.setRangeLimits(0.0, totalHeight, juce::dontSendNotification);
