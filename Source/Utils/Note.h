@@ -47,13 +47,6 @@ struct Note {
         return static_cast<int>(std::round(69.0f + 12.0f * std::log2(adjustedPitch / 440.0f)));
     }
 
-    int getBaseMidiNote() const {
-        if (pitch <= 0.0f) {
-            return 0;
-        }
-        return static_cast<int>(std::round(69.0f + 12.0f * std::log2(pitch / 440.0f)));
-    }
-
     static float midiToFrequency(int midiNote) {
         return 440.0f * std::pow(2.0f, (static_cast<float>(midiNote) - 69.0f) / 12.0f);
     }

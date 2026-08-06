@@ -1,3 +1,4 @@
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -1060,6 +1061,97 @@ void testAutoSnapRefactorContract()
            "pendingAutoTuneOnReady_ has zero residual across processor and editors");
 }
 
+// ── Auto Snap 数学模型 ──
+// 与 ScaleSnapConfig::snapMidi / quantizeMidiToActiveScale
+// （Source/Utils/LegacyNoteGenerator.cpp:51-84）及 applyAutoSnapToAllNotes 的
+// snappedOffset 公式（Source/Standalone/UI/PianoRollComponent.cpp:4724-4729）
+// 逐行同构。tones == nullptr 表示 Chromatic（生产实现直接 round，不投影音阶）。
+float snapMidiModel(float midiNote, int root, const int* tones, int count)
+{
+    float pc = std::fmod(midiNote - static_cast<float>(root), 12.0f);
+    if (pc < 0.0f) pc += 12.0f;
+
+    float bestDiff = 999.0f;
+    int   bestTone = tones[0];
+    for (int i = 0; i < count; ++i) {
+        float diff = pc - static_cast<float>(tones[i]);
+        if (diff >  6.0f) diff -= 12.0f;
+        if (diff < -6.0f) diff += 12.0f;
+        if (std::abs(diff) < bestDiff) {
+            bestDiff = std::abs(diff);
+            bestTone = tones[i];
+        }
+    }
+
+    float adj = static_cast<float>(bestTone) - pc;
+    if (adj >  6.0f) adj -= 12.0f;
+    if (adj < -6.0f) adj += 12.0f;
+
+    return midiNote + adj;
+}
+
+float quantizeMidiToActiveScaleModel(float midiNote, int root, const int* tones, int count)
+{
+    if (tones == nullptr) return std::round(midiNote);
+    return std::round(snapMidiModel(midiNote, root, tones, count));
+}
+
+void testAutoSnapTargetMathContract()
+{
+    // C Major 音级表（与 LegacyNoteGenerator.cpp kMajorSemitones 一致），root 0 = C
+    static const int majorTones[] = {0, 2, 4, 5, 7, 9, 11};
+    const int majorCount = 7;
+
+    // 连续基准音高 60.32 → C Major SNAP：目标精确 60.0
+    const float baseMidi = 60.32f;
+    const float snapped = quantizeMidiToActiveScaleModel(baseMidi, 0, majorTones, majorCount);
+    expect(snapped == 60.0f,
+           "Auto Snap math: 60.32 in C Major quantizes exactly to 60.0");
+    // 最终 adjusted MIDI = baseMidi + snappedOffset（生产：note.pitchOffset = snappedOffset）
+    const float snappedOffset = snapped - baseMidi;
+    expect(std::abs(snappedOffset + 0.32f) < 0.0001f,
+           "Auto Snap math: snappedOffset preserves the -0.32 semitone correction");
+    expect(std::abs((baseMidi + snappedOffset) - 60.0f) < 0.0001f,
+           "Auto Snap math: final adjusted MIDI lands exactly on the 60.0 target");
+
+    // 最近音级选择：61.51 偏向 62（距 62 为 0.49 < 距 60 的 1.51）
+    expect(quantizeMidiToActiveScaleModel(61.51f, 0, majorTones, majorCount) == 62.0f,
+           "Auto Snap math: 61.51 in C Major lands exactly on 62.0");
+    // 跨 octave 音级折叠：59.4 的 pitch class 11.4 吸附到音级 11
+    expect(quantizeMidiToActiveScaleModel(59.4f, 0, majorTones, majorCount) == 59.0f,
+           "Auto Snap math: 59.4 in C Major lands exactly on 59.0 via octave folding");
+    // Chromatic：round 到最近半音
+    expect(quantizeMidiToActiveScaleModel(60.32f, 0, nullptr, 0) == 60.0f,
+           "Auto Snap math: Chromatic rounds 60.32 exactly to 60.0");
+
+    // ── 源码对照：生产实现与模型同构（捕获公式/路径漂移）──
+    const auto generatorSource = readSource("Source/Utils/LegacyNoteGenerator.cpp");
+    const auto quantizeFn = functionBlock(
+        generatorSource, "float ScaleSnapConfig::quantizeMidiToActiveScale");
+    const auto snapFn = functionBlock(generatorSource, "float ScaleSnapConfig::snapMidi");
+    expect(contains(quantizeFn, "std::round(snapMidi(midiNote))"),
+           "quantizeMidiToActiveScale projects through round(snapMidi)");
+    expect(contains(snapFn, "std::fmod(midiNote - static_cast<float>(root), 12.0f)")
+               && contains(snapFn, "midiNote + adj")
+               && contains(snapFn, "diff >  6.0f")
+               && contains(snapFn, "diff < -6.0f"),
+           "snapMidi folds pitch-class distances and returns midiNote + adj");
+    expect(contains(generatorSource, "{0, 2, 4, 5, 7, 9, 11}"),
+           "C Major tone table matches the model");
+
+    // 生产 snappedOffset 相对 baseMidi 计算，最终 adjusted MIDI = quantize 结果
+    const auto autoSnap = functionBlock(
+        readSource("Source/Standalone/UI/PianoRollComponent.cpp"),
+        "PianoRollComponent::applyAutoSnapToAllNotes");
+    expect(contains(autoSnap, "const float baseMidi = PitchUtils::freqToMidi(note.pitch);")
+               && contains(autoSnap, "const float targetMidi = baseMidi + note.pitchOffset;")
+               && contains(autoSnap, "scaleSnap->quantizeMidiToActiveScale(targetMidi)")
+               && contains(autoSnap, "- baseMidi")
+               && !contains(autoSnap, "getBaseMidiNote()")
+               && contains(autoSnap, "note.pitchOffset = snappedOffset;"),
+           "Auto Snap preserves continuous MIDI until scale quantization and lands on the target");
+}
+
 int main()
 {
     testVisibleEntryContract();
@@ -1080,6 +1172,7 @@ int main()
     testOpenDyneNoteEdgeRetreatContract();
     testPitchModulationDriftContract();
     testAutoSnapRefactorContract();
+    testAutoSnapTargetMathContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";

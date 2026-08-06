@@ -3,6 +3,7 @@
 #include "../../../Utils/AppLogger.h"
 #include "../../../Utils/KeyShortcutConfig.h"
 #include "../../../Utils/ScissorsUndoAction.h"
+#include "../../../Utils/PitchUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -2010,8 +2011,9 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
     for (int noteIndex : state.noteDrag.draggedNoteIndices) {
         auto& note = notes[static_cast<size_t>(noteIndex)];
         const float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
-        const int baseMidi = note.getBaseMidiNote();
-        const float targetMidi = static_cast<float>(baseMidi) + initialOffset + deltaSemitones;
+        // 连续基准 MIDI（不提前取整）：SNAP 目标全程保持连续语义
+        const float baseMidi = PitchUtils::freqToMidi(note.pitch);
+        const float targetMidi = baseMidi + initialOffset + deltaSemitones;
         // Pitch Grid 全局开关决定吸附方式；Alt 拖拽临时解除吸附（保留连续 cents）
         float snappedMidi = targetMidi;
         if (!altBypass) {
@@ -2030,7 +2032,8 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
                 }
             }
         }
-        note.pitchOffset = snappedMidi - static_cast<float>(baseMidi);
+        // pitchOffset = snappedMidi - baseMidi ⇒ getAdjustedPitch() 精确等于目标 MIDI 频率
+        note.pitchOffset = snappedMidi - baseMidi;
         note.dirty = true;
     }
 
@@ -2299,9 +2302,10 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         return;   // 无音阶配置（默认 Chromatic）：音符已半音吸附，无需动作
 
     const Note& original = notes[static_cast<size_t>(clickedNoteIndex)];
-    const float targetMidi = static_cast<float>(original.getBaseMidiNote()) + original.pitchOffset;
-    const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(targetMidi)
-        - static_cast<float>(original.getBaseMidiNote());
+    // 连续基准 MIDI（不提前取整），与拖拽 SNAP 同一数学路径
+    const float baseMidi = PitchUtils::freqToMidi(original.pitch);
+    const float targetMidi = baseMidi + original.pitchOffset;
+    const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(targetMidi) - baseMidi;
     if (std::abs(snappedOffset - original.pitchOffset) < 0.001f)
         return;
 
