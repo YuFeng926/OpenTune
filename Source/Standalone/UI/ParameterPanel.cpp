@@ -759,10 +759,10 @@ void ParameterPanel::resized()
             buttons[static_cast<size_t>(i)]->setBounds(bx, by, toolButtonSize, toolButtonSize);
         }
 
-        // Pitch Grid 选择器：网格最后一行下方 4px
+        // Pitch Grid 选择器：网格最后一行下方 14px
         const int gridRows = (static_cast<int>(buttons.size()) + 1) / 2;
         const int gridBottom = y + gridRows * toolButtonSize + (gridRows - 1) * toolButtonGap;
-        pitchGridSelector_.setBounds(contentLeft + 5, gridBottom + 4, contentWidth - 10, 22);
+        pitchGridSelector_.setBounds(contentLeft + 5, gridBottom + 14, contentWidth - 10, 22);
     }
     else
     {
