@@ -476,6 +476,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const int f0StartFrame = static_cast<int>(std::floor(trueStartSeconds * f0FrameRate));
     const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
     const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
+    const double firstSampleFramePhase = trueStartSeconds * f0FrameRate - static_cast<double>(f0StartFrame);
 
     // Blank 判定：仅当全局移调为恒等（effectiveF0 与 originalF0 一致，无差异可
     // 合成）且该 chunk 帧范围内无任何 correction segment 时，才 Blank 回退原始
@@ -525,7 +526,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     originalF0Full.data() + f0StartFrame,
                     effectiveF0.data(),
                     safeNumF0Frames,
-                    f0FrameRate);
+                    f0FrameRate,
+                    firstSampleFramePhase);
 
                 if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount)
                     shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);

@@ -7,6 +7,7 @@
 #include "../Runtime/ProcessF0Runtime.h"
 #include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
+#include "../Services/ImportedClipF0Extraction.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/TimeCoordinate.h"
 #include "../Utils/SilentGapDetector.h"
@@ -1725,39 +1726,17 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
             const int hopSize = f0Svc->getF0HopSize();
             const int f0SampleRate = f0Svc->getF0SampleRate();
 
-            auto pitchCurve = std::make_shared<PitchCurve>();
-            pitchCurve->setOriginalF0(f0Data);
-            pitchCurve->setSampleRate(static_cast<double>(f0SampleRate));
-            pitchCurve->setHopSize(hopSize);
+            const auto energy = computeFrameEnergy(
+                data.data(), static_cast<int>(data.size()),
+                static_cast<int>(sourceSampleRate),
+                f0Data, f0SampleRate, hopSize);
 
-            // Compute energy from source audio
-            {
-                const int f0Frames = static_cast<int>(f0Data.size());
-                std::vector<float> energy(f0Frames, 0.0f);
-                const int srcSamples = static_cast<int>(data.size());
-                for (int i = 0; i < f0Frames; ++i)
-                {
-                    const int startSample = i * hopSize;
-                    const int endSampleExclusive = std::min(startSample + hopSize, srcSamples);
-                    double squareSum = 0.0;
-                    for (int j = startSample; j < endSampleExclusive; ++j)
-                    {
-                        const auto v = data[static_cast<size_t>(j)];
-                        squareSum += static_cast<double>(v) * static_cast<double>(v);
-                    }
-                    const double meanSquare = squareSum / static_cast<double>(endSampleExclusive - startSample);
-                    energy[i] = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::sqrt(meanSquare)));
-                }
-                pitchCurve->setOriginalEnergy(energy);
-            }
-
-            // Store pitchCurve in Result for commit callback
             F0ExtractionService::Result result;
             result.success = true;
             result.f0 = f0Data;
             result.hopSize = hopSize;
             result.f0SampleRate = f0SampleRate;
-            // Pass pitchCurve via shared state - store in member or use extended Result
+            result.energy = std::move(energy);
             return result;
         },
         [this, crs, key, birthRevision, hostModification, leaseToken = asyncLeaseToken_](F0ExtractionService::Result&& result) mutable
@@ -1802,6 +1781,8 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 pitchCurve->setOriginalF0(result.f0);
                 pitchCurve->setSampleRate(static_cast<double>(result.f0SampleRate));
                 pitchCurve->setHopSize(result.hopSize);
+                if (!result.energy.empty())
+                    pitchCurve->setOriginalEnergy(result.energy);
 
                 mod->applyOriginalF0(std::move(pitchCurve));
                 if (mod->audioModification != nullptr)

@@ -840,7 +840,7 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
     }
 
     auto snapshot = curve->getSnapshot();
-    if (snapshot == nullptr || snapshot->isEmpty()) {
+    if (snapshot->isEmpty()) {
         return false;
     }
     const auto contentSnapshot = ctx_.getEditableContentSnapshot();
@@ -2128,10 +2128,6 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
             dirtyStartTime = std::min(dirtyStartTime, notes[static_cast<size_t>(noteIndex)].startTime);
             dirtyEndTime = std::max(dirtyEndTime, notes[static_cast<size_t>(noteIndex)].endTime);
             ctx_.notifyNoteOffsetChanged(static_cast<size_t>(noteIndex), initialOffset, finalOffset);
-            float newPip = ctx_.recalculatePIP(notes[static_cast<size_t>(noteIndex)]);
-            if (newPip > 0.0f) {
-                notes[static_cast<size_t>(noteIndex)].originalPitch = newPip;
-            }
         }
     }
 
@@ -2758,7 +2754,7 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
         finalNote.vibratoRate = ctx_.getVibratoRate();
         finalNote.dirty = true;
 
-        float newPip = ctx_.recalculatePIP(finalNote);
+        float newPip = ctx_.calculateEffectivePIP(finalNote);
         if (newPip > 0.0f) {
             float sourcePitch = Note::midiToFrequency(Note::frequencyToMidi(newPip));
             finalNote.pitch = sourcePitch;

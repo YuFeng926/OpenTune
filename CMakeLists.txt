@@ -1315,6 +1315,17 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
     endif()
     add_test(NAME OpenTuneAutomationLaneRuntimeTests COMMAND OpenTuneAutomationLaneRuntimeTests)
 
+    add_executable(OpenTunePasteTopologyRuntimeTests
+        Tests/PasteTopologyRuntimeTests.cpp
+    )
+    target_compile_features(OpenTunePasteTopologyRuntimeTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTunePasteTopologyRuntimeTests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    if(MSVC)
+        target_compile_options(OpenTunePasteTopologyRuntimeTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTunePasteTopologyRuntimeTests COMMAND OpenTunePasteTopologyRuntimeTests)
+
     # ==============================================================================
     # OpenTuneThemeScreenshots — 后台静默主题截图工具
     # 无窗口软件渲染主编辑器（createComponentSnapshot），输出各主题 PNG

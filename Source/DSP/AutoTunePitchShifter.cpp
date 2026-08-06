@@ -85,7 +85,8 @@ float AutoTunePitchShifter::processSample(double currentPeriod, double targetRes
 std::vector<float> AutoTunePitchShifter::shiftChunk(
     const float* input, int numSamples,
     const float* originalF0, const float* correctedF0,
-    int numF0Frames, double f0FrameRate)
+    int numF0Frames, double f0FrameRate,
+    double firstSampleFramePhase)
 {
     std::vector<float> output(static_cast<size_t>(numSamples), 0.0f);
 
@@ -96,7 +97,7 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
 
         // Determine which F0 frame this sample belongs to
         const int f0Frame = std::clamp(
-            static_cast<int>(static_cast<double>(i) / samplesPerF0Frame),
+            static_cast<int>(std::floor(firstSampleFramePhase + static_cast<double>(i) / samplesPerF0Frame)),
             0, numF0Frames - 1);
 
         const float origF0 = originalF0[f0Frame];

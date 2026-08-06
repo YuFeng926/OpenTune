@@ -514,7 +514,7 @@ private:
 
     float dragStartVerticalScrollOffset_ = 0.0f;
 
-    float recalculatePIP(Note& note);
+    float calculateEffectivePIP(Note& note);
 
 private:
 

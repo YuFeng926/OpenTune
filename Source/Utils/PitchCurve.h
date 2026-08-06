@@ -285,6 +285,12 @@ public:
         std::atomic_store(&snapshot_, newSnapshot);
     }
 
+    std::vector<PitchCorrectionSegment> copyCorrectionSegments() const {
+        const auto snapshot = getSnapshot();
+        const auto& segments = snapshot->getCorrectionSegments();
+        return std::vector<PitchCorrectionSegment>(segments.begin(), segments.end());
+    }
+
     void restoreCorrectionSegment(const PitchCorrectionSegment& segment) {
         auto oldSnapshot = getSnapshot();
         auto segments = oldSnapshot->getCorrectionSegments();

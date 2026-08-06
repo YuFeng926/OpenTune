@@ -31,7 +31,6 @@ struct ParameterPanelSyncDecision {
 };
 
 inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
-    AudioEditingScheme::Scheme scheme,
     const ParameterPanelSyncContext& context) noexcept
 {
     ParameterPanelSyncDecision decision;
@@ -40,12 +39,8 @@ inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
     AudioEditingScheme::ParameterTargetContext targetContext;
     targetContext.hasSelectedNotes = context.hasSelectedNoteParameters;
     targetContext.hasFrameSelection = false;
-    targetContext.allowWholeClipFallback = false;
 
-    const auto parameterTarget = AudioEditingScheme::resolveParameterTarget(
-        scheme,
-        AudioEditingScheme::ParameterKind::RetuneSpeed,
-        targetContext);
+    const auto parameterTarget = AudioEditingScheme::resolveParameterTarget(targetContext);
 
     if (parameterTarget == AudioEditingScheme::ParameterTarget::SelectedNotes
         && context.hasSelectedNoteParameters) {
