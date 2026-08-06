@@ -26,10 +26,7 @@ struct ContentEditRangeFrames {
     int endFrameExclusive{0};
 };
 
-struct ContentEditRangeSeconds {
-    double startSeconds{0.0};
-    double endSeconds{0.0};
-};
+using ContentEditRangeSeconds = NoteRangeSeconds;
 
 struct ContentNoteRangePatch {
     ContentEditRangeSeconds affectedRange;

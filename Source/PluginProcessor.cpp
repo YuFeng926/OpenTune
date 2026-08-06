@@ -113,46 +113,6 @@ ReferenceFeatureSet makeReferenceFeatureSetFromNotes(
     return result;
 }
 
-std::vector<PitchCorrectionSegment> copyPitchCorrectionSegments(const std::shared_ptr<PitchCurve>& curve)
-{
-    std::vector<PitchCorrectionSegment> copiedSegments;
-    if (curve == nullptr) {
-        return copiedSegments;
-    }
-
-    const auto snapshot = curve->getSnapshot();
-    copiedSegments.reserve(snapshot->getCorrectionSegments().size());
-    for (const auto& segment : snapshot->getCorrectionSegments()) {
-        copiedSegments.push_back(segment);
-    }
-    return copiedSegments;
-}
-
-// 秒域 range merge：keptBefore + afterNotesInRange + keptAfter，标准化后返回。
-// Note 拓扑 patch 的唯一 range merge 语义（时间有序，range 边界处无重叠）。
-std::vector<Note> mergeNotesRange(const std::vector<Note>& existing,
-                                  const ContentNoteRangePatch& patch)
-{
-    std::vector<Note> mergedNotes;
-    mergedNotes.reserve(existing.size() + patch.afterNotesInRange.size());
-
-    for (const auto& note : existing) {
-        if (note.endTime <= patch.affectedRange.startSeconds)
-            mergedNotes.push_back(note);
-    }
-
-    mergedNotes.insert(mergedNotes.end(),
-                       patch.afterNotesInRange.begin(),
-                       patch.afterNotesInRange.end());
-
-    for (const auto& note : existing) {
-        if (note.startTime >= patch.affectedRange.endSeconds)
-            mergedNotes.push_back(note);
-    }
-
-    return normalizeStoredNotes(std::move(mergedNotes));
-}
-
 ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
 {
     ContentPayloadState payload;
@@ -530,7 +490,7 @@ std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& 
                                     trailingOriginalEnergy.begin() + static_cast<std::ptrdiff_t>(trailingOriginalF0.size()));
     }
 
-    std::vector<PitchCorrectionSegment> mergedSegments = copyPitchCorrectionSegments(leadingCurve);
+    std::vector<PitchCorrectionSegment> mergedSegments = leadingCurve->copyCorrectionSegments();
     const int leadingFrameCount = static_cast<int>(leadingSnapshot->getOriginalF0().size());
     for (auto segment : trailingSnapshot->getCorrectionSegments()) {
         segment.startFrame += leadingFrameCount;
@@ -832,19 +792,6 @@ void OpenTuneAudioProcessor::analysisFinished(
     pendingTimeToolSeedKeys_.erase(pendingIt);
     if (result.isReady())
         ensureTimeToolAnchorSeed(key);
-}
-
-static std::shared_ptr<PitchCurve> clonePitchCurveWithPitchCorrectionSegments(
-    const std::shared_ptr<PitchCurve>& sourceCurve,
-    const std::vector<PitchCorrectionSegment>& segments)
-{
-    if (sourceCurve == nullptr) {
-        return nullptr;
-    }
-
-    auto committedCurve = sourceCurve->clone();
-    committedCurve->replaceCorrectionSegments(segments);
-    return committedCurve;
 }
 
 juce::AudioProcessor::BusesProperties OpenTuneAudioProcessor::makeBuses()
@@ -4295,7 +4242,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         return result;
     }
 
-    const auto oldSegments = copyPitchCorrectionSegments(oldCurve);
+    const auto oldSegments = oldCurve->copyCorrectionSegments();
     const double targetDurationSeconds = targetSnap->sourceWindow.isValid()
         ? targetSnap->sourceWindow.durationSeconds()
         : targetFeatures.sourceDurationSeconds;
@@ -4435,7 +4382,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         PitchControlConfig::kDefaultVibratoDepth,
         PitchControlConfig::kDefaultVibratoRateHz);
 
-    const auto segmentsInRange = filterSegments(copyPitchCorrectionSegments(derivedCurve));
+    const auto segmentsInRange = filterSegments(derivedCurve->copyCorrectionSegments());
     auto beforeNotesScoped = filterNotes(oldNotes);
     auto beforeSegmentsScoped = filterSegments(oldSegments);
 
@@ -4460,7 +4407,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         std::move(beforeNotesScoped),
         filterNotes(commitSnap->notes),
         std::move(beforeSegmentsScoped),
-        filterSegments(copyPitchCorrectionSegments(commitSnap->pitchCurve)),
+        filterSegments(commitSnap->pitchCurve->copyCorrectionSegments()),
         commitRange));
 
     result.status = ReferenceAlignmentResult::Status::Succeeded;
@@ -4634,7 +4581,8 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
                   return a.startFrame < b.startFrame;
               });
 
-    auto newCurve = clonePitchCurveWithPitchCorrectionSegments(snap->pitchCurve, std::move(mergedSegments));
+    auto newCurve = snap->pitchCurve->clone();
+    newCurve->replaceCorrectionSegments(mergedSegments);
     if (!newCurve) return {};
 
     bool ok = false;
@@ -4683,7 +4631,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
     auto snap = getContentSnapshot(key);
     if (!snap) return {};
 
-    auto normalizedNotes = mergeNotesRange(snap->notes, patch);
+    auto normalizedNotes = mergeNotesRange(snap->notes, patch.affectedRange, patch.afterNotesInRange);
 
     bool ok = false;
     switch (key.domainKind) {
@@ -5059,7 +5007,7 @@ std::unique_ptr<PitchShiftEditAction> OpenTuneAudioProcessor::commitPitchShiftEd
     PitchShiftEditState before;
     before.settings = oldSettings;
     before.notes = snap->notes;
-    before.segments = copyPitchCorrectionSegments(snap->pitchCurve);
+    before.segments = snap->pitchCurve->copyCorrectionSegments();
 
     PitchShiftEditState after = before;
     after.settings = newSettings;

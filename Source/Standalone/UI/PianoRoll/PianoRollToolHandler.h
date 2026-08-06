@@ -137,7 +137,7 @@ public:
         std::function<float()> getVibratoRate;
         std::function<AudioEditingScheme::Scheme()> getAudioEditingScheme;
         std::function<const KeyShortcutConfig::KeyShortcutSettings&()> getShortcutSettings;
-        std::function<float(Note&)> recalculatePIP;
+        std::function<float(Note&)> calculateEffectivePIP;
 
         std::function<double()> getDirtyStartTime;
         std::function<void(double)> setDirtyStartTime;

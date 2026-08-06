@@ -10,6 +10,46 @@
 
 namespace OpenTune {
 
+/// Pure energy computation shared by ARA and Standalone paths.
+/// Returns energy[f0.size()], voiced-gated RMS per F0 frame using ±10ms center-aligned window.
+/// centerSample = round(frameIndex * hopSize / f0SampleRate * sourceSampleRate)
+inline std::vector<float> computeFrameEnergy(
+    const float* sourcePCM, int numSamples, int sourceSampleRate,
+    const std::vector<float>& f0, int f0SampleRate, int hopSize)
+{
+    std::vector<float> energy(f0.size(), 0.0f);
+    if (f0SampleRate <= 0 || hopSize <= 0 || sourceSampleRate <= 0 || numSamples <= 0)
+        return energy;
+
+    const int halfRmsWindowSamples = juce::jmax(1,
+        static_cast<int>(std::round(static_cast<double>(sourceSampleRate) * 0.010)));
+    const double f0SecondsPerFrame = static_cast<double>(hopSize)
+        / static_cast<double>(juce::jmax(1, f0SampleRate));
+
+    for (size_t i = 0; i < f0.size(); ++i) {
+        if (!std::isfinite(f0[i]) || f0[i] <= 0.0f)
+            continue;
+
+        const int centerSample = juce::jlimit(
+            0, numSamples - 1,
+            static_cast<int>(std::round(static_cast<double>(i)
+                * f0SecondsPerFrame * static_cast<double>(sourceSampleRate))));
+        const int startSample = juce::jmax(0, centerSample - halfRmsWindowSamples);
+        const int endSampleExclusive = juce::jmin(numSamples, centerSample + halfRmsWindowSamples);
+        if (endSampleExclusive <= startSample)
+            continue;
+
+        double squareSum = 0.0;
+        for (int sample = startSample; sample < endSampleExclusive; ++sample) {
+            const float value = sourcePCM[sample];
+            squareSum += static_cast<double>(value) * static_cast<double>(value);
+        }
+        const double meanSquare = squareSum / static_cast<double>(endSampleExclusive - startSample);
+        energy[i] = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::sqrt(meanSquare)));
+    }
+    return energy;
+}
+
 inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
                                               const std::shared_ptr<F0RunOwnerState>& runOwnerState,
                                               const EditableContentSnapshot& snap,
@@ -61,34 +101,8 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
     }
 
     out.f0 = extraction.value();
-    out.energy.resize(out.f0.size(), 0.0f);
-    const double f0SecondsPerFrame = static_cast<double>(hopSize)
-        / static_cast<double>(juce::jmax(1, f0SampleRate));
-    const int halfRmsWindowSamples = juce::jmax(1, static_cast<int>(std::round(internalSampleRate * 0.010)));
-    for (size_t i = 0; i < out.f0.size(); ++i) {
-        if (!std::isfinite(out.f0[i]) || out.f0[i] <= 0.0f) {
-            continue;
-        }
-
-        const int centerSample = juce::jlimit(
-            0,
-            numSamples - 1,
-            static_cast<int>(std::round(static_cast<double>(i) * f0SecondsPerFrame * internalSampleRate)));
-        const int startSample = juce::jmax(0, centerSample - halfRmsWindowSamples);
-        const int endSampleExclusive = juce::jmin(numSamples, centerSample + halfRmsWindowSamples);
-        if (endSampleExclusive <= startSample) {
-            continue;
-        }
-
-        double squareSum = 0.0;
-        for (int sample = startSample; sample < endSampleExclusive; ++sample) {
-            const float value = src[sample];
-            squareSum += static_cast<double>(value) * static_cast<double>(value);
-        }
-
-        const double meanSquare = squareSum / static_cast<double>(endSampleExclusive - startSample);
-        out.energy[i] = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::sqrt(meanSquare)));
-    }
+    out.energy = computeFrameEnergy(src, numSamples,
+        static_cast<int>(internalSampleRate), out.f0, f0SampleRate, hopSize);
 
     out.hopSize = hopSize;
     out.f0SampleRate = f0SampleRate;

@@ -33,7 +33,8 @@ public:
     std::vector<float> shiftChunk(
         const float* input, int numSamples,
         const float* originalF0, const float* correctedF0,
-        int numF0Frames, double f0FrameRate);
+        int numF0Frames, double f0FrameRate,
+        double firstSampleFramePhase);
 
 private:
     double sampleRate_;

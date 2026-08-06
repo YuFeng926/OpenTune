@@ -22,26 +22,17 @@ struct FrameRange
     }
 };
 
-enum class ParameterKind
-{
-    RetuneSpeed = 0,
-    VibratoDepth,
-    VibratoRate
-};
-
 enum class ParameterTarget
 {
     None = 0,
     SelectedNotes,
-    FrameSelection,
-    WholeClip
+    FrameSelection
 };
 
 struct ParameterTargetContext
 {
     bool hasSelectedNotes = false;
     bool hasFrameSelection = false;
-    bool allowWholeClipFallback = true;
 };
 
 enum class AutoTuneTarget
@@ -58,7 +49,6 @@ struct AutoTuneTargetContext
     FrameRange selectedNotesRange;
     FrameRange selectionAreaRange;
     FrameRange f0SelectionRange;
-    bool allowWholeClipFallback = true;
 };
 
 struct AutoTuneDecision
@@ -133,9 +123,7 @@ inline bool allowsLineAnchorSegmentSelection(Scheme scheme) noexcept
     return !usesNotesPrimaryScheme(scheme);
 }
 
-inline ParameterTarget resolveParameterTarget(Scheme scheme,
-                                             ParameterKind kind,
-                                             const ParameterTargetContext& context) noexcept
+inline ParameterTarget resolveParameterTarget(const ParameterTargetContext& context) noexcept
 {
     if (context.hasSelectedNotes) {
         return ParameterTarget::SelectedNotes;
@@ -145,11 +133,10 @@ inline ParameterTarget resolveParameterTarget(Scheme scheme,
         return ParameterTarget::FrameSelection;
     }
 
-    return context.allowWholeClipFallback ? ParameterTarget::WholeClip : ParameterTarget::None;
+    return ParameterTarget::None;
 }
 
-inline AutoTuneDecision resolveAutoTuneRange(Scheme scheme,
-                                            const AutoTuneTargetContext& context) noexcept
+inline AutoTuneDecision resolveAutoTuneRange(const AutoTuneTargetContext& context) noexcept
 {
     auto makeDecision = [](AutoTuneTarget target, const FrameRange& range) -> AutoTuneDecision {
         AutoTuneDecision decision;
@@ -174,39 +161,22 @@ inline AutoTuneDecision resolveAutoTuneRange(Scheme scheme,
         return decision.target != AutoTuneTarget::None;
     };
 
-    if (usesNotesPrimaryScheme(scheme)) {
-        const auto selectedNotesDecision = tryDecision(AutoTuneTarget::SelectedNotes, context.selectedNotesRange);
-        if (hasDecision(selectedNotesDecision)) {
-            return selectedNotesDecision;
-        }
-
-        const auto f0SelectionDecision = tryDecision(AutoTuneTarget::FrameSelection, context.f0SelectionRange);
-        if (hasDecision(f0SelectionDecision)) {
-            return f0SelectionDecision;
-        }
-
-        const auto selectionAreaDecision = tryDecision(AutoTuneTarget::FrameSelection, context.selectionAreaRange);
-        if (hasDecision(selectionAreaDecision)) {
-            return selectionAreaDecision;
-        }
-    } else {
-        const auto selectionAreaDecision = tryDecision(AutoTuneTarget::FrameSelection, context.selectionAreaRange);
-        if (hasDecision(selectionAreaDecision)) {
-            return selectionAreaDecision;
-        }
-
-        const auto f0SelectionDecision = tryDecision(AutoTuneTarget::FrameSelection, context.f0SelectionRange);
-        if (hasDecision(f0SelectionDecision)) {
-            return f0SelectionDecision;
-        }
-
-        const auto selectedNotesDecision = tryDecision(AutoTuneTarget::SelectedNotes, context.selectedNotesRange);
-        if (hasDecision(selectedNotesDecision)) {
-            return selectedNotesDecision;
-        }
+    const auto selectionAreaDecision = tryDecision(AutoTuneTarget::FrameSelection, context.selectionAreaRange);
+    if (hasDecision(selectionAreaDecision)) {
+        return selectionAreaDecision;
     }
 
-    if (!context.allowWholeClipFallback || context.totalFrameCount <= 0) {
+    const auto f0SelectionDecision = tryDecision(AutoTuneTarget::FrameSelection, context.f0SelectionRange);
+    if (hasDecision(f0SelectionDecision)) {
+        return f0SelectionDecision;
+    }
+
+    const auto selectedNotesDecision = tryDecision(AutoTuneTarget::SelectedNotes, context.selectedNotesRange);
+    if (hasDecision(selectedNotesDecision)) {
+        return selectedNotesDecision;
+    }
+
+    if (context.totalFrameCount <= 0) {
         return makeNoneDecision();
     }
 
