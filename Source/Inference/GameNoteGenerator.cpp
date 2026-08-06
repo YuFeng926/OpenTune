@@ -227,7 +227,7 @@ void appendNote(std::vector<Note>& out, double start, double end,
     Note n;
     n.startTime     = start;
     n.endTime       = end;
-    n.pitch         = Note::midiToFrequency(midiInt);
+    n.pitch         = PitchUtils::midiToFreq(static_cast<float>(midiInt));
     n.originalPitch = 440.0f * std::pow(2.0f, (continuousMidi - 69.0f) / 12.0f);
     n.isVoiced      = true;
     out.push_back(n);
@@ -602,14 +602,14 @@ std::vector<Note> mergeChunkNotes(const std::vector<std::vector<Note>>& perChunk
 
         for (const auto& n : perChunk[c]) {
             const double absStart = n.startTime + offset;
-            const int    midiCandidate = n.getMidiNote();
+            const int    midiCandidate = static_cast<int>(std::round(PitchUtils::freqToMidi(n.getAdjustedPitch())));
 
             bool drop = false;
             // Walk merged in reverse to find tail notes inside the seam window.
             for (auto it = merged.rbegin(); it != merged.rend(); ++it) {
                 if (seamSec - it->endTime > seamToleranceSec) break; // before the window
                 if (std::abs(absStart - seamSec) > seamToleranceSec) break; // candidate not at seam
-                if (it->getMidiNote() == midiCandidate) {
+                if (static_cast<int>(std::round(PitchUtils::freqToMidi(it->getAdjustedPitch()))) == midiCandidate) {
                     drop = true;
                     break;
                 }

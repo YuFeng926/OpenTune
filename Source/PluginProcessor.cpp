@@ -53,7 +53,7 @@ struct AutoRefGameBackendProbe {
     bool currentBackendIsLegacy = false;
 };
 
-AutoRefGameBackendProbe probeAutoRefGameBackendLocked(INoteGenerator* generator, const juce::String& modelsDir)
+AutoRefGameBackendProbe probeAutoRefGameBackendLocked(GameNoteGenerator* generator, bool legacyFallback, const juce::String& modelsDir)
 {
     AutoRefGameBackendProbe probe;
     const auto envBackend = juce::SystemStats::getEnvironmentVariable("OPENTUNE_NOTE_BACKEND", {})
@@ -63,8 +63,8 @@ AutoRefGameBackendProbe probeAutoRefGameBackendLocked(INoteGenerator* generator,
 
     const auto gameDir = juce::File(modelsDir).getChildFile("GAME");
     probe.gameBundlePresent = gameDir.getChildFile("encoder.onnx").existsAsFile();
-    probe.currentBackendIsGame = dynamic_cast<GameNoteGenerator*>(generator) != nullptr;
-    probe.currentBackendIsLegacy = generator != nullptr && !probe.currentBackendIsGame;
+    probe.currentBackendIsGame = generator != nullptr;
+    probe.currentBackendIsLegacy = legacyFallback;
     return probe;
 }
 
@@ -641,7 +641,7 @@ ReferenceFeatureProducer OpenTuneAudioProcessor::resolveReferenceFeatureProducer
 
     const auto modelsDir = juce::String(ModelPathResolver::getModelsDirectory());
     std::lock_guard<std::mutex> lock(noteGenInitMutex_);
-    const auto backendProbe = probeAutoRefGameBackendLocked(noteGenerator_.get(), modelsDir);
+    const auto backendProbe = probeAutoRefGameBackendLocked(noteGenerator_.get(), noteGenLegacyFallback_, modelsDir);
     if (backendProbe.forceLegacy || backendProbe.currentBackendIsLegacy || !backendProbe.gameBundlePresent)
         return ReferenceFeatureProducer::StandardAuto;
     return ReferenceFeatureProducer::Game;
@@ -743,7 +743,7 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
         return failGame("AUTO Ref GAME analysis requires GAME note generator");
     }
 
-    auto* const gameGenerator = dynamic_cast<GameNoteGenerator*>(noteGenerator_.get());
+    auto* const gameGenerator = noteGenerator_.get();
     if (gameGenerator == nullptr) {
         return failGame("AUTO Ref GAME analysis requires GAME backend");
     }
@@ -756,8 +756,6 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
     try {
         std::lock_guard<std::mutex> lk(noteGeneratorInferenceMutex_);
         gameNotes = gameGenerator->generate(input);
-    } catch (const std::exception& e) {
-        return failGame("AUTO Ref GAME note generation failed: " + juce::String(e.what()));
     } catch (...) {
         return failGame("AUTO Ref GAME note generation failed");
     }
@@ -1191,9 +1189,6 @@ bool OpenTuneAudioProcessor::ensureServiceReady(
             return false;
         }
         AppLogger::log(juce::String(serviceName) + " inference service initialized successfully");
-    } catch (const std::exception& e) {
-        AppLogger::log(juce::String(serviceName) + " initialize exception: " + juce::String(e.what()));
-        ok = false;
     } catch (...) {
         AppLogger::log(juce::String(serviceName) + " initialize unknown exception");
         ok = false;
@@ -1277,13 +1272,14 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
 bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
 {
     // Backend selection (per design D7):
-    //   1. env OPENTUNE_NOTE_BACKEND=legacy  → LegacyNoteGenerator
+    //   1. env OPENTUNE_NOTE_BACKEND=legacy  → static LegacyNoteGenerator::generate
     //   2. else if GAME-small ONNX bundle present → GameNoteGenerator
-    //   3. else fallback to LegacyNoteGenerator
+    //   3. else fallback to static LegacyNoteGenerator::generate
     // Logged once at first init so support can identify which path ran.
     return ensureServiceReady(noteGenReady_, noteGenInitAttempted_, noteGenInitMutex_, "NoteGen",
         [this](const std::string& modelsDir) {
             if (noteGenerator_) return true;
+            if (noteGenLegacyFallback_) return false;
 
             const auto envBackendRaw = juce::SystemStats::getEnvironmentVariable(
                 "OPENTUNE_NOTE_BACKEND", {});
@@ -1317,8 +1313,9 @@ bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
                 }
             }
 
-            noteGenerator_ = std::make_unique<LegacyNoteGenerator>();
-            noteGenerator_->setAbortFlag(gameNoteAbortFlag_);
+            // Legacy is a static DSP path (LegacyNoteGenerator::generate);
+            // mark the fallback so AUTO Ref resolves to StandardAuto.
+            noteGenLegacyFallback_ = true;
             AppLogger::info(juce::String("[NoteGen] backend=Legacy (forceLegacy=")
                             + (forceLegacy ? "true" : "false") + ")");
             return true;
@@ -5060,11 +5057,9 @@ bool OpenTuneAudioProcessor::generateNotesOnlyByContentKey(
     auto snap = getContentSnapshot(key);
     if (snap == nullptr || snap->pitchCurve == nullptr) return false;
     const auto curveSnapshot = snap->pitchCurve->getSnapshot();
-    if (curveSnapshot == nullptr) return false;
-    const int f0Count = static_cast<int>(curveSnapshot->getOriginalF0().size());
-    if (f0Count == 0) return false;
 
-    auto generatedNotes = generateNotesFromOriginalF0(curveSnapshot, 0, f0Count, params);
+    auto generatedNotes = generateNotesFromOriginalF0(curveSnapshot, 0,
+        curveSnapshot ? static_cast<int>(curveSnapshot->getOriginalF0().size()) : 0, params);
     if (!generatedNotes.has_value()) return false;
 
     // 初始状态不量化：保持 originalPitch，用户点击 SNAP 时再吸附到音阶。
@@ -5078,6 +5073,7 @@ bool OpenTuneAudioProcessor::generateNotesOnlyByContentKey(
                                  / curveSnapshot->getSampleRate();
     // 生成音符可能因 tailExtendMs 超出 f0Count 秒域范围：
     // affected range 必须覆盖生成音符实际范围，mergeNotesRange 不做范围过滤
+    const int f0Count = static_cast<int>(curveSnapshot->getOriginalF0().size());
     double rangeStartSec = 0.0;
     double rangeEndSec = static_cast<double>(f0Count) * secondsPerFrame;
     for (const auto& n : *generatedNotes) {

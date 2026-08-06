@@ -105,8 +105,6 @@ struct DrawingState
     std::vector<float> handDrawBuffer;
     double dirtyStartTime = -1.0;
     double dirtyEndTime = -1.0;
-    juce::Point<float> lastDrawPoint;
-    
     bool isDrawingNote = false;
     double drawingNoteStartTime = 0.0;
     double drawingNoteEndTime = 0.0;

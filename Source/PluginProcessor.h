@@ -39,7 +39,7 @@
 #include "Utils/UndoManager.h"
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
-#include "Inference/INoteGenerator.h"
+#include "Inference/GameNoteGenerator.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlacementClipboard.h"
 #include "Utils/TrackConstants.h"
@@ -636,10 +636,11 @@ private:
 
     std::shared_ptr<ResamplingManager> resamplingManager_;
 
-    // Note generator (GAME-small by default; LegacyNoteGenerator
-    // when env OPENTUNE_NOTE_BACKEND=legacy or models missing). Lazily
-    // initialised by ensureNoteGeneratorReady().
-    std::unique_ptr<INoteGenerator> noteGenerator_;
+    // Note generator (GAME-small by default; the static DSP fallback
+    // LegacyNoteGenerator::generate when env OPENTUNE_NOTE_BACKEND=legacy or
+    // models missing). Lazily initialised by ensureNoteGeneratorReady().
+    std::unique_ptr<GameNoteGenerator> noteGenerator_;
+    bool noteGenLegacyFallback_ = false; // GAME unavailable → StandardAuto path
     std::mutex                      noteGeneratorInferenceMutex_; // serialise inference calls
 
     ExperimentalReferenceAlignMode experimentalReferenceAlignMode_ = ExperimentalReferenceAlignMode::StandardAuto;

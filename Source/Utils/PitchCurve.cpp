@@ -65,9 +65,9 @@ float smootherstep(float t) noexcept
 
 double noteTransitionFrameAt(const Note& leftNote,
                              const Note& rightNote,
-                             double framePerSecond) noexcept
+                             double secondsPerFrame) noexcept
 {
-    return 0.5 * (leftNote.endTime + rightNote.startTime) * framePerSecond;
+    return 0.5 * (leftNote.endTime + rightNote.startTime) / secondsPerFrame;
 }
 
 float noteBoundaryShiftSemitoneOffset(const std::vector<Note>& notes,
@@ -75,9 +75,9 @@ float noteBoundaryShiftSemitoneOffset(const std::vector<Note>& notes,
                                       const std::vector<float>& noteAnchorMidis,
                                       size_t activeNoteIndex,
                                       float activeOffsetSemitones,
-                                      int frame,
-                                      double framePerSecond,
-                                      float frameRetuneSpeed)
+                                       int frame,
+                                       double secondsPerFrame,
+                                       float frameRetuneSpeed)
 {
     const int maxBridgeFrames = PitchCurve::getCorrectedF0BoundaryContextFrames();
     const int bridgeFrames = static_cast<int>(std::lround(
@@ -118,7 +118,7 @@ float noteBoundaryShiftSemitoneOffset(const std::vector<Note>& notes,
     if (position > 0) {
         const size_t leftNoteIndex = relevantNoteIndices[position - 1];
         const auto bridged = transitionOffsetFor(leftNoteIndex,
-                                                 noteTransitionFrameAt(notes[leftNoteIndex], notes[activeNoteIndex], framePerSecond),
+                                                 noteTransitionFrameAt(notes[leftNoteIndex], notes[activeNoteIndex], secondsPerFrame),
                                                  true);
         if (bridged.has_value()) {
             return *bridged;
@@ -128,7 +128,7 @@ float noteBoundaryShiftSemitoneOffset(const std::vector<Note>& notes,
     if (position + 1 < relevantNoteIndices.size()) {
         const size_t rightNoteIndex = relevantNoteIndices[position + 1];
         const auto bridged = transitionOffsetFor(rightNoteIndex,
-                                                 noteTransitionFrameAt(notes[activeNoteIndex], notes[rightNoteIndex], framePerSecond),
+                                                 noteTransitionFrameAt(notes[activeNoteIndex], notes[rightNoteIndex], secondsPerFrame),
                                                  false);
         if (bridged.has_value()) {
             return *bridged;
@@ -222,7 +222,7 @@ void PitchCurve::applyCorrectionToRange(
         float anchorPitch = 0.0f;
         float anchorMidi = 0.0f;
         float rotationRad = 0.0f;
-        float timeCenterSeconds = 0.0f;
+        double timeCenterSeconds = 0.0;
     };
 
     std::vector<NoteCorrectionInfo> noteInfos(notes.size());
@@ -233,13 +233,14 @@ void PitchCurve::applyCorrectionToRange(
     const float slopeAngleMaxDeg = 30.0f;
     const float slopeAt45DegSemitonesPerSecond = 7.0f;
 
-    const double framePerSecond = sampleRate / static_cast<double>(hopSize);
+    const F0Timeline f0tl(hopSize, sampleRate, maxFrame);
+    const double secondsPerFrame = static_cast<double>(hopSize) / sampleRate;
     std::vector<size_t> relevantNoteIndices;
     for (size_t noteIndex = 0; noteIndex < notes.size(); ++noteIndex) {
         const auto& note = notes[noteIndex];
 
-        size_t noteStartFrame = static_cast<size_t>(std::max(0, static_cast<int>(std::floor(note.startTime * framePerSecond))));
-        size_t noteEndFrame = static_cast<size_t>(std::max(0, static_cast<int>(std::ceil(note.endTime * framePerSecond))));
+        size_t noteStartFrame = static_cast<size_t>(f0tl.frameAtOrBefore(note.startTime));
+        size_t noteEndFrame = static_cast<size_t>(f0tl.exclusiveFrameAt(note.endTime));
 
         if (static_cast<int>(noteEndFrame) <= calculationStartFrame
             || static_cast<int>(noteStartFrame) >= calculationEndFrame) {
@@ -253,7 +254,7 @@ void PitchCurve::applyCorrectionToRange(
         if (anchorPitch <= 0.0f) anchorPitch = note.pitch;
         info.anchorPitch = anchorPitch;
         info.anchorMidi = PitchUtils::freqToMidi(anchorPitch);
-        info.timeCenterSeconds = static_cast<float>((note.startTime + note.endTime) * 0.5);
+        info.timeCenterSeconds = (note.startTime + note.endTime) * 0.5;
 
         if (info.anchorMidi > 0.0f && noteStartFrame < noteEndFrame) {
             std::vector<float> voicedTimes;
@@ -262,8 +263,8 @@ void PitchCurve::applyCorrectionToRange(
                 const float rawF0 = originalF0[f];
                 const float f0 = rawF0 > 0.0f ? rawF0 * sourcePitchRatio : rawF0;
                 if (f0 <= 0.0f) continue;
-                float tSec = static_cast<float>(static_cast<double>(f) * static_cast<double>(hopSize) / sampleRate);
-                voicedTimes.push_back(tSec);
+                const double tSec = f0tl.timeAtFrame(f);
+                voicedTimes.push_back(static_cast<float>(tSec));
                 voicedMidis.push_back(PitchUtils::freqToMidi(f0));
             }
 
@@ -317,7 +318,7 @@ void PitchCurve::applyCorrectionToRange(
             continue;
         }
 
-        const double timeSeconds = static_cast<double>(i) * static_cast<double>(hopSize) / sampleRate;
+        const double timeSeconds = f0tl.timeAtFrame(i);
 
         const Note* activeNote = nullptr;
         size_t activeNoteIndex = 0;
@@ -353,8 +354,8 @@ void PitchCurve::applyCorrectionToRange(
 
             float baseF0 = f0;
             if (noteInfos[activeNoteIndex].rotationRad != 0.0f) {
-                float tSec = static_cast<float>(timeSeconds);
-                float x = tSec - noteInfos[activeNoteIndex].timeCenterSeconds;
+                const double tSec = timeSeconds;
+                float x = static_cast<float>(tSec - noteInfos[activeNoteIndex].timeCenterSeconds);
                 float y = PitchUtils::freqToMidi(f0) - noteInfos[activeNoteIndex].anchorMidi;
                 float c = std::cos(noteInfos[activeNoteIndex].rotationRad);
                 float s = std::sin(noteInfos[activeNoteIndex].rotationRad);
@@ -371,9 +372,9 @@ void PitchCurve::applyCorrectionToRange(
                                                                                      noteAnchorMidis,
                                                                                      activeNoteIndex,
                                                                                      activeOffsetSemitones,
-                                                                                     i,
-                                                                                     framePerSecond,
-                                                                                     frameRetuneSpeed);
+                                                                                      i,
+                                                                                      secondsPerFrame,
+                                                                                      frameRetuneSpeed);
                 float shiftRatio = std::pow(2.0f, dynamicOffsetSemitones / 12.0f);
                 shiftedF0 = baseF0 * shiftRatio;
             }

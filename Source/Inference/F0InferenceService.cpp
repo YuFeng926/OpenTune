@@ -43,9 +43,6 @@ public:
 #endif
             return true;
 
-        } catch (const std::exception& e) {
-            AppLogger::error("[F0InferenceService] Initialization error: " + juce::String(e.what()));
-            return false;
         } catch (...) {
             AppLogger::error("[F0InferenceService] Unknown initialization error");
             return false;
@@ -132,9 +129,6 @@ public:
                     auto f0 = currentExtractor_->extractF0(audio, length, sampleRate,
                                                              runOptions_, progressCallback, partialCallback);
                     result = Result<std::vector<float>>::success(f0);
-                } catch (const std::exception& e) {
-                    result = Result<std::vector<float>>::failure(
-                        ErrorCode::ModelInferenceFailed, std::string(e.what()));
                 } catch (...) {
                     AppLogger::error("[F0InferenceService] Unknown exception during F0 extraction");
                     result = Result<std::vector<float>>::failure(

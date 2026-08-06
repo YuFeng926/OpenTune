@@ -1,10 +1,8 @@
 #pragma once
 
 /**
- * Shared parameter types used by both LegacyNoteGenerator and the
- * INoteGenerator interface. Extracted into its own header to break the
- * include cycle between Source/Inference/INoteGenerator.h and
- * Source/Utils/LegacyNoteGenerator.h.
+ * Shared parameter types used by the note-generation pipeline:
+ * LegacyNoteGenerator and the ScaleSnap consumers (AutoTune, Pitch Tool).
  *
  * Method bodies (e.g. ScaleSnapConfig::semitones, snapMidi,
  * quantizeMidiToActiveScale, applyToNotes) live in

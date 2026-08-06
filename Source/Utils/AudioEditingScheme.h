@@ -62,11 +62,6 @@ inline bool usesNotesPrimaryScheme(Scheme scheme) noexcept
     return scheme == Scheme::NotesPrimary;
 }
 
-inline bool usesVoicedOnlyEditing(Scheme scheme) noexcept
-{
-    return usesNotesPrimaryScheme(scheme);
-}
-
 inline bool isEditableVoicedFrame(float frequencyHz) noexcept
 {
     return frequencyHz > 0.0f;
@@ -88,7 +83,7 @@ inline bool canEditFrame(Scheme scheme, const std::vector<float>& originalF0, in
         return false;
     }
 
-    return !usesVoicedOnlyEditing(scheme) || isEditableVoicedFrame(originalF0[static_cast<std::size_t>(frameIndex)]);
+    return !usesNotesPrimaryScheme(scheme) || isEditableVoicedFrame(originalF0[static_cast<std::size_t>(frameIndex)]);
 }
 
 inline FrameRange trimFrameRangeToEditableBounds(Scheme scheme,
@@ -96,7 +91,7 @@ inline FrameRange trimFrameRangeToEditableBounds(Scheme scheme,
                                                  FrameRange requestedRange) noexcept
 {
     auto trimmedRange = clampFrameRange(requestedRange, static_cast<int>(originalF0.size()));
-    if (!trimmedRange.isValid() || !usesVoicedOnlyEditing(scheme)) {
+    if (!trimmedRange.isValid() || !usesNotesPrimaryScheme(scheme)) {
         return trimmedRange;
     }
 
@@ -138,50 +133,24 @@ inline ParameterTarget resolveParameterTarget(const ParameterTargetContext& cont
 
 inline AutoTuneDecision resolveAutoTuneRange(const AutoTuneTargetContext& context) noexcept
 {
-    auto makeDecision = [](AutoTuneTarget target, const FrameRange& range) -> AutoTuneDecision {
-        AutoTuneDecision decision;
-        decision.target = target;
-        decision.range = range;
-        return decision;
+    auto tryResolve = [](AutoTuneTarget target, const FrameRange& range) -> AutoTuneDecision {
+        if (!range.isValid()) return AutoTuneDecision{};
+        return AutoTuneDecision{target, range};
     };
 
-    auto makeNoneDecision = []() -> AutoTuneDecision {
+    if (auto d = tryResolve(AutoTuneTarget::FrameSelection, context.selectionAreaRange); d.target != AutoTuneTarget::None)
+        return d;
+
+    if (auto d = tryResolve(AutoTuneTarget::FrameSelection, context.f0SelectionRange); d.target != AutoTuneTarget::None)
+        return d;
+
+    if (auto d = tryResolve(AutoTuneTarget::SelectedNotes, context.selectedNotesRange); d.target != AutoTuneTarget::None)
+        return d;
+
+    if (context.totalFrameCount <= 0)
         return AutoTuneDecision{};
-    };
 
-    auto tryDecision = [&](AutoTuneTarget target, const FrameRange& range) -> AutoTuneDecision {
-        if (!range.isValid()) {
-            return makeNoneDecision();
-        }
-
-        return makeDecision(target, range);
-    };
-
-    auto hasDecision = [](const AutoTuneDecision& decision) noexcept {
-        return decision.target != AutoTuneTarget::None;
-    };
-
-    const auto selectionAreaDecision = tryDecision(AutoTuneTarget::FrameSelection, context.selectionAreaRange);
-    if (hasDecision(selectionAreaDecision)) {
-        return selectionAreaDecision;
-    }
-
-    const auto f0SelectionDecision = tryDecision(AutoTuneTarget::FrameSelection, context.f0SelectionRange);
-    if (hasDecision(f0SelectionDecision)) {
-        return f0SelectionDecision;
-    }
-
-    const auto selectedNotesDecision = tryDecision(AutoTuneTarget::SelectedNotes, context.selectedNotesRange);
-    if (hasDecision(selectedNotesDecision)) {
-        return selectedNotesDecision;
-    }
-
-    if (context.totalFrameCount <= 0) {
-        return makeNoneDecision();
-    }
-
-    const FrameRange wholeClipRange { 0, context.totalFrameCount };
-    return makeDecision(AutoTuneTarget::WholeClip, wholeClipRange);
+    return AutoTuneDecision{AutoTuneTarget::WholeClip, FrameRange{0, context.totalFrameCount}};
 }
 
 } // namespace OpenTune::AudioEditingScheme

@@ -16,7 +16,7 @@
  * See research/p1_note_transcription_spike/reports.md.
  *
  * Implements `INoteGenerator`. Reads only `input.audio` and `input.sampleRate`
- * from `NoteGeneratorInput`; ignores the F0 / frame-domain fields.
+ * from `NoteGeneratorInput`.
  *
  * Design rationale: see openspec/changes/add-game-note-generator/design.md (D1–D7).
  */
