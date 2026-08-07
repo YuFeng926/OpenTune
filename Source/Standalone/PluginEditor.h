@@ -302,6 +302,7 @@ private:
     ExperimentalReferenceAlignMode appliedReferenceAlignMode_ = ExperimentalReferenceAlignMode::StandardAuto;
     bool appliedExperimentalFeaturesEnabled_ = false;
     bool referenceRefreshPending_ = false;
+    AudioEditingScheme::Scheme appliedAudioEditingScheme_ = AudioEditingScheme::Scheme::CorrectedF0Primary;
 #if JUCE_DEBUG
     int diagnosticHeartbeatCounter_ = 0;
 #endif
