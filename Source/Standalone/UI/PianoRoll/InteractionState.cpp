@@ -104,6 +104,11 @@ void NoteSelectionState::toggle(int noteIndex, int noteCount)
     trimToNoteCount(noteCount);
 }
 
+bool NoteSelectionState::isAllSelected(int noteCount) const noexcept
+{
+    return noteCount > 0 && static_cast<int>(selectedIndices.size()) == noteCount;
+}
+
 void NoteSelectionState::selectAll(int noteCount)
 {
     if (noteCount <= 0) {
