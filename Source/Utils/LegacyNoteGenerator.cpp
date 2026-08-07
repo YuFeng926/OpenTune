@@ -248,7 +248,7 @@ std::vector<Note> LegacyNoteGenerator::generate(
             }
 
             pitches.push_back(f0val);
-            energyBuf.push_back(energy[i]);
+            if (energy != nullptr) energyBuf.push_back(energy[i]);
             segmentPitchSum += static_cast<double>(f0val);
             ++segmentPitchCount;
             lastVoicedFrame = i;
