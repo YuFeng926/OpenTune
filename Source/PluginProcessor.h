@@ -39,7 +39,6 @@
 #include "Utils/UndoManager.h"
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
-#include "Inference/GameNoteGenerator.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlacementClipboard.h"
 #include "Utils/TrackConstants.h"
@@ -291,8 +290,7 @@ namespace Capture {
  * 管理多轨道、Clip、音高曲线、渲染缓存等核心数据。
  */
 class OpenTuneAudioProcessor : public juce::AudioProcessor,
-                               public juce::AsyncUpdater,
-                               private ReferenceAnalysisService::Listener
+                               public juce::AsyncUpdater
 #if JucePlugin_Enable_ARA
                            , public juce::AudioProcessorARAExtension
 #endif
@@ -500,9 +498,6 @@ private:
     juce::AudioParameterInt* editVersionParam_{nullptr};
     std::atomic<juce::int64> lastControlTimestamp_{0};
     std::atomic<int> lastControlType_{static_cast<int>(DiagnosticControlCall::None)};
-    std::atomic<bool> noteGenReady_{false};
-    std::atomic<bool> noteGenInitAttempted_{false};
-    mutable std::mutex noteGenInitMutex_;
 
 public:
     // ========================================================================
@@ -636,27 +631,16 @@ private:
 
     std::shared_ptr<ResamplingManager> resamplingManager_;
 
-    // Note generator (GAME-small by default; the static DSP fallback
-    // LegacyNoteGenerator::generate when env OPENTUNE_NOTE_BACKEND=legacy or
-    // models missing). Lazily initialised by ensureNoteGeneratorReady().
-    std::unique_ptr<GameNoteGenerator> noteGenerator_;
-    bool noteGenLegacyFallback_ = false; // GAME unavailable → StandardAuto path
-    std::mutex                      noteGeneratorInferenceMutex_; // serialise inference calls
-
     ExperimentalReferenceAlignMode experimentalReferenceAlignMode_ = ExperimentalReferenceAlignMode::StandardAuto;
     std::unordered_set<ContentKey> pendingTimeToolSeedKeys_; // message-thread only
 
     // 运行时惰性解析进程级 F0 服务，消除冷启动空快照
     F0ExtractionService f0ExtractionService_{1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }};
 
-    // GAME 推理中止标志：true=已中止。初始 false（未中止，GAME 功能正常），
-    // 析构时置 true + noteGenerator_->terminateRun()，
-    // 让进行中的 GAME Run 快速返回，join 分析 worker 不冻结。
-    std::shared_ptr<std::atomic<bool>> gameNoteAbortFlag_{std::make_shared<std::atomic<bool>>(false)};
-
-    // Completion gate：F0 commit lambda 与 chunkSettled 回调（均捕获裸 this/processor）
-    // 与析构互斥的唯一生命周期闸门。析构最先持锁置 closed=true：已进入的 commit/回调
-    // 完成后才置位，此后进入者持锁见 closed 即返回，不再访问 owner。
+    // Completion gate：F0 commit / Reference 分析 completion / 模型切换 completion
+    // 回调（均捕获裸 this/processor）与析构互斥的唯一生命周期闸门。析构最先持锁置
+    // closed=true：已进入的回调完成后才置位，此后进入者持锁见 closed 即返回，
+    // 不再访问 owner。
     std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate_{
         std::make_shared<ProcessRenderRuntime::CompletionGate>()};
 
@@ -671,23 +655,15 @@ private:
     juce::String lastExportError_;
 
     bool ensureF0Ready();
-    bool ensureNoteGeneratorReady();
-
-    bool ensureServiceReady(std::atomic<bool>& readyFlag,
-                            std::atomic<bool>& attemptedFlag,
-                            std::mutex& initMutex,
-                            const char* serviceName,
-                            std::function<bool(const std::string&)> initFunc);
 
     ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
-    void configureReferenceAnalysisService();
 
     ContentRenderService* resolveMutableLocalContentRenderService(ContentKey key) const noexcept;
     const ContentRenderService* resolveReadableContentRenderService(ContentKey key) const noexcept;
     AnalysisAudioProvider resolveAnalysisAudioProvider(ContentKey key);
 
     void analysisFinished(ContentKey key,
-                          const ReferenceFeatureSet& result) override;
+                          const ReferenceFeatureSet& result);
 
 public:
     // Track State Management
@@ -701,12 +677,19 @@ public:
     bool getShowLanes() const { return showLanes_; }
 
     /**
-     * 重置推理后端（切换 GPU/CPU 时调用，UI 线程）
-     * 停止 render worker → 释放推理服务 → 重新检测 → worker 惰性重启
+     * 重置推理后端（切换 GPU/CPU 时调用，UI 线程）：
+     * 暂停 render worker → 向进程寿命 control worker 投递命令（Session 销毁、
+     * AccelerationDetector reset/detect、重建全部在其上执行）→ 立即返回。
+     * 完成后经消息线程回调：恢复 render worker。gate 关闭后回调直接丢弃。
      */
     void resetInferenceBackend(bool forceCpu);
 
-    /** @brief 切换声码器模型权重。停worker→清cache→懒重建vocoder。调用方负责持久化偏好。 */
+    /**
+     * 切换声码器模型权重（UI 线程）：暂停 render worker → 向进程寿命 control
+     * worker 投递命令（严格先销毁旧 Session 再按当前配置重建）→ 立即返回。
+     * 模型切换完成后才清 RenderCache/TimeStretchCache 并恢复 render worker。
+     * gate 关闭后回调直接丢弃。调用方负责持久化偏好。
+     */
     void setVocoderModelWeight(VocoderModelWeight weight);
 
     bool isInferenceReady() const { return ProcessF0Runtime::getInstance().isReady(); }
@@ -743,12 +726,6 @@ public:
     bool ensureTimeToolAnchorSeed(ContentKey key);
     AutoRefAvailability queryAutoRefAvailability(uint64_t targetPlacementId) const;
 
-    /** AUTO(REF) 特征生产入口。producer 由提交 job 固定，worker 不读取 UI 状态。 */
-    ReferenceFeatureSet buildReferenceFeatureSet(
-        ContentKey key,
-        const EditableContentSnapshot& snapshot,
-        ReferenceFeatureProducer producer);
-
     /** 设置当前实验性参考对齐模式。由 UI 首选项变更驱动。 */
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode)
     {
@@ -758,10 +735,10 @@ public:
 private:
     void enqueueStandaloneStage2WhenCanonicalSettled(ContentKey key);
     ReferenceFeatureProducer resolveReferenceFeatureProducer() const;
-    ReferenceFeatureSet buildStandardAutoReferenceFeatureSet(
-        const EditableContentSnapshot& snapshot);
-    ReferenceFeatureSet buildGameReferenceFeatureSet(
-        ContentKey key, const EditableContentSnapshot& snapshot);
+    // 纯数据 StandardAuto 特征生产（static：不访问 processor 状态，analysisRevision
+    // 由提交方在消息线程固定，worker 只读提交时捕获的不可变 snapshot）。
+    static ReferenceFeatureSet buildStandardAutoReferenceFeatureSet(
+        const EditableContentSnapshot& snapshot, int analysisRevision);
 public:
 
     std::shared_ptr<ContentEditCommands> getContentCommands() const { return contentCommands_; }
@@ -861,10 +838,6 @@ public:
     // ── Internal: these APIs exist to serve remaining PluginProcessor.cpp callers
     // ── (import, split, merge, clone, state save/load). Not for new code.
     bool getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const;
-    bool extractImportedClipOriginalF0(const EditableContentSnapshot& snap,
-                                       const std::shared_ptr<F0RunOwnerState>& runOwnerState,
-                                       F0ExtractionService::Result& out,
-                                        std::string& errorMessage);
     ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(ContentKey key);
 
     bool exportPlacementAudio(int trackId, int placementIndex, const juce::File& file);

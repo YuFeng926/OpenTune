@@ -723,6 +723,7 @@ target_compile_definitions(OpenTune_Standalone
 target_sources(OpenTune_VST3
     PRIVATE
         Source/Utils/D3D12AgilityBootstrap.cpp
+        Source/Utils/Vst3ModulePin.cpp
         Source/Editor/EditorFactoryPlugin.cpp
         Source/Plugin/PluginEditor.cpp
         Source/Plugin/PluginEditor.h
@@ -1325,6 +1326,130 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         target_compile_options(OpenTunePasteTopologyRuntimeTests PRIVATE /utf-8)
     endif()
     add_test(NAME OpenTunePasteTopologyRuntimeTests COMMAND OpenTunePasteTopologyRuntimeTests)
+
+    # ==============================================================================
+    # OpenTuneInferenceProcessIsolationTests — 进程级推理隔离功能合同测试
+    # 验证 F0ExtractionService / ReferenceAnalysisService 生命周期合同、
+    # CompletionGate 互斥、ProcessRenderRuntime / ProcessF0Runtime detach 非阻塞。
+    # 不依赖模型文件 / GPU / ORT session 初始化（只测队列/锁/计数语义）。
+    # ==============================================================================
+    add_executable(OpenTuneInferenceProcessIsolationTests
+        Tests/InferenceProcessIsolationTests.cpp
+        Source/Services/F0ExtractionService.cpp
+        Source/Services/ReferenceAnalysisService.cpp
+        Source/Utils/AppLogger.cpp
+        Source/Utils/AccelerationDetector.cpp
+        Source/Runtime/ProcessF0Runtime.cpp
+        Source/Runtime/ProcessRenderRuntime.cpp
+        Source/Inference/F0InferenceService.cpp
+        Source/Inference/GameNoteGenerator.cpp
+        Source/Inference/VocoderDomain.cpp
+        Source/Inference/VocoderInferenceService.cpp
+        Source/Inference/VocoderRenderScheduler.cpp
+        Source/Inference/VocoderFactory.cpp
+        Source/Inference/DmlVocoder.cpp
+        Source/Inference/OnnxVocoderBase.cpp
+        Source/Inference/PCNSFHifiGANVocoder.cpp
+        Source/Inference/RMVPEExtractor.cpp
+        Source/Inference/ModelFactory.cpp
+        Source/Inference/RenderCache.cpp
+        Source/Inference/TimeStretchCache.cpp
+        Source/Inference/SoundTouchStretcher.cpp
+
+        # SoundTouch library
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/AAFilter.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/FIFOSampleBuffer.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/FIRFilter.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateCubic.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateLinear.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateShannon.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/RateTransposer.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/TDStretch.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/cpu_detect_x86.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/sse_optimized.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/mmx_optimized.cpp
+
+        Source/DSP/MelSpectrogram.cpp
+        Source/DSP/AutoTunePitchShifter.cpp
+        Source/DSP/ResamplingManager.cpp
+        Source/Utils/SimdAccelerator.cpp
+        Source/Utils/ChannelLayoutLogger.cpp
+        Source/Utils/CpuBudgetManager.cpp
+        Source/Utils/PitchCurve.cpp
+        Source/Utils/SilentGapDetector.cpp
+        Source/Utils/TimeGrid.cpp
+        Source/Render/ContentRenderService.cpp
+        Source/Render/RenderWorker.cpp
+        Source/Render/RenderChunkPlanner.cpp
+        Source/Render/Stage2TimeStretchRebuilder.cpp
+        Source/Render/StretcherPool.cpp
+        Source/Render/PlaybackSourcePublisher.cpp
+        Source/Render/RenderCacheRegistry.cpp
+        Source/Content/StandaloneClipContent.cpp
+        Source/Content/StandaloneContentRepository.cpp
+    )
+    target_compile_features(OpenTuneInferenceProcessIsolationTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneInferenceProcessIsolationTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${ONNXRUNTIME_INCLUDE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master
+            ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/soundtouch-2.3.3/include
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_basics>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_core>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_data_structures>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_events>
+    )
+    if(WIN32)
+        target_include_directories(OpenTuneInferenceProcessIsolationTests
+            PRIVATE
+                ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
+                ${D3D12_AGILITY_INCLUDE_DIR}
+                ${D3D12_AGILITY_D3DX12_INCLUDE_DIR}
+                ${D3D12_AGILITY_NATIVE_DIR}
+                ${DIRECTML_INCLUDE_DIR}
+        )
+    endif()
+    target_link_libraries(OpenTuneInferenceProcessIsolationTests
+        PRIVATE
+            juce::juce_audio_basics
+            juce::juce_core
+            juce::juce_data_structures
+            juce::juce_dsp
+            juce::juce_events
+            OpenTuneResources
+    )
+    if(WIN32)
+        target_link_libraries(OpenTuneInferenceProcessIsolationTests
+            PRIVATE
+                "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
+                "${OPENTUNE_D3D12_SYSTEM_LIB}"
+                "${OPENTUNE_DXGI_SYSTEM_LIB}"
+                version
+        )
+    endif()
+    target_compile_definitions(OpenTuneInferenceProcessIsolationTests
+        PRIVATE
+            OPENTUNE_VERSION="${PROJECT_VERSION}"
+            OPENTUNE_D3D12_AGILITY_SDK_VERSION=${OPENTUNE_D3D12_SDK_VERSION}
+            ORT_API_MANUAL_INIT
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+            OPENTUNE_TEST_BUILD=1
+            SOUNDTOUCH_FLOAT_SAMPLES
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneInferenceProcessIsolationTests PRIVATE /utf-8 /MP /bigobj)
+    endif()
+    if(WIN32)
+        add_custom_command(TARGET OpenTuneInferenceProcessIsolationTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneInferenceProcessIsolationTests>/onnxruntime.dll"
+            COMMENT "Copying ONNX Runtime DLL to OpenTuneInferenceProcessIsolationTests..."
+        )
+    endif()
+    add_test(NAME OpenTuneInferenceProcessIsolationTests COMMAND OpenTuneInferenceProcessIsolationTests)
 
     # ==============================================================================
     # OpenTuneThemeScreenshots — 后台静默主题截图工具

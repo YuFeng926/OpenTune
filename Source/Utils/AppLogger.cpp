@@ -2,28 +2,43 @@
 
 namespace OpenTune {
 
+namespace {
+
+struct LoggerState
+{
+    juce::CriticalSection lock;
+    std::unique_ptr<juce::FileLogger> logger;
+    juce::File file;
+    LogLevel level{LogLevel::Info};
+};
+
+LoggerState& getLoggerState()
+{
+    // 后台推理线程与模块同为进程寿命，logger 状态也必须永不静态析构。
+    static auto* state = new LoggerState;
+    return *state;
+}
+
+} // namespace
+
 static juce::CriticalSection& getLoggerLock()
 {
-    static juce::CriticalSection lock;
-    return lock;
+    return getLoggerState().lock;
 }
 
 static std::unique_ptr<juce::FileLogger>& getLoggerInstance()
 {
-    static std::unique_ptr<juce::FileLogger> logger;
-    return logger;
+    return getLoggerState().logger;
 }
 
 static juce::File& getLogFileInstance()
 {
-    static juce::File file;
-    return file;
+    return getLoggerState().file;
 }
 
 static LogLevel& getLogLevelInstance()
 {
-    static LogLevel level = LogLevel::Info;
-    return level;
+    return getLoggerState().level;
 }
 
 const char* AppLogger::levelToString(LogLevel level)
@@ -77,17 +92,6 @@ void AppLogger::initialize()
         juce::Logger::setCurrentLogger(logger.get());
         juce::Logger::writeToLog("Log file: " + getLogFileInstance().getFullPathName());
     }
-}
-
-void AppLogger::shutdown()
-{
-    const juce::ScopedLock sl(getLoggerLock());
-    auto& logger = getLoggerInstance();
-    if (juce::Logger::getCurrentLogger() == logger.get()) {
-        juce::Logger::setCurrentLogger(nullptr);
-    }
-    logger.reset();
-    getLogFileInstance() = juce::File{};
 }
 
 void AppLogger::log(const juce::String& message)
