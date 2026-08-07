@@ -2653,8 +2653,13 @@ void PianoRollComponent::resized() {
 
     auto bounds = getLocalBounds();
 
-    // Reserve space for scrollbars
-    horizontalScrollBar_.setBounds(bounds.removeFromBottom(UIColors::scrollBarThickness));
+    // In OpenDyne mode, the horizontal scrollbar is replaced by the Melodyne-style
+    // overview strip which overlays the bottom of the viewport.
+    if (!isOpenDyne())
+        horizontalScrollBar_.setBounds(bounds.removeFromBottom(UIColors::scrollBarThickness));
+    else
+        horizontalScrollBar_.setBounds({});
+
     verticalScrollBar_.setBounds(bounds.removeFromRight(UIColors::scrollBarThickness));
 
     const float maxVerticalScroll = juce::jmax(0.0f, getTotalHeight() - static_cast<float>(getTimelineContentViewportHeight()));
@@ -2984,7 +2989,10 @@ void PianoRollComponent::requestThemeRedraw() {
 juce::Rectangle<int> PianoRollComponent::getTimelineViewportBounds() const
 {
     const int viewportWidth = juce::jmax(0, getWidth() - verticalScrollBar_.getWidth());
-    const int viewportHeight = juce::jmax(0, getHeight() - horizontalScrollBar_.getHeight());
+    // In OpenDyne mode, no horizontal scrollbar reserves space — the overview strip overlays the bottom.
+    const int viewportHeight = isOpenDyne()
+        ? getHeight()
+        : juce::jmax(0, getHeight() - horizontalScrollBar_.getHeight());
     return { 0, 0, viewportWidth, viewportHeight };
 }
 
@@ -3266,6 +3274,10 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
     contentDirty_ = true;
     rasterizeDirtySurfaces();
     overlay_->repaint();
+
+    // Scheme changed → relayout to show/hide the horizontal scrollbar.
+    if (wasOpenDyne != nowOpenDyne)
+        resized();
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {

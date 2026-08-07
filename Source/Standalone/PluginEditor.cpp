@@ -951,10 +951,14 @@ void OpenTuneAudioProcessorEditor::resized()
         const int overviewX = bounds.getX() + 12;
         const int overviewRight = bounds.getX() + timelineViewport.getRight();
         const int overviewBottom = bounds.getY() + timelineViewport.getBottom();
+        // In OpenDyne mode, extend the overview strip to fill the former scrollbar space (20px).
+        const int overviewHeight = pianoRoll_.isOpenDyne()
+            ? OVERVIEW_STRIP_HEIGHT + UIColors::scrollBarThickness
+            : OVERVIEW_STRIP_HEIGHT;
         overviewStrip_.setBounds(overviewX,
-                                 overviewBottom - OVERVIEW_STRIP_HEIGHT,
+                                 overviewBottom - overviewHeight,
                                  overviewRight - overviewX,
-                                 OVERVIEW_STRIP_HEIGHT);
+                                 overviewHeight);
     }
     else
     {
@@ -1296,6 +1300,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
         applyThemeToEditor(effectiveTheme);
 
     pianoRoll_.setAudioEditingScheme(sharedPreferences.audioEditingScheme);
+    overviewStrip_.setMelodyneStyle(AudioEditingScheme::usesNotesPrimaryScheme(sharedPreferences.audioEditingScheme));
     pianoRoll_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
@@ -1307,6 +1312,13 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     arrangementView_.setExperimentalReferenceControlsEnabled(experimentalFeaturesEnabled);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+
+    // When the editing scheme changes, relayout to show/hide the horizontal scrollbar
+    // and resize the overview strip for Melodyne-style integration.
+    if (appliedAudioEditingScheme_ != sharedPreferences.audioEditingScheme) {
+        appliedAudioEditingScheme_ = sharedPreferences.audioEditingScheme;
+        resized();
+    }
 
     shortcutSettings_ = preferencesState.shared.shortcuts;
     pianoRoll_.setShortcutSettings(shortcutSettings_);
