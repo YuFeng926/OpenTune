@@ -4344,20 +4344,9 @@ std::optional<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildCon
                                 static_cast<int>(item.pitchSnapshot->size()) };
     }
 
-    // OpenDyne：注入当前缩放级别的 mipmap level 供 drawNotes 绘制 waveform blob。
-    // 数据源是 mipmap：selectBestLevelIndex 只选 complete 非空 level（无可用 level 时
-    // 返回 -1）。不要求全量 6 级完成、不依赖 audioBuffer（ARA 快照无音频缓冲）。
+    // OpenDyne blob 主音符图形由 Renderer 从持久 originalEnergy 构建，
+    // 不注入可选 PCM/mipmap；背景波形（非 OpenDyne）由 drawContent 直接读缓存。
     item.notesPrimaryScheme = isOpenDyne();
-    if (item.notesPrimaryScheme) {
-        const auto* mipmap = waveformMipmapCache_.get(placement.contentKey);
-        if (mipmap != nullptr && mipmap->hasSource()) {
-            const int bestLevel = mipmap->selectBestLevelIndex(camera_.pixelsPerSecond);
-            if (bestLevel >= 0) {
-                item.wfLevel = &mipmap->getLevel(bestLevel);
-                item.wfLevelSamplesPerPeak = WaveformMipmap::kSamplesPerPeak[bestLevel];
-            }
-        }
-    }
 
     return item;
 }

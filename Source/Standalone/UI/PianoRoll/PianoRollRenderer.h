@@ -78,9 +78,6 @@ public:
         bool active = false;
         juce::Colour displayColour{0xFF4A90D9}; // 从 placement 注入，Renderer 不查 owner
         bool notesPrimaryScheme = false;        // OpenDyne：波形 blob 模式
-        // OpenDyne waveform blob: 当前缩放级别的 mipmap level，nullptr 表示 mipmap 未完成
-        const WaveformMipmap::Level* wfLevel = nullptr;
-        int wfLevelSamplesPerPeak = 0;
 
         bool isValid() const noexcept
         {

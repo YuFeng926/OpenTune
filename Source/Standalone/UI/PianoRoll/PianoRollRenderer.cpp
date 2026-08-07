@@ -222,15 +222,14 @@ inline int sourceTimeToScreenX(double sourceTime,
     return ctx.coords.timeToX(timelineTime);
 }
 
-// OpenDyne waveform blob：按 Note source-time 窗口索引 mipmap 峰值，构建闭合波形 Path。
+// OpenDyne waveform blob：按 Note 的 F0Timeline 帧范围索引持久 originalEnergy，构建闭合波形 Path。
 // drawNotes 与选中高亮共用，保证 blob 几何完全一致。
 static bool buildNoteBlobPath(
     const Note& note,
     const PianoRollRenderer::RenderContext& ctx,
     const PianoRollRenderer::ContentRenderItem& item,
-    const WaveformMipmap::Level& wfLevel,
-    double timePerPeak,
-    int64_t numPeaks,
+    const std::vector<float>& energy,
+    const F0Timeline& timeline,
     float clipRefMag,
     const AutomationLane* volumeEnvelope,
     float centerY,
@@ -239,20 +238,17 @@ static bool buildNoteBlobPath(
     int x2,
     juce::Path& outPath)
 {
-    int64_t idxStart = std::max<int64_t>(0, static_cast<int64_t>(note.startTime / timePerPeak));
-    int64_t idxEnd = std::min<int64_t>(numPeaks,
-                                       static_cast<int64_t>(note.endTime / timePerPeak) + 1);
-    if (idxEnd <= idxStart)
+    const auto range = timeline.rangeForTimes(note.startTime, note.endTime);
+    if (range.isEmpty())
         return false;
 
     juce::Path blob;
     blob.startNewSubPath(static_cast<float>(x1), centerY);
 
-    for (int64_t i = idxStart; i < idxEnd; ++i)
+    for (int frame = range.startFrame; frame < range.endFrameExclusive; ++frame)
     {
-        const auto& peak = wfLevel.peaks[static_cast<size_t>(i)];
-        const float normMag = peak.getMagnitude() / clipRefMag;
-        const double sourceTime = static_cast<double>(i) * timePerPeak;
+        const float normMag = energy[static_cast<size_t>(frame)] / clipRefMag;
+        const double sourceTime = timeline.timeAtFrame(frame);
         const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
         const float gainDb = volumeEnvelope ? volumeEnvelope->evalAt(sourceTime) : 0.0f;
         // 视觉范围 -14dB ~ +8dB：0dB=1.0 原始大小，超出后饱和（防遮挡/防消失）
@@ -262,11 +258,10 @@ static bool buildNoteBlobPath(
     }
     blob.lineTo(static_cast<float>(x2), centerY);
 
-    for (int64_t i = idxEnd; i-- > idxStart;)
+    for (int frame = range.endFrameExclusive; frame-- > range.startFrame;)
     {
-        const auto& peak = wfLevel.peaks[static_cast<size_t>(i)];
-        const float normMag = peak.getMagnitude() / clipRefMag;
-        const double sourceTime = static_cast<double>(i) * timePerPeak;
+        const float normMag = energy[static_cast<size_t>(frame)] / clipRefMag;
+        const double sourceTime = timeline.timeAtFrame(frame);
         const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
         const float gainDb = volumeEnvelope ? volumeEnvelope->evalAt(sourceTime) : 0.0f;
         // 视觉范围 -14dB ~ +8dB：0dB=1.0 原始大小，超出后饱和（防遮挡/防消失）
@@ -975,9 +970,13 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     // ── OpenDyne waveform blob 模式 ──────────────────────────────
     if (item.notesPrimaryScheme)
     {
-        // 没有 complete 非空 mipmap level 时，装配阶段不会注入 wfLevel。
-        if (item.wfLevel == nullptr || item.wfLevel->peaks.empty())
+        // blob 是主音符图形：只依赖持久 originalEnergy + F0Timeline，不依赖可选 PCM/mipmap
+        if (item.pitchSnapshot == nullptr
+            || item.pitchSnapshot->getOriginalEnergy().empty()
+            || item.f0Timeline.isEmpty())
             return;
+
+        const auto& energy = item.pitchSnapshot->getOriginalEnergy();
 
         // blob 音量缩放：拖拽预览包络优先，否则回退到已提交音量包络
         const AutomationLane* volumeEnvelope = nullptr;
@@ -986,15 +985,10 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 ? volumePreviewEnvelope_ : &item.ownerSnapshot->volumeEnvelope;
         }
 
-        const double timePerPeak = static_cast<double>(item.wfLevelSamplesPerPeak)
-            / WaveformMipmap::kBaseSampleRate;
-        const int64_t numPeaks = static_cast<int64_t>(item.wfLevel->peaks.size());
-
-        // ── clip 级振幅参考值：扫描 mipmap 全部峰值，取最大 magnitude ──
+        // ── clip 级振幅参考值：扫描全部 energy 帧，取最大值 ──
         float clipRefMag = 0.0f;
-        for (const auto& peak : item.wfLevel->peaks) {
-            const float m = peak.getMagnitude();
-            if (m > clipRefMag) clipRefMag = m;
+        for (const float e : energy) {
+            if (e > clipRefMag) clipRefMag = e;
         }
         if (clipRefMag <= 0.0f)
             return;  // 静音 clip，跳过 blob 绘制
@@ -1018,7 +1012,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
             juce::Path blob;
-            if (!buildNoteBlobPath(note, ctx, item, *item.wfLevel, timePerPeak, numPeaks,
+            if (!buildNoteBlobPath(note, ctx, item, energy, item.f0Timeline,
                                    clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
@@ -1148,8 +1142,13 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
     // ── OpenDyne：选中高亮直接叠加在波形 blob 上（blob 几何与 drawNotes 完全一致） ──
     if (item.notesPrimaryScheme)
     {
-        if (item.wfLevel == nullptr || item.wfLevel->peaks.empty())
+        // blob 是主音符图形：只依赖持久 originalEnergy + F0Timeline，不依赖可选 PCM/mipmap
+        if (item.pitchSnapshot == nullptr
+            || item.pitchSnapshot->getOriginalEnergy().empty()
+            || item.f0Timeline.isEmpty())
             return;
+
+        const auto& energy = item.pitchSnapshot->getOriginalEnergy();
 
         // blob 音量缩放：与 drawNotes 一致——拖拽预览包络优先，否则回退到已提交音量包络
         const AutomationLane* volumeEnvelope = nullptr;
@@ -1158,15 +1157,10 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
                 ? volumePreviewEnvelope_ : &item.ownerSnapshot->volumeEnvelope;
         }
 
-        const double timePerPeak = static_cast<double>(item.wfLevelSamplesPerPeak)
-            / WaveformMipmap::kBaseSampleRate;
-        const int64_t numPeaks = static_cast<int64_t>(item.wfLevel->peaks.size());
-
         // clip 级振幅参考值：与 drawNotes 一致
         float clipRefMag = 0.0f;
-        for (const auto& peak : item.wfLevel->peaks) {
-            const float m = peak.getMagnitude();
-            if (m > clipRefMag) clipRefMag = m;
+        for (const float e : energy) {
+            if (e > clipRefMag) clipRefMag = e;
         }
         if (clipRefMag <= 0.0f)
             return;  // 静音 clip，无 blob 可高亮
@@ -1197,7 +1191,7 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
             x2 = juce::jmin(x2, visibleWindow.viewportEndX);
 
             juce::Path blob;
-            if (!buildNoteBlobPath(note, ctx, item, *item.wfLevel, timePerPeak, numPeaks,
+            if (!buildNoteBlobPath(note, ctx, item, energy, item.f0Timeline,
                                    clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
