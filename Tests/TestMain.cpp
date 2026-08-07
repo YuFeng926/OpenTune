@@ -354,6 +354,31 @@ void testOpenDyneContract()
     expect(contains(mipmapSource, "return -1;"),
            "selectBestLevelIndex returns -1 when no complete non-empty level exists");
 
+    // OpenDyne blob 是主音符图形：只从持久 originalEnergy + F0Timeline 构建，
+    // 不依赖可选 PCM/mipmap；background drawWaveform 仍引用 mipmap（只解除主音符依赖）。
+    const auto blobBuilder = functionBlock(rendererSource, "static bool buildNoteBlobPath(");
+    expect(contains(blobBuilder, "timeline.rangeForTimes(note.startTime, note.endTime)")
+               && contains(blobBuilder, "timeline.timeAtFrame(frame)"),
+           "Blob frame range and source time derive from the F0Timeline, no hop/sampleRate math");
+    expect(!contains(blobBuilder, "WaveformMipmap") && !contains(blobBuilder, "wfLevel"),
+           "Blob geometry never touches mipmap peaks");
+    const auto drawNotesBlock = functionBlock(rendererSource, "void PianoRollRenderer::drawNotes");
+    const auto drawSelectedBlock =
+        functionBlock(rendererSource, "void PianoRollRenderer::drawSelectedNoteHighlights");
+    expect(contains(drawNotesBlock, "item.pitchSnapshot->getOriginalEnergy()")
+               && contains(drawSelectedBlock, "item.pitchSnapshot->getOriginalEnergy()"),
+           "Both blob branches consume the persistent originalEnergy");
+    expect(contains(drawNotesBlock, "buildNoteBlobPath(")
+               && contains(drawSelectedBlock, "buildNoteBlobPath("),
+           "Both blob branches share the single buildNoteBlobPath geometry");
+    expect(!contains(functionBlock(rendererHeader, "struct ContentRenderItem"), "wfLevel"),
+           "ContentRenderItem carries no mipmap level fields");
+    const auto buildItem = functionBlock(pianoRoll, "PianoRollComponent::buildContentRenderItem");
+    expect(!contains(buildItem, "wfLevel") && !contains(buildItem, "waveformMipmapCache_"),
+           "buildContentRenderItem injects no OpenDyne mipmap level");
+    expect(contains(rendererHeader, "const WaveformMipmap::Level& wfLevel"),
+           "Background drawWaveform keeps consuming the mipmap level");
+
     // Note 拓扑和 AUTO 不再维护独立 A 层增益路径。
     const auto autoCommit = functionBlock(processor, "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey");
     expect(!contains(processor, "applyNotesWithOutputGain")
