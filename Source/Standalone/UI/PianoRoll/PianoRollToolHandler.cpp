@@ -1257,7 +1257,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
             } else {
                 noteSelection.add(clickedNoteIndex, noteCount);
             }
-        } else if (!noteSelection.isSelected(clickedNoteIndex)) {
+        } else if (!noteSelection.isSelected(clickedNoteIndex) || (isOpenDyne && noteSelection.isAllSelected(noteCount))) {
             noteSelection.setSingle(clickedNoteIndex, noteCount);
         }
 
@@ -2207,10 +2207,10 @@ void PianoRollToolHandler::handlePitchToolMouseDown(const juce::MouseEvent& e)
 
     auto& noteSelection = ctx_.getState().noteSelection;
     const int noteCount = static_cast<int>(notes.size());
-    if (noteSelection.isSelected(clickedNoteIndex)) {
+    if (noteSelection.isSelected(clickedNoteIndex) && !noteSelection.isAllSelected(noteCount)) {
         // 点击已选中音符：保留多选，准备批量拖拽
     } else {
-        // 点击未选中音符：单选该音符
+        // 点击未选中音符或全选状态：单选该音符
         noteSelection.setSingle(clickedNoteIndex, noteCount);
     }
     // 清除旧框选矩形，F0 编辑范围由实际 draggedNoteIndices 计算
@@ -2339,7 +2339,7 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEv
         return;
 
     auto& state = ctx_.getState();
-    if (!state.noteSelection.isSelected(clickedNoteIndex))
+    if (!state.noteSelection.isSelected(clickedNoteIndex) || state.noteSelection.isAllSelected(static_cast<int>(notes.size())))
         state.noteSelection.setSingle(clickedNoteIndex, static_cast<int>(notes.size()));
     updateF0SelectionFromNotes(notes);
 

@@ -53,6 +53,7 @@ struct NoteSelectionState
     void selectRange(int startIndex, int endIndex, const std::vector<Note>& notes);
     void setFromIndices(std::vector<int> indices, int noteCount);
     bool empty() const noexcept { return selectedIndices.empty(); }
+    bool isAllSelected(int noteCount) const noexcept;
 };
 
 struct NoteDragManualTarget
