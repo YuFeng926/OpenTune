@@ -1473,12 +1473,12 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
                                              *currentTime);
 
     float targetF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-    float midiNote = 69.0f + 12.0f * std::log2(targetF0 / 440.0f);
+    float midiNote = PitchUtils::freqToMidi(targetF0);
     // 唯一投影入口：无配置时用默认 Chromatic（quantize 内部 round 半音）。
     const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
     const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
     int roundedMidi = static_cast<int>(std::lround(snap.quantizeMidiToActiveScale(midiNote)));
-    float snappedF0 = 440.0f * std::pow(2.0f, (roundedMidi - 69) / 12.0f);
+    float snappedF0 = PitchUtils::midiToFreq(static_cast<float>(roundedMidi));
 
     // Compute before bounds from current drawing state
     juce::Rectangle<int> beforeBounds;
@@ -2857,12 +2857,18 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     const auto f0tl = ctx_.getF0Timeline();
     if (f0tl.isEmpty()) return;
 
-    float midiNote = 69.0f + 12.0f * std::log2(clickFreq / 440.0f);
-    // 唯一投影入口：无配置时用默认 Chromatic（quantize 内部 round 半音）。
-    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-    const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-    int roundedMidi = static_cast<int>(std::lround(snap.quantizeMidiToActiveScale(midiNote)));
-    float snappedFreq = 440.0f * std::pow(2.0f, static_cast<float>(roundedMidi - 69) / 12.0f);
+    const float midiNote = PitchUtils::freqToMidi(clickFreq);
+    const bool altBypass = AudioEditingScheme::usesNotesPrimaryScheme(scheme)
+        && e.mods.isAltDown();
+    float snappedFreq;
+    if (altBypass) {
+        snappedFreq = clickFreq;
+    } else {
+        const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+        const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+        const int roundedMidi = static_cast<int>(std::lround(snap.quantizeMidiToActiveScale(midiNote)));
+        snappedFreq = PitchUtils::midiToFreq(static_cast<float>(roundedMidi));
+    }
 
     int clickFrame = f0tl.frameAtOrBefore(*clickTime);
 
