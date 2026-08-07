@@ -45,7 +45,7 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
     installDocumentRenderExecution();
 
-    // 进程级运行时客户端租约（最后 detach 时 shutdown F0 / resetVocoder）
+    // 进程级运行时客户端租约（仅计数，不触发释放）
     ProcessF0Runtime::getInstance().attach();
     ProcessRenderRuntime::getInstance().attach();
 }
@@ -56,7 +56,10 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     if (asyncLeaseToken_)
         asyncLeaseToken_->store(false, std::memory_order_release);
 
-    // 最前段 shutdown + join F0 worker：此后不再有 F0 任务访问 DC
+    // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
+    // F0 Run（SetTerminate 加速返回）。不 join worker —— worker 是 detached
+    // 进程常驻执行器，见 shutdownStarted_ 后自行退出，期间只访问进程级 F0
+    // 服务与提交时捕获的纯数据，绝不访问已析构的 DC/service。
     contentF0ExtractionService_.reset();
 
     // 停止渲染服务：detach execution lease（终止操作：清 lease + 丢弃排队 job
@@ -74,7 +77,7 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     }
     playbackRenderers_.clear();
 
-    // 进程级运行时客户端租约释放（最后客户端时 resetVocoder / shutdown F0）
+    // 进程级运行时客户端租约释放（仅递减计数，不触发任何释放）
     ProcessRenderRuntime::getInstance().detach();
     ProcessF0Runtime::getInstance().detach();
 }

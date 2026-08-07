@@ -4,12 +4,15 @@
 #include "../DSP/MelSpectrogram.h"
 #include "../Inference/ChunkRenderStrategy.h"
 #include "../Inference/VocoderDomain.h"
+#include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/ChannelLayoutLogger.h"
 #include "../Utils/ModelPathResolver.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeCoordinate.h"
 #include "ProcessF0Runtime.h"
+
+#include <juce_events/juce_events.h>
 
 #include <algorithm>
 #include <cmath>
@@ -265,10 +268,21 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
 ProcessRenderRuntime& ProcessRenderRuntime::getInstance()
 {
     // 进程寿命 heap singleton：不注册静态析构（DLL detach 持 loader lock，
-    // 不得在静态析构中 join 工作线程）。domain 由最后一个客户端 detach()
-    // 在正常析构上下文销毁。
+    // 不得在静态析构中 join 工作线程）。VST3 构建中模块已被 pin
+    // （Vst3ModulePin.cpp），domain 与 control worker 存活到进程退出；
+    // vocoderDomain_ 只经 setVocoderModelWeight() / resetVocoder() /
+    // resetInferenceBackend() 在 control worker 上显式重建。
     static auto* instance = new ProcessRenderRuntime;
     return *instance;
+}
+
+ProcessRenderRuntime::ProcessRenderRuntime()
+{
+    // 进程寿命 control worker：模型切换/后端重置的耗时 Session 销毁、按当前
+    // 配置重建与 AccelerationDetector reset/detect 全部在此串行执行；UI 线程
+    // 只投递命令并立即返回。单例永不析构，线程随进程退出回收，绝不在实例
+    // 卸载路径 join。
+    controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
 }
 
 void ProcessRenderRuntime::attach()
@@ -279,12 +293,12 @@ void ProcessRenderRuntime::attach()
 
 void ProcessRenderRuntime::detach()
 {
-    // 与 attach 同一临界区线性化：仅当计数精确归零（最后一个客户端，正常析构
-    // 上下文）时销毁 domain 并推进 generation，不释放锁后再 reset。
+    // 只递减客户端租约计数：vocoder domain 是进程寿命资源（VST3 模块 pin /
+    // Standalone 进程寿命），最后一个客户端 detach 也不销毁它，后续实例直接
+    // 复用已加载的 domain 与 generation，避免重建 ORT Session。显式重置只
+    // 经由 setVocoderModelWeight() / resetVocoder() / resetInferenceBackend()。
     std::lock_guard<std::mutex> lock(vocoderMutex_);
     --clientCount_;
-    if (clientCount_ == 0)
-        resetVocoderLocked();
 }
 
 std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, VocoderModelWeight weight)
@@ -298,27 +312,130 @@ std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir
     return modelDir + "/hifigan.onnx";
 }
 
-void ProcessRenderRuntime::resetVocoderLocked()
+std::unique_ptr<VocoderDomain> ProcessRenderRuntime::createVocoderDomain(VocoderModelWeight weight)
 {
-    vocoderDomain_.reset();   // VocoderDomain 析构已调用 shutdown，无需显式调用
-    ++vocoderGeneration_;
+    // 该函数始终在 vocoderMutex_ 外执行。ORT Env 初始化、模型加载、Session
+    // 创建和失败清理都可能耗时，绝不能阻塞 UI 的 detach/isVocoderReady。
+    const auto modelsDir = ModelPathResolver::getModelsDirectory();
+    if (!ProcessF0Runtime::getInstance().initialize(modelsDir))
+        return nullptr;
+
+    auto env = ProcessF0Runtime::getInstance().getOrtEnv();
+    if (env == nullptr)
+        return nullptr;
+
+    auto domain = std::make_unique<VocoderDomain>(env);
+    const auto modelPath = modelPathForWeight(modelsDir, weight);
+    if (!domain->initialize(modelPath))
+        return nullptr;
+
+    return domain;
 }
 
-bool ProcessRenderRuntime::setVocoderModelWeight(VocoderModelWeight weight)
+void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
 {
-    std::lock_guard<std::mutex> lock(vocoderMutex_);
-    if (currentVocoderModelWeight_ == weight)
-        return false;
+    std::unique_ptr<VocoderDomain> retiredDomain;
+    VocoderModelWeight targetWeight;
 
-    currentVocoderModelWeight_ = weight;
-    resetVocoderLocked();
-    return true;
+    {
+        std::unique_lock<std::mutex> lock(vocoderMutex_);
+
+        if (command.type == ControlCommand::Type::SetVocoderWeight
+            && currentVocoderModelWeight_ == command.weight)
+            return;
+
+        if (command.type == ControlCommand::Type::SetVocoderWeight)
+            currentVocoderModelWeight_ = command.weight;
+
+        targetWeight = currentVocoderModelWeight_;
+        vocoderReconfiguring_ = true;
+        retiredDomain = std::move(vocoderDomain_); // O(1)：锁内只摘除所有权
+        ++vocoderGeneration_;                      // 立即拒绝全部旧配置快照
+
+        // 首次惰性创建也在锁外执行。control worker 只在后台等待它完成并清理，
+        // UI 线程从不等待该条件；reconfiguring_ 使新的 acquire 快速失败。
+        vocoderStateCv_.wait(lock, [this] { return !vocoderInitializing_; });
+    }
+
+    // 唯一可能无界的路径：只阻塞进程寿命 control worker，不持任何 runtime 锁。
+    retiredDomain.reset();
+
+    if (command.type == ControlCommand::Type::ResetInferenceBackend)
+    {
+        auto& detector = AccelerationDetector::getInstance();
+        detector.reset();
+        detector.detect(command.forceCpu);
+    }
+
+    // 严格先销毁旧 Session，再创建新 Session；新旧显存不并存。
+    auto newDomain = createVocoderDomain(targetWeight);
+
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        if (currentVocoderModelWeight_ == targetWeight)
+        {
+            vocoderDomain_ = std::move(newDomain);
+            if (vocoderDomain_ != nullptr)
+                ++vocoderGeneration_; // 新 domain 获得独立代际
+        }
+        vocoderReconfiguring_ = false;
+    }
+    vocoderStateCv_.notify_all();
 }
 
-void ProcessRenderRuntime::resetVocoder()
+void ProcessRenderRuntime::postControlCommand(ControlCommand command)
 {
-    std::lock_guard<std::mutex> lock(vocoderMutex_);
-    resetVocoderLocked();
+    {
+        std::lock_guard<std::mutex> lock(controlMutex_);
+        controlQueue_.push_back(std::move(command));
+    }
+    controlCv_.notify_one();
+}
+
+void ProcessRenderRuntime::controlWorkerLoop()
+{
+    while (true)
+    {
+        ControlCommand command;
+        {
+            std::unique_lock<std::mutex> lock(controlMutex_);
+            controlCv_.wait(lock, [this]() { return !controlQueue_.empty(); });
+            command = std::move(controlQueue_.front());
+            controlQueue_.pop_front();
+        }
+
+        reconfigureVocoder(command);
+
+        if (command.completion)
+            juce::MessageManager::callAsync(std::move(command.completion));
+    }
+}
+
+void ProcessRenderRuntime::setVocoderModelWeight(VocoderModelWeight weight, std::function<void()> completion)
+{
+    // UI 线程只投递命令并立即返回；Session 销毁与重建由 control worker 串行执行。
+    ControlCommand command;
+    command.type = ControlCommand::Type::SetVocoderWeight;
+    command.weight = weight;
+    command.completion = std::move(completion);
+    postControlCommand(std::move(command));
+}
+
+void ProcessRenderRuntime::resetVocoder(std::function<void()> completion)
+{
+    ControlCommand command;
+    command.type = ControlCommand::Type::ResetVocoder;
+    command.completion = std::move(completion);
+    postControlCommand(std::move(command));
+}
+
+void ProcessRenderRuntime::resetInferenceBackend(bool forceCpu, std::function<void()> completion)
+{
+    ControlCommand command;
+    command.type = ControlCommand::Type::ResetInferenceBackend;
+    command.forceCpu = forceCpu;
+    command.completion = std::move(completion);
+    postControlCommand(std::move(command));
 }
 
 bool ProcessRenderRuntime::submitVocoderJob(VocoderDomain::Job job, uint64_t expectedGeneration)
@@ -333,34 +450,62 @@ bool ProcessRenderRuntime::submitVocoderJob(VocoderDomain::Job job, uint64_t exp
 
 bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
 {
-    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    VocoderModelWeight targetWeight;
+    uint64_t creationGeneration = 0;
 
-    if (vocoderDomain_ == nullptr)
     {
-        const auto modelsDir = ModelPathResolver::getModelsDirectory();
-        if (!ProcessF0Runtime::getInstance().initialize(modelsDir))
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        if (vocoderDomain_ != nullptr)
+        {
+            out.generation = vocoderGeneration_;
+            out.hopSize = vocoderDomain_->getVocoderHopSize();
+            out.melBins = vocoderDomain_->getMelBins();
+            out.fMax = vocoderDomain_->getFMax();
+            return true;
+        }
+
+        if (vocoderReconfiguring_ || vocoderInitializing_)
             return false;
 
-        // Env 仅以局部 shared_ptr 传入 domain：生命周期由 domain 内部持有，
-        // 不存成员，消除与 F0 runtime 的重叠所有权。
-        auto env = ProcessF0Runtime::getInstance().getOrtEnv();
-        if (env == nullptr)
-            return false;
-
-        auto domain = std::make_unique<VocoderDomain>(env);
-        const auto modelPath = modelPathForWeight(modelsDir, currentVocoderModelWeight_);
-        if (!domain->initialize(modelPath))
-            return false;
-
-        vocoderDomain_ = std::move(domain);
-        ++vocoderGeneration_;
+        vocoderInitializing_ = true;
+        targetWeight = currentVocoderModelWeight_;
+        creationGeneration = vocoderGeneration_;
     }
 
-    out.generation = vocoderGeneration_;
-    out.hopSize = vocoderDomain_->getVocoderHopSize();
-    out.melBins = vocoderDomain_->getMelBins();
-    out.fMax = vocoderDomain_->getFMax();
-    return true;
+    // 首次模型加载在 RenderWorker 上锁外执行；UI 查询仍可取得短锁并立即返回。
+    auto newDomain = createVocoderDomain(targetWeight);
+
+    bool mayPublish = false;
+    bool published = false;
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        mayPublish = !vocoderReconfiguring_
+            && vocoderInitializing_
+            && vocoderGeneration_ == creationGeneration
+            && currentVocoderModelWeight_ == targetWeight
+            && vocoderDomain_ == nullptr;
+
+        if (mayPublish && newDomain != nullptr)
+        {
+            vocoderDomain_ = std::move(newDomain);
+            ++vocoderGeneration_;
+            out.generation = vocoderGeneration_;
+            out.hopSize = vocoderDomain_->getVocoderHopSize();
+            out.melBins = vocoderDomain_->getMelBins();
+            out.fMax = vocoderDomain_->getFMax();
+            published = true;
+        }
+    }
+
+    // 发布失败的新 domain 也必须在锁外销毁。保持 initializing=true 直到其清理
+    // 完成，防止 control worker 在旧初始化对象仍存在时创建第二个 Session。
+    newDomain.reset();
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        vocoderInitializing_ = false;
+    }
+    vocoderStateCv_.notify_all();
+    return published;
 }
 
 bool ProcessRenderRuntime::isVocoderReady() const noexcept

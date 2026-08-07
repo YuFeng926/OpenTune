@@ -85,11 +85,6 @@ GameNoteGenerator::GameNoteGenerator(const std::string& modelDir, Ort::Env& env)
 
 GameNoteGenerator::~GameNoteGenerator() = default;
 
-void GameNoteGenerator::terminateRun()
-{
-    runOptions_.SetTerminate();
-}
-
 void GameNoteGenerator::loadConfig(const std::string& configPath)
 {
     juce::var parsed;
@@ -112,10 +107,6 @@ void GameNoteGenerator::loadConfig(const std::string& configPath)
 
 std::vector<Note> GameNoteGenerator::generate(const NoteGeneratorInput& input)
 {
-    if (aborted()) {
-        return {};
-    }
-
     if (input.audio.empty()) {
         return {};
     }
@@ -292,8 +283,6 @@ std::vector<Note> GameNoteGenerator::runSingleChunk(const float* audio,
             std::move(waveformTensor), std::move(durationTensor)
         };
 
-        if (aborted()) return {};
-
         auto encOut = encoder_->Run(
             runOptions_,
             encInputNames, encInputs.data(), encInputs.size(),
@@ -379,8 +368,6 @@ std::vector<Note> GameNoteGenerator::runSingleChunk(const float* audio,
         std::vector<unsigned char> currBd(static_cast<size_t>(T), 0);
 
         for (size_t step = 0; step < ts.size(); ++step) {
-            if (aborted()) return {};
-
             float tVal = ts[step];
 
             // Build segmenter inputs.  Python uses input-name filter; we
@@ -464,8 +451,6 @@ std::vector<Note> GameNoteGenerator::runSingleChunk(const float* audio,
             std::move(bdTensor), std::move(bdMaskTTensor)
         };
 
-        if (aborted()) return {};
-
         auto bd2durOut = bd2dur_->Run(
             runOptions_,
             bd2durInputNames, bd2durInputs.data(), bd2durInputs.size(),
@@ -523,8 +508,6 @@ std::vector<Note> GameNoteGenerator::runSingleChunk(const float* audio,
             std::move(maskTForEstTensor), std::move(maskNTensor),
             std::move(estThresholdTensor)
         };
-
-        if (aborted()) return {};
 
         auto estOut = estimator_->Run(
             runOptions_,

@@ -23,8 +23,8 @@
 namespace OpenTune {
 
 AccelerationDetector& AccelerationDetector::getInstance() {
-    static AccelerationDetector instance;
-    return instance;
+    static auto* instance = new AccelerationDetector;
+    return *instance;
 }
 
 #ifdef _WIN32

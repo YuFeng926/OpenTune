@@ -32,52 +32,60 @@ public:
 
     using AnalysisFunc = std::function<ReferenceFeatureSet(
         const AnalysisJobKey& jobKey)>;
+    using CompletionFunc = std::function<void(
+        const AnalysisJobKey& jobKey, const ReferenceFeatureSet& result)>;
     using NotificationDispatcher = std::function<void(std::function<void()> task)>;
 
-    class Listener {
-    public:
-        virtual ~Listener() = default;
-        virtual void analysisFinished(ContentKey key,
-                                      const ReferenceFeatureSet& result) = 0;
+    // 每个 job 携带 analysis 与 completion 函数：不存在 service 级分析函数、
+    // Listener 或 raw-this 通知路径。analysis 在 worker 上执行（纯数据，不访问
+    // owner）；completion 由 worker 经 dispatcher 投递到消息线程，调用方在
+    // completion gate 关闭后直接丢弃。
+    struct ReferenceJob {
+        AnalysisJobKey key;
+        AnalysisFunc analysis;
+        CompletionFunc completion;
+
+        bool operator==(const ReferenceJob& rhs) const noexcept
+        {
+            return key == rhs.key;
+        }
     };
 
     ReferenceAnalysisService();
     ~ReferenceAnalysisService();
 
-    void setAnalysisFunc(AnalysisFunc func);
-    void setNotificationDispatcher(NotificationDispatcher dispatcher);
-    /// Terminate any in-flight inference (e.g. GAME ORT Run) before the worker
-    /// thread is joined by shutdown(). shutdown() copies it under mutex_ and
-    /// invokes it outside the lock; must be fast and non-blocking.
-    void setTerminateFn(std::function<void()> fn);
-
-    void addListener(Listener* listener);
-    void removeListener(Listener* listener);
-
+    /// 提交分析 job：活跃 job 完全一致时不重启分析，同一 ContentKey 只保留
+    /// 最新 pending job。analysis 在 worker 上执行；completion 经 dispatcher
+    /// 投递到消息线程。
     void submitAnalysis(ContentKey key, int64_t inputFingerprint,
-                        ReferenceFeatureProducer producer = ReferenceFeatureProducer::Unknown);
+                        ReferenceFeatureProducer producer,
+                        AnalysisFunc analysis, CompletionFunc completion);
 
+    void setNotificationDispatcher(NotificationDispatcher dispatcher);
+
+    /// 关闭 owner：清空 pending 与 active、唤醒 worker。不 join —— worker 是
+    /// detached 进程常驻执行器；活跃 GAME 任务允许在后台完成（进程级共享
+    /// generator，永不 terminateRun）。关闭后不再投递 completion。
     void shutdown();
 
 private:
-    void workerLoop();
+    // worker 线程执行状态全部放入 shared state：worker 捕获 state（shared_ptr）
+    // 而非 service this；owner 销毁后 state 由 worker 自身持有直到其退出，因此
+    // worker 永不触碰已析构的 service。
+    struct SharedState {
+        std::mutex mutex;
+        std::condition_variable cv;
 
-    AnalysisFunc analysisFunc_;
-    NotificationDispatcher notificationDispatcher_;
-    std::function<void()> terminateFn_;
+        std::map<ContentKey, ReferenceJob> pendingJobs;
+        std::optional<ReferenceJob> activeJob;
 
-    std::mutex mutex_;
-    std::condition_variable cv_;
+        std::atomic<bool> running{true};
+        NotificationDispatcher notificationDispatcher;
+    };
 
-    std::map<ContentKey, AnalysisJobKey> pendingJobs_;
+    std::shared_ptr<SharedState> state_;
 
-    std::optional<AnalysisJobKey> activeJob_;
-
-    std::atomic<bool> running_{true};
-    std::shared_ptr<std::atomic<bool>> aliveToken_{std::make_shared<std::atomic<bool>>(true)};
-    std::thread workerThread_;
-
-    juce::ListenerList<Listener> listeners_;
+    static void workerLoop(std::shared_ptr<SharedState> state);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ReferenceAnalysisService)
 };
