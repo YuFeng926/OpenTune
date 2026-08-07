@@ -1022,6 +1022,9 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                         result.f0 = extraction.value();
                         result.hopSize = f0Svc->getF0HopSize();
                         result.f0SampleRate = f0Svc->getF0SampleRate();
+                        result.energy = computeFrameEnergy(
+                            src, numSamples, static_cast<int>(sr),
+                            result.f0, result.f0SampleRate, result.hopSize);
                         result.modelName = "RMVPE";
                         result.success = true;
                         return result;
