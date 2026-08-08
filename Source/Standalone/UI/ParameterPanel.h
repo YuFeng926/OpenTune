@@ -92,8 +92,8 @@ public:
     /** Pitch Grid 全局开关回调：切换 No Snap / Chromatic / Key Scale 吸附模式。 */
     std::function<void(PitchGridMode)> onPitchGridModeChanged;
 
-    /** 设置 AUTO 按钮的模式显示。
-     *  @param hasReference  true: 主文本 "AUTO" + 副标题 "(Ref)"（小字在下方）, false: 仅 "AUTO" 居中
+    /** 设置 AUTO 按钮的模式显示（OpenTune 主文本 "AUTO"，OpenDyne 主文本 "SNAP"）。
+     *  @param presentation 携带 ReferenceAuto 模式时显示 "(Ref)" 副标题。
      */
     void setAutoButtonPresentation(const AutoButtonPresentation& presentation);
     

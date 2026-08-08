@@ -1016,7 +1016,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                    clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
-            // displayColour 派生纵向渐变填充 + 同色高对比描边
+            // displayColour 派生纵向渐变填充 + 中心径向高光 + 同色高对比描边
             const auto fillTop = item.displayColour.brighter(0.35f).withAlpha(0.60f);
             const auto fillMid = item.displayColour.withAlpha(0.52f);
             const auto fillBottom = item.displayColour.darker(0.40f).withAlpha(0.56f);
@@ -1027,38 +1027,26 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(grad);
             g.fillPath(blob);
 
+            // Blob 中心径向高光：唯一亮心向波形边缘平滑衰减，不产生可见中线。
+            {
+                const float centerX = (static_cast<float>(x1) + static_cast<float>(x2)) * 0.5f;
+                const float radius = halfH * 1.6f;
+                const auto glowCore = item.displayColour
+                    .interpolatedWith(juce::Colours::white, 0.55f)
+                    .withAlpha(0.85f);
+                const auto glowMid = glowCore.withAlpha(0.25f);
+                const auto glowFade = glowCore.withAlpha(0.0f);
+                juce::ColourGradient glow(glowCore, centerX, centerY,
+                                          glowFade, centerX + radius, centerY, true);
+                glow.addColour(0.42f, glowMid);
+                g.setGradientFill(glow);
+                g.fillPath(blob);
+            }
+
             g.setColour(item.displayColour.brighter(0.45f).withAlpha(0.55f));
             g.strokePath(blob, juce::PathStrokeType(0.9f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
-
-            // 中线中心渐变高亮：中心最亮、向四周辐射衰减（垂直+水平双渐变叠加），替代旧的水平中线
-            {
-                const auto glowCore = item.displayColour.brighter(0.75f).withAlpha(0.40f);
-                const auto glowFade = glowCore.withAlpha(0.0f);
-                const auto glowRect = juce::Rectangle<float>(
-                    static_cast<float>(x1), centerY - halfH,
-                    static_cast<float>(x2 - x1), halfH * 2.0f);
-
-                g.saveState();
-                g.reduceClipRegion(blob);
-
-                // 垂直：中线最亮，向上下边缘衰减
-                juce::ColourGradient vertical(glowFade, static_cast<float>(x1), centerY - halfH,
-                                              glowFade, static_cast<float>(x1), centerY + halfH, false);
-                vertical.addColour(0.5f, glowCore);
-                g.setGradientFill(vertical);
-                g.fillRect(glowRect);
-
-                // 水平：音符中心最亮，向左右两端衰减
-                juce::ColourGradient horizontal(glowFade, static_cast<float>(x1), centerY,
-                                                glowFade, static_cast<float>(x2), centerY, false);
-                horizontal.addColour(0.5f, glowCore);
-                g.setGradientFill(horizontal);
-                g.fillRect(glowRect);
-
-                g.restoreState();
-            }
         }
         return;
     }
@@ -1223,7 +1211,7 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
                                    clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
-            // 选中态：亮色透明填充叠加 + 高亮描边
+            // 选中态：透明选区填充 + 高亮描边；中心高光由内容层绘制，F0 保持前景。
             g.setColour(item.displayColour.brighter(0.55f).withAlpha(0.28f));
             g.fillPath(blob);
 
@@ -1231,32 +1219,6 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
             g.strokePath(blob, juce::PathStrokeType(1.5f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
-
-            // 选中态：中线中心渐变高亮（与 drawNotes 一致，亮度更高），替代旧的水平中线
-            {
-                const auto glowCore = item.displayColour.brighter(0.85f).withAlpha(0.50f);
-                const auto glowFade = glowCore.withAlpha(0.0f);
-                const auto glowRect = juce::Rectangle<float>(
-                    static_cast<float>(x1), centerY - halfH,
-                    static_cast<float>(x2 - x1), halfH * 2.0f);
-
-                g.saveState();
-                g.reduceClipRegion(blob);
-
-                juce::ColourGradient vertical(glowFade, static_cast<float>(x1), centerY - halfH,
-                                              glowFade, static_cast<float>(x1), centerY + halfH, false);
-                vertical.addColour(0.5f, glowCore);
-                g.setGradientFill(vertical);
-                g.fillRect(glowRect);
-
-                juce::ColourGradient horizontal(glowFade, static_cast<float>(x1), centerY,
-                                                glowFade, static_cast<float>(x2), centerY, false);
-                horizontal.addColour(0.5f, glowCore);
-                g.setGradientFill(horizontal);
-                g.fillRect(glowRect);
-
-                g.restoreState();
-            }
         }
         return;
     }

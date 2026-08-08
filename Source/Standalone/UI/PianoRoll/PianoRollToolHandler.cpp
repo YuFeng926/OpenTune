@@ -1996,7 +1996,7 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
         // 连续基准 MIDI（不提前取整）：SNAP 目标全程保持连续语义
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
         const float targetMidi = baseMidi + initialOffset + deltaSemitones;
-        // Pitch Grid 全局开关决定吸附方式；Alt 拖拽临时解除吸附（保留连续 cents）
+        // OpenDyne：Pitch Grid 三态决定吸附方式；Alt 拖拽临时解除吸附（保留连续 cents）；OpenTune 固定半音
         float snappedMidi = targetMidi;
         if (!altBypass) {
             if (!openDyne) {
