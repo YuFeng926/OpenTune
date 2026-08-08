@@ -259,7 +259,10 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
                 : juce::String::formatted("%lld.%lld", static_cast<long long>(bar), static_cast<long long>(beatInBar));
 
             g.setColour(rulerStyle.labelColour);
-            g.drawText(label, pixelX - 20, rulerTop + 2, 40, rulerHeight - 12, juce::Justification::centred);
+            juce::Rectangle<int> labelRect { pixelX - 20, rulerTop + 2, 40, rulerHeight - 12 };
+            if (labelRect.getX() < 0)
+                labelRect.setX(0); // 左边界标签左对齐，避免被视图左边界裁切
+            g.drawText(label, labelRect, juce::Justification::centred);
         }
     } else { // Seconds
         double markerInterval = selectMarkerInterval(pps);
@@ -288,7 +291,10 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
             const juce::String timeStr = formatSecondsRulerLabel(static_cast<int>(time));
 
             g.setColour(rulerStyle.labelColour);
-            g.drawText(timeStr, pixelX - 20, rulerTop + 2, 40, rulerHeight - 12, juce::Justification::centred);
+            juce::Rectangle<int> labelRect { pixelX - 20, rulerTop + 2, 40, rulerHeight - 12 };
+            if (labelRect.getX() < 0)
+                labelRect.setX(0); // 左边界标签左对齐，避免被视图左边界裁切
+            g.drawText(timeStr, labelRect, juce::Justification::centred);
         }
     }
 }
@@ -369,6 +375,8 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
 // ============================================================================
 juce::String TimelineLayerComposer::formatSecondsRulerLabel(int totalSeconds)
 {
+    if (totalSeconds == 0)
+        return "0";
     const int mins = totalSeconds / 60;
     const int secs = totalSeconds % 60;
     return juce::String::formatted("%02d:%02d", mins, secs);
