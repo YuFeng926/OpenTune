@@ -12,6 +12,7 @@
 
 #include "../../Content/ContentKey.h"
 #include "../../Content/CaptureSegmentContent.h"
+#include "../../Utils/ContentAnalysisState.h"
 
 namespace OpenTune::Capture {
 
@@ -84,10 +85,12 @@ struct CaptureSegment
      *  check time to leave CaptureRingBuffer::write before FIFO release. */
     int pendingDrainTicks = 0;
 
-    /** Message-thread only: F0 Ready 后是否已提交过一次全量渲染。tick() 仅在
-     *  跃迁（Ready 首次出现）时提交 requestFullRender，避免渲染窗口内
-     *  （渲染耗时 > 33ms，大于 30Hz tick 间隔）重复提交取消并重启 Running chunk。 */
-    bool renderRequested = false;
+    /** Message-thread only: 上次 tick 观察到的 F0 状态。tick() 仅在跃迁
+     *  （非 Ready → Ready，含首次观察即 Ready）时提交一次 requestFullRender，
+     *  避免渲染窗口内（渲染耗时 > 33ms，大于 30Hz tick 间隔）重复提交取消并重启
+     *  Running chunk。与插件 UI 侧 lastObservedOriginalF0States_ 同为
+     *  状态记录+跃迁检测模式；初始 NotRequested 保证首次观察即 Ready 不丢失。 */
+    OriginalF0State lastObservedF0State = OriginalF0State::NotRequested;
 
     /** Diagnostic: peak absolute sample value seen during capture. Audio thread writes,
      *  message thread reads in stopCapture log. Helps distinguish "host sends silence"
