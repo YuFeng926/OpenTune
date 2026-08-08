@@ -433,16 +433,26 @@ void testOpenDyneContract()
 
     // OpenTune（CorrectedF0Primary）工具固定 Chromatic：DrawNote 不读活动调式；
     // LineAnchor/音符拖拽的音阶吸附被 NotesPrimary 门控，OpenTune 分支保持全半音。
-    expect(!contains(functionBlock(toolHandler, "void PianoRollToolHandler::handleDrawNoteTool"),
-                     "getActiveScaleSnap"),
+    const auto drawNoteTool = functionBlock(toolHandler, "void PianoRollToolHandler::handleDrawNoteTool");
+    expect(contains(drawNoteTool, "std::lround(PitchUtils::freqToMidi(targetF0))"),
+           "DrawNote quantizes the raw clicked frequency to the nearest semitone");
+    expect(!contains(drawNoteTool, "getActiveScaleSnap"),
            "DrawNote (OpenTune-only) stays chromatic and never reads the active scale");
     const auto lineAnchorDown = functionBlock(toolHandler, "void PianoRollToolHandler::handleLineAnchorMouseDown");
     expect(contains(lineAnchorDown, "usesNotesPrimaryScheme")
                && contains(lineAnchorDown, "quantizeMidiToActiveScale")
                && contains(lineAnchorDown, "std::lround(midiNote)"),
            "LineAnchor scale snap is gated to OpenDyne (NotesPrimary); OpenTune stays chromatic");
-    expect(contains(dragPitch, "std::round(targetMidi)"),
-           "OpenTune note drag snaps to chromatic semitones");
+    expect(contains(lineAnchorDown, "openDyne && e.mods.isAltDown()"),
+           "LineAnchor Alt bypass is gated to OpenDyne (NotesPrimary)");
+    const auto openDyneLineAnchor = functionBlock(lineAnchorDown, "} else if (openDyne) {");
+    expect(contains(openDyneLineAnchor, "quantizeMidiToActiveScale"),
+           "LineAnchor scale snap lives only in the OpenDyne branch");
+    const auto openTuneDragBlock = functionBlock(dragPitch, "if (!openDyne)");
+    expect(contains(openTuneDragBlock, "std::round(targetMidi)")
+               && !contains(openTuneDragBlock, "pitchGridMode_")
+               && !contains(openTuneDragBlock, "getActiveScaleSnap"),
+           "OpenTune note drag snaps to plain semitones without pitch grid or scale");
 
     // OpenDyne 滚轮导航固定契约：
     // Ctrl(Command)=横纵向同步缩放、Alt=纵向缩放、Shift=横向滚动、默认=纵向滚动
@@ -560,6 +570,14 @@ void testOpenDyneToolSwitchingContract()
     expect(!contains(setOpenDyneMode, "selectToolButton_->setVisible(!enabled)")
                && !contains(setOpenDyneMode, "autoTuneToolButton_->setVisible(!enabled)"),
            "Select and AUTO are never hidden by setOpenDyneMode");
+    // AUTO 按钮：OpenTune 显示 AUTO，OpenDyne 显示 SNAP；构造初始 AUTO；模式切换经 refreshLocalizedText 同步
+    expect(contains(parameterPanel, "setTextIcon(\"AUTO\")"),
+           "ParameterPanel constructor initializes the AUTO button label as AUTO");
+    const auto setPresentation = functionBlock(parameterPanel, "void ParameterPanel::setAutoButtonPresentation");
+    expect(contains(setPresentation, "setTextIcon(openDyneMode_ ? \"SNAP\" : \"AUTO\")"),
+           "AUTO button label resolves by scheme: SNAP in OpenDyne, AUTO in OpenTune");
+    expect(contains(setOpenDyneMode, "refreshLocalizedText()"),
+           "setOpenDyneMode refreshes the AUTO button label via refreshLocalizedText");
     // resized() 的 OpenDyne 分支从 if (openDyneMode_) 到函数尾之间布局 8 个工具按钮（含 AUTO）
     expect(layoutPos != std::string::npos
                && contains(resized.substr(layoutPos), "autoTuneToolButton_"),
