@@ -2277,18 +2277,28 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         return;
     }
 
-    // Pitch Tool (F2×1) 双击：吸附到当前音阶
-    // 量化目标：有音阶配置时按音阶吸附；Chromatic（无音阶配置）时吸附到最近半音
-    // （与按钮入口一致，quantizeMidiToActiveScale Chromatic 分支 = round；
-    //   OpenTune 音符已半音量化时 round 无变化，自动保持无操作）
+    // Pitch Tool (F2×1) 双击：按 Pitch Grid 模式吸附（与拖拽吸附同一三态语义）
+    // NoSnap：不吸附；Chromatic：吸附到最近半音；KeyScale：吸附到活动音阶（无配置时按半音）
     auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-    if (!scaleSnap.has_value())
-        scaleSnap = ScaleSnapConfig{};
 
     const Note& original = notes[static_cast<size_t>(clickedNoteIndex)];
     // SNAP 按基准音高重投影：pitchOffset 不进入量化输入（与按钮入口一致）
     const float baseMidi = PitchUtils::freqToMidi(original.pitch);
-    const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(baseMidi) - baseMidi;
+    float snappedMidi = baseMidi;
+    switch (pitchGridMode_) {
+        case PitchGridMode::NoSnap:
+            return;   // 自由模式：不吸附
+        case PitchGridMode::Chromatic:
+            snappedMidi = std::round(baseMidi);  // 吸附到最近半音
+            break;
+        case PitchGridMode::KeyScale: {
+            // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
+            const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+            snappedMidi = snap.quantizeMidiToActiveScale(baseMidi);
+            break;
+        }
+    }
+    const float snappedOffset = snappedMidi - baseMidi;
     if (std::abs(snappedOffset - original.pitchOffset) < 0.001f)
         return;
 

@@ -1032,12 +1032,32 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
 
-            // Note 中线高亮：半透明亮线凸显音高中心，区分音符背景与F0曲线
+            // 中线中心渐变高亮：中心最亮、向四周辐射衰减（垂直+水平双渐变叠加），替代旧的水平中线
             {
-                const auto lineColour = item.displayColour.brighter(0.65f).withAlpha(0.40f);
-                g.setColour(lineColour);
-                g.drawLine(static_cast<float>(x1) + 2.0f, centerY,
-                           static_cast<float>(x2) - 2.0f, centerY, 0.8f);
+                const auto glowCore = item.displayColour.brighter(0.75f).withAlpha(0.40f);
+                const auto glowFade = glowCore.withAlpha(0.0f);
+                const auto glowRect = juce::Rectangle<float>(
+                    static_cast<float>(x1), centerY - halfH,
+                    static_cast<float>(x2 - x1), halfH * 2.0f);
+
+                g.saveState();
+                g.reduceClipRegion(blob);
+
+                // 垂直：中线最亮，向上下边缘衰减
+                juce::ColourGradient vertical(glowFade, static_cast<float>(x1), centerY - halfH,
+                                              glowFade, static_cast<float>(x1), centerY + halfH, false);
+                vertical.addColour(0.5f, glowCore);
+                g.setGradientFill(vertical);
+                g.fillRect(glowRect);
+
+                // 水平：音符中心最亮，向左右两端衰减
+                juce::ColourGradient horizontal(glowFade, static_cast<float>(x1), centerY,
+                                                glowFade, static_cast<float>(x2), centerY, false);
+                horizontal.addColour(0.5f, glowCore);
+                g.setGradientFill(horizontal);
+                g.fillRect(glowRect);
+
+                g.restoreState();
             }
         }
         return;
@@ -1212,10 +1232,31 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
 
-            // 选中态：中线高亮（与 drawNotes 一致，亮度更高）
-            g.setColour(item.displayColour.brighter(0.85f).withAlpha(0.55f));
-            g.drawLine(static_cast<float>(x1) + 2.0f, centerY,
-                       static_cast<float>(x2) - 2.0f, centerY, 1.0f);
+            // 选中态：中线中心渐变高亮（与 drawNotes 一致，亮度更高），替代旧的水平中线
+            {
+                const auto glowCore = item.displayColour.brighter(0.85f).withAlpha(0.50f);
+                const auto glowFade = glowCore.withAlpha(0.0f);
+                const auto glowRect = juce::Rectangle<float>(
+                    static_cast<float>(x1), centerY - halfH,
+                    static_cast<float>(x2 - x1), halfH * 2.0f);
+
+                g.saveState();
+                g.reduceClipRegion(blob);
+
+                juce::ColourGradient vertical(glowFade, static_cast<float>(x1), centerY - halfH,
+                                              glowFade, static_cast<float>(x1), centerY + halfH, false);
+                vertical.addColour(0.5f, glowCore);
+                g.setGradientFill(vertical);
+                g.fillRect(glowRect);
+
+                juce::ColourGradient horizontal(glowFade, static_cast<float>(x1), centerY,
+                                                glowFade, static_cast<float>(x2), centerY, false);
+                horizontal.addColour(0.5f, glowCore);
+                g.setGradientFill(horizontal);
+                g.fillRect(glowRect);
+
+                g.restoreState();
+            }
         }
         return;
     }

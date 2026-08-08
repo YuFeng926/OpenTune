@@ -540,13 +540,13 @@ ParameterPanel::ParameterPanel()
     scissorsToolButton_->onClick = [this] { onToolClicked(8); };
     addChildComponent(*scissorsToolButton_);
 
-    pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", juce::String::fromUTF8(u8"Modulation 颤音深度\nF2×2"));
+    pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", LOC(kTooltipPitchModulation) + "\nF2×2");
     pitchModulationToolButton_->setRadioGroupId(1001);
     pitchModulationToolButton_->setIcon(ToolbarIcons::getPitchModulationToolIcon(), false);
     pitchModulationToolButton_->onClick = [this] { onToolClicked(9); };
     addChildComponent(*pitchModulationToolButton_);
 
-    pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", juce::String::fromUTF8(u8"Drift 漂移修正\nF2×3"));
+    pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", LOC(kTooltipPitchDrift) + "\nF2×3");
     pitchDriftToolButton_->setRadioGroupId(1001);
     pitchDriftToolButton_->setIcon(ToolbarIcons::getPitchDriftToolIcon(), false);
     pitchDriftToolButton_->onClick = [this] { onToolClicked(10); };
@@ -855,6 +855,10 @@ void ParameterPanel::refreshLocalizedText()
         volumeEnvelopeToolButton_->setTooltip(juce::String::fromUTF8(u8"Volume Envelope 音量包络\nF4"));
     if (scissorsToolButton_)
         scissorsToolButton_->setTooltip(juce::String::fromUTF8(u8"Scissors 切割音符\nF6"));
+    if (pitchModulationToolButton_)
+        pitchModulationToolButton_->setTooltip(LOC(kTooltipPitchModulation) + "\nF2×2");
+    if (pitchDriftToolButton_)
+        pitchDriftToolButton_->setTooltip(LOC(kTooltipPitchDrift) + "\nF2×3");
 
     repaint();
 }
@@ -989,19 +993,15 @@ void ParameterPanel::setAutoButtonPresentation(const AutoButtonPresentation& pre
     autoTuneToolButton_->setTextIcon("SNAP");
     const bool hasReference = autoButtonPresentation_.mode == AutoButtonPresentation::Mode::ReferenceAuto;
     const auto resolvedTooltip = buildAutoButtonTooltip(autoButtonPresentation_);
+    if (hasReference)
     {
-        if (hasReference)
-        {
-            autoTuneToolButton_->setSubTextIcon("(Ref)");
-            autoTuneToolButton_->setTooltip(juce::String::fromUTF8(u8"按参考 Clip 自动修音并对齐节奏"));
-        }
-        else
-        {
-            autoTuneToolButton_->setSubTextIcon({});
-            autoTuneToolButton_->setTooltip(juce::String::fromUTF8(u8"自动修音（吸附到临近音阶）"));
-            autoTuneToolButton_->setTooltip(resolvedTooltip);
-        }
+        autoTuneToolButton_->setSubTextIcon("(Ref)");
     }
+    else
+    {
+        autoTuneToolButton_->setSubTextIcon({});
+    }
+    autoTuneToolButton_->setTooltip(resolvedTooltip);
 }
 
 // Getters and Setters

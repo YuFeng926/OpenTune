@@ -173,7 +173,8 @@ std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::create
     auto renderingPriorityComponent = SharedPreferencePages::createRenderingPriorityComponent(
         appPreferences, onPreferencesChanged,
         std::move(onRenderingPriorityChanged),
-        std::move(onVocoderModelWeightChanged));
+        std::move(onVocoderModelWeightChanged),
+        false);
     if (audioDeviceManager != nullptr) {
         pages.push_back({ LOC(kAudio), std::make_unique<AudioSettingsPage>(audioDeviceManager, std::move(renderingPriorityComponent)) });
     }

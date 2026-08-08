@@ -84,6 +84,11 @@ struct CaptureSegment
      *  check time to leave CaptureRingBuffer::write before FIFO release. */
     int pendingDrainTicks = 0;
 
+    /** Message-thread only: F0 Ready 后是否已提交过一次全量渲染。tick() 仅在
+     *  跃迁（Ready 首次出现）时提交 requestFullRender，避免渲染窗口内
+     *  （渲染耗时 > 33ms，大于 30Hz tick 间隔）重复提交取消并重启 Running chunk。 */
+    bool renderRequested = false;
+
     /** Diagnostic: peak absolute sample value seen during capture. Audio thread writes,
      *  message thread reads in stopCapture log. Helps distinguish "host sends silence"
      *  from "fifo write path broken". */

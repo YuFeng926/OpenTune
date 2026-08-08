@@ -45,13 +45,20 @@ public:
 
     void paintButton(juce::Graphics& g, bool shouldDrawButtonAsMouseOver, bool shouldDrawButtonAsDown) override
     {
-        juce::ignoreUnused(shouldDrawButtonAsMouseOver, shouldDrawButtonAsDown);
-
         auto bounds = getLocalBounds().toFloat();
-        
+
         // 绘制圆角矩形背景
         g.setColour(findColour(juce::TextButton::buttonColourId));
         g.fillRoundedRectangle(bounds, 3.0f);
+
+        // hover 高亮（背景调亮）/ 按下压暗
+        if (shouldDrawButtonAsDown) {
+            g.setColour(juce::Colours::black.withAlpha(0.18f));
+            g.fillRoundedRectangle(bounds, 3.0f);
+        } else if (shouldDrawButtonAsMouseOver) {
+            g.setColour(juce::Colours::white.withAlpha(0.18f));
+            g.fillRoundedRectangle(bounds, 3.0f);
+        }
 
         // 绘制按钮文字
         g.setColour(findColour(juce::TextButton::textColourOffId));

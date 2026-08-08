@@ -1,5 +1,6 @@
 #include "TrackPanelComponent.h"
 #include "UIColors.h"
+#include "../../Utils/LocalizationManager.h"
 
 namespace OpenTune {
 
@@ -545,17 +546,17 @@ void TrackPanelComponent::mouseUp(const juce::MouseEvent& event)
         return;
 
     juce::PopupMenu menu;
-    menu.addItem(1, TRANS("Add Track"));
-    menu.addItem(2, TRANS("Duplicate Track"));
+    menu.addItem(1, LOC(kAddTrack));
+    menu.addItem(2, LOC(kDuplicateTrack));
     menu.addSeparator();
 
     juce::PopupMenu colorSub;
-    colorSub.addItem(3, TRANS("Custom Color..."));
-    colorSub.addItem(4, TRANS("Random Color"));
-    menu.addSubMenu(TRANS("Track Color"), colorSub);
+    colorSub.addItem(3, LOC(kCustomColor));
+    colorSub.addItem(4, LOC(kRandomColor));
+    menu.addSubMenu(LOC(kTrackColor), colorSub);
 
     menu.addSeparator();
-    menu.addItem(5, TRANS("Delete Track"));
+    menu.addItem(5, LOC(kDeleteTrack));
 
     menu.showMenuAsync(juce::PopupMenu::Options(),
         [this, trackIndex](int result) {

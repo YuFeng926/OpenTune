@@ -370,8 +370,10 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             { { ToolId::DrawNote,   "Draw Note",   "2", []{ return ToolbarIcons::getDrawNoteIcon(); } } },
             { { ToolId::LineAnchor, "Line Anchor", "4", []{ return ToolbarIcons::getLineAnchorIcon(); } } },
             { { ToolId::HandDraw,   "Hand Draw",   "5", []{ return ToolbarIcons::getHandDrawIcon(); } } },
-            { { ToolId::TimeTool,   "Time",        "T", []{ return makeToolIcon(ToolId::TimeTool); } } },
         };
+        // Time 与侧栏一致：OpenTune 仅 experimental 开启时可选（OpenDyne 分支恒含）
+        if (experimentalFeaturesEnabled_)
+            mainItems.push_back({ { ToolId::TimeTool, "Time", "T", []{ return makeToolIcon(ToolId::TimeTool); } } });
     }
 
     // 布局常量
@@ -3428,22 +3430,6 @@ void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     repaint();
 }
 
-void PianoRollComponent::setShowOriginalF0(bool show) {
-    if (showOriginalF0_ == show) return;
-    showOriginalF0_ = show;
-    contentDirty_ = true;
-    rasterizeDirtySurfaces();
-    repaint();
-}
-
-void PianoRollComponent::setShowCorrectedF0(bool show) {
-    if (showCorrectedF0_ == show) return;
-    showCorrectedF0_ = show;
-    contentDirty_ = true;
-    rasterizeDirtySurfaces();
-    repaint();
-}
-
 void PianoRollComponent::setBpm(double bpm) {
     if (bpm_ == bpm) return;
     bpm_ = bpm;
@@ -4260,7 +4246,7 @@ bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
     }
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Cut, key)) {
         copySelectedNotes();
-        toolHandler_->keyPressed(key);  // Delete selected notes via tool handler
+        toolHandler_->handleDeleteKey();  // 剪切语义：复制到剪贴板 + 删除选中
         return true;
     }
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::DuplicateClip, key)) {
