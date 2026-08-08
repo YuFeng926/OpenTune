@@ -1467,11 +1467,9 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
                                              *currentTime);
 
     float targetF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-    float midiNote = PitchUtils::freqToMidi(targetF0);
-    // 唯一投影入口：无配置时用默认 Chromatic（quantize 内部 round 半音）。
-    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-    const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-    int roundedMidi = static_cast<int>(std::lround(snap.quantizeMidiToActiveScale(midiNote)));
+    // DrawNote 是 OpenTune（CorrectedF0Primary）专属工具：绘制音符允许全部半音
+    // （chromatic），直接半音量化，不读活动调式/顶栏 scale。
+    int roundedMidi = static_cast<int>(std::lround(PitchUtils::freqToMidi(targetF0)));
     float snappedF0 = PitchUtils::midiToFreq(static_cast<float>(roundedMidi));
 
     // Compute before bounds from current drawing state
@@ -1780,8 +1778,8 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 // OpenDyne（NotesPrimary）工具
 //
 // 唯一 pitch-drag 内部流程：OpenTune Select 与 OpenDyne Pitch Tool 共用。
-// 吸附只走 ScaleSnapConfig::quantizeMidiToActiveScale 单一入口；
-// nullopt（未绑定/无配置）≡ Chromatic（round 半音），OpenTune 无产品变化。
+// OpenTune（CorrectedF0Primary）固定 Chromatic 半音吸附，不读活动调式；
+// OpenDyne 由 Pitch Grid 三态决定（KeyScale 走 quantizeMidiToActiveScale）。
 // ============================================================================
 
 void PianoRollToolHandler::beginNotePitchDrag(int clickedNoteIndex, const std::vector<Note>& notes)
@@ -1986,10 +1984,9 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
     }
 
     // OpenDyne Pitch Tool：Alt 拖拽期间临时解除吸附（保留连续 cents）；
-    // OpenTune Select 保持现有半音吸附，无产品变化。
-    const bool altBypass = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())
-        && e.mods.isAltDown();
-    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    // OpenTune Select：固定 Chromatic 半音吸附，允许全部音高，不读活动调式。
+    const bool openDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
+    const bool altBypass = openDyne && e.mods.isAltDown();
 
     auto& notes = workingDraftNotes(ctx_);
     resetDraftNotesToBaseline(ctx_);
@@ -2002,18 +1999,24 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
         // Pitch Grid 全局开关决定吸附方式；Alt 拖拽临时解除吸附（保留连续 cents）
         float snappedMidi = targetMidi;
         if (!altBypass) {
-            switch (pitchGridMode_) {
-                case PitchGridMode::NoSnap:
-                    // 自由模式：不吸附，保留连续 cents
-                    break;
-                case PitchGridMode::Chromatic:
-                    snappedMidi = std::round(targetMidi);  // 吸附到最近半音
-                    break;
-                case PitchGridMode::KeyScale: {
-                    // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
-                    const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-                    snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
-                    break;
+            if (!openDyne) {
+                // OpenTune：固定 Chromatic，吸附到最近半音，允许全部音高
+                snappedMidi = std::round(targetMidi);
+            } else {
+                switch (pitchGridMode_) {
+                    case PitchGridMode::NoSnap:
+                        // 自由模式：不吸附，保留连续 cents
+                        break;
+                    case PitchGridMode::Chromatic:
+                        snappedMidi = std::round(targetMidi);  // 吸附到最近半音
+                        break;
+                    case PitchGridMode::KeyScale: {
+                        // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
+                        const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+                        const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+                        snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
+                        break;
+                    }
                 }
             }
         }
@@ -2859,16 +2862,19 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     if (f0tl.isEmpty()) return;
 
     const float midiNote = PitchUtils::freqToMidi(clickFreq);
-    const bool altBypass = AudioEditingScheme::usesNotesPrimaryScheme(scheme)
-        && e.mods.isAltDown();
+    const bool openDyne = AudioEditingScheme::usesNotesPrimaryScheme(scheme);
     float snappedFreq;
-    if (altBypass) {
-        snappedFreq = clickFreq;
-    } else {
+    if (openDyne && e.mods.isAltDown()) {
+        snappedFreq = clickFreq;  // OpenDyne Alt：旁路量化，直接使用点击频率
+    } else if (openDyne) {
+        // OpenDyne：按活动调式音阶吸附
         const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
         const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
         const int roundedMidi = static_cast<int>(std::lround(snap.quantizeMidiToActiveScale(midiNote)));
         snappedFreq = PitchUtils::midiToFreq(static_cast<float>(roundedMidi));
+    } else {
+        // OpenTune：允许全部半音（chromatic），不读活动调式
+        snappedFreq = PitchUtils::midiToFreq(static_cast<float>(std::lround(midiNote)));
     }
 
     int clickFrame = f0tl.frameAtOrBefore(*clickTime);

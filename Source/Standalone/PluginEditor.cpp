@@ -1,4 +1,8 @@
-﻿#include "PluginEditor.h"
+﻿#if defined(_WIN32) && !defined(NOMINMAX)
+#define NOMINMAX
+#endif
+
+#include "PluginEditor.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -40,6 +44,11 @@
 #include <future>
 #include <chrono>
 
+#if JUCE_WINDOWS
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+#endif
+
 namespace OpenTune {
 
 namespace {
@@ -57,6 +66,91 @@ ThemeId resolveEffectiveTheme(ThemeId configured)
     if (env == "bluebreeze")   return ThemeId::BlueBreeze;
     if (env == "darkbluegrey") return ThemeId::DarkBlueGrey;
     return configured;
+}
+
+#if JUCE_WINDOWS
+// 读取 Windows 系统默认渲染设备（mmsys.cpl 中的"默认格式"）的共享模式采样率。
+// 通过 WASAPI GetMixFormat 获取：共享引擎实际使用的格式即用户设置的系统默认格式。
+// 返回 0.0 表示读取失败（设备不可用/COM 不可用），调用方应跳过恢复。
+double getSystemDefaultRenderSampleRate()
+{
+    double result = 0.0;
+
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool coInitHere = SUCCEEDED(hr);
+
+    IMMDeviceEnumerator* enumerator = nullptr;
+    if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                   IID_PPV_ARGS(&enumerator))))
+    {
+        IMMDevice* device = nullptr;
+        if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &device)))
+        {
+            IAudioClient* client = nullptr;
+            if (SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                                           reinterpret_cast<void**>(&client))))
+            {
+                WAVEFORMATEX* mixFormat = nullptr;
+                if (SUCCEEDED(client->GetMixFormat(&mixFormat)) && mixFormat != nullptr)
+                {
+                    result = static_cast<double>(mixFormat->nSamplesPerSec);
+                    CoTaskMemFree(mixFormat);
+                }
+                client->Release();
+            }
+            device->Release();
+        }
+        enumerator->Release();
+    }
+
+    if (coInitHere)
+        CoUninitialize();
+
+    return result;
+}
+#endif
+
+// ASIO 独占使用后，XMOS 类 USB 设备固件会停留在最后使用的采样率；若与 Windows
+// 系统默认共享格式不一致，退出后系统声音按错误速率播放（SPDIF 直通路径表现为
+// 持续高频失真）。standalone 退出（editor 析构）时把 ASIO 设备采样率切回系统格式，
+// 让固件停在系统格式上。非 ASIO / 采样率一致 / 驱动不支持目标率时无操作。
+void restoreAsioSampleRateBeforeExit()
+{
+#if JUCE_WINDOWS
+    auto* holder = juce::StandalonePluginHolder::getInstance();
+    if (holder == nullptr)
+        return;
+
+    auto& dm = holder->deviceManager;
+    if (dm.getCurrentAudioDeviceType() != "ASIO")
+        return;
+
+    auto* device = dm.getCurrentAudioDevice();
+    if (device == nullptr)
+        return;
+
+    const double systemRate = getSystemDefaultRenderSampleRate();
+    if (systemRate <= 0.0)
+        return;
+
+    const double currentRate = device->getCurrentSampleRate();
+    if (currentRate <= 0.0 || std::abs(systemRate - currentRate) < 1.0)
+        return;
+
+    bool supported = false;
+    for (auto rate : device->getAvailableSampleRates())
+        if (std::abs(rate - systemRate) < 1.0) { supported = true; break; }
+    if (!supported)
+        return;
+
+    auto setup = dm.getAudioDeviceSetup();
+    setup.sampleRate = systemRate;
+    const auto error = dm.setAudioDeviceSetup(setup, true);
+    if (error.isNotEmpty())
+        AppLogger::error("[PluginEditor] ASIO exit: restore sample rate to system format failed: " + error);
+    else
+        AppLogger::log("[PluginEditor] ASIO exit: sample rate restored to " + juce::String(systemRate, 1) + " Hz");
+#endif
 }
 
 ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::Placement& placement,
@@ -117,9 +211,6 @@ juce::String renderStatusToString(RenderStatus status)
 
     return "unknown";
 }
-
-constexpr int kDirectSoundCallbackBlockSize = 960;
-constexpr const char* kDirectSoundDeviceTypeName = "DirectSound";
 
 } // namespace
 
@@ -521,21 +612,13 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 // Apply persisted vocoder model weight bias at startup
     const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
     processorRef_.setVocoderModelWeight(weight);
-
-    // DirectSound buffer size enforcement
-    auto* holder = juce::StandalonePluginHolder::getInstance();
-    if (holder != nullptr)
-    {
-        standaloneAudioDeviceManager_ = &holder->deviceManager;
-        standaloneAudioDeviceManager_->addChangeListener(this);
-        applyDirectSoundBufferPolicy();
-    }
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
-    if (standaloneAudioDeviceManager_ != nullptr)
-        standaloneAudioDeviceManager_->removeChangeListener(this);
+    // ASIO 独占退出前把设备采样率切回 Windows 系统默认共享格式，
+    // 避免 XMOS 类设备固件残留采样率导致系统声音（SPDIF 直通）高频失真。
+    restoreAsioSampleRateBeforeExit();
 
     // Stop timer
 #if JUCE_MAC
@@ -2614,6 +2697,12 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
         ? arrangementView_.timelineCamera()
         : pianoRoll_.timelineCamera();
 
+    // F0 Ready 初始视图定位优先于编排相机转移：pending 请求在 setVisible →
+    // visibilityChanged → tryConsumeInitialF0View 中消费并定位到 F0 首帧（经当前投影
+    // 映射到位移后的时间轴位置）。若此时存在未消费请求，跳过编排相机覆盖，保留
+    // F0 定位结果；否则维持"切换保持时间轴位置"行为。
+    const bool preserveInitialF0View = !workspaceView && pianoRoll_.hasPendingInitialF0View();
+
     isWorkspaceView_ = workspaceView;
     arrangementView_.setVisible(isWorkspaceView_);
     pianoRoll_.setVisible(!isWorkspaceView_);
@@ -2631,7 +2720,7 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     // The now-hidden view is left untouched, so playback never replays camera into it.
     if (isWorkspaceView_)
         arrangementView_.activateTimelineCamera(camera);
-    else
+    else if (!preserveInitialF0View)
         pianoRoll_.activateTimelineCamera(camera);
 
     resized();
@@ -3629,33 +3718,6 @@ bool OpenTuneAudioProcessorEditor::handleAutoRefExecute()
     referenceRefreshPending_ = true;
     refreshReferenceContext();
     return true;
-}
-
-void OpenTuneAudioProcessorEditor::changeListenerCallback(juce::ChangeBroadcaster* /*source*/)
-{
-    applyDirectSoundBufferPolicy();
-}
-
-void OpenTuneAudioProcessorEditor::applyDirectSoundBufferPolicy()
-{
-    if (standaloneAudioDeviceManager_ == nullptr)
-        return;
-
-    auto* device = standaloneAudioDeviceManager_->getCurrentAudioDevice();
-    if (device == nullptr)
-        return;
-
-    if (standaloneAudioDeviceManager_->getCurrentAudioDeviceType() != kDirectSoundDeviceTypeName)
-        return;
-
-    auto setup = standaloneAudioDeviceManager_->getAudioDeviceSetup();
-    if (setup.bufferSize == kDirectSoundCallbackBlockSize)
-        return;
-
-    setup.bufferSize = kDirectSoundCallbackBlockSize;
-    const auto error = standaloneAudioDeviceManager_->setAudioDeviceSetup(setup, true);
-    if (error.isNotEmpty())
-        AppLogger::error("[PluginEditor] DirectSound bufferSize enforcement failed: " + error);
 }
 
 } // namespace OpenTune

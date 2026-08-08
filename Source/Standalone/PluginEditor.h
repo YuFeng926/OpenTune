@@ -76,8 +76,7 @@ class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public PianoRollComponent::Listener,
                                       public juce::FileDragAndDropTarget,
                                       public LanguageChangeListener,  // 语言变化监听
-                                      private juce::Timer,
-                                      private juce::ChangeListener
+                                      private juce::Timer
 {
 public:
     explicit OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor&);
@@ -321,11 +320,6 @@ private:
     bool rmvpeOverlayLatched_ = false;
     ContentKey rmvpeOverlayTargetContentKey_;
 
-
-    // DirectSound buffer size enforcement
-    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
-    void applyDirectSoundBufferPolicy();
-    juce::AudioDeviceManager* standaloneAudioDeviceManager_ = nullptr;
 
     // Export worker thread management
     std::thread exportWorker_;

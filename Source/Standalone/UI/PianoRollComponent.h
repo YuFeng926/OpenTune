@@ -120,6 +120,8 @@ public:
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                            int sampleRate);
     void requestInitialF0View(ContentKey contentKey);
+    /** 是否存在未消费的 F0 初始视图定位请求（F0 Ready 跃迁已入队，尚未定位）。 */
+    bool hasPendingInitialF0View() const noexcept { return !pendingInitialF0ViewRequests_.empty(); }
     void onTimeGridRevisionChanged();
     void onNotesRevisionChanged();
     void onPitchRevisionChanged();
