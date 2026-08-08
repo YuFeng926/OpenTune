@@ -921,7 +921,7 @@ target_compile_definitions(OpenTune
 )
 
 if(WIN32)
-    target_compile_definitions(OpenTune PUBLIC JUCE_ASIO=1)
+    target_compile_definitions(OpenTune PUBLIC JUCE_ASIO=1 JUCE_WASAPI=1)
     target_compile_definitions(OpenTune PRIVATE JUCE_USE_WINDOWS_MEDIA_FORMAT=1)
 endif()
 
@@ -1667,6 +1667,7 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         target_compile_definitions(OpenTuneThemeScreenshots
             PRIVATE
                 JUCE_ASIO=1
+                JUCE_WASAPI=1
                 JUCE_USE_WINDOWS_MEDIA_FORMAT=1
         )
     endif()

@@ -468,9 +468,9 @@ ParameterPanel::ParameterPanel()
     setupHeader(toolsHeader_, LOC(kTools));
     addAndMakeVisible(toolsHeader_);
 
-    autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Snap", LOC(kTooltipAutoTune) + "\n6");
+    autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Auto", LOC(kTooltipAutoTune) + "\n6");
     autoTuneToolButton_->setClickingTogglesState(false);
-    autoTuneToolButton_->setTextIcon("SNAP");
+    autoTuneToolButton_->setTextIcon("AUTO");
     autoTuneToolButton_->onClick = [this] {
         listeners_.call([](Listener& l) { l.autoTuneRequested(); });
     };
@@ -990,7 +990,9 @@ void ParameterPanel::setAutoButtonPresentation(const AutoButtonPresentation& pre
         return;
     }
 
-    autoTuneToolButton_->setTextIcon("SNAP");
+    // OpenTune（CorrectedF0Primary）显示 AUTO；OpenDyne（NotesPrimary）显示 SNAP。
+    // setOpenDyneMode → refreshLocalizedText → setAutoButtonPresentation 自动同步。
+    autoTuneToolButton_->setTextIcon(openDyneMode_ ? "SNAP" : "AUTO");
     const bool hasReference = autoButtonPresentation_.mode == AutoButtonPresentation::Mode::ReferenceAuto;
     const auto resolvedTooltip = buildAutoButtonTooltip(autoButtonPresentation_);
     if (hasReference)
