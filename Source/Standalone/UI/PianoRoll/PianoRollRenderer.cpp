@@ -1031,6 +1031,14 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.strokePath(blob, juce::PathStrokeType(0.9f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
+
+            // Note 中线高亮：半透明亮线凸显音高中心，区分音符背景与F0曲线
+            {
+                const auto lineColour = item.displayColour.brighter(0.65f).withAlpha(0.40f);
+                g.setColour(lineColour);
+                g.drawLine(static_cast<float>(x1) + 2.0f, centerY,
+                           static_cast<float>(x2) - 2.0f, centerY, 0.8f);
+            }
         }
         return;
     }
@@ -1203,6 +1211,11 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
             g.strokePath(blob, juce::PathStrokeType(1.5f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
+
+            // 选中态：中线高亮（与 drawNotes 一致，亮度更高）
+            g.setColour(item.displayColour.brighter(0.85f).withAlpha(0.55f));
+            g.drawLine(static_cast<float>(x1) + 2.0f, centerY,
+                       static_cast<float>(x2) - 2.0f, centerY, 1.0f);
         }
         return;
     }

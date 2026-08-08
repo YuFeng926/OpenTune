@@ -912,7 +912,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                             if (!result.success) {
                                 session->commitSegmentF0Result(
                                     segContentKey, nullptr,
-                                    OriginalF0State::Failed, DetectedKey{});
+                                    OriginalF0State::Failed);
                                 return;
                             }
                             auto pitchCurve = std::make_shared<PitchCurve>();
@@ -921,9 +921,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                             pitchCurve->setOriginalF0(result.f0);
                             if (!result.energy.empty())
                                 pitchCurve->setOriginalEnergy(result.energy);
-                            session->commitSegmentF0Result(
-                                segContentKey, std::move(pitchCurve),
-                                OriginalF0State::Ready, DetectedKey{});
+                            if (session->commitSegmentF0Result(
+                                    segContentKey, std::move(pitchCurve),
+                                    OriginalF0State::Ready)) {
+                                detectContentKeyIfUnset(segContentKey);
+                            }
                             if (pendingTimeToolSeedKeys_.count(segContentKey) != 0)
                                 ensureTimeToolAnchorSeed(segContentKey);
                         }
