@@ -2278,9 +2278,12 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
     }
 
     // Pitch Tool (F2×1) 双击：吸附到当前音阶
-    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    // 量化目标：有音阶配置时按音阶吸附；Chromatic（无音阶配置）时吸附到最近半音
+    // （与按钮入口一致，quantizeMidiToActiveScale Chromatic 分支 = round；
+    //   OpenTune 音符已半音量化时 round 无变化，自动保持无操作）
+    auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
     if (!scaleSnap.has_value())
-        return;   // 无音阶配置（默认 Chromatic）：音符已半音吸附，无需动作
+        scaleSnap = ScaleSnapConfig{};
 
     const Note& original = notes[static_cast<size_t>(clickedNoteIndex)];
     // SNAP 按基准音高重投影：pitchOffset 不进入量化输入（与按钮入口一致）

@@ -4596,8 +4596,9 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::EmptyTimeline };
     }
 
-    // ── OpenDyne：AUTO 按钮 = Auto Snap 一键吸附全部音符（Melodyne 语义）──
-    // 分流位于选区解析（getSelectedNotesFrameRange）之前，全部音符处理
+    // ── OpenDyne：AUTO 按钮 = Auto Snap 一键吸附（Melodyne 语义）──
+    // 有选中音符时只吸附选中音符；未选中任何音符时才对全量吸附。
+    // 分流位于选区解析（getSelectedNotesFrameRange）之前，目标集合由 applyAutoSnapToAllNotes 内部决定
     if (AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_)) {
         return applyAutoSnapToAllNotes(snap, f0tl);
     }
@@ -4684,17 +4685,35 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
     const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot,
     const F0Timeline& f0tl)
 {
-    const auto scaleSnap = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
+    // 量化目标：有音阶配置时按音阶吸附；Chromatic（无音阶配置）时吸附到最近半音
+    // （ScaleSnapConfig 默认 mode=Chromatic，quantizeMidiToActiveScale = round，
+    //   与 AUTO 生成器 quantisePitch 一致）
+    auto scaleSnap = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
     if (!scaleSnap.has_value())
-        return { AutoTuneApplyStatus::NoChange };   // Chromatic：无音阶吸附
+        scaleSnap = ScaleSnapConfig{};
 
     // 单一快照来源：notes/curve 全部从 contentSnapshot 派生
     auto notes = contentSnapshot->notes;
     const auto curveSnap = contentSnapshot->pitchCurve->getSnapshot();
 
+    // 吸附目标 = 选中音符子集；未选中任何音符时才全量吸附
+    const bool selectionActive = !interactionState_.noteSelection.empty();
+    std::vector<int> targetIndices;
+    if (selectionActive) {
+        targetIndices = interactionState_.noteSelection.selectedIndices;
+    } else {
+        targetIndices.resize(notes.size());
+        for (size_t i = 0; i < notes.size(); ++i)
+            targetIndices[i] = static_cast<int>(i);
+    }
+    if (targetIndices.empty())
+        return { AutoTuneApplyStatus::NoChange };
+
+    // 吸附：修改目标音符 pitchOffset（修正曲线将基于修改后的值计算）
     double dirtyStartTime = 1e30, dirtyEndTime = -1e30;
     bool anyPitchChanged = false;
-    for (auto& note : notes) {
+    for (int noteIndex : targetIndices) {
+        auto& note = notes[static_cast<size_t>(noteIndex)];
         // SNAP 按基准音高重投影：pitchOffset 不进入量化输入
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
         const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(baseMidi) - baseMidi;
@@ -4707,34 +4726,33 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
         dirtyEndTime = std::max(dirtyEndTime, note.endTime);
     }
 
-    // 无音符 → NoChange
-    if (notes.empty())
-        return { AutoTuneApplyStatus::NoChange };
-
-    // 全部音符帧范围（F0Timeline 无 frameAtTime，用 rangeForTimes）
-    double minStartTime = 1e30, maxEndTime = -1e30;
-    for (const auto& n : notes) {
-        minStartTime = std::min(minStartTime, n.startTime);
-        maxEndTime = std::max(maxEndTime, n.endTime);
+    // 目标音符集合（修改后取值）：修正曲线只对目标音符重写，未选中音符的修正保持原样
+    std::vector<Note> targetNotes;
+    targetNotes.reserve(targetIndices.size());
+    double targetMinStartTime = 1e30, targetMaxEndTime = -1e30;
+    for (int noteIndex : targetIndices) {
+        const auto& note = notes[static_cast<size_t>(noteIndex)];
+        targetMinStartTime = std::min(targetMinStartTime, note.startTime);
+        targetMaxEndTime = std::max(targetMaxEndTime, note.endTime);
+        targetNotes.push_back(note);
     }
-    const auto notesRange = f0tl.rangeForTimes(minStartTime, maxEndTime);
+
+    // 目标音符帧范围
+    const auto notesRange = f0tl.rangeForTimes(targetMinStartTime, targetMaxEndTime);
 
     // NoChange 判据 = 最终修正结果已达成（无覆盖空洞）：
-    // 全部音符帧范围被 correction 完全覆盖（无空洞）且 pitchOffset 无变化。
-    // 新导入音符已全部在音阶、pitchOffset 无变化、但 correction 为空时，
-    // 播放仍走 OriginalF0，Auto Snap 未产生任何修正 → 必须提交修正曲线。
+    // 目标音符帧范围被 correction 完全覆盖（无空洞）且 pitchOffset 无变化。
     const bool fullyCorrected = isFullyCorrectedInRange(
         *curveSnap, notesRange.startFrame, notesRange.endFrameExclusive);
     if (!anyPitchChanged && fullyCorrected)
         return { AutoTuneApplyStatus::NoChange };
 
     if (anyPitchChanged) {
-        dirtyStartTime = std::min(dirtyStartTime, minStartTime);
-        dirtyEndTime = std::max(dirtyEndTime, maxEndTime);
+        dirtyStartTime = std::min(dirtyStartTime, targetMinStartTime);
+        dirtyEndTime = std::max(dirtyEndTime, targetMaxEndTime);
     } else {
-        // 仅写修正曲线：覆盖全部音符范围
-        dirtyStartTime = minStartTime;
-        dirtyEndTime = maxEndTime;
+        dirtyStartTime = targetMinStartTime;
+        dirtyEndTime = targetMaxEndTime;
     }
     const auto editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
     if (editRange.isEmpty())
@@ -4744,7 +4762,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
     const auto params = getCurrentAutoTuneParams();
     auto clonedCurve = contentSnapshot->pitchCurve->clone();
     clonedCurve->applyCorrectionToRange(
-        notes, editRange.startFrame, editRange.endFrameExclusive,
+        targetNotes, editRange.startFrame, editRange.endFrameExclusive,
         static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
         params.retuneSpeed, params.vibratoDepth, params.vibratoRate);
 
@@ -4752,13 +4770,93 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
     const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
         editRange.startFrame, editRange.endFrameExclusive, f0tl.endFrameExclusive());
 
+    // 修正段 = 目标音符帧的新段 + affectedRange 内非目标帧的既有段。两者帧域互补、
+    // 无重叠（渲染端 forEachCorrectionF0Span 先出现的段优先，重叠段会被遮蔽）。
     std::vector<PitchCorrectionSegment> segmentsInRange;
-    for (const auto& seg : snap->getCorrectionSegments()) {
-        if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
-            segmentsInRange.push_back(seg);
+    if (!selectionActive) {
+        // 全量吸附：新段覆盖整个 affectedRange，与历史实现一致（间隙帧 = 原始 F0×pitchRatio）
+        for (const auto& seg : snap->getCorrectionSegments()) {
+            if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
+                segmentsInRange.push_back(seg);
+        }
+    } else {
+        // 目标音符帧区间并集（帧 i 属于音符 ⟺ i*spf ∈ [startTime, endTime)，
+        // 与 PitchCurve.cpp 逐帧归属一致），排序后合并相邻/重叠区间
+        std::vector<F0FrameRange> noteFrames;
+        for (const auto& note : targetNotes) {
+            const int noteStart = f0tl.exclusiveFrameAt(note.startTime);
+            const int noteEnd = f0tl.exclusiveFrameAt(note.endTime);
+            if (noteEnd > noteStart)
+                noteFrames.push_back(F0FrameRange{noteStart, noteEnd});
+        }
+        std::sort(noteFrames.begin(), noteFrames.end(),
+                  [](const F0FrameRange& a, const F0FrameRange& b) { return a.startFrame < b.startFrame; });
+        std::vector<F0FrameRange> targetFrames;
+        for (const auto& nf : noteFrames) {
+            if (targetFrames.empty() || targetFrames.back().endFrameExclusive < nf.startFrame)
+                targetFrames.push_back(nf);
+            else
+                targetFrames.back().endFrameExclusive = std::max(targetFrames.back().endFrameExclusive, nf.endFrameExclusive);
+        }
+
+        // 新段裁剪到目标音符帧（交集）
+        for (const auto& seg : snap->getCorrectionSegments()) {
+            if (seg.endFrame <= affectedRange.startFrame || seg.startFrame >= affectedRange.endFrameExclusive)
+                continue;
+            for (const auto& tf : targetFrames) {
+                const int clipStart = std::max(seg.startFrame, tf.startFrame);
+                const int clipEnd = std::min(seg.endFrame, tf.endFrameExclusive);
+                if (clipEnd <= clipStart)
+                    continue;
+                const int offset = clipStart - seg.startFrame;
+                if (offset + (clipEnd - clipStart) > static_cast<int>(seg.f0Data.size()))
+                    continue;   // 与系统段裁剪契约一致（extractSegmentsInRange）
+                PitchCorrectionSegment clipped = seg;
+                clipped.startFrame = clipStart;
+                clipped.endFrame = clipEnd;
+                clipped.f0Data.assign(seg.f0Data.begin() + offset,
+                                      seg.f0Data.begin() + offset + (clipEnd - clipStart));
+                segmentsInRange.push_back(std::move(clipped));
+            }
+        }
+
+        // 非目标帧的既有段原样保留（帧域区间差）
+        for (const auto& seg : curveSnap->getCorrectionSegments()) {
+            if (seg.endFrame <= affectedRange.startFrame || seg.startFrame >= affectedRange.endFrameExclusive)
+                continue;
+            std::vector<F0FrameRange> spans{ F0FrameRange{seg.startFrame, seg.endFrame} };
+            for (const auto& tf : targetFrames) {
+                std::vector<F0FrameRange> remainder;
+                for (const auto& span : spans) {
+                    if (tf.startFrame >= span.endFrameExclusive || tf.endFrameExclusive <= span.startFrame) {
+                        remainder.push_back(span);
+                        continue;
+                    }
+                    if (span.startFrame < tf.startFrame)
+                        remainder.push_back(F0FrameRange{span.startFrame, std::min(span.endFrameExclusive, tf.startFrame)});
+                    if (tf.endFrameExclusive < span.endFrameExclusive)
+                        remainder.push_back(F0FrameRange{std::max(span.startFrame, tf.endFrameExclusive), span.endFrameExclusive});
+                }
+                spans = std::move(remainder);
+                if (spans.empty())
+                    break;
+            }
+            for (const auto& span : spans) {
+                const int offset = span.startFrame - seg.startFrame;
+                const int len = span.endFrameExclusive - span.startFrame;
+                if (len <= 0 || offset + len > static_cast<int>(seg.f0Data.size()))
+                    continue;   // 与系统段裁剪契约一致（extractSegmentsInRange）
+                PitchCorrectionSegment kept = seg;
+                kept.startFrame = span.startFrame;
+                kept.endFrame = span.endFrameExclusive;
+                kept.f0Data.assign(seg.f0Data.begin() + offset, seg.f0Data.begin() + offset + len);
+                segmentsInRange.push_back(std::move(kept));
+            }
+        }
     }
 
     pendingUndoDescription_ = TRANS("音高吸附");   // 与双击吸附语义一致
+    // 提交全量 notes：affectedRange 内未选中音符以原样保留，range-scoped merge 不丢音符
     if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, segmentsInRange, affectedRange)) {
         pendingUndoDescription_ = {};   // 提交失败清理本次事务的临时 undo 状态
         return { AutoTuneApplyStatus::NoContent };
