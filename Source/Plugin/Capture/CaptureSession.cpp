@@ -403,19 +403,22 @@ void CaptureSession::tick()
                 }
 
                 if (f0State == OriginalF0State::Ready) {
-                    // F0 Ready: 跃迁时提交一次全量渲染，等待 onRenderComplete 回调。
+                    // F0 Ready 跃迁（含首次观察即 Ready）：提交一次全量渲染，
+                    // 等待 onRenderComplete 回调。状态记录+跃迁检测（与插件 UI 侧
+                    // lastObservedOriginalF0States_ 同一模式）：tick 每轮只观察比对，
+                    // requestFullRender 仅出现在跃迁路径，无"每 tick 触发"残留。
                     // 重复提交会在渲染窗口内（>33ms）把 Running chunk 取消并重启，
-                    // 30Hz tick 下渲染永远无法完成——renderRequested 标记保证只提交一次。
-                    // 生命周期终点（Failed 段移除 / onRenderComplete 段变 Edited）均离开
-                    // 本分支，无需复位标记。
-                    if (!seg.renderRequested) {
-                        seg.renderRequested = true;
+                    // 30Hz tick 下渲染永远无法完成。
+                    if (seg.lastObservedF0State != OriginalF0State::Ready) {
                         if (bindings_.requestFullRender) {
                             bindings_.requestFullRender(seg.contentKey);
                         }
                     }
                     anyChange = true;
                 }
+                // 记录本次观察状态（NotRequested/Extracting/Ready），作为跃迁检测基线；
+                // Failed 段已在上方移除，无需记录。
+                seg.lastObservedF0State = f0State;
 
                 ++it;
             }
