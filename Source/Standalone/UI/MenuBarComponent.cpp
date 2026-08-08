@@ -112,8 +112,10 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
         }
         case 1:  // Edit
         {
-            menu.addItem(EditUndo, LOC(kUndo) + "  (Ctrl+Z)", true);
-            menu.addItem(EditRedo, LOC(kRedo) + "  (Ctrl+Shift+Z)", true);
+            const bool canUndo = canUndoQuery ? canUndoQuery() : true;
+            const bool canRedo = canRedoQuery ? canRedoQuery() : true;
+            menu.addItem(EditUndo, LOC(kUndo) + "  (Ctrl+Z)", canUndo);
+            menu.addItem(EditRedo, LOC(kRedo) + "  (Ctrl+Shift+Z)", canRedo);
             break;
         }
         case 2:  // View

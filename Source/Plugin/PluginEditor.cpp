@@ -107,6 +107,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     UIColors::applyTheme(appPreferences_.getState().shared.theme);
 
     menuBar_.addListener(this);
+
+    // Undo/Redo 菜单项实时反映撤销栈状态
+    menuBar_.canUndoQuery = [this]() { return processorRef_.getUndoManager().canUndo(); };
+    menuBar_.canRedoQuery = [this]() { return processorRef_.getUndoManager().canRedo(); };
     LocalizationManager::getInstance().addListener(this);
 
     transportBar_.addListener(this);
@@ -744,7 +748,8 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     auto audioPage = SharedPreferencePages::createRenderingPriorityComponent(
         appPreferences_, [this] { syncSharedAppPreferences(); },
         [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
-        std::move(onVocoderModelWeightChanged));
+        std::move(onVocoderModelWeightChanged),
+        true);
     pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage) });
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
@@ -1130,7 +1135,9 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
 
     auto commands = getContentCommandsShared();
-    struct DialogHelper : public OpenTune::PitchShiftDialogContent::Listener
+    // 生命周期绑定 content：作为其子组件托管，DialogWindow 关闭删除 content 时自动析构，
+    // Esc/关闭按钮/确认/重置四条关闭路径均安全释放。
+    struct DialogHelper : public juce::Component, public OpenTune::PitchShiftDialogContent::Listener
     {
         OpenTuneAudioProcessorEditor* owner;
         ContentKey activeContentKey;
@@ -1142,7 +1149,12 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
                      const OpenTune::PitchShiftSettings& s,
                      std::shared_ptr<ContentEditCommands> cmds,
                      juce::Component::SafePointer<juce::Component> c)
-            : owner(o), activeContentKey(k), oldSettings(s), commands(std::move(cmds)), contentPtr(std::move(c)) {}
+            : owner(o), activeContentKey(k), oldSettings(s), commands(std::move(cmds)), contentPtr(std::move(c))
+        {
+            // 纯托管载体：不显示、不拦截鼠标
+            setVisible(false);
+            setInterceptsMouseClicks(false, false);
+        }
 
         void pitchShiftConfirmed(const OpenTune::PitchShiftSettings& newSettings) override
         {
@@ -1186,6 +1198,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     auto* helper = new DialogHelper{this, activeKey, currentSettings,
                                     std::move(commands),
                                     juce::Component::SafePointer<juce::Component>(content)};
+    content->addChildComponent(helper);
     content->addListener(helper);
 
     auto options = juce::DialogWindow::LaunchOptions();
@@ -1211,7 +1224,7 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 {
-    // Escape cancels selection/tool mode; not a transport command.
+    // 插件版无工作区/钢琴卷帘视图切换，Esc 无操作——空实现是有意为之。
 }
 
 void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()

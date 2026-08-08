@@ -154,11 +154,13 @@ public:
     SharedAudioPage(AppPreferences& appPreferences,
                     std::function<void()> onPreferencesChanged,
                     std::function<void(bool)> onRenderingPriorityChanged,
-                    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged)
+                    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+                    bool isVst3Plugin)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
         , onRenderingPriorityChanged_(std::move(onRenderingPriorityChanged))
         , onVocoderModelWeightChanged_(std::move(onVocoderModelWeightChanged))
+        , isVst3Plugin_(isVst3Plugin)
     {
         auto state = appPreferences_.getState();
 
@@ -201,38 +203,40 @@ public:
                 onPreferencesChanged_();
         };
 
-        initialiseToggleButton(experimentalFeaturesToggle_);
-        experimentalFeaturesToggle_.setButtonText(juce::String::fromUTF8(u8"启用实验性功能（参考轨、伸缩工具）"));
-        experimentalFeaturesToggle_.setToggleState(state.shared.experimentalFeaturesEnabled,
-                                                   juce::dontSendNotification);
-        experimentalFeaturesToggle_.onClick = [this] {
-            appPreferences_.setExperimentalFeaturesEnabled(experimentalFeaturesToggle_.getToggleState());
-            notifyChanged();
-        };
-        addAndMakeVisible(experimentalFeaturesToggle_);
+        if (!isVst3Plugin_) {
+            initialiseToggleButton(experimentalFeaturesToggle_);
+            experimentalFeaturesToggle_.setButtonText(juce::String::fromUTF8(u8"启用实验性功能（参考轨、伸缩工具）"));
+            experimentalFeaturesToggle_.setToggleState(state.shared.experimentalFeaturesEnabled,
+                                                       juce::dontSendNotification);
+            experimentalFeaturesToggle_.onClick = [this] {
+                appPreferences_.setExperimentalFeaturesEnabled(experimentalFeaturesToggle_.getToggleState());
+                notifyChanged();
+            };
+            addAndMakeVisible(experimentalFeaturesToggle_);
 
-        initialiseLabel(experimentalFeaturesHintLabel_,
-                        juce::String::fromUTF8(u8"提示：参考轨与伸缩工具目前仍不完善，属于实验性功能，可能存在 Bug。"));
-        experimentalFeaturesHintLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
-        experimentalFeaturesHintLabel_.setJustificationType(juce::Justification::topLeft);
-        addAndMakeVisible(experimentalFeaturesHintLabel_);
+            initialiseLabel(experimentalFeaturesHintLabel_,
+                            juce::String::fromUTF8(u8"提示：参考轨与伸缩工具目前仍不完善，属于实验性功能，可能存在 Bug。"));
+            experimentalFeaturesHintLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
+            experimentalFeaturesHintLabel_.setJustificationType(juce::Justification::topLeft);
+            addAndMakeVisible(experimentalFeaturesHintLabel_);
 
-        initialiseLabel(experimentalReferenceAlignModeLabel_, juce::String::fromUTF8(u8"AUTO Ref 模式"));
-        addAndMakeVisible(experimentalReferenceAlignModeLabel_);
+            initialiseLabel(experimentalReferenceAlignModeLabel_, juce::String::fromUTF8(u8"AUTO Ref 模式"));
+            addAndMakeVisible(experimentalReferenceAlignModeLabel_);
 
-        experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"普通 AUTO"), 1);
-        experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"GAME"), 2);
-        experimentalReferenceAlignModeSelector_.setSelectedId(
-            static_cast<int>(state.shared.experimentalReferenceAlignMode) + 1,
-            juce::dontSendNotification);
-        experimentalReferenceAlignModeSelector_.onChange = [this] {
-            const auto mode = static_cast<ExperimentalReferenceAlignMode>(
-                experimentalReferenceAlignModeSelector_.getSelectedId() - 1);
-            appPreferences_.setExperimentalReferenceAlignMode(mode);
-            notifyChanged();
-        };
-        initialiseComboBox(experimentalReferenceAlignModeSelector_);
-        addAndMakeVisible(experimentalReferenceAlignModeSelector_);
+            experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"普通 AUTO"), 1);
+            experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"GAME"), 2);
+            experimentalReferenceAlignModeSelector_.setSelectedId(
+                static_cast<int>(state.shared.experimentalReferenceAlignMode) + 1,
+                juce::dontSendNotification);
+            experimentalReferenceAlignModeSelector_.onChange = [this] {
+                const auto mode = static_cast<ExperimentalReferenceAlignMode>(
+                    experimentalReferenceAlignModeSelector_.getSelectedId() - 1);
+                appPreferences_.setExperimentalReferenceAlignMode(mode);
+                notifyChanged();
+            };
+            initialiseComboBox(experimentalReferenceAlignModeSelector_);
+            addAndMakeVisible(experimentalReferenceAlignModeSelector_);
+        }
 
         initialiseToggleButton(lightPitchCorrectionToggle_);
         lightPitchCorrectionToggle_.setButtonText(
@@ -248,10 +252,10 @@ public:
         // Publish preferred height for parent containers
         {
             const int vPad = 4 * 2; // reduced(10, 4) vertical
-            const int rows = 5;     // renderingPriority, vocoderWeight, experimentalToggle, refAlignMode, lightPitchToggle
+            const int rows = isVst3Plugin_ ? 3 : 5; // 插件隐藏实验控件：renderingPriority, vocoderWeight, lightPitchToggle
             const int rowH = 34;
-            const int gaps = 8 * 4 + 4; // four 8px gaps + one 4px gap
-            const int hintHeight = 42;
+            const int gaps = 8 * (rows - 1) + (isVst3Plugin_ ? 0 : 4); // 行间 8px；实验模式下额外 hint 前 4px
+            const int hintHeight = isVst3Plugin_ ? 0 : 42;
             getProperties().set("preferredHeight", vPad + rows * rowH + gaps + hintHeight);
         }
     }
@@ -277,17 +281,19 @@ public:
         vocoderWeightLabel_.setBounds(row.removeFromLeft(labelWidth));
         vocoderWeightSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
 
-        bounds.removeFromTop(8);
-        row = bounds.removeFromTop(rowHeight);
-        experimentalFeaturesToggle_.setBounds(row.removeFromLeft(labelWidth + selectorWidth + 80));
+        if (!isVst3Plugin_) {
+            bounds.removeFromTop(8);
+            row = bounds.removeFromTop(rowHeight);
+            experimentalFeaturesToggle_.setBounds(row.removeFromLeft(labelWidth + selectorWidth + 80));
 
-        bounds.removeFromTop(4);
-        experimentalFeaturesHintLabel_.setBounds(bounds.removeFromTop(42));
+            bounds.removeFromTop(4);
+            experimentalFeaturesHintLabel_.setBounds(bounds.removeFromTop(42));
 
-        bounds.removeFromTop(8);
-        row = bounds.removeFromTop(rowHeight);
-        experimentalReferenceAlignModeLabel_.setBounds(row.removeFromLeft(labelWidth));
-        experimentalReferenceAlignModeSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
+            bounds.removeFromTop(8);
+            row = bounds.removeFromTop(rowHeight);
+            experimentalReferenceAlignModeLabel_.setBounds(row.removeFromLeft(labelWidth));
+            experimentalReferenceAlignModeSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
+        }
 
         bounds.removeFromTop(8);
         row = bounds.removeFromTop(rowHeight);
@@ -306,6 +312,7 @@ private:
     std::function<void()> onPreferencesChanged_;
     std::function<void(bool)> onRenderingPriorityChanged_;
     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged_;
+    bool isVst3Plugin_ = false;
     juce::Label renderingPriorityLabel_;
     juce::ComboBox renderingPrioritySelector_;
     juce::Label vocoderWeightLabel_;
@@ -791,12 +798,14 @@ std::unique_ptr<juce::Component> SharedPreferencePages::createRenderingPriorityC
     AppPreferences& appPreferences,
     std::function<void()> onPreferencesChanged,
     std::function<void(bool forceCpu)> onRenderingPriorityChanged,
-    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged)
+    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+    bool isVst3Plugin)
 {
     return std::make_unique<SharedAudioPage>(appPreferences,
                                               std::move(onPreferencesChanged),
                                               std::move(onRenderingPriorityChanged),
-                                              std::move(onVocoderModelWeightChanged));
+                                              std::move(onVocoderModelWeightChanged),
+                                              isVst3Plugin);
 }
 
 } // namespace OpenTune

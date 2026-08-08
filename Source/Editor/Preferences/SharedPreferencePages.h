@@ -16,7 +16,8 @@ struct SharedPreferencePages {
         AppPreferences& appPreferences,
         std::function<void()> onPreferencesChanged,
         std::function<void(bool forceCpu)> onRenderingPriorityChanged,
-        std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged);
+        std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+        bool isVst3Plugin);
 };
 
 } // namespace OpenTune

@@ -237,6 +237,8 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e);
 
     bool keyPressed(const juce::KeyPress& key);
+    // 删除键命令入口（Delete/Backspace/'1'/Cut 共用）：删除选中音符与选区内容
+    void handleDeleteKey();
 
 private:
     // === 各工具的 mouseDown/mouseDrag/mouseUp 分派 ===
@@ -303,7 +305,6 @@ private:
     void cancelActiveMouseGesture();
 
     void deleteSelectedNotes(std::vector<Note>& notes);
-    void handleDeleteKey();
 
     // === Note 选择辅助 ===
     int findNoteIndexAt(const std::vector<Note>& notes, double time, float targetPitchHz, float pitchToleranceSemitones);

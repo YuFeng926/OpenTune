@@ -283,6 +283,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Setup Menu Bar
     menuBar_.addListener(this);
 
+    // Undo/Redo 菜单项实时反映撤销栈状态
+    menuBar_.canUndoQuery = [this]() { return processorRef_.getUndoManager().canUndo(); };
+    menuBar_.canRedoQuery = [this]() { return processorRef_.getUndoManager().canRedo(); };
+
 #if JUCE_MAC
     // Populate the macOS system menu bar with File/Edit/View menus.
     // JUCE automatically adds "About OpenTune" and "Quit OpenTune" to the app menu.

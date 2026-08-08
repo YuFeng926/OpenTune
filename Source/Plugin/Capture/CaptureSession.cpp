@@ -403,10 +403,16 @@ void CaptureSession::tick()
                 }
 
                 if (f0State == OriginalF0State::Ready) {
-                    // F0 Ready: trigger render, wait for onRenderComplete callback
-                    // Do NOT set Edited here; wait for render completion
-                    if (bindings_.requestFullRender) {
-                        bindings_.requestFullRender(seg.contentKey);
+                    // F0 Ready: 跃迁时提交一次全量渲染，等待 onRenderComplete 回调。
+                    // 重复提交会在渲染窗口内（>33ms）把 Running chunk 取消并重启，
+                    // 30Hz tick 下渲染永远无法完成——renderRequested 标记保证只提交一次。
+                    // 生命周期终点（Failed 段移除 / onRenderComplete 段变 Edited）均离开
+                    // 本分支，无需复位标记。
+                    if (!seg.renderRequested) {
+                        seg.renderRequested = true;
+                        if (bindings_.requestFullRender) {
+                            bindings_.requestFullRender(seg.contentKey);
+                        }
                     }
                     anyChange = true;
                 }

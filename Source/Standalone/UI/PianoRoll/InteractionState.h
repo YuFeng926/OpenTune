@@ -144,7 +144,7 @@ struct TimeToolState
     uint64_t hoveredHandleId = 0;
 
     // Primary selected handle id (0 = none).  Survives across mouse events;
-    // cleared on Escape, click-empty, or tool change.
+    // cleared on click-empty or tool change (Escape 是视图切换，不清除选中).
     uint64_t selectedHandleId = 0;
 
     // Additional handle ids selected via Shift+click.

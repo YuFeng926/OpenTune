@@ -173,8 +173,6 @@ public:
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
     bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
 
-    void setShowOriginalF0(bool show);
-    void setShowCorrectedF0(bool show);
     bool isShowingOriginalF0() const { return showOriginalF0_; }
 
     void setRetuneSpeed(float speed) { currentRetuneSpeed_ = speed; }

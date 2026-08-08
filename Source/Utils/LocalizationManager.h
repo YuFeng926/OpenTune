@@ -201,6 +201,12 @@ constexpr const char* kShowUnvoicedFrames = "Show Unvoiced Frames";
 constexpr const char* kTrackColors = "Track Colors";
 constexpr const char* kTrackColorsRandom = "Random Colors";
 constexpr const char* kTrackColorsCustom = "Custom Colors";
+constexpr const char* kAddTrack = "Add Track";
+constexpr const char* kDuplicateTrack = "Duplicate Track";
+constexpr const char* kCustomColor = "Custom Color...";
+constexpr const char* kRandomColor = "Random Color";
+constexpr const char* kTrackColor = "Track Color";
+constexpr const char* kDeleteTrack = "Delete Track";
 constexpr const char* kTheme = "Theme";
 constexpr const char* kThemeBlueBreeze = "Blue Breeze";
 constexpr const char* kThemeDarkBlueGrey = "Dark Blue-Grey";
@@ -342,6 +348,8 @@ constexpr const char* kTooltipRetuneSpeed = "Retune Speed - Controls how fast pi
 constexpr const char* kTooltipVibratoDepth = "Vibrato Depth - Controls vibrato amplitude";
 constexpr const char* kTooltipVibratoRate = "Vibrato Rate - Controls vibrato speed";
 constexpr const char* kTooltipNoteSplit = "Note Split - Threshold for splitting notes";
+constexpr const char* kTooltipPitchModulation = "Modulation - Vibrato Depth";
+constexpr const char* kTooltipPitchDrift = "Drift - Pitch Drift Correction";
 
 }
 
@@ -384,6 +392,12 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTrackColors, "Track Colors", "轨道颜色", "トラック色", "Цвет дорожки", "Color pista" },
         { Keys::kTrackColorsRandom, "Random Colors", "随机颜色", "ランダム色", "Случайный цвет", "Color aleatorio" },
         { Keys::kTrackColorsCustom, "Custom Colors", "自定义颜色", "カスタム色", "Пользовательский", "Color personalizado" },
+        { Keys::kAddTrack, "Add Track", "新建轨道", "トラックを追加", "Добавить дорожку", "Añadir pista" },
+        { Keys::kDuplicateTrack, "Duplicate Track", "复制轨道", "トラックを複製", "Дублировать дорожку", "Duplicar pista" },
+        { Keys::kCustomColor, "Custom Color...", "自定义颜色...", "カスタム色...", "Свой цвет...", "Color personalizado..." },
+        { Keys::kRandomColor, "Random Color", "随机颜色", "ランダム色", "Случайный цвет", "Color aleatorio" },
+        { Keys::kTrackColor, "Track Color", "轨道颜色", "トラック色", "Цвет дорожки", "Color pista" },
+        { Keys::kDeleteTrack, "Delete Track", "删除轨道", "トラックを削除", "Удалить дорожку", "Eliminar pista" },
         { Keys::kTheme, "Theme", "主题", "テーマ", "Тема", "Tema" },
         { Keys::kThemeBlueBreeze, "Blue Breeze", "蓝色清风", "ブルーブリーズ", "Голубой бриз", "Brisa azul" },
         { Keys::kThemeDarkBlueGrey, "Dark Blue-Grey", "深蓝灰", "ダークブルーグレー", "Тёмно-синий серый", "Azul-gris oscuro" },
@@ -517,6 +531,8 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTooltipVibratoDepth, "Vibrato Depth - Controls vibrato amplitude", "颤音深度 - 控制颤音幅度", "ビブラート深さ - ビブラートの振幅を制御", "Глубина вибрато - амплитуда вибрато", "Prof. vibrato - Controla la amplitud" },
         { Keys::kTooltipVibratoRate, "Vibrato Rate - Controls vibrato speed", "颤音速率 - 控制颤音频率", "ビブラート速度 - ビブラートの速さを制御", "Скорость вибрато - частота вибрато", "Tasa vibrato - Controla la velocidad" },
         { Keys::kTooltipNoteSplit, "Note Split - Threshold for splitting notes", "音符分割 - 控制音符分割阈值", "ノート分割 - ノート分割の閾値を制御", "Разделение нот - порог разделения", "Div. notas - Umbral de división" },
+        { Keys::kTooltipPitchModulation, "Modulation - Vibrato Depth", "颤音深度调制", "モジュレーション - ビブラート深度", "Модуляция - глубина вибрато", "Modulación - profundidad de vibrato" },
+        { Keys::kTooltipPitchDrift, "Drift - Pitch Drift Correction", "漂移修正", "ドリフト - ピッチドリフト補正", "Дрейф - коррекция дрейфа", "Deriva - corrección de deriva" },
         { Keys::kToolPitch, "Pitch", "音高", "ピッチ", "Высота тона", "Tono" },
         { Keys::kToolModulation, "Modulation", "调制", "モジュレーション", "Модуляция", "Modulación" },
         { Keys::kToolDrift, "Drift", "漂移", "ドリフト", "Дрейф", "Deriva" },
