@@ -1264,14 +1264,8 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
         updateF0SelectionFromNotes(notes);
 
         if (noteSelection.isSelected(clickedNoteIndex)) {
-            if (isOpenDyne) {
-                // OpenDyne Main/Select 只做选择，不做 pitch 拖拽。
-                ctx_.getState().noteDrag.draggedNoteIndex = -1;
-                ctx_.getState().noteDrag.draggedNoteIndices.clear();
-                clearNoteDragPreview(ctx_);
-            } else {
-                beginNotePitchDrag(clickedNoteIndex, notes);
-            }
+            // OpenDyne Main/Select 与普通模式一致：允许对选中音符进行 pitch 拖拽。
+            beginNotePitchDrag(clickedNoteIndex, notes);
         } else {
             // Note was not selected - start selection area or clear
             if (!isCtrlDown) {
@@ -1652,11 +1646,6 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
 
     if (ctx_.getState().noteDrag.draggedNoteIndex >= 0) {
         dragNotePitch(e);
-        return;
-    }
-
-    // OpenDyne（NotesPrimary）：Main/Select 不做 pitch 拖拽，禁止选中音符的兜底启动。
-    if (AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
         return;
     }
 
@@ -2294,10 +2283,9 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         return;   // 无音阶配置（默认 Chromatic）：音符已半音吸附，无需动作
 
     const Note& original = notes[static_cast<size_t>(clickedNoteIndex)];
-    // 连续基准 MIDI（不提前取整），与拖拽 SNAP 同一数学路径
+    // SNAP 按基准音高重投影：pitchOffset 不进入量化输入（与按钮入口一致）
     const float baseMidi = PitchUtils::freqToMidi(original.pitch);
-    const float targetMidi = baseMidi + original.pitchOffset;
-    const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(targetMidi) - baseMidi;
+    const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(baseMidi) - baseMidi;
     if (std::abs(snappedOffset - original.pitchOffset) < 0.001f)
         return;
 

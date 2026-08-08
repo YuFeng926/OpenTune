@@ -483,8 +483,7 @@ void CaptureSession::onRenderComplete(ContentKey segmentContentKey)
 bool CaptureSession::commitSegmentF0Result(
     ContentKey segmentContentKey,
     std::shared_ptr<PitchCurve> pitchCurve,
-    OriginalF0State state,
-    const DetectedKey& detectedKey)
+    OriginalF0State state)
 {
     std::lock_guard<std::mutex> lock(mutableMutex_);
 
@@ -501,7 +500,6 @@ bool CaptureSession::commitSegmentF0Result(
     if (pitchCurve)
         seg->content->applyPitchCurve(std::move(pitchCurve));
 
-    seg->content->applyDetectedKey(detectedKey);
     seg->content->applyOriginalF0State(state);
     return true;
 }

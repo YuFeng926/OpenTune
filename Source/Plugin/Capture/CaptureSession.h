@@ -162,8 +162,7 @@ public:
     /** Commit F0 extraction result to segment content. Does not promote lifecycle. */
     bool commitSegmentF0Result(ContentKey segmentContentKey,
                                std::shared_ptr<PitchCurve> pitchCurve,
-                               OriginalF0State state,
-                               const DetectedKey& detectedKey);
+                               OriginalF0State state);
     bool applyAutoTuneGeneratedNotes(ContentKey segmentContentKey,
                                      std::vector<Note> notes,
                                      std::shared_ptr<PitchCurve> pitchCurve);

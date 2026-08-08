@@ -4695,10 +4695,9 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
     double dirtyStartTime = 1e30, dirtyEndTime = -1e30;
     bool anyPitchChanged = false;
     for (auto& note : notes) {
-        // 连续基准 MIDI（不提前取整），与拖拽 SNAP 同一数学路径
+        // SNAP 按基准音高重投影：pitchOffset 不进入量化输入
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
-        const float targetMidi = baseMidi + note.pitchOffset;
-        const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(targetMidi) - baseMidi;
+        const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(baseMidi) - baseMidi;
         if (std::abs(snappedOffset - note.pitchOffset) < 0.001f)
             continue;
         note.pitchOffset = snappedOffset;

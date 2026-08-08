@@ -111,13 +111,13 @@ void testAnalysisQueueContract()
         processor, "OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures");
     const auto finished = functionBlock(processor, "void OpenTuneAudioProcessor::analysisFinished");
 
-    expect(contains(submit, "*activeJob_ == jobKey"),
+    expect(contains(submit, "*state_->activeJob == jobKey"),
             "Analysis deduplicates only an identical active job");
     expect(contains(jobEquality, "contentKey == rhs.contentKey")
                 && contains(jobEquality, "inputFingerprint == rhs.inputFingerprint")
                 && contains(jobEquality, "producer == rhs.producer"),
             "AnalysisJobKey equality compares contentKey, inputFingerprint, and producer");
-    expect(contains(submit, "pendingJobs_[key] = jobKey"),
+    expect(contains(submit, "state_->pendingJobs[key] = jobKey"),
            "Analysis queue keeps the latest pending job per content");
     expect(contains(preheat, "case OriginalF0State::NotRequested")
                && contains(preheat, "requestContentRefresh(refreshRequest)"),
@@ -1149,6 +1149,25 @@ void testAutoSnapTargetMathContract()
     expect(quantizeMidiToActiveScaleModel(60.32f, 0, nullptr, 0) == 60.0f,
            "Auto Snap math: Chromatic rounds 60.32 exactly to 60.0");
 
+    // 切调式二次 SNAP 反例：Q_new(Q_old(x)) 被禁止，必须按基准音高重新投影。
+    // base=61.3：旧 C Major 吸附到 62；新 C Pentatonic Minor 对旧目标 62 再吸附 → 63；
+    // 直接按基准 61.3 投影 → 60。63 != 60，证明链式投影与正确结果发散。
+    static const int pentatonicMinorTones[] = {0, 3, 5, 7, 10};
+    const int pentMinorCount = 5;
+    const float reSnapBase = 61.3f;
+    const float oldSnap = quantizeMidiToActiveScaleModel(reSnapBase, 0, majorTones, majorCount);
+    const float reSnapOldTarget =
+        quantizeMidiToActiveScaleModel(oldSnap, 0, pentatonicMinorTones, pentMinorCount);
+    const float directBaseSnap =
+        quantizeMidiToActiveScaleModel(reSnapBase, 0, pentatonicMinorTones, pentMinorCount);
+    expect(oldSnap == 62.0f,
+           "Auto Snap math: 61.3 in C Major lands exactly on 62.0");
+    expect(reSnapOldTarget == 63.0f,
+           "Auto Snap math: re-snapping the old 62.0 target in C Pentatonic Minor lands on 63.0");
+    expect(directBaseSnap == 60.0f,
+           "Auto Snap math: 61.3 projected directly in C Pentatonic Minor lands on 60.0");
+    // 63 != 60（前三条已锁死）：链式投影与直接基准投影发散，Q_new(Q_old(x)) 被禁止。
+
     // ── 源码对照：生产实现与模型同构（捕获公式/路径漂移）──
     const auto generatorSource = readSource("Source/Utils/LegacyNoteGenerator.cpp");
     const auto quantizeFn = functionBlock(
@@ -1164,17 +1183,48 @@ void testAutoSnapTargetMathContract()
     expect(contains(generatorSource, "{0, 2, 4, 5, 7, 9, 11}"),
            "C Major tone table matches the model");
 
-    // 生产 snappedOffset 相对 baseMidi 计算，最终 adjusted MIDI = quantize 结果
+    // 生产 snappedOffset 相对 baseMidi 计算，最终 adjusted MIDI = quantize 结果。
+    // 基准 MIDI 直接进 quantizeMidiToActiveScale，pitchOffset 不参与量化输入，
+    // 不存在 targetMidi 中间量（切调式反例证明 Q_new(Q_old(x)) 被禁止）。
     const auto autoSnap = functionBlock(
         readSource("Source/Standalone/UI/PianoRollComponent.cpp"),
         "PianoRollComponent::applyAutoSnapToAllNotes");
     expect(contains(autoSnap, "const float baseMidi = PitchUtils::freqToMidi(note.pitch);")
-               && contains(autoSnap, "const float targetMidi = baseMidi + note.pitchOffset;")
-               && contains(autoSnap, "scaleSnap->quantizeMidiToActiveScale(targetMidi)")
-               && contains(autoSnap, "- baseMidi")
-               && !contains(autoSnap, "getBaseMidiNote()")
-               && contains(autoSnap, "note.pitchOffset = snappedOffset;"),
-           "Auto Snap preserves continuous MIDI until scale quantization and lands on the target");
+           && contains(autoSnap, "quantizeMidiToActiveScale(baseMidi)")
+           && !contains(autoSnap, "baseMidi + note.pitchOffset")
+           && !contains(autoSnap, "targetMidi")
+           && contains(autoSnap, "- baseMidi")
+           && !contains(autoSnap, "getBaseMidiNote()")
+           && contains(autoSnap, "note.pitchOffset = snappedOffset;"),
+           "Auto Snap quantizes the continuous base MIDI directly, never the offset-shifted target");
+
+    // Pitch 工具双击（F2×1）与按钮入口同构：基准 MIDI 直接进 quantizeMidiToActiveScale，
+    // original.pitchOffset 不参与量化输入，也不存在旧 targetMidi 中间量。
+    const auto toolHandler = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto pitchDoubleClick = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handlePitchToolDoubleClick");
+    expect(contains(pitchDoubleClick, "const float baseMidi = PitchUtils::freqToMidi(original.pitch);")
+           && contains(pitchDoubleClick, "quantizeMidiToActiveScale(baseMidi)")
+           && !contains(pitchDoubleClick, "baseMidi + original.pitchOffset")
+           && !contains(pitchDoubleClick, "targetMidi")
+           && contains(pitchDoubleClick, "pitchOffset = snappedOffset"),
+           "Pitch tool double-click quantizes the base MIDI directly, never the offset-shifted target");
+}
+
+void testCaptureF0KeyContract()
+{
+    const auto captureSession = readSource("Source/Plugin/Capture/CaptureSession.cpp");
+    const auto commitF0 = functionBlock(
+        captureSession, "bool CaptureSession::commitSegmentF0Result(");
+    const auto processor = readSource("Source/PluginProcessor.cpp");
+    const auto successCommit = functionBlock(
+        processor, "if (session->commitSegmentF0Result(");
+
+    expect(!contains(commitF0, "DetectedKey") && !contains(commitF0, "applyDetectedKey"),
+           "commitSegmentF0Result applies F0 state without any detected-key side effect");
+    expect(contains(successCommit, "detectContentKeyIfUnset(segContentKey)"),
+           "Segment F0 success path detects the content key when unset");
 }
 
 int main()
@@ -1198,6 +1248,7 @@ int main()
     testPitchModulationDriftContract();
     testAutoSnapRefactorContract();
     testAutoSnapTargetMathContract();
+    testCaptureF0KeyContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";

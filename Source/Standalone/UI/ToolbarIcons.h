@@ -308,9 +308,9 @@ public:
         juce::Path p;
         // 底部音符块（与 getPitchToolIcon 相同位置）
         p.addRoundedRectangle(4.0f, 14.0f, 16.0f, 6.0f, 2.0f);
-        // 顶部：缓慢上升倾斜线（表示 pitch drift 趋势）
+        // 顶部：缓慢漂移曲线，从左下到右上微微弯曲（表示 pitch drift 慢漂移趋势）
         p.startNewSubPath(4.0f, 12.0f);
-        p.lineTo(20.0f, 5.0f);
+        p.cubicTo(8.0f, 11.0f, 14.0f, 8.0f, 20.0f, 5.0f);
         return p;
     }
 
