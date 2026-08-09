@@ -338,6 +338,7 @@ juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry
     if (!mat.notes.empty()) {
         tree.addChild(notesToValueTree(mat.notes, "Notes"), -1, nullptr);
     }
+    tree.setProperty("noteTopologyInitialized", mat.noteTopologyInitialized ? 1 : 0, nullptr);
 
     // Volume envelope
     if (!mat.volumeEnvelope.empty()) {
@@ -401,6 +402,11 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
 
     // Notes
     m.notes = notesFromValueTree(tree.getChildWithName("Notes"));
+
+    // Note topology state（旧工程无该 property 时按 notes 是否为空推断，避免覆盖已有音符）
+    m.noteTopologyInitialized = tree.hasProperty("noteTopologyInitialized")
+        ? static_cast<int>(tree.getProperty("noteTopologyInitialized", 0)) != 0
+        : !m.notes.empty();
 
     const auto volumeEnvelopeTree = tree.getChildWithName("VolumeEnvelope");
     if (volumeEnvelopeTree.isValid()) {

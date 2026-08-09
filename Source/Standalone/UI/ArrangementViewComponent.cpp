@@ -1123,7 +1123,9 @@ BackgroundGenerationSignature ArrangementViewComponent::makeBackgroundSignature(
 ForegroundGenerationSignature ArrangementViewComponent::makeForegroundSignature() const
 {
     ForegroundGenerationSignature sig;
+    sig.pixelsPerSecond = camera_.pixelsPerSecond;
     sig.contentRevision = contentMetrics_.revision;
+    sig.selectionRevision = computeSelectionRevision();
     return sig;
 }
 
@@ -3063,6 +3065,16 @@ ViewMapper ArrangementViewComponent::makeViewMapper() const noexcept
         0.0f,  // verticalScrollOffset (not used in ArrangementView)
         127.0f // maxMidi (not used in ArrangementView)
     };
+}
+
+uint64_t ArrangementViewComponent::computeSelectionRevision() const noexcept
+{
+    uint64_t h = 0;
+    for (const auto& key : selectedPlacements_) {
+        h ^= std::hash<uint64_t>{}(key.placementId) + 0x9e3779b9ULL + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(key.trackId) + 0x9e3779b9ULL + (h << 6) + (h >> 2);
+    }
+    return h;
 }
 
 } // namespace OpenTune

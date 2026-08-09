@@ -76,6 +76,33 @@ void testVisibleEntryContract()
            "Reference painting and hit-testing share one bounds function");
 }
 
+void testArrangementForegroundScaleContract()
+{
+    const auto cacheHeader = readSource("Source/Standalone/UI/TimelineCompositeCache.h");
+    const auto cacheSource = readSource("Source/Standalone/UI/TimelineCompositeCache.cpp");
+    const auto arrangementSource = readSource("Source/Standalone/UI/ArrangementViewComponent.cpp");
+    const auto foregroundSignature = cacheHeader.substr(
+        cacheHeader.find("struct ForegroundGenerationSignature"), 320);
+    const auto equality = functionBlock(
+        cacheSource, "bool ForegroundGenerationSignature::operator==");
+    const auto makeSignature = functionBlock(
+        arrangementSource,
+        "ForegroundGenerationSignature ArrangementViewComponent::makeForegroundSignature");
+
+    expect(contains(foregroundSignature, "double pixelsPerSecond"),
+           "Arrangement foreground signature tracks horizontal scale");
+    expect(contains(foregroundSignature, "uint64_t selectionRevision = 0;"),
+           "Arrangement foreground signature carries the selection revision");
+    expect(contains(equality, "pixelsPerSecond == o.pixelsPerSecond"),
+           "Arrangement foreground cache invalidates when horizontal scale changes");
+    expect(contains(equality, "selectionRevision == o.selectionRevision"),
+           "Arrangement foreground cache invalidates when the selection revision changes");
+    expect(contains(makeSignature, "sig.pixelsPerSecond = camera_.pixelsPerSecond"),
+           "Arrangement foreground raster uses the active camera scale in its signature");
+    expect(contains(makeSignature, "sig.selectionRevision = computeSelectionRevision();"),
+           "Arrangement foreground signature is injected from the live selection revision");
+}
+
 void testModeAndOverlayContract()
 {
     const auto preferences = readSource("Source/Utils/AppPreferences.h");
@@ -1239,6 +1266,171 @@ void testAutoSnapTargetMathContract()
            "Pitch tool double-click quantizes the base MIDI directly, never the offset-shifted target");
 }
 
+void testNoteTopologyContract()
+{
+    // 1. 快照/三个 state/工程条目统一携带音符拓扑初始化标记
+    expect(contains(readSource("Source/Content/EditableContentSnapshot.h"), "noteTopologyInitialized"),
+           "EditableContentSnapshot carries noteTopologyInitialized");
+    expect(contains(readSource("Source/Content/ContentPayloadState.h"), "noteTopologyInitialized")
+               && contains(readSource("Source/Content/ARAEditableContentState.h"), "noteTopologyInitialized")
+               && contains(readSource("Source/Content/EditableContentState.h"), "noteTopologyInitialized"),
+           "All three content states carry noteTopologyInitialized");
+    expect(contains(readSource("Source/Utils/ProjectModel.h"), "noteTopologyInitialized"),
+           "ProjectContentEntry carries noteTopologyInitialized");
+
+    // 2. 三个 applyNotes 提交块都置位拓扑初始化标记
+    expect(contains(functionBlock(readSource("Source/ARA/AudioModification.cpp"),
+                                  "void AudioModification::applyNotes"),
+                    "noteTopologyInitialized = true")
+               && contains(functionBlock(readSource("Source/Content/StandaloneClipContent.cpp"),
+                                         "void StandaloneClipContent::applyNotes"),
+                           "noteTopologyInitialized = true")
+               && contains(functionBlock(readSource("Source/Content/CaptureSegmentContent.cpp"),
+                                         "void CaptureSegmentContent::applyNotes"),
+                           "noteTopologyInitialized = true"),
+           "All three applyNotes blocks set noteTopologyInitialized = true");
+
+    // 3. ensureOpenDyneNotesIfNeeded 以拓扑标记为判据，不依赖本地缓存，生成成功后走统一 contentEdited
+    const auto ensureBlock = functionBlock(
+        readSource("Source/Standalone/UI/PianoRollComponent.cpp"),
+        "void PianoRollComponent::ensureOpenDyneNotesIfNeeded");
+    expect(contains(ensureBlock, "snap->noteTopologyInitialized"),
+           "OpenDyne note seeding gates on snap->noteTopologyInitialized");
+    expect(!contains(ensureBlock, "cachedNotes_.empty()"),
+           "OpenDyne note seeding never gates on cachedNotes_.empty()");
+    expect(contains(ensureBlock, "generateNotesOnlyByContentKey")
+               && contains(ensureBlock, "listener.contentEdited()"),
+           "Successful note seeding notifies through the shared contentEdited listener");
+
+    // 4. ProjectPersistence：写 property、hasProperty 读取、旧工程默认 !m.notes.empty()
+    const auto persistence = readSource("Source/Utils/ProjectPersistence.cpp");
+    expect(contains(persistence, "setProperty(\"noteTopologyInitialized\", mat.noteTopologyInitialized ? 1 : 0"),
+           "ProjectPersistence writes noteTopologyInitialized as a content property");
+    expect(contains(persistence, "tree.hasProperty(\"noteTopologyInitialized\")")
+               && contains(persistence, ": !m.notes.empty();"),
+           "ProjectPersistence reads via hasProperty and defaults legacy projects to !m.notes.empty()");
+
+    // 5. ProjectSession：capture 复制 notes 与拓扑标记，applyNotes 后恢复持久值
+    const auto projectSession = readSource("Source/Utils/ProjectSession.cpp");
+    expect(contains(projectSession, "entry.notes = payload.notes;")
+               && contains(projectSession, "entry.noteTopologyInitialized = payload.noteTopologyInitialized;"),
+           "ProjectSession capture copies notes and the topology flag as one unit");
+    // applySnapshot 块内锁定恢复顺序：applyNotes 必须先于拓扑标记恢复执行
+    const auto applySnapshot = functionBlock(
+        projectSession, "Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)");
+    const auto applyNotesPos = applySnapshot.find("clip->applyNotes(contentEntry.notes);");
+    const auto restoreFlagPos = applySnapshot.find(
+        "clip->payload().noteTopologyInitialized = contentEntry.noteTopologyInitialized;");
+    expect(applyNotesPos != std::string::npos && restoreFlagPos != std::string::npos
+               && applyNotesPos < restoreFlagPos,
+           "applySnapshot restores the persisted topology flag only after applyNotes ran");
+
+    // 6. ARA 归档：写入断言 + 恢复端按拓扑标记回填旧归档缺省值
+    const auto documentController = readSource("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto storeObjects = functionBlock(
+        documentController, "bool OpenTuneDocumentController::doStoreObjectsToStream");
+    const auto serializeContent = functionBlock(
+        documentController,
+        "void serializeAudioModificationContent(const AudioModification& mod, juce::XmlElement& el)");
+    const auto restoreContent = functionBlock(
+        documentController, "std::optional<AudioModificationContentState> restoreAudioModificationContent");
+    expect(contains(storeObjects, "output.writeInt(kContentPayloadArchiveMagic)")
+               && contains(storeObjects, "output.writeString(modification->persistentId)")
+               && contains(storeObjects, "serializeAudioModificationContent(*modification, el)")
+               && contains(storeObjects, "output.writeString(el.toString())"),
+           "ARA archive write stores magic/version, persistentId and the serialized content payload");
+    expect(contains(serializeContent, "setAttribute(\"noteTopologyInitialized\""),
+           "ARA serialize writes the noteTopologyInitialized attribute directly, not only via the store caller");
+    expect(contains(restoreContent, "getIntAttribute(\"noteTopologyInitialized\"")
+               && contains(restoreContent, "content.editable.notes.empty() ? 0 : 1")
+               && contains(restoreContent, "content.editable.noteTopologyInitialized ="),
+           "ARA restore reads the topology flag and defaults legacy archives to notes.empty() ? 0 : 1");
+
+    // 7. snapshotAudioModification：将 editable/analysis 状态传播进渲染快照
+    const auto snapshotModification = functionBlock(
+        documentController, "OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const");
+    expect(contains(snapshotModification, "snap->notes = content.editable.notes;")
+               && contains(snapshotModification, "snap->pitchCurve = content.analysis.pitchCurve;")
+               && contains(snapshotModification, "snap->timeGrid = content.editable.timeGrid;")
+               && contains(snapshotModification, "snap->noteTopologyInitialized = content.editable.noteTopologyInitialized;"),
+           "snapshotAudioModification propagates editable notes and analysis state into the render snapshot");
+    expect(contains(snapshotModification, "snap->notesRevision = content.editable.notesRevision;")
+               && contains(snapshotModification, "snap->contentRevision = content.contentRevision;")
+               && contains(documentController, "snapshotAudioModification(job.contentKey)"),
+           "snapshotAudioModification propagates the revisions and feeds the chunk render job");
+
+    // 8. CapturePersistence：magic/读写基础断言 + 拓扑标记字段成对（property 写、hasProperty 读、最终回填）
+    const auto capturePersistence = readSource("Source/Plugin/Capture/CapturePersistence.cpp");
+    const auto captureSerialize = functionBlock(
+        capturePersistence, "juce::MemoryBlock CapturePersistence::serialize");
+    const auto captureDeserialize = functionBlock(
+        capturePersistence, "bool CapturePersistence::deserialize");
+    expect(contains(captureSerialize, "stream.writeInt(static_cast<int>(kCaptureMagic))")
+               && contains(captureSerialize, "stream.writeInt(kCaptureArchiveVersion)")
+               && contains(captureSerialize, "writePitchCurve(stream, snap->pitchCurve)")
+               && contains(captureSerialize, "stream.writeDouble(note.startTime)")
+               && contains(captureSerialize, "setProperty(\"noteTopologyInitialized\""),
+           "CapturePersistence write emits magic/version, pitch curve and the topology flag property");
+    expect(contains(captureDeserialize, "magic != kCaptureMagic")
+               && contains(captureDeserialize, "note.startTime = stream.readDouble()")
+               && contains(captureDeserialize, "readPitchCurve(stream, hasPitchDriftScale)")
+               && contains(captureDeserialize, "hasProperty(\"noteTopologyInitialized\")")
+               && contains(captureDeserialize, ": !p.notes.empty();")
+               && contains(captureDeserialize, "editable().noteTopologyInitialized = p.noteTopologyInitialized"),
+           "CapturePersistence read validates magic/version, restores curve and back-fills the topology flag");
+
+    // 9. PluginProcessor 放置操作：merge 以双端 OR 合并拓扑标记，copy 继承源快照状态
+    const auto processorSource = readSource("Source/PluginProcessor.cpp");
+    const auto placementsMerge = functionBlock(
+        processorSource, "std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements");
+    const auto rangeCopy = functionBlock(
+        processorSource, "ContentKey OpenTuneAudioProcessor::copyContentRange");
+    expect(contains(placementsMerge, "mergedPayload.noteTopologyInitialized")
+               && contains(placementsMerge, "leadingSnapshot->noteTopologyInitialized")
+               && contains(placementsMerge, "trailingSnapshot->noteTopologyInitialized")
+               && contains(placementsMerge, "||"),
+           "Placement merge ORs the leading/trailing topology flags into the merged payload");
+    expect(contains(rangeCopy, "payload.noteTopologyInitialized = sourceSnap->noteTopologyInitialized"),
+           "Range copy inherits the topology flag from the source snapshot");
+
+    // 10. 删除键契约：逐选中音符换算清除范围，排序合并后单克隆逐 range 清空，单次原子提交
+    const auto deleteKey = functionBlock(
+        readSource("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp"),
+        "void PianoRollToolHandler::handleDeleteKey");
+    expect(contains(deleteKey, "for (int noteIndex : selectedIndices) {")
+               && contains(deleteKey, "f0tl.rangeForTimes(note.startTime, note.endTime)"),
+           "Delete key converts each selected note to a clear range inside the selection loop");
+    expect(contains(deleteKey, "std::sort(correctionClearRanges.begin(), correctionClearRanges.end(),")
+               && contains(deleteKey, "mergedRanges"),
+           "Delete key sorts and merges the per-note clear ranges");
+    expect(contains(deleteKey, "auto clonedCurve = curve->clone();")
+               && contains(deleteKey, "for (const auto& range : correctionClearRanges) {")
+               && contains(deleteKey, "clonedCurve->clearCorrectionRange(range.startFrame, range.endFrameExclusive)"),
+           "Delete key clears each merged range on one cloned curve");
+    expect(contains(deleteKey, "auto snap = clonedCurve->getSnapshot();")
+               && contains(deleteKey, "auto allSegments = snap->getCorrectionSegments();")
+               && contains(deleteKey, "std::vector<PitchCorrectionSegment> segmentsInRange;")
+               && contains(deleteKey, "for (const auto& seg : allSegments)")
+               && contains(deleteKey, "segmentsInRange.push_back(seg)"),
+           "Delete key rebuilds segments from the cleared clone and re-commits only the in-range ones, "
+           "so unselected middle-note corrections cleared from the clone are re-submitted and preserved");
+    expect(countOccurrences(deleteKey, "commitNotesAndSegments") == 1,
+           "Delete key commits notes and segments exactly once");
+
+    // 11. F0 契约：唯一外层 ownerSnapshot truthy 守卫，模式分流决策位于该块内
+    const auto drawF0Curve = functionBlock(
+        readSource("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp"),
+        "void PianoRollRenderer::drawF0Curve");
+    expect(countOccurrences(drawF0Curve, "ctx.showCorrectedF0 && item.ownerSnapshot") == 1,
+           "drawF0Curve has exactly one outer corrected-F0 guard on the owner snapshot");
+    expect(contains(drawF0Curve, "const bool hasCorrections = item.pitchSnapshot->hasCorrectionLayer()")
+               && contains(drawF0Curve, "const bool shouldDrawCorrected = item.notesPrimaryScheme"),
+           "hasCorrections and shouldDrawCorrected live inside the corrected-F0 block");
+    expect(contains(drawF0Curve, "item.notesPrimaryScheme")
+               && contains(drawF0Curve, "hasCorrections"),
+           "drawF0Curve keeps the OpenDyne/OpenTune corrected-F0 mode semantics");
+}
+
 void testCaptureF0KeyContract()
 {
     const auto captureSession = readSource("Source/Plugin/Capture/CaptureSession.cpp");
@@ -1257,6 +1449,7 @@ void testCaptureF0KeyContract()
 int main()
 {
     testVisibleEntryContract();
+    testArrangementForegroundScaleContract();
     testModeAndOverlayContract();
     testAnalysisQueueContract();
     testPitchOnlyExecutionContract();
@@ -1275,6 +1468,7 @@ int main()
     testPitchModulationDriftContract();
     testAutoSnapRefactorContract();
     testAutoSnapTargetMathContract();
+    testNoteTopologyContract();
     testCaptureF0KeyContract();
 
     if (failures != 0) {

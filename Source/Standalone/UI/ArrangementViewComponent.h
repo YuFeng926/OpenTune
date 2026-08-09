@@ -239,7 +239,7 @@ private:
 
     // Last render background signature — only used to detect BPM/time sig/display mode changes
     BackgroundGenerationSignature lastBgSignature_{};
-    // Last render foreground signature — only used to detect content revision changes
+    // Last render foreground signature — only used to detect content/selection revision changes
     ForegroundGenerationSignature lastFgSignature_{};
 
     juce::ScrollBar horizontalScrollBar_{ false };
@@ -274,6 +274,7 @@ private:
 
     BackgroundGenerationSignature makeBackgroundSignature() const;
     ForegroundGenerationSignature makeForegroundSignature() const;
+    uint64_t computeSelectionRevision() const noexcept;
     void buildCompositeBackground(juce::Graphics& g, juce::Rectangle<int> tileBounds,
                                   TimelineCompositeCache::TileKey key);
     void buildCompositeForeground(juce::Graphics& g, juce::Rectangle<int> tileBounds,

@@ -105,6 +105,7 @@ ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
     payload.timeGrid = snap.timeGrid;
     payload.pitchShiftSettings = snap.pitchShiftSettings;
     payload.notesRevision = snap.notesRevision;
+    payload.noteTopologyInitialized = snap.noteTopologyInitialized;
     payload.pitchRevision = snap.pitchRevision;
     payload.timeGridRevision = snap.timeGridRevision;
     payload.pitchShiftRevision = snap.pitchShiftRevision;
@@ -2469,6 +2470,8 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     mergedPayload.originalF0State = leadingSnapshot->originalF0State;
     mergedPayload.detectedKey = leadingSnapshot->detectedKey;
     mergedPayload.notes = std::move(mergedNotes);
+    mergedPayload.noteTopologyInitialized = leadingSnapshot->noteTopologyInitialized
+        || trailingSnapshot->noteTopologyInitialized;
     mergedPayload.silentGaps = mergeSilentGaps(leadingSnapshot->silentGaps, trailingSnapshot->silentGaps, leadingSamples);
     mergedPayload.pitchShiftSettings = leadingSnapshot->pitchShiftSettings;
 
@@ -5073,6 +5076,7 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
     payload.notes = sliceNotesToLocalRange(sourceSnap->notes,
                                            offsetSeconds,
                                            offsetSeconds + durationSeconds);
+    payload.noteTopologyInitialized = sourceSnap->noteTopologyInitialized;
     payload.silentGaps = sliceSilentGaps(sourceSnap->silentGaps,
                                          offsetSamples,
                                          offsetSamples + durSamples);

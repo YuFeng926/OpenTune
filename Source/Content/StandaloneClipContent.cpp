@@ -36,6 +36,7 @@ std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotCo
     snap->referenceFeatures = content_.referenceFeatures;
     snap->volumeEnvelope = content_.volumeEnvelope;
     snap->notesRevision = content_.notesRevision;
+    snap->noteTopologyInitialized = content_.noteTopologyInitialized;
     snap->pitchRevision = content_.pitchRevision;
     snap->timeGridRevision = content_.timeGridRevision;
     snap->pitchShiftRevision = content_.pitchShiftRevision;
@@ -108,6 +109,7 @@ void StandaloneClipContent::applyNotes(std::vector<Note> notes)
     content_.notes = std::move(notes);
     for (auto& note : content_.notes)
         note.outputGainDb = content_.volumeEnvelope.evalAt(note.startTime);
+    content_.noteTopologyInitialized = true;
     ++content_.notesRevision;
     bumpContentRevision();
 }

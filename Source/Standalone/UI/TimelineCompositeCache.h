@@ -24,9 +24,12 @@ struct BackgroundGenerationSignature {
     bool operator==(const BackgroundGenerationSignature&) const;
 };
 
-// Foreground-plane generation parameters (content revision only affects clips/waveforms)
+// Foreground-plane generation parameters: rasterization depends on horizontal zoom,
+// content revision, and the current placement selection
 struct ForegroundGenerationSignature {
+    double pixelsPerSecond = 0.0;
     uint64_t contentRevision = 0;
+    uint64_t selectionRevision = 0;
 
     bool operator==(const ForegroundGenerationSignature&) const;
 };

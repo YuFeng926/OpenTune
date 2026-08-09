@@ -144,6 +144,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         entry.sourceWindow = payload.sourceWindow;
         entry.detectedKey = payload.detectedKey;
         entry.notes = payload.notes;
+        entry.noteTopologyInitialized = payload.noteTopologyInitialized;
         entry.volumeEnvelope = payload.volumeEnvelope;
 
         // Extract corrected segments from pitch curve
@@ -450,6 +451,9 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 
         // 应用 notes
         clip->applyNotes(contentEntry.notes);
+
+        // 恢复 note topology 状态（applyNotes 按新契约会置 true，空 notes 工程必须恢复持久值）
+        clip->payload().noteTopologyInitialized = contentEntry.noteTopologyInitialized;
 
         // 恢复 envelope（revision 不落盘，恢复端由 owner 推进新 revision）
         clip->applyVolumeEnvelope(contentEntry.volumeEnvelope);

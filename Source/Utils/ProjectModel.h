@@ -95,6 +95,7 @@ struct ProjectContentEntry {
 
     // Notes (user-edited)
     std::vector<Note> notes;
+    bool noteTopologyInitialized{false};
 
     // Volume Envelope（content-local 绝对时间，dB）
     AutomationLane volumeEnvelope;
