@@ -15,7 +15,9 @@ bool BackgroundGenerationSignature::operator==(const BackgroundGenerationSignatu
 }
 
 bool ForegroundGenerationSignature::operator==(const ForegroundGenerationSignature& o) const {
-    return contentRevision == o.contentRevision;
+    return pixelsPerSecond == o.pixelsPerSecond
+        && contentRevision == o.contentRevision
+        && selectionRevision == o.selectionRevision;
 }
 
 void TimelineCompositeCache::prepare(

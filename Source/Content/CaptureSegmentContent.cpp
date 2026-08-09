@@ -32,6 +32,7 @@ std::shared_ptr<const EditableContentSnapshot> CaptureSegmentContent::snapshotCo
     snap->audioSampleRate = editable_.audioSampleRate;
     snap->audioRevision = editable_.audioRevision;
     snap->notesRevision = editable_.notesRevision;
+    snap->noteTopologyInitialized = editable_.noteTopologyInitialized;
     snap->pitchRevision = editable_.pitchRevision;
     snap->timeGridRevision = editable_.timeGridRevision;
     snap->pitchShiftRevision = editable_.pitchShiftRevision;
@@ -113,6 +114,7 @@ void CaptureSegmentContent::applyNotes(std::vector<Note> notes)
     editable_.notes = std::move(notes);
     for (auto& note : editable_.notes)
         note.outputGainDb = editable_.volumeEnvelope.evalAt(note.startTime);
+    editable_.noteTopologyInitialized = true;
     ++editable_.notesRevision;
     ++editable_.contentRevision;
 }

@@ -102,6 +102,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     editable->setAttribute("timeGridRevision", juce::String(static_cast<juce::int64>(mod.content->editable.timeGridRevision)));
     editable->setAttribute("pitchShiftRevision", juce::String(static_cast<juce::int64>(mod.content->editable.pitchShiftRevision)));
     editable->setAttribute("contentRevision", juce::String(static_cast<juce::int64>(mod.content->editable.contentRevision)));
+    editable->setAttribute("noteTopologyInitialized", mod.content->editable.noteTopologyInitialized ? 1 : 0);
 
     for (const auto& note : mod.content->editable.notes)
     {
@@ -378,6 +379,10 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             note.isVoiced = n->getIntAttribute("isVoiced") != 0;
             content.editable.notes.push_back(note);
         }
+
+        // 旧归档无该字段时，以是否有音符为准，避免覆盖已有音符
+        content.editable.noteTopologyInitialized =
+            editable->getIntAttribute("noteTopologyInitialized", content.editable.notes.empty() ? 0 : 1) != 0;
 
         if (auto* env = editable->getChildByName("VolumeEnvelope")) {
             std::vector<AutomationPoint> points;
@@ -1867,6 +1872,7 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
     snap->timeGridRevision = content.editable.timeGridRevision;
     snap->contentRevision = content.contentRevision;
     snap->notesRevision = content.editable.notesRevision;
+    snap->noteTopologyInitialized = content.editable.noteTopologyInitialized;
     return snap;
 }
 

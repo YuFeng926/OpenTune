@@ -22,6 +22,7 @@ struct ARAEditableContentState
     
     // Revisions
     uint64_t notesRevision{0};
+    bool noteTopologyInitialized{false};  // 内容是否经历过至少一次音符拓扑提交（含合法空结果）
     uint64_t pitchRevision{0};
     uint64_t timeGridRevision{0};
     uint64_t pitchShiftRevision{0};

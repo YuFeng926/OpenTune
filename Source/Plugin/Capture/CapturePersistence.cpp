@@ -120,6 +120,8 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
             segNode.setProperty("durationSeconds", seg->durationSeconds, nullptr);
             segNode.setProperty("captureSampleRate", seg->captureSampleRate, nullptr);
             segNode.setProperty("captureChannels", seg->captureChannels, nullptr);
+            segNode.setProperty("noteTopologyInitialized",
+                                seg->content->editable().noteTopologyInitialized ? 1 : 0, nullptr);
             root.appendChild(segNode, nullptr);
             ++persistedCount;
         }
@@ -253,6 +255,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         std::vector<Note> notes;
         AutomationLane volumeEnvelope;
         PitchShiftSettings pitchShiftSettings;
+        bool noteTopologyInitialized{false};
     };
     std::vector<PersistedSegment> persisted;
     persisted.reserve(static_cast<size_t>(root.getNumChildren()));
@@ -315,6 +318,10 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             note.isVoiced = stream.readInt() != 0;
             p.notes.push_back(note);
         }
+        // 旧归档无该 property 时按 notes 是否为空推断，避免覆盖已有音符拓扑事实。
+        p.noteTopologyInitialized = segNode.hasProperty("noteTopologyInitialized")
+            ? static_cast<int>(segNode.getProperty("noteTopologyInitialized", 0)) != 0
+            : !p.notes.empty();
         const int envelopeCount = stream.readInt();
         if (envelopeCount < 0)
             return false;
@@ -382,6 +389,9 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
 
         // Envelope revision 不落盘，恢复端由 owner 推进新 revision。
         seg->content->applyVolumeEnvelope(std::move(p.volumeEnvelope));
+
+        // 持久化的拓扑初始化标志最终覆盖恢复路径中写 notes 但未置位该标志的中间步骤（applyPitchShiftState）。
+        seg->content->editable().noteTopologyInitialized = p.noteTopologyInitialized;
 
         const bool ready = p.originalF0State == OriginalF0State::Ready;
         const auto restoredState = ready ? SegmentState::Edited : p.segmentState;

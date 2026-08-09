@@ -119,6 +119,7 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
     snap->referenceFeatures = content->analysis.referenceFeatures;
     snap->volumeEnvelope = content->editable.volumeEnvelope;
     snap->notesRevision = content->editable.notesRevision;
+    snap->noteTopologyInitialized = content->editable.noteTopologyInitialized;
     snap->pitchRevision = content->editable.pitchRevision;
     snap->timeGridRevision = content->editable.timeGridRevision;
     snap->pitchShiftRevision = content->editable.pitchShiftRevision;
@@ -132,6 +133,7 @@ void AudioModification::applyNotes(const std::vector<Note>& notes)
     content->editable.notes = notes;
     for (auto& note : content->editable.notes)
         note.outputGainDb = content->editable.volumeEnvelope.evalAt(note.startTime);
+    content->editable.noteTopologyInitialized = true;
     ++content->editable.notesRevision;
     ++content->editable.contentRevision;
     ++content->contentRevision;

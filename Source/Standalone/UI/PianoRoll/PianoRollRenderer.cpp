@@ -1674,10 +1674,16 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         && !tempPitchCurves->empty()
         && item.active
         && item.displayNotes != nullptr;
-    if (ctx.showCorrectedF0
-        && item.ownerSnapshot
-        && (item.pitchSnapshot->hasOriginalF0Data()
-            || hasTempPreview)) {
+    // OpenDyne（notesPrimaryScheme）：显示有效F0（修正段+回退OriginalF0）；
+    // OpenTune：仅存在修正层/非恒等pitchShift（或拖拽预览）时才显示CorrectedF0，
+    // 无修正时只显示OriginalF0红色细线。
+    if (ctx.showCorrectedF0 && item.ownerSnapshot) {
+        const bool hasCorrections = item.pitchSnapshot->hasCorrectionLayer()
+            || !item.ownerSnapshot->pitchShiftSettings.isIdentity();
+        const bool shouldDrawCorrected = item.notesPrimaryScheme
+            ? item.pitchSnapshot->hasOriginalF0Data()
+            : hasCorrections;
+        if (shouldDrawCorrected || hasTempPreview) {
         bool previewBufferReady = false;
         std::vector<float> previewBuffer;
         auto correctedProducer = [&](auto&& sink) {
@@ -1858,6 +1864,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.setGradientFill(grad);
                 g.strokePath(runPath, strokeType);
             }
+        }
         }
     }
 }
