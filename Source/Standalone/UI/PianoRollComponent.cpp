@@ -1270,9 +1270,12 @@ void PianoRollComponent::invalidateLiveNotes(const std::vector<Note>& beforeNote
     auto beforeBounds = getNotesBounds(beforeNotes);
     auto afterBounds = getNotesBounds(afterNotes);
     auto dirty = beforeBounds.getUnion(afterBounds);
-    // OpenDyne 拖拽（Mod/Drift 的 F0 预览曲线、VolumeEnvelope 的 blob 缩放）会超出
-    // note 的 1 个半音高度，dirty 必须扩展为全视口高度，否则 content 缓存残留旧曲线。
-    if (isOpenDyne() && (interactionState_.isModDriftDragging || interactionState_.isVolumeDragging)) {
+    // OpenDyne energy blob 的视觉范围可达 2.5 个半音（gainFactor 最大 2.5），
+    // 超出 getNoteBounds 的 1 个半音高度，dirty 必须扩展为全视口高度，
+    // 否则拖拽时旧位置 blob 高能量帧像素残留在 content 缓存中。
+    if (isOpenDyne() && (interactionState_.noteDrag.isDraggingNotes
+                         || interactionState_.isModDriftDragging
+                         || interactionState_.isVolumeDragging)) {
         const auto viewport = getTimelineViewportBounds();
         dirty = dirty.withY(viewport.getY()).withHeight(viewport.getHeight());
     }
@@ -2655,12 +2658,9 @@ void PianoRollComponent::resized() {
 
     auto bounds = getLocalBounds();
 
-    // In OpenDyne mode, the horizontal scrollbar is replaced by the Melodyne-style
-    // overview strip which overlays the bottom of the viewport.
-    if (!isOpenDyne())
-        horizontalScrollBar_.setBounds(bounds.removeFromBottom(UIColors::scrollBarThickness));
-    else
-        horizontalScrollBar_.setBounds({});
+    // Horizontal scrollbar is always replaced by the Melodyne-style overview strip
+    // which overlays the bottom of the viewport.
+    horizontalScrollBar_.setBounds({});
 
     verticalScrollBar_.setBounds(bounds.removeFromRight(UIColors::scrollBarThickness));
 

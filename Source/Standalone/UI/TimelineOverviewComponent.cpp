@@ -141,15 +141,6 @@ TimelineOverviewComponent::TimelineOverviewComponent(
     setMouseCursor(juce::MouseCursor::PointingHandCursor);
 }
 
-void TimelineOverviewComponent::setMelodyneStyle(bool enabled)
-{
-    if (melodyneStyle_ != enabled)
-    {
-        melodyneStyle_ = enabled;
-        repaint();
-    }
-}
-
 void TimelineOverviewComponent::addListener(Listener* listener)
 {
     listeners_.add(listener);
@@ -344,17 +335,9 @@ void TimelineOverviewComponent::paint(juce::Graphics& g)
 
     const float radius = juce::jmin(8.0f, UIColors::currentThemeStyle().controlRadius);
 
-    if (melodyneStyle_)
-    {
-        // Melodyne style: neutral dark background, waveform as full-width background
-        g.setColour(UIColors::darkControlFace.withAlpha(0.90f));
-        g.fillRoundedRectangle(panel, radius);
-    }
-    else
-    {
-        g.setColour(UIColors::darkControlFace.withAlpha(0.80f));
-        g.fillRoundedRectangle(panel, radius);
-    }
+    // Melodyne style: neutral dark background, waveform as full-width background
+    g.setColour(UIColors::darkControlFace.withAlpha(0.90f));
+    g.fillRoundedRectangle(panel, radius);
 
     const auto contentBounds = getContentBounds();
     const auto geometry = calculateGeometry();
@@ -379,24 +362,13 @@ void TimelineOverviewComponent::paint(juce::Graphics& g)
 
         if (!viewBounds.isEmpty())
         {
-            if (melodyneStyle_)
-            {
-                // Melodyne: dark semi-transparent overlay for the visible viewport,
-                // out-of-view regions remain visible but dimmed by the overlay
-                const float vr = juce::jmin(4.0f, radius);
-                g.setColour(juce::Colour(0xff2a2a2a).withAlpha(0.55f));
-                g.fillRoundedRectangle(viewBounds, vr);
-                g.setColour(juce::Colour(0xff888888).withAlpha(0.60f));
-                g.drawRoundedRectangle(viewBounds, vr, 1.0f);
-            }
-            else
-            {
-                // Default style: accent-colored viewport highlight
-                g.setColour(UIColors::accent.withAlpha(0.16f));
-                g.fillRoundedRectangle(viewBounds, 1.5f);
-                g.setColour(UIColors::accent.withAlpha(0.70f));
-                g.drawRoundedRectangle(viewBounds, 1.5f, 1.0f);
-            }
+            // Melodyne: dark semi-transparent overlay for the visible viewport,
+            // out-of-view regions remain visible but dimmed by the overlay
+            const float vr = juce::jmin(4.0f, radius);
+            g.setColour(juce::Colour(0xff2a2a2a).withAlpha(0.55f));
+            g.fillRoundedRectangle(viewBounds, vr);
+            g.setColour(juce::Colour(0xff888888).withAlpha(0.60f));
+            g.drawRoundedRectangle(viewBounds, vr, 1.0f);
         }
     }
 
