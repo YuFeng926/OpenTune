@@ -1038,10 +1038,8 @@ void OpenTuneAudioProcessorEditor::resized()
         const int overviewX = bounds.getX() + 12;
         const int overviewRight = bounds.getX() + timelineViewport.getRight();
         const int overviewBottom = bounds.getY() + timelineViewport.getBottom();
-        // In OpenDyne mode, extend the overview strip to fill the former scrollbar space (20px).
-        const int overviewHeight = pianoRoll_.isOpenDyne()
-            ? OVERVIEW_STRIP_HEIGHT + UIColors::scrollBarThickness
-            : OVERVIEW_STRIP_HEIGHT;
+        // Extend the overview strip to fill the former scrollbar space (20px).
+        const int overviewHeight = OVERVIEW_STRIP_HEIGHT + UIColors::scrollBarThickness;
         overviewStrip_.setBounds(overviewX,
                                  overviewBottom - overviewHeight,
                                  overviewRight - overviewX,
@@ -1387,7 +1385,6 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
         applyThemeToEditor(effectiveTheme);
 
     pianoRoll_.setAudioEditingScheme(sharedPreferences.audioEditingScheme);
-    overviewStrip_.setMelodyneStyle(AudioEditingScheme::usesNotesPrimaryScheme(sharedPreferences.audioEditingScheme));
     pianoRoll_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);

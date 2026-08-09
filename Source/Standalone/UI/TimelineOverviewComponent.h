@@ -25,7 +25,7 @@ public:
     ~TimelineOverviewComponent() override = default;
 
     /// Melodyne-style: waveform is background, viewport rectangle is a dark overlay scrollbar.
-    void setMelodyneStyle(bool enabled);
+    /// Now always enabled - horizontal scrollbar is replaced by overview strip.
 
     void paint(juce::Graphics& g) override;
     void onHeartbeatTick(ContentKey contentKey,
@@ -71,7 +71,6 @@ private:
 
     bool isDragging_ = false;
     double dragPointerOffsetSeconds_ = 0.0;
-    bool melodyneStyle_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TimelineOverviewComponent)
 };

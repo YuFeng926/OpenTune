@@ -1027,18 +1027,18 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(grad);
             g.fillPath(blob);
 
-            // Blob 中心径向高光：唯一亮心向波形边缘平滑衰减，不产生可见中线。
+            // 中心径向高光→纵向线性渐变：横向上由 blob 轮廓裁剪自然全宽
             {
-                const float centerX = (static_cast<float>(x1) + static_cast<float>(x2)) * 0.5f;
                 const float radius = halfH * 1.6f;
                 const auto glowCore = item.displayColour
                     .interpolatedWith(juce::Colours::white, 0.55f)
                     .withAlpha(0.85f);
                 const auto glowMid = glowCore.withAlpha(0.25f);
                 const auto glowFade = glowCore.withAlpha(0.0f);
-                juce::ColourGradient glow(glowCore, centerX, centerY,
-                                          glowFade, centerX + radius, centerY, true);
-                glow.addColour(0.42f, glowMid);
+                // 纵向线性渐变：横向上由 blob 轮廓裁剪自然全宽，替代原径向圆点高光
+                juce::ColourGradient glow(glowCore, 0.0f, centerY - radius,
+                                          glowFade, 0.0f, centerY + radius, false);
+                glow.addColour(0.5f, glowMid);
                 g.setGradientFill(glow);
                 g.fillPath(blob);
             }
