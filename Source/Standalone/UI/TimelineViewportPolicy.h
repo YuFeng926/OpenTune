@@ -46,17 +46,6 @@ struct TimelineViewportRequest
     double pixelsPerSecond = TimelineViewportCamera::kDefaultPixelsPerSecond;
 };
 
-struct TimelineViewportRange
-{
-    double absoluteStartSeconds = 0.0;
-    double absoluteEndSeconds = 0.0;
-    double visibleStartSeconds = 0.0;
-    double visibleDuration = 0.0;     // seconds visible in viewport
-    double currentPlayheadSeconds = 0.0;
-    double scrollPercent = 0.0;       // 0.0-1.0 viewport start position in absolute range
-    double thumbPercent = 0.0;        // 0.0-1.0 scrollbar thumb width relative to total range
-};
-
 class TimelineViewportPolicy
 {
 public:
@@ -67,14 +56,6 @@ public:
 
     // 唯一入口：根据 request 计算 camera（含 Zoom）
     static TimelineViewportCamera resolve(const TimelineViewportRequest& request);
-
-    // 计算 scrollbar 绝对范围（用于 scrollbar thumb 大小和位置）
-    static TimelineViewportRange computeViewportRange(
-        double absoluteStartSeconds,
-        double absoluteEndSeconds,
-        const TimelineViewportCamera& camera,
-        int viewportWidth,
-        double currentPlayheadSeconds);
 
     // 钳制 visibleStartSeconds >= 0
     static double clampStartSeconds(double startSeconds);

@@ -99,44 +99,6 @@ TimelineViewportCamera TimelineViewportPolicy::resolve(const TimelineViewportReq
     return camera;
 }
 
-TimelineViewportRange TimelineViewportPolicy::computeViewportRange(
-    double absoluteStartSeconds,
-    double absoluteEndSeconds,
-    const TimelineViewportCamera& camera,
-    int viewportWidth,
-    double currentPlayheadSeconds)
-{
-    TimelineViewportRange range;
-    range.absoluteStartSeconds = absoluteStartSeconds;
-    range.absoluteEndSeconds = absoluteEndSeconds;
-    range.visibleStartSeconds = camera.visibleStartSeconds;
-    range.currentPlayheadSeconds = currentPlayheadSeconds;
-
-    const double rangeDuration = absoluteEndSeconds - absoluteStartSeconds;
-    const double visDuration = (camera.pixelsPerSecond > 0.0 && viewportWidth > 0)
-        ? viewportWidth / camera.pixelsPerSecond
-        : 0.0;
-    range.visibleDuration = visDuration;
-
-    if (rangeDuration > 0.0)
-    {
-        // scrollPercent: where the viewport start is in the absolute range [0..1]
-        const double rawPercent = (camera.visibleStartSeconds - absoluteStartSeconds) / rangeDuration;
-        range.scrollPercent = std::max(0.0, std::min(1.0, rawPercent));
-
-        // thumbPercent: viewport width relative to total range
-        const double rawThumb = visDuration / rangeDuration;
-        range.thumbPercent = std::max(0.0, std::min(1.0, rawThumb));
-    }
-    else
-    {
-        range.scrollPercent = 0.0;
-        range.thumbPercent = 1.0;
-    }
-
-    return range;
-}
-
 TimelinePlayheadPresentation TimelineViewportPolicy::computePlayheadPresentation(
     int timeDerivedX,
     int viewportCentreX,

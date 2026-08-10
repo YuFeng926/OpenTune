@@ -1714,6 +1714,17 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
 endif()
 
     # ==============================================================================
+    # Blob Gradient Preview — 离屏渲染单音符 blob 验证渐变效果
+    # ==============================================================================
+    add_executable(OpenTuneBlobPreview Tests/BlobGradientPreview.cpp)
+    target_compile_features(OpenTuneBlobPreview PRIVATE cxx_std_17)
+    if(MSVC)
+        target_compile_options(OpenTuneBlobPreview PRIVATE /utf-8 /MP)
+    endif()
+    add_test(NAME OpenTuneBlobPreview COMMAND OpenTuneBlobPreview
+        "${CMAKE_SOURCE_DIR}/.opencode/screenshots")
+
+    # ==============================================================================
     # Installation
     # ==============================================================================
     install(TARGETS OpenTune

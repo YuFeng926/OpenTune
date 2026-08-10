@@ -60,16 +60,12 @@ bool isFullyCorrectedInRange(const PitchCurveSnapshot& curve, int startFrame, in
 
 void PianoRollComponent::initializeUIComponents() {
     setWantsKeyboardFocus(true);
-    addAndMakeVisible(horizontalScrollBar_);
     addAndMakeVisible(verticalScrollBar_);
-    horizontalScrollBar_.addListener(this);
     verticalScrollBar_.addListener(this);
-    horizontalScrollBar_.setAutoHide(false);
     verticalScrollBar_.setAutoHide(false);
 
     // OpenDyne：双击滚动条 = 缩放到全部音符
     fitToAllNotesOnDoubleClick_ = std::make_unique<FitToAllNotesOnDoubleClick>(*this);
-    horizontalScrollBar_.addMouseListener(fitToAllNotesOnDoubleClick_.get(), false);
     verticalScrollBar_.addMouseListener(fitToAllNotesOnDoubleClick_.get(), false);
 
     scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous ? "Cont" : "Page");
@@ -639,7 +635,6 @@ PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState)
 
 PianoRollComponent::~PianoRollComponent() {
     scrollVBlankAttachment_.reset();
-    horizontalScrollBar_.removeListener(this);
     verticalScrollBar_.removeListener(this);
 }
 
@@ -1818,7 +1813,7 @@ void PianoRollComponent::paint(juce::Graphics& g)
     if (zoomPreviewActive_) {
         const double t0 = juce::Time::getMillisecondCounterHiRes();
         const auto fullBounds = getLocalBounds();
-        const ViewState liveView{camera_, pixelsPerSemitone_, verticalScrollOffset_};
+        const ViewportState liveView{camera_, pixelsPerSemitone_, verticalScrollOffset_};
         drawFixedChrome(g, fullBounds);
         drawRuler(g, liveView, fullBounds);
         drawPitchBackground(g, liveView, fullBounds);
@@ -1947,7 +1942,7 @@ void PianoRollComponent::drawFixedChrome(juce::Graphics& g, juce::Rectangle<int>
     UIColors::drawShadow(g, juce::Rectangle<float>(0, 0, static_cast<float>(imgW), static_cast<float>(imgH)));
 }
 
-void PianoRollComponent::drawRuler(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage)
+void PianoRollComponent::drawRuler(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage)
 {
     const int cw = getTimelineContentViewportWidth();
     const juce::Rectangle<int> rulerDomain(pianoKeyWidth_, 0, cw, rulerHeight_);
@@ -1976,7 +1971,7 @@ void PianoRollComponent::drawRuler(juce::Graphics& g, const ViewState& view, juc
     TimelineLayerComposer::drawTimeRuler(g, rp);
 }
 
-void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage)
+void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage)
 {
     const int cw = getTimelineContentViewportWidth();
     const int ch = getTimelineContentViewportHeight();
@@ -2018,7 +2013,7 @@ void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewState&
     }
 }
 
-void PianoRollComponent::drawPianoKeyboard(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage)
+void PianoRollComponent::drawPianoKeyboard(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage)
 {
     if (!shouldShowPianoKeys()) return;
 
@@ -2078,7 +2073,7 @@ void PianoRollComponent::rasterizeStatic(std::optional<juce::Rectangle<int>> dir
     recordRenderProbe(RenderProbePoint::StaticRaster, juce::Time::getMillisecondCounterHiRes() - t0);
 }
 
-void PianoRollComponent::drawContent(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage)
+void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage)
 {
     const int w = getTimelineViewportBounds().getWidth();
     const int cw = getTimelineContentViewportWidth();
@@ -2658,10 +2653,6 @@ void PianoRollComponent::resized() {
 
     auto bounds = getLocalBounds();
 
-    // Horizontal scrollbar is always replaced by the Melodyne-style overview strip
-    // which overlays the bottom of the viewport.
-    horizontalScrollBar_.setBounds({});
-
     verticalScrollBar_.setBounds(bounds.removeFromRight(UIColors::scrollBarThickness));
 
     const float maxVerticalScroll = juce::jmax(0.0f, getTotalHeight() - static_cast<float>(getTimelineContentViewportHeight()));
@@ -2992,12 +2983,9 @@ void PianoRollComponent::requestThemeRedraw() {
 
 juce::Rectangle<int> PianoRollComponent::getTimelineViewportBounds() const
 {
+    // 水平滚动条已由 TimelineOverview 永久替代；垂直滚动条在右侧占位。
     const int viewportWidth = juce::jmax(0, getWidth() - verticalScrollBar_.getWidth());
-    // In OpenDyne mode, no horizontal scrollbar reserves space — the overview strip overlays the bottom.
-    const int viewportHeight = isOpenDyne()
-        ? getHeight()
-        : juce::jmax(0, getHeight() - horizontalScrollBar_.getHeight());
-    return { 0, 0, viewportWidth, viewportHeight };
+    return { 0, 0, viewportWidth, getHeight() };
 }
 
 juce::Rectangle<int> PianoRollComponent::timeAxisRect() const
@@ -3241,6 +3229,31 @@ void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
         repaint();
         overlay_->repaint();
     }
+}
+
+PianoRollComponent::ViewportState PianoRollComponent::viewportState() const noexcept
+{
+    return { camera_, pixelsPerSemitone_, verticalScrollOffset_ };
+}
+
+void PianoRollComponent::restoreViewportState(const ViewportState& state)
+{
+    // 恢复镜头代表用户明确的视图意图：阻止 fitToScreen 自动覆盖，
+    // 并清除该内容的 pending 初始定位，避免异步 F0 Ready 覆盖恢复镜头。
+    userHasManuallyZoomed_ = true;
+    pendingInitialF0ViewRequests_.erase(editedContentKey_);
+
+    camera_ = state.camera;
+    pixelsPerSemitone_ = state.pixelsPerSemitone;
+    const float maxScroll = juce::jmax(0.0f, getTotalHeight() - static_cast<float>(getTimelineContentViewportHeight()));
+    verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, state.verticalScrollOffset);
+
+    staticDirty_ = true;
+    contentDirty_ = true;
+    rasterizeDirtySurfaces();
+    updateScrollBars();
+    repaint();
+    overlay_->repaint();
 }
 
 // ── OpenDyne scheme 切换原子重置（计划 §二.3） ──
@@ -3830,7 +3843,7 @@ void PianoRollComponent::endOpenDyneZoomPan() {
 
 void PianoRollComponent::saveOpenDyneZoomState() {
     if (!savedOpenDyneZoomState_.has_value())
-        savedOpenDyneZoomState_ = ViewState{camera_, pixelsPerSemitone_, verticalScrollOffset_};
+        savedOpenDyneZoomState_ = ViewportState{camera_, pixelsPerSemitone_, verticalScrollOffset_};
 }
 
 void PianoRollComponent::restoreOpenDyneZoomState() {
@@ -4450,14 +4463,17 @@ void PianoRollComponent::fitToScreen() {
         // 不在此分支栅格；最终 commitViewportRequest 通过 applyRasterCamera 一次性完整重建
     }
 
-    // 2. Horizontal Fit:
-    // If has audio: fit audio length
-    // If no audio: fit 16 seconds
+    // 2. Horizontal Fit: 精确覆盖 activeContentProjection 的
+    //    [timelineStartSeconds, timelineEndSeconds]。
+    //    缩放按完整 span 计算且 camera 起点即 timelineStartSeconds，
+    //    不再"起点前移 10% 但缩放仍按原 duration"裁掉尾部。
+    double fitStartSeconds = 0.0;
     double duration = 16.0;
     const auto activeProjection = activeContentProjection();
     const bool hasProjectedClipTimeline = activeProjection.isValid();
     if (hasProjectedClipTimeline) {
-        duration = activeProjection.timelineDurationSeconds;
+        fitStartSeconds = activeProjection.timelineStartSeconds;
+        duration = activeProjection.timelineEndSeconds() - fitStartSeconds;
     }
     if (!hasProjectedClipTimeline && audioBuffer_ && audioBufferSampleRate_ > 0.0) {
         duration = static_cast<double>(audioBuffer_->getNumSamples()) / audioBufferSampleRate_;
@@ -4469,7 +4485,7 @@ void PianoRollComponent::fitToScreen() {
         double pixelsPerSecond = static_cast<double>(viewWidth) / duration;
         const auto req = makeViewportRequest(
             TimelineViewportRequest::Kind::Manual,
-            hasProjectedClipTimeline ? activeProjection.timelineStartSeconds - duration * 0.1 : 0.0,
+            fitStartSeconds,
             0.0,
             pixelsPerSecond);
         commitViewportRequest(req);
@@ -4875,16 +4891,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
 }
 
 void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) {
-    if (scrollBar == &horizontalScrollBar_) {
-        const double pps = camera_.pixelsPerSecond;
-        userScrollHold_ = true;
-        const auto req = makeViewportRequest(
-            TimelineViewportRequest::Kind::Manual,
-            newRangeStart,
-            0.0,
-            pps);
-        commitViewportRequest(req);
-    } else if (scrollBar == &verticalScrollBar_) {
+    if (scrollBar == &verticalScrollBar_) {
         verticalScrollOffset_ = static_cast<float>(newRangeStart);
         staticDirty_ = true;
         contentDirty_ = true;
@@ -4899,32 +4906,7 @@ std::vector<Note> PianoRollComponent::getEditedContentNotesCopy() const {
 }
 
 void PianoRollComponent::updateScrollBars() {
-    int visibleWidth = getTimelineContentViewportWidth();
-    visibleWidth = juce::jmax(1, visibleWidth);
-    const double pps = camera_.pixelsPerSecond;
-
-    const double visibleDuration = visibleWidth / pps;
-    const double scrollbarEndSeconds = std::max(
-        computeContentTimelineEndSeconds() + visibleDuration,
-        camera_.visibleStartSeconds + visibleDuration);
-
-    const auto range = TimelineViewportPolicy::computeViewportRange(
-        0.0,
-        scrollbarEndSeconds,
-        camera_,
-        visibleWidth,
-        pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : playHeadState_.getPresentedPositionSeconds());
-
-    horizontalScrollBar_.setRangeLimits(
-        range.absoluteStartSeconds,
-        range.absoluteEndSeconds,
-        juce::dontSendNotification);
-    horizontalScrollBar_.setCurrentRange(
-        range.visibleStartSeconds,
-        range.visibleDuration,
-        juce::dontSendNotification);
-
-    // Vertical
+    // Vertical（水平滚动条已由 TimelineOverview 永久替代）
     float totalHeight = getTotalHeight();
     int visibleHeight = getTimelineContentViewportHeight();
     visibleHeight = juce::jmax(1, visibleHeight);
@@ -4950,7 +4932,7 @@ ViewMapper PianoRollComponent::makeViewMapper() const noexcept {
     };
 }
 
-ViewMapper PianoRollComponent::makeViewMapperForView(const ViewState& view) const noexcept {
+ViewMapper PianoRollComponent::makeViewMapperForView(const ViewportState& view) const noexcept {
     return ViewMapper{
         view.camera.visibleStartSeconds,
         view.camera.pixelsPerSecond,
@@ -4961,35 +4943,6 @@ ViewMapper PianoRollComponent::makeViewMapperForView(const ViewState& view) cons
         view.verticalScrollOffset,
         maxMidi_
     };
-}
-
-double PianoRollComponent::computeContentTimelineEndSeconds() const noexcept {
-    // Absolute timeline starts from zero.
-    double maxEndSeconds = 0.0;
-
-    for (const auto& placement : timelineContentPlacements_) {
-        if (placement.isValid()) {
-            maxEndSeconds = std::max(maxEndSeconds, placement.projection.timelineEndSeconds());
-        }
-    }
-
-    // 锟?placement 鏃朵娇锟?audio 锟?notes 鐨勫疄锟?duration
-    if (maxEndSeconds <= 0.0) {
-        double duration = 0.0;
-        if (audioBuffer_ && audioBuffer_->getNumSamples() > 0) {
-            duration = static_cast<double>(audioBuffer_->getNumSamples()) / audioBufferSampleRate_;
-        } else {
-            const auto& notes = getCommittedNotes();
-            for (const auto& note : notes) {
-                if (note.endTime > duration)
-                    duration = note.endTime;
-            }
-        }
-        if (duration > 0.0)
-            maxEndSeconds = duration;
-    }
-
-    return maxEndSeconds;
 }
 
 } // namespace OpenTune

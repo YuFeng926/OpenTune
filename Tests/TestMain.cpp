@@ -1446,6 +1446,137 @@ void testCaptureF0KeyContract()
            "Segment F0 success path detects the content key when unset");
 }
 
+void testPianoRollViewportSessionContract()
+{
+    const auto header = readSource("Source/Standalone/UI/PianoRollComponent.h");
+    const auto source = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto pluginEditor = readSource("Source/Plugin/PluginEditor.cpp");
+
+    // 1. 私有 ViewState 收敛为公开 ViewportState：字段不变，零残留，无别名/兼容层
+    expect(contains(header, "struct ViewportState")
+               && contains(header, "TimelineViewportCamera camera{")
+               && contains(header, "float pixelsPerSemitone = 25.0f")
+               && contains(header, "float verticalScrollOffset = 0.0f"),
+           "PianoRoll exposes the public ViewportState with camera/pixelsPerSemitone/verticalScrollOffset");
+    expect(!contains(header, "struct ViewState") && !contains(source, "ViewState"),
+           "Private ViewState has zero residual in PianoRollComponent");
+
+    // 2. 完整状态读取 + 原子恢复公共 API
+    expect(contains(header, "ViewportState viewportState() const noexcept"),
+           "PianoRoll exposes the complete-state read viewportState()");
+    expect(contains(header, "void restoreViewportState(const ViewportState& state)"),
+           "PianoRoll exposes the atomic restoreViewportState()");
+    const auto restore = functionBlock(
+        source, "void PianoRollComponent::restoreViewportState");
+    expect(contains(restore, "camera_ = state.camera")
+               && contains(restore, "pixelsPerSemitone_ = state.pixelsPerSemitone")
+               && contains(restore, "verticalScrollOffset_ ="),
+           "restoreViewportState writes camera, vertical zoom and vertical offset");
+    expect(contains(restore, "staticDirty_ = true") && contains(restore, "contentDirty_ = true")
+               && contains(restore, "rasterizeDirtySurfaces()")
+               && contains(restore, "updateScrollBars()")
+               && contains(restore, "repaint()")
+               && contains(restore, "overlay_->repaint()"),
+           "restoreViewportState synchronizes scrollbars, raster and repaint in one pass");
+    expect(contains(restore, "userHasManuallyZoomed_ = true"),
+           "restoreViewportState marks the restored camera as user intent so fitToScreen never overrides it");
+    expect(contains(restore, "pendingInitialF0ViewRequests_.erase(editedContentKey_)"),
+           "restoreViewportState clears the pending initial F0 view so async F0 Ready never overrides the restored camera");
+
+    // 3. fitToScreen 水平逻辑：精确覆盖 [timelineStartSeconds, timelineEndSeconds]，
+    //    不再"起点前移 10% 但缩放仍按原 duration"裁掉尾部；保留手动缩放守卫
+    const auto fit = functionBlock(source, "void PianoRollComponent::fitToScreen()");
+    expect(contains(fit, "userHasManuallyZoomed_"),
+           "fitToScreen keeps the manual-zoom guard");
+    expect(contains(fit, "fitStartSeconds = activeProjection.timelineStartSeconds")
+               && contains(fit, "activeProjection.timelineEndSeconds() - fitStartSeconds"),
+           "fitToScreen fits the exact timelineStartSeconds..timelineEndSeconds span");
+    expect(!contains(fit, "duration * 0.1"),
+           "fitToScreen no longer offsets the camera start by 10% of the duration");
+
+    // 4. horizontalScrollBar_ 全路径删除（成员/构造监听/布局/scrollBarMoved/updateScrollBars/高度依赖）
+    expect(!contains(header, "horizontalScrollBar_") && !contains(source, "horizontalScrollBar_"),
+           "PianoRoll horizontal scrollbar is fully removed");
+    const auto scrollBarMoved = functionBlock(source, "void PianoRollComponent::scrollBarMoved");
+    expect(contains(scrollBarMoved, "verticalScrollBar_") && !contains(scrollBarMoved, "horizontal"),
+           "scrollBarMoved keeps only the vertical branch");
+    const auto updateBars = functionBlock(source, "void PianoRollComponent::updateScrollBars");
+    expect(contains(updateBars, "verticalScrollBar_") && !contains(updateBars, "computeViewportRange"),
+           "updateScrollBars keeps only the vertical range");
+    const auto viewportBounds = functionBlock(
+        source, "juce::Rectangle<int> PianoRollComponent::getTimelineViewportBounds");
+    expect(!contains(viewportBounds, "horizontalScrollBar_") && contains(viewportBounds, "getHeight()"),
+           "getTimelineViewportBounds uses the full height with no scrollbar layout dependency");
+
+    // 4b. 水平滚动条删除后 TimelineViewportRange/computeViewportRange 零残留，
+    //     保留 resolve/clampStartSeconds/visibleEndSeconds/computePlayheadPresentation
+    const auto policyHeader = readSource("Source/Standalone/UI/TimelineViewportPolicy.h");
+    const auto policySource = readSource("Source/Standalone/UI/TimelineViewportPolicy.cpp");
+    expect(!contains(policyHeader, "TimelineViewportRange") && !contains(policySource, "TimelineViewportRange"),
+           "TimelineViewportRange has zero residual after the horizontal scrollbar removal");
+    expect(!contains(policyHeader, "computeViewportRange") && !contains(policySource, "computeViewportRange"),
+           "computeViewportRange has zero residual after the horizontal scrollbar removal");
+    expect(contains(policyHeader, "static TimelineViewportCamera resolve(")
+               && contains(policyHeader, "clampStartSeconds")
+               && contains(policyHeader, "visibleEndSeconds")
+               && contains(policyHeader, "computePlayheadPresentation"),
+           "TimelineViewportPolicy keeps resolve/clampStartSeconds/visibleEndSeconds/computePlayheadPresentation");
+
+    // 5. Processor 会话状态：身份 = ContentKey + 四时间字段；中立 primitive；无 UI 类型、无锁、无序列化
+    const auto processorHeader = readSource("Source/PluginProcessor.h");
+    const auto processor = readSource("Source/PluginProcessor.cpp");
+    const auto sessionStart = processorHeader.find("struct PianoRollPlacementIdentity");
+    const auto sessionEnd = processorHeader.find("class OpenTuneAudioProcessor", sessionStart);
+    const auto sessionRegion = (sessionStart != std::string::npos && sessionEnd != std::string::npos)
+        ? processorHeader.substr(sessionStart, sessionEnd - sessionStart) : std::string();
+    expect(contains(processorHeader, "#include \"Utils/ContentTimelineProjection.h\""),
+           "PluginProcessor includes ContentTimelineProjection for the session identity");
+    expect(contains(sessionRegion, "ContentKey contentKey")
+               && contains(sessionRegion, "ContentTimelineProjection projection"),
+           "Placement identity is ContentKey + ContentTimelineProjection");
+    expect(contains(sessionRegion, "timelineStartSeconds")
+               && contains(sessionRegion, "timelineDurationSeconds")
+               && contains(sessionRegion, "contentStartSeconds")
+               && contains(sessionRegion, "contentDurationSeconds"),
+           "Placement identity carries the four projection time fields");
+    expect(contains(sessionRegion, "cameraStartSeconds")
+               && contains(sessionRegion, "cameraPixelsPerSecond")
+               && contains(sessionRegion, "pixelsPerSemitone")
+               && contains(sessionRegion, "verticalScrollOffset"),
+           "Session viewport is the four primitive values of ViewportState");
+    expect(!contains(sessionRegion, "PianoRollComponent")
+               && !contains(sessionRegion, "ViewMapper")
+               && !contains(sessionRegion, "TimelineViewportCamera"),
+           "Processor session state includes no PianoRoll UI types");
+    expect(!contains(sessionRegion, "mutex") && !contains(sessionRegion, "atomic"),
+           "Session state is plain message-thread data without locks");
+    expect(contains(processorHeader, "rememberPianoRollViewport")
+               && contains(processorHeader, "readPianoRollViewport")
+               && contains(processorHeader, "lastActivePianoRollPlacement"),
+           "Processor exposes the remember/read/last-active session API");
+    expect(contains(processorHeader, "PluginPianoRollSessionState pianoRollSession_"),
+           "Processor owns one piano roll session state member");
+    expect(!contains(functionBlock(processor, "void OpenTuneAudioProcessor::getStateInformation"),
+                     "pianoRollSession_"),
+           "Session memory is never serialized");
+    const auto remember = functionBlock(
+        processor, "void OpenTuneAudioProcessor::rememberPianoRollViewport");
+    expect(contains(remember, "lastActivePlacement = placement")
+               && contains(remember, "emplace_back(placement, viewport)"),
+           "remember updates last-active and stores one entry per placement");
+    const auto readViewport = functionBlock(
+        processor, "OpenTuneAudioProcessor::readPianoRollViewport");
+    expect(contains(readViewport, "find_if") && contains(readViewport, "std::nullopt"),
+           "read looks the placement up and returns nullopt when absent");
+    const auto lastActive = functionBlock(
+        processor, "OpenTuneAudioProcessor::lastActivePianoRollPlacement");
+    expect(contains(lastActive, "pianoRollSession_.lastActivePlacement"),
+           "last-active returns the stored placement identity");
+
+    expect(!contains(pluginEditor, "requestInitialF0View("),
+           "VST3 viewport is controlled only by session restore or whole-item fit");
+}
+
 int main()
 {
     testVisibleEntryContract();
@@ -1470,6 +1601,7 @@ int main()
     testAutoSnapTargetMathContract();
     testNoteTopologyContract();
     testCaptureF0KeyContract();
+    testPianoRollViewportSessionContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";

@@ -23,10 +23,12 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include "SourceStore.h"
 #include "StandaloneArrangement.h"
 #include "DSP/ResamplingManager.h"
 #include "Utils/PitchCurve.h"
+#include "Utils/ContentTimelineProjection.h"
 #include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
 #include "Inference/F0InferenceService.h"
@@ -276,6 +278,50 @@ struct PlayHeadState
 #if JucePlugin_Enable_ARA
 class OpenTuneDocumentController;
 #endif
+
+// ============================================================================
+// PluginPianoRollSessionState — runtime piano roll camera memory (message thread)
+// ============================================================================
+//
+// Processor-owned, editor-visible session memory: the VST3 editor remembers the
+// full piano roll camera per placement and restores it when the editor closes
+// and reopens within one processor lifetime. Never serialized into host state,
+// never locked — all access happens on the message thread.
+//
+// Placement identity = ContentKey + the four ContentTimelineProjection time
+// fields, so different PlaybackRegions of the same AudioModification never share
+// an absolute-timeline camera. Only neutral primitives live here — this header
+// includes no PianoRoll UI types.
+
+struct PianoRollPlacementIdentity
+{
+    ContentKey contentKey;
+    ContentTimelineProjection projection;
+
+    bool operator==(const PianoRollPlacementIdentity& rhs) const noexcept
+    {
+        return contentKey == rhs.contentKey
+            && projection.timelineStartSeconds == rhs.projection.timelineStartSeconds
+            && projection.timelineDurationSeconds == rhs.projection.timelineDurationSeconds
+            && projection.contentStartSeconds == rhs.projection.contentStartSeconds
+            && projection.contentDurationSeconds == rhs.projection.contentDurationSeconds;
+    }
+};
+
+/** 完整镜头的四个 primitive：横向 camera 2 项 + 纵向缩放 + 纵向偏移。 */
+struct PianoRollViewportPrimitive
+{
+    double cameraStartSeconds = 0.0;
+    double cameraPixelsPerSecond = 100.0;
+    float pixelsPerSemitone = 25.0f;
+    float verticalScrollOffset = 0.0f;
+};
+
+struct PluginPianoRollSessionState
+{
+    std::optional<PianoRollPlacementIdentity> lastActivePlacement;
+    std::vector<std::pair<PianoRollPlacementIdentity, PianoRollViewportPrimitive>> remembered;
+};
 
 struct PluginProcessorTransportTestAccessor;  // forward decl for test access to transport fields
 
@@ -587,6 +633,9 @@ private:
     // processor's processBlock(); ARA/UI read it via getPlayHeadState().
     PlayHeadState playHeadState_;
 
+    // Plugin piano roll camera session memory (message thread only, no locks).
+    PluginPianoRollSessionState pianoRollSession_;
+
     // ---- Transport ramp (audio-thread only writes) ----
     static constexpr double kTransportRampDurationSeconds = 0.2;
     int64_t audioReadCursor_{0};                                 // 下一段尚未生成的设备样本位置
@@ -721,6 +770,18 @@ public:
     bool getPlacementById(int trackId, uint64_t placementId, StandaloneArrangement::Placement& out) const;
     PitchShiftSettings getPitchShiftSettings(ContentKey key) const;
     ReferenceFeatureSet getReferenceFeatures(ContentKey key) const;
+
+    // ========================================================================
+    // Plugin piano roll session memory (message thread only; never serialized)
+    // ========================================================================
+    /** 记住 placement 的最后完整镜头，并更新 last-active 身份。 */
+    void rememberPianoRollViewport(PianoRollPlacementIdentity placement, PianoRollViewportPrimitive viewport);
+
+    /** 读取 placement 记住的镜头；无记录返回 nullopt。 */
+    std::optional<PianoRollViewportPrimitive> readPianoRollViewport(const PianoRollPlacementIdentity& placement) const;
+
+    /** 最后活动的 placement 身份；无记录返回 nullopt。 */
+    std::optional<PianoRollPlacementIdentity> lastActivePianoRollPlacement() const noexcept;
 
     // ⚡️ vocal-time-stretch §3.6 — TimeGrid accessors per content
     bool ensureTimeToolAnchorSeed(ContentKey key);
