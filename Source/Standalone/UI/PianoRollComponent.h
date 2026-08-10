@@ -81,6 +81,14 @@ private:
 class PianoRollComponent : public juce::Component,
                            public juce::ScrollBar::Listener {
 public:
+    /** 钢琴卷帘完整镜头状态：横向 camera + 纵向缩放 + 纵向偏移。 */
+    struct ViewportState
+    {
+        TimelineViewportCamera camera{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
+        float pixelsPerSemitone = 25.0f;
+        float verticalScrollOffset = 0.0f;
+    };
+
     void visibilityChanged() override;
     static constexpr int kAudioSampleRate = 44100;
 
@@ -144,6 +152,13 @@ public:
     int timelinePolicyViewportWidth() const noexcept { return getTimelineContentViewportWidth(); }
     TimelineViewportCamera timelineCamera() const noexcept { return camera_; }
     void activateTimelineCamera(TimelineViewportCamera camera);
+
+    /** 读取当前完整镜头状态（横向 camera + 纵向缩放 + 纵向偏移）。 */
+    ViewportState viewportState() const noexcept;
+
+    /** 原子恢复完整镜头状态：横向 camera、纵向缩放、纵向偏移、
+     *  scrollbar range、raster 与 repaint 一次性同步。 */
+    void restoreViewportState(const ViewportState& state);
     void setCurrentTool(ToolId tool);
     void setExperimentalFeaturesEnabled(bool enabled);
     ToolId getCurrentTool() const { return currentTool_; }
@@ -275,14 +290,9 @@ private:
     friend class PianoRollOverlayComponent;
 
     // ── 保留表面状态快照 ──────────────────────────────────────
-    struct ViewState {
-        TimelineViewportCamera camera{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
-        float pixelsPerSemitone = 25.0f;
-        float verticalScrollOffset = 0.0f;
-    };
     juce::Image staticSurface_;
     juce::Image contentSurface_;
-    ViewState surfaceView_;
+    ViewportState surfaceView_;
     bool staticDirty_ = true;
     bool contentDirty_ = true;
 
@@ -301,10 +311,10 @@ private:
 
     // ── 按坐标域拆分的唯一绘制函数（raster target 与 preview target 共用） ──
     void drawFixedChrome(juce::Graphics& g, juce::Rectangle<int> damage);
-    void drawRuler(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);
-    void drawPitchBackground(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);
-    void drawPianoKeyboard(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);
-    void drawContent(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);
+    void drawRuler(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
+    void drawPitchBackground(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
+    void drawPianoKeyboard(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
+    void drawContent(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
 
     // ── 性能探针 ──────────────────────────────────────────────
     struct RasterProbe { int count = 0; double totalMs = 0.0; };
@@ -349,7 +359,6 @@ private:
     bool getSelectionAreaFrameRange(int& startFrame, int& endFrameExclusive) const;
     bool getF0SelectionFrameRange(int& startFrame, int& endFrameExclusive) const;
 
-    juce::ScrollBar horizontalScrollBar_{ false };
     juce::ScrollBar verticalScrollBar_{ true };
     SmallButton scrollModeToggleButton_;
     SmallButton timeUnitToggleButton_;
@@ -376,8 +385,7 @@ private:
     int getTimelineContentViewportHeight() const;
 
     ViewMapper makeViewMapper() const noexcept;
-    ViewMapper makeViewMapperForView(const ViewState& view) const noexcept;
-    double computeContentTimelineEndSeconds() const noexcept;
+    ViewMapper makeViewMapperForView(const ViewportState& view) const noexcept;
     juce::Rectangle<int> timeAxisRect() const;
 
     // ── Overlay 绘制委托（由 PianoRollOverlayComponent 调用） ──
@@ -509,7 +517,7 @@ private:
     float openDyneZoomPanAnchorMidi_ = 60.0f;
 
     // OpenDyne: Cmd+Alt+double-click → zoom to note / restore zoom
-    std::optional<ViewState> savedOpenDyneZoomState_;
+    std::optional<ViewportState> savedOpenDyneZoomState_;
     void saveOpenDyneZoomState();
     void restoreOpenDyneZoomState();
     void fitToNote(const Note& note);

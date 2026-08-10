@@ -5129,6 +5129,39 @@ ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
     return newKey;
 }
 
+// ============================================================================
+// Plugin piano roll session memory (message thread only, no locks)
+// ============================================================================
+
+void OpenTuneAudioProcessor::rememberPianoRollViewport(
+    PianoRollPlacementIdentity placement, PianoRollViewportPrimitive viewport)
+{
+    pianoRollSession_.lastActivePlacement = placement;
+    auto& remembered = pianoRollSession_.remembered;
+    const auto it = std::find_if(remembered.begin(), remembered.end(),
+                                 [&placement](const auto& entry) { return entry.first == placement; });
+    if (it != remembered.end())
+        it->second = viewport;
+    else
+        remembered.emplace_back(placement, viewport);
+}
+
+std::optional<PianoRollViewportPrimitive> OpenTuneAudioProcessor::readPianoRollViewport(
+    const PianoRollPlacementIdentity& placement) const
+{
+    const auto& remembered = pianoRollSession_.remembered;
+    const auto it = std::find_if(remembered.begin(), remembered.end(),
+                                 [&placement](const auto& entry) { return entry.first == placement; });
+    if (it == remembered.end())
+        return std::nullopt;
+    return it->second;
+}
+
+std::optional<PianoRollPlacementIdentity> OpenTuneAudioProcessor::lastActivePianoRollPlacement() const noexcept
+{
+    return pianoRollSession_.lastActivePlacement;
+}
+
 } // namespace OpenTune
 
 // This creates new instances of the plugin..

@@ -1016,30 +1016,22 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                    clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
-            // displayColour 派生纵向渐变填充 + 中心径向高光 + 同色高对比描边
-            const auto fillTop = item.displayColour.brighter(0.35f).withAlpha(0.60f);
-            const auto fillMid = item.displayColour.withAlpha(0.52f);
-            const auto fillBottom = item.displayColour.darker(0.40f).withAlpha(0.56f);
-            juce::ColourGradient grad(fillTop, static_cast<float>(x1), centerY - halfH,
-                                      fillBottom, static_cast<float>(x1), centerY + halfH,
-                                      false);
-            grad.addColour(0.45f, fillMid);
-            g.setGradientFill(grad);
-            g.fillPath(blob);
-
-            // 中心径向高光→纵向线性渐变：横向上由 blob 轮廓裁剪自然全宽
+            // 单一纵向渐变覆盖整个 blob 高度：顶部/底部纯色 → 中心极亮，横向上由 blob 轮廓裁剪自然全宽
             {
-                const float radius = halfH * 1.6f;
+                const auto fillTop = item.displayColour.brighter(0.35f).withAlpha(0.60f);
+                const auto fillBottom = item.displayColour.darker(0.40f).withAlpha(0.56f);
                 const auto glowCore = item.displayColour
-                    .interpolatedWith(juce::Colours::white, 0.55f)
-                    .withAlpha(0.85f);
-                const auto glowMid = glowCore.withAlpha(0.25f);
-                const auto glowFade = glowCore.withAlpha(0.0f);
-                // 纵向线性渐变：横向上由 blob 轮廓裁剪自然全宽，替代原径向圆点高光
-                juce::ColourGradient glow(glowCore, 0.0f, centerY - radius,
-                                          glowFade, 0.0f, centerY + radius, false);
-                glow.addColour(0.5f, glowMid);
-                g.setGradientFill(glow);
+                    .interpolatedWith(juce::Colours::white, 0.75f)
+                    .withAlpha(0.95f);
+                const auto glowMid = item.displayColour
+                    .interpolatedWith(juce::Colours::white, 0.35f)
+                    .withAlpha(0.70f);
+                juce::ColourGradient grad(fillTop, 0.0f, centerY - halfH,
+                                          fillBottom, 0.0f, centerY + halfH, false);
+                grad.addColour(0.25f, glowMid);
+                grad.addColour(0.50f, glowCore);
+                grad.addColour(0.75f, glowMid);
+                g.setGradientFill(grad);
                 g.fillPath(blob);
             }
 
@@ -1728,7 +1720,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
         const juce::Colour colour = UIColors::correctedF0;
         static const juce::Colour kLevelHotGold { 0xFFFFC24A };
-        static const juce::Colour kOpenDyneBrightCurve { 0xFFFFC24A }; // 暗轨→亮金
+        static const juce::Colour kOpenDyneBrightCurve { 0xFFFF9C1A }; // 暗轨→深黄橙（原亮金降饱和）
         static const juce::Colour kOpenDyneDarkCurve   { 0xFF196FC4 }; // 亮轨→主题蓝
         const auto blendLevelHotColour = [&](juce::Colour base, float hm) {
             if (!item.notesPrimaryScheme)
@@ -1739,7 +1731,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                              + 0.587f * item.displayColour.getGreen()
                              + 0.114f * item.displayColour.getBlue()) / 255.0f;
             const auto contrastBase = lum < 0.5f
-                ? kOpenDyneBrightCurve : kOpenDyneDarkCurve;
+                ? kOpenDyneDarkCurve : kOpenDyneBrightCurve;
             return contrastBase.interpolatedWith(kLevelHotGold,
                 juce::jlimit(0.0f, 0.42f, hm));
         };
@@ -1863,6 +1855,15 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 }
                 g.setGradientFill(grad);
                 g.strokePath(runPath, strokeType);
+
+                // OpenDyne：极细橘红描边叠加在 corrected F0 上
+                if (item.notesPrimaryScheme) {
+                    static const juce::Colour kOpenDyneAccentStroke { 0xFFE85D2A }; // 橘红
+                    g.setColour(kOpenDyneAccentStroke.withAlpha(0.65f));
+                    g.strokePath(runPath, juce::PathStrokeType(0.55f,
+                                                              juce::PathStrokeType::curved,
+                                                              juce::PathStrokeType::rounded));
+                }
             }
         }
         }

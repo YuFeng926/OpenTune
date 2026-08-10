@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include "Content/ContentKey.h"
@@ -37,6 +38,7 @@
 #include "UI/OpenTuneTooltipWindow.h"
 #include "UI/AuroraLookAndFeel.h"
 #include "UI/UIColors.h"
+#include "UI/TimelineOverviewComponent.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
 
@@ -46,6 +48,7 @@ class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
 #if JucePlugin_Enable_ARA
                                      public juce::AudioProcessorEditorARAExtension,
 #endif
+                                     public TimelineOverviewComponent::Listener,
                                      public ParameterPanel::Listener,
                                      public MenuBarComponent::Listener,
                                      public TransportBarComponent::Listener,
@@ -111,6 +114,7 @@ private:
     {
         std::vector<TimelineContentPlacement> placements;
         ContentKey activeContentKey;
+        std::optional<PianoRollPlacementIdentity> activePlacementIdentity;
         double timelineViewStartSeconds = 0.0;
         double timelineViewEndSeconds = 0.0;
 
@@ -126,12 +130,15 @@ private:
     };
 
     void timerCallback() override;
+    void overviewNavigateRequested(double visibleStartSeconds,
+                                   double pixelsPerSecond) override;
     void syncSharedAppPreferences();
     void applyThemeToEditor(ThemeId themeId);
     ContentKey resolveCurrentContentKey();
     PianoRollContentSync resolveCurrentContentSync();
     void syncParameterPanelFromSelection();
     void syncContentProjectionToPianoRoll();
+    void rememberPresentedPianoRollViewport();
     void showPreferencesDialog();
     bool handleEditorShortcut(const juce::KeyPress& key);
     void surfaceRegularVst3HostControlledTransport(const char* actionName);
@@ -157,6 +164,7 @@ private:
     TopBarComponent topBar_;
     ParameterPanel parameterPanel_;
     PianoRollComponent pianoRoll_;
+    TimelineOverviewComponent overviewStrip_;
     AutoRenderOverlayComponent autoRenderOverlay_;
     RenderBadgeComponent renderBadge_;
     OpenTuneTooltipWindow tooltipWindow_{ this, 600 };
@@ -173,7 +181,9 @@ private:
     std::vector<ContentKey> rmvpeOverlayTargetContentKeys_;
     // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator (GAME) commits late.
-    ContentKey lastActiveContentKey_;
+    // Tracks last-seen ContentKey for revision baseline only (not session last-active).
+    ContentKey lastRevisionObservedContentKey_;
+    std::optional<PianoRollPlacementIdentity> presentedPlacementIdentity_;
     std::map<ContentKey, OriginalF0State> lastObservedOriginalF0States_;
     // Read 读取音频时捕获的 OpenDyne 一次性音符生成意图（F0 Ready 后消费）
     std::map<ContentKey, NoteGeneratorParams> pendingNoteGenerationOnReady_;
@@ -184,6 +194,7 @@ private:
 
     static constexpr int TOP_BAR_HEIGHT = 96;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;
+    static constexpr int OVERVIEW_STRIP_HEIGHT = 60;
     static constexpr int kHeartbeatHz = 30;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessorEditor)

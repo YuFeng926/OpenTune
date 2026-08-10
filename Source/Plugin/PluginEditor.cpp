@@ -75,7 +75,8 @@ ContentTimelineProjection makePianoRollLocalProjection(
     ContentTimelineProjection projection;
     projection.timelineStartSeconds = region.startInPlaybackTime;
     projection.timelineDurationSeconds = region.durationInPlaybackTime;
-    projection.contentDurationSeconds = region.contentDurationSeconds;
+    projection.contentStartSeconds = region.startInModificationTime;
+    projection.contentDurationSeconds = region.durationInModificationTime;
     return projection;
 }
 #endif
@@ -98,6 +99,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , menuBar_(processor, MenuBarComponent::Profile::Plugin)
     , topBar_(menuBar_, transportBar_)
     , pianoRoll_(processor.getPlayHeadState())
+    , overviewStrip_(pianoRoll_.getWaveformMipmapCache())
 {
     setResizable(true, true);
     // 最小宽度 855 = TransportBar 固定内容 711 + reduced(4,4) 8 + TopBar 边距 136（reduced 12×2 + pad 3×2 + 左右侧栏切换钮各 53）
@@ -171,6 +173,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     addAndMakeVisible(pianoRoll_);
     pianoRoll_.addListener(this);
 
+    overviewStrip_.addListener(this);
+    addAndMakeVisible(overviewStrip_);
+
     addAndMakeVisible(autoRenderOverlay_);
     autoRenderOverlay_.setVisible(false);
     addAndMakeVisible(renderBadge_);
@@ -192,13 +197,35 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    // Save current viewport state before teardown — unconditionally,
+    // because the host removes the editor from the hierarchy before
+    // destruction, making isShowing() false while state objects still exist.
+    rememberPresentedPianoRollViewport();
     setLookAndFeel(nullptr);
     stopTimer();
+    overviewStrip_.removeListener(this);
     LocalizationManager::getInstance().removeListener(this);
     menuBar_.removeListener(this);
     transportBar_.removeListener(this);
     parameterPanel_.removeListener(this);
     pianoRoll_.removeListener(this);
+}
+
+// =========================================================================
+// rememberPresentedPianoRollViewport
+// =========================================================================
+
+void OpenTuneAudioProcessorEditor::rememberPresentedPianoRollViewport()
+{
+    if (!presentedPlacementIdentity_.has_value())
+        return;
+    const auto vs = pianoRoll_.viewportState();
+    PianoRollViewportPrimitive prim;
+    prim.cameraStartSeconds = vs.camera.visibleStartSeconds;
+    prim.cameraPixelsPerSecond = vs.camera.pixelsPerSecond;
+    prim.pixelsPerSemitone = vs.pixelsPerSemitone;
+    prim.verticalScrollOffset = vs.verticalScrollOffset;
+    processorRef_.rememberPianoRollViewport(*presentedPlacementIdentity_, prim);
 }
 
 // =========================================================================
@@ -229,6 +256,19 @@ void OpenTuneAudioProcessorEditor::resized()
 
     // 中央 PianoRoll
     pianoRoll_.setBounds(bounds);
+
+    // Overview strip: overlay at bottom, aligned with PianoRoll's timeline viewport.
+    {
+        const auto timelineViewport = pianoRoll_.getTimelineViewportBounds();
+        const int overviewX = bounds.getX() + 12;
+        const int overviewRight = bounds.getX() + timelineViewport.getRight();
+        const int overviewBottom = bounds.getY() + timelineViewport.getBottom();
+        const int overviewHeight = OVERVIEW_STRIP_HEIGHT + UIColors::scrollBarThickness;
+        overviewStrip_.setBounds(overviewX,
+                                 overviewBottom - overviewHeight,
+                                 overviewRight - overviewX,
+                                 overviewHeight);
+    }
 
     // Overlay 覆盖 PianoRoll 区域
     autoRenderOverlay_.setBounds(pianoRoll_.getBounds());
@@ -305,11 +345,20 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     syncParameterPanelFromSelection();
 
+    // Content projection must run first so heartbeat ticks consume
+    // already-synchronized content and projection this frame.
+    syncContentProjectionToPianoRoll();
+
     if (pianoRoll_.isShowing()) {
         pianoRoll_.onHeartbeatTick();
+        overviewStrip_.onHeartbeatTick(pianoRoll_.editedContentKey(),
+                                       pianoRoll_.activeContentProjection(),
+                                       pianoRoll_.timelineCamera(),
+                                       pianoRoll_.timelinePolicyViewportWidth());
     }
 
-    syncContentProjectionToPianoRoll();
+    // Continuously remember viewport for stable placement restore
+    rememberPresentedPianoRollViewport();
 
     // Revision detection (aligned with Standalone pattern)
     const auto sync = resolveCurrentContentSync();
@@ -325,7 +374,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             && (previous->second == OriginalF0State::Extracting
                 || previous->second == OriginalF0State::NotRequested)
             && currentState == OriginalF0State::Ready) {
-            pianoRoll_.requestInitialF0View(contentKey);
             const auto intentIt = pendingNoteGenerationOnReady_.find(contentKey);
             if (intentIt != pendingNoteGenerationOnReady_.end()) {
                 // 统一调性检测（复用 processor 唯一实现；失败静默）
@@ -349,8 +397,8 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     // Content 切换检测
     bool contentJustSwitched = false;
-    if (activeKey != lastActiveContentKey_) {
-        lastActiveContentKey_ = activeKey;
+    if (activeKey != lastRevisionObservedContentKey_) {
+        lastRevisionObservedContentKey_ = activeKey;
         contentJustSwitched = true;
 
         // 同步到当前 snapshot 的 revision baseline（与 Standalone 对齐）
@@ -557,35 +605,81 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
 #if JucePlugin_Enable_ARA
     if (const auto* dc = processorRef_.getDocumentController()) {
         const auto regions = dc->getPlaybackRegionProjections();
+
+        // Build identity+placement pairs for all valid regions.
+        struct RegionEntry {
+            PianoRollPlacementIdentity identity;
+            TimelineContentPlacement placement;
+        };
+        std::vector<RegionEntry> entries;
         for (const auto& region : regions) {
             if (!region.contentKey.isValid())
                 continue;
-
-            sync.placements.push_back(makePlacement(region.contentKey,
-                                                     makePianoRollLocalProjection(region)));
+            const auto projection = makePianoRollLocalProjection(region);
+            if (!projection.isValid())
+                continue;
+            RegionEntry entry;
+            entry.identity.contentKey = region.contentKey;
+            entry.identity.projection = projection;
+            entry.placement = makePlacement(region.contentKey, projection);
+            entries.push_back(std::move(entry));
         }
 
-        // ViewSelection 优先；否则选 timeline 最早的 content-backed placement
-        if (const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection()) {
-            sync.activeContentKey = focusedRegion->contentKey;
+        if (entries.empty())
+            return sync;
+
+        // Resolve active placement: focused → lastActive → earliest
+        const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection();
+        std::optional<PianoRollPlacementIdentity> activeIdentity;
+
+        if (focusedRegion.has_value() && focusedRegion->contentKey.isValid()) {
+            const auto focusedProj = makePianoRollLocalProjection(*focusedRegion);
+            if (focusedProj.isValid()) {
+                PianoRollPlacementIdentity focusedIdentity{
+                    focusedRegion->contentKey, focusedProj};
+                // Only adopt focused identity if it matches an entry exactly
+                const bool matched = std::any_of(entries.begin(), entries.end(),
+                    [&](const auto& e) { return e.identity == focusedIdentity; });
+                if (matched)
+                    activeIdentity = focusedIdentity;
+            }
         }
 
-        if (!sync.activeContentKey.isValid() && !sync.placements.empty()) {
-            const auto earliest = std::min_element(sync.placements.begin(),
-                                                    sync.placements.end(),
-                                                    [](const auto& a, const auto& b) {
-                                                        return a.projection.timelineStartSeconds < b.projection.timelineStartSeconds;
-                                                    });
-            sync.activeContentKey = earliest->contentKey;
+        // last-active → earliest fallback
+        if (!activeIdentity.has_value()) {
+            activeIdentity = processorRef_.lastActivePianoRollPlacement();
+            if (activeIdentity.has_value()) {
+                // Verify it still exists among current entries
+                const bool found = std::any_of(entries.begin(), entries.end(),
+                    [&](const auto& e) { return e.identity == *activeIdentity; });
+                if (!found)
+                    activeIdentity = std::nullopt;
+            }
         }
 
-        const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
-                                                            sync.placements.end(),
-                                                            [&sync](const auto& placement) {
-                                                                return placement.contentKey == sync.activeContentKey;
-                                                            });
-        if (!activeBelongsToPlacements)
-            sync.activeContentKey = {};
+        if (!activeIdentity.has_value()) {
+            // Fallback: earliest timeline item
+            const auto* earliest = &entries.front();
+            for (const auto& e : entries) {
+                if (e.identity.projection.timelineStartSeconds
+                    < earliest->identity.projection.timelineStartSeconds)
+                    earliest = &e;
+            }
+            activeIdentity = earliest->identity;
+        }
+
+        sync.activePlacementIdentity = activeIdentity;
+        sync.activeContentKey = activeIdentity->contentKey;
+
+        // Put active placement at front so findEditedPlacement() resolves correctly.
+        auto activeIt = std::find_if(entries.begin(), entries.end(),
+            [&](const auto& e) { return e.identity == *activeIdentity; });
+        if (activeIt != entries.end()) {
+            sync.placements.push_back(std::move(activeIt->placement));
+            entries.erase(activeIt);
+        }
+        for (auto& e : entries)
+            sync.placements.push_back(std::move(e.placement));
 
         return sync;
     }
@@ -1227,6 +1321,20 @@ void OpenTuneAudioProcessorEditor::escapeKeyPressed()
     // 插件版无工作区/钢琴卷帘视图切换，Esc 无操作——空实现是有意为之。
 }
 
+void OpenTuneAudioProcessorEditor::overviewNavigateRequested(double visibleStartSeconds,
+                                                             double pixelsPerSecond)
+{
+    pianoRoll_.commitViewportRequest({
+        TimelineViewportRequest::Kind::Manual,
+        TimelineViewportRequest::ViewKind::PianoRoll,
+        visibleStartSeconds,
+        0.0,  // Manual 分支不使用 currentVisibleStartSeconds
+        0.0,
+        pianoRoll_.timelinePolicyViewportWidth(),
+        pixelsPerSecond
+    });
+}
+
 void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
 {
     if (!contentCommands_) {
@@ -1240,9 +1348,15 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     }
 
     const auto sync = resolveCurrentContentSync();
+    const bool identityChanged = sync.activePlacementIdentity.has_value() != presentedPlacementIdentity_.has_value()
+        || (sync.activePlacementIdentity.has_value() && !(*sync.activePlacementIdentity == *presentedPlacementIdentity_));
+
+    // Save old placement viewport before switch
+    if (identityChanged)
+        rememberPresentedPianoRollViewport();
 
     if (!sync.hasPlacements()) {
-        // Infinite timeline: no explicit domain needed.
+        presentedPlacementIdentity_.reset();
         pianoRoll_.setTimelineContentPlacements({});
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
@@ -1252,6 +1366,7 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     }
 
     if (!sync.hasActiveContent()) {
+        presentedPlacementIdentity_.reset();
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
                                     nullptr,
@@ -1285,8 +1400,24 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
                                 static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
     pianoRoll_.setTimelineContentPlacements(sync.placements);
 
+    // Viewport restore or fit on placement switch
+    if (identityChanged && sync.activePlacementIdentity.has_value()) {
+        const auto savedViewport = processorRef_.readPianoRollViewport(*sync.activePlacementIdentity);
+        if (savedViewport.has_value()) {
+            pianoRoll_.restoreViewportState({
+                {savedViewport->cameraStartSeconds, savedViewport->cameraPixelsPerSecond},
+                savedViewport->pixelsPerSemitone,
+                savedViewport->verticalScrollOffset
+            });
+        } else {
+            pianoRoll_.resetUserZoomFlag();
+            pianoRoll_.fitToScreen();
+        }
+    }
+
+    presentedPlacementIdentity_ = sync.activePlacementIdentity;
+
     if (syncBuffer == nullptr) {
-        // Waveform missing; notes/time grid/placement/edit state preserved.
         return;
     }
 
