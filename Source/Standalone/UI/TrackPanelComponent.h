@@ -25,22 +25,6 @@ static constexpr int TRACK_PANEL_WIDTH = 120; // 紧凑模式宽度
 static constexpr int MAX_TRACKS = MaxTracks;    // 最大轨道数量
 static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
 
-    // 12种轨道淡彩色（柔和不抢主题，BlueBreeze 主题专用）
-    static constexpr juce::uint32 trackPastelColors[12] = {
-        0x18E8F5FF,  // 淡蓝
-        0x18FFE8F0,  // 淡粉
-        0x18E8FFE8,  // 淡绿
-        0x18FFF5E8,  // 淡橙
-        0x18F0E8FF,  // 淡紫
-        0x18FFFFE8,  // 淡黄
-        0x18E8FFFF,  // 淡青
-        0x18FFE8E8,  // 淡红
-        0x18F5FFE8,  // 淡柠檬
-        0x18E8E8FF,  // 淡靛蓝
-        0x18FFE8FF,  // 淡品红
-        0x18E8FFF5,  // 淡薄荷
-    };
-
     // 环形LED电平表 - 包裹在音量旋钮外圈
     class CircularLevelMeter : public juce::Component, private juce::Timer
     {

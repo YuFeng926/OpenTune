@@ -3219,6 +3219,12 @@ void PianoRollComponent::commitViewportRequest(TimelineViewportRequest req)
     activateTimelineCamera(TimelineViewportPolicy::resolve(req));
 }
 
+void PianoRollComponent::navigateFromOverview(TimelineViewportRequest req)
+{
+    userScrollHold_ = true;
+    commitViewportRequest(req);
+}
+
 void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
 {
     camera_ = camera;
@@ -3238,7 +3244,7 @@ PianoRollComponent::ViewportState PianoRollComponent::viewportState() const noex
 
 void PianoRollComponent::restoreViewportState(const ViewportState& state)
 {
-    // 恢复镜头代表用户明确的视图意图：阻止 fitToScreen 自动覆盖，
+    // 恢复镜头代表用户明确的视图意图：标记手动缩放阻止初始自动定位，
     // 并清除该内容的 pending 初始定位，避免异步 F0 Ready 覆盖恢复镜头。
     userHasManuallyZoomed_ = true;
     pendingInitialF0ViewRequests_.erase(editedContentKey_);

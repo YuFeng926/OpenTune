@@ -33,6 +33,7 @@ public:
         SourceWindow contentWindow;
         uint64_t contentRevision{0};
         uint64_t placementRevision{0};
+        std::optional<juce::Colour> displayColour;
         double startInPlaybackTime{0.0};
         double startInModificationTime{0.0};
         double durationInPlaybackTime{0.0};
@@ -130,6 +131,7 @@ public:
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
 
     void didUpdateMusicalContextProperties(juce::ARAMusicalContext* musicalContext) override;
+    void didUpdateRegionSequenceProperties(juce::ARARegionSequence* regionSequence) override;
     void willBeginEditing(juce::ARADocument* document) override;
     void didEndEditing(juce::ARADocument* document) override;
 
