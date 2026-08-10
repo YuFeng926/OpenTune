@@ -851,6 +851,18 @@ void OpenTuneDocumentController::didUpdateMusicalContextProperties(juce::ARAMusi
     juce::ignoreUnused(musicalContext);
 }
 
+void OpenTuneDocumentController::didUpdateRegionSequenceProperties(juce::ARARegionSequence* regionSequence)
+{
+    // RegionSequence 属性（颜色）变化会改变其所属 PlaybackRegion 的
+    // getEffectiveColor 结果：刷新属于该 sequence 的所有缓存 PlaybackRegion 的
+    // 颜色投影。仅更新模型，不触发音频 renderer 重建。
+    for (auto& region : playbackRegions_)
+    {
+        if (region.playbackRegion->getRegionSequence() == regionSequence)
+            region.updateDisplayColourFrom(region.playbackRegion);
+    }
+}
+
 void OpenTuneDocumentController::willBeginEditing(juce::ARADocument* document)
 {
     juce::ignoreUnused(document);
@@ -1407,6 +1419,7 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
     projection.timestretchReflectingTempo = placement.timestretchReflectingTempo;
     projection.contentBasedFadeAtHead = placement.contentBasedFadeAtHead;
     projection.contentBasedFadeAtTail = placement.contentBasedFadeAtTail;
+    projection.displayColour = placement.displayColour;
 
     const auto* modification = findAudioModification(placement.audioModificationPersistentId);
     if (modification == nullptr || !modification->hasContentState())

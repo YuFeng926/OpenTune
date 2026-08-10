@@ -212,6 +212,74 @@ juce::String renderStatusToString(RenderStatus status)
     return "unknown";
 }
 
+// 轨道随机颜色策略：四组权重 Vivid 40% / Muted 30% / 色盲安全 20% / 受约束任意色相 10%
+// 深色 DAW 完整不透明色，每组内随机取色，与当前色相同时取同组下一色（无重抽循环）
+static juce::Colour pickTrackRandomColor(juce::Colour current)
+{
+    auto& rng = juce::Random::getSystemRandom();
+
+    // Vivid 组 (40%)：高饱和鲜明色，DAW 深色背景上对比强烈
+    static const juce::Colour vivid[] = {
+        juce::Colour(0xFFE8543B), juce::Colour(0xFFE89A2D),
+        juce::Colour(0xFFA8C93C), juce::Colour(0xFF3DC46B),
+        juce::Colour(0xFF35C4C9), juce::Colour(0xFF4E8FE8),
+        juce::Colour(0xFFB06CE8), juce::Colour(0xFFE868A8),
+    };
+
+    // Muted 组 (30%)：降饱和柔色，不抢视觉焦点
+    static const juce::Colour muted[] = {
+        juce::Colour(0xFFD97A70), juce::Colour(0xFFD3AD71),
+        juce::Colour(0xFF9BC48D), juce::Colour(0xFF85A5C2),
+        juce::Colour(0xFFA595B5),
+    };
+
+    // 色盲安全组 (20%)：deuteranopia/protanopia 可区分色
+    static const juce::Colour cbsafe[] = {
+        juce::Colour(0xFFE8A33D), juce::Colour(0xFF66C4F0),
+        juce::Colour(0xFF00C68F), juce::Colour(0xFF3D8FD6),
+        juce::Colour(0xFFE06A3D), juce::Colour(0xFFD080B0),
+    };
+
+    // 从固定数组中取色：随机索引，与当前色完全相同时取下一色
+    const auto pickFrom = [&](const juce::Colour* arr, int n) -> juce::Colour {
+        int i = rng.nextInt(n);
+        if (arr[i] == current)
+            i = (i + 1) % n;
+        return arr[i];
+    };
+
+    // 权重滚轮：[0,40) Vivid / [40,70) Muted / [70,90) CBSafe / [90,100) Arbitrary
+    const int roll = rng.nextInt(100);
+
+    if (roll < 40)
+        return pickFrom(vivid, 8);
+    if (roll < 70)
+        return pickFrom(muted, 5);
+    if (roll < 90)
+        return pickFrom(cbsafe, 6);
+
+    // 受约束任意色相 (10%)：连续均匀 hue [0,1)，S/V 独立随机
+    // S [0.55,0.85) 保对比，V [0.50,0.70) 保深色 DAW 可读
+    // 黄色段 hue≈0.153-0.208（55°-75°）压低 value 避免刺眼
+    constexpr float kYellowLo = 55.0f / 360.0f;  // ≈0.153
+    constexpr float kYellowHi = 75.0f / 360.0f;  // ≈0.208
+    float h = rng.nextFloat();
+    float s = 0.55f + rng.nextFloat() * 0.30f;
+    float v = (h >= kYellowLo && h < kYellowHi)
+              ? 0.45f + rng.nextFloat() * 0.10f   // 黄色段 V [0.45,0.55)
+              : 0.50f + rng.nextFloat() * 0.20f;  // 其余   V [0.50,0.70)
+    auto c = juce::Colour::fromHSV(h, s, v, 1.0f);
+    if (c == current) {
+        h = std::fmod(h + 0.5f, 1.0f);
+        s = 0.55f + rng.nextFloat() * 0.30f;
+        v = (h >= kYellowLo && h < kYellowHi)
+            ? 0.45f + rng.nextFloat() * 0.10f
+            : 0.50f + rng.nextFloat() * 0.20f;
+        c = juce::Colour::fromHSV(h, s, v, 1.0f);
+    }
+    return c;
+}
+
 } // namespace
 
 #if JUCE_DEBUG
@@ -2727,7 +2795,7 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
 void OpenTuneAudioProcessorEditor::overviewNavigateRequested(double visibleStartSeconds,
                                                              double pixelsPerSecond)
 {
-    pianoRoll_.commitViewportRequest({
+    pianoRoll_.navigateFromOverview({
         TimelineViewportRequest::Kind::Manual,
         TimelineViewportRequest::ViewKind::PianoRoll,
         visibleStartSeconds,
@@ -2930,9 +2998,9 @@ void OpenTuneAudioProcessorEditor::trackColorRandomizeRequested(int trackId)
     if (arrangement == nullptr)
         return;
 
-    // Pick a random color from the pastel palette
-    const int colorIndex = juce::Random::getSystemRandom().nextInt(12);
-    const auto newColour = juce::Colour(OpenTune::trackPastelColors[colorIndex]);
+    // 四组随机颜色策略，与当前色相同时取同组下一色
+    const auto currentColour = arrangement->getTrackColour(trackId);
+    const auto newColour = pickTrackRandomColor(currentColour);
 
     arrangement->setTrackColour(trackId, newColour);
     trackPanel_.setTrackColour(trackId, newColour);

@@ -2,6 +2,8 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <optional>
+
 namespace OpenTune {
 
 struct PlaybackRegion
@@ -17,8 +19,10 @@ struct PlaybackRegion
     bool contentBasedFadeAtHead{false};
     bool contentBasedFadeAtTail{false};
     uint64_t placementRevision{0};
+    std::optional<juce::Colour> displayColour;
 
     void updateFrom(juce::ARAPlaybackRegion* region);
+    void updateDisplayColourFrom(juce::ARAPlaybackRegion* region);
     double endInPlaybackTime() const noexcept;
     bool hasValidPlacement() const noexcept;
 };

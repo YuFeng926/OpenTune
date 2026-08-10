@@ -149,6 +149,11 @@ public:
     /** [ARA 重构] 注入域内容所有者（替代 setContentProviders）。统一 ARA/Standalone/Capture 路径。 */
 
     void commitViewportRequest(TimelineViewportRequest req);
+
+    /** 总览条导航入口：设置 userScrollHold_ 后走 commitViewportRequest 单一路径，
+     *  阻止下一帧 heartbeat 播放跟随立即夺回 camera。 */
+    void navigateFromOverview(TimelineViewportRequest req);
+
     int timelinePolicyViewportWidth() const noexcept { return getTimelineContentViewportWidth(); }
     TimelineViewportCamera timelineCamera() const noexcept { return camera_; }
     void activateTimelineCamera(TimelineViewportCamera camera);

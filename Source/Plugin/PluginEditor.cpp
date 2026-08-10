@@ -49,13 +49,13 @@ ContentTimelineProjection makeCaptureSegmentProjection(const Capture::SegmentInf
 }
 
 TimelineContentPlacement makePlacement(ContentKey contentKey,
-                                                const ContentTimelineProjection& projection)
+                                                const ContentTimelineProjection& projection,
+                                                juce::Colour displayColour)
 {
     TimelineContentPlacement placement;
     placement.contentKey = contentKey;
     placement.projection = projection;
-    // displayColour 契约：单 clip 无 track 主题色，用 noteBlock 默认色
-    placement.displayColour = UIColors::noteBlock;
+    placement.displayColour = displayColour;
     return placement;
 }
 
@@ -345,10 +345,8 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     syncParameterPanelFromSelection();
 
-    // Content projection must run first so heartbeat ticks consume
-    // already-synchronized content and projection this frame.
-    syncContentProjectionToPianoRoll();
-
+    // Heartbeat ticks first — match Standalone pattern: overview/camera
+    // state is stable before any content projection runs.
     if (pianoRoll_.isShowing()) {
         pianoRoll_.onHeartbeatTick();
         overviewStrip_.onHeartbeatTick(pianoRoll_.editedContentKey(),
@@ -357,11 +355,15 @@ void OpenTuneAudioProcessorEditor::timerCallback()
                                        pianoRoll_.timelinePolicyViewportWidth());
     }
 
+    // Content projection after heartbeat: publish the previous frame's stable
+    // camera first (heartbeat ticks have settled), then sync this frame's content.
+    // Running before heartbeat would cause a duplicate resolve race.
+    const auto sync = syncContentProjectionToPianoRoll();
+
     // Continuously remember viewport for stable placement restore
     rememberPresentedPianoRollViewport();
 
     // Revision detection (aligned with Standalone pattern)
-    const auto sync = resolveCurrentContentSync();
     const ContentKey activeKey = sync.activeContentKey;
 
     const auto observeOriginalF0State = [this](ContentKey contentKey) {
@@ -621,7 +623,9 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
             RegionEntry entry;
             entry.identity.contentKey = region.contentKey;
             entry.identity.projection = projection;
-            entry.placement = makePlacement(region.contentKey, projection);
+            // 宿主未提供 ARA 标准颜色时采用插件产品默认色
+            entry.placement = makePlacement(region.contentKey, projection,
+                                            region.displayColour.value_or(UIColors::noteBlock));
             entries.push_back(std::move(entry));
         }
 
@@ -689,7 +693,7 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
         double viewEndSeconds = 0.0;
         for (const auto& segment : session->listEditedSegments()) {
             const auto projection = makeCaptureSegmentProjection(segment);
-            sync.placements.push_back(makePlacement(segment.contentKey, projection));
+            sync.placements.push_back(makePlacement(segment.contentKey, projection, UIColors::noteBlock));
             viewEndSeconds = std::max(viewEndSeconds, projection.timelineEndSeconds());
         }
 
@@ -1324,7 +1328,7 @@ void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 void OpenTuneAudioProcessorEditor::overviewNavigateRequested(double visibleStartSeconds,
                                                              double pixelsPerSecond)
 {
-    pianoRoll_.commitViewportRequest({
+    pianoRoll_.navigateFromOverview({
         TimelineViewportRequest::Kind::Manual,
         TimelineViewportRequest::ViewKind::PianoRoll,
         visibleStartSeconds,
@@ -1335,7 +1339,8 @@ void OpenTuneAudioProcessorEditor::overviewNavigateRequested(double visibleStart
     });
 }
 
-void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
+OpenTuneAudioProcessorEditor::PianoRollContentSync
+OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
 {
     if (!contentCommands_) {
         contentCommands_ = processorRef_.getContentCommands();
@@ -1362,7 +1367,7 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
                                     nullptr,
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
-        return;
+        return sync;
     }
 
     if (!sync.hasActiveContent()) {
@@ -1372,7 +1377,7 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
         pianoRoll_.setTimelineContentPlacements(sync.placements);
-        return;
+        return sync;
     }
 
     std::shared_ptr<const juce::AudioBuffer<float>> syncBuffer;
@@ -1417,19 +1422,18 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
 
     presentedPlacementIdentity_ = sync.activePlacementIdentity;
 
-    if (syncBuffer == nullptr) {
-        return;
+    if (syncBuffer != nullptr) {
+        const int rootNote = static_cast<int>(detectedKey.root);
+        const int scaleType = OpenTune::scaleToUiScaleType(detectedKey.scale);
+
+        suppressScaleChangedCallback_ = true;
+        transportBar_.setScale(rootNote, scaleType);
+        suppressScaleChangedCallback_ = false;
+
+        pianoRoll_.setScale(rootNote, scaleType);
     }
 
-    juce::ignoreUnused(sync);
-    const int rootNote = static_cast<int>(detectedKey.root);
-    const int scaleType = OpenTune::scaleToUiScaleType(detectedKey.scale);
-
-    suppressScaleChangedCallback_ = true;
-    transportBar_.setScale(rootNote, scaleType);
-    suppressScaleChangedCallback_ = false;
-
-    pianoRoll_.setScale(rootNote, scaleType);
+    return sync;
 }
 
 } // namespace OpenTune::PluginUI

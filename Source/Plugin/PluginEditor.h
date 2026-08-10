@@ -137,7 +137,7 @@ private:
     ContentKey resolveCurrentContentKey();
     PianoRollContentSync resolveCurrentContentSync();
     void syncParameterPanelFromSelection();
-    void syncContentProjectionToPianoRoll();
+    PianoRollContentSync syncContentProjectionToPianoRoll();
     void rememberPresentedPianoRollViewport();
     void showPreferencesDialog();
     bool handleEditorShortcut(const juce::KeyPress& key);

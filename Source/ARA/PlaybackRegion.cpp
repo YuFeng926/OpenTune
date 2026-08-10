@@ -21,7 +21,20 @@ void PlaybackRegion::updateFrom(juce::ARAPlaybackRegion* region)
     timestretchReflectingTempo = region->isTimeStretchReflectingTempo();
     contentBasedFadeAtHead = region->hasContentBasedFadeAtHead();
     contentBasedFadeAtTail = region->hasContentBasedFadeAtTail();
+    updateDisplayColourFrom(region);
     ++placementRevision;
+}
+
+void PlaybackRegion::updateDisplayColourFrom(juce::ARAPlaybackRegion* region)
+{
+    // ARA 标准有效颜色：getEffectiveColor 回退链仅为 region 自身 color →
+    // RegionSequence color（ARA_Library/PlugIn/ARAPlug.cpp:588-594），无 musical
+    // context 一级。空值表示无颜色。ARAColor 为 0.0f~1.0f 的 RGB float，不透明
+    // 投影为 alpha=1.0f 的 juce::Colour。
+    if (const ARA::ARAColor* color = region->getEffectiveColor())
+        displayColour = juce::Colour::fromFloatRGBA(color->r, color->g, color->b, 1.0f);
+    else
+        displayColour = std::nullopt;
 }
 
 double PlaybackRegion::endInPlaybackTime() const noexcept
