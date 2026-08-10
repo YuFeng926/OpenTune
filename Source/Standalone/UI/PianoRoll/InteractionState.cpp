@@ -159,12 +159,7 @@ void NoteDragState::clear()
     draggedNoteIndex = -1;
     draggedNoteIndices.clear();
     isDraggingNotes = false;
-    manualStartFrame = -1;
-    manualEndFrameExclusive = -1;
-    initialManualTargets.clear();
-    previewStartFrame = -1;
-    previewEndFrameExclusive = -1;
-    previewF0.clear();
+    previewSnapshot.reset();
 }
 
 void NoteResizeState::clear()
@@ -213,7 +208,6 @@ void InteractionState::resetTransient() noexcept
     isModDriftDragging = false;
     modDriftPreviewValue = 0.0f;
     modDriftTool = ToolId::PitchModulation;
-    clearTempPitchCurves();
     isPanning = false;
     dragStartPos = {};
     drawNoteToolPendingDrag = false;

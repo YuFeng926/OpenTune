@@ -47,8 +47,7 @@ private:
         float                      hopSizeTime,
         double                     endTime,
         double                     minNoteDuration,
-        double                     tailExtendDuration,
-        const NoteGeneratorParams& params);
+        double                     tailExtendDuration);
 };
 
 } // namespace OpenTune

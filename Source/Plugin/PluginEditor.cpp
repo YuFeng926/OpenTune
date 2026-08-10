@@ -1362,6 +1362,8 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
 
     if (!sync.hasPlacements()) {
         presentedPlacementIdentity_.reset();
+        // 同一 ContentKey 经空状态重新进入时强制首显
+        lastResolvedScaleContentKey_ = ContentKey{};
         pianoRoll_.setTimelineContentPlacements({});
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
@@ -1372,6 +1374,8 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
 
     if (!sync.hasActiveContent()) {
         presentedPlacementIdentity_.reset();
+        // 同一 ContentKey 经空状态重新进入时强制首显
+        lastResolvedScaleContentKey_ = ContentKey{};
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
                                     nullptr,
@@ -1426,11 +1430,21 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         const int rootNote = static_cast<int>(detectedKey.root);
         const int scaleType = OpenTune::scaleToUiScaleType(detectedKey.scale);
 
-        suppressScaleChangedCallback_ = true;
-        transportBar_.setScale(rootNote, scaleType);
-        suppressScaleChangedCallback_ = false;
+        // 仅当 ContentKey 或 detectedKey 映射出的 root/type 与观察基线不同才回显；
+        // 基线是 content 观察值而非 UI 显示值：手动设置未持久化时不会被回读覆盖。
+        if (sync.activeContentKey != lastResolvedScaleContentKey_
+            || rootNote != lastResolvedScaleRootNote_
+            || scaleType != lastResolvedScaleType_) {
+            suppressScaleChangedCallback_ = true;
+            transportBar_.setScale(rootNote, scaleType);
+            suppressScaleChangedCallback_ = false;
 
-        pianoRoll_.setScale(rootNote, scaleType);
+            pianoRoll_.setScale(rootNote, scaleType);
+
+            lastResolvedScaleContentKey_ = sync.activeContentKey;
+            lastResolvedScaleRootNote_ = rootNote;
+            lastResolvedScaleType_ = scaleType;
+        }
     }
 
     return sync;

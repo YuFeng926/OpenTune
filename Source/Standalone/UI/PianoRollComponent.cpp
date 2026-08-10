@@ -212,17 +212,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.setDrawNoteToolMouseDownPos = [this](juce::Point<int> v) { interactionState_.drawNoteToolMouseDownPos = v; };
     toolCtx.getDragThreshold = [this]() { return dragThreshold_; };
 
-    toolCtx.getNoteDragManualStartFrame = [this]() { return interactionState_.noteDrag.manualStartFrame; };
-    toolCtx.setNoteDragManualStartFrame = [this](int v) { interactionState_.noteDrag.manualStartFrame = v; };
-    toolCtx.getNoteDragManualEndFrameExclusive = [this]() { return interactionState_.noteDrag.manualEndFrameExclusive; };
-    toolCtx.setNoteDragManualEndFrameExclusive = [this](int v) { interactionState_.noteDrag.manualEndFrameExclusive = v; };
-    toolCtx.getNoteDragInitialManualTargets = [this]() -> std::vector<NoteDragManualTarget>& { return interactionState_.noteDrag.initialManualTargets; };
-    toolCtx.getNoteDragPreviewF0 = [this]() -> std::vector<float>& { return interactionState_.noteDrag.previewF0; };
-    toolCtx.getNoteDragPreviewStartFrame = [this]() { return interactionState_.noteDrag.previewStartFrame; };
-    toolCtx.setNoteDragPreviewStartFrame = [this](int v) { interactionState_.noteDrag.previewStartFrame = v; };
-    toolCtx.getNoteDragPreviewEndFrameExclusive = [this]() { return interactionState_.noteDrag.previewEndFrameExclusive; };
-    toolCtx.setNoteDragPreviewEndFrameExclusive = [this](int v) { interactionState_.noteDrag.previewEndFrameExclusive = v; };
-
     toolCtx.invalidateLiveNotes = [this](const std::vector<Note>& before, const std::vector<Note>& after) {
         invalidateLiveNotes(before, after);
     };
@@ -653,6 +642,14 @@ bool PianoRollComponent::applyCorrectionToEntireClip(float retuneSpeed, float vi
     }
 
     auto notes = getCommittedNotes();
+    // 全局参数调节（无选中）语义：应用到整条 clip 的每个音符，
+    // 同步写入音符字段（否则 PitchCurve 渲染时音符级旧值覆盖新全局参数）。
+    for (auto& note : notes) {
+        note.retuneSpeed = retuneSpeed;
+        note.vibratoDepth = vibratoDepth;
+        note.vibratoRate = vibratoRate;
+        note.dirty = true;
+    }
     auto editedCurve = currentCurve_->clone();
     editedCurve->applyCorrectionToRange(notes, 0, f0tl.endFrameExclusive(),
                                         static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
@@ -1222,55 +1219,19 @@ juce::Rectangle<int> PianoRollComponent::getLineAnchorPreviewBounds() const
                      : juce::Rectangle<int>();
 }
 
-juce::Rectangle<int> PianoRollComponent::getNoteDragCurvePreviewBounds() const
-{
-    if (interactionState_.noteDrag.previewStartFrame < 0
-        || interactionState_.noteDrag.previewEndFrameExclusive <= interactionState_.noteDrag.previewStartFrame
-        || interactionState_.noteDrag.previewF0.empty()) {
-        return {};
-    }
-
-    const auto f0tl = currentF0Timeline();
-    if (f0tl.isEmpty()) {
-        return {};
-    }
-    juce::Rectangle<float> bounds;
-    bool hasBounds = false;
-    for (int frame = interactionState_.noteDrag.previewStartFrame;
-         frame < interactionState_.noteDrag.previewEndFrameExclusive;
-         ++frame) {
-        const int relIndex = frame - interactionState_.noteDrag.previewStartFrame;
-        if (relIndex < 0 || relIndex >= static_cast<int>(interactionState_.noteDrag.previewF0.size())) {
-            continue;
-        }
-
-        const float f0 = interactionState_.noteDrag.previewF0[static_cast<std::size_t>(relIndex)];
-        if (f0 <= 0.0f) {
-            continue;
-        }
-
-        const float x = static_cast<float>(sourceTimeToX(f0tl.timeAtFrame(frame)));
-        const float y = makeViewMapper().freqToY(f0);
-        const auto pointBounds = juce::Rectangle<float>(x - 2.0f, y - 2.0f, 4.0f, 4.0f);
-        bounds = hasBounds ? bounds.getUnion(pointBounds) : pointBounds;
-        hasBounds = true;
-    }
-
-    return hasBounds ? bounds.getSmallestIntegerContainer().expanded(4).getIntersection(getTimelineViewportBounds())
-                     : juce::Rectangle<int>();
-}
-
 void PianoRollComponent::invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes)
 {
     auto beforeBounds = getNotesBounds(beforeNotes);
     auto afterBounds = getNotesBounds(afterNotes);
     auto dirty = beforeBounds.getUnion(afterBounds);
-    // OpenDyne energy blob 的视觉范围可达 2.5 个半音（gainFactor 最大 2.5），
-    // 超出 getNoteBounds 的 1 个半音高度，dirty 必须扩展为全视口高度，
-    // 否则拖拽时旧位置 blob 高能量帧像素残留在 content 缓存中。
-    if (isOpenDyne() && (interactionState_.noteDrag.isDraggingNotes
-                         || interactionState_.isModDriftDragging
-                         || interactionState_.isVolumeDragging)) {
+    // 拖拽预览曲线与 OpenDyne energy blob 的视觉范围可能远超 note 高度
+    // （曲线斜率 / gainFactor 最大 2.5 倍），拖拽进行中（含 mouseUp 时刻
+    // previewSnapshot 已 reset 但必须全高抹除上一帧曲线的场景）dirty 必须
+    // 扩展为全视口高度，两种 scheme 共用，否则旧预览曲线像素残留在 content
+    // 缓存中。以拖拽状态驱动，不依赖 previewSnapshot 非空。
+    if (interactionState_.noteDrag.isDraggingNotes
+        || interactionState_.isModDriftDragging
+        || interactionState_.isVolumeDragging) {
         const auto viewport = getTimelineViewportBounds();
         dirty = dirty.withY(viewport.getY()).withHeight(viewport.getHeight());
     }
@@ -1390,8 +1351,8 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     juce::Graphics::ScopedSaveState overlaySave(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
 
-    // note-drag Corrected F0 预览：两种 scheme 共用；HandDraw/LineAnchor 预览仅 OpenTune
-    drawNoteDragCurvePreview(g);
+    // note-drag Corrected F0 预览已收敛为 noteDrag.previewSnapshot（renderer 消费），
+    // HandDraw/LineAnchor 预览仅 OpenTune
     if (!isOpenDyne()) {
         drawHandDrawPreview(g);
         drawLineAnchorPreview(g);
@@ -1674,52 +1635,6 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
         g.setColour(previewColour.withAlpha(0.85f));
         juce::PathStrokeType strokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
         g.strokePath(previewPath, strokeType);
-    }
-}
-
-void PianoRollComponent::drawNoteDragCurvePreview(juce::Graphics& g)
-{
-    if (!showCorrectedF0_
-        || interactionState_.noteDrag.previewStartFrame < 0
-        || interactionState_.noteDrag.previewEndFrameExclusive <= interactionState_.noteDrag.previewStartFrame
-        || interactionState_.noteDrag.previewF0.empty()) {
-        return;
-    }
-
-    const auto f0tl = currentF0Timeline();
-    if (f0tl.isEmpty()) return;
-    juce::Path previewPath;
-    bool pathStarted = false;
-    for (int frame = interactionState_.noteDrag.previewStartFrame;
-         frame < interactionState_.noteDrag.previewEndFrameExclusive;
-         ++frame) {
-        const int relIndex = frame - interactionState_.noteDrag.previewStartFrame;
-        if (relIndex < 0 || relIndex >= static_cast<int>(interactionState_.noteDrag.previewF0.size())) {
-            continue;
-        }
-
-        const float f0 = interactionState_.noteDrag.previewF0[static_cast<std::size_t>(relIndex)];
-        if (f0 <= 0.0f) {
-            pathStarted = false;
-            continue;
-        }
-
-        const float x = static_cast<float>(sourceTimeToX(f0tl.timeAtFrame(frame)));
-        const float y = makeViewMapper().freqToY(f0);
-        if (!pathStarted) {
-            previewPath.startNewSubPath(x, y);
-            pathStarted = true;
-        } else {
-            previewPath.lineTo(x, y);
-        }
-    }
-
-    if (!previewPath.isEmpty()) {
-        g.setColour(UIColors::correctedF0.withAlpha(0.8f));
-        g.strokePath(previewPath,
-                     juce::PathStrokeType(2.0f,
-                                          juce::PathStrokeType::curved,
-                                          juce::PathStrokeType::rounded));
     }
 }
 
@@ -2106,10 +2021,6 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     renderCtx.coords = mapper;
     renderCtx.rasterBounds = clipArea;
 
-    // Modulation/Drift 拖拽临时预览曲线
-    if (toolHandler_)
-        renderer_->setTempPitchCurves(toolHandler_->getTempPitchCurves());
-
     // VolumeEnvelope 拖拽：blob 大小反馈使用预览包络
     renderer_->setVolumePreviewEnvelope(interactionState_.isVolumeDragging
         ? &interactionState_.volumePreviewEnvelope : nullptr);
@@ -2365,6 +2276,19 @@ bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vib
     if (contentSnapshot == nullptr) return false;
 
     auto notes = getEditedContentNotesCopy();
+    // 帧范围参数调节 = 把当前全局参数应用到该范围音符，同步写入音符字段
+    // （否则 PitchCurve 渲染时音符级旧值覆盖新全局参数）。
+    const auto f0tl = currentF0Timeline();
+    const double rangeStartSec = f0tl.timeAtFrame(startFrame);
+    const double rangeEndSec = f0tl.timeAtFrame(endFrameExclusive);
+    for (auto& note : notes) {
+        if (note.endTime > rangeStartSec && note.startTime < rangeEndSec) {
+            note.retuneSpeed = retuneSpeed;
+            note.vibratoDepth = vibratoDepth;
+            note.vibratoRate = vibratoRate;
+            note.dirty = true;
+        }
+    }
     auto editedCurve = currentCurve_->clone();
     editedCurve->applyCorrectionToRange(notes, startFrame, endFrameExclusive,
                                         static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
@@ -2879,7 +2803,9 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     if (contentChanged) {
         editedContentKey_ = contentKey;
-        clearNoteDraft();
+        // 切换编辑目标：清除全部拖拽/绘制瞬态与 note draft（noteDraft 是
+        // interactionState_ 成员，resetTransient 的 noteDraft.clear() 已覆盖）
+        interactionState_.resetTransient();
         pendingUndoDescription_ = {};
         beforeUndoNotes_.clear();
         beforeUndoSegments_.clear();
@@ -3348,6 +3274,14 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         clearedAnchorPreview = true;
     }
 
+    // 在清空任何拖拽预览瞬态之前捕获：TimeTool 分支会 noteDrag.clear()、
+    // clearNoteDraft()，toolHandler_->setTool 也会 cancelActiveMouseGesture；
+    // content surface 上残留的预览曲线必须立即重绘，否则旧 F0 预览曲线永久残留。
+    const bool hadTransientPreview =
+        interactionState_.noteDrag.previewSnapshot != nullptr
+        || interactionState_.isModDriftDragging
+        || interactionState_.isVolumeDragging;
+
     if (toolChanged) {
         if (tool == ToolId::TimeTool) {
             if (pressedPianoKey_ >= 0) {
@@ -3365,12 +3299,6 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
     }
 
     currentTool_ = tool;
-    // 工具切换会 cancelActiveMouseGesture 清空拖拽预览瞬态（tempPitchCurves/volumePreviewEnvelope），
-    // content surface 上残留的预览曲线必须立即重绘，否则旧 F0 预览曲线永久残留。
-    const bool hadTransientPreview = isOpenDyne()
-        && (!interactionState_.tempPitchCurves.empty()
-            || interactionState_.isModDriftDragging
-            || interactionState_.isVolumeDragging);
     if (toolHandler_) {
         toolHandler_->setTool(tool);
     }
@@ -4366,10 +4294,22 @@ std::optional<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildCon
 
     std::shared_ptr<PitchCurve> curve;
     if (item.active) {
-        curve = currentCurve_;
+        // 拖拽预览：active item 直接消费 noteDrag.previewSnapshot（已含 clone 后
+        // 经 applyCorrectionToRange 烘焙的 pitchCurve 与 working notes），
+        // curve 与 displayNotes 均取自该 snapshot，renderer 无需任何覆盖注入。
+        // 非预览：ownerSnapshot 为 committed snapshot，displayNotes 保留
+        // getDisplayedNotes() 以支持 resize/draw 等 live draft。
+        const auto& previewSnap = interactionState_.noteDrag.previewSnapshot;
+        if (previewSnap != nullptr) {
+            item.ownerSnapshot = previewSnap;
+            item.displayNotes = &item.ownerSnapshot->notes;
+        } else {
+            item.ownerSnapshot = readEditedSnapshot();
+            item.displayNotes = &getDisplayedNotes();  // includes live note draft when active
+        }
+        // 唯一 F0 来源：ownerSnapshot 的 pitchCurve（预览 = 烘焙 clone，否则 = committed）
+        curve = item.ownerSnapshot != nullptr ? item.ownerSnapshot->pitchCurve : nullptr;
         item.audioBuffer = audioBuffer_;
-        item.ownerSnapshot = readEditedSnapshot();
-        item.displayNotes = &getDisplayedNotes();  // includes live note draft when active
     } else {
         curve = snap->pitchCurve;
         item.audioBuffer = snap->audioBuffer;
