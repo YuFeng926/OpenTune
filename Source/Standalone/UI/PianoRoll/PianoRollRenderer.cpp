@@ -1016,23 +1016,56 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                    clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
-            // 单一纵向渐变覆盖整个 blob 高度：顶部/底部纯色 → 中心极亮，横向上由 blob 轮廓裁剪自然全宽
+            // 能量自适应纵向渐变：列式渲染，过渡带亮度和宽窄均随局部 energy 缩放
             {
-                const auto fillTop = item.displayColour.brighter(0.35f).withAlpha(0.60f);
-                const auto fillBottom = item.displayColour.darker(0.40f).withAlpha(0.56f);
+                const auto fillTop = item.displayColour.darker(0.22f).withAlpha(0.32f);
+                const auto fillBottom = item.displayColour.darker(0.22f).withAlpha(0.32f);
                 const auto glowCore = item.displayColour
-                    .interpolatedWith(juce::Colours::white, 0.75f)
+                    .interpolatedWith(juce::Colours::white, 0.88f)
                     .withAlpha(0.95f);
-                const auto glowMid = item.displayColour
-                    .interpolatedWith(juce::Colours::white, 0.35f)
-                    .withAlpha(0.70f);
-                juce::ColourGradient grad(fillTop, 0.0f, centerY - halfH,
-                                          fillBottom, 0.0f, centerY + halfH, false);
-                grad.addColour(0.25f, glowMid);
-                grad.addColour(0.50f, glowCore);
-                grad.addColour(0.75f, glowMid);
-                g.setGradientFill(grad);
-                g.fillPath(blob);
+
+                g.saveState();
+                g.reduceClipRegion(blob);
+
+                constexpr float kStep = 2.0f;
+                for (float x = static_cast<float>(x1); x < static_cast<float>(x2); x += kStep)
+                {
+                    const float srcTime = static_cast<float>(note.startTime
+                        + (note.endTime - note.startTime)
+                          * ((x - static_cast<float>(x1))
+                             / static_cast<float>(x2 - x1)));
+                    const int frame = item.f0Timeline.frameAtOrBefore(srcTime);
+                    const float normEnergy = (frame >= 0
+                        && frame < static_cast<int>(energy.size()))
+                        ? juce::jlimit(0.0f, 1.0f,
+                            energy[static_cast<size_t>(frame)] / clipRefMag)
+                        : 0.0f;
+
+                    const auto glowTrans = item.displayColour
+                        .interpolatedWith(juce::Colours::white, 0.35f * normEnergy)
+                        .withAlpha(0.65f + 0.05f * normEnergy);
+
+                    // 过渡带宽窄自适应：normEnergy=0 → 亮带20%（窄），=1 → 亮带60%（宽）
+                    const float bw = 0.20f + 0.40f * normEnergy;
+                    const float tLo = 0.50f - bw * 0.5f;
+                    const float tHi = 0.50f + bw * 0.5f;
+                    const float trLo = tLo * 0.5f;
+                    const float trHi = tHi + (1.0f - tHi) * 0.5f;
+
+                    const float rectH = halfH;
+                    juce::ColourGradient col(fillTop, 0.0f, 0.0f,
+                                             fillBottom, 0.0f, 1.0f, true);
+                    col.addColour(trLo, fillTop);
+                    col.addColour(tLo,  glowTrans);
+                    col.addColour(0.50f, glowCore);
+                    col.addColour(tHi,  glowTrans);
+                    col.addColour(trHi, fillBottom);
+
+                    g.setGradientFill(col);
+                    g.fillRect(x, centerY - rectH, kStep, rectH * 2.0f);
+                }
+
+                g.restoreState();
             }
 
             g.setColour(item.displayColour.brighter(0.45f).withAlpha(0.55f));
@@ -1661,13 +1694,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     }
 
     // Draw effective corrected F0 (thicker).
-    // Modulation/Drift 拖拽期间：tempPitchCurves 覆盖已提交曲线，实时预览。
-    const bool hasTempPreview = tempPitchCurves != nullptr
-        && !tempPitchCurves->empty()
-        && item.active
-        && item.displayNotes != nullptr;
+    // 拖拽预览 item 已携带临时 snapshot（noteDrag.previewSnapshot）：其 pitchCurve
+    // 是 clone + applyCorrectionToRange 的烘焙结果，OpenTune 的 shouldDrawCorrected
+    // 由该临时 curve 的 correction layer 自然成立，无需任何覆盖注入。
     // OpenDyne（notesPrimaryScheme）：显示有效F0（修正段+回退OriginalF0）；
-    // OpenTune：仅存在修正层/非恒等pitchShift（或拖拽预览）时才显示CorrectedF0，
+    // OpenTune：仅存在修正层/非恒等pitchShift 时才显示CorrectedF0，
     // 无修正时只显示OriginalF0红色细线。
     if (ctx.showCorrectedF0 && item.ownerSnapshot) {
         const bool hasCorrections = item.pitchSnapshot->hasCorrectionLayer()
@@ -1675,44 +1706,9 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         const bool shouldDrawCorrected = item.notesPrimaryScheme
             ? item.pitchSnapshot->hasOriginalF0Data()
             : hasCorrections;
-        if (shouldDrawCorrected || hasTempPreview) {
-        bool previewBufferReady = false;
-        std::vector<float> previewBuffer;
+        if (shouldDrawCorrected) {
         auto correctedProducer = [&](auto&& sink) {
-            if (hasTempPreview) {
-                // 合并：先取已提交 effective F0，再用临时预览曲线覆盖拖拽 note 的帧。
-                // buildF0VisualSegments 会多次调用 producer，buffer 只构建一次。
-                if (!previewBufferReady) {
-                    previewBufferReady = true;
-                    previewBuffer.assign(static_cast<size_t>(endFrame - startFrame), 0.0f);
-                    item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame,
-                        [&](int frameIndex, const float* data, int length, float gain) {
-                            if (data == nullptr || length <= 0) return;
-                            const int relStart = frameIndex - startFrame;
-                            if (relStart < 0 || relStart >= static_cast<int>(previewBuffer.size())) return;
-                            const int copyLength = std::min(length, static_cast<int>(previewBuffer.size()) - relStart);
-                            for (int i = 0; i < copyLength; ++i)
-                                previewBuffer[static_cast<size_t>(relStart + i)] = data[i] * gain;
-                        });
-                    for (const auto& entry : *tempPitchCurves) {
-                        const size_t noteIndex = entry.first;
-                        if (noteIndex >= item.displayNotes->size()) continue;
-                        const auto& note = (*item.displayNotes)[noteIndex];
-                        const int noteStart = item.f0Timeline.frameAtOrBefore(note.startTime);
-                        const int noteEnd = item.f0Timeline.exclusiveFrameAt(note.endTime);
-                        const auto& curve = entry.second;
-                        for (int f = juce::jmax(startFrame, noteStart); f < juce::jmin(endFrame, noteEnd); ++f) {
-                            const int local = f - noteStart;
-                            if (local < 0 || local >= static_cast<int>(curve.size())) continue;
-                            // 无条件覆盖：0 值帧 = 无声帧，也覆盖掉已提交旧曲线，避免拖拽时新旧两段曲线叠加
-                            previewBuffer[static_cast<size_t>(f - startFrame)] = curve[static_cast<size_t>(local)];
-                        }
-                    }
-                }
-                sink(startFrame, previewBuffer.data(), static_cast<int>(previewBuffer.size()), 1.0f);
-            } else {
-                item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
-            }
+            item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
         };
 
         const auto visualSegments = buildF0VisualSegments(

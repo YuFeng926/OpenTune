@@ -170,6 +170,11 @@ private:
     OpenTuneTooltipWindow tooltipWindow_{ this, 600 };
 
     bool suppressScaleChangedCallback_ = false;
+    // content detectedKey 的上次观察基线（content→UI 回显专用，与 UI 显示值分离：
+    // 仅由 syncContentProjectionToPianoRoll 写入，手动设置未持久化时不被轮询回读覆盖）
+    ContentKey lastResolvedScaleContentKey_{};
+    int lastResolvedScaleRootNote_ = 0;
+    int lastResolvedScaleType_ = 1;  // 1=Major
     double lastSyncedBpm_ = 120.0;
     int lastSyncedTimeSigNum_ = 4;
     int lastSyncedTimeSigDenom_ = 4;

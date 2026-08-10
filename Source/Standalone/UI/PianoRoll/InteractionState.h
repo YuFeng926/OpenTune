@@ -4,11 +4,11 @@
 #include <vector>
 #include <utility>
 #include <memory>
-#include <unordered_map>
 #include "Utils/Note.h"
 #include "Utils/AutomationLane.h"
 #include "UI/ToolIds.h"
 #include "Utils/TimeGrid.h"   // vocal-time-stretch §8.3 — Time tool
+#include "../../../Content/EditableContentSnapshot.h"   // NoteDragState::previewSnapshot
 
 namespace OpenTune {
 
@@ -56,25 +56,17 @@ struct NoteSelectionState
     bool isAllSelected(int noteCount) const noexcept;
 };
 
-struct NoteDragManualTarget
-{
-    int frame = -1;
-    float f0 = 0.0f;
-};
-
 struct NoteDragState
 {
     int draggedNoteIndex = -1;
     std::vector<int> draggedNoteIndices;
     bool isDraggingNotes = false;
-    
-    int manualStartFrame = -1;
-    int manualEndFrameExclusive = -1;
-    std::vector<NoteDragManualTarget> initialManualTargets;
-    int previewStartFrame = -1;
-    int previewEndFrameExclusive = -1;
-    std::vector<float> previewF0;
-    
+
+    // 拖拽预览：buildNoteBasedCorrectionState 构建的临时 EditableContentSnapshot
+    // （clone 后经 applyCorrectionToRange 烘焙的 pitchCurve + working notes）。
+    // 非拖拽期间为 nullptr，active render item 回退已提交 snapshot。
+    std::shared_ptr<const EditableContentSnapshot> previewSnapshot;
+
     void clear();
 };
 
@@ -220,14 +212,6 @@ public:
     bool isModDriftDragging = false;
     float modDriftPreviewValue = 0.0f;
     ToolId modDriftTool = ToolId::PitchModulation;
-
-    // Modulation/Drift 拖拽期间的临时 pitch curve 快照：
-    // key = noteIndex（displayNotes 下标），value = 帧级 corrected F0（Hz）。
-    // 由 ToolHandler 在拖拽中计算、mouseUp/中断时清空；renderer 在拖拽期间
-    // 用它覆盖已提交 PitchCurve 的 corrected F0 曲线。非拖拽期间为空。
-    std::unordered_map<size_t, std::vector<float>> tempPitchCurves;
-
-    void clearTempPitchCurves() noexcept { tempPitchCurves.clear(); }
 
     bool isPanning = false;
     juce::Point<int> dragStartPos;

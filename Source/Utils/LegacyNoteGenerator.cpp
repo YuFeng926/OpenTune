@@ -134,8 +134,7 @@ void LegacyNoteGenerator::commitNote(
     float                      hopSizeTime,
     double                     endTime,
     double                     minNoteDuration,
-    double                     tailExtendDuration,
-    const NoteGeneratorParams& params)
+    double                     tailExtendDuration)
 {
     if (pitches.empty()) return;
 
@@ -150,10 +149,9 @@ void LegacyNoteGenerator::commitNote(
         if (rep > 0.0f) {
             current.originalPitch = rep;
             current.pitch         = quantisePitch(rep);
-            current.retuneSpeed   = params.retuneSpeed;
-            current.pitchDriftScale = params.pitchDriftScale;
-            current.vibratoDepth  = params.vibratoDepth;
-            current.vibratoRate   = params.vibratoRate;
+            // 不烘焙 retuneSpeed/vibratoDepth/vibratoRate/pitchDriftScale：
+            // 保持 Note 默认值（-1/-1/-1/1.0 = 跟随全局），全局滑块调节才能生效；
+            // 音符级显式参数只由用户编辑（applyNoteParameterToSelectedNotes）写入。
             out.push_back(current);
         }
     }
@@ -237,7 +235,7 @@ std::vector<Note> LegacyNoteGenerator::generate(
                 {
                     commitNote(out, current, pitches, energyBuf,
                                static_cast<float>(hopSecs), frameToTime(i),
-                               minNoteDuration, tailExtendDuration, params);
+                               minNoteDuration, tailExtendDuration);
 
                     current             = Note{};
                     current.startTime   = frameToTime(i);
@@ -259,7 +257,7 @@ std::vector<Note> LegacyNoteGenerator::generate(
                 if (trailingUnvoiced > gapBridgeFrames) {
                     commitNote(out, current, pitches, energyBuf,
                                static_cast<float>(hopSecs), frameToTime(lastVoicedFrame + 1),
-                               minNoteDuration, tailExtendDuration, params);
+                               minNoteDuration, tailExtendDuration);
                     inNote           = false;
                     trailingUnvoiced = 0;
                     lastVoicedFrame  = -1;
@@ -273,7 +271,7 @@ std::vector<Note> LegacyNoteGenerator::generate(
     if (inNote && !pitches.empty() && lastVoicedFrame >= 0) {
         commitNote(out, current, pitches, energyBuf,
                    static_cast<float>(hopSecs), frameToTime(lastVoicedFrame + 1),
-                   minNoteDuration, tailExtendDuration, params);
+                   minNoteDuration, tailExtendDuration);
     }
 
     std::sort(out.begin(), out.end(),

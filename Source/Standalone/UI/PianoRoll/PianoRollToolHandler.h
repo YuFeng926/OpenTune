@@ -157,17 +157,6 @@ public:
         std::function<void(juce::Point<int>)> setDrawNoteToolMouseDownPos;
         std::function<int()> getDragThreshold;
 
-        std::function<int()> getNoteDragManualStartFrame;
-        std::function<void(int)> setNoteDragManualStartFrame;
-        std::function<int()> getNoteDragManualEndFrameExclusive;
-        std::function<void(int)> setNoteDragManualEndFrameExclusive;
-        std::function<std::vector<NoteDragManualTarget>&()> getNoteDragInitialManualTargets;
-        std::function<std::vector<float>&()> getNoteDragPreviewF0;
-        std::function<int()> getNoteDragPreviewStartFrame;
-        std::function<void(int)> setNoteDragPreviewStartFrame;
-        std::function<int()> getNoteDragPreviewEndFrameExclusive;
-        std::function<void(int)> setNoteDragPreviewEndFrameExclusive;
-
         // === 精确 invalidation ===
         // 拖拽/缩放 note 内容变化时调用
         std::function<void(const std::vector<Note>&, const std::vector<Note>&)> invalidateLiveNotes;
@@ -221,14 +210,6 @@ public:
 
     void setTool(ToolId tool);
     void setPitchGridMode(PitchGridMode mode) { pitchGridMode_ = mode; }
-    const std::unordered_map<size_t, std::vector<float>>* getTempPitchCurves() const
-    {
-        if (ctx_.getState) {
-            const auto& s = ctx_.getState();
-            return s.tempPitchCurves.empty() ? nullptr : &s.tempPitchCurves;
-        }
-        return nullptr;
-    }
     void mouseMove(const juce::MouseEvent& e);
     void mouseDown(const juce::MouseEvent& e);
     void mouseDrag(const juce::MouseEvent& e);
@@ -257,6 +238,13 @@ private:
     void beginNotePitchDrag(int clickedNoteIndex, const std::vector<Note>& notes);
     void dragNotePitch(const juce::MouseEvent& e);
     bool endNotePitchDrag(const juce::MouseEvent& e);
+    // 唯一拖拽 editRange：只聚合实际变化的音符（普通 Pitch 比 pitchOffset、
+    // Modulation 比有效 retuneSpeed、Drift 比 pitchDriftScale，阈值 0.001f），
+    // 无变化或范围无效时返回空 F0FrameRange。预览与 mouseUp 提交共用。
+    F0FrameRange noteDragEditRange(const std::vector<Note>& notes) const;
+    // 拖拽预览：经 noteDragEditRange 获取 editRange，
+    // 再经 buildNoteBasedCorrectionState 构建临时 snapshot 写入 noteDrag.previewSnapshot。
+    void updateNoteBasedCorrectionPreview(const std::vector<Note>& notes);
     void handlePitchToolMouseDown(const juce::MouseEvent& e);
     void handlePitchToolDoubleClick(const juce::MouseEvent& e);
     void handlePitchToolMouseUp(const juce::MouseEvent& e);

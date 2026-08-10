@@ -3535,6 +3535,11 @@ OpenTuneAudioProcessorEditor::AutoRefUiState OpenTuneAudioProcessorEditor::evalu
     uiState.presentation.mode = ParameterPanel::AutoButtonPresentation::Mode::StandardAuto;
     uiState.presentation.tooltip = juce::String("Auto tune to nearby notes");
 
+    // OpenDyne 模式下 AUTO 按钮永远走 snap-to-scale，不走 Ref 路径
+    if (AudioEditingScheme::usesNotesPrimaryScheme(appliedAudioEditingScheme_)) {
+        return uiState;
+    }
+
     const int trackId = getStandaloneActiveTrack(processorRef_);
     const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
     const uint64_t targetPlacementId = placementIndex >= 0

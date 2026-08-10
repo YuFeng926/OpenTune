@@ -35,7 +35,6 @@
 #include <algorithm>
 #include <vector>
 #include <map>
-#include <unordered_map>
 #include <set>
 #include <optional>
 #include <utility>
@@ -396,7 +395,6 @@ private:
     // ── Overlay 绘制委托（由 PianoRollOverlayComponent 调用） ──
     void drawPlayheadOverlay(juce::Graphics& g);
     void drawTransientOverlay(juce::Graphics& g);
-    void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
     void drawLineAnchorPreview(juce::Graphics& g);
     void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
@@ -461,7 +459,6 @@ private:
     juce::Rectangle<int> getSelectionBounds() const;
     juce::Rectangle<int> getHandDrawPreviewBounds() const;
     juce::Rectangle<int> getLineAnchorPreviewBounds() const;
-    juce::Rectangle<int> getNoteDragCurvePreviewBounds() const;
     void invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes);
     void invalidateSelectionFeedback();
     void invalidateInteractionPreview(const juce::Rectangle<int>& bounds);
