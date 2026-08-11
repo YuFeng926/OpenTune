@@ -10,9 +10,9 @@ namespace BlueBreeze {
     {
         static const juce::uint32 CanvasTop     = 0xFFF9FCFF;
         static const juce::uint32 CanvasBottom  = 0xFFE4EDF5;
-        static const juce::uint32 PanelTop      = 0xFFF4F8FC;
-        static const juce::uint32 PanelBottom   = 0xFFD7E1EA;
-        static const juce::uint32 PanelInset    = 0xFFA8B8C6;
+        static const juce::uint32 PanelTop      = 0xFFE4EBF0;
+        static const juce::uint32 PanelBottom   = 0xFFC0CCD6;
+        static const juce::uint32 PanelInset    = 0xFF90A0AE;
         static const juce::uint32 SourceLight   = 0xECFFFFFF;
 
         static const juce::uint32 GraphBgDeep   = 0xFF8394A6;
@@ -24,9 +24,9 @@ namespace BlueBreeze {
         static const juce::uint32 FieldFogMid   = 0xFFA1B1BF;
         static const juce::uint32 FieldFogBottom = 0xFF8B9CAD;
         static const juce::uint32 FieldFogRim   = 0xFFE8EEF4;
-        static const juce::uint32 TrayTop       = 0xFFF1F6FB;
-        static const juce::uint32 TrayBottom    = 0xFFD1DCE6;
-        static const juce::uint32 TrayInset     = 0xFFB0BFCC;
+        static const juce::uint32 TrayTop       = 0xFFE2E9F0;
+        static const juce::uint32 TrayBottom    = 0xFFBBC7D2;
+        static const juce::uint32 TrayInset     = 0xFF98A8B6;
         static const juce::uint32 DisplayTop    = 0xFF111D27;
         static const juce::uint32 DisplayMid    = 0xFF182632;
         static const juce::uint32 DisplayBottom = 0xFF080F17;
@@ -37,13 +37,13 @@ namespace BlueBreeze {
 
         // Sidebar / Panels (Pale Fog)
         static const juce::uint32 SidebarBg     = CanvasBottom;
-        static const juce::uint32 PanelBorder   = 0xFFA4B3C0;
+        static const juce::uint32 PanelBorder   = 0xFF90A0AE;
 
         // Controls
-        static const juce::uint32 ControlTop        = 0xFFFFFFFF;
-        static const juce::uint32 ControlBottom     = 0xFFEAF1F7;
-        static const juce::uint32 ControlPressed    = 0xFFDCE5EE;
-        static const juce::uint32 ControlHover      = 0xFFFCFEFF;
+        static const juce::uint32 ControlTop        = 0xFFF2F5F8;
+        static const juce::uint32 ControlBottom     = 0xFFD4DBE2;
+        static const juce::uint32 ControlPressed    = 0xFFC4CDD6;
+        static const juce::uint32 ControlHover      = 0xFFF4F7FA;
         static const juce::uint32 ControlShadow     = 0x44687B8C;
 
         static const juce::uint32 KnobBody          = 0xFF080A0C;

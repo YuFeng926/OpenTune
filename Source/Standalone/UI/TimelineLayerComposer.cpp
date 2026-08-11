@@ -90,9 +90,9 @@ TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& v
         style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
         style.tickStroke = isArrangement ? 1.0f : 0.7f;
     } else if (themeId == ThemeId::BlueBreeze) {
-        style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
-        style.tickColour = UIColors::pianoRollGrid.withAlpha(0.052f);
-        style.separatorColour = UIColors::pianoRollGrid.withAlpha(0.040f);
+        style.labelColour = UIColors::textSecondary.withAlpha(0.80f);
+        style.tickColour = UIColors::pianoRollGrid.withAlpha(0.08f);
+        style.separatorColour = UIColors::pianoRollGrid.withAlpha(0.06f);
         style.tickStroke = 0.7f;
     } else if (themeId == ThemeId::Overdose) {
         style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
@@ -120,7 +120,7 @@ static juce::Colour resolveGridLineColour(ThemeId themeId, bool isMeasure) {
     if (themeId == ThemeId::Overdose)
         return UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.10f : 0.05f);
     if (themeId == ThemeId::DarkBlueGrey)
-        return UIColors::panelBorder.withAlpha(0.12f);
+        return UIColors::textSecondary.withAlpha(0.18f);
     return UIColors::panelBorder.withAlpha(isMeasure ? 0.35f : 0.25f);
 }
 
@@ -363,7 +363,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
         const auto rowLineColour = isAurora
             ? UIColors::pianoRollGrid.withAlpha(0.022f)
             : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                ? UIColors::pianoRollGrid.withAlpha(0.030f) : UIColors::panelBorder.withAlpha(0.15f));
+                ? UIColors::pianoRollGrid.withAlpha(0.030f) : UIColors::panelBorder.withAlpha(0.25f));
         g.setColour(rowLineColour);
         g.drawLine(static_cast<float>(pianoKeyWidth), y, static_cast<float>(w), y,
                    (isAurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.55f : 1.0f);

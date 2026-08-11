@@ -1144,7 +1144,7 @@ void ArrangementViewComponent::buildCompositeBackground(
     const int trackHeight = processor_.getTrackHeight();
 
     // 1. Track lanes
-    if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
+    {
         const int visibleTracks = juce::jmax(1, visibleTrackCount_);
         const int firstTrack = std::max(0, worldTopY / trackHeight);
         const int lastTrack = std::min(visibleTracks,
@@ -1162,8 +1162,11 @@ void ArrangementViewComponent::buildCompositeBackground(
                 : ((trackId % 2 == 0) ? UIColors::pianoRollLane.withAlpha(0.060f) : UIColors::glassSurface.withAlpha(0.022f));
             g.setColour(laneFill);
             g.fillRect(lane);
-            g.setColour((themeId == ThemeId::Aurora ? UIColors::gridLine : UIColors::pianoRollGrid)
-                            .withAlpha(themeId == ThemeId::Aurora ? 0.026f : 0.036f));
+            const auto separatorColour = themeId == ThemeId::DarkBlueGrey
+                ? UIColors::textSecondary.withAlpha(0.10f)
+                : (themeId == ThemeId::Aurora ? UIColors::gridLine : UIColors::pianoRollGrid)
+                    .withAlpha(themeId == ThemeId::Aurora ? 0.026f : 0.036f);
+            g.setColour(separatorColour);
             g.drawHorizontalLine(juce::roundToInt(lane.getBottom()), lane.getX(), lane.getRight());
         }
     }
