@@ -197,7 +197,7 @@ private:
     uint64_t lastPianoRollPitchRevision_{0};
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
 
-    static constexpr int TOP_BAR_HEIGHT = 96;
+    static constexpr int TOP_BAR_HEIGHT = 88;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;
     static constexpr int OVERVIEW_STRIP_HEIGHT = 60;
     static constexpr int kHeartbeatHz = 30;
