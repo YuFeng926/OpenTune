@@ -548,21 +548,11 @@ void testOpenDyneRenderPreviewContract()
 
     expect(!contains(drawWaveform, "audioBuffer"),
            "drawWaveform draws the injected mipmap level without item.audioBuffer");
-    // drawNoteDragCurvePreview 必须无条件调用（两种 scheme 共用），
-    // !isOpenDyne() 仅用于 HandDraw/LineAnchor 预览守卫，不包裹 note-drag F0
-    expect(contains(transientOverlay, "drawNoteDragCurvePreview(g);"),
-           "Note-drag F0 preview is always called");
-    {
-        const auto dragPos = transientOverlay.find("drawNoteDragCurvePreview(g);");
-        const auto dyneGuard = transientOverlay.find("!isOpenDyne()");
-        expect(dragPos != std::string::npos && (dyneGuard == std::string::npos || dragPos < dyneGuard),
-               "Note-drag F0 preview call precedes any !isOpenDyne guard");
-    }
+    // note-drag F0 preview 已收敛为 noteDrag.previewSnapshot（renderer 消费），
+    // 不再在 transientOverlay 中直接绘制
     expect(!contains(transientOverlay, "drawVolumeEnvelopePreview")
                && contains(transientOverlay, "drawScissorsPreview(g)"),
            "OpenDyne transient previews stay scheme-specific; envelope line is gone");
-    expect(!contains(dragPreview, "CorrectedF0Primary"),
-           "Note-drag F0 preview is not restricted to the CorrectedF0Primary scheme");
 }
 
 void testOpenDyneToolSwitchingContract()
@@ -985,12 +975,13 @@ void testPitchModulationDriftContract()
     // Mod/Drift 提交路径：endNotePitchDrag 的 Modulation/Drift 分支先对最终
     // 拖拽采样（dragNotePitch），再走曲线提交（commitNoteBasedCorrection），
     // 不再用 note-only 的 commitNoteDraft；提交后清理 isModDriftDragging 与
-    // tempPitchCurves，采样必须先于曲线提交。
+    // noteDrag，采样必须先于曲线提交。
     const auto endDrag = functionBlock(
         toolHandler, "bool PianoRollToolHandler::endNotePitchDrag");
     const auto modDriftUpStart = endDrag.find(
         "ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift");
-    const auto modDriftUpEnd = endDrag.find("return true;", modDriftUpStart);
+    const auto modDriftUpFirstReturn = endDrag.find("return true;", modDriftUpStart);
+    const auto modDriftUpEnd = endDrag.find("return true;", modDriftUpFirstReturn + 1);
     const auto modDriftUpRegion = (modDriftUpStart != std::string::npos
                                    && modDriftUpEnd != std::string::npos)
         ? endDrag.substr(modDriftUpStart, modDriftUpEnd - modDriftUpStart)
@@ -1010,8 +1001,8 @@ void testPitchModulationDriftContract()
                && finalDragPos < curveCommitPos,
            "Modulation/Drift commit order: final drag sampling precedes the curve commit");
     expect(contains(modDriftUpRegion, "isModDriftDragging = false")
-               && contains(modDriftUpRegion, "clearTempPitchCurves"),
-           "Modulation/Drift mouseUp clears isModDriftDragging and tempPitchCurves");
+               && contains(modDriftUpRegion, "noteDrag.clear()"),
+           "Modulation/Drift mouseUp clears isModDriftDragging and noteDrag");
 }
 
 void testAutoSnapRefactorContract()
@@ -1442,8 +1433,88 @@ void testCaptureF0KeyContract()
 
     expect(!contains(commitF0, "DetectedKey") && !contains(commitF0, "applyDetectedKey"),
            "commitSegmentF0Result applies F0 state without any detected-key side effect");
-    expect(contains(successCommit, "detectContentKeyIfUnset(segContentKey)"),
-           "Segment F0 success path detects the content key when unset");
+    expect(contains(successCommit, "updateContentKeyFromOriginalF0(segContentKey)"),
+           "Segment F0 success path updates the content key from the committed F0");
+}
+
+void testF0KeyDetectionContract()
+{
+    // 1. ChromaKeyDetector 零残留：Source/DSP 文件不存在，CMake 无引用
+    expect(!std::filesystem::exists(sourceRoot / "Source/DSP/ChromaKeyDetector.cpp")
+               && !std::filesystem::exists(sourceRoot / "Source/DSP/ChromaKeyDetector.h"),
+           "ChromaKeyDetector source files are fully removed from Source/DSP");
+    expect(!contains(readSource("CMakeLists.txt"), "ChromaKeyDetector"),
+           "CMakeLists.txt no longer references ChromaKeyDetector");
+
+    // 2. F0KeyDetector 为 F0 轨迹驱动，无 PCM chroma/FFT/Pearson/Temperley 残留
+    const auto f0Detector = readSource("Source/DSP/F0KeyDetector.cpp");
+    expect(!contains(f0Detector, "FFT")
+               && !contains(f0Detector, "pearson")
+               && !contains(f0Detector, "Temperley")
+               && !contains(f0Detector, "juce::dsp"),
+           "F0KeyDetector is F0-driven with no PCM chroma/FFT/Pearson/Temperley machinery");
+
+    // 3. 类型迁移完成：8 个头文件 include Utils/DetectedKey.h，无 ChromaKeyDetector.h
+    const auto migratedHeaders = {
+        "Source/Content/AnalysisState.h",
+        "Source/Content/ContentEditCommands.h",
+        "Source/Content/ContentPayloadState.h",
+        "Source/Content/EditableContentSnapshot.h",
+        "Source/Content/EditableContentState.h",
+        "Source/PluginProcessor.h",
+        "Source/Utils/ProjectModel.h",
+        "Source/Utils/ScaleUiMapping.h",
+    };
+    for (const char* path : migratedHeaders) {
+        const auto header = readSource(path);
+        expect(contains(header, "DetectedKey.h")
+                   && !contains(header, "ChromaKeyDetector.h"),
+               "DetectedKey types migrate to Utils/DetectedKey.h in the header list");
+    }
+
+    // 4. 调用入口收敛：PluginProcessor 唯一 F0 驱动入口，UI 无重复入口，ARA 链走 F0KeyDetector
+    const auto processor = readSource("Source/PluginProcessor.cpp");
+    const auto pluginEditor = readSource("Source/Plugin/PluginEditor.cpp");
+    const auto araArchive = readSource("Source/ARA/OpenTuneDocumentController.cpp");
+    expect(contains(processor, "updateContentKeyFromOriginalF0")
+               && !contains(processor, "detectContentKeyIfUnset"),
+           "F0-driven key update is the only detection entry in PluginProcessor");
+    expect(!contains(pluginEditor, "updateContentKeyFromOriginalF0")
+               && !contains(pluginEditor, "detectContentKeyIfUnset"),
+           "PluginEditor has no duplicate key-detection entry point");
+    expect(contains(araArchive, "F0KeyDetector"),
+           "ARA chain drives detection through F0KeyDetector");
+
+    // 5. Manual guard：updateContentKeyFromOriginalF0 永不覆盖手动调式
+    const auto updateF0 = functionBlock(
+        processor, "void OpenTuneAudioProcessor::updateContentKeyFromOriginalF0");
+    expect(contains(updateF0, "Origin::Manual"),
+           "updateContentKeyFromOriginalF0 never overwrites a manual key");
+
+    // 6. UI 手动构造器写入 Origin::Manual
+    const auto scaleUiMapping = readSource("Source/Utils/ScaleUiMapping.h");
+    expect(contains(functionBlock(scaleUiMapping, "makeDetectedKeyFromUi"), "Origin::Manual"),
+           "makeDetectedKeyFromUi marks UI-set keys as manual");
+
+    // 7. 持久化三路径写入 origin（写法与既有 root/scale/confidence 持久化同构）
+    const auto projectPersistence = readSource("Source/Utils/ProjectPersistence.cpp");
+    const auto capturePersistence = readSource("Source/Plugin/Capture/CapturePersistence.cpp");
+    expect(contains(projectPersistence, "setProperty(\"origin\""),
+           "ProjectPersistence writes the detected-key origin property");
+    expect(contains(functionBlock(capturePersistence,
+                                  "juce::MemoryBlock CapturePersistence::serialize"),
+                    "detectedKey.origin"),
+           "CapturePersistence serialize writes the detected-key origin");
+    expect(contains(araArchive, "setAttribute(\"origin\""),
+           "ARA archive writes the detected-key origin attribute");
+
+    // 8. 相等比较与去重提交包含 origin
+    expect(contains(functionBlock(processor, "bool detectedKeysMatch"), "origin"),
+           "detectedKeysMatch compares the detected-key origin");
+    expect(contains(functionBlock(readSource("Source/Content/CaptureSegmentContent.cpp"),
+                                  "void CaptureSegmentContent::applyDetectedKey"),
+                    "origin"),
+           "applyDetectedKey compares the detected-key origin");
 }
 
 void testPianoRollViewportSessionContract()
@@ -1601,6 +1672,7 @@ int main()
     testAutoSnapTargetMathContract();
     testNoteTopologyContract();
     testCaptureF0KeyContract();
+    testF0KeyDetectionContract();
     testPianoRollViewportSessionContract();
 
     if (failures != 0) {

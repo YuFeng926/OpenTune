@@ -543,8 +543,8 @@ target_sources(OpenTune
         Source/DSP/ResamplingManager.h
         Source/DSP/MelSpectrogram.cpp
         Source/DSP/MelSpectrogram.h
-        Source/DSP/ChromaKeyDetector.cpp
-        Source/DSP/ChromaKeyDetector.h
+        Source/DSP/F0KeyDetector.cpp
+        Source/DSP/F0KeyDetector.h
         Source/DSP/ReferenceAutoAlign.cpp
         Source/DSP/ReferenceAutoAlign.h
         Source/DSP/AutoTunePitchShifter.cpp
@@ -622,6 +622,7 @@ target_sources(OpenTune
         Source/Utils/AppPreferences.h
         Source/Utils/PianoRollVisualPreferences.h
         Source/Utils/PitchUtils.h
+        Source/Utils/DetectedKey.h
         Source/Utils/Note.h
         Source/Utils/WindowsDllSearchPath.cpp
         Source/Utils/OnnxRuntimeDelayLoadHook.cpp
@@ -1327,6 +1328,24 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
     endif()
     add_test(NAME OpenTunePasteTopologyRuntimeTests COMMAND OpenTunePasteTopologyRuntimeTests)
 
+    add_executable(OpenTuneF0KeyDetectorRuntimeTests
+        Tests/F0KeyDetectorRuntimeTests.cpp
+        Source/DSP/F0KeyDetector.cpp
+    )
+    target_compile_features(OpenTuneF0KeyDetectorRuntimeTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneF0KeyDetectorRuntimeTests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    target_link_libraries(OpenTuneF0KeyDetectorRuntimeTests
+        PRIVATE
+            juce::juce_audio_basics
+            juce::juce_data_structures
+            juce::juce_graphics
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneF0KeyDetectorRuntimeTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneF0KeyDetectorRuntimeTests COMMAND OpenTuneF0KeyDetectorRuntimeTests)
+
     # ==============================================================================
     # OpenTuneInferenceProcessIsolationTests — 进程级推理隔离功能合同测试
     # 验证 F0ExtractionService / ReferenceAnalysisService 生命周期合同、
@@ -1495,7 +1514,7 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         # DSP
         Source/DSP/ResamplingManager.cpp
         Source/DSP/MelSpectrogram.cpp
-        Source/DSP/ChromaKeyDetector.cpp
+        Source/DSP/F0KeyDetector.cpp
         Source/DSP/ReferenceAutoAlign.cpp
         Source/DSP/AutoTunePitchShifter.cpp
 
