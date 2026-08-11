@@ -1140,9 +1140,6 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         // 原子替换 content
         targetMod->content = std::move(state);
         targetMod->birthState = AudioModificationBirthState::WaitingForSource;
-
-        // F0 #B.4: 提交完成后再递增 birthRevision 以捕获 F0 completion (#B.3)
-        ++targetMod->birthRevision;
     }
 
     // 提交完成后再通知 Host，避免 Host 观察到半提交状态。
@@ -1559,6 +1556,10 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     modification.birthState = AudioModificationBirthState::Rendering;
     ++modification.birthRevision;
 
+    // 若已有 valid F0（恢复路径），跳过重复提取，避免新旧重叠
+    const bool alreadyHasF0 = content.analysis.pitchCurve != nullptr
+        && content.analysis.originalF0State == OriginalF0State::Ready;
+
     // 1. Determine source window from AudioSource
     auto readerLease = source->shareReaderLease();
     if (readerLease == nullptr || source->getShape().numChannels <= 0
@@ -1621,9 +1622,11 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         }
     }
 
-    // 3. Extract ch0 for async F0
-    std::vector<float> channel0Data(static_cast<size_t>(playableAccum.getNumSamples()));
+    // 3. Extract ch0 for async F0 (skip if F0 already available)
+    std::vector<float> channel0Data;
+    if (!alreadyHasF0)
     {
+        channel0Data.resize(static_cast<size_t>(playableAccum.getNumSamples()));
         const float* ch0Read = playableAccum.getReadPointer(0);
         std::copy(ch0Read, ch0Read + playableAccum.getNumSamples(), channel0Data.begin());
     }
@@ -1663,7 +1666,8 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(storedBuffer));
 
     modification.submitSilentGaps(std::move(silentGaps));
-    modification.applyOriginalF0State(OriginalF0State::NotRequested);
+    if (!alreadyHasF0)
+        modification.applyOriginalF0State(OriginalF0State::NotRequested);
 
     // 7. Publish to CRS (derived playback cache + resampled audio buffer)
     // Per ARA2 spec: CRS holds derived/cache for renderer fast read,
@@ -1679,8 +1683,8 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     if (modification.audioModification != nullptr)
         modification.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
 
-    // 9. Schedule async F0 extraction via CRS
-    if (contentRenderService_ != nullptr)
+    // 9. Schedule async F0 extraction via CRS (skip if F0 already available)
+    if (!alreadyHasF0 && contentRenderService_ != nullptr)
     {
         auto* hostModification = modification.audioModification;
         scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate, hostModification);
