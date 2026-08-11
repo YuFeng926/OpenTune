@@ -1750,9 +1750,9 @@ public:
         
         if (themeId == ThemeId::BlueBreeze)
         {
-            trackBg = juce::Colour(BlueBreeze::Colors::PanelBorder);
-            thumbBg = juce::Colour(BlueBreeze::Colors::ControlBottom);
-            thumbHover = juce::Colour(BlueBreeze::Colors::ControlHover);
+            trackBg = juce::Colour(BlueBreeze::Colors::PanelInset);
+            thumbBg = juce::Colour(BlueBreeze::Colors::ControlBottom).darker(0.08f);
+            thumbHover = juce::Colour(BlueBreeze::Colors::ControlHover).darker(0.06f);
             thumbPressed = juce::Colour(BlueBreeze::Colors::ControlPressed);
             highlight = juce::Colour(BlueBreeze::Colors::SourceLight);
         }
