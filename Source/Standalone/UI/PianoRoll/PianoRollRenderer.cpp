@@ -1053,8 +1053,8 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                     const float trHi = tHi + (1.0f - tHi) * 0.5f;
 
                     const float rectH = halfH;
-                    juce::ColourGradient col(fillTop, 0.0f, 0.0f,
-                                             fillBottom, 0.0f, 1.0f, true);
+                    juce::ColourGradient col(fillTop, x, centerY - rectH,
+                                             fillBottom, x, centerY + rectH, false);
                     col.addColour(trLo, fillTop);
                     col.addColour(tLo,  glowTrans);
                     col.addColour(0.50f, glowCore);
@@ -1076,7 +1076,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         return;
     }
 
-    // ── OpenTune 矩形音符（原路径保持不变） ──────────────────────
+    // ── OpenTune 矩形音符（使用 track theme colour 联动） ───────
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
@@ -1093,8 +1093,6 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float y = ctx.coords.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
         float h = ctx.pixelsPerSemitone;
 
-        // 搂8.5 鈥?note.startTime/endTime are SOURCE time; project through 蟿
-        // so a stretched segment renders at its correct visual width.
         int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
         int x2 = sourceTimeToScreenX(note.endTime,   ctx, item);
         if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
@@ -1103,7 +1101,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float w = std::max(1.0f, static_cast<float>(x2 - x1));
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
-        const auto noteColor = UIColors::noteBlock;
+        const auto noteColor = item.displayColour;
 
         if (isAurora)
         {
@@ -1274,11 +1272,11 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
         float w = std::max(1.0f, static_cast<float>(x2 - x1));
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
-        // Selection highlight: semi-transparent tint + brighter border
-        g.setColour(UIColors::noteBlockSelected.withAlpha(isAurora ? 0.15f : 0.12f));
+        // Selection highlight: semi-transparent tint + brighter border (track theme colour)
+        g.setColour(item.displayColour.brighter(0.55f).withAlpha(isAurora ? 0.15f : 0.12f));
         g.fillRect(noteBounds);
 
-        g.setColour(UIColors::noteBlockSelected.withAlpha(isAurora ? 0.72f : 0.60f));
+        g.setColour(item.displayColour.brighter(0.75f).withAlpha(isAurora ? 0.72f : 0.60f));
         g.drawRect(noteBounds, isAurora ? 1.35f : 1.1f);
     }
 }

@@ -27,6 +27,7 @@ class CaptureSession;
  *       [i32 detectedKeyRoot]
  *       [i32 detectedKeyScale]
  *       [f32 detectedKeyConfidence]
+ *       [i32 detectedKeyOrigin]
  *       [pitch curve payload]
  *   ]
  *   [u32 CAPTURE_END_MAGIC = 'xCAP' (0x78434150)]

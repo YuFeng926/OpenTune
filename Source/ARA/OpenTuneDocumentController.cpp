@@ -8,6 +8,7 @@
 #include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
 #include "../Services/ImportedClipF0Extraction.h"
+#include "../DSP/F0KeyDetector.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/TimeCoordinate.h"
 #include "../Utils/SilentGapDetector.h"
@@ -48,6 +49,9 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     // 进程级运行时客户端租约（仅计数，不触发释放）
     ProcessF0Runtime::getInstance().attach();
     ProcessRenderRuntime::getInstance().attach();
+
+    AppLogger::log("ARA-DIAG: DocumentController created dc="
+        + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
 }
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
@@ -186,6 +190,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     dk->setAttribute("root", static_cast<int>(mod.content->analysis.detectedKey.root));
     dk->setAttribute("scale", static_cast<int>(mod.content->analysis.detectedKey.scale));
     dk->setAttribute("confidence", mod.content->analysis.detectedKey.confidence);
+    dk->setAttribute("origin", static_cast<int>(mod.content->analysis.detectedKey.origin));
     analysis->addChildElement(dk);
     
     // SilentGaps
@@ -554,6 +559,11 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             content.analysis.detectedKey.root = static_cast<Key>(root);
             content.analysis.detectedKey.scale = static_cast<Scale>(scale);
             content.analysis.detectedKey.confidence = static_cast<float>(confidence);
+            const int origin = dk->getIntAttribute("origin", -1);
+            // 旧数据无 origin 字段：按 confidence 迁移
+            content.analysis.detectedKey.origin = origin < 0
+                ? DetectedKey::originFromLegacyConfidence(static_cast<float>(confidence))
+                : static_cast<Origin>(origin);
         }
 
         // SilentGaps: 可选元素，absence 保持空
@@ -1805,7 +1815,17 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 if (!result.energy.empty())
                     pitchCurve->setOriginalEnergy(result.energy);
 
+                // 调式检测（F0 提交成功链）：origin==Manual 的内容永不覆盖；
+                // 检测在 std::move 前读 result 数据，pitchCurve 移动后由 applyOriginalF0 存入 content
+                if (mod->content->analysis.detectedKey.origin != Origin::Manual) {
+                    F0KeyDetector detector;
+                    const auto detectedKey = detector.detect(result.f0, result.energy);
+                    if (detectedKey.origin != Origin::Unset)
+                        mod->applyDetectedKey(detectedKey);
+                }
+
                 mod->applyOriginalF0(std::move(pitchCurve));
+
                 if (mod->audioModification != nullptr)
                     mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
             }
@@ -2311,5 +2331,6 @@ bool OpenTuneDocumentController::applyOriginalF0StateToModification(const Conten
 
 const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory()
 {
+    OpenTune::AppLogger::log("ARA-DIAG: createARAFactory called");
     return juce::ARADocumentControllerSpecialisation::createARAFactory<OpenTune::OpenTuneDocumentController>();
 }

@@ -4,6 +4,7 @@
 #include "Editor/EditorFactory.h"
 #include "DSP/ResamplingManager.h"
 #include "DSP/MelSpectrogram.h"
+#include "DSP/F0KeyDetector.h"
 #include "Services/F0ExtractionService.h"
 #include "Services/ImportedClipF0Extraction.h"
 #include "Utils/ModelPathResolver.h"
@@ -401,6 +402,7 @@ bool detectedKeysMatch(const DetectedKey& lhs, const DetectedKey& rhs)
 {
     return lhs.root == rhs.root
         && lhs.scale == rhs.scale
+        && lhs.origin == rhs.origin
         && std::abs(lhs.confidence - rhs.confidence) <= 1.0e-6f;
 }
 
@@ -680,7 +682,15 @@ juce::AudioProcessor::BusesProperties OpenTuneAudioProcessor::makeBuses()
 OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     : AudioProcessor(makeBuses()) {
     AppLogger::initialize();
-    AppLogger::log("OpenTuneAudioProcessor: ctor");
+    AppLogger::log("OpenTuneAudioProcessor: ctor version=" + juce::String(OPENTUNE_VERSION)
+        + " wrapper=" + juce::String(juce::AudioProcessor::getWrapperTypeDescription(wrapperType))
+        + " araCompiled="
+#if JucePlugin_Enable_ARA
+        + "true"
+#else
+        + "false"
+#endif
+        + " processor=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
 
     editVersionParam_ = new juce::AudioParameterInt("editVersion", "EditVersion", 0, 100000, 0);
     addParameter(editVersionParam_);
@@ -925,7 +935,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                             if (session->commitSegmentF0Result(
                                     segContentKey, std::move(pitchCurve),
                                     OriginalF0State::Ready)) {
-                                detectContentKeyIfUnset(segContentKey);
+                                updateContentKeyFromOriginalF0(segContentKey);
                             }
                             if (pendingTimeToolSeedKeys_.count(segContentKey) != 0)
                                 ensureTimeToolAnchorSeed(segContentKey);
@@ -1338,6 +1348,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
 
         AppLogger::log("ARA: didBindToARA - DC owns its CRS lease; processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+            + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc))
             + " araBound=true");
 
         // Replay any pre-bind state that was cached by setStateInformation.
@@ -3474,8 +3485,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 onContentFullMutationCompleted(request.contentKey);
             }
         }
-
-        setContentDetectedKey(request.contentKey, DetectedKey{});
     }
 
     switch (request.contentKey.domainKind) {
@@ -3632,7 +3641,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                     + " expectedInferenceFrameCount=" + juce::String(result.expectedInferenceFrameCount));
             }
 
-            processor->detectContentKeyIfUnset(capturedRequest.contentKey);
+            processor->updateContentKeyFromOriginalF0(capturedRequest.contentKey);
 
             if (capturedRequest.generateNotesWholeContentOnReady) {
                 // OpenDyne 导入：仅生成音符，不写修正曲线（还原 Melodyne 初始状态）。
@@ -3677,24 +3686,21 @@ bool OpenTuneAudioProcessor::movePlacementToTrack(int sourceTrackId,
     return standaloneArrangement_->movePlacementToTrack(sourceTrackId, targetTrackId, placementId, newTimelineStartSeconds);
 }
 
-void OpenTuneAudioProcessor::detectContentKeyIfUnset(ContentKey key)
+void OpenTuneAudioProcessor::updateContentKeyFromOriginalF0(ContentKey key)
 {
     auto snap = getContentSnapshot(key);
-    if (!snap) return;
+    if (!snap || !snap->pitchCurve) return;
 
-    if (snap->detectedKey.confidence > 0.0f) {
-        return;
-    }
+    if (snap->detectedKey.origin == Origin::Manual) return;
 
-    auto audio = resolveAnalysisAudioProvider(key);
-    if (!audio.valid || audio.numSamples <= 0) {
-        return;
-    }
+    const auto curveSnapshot = snap->pitchCurve->getSnapshot();
+    const auto& originalF0 = curveSnapshot->getOriginalF0();
+    if (originalF0.empty()) return;
 
-    ChromaKeyDetector detector;
-    const auto detectedKey = detector.detect(audio.samples,
-                                             audio.numSamples,
-                                             static_cast<int>(audio.sampleRate));
+    const auto& energies = curveSnapshot->getOriginalEnergy();
+    F0KeyDetector detector;
+    const auto detectedKey = detector.detect(originalF0, energies);
+    if (detectedKey.origin == Origin::Unset) return;   // 无有效帧
     setContentDetectedKey(key, detectedKey);
 }
 

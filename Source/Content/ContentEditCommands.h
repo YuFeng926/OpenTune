@@ -7,7 +7,7 @@
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
 #include "../Utils/NoteGeneratorTypes.h"
-#include "../DSP/ChromaKeyDetector.h"
+#include "../Utils/DetectedKey.h"
 #include "../DSP/ReferenceFeatures.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>

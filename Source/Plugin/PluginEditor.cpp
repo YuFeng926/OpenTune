@@ -378,8 +378,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             && currentState == OriginalF0State::Ready) {
             const auto intentIt = pendingNoteGenerationOnReady_.find(contentKey);
             if (intentIt != pendingNoteGenerationOnReady_.end()) {
-                // 统一调性检测（复用 processor 唯一实现；失败静默）
-                processorRef_.detectContentKeyIfUnset(contentKey);
                 // 仅生成音符，不写修正曲线（还原 Melodyne 初始状态）。
                 // f0Count 由 generateNotesOnly 内部从同一 snapshot 派生，调用方不传范围。
                 contentCommands_->generateNotesOnly(contentKey, intentIt->second);
@@ -1061,10 +1059,8 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
 
     const auto activeKey = resolveCurrentContentKey();
     if (activeKey.isValid()) {
-        DetectedKey key;
-        key.root = static_cast<Key>(clampedRoot);
-        key.scale = OpenTune::uiScaleTypeToScale(clampedType);
-        key.confidence = 1.0f;
+        // 手动设置：唯一映射入口 makeDetectedKeyFromUi 固定 confidence=1.0 + origin=Manual
+        const DetectedKey key = OpenTune::makeDetectedKeyFromUi(clampedRoot, clampedType);
         contentCommands_->setDetectedKey(activeKey, key);
     }
 }
