@@ -20,7 +20,7 @@ namespace {
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 6;
+    constexpr int kCaptureArchiveVersion = 7;   // v7 adds DetectedKey.origin
     constexpr int kCaptureArchiveVersionMin = 4;  // v4 files load with pitchDriftScale=1.0
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
@@ -172,6 +172,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
             stream.writeInt(static_cast<int>(snap->detectedKey.root));
             stream.writeInt(static_cast<int>(snap->detectedKey.scale));
             stream.writeFloat(snap->detectedKey.confidence);
+            stream.writeInt(static_cast<int>(snap->detectedKey.origin));
             writePitchCurve(stream, snap->pitchCurve);
 
             stream.writeInt(static_cast<int>(snap->notes.size()));
@@ -222,6 +223,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         return false;
     const bool hasPitchDriftScale = (fileVersion >= 5);
     const bool hasUnifiedVolumeEnvelope = (fileVersion >= 6);
+    const bool hasDetectedKeyOrigin = (fileVersion >= 7);
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -296,6 +298,10 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         p.detectedKey.root = static_cast<Key>(stream.readInt());
         p.detectedKey.scale = static_cast<Scale>(stream.readInt());
         p.detectedKey.confidence = stream.readFloat();
+        // v6 及更旧数据无 origin：按 confidence 迁移
+        p.detectedKey.origin = hasDetectedKeyOrigin
+            ? static_cast<Origin>(stream.readInt())
+            : DetectedKey::originFromLegacyConfidence(p.detectedKey.confidence);
         p.pitchCurve = readPitchCurve(stream, hasPitchDriftScale);
 
         const int noteCount = stream.readInt();

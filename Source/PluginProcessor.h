@@ -29,7 +29,7 @@
 #include "DSP/ResamplingManager.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/ContentTimelineProjection.h"
-#include "DSP/ChromaKeyDetector.h"
+#include "Utils/DetectedKey.h"
 #include "Inference/RenderCache.h"
 #include "Inference/F0InferenceService.h"
 #include "Services/F0ExtractionService.h"
@@ -837,8 +837,6 @@ public:
                               ContentEditRangeFrames affectedRange);
     bool setContentTimeGrid(ContentKey key,
                             std::shared_ptr<const TimeGridSnapshot> grid);
-    // 惰性调性检测：detectedKey 未设置时分析音频并写入（F0 Ready 后 AUTO 消费前统一调用）
-    void detectContentKeyIfUnset(ContentKey key);
     bool setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey);
     bool setContentOriginalF0State(ContentKey key, OriginalF0State state);
     bool applyContentPitchShiftState(ContentKey key, const PitchShiftEditState& state);
@@ -846,6 +844,8 @@ public:
         ContentKey key,
         const PitchShiftSettings& newSettings);
 private:
+    // 调式检测唯一入口（F0 提交成功链调用）：origin==Manual 的内容永不自动覆盖
+    void updateContentKeyFromOriginalF0(ContentKey key);
     // AUTO 提交底层：合并/吸附后的音符 + 派生曲线一次性写回。
     // 唯一核心调用方是 autoTuneContentRangeByContentKey；不创建 undo、不 mark dirty。
     bool commitAutoTuneGeneratedNotesByContentKey(ContentKey key,

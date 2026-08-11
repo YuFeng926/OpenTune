@@ -7,7 +7,7 @@
  * 收口到唯一共享转换函数。
  */
 
-#include "../DSP/ChromaKeyDetector.h"
+#include "DetectedKey.h"
 #include "NoteGeneratorTypes.h"
 #include <optional>
 
@@ -48,13 +48,14 @@ inline Scale uiScaleTypeToScale(int scaleType) {
 }
 
 /**
- * 从 UI 参数构造 DetectedKey
+ * 从 UI 参数构造 DetectedKey（手动设置入口）
  */
-inline DetectedKey makeDetectedKeyFromUi(int rootNote, int scaleType, float confidence = 1.0f) {
+inline DetectedKey makeDetectedKeyFromUi(int rootNote, int scaleType) {
     DetectedKey key;
     key.root = static_cast<Key>(juce::jlimit(0, 11, rootNote));
     key.scale = uiScaleTypeToScale(scaleType);
-    key.confidence = confidence;
+    key.confidence = 1.0f;
+    key.origin = Origin::Manual;
     return key;
 }
 

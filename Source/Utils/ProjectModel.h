@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "../DSP/ChromaKeyDetector.h"
+#include "DetectedKey.h"
 #include "../Utils/Note.h"
 #include "../Utils/AutomationLane.h"
 #include "../Utils/SourceWindow.h"

@@ -1,5 +1,5 @@
 #pragma once
-#include "../DSP/ChromaKeyDetector.h"
+#include "../Utils/DetectedKey.h"
 #include "../Utils/ContentAnalysisState.h"
 #include "../Utils/Note.h"
 #include "../Utils/AutomationLane.h"

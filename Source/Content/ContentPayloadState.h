@@ -7,7 +7,7 @@
 #include "../Utils/AutomationLane.h"
 #include "../Utils/SilentGapDetector.h"
 #include "../Utils/ContentAnalysisState.h"   // OriginalF0State
-#include "../DSP/ChromaKeyDetector.h"         // DetectedKey
+#include "../Utils/DetectedKey.h"              // DetectedKey
 #include "../DSP/ReferenceFeatures.h"          // ReferenceFeatureSet
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>

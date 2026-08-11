@@ -103,6 +103,7 @@ void CaptureSegmentContent::applyDetectedKey(const DetectedKey& key)
 {
     if (editable_.detectedKey.root == key.root
         && editable_.detectedKey.scale == key.scale
+        && editable_.detectedKey.origin == key.origin
         && std::abs(editable_.detectedKey.confidence - key.confidence) <= 1.0e-6f)
         return;
     editable_.detectedKey = key;

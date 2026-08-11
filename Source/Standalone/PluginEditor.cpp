@@ -324,10 +324,7 @@ DetectedKey OpenTuneAudioProcessorEditor::resolveScaleForPlacementContent(int tr
                                                                                   juce::String* sourceOut) const
 {
     const auto defaultKey = []() {
-        DetectedKey k;
-        k.root = Key::C;
-        k.scale = Scale::Major;
-        k.confidence = 1.0f;
+        DetectedKey k;  // C Major, 0.0 confidence, origin=Unset —— 无检测信息的兜底显示值
         return k;
     };
 
@@ -340,7 +337,7 @@ DetectedKey OpenTuneAudioProcessorEditor::resolveScaleForPlacementContent(int tr
     if (contentKey.isValid()) {
         auto snap = processorRef_.getContentSnapshot(contentKey);
         const DetectedKey detectedKey = snap ? snap->detectedKey : DetectedKey{};
-        if (detectedKey.confidence > 0.0f) {
+        if (detectedKey.origin != Origin::Unset) {
             if (sourceOut) *sourceOut = "content";
             return detectedKey;
         }
@@ -2725,12 +2722,14 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
     const int oldRootNote = static_cast<int>(oldResolved.root);
     const int oldScaleType = OpenTune::scaleToUiScaleType(oldResolved.scale);
 
-    if (oldRootNote == newRoot && oldScaleType == newScaleType) {
+    // 已落写的 Manual 且 root/scale 未变：仅回显 UI，不重复写入。
+    // 当前为 Automatic/Unset 时用户再次选择相同值 = 显式手动确认，必须走落写路径。
+    if (oldRootNote == newRoot && oldScaleType == newScaleType && oldResolved.origin == Origin::Manual) {
         applyScaleToUi(newRoot, newScaleType);
         return;
     }
 
-    const DetectedKey newKey = OpenTune::makeDetectedKeyFromUi(newRoot, newScaleType, 1.0f);
+    const DetectedKey newKey = OpenTune::makeDetectedKeyFromUi(newRoot, newScaleType);
 
     if (activeContentKey.isValid()) {
         processorRef_.setContentDetectedKey(activeContentKey, newKey);

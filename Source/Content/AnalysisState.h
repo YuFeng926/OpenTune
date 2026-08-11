@@ -1,7 +1,7 @@
 #pragma once
 #include "../Utils/ContentAnalysisState.h"
 #include "../Utils/PitchCurve.h"
-#include "../DSP/ChromaKeyDetector.h"
+#include "../Utils/DetectedKey.h"
 #include "../DSP/ReferenceFeatures.h"
 #include "../Utils/SilentGapDetector.h"
 #include <memory>

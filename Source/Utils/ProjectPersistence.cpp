@@ -332,6 +332,7 @@ juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry
     dkTree.setProperty("tonic", static_cast<int>(mat.detectedKey.root), nullptr);
     dkTree.setProperty("scale", static_cast<int>(mat.detectedKey.scale), nullptr);
     dkTree.setProperty("confidence", mat.detectedKey.confidence, nullptr);
+    dkTree.setProperty("origin", static_cast<int>(mat.detectedKey.origin), nullptr);
     tree.addChild(dkTree, -1, nullptr);
 
     // Notes
@@ -398,6 +399,10 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
         m.detectedKey.root = static_cast<Key>(static_cast<int>(dkTree.getProperty("tonic", 0)));
         m.detectedKey.scale = static_cast<Scale>(static_cast<int>(dkTree.getProperty("scale", 0)));
         m.detectedKey.confidence = dkTree.getProperty("confidence", 0.0f);
+        // 旧数据无 origin 属性：按 confidence 迁移
+        m.detectedKey.origin = dkTree.hasProperty("origin")
+            ? static_cast<Origin>(static_cast<int>(dkTree.getProperty("origin", 0)))
+            : DetectedKey::originFromLegacyConfidence(m.detectedKey.confidence);
     }
 
     // Notes
