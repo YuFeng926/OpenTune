@@ -540,13 +540,13 @@ ParameterPanel::ParameterPanel()
     scissorsToolButton_->onClick = [this] { onToolClicked(8); };
     addChildComponent(*scissorsToolButton_);
 
-    pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", LOC(kTooltipPitchModulation) + "\nF2×2");
+    pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", LOC(kTooltipPitchModulation) + "\nF2x2");
     pitchModulationToolButton_->setRadioGroupId(1001);
     pitchModulationToolButton_->setIcon(ToolbarIcons::getPitchModulationToolIcon(), false);
     pitchModulationToolButton_->onClick = [this] { onToolClicked(9); };
     addChildComponent(*pitchModulationToolButton_);
 
-    pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", LOC(kTooltipPitchDrift) + "\nF2×3");
+    pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", LOC(kTooltipPitchDrift) + "\nF2x3");
     pitchDriftToolButton_->setRadioGroupId(1001);
     pitchDriftToolButton_->setIcon(ToolbarIcons::getPitchDriftToolIcon(), false);
     pitchDriftToolButton_->onClick = [this] { onToolClicked(10); };
@@ -856,9 +856,9 @@ void ParameterPanel::refreshLocalizedText()
     if (scissorsToolButton_)
         scissorsToolButton_->setTooltip(juce::String::fromUTF8(u8"Scissors 切割音符\nF6"));
     if (pitchModulationToolButton_)
-        pitchModulationToolButton_->setTooltip(LOC(kTooltipPitchModulation) + "\nF2×2");
+        pitchModulationToolButton_->setTooltip(LOC(kTooltipPitchModulation) + "\nF2x2");
     if (pitchDriftToolButton_)
-        pitchDriftToolButton_->setTooltip(LOC(kTooltipPitchDrift) + "\nF2×3");
+        pitchDriftToolButton_->setTooltip(LOC(kTooltipPitchDrift) + "\nF2x3");
 
     repaint();
 }
