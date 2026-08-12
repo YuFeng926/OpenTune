@@ -133,8 +133,8 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             menu.addItem(ShowUnvoicedFrames, LOC(kShowUnvoicedFrames), true, showUnvoicedFrames_);
 
             juce::PopupMenu themeMenu;
-            themeMenu.addItem(ThemeBlueBreeze, LOC(kThemeBlueBreeze), true, UIColors::currentThemeId() == ThemeId::BlueBreeze);
-            themeMenu.addItem(ThemeDarkBlueGrey, LOC(kThemeDarkBlueGrey), true, UIColors::currentThemeId() == ThemeId::DarkBlueGrey);
+            // themeMenu.addItem(ThemeBlueBreeze, LOC(kThemeBlueBreeze), true, UIColors::currentThemeId() == ThemeId::BlueBreeze);  // 临时隐藏
+            // themeMenu.addItem(ThemeDarkBlueGrey, LOC(kThemeDarkBlueGrey), true, UIColors::currentThemeId() == ThemeId::DarkBlueGrey); // 临时隐藏
             themeMenu.addItem(ThemeAurora, LOC(kThemeAurora), true, UIColors::currentThemeId() == ThemeId::Aurora);
             // themeMenu.addItem(ThemeOverdose, LOC(kThemeOverdose), true, UIColors::currentThemeId() == ThemeId::Overdose);  // "升天" 暂时隐藏
             menu.addSeparator();
