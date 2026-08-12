@@ -81,12 +81,14 @@ public:
         initialiseLabel(themeLabel_, LOC(kTheme));
         addAndMakeVisible(themeLabel_);
 
-        themeSelector_.addItem(LOC(kThemeBlueBreeze), 1);
-        themeSelector_.addItem(LOC(kThemeDarkBlueGrey), 2);
+        // themeSelector_.addItem(LOC(kThemeBlueBreeze), 1);  // 临时隐藏
+        // themeSelector_.addItem(LOC(kThemeDarkBlueGrey), 2); // 临时隐藏
         themeSelector_.addItem(LOC(kThemeAurora), 3);
         // themeSelector_.addItem(LOC(kThemeOverdose), 4);  // "升天" 主题暂时隐藏
         const int themeIdx = static_cast<int>(state.shared.theme);
-        themeSelector_.setSelectedId(themeIdx >= static_cast<int>(ThemeId::Overdose) ? 1 : themeIdx + 1, juce::dontSendNotification);
+        // 蓝色清风/深蓝灰临时隐藏，fallback到Aurora
+        const int selectedId = (themeIdx <= static_cast<int>(ThemeId::DarkBlueGrey)) ? 3 : themeIdx + 1;
+        themeSelector_.setSelectedId(selectedId, juce::dontSendNotification);
         themeSelector_.onChange = [this] {
             appPreferences_.setTheme(static_cast<ThemeId>(themeSelector_.getSelectedId() - 1));
             notifyChanged();
