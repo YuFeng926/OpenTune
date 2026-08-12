@@ -116,7 +116,7 @@ void DmlVocoder::initializeSession(const std::string& modelPath,
         if (probeStatus != nullptr) {
             DmlInitDiagnostic diag = createOrtDiagnostic(
                 "ort_get_dml_api", probeStatus, api,
-                "Ensure onnxruntime.dll is the DirectML-enabled package.");
+                "Ensure OpenTuneOnnxRuntime_1_24_4.dll is the DirectML-enabled package.");
             throw std::runtime_error(std::string("DmlVocoder initialization failed: ") + diag.toString());
         }
     }

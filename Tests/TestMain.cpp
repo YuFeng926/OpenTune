@@ -1648,6 +1648,34 @@ void testPianoRollViewportSessionContract()
            "VST3 viewport is controlled only by session restore or whole-item fit");
 }
 
+void testPrivateOnnxRuntimeContract()
+{
+    const auto cmake = readSource("CMakeLists.txt");
+    const auto delayLoadHook = readSource("Source/Utils/OnnxRuntimeDelayLoadHook.cpp");
+    const auto modelPathResolver = readSource("Source/Utils/ModelPathResolver.h");
+    const auto importDefinition = readSource("cmake/OpenTuneOnnxRuntime_1_24_4.def");
+
+    expect(contains(cmake, "OpenTuneOnnxRuntime_1_24_4.dll")
+               && contains(cmake, "/DELAYLOAD:${OPENTUNE_ORT_DLL_NAME}")
+               && contains(cmake, "OpenTuneOnnxRuntime_1_24_4.lib"),
+           "Windows targets link and delay-load the private versioned ONNX Runtime DLL");
+    expect(!contains(cmake, "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib")
+               && !contains(cmake, "Source/Utils/WindowsDllSearchPath.cpp")
+               && !contains(cmake, "ONNXRUNTIME_PROVIDERS_SHARED_DLL"),
+           "The old import library, host-global DLL search mutation, and shared-provider deployment are removed");
+    expect(contains(delayLoadHook, "OpenTuneOnnxRuntime_1_24_4.dll")
+               && !contains(delayLoadHook, "GetModuleHandleW(L\"onnxruntime.dll\")")
+               && contains(modelPathResolver, "OpenTuneOnnxRuntime_1_24_4.dll")
+               && !contains(modelPathResolver, "GetModuleHandleW(L\"onnxruntime.dll\")"),
+           "Runtime loading accepts only the private versioned ONNX Runtime DLL");
+    expect(contains(importDefinition, "LIBRARY OpenTuneOnnxRuntime_1_24_4.dll")
+               && contains(importDefinition, "OrtGetApiBase")
+               && contains(importDefinition, "OrtSessionOptionsAppendExecutionProviderEx_DML"),
+           "The generated import library names the private DLL and exact DML exports");
+    expect(!std::filesystem::exists(sourceRoot / "Source/Utils/WindowsDllSearchPath.cpp"),
+           "No source file remains that mutates the DAW process DLL search policy");
+}
+
 int main()
 {
     testVisibleEntryContract();
@@ -1674,6 +1702,7 @@ int main()
     testCaptureF0KeyContract();
     testF0KeyDetectionContract();
     testPianoRollViewportSessionContract();
+    testPrivateOnnxRuntimeContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";

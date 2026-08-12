@@ -279,16 +279,26 @@ if(WIN32)
     # Core DLL: always use the DML build (builtin DML, larger, covers CPU+DML)
     set(ONNXRUNTIME_DLL "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime.dll")
 
-    # Shared providers DLL: prefer CPU build's copy
-    set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "")
-    if(EXISTS "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll")
-        set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll")
-    elseif(EXISTS "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime_providers_shared.dll")
-        set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime_providers_shared.dll")
-    endif()
+    # 运行时 DLL 唯一名（Windows）：OpenTune 专用 ONNX Runtime 运行库，带版本后缀，
+    # 绝不使用裸名 onnxruntime.dll，避免与宿主 DAW 自带同名 DLL 撞名。
+    # 源仍是第三方包内 onnxruntime.dll（builtin DML），仅输出改名。
+    set(OPENTUNE_ORT_DLL_NAME "OpenTuneOnnxRuntime_1_24_4.dll")
 
-    # DML provider DLL: none in v1.24.4 (builtin DML in onnxruntime.dll)
-    set(ONNXRUNTIME_PROVIDERS_DML_DLL "")
+    # 用 MSVC lib.exe 从项目内 .def（导出表取自上述 DML DLL 精确导出）生成与新 DLL 名
+    # 匹配的导入库，供 OpenTune / Standalone / VST3 / Windows 测试目标链接。
+    set(OPENTUNE_ORT_DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneOnnxRuntime_1_24_4.def")
+    set(OPENTUNE_ORT_IMPORT_LIB "${CMAKE_CURRENT_BINARY_DIR}/OpenTuneOnnxRuntime_1_24_4.lib")
+    add_custom_command(
+        OUTPUT "${OPENTUNE_ORT_IMPORT_LIB}"
+        COMMAND "${CMAKE_AR}" /NOLOGO
+            "/DEF:${OPENTUNE_ORT_DEF_FILE}"
+            "/OUT:${OPENTUNE_ORT_IMPORT_LIB}"
+            /MACHINE:X64
+        DEPENDS "${OPENTUNE_ORT_DEF_FILE}"
+        COMMENT "Generating import library for renamed ONNX Runtime DLL (${OPENTUNE_ORT_DLL_NAME})..."
+        VERBATIM
+    )
+    add_custom_target(OpenTuneOnnxRuntimeImportLib DEPENDS "${OPENTUNE_ORT_IMPORT_LIB}")
 
     if(NOT EXISTS "${ONNXRUNTIME_DLL}")
         message(FATAL_ERROR "ONNX Runtime DirectML DLL missing: ${ONNXRUNTIME_DLL}")
@@ -297,8 +307,9 @@ if(WIN32)
     message(STATUS "ONNX Runtime version: 1.24.4")
     message(STATUS "ONNX Runtime CPU root: ${ONNXRUNTIME_ROOT}")
     message(STATUS "ONNX Runtime DML root: ${ONNXRUNTIME_DML_ROOT}")
-    message(STATUS "ONNX Runtime DLL: ${ONNXRUNTIME_DLL}")
-    message(STATUS "ONNX Runtime DML mode: builtin (DML integrated in onnxruntime.dll)")
+    message(STATUS "ONNX Runtime DLL source: ${ONNXRUNTIME_DLL}")
+    message(STATUS "ONNX Runtime DLL output name: ${OPENTUNE_ORT_DLL_NAME}")
+    message(STATUS "ONNX Runtime DML mode: builtin (DML integrated in ONNX Runtime DLL)")
     message(STATUS "DirectML version: ${OPENTUNE_DIRECTML_VERSION}")
     message(STATUS "DirectML include dir: ${DIRECTML_INCLUDE_DIR}")
     message(STATUS "DirectML DLL: ${DIRECTML_DLL}")
@@ -624,7 +635,6 @@ target_sources(OpenTune
         Source/Utils/PitchUtils.h
         Source/Utils/DetectedKey.h
         Source/Utils/Note.h
-        Source/Utils/WindowsDllSearchPath.cpp
         Source/Utils/OnnxRuntimeDelayLoadHook.cpp
         Source/Utils/ModelPathResolver.h
         Source/Utils/ProjectModel.cpp
@@ -883,7 +893,8 @@ target_link_libraries(OpenTune
 # ONNX Runtime Linking
 # ==============================================================================
 if(WIN32)
-    target_link_libraries(OpenTune PRIVATE "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib")
+    target_link_libraries(OpenTune PRIVATE "${OPENTUNE_ORT_IMPORT_LIB}")
+    add_dependencies(OpenTune OpenTuneOnnxRuntimeImportLib)
 elseif(APPLE)
     target_link_libraries(OpenTune PRIVATE "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.dylib")
     target_link_libraries(OpenTune PRIVATE "-framework Accelerate")
@@ -938,15 +949,17 @@ if(WIN32)
             Source/DSP/MelSpectrogram.cpp
             PROPERTIES COMPILE_FLAGS "/arch:AVX2"
         )
-        # Delay load onnxruntime.dll for Standalone
-        target_link_options(OpenTune_Standalone PRIVATE "/DELAYLOAD:onnxruntime.dll")
+        # Delay load the renamed ONNX Runtime DLL for Standalone
+        target_link_options(OpenTune_Standalone PRIVATE "/DELAYLOAD:${OPENTUNE_ORT_DLL_NAME}")
         target_link_libraries(OpenTune_Standalone PRIVATE delayimp)
         target_compile_options(OpenTune_Standalone PRIVATE /wd4100)
+        add_dependencies(OpenTune_Standalone OpenTuneOnnxRuntimeImportLib)
 
-        # Delay load onnxruntime.dll for VST3 plugin
-        target_link_options(OpenTune_VST3 PRIVATE "/DELAYLOAD:onnxruntime.dll")
+        # Delay load the renamed ONNX Runtime DLL for VST3 plugin
+        target_link_options(OpenTune_VST3 PRIVATE "/DELAYLOAD:${OPENTUNE_ORT_DLL_NAME}")
         target_link_libraries(OpenTune_VST3 PRIVATE delayimp)
         target_compile_options(OpenTune_VST3 PRIVATE /wd4100)
+        add_dependencies(OpenTune_VST3 OpenTuneOnnxRuntimeImportLib)
     endif()
 elseif(APPLE)
     target_compile_options(OpenTune PRIVATE -Wall -Wno-unused-parameter)
@@ -1008,29 +1021,14 @@ endif()
 # --- ONNX Runtime library copying ---
 if(WIN32)
     add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime.dll"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_shared.dll"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${ONNXRUNTIME_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime.dll"
-        COMMENT "Copying ONNX Runtime DLL to Standalone..."
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/${OPENTUNE_ORT_DLL_NAME}"
+        COMMENT "Copying ONNX Runtime DLL (renamed) to Standalone..."
     )
-
-    if(ONNXRUNTIME_PROVIDERS_SHARED_DLL)
-        add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ONNXRUNTIME_PROVIDERS_SHARED_DLL}"
-                "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_shared.dll"
-            COMMENT "Copying ONNX Runtime shared providers DLL to Standalone..."
-        )
-    endif()
-
-    if(ONNXRUNTIME_PROVIDERS_DML_DLL)
-        add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ONNXRUNTIME_PROVIDERS_DML_DLL}"
-                "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_dml.dll"
-            COMMENT "Copying ONNX Runtime DML providers DLL to Standalone..."
-        )
-    endif()
 
     add_custom_command(TARGET OpenTune_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1151,32 +1149,16 @@ endif()
 # Windows lays files alongside the .vst3, macOS embeds them in the bundle.
 if(TARGET OpenTune_VST3)
     if(WIN32)
-        # ONNX Runtime DLL
+        # ONNX Runtime DLL (renamed)
         add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime.dll"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime_providers_shared.dll"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ONNXRUNTIME_DLL}"
-                "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime.dll"
-            COMMENT "Copying ONNX Runtime DLL to VST3 plugin..."
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/${OPENTUNE_ORT_DLL_NAME}"
+            COMMENT "Copying ONNX Runtime DLL (renamed) to VST3 plugin..."
         )
-
-        # ONNX Runtime providers shared DLL
-        if(ONNXRUNTIME_PROVIDERS_SHARED_DLL)
-            add_custom_command(TARGET OpenTune_VST3 POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${ONNXRUNTIME_PROVIDERS_SHARED_DLL}"
-                    "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime_providers_shared.dll"
-                COMMENT "Copying ONNX Runtime shared providers DLL to VST3 plugin..."
-            )
-        endif()
-
-        if(ONNXRUNTIME_PROVIDERS_DML_DLL)
-            add_custom_command(TARGET OpenTune_VST3 POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${ONNXRUNTIME_PROVIDERS_DML_DLL}"
-                    "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime_providers_dml.dll"
-                COMMENT "Copying ONNX Runtime DML providers DLL to VST3 plugin..."
-            )
-        endif()
 
         # DirectML DLL
         add_custom_command(TARGET OpenTune_VST3 POST_BUILD
@@ -1442,11 +1424,12 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
     if(WIN32)
         target_link_libraries(OpenTuneInferenceProcessIsolationTests
             PRIVATE
-                "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
+                "${OPENTUNE_ORT_IMPORT_LIB}"
                 "${OPENTUNE_D3D12_SYSTEM_LIB}"
                 "${OPENTUNE_DXGI_SYSTEM_LIB}"
                 version
         )
+        add_dependencies(OpenTuneInferenceProcessIsolationTests OpenTuneOnnxRuntimeImportLib)
     endif()
     target_compile_definitions(OpenTuneInferenceProcessIsolationTests
         PRIVATE
@@ -1462,10 +1445,13 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
     endif()
     if(WIN32)
         add_custom_command(TARGET OpenTuneInferenceProcessIsolationTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                "$<TARGET_FILE_DIR:OpenTuneInferenceProcessIsolationTests>/onnxruntime.dll"
+                "$<TARGET_FILE_DIR:OpenTuneInferenceProcessIsolationTests>/onnxruntime_providers_shared.dll"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ONNXRUNTIME_DLL}"
-                "$<TARGET_FILE_DIR:OpenTuneInferenceProcessIsolationTests>/onnxruntime.dll"
-            COMMENT "Copying ONNX Runtime DLL to OpenTuneInferenceProcessIsolationTests..."
+                "$<TARGET_FILE_DIR:OpenTuneInferenceProcessIsolationTests>/${OPENTUNE_ORT_DLL_NAME}"
+            COMMENT "Copying ONNX Runtime DLL (renamed) to OpenTuneInferenceProcessIsolationTests..."
         )
     endif()
     add_test(NAME OpenTuneInferenceProcessIsolationTests COMMAND OpenTuneInferenceProcessIsolationTests)
@@ -1548,7 +1534,6 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         Source/Utils/AppLogger.cpp
         Source/Utils/ChannelLayoutLogger.cpp
         Source/Utils/AppPreferences.cpp
-        Source/Utils/WindowsDllSearchPath.cpp
         Source/Utils/OnnxRuntimeDelayLoadHook.cpp
         Source/Utils/ProjectModel.cpp
         Source/Utils/ProjectPersistence.cpp
@@ -1653,11 +1638,12 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
     if(WIN32)
         target_link_libraries(OpenTuneThemeScreenshots
             PRIVATE
-                "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
+                "${OPENTUNE_ORT_IMPORT_LIB}"
                 "${OPENTUNE_D3D12_SYSTEM_LIB}"
                 "${OPENTUNE_DXGI_SYSTEM_LIB}"
                 version
         )
+        add_dependencies(OpenTuneThemeScreenshots OpenTuneOnnxRuntimeImportLib)
     endif()
 
     target_compile_definitions(OpenTuneThemeScreenshots
@@ -1722,10 +1708,13 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
     # Runtime DLL alongside the executable (same source as OpenTune Standalone)
     if(WIN32)
         add_custom_command(TARGET OpenTuneThemeScreenshots POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                "$<TARGET_FILE_DIR:OpenTuneThemeScreenshots>/onnxruntime.dll"
+                "$<TARGET_FILE_DIR:OpenTuneThemeScreenshots>/onnxruntime_providers_shared.dll"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ONNXRUNTIME_DLL}"
-                "$<TARGET_FILE_DIR:OpenTuneThemeScreenshots>/onnxruntime.dll"
-            COMMENT "Copying ONNX Runtime DLL to OpenTuneThemeScreenshots..."
+                "$<TARGET_FILE_DIR:OpenTuneThemeScreenshots>/${OPENTUNE_ORT_DLL_NAME}"
+            COMMENT "Copying ONNX Runtime DLL (renamed) to OpenTuneThemeScreenshots..."
         )
     endif()
 
