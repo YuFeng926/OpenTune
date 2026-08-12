@@ -108,6 +108,8 @@ private:
 class MouseTrailPage final : public juce::Component
 {
 public:
+    static constexpr int kContentHeight = 74; // 20 + 34 + 20
+
     MouseTrailPage(AppPreferences& appPreferences, std::function<void()> onPreferencesChanged)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
@@ -176,16 +178,19 @@ std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::create
         std::move(onVocoderModelWeightChanged),
         false);
     if (audioDeviceManager != nullptr) {
-        pages.push_back({ LOC(kAudio), std::make_unique<AudioSettingsPage>(audioDeviceManager, std::move(renderingPriorityComponent)) });
+        // renderingPriorityComponent 高度 + AudioDeviceSelectorComponent 高度
+        const int rpHeight = SharedPreferencePages::getRenderingPriorityPageHeight(*renderingPriorityComponent);
+        const int totalHeight = rpHeight + 8 + 200; // rendering priority + gap + audio selector
+        pages.push_back({ LOC(kAudio), std::make_unique<AudioSettingsPage>(audioDeviceManager, std::move(renderingPriorityComponent)), totalHeight });
     }
     return pages;
 }
 
 std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::createStandaloneOnlyPages(AppPreferences& appPreferences,
-                                                                                                     std::function<void()> onPreferencesChanged)
+                                                                                                  std::function<void()> onPreferencesChanged)
 {
     std::vector<TabbedPreferencesDialog::PageSpec> pages;
-    pages.push_back({ LOC(kMouseTrail), std::make_unique<MouseTrailPage>(appPreferences, std::move(onPreferencesChanged)) });
+    pages.push_back({ LOC(kMouseTrail), std::make_unique<MouseTrailPage>(appPreferences, std::move(onPreferencesChanged)), MouseTrailPage::kContentHeight });
     return pages;
 }
 

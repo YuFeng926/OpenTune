@@ -2132,7 +2132,7 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
         return;
     }
 
-    // ── 同 PPS 横向滚动：标尺带完整重栅格 + 内容带moveImageSection ──
+    // ── 同 PPS 横向滚动：标尺带完整重栅格 + 静态/内容带moveImageSection ──
     const int viewportW = getTimelineViewportBounds().getWidth();
     const int viewportH = getTimelineViewportBounds().getHeight();
     const int timelineLeft = pianoKeyWidth_;
@@ -2146,13 +2146,15 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
     const juce::Rectangle<int> rulerRect(timelineLeft, 0, timelineW, rulerHeight_);
     rasterizeStatic(rulerRect);
 
-    // 内容带：moveImageSection + 补绘条带
+    // 内容带：staticSurface_ + contentSurface_ 同步平移
     const int srcX = timelineLeft + (dPixels > 0 ? dPixels : 0);
     const int dstX = timelineLeft + (dPixels > 0 ? 0 : -dPixels);
     const int moveW = timelineW - std::abs(dPixels);
+    const int contentH = viewportH - rulerHeight_;
 
     if (moveW > 0) {
-        contentSurface_.moveImageSection(dstX, rulerHeight_, srcX, rulerHeight_, moveW, viewportH - rulerHeight_);
+        staticSurface_.moveImageSection(dstX, rulerHeight_, srcX, rulerHeight_, moveW, contentH);
+        contentSurface_.moveImageSection(dstX, rulerHeight_, srcX, rulerHeight_, moveW, contentH);
     }
 
     // 补绘露出条带
@@ -2168,7 +2170,8 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
     stripW = juce::jmin(stripW, timelineW);
 
     if (stripW > 0) {
-        juce::Rectangle<int> strip(stripX, rulerHeight_, stripW, viewportH - rulerHeight_);
+        juce::Rectangle<int> strip(stripX, rulerHeight_, stripW, contentH);
+        rasterizeStatic(strip);
         rasterizeContent(strip);
     }
 

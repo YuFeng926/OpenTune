@@ -969,19 +969,29 @@ void OpenTuneDocumentController::didUpdateAudioSourceProperties(juce::ARAAudioSo
 void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource* audioSource,
                                                             juce::ARAContentUpdateScopes scopeFlags)
 {
-    juce::ignoreUnused(scopeFlags);
-
     if (auto* source = findAudioSource(audioSource))
     {
+        // Per ARA2 spec (ARAInterface.h:1145-1151):
+        // kARAContentUpdateSignalScopeRemainsUnchanged means actual signal is unaffected.
+        // When signal is unchanged (e.g. window reopen after archive restore):
+        //   - Preserve analysis (pitchCurve, originalF0) — these remain valid
+        //   - Skip removeCRSArtifactsForModification — it cancels F0 tasks, contradicting preservation
+        //   - CRS playback cache will be rebuilt by birthContentForModification when recordRequested fires
+        // When signal changed:
+        //   - Invalidate ALL derived artifacts (CRS + analysis)
+        const bool signalChanged = scopeFlags.affectSamples();
+
         for (auto& modification : audioModifications_)
         {
             if (modification.hasContentState()
                 && modification.content->sourceWindow.sourcePersistentId == source->getIdentity().persistentId)
             {
-                // Invalidate derived artifacts (CRS, analysis cache) but preserve
-                // user-editable modification-scoped truth (notes, pitchCurve, timeGrid, etc.)
-                removeCRSArtifactsForModification(modification);
-                modification.invalidateDerivedContent();
+                if (signalChanged)
+                {
+                    removeCRSArtifactsForModification(modification);
+                    modification.invalidateDerivedContent();
+                }
+                // else: signal unchanged — preserve everything, renderer will republish via recordRequested
             }
         }
     }
@@ -1144,12 +1154,9 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
     }
 
     // 提交完成后再通知 Host，避免 Host 观察到半提交状态。
-    for (const auto& [targetMod, state] : pending)
-    {
-        juce::ignoreUnused(state);
-        if (targetMod->audioModification != nullptr)
-            targetMod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-    }
+    // Per ARA2 spec (ARAInterface.h:2223-2228): archive restore must not notify Host.
+    // Host is already aware of the restore that triggered this call.
+    // refreshRegisteredRenderers() is sufficient to update plugin-internal views.
 
     refreshRegisteredRenderers(publishModelChange());
     return true;
@@ -1557,9 +1564,11 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     modification.birthState = AudioModificationBirthState::Rendering;
     ++modification.birthRevision;
 
-    // 若已有 valid F0（恢复路径），跳过重复提取，避免新旧重叠
-    const bool alreadyHasF0 = content.analysis.pitchCurve != nullptr
-        && content.analysis.originalF0State == OriginalF0State::Ready;
+    // 若已有 valid F0（恢复路径），跳过重复提取，避免新旧重叠。
+    // 验证 pitchCurve 实际包含 F0 数据，防止空 pitchCurve 误判为已提取。
+    const bool alreadyHasF0 = content.analysis.originalF0State == OriginalF0State::Ready
+        && content.analysis.pitchCurve != nullptr
+        && content.analysis.pitchCurve->hasOriginalF0Data();
 
     // 1. Determine source window from AudioSource
     auto readerLease = source->shareReaderLease();

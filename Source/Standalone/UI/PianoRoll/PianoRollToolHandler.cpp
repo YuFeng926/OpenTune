@@ -972,6 +972,10 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
         return true;
     }
 
+    // 纯单击空白：取消当前选中 + 移动播放头
+    deselectAllNotes();
+    updateF0SelectionFromNotes(committedNotes(ctx_));
+
     if (intent.mouseDownTime >= 0.0) {
         ctx_.notifyPlayheadChange(intent.mouseDownTime);
     }
