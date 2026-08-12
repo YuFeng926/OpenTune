@@ -972,9 +972,16 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
         return true;
     }
 
-    // 纯单击空白：取消当前选中 + 移动播放头
+    // 纯单击空白：取消当前选中 + 清除框选残留状态 + 移动播放头
     deselectAllNotes();
     updateF0SelectionFromNotes(committedNotes(ctx_));
+    auto& sel = ctx_.getState().selection;
+    sel.isSelectingArea = false;
+    sel.hasSelectionArea = false;
+    sel.selectionStartTime = 0.0;
+    sel.selectionEndTime = 0.0;
+    sel.selectionStartMidi = 0.0f;
+    sel.selectionEndMidi = 0.0f;
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 
     if (intent.mouseDownTime >= 0.0) {
@@ -1217,7 +1224,8 @@ void PianoRollToolHandler::beginAreaSelection(const juce::MouseEvent& e)
         ctx_.getState().selection.hasSelectionArea = true;
         ctx_.getState().selection.selectionStartTime = std::max(0.0, *sourceTime);
         ctx_.getState().selection.selectionEndTime = ctx_.getState().selection.selectionStartTime;
-        float midiVal = ctx_.getViewMapper().freqToMidi(ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY)));
+        float midiVal = juce::jlimit(ctx_.getMinMidi(), ctx_.getMaxMidi(),
+            ctx_.getViewMapper().freqToMidi(ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY))));
         ctx_.getState().selection.selectionStartMidi = midiVal;
         ctx_.getState().selection.selectionEndMidi = midiVal;
     } else {
@@ -1446,8 +1454,9 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
 
         ctx_.getState().selection.selectionEndTime = std::max(0.0, clampedTime);
 
-        float currentMidi = ctx_.getViewMapper().freqToMidi(
-            ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY)));
+        float currentMidi = juce::jlimit(ctx_.getMinMidi(), ctx_.getMaxMidi(),
+            ctx_.getViewMapper().freqToMidi(
+                ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY))));
         ctx_.getState().selection.selectionEndMidi = currentMidi;
 
         double selStartTime = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
