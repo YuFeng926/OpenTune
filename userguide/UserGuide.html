@@ -68,14 +68,14 @@
     <h1>OpenTune</h1>
     <div class="subtitle">AI 智能修音软件</div>
     <div class="tagline">保留共振峰，移调不失真</div>
-    <div class="version">用户指南 v1.5</div>
-    <div class="version" style="margin-top: 10px;">2026 年 5 月</div>
+    <div class="version">用户指南 v1.7</div>
+    <div class="version" style="margin-top: 10px;">2026 年 8 月</div>
 </div>
 
 <div class="toc">
     <h2>目录</h2>
     <ul>
-        <li><a href="#whats-new">★ v1.5 新功能与改进</a></li>
+        <li><a href="#whats-new">★ v1.7 新功能与改进</a></li>
         <li><a href="#intro">1. 产品简介</a></li>
         <li><a href="#requirements">2. 系统要求</a></li>
         <li><a href="#install">3. 安装与启动</a></li>
@@ -96,33 +96,21 @@
 </div>
 
 <div class="page-break"></div>
-<h2 id="whats-new">★ v1.5 新功能与改进</h2>
+<h2 id="whats-new">★ v1.7 新功能与改进</h2>
 
 <h3>🎉 新增功能</h3>
 <table>
     <tr><th width="25%">功能</th><th>说明</th></tr>
-    <tr><td><strong>VST3/ARA 插件模式</strong></td><td>全新支持以 VST3 + ARA2 插件形式加载到 DAW（如 Studio One、Cubase、Logic Pro）中使用</td></tr>
-    <tr><td><strong>广泛 GPU 加速</strong></td><td>NVIDIA / AMD / Intel 显卡均可使用 GPU 加速</td></tr>
-    <tr><td><strong>8 种调式检测</strong></td><td>调式类型从大调/小调扩展到 8 种：大调、小调、半音阶、和声小调、多利亚、混合利底亚、大调五声、小调五声</td></tr>
-    <tr><td><strong>钢琴键试听</strong></td><td>点击钢琴卷帘左侧的钢琴键预览对应音高，支持拖拽滑动，松开停止</td></tr>
-    <tr><td><strong>编辑方案</strong></td><td>新增"曲线优先编辑"和"音符优先编辑"两种编辑方案，通过偏好设置切换</td></tr>
-    <tr><td><strong>偏好设置面板</strong></td><td>全新偏好设置对话框，集中管理语言、主题、编辑方案、渲染优先级、缩放灵敏度等</td></tr>
-    <tr><td><strong>5 国语言界面</strong></td><td>支持中文、English、日本語、Русский、Español 五种界面语言</td></tr>
-    <tr><td><strong>鼠标拖尾特效</strong></td><td>8 种鼠标轨迹特效主题（Classic、Neon、Fire、Ocean、Galaxy、Cherry Blossom、Matrix 等）</td></tr>
-    <tr><td><strong>面板折叠</strong></td><td>左右面板可折叠隐藏，实现沉浸式全屏编辑</td></tr>
-    <tr><td><strong>渲染状态徽章</strong></td><td>右上角浮动显示双阶段渲染进度（Stage 1 音高修正 + Stage 2 时间拉伸）</td></tr>
-    <tr><td><strong>逐音符颤音控制</strong></td><td>Vibrato Depth 和 Vibrato Rate 支持为每个音符独立设置</td></tr>
-    <tr><td><strong>Line Anchor 段参数</strong></td><td>Line Anchor 工具绘制的段可被选中并独立设置 Retune Speed</td></tr>
-    <tr><td><strong>悬浮提示</strong></td><td>所有控件支持鼠标悬浮提示（功能说明 + 快捷键），随界面语言切换</td></tr>
-    <tr><td><strong>批量导入</strong></td><td>支持一次导入多个音频文件，可选择顺序排列或分配到不同轨道</td></tr>
-    <tr><td><strong>视图菜单快捷设置</strong></td><td>波形显示、音道、音名标签、分块边界等视觉选项可通过 View 菜单快速切换</td></tr>
-    <tr><td><strong>时间工具 (TimeTool)</strong></td><td>第 6 种编辑工具，实验性功能，仅 Standalone 提供。需在偏好设置中启用实验性功能。拖拽时间手柄调整输出时间，实现时间拉伸/压缩。快捷键 T</td></tr>
-    <tr><td><strong>双阶段渲染管线</strong></td><td>Stage 1 音高修正（现有）+ Stage 2 时间拉伸（SoundTouch WSOLA），编辑时间网格不影响音高缓存</td></tr>
-    <tr><td><strong>三坐标系</strong></td><td>源时间 ↔ 输出时间（通过 TimeGrid τ 映射）↔ 屏幕像素，支持精确的时间域编辑</td></tr>
-    <tr><td><strong>声码器双权重</strong></td><td>新增社区版 (Community) 和 Coulin9 v4 专业版声码器模型权重，可在偏好设置中切换</td></tr>
-    <tr><td><strong>参考自动对齐</strong></td><td>ARA 模式下多 region 之间的参考音高自动对齐，提升多轨编辑一致性</td></tr>
-    <tr><td><strong>工程系统</strong></td><td>.otproj 工程文件保存/加载，完整恢复项目编辑状态、轨道布局和音高校正</td></tr>
-    <tr><td><strong>Overdose 主题</strong></td><td>第四套界面主题，深色霓虹风格，为音乐制作提供更激进的视觉选项</td></tr>
+    <tr><td><strong>OpenDyne 编辑模式</strong></td><td>全新神经编辑模式，Melodyne 式工作流：波形可视化、音高调制/音高漂移工具、音量包络、剪刀切割、概览导航条</td></tr>
+    <tr><td><strong>Melodyne 式概览</strong></td><td>波形预览条与滚动条合并，支持视图导航</td></tr>
+    <tr><td><strong>滚轮导航（OpenDyne）</strong></td><td>Ctrl+滚轮双轴缩放、Alt+滚轮纵向缩放、Shift+滚轮横向滚动</td></tr>
+    <tr><td><strong>Melodyne 式缩放</strong></td><td>Cmd+Alt 双击聚焦/恢复、方向键精确缩放、临时放大镜光标</td></tr>
+    <tr><td><strong>音高网格吸附</strong></td><td>可切换的音高网格吸附，一键吸附到最近音符</td></tr>
+    <tr><td><strong>音符边缘退让</strong></td><td>拖拽音符时边缘自动退让，避免遮挡相邻元素</td></tr>
+    <tr><td><strong>右键工具栏（OpenDyne）</strong></td><td>右键工具选择改为纵向图标工具栏布局</td></tr>
+    <tr><td><strong>时间轴总览条</strong></td><td>新增时间轴总览条与钢琴卷帘视口记忆</td></tr>
+    <tr><td><strong>鼠标光标主题</strong></td><td>3 种可选光标样式：Adwaita、Capitaine、Breeze</td></tr>
+    <tr><td><strong>快捷键三段式布局</strong></td><td>快捷键设置页分为通用/OpenTune/OpenDyne 三段</td></tr>
 </table>
 
 <h3>🐛 修复与优化</h3>
@@ -130,7 +118,8 @@
     <tr><th width="25%">问题</th><th>改进</th></tr>
     <tr><td><strong>内存占用过高</strong></td><td>优化内存管理，常驻内存减少约 500–900 MB</td></tr>
     <tr><td><strong>GPU 兼容性差</strong></td><td>所有主流 GPU 均可使用 GPU 加速，无兼容 GPU 时自动回退 CPU</td></tr>
-    <tr><td><strong>处理速度慢</strong></td><td>通过 GPU 加速大幅提升修音处理速度</td></tr>
+    <tr><td><strong>处理速度慢</strong></td><td>GPU 加速大幅提升修音处理速度</td></tr>
+    <tr><td><strong>设置弹窗适配</strong></td><td>适配不同屏幕分辨率，支持缩放</td></tr>
 </table>
 
 <h2 id="intro">1. 产品简介</h2>
@@ -435,21 +424,33 @@
 <div class="page-break"></div>
 <h2 id="schemes">9. 编辑方案</h2>
 
-<p>OpenTune 提供两种编辑方案，决定工具行为。通过偏好设置 → 编辑方案切换。</p>
+<p>OpenTune 提供两种编辑方案，通过偏好设置 → 编辑方案切换。</p>
 
-<h3>9.1 曲线优先编辑（默认）</h3>
+<h3>9.1 OpenTune 编辑（默认）</h3>
 <ul>
-    <li>LineAnchor 段可被选中并独立设置 Retune Speed</li>
-    <li>参数面板优先显示选中 LineAnchor 段的参数</li>
-    <li>AutoTune 优先作用于选中的时间区域</li>
+    <li>传统波形+音符编辑模式</li>
+    <li>滚轮：垂直滚动 / Shift+滚轮垂直缩放 / Ctrl+滚轮水平缩放 / Alt+滚轮水平滚动</li>
+    <li>工具栏横向排列</li>
 </ul>
 
-<h3>9.2 音符优先编辑</h3>
+<h3>9.2 OpenDyne 编辑</h3>
 <ul>
-    <li>HandDraw / LineAnchor 绘制后自动选中受影响的音符</li>
-    <li>AutoTune 优先作用于选中的音符范围</li>
-    <li>参数面板优先显示选中音符的参数</li>
+    <li>Melodyne 式神经编辑模式：波形可视化、选中高亮叠加</li>
+    <li>滚轮：垂直滚动 / Shift+滚轮横向滚动 / Ctrl+滚轮双轴缩放 / Alt+滚轮纵向缩放</li>
+    <li>右键工具栏纵向图标布局</li>
+    <li>音高调制工具</li>
+    <li>音高漂移工具</li>
+    <li>音量包络工具</li>
+    <li>剪刀切割工具（Melodyne 行为：切点竖线穿过即切）</li>
+    <li>音高网格吸附 + 一键吸附</li>
+    <li>Melodyne 式概览导航条</li>
+    <li>Melodyne 式缩放：Cmd+Alt 双击聚焦/恢复、方向键精确缩放</li>
 </ul>
+
+<div class="note">
+    <div class="note-title">编辑方案与滚轮映射</div>
+    <p>切换编辑方案会同步切换滚轮导航映射和工具集。OpenTune 方案使用传统音符编辑，OpenDyne 方案使用 Melodyne 式波形块编辑。</p>
+</div>
 
 <h2 id="preferences">10. 偏好设置</h2>
 
@@ -459,8 +460,8 @@
 <table>
     <tr><th>设置项</th><th>说明</th><th>默认值</th></tr>
     <tr><td>界面语言</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
-    <tr><td>主题</td><td>BlueBreeze / DarkBlueGrey / Aurora / Overdose</td><td>Aurora</td></tr>
-    <tr><td>编辑方案</td><td>曲线优先 / 音符优先</td><td>曲线优先</td></tr>
+    <tr><td>主题</td><td>Aurora</td><td>Aurora</td></tr>
+    <tr><td>编辑方案</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
     <tr><td>渲染优先级</td><td>GPU 优先 / CPU 优先</td><td>GPU 优先</td></tr>
     <tr><td>声码器模型权重</td><td>Community（社区版）/ Coulin9 v4（专业版）</td><td>Community</td></tr>
     <tr><td>水平缩放灵敏度</td><td>控制鼠标滚轮水平缩放速度</td><td>1.0</td></tr>
@@ -469,6 +470,7 @@
     <tr><td>音名显示</td><td>全部显示 / 仅 C / 隐藏</td><td>仅 C</td></tr>
     <tr><td>显示分块边界</td><td>渲染分块边界可视化</td><td>关</td></tr>
     <tr><td>显示无声帧</td><td>显示非有声帧的 F0 数据</td><td>关</td></tr>
+    <tr><td>鼠标光标样式</td><td>Adwaita / Capitaine / Breeze</td><td>系统默认</td></tr>
 </table>
 
 <h3>10.2 Standalone 专有设置</h3>
@@ -487,7 +489,7 @@
     <li>Note Labels — 音名显示模式</li>
     <li>Show Chunk Boundaries — 分块边界</li>
     <li>Show Unvoiced Frames — 无声帧</li>
-    <li>Theme — 主题切换（含 Overdose）</li>
+    <li>Theme — 主题切换</li>
     <li>Mouse Trail — 鼠标拖尾主题</li>
 </ul>
 
@@ -515,18 +517,31 @@
 </table>
 
 <h3>11.3 工具切换</h3>
+<p><strong>OpenTune 工具</strong></p>
 <table class="shortcut-table">
     <tr><th>快捷键</th><th>工具</th></tr>
-    <tr><td>2</td><td>DrawNote — 绘制音符</td></tr>
-    <tr><td>3</td><td>Select — 选择工具</td></tr>
-    <tr><td>4</td><td>LineAnchor — 锚点工具</td></tr>
-    <tr><td>5</td><td>HandDraw — 手绘工具</td></tr>
-    <tr><td>6</td><td>AutoTune — 自动修正</td></tr>
-    <tr><td>T</td><td>TimeTool — 时间工具</td></tr>
+    <tr><td>2</td><td>绘制音符</td></tr>
+    <tr><td>3</td><td>选择工具</td></tr>
+    <tr><td>4</td><td>锚点工具</td></tr>
+    <tr><td>5</td><td>手绘工具</td></tr>
+    <tr><td>6</td><td>自动修正</td></tr>
+    <tr><td>T</td><td>时间工具</td></tr>
+</table>
+
+<p><strong>OpenDyne 工具</strong></p>
+<table class="shortcut-table">
+    <tr><th>快捷键</th><th>工具</th></tr>
+    <tr><td>2</td><td>绘制音符</td></tr>
+    <tr><td>3</td><td>选择工具</td></tr>
+    <tr><td>4</td><td>音高调制工具</td></tr>
+    <tr><td>5</td><td>音高漂移工具</td></tr>
+    <tr><td>6</td><td>音量包络工具</td></tr>
+    <tr><td>7</td><td>剪刀工具</td></tr>
+    <tr><td>T</td><td>时间工具</td></tr>
 </table>
 
 <h3>11.4 视图操作</h3>
-<p><strong>普通模式</strong></p>
+<p><strong>OpenTune 模式</strong></p>
 <table class="shortcut-table">
     <tr><th>快捷键</th><th>功能</th></tr>
     <tr><td>滚轮</td><td>垂直滚动</td></tr>
@@ -555,10 +570,7 @@
 <h3>12.1 界面主题</h3>
 <table>
     <tr><th>主题</th><th>风格</th><th>适用场景</th></tr>
-    <tr><td><strong>Blue Breeze</strong></td><td>浅色系、柔和蓝调、现代简约</td><td>明亮环境、长时间使用</td></tr>
-    <tr><td><strong>Dark Blue-Grey</strong></td><td>深色系、专业录音室风格、立体阴影</td><td>暗室环境、专业制作</td></tr>
-    <tr><td><strong>Aurora Glass</strong></td><td>深色背景、霓虹发光、毛玻璃质感</td><td>追求科技感、个性表达</td></tr>
-    <tr><td><strong>Overdose</strong></td><td>深色霓虹风格、高饱和度、激进视觉</td><td>音乐制作、个性表达</td></tr>
+    <tr><td><strong>Aurora</strong></td><td>深色背景、霓虹发光、毛玻璃质感、旋钮拟物化（金属银色+心形中心）、模块边框精致化</td><td>追求科技感、音乐制作、个性表达</td></tr>
 </table>
 
 <h3>12.2 鼠标拖尾特效（仅 Standalone）</h3>
@@ -669,7 +681,7 @@
 </ul>
 
 <h3>Q3: 内存占用很高？</h3>
-<p><strong>A:</strong> v1.5 已优化内存管理——F0 模型用完自动释放。如仍偏高，可尝试：关闭 GPU 加速（GPU session 会占用额外显存）、减少同时打开的轨道数量。</p>
+<p><strong>A:</strong> v1.7 已优化内存管理——F0 模型用完自动释放。如仍偏高，可尝试：关闭 GPU 加速（GPU session 会占用额外显存）、减少同时打开的轨道数量。</p>
 
 <h3>Q4: 修正后的音质有异常？</h3>
 <p><strong>A:</strong> 可能原因：声码器模型文件损坏（重新下载）、Retune Speed 设置过高（降低到 30% 以下试试）、原始录音质量较差。</p>
@@ -679,7 +691,7 @@
     <li>使用较低的 Retune Speed（10–30%）</li>
     <li>保留原始颤音，不添加人工 Vibrato</li>
     <li>使用 LineAnchor 工具精细调整关键位置</li>
-    <li>选择"曲线优先编辑"方案获得更精细的控制</li>
+    <li>选择"OpenTune 编辑"方案获得更精细的控制</li>
 </ul>
 
 <h3>Q6: VST3 插件在 DAW 中无法加载？</h3>
@@ -691,7 +703,7 @@
 <hr>
 
 <footer>
-    <p>OpenTune v1.5 — AI 智能修音软件 | 开源免费 | AGPL v3.0 许可证</p>
+    <p>OpenTune v1.7 — AI 智能修音软件 | 开源免费 | AGPL v3.0 许可证</p>
     <p>感谢 DiffSinger 开源社区及所有贡献者</p>
 </footer>
 

@@ -68,14 +68,14 @@
     <h1>OpenTune</h1>
     <div class="subtitle">AI-Powered Pitch Correction Software</div>
     <div class="tagline">Preserve formants, pitch-shift without distortion</div>
-    <div class="version">User Guide v1.5</div>
-    <div class="version" style="margin-top: 10px;">May 2026</div>
+    <div class="version">User Guide v1.7</div>
+    <div class="version" style="margin-top: 10px;">August 2026</div>
 </div>
 
 <div class="toc">
     <h2>Table of Contents</h2>
     <ul>
-        <li><a href="#whats-new">★ What's New in v1.5</a></li>
+        <li><a href="#whats-new">★ What's New in v1.7</a></li>
         <li><a href="#intro">1. Introduction</a></li>
         <li><a href="#requirements">2. System Requirements</a></li>
         <li><a href="#install">3. Installation &amp; Launch</a></li>
@@ -97,41 +97,30 @@
 
 
 <div class="page-break"></div>
-<h2 id="whats-new">★ What's New in v1.5</h2>
+<h2 id="whats-new">★ What's New in v1.7</h2>
 
 <h3>🎉 New Features</h3>
 <table>
     <tr><th width="25%">Feature</th><th>Description</th></tr>
-    <tr><td><strong>VST3/ARA Plugin Mode</strong></td><td>Load OpenTune as a VST3 + ARA2 plugin in DAWs (Studio One, Cubase, Logic Pro)</td></tr>
-    <tr><td><strong>Universal GPU Acceleration</strong></td><td>GPU acceleration now works on NVIDIA / AMD / Intel GPUs</td></tr>
-    <tr><td><strong>8 Scale/Mode Types</strong></td><td>Scale detection expanded from Major/Minor to 8 types: Major, Minor, Chromatic, Harmonic Minor, Dorian, Mixolydian, Major Pentatonic, Minor Pentatonic</td></tr>
-    <tr><td><strong>Piano Key Audition</strong></td><td>Click piano keys on the left side of the piano roll to preview pitch; supports click-and-drag across keys, release to stop</td></tr>
-    <tr><td><strong>Editing Schemes</strong></td><td>New "Curve-Priority" and "Note-Priority" editing schemes, switchable in Preferences</td></tr>
-    <tr><td><strong>Preferences Panel</strong></td><td>Full preferences dialog for language, theme, editing scheme, render priority, zoom sensitivity, and more</td></tr>
-    <tr><td><strong>5-Language Interface</strong></td><td>UI available in Chinese, English, Japanese, Russian, and Spanish</td></tr>
-    <tr><td><strong>Mouse Trail Effects</strong></td><td>8 mouse trail themes (Classic, Neon, Fire, Ocean, Galaxy, Cherry Blossom, Matrix, etc.)</td></tr>
-    <tr><td><strong>Panel Collapse</strong></td><td>Left/right panels can be hidden for immersive full-screen editing</td></tr>
-    <tr><td><strong>Render Status Badge</strong></td><td>Floating badge in the top-right corner showing current render progress</td></tr>
-    <tr><td><strong>Per-Note Vibrato</strong></td><td>Vibrato Depth and Rate can be set independently for each note</td></tr>
-    <tr><td><strong>Line Anchor Segment Parameters</strong></td><td>Line Anchor segments can be selected and given individual Retune Speed values</td></tr>
-    <tr><td><strong>Hover Tooltips</strong></td><td>All controls show tooltips on hover with description and shortcut key</td></tr>
-    <tr><td><strong>Batch Import</strong></td><td>Import multiple audio files at once — arrange sequentially or distribute to separate tracks</td></tr>
-    <tr><td><strong>View Menu Quick Settings</strong></td><td>Toggle waveform, lanes, note labels, chunk boundaries, and other visual options from the View menu</td></tr>
-    <tr><td><strong>Time Tool (TimeTool)</strong></td><td>The 6th editing tool, experimental, Standalone-only. Enable in Preferences → Experimental Features. Drag time handles to adjust output time for time-stretch/compression. Shortcut T</td></tr>
-    <tr><td><strong>Two-Stage Render Pipeline</strong></td><td>Stage 1 pitch correction (existing) + Stage 2 time-stretch (SoundTouch WSOLA); editing the time grid does not re-run pitch correction cache</td></tr>
-    <tr><td><strong>Three Coordinate Systems</strong></td><td>Source time ↔ Output time (via TimeGrid τ mapping) ↔ Screen pixels, enabling precise time-domain editing</td></tr>
-    <tr><td><strong>Vocoder Dual Weights</strong></td><td>Community (default) and Coulin9 v4 (professional) vocoder model weights, switchable in Preferences</td></tr>
-    <tr><td><strong>Reference Auto-Alignment</strong></td><td>Reference pitch auto-aligned across ARA regions, improving multi-track editing consistency</td></tr>
-    <tr><td><strong>Project System</strong></td><td>.otproj project file save/load, fully restoring project editing state, track layout, and pitch correction</td></tr>
-    <tr><td><strong>Overdose Theme</strong></td><td>Fourth interface theme, dark neon style, offering a more aggressive visual option for music production</td></tr>
+    <tr><td><strong>OpenDyne Editing Mode</strong></td><td>Neural editing mode with Melodyne-style workflow: waveform visualization, pitch modulation/drift tools, volume envelope, scissors cutting, overview navigation strip</td></tr>
+    <tr><td><strong>Melodyne-style Overview</strong></td><td>Waveform preview strip merged with scrollbar, viewport navigation</td></tr>
+    <tr><td><strong>Wheel Navigation (OpenDyne)</strong></td><td>Ctrl+Wheel dual-axis zoom, Alt+Wheel vertical zoom, Shift+Wheel horizontal scroll</td></tr>
+    <tr><td><strong>Melodyne-style Zoom</strong></td><td>Cmd+Alt double-click focus/restore, arrow key precise zoom, temporary magnifier cursor</td></tr>
+    <tr><td><strong>Pitch Grid Snap</strong></td><td>Toggleable pitch grid snapping, one-click snap to nearest note</td></tr>
+    <tr><td><strong>Note Edge Retraction</strong></td><td>Automatic edge retraction when dragging notes, avoids obscuring adjacent elements</td></tr>
+    <tr><td><strong>Right-click Toolbar (OpenDyne)</strong></td><td>Right-click tool selection changed to vertical icon toolbar layout</td></tr>
+    <tr><td><strong>Timeline Overview Strip</strong></td><td>New timeline overview strip with piano roll viewport memory</td></tr>
+    <tr><td><strong>Mouse Cursor Themes</strong></td><td>3 selectable cursor styles: Adwaita, Capitaine, Breeze</td></tr>
+    <tr><td><strong>Shortcut Three-section Layout</strong></td><td>Shortcut settings page divided into General/OpenTune/OpenDyne sections</td></tr>
 </table>
 
 <h3>🐛 Fixes &amp; Optimizations</h3>
 <table>
     <tr><th width="25%">Issue</th><th>Improvement</th></tr>
     <tr><td><strong>High Memory Usage</strong></td><td>Optimized memory management reduces resident memory by ~500–900 MB</td></tr>
-    <tr><td><strong>Poor GPU Compatibility</strong></td><td>GPU acceleration now works on all major GPUs, with automatic CPU fallback when no compatible GPU is available</td></tr>
+    <tr><td><strong>Poor GPU Compatibility</strong></td><td>GPU acceleration works on all major GPUs, with automatic CPU fallback</td></tr>
     <tr><td><strong>Slow Processing</strong></td><td>GPU acceleration significantly improves processing speed</td></tr>
+    <tr><td><strong>Preferences Dialog Adaptation</strong></td><td>Adapts to different screen resolutions, supports scaling</td></tr>
 </table>
 
 <h2 id="intro">1. Introduction</h2>
@@ -218,9 +207,9 @@
     <tr><td><strong>Top Toolbar</strong></td><td>Menu buttons (File/Edit/View), transport controls, BPM/Scale settings, Tap Tempo, view switching</td></tr>
     <tr><td><strong>Left Track Panel</strong></td><td>Multi-track management (up to 12 tracks), volume knobs, Solo/Mute, circular level meters, add-track button</td></tr>
     <tr><td><strong>Center Arrange View</strong></td><td>Audio clip arrangement, waveform preview, timeline, clip drag/split/merge/delete</td></tr>
-    <tr><td><strong>Center Piano Roll</strong></td>    <td>Pitch curve editing, note drawing/selection, F0 curve visualization, playhead, piano key audition (click the keyboard to preview pitch); in TimeTool view, piano keys and notes/F0 curves are hidden and draggable time handles (TimeGrid handles) are shown</td></tr>
+    <tr><td><strong>Center Piano Roll</strong></td>    <td>Pitch curve editing, note drawing/selection, pitch curve visualization, playhead, piano key audition (click the keyboard to preview pitch); in TimeTool view, piano keys and notes/pitch curves are hidden and draggable time handles are shown</td></tr>
     <tr><td><strong>Right Parameter Panel</strong></td><td>Retune Speed / Vibrato / Note Split knobs, tool selection buttons</td></tr>
-    <tr><td><strong>Render Status Badge</strong></td><td>Top-right floating indicator showing current render progress (e.g. "Rendering 3/8"); Stage 2 time-stretch progress shown separately (e.g. "+2")</td></tr>
+    <tr><td><strong>Render Status Badge</strong></td><td>Top-right floating indicator showing current render progress (e.g. "Rendering 3/8"); time-stretch progress shown separately (e.g. "+2")</td></tr>
 </table>
 
 <h3>4.2 Panel Toggle</h3>
@@ -368,14 +357,14 @@
 
 <div class="tool-card">
     <h4>HandDraw — Freehand Tool (Shortcut: 5)</h4>
-    <p>Draw the F0 curve directly by hand for fully customized pitch shaping. Ideal for drawing vibrato, glides, bends, and other ornamental effects.</p>
+    <p>Draw the pitch curve directly by hand for fully customized pitch shaping. Ideal for drawing vibrato, glides, bends, and other ornamental effects.</p>
 </div>
 
 <div class="tool-card">
     <h4>TimeTool — Time Tool (Shortcut: T) [Experimental, Standalone-only]</h4>
-    <p>Enable experimental features in Preferences before use. It is not available in VST3 or ARA. Drag time handles to adjust the output time of audio, achieving time-stretch/compression effects. When entering TimeTool view, piano keys and notes/F0 curves are automatically hidden, focusing on time-domain editing.</p>
-    <p><strong>Operations</strong>: Drag handles to adjust output time; Shift+click to multi-select handles; Alt+drag to release minimum-spacing clamp; double-click blank area to insert a new handle; Delete removes selected handles (endpoints protected); click blank area to reposition playhead.</p>
-    <p><strong>Endpoints &amp; Rendering</strong>: First and last endpoints are fixed, total duration stays unchanged. Editing does not re-run pitch correction; once the current canonical completes, a one-off SoundTouch WSOLA Stage 2 time-stretch rebuild is queued.</p>
+    <p>Enable experimental features in Preferences before use. It is not available in VST3 or ARA. Drag time handles to adjust the output time of audio, achieving time-stretch/compression effects. When entering TimeTool view, piano keys and notes/pitch curves are automatically hidden, focusing on time-based editing.</p>
+    <p><strong>Operations</strong>: Drag handles to adjust output time; Shift+click to multi-select handles; Alt+drag to relax the minimum-spacing constraint; double-click blank area to insert a new handle; Delete removes selected handles (endpoints protected); click blank area to reposition playhead.</p>
+    <p><strong>Endpoints &amp; Rendering</strong>: First and last endpoints are fixed, total duration stays unchanged. Editing does not re-run pitch correction; once the current processing pass completes, a one-off time-stretch rebuild is queued.</p>
 </div>
 
 <h3>7.1 Piano Key Audition</h3>
@@ -436,21 +425,33 @@
 <div class="page-break"></div>
 <h2 id="schemes">9. Editing Schemes</h2>
 
-<p>OpenTune provides two editing schemes that determine tool behavior. Switch via Preferences &rarr; Editing Scheme.</p>
+<p>OpenTune provides two editing schemes. Switch via Preferences → Editing Scheme.</p>
 
-<h3>9.1 Curve-First Editing (Default)</h3>
+<h3>9.1 OpenTune Editing (Default)</h3>
 <ul>
-    <li>LineAnchor segments can be selected and given independent Retune Speed</li>
-    <li>The parameter panel prioritizes displaying parameters of the selected LineAnchor segment</li>
-    <li>AutoTune prioritizes acting on the selected time region</li>
+    <li>Traditional waveform + note editing mode</li>
+    <li>Wheel: Vertical scroll / Shift+Wheel vertical zoom / Ctrl+Wheel horizontal zoom / Alt+Wheel horizontal scroll</li>
+    <li>Horizontal toolbar layout</li>
 </ul>
 
-<h3>9.2 Note-First Editing</h3>
+<h3>9.2 OpenDyne Editing</h3>
 <ul>
-    <li>After HandDraw / LineAnchor drawing, affected notes are automatically selected</li>
-    <li>AutoTune prioritizes acting on the selected note range</li>
-    <li>The parameter panel prioritizes displaying parameters of the selected note</li>
+    <li>Melodyne-style neural editing: waveform visualization, selected highlight overlay</li>
+    <li>Wheel: Vertical scroll / Shift+Wheel horizontal scroll / Ctrl+Wheel dual-axis zoom / Alt+Wheel vertical zoom</li>
+    <li>Right-click vertical icon toolbar layout</li>
+    <li>Pitch Modulation tool</li>
+    <li>Pitch Drift tool</li>
+    <li>Volume Envelope tool</li>
+    <li>Scissors tool (Melodyne behavior: cuts when the vertical line passes through)</li>
+    <li>Pitch grid snap + one-click snap</li>
+    <li>Melodyne-style overview navigation strip</li>
+    <li>Melodyne-style zoom: Cmd+Alt double-click focus/restore, arrow key precise zoom</li>
 </ul>
+
+<div class="note">
+    <div class="note-title">Editing Scheme and Wheel Mapping</div>
+    <p>Switching editing scheme also switches wheel navigation mapping and tool set. OpenTune uses traditional note editing, OpenDyne uses Melodyne-style waveform block editing.</p>
+</div>
 
 <h2 id="preferences">10. Preferences</h2>
 
@@ -459,9 +460,9 @@
 <h3>10.1 Shared Settings (common to Standalone and VST3)</h3>
 <table>
     <tr><th>Setting</th><th>Description</th><th>Default</th></tr>
-    <tr><td>Interface Language</td><td>Chinese / English / &#26085;&#26412;&#35486; / &#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081; / Espa&ntilde;ol</td><td>Chinese</td></tr>
-    <tr><td>Theme</td><td>BlueBreeze / DarkBlueGrey / Aurora / Overdose</td><td>Aurora</td></tr>
-    <tr><td>Editing Scheme</td><td>Curve-First / Note-First</td><td>Curve-First</td></tr>
+    <tr><td>Interface Language</td><td>Chinese / English / Japanese / Russian / Spanish</td><td>Chinese</td></tr>
+    <tr><td>Theme</td><td>Aurora</td><td>Aurora</td></tr>
+    <tr><td>Editing Scheme</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
     <tr><td>Render Priority</td><td>GPU Preferred / CPU Preferred</td><td>GPU Preferred</td></tr>
     <tr><td>Vocoder Model Weights</td><td>Community / Coulin9 v4 (Professional)</td><td>Community</td></tr>
     <tr><td>Horizontal Zoom Sensitivity</td><td>Controls mouse wheel horizontal zoom speed</td><td>1.0</td></tr>
@@ -469,7 +470,8 @@
     <tr><td>Scroll Speed</td><td>View scrolling speed</td><td>1.0</td></tr>
     <tr><td>Note Name Display</td><td>Show All / C Only / Hidden</td><td>C Only</td></tr>
     <tr><td>Show Chunk Boundaries</td><td>Visualize render chunk boundaries</td><td>Off</td></tr>
-    <tr><td>Show Unvoiced Frames</td><td>Display F0 data for non-voiced frames</td><td>Off</td></tr>
+    <tr><td>Show Unvoiced Frames</td><td>Display pitch data for unvoiced frames</td><td>Off</td></tr>
+    <tr><td>Mouse Cursor Style</td><td>Adwaita / Capitaine / Breeze</td><td>System Default</td></tr>
 </table>
 
 <h3>10.2 Standalone-Specific Settings</h3>
@@ -516,18 +518,31 @@
 </table>
 
 <h3>11.3 Tool Switching</h3>
+<p><strong>OpenTune Tools</strong></p>
 <table class="shortcut-table">
     <tr><th>Shortcut</th><th>Tool</th></tr>
-    <tr><td>2</td><td>DrawNote — Note Drawing</td></tr>
-    <tr><td>3</td><td>Select — Selection Tool</td></tr>
-    <tr><td>4</td><td>LineAnchor — Anchor Tool</td></tr>
-    <tr><td>5</td><td>HandDraw — Freehand Tool</td></tr>
-    <tr><td>6</td><td>AutoTune — Auto Correction</td></tr>
-    <tr><td>T</td><td>TimeTool — Time Tool</td></tr>
+    <tr><td>2</td><td>Draw Note</td></tr>
+    <tr><td>3</td><td>Select</td></tr>
+    <tr><td>4</td><td>Anchor (LineAnchor)</td></tr>
+    <tr><td>5</td><td>Freehand Draw (HandDraw)</td></tr>
+    <tr><td>6</td><td>Auto-Tune</td></tr>
+    <tr><td>T</td><td>Time Tool</td></tr>
+</table>
+
+<p><strong>OpenDyne Tools</strong></p>
+<table class="shortcut-table">
+    <tr><th>Shortcut</th><th>Tool</th></tr>
+    <tr><td>2</td><td>Draw Note</td></tr>
+    <tr><td>3</td><td>Select</td></tr>
+    <tr><td>4</td><td>Pitch Modulation</td></tr>
+    <tr><td>5</td><td>Pitch Drift</td></tr>
+    <tr><td>6</td><td>Volume Envelope</td></tr>
+    <tr><td>7</td><td>Scissors</td></tr>
+    <tr><td>T</td><td>Time Tool</td></tr>
 </table>
 
 <h3>11.4 View Operations</h3>
-<p><strong>Normal Mode</strong></p>
+<p><strong>OpenTune Mode</strong></p>
 <table class="shortcut-table">
     <tr><th>Shortcut</th><th>Function</th></tr>
     <tr><td>Mouse Wheel</td><td>Vertical scrolling</td></tr>
@@ -556,10 +571,7 @@
 <h3>12.1 Interface Themes</h3>
 <table>
     <tr><th>Theme</th><th>Style</th><th>Best For</th></tr>
-    <tr><td><strong>Blue Breeze</strong></td><td>Light palette, soft blue tones, modern minimalism</td><td>Bright environments, extended sessions</td></tr>
-    <tr><td><strong>Dark Blue-Grey</strong></td><td>Dark palette, professional studio style, dimensional shadows</td><td>Dark-room environments, professional production</td></tr>
-    <tr><td><strong>Aurora Glass</strong></td><td>Dark background, neon glow, frosted glass texture</td><td>Tech-forward aesthetic, personal expression</td></tr>
-    <tr><td><strong>Overdose</strong></td><td>Dark neon style, high saturation, aggressive visuals</td><td>Music production, personal expression</td></tr>
+    <tr><td><strong>Aurora Glass</strong></td><td>Dark background, neon glow, frosted glass, skeuomorphic knobs (metallic silver + heart center), refined module borders</td><td>Tech-forward aesthetic, personal expression</td></tr>
 </table>
 
 <h3>12.2 Mouse Trail Effects (Standalone Only)</h3>
@@ -659,7 +671,7 @@
 <h2 id="faq">16. FAQ</h2>
 
 <h3>Q1: No pitch curve after importing audio?</h3>
-<p><strong>A:</strong> Ensure <code>models/rmvpe.onnx</code> exists and is intact. The audio must contain clear vocal melodic content. Pure accompaniment/percussion cannot extract F0.</p>
+<p><strong>A:</strong> Ensure <code>models/rmvpe.onnx</code> exists and is intact. The audio must contain clear vocal melodic content. Pure accompaniment/percussion contains no extractable pitch.</p>
 
 <h3>Q2: GPU acceleration not working?</h3>
 <p><strong>A:</strong> Check the following:</p>
@@ -667,11 +679,11 @@
     <li>Ensure <code>DirectML.dll</code> is in the program directory</li>
     <li>Confirm GPU drivers are updated to the latest version</li>
     <li>Verify "Render Priority" is set to GPU Preferred in Preferences</li>
-    <li>Check log files to confirm the DML provider loaded successfully</li>
+    <li>Check log files to confirm GPU acceleration loaded successfully</li>
 </ul>
 
 <h3>Q3: High memory usage?</h3>
-<p><strong>A:</strong> v1.5 has optimized memory management — the F0 model is automatically released after use. If usage remains high, try: disabling GPU acceleration (GPU sessions consume additional memory), reducing the number of simultaneously open tracks.</p>
+<p><strong>A:</strong> v1.7 has optimized memory management — the pitch-extraction model is automatically released after use. If usage remains high, try: disabling GPU acceleration (GPU rendering consumes additional memory), reducing the number of simultaneously open tracks.</p>
 
 <h3>Q4: Abnormal audio quality after correction?</h3>
 <p><strong>A:</strong> Possible causes: corrupted vocoder model files (re-download), Retune Speed set too high (try lowering below 30%), poor original recording quality.</p>
@@ -681,7 +693,7 @@
     <li>Use a lower Retune Speed (10&ndash;30%)</li>
     <li>Preserve original vibrato; do not add artificial Vibrato</li>
     <li>Use the LineAnchor tool for fine adjustments at key points</li>
-    <li>Choose "Curve-First Editing" scheme for more refined control</li>
+    <li>Choose the "OpenTune editing" scheme for more refined control</li>
 </ul>
 
 <h3>Q6: VST3 plugin won't load in DAW?</h3>
@@ -693,7 +705,7 @@
 <hr>
 
 <footer>
-    <p>OpenTune v1.5 &mdash; AI-Powered Pitch Correction Software | Open Source &amp; Free | AGPL v3.0 License</p>
+    <p>OpenTune v1.7 &mdash; AI-Powered Pitch Correction Software | Open Source &amp; Free | AGPL v3.0 License</p>
     <p>Thanks to the DiffSinger open-source community and all contributors</p>
 </footer>
 

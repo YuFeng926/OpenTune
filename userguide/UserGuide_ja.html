@@ -68,14 +68,14 @@
     <h1>OpenTune</h1>
     <div class="subtitle">AI スマートピッチ補正ソフトウェア</div>
     <div class="tagline">フォルマントを保持し、自然なピッチシフトを実現</div>
-    <div class="version">ユーザーガイド v1.5</div>
-    <div class="version" style="margin-top: 10px;">2026年5月</div>
+    <div class="version">ユーザーガイド v1.7</div>
+    <div class="version" style="margin-top: 10px;">2026年8月</div>
 </div>
 
 <div class="toc">
     <h2>目次</h2>
     <ul>
-        <li><a href="#whats-new">★ v1.5 新機能と改善</a></li>
+        <li><a href="#whats-new">★ v1.7 新機能と改善</a></li>
 <li><a href="#intro">1. 製品概要</a></li>
         <li><a href="#requirements">2. システム要件</a></li>
         <li><a href="#install">3. インストールと起動</a></li>
@@ -96,50 +96,37 @@
 </div>
 
 <div class="page-break"></div>
-<h2 id="whats-new">★ v1.5 新機能と改善</h2>
+<h2 id="whats-new">★ v1.7 新機能と改善</h2>
 
 <h3>🎉 新機能</h3>
 <table>
     <tr><th width="25%">機能</th><th>説明</th></tr>
-    <tr><td><strong>VST3/ARA プラグインモード</strong></td><td>VST3 + ARA2 プラグインとして DAW（Studio One、Cubase、Logic Pro）で使用可能</td></tr>
-    <tr><td><strong>ユニバーサル GPU アクセラレーション</strong></td><td>NVIDIA / AMD / Intel の全 GPU で GPU アクセラレーションが使用可能</td></tr>
-    <tr><td><strong>8 種類のスケール/モード</strong></td><td>スケール検出をメジャー/マイナーから 8 種類に拡張：メジャー、マイナー、クロマチック、ハーモニックマイナー、ドリアン、ミクソリディアン、メジャーペンタトニック、マイナーペンタトニック</td></tr>
-    <tr><td><strong>鍵盤試聴</strong></td><td>ピアノロール左側の鍵盤をクリックしてピッチをプレビュー、ドラッグでキー間を移動、離して停止</td></tr>
-    <tr><td><strong>編集モード</strong></td><td>「カーブ優先」と「ノート優先」の 2 つの編集モードを新設、設定で切替可能</td></tr>
-    <tr><td><strong>設定パネル</strong></td><td>言語、テーマ、編集モード、レンダリング優先度、ズーム感度などを一元管理する設定ダイアログ</td></tr>
-    <tr><td><strong>5 言語インターフェース</strong></td><td>中国語・英語・日本語・ロシア語・スペイン語の 5 言語に対応</td></tr>
-    <tr><td><strong>マウストレイルエフェクト</strong></td><td>8 種類のマウス軌跡テーマ（Classic、Neon、Fire、Ocean、Galaxy、Cherry Blossom、Matrix など）</td></tr>
-    <tr><td><strong>パネル折りたたみ</strong></td><td>左右パネルを非表示にし、没入型フルスクリーン編集が可能</td></tr>
-    <tr><td><strong>レンダリングステータスバッジ</strong></td><td>右上にフローティング表示で現在のレンダリング進捗を表示</td></tr>
-    <tr><td><strong>ノート単位のビブラート</strong></td><td>Vibrato Depth と Rate を各ノートに個別設定可能</td></tr>
-    <tr><td><strong>Line Anchor セグメントパラメータ</strong></td><td>Line Anchor セグメントを選択し、個別の Retune Speed を設定可能</td></tr>
-    <tr><td><strong>ホバーツールチップ</strong></td><td>すべてのコントロールにホバー時ツールチップ（機能説明＋ショートカットキー）を表示</td></tr>
-    <tr><td><strong>バッチインポート</strong></td><td>複数の音声ファイルを一括インポート可能（順次配置またはトラック分配）</td></tr>
-    <tr><td><strong>View メニュークイック設定</strong></td><td>波形表示、レーン、ノート名、チャンク境界などの表示オプションを View メニューから即座に切替</td></tr>
-    <tr><td><strong>時間ツール (TimeTool)</strong></td><td>6 つ目の編集ツール、実験的機能、Standalone のみ提供。設定の「実験的機能」で有効化が必要。タイムハンドルをドラッグして出力時間を調整し、タイムストレッチ/圧縮を実現。ショートカット T</td></tr>
-    <tr><td><strong>二段階レンダリングパイプライン</strong></td><td>Stage 1 ピッチ補正（既存）+ Stage 2 タイムストレッチ（SoundTouch WSOLA）、タイムグリッド編集はピッチ補正キャッシュを再実行しない</td></tr>
-    <tr><td><strong>三座標系</strong></td><td>ソース時間 ↔ 出力時間（TimeGrid τ マッピング経由）↔ 画面ピクセル、正確な時間領域編集を実現</td></tr>
-    <tr><td><strong>ボコーダーデュアルウェイト</strong></td><td>コミュニティ版（Community）と Coulin9 v4 プロフェッショナル版のボコーダーモデルウェイトを、設定で切替可能</td></tr>
-    <tr><td><strong>リファレンス自動アライメント</strong></td><td>ARA モードで複数 region 間のリファレンスピッチを自動アライメント、マルチトラック編集の一貫性を向上</td></tr>
-    <tr><td><strong>プロジェクトシステム</strong></td><td>.otproj プロジェクトファイルの保存/読み込み、プロジェクト編集状態・トラックレイアウト・ピッチ補正を完全に復元</td></tr>
-    <tr><td><strong>Overdose テーマ</strong></td><td>第 4 のインターフェーステーマ、ダークネオンスタイル、音楽制作向けのより攻撃的なビジュアルオプション</td></tr>
+    <tr><td><strong>OpenDyne 編集モード</strong></td><td>Melodyne スタイルのニューラル編集モード：波形可視化、ピッチ変調/ドリフトツール、音量エンベロープ、はさみ切断、オーバービューナビゲーションストリップ</td></tr>
+    <tr><td><strong>Melodyne スタイルのオーバービュー</strong></td><td>波形プレビューストリップとスクロールバーを統合、ビューポートナビゲーション</td></tr>
+    <tr><td><strong>ホイールナビゲーション（OpenDyne）</strong></td><td>Ctrl+ホイール デュアル軸ズーム、Alt+ホイール 縦方向ズーム、Shift+ホイール 横スクロール</td></tr>
+    <tr><td><strong>Melodyne スタイルズーム</strong></td><td>Cmd+Alt ダブルクリック フォーカス/復元、矢印キー精密ズーム、一時マグニファイアカーソル</td></tr>
+    <tr><td><strong>ピッチグリッドスナップ</strong></td><td>切り替え可能なピッチグリッドスナップ、ワンクリックで最近のノートにスナップ</td></tr>
+    <tr><td><strong>ノートエッジ退避</strong></td><td>ノートドラッグ時にエッジが自動退避し、隣接要素を隠さない</td></tr>
+    <tr><td><strong>右クリックツールバー（OpenDyne）</strong></td><td>右クリックツール選択を縦型アイコンツールバーに変更</td></tr>
+    <tr><td><strong>タイムラインオーバービューストリップ</strong></td><td>ピアノロールのビューポート記憶付きの新しいタイムラインオーバービューストリップ</td></tr>
+    <tr><td><strong>マウスカーソルテーマ</strong></td><td>3 種類のカーソルスタイル：Adwaita、Capitaine、Breeze</td></tr>
+    <tr><td><strong>ショートカット三段構成</strong></td><td>ショートカット設定ページを一般/OpenTune/OpenDyne の三段に分割</td></tr>
 </table>
 
 <h3>🐛 修正と最適化</h3>
 <table>
     <tr><th width="25%">問題</th><th>改善内容</th></tr>
     <tr><td><strong>メモリ使用量が高い</strong></td><td>メモリ管理を最適化し、常駐メモリを約 500〜900 MB 削減</td></tr>
-    <tr><td><strong>GPU 互換性が低い</strong></td><td>全主要 GPU でアクセラレーション可能、非対応時は自動的に CPU にフォールバック</td></tr>
+    <tr><td><strong>GPU 互換性が低い</strong></td><td>全主要 GPU でアクセラレーション可能、非対応時は自動 CPU フォールバック</td></tr>
     <tr><td><strong>処理速度が遅い</strong></td><td>GPU アクセラレーションにより処理速度を大幅向上</td></tr>
-
-
+    <tr><td><strong>設定ダイアログ適応</strong></td><td>異なる画面解像度に対応、ズームサポート</td></tr>
 </table>
 
 <h2 id="intro">1. 製品概要</h2>
 
 <p>OpenTune は、ニューラルボコーダーベースのオープンソース AI ピッチ補正ソフトウェアです。従来の DSP アルゴリズムが直接ピッチシフトを行うのとは異なり、PC-NSF-HiFiGAN ボコーダーを使用して元のフォルマントを保持したまま声を再生成するため、極端なピッチ調整でも自然で安定した音質を実現します。</p>
 
-<p>OpenTune は <strong>Standalone（スタンドアロン）</strong>と <strong>VST3/ARA（ホストプラグイン）</strong>の両方の動作モードを提供し、独立したマルチトラックエディターとしても、DAW に組み込んでリアルタイムの共同編集を行うことも可能です。</p>
+<p>OpenTune は <strong>スタンドアロン版</strong>と <strong>VST3/ARA（ホストプラグイン）</strong>の両方の動作モードを提供し、独立したマルチトラックエディターとしても、DAW に組み込んでリアルタイムの共同編集を行うことも可能です。</p>
 
 <h3>主な利点</h3>
 <table>
@@ -149,7 +136,7 @@
     <tr><td><strong>AI リシンセシス</strong></td><td>PC-NSF-HiFiGAN ディープラーニングボコーダーによる高忠実度の音声再構築</td></tr>
     <tr><td><strong>Auto-Tune ライクなワークフロー</strong></td><td>自動補正、手描き、音符、アンカーツールを完備</td></tr>
     <tr><td><strong>自動調性検出</strong></td><td>Krumhansl-Schmuckler アルゴリズム内蔵、8種類の調性に対応</td></tr>
-    <tr><td><strong>デュアルフォーマット対応</strong></td><td>Standalone スタンドアロン + VST3/ARA プラグインで主要 DAW とシームレス連携</td></tr>
+    <tr><td><strong>デュアルフォーマット対応</strong></td><td>スタンドアロン版 + VST3/ARA プラグインで主要 DAW とシームレス連携</td></tr>
     <tr><td><strong>GPU アクセラレーション</strong></td><td>DirectML / CoreML による AI 推論の自動高速化、CPU に自動フォールバック</td></tr>
     <tr><td><strong>500 ステップの取り消し</strong></td><td>カスタム Undo/Redo システム、あらゆる編集操作を元に戻せます</td></tr>
     <tr><td><strong>オープンソース・無料</strong></td><td>永久無料、コミュニティ主導、継続的な進化</td></tr>
@@ -192,7 +179,7 @@
 
 <h3>3.2 ファイル構成</h3>
 <ul>
-    <li><code>OpenTune.exe</code> — メインプログラム（Standalone）</li>
+    <li><code>OpenTune.exe</code> — メインプログラム（スタンドアロン版）</li>
     <li><code>OpenTune.vst3</code> — VST3 プラグイン（DAW 用）</li>
     <li><code>OpenTuneOnnxRuntime_1_24_4.dll</code> — ONNX Runtime</li>
     <li><code>DirectML.dll</code> — DirectML ランタイム（GPU アクセラレーション）</li>
@@ -211,7 +198,7 @@
 <div class="page-break"></div>
 <h2 id="interface">4. インターフェース概要</h2>
 
-<p>OpenTune Standalone のインターフェースはモダンなマルチパネルデザインを採用し、各エリアは折りたたみ可能です：</p>
+<p>OpenTune スタンドアロン版のインターフェースはモダンなマルチパネルデザインを採用し、各エリアは折りたたみ可能です：</p>
 
 <h3>4.1 画面レイアウト</h3>
 <table>
@@ -219,9 +206,9 @@
     <tr><td><strong>上部ツールバー</strong></td><td>メニューボタン（ファイル/編集/表示）、トランスポートコントロール、BPM/調性設定、Tap Tempo、ビュー切替</td></tr>
     <tr><td><strong>左側トラックパネル</strong></td><td>マルチトラック管理（最大12トラック）、ボリュームノブ、Solo/Mute、円形レベルメーター、トラック追加ボタン</td></tr>
     <tr><td><strong>中央アレンジビュー</strong></td><td>オーディオクリップ配置、波形プレビュー、タイムライン、クリップのドラッグ/分割/結合/削除</td></tr>
-    <tr>        <td><strong>中央ピアノロール</strong></td><td>ピッチカーブ編集、音符の描画/選択、F0 カーブ可視化、プレイヘッド、鍵盤試聴（左側キーボードをクリックしてピッチをプレビュー）；TimeTool では鍵盤・音符/F0 カーブが非表示になり、ドラッグ可能なタイムハンドル（TimeGrid handles）が表示</td></tr>
+    <tr>        <td><strong>中央ピアノロール</strong></td><td>ピッチカーブ編集、音符の描画/選択、F0 カーブ可視化、プレイヘッド、鍵盤試聴（左側キーボードをクリックしてピッチをプレビュー）；TimeTool では鍵盤・音符/F0 カーブが非表示になり、ドラッグ可能なタイムグリッドハンドルが表示</td></tr>
     <tr><td><strong>右側パラメータパネル</strong></td><td>Retune Speed / Vibrato / Note Split ノブ、ツール選択ボタン</td></tr>
-    <tr><td><strong>レンダリングステータスバッジ</strong></td><td>右上にフローティング表示、現在のレンダリング進捗（例：「レンダリング中 3/8」）、Stage 2 タイムストレッチ進捗は別途表示（例：「+2」）</td></tr>
+    <tr><td><strong>レンダリングステータスバッジ</strong></td><td>右上にフローティング表示、現在のレンダリング進捗（例：「レンダリング中 3/8」）、第 2 段階のタイムストレッチ進捗は別途表示（例：「+2」）</td></tr>
 </table>
 
 <h3>4.2 パネルの折りたたみ</h3>
@@ -373,10 +360,10 @@
 </div>
 
 <div class="tool-card">
-    <h4>TimeTool — 時間ツール (ショートカット: T) [実験的機能、Standalone のみ]</h4>
+    <h4>TimeTool — 時間ツール (ショートカット: T) [実験的機能、スタンドアロン版のみ]</h4>
     <p>設定で実験的機能を有効化した後で使用できます。VST3/ARA モードでは利用できません。タイムハンドルをドラッグしてオーディオの出力時間を調整し、タイムストレッチ/圧縮を実現します。TimeTool ビューでは、鍵盤・音符/F0 カーブが自動で非表示になり、時間領域の編集に集中できます。</p>
     <p><strong>操作</strong>：ハンドルをドラッグして出力時間を調整；Shift+クリックで複数ハンドルを選択；Alt+ドラッグで最小間隔クランプを解除；空白をダブルクリックして新しいハンドルを挿入；Delete で選択中のハンドルを削除（端点保護あり）；空白をクリックしてプレイヘッドを再配置。</p>
-    <p><strong>端点とレンダリング</strong>：最初と最後の端点は固定、総再生時間は変更されません。編集はピッチ補正を再実行しません；現在の canonical が完了すると、SoundTouch WSOLA Stage 2 タイムストレッチ再構築が 1 回キューイングされます。</p>
+    <p><strong>端点とレンダリング</strong>：最初と最後の端点は固定、総再生時間は変更されません。編集はピッチ補正を再実行しません；現在のレンダリングが完了すると、第 2 段階のタイムストレッチ再構築が 1 回キューイングされます。</p>
 </div>
 
 <h3>7.1 鍵盤試聴</h3>
@@ -437,32 +424,43 @@
 <div class="page-break"></div>
 <h2 id="schemes">9. 編集モード</h2>
 
-<p>OpenTune は2つの編集モードを提供し、ツールの動作を決定します。設定 → 編集モードから切り替え可能です。</p>
+<p>OpenTune は2つの編集モードを提供します。設定 → 編集モードから切り替え可能です。</p>
 
-<h3>9.1 カーブ優先編集（デフォルト）</h3>
+<h3>9.1 OpenTune 編集（デフォルト）</h3>
 <ul>
-    <li>LineAnchor セグメントを選択し、独立した Retune Speed を設定可能</li>
-    <li>パラメータパネルは選択中の LineAnchor セグメントのパラメータを優先表示</li>
-    <li>AutoTune は選択中の時間領域を優先して作用</li>
+    <li>従来の波形+ノート編集モード</li>
+    <li>ホイール：垂直スクロール / Shift+ホイール 垂直ズーム / Ctrl+ホイール 水平ズーム / Alt+ホイール 水平スクロール</li>
+    <li>水平ツールバーレイアウト</li>
 </ul>
 
-<h3>9.2 音符優先編集</h3>
+<h3>9.2 OpenDyne 編集</h3>
 <ul>
-    <li>HandDraw / LineAnchor 描画後、影響を受ける音符を自動選択</li>
-    <li>AutoTune は選択中の音符範囲を優先して作用</li>
-    <li>パラメータパネルは選択中の音符のパラメータを優先表示</li>
+    <li>Melodyne スタイルニューラル編集：波形ブロブの可視化、選択ハイライトオーバーレイ</li>
+    <li>ホイール：垂直スクロール / Shift+ホイール 水平スクロール / Ctrl+ホイール デュアル軸ズーム / Alt+ホイール 垂直ズーム</li>
+    <li>右クリック縦型アイコンツールバーレイアウト</li>
+    <li>ピッチモジュレーション / ピッチドリフトツール</li>
+    <li>ボリュームエンベロープツール</li>
+    <li>ハサミツール（Melodyne の挙動：縦線が交差したら切断）</li>
+    <li>ピッチグリッドのスナップモード + ワンクリック自動スナップ</li>
+    <li>Melodyne スタイルのオーバービューナビゲーションストリップ</li>
+    <li>Melodyne スタイルズーム：Cmd+Alt ダブルクリック フォーカス/復元、矢印キー精密ズーム</li>
 </ul>
+
+<div class="note">
+    <div class="note-title">編集モードとホイールマッピング</div>
+    <p>編集モードの切り替えでホイールナビゲーションマッピングとツールセットも切り替わります。OpenTune は従来のノート編集、OpenDyne は Melodyne スタイルのブロブ編集を使用します。</p>
+</div>
 
 <h2 id="preferences">10. 設定</h2>
 
 <p>メニュー <strong>File → Options</strong> または <strong>Edit → Preferences</strong> から設定ダイアログを開きます。</p>
 
-<h3>10.1 共有設定（Standalone および VST3 共通）</h3>
+<h3>10.1 共有設定（スタンドアロン版および VST3 共通）</h3>
 <table>
     <tr><th>設定項目</th><th>説明</th><th>デフォルト</th></tr>
     <tr><td>画面言語</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
-    <tr><td><strong>テーマ</strong></td><td>BlueBreeze / DarkBlueGrey / Aurora / Overdose</td><td>Aurora</td></tr>
-    <tr><td>編集モード</td><td>カーブ優先 / 音符優先</td><td>カーブ優先</td></tr>
+    <tr><td><strong>テーマ</strong></td><td>Aurora</td><td>Aurora</td></tr>
+    <tr><td>編集モード</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
     <tr><td>レンダリング優先</td><td>GPU 優先 / CPU 優先</td><td>GPU 優先</td></tr>
     <tr><td>ボコーダーモデルウェイト</td><td>Community（コミュニティ版）/ Coulin9 v4（プロフェッショナル版）</td><td>Community</td></tr>
     <tr><td>水平ズーム感度</td><td>マウスホイールの水平ズーム速度を制御</td><td>1.0</td></tr>
@@ -471,9 +469,10 @@
     <tr><td>音名表示</td><td>すべて表示 / C のみ / 非表示</td><td>C のみ</td></tr>
     <tr><td>チャンク境界を表示</td><td>レンダリングチャンク境界の可視化</td><td>オフ</td></tr>
     <tr><td>無声フレームを表示</td><td>非有声音フレームの F0 データを表示</td><td>オフ</td></tr>
+    <tr><td>マウスカーソルスタイル</td><td>Adwaita / Capitaine / Breeze</td><td>システムデフォルト</td></tr>
 </table>
 
-<h3>10.2 Standalone 専用設定</h3>
+<h3>10.2 スタンドアロン版専用設定</h3>
 <table>
     <tr><th>設定項目</th><th>説明</th></tr>
     <tr><td>オーディオデバイス</td><td>ドライバタイプ、デバイス選択、サンプルレート、バッファサイズ</td></tr>
@@ -517,18 +516,31 @@
 </table>
 
 <h3>11.3 ツール切替</h3>
+<p><strong>OpenTune ツール</strong></p>
 <table class="shortcut-table">
     <tr><th>ショートカット</th><th>ツール</th></tr>
-    <tr><td>2</td><td>DrawNote — 音符描画</td></tr>
-    <tr><td>3</td><td>Select — 選択ツール</td></tr>
-    <tr><td>4</td><td>LineAnchor — アンカーツール</td></tr>
-    <tr><td>5</td><td>HandDraw — 手描きツール</td></tr>
-    <tr><td>6</td><td>AutoTune — 自動補正</td></tr>
-    <tr><td>T</td><td>TimeTool — 時間ツール</td></tr>
+    <tr><td>2</td><td>音符描画</td></tr>
+    <tr><td>3</td><td>選択ツール</td></tr>
+    <tr><td>4</td><td>アンカーツール</td></tr>
+    <tr><td>5</td><td>手描きツール</td></tr>
+    <tr><td>6</td><td>自動補正</td></tr>
+    <tr><td>T</td><td>時間ツール</td></tr>
+</table>
+
+<p><strong>OpenDyne ツール</strong></p>
+<table class="shortcut-table">
+    <tr><th>ショートカット</th><th>ツール</th></tr>
+    <tr><td>2</td><td>音符描画</td></tr>
+    <tr><td>3</td><td>選択ツール</td></tr>
+    <tr><td>4</td><td>音高変調ツール</td></tr>
+    <tr><td>5</td><td>音高ドリフトツール</td></tr>
+    <tr><td>6</td><td>音量エンベロープツール</td></tr>
+    <tr><td>7</td><td>はさみツール</td></tr>
+    <tr><td>T</td><td>時間ツール</td></tr>
 </table>
 
 <h3>11.4 ビュー操作</h3>
-<p><strong>通常モード</strong></p>
+<p><strong>OpenTune モード</strong></p>
 <table class="shortcut-table">
     <tr><th>ショートカット</th><th>機能</th></tr>
     <tr><td>ホイール</td><td>垂直スクロール</td></tr>
@@ -557,10 +569,7 @@
 <h3>12.1 画面テーマ</h3>
 <table>
     <tr><th>テーマ</th><th>スタイル</th><th>適したシーン</th></tr>
-    <tr><td><strong>Blue Breeze</strong></td><td>ライト系、ソフトなブルートーン、モダンミニマル</td><td>明るい環境、長時間使用</td></tr>
-    <tr><td><strong>Dark Blue-Grey</strong></td><td>ダーク系、プロフェッショナルスタジオ風、立体シャドウ</td><td>暗い環境、プロフェッショナル制作</td></tr>
-    <tr><td><strong>Aurora Glass</strong></td><td>ダーク背景、ネオングロー、すりガラス質感</td><td>テクノロジー感、個性的な表現を求める場合</td></tr>
-    <tr><td><strong>Overdose</strong></td><td>ダークネオンスタイル、高彩度、攻撃的なビジュアル</td><td>音楽制作、個性的な表現</td></tr>
+    <tr><td><strong>Aurora Glass</strong></td><td>ダーク背景、ネオングロー、すりガラス、スキューモフィックノブ（メタリックシルバー+ハートセンター）、モジュールボーダー改良</td><td>テクノロジー感、個性的な表現を求める場合</td></tr>
 </table>
 <table>
     <tr><th>エフェクト</th><th>スタイル</th></tr>
@@ -604,15 +613,15 @@
     <li>VST3 + ARA2 拡張として互換 DAW（Studio One、Cubase、Logic Pro など）にロード</li>
     <li>DAW が ARA プロトコルを通じてオーディオソースデータを提供、ファイルのインポート/エクスポート不要</li>
     <li>編集結果は DAW のタイムライン再生にリアルタイム反映</li>
-    <li>ホストトランスポート同期（Play/Stop/Seek）および BPM 追従に対応</li>
-    <li>ARA 多 region バインディングをサポート、同じソースの複数 region で編集状態を共有</li>
-    <li>Reference auto-alignment：ARA モードで複数 region 間のリファレンスピッチが自動アライメントされ、マルチトラック編集の一貫性が向上</li>
-    <li>VST3 プラグインモードでは、プロジェクト/インポート/エクスポートなど Standalone 固有のメニュー項目を非表示</li>
+    <li>ホストトランスポート同期（再生/停止/シーク）および BPM 追従に対応</li>
+    <li>ARA 複数リージョンのバインディングをサポートし、同じソースの複数リージョンで編集状態を共有</li>
+    <li>リファレンス自動アライメント：ARA モードで複数リージョン間のリファレンスピッチが自動アライメントされ、マルチトラック編集の一貫性が向上</li>
+    <li>VST3 プラグインモードでは、プロジェクト/インポート/エクスポートなどスタンドアロン版固有のメニュー項目を非表示</li>
 </ul>
 
-<h3>14.2 Standalone との違い</h3>
+<h3>14.2 スタンドアロン版との違い</h3>
 <table>
-    <tr><th>機能</th><th>Standalone</th><th>VST3/ARA</th></tr>
+    <tr><th>機能</th><th>スタンドアロン版</th><th>VST3/ARA</th></tr>
     <tr><td>マルチトラック編集</td><td>✓ 最大12トラック</td><td>✗ 単一素材編集</td></tr>
     <tr><td>ファイルインポート/エクスポート</td><td>✓</td><td>✗ （DAW が管理）</td></tr>
     <tr><td>マウストレイル</td><td>✓ 8種類のテーマ</td><td>✗</td></tr>
@@ -670,7 +679,7 @@
 </ul>
 
 <h3>Q3: メモリ使用量が多い？</h3>
-<p><strong>A:</strong> v1.5 ではメモリ管理が最適化されており、F0 モデルは使用後に自動解放されます。それでも高い場合は、GPU アクセラレーションを無効にする（GPU セッションは追加のビデオメモリを消費します）、同時に開くトラック数を減らすなどをお試しください。</p>
+<p><strong>A:</strong> v1.7 ではメモリ管理が最適化されており、F0 モデルは使用後に自動解放されます。それでも高い場合は、GPU アクセラレーションを無効にする（GPU セッションは追加のビデオメモリを消費します）、同時に開くトラック数を減らすなどをお試しください。</p>
 
 <h3>Q4: 補正後の音質に異常がある？</h3>
 <p><strong>A:</strong> 考えられる原因：ボコーダーモデルファイルの破損（再ダウンロード）、Retune Speed の設定が高すぎる（30% 以下に下げてお試しください）、元の録音品質が低い。</p>
@@ -680,7 +689,7 @@
     <li>低めの Retune Speed（10–30%）を使用する</li>
     <li>元のビブラートを保持し、人工 Vibrato を追加しない</li>
     <li>LineAnchor ツールでキーポイントを精密に調整する</li>
-    <li>「カーブ優先編集」モードを選択してより精密な制御を得る</li>
+    <li>「OpenTune 編集」モードを選択してより精密な制御を得る</li>
 </ul>
 
 <h3>Q6: VST3 プラグインが DAW でロードできない？</h3>
@@ -692,7 +701,7 @@
 <hr>
 
 <footer>
-    <p>OpenTune v1.5 — AI スマートピッチ補正ソフトウェア | オープンソース・無料 | AGPL v3.0 ライセンス</p>
+    <p>OpenTune v1.7 — AI スマートピッチ補正ソフトウェア | オープンソース・無料 | AGPL v3.0 ライセンス</p>
     <p>DiffSinger オープンソースコミュニティとすべての貢献者に感謝します</p>
 </footer>
 
