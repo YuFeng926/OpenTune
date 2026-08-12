@@ -54,6 +54,10 @@ constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::Shortcu
     "shared.shortcuts.toolAutoTune",
     "shared.shortcuts.toolTimeTool",
     "shared.shortcuts.cancelSelection",
+    "shared.shortcuts.toolODSelect",
+    "shared.shortcuts.toolODPitch",
+    "shared.shortcuts.toolODVolumeEnvelope",
+    "shared.shortcuts.toolODScissors",
 }};
 
 juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storageOptions)
