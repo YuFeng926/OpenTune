@@ -108,7 +108,7 @@ AI 的存在是为了帮助人，以人为本，带来更好的创作体验。
 ```
 OpenTune/
 ├── OpenTune.exe
-├── onnxruntime.dll          ← ONNX Runtime (内置 DirectML)
+├── OpenTuneOnnxRuntime_1_24_4.dll ← ONNX Runtime (内置 DirectML)
 ├── DirectML.dll             ← DirectML 运行时
 ├── D3D12/
 │   ├── D3D12Core.dll        ← DirectX Agility SDK
@@ -173,7 +173,7 @@ cd ..
 
 #### 4. ONNX Runtime (v1.24.4)
 
-本项目需要 **两个** ONNX Runtime 包（Windows）：CPU 版提供头文件和 `.lib`，DML 版提供运行时 `onnxruntime.dll`（内置 DirectML 支持）。
+本项目需要 **两个** ONNX Runtime 包（Windows）：CPU 版提供头文件，DML 版提供原始 `onnxruntime.dll`（内置 DirectML 支持）。构建系统生成专用导入库，并把运行时 DLL 输出为 `OpenTuneOnnxRuntime_1_24_4.dll`。
 
 **Windows** — 下载并解压到 `ThirdParty/`：
 
@@ -192,19 +192,18 @@ ThirdParty/
 │   ├── include/
 │   │   └── onnxruntime_cxx_api.h      ← CMake 检测此文件是否存在
 │   └── lib/
-│       ├── onnxruntime.lib            ← 链接用
-│       └── onnxruntime_providers_shared.dll
+│       └── onnxruntime.lib            ← 上游包文件；OpenTune 不直接链接
 │
 └── onnxruntime-dml-1.24.4/            ← DML 版（运行时 DLL + DML provider 头文件）
     ├── build/native/include/
     │   └── dml_provider_factory.h     ← DirectML EP 注册头文件
     └── runtimes/win-x64/native/
-        └── onnxruntime.dll            ← 运行时使用的 DLL（内置 DML）
+        └── onnxruntime.dll             ← 上游源 DLL；构建时改名复制
 ```
 
 **为什么需要两个包？**
-- **CPU 包** (`onnxruntime-win-x64-1.24.4`)：提供 C++ API 头文件（`onnxruntime_cxx_api.h`）和 `.lib` 导入库用于编译链接。
-- **DML 包** (`onnxruntime-dml-1.24.4`)：提供编译了 DirectML Execution Provider 的 `onnxruntime.dll`，运行时通过 delay-load 加载。同时提供 `dml_provider_factory.h` 头文件用于注册 DML EP。
+- **CPU 包** (`onnxruntime-win-x64-1.24.4`)：提供 C++ API 头文件（`onnxruntime_cxx_api.h`）。
+- **DML 包** (`onnxruntime-dml-1.24.4`)：提供编译了 DirectML Execution Provider 的原始 `onnxruntime.dll` 和 `dml_provider_factory.h`。CMake 根据项目内 `.def` 生成 `OpenTuneOnnxRuntime_1_24_4.lib`，并把源 DLL 改名部署为 `OpenTuneOnnxRuntime_1_24_4.dll`。
 
 **macOS (Apple Silicon)**：
 
