@@ -498,7 +498,7 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
         void updateLayout()
         {
             const bool showSub = isDyne_ && subExpanded_ && !subButtons_.empty();
-            const int subH = showSub ? (btnSize_ + gap_) : 0;
+            const int subH = showSub ? (btnSize_ * static_cast<int>(subButtons_.size()) + gap_ * (static_cast<int>(subButtons_.size()) - 1)) : 0;
             const int totalH = pad_ + btnSize_ + subH + pad_;
 
             int x = pad_;
@@ -510,7 +510,9 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             if (showSub) {
                 int sx;
                 if (pitchButtonIdx_ >= 0) {
-                    sx = mainButtons_[pitchButtonIdx_]->getX();
+                    // 居中对齐到 Pitch 按钮下方
+                    const int pitchBtnW = mainWidths_[pitchButtonIdx_];
+                    sx = mainButtons_[pitchButtonIdx_]->getX() + (pitchBtnW - btnSize_) / 2;
                 } else {
                     sx = pad_;
                 }
@@ -518,7 +520,7 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
                 for (auto& sb : subButtons_) {
                     sb->setBounds(sx, sy, btnSize_, btnSize_);
                     sb->setVisible(true);
-                    sx += btnSize_ + gap_;
+                    sy += btnSize_ + gap_;
                 }
             } else {
                 for (auto& sb : subButtons_)
