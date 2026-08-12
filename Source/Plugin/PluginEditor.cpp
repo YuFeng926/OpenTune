@@ -846,10 +846,16 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
         std::move(onVocoderModelWeightChanged),
         true);
-    pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage) });
+    const int audioPageHeight = SharedPreferencePages::getRenderingPriorityPageHeight(*audioPage);
+    pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage), audioPageHeight });
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
-    dialogContent->setSize(640, 560);
+
+    // 根据当前屏幕可用区域计算对话框尺寸，适配不同显示器和分辨率
+    const auto usable = getParentMonitorArea();
+    const int maxW = juce::jmin(640, usable.getWidth() - 48);
+    const int maxH = juce::jmin(560, usable.getHeight() - 48);
+    dialogContent->setSize(juce::jmax(480, maxW), juce::jmax(360, maxH));
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(dialogContent);
@@ -858,7 +864,8 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     options.dialogBackgroundColour = UIColors::backgroundDark;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
-    options.resizable = false;
+    options.resizable = true;
+    options.useBottomRightCornerResizer = true;
     options.launchAsync();
 }
 
