@@ -346,8 +346,8 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             { { ToolId::Scissors,  "Scissors", "F6",  []{ return makeToolIcon(ToolId::Scissors); } } },
         };
         subItems = {
-            { ToolId::PitchModulation, "Modulation", "F2×2", []{ return makeToolIcon(ToolId::PitchModulation); } },
-            { ToolId::PitchDrift,      "Drift",      "F2×3", []{ return makeToolIcon(ToolId::PitchDrift); } },
+            { ToolId::PitchModulation, "Modulation", "F2x2", []{ return makeToolIcon(ToolId::PitchModulation); } },
+            { ToolId::PitchDrift,      "Drift",      "F2x3", []{ return makeToolIcon(ToolId::PitchDrift); } },
         };
     } else {
         mainItems = {

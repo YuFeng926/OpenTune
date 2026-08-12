@@ -640,6 +640,11 @@ public:
             KeyShortcutConfig::ShortcutId::ToolDrawNote, KeyShortcutConfig::ShortcutId::ToolSelect,
             KeyShortcutConfig::ShortcutId::ToolLineAnchor, KeyShortcutConfig::ShortcutId::ToolHandDraw,
         };
+        // OpenDyne 专属: Select, Pitch, VolumeEnvelope, Scissors
+        opendyneIds_ = {
+            KeyShortcutConfig::ShortcutId::ToolODSelect, KeyShortcutConfig::ShortcutId::ToolODPitch,
+            KeyShortcutConfig::ShortcutId::ToolODVolumeEnvelope, KeyShortcutConfig::ShortcutId::ToolODScissors,
+        };
 
         // 内容高度：顶部padding + 通用区(段标题+条目) + 间距 + OpenTune区 + 间距 + OpenDyne区 + 间距 + 重置按钮 + 底部padding
         constexpr int topPad = 20;
@@ -655,8 +660,9 @@ public:
                            + static_cast<int>(generalIds_.size()) * (rowH + rowGap);
         const int opentuneH = sectionHeaderH + sectionGapAfter
                             + static_cast<int>(opentuneIds_.size()) * (rowH + rowGap);
-        // OpenDyne 参考区：段标题 + 4条固定映射参考
-        const int opendyneH = sectionHeaderH + sectionGapAfter + 4 * (rowH + rowGap);
+        // OpenDyne 区：段标题 + 可配置条目
+        const int opendyneH = sectionHeaderH + sectionGapAfter
+                            + static_cast<int>(opendyneIds_.size()) * (rowH + rowGap);
         contentHeight_ = topPad + generalH + sectionGapBefore
                        + opentuneH + sectionGapBefore + opendyneH
                        + sectionGapBefore + resetBtnH + bottomPad;
@@ -685,22 +691,6 @@ public:
             addAndMakeVisible(button);
         };
 
-        auto makeReferenceRow = [this](const juce::String& keyText, const juce::String& desc) {
-            auto* keyLabel = new juce::Label();
-            keyLabel->setText(keyText, juce::dontSendNotification);
-            keyLabel->setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
-            keyLabel->setColour(juce::Label::textColourId, UIColors::textPrimary);
-            keyLabel->setJustificationType(juce::Justification::centredRight);
-            refKeyLabels_.add(keyLabel);
-            addAndMakeVisible(keyLabel);
-
-            auto* descLabel = new juce::Label();
-            descLabel->setText(desc, juce::dontSendNotification);
-            initialiseLabel(*descLabel, desc);
-            refDescLabels_.add(descLabel);
-            addAndMakeVisible(descLabel);
-        };
-
         // === Section1: General ===
         makeSectionHeader("General");
         for (auto id : generalIds_)
@@ -711,12 +701,10 @@ public:
         for (auto id : opentuneIds_)
             makeShortcutRow(id);
 
-        // === Section 3: OpenDyne Mode (read-only reference) ===
+        // === Section 3: OpenDyne Mode ===
         makeSectionHeader("OpenDyne Mode");
-        makeReferenceRow("F1", "Select");
-        makeReferenceRow("F2", "Pitch (×1) / PitchModulation (×2) / PitchDrift (×3)");
-        makeReferenceRow("F4", "Volume Envelope");
-        makeReferenceRow("F6", "Scissors");
+        for (auto id : opendyneIds_)
+            makeShortcutRow(id);
 
         // Reset button
         resetAllButton_.setButtonText(LOC(kResetAllToDefaults));
@@ -741,7 +729,6 @@ public:
         const int rowHeight = 32;
         const int labelWidth = 180;
         const int buttonWidth = 220;
-        const int refKeyWidth = 50;
         int idx = 0;
 
         auto layoutSection = [&](const juce::String& /*headerLabel*/, int itemCount, auto getRow) {
@@ -775,10 +762,11 @@ public:
 
         bounds.removeFromTop(10);
 
-        // Section3: OpenDyne Mode (read-only reference)
-        layoutSection("OpenDyne Mode", 4, [&](int i, juce::Rectangle<int> row) {
-            refKeyLabels_[i]->setBounds(row.removeFromLeft(refKeyWidth));
-            refDescLabels_[i]->setBounds(row.removeFromLeft(labelWidth + buttonWidth - refKeyWidth));
+        // Section3: OpenDyne Mode
+        layoutSection("OpenDyne Mode", static_cast<int>(opendyneIds_.size()), [&](int /*i*/, juce::Rectangle<int> row) {
+            shortcutLabels_[shortcutIdx]->setBounds(row.removeFromLeft(labelWidth));
+            shortcutButtons_[shortcutIdx]->setBounds(row.removeFromLeft(buttonWidth).reduced(0, 3));
+            ++shortcutIdx;
         });
 
         bounds.removeFromTop(12);
@@ -875,12 +863,14 @@ private:
             if (index < generalIds_.size()) {
                 if (auto* button = shortcutButtons_[static_cast<int>(index)])
                     button->setButtonText(KeyShortcutConfig::getShortcutBinding(settings_, generalIds_[index]).getDisplayNames());
-            } else {
+            } else if (index < generalIds_.size() + opentuneIds_.size()) {
                 const auto otIdx = index - generalIds_.size();
-                if (otIdx < opentuneIds_.size()) {
-                    if (auto* button = shortcutButtons_[static_cast<int>(index)])
-                        button->setButtonText(KeyShortcutConfig::getShortcutBinding(settings_, opentuneIds_[otIdx]).getDisplayNames());
-                }
+                if (auto* button = shortcutButtons_[static_cast<int>(index)])
+                    button->setButtonText(KeyShortcutConfig::getShortcutBinding(settings_, opentuneIds_[otIdx]).getDisplayNames());
+            } else {
+                const auto odIdx = index - generalIds_.size() - opentuneIds_.size();
+                if (auto* button = shortcutButtons_[static_cast<int>(index)])
+                    button->setButtonText(KeyShortcutConfig::getShortcutBinding(settings_, opendyneIds_[odIdx]).getDisplayNames());
             }
         }
     }
@@ -891,11 +881,10 @@ private:
     int contentHeight_ = 0;
     std::vector<KeyShortcutConfig::ShortcutId> generalIds_;
     std::vector<KeyShortcutConfig::ShortcutId> opentuneIds_;
+    std::vector<KeyShortcutConfig::ShortcutId> opendyneIds_;
     juce::OwnedArray<juce::Label> sectionHeaders_;
     juce::OwnedArray<juce::Label> shortcutLabels_;
     juce::OwnedArray<juce::TextButton> shortcutButtons_;
-    juce::OwnedArray<juce::Label> refKeyLabels_;
-    juce::OwnedArray<juce::Label> refDescLabels_;
     juce::TextButton resetAllButton_;
     std::unique_ptr<CaptureWindow> captureWindow_;
     KeyShortcutConfig::ShortcutId currentEditingId_ = KeyShortcutConfig::ShortcutId::Count;

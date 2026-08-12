@@ -577,16 +577,15 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
 {
     const auto& shortcutSettings = ctx_.getShortcutSettings();
 
-    // OpenDyne（NotesPrimary）F 键固定映射：F1=Select、F2=Pitch、F4=VolumeEnvelope、
-    // F6=Scissors。不新增 ShortcutId、不进 KeyShortcutConfig。T 继续走现有 ToolTimeTool。
+    // OpenDyne（NotesPrimary）工具切换：通过 KeyShortcutConfig 可配置
     const bool isOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
     if (isOpenDyne) {
-        if (key.getKeyCode() == juce::KeyPress::F1Key) {
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolODSelect, key)) {
             ctx_.setCurrentTool(ToolId::Select);
             return true;
         }
-        if (key.getKeyCode() == juce::KeyPress::F2Key) {
-            // Melodyne-style F2 cycling: F2×1=Pitch, F2×2=Modulation, F2×3=Drift
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolODPitch, key)) {
+            // Melodyne-style cycling: Pitch -> PitchModulation -> PitchDrift
             auto now = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastF2PressTime_).count();
             if (elapsed < kF2DoubleClickMs && f2PressCount_ > 0) {
@@ -602,11 +601,11 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
             }
             return true;
         }
-        if (key.getKeyCode() == juce::KeyPress::F4Key) {
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolODVolumeEnvelope, key)) {
             ctx_.setCurrentTool(ToolId::VolumeEnvelope);
             return true;
         }
-        if (key.getKeyCode() == juce::KeyPress::F6Key) {
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolODScissors, key)) {
             ctx_.setCurrentTool(ToolId::Scissors);
             return true;
         }

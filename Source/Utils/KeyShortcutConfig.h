@@ -33,6 +33,11 @@ enum class ShortcutId {
     ToolTimeTool,
     // Cancel / Deselect
     CancelSelection,
+    // OpenDyne tools (Melodyne-style)
+    ToolODSelect,
+    ToolODPitch,
+    ToolODVolumeEnvelope,
+    ToolODScissors,
     Count
 };
 
@@ -156,6 +161,8 @@ private:
             name << "PageDown";
         else if (keyCode == juce::KeyPress::pageUpKey)
             name << "PageUp";
+        else if (keyCode >= juce::KeyPress::F1Key && keyCode <= juce::KeyPress::F12Key)
+            name << "F" << (keyCode - juce::KeyPress::F1Key + 1);
         else if (keyCode >= 32 && keyCode < 127)
             name << juce::String::charToString(static_cast<juce::juce_wchar>(keyCode)).toUpperCase();
         else
@@ -196,6 +203,10 @@ inline const ShortcutInfo kShortcutInfos[] = {
     { ShortcutId::ToolAutoTune, Loc::Keys::kToolAutoTune, { KeyBinding('6', {}) } },
     { ShortcutId::ToolTimeTool, Loc::Keys::kToolTimeTool, { KeyBinding('t', {}) } },
     { ShortcutId::CancelSelection, Loc::Keys::kCancelSelection, { KeyBinding(juce::KeyPress::escapeKey, {}) } },
+    { ShortcutId::ToolODSelect, Loc::Keys::kToolODSelect, { KeyBinding(juce::KeyPress::F1Key, {}) } },
+    { ShortcutId::ToolODPitch, Loc::Keys::kToolODPitch, { KeyBinding(juce::KeyPress::F2Key, {}) } },
+    { ShortcutId::ToolODVolumeEnvelope, Loc::Keys::kToolODVolumeEnvelope, { KeyBinding(juce::KeyPress::F4Key, {}) } },
+    { ShortcutId::ToolODScissors, Loc::Keys::kToolODScissors, { KeyBinding(juce::KeyPress::F6Key, {}) } },
 };
 
 inline const size_t kShortcutCount = sizeof(kShortcutInfos) / sizeof(kShortcutInfos[0]);
@@ -283,6 +294,8 @@ inline juce::String toCanonicalString(const KeyBinding& binding)
         text << "PageDown";
     } else if (binding.keyCode == juce::KeyPress::pageUpKey) {
         text << "PageUp";
+    } else if (binding.keyCode >= juce::KeyPress::F1Key && binding.keyCode <= juce::KeyPress::F12Key) {
+        text << "F" << (binding.keyCode - juce::KeyPress::F1Key + 1);
     } else if (binding.keyCode >= 32 && binding.keyCode < 127) {
         text << juce::String::charToString(static_cast<juce::juce_wchar>(binding.keyCode)).toUpperCase();
     }
@@ -424,6 +437,14 @@ inline bool parseKeyBinding(const juce::String& text, KeyBinding& outBinding)
         keyCode = juce::KeyPress::pageDownKey;
     else if (keyPart == "pageup" || keyPart == "pgup")
         keyCode = juce::KeyPress::pageUpKey;
+    else if (keyPart.length() > 1 && keyPart[0] == 'f')
+    {
+        int num = keyPart.substring(1).getIntValue();
+        if (num >= 1 && num <= 12)
+            keyCode = juce::KeyPress::F1Key + num - 1;
+        else
+            return false;
+    }
     else if (keyPart.length() == 1)
     {
         auto c = keyPart[0];
