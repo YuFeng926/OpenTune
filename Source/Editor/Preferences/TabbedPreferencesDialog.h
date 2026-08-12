@@ -13,12 +13,41 @@
 
 namespace OpenTune {
 
+// 包装页面使其可滚动：Viewport 填满 tab 区域，内部页面保持内容高度
+class ScrollablePage : public juce::Viewport
+{
+public:
+    explicit ScrollablePage(std::unique_ptr<juce::Component> content, int contentHeight)
+    {
+        setScrollBarThickness(8);
+        // setViewedComponent 将 content 放入内部 contentHolder
+        // content 保持自身高度，viewport 自动提供滚动
+        contentHeight_ = contentHeight;
+        content_ = std::move(content);
+        setViewedComponent(content_.get(), false);
+        content_->setSize(600, contentHeight); // 初始宽度，resized 时会更新
+    }
+
+    void resized() override
+    {
+        juce::Viewport::resized();
+        // viewport 宽度变化时，同步更新内容宽度（高度保持不变以支持滚动）
+        if (content_ != nullptr)
+            content_->setSize(getWidth(), contentHeight_);
+    }
+
+private:
+    std::unique_ptr<juce::Component> content_;
+    int contentHeight_ = 0;
+};
+
 class TabbedPreferencesDialog : public juce::Component
 {
 public:
     struct PageSpec {
         juce::String title;
         std::unique_ptr<juce::Component> content;
+        int totalHeight = 0; // 内容总高度，用于判断是否需要滚动
     };
 
     explicit TabbedPreferencesDialog(std::vector<PageSpec> pages)
@@ -36,7 +65,9 @@ public:
                 continue;
             }
 
-            tabbedComponent_.addTab(page.title, UIColors::backgroundDark, page.content.release(), true);
+            // 统一包装为可滚动：内容比视口矮时滚动条不出现，比视口高时自动出现
+            auto* scrollable = new ScrollablePage(std::move(page.content), page.totalHeight);
+            tabbedComponent_.addTab(page.title, UIColors::backgroundDark, scrollable, true);
         }
 
         closeButton_.setButtonText(LOC(kClose));
