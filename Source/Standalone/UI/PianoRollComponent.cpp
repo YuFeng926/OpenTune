@@ -1754,11 +1754,13 @@ void PianoRollComponent::paint(juce::Graphics& g)
 
 void PianoRollComponent::invalidateTimeAxisStaticSurface()
 {
-    // Static surface 已可用、非全局脏、非缩放预览 → 增量栅格时间轴矩形
-    if (!zoomPreviewActive_ && staticSurface_.isValid() && !staticDirty_)
-        rasterizeStatic(timeAxisRect());
-    else
+    // 非缩放预览状态：标脏 → 同步栅格化 → repaint，构成原子展示提交
+    if (!zoomPreviewActive_ && staticSurface_.isValid()) {
         staticDirty_ = true;
+        rasterizeStatic(timeAxisRect());
+    } else {
+        staticDirty_ = true;
+    }
     repaint(timeAxisRect());
 }
 
@@ -2130,24 +2132,28 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
         return;
     }
 
-    // ── 同 PPS 横向滚动：moveImageSection + 补绘条带 ──
+    // ── 同 PPS 横向滚动：标尺带完整重栅格 + 内容带moveImageSection ──
     const int viewportW = getTimelineViewportBounds().getWidth();
     const int viewportH = getTimelineViewportBounds().getHeight();
     const int timelineLeft = pianoKeyWidth_;
     const int timelineW = viewportW - timelineLeft;
 
+    // surfaceView_.camera 描述 retained pixels 的实际来源；
+    // 仅推进 moveImageSection 已执行的整数像素位移；连续语义继续由 camera_ 保持
+    surfaceView_.camera.visibleStartSeconds += static_cast<double>(dPixels) / surfaceView_.camera.pixelsPerSecond;
+
+    // 标尺带：完整重栅格（文本像素不能安全平移）
+    const juce::Rectangle<int> rulerRect(timelineLeft, 0, timelineW, rulerHeight_);
+    rasterizeStatic(rulerRect);
+
+    // 内容带：moveImageSection + 补绘条带
     const int srcX = timelineLeft + (dPixels > 0 ? dPixels : 0);
     const int dstX = timelineLeft + (dPixels > 0 ? 0 : -dPixels);
     const int moveW = timelineW - std::abs(dPixels);
 
     if (moveW > 0) {
-        staticSurface_.moveImageSection(dstX, 0, srcX, 0, moveW, viewportH);
-        contentSurface_.moveImageSection(dstX, 0, srcX, 0, moveW, viewportH);
+        contentSurface_.moveImageSection(dstX, rulerHeight_, srcX, rulerHeight_, moveW, viewportH - rulerHeight_);
     }
-
-    // surfaceView_.camera 描述 retained pixels 的实际来源；
-    // 仅推进 moveImageSection 已执行的整数像素位移；连续语义继续由 camera_ 保持
-    surfaceView_.camera.visibleStartSeconds += static_cast<double>(dPixels) / surfaceView_.camera.pixelsPerSecond;
 
     // 补绘露出条带
     int stripX, stripW;
@@ -2162,13 +2168,7 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
     stripW = juce::jmin(stripW, timelineW);
 
     if (stripW > 0) {
-        juce::Rectangle<int> strip(stripX, 0, stripW, viewportH);
-        const juce::Rectangle<int> timelineBounds(timelineLeft, 0, timelineW, viewportH);
-        const auto damage = TimelineLayerComposer::makeRulerScrollDamage(strip, timelineBounds, dPixels);
-        if (!damage.entering.isEmpty())
-            rasterizeStatic(damage.entering);
-        if (!damage.exiting.isEmpty())
-            rasterizeStatic(damage.exiting);
+        juce::Rectangle<int> strip(stripX, rulerHeight_, stripW, viewportH - rulerHeight_);
         rasterizeContent(strip);
     }
 

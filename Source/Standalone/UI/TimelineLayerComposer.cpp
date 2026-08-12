@@ -260,8 +260,12 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
 
             g.setColour(rulerStyle.labelColour);
             juce::Rectangle<int> labelRect { pixelX - 20, rulerTop + 2, 40, rulerHeight - 12 };
+            // 左边界标签左对齐，但确保不与其他标签重叠
             if (labelRect.getX() < 0)
-                labelRect.setX(0); // 左边界标签左对齐，避免被视图左边界裁切
+                labelRect.setX(0);
+            // 跳过与左边界标签重叠的后续标签（pixelX < 40时标签会重叠）
+            if (labelRect.getX() == 0 && pixelX >= 40)
+                continue;
             g.drawText(label, labelRect, juce::Justification::centred);
         }
     } else { // Seconds
@@ -292,8 +296,12 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
 
             g.setColour(rulerStyle.labelColour);
             juce::Rectangle<int> labelRect { pixelX - 20, rulerTop + 2, 40, rulerHeight - 12 };
+            // 左边界标签左对齐，但确保不与其他标签重叠
             if (labelRect.getX() < 0)
-                labelRect.setX(0); // 左边界标签左对齐，避免被视图左边界裁切
+                labelRect.setX(0);
+            // 跳过与左边界标签重叠的后续标签（pixelX < 40时标签会重叠）
+            if (labelRect.getX() == 0 && pixelX >= 40)
+                continue;
             g.drawText(timeStr, labelRect, juce::Justification::centred);
         }
     }
