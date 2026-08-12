@@ -1140,6 +1140,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         // 原子替换 content
         targetMod->content = std::move(state);
         targetMod->birthState = AudioModificationBirthState::WaitingForSource;
+        ++targetMod->birthRevision;
     }
 
     // 提交完成后再通知 Host，避免 Host 观察到半提交状态。
