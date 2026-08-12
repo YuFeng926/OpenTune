@@ -396,7 +396,25 @@ void PitchCurve::applyCorrectionToRange(
 
             correctedF0Buffer[i - calculationStartFrame] = PitchUtils::mixRetune(shiftedF0, targetF0, frameRetuneSpeed);
         } else {
-            correctedF0Buffer[i - calculationStartFrame] = f0;
+            // Gap frame between notes: shift F0 by nearest relevant note's pitch ratio
+            // to maintain continuity with dragged notes.
+            float gapShiftRatio = 1.0f;
+            float bestDist = 1e30f;
+            for (size_t ri = 0; ri < relevantNoteIndices.size(); ++ri) {
+                const size_t idx = relevantNoteIndices[ri];
+                const auto& note = notes[idx];
+                const float anchor = noteInfos[idx].anchorPitch;
+                const float target = note.getAdjustedPitch();
+                if (anchor <= 0.0f || target <= 0.0f) continue;
+                const float dist = (timeSeconds < note.startTime)
+                    ? static_cast<float>(note.startTime - timeSeconds)
+                    : static_cast<float>(timeSeconds - note.endTime);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    gapShiftRatio = target / anchor;
+                }
+            }
+            correctedF0Buffer[i - calculationStartFrame] = f0 * gapShiftRatio;
         }
     }
 
