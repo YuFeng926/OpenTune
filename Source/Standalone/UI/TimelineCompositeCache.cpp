@@ -16,6 +16,7 @@ bool BackgroundGenerationSignature::operator==(const BackgroundGenerationSignatu
 
 bool ForegroundGenerationSignature::operator==(const ForegroundGenerationSignature& o) const {
     return pixelsPerSecond == o.pixelsPerSecond
+        && trackHeight == o.trackHeight
         && contentRevision == o.contentRevision
         && selectionRevision == o.selectionRevision;
 }

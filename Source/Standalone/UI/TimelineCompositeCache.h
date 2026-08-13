@@ -28,6 +28,7 @@ struct BackgroundGenerationSignature {
 // content revision, and the current placement selection
 struct ForegroundGenerationSignature {
     double pixelsPerSecond = 0.0;
+    int trackHeight = 0;
     uint64_t contentRevision = 0;
     uint64_t selectionRevision = 0;
 
