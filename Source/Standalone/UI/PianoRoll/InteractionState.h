@@ -227,6 +227,7 @@ public:
     double scissorsPreviewTime = -1.0;
     // Volume Envelope Tool 拖拽预览。
     bool isVolumeDragging = false;
+    float volumePreviewDeltaDb = 0.0f;  // 新增：当前拖拽的 dB 偏移值
     AutomationLane volumePreviewEnvelope;
     // Modulation / Drift Tool 拖拽预览：参数值 + 哪个工具
     bool isModDriftDragging = false;
