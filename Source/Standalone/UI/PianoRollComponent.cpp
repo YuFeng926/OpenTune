@@ -2672,9 +2672,11 @@ ContentTimelineProjection PianoRollComponent::activeContentProjection() const no
 double PianoRollComponent::sourceTimeToTimelineTime(double sourceSeconds) const
 {
     const auto projection = activeContentProjection();
-    jassert(projection.isValid());
+    if (!projection.isValid())
+        return 0.0;
     const auto snap = readEditedSnapshot();
-    jassert(snap && snap->timeGrid);
+    if (!snap || !snap->timeGrid)
+        return 0.0;
     const double outputSeconds = snap->timeGrid->tauForward(sourceSeconds);
     return projection.projectContentTimeToTimeline(outputSeconds);
 }
@@ -2687,10 +2689,12 @@ int PianoRollComponent::sourceTimeToX(double sourceSeconds) const
 double PianoRollComponent::xToSourceTime(int x) const
 {
     const auto projection = activeContentProjection();
-    jassert(projection.isValid());
+    if (!projection.isValid())
+        return 0.0;
 
     const auto snap = readEditedSnapshot();
-    jassert(snap && snap->timeGrid);
+    if (!snap || !snap->timeGrid)
+        return 0.0;
 
     const double timeline = makeViewMapper().xToTime(x);
     const double output   = projection.projectTimelineTimeToContent(timeline);
@@ -2700,7 +2704,8 @@ double PianoRollComponent::xToSourceTime(int x) const
 SourceEditRange PianoRollComponent::sourceEditRange() const
 {
     const auto snap = readEditedSnapshot();
-    jassert(snap && snap->timeGrid);
+    if (!snap || !snap->timeGrid)
+        return { 0.0, 0.0, 0.0 };
     return SourceEditRange::fromTimeGrid(*snap->timeGrid, 0.0);
 }
 
