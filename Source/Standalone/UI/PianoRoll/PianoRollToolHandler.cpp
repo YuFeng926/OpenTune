@@ -671,8 +671,9 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
 
     // ==== Tool switching (via configurable shortcuts) ====
     // OpenTune（PitchPrimary）工具切换走可配置快捷键；OpenDyne（NotesPrimary）用固定 F1/F2/F4/F6，
-    // 这四个可配置入口（ToolDrawNote/ToolSelect/ToolLineAnchor/ToolHandDraw）只在 OpenTune 分支生效，
-    // 绝不穿透到 OpenDyne。ToolTimeTool/ToolAutoTune 与通用 SelectAll/Delete/CancelSelection 两 scheme 共用。
+    // DrawNote/LineAnchor 只在 OpenTune 分支生效，绝不穿透到 OpenDyne。
+    // HandDraw 两种模式共用（OpenDyne 下自由绘制音高曲线）。
+    // ToolTimeTool/ToolAutoTune 与通用 SelectAll/Delete/CancelSelection 两 scheme 共用。
     if (!isOpenDyne) {
         if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolDrawNote, key)) {
             ctx_.setCurrentTool(ToolId::DrawNote);
@@ -688,11 +689,12 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
             ctx_.setCurrentTool(ToolId::LineAnchor);
             return true;
         }
+    }
 
-        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolHandDraw, key)) {
-            ctx_.setCurrentTool(ToolId::HandDraw);
-            return true;
-        }
+    // HandDraw 两种模式共用
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolHandDraw, key)) {
+        ctx_.setCurrentTool(ToolId::HandDraw);
+        return true;
     }
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolTimeTool, key)) {
@@ -2237,6 +2239,7 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolDrag(const juce::MouseEvent& 
 
     const float dbPerPixel = 12.0f / ctx_.getViewMapper().pixelsPerSemitone;
     const float deltaGainDb = static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
+    state.volumePreviewDeltaDb = deltaGainDb;  // 新增：存储 dB 偏移
     const auto& notes = committedNotes(ctx_);
     state.volumePreviewEnvelope = buildVolumeEnvelopeDragPreview(notes, deltaGainDb);
     // blob 大小变化绘制在 content surface，需触发 rasterizeContent 重绘
@@ -2250,6 +2253,7 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolUp(const juce::MouseEvent& e)
     if (!state.isVolumeDragging)
         return;
     state.isVolumeDragging = false;
+    state.volumePreviewDeltaDb = 0.0f;
 
     const float dbPerPixel = 12.0f / ctx_.getViewMapper().pixelsPerSemitone;
     const float deltaGainDb = static_cast<float>(dragStartPos_.y - e.y) * dbPerPixel;
@@ -2511,50 +2515,101 @@ bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
     const bool hasF0 = !effectiveF0.empty();
     const auto f0tl = ctx_.getF0Timeline();
 
+    const auto selectedIndices = collectSelectedNoteIndices(beforeNotes);
+    const bool hasSelection = !selectedIndices.empty();
+
     std::vector<char> consumed(beforeNotes.size(), 0);
     std::vector<Note> newNotes;
     newNotes.reserve(beforeNotes.size());
     size_t mergeCount = 0;
 
-    for (size_t i = 0; i < beforeNotes.size(); ++i) {
-        if (consumed[i] != 0)
-            continue;
-        const Note& left = beforeNotes[i];
-        if (std::abs(left.endTime - splitTime) >= tolerance) {
-            newNotes.push_back(left);
-            continue;
-        }
+    if (hasSelection) {
+        // 选中模式：合并选中音符中相邻的同 pitch 音符对
+        std::vector<char> isSelected(beforeNotes.size(), 0);
+        for (int idx : selectedIndices)
+            isSelected[static_cast<size_t>(idx)] = 1;
 
-        size_t rightIdx = std::numeric_limits<size_t>::max();
-        for (size_t j = i + 1; j < beforeNotes.size(); ++j) {
-            if (consumed[j] != 0)
+        for (size_t i = 0; i < beforeNotes.size(); ++i) {
+            if (consumed[i] != 0)
                 continue;
-            if (beforeNotes[j].startTime > splitTime + tolerance)
-                break;
-            if (std::abs(beforeNotes[j].startTime - splitTime) < tolerance) {
-                rightIdx = j;
-                break;
+            if (!isSelected[i]) {
+                newNotes.push_back(beforeNotes[i]);
+                continue;
             }
-        }
-        if (rightIdx == std::numeric_limits<size_t>::max()) {
-            newNotes.push_back(left);
-            continue;
-        }
 
-        consumed[rightIdx] = 1;
-        const Note& right = beforeNotes[rightIdx];
-        Note merged = left;
-        merged.endTime = right.endTime;
-        merged.dirty = true;
-        if (hasF0) {
-            const float avgF0 = computeAvgF0InRange(f0tl, effectiveF0, left.startTime, right.endTime);
-            if (avgF0 > 0.0f) {
-                merged.pitch = avgF0;
-                merged.pitchOffset = 0.0f;
+            // 选中音符：链式合并相邻同 pitch 的后续选中音符
+            Note merged = beforeNotes[i];
+            const double mergeStart = merged.startTime;
+            bool didMerge = false;
+
+            for (size_t j = i + 1; j < beforeNotes.size(); ++j) {
+                if (consumed[j] != 0 || !isSelected[j])
+                    continue;
+                const Note& right = beforeNotes[j];
+                if (right.pitch != merged.pitch)
+                    continue; // 不同 pitch 行，跳过（可能后面还有同 pitch 的）
+                if (std::abs(right.startTime - merged.endTime) >= 1.0 / 44100.0)
+                    break; // 不相邻，链断裂
+                consumed[j] = 1;
+                merged.endTime = right.endTime;
+                merged.dirty = true;
+                didMerge = true;
             }
+
+            if (didMerge && hasF0) {
+                const float avgF0 = computeAvgF0InRange(f0tl, effectiveF0, mergeStart, merged.endTime);
+                if (avgF0 > 0.0f) {
+                    merged.pitch = avgF0;
+                    merged.pitchOffset = 0.0f;
+                }
+            }
+
+            newNotes.push_back(merged);
+            if (didMerge)
+                ++mergeCount;
         }
-        newNotes.push_back(merged);
-        ++mergeCount;
+    } else {
+        // 无选中：按 splitTime 合并分离线两侧音符（原有逻辑）
+        for (size_t i = 0; i < beforeNotes.size(); ++i) {
+            if (consumed[i] != 0)
+                continue;
+            const Note& left = beforeNotes[i];
+            if (std::abs(left.endTime - splitTime) >= tolerance) {
+                newNotes.push_back(left);
+                continue;
+            }
+
+            size_t rightIdx = std::numeric_limits<size_t>::max();
+            for (size_t j = i + 1; j < beforeNotes.size(); ++j) {
+                if (consumed[j] != 0)
+                    continue;
+                if (beforeNotes[j].startTime > splitTime + tolerance)
+                    break;
+                if (std::abs(beforeNotes[j].startTime - splitTime) < tolerance) {
+                    rightIdx = j;
+                    break;
+                }
+            }
+            if (rightIdx == std::numeric_limits<size_t>::max()) {
+                newNotes.push_back(left);
+                continue;
+            }
+
+            consumed[rightIdx] = 1;
+            const Note& right = beforeNotes[rightIdx];
+            Note merged = left;
+            merged.endTime = right.endTime;
+            merged.dirty = true;
+            if (hasF0) {
+                const float avgF0 = computeAvgF0InRange(f0tl, effectiveF0, left.startTime, right.endTime);
+                if (avgF0 > 0.0f) {
+                    merged.pitch = avgF0;
+                    merged.pitchOffset = 0.0f;
+                }
+            }
+            newNotes.push_back(merged);
+            ++mergeCount;
+        }
     }
 
     if (mergeCount == 0)
