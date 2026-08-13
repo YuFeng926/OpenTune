@@ -2510,106 +2510,56 @@ bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
 
     // 分离线 = left.endTime ≈ splitTime 且相邻 right.startTime ≈ splitTime。
     // 按序配对（left 取其后第一个未消费的 right），分离线两侧多个音符
-    // （不同 pitch 行）各自独立合并。
+    // （不同 pitch 行）各自独立合并。始终以鼠标命中的分离线为准，与选择无关。
     const auto effectiveF0 = loadEffectiveF0();
     const bool hasF0 = !effectiveF0.empty();
     const auto f0tl = ctx_.getF0Timeline();
-
-    const auto selectedIndices = collectSelectedNoteIndices(beforeNotes);
-    const bool hasSelection = !selectedIndices.empty();
 
     std::vector<char> consumed(beforeNotes.size(), 0);
     std::vector<Note> newNotes;
     newNotes.reserve(beforeNotes.size());
     size_t mergeCount = 0;
 
-    if (hasSelection) {
-        // 选中模式：合并选中音符中相邻的同 pitch 音符对
-        std::vector<char> isSelected(beforeNotes.size(), 0);
-        for (int idx : selectedIndices)
-            isSelected[static_cast<size_t>(idx)] = 1;
-
-        for (size_t i = 0; i < beforeNotes.size(); ++i) {
-            if (consumed[i] != 0)
-                continue;
-            if (!isSelected[i]) {
-                newNotes.push_back(beforeNotes[i]);
-                continue;
-            }
-
-            // 选中音符：链式合并相邻同 pitch 的后续选中音符
-            Note merged = beforeNotes[i];
-            const double mergeStart = merged.startTime;
-            bool didMerge = false;
-
-            for (size_t j = i + 1; j < beforeNotes.size(); ++j) {
-                if (consumed[j] != 0 || !isSelected[j])
-                    continue;
-                const Note& right = beforeNotes[j];
-                if (right.pitch != merged.pitch)
-                    continue; // 不同 pitch 行，跳过（可能后面还有同 pitch 的）
-                if (std::abs(right.startTime - merged.endTime) >= 1.0 / 44100.0)
-                    break; // 不相邻，链断裂
-                consumed[j] = 1;
-                merged.endTime = right.endTime;
-                merged.dirty = true;
-                didMerge = true;
-            }
-
-            if (didMerge && hasF0) {
-                const float avgF0 = computeAvgF0InRange(f0tl, effectiveF0, mergeStart, merged.endTime);
-                if (avgF0 > 0.0f) {
-                    merged.pitch = avgF0;
-                    merged.pitchOffset = 0.0f;
-                }
-            }
-
-            newNotes.push_back(merged);
-            if (didMerge)
-                ++mergeCount;
+    // 按 splitTime 合并分离线两侧音符
+    for (size_t i = 0; i < beforeNotes.size(); ++i) {
+        if (consumed[i] != 0)
+            continue;
+        const Note& left = beforeNotes[i];
+        if (std::abs(left.endTime - splitTime) >= tolerance) {
+            newNotes.push_back(left);
+            continue;
         }
-    } else {
-        // 无选中：按 splitTime 合并分离线两侧音符（原有逻辑）
-        for (size_t i = 0; i < beforeNotes.size(); ++i) {
-            if (consumed[i] != 0)
-                continue;
-            const Note& left = beforeNotes[i];
-            if (std::abs(left.endTime - splitTime) >= tolerance) {
-                newNotes.push_back(left);
-                continue;
-            }
 
-            size_t rightIdx = std::numeric_limits<size_t>::max();
-            for (size_t j = i + 1; j < beforeNotes.size(); ++j) {
-                if (consumed[j] != 0)
-                    continue;
-                if (beforeNotes[j].startTime > splitTime + tolerance)
-                    break;
-                if (std::abs(beforeNotes[j].startTime - splitTime) < tolerance) {
-                    rightIdx = j;
-                    break;
-                }
-            }
-            if (rightIdx == std::numeric_limits<size_t>::max()) {
-                newNotes.push_back(left);
+        size_t rightIdx = std::numeric_limits<size_t>::max();
+        for (size_t j = i + 1; j < beforeNotes.size(); ++j) {
+            if (consumed[j] != 0)
                 continue;
+            if (beforeNotes[j].startTime > splitTime + tolerance)
+                break;
+            if (std::abs(beforeNotes[j].startTime - splitTime) < tolerance) {
+                rightIdx = j;
+                break;
             }
-
-            consumed[rightIdx] = 1;
-            const Note& right = beforeNotes[rightIdx];
-            Note merged = left;
-            merged.endTime = right.endTime;
-            merged.dirty = true;
-            if (hasF0) {
-                const float avgF0 = computeAvgF0InRange(f0tl, effectiveF0, left.startTime, right.endTime);
-                if (avgF0 > 0.0f) {
-                    merged.pitch = avgF0;
-                    merged.pitchOffset = 0.0f;
-                }
-            }
-            newNotes.push_back(merged);
-            ++mergeCount;
         }
+        if (rightIdx == std::numeric_limits<size_t>::max()) {
+            newNotes.push_back(left);
+            continue;
+        }
+
+        consumed[rightIdx] = 1;
+        const Note& right = beforeNotes[rightIdx];
+        Note merged = left;
+        merged.endTime = right.endTime;
+        merged.dirty = true;
+        if (hasF0) {
+            const float avgF0 = computeAvgF0InRange(f0tl, effectiveF0, left.startTime, right.endTime);
+            if (avgF0 > 0.0f) {
+                merged.pitch = avgF0;
+                merged.pitchOffset = 0.0f;
+            }
+        }
+        newNotes.push_back(merged);
+        ++mergeCount;
     }
 
     if (mergeCount == 0)

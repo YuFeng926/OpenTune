@@ -686,6 +686,30 @@ void testOpenDyneNoteEdgeRetreatContract()
            "The merged target/neighbor range feeds the F0 affected range of the resize commit");
 }
 
+void testOpenDyneScissorsMergeContract()
+{
+    const auto toolHandler = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto merge = functionBlock(
+        toolHandler, "bool PianoRollToolHandler::handleScissorsToolMerge");
+    const auto cut = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handleScissorsToolUp");
+
+    expect(!contains(merge, "collectSelectedNoteIndices")
+               && !contains(merge, "hasSelection")
+               && !contains(merge, "isSelected"),
+           "Scissors separator merge is independent of the current note selection");
+    expect(contains(merge, "std::abs(left.endTime - splitTime) >= tolerance")
+               && contains(merge, "std::abs(beforeNotes[j].startTime - splitTime) < tolerance")
+               && contains(merge, "merged.endTime = right.endTime"),
+           "Scissors double-click merges the two notes adjacent to the hit separator");
+    expect(contains(merge, "computeAvgF0InRange(f0tl, effectiveF0, left.startTime, right.endTime)")
+               && contains(merge, "merged.pitchOffset = 0.0f"),
+           "Scissors merge rebuilds one visible note over the complete joined F0 range");
+    expect(contains(cut, "state.noteSelection.setSingle(lastRightIdx"),
+           "Scissors cut may select only the right segment without blocking separator merge");
+}
+
 void testKillListContract()
 {
     const auto owner = readSource("Source/Content/DomainContentOwner.h");
@@ -1701,6 +1725,7 @@ int main()
     testOpenDyneRenderPreviewContract();
     testOpenDyneToolSwitchingContract();
     testOpenDyneNoteEdgeRetreatContract();
+    testOpenDyneScissorsMergeContract();
     testPitchModulationDriftContract();
     testAutoSnapRefactorContract();
     testAutoSnapTargetMathContract();
