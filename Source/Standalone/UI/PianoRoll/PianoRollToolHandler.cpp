@@ -2678,6 +2678,12 @@ void PianoRollToolHandler::deleteSelectedNotes(std::vector<Note>& notes)
 void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
 // 线锚点工具鼠标按下处理：放置锚点，在锚点间生成线性插值的F0曲线
 {
+    if (!ctx_.getActiveContentTimeGrid)
+        return;
+    auto grid = ctx_.getActiveContentTimeGrid();
+    if (!grid)
+        return;
+
     const auto editRange = sourceEditRange();
     // 搂8.5 鈥?LineAnchor places anchors at SOURCE time (PitchCurve indexing).
     const auto clickTime = pixelXToSourceTime(e.x);
