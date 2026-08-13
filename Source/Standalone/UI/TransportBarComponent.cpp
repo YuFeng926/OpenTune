@@ -246,6 +246,11 @@ void BpmValueField::setReadOnly(bool readOnly)
         }
         if (hasKeyboardFocus(true))
             giveAwayKeyboardFocus();
+        setWantsKeyboardFocus(false);
+    }
+    else
+    {
+        setWantsKeyboardFocus(true);
     }
 
     repaint();

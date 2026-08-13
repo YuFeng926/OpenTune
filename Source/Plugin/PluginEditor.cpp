@@ -307,6 +307,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    pianoRoll_.setShortcutSettings(sharedPreferences.shortcuts);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
 
@@ -732,6 +733,19 @@ bool OpenTuneAudioProcessorEditor::handleEditorShortcut(const juce::KeyPress& ke
         return true;
     }
 
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
+        if (processorRef_.isPlaying())
+            pauseRequested();
+        else
+            playRequested();
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Stop, key)) {
+        stopRequested();
+        return true;
+    }
+
     return false;
 }
 
@@ -866,6 +880,8 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     options.useNativeTitleBar = false;
     options.resizable = true;
     options.useBottomRightCornerResizer = true;
+    // 确保对话框打开前 PianoRoll 持有焦点，JUCE 模态管理器会在关闭时自动恢复
+    pianoRoll_.grabKeyboardFocus();
     options.launchAsync();
 }
 
@@ -1310,6 +1326,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     options.useNativeTitleBar = false;
     options.resizable = false;
     options.componentToCentreAround = this;
+    pianoRoll_.grabKeyboardFocus();
     options.launchAsync();
 }
 
