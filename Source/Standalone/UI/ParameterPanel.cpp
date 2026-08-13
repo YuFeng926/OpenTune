@@ -552,6 +552,13 @@ ParameterPanel::ParameterPanel()
     pitchDriftToolButton_->onClick = [this] { onToolClicked(10); };
     addChildComponent(*pitchDriftToolButton_);
 
+    // EQ tool button (visible in both OpenTune and OpenDyne modes)
+    eqToolButton_ = std::make_unique<ToolIconButton>(11, "EQ", juce::String::fromUTF8(u8"EQ 频率均衡\nE"));
+    eqToolButton_->setRadioGroupId(1001);
+    eqToolButton_->setIcon(ToolbarIcons::getEqIcon(), false);
+    eqToolButton_->onClick = [this] { onToolClicked(11); };
+    addAndMakeVisible(*eqToolButton_);
+
     // ── Pitch Grid 模式选择器（OpenDyne 专属，初态隐藏） ──
     pitchGridSelector_.addItem(u8"No Snap", 1);
     pitchGridSelector_.addItem(u8"Chromatic", 2);
@@ -774,6 +781,7 @@ void ParameterPanel::resized()
         if (handDrawToolButton_) buttons.push_back(handDrawToolButton_.get());
         if (timeToolButton_) buttons.push_back(timeToolButton_.get());
         if (autoTuneToolButton_) buttons.push_back(autoTuneToolButton_.get());
+        if (eqToolButton_) buttons.push_back(eqToolButton_.get());
 
         if (!experimentalFeaturesEnabled_ && timeToolButton_)
         {
@@ -930,6 +938,7 @@ void ParameterPanel::setActiveTool(int toolId)
     if (scissorsToolButton_) scissorsToolButton_->setToggleState(toolId == 8, juce::dontSendNotification);
     if (pitchModulationToolButton_) pitchModulationToolButton_->setToggleState(toolId == 9, juce::dontSendNotification);
     if (pitchDriftToolButton_) pitchDriftToolButton_->setToggleState(toolId == 10, juce::dontSendNotification);
+    if (eqToolButton_) eqToolButton_->setToggleState(toolId == 11, juce::dontSendNotification);
 }
 
 void ParameterPanel::setExperimentalFeaturesEnabled(bool enabled)

@@ -4,6 +4,7 @@
 #include "TimeCoordinate.h"
 #include "../Inference/TimeStretchCache.h"
 #include "../Inference/RenderCache.h"
+#include "../DSP/NoteEqProcessor.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <cmath>
@@ -70,6 +71,84 @@ inline void applyAutomationGain(juce::AudioBuffer<float>& destination,
         for (int channel = 0; channel < channels; ++channel) {
             destination.getWritePointer(channel, destinationStartSample + s)[0] *= gainLinear;
         }
+    }
+}
+
+/**
+ * Per-note EQ processing: apply EQ to audio buffer based on note time ranges.
+ * 
+ * For each sample, find which note it belongs to and apply that note's EQ settings.
+ * If a sample doesn't belong to any note, no EQ is applied.
+ * If a note has no EQ settings (nullopt), no EQ is applied.
+ */
+inline void applyPerNoteEq(juce::AudioBuffer<float>& destination,
+                           int destinationStartSample,
+                           int numSamples,
+                           const std::vector<Note>* notes,
+                           const std::shared_ptr<const TimeGridSnapshot>& timeGrid,
+                           int64_t readStartSample,
+                           double targetSampleRate)
+{
+    if (notes == nullptr || notes->empty())
+        return;
+    
+    // Process in chunks for each note to avoid per-sample filter state issues
+    for (int s = 0; s < numSamples; ) {
+        // Find which note this sample belongs to
+        const double outputSeconds = static_cast<double>(readStartSample + s) / targetSampleRate;
+        const double sourceSeconds = timeGrid != nullptr
+            ? timeGrid->tauInverse(outputSeconds)
+            : outputSeconds;
+        
+        // Find the note at this time
+        const Note* activeNote = nullptr;
+        for (const auto& note : *notes) {
+            if (sourceSeconds >= note.startTime && sourceSeconds < note.endTime) {
+                activeNote = &note;
+                break;
+            }
+        }
+        
+        if (activeNote == nullptr || !activeNote->eq.has_value() || !activeNote->eq->active) {
+            // No EQ for this sample, skip ahead
+            ++s;
+            continue;
+        }
+        
+        // Find how many samples belong to this note
+        const double noteEndSeconds = activeNote->endTime;
+        double noteEndOutputSeconds = noteEndSeconds;
+        if (timeGrid != nullptr) {
+            noteEndOutputSeconds = timeGrid->tauForward(noteEndSeconds);
+        }
+        const int64_t noteEndSample = static_cast<int64_t>(noteEndOutputSeconds * targetSampleRate);
+        const int chunkSize = static_cast<int>(juce::jmin(
+            static_cast<int64_t>(numSamples - s),
+            noteEndSample - (readStartSample + s)));
+        
+        if (chunkSize <= 0) {
+            ++s;
+            continue;
+        }
+        
+        // Apply EQ to this chunk
+        NoteEqProcessor processor;
+        processor.prepare(targetSampleRate, chunkSize);
+        processor.updateCoefficients(*activeNote->eq);
+        
+        // Extract chunk, process, and put back
+        juce::AudioBuffer<float> chunk(destination.getNumChannels(), chunkSize);
+        for (int ch = 0; ch < destination.getNumChannels(); ++ch) {
+            chunk.copyFrom(ch, 0, destination, ch, destinationStartSample + s, chunkSize);
+        }
+        
+        processor.process(chunk);
+        
+        for (int ch = 0; ch < destination.getNumChannels(); ++ch) {
+            destination.copyFrom(ch, destinationStartSample + s, chunk, ch, 0, chunkSize);
+        }
+        
+        s += chunkSize;
     }
 }
 
@@ -177,6 +256,15 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
                                                           request.readStartSample,
                                                           static_cast<int>(request.targetSampleRate));
     }
+    
+    // ============================================================
+    // Per-note EQ processing
+    // ============================================================
+    applyPerNoteEq(destination, destinationStartSample, availableSamples,
+                   request.source.notes,
+                   request.source.timeGrid,
+                   request.readStartSample,
+                   request.targetSampleRate);
 
     // ============================================================
     // 统一最终增益收尾

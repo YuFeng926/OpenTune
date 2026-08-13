@@ -607,6 +607,33 @@ public:
     }
 
     /**
+     * @brief Get EQ icon path (frequency curve with slider)
+     */
+    static juce::Path getEqIcon() {
+        juce::Path path;
+        // EQ curve shape (simplified sine wave)
+        path.startNewSubPath(4.0f, 16.0f);
+        path.cubicTo(8.0f, 8.0f, 16.0f, 8.0f, 20.0f, 16.0f);
+        
+        // Horizontal line (frequency axis)
+        path.startNewSubPath(2.0f, 20.0f);
+        path.lineTo(22.0f, 20.0f);
+        
+        // Vertical line (gain axis)
+        path.startNewSubPath(4.0f, 4.0f);
+        path.lineTo(4.0f, 20.0f);
+        
+        return path;
+    }
+
+    /**
+     * @brief Create EQ icon image
+     */
+    static juce::Image createEqIconImage() {
+        return createIconImage(getEqIcon(), juce::Colours::white);
+    }
+
+    /**
      * @brief Draw an icon path scaled to fit within bounds
      * @param g Graphics context
      * @param path Icon path to draw

@@ -473,6 +473,21 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
         nt.setProperty("vibratoRate", note.vibratoRate, nullptr);
         nt.setProperty("outputGainDb", note.outputGainDb, nullptr);
         nt.setProperty("isVoiced", note.isVoiced ? 1 : 0, nullptr);
+        
+        // v5: Per-note EQ settings
+        if (note.eq.has_value()) {
+            const auto& eq = *note.eq;
+            juce::ValueTree eqTree("EqSettings");
+            eqTree.setProperty("active", eq.active ? 1 : 0, nullptr);
+            for (int b = 0; b < EqSettings::kNumBands; ++b) {
+                juce::ValueTree bandTree("Band" + juce::String(b));
+                bandTree.setProperty("gainDb", eq.bands[b].gainDb, nullptr);
+                bandTree.setProperty("frequency", eq.bands[b].frequency, nullptr);
+                eqTree.addChild(bandTree, -1, nullptr);
+            }
+            nt.addChild(eqTree, -1, nullptr);
+        }
+        
         tree.addChild(nt, -1, nullptr);
     }
     return tree;
@@ -497,6 +512,22 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
         note.vibratoRate = child.getProperty("vibratoRate", -1.0f);
         note.outputGainDb = child.getProperty("outputGainDb", 0.0f);
         note.isVoiced = static_cast<int>(child.getProperty("isVoiced", 1)) != 0;
+        
+        // v5: Per-note EQ settings
+        auto eqTree = child.getChildWithName("EqSettings");
+        if (eqTree.isValid()) {
+            EqSettings eq;
+            eq.active = static_cast<int>(eqTree.getProperty("active", 0)) != 0;
+            for (int b = 0; b < EqSettings::kNumBands; ++b) {
+                auto bandTree = eqTree.getChildWithName("Band" + juce::String(b));
+                if (bandTree.isValid()) {
+                    eq.bands[b].gainDb = bandTree.getProperty("gainDb", 0.0f);
+                    eq.bands[b].frequency = bandTree.getProperty("frequency", 1000.0f);
+                }
+            }
+            note.eq = eq;
+        }
+        
         notes.push_back(note);
     }
     return notes;

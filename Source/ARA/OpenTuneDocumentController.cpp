@@ -122,6 +122,20 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         n->setAttribute("vibratoRate", note.vibratoRate);
         n->setAttribute("outputGainDb", note.outputGainDb);
         n->setAttribute("isVoiced", note.isVoiced ? 1 : 0);
+        
+        // v5: Per-note EQ settings
+        if (note.eq.has_value()) {
+            auto* eqEl = new juce::XmlElement("EqSettings");
+            eqEl->setAttribute("active", note.eq->active ? 1 : 0);
+            for (int b = 0; b < EqSettings::kNumBands; ++b) {
+                auto* bandEl = new juce::XmlElement("Band" + juce::String(b));
+                bandEl->setAttribute("gainDb", note.eq->bands[b].gainDb);
+                bandEl->setAttribute("frequency", note.eq->bands[b].frequency);
+                eqEl->addChildElement(bandEl);
+            }
+            n->addChildElement(eqEl);
+        }
+        
         editable->addChildElement(n);
     }
 
@@ -382,6 +396,21 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             if (!std::isfinite(note.outputGainDb))
                 return std::nullopt;
             note.isVoiced = n->getIntAttribute("isVoiced") != 0;
+            
+            // v5: Per-note EQ settings
+            if (auto* eqEl = n->getChildByName("EqSettings")) {
+                EqSettings eq;
+                eq.active = eqEl->getIntAttribute("active", 0) != 0;
+                for (int b = 0; b < EqSettings::kNumBands; ++b) {
+                    auto* bandEl = eqEl->getChildByName(("Band" + juce::String(b)).toRawUTF8());
+                    if (bandEl != nullptr) {
+                        eq.bands[b].gainDb = static_cast<float>(bandEl->getDoubleAttribute("gainDb"));
+                        eq.bands[b].frequency = static_cast<float>(bandEl->getDoubleAttribute("frequency"));
+                    }
+                }
+                note.eq = eq;
+            }
+            
             content.editable.notes.push_back(note);
         }
 
