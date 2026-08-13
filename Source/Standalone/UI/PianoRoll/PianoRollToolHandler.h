@@ -257,6 +257,16 @@ private:
     void updateScissorsPreview(const juce::MouseEvent& e);
     void handleScissorsToolMouseDown(const juce::MouseEvent& e);
     void handleScissorsToolUp(const juce::MouseEvent& e);
+    // 双击分离线：合并相邻音符（left.endTime ≈ right.startTime ≈ 点击时间）。
+    // 命中分离线返回 true；未命中返回 false（调用方回退为切割）。
+    bool handleScissorsToolMerge(const juce::MouseEvent& e);
+    // Scissors 切割/合并共用：加载 effective (corrected) F0 数组（不可用返回空）。
+    std::vector<float> loadEffectiveF0() const;
+    // Scissors 切割/合并共用：区间 [tStart, tEnd) 内有效 F0 帧的算术平均，无有效帧返回 0。
+    float computeAvgF0InRange(const F0Timeline& f0tl,
+                              const std::vector<float>& effectiveF0,
+                              double tStart,
+                              double tEnd) const;
     
     // === EQ Tool ===
     void handleEqToolMouseDown(const juce::MouseEvent& e);
@@ -333,6 +343,11 @@ private:
     int f2PressCount_ = 0;
     std::chrono::steady_clock::time_point lastF2PressTime_{};
     static constexpr int kF2DoubleClickMs = 400;
+
+    // Scissors：本点击序列第一击的实际切割位置（source 秒），-1 = 未切割。
+    // mouseDown（clicks==1）清除，切割提交成功时设置，mouseDoubleClick 据此
+    // 区分"音符内部双击"（第一击已切出刀口 → 保持切割）与"分离线双击"（合并）。
+    double scissorsLastCutTime_ = -1.0;
 
     juce::Point<int> dragStartPos_;
     double lastDrawTime_ = 0.0;

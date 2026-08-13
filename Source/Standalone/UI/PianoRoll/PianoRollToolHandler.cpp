@@ -531,8 +531,14 @@ void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
                && AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
         handleVolumeEnvelopeToolDoubleClick(e);
     } else if (currentTool_ == ToolId::Scissors) {
-        // 双击切割：复用 mouseUp 的提交逻辑，与 Melodyne 双击交互一致。
-        handleScissorsToolUp(e);
+        // 双击：本序列第一击已在音符内部切割（产生刀口）→ 保持切割语义
+        // （此处幂等空切）；否则按 Melodyne：命中分离线则合并相邻音符，
+        // 未命中分离线则切割。
+        if (scissorsLastCutTime_ >= 0.0) {
+            handleScissorsToolUp(e);
+        } else if (!handleScissorsToolMerge(e)) {
+            handleScissorsToolUp(e);
+        }
     }
     // Other tools: no-op (could be extended later for note resize / etc.)
 }
@@ -2317,7 +2323,10 @@ void PianoRollToolHandler::updateScissorsPreview(const juce::MouseEvent& e)
 
 void PianoRollToolHandler::handleScissorsToolMouseDown(const juce::MouseEvent& e)
 {
-    juce::ignoreUnused(e);
+    // 新点击序列（clicks==1）重置"本序列第一击是否已切割"标记；
+    // 双击序列的第二次按下（clicks>=2）不清除，供 mouseDoubleClick 判定。
+    if (e.getNumberOfClicks() <= 1)
+        scissorsLastCutTime_ = -1.0;
     // 切点以 mouseUp 时刻为准提交；此处只清除旧预览。
     ctx_.getState().scissorsPreviewTime = -1.0;
 }
@@ -2352,23 +2361,9 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
 
     // 获取 effective (corrected) F0 数据用于 pitch center 重算；
     // F0 数据不可用时保持原 pitch（不重算）。
-    std::vector<float> effectiveF0;
-    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    const auto effectiveF0 = loadEffectiveF0();
+    const bool hasF0 = !effectiveF0.empty();
     const auto f0tl = ctx_.getF0Timeline();
-    const bool hasF0 = contentSnapshot && !f0tl.isEmpty();
-    if (hasF0) {
-        effectiveF0.assign(static_cast<size_t>(f0tl.endFrameExclusive()), 0.0f);
-        contentSnapshot->forEachEffectiveF0Span(0, f0tl.endFrameExclusive(),
-            [&](int frameIndex, const float* data, int length, float gain) {
-                if (data == nullptr || frameIndex < 0)
-                    return;
-                for (int i = 0; i < length; ++i) {
-                    const int idx = frameIndex + i;
-                    if (idx < static_cast<int>(effectiveF0.size()))
-                        effectiveF0[static_cast<size_t>(idx)] = data[i] * gain;
-                }
-            });
-    }
 
     // 构建新 notes 向量：每个待切割 note 生成左右两段，其余原样保留。
     std::vector<Note> newNotes;
@@ -2390,31 +2385,14 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
 
         // pitch center 重算：用 effective F0 在各自时间范围内的平均值，
         // pitch 设为均值、pitchOffset=0，使 getAdjustedPitch() 直接返回该频率。
-        if (hasF0 && !effectiveF0.empty()) {
-            auto computeAvgF0 = [&](double tStart, double tEnd) -> float {
-                const int startFrame = f0tl.frameAtOrBefore(tStart);
-                const int endFrame = f0tl.exclusiveFrameAt(tEnd);
-                float sum = 0.0f;
-                int count = 0;
-                for (int f = startFrame; f < endFrame; ++f) {
-                    if (f < 0 || f >= static_cast<int>(effectiveF0.size()))
-                        continue;
-                    const float f0 = effectiveF0[static_cast<size_t>(f)];
-                    if (f0 > 0.0f) {
-                        sum += f0;
-                        ++count;
-                    }
-                }
-                return count > 0 ? sum / static_cast<float>(count) : 0.0f;
-            };
-
-            const float leftAvgF0 = computeAvgF0(original.startTime, splitTime);
+        if (hasF0) {
+            const float leftAvgF0 = computeAvgF0InRange(f0tl, effectiveF0, original.startTime, splitTime);
             if (leftAvgF0 > 0.0f) {
                 left.pitch = leftAvgF0;
                 left.pitchOffset = 0.0f;
             }
 
-            const float rightAvgF0 = computeAvgF0(splitTime, original.endTime);
+            const float rightAvgF0 = computeAvgF0InRange(f0tl, effectiveF0, splitTime, original.endTime);
             if (rightAvgF0 > 0.0f) {
                 right.pitch = rightAvgF0;
                 right.pitchOffset = 0.0f;
@@ -2428,6 +2406,9 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
     if (!ctx_.replaceContentNotesForFullMutation || !ctx_.replaceContentNotesForFullMutation(newNotes)) {
         return;
     }
+    // 记录本点击序列已实际切割（供 mouseDoubleClick 区分"音符内部双击"
+    // 与"分离线双击"，避免把刚切出的刀口当分离线合并回去）。
+    scissorsLastCutTime_ = splitTime;
     if (ctx_.republishPlaybackSource)
         ctx_.republishPlaybackSource();
 
@@ -2457,6 +2438,148 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
             ctx_.republishPlaybackSource);
         ctx_.pushUndoAction(std::move(action));
     }
+}
+
+std::vector<float> PianoRollToolHandler::loadEffectiveF0() const
+{
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    const auto f0tl = ctx_.getF0Timeline();
+    if (!contentSnapshot || f0tl.isEmpty())
+        return {};
+
+    std::vector<float> effectiveF0(static_cast<size_t>(f0tl.endFrameExclusive()), 0.0f);
+    contentSnapshot->forEachEffectiveF0Span(0, f0tl.endFrameExclusive(),
+        [&](int frameIndex, const float* data, int length, float gain) {
+            if (data == nullptr || frameIndex < 0)
+                return;
+            for (int i = 0; i < length; ++i) {
+                const int idx = frameIndex + i;
+                if (idx < static_cast<int>(effectiveF0.size()))
+                    effectiveF0[static_cast<size_t>(idx)] = data[i] * gain;
+            }
+        });
+    return effectiveF0;
+}
+
+float PianoRollToolHandler::computeAvgF0InRange(const F0Timeline& f0tl,
+                                                const std::vector<float>& effectiveF0,
+                                                double tStart,
+                                                double tEnd) const
+{
+    if (effectiveF0.empty())
+        return 0.0f;
+
+    const int startFrame = f0tl.frameAtOrBefore(tStart);
+    const int endFrame = f0tl.exclusiveFrameAt(tEnd);
+    float sum = 0.0f;
+    int count = 0;
+    for (int f = startFrame; f < endFrame; ++f) {
+        if (f < 0 || f >= static_cast<int>(effectiveF0.size()))
+            continue;
+        const float f0 = effectiveF0[static_cast<size_t>(f)];
+        if (f0 > 0.0f) {
+            sum += f0;
+            ++count;
+        }
+    }
+    return count > 0 ? sum / static_cast<float>(count) : 0.0f;
+}
+
+bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
+{
+    auto& state = ctx_.getState();
+    state.scissorsPreviewTime = -1.0;
+
+    const auto beforeNotes = committedNotes(ctx_);
+    const auto sourceTime = pixelXToSourceTime(e.x);
+    if (!sourceTime)
+        return false;
+    const auto editRange = sourceEditRange();
+    if (!editRange.contains(*sourceTime))
+        return false;
+
+    // 容差 = 3 像素对应的源时间：分离线两侧音符边界均来自 pixelXToSourceTime
+    // 的像素位置，3px 内视为同一时间点。
+    const double splitTime = *sourceTime;
+    const auto tPlus = pixelXToSourceTime(e.x + 3);
+    const double tolerance = tPlus ? std::abs(*tPlus - splitTime) : 1.0 / 44100.0;
+
+    // 分离线 = left.endTime ≈ splitTime 且相邻 right.startTime ≈ splitTime。
+    // 按序配对（left 取其后第一个未消费的 right），分离线两侧多个音符
+    // （不同 pitch 行）各自独立合并。
+    const auto effectiveF0 = loadEffectiveF0();
+    const bool hasF0 = !effectiveF0.empty();
+    const auto f0tl = ctx_.getF0Timeline();
+
+    std::vector<char> consumed(beforeNotes.size(), 0);
+    std::vector<Note> newNotes;
+    newNotes.reserve(beforeNotes.size());
+    size_t mergeCount = 0;
+
+    for (size_t i = 0; i < beforeNotes.size(); ++i) {
+        if (consumed[i] != 0)
+            continue;
+        const Note& left = beforeNotes[i];
+        if (std::abs(left.endTime - splitTime) >= tolerance) {
+            newNotes.push_back(left);
+            continue;
+        }
+
+        size_t rightIdx = std::numeric_limits<size_t>::max();
+        for (size_t j = i + 1; j < beforeNotes.size(); ++j) {
+            if (consumed[j] != 0)
+                continue;
+            if (beforeNotes[j].startTime > splitTime + tolerance)
+                break;
+            if (std::abs(beforeNotes[j].startTime - splitTime) < tolerance) {
+                rightIdx = j;
+                break;
+            }
+        }
+        if (rightIdx == std::numeric_limits<size_t>::max()) {
+            newNotes.push_back(left);
+            continue;
+        }
+
+        consumed[rightIdx] = 1;
+        const Note& right = beforeNotes[rightIdx];
+        Note merged = left;
+        merged.endTime = right.endTime;
+        merged.dirty = true;
+        if (hasF0) {
+            const float avgF0 = computeAvgF0InRange(f0tl, effectiveF0, left.startTime, right.endTime);
+            if (avgF0 > 0.0f) {
+                merged.pitch = avgF0;
+                merged.pitchOffset = 0.0f;
+            }
+        }
+        newNotes.push_back(merged);
+        ++mergeCount;
+    }
+
+    if (mergeCount == 0)
+        return false;
+
+    if (!ctx_.replaceContentNotesForFullMutation || !ctx_.replaceContentNotesForFullMutation(newNotes)) {
+        return false;
+    }
+    if (ctx_.republishPlaybackSource)
+        ctx_.republishPlaybackSource();
+    if (ctx_.invalidateSelectionFeedback)
+        ctx_.invalidateSelectionFeedback();
+
+    // 合并后不自动选中（Melodyne 行为）。
+
+    if (ctx_.pushUndoAction) {
+        auto action = std::make_unique<ScissorsUndoAction>(
+            juce::String::fromUTF8(u8"音符合并"),
+            beforeNotes,
+            newNotes,
+            ctx_.replaceContentNotesForFullMutation,
+            ctx_.republishPlaybackSource);
+        ctx_.pushUndoAction(std::move(action));
+    }
+    return true;
 }
 
 void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
