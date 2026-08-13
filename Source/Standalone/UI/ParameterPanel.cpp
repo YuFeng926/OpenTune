@@ -969,10 +969,9 @@ void ParameterPanel::setOpenDyneMode(bool enabled)
     openDyneMode_ = enabled;
 
     // Select 与 AUTO 在两种布局均保留，恒可见
-    // OpenTune 专属工具：DrawNote/LineAnchor/HandDraw 只在 OpenTune 布局显示
+    // OpenTune 专属工具：DrawNote/LineAnchor 只在 OpenTune 布局显示；HandDraw 两种模式均可见
     if (drawNoteToolButton_)    drawNoteToolButton_->setVisible(!enabled);
     if (lineAnchorToolButton_)  lineAnchorToolButton_->setVisible(!enabled);
-    if (handDrawToolButton_)    handDrawToolButton_->setVisible(!enabled);
 
     // OpenDyne 专属工具：Pitch/PitchModulation/PitchDrift/VolumeEnvelope/Scissors 只在 OpenDyne 布局显示
     if (pitchToolButton_)                pitchToolButton_->setVisible(enabled);
