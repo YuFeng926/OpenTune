@@ -2085,7 +2085,9 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         if (hit.trackId < 0) {
             panAxisLock_.reset();
             isPanning_ = true;
-            lastMousePos_ = e.getPosition();
+            panStartPos_ = e.getPosition();
+            panStartVisibleStartSeconds_ = camera_.visibleStartSeconds;
+            panStartVerticalScrollOffset_ = verticalScrollOffset_;
             setMouseCursor(juce::MouseCursor::DraggingHandCursor);
             return;
         }
@@ -2278,30 +2280,27 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 {
     if (isPanning_)
     {
-        auto delta = e.getPosition() - lastMousePos_;
+        auto delta = e.getPosition() - panStartPos_;
 
         constexpr int kAxisLockThresholdPx = 5;
         const auto axis = panAxisLock_.resolve(delta.x, delta.y, kAxisLockThresholdPx);
-        if (axis == AxisLockState::Axis::None) {
-            lastMousePos_ = e.getPosition();
+        if (axis == AxisLockState::Axis::None)
             return;
-        }
 
         if (axis == AxisLockState::Axis::Horizontal) {
             const double deltaTime = static_cast<double>(-delta.x) / camera_.pixelsPerSecond;
             const auto req = makeViewportRequest(
                 TimelineViewportRequest::Kind::Manual,
-                camera_.visibleStartSeconds + deltaTime,
+                panStartVisibleStartSeconds_ + deltaTime,
                 0.0,
                 camera_.pixelsPerSecond);
             commitViewportRequest(req);
         } else {
-            const int newVerticalOffset = verticalScrollOffset_ - delta.y;
+            const int newVerticalOffset = panStartVerticalScrollOffset_ - delta.y;
             setVerticalScrollOffset(newVerticalOffset);
             listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
         }
 
-        lastMousePos_ = e.getPosition();
         return;
     }
 

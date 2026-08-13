@@ -3525,6 +3525,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
             interactionState_.isPanning = true;
             interactionState_.dragStartPos = e.getPosition();
             dragStartVerticalScrollOffset_ = verticalScrollOffset_;
+            dragStartVisibleStartSeconds_ = camera_.visibleStartSeconds;
             setMouseCursor(juce::MouseCursor::DraggingHandCursor);
             return;
         }
@@ -3545,6 +3546,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
             interactionState_.isPanning = true;
             interactionState_.dragStartPos = e.getPosition();
             dragStartVerticalScrollOffset_ = verticalScrollOffset_;
+            dragStartVisibleStartSeconds_ = camera_.visibleStartSeconds;
             setMouseCursor(juce::MouseCursor::DraggingHandCursor);
             return;
         }
@@ -3597,7 +3599,7 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
                 contentDirty_ = true;
             }
         } else {
-            const double newVisibleStart = camera_.visibleStartSeconds - deltaX / pps;
+            const double newVisibleStart = dragStartVisibleStartSeconds_ - deltaX / pps;
             const auto req = makeViewportRequest(
                 TimelineViewportRequest::Kind::Manual,
                 newVisibleStart,
@@ -3803,7 +3805,7 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
 
     if (axis == AxisLockState::Axis::Horizontal) {
         // 时间轴：保持锚点时间在鼠标 X 下
-        const double zoomFactorH = std::exp(dx * 0.008);
+        const double zoomFactorH = std::exp(dx * 0.005);
         const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
             openDyneZoomPanStartPps_ * zoomFactorH,
             TimelineViewportRequest::ViewKind::PianoRoll);
@@ -3817,7 +3819,7 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
             newPps));
     } else {
         // 音高轴：保持锚点 midi 在鼠标 Y 下
-        const float zoomFactorV = static_cast<float>(std::exp(dy * 0.008));
+        const float zoomFactorV = static_cast<float>(std::exp(dy * 0.005));
         const float newPixelsPerSemitone = juce::jlimit(
             5.0f, 60.0f, openDyneZoomPanStartPixelsPerSemitone_ * zoomFactorV);
         pixelsPerSemitone_ = newPixelsPerSemitone;
