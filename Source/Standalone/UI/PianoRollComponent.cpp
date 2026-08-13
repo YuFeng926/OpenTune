@@ -341,6 +341,7 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
         mainItems = {
             { { ToolId::Select,    "Select",   "F1",  []{ return makeToolIcon(ToolId::Select); } } },
             { { ToolId::Pitch,     "Pitch",    "F2",  []{ return makeToolIcon(ToolId::Pitch); } }, true },
+            { { ToolId::HandDraw,  "Hand Draw","5",   []{ return ToolbarIcons::getHandDrawIcon(); } } },
             { { ToolId::VolumeEnvelope, "Volume", "F4", []{ return makeToolIcon(ToolId::VolumeEnvelope); } } },
             { { ToolId::TimeTool,  "Time",     "T",   []{ return makeToolIcon(ToolId::TimeTool); } } },
             { { ToolId::Scissors,  "Scissors", "F6",  []{ return makeToolIcon(ToolId::Scissors); } } },
@@ -1371,10 +1372,11 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
         drawLineAnchorPreview(g);
     }
 
-    // ── OpenDyne transient previews（Scissors 预览线与 Mod/Drift tooltip） ──
+    // ── OpenDyne transient previews（Scissors 预览线、Mod/Drift tooltip、Volume dB tooltip） ──
     if (isOpenDyne()) {
         drawScissorsPreview(g);
         drawModDriftDragPreview(g);
+        drawVolumeDragPreview(g);
     }
 
     // ⚡️ Cursor preview (豁免路径): DrawNote tool 的绘制中 note preview
@@ -1473,6 +1475,35 @@ void PianoRollComponent::drawModDriftDragPreview(juce::Graphics& g)
     const juce::String text = isModulation
         ? juce::String::formatted("%.0f%%", value * 100.0f)
         : juce::String::formatted("%+.0f%%", value * 100.0f);
+    juce::Font font(12.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.75f));
+    g.fillRoundedRectangle(static_cast<float>(mousePos.x + 12), static_cast<float>(mousePos.y + 12),
+                           font.getStringWidth(text) + 12.0f, 20.0f, 4.0f);
+    g.setColour(juce::Colours::white);
+    g.setFont(font);
+    g.drawText(text, mousePos.getX() + 18, mousePos.getY() + 14, font.getStringWidth(text), 14,
+               juce::Justification::centredLeft);
+}
+
+// ============================================================================
+// drawVolumeDragPreview — OpenDyne VolumeEnvelope Tool 拖拽 dB 数值预览
+// 与 drawModDriftDragPreview 同构范式
+// ============================================================================
+void PianoRollComponent::drawVolumeDragPreview(juce::Graphics& g)
+{
+    if (!interactionState_.isVolumeDragging)
+        return;
+    if (currentTool_ != ToolId::VolumeEnvelope)
+        return;
+
+    const float deltaDb = interactionState_.volumePreviewDeltaDb;
+    if (std::abs(deltaDb) < 0.01f)
+        return;
+
+    // 鼠标旁 tooltip（与 drawModDriftDragPreview 同构）
+    const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
+        + juce::Point<int>(0, -rulerHeight_);
+    const juce::String text = juce::String::formatted("%+.1f dB", static_cast<double>(deltaDb));
     juce::Font font(12.0f);
     g.setColour(juce::Colours::black.withAlpha(0.75f));
     g.fillRoundedRectangle(static_cast<float>(mousePos.x + 12), static_cast<float>(mousePos.y + 12),
@@ -3226,12 +3257,12 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
     if (openDyneZoomPanActive_)
         endOpenDyneZoomPan();
 
-    // 切入 OpenDyne：DrawNote→Pitch，LineAnchor/HandDraw→Select；Select/TimeTool 保持
+    // 切入 OpenDyne：DrawNote→Pitch，LineAnchor→Select；HandDraw/Select/TimeTool 保持
     // 切回 OpenTune：Pitch→DrawNote，OpenDyne-only 工具（VolumeEnvelope/Scissors）→Select
     if (nowOpenDyne) {
         if (currentTool_ == ToolId::DrawNote)
             setCurrentTool(ToolId::Pitch);
-        else if (currentTool_ == ToolId::LineAnchor || currentTool_ == ToolId::HandDraw)
+        else if (currentTool_ == ToolId::LineAnchor)
             setCurrentTool(ToolId::Select);
     } else if (wasOpenDyne) {
         if (currentTool_ == ToolId::Pitch || currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift)

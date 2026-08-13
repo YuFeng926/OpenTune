@@ -405,6 +405,7 @@ private:
     // OpenDyne overlay
     void drawScissorsPreview(juce::Graphics& g);
     void drawModDriftDragPreview(juce::Graphics& g);
+    void drawVolumeDragPreview(juce::Graphics& g);
 
     bool shouldShowPianoKeys() const noexcept;
     bool isTimeView() const noexcept { return currentTool_ == ToolId::TimeTool; }
