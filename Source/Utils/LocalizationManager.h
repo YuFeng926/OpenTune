@@ -241,6 +241,7 @@ constexpr const char* kSchemeOpenDyne = "OpenDyne";
 constexpr const char* kHorizontalZoomSensitivity = "Horizontal Zoom Sensitivity";
 constexpr const char* kVerticalZoomSensitivity = "Vertical Zoom Sensitivity";
 constexpr const char* kScrollSpeed = "Scroll Speed";
+constexpr const char* kTuningHz = "Tuning Hz";
 constexpr const char* kResetToDefaults = "Reset to Defaults";
 constexpr const char* kRenderingPriority = "Rendering Priority";
 constexpr const char* kGpuFirst = "GPU First";
@@ -436,6 +437,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kHorizontalZoomSensitivity, "Horizontal Zoom Sensitivity", "水平缩放灵敏度", "水平ズーム感度", "Чувств. гориз. zoom", "Sensibilidad zoom horizontal" },
         { Keys::kVerticalZoomSensitivity, "Vertical Zoom Sensitivity", "垂直缩放灵敏度", "垂直ズーム感度", "Чувств. верт. zoom", "Sensibilidad zoom vertical" },
         { Keys::kScrollSpeed, "Scroll Speed", "滚动速度", "スクロール速度", "Скорость прокрутки", "Velocidad" },
+        { Keys::kTuningHz, "Tuning Hz", "基准音高", "基準ピッチ", "Частота настройки", "Frecuencia de afinación" },
         { Keys::kResetToDefaults, "Reset to Defaults", "恢复默认设置", "デフォルトに戻す", "Сбросить", "Restablecer" },
         { Keys::kRenderingPriority, "Rendering Priority", "渲染优先级", "レンダリング優先度", "Приоритет рендеринга", "Prioridad de renderizado" },
         { Keys::kGpuFirst, "GPU First", "GPU 优先", "GPU 優先", "GPU приоритет", "GPU primero" },

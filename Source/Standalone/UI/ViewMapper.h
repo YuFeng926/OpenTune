@@ -3,6 +3,7 @@
 #include <juce_core/juce_core.h>
 #include <cmath>
 #include "TimelineViewportCamera.h"
+#include "../../Utils/TuningConfig.h"
 
 namespace OpenTune {
 
@@ -36,12 +37,12 @@ struct ViewMapper {
     }
     
     float freqToMidi(float hz) const {
-        // 440 Hz = MIDI 69 (A4)
-        return static_cast<float>(12.0 * std::log2(hz / 440.0) + 69.0) - 0.5f;
+        // Tuning Hz = MIDI 69 (A4), with -0.5 pixel center offset
+        return static_cast<float>(12.0 * std::log2(hz / TuningConfig::currentTuningHz()) + 69.0) - 0.5f;
     }
     
     float midiToFreq(float midi) const {
-        return 440.0f * std::pow(2.0f, (midi + 0.5f - 69.0f) / 12.0f);
+        return TuningConfig::currentTuningHz() * std::pow(2.0f, (midi + 0.5f - 69.0f) / 12.0f);
     }
     
     float freqToY(float hz) const {

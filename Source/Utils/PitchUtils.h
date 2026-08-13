@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include "TuningConfig.h"
 
 namespace OpenTune {
 namespace PitchUtils {
@@ -29,7 +30,7 @@ inline float mixRetune(float shiftedF0, float targetF0, float retuneSpeed) {
  */
 inline float freqToMidi(float freq) {
     if (freq <= 0.0f) return 0.0f;
-    return 69.0f + 12.0f * std::log2(freq / 440.0f);
+    return 69.0f + 12.0f * std::log2(freq / TuningConfig::currentTuningHz());
 }
 
 /**
@@ -37,7 +38,7 @@ inline float freqToMidi(float freq) {
  */
 inline float midiToFreq(float midi) {
     if (midi <= 0.0f) return 0.0f;
-    return 440.0f * std::pow(2.0f, (midi - 69.0f) / 12.0f);
+    return TuningConfig::currentTuningHz() * std::pow(2.0f, (midi - 69.0f) / 12.0f);
 }
 
 } // namespace PitchUtils

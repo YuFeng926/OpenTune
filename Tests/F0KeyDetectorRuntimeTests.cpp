@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "DSP/F0KeyDetector.h"
+#include "../Source/Utils/TuningConfig.h"
 
 namespace {
 
@@ -25,10 +26,11 @@ void expect(bool condition, const char* message)
     std::cerr << "[FAIL] " << message << '\n';
 }
 
-// A4 = 440 Hz = MIDI 69
+// A4 = TuningConfig::kDefaultTuningHz = MIDI 69
 float midiToFreq(float midiNote)
 {
-    return 440.0f * std::pow(2.0f, (midiNote - 69.0f) / 12.0f);
+    return OpenTune::TuningConfig::kDefaultTuningHz
+        * std::pow(2.0f, (midiNote - 69.0f) / 12.0f);
 }
 
 // 每音级 4 帧的帧序列
