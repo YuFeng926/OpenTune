@@ -54,7 +54,7 @@ public:
     // 常量
     // ============================================================================
 
-    static constexpr int kCurrentProjectFormatVersion = 4; // v4 unifies note gain and sibilant gain into VolumeEnvelope
+    static constexpr int kCurrentProjectFormatVersion = 5; // v5 adds per-note EQ settings
     static constexpr int kMinimumProjectFormatVersion = 3;
     static constexpr const char* kRootNodeName = "OpenTuneProject";
     static constexpr const char* kProjectFormatVersionAttr = "projectFormatVersion";

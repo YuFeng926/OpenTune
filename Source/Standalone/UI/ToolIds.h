@@ -18,7 +18,8 @@ enum class ToolId : int
     Scissors = 8,
     // OpenDyne F2 sub-tools (Melodyne-style pitch editing)
     PitchModulation = 9,
-    PitchDrift = 10
+    PitchDrift = 10,
+    Eq = 11
 };
 
 // Pitch Grid 全局开关：控制 Pitch 工具拖拽时的吸附行为（OpenDyne 模式）

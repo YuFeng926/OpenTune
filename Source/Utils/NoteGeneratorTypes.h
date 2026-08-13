@@ -72,9 +72,9 @@ struct ScaleSnapConfig {
 };
 
 struct NoteSegmentationPolicy {
-    float transitionThresholdCents = 80.0f;
+    float transitionThresholdCents = 50.0f;
     float gapBridgeMs              = 10.0f;
-    float minDurationMs            = 100.0f;
+    float minDurationMs            = 20.0f;
     float tailExtendMs             = 15.0f;
 };
 

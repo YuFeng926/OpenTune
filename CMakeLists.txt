@@ -560,6 +560,7 @@ target_sources(OpenTune
         Source/DSP/ReferenceAutoAlign.h
         Source/DSP/AutoTunePitchShifter.cpp
         Source/DSP/AutoTunePitchShifter.h
+        Source/DSP/NoteEqProcessor.h
 
         # UI Layer
         Source/Standalone/UI/UIColors.h
@@ -587,6 +588,12 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h
         Source/Standalone/UI/PianoRoll/InteractionState.cpp
         Source/Standalone/UI/PianoRoll/InteractionState.h
+        
+        Source/Standalone/UI/PianoRoll/EqGraphRenderer.cpp
+        Source/Standalone/UI/PianoRoll/EqGraphRenderer.h
+        Source/Standalone/UI/PianoRoll/EqBandInteraction.h
+        Source/Standalone/UI/PianoRoll/EqPopupComponent.cpp
+        Source/Standalone/UI/PianoRoll/EqPopupComponent.h
 
         Source/Standalone/UI/ViewMapper.h
         Source/Standalone/UI/MenuBarComponent.cpp
@@ -635,6 +642,7 @@ target_sources(OpenTune
         Source/Utils/PitchUtils.h
         Source/Utils/DetectedKey.h
         Source/Utils/Note.h
+        Source/Utils/NoteEqSettings.h
         Source/Utils/OnnxRuntimeDelayLoadHook.cpp
         Source/Utils/ModelPathResolver.h
         Source/Utils/ProjectModel.cpp

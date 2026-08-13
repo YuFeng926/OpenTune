@@ -450,6 +450,9 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
         case ToolId::Scissors:
             handleScissorsToolMouseDown(e);
             break;
+        case ToolId::Eq:
+            handleEqToolMouseDown(e);
+            break;
         default:
             AppLogger::warn("[PianoRollToolHandler] mouseDown: unknown tool " + juce::String(static_cast<int>(currentTool_)));
             break;
@@ -509,6 +512,9 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
         case ToolId::Scissors:
             updateScissorsPreview(e);
             break;
+        case ToolId::Eq:
+            handleEqToolMouseDrag(e);
+            break;
         default:
             break;
     }
@@ -533,6 +539,9 @@ void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
 
 void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu())
+        return;
+
     if (consumeEmptySpaceIntentUp(e)) {
         return;
     }
@@ -569,6 +578,9 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
             break;
         case ToolId::Scissors:
             handleScissorsToolUp(e);
+            break;
+        case ToolId::Eq:
+            handleEqToolMouseUp(e);
             break;
         default:
             ctx_.getState().noteDrag.draggedNoteIndex = -1;
@@ -3321,6 +3333,29 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
     tt.hoveredHandleId  = 0;
     // commitTimeGrid already triggers cache dirty internally.
     return true;
+}
+
+// ============================================================================
+// EQ Tool Handlers
+// ============================================================================
+
+void PianoRollToolHandler::handleEqToolMouseDown(const juce::MouseEvent& e)
+{
+    // EQ tool: click on a note to open EQ popup
+    // For now, just log the event - actual popup integration will be in Phase 4
+    AppLogger::log("[EQ Tool] mouseDown at (" + juce::String(e.x) + ", " + juce::String(e.y) + ")");
+}
+
+void PianoRollToolHandler::handleEqToolMouseDrag(const juce::MouseEvent& e)
+{
+    // EQ tool: drag to adjust EQ parameters on selected note
+    AppLogger::log("[EQ Tool] mouseDrag at (" + juce::String(e.x) + ", " + juce::String(e.y) + ")");
+}
+
+void PianoRollToolHandler::handleEqToolMouseUp(const juce::MouseEvent& e)
+{
+    // EQ tool: release to finalize EQ adjustment
+    AppLogger::log("[EQ Tool] mouseUp at (" + juce::String(e.x) + ", " + juce::String(e.y) + ")");
 }
 
 } // namespace OpenTune

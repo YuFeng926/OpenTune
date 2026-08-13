@@ -6,6 +6,7 @@
 #include "../../Utils/AppLogger.h"
 #include "../../Utils/ChannelLayoutLogger.h"
 #include "../../Utils/PitchCurve.h"
+#include "../../Utils/NoteEqSettings.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_data_structures/juce_data_structures.h>
@@ -20,7 +21,7 @@ namespace {
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 7;   // v7 adds DetectedKey.origin
+    constexpr int kCaptureArchiveVersion = 8;   // v8 adds per-note EQ settings
     constexpr int kCaptureArchiveVersionMin = 4;  // v4 files load with pitchDriftScale=1.0
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
@@ -186,9 +187,20 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 stream.writeFloat(note.pitchDriftScale);
                 stream.writeFloat(note.vibratoDepth);
                 stream.writeFloat(note.vibratoRate);
-                stream.writeFloat(note.outputGainDb);
-                stream.writeInt(note.isVoiced ? 1 : 0);
+            stream.writeFloat(note.outputGainDb);
+            stream.writeInt(note.isVoiced ? 1 : 0);
+            
+            // v8: Per-note EQ settings
+            stream.writeInt(note.eq.has_value() ? 1 : 0);
+            if (note.eq.has_value()) {
+                const auto& eq = *note.eq;
+                stream.writeInt(eq.active ? 1 : 0);
+                for (int b = 0; b < EqSettings::kNumBands; ++b) {
+                    stream.writeFloat(eq.bands[b].gainDb);
+                    stream.writeFloat(eq.bands[b].frequency);
+                }
             }
+        }
             const auto& envelopePoints = snap->volumeEnvelope.points();
             stream.writeInt(static_cast<int>(envelopePoints.size()));
             for (const auto& point : envelopePoints) {
@@ -224,6 +236,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     const bool hasPitchDriftScale = (fileVersion >= 5);
     const bool hasUnifiedVolumeEnvelope = (fileVersion >= 6);
     const bool hasDetectedKeyOrigin = (fileVersion >= 7);
+    const bool hasPerNoteEq = (fileVersion >= 8);
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -322,6 +335,20 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             note.vibratoRate = stream.readFloat();
             note.outputGainDb = stream.readFloat();
             note.isVoiced = stream.readInt() != 0;
+            
+            // v8: Per-note EQ settings
+            if (hasPerNoteEq) {
+                if (stream.readInt() == 1) {
+                    EqSettings eq;
+                    eq.active = stream.readInt() != 0;
+                    for (int b = 0; b < EqSettings::kNumBands; ++b) {
+                        eq.bands[b].gainDb = stream.readFloat();
+                        eq.bands[b].frequency = stream.readFloat();
+                    }
+                    note.eq = eq;
+                }
+            }
+            
             p.notes.push_back(note);
         }
         // 旧归档无该 property 时按 notes 是否为空推断，避免覆盖已有音符拓扑事实。

@@ -178,6 +178,7 @@ private:
     std::unique_ptr<ToolIconButton> pitchToolButton_;
     std::unique_ptr<ToolIconButton> pitchModulationToolButton_;
     std::unique_ptr<ToolIconButton> pitchDriftToolButton_;
+    std::unique_ptr<ToolIconButton> eqToolButton_;
     std::unique_ptr<ToolIconButton> volumeEnvelopeToolButton_;
     std::unique_ptr<ToolIconButton> scissorsToolButton_;
     AutoButtonPresentation autoButtonPresentation_;

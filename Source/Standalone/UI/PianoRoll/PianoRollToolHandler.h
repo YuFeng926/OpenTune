@@ -257,6 +257,11 @@ private:
     void updateScissorsPreview(const juce::MouseEvent& e);
     void handleScissorsToolMouseDown(const juce::MouseEvent& e);
     void handleScissorsToolUp(const juce::MouseEvent& e);
+    
+    // === EQ Tool ===
+    void handleEqToolMouseDown(const juce::MouseEvent& e);
+    void handleEqToolMouseDrag(const juce::MouseEvent& e);
+    void handleEqToolMouseUp(const juce::MouseEvent& e);
 
     // ⚡️ §8.4 — Time tool handlers (drag math, double-click insert,
     // Alt-snap-disable, group multi-handle drag, output spacing clamp).
