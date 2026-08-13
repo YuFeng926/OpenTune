@@ -14,6 +14,7 @@
 #include "PianoRollVisualPreferences.h"
 #include "../Standalone/UI/ThemeTokens.h"
 #include "TimelineDisplayMode.h"
+#include "TuningConfig.h"
 #include "VocoderModelWeight.h"
 #include "ZoomSensitivityConfig.h"
 
@@ -62,6 +63,7 @@ struct SharedPreferencesState {
     KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
     bool lightPitchCorrectionEnabled = false;  ///< 轻量修音开关（AutoTune cycle resampling，默认关）
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
+    TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
 };
 
 struct StandalonePreferencesState {
@@ -98,6 +100,7 @@ public:
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowUnvoicedFrames(bool shouldShow);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
+    void setTuning(const TuningConfig::TuningSettings& tuning);
     void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
     void setRenderingPriority(RenderingPriority priority);
     void setVocoderModelWeight(VocoderModelWeight weight);

@@ -29,6 +29,7 @@ constexpr const char* kSharedSnapModeKey = "shared.snap.mode";
 constexpr const char* kSharedTrackColorModeKey = "shared.trackColor.mode";
 constexpr const char* kSharedLightPitchCorrectionEnabledKey = "shared.render.lightPitchCorrection";
 constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMode";
+constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "shared.shortcuts.playPause",
@@ -315,6 +316,8 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
         properties.getDoubleValue(kSharedZoomVerticalFactorKey, state.shared.zoomSensitivity.verticalZoomFactor));
     state.shared.zoomSensitivity.scrollSpeed = static_cast<float>(
         properties.getDoubleValue(kSharedScrollSpeedKey, state.shared.zoomSensitivity.scrollSpeed));
+    state.shared.tuning.tuningHz = static_cast<float>(
+        properties.getDoubleValue(kSharedTuningHzKey, state.shared.tuning.tuningHz));
     state.shared.renderingPriority = renderingPriorityFromToken(
         properties.getValue(kSharedRenderingPriorityKey,
                             toRenderingPriorityToken(state.shared.renderingPriority)));
@@ -372,6 +375,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedZoomHorizontalFactorKey, static_cast<double>(state.shared.zoomSensitivity.horizontalZoomFactor));
     properties.setValue(kSharedZoomVerticalFactorKey, static_cast<double>(state.shared.zoomSensitivity.verticalZoomFactor));
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
+    properties.setValue(kSharedTuningHzKey, static_cast<double>(state.shared.tuning.tuningHz));
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
     properties.setValue(kSharedVocoderWeightKey,
@@ -430,6 +434,7 @@ void AppPreferences::load()
     }
 
     state_ = loadStateFromProperties(*userSettings);
+    TuningConfig::currentTuningHz() = state_.shared.tuning.tuningHz;
 }
 
 void AppPreferences::save()
@@ -489,6 +494,14 @@ void AppPreferences::setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensiti
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.zoomSensitivity = zoomSensitivity;
+    saveLocked();
+}
+
+void AppPreferences::setTuning(const TuningConfig::TuningSettings& tuning)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.tuning = tuning;
+    TuningConfig::currentTuningHz() = tuning.tuningHz;
     saveLocked();
 }
 

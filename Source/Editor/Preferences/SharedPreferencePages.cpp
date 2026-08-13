@@ -315,7 +315,7 @@ private:
 class SharedEditingPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 252; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 28 + 20
+    static constexpr int kContentHeight = 272; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 28 + 20
 
     SharedEditingPage(AppPreferences& appPreferences,
                       std::function<void()> onPreferencesChanged,
@@ -383,6 +383,19 @@ public:
         initialiseSlider(scrollSlider_);
         addAndMakeVisible(scrollSlider_);
 
+        initialiseLabel(tuningLabel_, LOC(kTuningHz));
+        addAndMakeVisible(tuningLabel_);
+        tuningSlider_.setRange(TuningConfig::kMinTuningHz, TuningConfig::kMaxTuningHz, 1.0);
+        tuningSlider_.setValue(appPreferences_.getState().shared.tuning.tuningHz, juce::dontSendNotification);
+        tuningSlider_.onValueChange = [this] {
+            TuningConfig::TuningSettings tuning;
+            tuning.tuningHz = static_cast<float>(tuningSlider_.getValue());
+            appPreferences_.setTuning(tuning);
+            notifyChanged();
+        };
+        initialiseSlider(tuningSlider_);
+        addAndMakeVisible(tuningSlider_);
+
         resetButton_.setButtonText(LOC(kResetToDefaults));
         resetButton_.setColour(juce::TextButton::buttonColourId, UIColors::buttonNormal);
         resetButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
@@ -426,6 +439,11 @@ public:
         scrollLabel_.setBounds(row.removeFromLeft(labelWidth));
         scrollSlider_.setBounds(row);
 
+        bounds.removeFromTop(10);
+        row = bounds.removeFromTop(rowHeight);
+        tuningLabel_.setBounds(row.removeFromLeft(labelWidth));
+        tuningSlider_.setBounds(row);
+
         bounds.removeFromTop(18);
         resetButton_.setBounds(bounds.removeFromTop(28).removeFromLeft(150));
     }
@@ -456,6 +474,8 @@ private:
     juce::Slider verticalSlider_;
     juce::Label scrollLabel_;
     juce::Slider scrollSlider_;
+    juce::Label tuningLabel_;
+    juce::Slider tuningSlider_;
     juce::TextButton resetButton_;
 };
 

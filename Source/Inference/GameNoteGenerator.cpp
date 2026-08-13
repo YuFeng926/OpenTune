@@ -2,6 +2,7 @@
 #include "../Utils/AppLogger.h"
 #include "../Utils/PitchUtils.h"
 #include "../Utils/SilentGapDetector.h"
+#include "../Utils/TuningConfig.h"
 #include "../Render/RenderChunkPlanner.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -219,7 +220,7 @@ void appendNote(std::vector<Note>& out, double start, double end,
     n.startTime     = start;
     n.endTime       = end;
     n.pitch         = PitchUtils::midiToFreq(static_cast<float>(midiInt));
-    n.originalPitch = 440.0f * std::pow(2.0f, (continuousMidi - 69.0f) / 12.0f);
+    n.originalPitch = TuningConfig::currentTuningHz() * std::pow(2.0f, (continuousMidi - 69.0f) / 12.0f);
     n.isVoiced      = true;
     out.push_back(n);
 }
