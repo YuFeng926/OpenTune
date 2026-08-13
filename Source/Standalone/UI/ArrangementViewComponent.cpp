@@ -1124,6 +1124,7 @@ ForegroundGenerationSignature ArrangementViewComponent::makeForegroundSignature(
 {
     ForegroundGenerationSignature sig;
     sig.pixelsPerSecond = camera_.pixelsPerSecond;
+    sig.trackHeight = processor_.getTrackHeight();
     sig.contentRevision = contentMetrics_.revision;
     sig.selectionRevision = computeSelectionRevision();
     return sig;

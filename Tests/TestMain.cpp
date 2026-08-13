@@ -91,14 +91,20 @@ void testArrangementForegroundScaleContract()
 
     expect(contains(foregroundSignature, "double pixelsPerSecond"),
            "Arrangement foreground signature tracks horizontal scale");
+    expect(contains(foregroundSignature, "int trackHeight"),
+           "Arrangement foreground signature tracks vertical scale (track height)");
     expect(contains(foregroundSignature, "uint64_t selectionRevision = 0;"),
            "Arrangement foreground signature carries the selection revision");
     expect(contains(equality, "pixelsPerSecond == o.pixelsPerSecond"),
            "Arrangement foreground cache invalidates when horizontal scale changes");
+    expect(contains(equality, "trackHeight == o.trackHeight"),
+           "Arrangement foreground cache invalidates when track height changes");
     expect(contains(equality, "selectionRevision == o.selectionRevision"),
            "Arrangement foreground cache invalidates when the selection revision changes");
     expect(contains(makeSignature, "sig.pixelsPerSecond = camera_.pixelsPerSecond"),
            "Arrangement foreground raster uses the active camera scale in its signature");
+    expect(contains(makeSignature, "sig.trackHeight = processor_.getTrackHeight()"),
+           "Arrangement foreground signature uses live track height");
     expect(contains(makeSignature, "sig.selectionRevision = computeSelectionRevision();"),
            "Arrangement foreground signature is injected from the live selection revision");
 }
