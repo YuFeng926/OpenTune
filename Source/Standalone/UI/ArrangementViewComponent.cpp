@@ -2083,6 +2083,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     if (e.mods.isCtrlDown()) {
         auto hit = hitTestPlacement(e.getPosition());
         if (hit.trackId < 0) {
+            panAxisLock_.reset();
             isPanning_ = true;
             lastMousePos_ = e.getPosition();
             setMouseCursor(juce::MouseCursor::DraggingHandCursor);
@@ -2278,21 +2279,28 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     if (isPanning_)
     {
         auto delta = e.getPosition() - lastMousePos_;
-        
-        // Horizontal Scroll 鈥?pan via camera
-        const double deltaTime = static_cast<double>(-delta.x) / camera_.pixelsPerSecond;
-        const auto req = makeViewportRequest(
-            TimelineViewportRequest::Kind::Manual,
-            camera_.visibleStartSeconds + deltaTime,
-            0.0,
-            camera_.pixelsPerSecond);
-        commitViewportRequest(req);
 
-        // Vertical Scroll 鈥?use setVerticalScrollOffset() to properly update tile cache
-        const int newVerticalOffset = verticalScrollOffset_ - delta.y;
-        setVerticalScrollOffset(newVerticalOffset);
-        listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
-        
+        constexpr int kAxisLockThresholdPx = 5;
+        const auto axis = panAxisLock_.resolve(delta.x, delta.y, kAxisLockThresholdPx);
+        if (axis == AxisLockState::Axis::None) {
+            lastMousePos_ = e.getPosition();
+            return;
+        }
+
+        if (axis == AxisLockState::Axis::Horizontal) {
+            const double deltaTime = static_cast<double>(-delta.x) / camera_.pixelsPerSecond;
+            const auto req = makeViewportRequest(
+                TimelineViewportRequest::Kind::Manual,
+                camera_.visibleStartSeconds + deltaTime,
+                0.0,
+                camera_.pixelsPerSecond);
+            commitViewportRequest(req);
+        } else {
+            const int newVerticalOffset = verticalScrollOffset_ - delta.y;
+            setVerticalScrollOffset(newVerticalOffset);
+            listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
+        }
+
         lastMousePos_ = e.getPosition();
         return;
     }

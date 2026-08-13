@@ -3354,6 +3354,9 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             // applied by handleTimeToolMouseMove (via ctx.setMouseCursor).
             setMouseCursor(juce::MouseCursor::NormalCursor);
             break;
+        case ToolId::Eq:
+            setMouseCursor(juce::MouseCursor::CrosshairCursor);
+            break;
     }
 
     // 通知监听者工具已切换（参数面板需要同步按钮高度）
@@ -3482,10 +3485,12 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
     // ── OpenDyne：Command+Alt+拖拽 = 同时缩放两轴；Command+Shift+拖拽 = 平移视区 ──
     if (isOpenDyne()) {
         if (e.mods.isCommandDown() && e.mods.isAltDown() && e.x >= pianoKeyWidth_) {
+            openDyneZoomAxisLock_.reset();
             beginOpenDyneZoomPan(e);
             return;
         }
         if (e.mods.isCommandDown() && e.mods.isShiftDown() && e.x >= pianoKeyWidth_) {
+            interactionState_.panAxisLock.reset();
             interactionState_.isPanning = true;
             interactionState_.dragStartPos = e.getPosition();
             dragStartVerticalScrollOffset_ = verticalScrollOffset_;
@@ -3505,6 +3510,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
             }
         }
         if (!onNote) {
+            interactionState_.panAxisLock.reset();
             interactionState_.isPanning = true;
             interactionState_.dragStartPos = e.getPosition();
             dragStartVerticalScrollOffset_ = verticalScrollOffset_;
@@ -3541,29 +3547,34 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
     if (interactionState_.isPanning) {
         int deltaX = e.x - interactionState_.dragStartPos.x;
         int deltaY = e.y - interactionState_.dragStartPos.y;
+
+        // 轴锁定：死区内不动，锁定后只应用一个轴
+        constexpr int kAxisLockThresholdPx = 5;
+        const auto axis = interactionState_.panAxisLock.resolve(deltaX, deltaY, kAxisLockThresholdPx);
+        if (axis == AxisLockState::Axis::None)
+            return;
+
         const double pps = camera_.pixelsPerSecond;
 
-        // 先计算并钳制纵向偏移
-        float newScrollY = dragStartVerticalScrollOffset_ - (float)deltaY;
-        float maxScroll = getTotalHeight() - getTimelineContentViewportHeight();
-        newScrollY = juce::jlimit(0.0f, std::max(0.0f, maxScroll), newScrollY);
-        const bool verticalChanged = (newScrollY != verticalScrollOffset_);
-
-        if (verticalChanged) {
-            verticalScrollOffset_ = newScrollY;
-            staticDirty_ = true;
-            contentDirty_ = true;
+        if (axis == AxisLockState::Axis::Vertical) {
+            float newScrollY = dragStartVerticalScrollOffset_ - (float)deltaY;
+            float maxScroll = getTotalHeight() - getTimelineContentViewportHeight();
+            newScrollY = juce::jlimit(0.0f, std::max(0.0f, maxScroll), newScrollY);
+            if (newScrollY != verticalScrollOffset_) {
+                verticalScrollOffset_ = newScrollY;
+                staticDirty_ = true;
+                contentDirty_ = true;
+            }
+        } else {
+            const double newVisibleStart = camera_.visibleStartSeconds - deltaX / pps;
+            const auto req = makeViewportRequest(
+                TimelineViewportRequest::Kind::Manual,
+                newVisibleStart,
+                0.0,
+                pps);
+            userScrollHold_ = true;
+            commitViewportRequest(req);
         }
-
-        // 横向：仅提交视图请求，不设 dirty（applyRasterCamera 走条带路径）
-        const double newVisibleStart = camera_.visibleStartSeconds - deltaX / pps;
-        const auto req = makeViewportRequest(
-            TimelineViewportRequest::Kind::Manual,
-            newVisibleStart,
-            0.0,
-            pps);
-        userScrollHold_ = true;
-        commitViewportRequest(req);
         return;
     }
 
@@ -3753,35 +3764,43 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
     const double dx = static_cast<double>(e.x - openDyneZoomPanStartPos_.x);
     const double dy = static_cast<double>(e.y - openDyneZoomPanStartPos_.y);
 
-    // 时间轴：保持锚点时间在鼠标 X 下
-    const double zoomFactorH = std::exp(dx * 0.008);
-    const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
-        openDyneZoomPanStartPps_ * zoomFactorH,
-        TimelineViewportRequest::ViewKind::PianoRoll);
-    const double mouseX = static_cast<double>(e.x - pianoKeyWidth_);
-    const double newVisibleStart = openDyneZoomPanAnchorTime_ - mouseX / newPps;
-    userScrollHold_ = true;
-    commitViewportRequest(makeViewportRequest(
-        TimelineViewportRequest::Kind::Manual,
-        newVisibleStart,
-        0.0,
-        newPps));
+    constexpr int kAxisLockThresholdPx = 5;
+    const auto axis = openDyneZoomAxisLock_.resolve(
+        static_cast<int>(dx), static_cast<int>(dy), kAxisLockThresholdPx);
+    if (axis == AxisLockState::Axis::None)
+        return;
 
-    // 音高轴：保持锚点 midi 在鼠标 Y 下
-    const float zoomFactorV = static_cast<float>(std::exp(dy * 0.008));
-    const float newPixelsPerSemitone = juce::jlimit(
-        5.0f, 60.0f, openDyneZoomPanStartPixelsPerSemitone_ * zoomFactorV);
-    pixelsPerSemitone_ = newPixelsPerSemitone;
-    const float contentY = static_cast<float>(e.y - rulerHeight_);
-    const float targetY = (maxMidi_ - openDyneZoomPanAnchorMidi_) * pixelsPerSemitone_;
-    verticalScrollOffset_ = targetY - contentY;
-    const float totalHeight = getTotalHeight();
-    const float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
-    const float maxScroll = totalHeight - visibleHeight;
-    if (maxScroll > 0.0f)
-        verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
-    else
-        verticalScrollOffset_ = 0.0f;
+    if (axis == AxisLockState::Axis::Horizontal) {
+        // 时间轴：保持锚点时间在鼠标 X 下
+        const double zoomFactorH = std::exp(dx * 0.008);
+        const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
+            openDyneZoomPanStartPps_ * zoomFactorH,
+            TimelineViewportRequest::ViewKind::PianoRoll);
+        const double mouseX = static_cast<double>(e.x - pianoKeyWidth_);
+        const double newVisibleStart = openDyneZoomPanAnchorTime_ - mouseX / newPps;
+        userScrollHold_ = true;
+        commitViewportRequest(makeViewportRequest(
+            TimelineViewportRequest::Kind::Manual,
+            newVisibleStart,
+            0.0,
+            newPps));
+    } else {
+        // 音高轴：保持锚点 midi 在鼠标 Y 下
+        const float zoomFactorV = static_cast<float>(std::exp(dy * 0.008));
+        const float newPixelsPerSemitone = juce::jlimit(
+            5.0f, 60.0f, openDyneZoomPanStartPixelsPerSemitone_ * zoomFactorV);
+        pixelsPerSemitone_ = newPixelsPerSemitone;
+        const float contentY = static_cast<float>(e.y - rulerHeight_);
+        const float targetY = (maxMidi_ - openDyneZoomPanAnchorMidi_) * pixelsPerSemitone_;
+        verticalScrollOffset_ = targetY - contentY;
+        const float totalHeight = getTotalHeight();
+        const float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
+        const float maxScroll = totalHeight - visibleHeight;
+        if (maxScroll > 0.0f)
+            verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
+        else
+            verticalScrollOffset_ = 0.0f;
+    }
 
     staticDirty_ = true;
     contentDirty_ = true;

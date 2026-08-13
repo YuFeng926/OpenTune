@@ -281,19 +281,11 @@ void TimelineOverviewComponent::mouseDown(const juce::MouseEvent& e)
     const double pointerTime = projection_.timelineStartSeconds
         + (static_cast<double>(e.position.x) - geometry.contentBounds.getX())
             / geometry.previewPixelsPerSecond;
-    const float viewX = geometry.contentBounds.getX()
-        + static_cast<float>((geometry.visibleStartSeconds
-                              - projection_.timelineStartSeconds)
-                             * geometry.previewPixelsPerSecond);
-    const float viewRight = viewX + static_cast<float>(geometry.visibleDurationSeconds
-                                                        * geometry.previewPixelsPerSecond);
-    const bool insideViewport = e.position.x >= viewX && e.position.x <= viewRight;
 
-    dragPointerOffsetSeconds_ = insideViewport
-        ? pointerTime - geometry.visibleStartSeconds
-        : geometry.visibleDurationSeconds * 0.5;
+    dragStartPointerTime_ = pointerTime;
+    dragStartVisibleStart_ = geometry.visibleStartSeconds;
     isDragging_ = true;
-    requestNavigation(pointerTime - dragPointerOffsetSeconds_);
+    requestNavigation(geometry.visibleStartSeconds);
     updateMouseCursor(e.position);
 }
 
@@ -309,7 +301,8 @@ void TimelineOverviewComponent::mouseDrag(const juce::MouseEvent& e)
     const double pointerTime = projection_.timelineStartSeconds
         + (static_cast<double>(e.position.x) - geometry.contentBounds.getX())
             / geometry.previewPixelsPerSecond;
-    requestNavigation(pointerTime - dragPointerOffsetSeconds_);
+    const double delta = pointerTime - dragStartPointerTime_;
+    requestNavigation(dragStartVisibleStart_ - delta);
     updateMouseCursor(e.position);
 }
 
@@ -321,7 +314,6 @@ void TimelineOverviewComponent::mouseMove(const juce::MouseEvent& e)
 void TimelineOverviewComponent::mouseUp(const juce::MouseEvent& e)
 {
     isDragging_ = false;
-    dragPointerOffsetSeconds_ = 0.0;
     updateMouseCursor(e.position);
 }
 
