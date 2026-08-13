@@ -2,6 +2,7 @@
 #include "PitchUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 
 namespace OpenTune {
@@ -61,6 +62,55 @@ float smootherstep(float t) noexcept
 {
     t = juce::jlimit(0.0f, 1.0f, t);
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+// 零相位FIR低通滤波器：使用汉宁窗，更好的阻带衰减
+// 窗口大小为windowFrames帧，截止频率约 sampleRate/(2*windowFrames*hopSize) Hz
+// 汉宁窗主瓣宽度3个bin，旁瓣衰减-31dB，适合分离drift(<3Hz)和vibrato(>5Hz)
+// 无声帧(NaN)不参与平均，通过权重归零处理
+std::vector<float> computeZeroPhaseDrift(const std::vector<float>& deviations, int windowFrames)
+{
+    const int n = static_cast<int>(deviations.size());
+    if (n <= 0 || windowFrames <= 1) {
+        return deviations;
+    }
+    
+    // 确保奇数窗口，保证对称性
+    const int win = (windowFrames % 2 == 0) ? windowFrames + 1 : windowFrames;
+    const int halfWin = win / 2;
+    
+    // 预计算汉宁窗系数
+    std::vector<float> hanning(win);
+    for (int k = 0; k < win; ++k) {
+        hanning[k] = 0.5f * (1.0f - std::cos(2.0f * 3.14159265f * k / (win - 1)));
+    }
+    
+    std::vector<float> drift(n);
+    
+    for (int i = 0; i < n; ++i) {
+        float sum = 0.0f;
+        float weightSum = 0.0f;
+        
+        for (int k = -halfWin; k <= halfWin; ++k) {
+            int idx = i + k;
+            // 对称镜像边界处理：超出范围时镜像反射
+            if (idx < 0) idx = -idx;
+            if (idx >= n) idx = 2 * n - idx - 2;
+            idx = std::max(0, std::min(n - 1, idx));
+            
+            // 跳过无声帧(NaN)
+            const float dev = deviations[idx];
+            if (std::isnan(dev)) continue;
+            
+            const float w = hanning[k + halfWin];
+            sum += dev * w;
+            weightSum += w;
+        }
+        
+        drift[i] = (weightSum > 0.0f) ? (sum / weightSum) : 0.0f;
+    }
+    
+    return drift;
 }
 
 double noteTransitionFrameAt(const Note& leftNote,
@@ -308,6 +358,54 @@ void PitchCurve::applyCorrectionToRange(
             return notes[left].startTime < notes[right].startTime;
         });
 
+    // 预计算每个音符的漂移分量d(t)：零相位汉宁窗FIR，完整音符作为分析域
+    // 偏差相对anchorPitch（原始音高）计算，确保：
+    // 1. midi(shiftedF0) - midi(targetBaseF0) = midi(f0) - midi(anchorPitch)（pitch shift是常量）
+    // 2. drift工具缩放的是原始音高曲线的慢速分量，与移调无关
+    struct NoteDriftInfo {
+        std::vector<float> driftComponent;  // d(t) in semitones
+        int noteStartFrame = 0;
+        int noteEndFrame = 0;
+    };
+    std::vector<NoteDriftInfo> noteDriftInfos(notes.size());
+    
+    // 窗口大小：约500ms（~43帧@86Hz帧率），汉宁窗-3dB点约0.44/fs
+    // 500ms窗口截止频率约2Hz，确保vibrato(>5Hz)不泄漏
+    const int driftWindowFrames = std::max(5, static_cast<int>(std::lround(0.5 * sampleRate / hopSize)));
+    
+    for (size_t ni = 0; ni < notes.size(); ++ni) {
+        const auto& note = notes[ni];
+        const float noteAnchorPitch = note.originalPitch;
+        if (noteAnchorPitch <= 0.0f || note.startTime >= note.endTime) continue;
+        
+        const int noteStartFrame = static_cast<int>(f0tl.frameAtOrBefore(note.startTime));
+        const int noteEndFrame = static_cast<int>(f0tl.exclusiveFrameAt(note.endTime));
+        // 使用完整音符范围，不裁剪到calculationRange，保证编辑顺序无关
+        const int fullStart = std::max(0, noteStartFrame);
+        const int fullEnd = std::min(maxFrame, noteEndFrame);
+        if (fullEnd <= fullStart) continue;
+        
+        const int noteFrameCount = fullEnd - fullStart;
+        std::vector<float> deviations(noteFrameCount);
+        
+        for (int f = fullStart; f < fullEnd; ++f) {
+            const float rawF0 = originalF0[f];
+            const float f0 = rawF0 > 0.0f ? rawF0 * sourcePitchRatio : rawF0;
+            if (f0 <= 0.0f) {
+                // 无声帧：标记为NaN，后续跳过不参与平均
+                deviations[f - fullStart] = std::numeric_limits<float>::quiet_NaN();
+                continue;
+            }
+            // 偏差相对anchorPitch（原始音高），不含vibrato和pitch shift
+            deviations[f - fullStart] = PitchUtils::freqToMidi(f0) - PitchUtils::freqToMidi(noteAnchorPitch);
+        }
+        
+        auto& info = noteDriftInfos[ni];
+        info.driftComponent = computeZeroPhaseDrift(deviations, driftWindowFrames);
+        info.noteStartFrame = fullStart;
+        info.noteEndFrame = fullEnd;
+    }
+
     std::vector<float> correctedF0Buffer(calculationEndFrame - calculationStartFrame, 0.0f);
 
     for (int i = calculationStartFrame; i < calculationEndFrame; ++i) {
@@ -379,18 +477,30 @@ void PitchCurve::applyCorrectionToRange(
                 shiftedF0 = baseF0 * shiftRatio;
             }
 
-            // --- Pitch Drift: scale the deviation from the target base (mirror axis) ---
+            // --- Pitch Drift: scale only the slow drift component d(t), leave vibrato untouched ---
             {
                 float framePitchDriftScale = pitchDriftScale;
                 if (activeNote->pitchDriftScale != 1.0f) {
                     framePitchDriftScale = activeNote->pitchDriftScale;
                 }
                 if (framePitchDriftScale != 1.0f && activeNote->startTime < activeNote->endTime) {
-                    // Deviation of the current curve from the target base, in semitones
-                    const float devSemitones = PitchUtils::freqToMidi(shiftedF0) - PitchUtils::freqToMidi(targetF0);
-                    // Scale around the target base as the mirror axis:
-                    // 1.0 = original, 0.0 = back to targetF0 (vibrato retained), -1.0 = full mirror
-                    shiftedF0 = PitchUtils::midiToFreq(PitchUtils::freqToMidi(targetF0) + devSemitones * framePitchDriftScale);
+                    // 使用预计算的零相位漂移分量d(t)
+                    const auto& driftInfo = noteDriftInfos[activeNoteIndex];
+                    if (i >= driftInfo.noteStartFrame && i < driftInfo.noteEndFrame) {
+                        const int localFrame = i - driftInfo.noteStartFrame;
+                        const float driftComponent = driftInfo.driftComponent[localFrame];
+                        
+                        // devSemitones = midi(shiftedF0) - midi(targetBaseF0) = midi(f0) - midi(anchorPitch)
+                        // 这是因为pitch shift是常量偏移
+                        const float devSemitones = PitchUtils::freqToMidi(shiftedF0) - PitchUtils::freqToMidi(targetBaseF0);
+                        // 调制分量m(t) = devSemitones - d(t)
+                        const float modulationComponent = devSemitones - driftComponent;
+                        
+                        // 缩放漂移分量，保留调制分量不变
+                        // f'(t) = targetBaseF0 + s·d(t) + m(t)
+                        const float scaledDev = driftComponent * framePitchDriftScale + modulationComponent;
+                        shiftedF0 = PitchUtils::midiToFreq(PitchUtils::freqToMidi(targetBaseF0) + scaledDev);
+                    }
                 }
             }
 
