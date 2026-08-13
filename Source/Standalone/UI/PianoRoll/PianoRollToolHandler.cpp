@@ -280,7 +280,8 @@ std::optional<double> PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
         return std::nullopt;
 
     const auto grid = ctx_.getActiveContentTimeGrid();
-    jassert(grid != nullptr);
+    if (!grid)
+        return std::nullopt;
 
     const double timelineSeconds = ctx_.getViewMapper().xToTime(pixelX);
     const double outputSeconds = projection.projectTimelineTimeToContent(timelineSeconds);
@@ -295,7 +296,8 @@ double PianoRollToolHandler::sourceTimeToTimelineTime(double sourceSeconds) cons
     jassert(projection.isValid());
 
     const auto grid = ctx_.getActiveContentTimeGrid();
-    jassert(grid != nullptr);
+    if (!grid)
+        return 0.0;
 
     const double outputSeconds = grid->tauForward(sourceSeconds);
     return projection.projectContentTimeToTimeline(outputSeconds);
@@ -309,7 +311,8 @@ int PianoRollToolHandler::sourceTimeToScreenX(double sourceSeconds) const
 SourceEditRange PianoRollToolHandler::sourceEditRange(double minDurationSeconds) const
 {
     const auto grid = ctx_.getActiveContentTimeGrid();
-    jassert(grid != nullptr);
+    if (!grid)
+        return { 0.0, 0.0, minDurationSeconds };
     return SourceEditRange::fromTimeGrid(*grid, minDurationSeconds);
 }
 
@@ -2187,6 +2190,7 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEv
 
     state.isVolumeDragging = true;
     const auto snap = ctx_.getEditableContentSnapshot();
+    if (!snap) { state.isVolumeDragging = false; return; }
     volumeDragBaselineEnvelope_ = snap->volumeEnvelope;
     state.volumePreviewEnvelope = volumeDragBaselineEnvelope_;
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
@@ -2265,6 +2269,7 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolDoubleClick(const juce::Mouse
         ctx_.invalidateSelectionFeedback();
 
     const auto snap = ctx_.getEditableContentSnapshot();
+    if (!snap) return;
     const auto& note = notes[static_cast<size_t>(noteIndex)];
     AutomationLane envelope = snap->volumeEnvelope;
     envelope.setRegionGain(note.startTime, note.endTime, 0.0f);
@@ -2678,12 +2683,6 @@ void PianoRollToolHandler::deleteSelectedNotes(std::vector<Note>& notes)
 void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
 // 线锚点工具鼠标按下处理：放置锚点，在锚点间生成线性插值的F0曲线
 {
-    if (!ctx_.getActiveContentTimeGrid)
-        return;
-    auto grid = ctx_.getActiveContentTimeGrid();
-    if (!grid)
-        return;
-
     const auto editRange = sourceEditRange();
     // 搂8.5 鈥?LineAnchor places anchors at SOURCE time (PitchCurve indexing).
     const auto clickTime = pixelXToSourceTime(e.x);
