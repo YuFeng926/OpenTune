@@ -368,9 +368,11 @@ private:
         }
     };
     AxisLockState panAxisLock_;
+    juce::Point<int> panStartPos_;
+    double panStartVisibleStartSeconds_ = 0.0;
+    int panStartVerticalScrollOffset_ = 0;
     juce::Point<int> dragStartPos_;
     juce::Point<int> dragCurrentPos_;
-    juce::Point<int> lastMousePos_;
     double dragStartPlacementSeconds_{0.0};
     float dragStartPlacementGain_{1.0f};
     uint64_t dragStartPlacementId_{0};
