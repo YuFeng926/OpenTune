@@ -517,6 +517,7 @@ private:
     float openDyneZoomPanStartPixelsPerSemitone_ = 25.0f;
     double openDyneZoomPanAnchorTime_ = 0.0;
     float openDyneZoomPanAnchorMidi_ = 60.0f;
+    AxisLockState openDyneZoomAxisLock_;
 
     // OpenDyne: Cmd+Alt+double-click → zoom to note / restore zoom
     std::optional<ViewportState> savedOpenDyneZoomState_;

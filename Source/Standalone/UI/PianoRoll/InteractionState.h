@@ -191,6 +191,26 @@ struct TimeToolState
     }
 };
 
+// 轴锁定状态：用于 pan/zoom 拖拽时防止正交轴抖动
+struct AxisLockState {
+    enum class Axis { None, Horizontal, Vertical };
+    Axis lockedAxis = Axis::None;
+    bool decided = false;
+
+    void reset() { lockedAxis = Axis::None; decided = false; }
+
+    // 返回应应用的轴。仍在死区内返回 None（调用方应跳过）。
+    Axis resolve(int dx, int dy, int threshold) {
+        if (decided) return lockedAxis;
+        if (std::abs(dx) > threshold || std::abs(dy) > threshold) {
+            lockedAxis = std::abs(dx) >= std::abs(dy) ? Axis::Horizontal : Axis::Vertical;
+            decided = true;
+            return lockedAxis;
+        }
+        return Axis::None;
+    }
+};
+
 class InteractionState
 {
 public:
@@ -214,6 +234,7 @@ public:
     ToolId modDriftTool = ToolId::PitchModulation;
 
     bool isPanning = false;
+    AxisLockState panAxisLock;
     juce::Point<int> dragStartPos;
     
     bool drawNoteToolPendingDrag = false;

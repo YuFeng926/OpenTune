@@ -351,6 +351,23 @@ private:
     bool isAdjustingGain_{false};
     bool isDraggingPlayhead_{false};
     bool isPanning_{false};
+    // 轴锁定状态（与 InteractionState::AxisLockState 同构，避免跨模块依赖）
+    struct AxisLockState {
+        enum class Axis { None, Horizontal, Vertical };
+        Axis lockedAxis = Axis::None;
+        bool decided = false;
+        void reset() { lockedAxis = Axis::None; decided = false; }
+        Axis resolve(int dx, int dy, int threshold) {
+            if (decided) return lockedAxis;
+            if (std::abs(dx) > threshold || std::abs(dy) > threshold) {
+                lockedAxis = std::abs(dx) >= std::abs(dy) ? Axis::Horizontal : Axis::Vertical;
+                decided = true;
+                return lockedAxis;
+            }
+            return Axis::None;
+        }
+    };
+    AxisLockState panAxisLock_;
     juce::Point<int> dragStartPos_;
     juce::Point<int> dragCurrentPos_;
     juce::Point<int> lastMousePos_;

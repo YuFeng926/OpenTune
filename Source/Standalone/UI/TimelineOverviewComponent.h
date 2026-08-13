@@ -70,7 +70,8 @@ private:
     float lastBuildProgress_ = 0.0f;
 
     bool isDragging_ = false;
-    double dragPointerOffsetSeconds_ = 0.0;
+    double dragStartPointerTime_ = 0.0;
+    double dragStartVisibleStart_ = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TimelineOverviewComponent)
 };
