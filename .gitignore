@@ -62,3 +62,6 @@ Python/
 
 # Project knowledge base
 knowledge/
+
+# Legacy source directory
+Source/src/
