@@ -501,16 +501,21 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             const int subH = showSub ? (btnSize_ * static_cast<int>(subButtons_.size()) + gap_ * (static_cast<int>(subButtons_.size()) - 1)) : 0;
             const int totalH = pad_ + btnSize_ + subH + pad_;
 
+            // 展开子按钮时只保留 Pitch 主按钮，隐藏其余
             int x = pad_;
             for (int i = 0; i < static_cast<int>(mainButtons_.size()); ++i) {
-                mainButtons_[i]->setBounds(x, pad_, mainWidths_[i], btnSize_);
-                x += mainWidths_[i] + gap_;
+                if (showSub && i != pitchButtonIdx_) {
+                    mainButtons_[i]->setVisible(false);
+                } else {
+                    mainButtons_[i]->setVisible(true);
+                    mainButtons_[i]->setBounds(x, pad_, mainWidths_[i], btnSize_);
+                    x += mainWidths_[i] + gap_;
+                }
             }
 
             if (showSub) {
                 int sx;
                 if (pitchButtonIdx_ >= 0) {
-                    // 居中对齐到 Pitch 按钮下方
                     const int pitchBtnW = mainWidths_[pitchButtonIdx_];
                     sx = mainButtons_[pitchButtonIdx_]->getX() + (pitchBtnW - btnSize_) / 2;
                 } else {
@@ -527,10 +532,16 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
                     sb->setVisible(false);
             }
 
-            int totalW = pad_ * 2;
-            for (int i = 0; i < static_cast<int>(mainButtons_.size()); ++i)
-                totalW += mainWidths_[i] + gap_;
-            if (!mainButtons_.empty()) totalW -= gap_;
+            // 展开时弹窗宽度 = Pitch 一格；收起时 = 全部主按钮
+            int totalW;
+            if (showSub && pitchButtonIdx_ >= 0) {
+                totalW = pad_ * 2 + mainWidths_[pitchButtonIdx_];
+            } else {
+                totalW = pad_ * 2;
+                for (int i = 0; i < static_cast<int>(mainButtons_.size()); ++i)
+                    totalW += mainWidths_[i] + gap_;
+                if (!mainButtons_.empty()) totalW -= gap_;
+            }
 
             setSize(totalW, totalH);
         }
