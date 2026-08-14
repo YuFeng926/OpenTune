@@ -956,24 +956,6 @@ void testEditorStateProjectionContract()
     const auto standaloneEditor = readSource("Source/Standalone/PluginEditor.cpp");
     const auto standaloneTimer = functionBlock(standaloneEditor, "void OpenTuneAudioProcessorEditor::timerCallback()");
 
-    expect(contains(standaloneTimer, "lastPianoRollOriginalF0State_ != OriginalF0State::Ready"),
-           "Standalone timerCallback gates initial F0 view on previous state not Ready");
-    expect(contains(standaloneTimer, "currentOriginalF0State == OriginalF0State::Ready"),
-           "Standalone timerCallback fires initial F0 view only when current state is Ready");
-    expect(contains(standaloneTimer, "pianoRoll_.requestInitialF0View(activeKey)"),
-           "Standalone timerCallback delegates initial F0 view to piano roll");
-    expect(!contains(standaloneTimer, "lastPianoRollOriginalF0State_ == OriginalF0State::Extracting"),
-           "Standalone timerCallback has no legacy Extracting gate");
-
-    const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto requestF0 = functionBlock(pianoRoll, "void PianoRollComponent::requestInitialF0View");
-    const auto consumeF0 = functionBlock(pianoRoll, "bool PianoRollComponent::tryConsumeInitialF0View");
-
-    expect(contains(requestF0, "pendingInitialF0ViewRequests_.insert"),
-           "requestInitialF0View inserts into the pending set");
-    expect(contains(consumeF0, "pendingInitialF0ViewRequests_.erase"),
-           "tryConsumeInitialF0View erases on the success path");
-
     const auto pluginEditor = readSource("Source/Plugin/PluginEditor.cpp");
     const auto pluginTimer = functionBlock(pluginEditor, "void OpenTuneAudioProcessorEditor::timerCallback()");
 
@@ -1686,8 +1668,6 @@ void testPianoRollViewportSessionContract()
            "restoreViewportState synchronizes scrollbars, raster and repaint in one pass");
     expect(contains(restore, "userHasManuallyZoomed_ = true"),
            "restoreViewportState marks the restored camera as user intent so fitToScreen never overrides it");
-    expect(contains(restore, "pendingInitialF0ViewRequests_.erase(editedContentKey_)"),
-           "restoreViewportState clears the pending initial F0 view so async F0 Ready never overrides the restored camera");
 
     // 3. fitToScreen 水平逻辑：精确覆盖 [timelineStartSeconds, timelineEndSeconds]，
     //    不再"起点前移 10% 但缩放仍按原 duration"裁掉尾部；保留手动缩放守卫

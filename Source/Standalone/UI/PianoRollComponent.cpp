@@ -2822,7 +2822,7 @@ void PianoRollComponent::deriveSingleTimelineContentPlacement()
     applyTimelineContentPlacements(std::move(placements), false);
 }
 
-void PianoRollComponent::setContentProjection(const ContentTimelineProjection& projection)
+bool PianoRollComponent::setContentProjection(const ContentTimelineProjection& projection)
 {
     const bool changed = std::abs(pendingSingleContentProjection_.timelineStartSeconds - projection.timelineStartSeconds) > 1.0e-9
         || std::abs(pendingSingleContentProjection_.timelineDurationSeconds - projection.timelineDurationSeconds) > 1.0e-9
@@ -2830,7 +2830,7 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
         || std::abs(pendingSingleContentProjection_.contentDurationSeconds - projection.contentDurationSeconds) > 1.0e-9;
 
     if (!changed) {
-        return;
+        return false;
     }
 
     pendingSingleContentProjection_ = projection;
@@ -2838,6 +2838,7 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
     deriveSingleTimelineContentPlacement();
     userScrollHold_ = false;
     requestContentRedraw();
+    return true;
 }
 
 void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements)
@@ -2864,6 +2865,8 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
     }
 
     if (contentChanged) {
+        if (!contentKey.isValid())
+            pendingInitialF0ViewContentKey_ = ContentKey{};
         editedContentKey_ = contentKey;
         // 切换编辑目标：清除全部拖拽/绘制瞬态与 note draft（noteDraft 是
         // interactionState_ 成员，resetTransient 的 noteDraft.clear() 已覆盖）
@@ -2924,7 +2927,7 @@ void PianoRollComponent::requestInitialF0View(ContentKey contentKey)
     if (!contentKey.isValid())
         return;
 
-    pendingInitialF0ViewRequests_.insert(contentKey);
+    pendingInitialF0ViewContentKey_ = contentKey;
     tryConsumeInitialF0View(contentKey);
 }
 
@@ -3002,54 +3005,83 @@ TimelineViewportRequest PianoRollComponent::makeViewportRequest(
 
 bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
 {
-    if (pendingInitialF0ViewRequests_.find(contentKey) == pendingInitialF0ViewRequests_.end()
-        || contentKey != editedContentKey_
-        || !isShowing()
-        || !isVisible()
-        || currentCurve_ == nullptr) {
+    if (pendingInitialF0ViewContentKey_ != contentKey
+        || contentKey != editedContentKey_) {
         return false;
     }
 
     const auto snapshot = readSnapshotFor(contentKey);
+    if (snapshot == nullptr)
+        return false;
+
+    // 终态收束（在可见性 guard 之前）：Failed 直接清空 pending；Ready 但当前
+    // projection 的 content 区间内没有有效 F0 也清空 pending。
+    // NotRequested/Extracting、curve/TimeGrid/projection/几何未就绪则继续保留。
+    if (snapshot->originalF0State != OriginalF0State::Ready) {
+        if (snapshot->originalF0State == OriginalF0State::Failed)
+            pendingInitialF0ViewContentKey_ = ContentKey{};
+        return false;
+    }
+
+    if (currentCurve_ == nullptr)
+        return false;
+
     const auto curveSnapshot = currentCurve_->getSnapshot();
     const auto projection = activeContentProjection();
-    const int contentWidth = getTimelineContentViewportWidth();
-    const int contentHeight = getTimelineContentViewportHeight();
-    if (snapshot == nullptr
-        || snapshot->originalF0State != OriginalF0State::Ready
-        || snapshot->timeGrid == nullptr
+    if (snapshot->timeGrid == nullptr
         || snapshot->timeGrid->empty()
         || !projection.isValid()
         || curveSnapshot->getHopSize() <= 0
         || !std::isfinite(curveSnapshot->getSampleRate())
-        || curveSnapshot->getSampleRate() <= 0.0
-        || contentWidth <= 0
-        || contentHeight <= 0
-        || camera_.pixelsPerSecond <= 0.0) {
+        || curveSnapshot->getSampleRate() <= 0.0) {
         return false;
     }
 
     const F0Timeline f0Timeline(curveSnapshot->getHopSize(),
                                 curveSnapshot->getSampleRate(),
                                 static_cast<int>(curveSnapshot->size()));
+    if (f0Timeline.isEmpty()) {
+        pendingInitialF0ViewContentKey_ = ContentKey{};
+        return false;
+    }
+
+    // 仅在当前 projection 的 content 区间 [contentStartSeconds, contentStartSeconds
+    // + contentDurationSeconds) 内寻找首个有效 F0：不得定位到 Trim 左侧已裁剪的 F0。
     const auto& originalF0 = curveSnapshot->getOriginalF0();
+    const double contentEndSeconds = projection.contentStartSeconds + projection.contentDurationSeconds;
     int firstFrame = -1;
     float startFrequency = 0.0f;
+    double firstContentSeconds = 0.0;
     for (int frame = 0; frame < static_cast<int>(originalF0.size()); ++frame) {
         const float f0 = originalF0[static_cast<size_t>(frame)];
-        if (std::isfinite(f0) && f0 >= 20.0f && f0 <= 2000.0f) {
+        if (!(std::isfinite(f0) && f0 >= 20.0f && f0 <= 2000.0f))
+            continue;
+        const double contentSeconds = snapshot->timeGrid->tauForward(f0Timeline.timeAtFrame(frame));
+        if (contentSeconds >= projection.contentStartSeconds && contentSeconds < contentEndSeconds) {
             firstFrame = frame;
             startFrequency = f0;
+            firstContentSeconds = contentSeconds;
             break;
         }
     }
 
-    if (firstFrame < 0 || f0Timeline.isEmpty())
+    // Ready 但当前 projection 区间内没有有效 F0 → 终态，清空 pending。
+    if (firstFrame < 0) {
+        pendingInitialF0ViewContentKey_ = ContentKey{};
         return false;
+    }
 
-    const double sourceSeconds = f0Timeline.timeAtFrame(firstFrame);
-    const double contentSeconds = snapshot->timeGrid->tauForward(sourceSeconds);
-    const double timelineSeconds = projection.projectContentTimeToTimeline(contentSeconds);
+    // 正常 Ready 定位仍需可见性与有效几何。
+    const int contentWidth = getTimelineContentViewportWidth();
+    const int contentHeight = getTimelineContentViewportHeight();
+    if (!isShowing() || !isVisible()
+        || contentWidth <= 0
+        || contentHeight <= 0
+        || camera_.pixelsPerSecond <= 0.0) {
+        return false;
+    }
+
+    const double timelineSeconds = projection.projectContentTimeToTimeline(firstContentSeconds);
     if (!std::isfinite(timelineSeconds))
         return false;
 
@@ -3067,16 +3099,18 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
     staticDirty_ = true;
     contentDirty_ = true;
     activateTimelineCamera(TimelineViewportPolicy::resolve(request));
-    pendingInitialF0ViewRequests_.erase(contentKey);
+    pendingInitialF0ViewContentKey_ = ContentKey{};
     return true;
 }
 
 void PianoRollComponent::onHeartbeatTick()
 {
+    // 终态收束先于可见性 guard：隐藏 PianoRoll 也能在 viewToggled 计算 preserve 前
+    // 结算 Failed/Ready-无目标 的 pending；正常 Ready 定位仍需 isShowing/isVisible。
+    tryConsumeInitialF0View(editedContentKey_);
+
     if (!isShowing())
         return;
-
-    tryConsumeInitialF0View(editedContentKey_);
 
     if (zoomPreviewActive_ && zoomDeadlineTicks_ > 0) {
         --zoomDeadlineTicks_;
@@ -3235,7 +3269,8 @@ void PianoRollComponent::restoreViewportState(const ViewportState& state)
     // 恢复镜头代表用户明确的视图意图：标记手动缩放阻止初始自动定位，
     // 并清除该内容的 pending 初始定位，避免异步 F0 Ready 覆盖恢复镜头。
     userHasManuallyZoomed_ = true;
-    pendingInitialF0ViewRequests_.erase(editedContentKey_);
+    if (pendingInitialF0ViewContentKey_ == editedContentKey_)
+        pendingInitialF0ViewContentKey_ = ContentKey{};
 
     camera_ = state.camera;
     pixelsPerSemitone_ = state.pixelsPerSemitone;
