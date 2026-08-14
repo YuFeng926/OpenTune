@@ -156,7 +156,8 @@ public:
 
     // PianoRollComponent::Listener
     bool playheadPositionChangeRequested(double timeSeconds) override;
-    void playPauseToggleRequested();
+    void playPauseToggleRequested() override;
+    void stopPlaybackRequested() override;
     void autoTuneRequested() override;
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void contentEdited() override;

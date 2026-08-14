@@ -799,7 +799,7 @@ bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Stop, key))
     {
-        stopRequested();
+        stopPlaybackRequested();
         return true;
     }
 
@@ -3087,6 +3087,11 @@ void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
     } else {
         playRequested();
     }
+}
+
+void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
+{
+    stopRequested();
 }
 
 void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()

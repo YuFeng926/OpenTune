@@ -103,6 +103,8 @@ public:
     void timelineDisplayModeChanged(TimelineDisplayMode mode) override;
 
     bool playheadPositionChangeRequested(double timeSeconds) override;
+    void playPauseToggleRequested() override;
+    void stopPlaybackRequested() override;
     void autoTuneRequested() override;
     void pitchShiftRequested() override;
     void pitchCurveEdited(int startFrame, int endFrame) override;

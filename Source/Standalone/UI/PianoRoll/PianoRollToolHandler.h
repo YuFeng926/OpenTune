@@ -171,6 +171,8 @@ public:
         std::function<void(double)> notifyPlayheadChange;
         std::function<void(int, int)> notifyPitchCurveEdited;
         std::function<void()> notifyAutoTuneRequested;
+        std::function<void()> notifyPlayPauseToggle;
+        std::function<void()> notifyStopPlayback;
         std::function<void()> notifyEscapeKey;
         std::function<void(size_t, float, float)> notifyNoteOffsetChanged;
 

@@ -710,6 +710,111 @@ void testOpenDyneScissorsMergeContract()
            "Scissors cut may select only the right segment without blocking separator merge");
 }
 
+void testShortcutContract()
+{
+    const auto keyShortcut = readSource("Source/Utils/KeyShortcutConfig.h");
+    const auto toolHandler = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto toolHandlerHeader = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h");
+    const auto pianoRollHeader = readSource("Source/Standalone/UI/PianoRollComponent.h");
+    const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto pluginEditor = readSource("Source/Plugin/PluginEditor.cpp");
+    const auto standaloneEditor = readSource("Source/Standalone/PluginEditor.cpp");
+    const auto sharedPages = readSource("Source/Editor/Preferences/SharedPreferencePages.cpp");
+
+    // 1. 默认绑定：PlayPause=Space、Stop=Enter、Delete=Delete/Backspace/'1'
+    expect(contains(keyShortcut,
+                    "ShortcutId::PlayPause, Loc::Keys::kPlayPause, { KeyBinding(juce::KeyPress::spaceKey, {}) }"),
+           "PlayPause defaults to the Space key");
+    expect(contains(keyShortcut,
+                    "ShortcutId::Stop, Loc::Keys::kStop, { KeyBinding(juce::KeyPress::returnKey, {}) }"),
+           "Stop defaults to the Enter key");
+    const auto deleteDefaultStart = keyShortcut.find("ShortcutId::Delete");
+    const auto deleteDefaultEnd = keyShortcut.find("} }", deleteDefaultStart);
+    const auto deleteDefault = (deleteDefaultStart != std::string::npos
+                                && deleteDefaultEnd != std::string::npos)
+        ? keyShortcut.substr(deleteDefaultStart, deleteDefaultEnd - deleteDefaultStart)
+        : std::string();
+    expect(contains(deleteDefault, "KeyBinding(juce::KeyPress::deleteKey, {})")
+               && contains(deleteDefault, "KeyBinding(juce::KeyPress::backspaceKey, {})")
+               && contains(deleteDefault, "KeyBinding('1', {})"),
+           "Delete defaults to Delete, Backspace, and '1'");
+
+    // 2. ToolHandler Context 携带传输通知回调
+    expect(contains(toolHandlerHeader, "std::function<void()> notifyPlayPauseToggle")
+               && contains(toolHandlerHeader, "std::function<void()> notifyStopPlayback"),
+           "ToolHandler Context carries the play/pause and stop notifications");
+
+    // 3. ToolHandler keyPressed 分派 PlayPause/Stop/Delete/SelectAll/CancelSelection
+    const auto keyPressed = functionBlock(
+        toolHandler, "bool PianoRollToolHandler::keyPressed");
+    expect(contains(keyPressed, "ShortcutId::PlayPause")
+               && contains(keyPressed, "ctx_.notifyPlayPauseToggle();"),
+           "ToolHandler PlayPause notifies the play/pause toggle");
+    expect(contains(keyPressed, "ShortcutId::Stop")
+               && contains(keyPressed, "ctx_.notifyStopPlayback();"),
+           "ToolHandler Stop notifies the stop callback");
+    expect(contains(keyPressed, "ShortcutId::Delete")
+               && contains(keyPressed, "handleDeleteKey();")
+               && contains(keyPressed, "handleTimeToolDeleteSelected();"),
+           "ToolHandler Delete runs the shared delete command; Time tool consumes it separately");
+    expect(contains(keyPressed, "ShortcutId::SelectAll")
+               && contains(keyPressed, "selectAllNotes(notes)"),
+           "ToolHandler SelectAll selects all notes");
+    expect(contains(keyPressed, "ShortcutId::CancelSelection")
+               && contains(keyPressed, "ctx_.notifyEscapeKey();"),
+           "ToolHandler CancelSelection notifies the escape key path");
+
+    // 4. PianoRoll Listener 两个传输回调 + buildToolHandlerContext 注入
+    expect(contains(pianoRollHeader, "virtual void playPauseToggleRequested() = 0;")
+               && contains(pianoRollHeader, "virtual void stopPlaybackRequested() = 0;"),
+           "PianoRoll Listener declares the two transport callbacks");
+    const auto buildContext = functionBlock(
+        pianoRoll, "PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext");
+    expect(contains(buildContext, "toolCtx.notifyPlayPauseToggle")
+               && contains(buildContext, "toolCtx.notifyStopPlayback"),
+           "buildToolHandlerContext wires both transport notifications");
+
+    // 5. VST3 handleEditorShortcut 调用统一命令函数，无内联 isPlaying
+    const auto handleShortcut = functionBlock(
+        pluginEditor, "bool OpenTuneAudioProcessorEditor::handleEditorShortcut");
+    expect(contains(handleShortcut, "playPauseToggleRequested();")
+               && contains(handleShortcut, "stopPlaybackRequested();"),
+           "VST3 handleEditorShortcut dispatches the shared transport commands");
+    expect(!contains(handleShortcut, "isPlaying")
+               && !contains(handleShortcut, "processorRef_.play()")
+               && !contains(handleShortcut, "processorRef_.stop()"),
+           "VST3 handleEditorShortcut keeps no inline transport logic");
+    expect(contains(functionBlock(pluginEditor,
+                                  "void OpenTuneAudioProcessorEditor::playPauseToggleRequested"),
+                    "isPlaying"),
+           "The isPlaying state check lives only in the shared playPauseToggleRequested command");
+
+    // 6. VST3 setShortcutSettings 注入共享快捷键设置
+    expect(contains(pluginEditor, "pianoRoll_.setShortcutSettings(sharedPreferences.shortcuts)"),
+           "VST3 sync pushes the shared shortcut settings into the piano roll");
+
+    // 7. Standalone Stop 调用统一函数
+    expect(contains(standaloneEditor, "stopPlaybackRequested();")
+               && contains(functionBlock(standaloneEditor,
+                                         "void OpenTuneAudioProcessorEditor::stopPlaybackRequested"),
+                           "stopRequested();"),
+           "Standalone Stop dispatches the shared stopPlaybackRequested command");
+
+    // 8. SharedPreferencePages General 分组包含 Delete
+    const auto generalStart = sharedPages.find("generalIds_ = {");
+    const auto generalEnd = sharedPages.find("};", generalStart);
+    const auto generalIds = (generalStart != std::string::npos
+                             && generalEnd != std::string::npos)
+        ? sharedPages.substr(generalStart, generalEnd - generalStart)
+        : std::string();
+    expect(contains(generalIds, "KeyShortcutConfig::ShortcutId::Delete,"),
+           "Shortcut preference General group includes Delete");
+    expect(contains(sharedPages, "makeSectionHeader(\"General\")"),
+           "Shortcut preference page keeps the General section header");
+}
+
 void testKillListContract()
 {
     const auto owner = readSource("Source/Content/DomainContentOwner.h");
@@ -1726,6 +1831,7 @@ int main()
     testOpenDyneToolSwitchingContract();
     testOpenDyneNoteEdgeRetreatContract();
     testOpenDyneScissorsMergeContract();
+    testShortcutContract();
     testPitchModulationDriftContract();
     testAutoSnapRefactorContract();
     testAutoSnapTargetMathContract();
