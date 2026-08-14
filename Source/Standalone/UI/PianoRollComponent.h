@@ -35,7 +35,6 @@
 #include <algorithm>
 #include <vector>
 #include <map>
-#include <set>
 #include <optional>
 #include <utility>
 #include <atomic>
@@ -129,8 +128,8 @@ public:
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                            int sampleRate);
     void requestInitialF0View(ContentKey contentKey);
-    /** 是否存在未消费的 F0 初始视图定位请求（F0 Ready 跃迁已入队，尚未定位）。 */
-    bool hasPendingInitialF0View() const noexcept { return !pendingInitialF0ViewRequests_.empty(); }
+    /** 是否存在由当前内容或投影变化建立、尚未消费的 F0 初始视图定位请求。 */
+    bool hasPendingInitialF0View() const noexcept { return pendingInitialF0ViewContentKey_.isValid(); }
     void onTimeGridRevisionChanged();
     void onNotesRevisionChanged();
     void onPitchRevisionChanged();
@@ -235,7 +234,8 @@ public:
                  std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime) };
     }
 
-    void setContentProjection(const ContentTimelineProjection& projection);
+    /** 设置单内容投影；返回投影是否有变化。 */
+    bool setContentProjection(const ContentTimelineProjection& projection);
     void setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements);
 
     /** 设置 reference overlay 数据（ghost notes + anchors）。
@@ -578,7 +578,7 @@ private:
     }
 
     ContentKey editedContentKey_;
-    std::set<ContentKey> pendingInitialF0ViewRequests_;
+    ContentKey pendingInitialF0ViewContentKey_;
     bool experimentalFeaturesEnabled_ = false;
     std::vector<Note> cachedNotes_;
     std::vector<Note> notesClipboard_;   // Note Copy/Paste 剪贴板

@@ -36,7 +36,6 @@
 #include <cmath>
 #include <atomic>
 #include <cstdlib>
-#include <set>
 #include <algorithm>
 #include <mutex>
 #include <unordered_map>
@@ -1233,9 +1232,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const uint64_t currentPitchRevision = activeKey.isValid() && snap
             ? snap->pitchRevision
             : 0;
-        const OriginalF0State currentOriginalF0State = snap
-            ? snap->originalF0State
-            : OriginalF0State::NotRequested;
         const bool contentKeyChanged = activeKey != lastPianoRollContentKey_;
         const bool contentChanged =
             contentKeyChanged
@@ -1248,16 +1244,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             lastPianoRollSampleRate_ = sr;
             lastPianoRollCurve_ = curve;
             lastPianoRollBuffer_ = contentBuffer;
-        }
-        if (contentKeyChanged) {
-            lastPianoRollOriginalF0State_ = currentOriginalF0State;
-        } else if (activeKey.isValid()
-                   && lastPianoRollOriginalF0State_ != OriginalF0State::Ready
-                   && currentOriginalF0State == OriginalF0State::Ready) {
-            pianoRoll_.requestInitialF0View(activeKey);
-            lastPianoRollOriginalF0State_ = currentOriginalF0State;
-        } else {
-            lastPianoRollOriginalF0State_ = currentOriginalF0State;
         }
         if (currentNotesRevision != lastPianoRollNotesRevision_) {
             // Same content, fresh notes – typically GAME's async commit.
@@ -1519,27 +1505,30 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
         && getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement);
     const ContentKey contentKey = hasPlacement ? placement.contentKey : ContentKey{};
 
-    pianoRoll_.setContentProjection(hasPlacement ? makePianoRollProjection(placement, processorRef_)
-                                                   : ContentTimelineProjection{});
+    const bool projectionChanged = pianoRoll_.setContentProjection(
+        hasPlacement ? makePianoRollProjection(placement, processorRef_)
+                     : ContentTimelineProjection{});
 
     const int sr = static_cast<int>(processorRef_.getSampleRate());
     auto snap = processorRef_.getContentSnapshot(contentKey);
     std::shared_ptr<const juce::AudioBuffer<float>> contentBuffer =
         snap ? snap->audioBuffer : nullptr;
     auto curve = snap ? snap->pitchCurve : nullptr;
+    const bool contentChanged = contentKey != lastPianoRollContentKey_;
+
     pianoRoll_.setEditedContent(contentKey, curve, contentBuffer, sr);
     pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, trackId));
 
     lastPianoRollContentKey_ = contentKey;
-    lastPianoRollOriginalF0State_ = snap
-        ? snap->originalF0State
-        : OriginalF0State::NotRequested;
     lastPianoRollSampleRate_ = sr;
     lastPianoRollCurve_ = curve;
     lastPianoRollBuffer_ = contentBuffer;
     lastPianoRollNotesRevision_ = snap ? snap->notesRevision : 0;
     lastPianoRollTimeGridRevision_ = snap ? snap->timeGridRevision : 0;
     lastPianoRollPitchRevision_ = snap ? snap->pitchRevision : 0;
+
+    if (hasPlacement && (contentChanged || projectionChanged))
+        pianoRoll_.requestInitialF0View(contentKey);
 
     applyResolvedScaleForPlacementContent(trackId, placementIndex);
 
@@ -1552,7 +1541,6 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
         pianoRoll_.setContentProjection({});
         pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollContentKey_ = ContentKey{};
-        lastPianoRollOriginalF0State_ = OriginalF0State::NotRequested;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;
@@ -1567,7 +1555,6 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
         pianoRoll_.setContentProjection({});
         pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollContentKey_ = ContentKey{};
-        lastPianoRollOriginalF0State_ = OriginalF0State::NotRequested;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;
@@ -1580,7 +1567,6 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
         pianoRoll_.setContentProjection({});
         pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollContentKey_ = ContentKey{};
-        lastPianoRollOriginalF0State_ = OriginalF0State::NotRequested;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;
@@ -2768,6 +2754,11 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     const TimelineViewportCamera camera = isWorkspaceView_
         ? arrangementView_.timelineCamera()
         : pianoRoll_.timelineCamera();
+
+    // 进入 PianoRoll 前先结算一次 heartbeat：隐藏状态下也能在 preserve 判定前
+    // 收束 Failed/Ready-无目标 的 pending F0 初始视图请求。
+    if (!workspaceView)
+        pianoRoll_.onHeartbeatTick();
 
     // F0 Ready 初始视图定位优先于编排相机转移：pending 请求在 setVisible →
     // visibilityChanged → tryConsumeInitialF0View 中消费并定位到 F0 首帧（经当前投影
