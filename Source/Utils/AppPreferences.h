@@ -62,6 +62,7 @@ struct SharedPreferencesState {
     TrackColorMode trackColorMode = TrackColorMode::Random;
     KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
     bool lightPitchCorrectionEnabled = false;  ///< 轻量修音开关（AutoTune cycle resampling，默认关）
+    PianoGridStyle gridStyle = PianoGridStyle::PianoLanes;
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
     TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
 };
@@ -115,6 +116,9 @@ public:
     TrackColorMode getTrackColorMode() const;
 
     void setLightPitchCorrectionEnabled(bool enabled);
+
+    void setGridStyle(PianoGridStyle gridStyle);
+    PianoGridStyle getGridStyle() const;
 
     void setTimelineDisplayMode(TimelineDisplayMode mode);
     TimelineDisplayMode getTimelineDisplayMode() const;

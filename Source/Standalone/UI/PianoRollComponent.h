@@ -171,6 +171,7 @@ public:
     PianoRollToolHandler* getToolHandler() const { return toolHandler_.get(); }
     void setShowWaveform(bool shouldShow);
     void setShowLanes(bool shouldShow);
+    void setGridStyle(PianoGridStyle gridStyle);
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowUnvoicedFrames(bool shouldShow);
     void setInferenceActive(bool active);
@@ -537,6 +538,7 @@ private:
 
     bool showWaveform_ = true;
     bool showLanes_ = true;
+    PianoGridStyle gridStyle_ = PianoGridStyle::PianoLanes;
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showUnvoicedFrames_ = false;
     bool showOriginalF0_ = true;

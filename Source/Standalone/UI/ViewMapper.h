@@ -4,6 +4,7 @@
 #include <cmath>
 #include "TimelineViewportCamera.h"
 #include "../../Utils/TuningConfig.h"
+#include "../../Utils/PianoRollVisualPreferences.h"
 
 namespace OpenTune {
 
@@ -16,6 +17,7 @@ struct ViewMapper {
     float pixelsPerSemitone{1.0f};
     float verticalScrollOffset{0.0f};
     float maxMidi{127.0f};
+    PianoGridStyle gridStyle{PianoGridStyle::PianoLanes};
 
     // Returns parent-component X for an absolute timeline position.
     int timeToX(double absoluteSeconds) const {
@@ -37,12 +39,13 @@ struct ViewMapper {
     }
     
     float freqToMidi(float hz) const {
-        // Tuning Hz = MIDI 69 (A4), with -0.5 pixel center offset
-        return static_cast<float>(12.0 * std::log2(hz / TuningConfig::currentTuningHz()) + 69.0) - 0.5f;
+        float midi = static_cast<float>(12.0 * std::log2(hz / TuningConfig::currentTuningHz()) + 69.0);
+        return (gridStyle == PianoGridStyle::EqualSpacing) ? midi : midi - 0.5f;
     }
     
     float midiToFreq(float midi) const {
-        return TuningConfig::currentTuningHz() * std::pow(2.0f, (midi + 0.5f - 69.0f) / 12.0f);
+        const float adjusted = (gridStyle == PianoGridStyle::EqualSpacing) ? midi : midi + 0.5f;
+        return TuningConfig::currentTuningHz() * std::pow(2.0f, (adjusted - 69.0f) / 12.0f);
     }
     
     float freqToY(float hz) const {

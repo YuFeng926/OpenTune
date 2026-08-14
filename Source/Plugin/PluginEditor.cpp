@@ -307,6 +307,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    pianoRoll_.setGridStyle(sharedPreferences.gridStyle);
     pianoRoll_.setShortcutSettings(sharedPreferences.shortcuts);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);

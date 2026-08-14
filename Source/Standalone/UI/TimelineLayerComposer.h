@@ -21,6 +21,7 @@ struct RenderParams {
     float worldTopY = 0.0f;
     int rulerHeight = 0;
     int laneStyle = 0;
+    int gridStyle = 0;  // 0 = PianoLanes, 1 = EqualSpacing (matches PianoGridStyle ordinal)
     int viewportWidth = 0;
     int viewportHeight = 0;
     std::string viewKind = "pianoroll";

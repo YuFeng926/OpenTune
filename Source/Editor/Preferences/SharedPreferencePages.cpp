@@ -407,6 +407,24 @@ public:
             persistZoom();
         };
         addAndMakeVisible(resetButton_);
+
+        // Grid style selector
+        initialiseLabel(gridStyleLabel_, LOC(kGridStyle));
+        addAndMakeVisible(gridStyleLabel_);
+        const auto currentGridStyle = appPreferences_.getState().shared.gridStyle;
+        gridStyleSelector_.addItem(LOC(kGridStylePianoLanes), 1);
+        gridStyleSelector_.addItem(LOC(kGridStyleEqualSpacing), 2);
+        gridStyleSelector_.setSelectedId(currentGridStyle == PianoGridStyle::EqualSpacing ? 2 : 1,
+                                         juce::dontSendNotification);
+        gridStyleSelector_.onChange = [this] {
+            const auto style = gridStyleSelector_.getSelectedId() == 2
+                ? PianoGridStyle::EqualSpacing
+                : PianoGridStyle::PianoLanes;
+            appPreferences_.setGridStyle(style);
+            notifyChanged();
+        };
+        initialiseComboBox(gridStyleSelector_);
+        addAndMakeVisible(gridStyleSelector_);
     }
 
     void paint(juce::Graphics& g) override
@@ -445,7 +463,11 @@ public:
         tuningSlider_.setBounds(row);
 
         bounds.removeFromTop(18);
-        resetButton_.setBounds(bounds.removeFromTop(28).removeFromLeft(150));
+        auto resetRow = bounds.removeFromTop(28);
+        resetButton_.setBounds(resetRow.removeFromLeft(150));
+        resetRow.removeFromLeft(16); // spacing
+        gridStyleLabel_.setBounds(resetRow.removeFromLeft(80));
+        gridStyleSelector_.setBounds(resetRow.reduced(0, 2));
     }
 
 private:
@@ -477,6 +499,8 @@ private:
     juce::Label tuningLabel_;
     juce::Slider tuningSlider_;
     juce::TextButton resetButton_;
+    juce::Label gridStyleLabel_;
+    juce::ComboBox gridStyleSelector_;
 };
 
 class SharedVisualPage final : public juce::Component
