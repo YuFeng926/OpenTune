@@ -30,6 +30,7 @@ constexpr const char* kSharedTrackColorModeKey = "shared.trackColor.mode";
 constexpr const char* kSharedLightPitchCorrectionEnabledKey = "shared.render.lightPitchCorrection";
 constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMode";
 constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
+constexpr const char* kSharedGridStyleKey = "shared.pianoRoll.gridStyle";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "shared.shortcuts.playPause",
@@ -318,6 +319,8 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
         properties.getDoubleValue(kSharedScrollSpeedKey, state.shared.zoomSensitivity.scrollSpeed));
     state.shared.tuning.tuningHz = static_cast<float>(
         properties.getDoubleValue(kSharedTuningHzKey, state.shared.tuning.tuningHz));
+    state.shared.gridStyle = static_cast<PianoGridStyle>(
+        properties.getIntValue(kSharedGridStyleKey, static_cast<int>(state.shared.gridStyle)));
     state.shared.renderingPriority = renderingPriorityFromToken(
         properties.getValue(kSharedRenderingPriorityKey,
                             toRenderingPriorityToken(state.shared.renderingPriority)));
@@ -376,6 +379,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedZoomVerticalFactorKey, static_cast<double>(state.shared.zoomSensitivity.verticalZoomFactor));
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
     properties.setValue(kSharedTuningHzKey, static_cast<double>(state.shared.tuning.tuningHz));
+    properties.setValue(kSharedGridStyleKey, static_cast<int>(state.shared.gridStyle));
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
     properties.setValue(kSharedVocoderWeightKey,
@@ -643,6 +647,19 @@ void AppPreferences::setTimelineDisplayMode(TimelineDisplayMode mode)
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.timelineDisplayMode = mode;
     saveLocked();
+}
+
+void AppPreferences::setGridStyle(PianoGridStyle gridStyle)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.gridStyle = gridStyle;
+    saveLocked();
+}
+
+PianoGridStyle AppPreferences::getGridStyle() const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return state_.shared.gridStyle;
 }
 
 TimelineDisplayMode AppPreferences::getTimelineDisplayMode() const

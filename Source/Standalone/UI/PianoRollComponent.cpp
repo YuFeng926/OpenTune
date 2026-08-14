@@ -1965,6 +1965,7 @@ void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewportSt
     lp.themeId = static_cast<int>(UIColors::currentThemeId());
     lp.pixelsPerSemitone = view.pixelsPerSemitone; lp.worldTopY = vOrigin;
     lp.rulerHeight = 0; lp.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
+    lp.gridStyle = static_cast<int>(gridStyle_);
     lp.viewportWidth = cw; lp.viewportHeight = ch; lp.viewKind = "pianoroll";
 
     g.reduceClipRegion(clipArea);
@@ -3445,6 +3446,16 @@ void PianoRollComponent::setShowLanes(bool shouldShow) {
     if (showLanes_ == shouldShow) return;
     showLanes_ = shouldShow;
     staticDirty_ = true;
+    rasterizeDirtySurfaces();
+    repaint();
+}
+
+void PianoRollComponent::setGridStyle(PianoGridStyle gridStyle)
+{
+    if (gridStyle_ == gridStyle) return;
+    gridStyle_ = gridStyle;
+    staticDirty_ = true;
+    contentDirty_ = true;
     rasterizeDirtySurfaces();
     repaint();
 }
@@ -4956,7 +4967,8 @@ ViewMapper PianoRollComponent::makeViewMapper() const noexcept {
         getTimelineContentViewportHeight(),
         pixelsPerSemitone_,
         verticalScrollOffset_,
-        maxMidi_
+        maxMidi_,
+        gridStyle_
     };
 }
 
@@ -4969,7 +4981,8 @@ ViewMapper PianoRollComponent::makeViewMapperForView(const ViewportState& view) 
         getTimelineContentViewportHeight(),
         view.pixelsPerSemitone,
         view.verticalScrollOffset,
-        maxMidi_
+        maxMidi_,
+        gridStyle_
     };
 }
 

@@ -587,6 +587,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setTimeSignature(processorRef_.getTimeSigNumerator(), processorRef_.getTimeSigDenominator());
     pianoRoll_.setShowWaveform(processorRef_.getShowWaveform());
     pianoRoll_.setShowLanes(processorRef_.getShowLanes());
+    pianoRoll_.setGridStyle(appPreferences_.getState().shared.gridStyle);
     
     // PianoRoll and ArrangementView read presented position from processor-owned
     // PlayHeadState via getPresentedPositionSeconds(); no second forwarding path needed.
@@ -1454,6 +1455,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    pianoRoll_.setGridStyle(sharedPreferences.gridStyle);
     parameterPanel_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     parameterPanel_.setOpenDyneMode(AudioEditingScheme::usesNotesPrimaryScheme(sharedPreferences.audioEditingScheme));
     parameterPanel_.setActiveTool(static_cast<int>(pianoRoll_.getCurrentTool()));

@@ -308,6 +308,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
     const int pianoKeyWidth = 0;
     const float worldTopY = params.worldTopY;
     const bool showLanes = decodeShowLanes(params.laneStyle);
+    const bool equalSpacing = (params.gridStyle == 1);
     const int scaleRootNote = decodeScaleRootNote(params.laneStyle);
     const int scaleType = decodeScaleType(params.laneStyle);
 
@@ -330,8 +331,8 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
         bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
                           noteInOctave == 8 || noteInOctave == 10);
 
-        // Lane fill (only when showLanes is on)
-        if (showLanes) {
+        // Lane fill (only when showLanes is on; skipped in equal-spacing grid mode)
+        if (showLanes && !equalSpacing) {
             if (isAurora) {
                 g.setColour(isBlackKey
                     ? UIColors::glassSurface.withAlpha(0.075f)

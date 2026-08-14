@@ -237,6 +237,9 @@ constexpr const char* kLanguageLabel = "Interface Language";
 constexpr const char* kAudioEditingScheme = "Audio Editing Scheme";
 constexpr const char* kSchemeOpenTune = "OpenTune";
 constexpr const char* kSchemeOpenDyne = "OpenDyne";
+constexpr const char* kGridStyle = "Grid Style";
+constexpr const char* kGridStylePianoLanes = "Piano Lanes";
+constexpr const char* kGridStyleEqualSpacing = "Equal Spacing";
 
 constexpr const char* kHorizontalZoomSensitivity = "Horizontal Zoom Sensitivity";
 constexpr const char* kVerticalZoomSensitivity = "Vertical Zoom Sensitivity";
@@ -433,6 +436,9 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kAudioEditingScheme, "Audio Editing Scheme", "音频编辑方案", "音声編集方式", "Схема аудиоредактирования", "Esquema de edicion de audio" },
         { Keys::kSchemeOpenTune, "OpenTune", "OpenTune", "OpenTune", "OpenTune", "OpenTune" },
         { Keys::kSchemeOpenDyne, "OpenDyne", "OpenDyne", "OpenDyne", "OpenDyne", "OpenDyne" },
+        { Keys::kGridStyle, "Grid Style", "网格样式", "グリッドスタイル", "Стиль сетки", "Estilo de cuadricula" },
+        { Keys::kGridStylePianoLanes, "Piano Lanes", "钢琴键槽", "ピアノレーン", "Клавиши пианино", "Teclas de piano" },
+        { Keys::kGridStyleEqualSpacing, "Equal Spacing", "等距", "等間隔", "Равный интервал", "Espaciado igual" },
         
         { Keys::kHorizontalZoomSensitivity, "Horizontal Zoom Sensitivity", "水平缩放灵敏度", "水平ズーム感度", "Чувств. гориз. zoom", "Sensibilidad zoom horizontal" },
         { Keys::kVerticalZoomSensitivity, "Vertical Zoom Sensitivity", "垂直缩放灵敏度", "垂直ズーム感度", "Чувств. верт. zoom", "Sensibilidad zoom vertical" },
