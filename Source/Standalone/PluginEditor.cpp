@@ -2452,7 +2452,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     const auto usable = getParentMonitorArea();
     const int maxW = juce::jmin(640, usable.getWidth() - 48);
     const int maxH = juce::jmin(560, usable.getHeight() - 48);
-    dialogContent->setSize(juce::jmax(480, maxW), juce::jmax(360, maxH));
+    dialogContent->setSize(juce::jmax(480, maxW), juce::jmax(480, maxH));
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(dialogContent);
