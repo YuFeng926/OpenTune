@@ -344,10 +344,14 @@ private:
     std::chrono::steady_clock::time_point lastF2PressTime_{};
     static constexpr int kF2DoubleClickMs = 400;
 
-    // Scissors：本点击序列第一击的实际切割位置（source 秒），-1 = 未切割。
-    // mouseDown（clicks==1）清除，切割提交成功时设置，mouseDoubleClick 据此
-    // 区分"音符内部双击"（第一击已切出刀口 → 保持切割）与"分离线双击"（合并）。
-    double scissorsLastCutTime_ = -1.0;
+    // Scissors 自定义双击检测：记录上一次点击的时间戳和位置
+    // 在 handleScissorsToolUp 中检测：800ms / 30px 内的同位置点击触发合并。
+    std::chrono::steady_clock::time_point scissorsLastClickTime_{};
+    juce::Point<int> scissorsLastClickPos_{};
+    static constexpr int kScissorsDoubleClickMs = 800;  // 800ms 双击阈值
+    static constexpr int kScissorsDoubleClickMaxDistPx = 30;  // 30像素位置容差
+    // 分离线容差（像素）：鼠标在分离线 ±10px 内 → 不显示竖虚线、单击无效、双击合并。
+    static constexpr int kScissorsSeparatorTolerancePx = 10;
 
     juce::Point<int> dragStartPos_;
     double lastDrawTime_ = 0.0;
