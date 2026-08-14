@@ -502,16 +502,12 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             const int subH = showSub ? (btnSize_ * static_cast<int>(subButtons_.size()) + gap_ * (static_cast<int>(subButtons_.size()) - 1)) : 0;
             const int totalH = pad_ + btnSize_ + subH + pad_;
 
-            // 展开子按钮时只保留 Pitch 主按钮，隐藏其余
+            // 一级菜单（横向工具列）始终完整显示；Pitch 子项是二级菜单，在其下方展开
             int x = pad_;
             for (int i = 0; i < static_cast<int>(mainButtons_.size()); ++i) {
-                if (showSub && i != pitchButtonIdx_) {
-                    mainButtons_[i]->setVisible(false);
-                } else {
-                    mainButtons_[i]->setVisible(true);
-                    mainButtons_[i]->setBounds(x, pad_, mainWidths_[i], btnSize_);
-                    x += mainWidths_[i] + gap_;
-                }
+                mainButtons_[i]->setVisible(true);
+                mainButtons_[i]->setBounds(x, pad_, mainWidths_[i], btnSize_);
+                x += mainWidths_[i] + gap_;
             }
 
             if (showSub) {
@@ -533,18 +529,20 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
                     sb->setVisible(false);
             }
 
-            // 展开时弹窗宽度 = Pitch 一格；收起时 = 全部主按钮
-            int totalW;
-            if (showSub && pitchButtonIdx_ >= 0) {
-                totalW = pad_ * 2 + mainWidths_[pitchButtonIdx_];
-            } else {
-                totalW = pad_ * 2;
-                for (int i = 0; i < static_cast<int>(mainButtons_.size()); ++i)
-                    totalW += mainWidths_[i] + gap_;
-                if (!mainButtons_.empty()) totalW -= gap_;
-            }
+            // 弹窗宽度始终等于全部一级按钮总宽；高度随二级菜单展开而增加
+            int totalW = pad_ * 2;
+            for (int i = 0; i < static_cast<int>(mainButtons_.size()); ++i)
+                totalW += mainWidths_[i] + gap_;
+            if (!mainButtons_.empty()) totalW -= gap_;
 
             setSize(totalW, totalH);
+
+            // 展开后弹窗尺寸增大，重新约束在父组件边界内
+            if (auto* parent = getParentComponent()) {
+                const int px = juce::jlimit(0, juce::jmax(0, parent->getWidth() - totalW), getX());
+                const int py = juce::jlimit(0, juce::jmax(0, parent->getHeight() - totalH), getY());
+                setTopLeftPosition(px, py);
+            }
         }
 
         void paint(juce::Graphics& g) override {
