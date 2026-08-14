@@ -245,7 +245,7 @@ public:
         // Publish preferred height for parent containers
         {
             const int vPad = 4 * 2; // reduced(10, 4) vertical
-            const int rows = isVst3Plugin_ ? 3 : 4; // 插件隐藏实验控件
+            const int rows = isVst3Plugin_ ? 2 : 4; // 插件隐藏实验控件
             const int rowH = 34;
             const int gaps = 8 * (rows - 1) + (isVst3Plugin_ ? 0 : 4); // 行间 8px；实验模式下额外 hint 前 4px
             const int hintHeight = isVst3Plugin_ ? 0 : 42;
@@ -315,7 +315,7 @@ private:
 class SharedEditingPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 272; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 28 + 20
+    static constexpr int kContentHeight = 296; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 28 + 20
 
     SharedEditingPage(AppPreferences& appPreferences,
                       std::function<void()> onPreferencesChanged,
@@ -666,26 +666,16 @@ public:
             KeyShortcutConfig::ShortcutId::ToolODVolumeEnvelope, KeyShortcutConfig::ShortcutId::ToolODScissors,
         };
 
-        // 内容高度：顶部padding + 通用区(段标题+条目) + 间距 + OpenTune区 + 间距 + OpenDyne区 + 间距 + 重置按钮 + 底部padding
-        constexpr int topPad = 20;
-        constexpr int sectionHeaderH = 24;
-        constexpr int sectionGapAfter = 4;
-        constexpr int rowH = 32;
-        constexpr int rowGap = 6;
-        constexpr int sectionGapBefore = 16;
-        constexpr int resetBtnH = 28;
-        constexpr int bottomPad = 20;
-
-        const int generalH = sectionHeaderH + sectionGapAfter
-                           + static_cast<int>(generalIds_.size()) * (rowH + rowGap);
-        const int opentuneH = sectionHeaderH + sectionGapAfter
-                            + static_cast<int>(opentuneIds_.size()) * (rowH + rowGap);
-        // OpenDyne 区：段标题 + 可配置条目
-        const int opendyneH = sectionHeaderH + sectionGapAfter
-                            + static_cast<int>(opendyneIds_.size()) * (rowH + rowGap);
-        contentHeight_ = topPad + generalH + sectionGapBefore
-                       + opentuneH + sectionGapBefore + opendyneH
-                       + sectionGapBefore + resetBtnH + bottomPad;
+        // 内容高度，与 resized() 布局一一对应：
+        // reduced(20) 的顶部+底部 40 + 每段(header 24 + gap 4 + rows*32 + gap 6) + 段间 10 + 底部 12 + 重置按钮 28
+        const auto sectionH = [](int itemCount) {
+            return 24 + 4 + itemCount * 32 + 6; // header + gapAfter + rows * rowH + trailingGap
+        };
+        contentHeight_ = 40
+                       + sectionH(static_cast<int>(generalIds_.size())) + 10
+                       + sectionH(static_cast<int>(opentuneIds_.size())) + 10
+                       + sectionH(static_cast<int>(opendyneIds_.size()))
+                       + 12 + 28;
 
         auto makeSectionHeader = [this](const juce::String& text) {
             auto* label = new juce::Label();
