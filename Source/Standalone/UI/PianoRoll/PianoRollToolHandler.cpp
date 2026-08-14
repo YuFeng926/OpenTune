@@ -530,16 +530,9 @@ void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
     } else if (currentTool_ == ToolId::VolumeEnvelope
                && AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
         handleVolumeEnvelopeToolDoubleClick(e);
-    } else if (currentTool_ == ToolId::Scissors) {
-        // 双击：本序列第一击已在音符内部切割（产生刀口）→ 保持切割语义
-        // （此处幂等空切）；否则按 Melodyne：命中分离线则合并相邻音符，
-        // 未命中分离线则切割。
-        if (scissorsLastCutTime_ >= 0.0) {
-            handleScissorsToolUp(e);
-        } else if (!handleScissorsToolMerge(e)) {
-            handleScissorsToolUp(e);
-        }
     }
+    // Scissors 合并检测已移至 handleScissorsToolUp，通过自定义时间/距离检测
+    // （800ms / 30px），不依赖 JUCE mouseDoubleClick 回调。
     // Other tools: no-op (could be extended later for note resize / etc.)
 }
 
@@ -2311,10 +2304,14 @@ void PianoRollToolHandler::updateScissorsPreview(const juce::MouseEvent& e)
     if (sourceTime) {
         const auto editRange = sourceEditRange();
         if (editRange.contains(*sourceTime)) {
-            // 预览与提交语义一致：切点时间穿过任意音符即显示预览（不检查音高），
-            // 具体命中音符由 drawScissorsPreview 过滤。
+            // 分离线容差：鼠标在音符边界 ±kScissorsSeparatorTolerancePx 像素内
+            // 不显示竖虚线，提示用户"此处可双击合并"。
+            const auto tPlus = pixelXToSourceTime(e.x + kScissorsSeparatorTolerancePx);
+            const double tolerance = tPlus ? std::abs(*tPlus - *sourceTime) : 1.0 / 44100.0;
             for (const auto& note : committedNotes(ctx_)) {
-                if (note.startTime < *sourceTime && *sourceTime < note.endTime) {
+                // 音符内部且远离两端边界 → 显示切割线
+                if (note.startTime + tolerance < *sourceTime
+                    && *sourceTime < note.endTime - tolerance) {
                     newPreview = *sourceTime;
                     break;
                 }
@@ -2329,10 +2326,6 @@ void PianoRollToolHandler::updateScissorsPreview(const juce::MouseEvent& e)
 
 void PianoRollToolHandler::handleScissorsToolMouseDown(const juce::MouseEvent& e)
 {
-    // 新点击序列（clicks==1）重置"本序列第一击是否已切割"标记；
-    // 双击序列的第二次按下（clicks>=2）不清除，供 mouseDoubleClick 判定。
-    if (e.getNumberOfClicks() <= 1)
-        scissorsLastCutTime_ = -1.0;
     // 切点以 mouseUp 时刻为准提交；此处只清除旧预览。
     ctx_.getState().scissorsPreviewTime = -1.0;
 }
@@ -2352,6 +2345,43 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
 
     const double splitTime = *sourceTime;
 
+    // === 自定义双击合并检测（800ms / 30px） ===
+    // 不依赖 JUCE mouseDoubleClick 回调，在每次 mouseUp 时独立检测，
+    // 解决操作系统双击时间（~500ms）过短导致合并难以触发的问题。
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - scissorsLastClickTime_).count();
+    const int dx = std::abs(e.x - scissorsLastClickPos_.x);
+    const int dy = std::abs(e.y - scissorsLastClickPos_.y);
+    const bool isSecondClick = (scissorsLastClickTime_.time_since_epoch().count() > 0)
+                            && (elapsedMs < kScissorsDoubleClickMs)
+                            && (dx <= kScissorsDoubleClickMaxDistPx)
+                            && (dy <= kScissorsDoubleClickMaxDistPx);
+
+    if (isSecondClick && handleScissorsToolMerge(e)) {
+        // 双击合并成功，重置防连续合并
+        scissorsLastClickTime_ = {};
+        scissorsLastClickPos_ = {};
+        return;
+    }
+    // === 结束合并检测 ===
+
+    // 分离线区域（±kScissorsSeparatorTolerancePx 像素）：单击无效。
+    // 与 updateScissorsPreview 的竖虚线消失范围一致——此处无竖虚线 = 不切割。
+    {
+        const auto tPlus = pixelXToSourceTime(e.x + kScissorsSeparatorTolerancePx);
+        const double tol = tPlus ? std::abs(*tPlus - splitTime) : 1.0 / 44100.0;
+        for (const auto& note : beforeNotes) {
+            if (std::abs(note.endTime - splitTime) < tol
+                || std::abs(note.startTime - splitTime) < tol) {
+                // 命中分离线，记录点击供双击合并，单击不切割
+                scissorsLastClickTime_ = now;
+                scissorsLastClickPos_ = e.getPosition();
+                return;
+            }
+        }
+    }
+
     // 切点时间竖线穿过的所有音符一律切割，与选中状态无关（Melodyne 行为）。
     auto isCutBySplitTime = [&](const Note& note) {
         return note.startTime < splitTime && splitTime < note.endTime;
@@ -2362,8 +2392,12 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
             ++cutCount;
     }
 
-    if (cutCount == 0)
+    if (cutCount == 0) {
+        // 无音符可切割，记录本次点击供后续合并检测
+        scissorsLastClickTime_ = now;
+        scissorsLastClickPos_ = e.getPosition();
         return;
+    }
 
     // 获取 effective (corrected) F0 数据用于 pitch center 重算；
     // F0 数据不可用时保持原 pitch（不重算）。
@@ -2412,9 +2446,9 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
     if (!ctx_.replaceContentNotesForFullMutation || !ctx_.replaceContentNotesForFullMutation(newNotes)) {
         return;
     }
-    // 记录本点击序列已实际切割（供 mouseDoubleClick 区分"音符内部双击"
-    // 与"分离线双击"，避免把刚切出的刀口当分离线合并回去）。
-    scissorsLastCutTime_ = splitTime;
+    // 记录本次点击的时间和位置，用于自定义双击合并检测
+    scissorsLastClickTime_ = now;
+    scissorsLastClickPos_ = e.getPosition();
     if (ctx_.republishPlaybackSource)
         ctx_.republishPlaybackSource();
 
@@ -2504,10 +2538,11 @@ bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
     if (!editRange.contains(*sourceTime))
         return false;
 
-    // 容差 = 3 像素对应的源时间：分离线两侧音符边界均来自 pixelXToSourceTime
-    // 的像素位置，3px 内视为同一时间点。
+    // 容差 = kScissorsSeparatorTolerancePx 像素对应的源时间：分离线两侧音符边界
+    // 均来自 pixelXToSourceTime 的像素位置，此范围内视为同一时间点。
+    // 与 updateScissorsPreview 的视觉反馈容差一致。
     const double splitTime = *sourceTime;
-    const auto tPlus = pixelXToSourceTime(e.x + 3);
+    const auto tPlus = pixelXToSourceTime(e.x + kScissorsSeparatorTolerancePx);
     const double tolerance = tPlus ? std::abs(*tPlus - splitTime) : 1.0 / 44100.0;
 
     // 分离线 = left.endTime ≈ splitTime 且相邻 right.startTime ≈ splitTime。
