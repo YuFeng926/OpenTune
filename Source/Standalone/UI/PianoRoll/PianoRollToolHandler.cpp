@@ -701,6 +701,16 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
     }
     // ==== End tool switching ====
 
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
+        ctx_.notifyPlayPauseToggle();
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Stop, key)) {
+        ctx_.notifyStopPlayback();
+        return true;
+    }
+
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Delete, key)) {
         // Time tool always consumes Delete to avoid accidentally deleting notes
         // when a handle isn't selected. No-op when nothing's selected.

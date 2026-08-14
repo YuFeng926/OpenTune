@@ -96,6 +96,8 @@ public:
     public:
         virtual ~Listener() = default;
         virtual bool playheadPositionChangeRequested(double timeSeconds) = 0;
+        virtual void playPauseToggleRequested() = 0;
+        virtual void stopPlaybackRequested() = 0;
         virtual void pitchCurveEdited(int startFrame, int endFrame) { (void)startFrame; (void)endFrame; }
         virtual void noteOffsetChanged(size_t noteIndex, float oldOffset, float newOffset) { (void)noteIndex; (void)oldOffset; (void)newOffset; }
         virtual void contentEdited() {}

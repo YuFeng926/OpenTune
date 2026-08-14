@@ -734,15 +734,12 @@ bool OpenTuneAudioProcessorEditor::handleEditorShortcut(const juce::KeyPress& ke
     }
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
-        if (processorRef_.isPlaying())
-            pauseRequested();
-        else
-            playRequested();
+        playPauseToggleRequested();
         return true;
     }
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Stop, key)) {
-        stopRequested();
+        stopPlaybackRequested();
         return true;
     }
 
@@ -1174,6 +1171,22 @@ bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
     // PianoRoll click/drag on timeline should not change plugin-internal position.
     juce::ignoreUnused(timeSeconds);
     return false;
+}
+
+void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
+{
+    const bool isPlaying = processorRef_.isPlaying();
+
+    if (isPlaying) {
+        pauseRequested();
+    } else {
+        playRequested();
+    }
+}
+
+void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
+{
+    stopRequested();
 }
 
 void OpenTuneAudioProcessorEditor::autoTuneRequested()
