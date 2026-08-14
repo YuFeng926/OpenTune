@@ -1832,7 +1832,8 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
                 }
             } else {
                 // 允许超出±100%（Melodyne支持224%、-112%等），DSP端不做钳位
-                const float target = baseline.pitchDriftScale + paramDelta;
+                // 方向翻转：向上拖拽减小pitchDriftScale，向下拖拽增大
+                const float target = baseline.pitchDriftScale - paramDelta;
                 state.modDriftPreviewValue = target;
                 if (std::abs(target - baseline.pitchDriftScale) > 0.001f) {
                     note.pitchDriftScale = target;
