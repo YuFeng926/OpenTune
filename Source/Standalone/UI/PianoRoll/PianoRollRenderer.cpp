@@ -683,10 +683,14 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     juce::Colour cBlackBottom = isOverdose ? juce::Colour { Overdose::Colors::KeyBedBlackBottom }
                              : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBlackBottom } : juce::Colour(0xFF1B2026));
 
+    // EqualSpacing: shift keyboard up half a key so key centers align with grid lines (matching note rendering)
+    const float keyYOffset = (ctx.coords.gridStyle == PianoGridStyle::EqualSpacing)
+                             ? -(ctx.pixelsPerSemitone * 0.5f) : 0.0f;
+
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi)) + keyYOffset;
         float h = ctx.pixelsPerSemitone;
 
         if (y < -50.0f || y > height + 50.0f) continue;
@@ -793,7 +797,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi)) + keyYOffset;
         float h = ctx.pixelsPerSemitone;
         if (y < -50.0f || y > height + 50.0f) continue;
 
@@ -808,7 +812,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi)) + keyYOffset;
         float h = ctx.pixelsPerSemitone;
 
         if (y < -50.0f || y > height + 50.0f) continue;
