@@ -506,7 +506,7 @@ private:
 class SharedVisualPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 122; // 20 + 34 + 14 + 34 + 20
+    static constexpr int kContentHeight = 170; // 20 + 34 + 14 + 34 + 14 + 34 + 20
 
     SharedVisualPage(AppPreferences& appPreferences, std::function<void()> onPreferencesChanged)
         : appPreferences_(appPreferences)
@@ -537,6 +537,19 @@ public:
         };
         initialiseToggleButton(showUnvoicedFramesToggle_);
         addAndMakeVisible(showUnvoicedFramesToggle_);
+
+        initialiseLabel(backgroundBrightnessLabel_, LOC(kBackgroundBrightness));
+        backgroundBrightnessLabel_.setComponentID("backgroundBrightness");
+        addAndMakeVisible(backgroundBrightnessLabel_);
+
+        backgroundBrightnessSlider_.setRange(0.0, 2.0, 0.01);
+        backgroundBrightnessSlider_.setValue(visualPreferences.backgroundBrightness, juce::dontSendNotification);
+        backgroundBrightnessSlider_.onValueChange = [this] {
+            appPreferences_.setBackgroundBrightness(static_cast<float>(backgroundBrightnessSlider_.getValue()));
+            notifyChanged();
+        };
+        initialiseSlider(backgroundBrightnessSlider_);
+        addAndMakeVisible(backgroundBrightnessSlider_);
     }
 
     void paint(juce::Graphics& g) override
@@ -556,6 +569,11 @@ public:
 
         bounds.removeFromTop(14);
         showUnvoicedFramesToggle_.setBounds(bounds.removeFromTop(rowHeight));
+
+        bounds.removeFromTop(14);
+        auto brightnessRow = bounds.removeFromTop(rowHeight);
+        backgroundBrightnessLabel_.setBounds(brightnessRow.removeFromLeft(labelWidth));
+        backgroundBrightnessSlider_.setBounds(brightnessRow.reduced(0, 4));
     }
 
 private:
@@ -591,6 +609,8 @@ private:
     juce::Label noteNameModeLabel_;
     juce::ComboBox noteNameModeSelector_;
     juce::ToggleButton showUnvoicedFramesToggle_;
+    juce::Label backgroundBrightnessLabel_;
+    juce::Slider backgroundBrightnessSlider_;
 };
 
 class ShortcutSettingsPage final : public juce::Component

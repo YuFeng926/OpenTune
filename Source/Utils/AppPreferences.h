@@ -100,6 +100,7 @@ public:
     void setPianoRollVisualPreferences(const PianoRollVisualPreferences& visualPreferences);
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowUnvoicedFrames(bool shouldShow);
+    void setBackgroundBrightness(float brightness);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
     void setTuning(const TuningConfig::TuningSettings& tuning);
     void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);

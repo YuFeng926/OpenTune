@@ -1441,6 +1441,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    pianoRoll_.setBackgroundBrightness(visualPreferences.backgroundBrightness);
     pianoRoll_.setGridStyle(sharedPreferences.gridStyle);
     parameterPanel_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     parameterPanel_.setOpenDyneMode(AudioEditingScheme::usesNotesPrimaryScheme(sharedPreferences.audioEditingScheme));

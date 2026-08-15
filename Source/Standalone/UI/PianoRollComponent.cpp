@@ -1901,6 +1901,18 @@ void PianoRollComponent::drawFixedChrome(juce::Graphics& g, juce::Rectangle<int>
             default: g.setColour(UIColors::rollBackground); g.fillPath(chromePath); break;
         }
     }
+    // 背景亮度叠加：1.0=不改变，0.0=纯黑，2.0=高亮
+    if (backgroundBrightness_ != 1.0f) {
+        if (backgroundBrightness_ < 1.0f) {
+            const float alpha = juce::jlimit(0.0f, 1.0f, 1.0f - backgroundBrightness_);
+            g.setColour(juce::Colours::black.withAlpha(alpha));
+            g.fillRect(0, 0, imgW, imgH);
+        } else {
+            const float alpha = juce::jlimit(0.0f, 0.5f, (backgroundBrightness_ - 1.0f) * 0.5f);
+            g.setColour(juce::Colours::white.withAlpha(alpha));
+            g.fillRect(0, 0, imgW, imgH);
+        }
+    }
     UIColors::drawShadow(g, juce::Rectangle<float>(0, 0, static_cast<float>(imgW), static_cast<float>(imgH)));
 }
 
@@ -3500,6 +3512,14 @@ void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     showUnvoicedFrames_ = shouldShow;
     contentDirty_ = true;
     rasterizeDirtySurfaces();
+    repaint();
+}
+
+void PianoRollComponent::setBackgroundBrightness(float brightness)
+{
+    const auto clamped = juce::jlimit(0.0f, 2.0f, brightness);
+    if (backgroundBrightness_ == clamped) return;
+    backgroundBrightness_ = clamped;
     repaint();
 }
 

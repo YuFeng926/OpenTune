@@ -17,6 +17,7 @@ enum class PianoGridStyle {
 struct PianoRollVisualPreferences {
     NoteNameMode noteNameMode = NoteNameMode::COnly;
     bool showUnvoicedFrames = false;
+    float backgroundBrightness = 1.0f; // 0.0=纯黑, 1.0=当前默认, 2.0=高亮
 };
 
 } // namespace OpenTune
