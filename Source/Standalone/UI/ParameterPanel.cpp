@@ -224,7 +224,7 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
         {
             // 文字图标（如 AUTO）
             g.setColour(active ? juce::Colour(0xFFFFFFFF) : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.90f));
-            g.setFont(juce::Font(16.0f, juce::Font::bold));  // 更大字体
+            g.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));  // 更大字体
             g.drawText(textIcon_, bounds.toNearestInt(), juce::Justification::centred);
         }
     }
