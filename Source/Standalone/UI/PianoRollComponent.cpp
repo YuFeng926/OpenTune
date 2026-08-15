@@ -551,28 +551,44 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             auto bounds = getLocalBounds().toFloat();
             const auto radius = UIColors::currentThemeStyle().controlRadius;
             const auto themeId = UIColors::currentThemeId();
+            const bool showSub = isDyne_ && subExpanded_ && !subButtons_.empty();
 
-            // 深色背景 + 圆角 + 阴影
-            {
-                const auto& style = UIColors::currentThemeStyle();
-                g.setColour(juce::Colours::black.withAlpha(style.shadowAlpha * 0.5f));
-                g.fillRoundedRectangle(bounds.translated(0, 2).expanded(0, 2), radius + 2.0f);
-            }
+            // 对指定矩形区域绘制 阴影 + 背景 + 顶部边缘线
+            auto paintBg = [&](const juce::Rectangle<float>& r) {
+                {
+                    const auto& style = UIColors::currentThemeStyle();
+                    g.setColour(juce::Colours::black.withAlpha(style.shadowAlpha * 0.5f));
+                    g.fillRoundedRectangle(r.translated(0, 2).expanded(0, 2), radius + 2.0f);
+                }
+                if (themeId == ThemeId::Overdose) {
+                    juce::ColourGradient bg(
+                        UIColors::backgroundDark.brighter(0.06f), r.getX(), r.getY(),
+                        UIColors::backgroundDark.darker(0.08f), r.getX(), r.getBottom(), false);
+                    g.setGradientFill(bg);
+                } else {
+                    g.setColour(UIColors::backgroundDark);
+                }
+                g.fillRoundedRectangle(r, radius);
+                g.setColour(UIColors::panelBorder.withAlpha(0.1f));
+                g.drawLine(r.getX() + radius, r.getY() + 0.5f,
+                           r.getRight() - radius, r.getY() + 0.5f, 1.0f);
+            };
 
-            if (themeId == ThemeId::Overdose) {
-                juce::ColourGradient bg(
-                    UIColors::backgroundDark.brighter(0.06f), bounds.getX(), bounds.getY(),
-                    UIColors::backgroundDark.darker(0.08f), bounds.getX(), bounds.getBottom(), false);
-                g.setGradientFill(bg);
+            if (showSub) {
+                // 上方：全宽一级菜单背景
+                const float topH = static_cast<float>(pad_ + btnSize_ + pad_);
+                paintBg({ 0.0f, 0.0f, bounds.getWidth(), topH });
+
+                // 下方：仅 Pitch 图标列宽的二级菜单背景
+                auto* firstSub = subButtons_.front().get();
+                const float subX = static_cast<float>(firstSub->getX() - pad_);
+                const float subW = static_cast<float>(btnSize_) + static_cast<float>(pad_) * 2.0f;
+                const float subY = static_cast<float>(pad_ + btnSize_);
+                const float subH = bounds.getBottom() - subY;
+                paintBg({ subX, subY, subW, subH });
             } else {
-                g.setColour(UIColors::backgroundDark);
+                paintBg(bounds);
             }
-            g.fillRoundedRectangle(bounds, radius);
-
-            // 顶部内边缘线
-            g.setColour(UIColors::panelBorder.withAlpha(0.1f));
-            g.drawLine(bounds.getX() + radius, bounds.getY() + 0.5f,
-                       bounds.getRight() - radius, bounds.getY() + 0.5f, 1.0f);
         }
 
         void mouseExit(const juce::MouseEvent&) override {
@@ -1475,13 +1491,14 @@ void PianoRollComponent::drawModDriftDragPreview(juce::Graphics& g)
     const juce::String text = isModulation
         ? juce::String::formatted("%.0f%%", value * 100.0f)
         : juce::String::formatted("%+.0f%%", value * 100.0f);
-    juce::Font font(12.0f);
+    juce::Font font(juce::FontOptions(12.0f));
+    const int textWidth = juce::roundToInt(juce::TextLayout::getStringWidth(font, text));
     g.setColour(juce::Colours::black.withAlpha(0.75f));
     g.fillRoundedRectangle(static_cast<float>(mousePos.x + 12), static_cast<float>(mousePos.y + 12),
-                           font.getStringWidth(text) + 12.0f, 20.0f, 4.0f);
+                           textWidth + 12.0f, 20.0f, 4.0f);
     g.setColour(juce::Colours::white);
     g.setFont(font);
-    g.drawText(text, mousePos.getX() + 18, mousePos.getY() + 14, font.getStringWidth(text), 14,
+    g.drawText(text, mousePos.getX() + 18, mousePos.getY() + 14, textWidth, 14,
                juce::Justification::centredLeft);
 }
 
@@ -1504,13 +1521,14 @@ void PianoRollComponent::drawVolumeDragPreview(juce::Graphics& g)
     const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
         + juce::Point<int>(0, -rulerHeight_);
     const juce::String text = juce::String::formatted("%+.1f dB", static_cast<double>(deltaDb));
-    juce::Font font(12.0f);
+    juce::Font font(juce::FontOptions(12.0f));
+    const int textWidth = juce::roundToInt(juce::TextLayout::getStringWidth(font, text));
     g.setColour(juce::Colours::black.withAlpha(0.75f));
     g.fillRoundedRectangle(static_cast<float>(mousePos.x + 12), static_cast<float>(mousePos.y + 12),
-                           font.getStringWidth(text) + 12.0f, 20.0f, 4.0f);
+                           textWidth + 12.0f, 20.0f, 4.0f);
     g.setColour(juce::Colours::white);
     g.setFont(font);
-    g.drawText(text, mousePos.getX() + 18, mousePos.getY() + 14, font.getStringWidth(text), 14,
+    g.drawText(text, mousePos.getX() + 18, mousePos.getY() + 14, textWidth, 14,
                juce::Justification::centredLeft);
 }
 
