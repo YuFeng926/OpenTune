@@ -181,8 +181,8 @@ void testLegacyVolumeEnvelopeMigration()
     const auto& migrated = result.value().contents.front().volumeEnvelope;
     expect(std::abs(migrated.evalAt(2.0) - 6.0f) < 1.0e-4f,
            "v3 migration preserves the middle sibilant event and adds note gain");
-    expect(result.value().header.projectFormatVersion == 4,
-           "loaded v3 project is promoted to project format v4");
+    expect(result.value().header.projectFormatVersion == 5,
+           "loaded v3 project is promoted to project format v5");
 }
 
 } // namespace

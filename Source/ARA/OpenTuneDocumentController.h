@@ -12,6 +12,7 @@
 #include "AudioModification.h"
 #include "AudioSource.h"
 #include "../Render/ContentRenderService.h"
+#include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
 #include "../Content/ContentKey.h"
 #include "PlaybackRegion.h"
@@ -118,9 +119,8 @@ public:
         const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const;
     std::vector<PlaybackRegionProjection> getEditorSelectionPlaybackRegionProjections() const;
     std::optional<PlaybackRegionProjection> getFocusedEditorPlaybackRegionProjection() const;
-    // User-read entry point: the ONLY method that reads AudioSource samples.
-    // Sample access enable is permission, not user intent. Only explicit user
-    // button press (Record/Read) can read host audio.
+    // 用户 Read 入口：新内容/未材质化内容的显式读取请求。
+    // archive 恢复且已有有效 F0 的内容由 readRestoredAudio 自动读取，无需此入口。
     int requestReadAudioForPlaybackRegions();
     // ARA SDK requires DocumentController operations on main thread.
     // This method executes synchronously to comply with ARA thread constraints.
@@ -189,6 +189,10 @@ private:
     // 服务租约 token：DC 析构时置 false，后台 F0 work 持有 shared_ptr 可安全检查
     std::shared_ptr<std::atomic<bool>> asyncLeaseToken_;
 
+    // Stage1 → Stage2 异步完成回调 gate，跟随 DC 析构关闭。
+    std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate_;
+    void handleStage1ChunkSettled(ContentKey key);
+
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
     AudioSource* findAudioSource(const juce::String& persistentId);
     const AudioSource* findAudioSource(const juce::String& persistentId) const;
@@ -234,6 +238,7 @@ private:
     bool publishPlaybackReadSourceForModification(
         AudioModification& modification,
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer);
+    void readRestoredAudio(const AudioSource* enabledSource);
     bool birthContentForModification(AudioModification& modification);
     void removeCRSArtifactsForModification(const AudioModification& modification);
     void scheduleAsyncF0Extraction(ContentKey contentKey,

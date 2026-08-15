@@ -14,6 +14,7 @@
 #include "../Utils/SilentGapDetector.h"
 #include "../Utils/PitchCurve.h"
 #include "../Inference/RenderCache.h"
+#include "../Render/Stage2TimeStretchRebuilder.h"
 #include "../Utils/SourceWindow.h"
 #include "../Utils/AppLogger.h"
 
@@ -44,6 +45,7 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
         1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
 {
     asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
+    completionGate_ = std::make_shared<ProcessRenderRuntime::CompletionGate>();
     installDocumentRenderExecution();
 
     // 进程级运行时客户端租约（仅计数，不触发释放）
@@ -59,6 +61,13 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     // 撤销服务租约，防止异步 F0 completion 写回已析构的 DC
     if (asyncLeaseToken_)
         asyncLeaseToken_->store(false, std::memory_order_release);
+
+    // 关闭 Stage1→Stage2 completion gate：持锁置 closed，与 worker 的
+    // notifyChunkSettled（持同一把锁调用回调）互斥，杜绝回调访问已析构的 this。
+    {
+        std::lock_guard<std::mutex> lk(completionGate_->mutex);
+        completionGate_->closed = true;
+    }
 
     // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
     // F0 Run（SetTerminate 加速返回）。不 join worker —— worker 是 detached
@@ -822,9 +831,8 @@ OpenTuneDocumentController::getFocusedEditorPlaybackRegionProjection() const
 
 int OpenTuneDocumentController::requestReadAudioForPlaybackRegions()
 {
-    // User-read entry point: the ONLY method that reads AudioSource samples.
-    // Per architecture: sample access enable is permission, not user intent.
-    // Only explicit user button press (Record/Read) can read host audio.
+    // 用户 Read 入口：新内容/未材质化内容的显式读取请求。
+    // 已 Ready 的内容已有 PCM，无需重复读取。
 
     std::set<juce::String> uniqueModIds;
     for (const auto& region : playbackRegions_)
@@ -844,7 +852,12 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegions()
         if (modification == nullptr)
             continue;
 
-        // 只对有 content 或等待 source 的 modification 调用 birthContentForModification
+        // 仅 WaitingForSource / Failed 的内容由用户 Read 触发 birth；
+        // Ready（已材质化）、Rendering（进行中）、Empty（无 content）跳过。
+        if (modification->birthState != AudioModificationBirthState::WaitingForSource
+            && modification->birthState != AudioModificationBirthState::Failed)
+            continue;
+
         if (birthContentForModification(*modification))
             ++refreshedCount;
     }
@@ -910,6 +923,7 @@ void OpenTuneDocumentController::willBeginEditing(juce::ARADocument* document)
 void OpenTuneDocumentController::didEndEditing(juce::ARADocument* document)
 {
     juce::ignoreUnused(document);
+    readRestoredAudio(nullptr);
     refreshRegisteredRenderers(publishModelChange());
 }
 
@@ -1005,7 +1019,8 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
         // When signal is unchanged (e.g. window reopen after archive restore):
         //   - Preserve analysis (pitchCurve, originalF0) — these remain valid
         //   - Skip removeCRSArtifactsForModification — it cancels F0 tasks, contradicting preservation
-        //   - CRS playback cache will be rebuilt by birthContentForModification when recordRequested fires
+        //   - CRS playback cache 重建：新内容由用户 Read 触发；archive 恢复且
+        //     已有有效 F0 的内容在 endEditing/access 后自动重建 PCM
         // When signal changed:
         //   - Invalidate ALL derived artifacts (CRS + analysis)
         const bool signalChanged = scopeFlags.affectSamples();
@@ -1020,7 +1035,7 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
                     removeCRSArtifactsForModification(modification);
                     modification.invalidateDerivedContent();
                 }
-                // else: signal unchanged — preserve everything, renderer will republish via recordRequested
+                // else: signal unchanged — preserve everything; PCM 由 readRestoredAudio / 用户 Read 重建
             }
         }
     }
@@ -1039,9 +1054,15 @@ void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess(juce::ARAAudi
 {
     auto& source = ensureAudioSource(audioSource);
     source.setSampleAccessEnabled(enable);
-    // Per plan doc: sample access enable is permission only, not read intent.
-    // Do NOT create reader lease here. Lease creation is user-commanded only
-    // via requestReadAudioForPlaybackRegions() -> recordRequested().
+    // ARA Audio Source Management callback 内建立 HostAudioReader lease；
+    // 实际 sample read 在用户 Read 或 restore 自动 materialization 的非实时路径进行。
+    if (enable)
+        source.createReaderLease();
+
+    // 编辑会话结束后到达的 access：archive 恢复且已有有效 F0 的内容自动重建 PCM。
+    // 编辑会话内（isHostEditingDocument）不提前读，由 didEndEditing 统一处理。
+    if (enable && !getDocumentController()->isHostEditingDocument())
+        readRestoredAudio(&source);
 
     refreshRegisteredRenderers(publishModelChange());
 }
@@ -1560,9 +1581,47 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     return true;
 }
 
+void OpenTuneDocumentController::readRestoredAudio(const AudioSource* enabledSource)
+{
+    // archive 恢复且已有有效 OriginalF0 的内容：自动重建 PCM，用户无需 Read。
+    // WaitingForSource 由现有生命周期保证 content 存在，直接读 *mod.content。
+    // 新插入插件无有效 F0，自动扫描自然跳过。
+    for (auto& mod : audioModifications_)
+    {
+        if (mod.birthState != AudioModificationBirthState::WaitingForSource)
+            continue;
+
+        auto& content = *mod.content;
+        if (content.analysis.originalF0State != OriginalF0State::Ready
+            || content.analysis.pitchCurve == nullptr
+            || !content.analysis.pitchCurve->hasOriginalF0Data())
+            continue;
+
+        if (enabledSource != nullptr
+            && content.sourceWindow.sourcePersistentId != enabledSource->getIdentity().persistentId)
+            continue;
+
+        // 仅对有有效 PlaybackRegion 的 modification 触发读取
+        bool hasPlaybackRegion = false;
+        for (const auto& region : playbackRegions_)
+        {
+            if (region.audioModificationPersistentId == mod.persistentId
+                && region.hasValidPlacement())
+            {
+                hasPlaybackRegion = true;
+                break;
+            }
+        }
+        if (!hasPlaybackRegion)
+            continue;
+
+        birthContentForModification(mod);
+    }
+}
+
 bool OpenTuneDocumentController::birthContentForModification(AudioModification& modification)
 {
-    // F0 #B.4: 在用户 read 开始前取消该 content 的旧 F0 request
+    // F0 #B.4: 每次 birth 开始前取消该 content 的旧 F0 request
     contentF0ExtractionService_->cancel(F0RequestKey{modification.contentKey()});
 
     // 前置条件：必须已拥有 content 和有效 sourceWindow。
@@ -1581,9 +1640,8 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         return false;
     }
 
-    if (!source->hasReaderLease())
-        source->createReaderLease();
-
+    // reader lease 由 didEnableAudioSourceSamplesAccess（ARA Audio Source Management
+    // callback）建立，这里只消费，不在非实时路径创建。
     if (!source->canReadSamples())
     {
         modification.birthState = AudioModificationBirthState::WaitingForSource;
@@ -1700,13 +1758,14 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         storedBuffer = std::move(playableAccum);
     }
 
-    // 6. Detect silent gaps and write back via owner methods (not direct content.analysis access)
-    auto silentGaps = SilentGapDetector::detectAllGapsAdaptive(storedBuffer);
-    auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(storedBuffer));
-
-    modification.submitSilentGaps(std::move(silentGaps));
+    // 6. Silent gaps 仅在新内容用户 Read 路径（无有效 F0）检测；
+    // archive 恢复路径（alreadyHasF0）保留 restored silentGaps，不递增 analysis/contentRevision。
     if (!alreadyHasF0)
+    {
+        modification.submitSilentGaps(SilentGapDetector::detectAllGapsAdaptive(storedBuffer));
         modification.applyOriginalF0State(OriginalF0State::NotRequested);
+    }
+    auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(storedBuffer));
 
     // 7. Publish to CRS (derived playback cache + resampled audio buffer)
     // Per ARA2 spec: CRS holds derived/cache for renderer fast read,
@@ -1719,8 +1778,14 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
 
     // 8. Set modification state and notify ARA host
     modification.birthState = AudioModificationBirthState::Ready;
+    // 有效 F0 表示 archive/runtime 恢复，不产生新模型变更；无有效 F0 表示用户 Read，保持通知
     if (modification.audioModification != nullptr)
-        modification.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        modification.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), !alreadyHasF0);
+
+    // 有效 F0（archive 恢复）自动触发完整 Stage1 渲染，无需用户手动编辑即可出声；
+    // 用户手动 Read（无有效 F0）不提前 Stage1，F0 提取完成后由既有链继续。
+    if (alreadyHasF0)
+        requestFullModificationRender(modification.contentKey());
 
     // 9. Schedule async F0 extraction via CRS (skip if F0 already available)
     if (!alreadyHasF0 && contentRenderService_ != nullptr)
@@ -1750,8 +1815,8 @@ void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioMo
 }
 
 // Removed rebuildCRSForSource per architecture: sample access enable is permission,
-// not user intent. Source-level scan that infers user intent is prohibited.
-// Only requestReadAudioForPlaybackRegions() (user button press) may read host audio.
+// not user intent. 新内容仅由用户 Read（requestReadAudioForPlaybackRegions）读取；
+// archive 恢复且已有有效 F0 的内容在 endEditing/access 后自动重建 PCM。
 
 void OpenTuneDocumentController::scheduleAsyncF0Extraction(
     ContentKey key,
@@ -1892,6 +1957,25 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
 
 void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
 {
+    // Stage2: TimeGrid 时间拉伸重建
+    if (job.kind == RenderJob::Kind::Stage2Rebuild)
+    {
+        auto snap = snapshotAudioModification(job.contentKey);
+        if (snap == nullptr || snap->timeGrid == nullptr || snap->timeGrid->isIdentity()
+            || snap->pitchRevision != job.pitchRevision
+            || snap->pitchShiftRevision != job.pitchShiftRevision
+            || snap->timeGridRevision != job.timeGridRevision)
+            return;
+
+        Stage2TimeStretchRebuilder::Request request;
+        request.contentKey = job.contentKey;
+        request.pitchRevision = job.pitchRevision;
+        request.pitchShiftRevision = job.pitchShiftRevision;
+        request.timeGridRevision = job.timeGridRevision;
+        Stage2TimeStretchRebuilder::rebuild(*contentRenderService_, request, std::move(snap));
+        return;
+    }
+
     if (job.renderCache == nullptr)
         return;
 
@@ -1918,9 +2002,28 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
         return;
     }
 
+    ProcessRenderRuntime::CompletionContext completion;
+    completion.gate = completionGate_;
+    completion.chunkSettled = [this](ContentKey key) {
+        handleStage1ChunkSettled(key);
+    };
     ProcessRenderRuntime::getInstance().processChunkRenderJob(
         contentRenderService_, job, std::move(snap),
-        false, {});
+        false, std::move(completion));
+}
+
+void OpenTuneDocumentController::handleStage1ChunkSettled(ContentKey key)
+{
+    auto snap = snapshotAudioModification(key);
+    if (snap == nullptr || snap->timeGrid == nullptr || snap->timeGrid->isIdentity())
+        return;
+
+    ContentRenderService::Stage2Request request;
+    request.contentKey = key;
+    request.pitchRevision = snap->pitchRevision;
+    request.pitchShiftRevision = snap->pitchShiftRevision;
+    request.timeGridRevision = snap->timeGridRevision;
+    contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(request);
 }
 
 std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
@@ -2302,13 +2405,28 @@ bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& k
 {
     auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState() || grid == nullptr) return false;
+    const bool isIdentity = grid->isIdentity();
     if (!mod->applyTimeGrid(std::move(grid)))
         return false;
-    
+
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
         mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-    
+
+    // TimeGrid 变更 → 失效 Stage2 并在 Stage1 settled 后重建；
+    // identity TimeGrid 无需 Stage2（无时间拉伸）。
+    contentRenderService_->getTimeStretchCache().invalidate(key);
+    if (!isIdentity)
+    {
+        auto snap = snapshotAudioModification(key);
+        ContentRenderService::Stage2Request request;
+        request.contentKey = key;
+        request.pitchRevision = snap->pitchRevision;
+        request.pitchShiftRevision = snap->pitchShiftRevision;
+        request.timeGridRevision = snap->timeGridRevision;
+        contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(request);
+    }
+
     refreshRegisteredRenderers(publishModelChange());
     return true;
 }

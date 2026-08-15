@@ -331,12 +331,9 @@ void testOpenDyneContract()
                && !contains(readCanonical, "applyAutomationGain"),
            "Playback gain applies once after both read paths; canonical read stays ungained");
 
-    // OpenDyne F 键为 scheme 固定映射，不写入 KeyShortcutConfig / 无新 ShortcutId
-    expect(contains(toolHandler, "F2Key") && contains(toolHandler, "F6Key")
-               && !contains(keyShortcut, "Pitch")
-               && !contains(keyShortcut, "Scissors")
-               && !contains(keyShortcut, "VolumeEnvelope"),
-           "OpenDyne F-keys are scheme-fixed, not user-configurable shortcuts");
+    // OpenDyne F 键为用户可配置快捷键，定义在 KeyShortcutConfig 中
+    expect(contains(keyShortcut, "ToolODPitch") && contains(keyShortcut, "ToolODScissors"),
+           "OpenDyne F-keys are user-configurable shortcuts in KeyShortcutConfig");
 
     // 无第二波形缓存 / 独立 OpenDyne renderer 或 tool handler
     expect(!contains(pianoRollHeader, "OpenDyneRenderer")
@@ -577,9 +574,9 @@ void testOpenDyneToolSwitchingContract()
                && contains(setCurrentTool, "!experimentalFeaturesEnabled_"),
            "TimeTool gate applies only outside OpenDyne and stays behind the experimental switch");
     expect(contains(applyScheme, "currentTool_ == ToolId::LineAnchor")
-               && contains(applyScheme, "currentTool_ == ToolId::HandDraw")
-               && contains(applyScheme, "setCurrentTool(ToolId::Select)"),
-           "Scheme entry falls LineAnchor/HandDraw back to Select");
+               && contains(applyScheme, "setCurrentTool(ToolId::Select)")
+               && !contains(applyScheme, "ToolId::HandDraw"),
+           "Scheme entry falls LineAnchor back to Select; HandDraw stays unchanged");
 
     const auto parameterPanel = readSource("Source/Standalone/UI/ParameterPanel.cpp");
     const auto setOpenDyneMode = functionBlock(
@@ -1539,6 +1536,143 @@ void testNoteTopologyContract()
            "drawF0Curve keeps the OpenDyne/OpenTune corrected-F0 mode semantics");
 }
 
+void testARARestoreAutoReadContract()
+{
+    // ARA 归档恢复自动读取契约：readRestoredAudio 只在 archive 已有有效 F0
+    // 时自动 birth；新插入无有效 F0 的内容保持等待用户 Read，不提前 Stage1。
+    const auto araArchive = readSource("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto araHeader = readSource("Source/ARA/OpenTuneDocumentController.h");
+
+    // 1. readRestoredAudio 只处理 WaitingForSource + Ready F0 + 有效 pitchCurve
+    //    + 有有效 PlaybackRegion 的 modification，并调用 birthContentForModification
+    const auto readRestored = functionBlock(
+        araArchive, "void OpenTuneDocumentController::readRestoredAudio");
+    expect(contains(readRestored, "mod.birthState != AudioModificationBirthState::WaitingForSource"),
+           "readRestoredAudio processes only WaitingForSource births");
+    expect(contains(readRestored, "content.analysis.originalF0State != OriginalF0State::Ready")
+               && contains(readRestored, "content.analysis.pitchCurve == nullptr")
+               && contains(readRestored, "!content.analysis.pitchCurve->hasOriginalF0Data()"),
+           "readRestoredAudio auto-reads only Ready OriginalF0 with non-empty pitch curve data");
+    expect(contains(readRestored, "region.hasValidPlacement()"),
+           "readRestoredAudio requires a valid playback region placement");
+    expect(contains(readRestored, "birthContentForModification(mod);"),
+           "readRestoredAudio births the restored modification automatically");
+
+    // 2. 编辑会话结束后统一自动读取
+    expect(contains(functionBlock(araArchive, "void OpenTuneDocumentController::didEndEditing"),
+                    "readRestoredAudio(nullptr);"),
+           "didEndEditing auto-reads restored content after the edit session");
+
+    // 3. 编辑会话外的 samples access 也触发自动读取，且限定到该 source
+    const auto samplesAccess = functionBlock(
+        araArchive, "void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess");
+    expect(contains(samplesAccess, "!getDocumentController()->isHostEditingDocument()"),
+           "samples-access auto-read is gated outside the host edit session");
+    expect(contains(samplesAccess, "readRestoredAudio(&source);"),
+           "samples-access auto-read targets the just-enabled source");
+
+    // 4. 用户 Read 只允许 WaitingForSource/Failed 两种 birth 状态
+    const auto readRequest = functionBlock(
+        araArchive, "int OpenTuneDocumentController::requestReadAudioForPlaybackRegions");
+    expect(contains(readRequest, "modification->birthState != AudioModificationBirthState::WaitingForSource")
+               && contains(readRequest, "modification->birthState != AudioModificationBirthState::Failed")
+               && contains(readRequest, "continue;"),
+           "user Read admits only WaitingForSource/Failed births and skips the rest");
+
+    // 5. birthContentForModification：已有有效 F0（archive 恢复）跳过提取并自动
+    //    Stage1；无有效 F0（新内容 Read）不提前 Stage1，只调度异步 F0 提取
+    const auto birth = functionBlock(
+        araArchive, "bool OpenTuneDocumentController::birthContentForModification");
+    expect(contains(birth, "const bool alreadyHasF0 = content.analysis.originalF0State == OriginalF0State::Ready")
+               && contains(birth, "content.analysis.pitchCurve != nullptr")
+               && contains(birth, "content.analysis.pitchCurve->hasOriginalF0Data();"),
+           "alreadyHasF0 requires Ready OriginalF0 with non-empty pitch curve data");
+    expect(contains(birth, "notifyContentChanged(juce::ARAContentUpdateScopes(), !alreadyHasF0)"),
+           "restored content suppresses the host content-changed notification");
+    expect(contains(functionBlock(birth, "if (alreadyHasF0)"),
+                    "requestFullModificationRender(modification.contentKey())"),
+           "restored content with valid F0 auto-triggers the full Stage1 render");
+    expect(contains(functionBlock(birth, "if (!alreadyHasF0 && contentRenderService_ != nullptr)"),
+                    "scheduleAsyncF0Extraction"),
+           "new content without valid F0 schedules async F0 extraction instead of Stage1");
+
+    // 6. applyTimeGridToModification：isIdentity 在 std::move(grid) 前捕获，
+    //    move 后不再解引用 grid；非 identity 才 enqueue Stage2 重建
+    const auto timeGrid = functionBlock(
+        araArchive, "bool OpenTuneDocumentController::applyTimeGridToModification");
+    const auto identityPos = timeGrid.find("const bool isIdentity = grid->isIdentity();");
+    const auto movePos = timeGrid.find("std::move(grid)");
+    expect(identityPos != std::string::npos && movePos != std::string::npos
+               && identityPos < movePos,
+           "applyTimeGridToModification captures isIdentity before moving the grid");
+    expect(countOccurrences(timeGrid, "grid->") == 1,
+           "applyTimeGridToModification never dereferences the grid after std::move(grid)");
+    expect(contains(timeGrid, "getTimeStretchCache().invalidate(key)"),
+           "TimeGrid edits invalidate the Stage2 stretch cache");
+    expect(contains(functionBlock(timeGrid, "if (!isIdentity)"),
+                    "enqueueStage2RebuildWhenCanonicalSettled(request)"),
+           "non-identity TimeGrid enqueues the Stage2 rebuild on canonical settle");
+
+    // 7. Stage1 → Stage2：chunk settled 经 CompletionContext gate 回调，
+    //    handleStage1ChunkSettled 统一 enqueue Stage2；析构关闭 gate
+    const auto processJob = functionBlock(
+        araArchive, "void OpenTuneDocumentController::processDocumentRenderJob");
+    expect(contains(processJob, "ProcessRenderRuntime::CompletionContext completion;")
+               && contains(processJob, "completion.gate = completionGate_;")
+               && contains(processJob, "completion.chunkSettled = [this](ContentKey key) {")
+               && contains(processJob, "handleStage1ChunkSettled(key);"),
+           "Stage1 chunk completion flows through the shared gate into handleStage1ChunkSettled");
+    expect(contains(functionBlock(araArchive, "void OpenTuneDocumentController::handleStage1ChunkSettled"),
+                    "enqueueStage2RebuildWhenCanonicalSettled(request);"),
+           "settled Stage1 chunks enqueue the Stage2 rebuild");
+    expect(contains(functionBlock(araArchive, "OpenTuneDocumentController::~OpenTuneDocumentController()"),
+                    "completionGate_->closed = true;"),
+           "destructor closes the Stage1-to-Stage2 completion gate");
+
+    // 8. 旧 restore 意图命名在 DC cpp/header 零残留
+    expect(!contains(araArchive, "restoredFromArchive")
+               && !contains(araArchive, "BirthIntent")
+               && !contains(araArchive, "archiveRestoreGraphReady")
+               && !contains(araArchive, "restoreMaterializationPending"),
+           "no legacy restore-intent naming remains in the document controller source");
+    expect(!contains(araHeader, "restoredFromArchive")
+               && !contains(araHeader, "BirthIntent")
+               && !contains(araHeader, "archiveRestoreGraphReady")
+               && !contains(araHeader, "restoreMaterializationPending"),
+           "no legacy restore-intent naming remains in the document controller header");
+
+    // 9. reader lease 只在 ARA sample-access callback 创建；
+    //    birthContentForModification 只消费 shareReaderLease，不在非实时路径创建
+    expect(contains(samplesAccess, "source.createReaderLease();"),
+           "reader lease is created only in the ARA sample-access callback");
+    expect(!contains(birth, "createReaderLease"),
+           "birthContentForModification consumes the reader lease without creating one");
+
+    // 10. silent-gap 检测只在用户 Read 分支（!alreadyHasF0）执行一次，
+    //     archive 恢复（alreadyHasF0）保留 restored silentGaps
+    const auto f0SkipBranchPos = birth.find("if (!alreadyHasF0)");
+    const auto silentGapBranchPos = birth.find("if (!alreadyHasF0)", f0SkipBranchPos + 1);
+    const auto newReadBranch = silentGapBranchPos != std::string::npos
+        ? functionBlock(birth.substr(silentGapBranchPos), "if (!alreadyHasF0)")
+        : std::string();
+    expect(contains(newReadBranch, "SilentGapDetector::detectAllGapsAdaptive")
+               && contains(newReadBranch, "submitSilentGaps")
+               && contains(newReadBranch, "applyOriginalF0State"),
+           "silent-gap detection and F0-state reset live only in the !alreadyHasF0 branch");
+    expect(countOccurrences(birth, "submitSilentGaps") == 1,
+           "birthContentForModification submits silent gaps exactly once");
+
+    // 11. 析构中 completion gate 锁作用域在 detachExecutionLease 之前结束
+    const auto destructor = functionBlock(
+        araArchive, "OpenTuneDocumentController::~OpenTuneDocumentController()");
+    const auto gateClosedPos = destructor.find("completionGate_->closed = true;");
+    const auto gateBracePos = destructor.find("\n    }", gateClosedPos);
+    const auto detachPos = destructor.find("detachExecutionLease(this)");
+    expect(gateClosedPos != std::string::npos && gateBracePos != std::string::npos
+               && detachPos != std::string::npos && gateBracePos < detachPos,
+           "completion gate lock scope ends before detachExecutionLease");
+}
+
 void testCaptureF0KeyContract()
 {
     const auto captureSession = readSource("Source/Plugin/Capture/CaptureSession.cpp");
@@ -1816,6 +1950,7 @@ int main()
     testAutoSnapRefactorContract();
     testAutoSnapTargetMathContract();
     testNoteTopologyContract();
+    testARARestoreAutoReadContract();
     testCaptureF0KeyContract();
     testF0KeyDetectionContract();
     testPianoRollViewportSessionContract();
