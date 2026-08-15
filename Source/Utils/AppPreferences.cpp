@@ -14,6 +14,7 @@ constexpr const char* kSharedThemeKey = "shared.theme.activeTheme";
 constexpr const char* kSharedAudioEditingSchemeKey = "shared.audioEditing.scheme";
 constexpr const char* kSharedPianoRollNoteNameModeKey = "shared.pianoRoll.noteNameMode";
 constexpr const char* kSharedPianoRollShowUnvoicedFramesKey = "shared.pianoRoll.showUnvoicedFrames";
+constexpr const char* kSharedPianoRollBackgroundBrightnessKey = "shared.pianoRoll.backgroundBrightness";
 constexpr const char* kSharedZoomHorizontalFactorKey = "shared.zoom.horizontalFactor";
 constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor";
 constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
@@ -311,6 +312,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.pianoRollVisualPreferences.showUnvoicedFrames = properties.getBoolValue(
         kSharedPianoRollShowUnvoicedFramesKey,
         state.shared.pianoRollVisualPreferences.showUnvoicedFrames);
+    state.shared.pianoRollVisualPreferences.backgroundBrightness = static_cast<float>(
+        properties.getDoubleValue(kSharedPianoRollBackgroundBrightnessKey,
+                                  state.shared.pianoRollVisualPreferences.backgroundBrightness));
     state.shared.zoomSensitivity.horizontalZoomFactor = static_cast<float>(
         properties.getDoubleValue(kSharedZoomHorizontalFactorKey, state.shared.zoomSensitivity.horizontalZoomFactor));
     state.shared.zoomSensitivity.verticalZoomFactor = static_cast<float>(
@@ -375,6 +379,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         toNoteNameModeToken(state.shared.pianoRollVisualPreferences.noteNameMode));
     properties.setValue(kSharedPianoRollShowUnvoicedFramesKey,
                         state.shared.pianoRollVisualPreferences.showUnvoicedFrames);
+    properties.setValue(kSharedPianoRollBackgroundBrightnessKey,
+                        static_cast<double>(state.shared.pianoRollVisualPreferences.backgroundBrightness));
     properties.setValue(kSharedZoomHorizontalFactorKey, static_cast<double>(state.shared.zoomSensitivity.horizontalZoomFactor));
     properties.setValue(kSharedZoomVerticalFactorKey, static_cast<double>(state.shared.zoomSensitivity.verticalZoomFactor));
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
@@ -491,6 +497,13 @@ void AppPreferences::setShowUnvoicedFrames(bool shouldShow)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.pianoRollVisualPreferences.showUnvoicedFrames = shouldShow;
+    saveLocked();
+}
+
+void AppPreferences::setBackgroundBrightness(float brightness)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.pianoRollVisualPreferences.backgroundBrightness = brightness;
     saveLocked();
 }
 

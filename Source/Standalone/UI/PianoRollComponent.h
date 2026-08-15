@@ -173,6 +173,7 @@ public:
     void setGridStyle(PianoGridStyle gridStyle);
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowUnvoicedFrames(bool shouldShow);
+    void setBackgroundBrightness(float brightness);
     void setInferenceActive(bool active);
     void setBpm(double bpm);
     void setTimeSignature(int numerator, int denominator);
@@ -541,6 +542,7 @@ private:
     PianoGridStyle gridStyle_ = PianoGridStyle::PianoLanes;
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showUnvoicedFrames_ = false;
+    float backgroundBrightness_ = 1.0f;
     bool showOriginalF0_ = true;
     bool showCorrectedF0_ = true;
     float currentRetuneSpeed_ = PitchControlConfig::kDefaultRetuneSpeedNormalized;
