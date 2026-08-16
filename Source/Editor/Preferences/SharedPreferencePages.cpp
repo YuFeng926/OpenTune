@@ -315,7 +315,7 @@ private:
 class SharedEditingPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 296; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 28 + 20
+    static constexpr int kContentHeight = 340; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 34 + 10 + 28 + 20
 
     SharedEditingPage(AppPreferences& appPreferences,
                       std::function<void()> onPreferencesChanged,
@@ -463,11 +463,13 @@ public:
         tuningSlider_.setBounds(row);
 
         bounds.removeFromTop(18);
+        row = bounds.removeFromTop(rowHeight);
+        gridStyleLabel_.setBounds(row.removeFromLeft(labelWidth));
+        gridStyleSelector_.setBounds(row);
+
+        bounds.removeFromTop(10);
         auto resetRow = bounds.removeFromTop(28);
         resetButton_.setBounds(resetRow.removeFromLeft(150));
-        resetRow.removeFromLeft(16); // spacing
-        gridStyleLabel_.setBounds(resetRow.removeFromLeft(80));
-        gridStyleSelector_.setBounds(resetRow.reduced(0, 2));
     }
 
 private:
