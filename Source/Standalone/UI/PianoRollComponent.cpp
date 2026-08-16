@@ -3669,6 +3669,8 @@ void PianoRollComponent::setBackgroundBrightness(float brightness)
     const auto clamped = juce::jlimit(0.0f, 2.0f, brightness);
     if (backgroundBrightness_ == clamped) return;
     backgroundBrightness_ = clamped;
+    staticDirty_ = true;
+    rasterizeDirtySurfaces();
     repaint();
 }
 
