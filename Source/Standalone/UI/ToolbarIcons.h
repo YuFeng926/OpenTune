@@ -607,22 +607,11 @@ public:
     }
 
     /**
-     * @brief Get EQ icon path (frequency curve with slider)
+     * @brief Get EQ icon path (empty - uses text "EQ" instead)
      */
     static juce::Path getEqIcon() {
         juce::Path path;
-        // EQ curve shape (simplified sine wave)
-        path.startNewSubPath(4.0f, 16.0f);
-        path.cubicTo(8.0f, 8.0f, 16.0f, 8.0f, 20.0f, 16.0f);
-        
-        // Horizontal line (frequency axis)
-        path.startNewSubPath(2.0f, 20.0f);
-        path.lineTo(22.0f, 20.0f);
-        
-        // Vertical line (gain axis)
-        path.startNewSubPath(4.0f, 4.0f);
-        path.lineTo(4.0f, 20.0f);
-        
+        // EQ uses bold text "EQ" instead of graphical icon
         return path;
     }
 

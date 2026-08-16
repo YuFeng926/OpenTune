@@ -656,8 +656,8 @@ public:
 
     juce::Font getPopupMenuFont() override
     {
-        // 显式使用 HONOR Sans CN Medium 确保 CJK 字符正确渲染
-        return juce::Font(juce::FontOptions("HONOR Sans CN", "Medium", 16.0f));
+        // 显式使用 Noto Sans SC Medium 确保 CJK 字符正确渲染
+        return juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 16.0f));
     }
 
     juce::Font getLabelFont(juce::Label&) override
@@ -779,17 +779,17 @@ public:
 
     juce::Font getAlertWindowTitleFont() override
     {
-        return juce::Font(juce::FontOptions("HONOR Sans CN", "Medium", 18.0f));
+        return juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 18.0f));
     }
 
     juce::Font getAlertWindowMessageFont() override
     {
-        return juce::Font(juce::FontOptions("HONOR Sans CN", "Medium", 16.0f));
+        return juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 16.0f));
     }
 
     juce::Font getAlertWindowFont() override
     {
-        return juce::Font(juce::FontOptions("HONOR Sans CN", "Medium", 16.0f));
+        return juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 16.0f));
     }
 
     juce::Font getSliderPopupFont(juce::Slider&) override

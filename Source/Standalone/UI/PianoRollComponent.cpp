@@ -323,6 +323,7 @@ juce::Path makeToolIcon(ToolId id) {
         case ToolId::VolumeEnvelope:  return ToolbarIcons::getVolumeEnvelopeToolIcon();
         case ToolId::TimeTool:        return ToolbarIcons::getTimeToolIcon();
         case ToolId::Scissors:        return ToolbarIcons::getScissorsToolIcon();
+        case ToolId::Eq:              return ToolbarIcons::getEqIcon();
         default:                      return {};
     }
 }
@@ -351,6 +352,7 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             { { ToolId::VolumeEnvelope, "Volume", "F4", []{ return makeToolIcon(ToolId::VolumeEnvelope); } } },
             { { ToolId::TimeTool,  "Time",     "T",   []{ return makeToolIcon(ToolId::TimeTool); } } },
             { { ToolId::Scissors,  "Scissors", "F6",  []{ return makeToolIcon(ToolId::Scissors); } } },
+            { { ToolId::Eq,        "EQ",       "E",   []{ return makeToolIcon(ToolId::Eq); } } },
         };
         subItems = {
             { ToolId::PitchModulation, "Modulation", "F2x2", []{ return makeToolIcon(ToolId::PitchModulation); } },
@@ -413,7 +415,16 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
                 g.fillRoundedRectangle(bounds, radius);
             }
 
-            if (!iconPath_.isEmpty()) {
+            if (tid_ == ToolId::Eq) {
+                // EQ tool uses bold text "EQ" instead of graphical icon
+                auto textColor = active ? juce::Colours::white : UIColors::textPrimary;
+                if (themeId == ThemeId::Overdose)
+                    textColor = active ? juce::Colours::white
+                                       : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f);
+                g.setColour(textColor);
+                g.setFont(juce::Font(juce::FontOptions("Roboto", "Bold", bounds.getHeight() * 0.5f)));
+                g.drawText("EQ", bounds, juce::Justification::centred);
+            } else if (!iconPath_.isEmpty()) {
                 const float iconSz = bounds.getWidth() * 0.55f;
                 auto iconRect = bounds.withSizeKeepingCentre(iconSz, iconSz);
                 auto iconColor = active ? juce::Colours::white : UIColors::textPrimary;
