@@ -805,6 +805,11 @@ public:
     std::shared_ptr<ContentEditCommands> getContentCommands() const { return contentCommands_; }
 
     // Local edits carry their precise range; full mutations rebuild all content.
+    // 秒域 local-mutation helper：保持现有 ARA/非 ARA 单一 Stage1 调度；
+    // 帧域入口只负责按 pitchCurve hop 换算后调用它。
+    void onContentLocalMutationCompletedSeconds(ContentKey key,
+                                               double startSeconds,
+                                               double endSeconds);
     void onContentLocalMutationCompleted(ContentKey key,
                                          ContentEditRangeFrames affectedRange);
     void onContentFullMutationCompleted(ContentKey key);

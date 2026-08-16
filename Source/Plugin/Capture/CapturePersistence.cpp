@@ -187,20 +187,24 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 stream.writeFloat(note.pitchDriftScale);
                 stream.writeFloat(note.vibratoDepth);
                 stream.writeFloat(note.vibratoRate);
-            stream.writeFloat(note.outputGainDb);
-            stream.writeInt(note.isVoiced ? 1 : 0);
-            
-            // v8: Per-note EQ settings
-            stream.writeInt(note.eq.has_value() ? 1 : 0);
-            if (note.eq.has_value()) {
-                const auto& eq = *note.eq;
-                stream.writeInt(eq.active ? 1 : 0);
-                for (int b = 0; b < EqSettings::kNumBands; ++b) {
-                    stream.writeFloat(eq.bands[b].gainDb);
-                    stream.writeFloat(eq.bands[b].frequency);
+                stream.writeFloat(note.outputGainDb);
+                stream.writeInt(note.isVoiced ? 1 : 0);
+
+                // v8: Per-note EQ settings
+                stream.writeInt(note.eq.has_value() ? 1 : 0);
+                if (note.eq.has_value()) {
+                    const auto& eq = *note.eq;
+                    stream.writeInt(eq.active ? 1 : 0);
+                    stream.writeFloat(eq.lowCutFrequencyHz);
+                    stream.writeFloat(eq.lowShelfFrequencyHz);
+                    stream.writeFloat(eq.lowShelfGainDb);
+                    stream.writeFloat(eq.peakFrequencyHz);
+                    stream.writeFloat(eq.peakGainDb);
+                    stream.writeFloat(eq.highShelfFrequencyHz);
+                    stream.writeFloat(eq.highShelfGainDb);
+                    stream.writeFloat(eq.highCutFrequencyHz);
                 }
             }
-        }
             const auto& envelopePoints = snap->volumeEnvelope.points();
             stream.writeInt(static_cast<int>(envelopePoints.size()));
             for (const auto& point : envelopePoints) {
@@ -335,20 +339,22 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             note.vibratoRate = stream.readFloat();
             note.outputGainDb = stream.readFloat();
             note.isVoiced = stream.readInt() != 0;
-            
+
             // v8: Per-note EQ settings
-            if (hasPerNoteEq) {
-                if (stream.readInt() == 1) {
-                    EqSettings eq;
-                    eq.active = stream.readInt() != 0;
-                    for (int b = 0; b < EqSettings::kNumBands; ++b) {
-                        eq.bands[b].gainDb = stream.readFloat();
-                        eq.bands[b].frequency = stream.readFloat();
-                    }
-                    note.eq = eq;
-                }
+            if (hasPerNoteEq && stream.readInt() == 1) {
+                EqSettings eq;
+                eq.active = stream.readInt() != 0;
+                eq.lowCutFrequencyHz = stream.readFloat();
+                eq.lowShelfFrequencyHz = stream.readFloat();
+                eq.lowShelfGainDb = stream.readFloat();
+                eq.peakFrequencyHz = stream.readFloat();
+                eq.peakGainDb = stream.readFloat();
+                eq.highShelfFrequencyHz = stream.readFloat();
+                eq.highShelfGainDb = stream.readFloat();
+                eq.highCutFrequencyHz = stream.readFloat();
+                note.eq = eq;
             }
-            
+
             p.notes.push_back(note);
         }
         // 旧归档无该 property 时按 notes 是否为空推断，避免覆盖已有音符拓扑事实。

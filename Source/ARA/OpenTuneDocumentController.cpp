@@ -30,7 +30,7 @@ namespace OpenTune {
 namespace {
 
 constexpr int kContentPayloadArchiveMagic = 0x4F544143;
-constexpr int kContentPayloadArchiveVersion = 4; // v4 unifies note gain and sibilant gain into VolumeEnvelope
+constexpr int kContentPayloadArchiveVersion = 5; // v5: Note 子元素携带 EqSettings 契约（9 scalar attributes）
 constexpr int kContentPayloadArchiveVersionMin = 3;
 constexpr int kMaxContentPayloadRecords = 4096;
 
@@ -132,16 +132,18 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         n->setAttribute("outputGainDb", note.outputGainDb);
         n->setAttribute("isVoiced", note.isVoiced ? 1 : 0);
         
-        // v5: Per-note EQ settings
+        // v5: Per-note EQ settings — 契约 9 个 scalar attributes（active + 8 float 字段）
         if (note.eq.has_value()) {
             auto* eqEl = new juce::XmlElement("EqSettings");
             eqEl->setAttribute("active", note.eq->active ? 1 : 0);
-            for (int b = 0; b < EqSettings::kNumBands; ++b) {
-                auto* bandEl = new juce::XmlElement("Band" + juce::String(b));
-                bandEl->setAttribute("gainDb", note.eq->bands[b].gainDb);
-                bandEl->setAttribute("frequency", note.eq->bands[b].frequency);
-                eqEl->addChildElement(bandEl);
-            }
+            eqEl->setAttribute("lowCutFrequencyHz", note.eq->lowCutFrequencyHz);
+            eqEl->setAttribute("lowShelfFrequencyHz", note.eq->lowShelfFrequencyHz);
+            eqEl->setAttribute("lowShelfGainDb", note.eq->lowShelfGainDb);
+            eqEl->setAttribute("peakFrequencyHz", note.eq->peakFrequencyHz);
+            eqEl->setAttribute("peakGainDb", note.eq->peakGainDb);
+            eqEl->setAttribute("highShelfFrequencyHz", note.eq->highShelfFrequencyHz);
+            eqEl->setAttribute("highShelfGainDb", note.eq->highShelfGainDb);
+            eqEl->setAttribute("highCutFrequencyHz", note.eq->highCutFrequencyHz);
             n->addChildElement(eqEl);
         }
         
@@ -301,7 +303,8 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
 // Missing optional children naturally result in default/empty state.
 // Per ARA2 spec: Maps archived source persistentID to current source persistentID via filter.
 std::optional<AudioModificationContentState> restoreAudioModificationContent(const juce::XmlElement& el,
-                                                                               const juce::ARARestoreObjectsFilter* filter)
+                                                                               const juce::ARARestoreObjectsFilter* filter,
+                                                                               int archiveVersion)
 {
     AudioModificationContentState content;
     std::vector<PitchCorrectionSegment> restoredCorrectionSegments;
@@ -406,18 +409,38 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 return std::nullopt;
             note.isVoiced = n->getIntAttribute("isVoiced") != 0;
             
-            // v5: Per-note EQ settings
-            if (auto* eqEl = n->getChildByName("EqSettings")) {
-                EqSettings eq;
-                eq.active = eqEl->getIntAttribute("active", 0) != 0;
-                for (int b = 0; b < EqSettings::kNumBands; ++b) {
-                    auto* bandEl = eqEl->getChildByName(("Band" + juce::String(b)).toRawUTF8());
-                    if (bandEl != nullptr) {
-                        eq.bands[b].gainDb = static_cast<float>(bandEl->getDoubleAttribute("gainDb"));
-                        eq.bands[b].frequency = static_cast<float>(bandEl->getDoubleAttribute("frequency"));
+            // v5 起 Note.eq 契约：EqSettings 子元素 9 字段 schema 完整（active + 8 个
+            // float）即恢复，与 Project/Capture 载体同一语义，不做额外 finiteness
+            // 防御；v4 及以下一律不恢复（保持 nullopt），历史错误草稿（Band 子节点
+            // 等）直接丢弃，不兼容。
+            if (archiveVersion >= 5)
+            {
+                if (auto* eqEl = n->getChildByName("EqSettings"))
+                {
+                    if (eqEl->hasAttribute("active")
+                        && eqEl->hasAttribute("lowCutFrequencyHz")
+                        && eqEl->hasAttribute("lowShelfFrequencyHz")
+                        && eqEl->hasAttribute("lowShelfGainDb")
+                        && eqEl->hasAttribute("peakFrequencyHz")
+                        && eqEl->hasAttribute("peakGainDb")
+                        && eqEl->hasAttribute("highShelfFrequencyHz")
+                        && eqEl->hasAttribute("highShelfGainDb")
+                        && eqEl->hasAttribute("highCutFrequencyHz"))
+                    {
+                        EqSettings eq;
+                        eq.active = eqEl->getIntAttribute("active") != 0;
+                        eq.lowCutFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("lowCutFrequencyHz"));
+                        eq.lowShelfFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("lowShelfFrequencyHz"));
+                        eq.lowShelfGainDb = static_cast<float>(eqEl->getDoubleAttribute("lowShelfGainDb"));
+                        eq.peakFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("peakFrequencyHz"));
+                        eq.peakGainDb = static_cast<float>(eqEl->getDoubleAttribute("peakGainDb"));
+                        eq.highShelfFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("highShelfFrequencyHz"));
+                        eq.highShelfGainDb = static_cast<float>(eqEl->getDoubleAttribute("highShelfGainDb"));
+                        eq.highCutFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("highCutFrequencyHz"));
+
+                        note.eq = eq;
                     }
                 }
-                note.eq = eq;
             }
             
             content.editable.notes.push_back(note);
@@ -1165,7 +1188,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
 
         // Parse XML to new content state with ARA filter remapping, then validate.
         // Fail early without changing any target.
-        auto newContent = restoreAudioModificationContent(*xml, filter);
+        auto newContent = restoreAudioModificationContent(*xml, filter, version);
         if (!newContent.has_value())
             return false;
 
@@ -2098,6 +2121,8 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     // Enqueue render request: job carries content identity and sample range.
     // RenderWorker resolves start/end/targetRevision from PendingJob when executing.
     auto snap = snapshotAudioModification(key);
+    if (!snap)
+        return;  // ARA 缺 snapshot：不排无意义任务
 
     RenderJob job;
     job.contentKey = key;
@@ -2108,12 +2133,9 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
 
     // Silent gaps carry chunk-planning metadata into enqueueRender.
-    if (snap)
-    {
-        job.silentGaps = snap->silentGaps;
-    }
+    job.silentGaps = snap->silentGaps;
 
-    contentRenderService_->enqueueRender(std::move(job));
+    contentRenderService_->enqueueRender(std::move(job), snap->notes);
 }
 
 void OpenTuneDocumentController::requestFullModificationRender(ContentKey key)

@@ -6,6 +6,7 @@
 #include "../../Utils/PianoRollNotePatchAction.h"
 #include "../../Utils/VolumeEnvelopeEditAction.h"
 #include "../../Utils/TimeGridEditAction.h"   // 閳库槄?vocal-time-stretch ?.7
+#include "../../Utils/CursorTheme.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -179,6 +180,9 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.calculateEffectivePIP = [this](Note& note) -> float { return calculateEffectivePIP(note); };
     toolCtx.getShortcutSettings = [this]() -> const KeyShortcutConfig::KeyShortcutSettings& { return shortcutSettings_; };
     toolCtx.setCurrentTool = [this](ToolId tool) { setCurrentTool(tool); };
+    // EQ 工具：主音符 index 由 ToolHandler 唯一判定并直通；EQ cursor 经主题机制应用
+    toolCtx.openEqPreview = [this](int primaryIndex) { openEqPopupForSelection(primaryIndex); };
+    toolCtx.getEqCursor = [this]() { return getEqCursor(); };
     toolCtx.showToolSelectionMenu = [this]() {
         // 在当前鼠标屏幕位置弹出纵向图标工具栏
         auto mousePos = juce::Desktop::getInstance().getMousePosition();
@@ -786,7 +790,8 @@ bool PianoRollComponent::commitNoteDraft()
             && a.retuneSpeed == b.retuneSpeed
             && a.pitchDriftScale == b.pitchDriftScale
             && a.vibratoDepth == b.vibratoDepth
-            && a.vibratoRate == b.vibratoRate;
+            && a.vibratoRate == b.vibratoRate
+            && a.eq == b.eq;   // exact optional<EqSettings> 比较（9 字段无容差）
     };
 
     size_t i = 0, j = 0;
@@ -864,12 +869,132 @@ bool PianoRollComponent::commitNoteDraft()
     clearNoteDraft();
     lastKnownNotesRevision_ = committedSnap->notesRevision;
     requestContentRedraw();
+    // 提交成功后沿用 Listener::contentEdited 标记 Standalone dirty
+    listeners_.call([](Listener& listener) { listener.contentEdited(); });
     return true;
 }
 
 void PianoRollComponent::clearNoteDraft()
 {
     interactionState_.noteDraft.clear();
+}
+
+// ============================================================================
+// EQ 工具：预览弹窗（PianoRollComponent 唯一持有）与选中组原子提交
+// ============================================================================
+
+void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
+{
+    closeEqPopup();
+
+    const auto& notes = getCommittedNotes();
+    if (primaryIndex < 0 || primaryIndex >= static_cast<int>(notes.size()))
+        return;
+
+    const Note& primary = notes[primaryIndex];
+
+    eqPopup_ = std::make_unique<EqPopupComponent>();
+    addAndMakeVisible(*eqPopup_);
+    eqPopup_->setNoteColor(trackDisplayColour_);
+    // 主音符 eq 有值显示它，无值显示 EqSettings 默认；打开零 draft、零提交
+    eqPopup_->setEqSettings(primary.eq.value_or(EqSettings{}));
+    eqPopup_->setPreviewMode(true);
+    if (appPreferences_ != nullptr)
+        eqPopup_->setRemoveConfirmationSuppressed(appPreferences_->getState().shared.suppressEqRemoveConfirmation);
+    eqPopup_->onCommitSettings = [this](const EqSettings& settings) { applyEqSettingsToSelection(settings); };
+    eqPopup_->onRemoveEq = [this]() { removeEqFromSelection(); closeEqPopup(); };
+    eqPopup_->onClose = [this]() { closeEqPopup(); };
+    eqPopup_->onRemoveConfirmationSuppressed = [this](bool suppress) {
+        if (appPreferences_ != nullptr)
+            appPreferences_->setSuppressEqRemoveConfirmation(suppress);
+    };
+
+    // 锚点：选中组音符 bounds 并集，退到主音符 bounds；弹窗在组件范围内靠近锚点
+    std::vector<Note> selectedNotes;
+    for (int idx : interactionState_.noteSelection.selectedIndices)
+        if (idx >= 0 && idx < static_cast<int>(notes.size()))
+            selectedNotes.push_back(notes[idx]);
+    auto anchor = getNotesBounds(selectedNotes);
+    if (anchor.isEmpty())
+        anchor = getNoteBounds(primary);
+    eqPopup_->setBounds(placeEqPopupBounds(anchor));
+    eqPopup_->toFront(false);
+}
+
+void PianoRollComponent::closeEqPopup()
+{
+    if (eqPopup_ == nullptr)
+        return;
+    removeChildComponent(eqPopup_.get());
+    eqPopup_.reset();
+}
+
+juce::MouseCursor PianoRollComponent::getEqCursor() const
+{
+    // EQ 曲线图标 cursor，经现有主题 cursor 机制应用
+    return CursorThemeManager::getInstance().resolveCursor(
+        juce::MouseCursor(ToolbarIcons::createEqIconImage(), 12, 12));
+}
+
+juce::Rectangle<int> PianoRollComponent::placeEqPopupBounds(const juce::Rectangle<int>& anchor) const
+{
+    constexpr int kEqPreviewWidth = 180;   // 契约：3 × 工具图标宽
+    constexpr int kEqPreviewHeight = 80;   // 契约：2 × 工具图标高
+    constexpr int kMargin = 8;
+    const auto componentBounds = getLocalBounds();
+
+    // 优先锚点右侧，越界翻到左侧；水平/垂直均夹紧在组件范围内
+    int x = anchor.getRight() + kMargin;
+    if (x + kEqPreviewWidth > componentBounds.getRight())
+        x = anchor.getX() - kMargin - kEqPreviewWidth;
+    x = juce::jlimit(componentBounds.getX(),
+                     juce::jmax(componentBounds.getX(), componentBounds.getRight() - kEqPreviewWidth),
+                     x);
+
+    const int y = juce::jlimit(componentBounds.getY(),
+                               juce::jmax(componentBounds.getY(), componentBounds.getBottom() - kEqPreviewHeight),
+                               anchor.getY());
+
+    return { x, y, kEqPreviewWidth, kEqPreviewHeight };
+}
+
+void PianoRollComponent::applyEqSettingsToSelection(const EqSettings& settings)
+{
+    if (!editedContentKey_.isValid() || processor_ == nullptr)
+        return;
+    const auto& selected = interactionState_.noteSelection.selectedIndices;
+    if (selected.empty())
+        return;
+
+    // 严格复用 draft → 提交链：一次原子提交覆盖全部选中音符
+    beginNoteDraft();
+    auto& working = interactionState_.noteDraft.workingNotes;
+    for (int idx : selected) {
+        if (idx >= 0 && idx < static_cast<int>(working.size()))
+            working[idx].eq = settings;
+    }
+    interactionState_.noteDraft.contentDirty = true;
+    pendingUndoDescription_ = juce::String::fromUTF8(u8"编辑 EQ");
+    commitNoteDraft();
+}
+
+void PianoRollComponent::removeEqFromSelection()
+{
+    if (!editedContentKey_.isValid() || processor_ == nullptr)
+        return;
+    const auto& selected = interactionState_.noteSelection.selectedIndices;
+    if (selected.empty())
+        return;
+
+    beginNoteDraft();
+    auto& working = interactionState_.noteDraft.workingNotes;
+    for (int idx : selected) {
+        if (idx >= 0 && idx < static_cast<int>(working.size()))
+            working[idx].eq = std::nullopt;
+    }
+    interactionState_.noteDraft.contentDirty = true;
+    pendingUndoDescription_ = juce::String::fromUTF8(u8"移除 EQ");
+    commitNoteDraft();
 }
 
 ContentCommitSnapshot PianoRollComponent::commitEditedContentPitchCorrectionSegments(const std::vector<PitchCorrectionSegment>& segments,
@@ -2887,6 +3012,8 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
     }
 
     if (contentChanged) {
+        // 切换编辑目标：EQ 弹窗由选中组驱动，内容切换即失效
+        closeEqPopup();
         if (!contentKey.isValid())
             pendingInitialF0ViewContentKey_ = ContentKey{};
         editedContentKey_ = contentKey;
@@ -3402,6 +3529,9 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         || interactionState_.isVolumeDragging;
 
     if (toolChanged) {
+        // 离开 Eq 工具：关闭 EQ 预览弹窗（EQ 由选中组驱动，工具退出即失效）
+        if (previousTool == ToolId::Eq)
+            closeEqPopup();
         if (tool == ToolId::TimeTool) {
             if (pressedPianoKey_ >= 0) {
                 if (pianoKeyAudition_ != nullptr)
@@ -3453,7 +3583,8 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             setMouseCursor(juce::MouseCursor::NormalCursor);
             break;
         case ToolId::Eq:
-            setMouseCursor(juce::MouseCursor::CrosshairCursor);
+            // EQ cursor：EQ 曲线图标经 CursorThemeManager::resolveCursor 应用主题，不是 Crosshair
+            setMouseCursor(getEqCursor());
             break;
     }
 

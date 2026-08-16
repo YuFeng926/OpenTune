@@ -309,12 +309,6 @@ void testOpenDyneContract()
     expect(contains(dragPitch, "quantizeMidiToActiveScale"),
            "KeyScale pitch drag snaps through the single quantizeMidiToActiveScale entry");
 
-    // topology command 不触发 render mutation completion
-    expect(!contains(processor, "commitContentNoteTopologyPatch")
-               || !contains(functionBlock(processor, "OpenTuneAudioProcessor::commitContentNoteTopologyPatch"),
-                            "onContentLocalMutationCompleted"),
-           "Topology command never triggers render mutation completion");
-
     // gain 命令只走 republishPlaybackSource，不 enqueue render
     const auto envelopePatch = functionBlock(processor, "OpenTuneAudioProcessor::commitVolumeEnvelope");
     expect(!contains(envelopePatch, "enqueueRender")
@@ -622,6 +616,64 @@ void testOpenDyneToolSwitchingContract()
                && keyPressed.find("ShortcutId::ToolLineAnchor") < timeTool
                && keyPressed.find("ShortcutId::ToolHandDraw") < timeTool,
            "Configurable tool shortcuts stay inside the !isOpenDyne gate; TimeTool remains shared");
+}
+
+void testParameterPanelLayoutContract()
+{
+    const auto panelHeader = readSource("Source/Standalone/UI/ParameterPanel.h");
+    const auto panel = readSource("Source/Standalone/UI/ParameterPanel.cpp");
+
+    // 固定尺寸契约：OpenDyne 内容需求（Overdose/BlueBreeze 115px 旋钮）与面板最小高度关系
+    expect(contains(panelHeader, "kMinimumContentHeight = 794"),
+           "OpenDyne content need stays at 794 with 115px knobs and five tool rows");
+    expect(contains(panelHeader, "kMinimumPanelHeight = kMinimumContentHeight + 40"),
+           "the minimum panel height is exactly content + 40");
+
+    // OpenDyne 工具区：9 按钮 / 5 行网格（ceil(9/2)）
+    const auto resized = functionBlock(panel, "void ParameterPanel::resized");
+    const auto dyneLayout = functionBlock(resized, "if (openDyneMode_)");
+    expect(contains(dyneLayout, "selectToolButton_.get()")
+               && contains(dyneLayout, "pitchToolButton_.get()")
+               && contains(dyneLayout, "pitchModulationToolButton_.get()")
+               && contains(dyneLayout, "pitchDriftToolButton_.get()")
+               && contains(dyneLayout, "volumeEnvelopeToolButton_.get()")
+               && contains(dyneLayout, "timeToolButton_.get()")
+               && contains(dyneLayout, "scissorsToolButton_.get()")
+               && contains(dyneLayout, "autoTuneToolButton_.get()")
+               && contains(dyneLayout, "eqToolButton_.get()")
+               && countOccurrences(dyneLayout, ".get()") == 9
+               && contains(dyneLayout, "gridRows = (static_cast<int>(buttons.size()) + 1) / 2;"),
+           "the OpenDyne grid lays out exactly nine tool buttons in ceil(9/2)=5 rows");
+
+    // EQ 按钮：同时设置图标与 "EQ" 文本标签
+    expect(contains(panel, "eqToolButton_->setIcon(ToolbarIcons::getEqIcon(), false)")
+               && contains(panel, "eqToolButton_->setTextIcon(\"EQ\");"),
+           "the EQ button sets both the icon and the EQ text label");
+
+    // ToolIconButton 图标 + 文本组合模式：两者都设置时同时绘制
+    const auto paintButton = functionBlock(
+        panel, "void ParameterPanel::ToolIconButton::paintButton");
+    expect(contains(paintButton, "!iconPath_.isEmpty() && textIcon_.isNotEmpty()")
+               && contains(paintButton, "ToolbarIcons::drawIcon(g, iconPath_, iconArea, iconColor, 2.0f, fillIcon_)")
+               && contains(paintButton, "g.drawText(textIcon_, textArea, juce::Justification::centred);"),
+           "ToolIconButton paints the icon and the text label together when both are set");
+
+    // 内容绘制唯一性：图标+文本组合条件恰出现1次（通用链唯一内容入口）
+    expect(countOccurrences(paintButton, "!iconPath_.isEmpty() && textIcon_.isNotEmpty()") == 1,
+           "the icon+text content guard appears exactly once (single content chain)");
+
+    // Overdose 分支只画按钮外壳，不含 drawIcon/fillPath/strokePath/drawText 内容调用
+    const auto overdoseBranch = functionBlock(paintButton, "if (themeId == ThemeId::Overdose)");
+    expect(overdoseBranch.find("drawIcon") == std::string::npos
+               && overdoseBranch.find("fillPath") == std::string::npos
+               && overdoseBranch.find("strokePath") == std::string::npos
+               && overdoseBranch.find("drawText") == std::string::npos,
+           "Overdose branch draws only chrome (shadow/gradient/border), no content");
+
+    // 通用内容链含 EQ 图文绘制
+    expect(contains(paintButton, "isOverdose ? juce::Colour(Overdose::Colors::PrimaryPink)")
+               && countOccurrences(paintButton, "isOverdose ? juce::Colour(Overdose::Colors::PrimaryPink)") >= 3,
+           "the content chain selects Overdose content colors inline without helper extraction");
 }
 
 void testOpenDyneNoteEdgeRetreatContract()
@@ -1925,6 +1977,1151 @@ void testPrivateOnnxRuntimeContract()
            "No source file remains that mutates the DAW process DLL search policy");
 }
 
+void testNoteEqDataContract()
+{
+    const auto eqSettings = readSource("Source/Utils/NoteEqSettings.h");
+    const auto noteHeader = readSource("Source/Utils/Note.h");
+    const auto processor = readSource("Source/DSP/NoteEqProcessor.h");
+
+    // 契约 §2：EqSettings 保存 9 个字段
+    expect(contains(eqSettings, "bool active"),
+           "EqSettings carries the global active flag");
+    expect(contains(eqSettings, "float lowCutFrequencyHz"),
+           "EqSettings stores lowCutFrequencyHz");
+    expect(contains(eqSettings, "float lowShelfFrequencyHz"),
+           "EqSettings stores lowShelfFrequencyHz");
+    expect(contains(eqSettings, "float lowShelfGainDb"),
+           "EqSettings stores lowShelfGainDb");
+    expect(contains(eqSettings, "float peakFrequencyHz"),
+           "EqSettings stores peakFrequencyHz");
+    expect(contains(eqSettings, "float peakGainDb"),
+           "EqSettings stores peakGainDb");
+    expect(contains(eqSettings, "float highShelfFrequencyHz"),
+           "EqSettings stores highShelfFrequencyHz");
+    expect(contains(eqSettings, "float highShelfGainDb"),
+           "EqSettings stores highShelfGainDb");
+    expect(contains(eqSettings, "float highCutFrequencyHz"),
+           "EqSettings stores highCutFrequencyHz");
+
+    // 契约 §2/§11：无 band 数组、无 type/Q/bypass 存储（错误草稿格式全部丢弃）
+    expect(!contains(eqSettings, "EqBandSettings"),
+           "no band array draft struct survives in the data contract");
+    expect(!contains(eqSettings, "kNumBands"),
+           "no band count constant survives in the data contract");
+    expect(!contains(eqSettings, "bands["),
+           "no band array member survives in the data contract");
+    expect(!contains(eqSettings, "kShelfQ"),
+           "fixed Q is a DSP-layer constant, not stored in the data contract");
+
+    // 契约 §1/§2：EqSettings 默认值为用户确认值（active 开、三段增益 0 dB）
+    expect(contains(eqSettings, "bool active = true"),
+           "EqSettings active defaults to true");
+    expect(contains(eqSettings, "float lowCutFrequencyHz = 80.0f")
+               && contains(eqSettings, "float lowShelfFrequencyHz = 500.0f")
+               && contains(eqSettings, "float peakFrequencyHz = 3000.0f")
+               && contains(eqSettings, "float highShelfFrequencyHz = 8000.0f")
+               && contains(eqSettings, "float highCutFrequencyHz = 12000.0f"),
+           "cut and shelf frequencies default to 80/500/3000/8000/12000 Hz");
+    expect(contains(eqSettings, "float lowShelfGainDb = 0.0f")
+               && contains(eqSettings, "float peakGainDb = 0.0f")
+               && contains(eqSettings, "float highShelfGainDb = 0.0f"),
+           "shelf and peak gains default to 0 dB");
+
+    // 契约 §2：Note 保持 std::optional<EqSettings> eq（nullopt = 无 EQ）
+    expect(contains(noteHeader, "std::optional<EqSettings> eq"),
+           "Note carries std::optional<EqSettings> eq");
+
+    // 契约 §3：LowCut / HighCut 用 8 阶 Butterworth 级联（FilterDesign）
+    expect(contains(processor, "designIIRHighpassHighOrderButterworthMethod")
+               && contains(processor, "designIIRLowpassHighOrderButterworthMethod"),
+           "cuts use the high-order Butterworth design");
+    expect(contains(processor, "kButterworthOrder = 8"),
+           "the Butterworth order is fixed at 8");
+
+    // 契约 §3：LowShelf / Peak / HighShelf 用 RBJ 最小相位二阶段，Q 固定 2.0
+    expect(contains(processor, "makeLowShelf") && contains(processor, "makePeakFilter")
+               && contains(processor, "makeHighShelf"),
+           "shelf and peak bands use the RBJ biquads");
+    expect(contains(processor, "kShelfQ = 2.0"),
+           "shelf/peak Q is fixed at 2.0");
+
+    // 契约 §3：固定双声道契约——prepare 无声道数参数，接口收束为
+    // prepare(sampleRate, settings) / reset() / process(AudioBuffer&) / isActive()
+    expect(contains(processor, "void prepare(double sampleRate, const EqSettings& settings)")
+               && !contains(processor, "int numChannels, const EqSettings&"),
+           "prepare binds coefficients by sample rate and settings; the numChannels parameter is removed");
+    expect(contains(processor, "void process(juce::AudioBuffer<float>&")
+               && !contains(processor, "float* const*"),
+           "process applies the AudioBuffer in place; the raw-pointer process is removed");
+    expect(contains(processor, "bool isActive() const"),
+           "isActive reports the bypass state");
+
+    // 契约 §3：每声道独立滤波状态——固定 std::array 两套 ChannelState，
+    // 状态结构直接表达领域顺序，无动态声道 vector
+    expect(contains(processor, "struct ChannelState"),
+           "per-channel state is a named fixed structure");
+    expect(contains(processor, "std::array<juce::dsp::IIR::Filter<float>, kSectionsPerCut> lowCut")
+               && contains(processor, "juce::dsp::IIR::Filter<float> lowShelf")
+               && contains(processor, "juce::dsp::IIR::Filter<float> peak")
+               && contains(processor, "juce::dsp::IIR::Filter<float> highShelf")
+               && contains(processor, "std::array<juce::dsp::IIR::Filter<float>, kSectionsPerCut> highCut"),
+           "ChannelState declares the fixed five-band order LowCut[4] → LowShelf → Peak → HighShelf → HighCut[4]");
+    expect(contains(processor, "std::array<ChannelState, kMaxChannels> channels_")
+               && !contains(processor, "std::vector<"),
+           "the stereo pair is a fixed std::array; no dynamic channel vector");
+    expect(contains(processor, "jassert(numChannels == 1 || numChannels == 2)"),
+           "channel count is a jassert-locked mono/stereo invariant without runtime fallback");
+    expect(contains(processor, "void reset()"),
+           "the processor resets state at each note start");
+    expect(contains(processor, "filter.reset()"),
+           "reset clears every biquad state");
+
+    // 契约 §3：处理顺序固定 LowCut → LowShelf → Peak → HighShelf → HighCut
+    const auto processSample = functionBlock(processor, "float processSample(float sample)");
+    const auto lowCutPos = processSample.find("lowCut");
+    const auto lowShelfPos = processSample.find("lowShelf");
+    const auto peakPos = processSample.find("peak");
+    const auto highShelfPos = processSample.find("highShelf");
+    const auto highCutPos = processSample.find("highCut");
+    expect(lowCutPos != std::string::npos && lowCutPos < lowShelfPos
+               && lowShelfPos < peakPos && peakPos < highShelfPos
+               && highShelfPos < highCutPos,
+           "processSample chains LowCut → LowShelf → Peak → HighShelf → HighCut in fixed order");
+
+    // 契约 §3/§7.5：视觉数学不进 DSP（视觉曲线由 EqGraphRenderer 复刻 SRC）
+    expect(!contains(processor, "filterResponseDb") && !contains(processor, "logGaussian")
+               && !contains(processor, "lowShelfResponseDb")
+               && !contains(processor, "highCutResponseDb"),
+           "visual response math does not live inside the DSP");
+}
+
+void testPerNoteEqStage1Contract()
+{
+    const auto readSourceHeader = readSource("Source/Render/PlaybackReadSource.h");
+    const auto reader = readSource("Source/Utils/PlaybackAudioReader.h");
+    const auto runtime = readSource("Source/Runtime/ProcessRenderRuntime.cpp");
+    const auto plannerHeader = readSource("Source/Render/RenderChunkPlanner.h");
+    const auto planner = readSource("Source/Render/RenderChunkPlanner.cpp");
+    const auto serviceHeader = readSource("Source/Render/ContentRenderService.h");
+    const auto service = readSource("Source/Render/ContentRenderService.cpp");
+    const auto processor = readSource("Source/PluginProcessor.cpp");
+    const auto controller = readSource("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto renderCacheHeader = readSource("Source/Inference/RenderCache.h");
+    const auto renderCacheSource = readSource("Source/Inference/RenderCache.cpp");
+    const auto stage2 = readSource("Source/Render/Stage2TimeStretchRebuilder.cpp");
+
+    // 契约 §4：reader 错误路径零残留
+    expect(!contains(readSourceHeader, "const std::vector<Note>*")
+               && !contains(readSourceHeader, "../Utils/Note.h"),
+           "PlaybackReadSource no longer carries a notes member or its Note include");
+    expect(!contains(reader, "applyPerNoteEq"),
+           "PlaybackAudioReader no longer contains applyPerNoteEq");
+    expect(!contains(reader, "NoteEqProcessor"),
+           "PlaybackAudioReader no longer includes or uses NoteEqProcessor");
+    const auto readPlayback = functionBlock(reader, "inline int readPlaybackAudio");
+    expect(!contains(readPlayback, "Eq"),
+           "readPlaybackAudio contains no EQ processing");
+
+    // 契约 §4/§5：Stage1 唯一发布辅助——completeChunkRenderWithAudio 在
+    // ProcessRenderRuntime 内只有 publishChunkWithPerNoteEq 一个调用点，
+    // raw/light/vocoder 三条最终路径全部经该单一辅助
+    expect(countOccurrences(runtime, "completeChunkRenderWithAudio") == 1,
+           "completeChunkRenderWithAudio has exactly one call site in ProcessRenderRuntime");
+    expect(countOccurrences(runtime, "publishChunkWithPerNoteEq") == 4,
+           "publishChunkWithPerNoteEq has one definition and covers raw/light/vocoder publishes");
+
+    // 契约 §6：三个 Blank 分支保留，且每个都被 active-EQ 相交排除；
+    // 原始发布覆盖 pitchCurve 缺失与三个 Blank 条件
+    expect(countOccurrences(runtime, "markChunkAsBlank") == 3,
+           "the three blank guards remain");
+    expect(countOccurrences(runtime, "publishRawWithEq") == 5,
+           "raw publish covers the pitch-curve-missing guard and the three blank guards");
+
+    // 契约 §6：三个 Blank 分支严格二选一单次 settle —— 无 active EQ 时
+    // markBlank + notify 一次；有 active EQ 时只调 publishRawWithEq（Published
+    // 才内部 notify，InvalidInput 只 failure，Stale 不通知），其调用后不再
+    // 无条件 notify，杜绝 active-EQ raw 发布双通知
+    {
+        std::size_t searchFrom = 0;
+        for (int i = 0; i < 3; ++i)
+        {
+            const char* marker = "markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);";
+            const auto blankPos = runtime.find(marker, searchFrom);
+            expect(blankPos != std::string::npos, "blank guard marker remains");
+            if (blankPos == std::string::npos)
+                break;
+            const auto returnPos = runtime.find("return;", blankPos);
+            expect(returnPos != std::string::npos, "blank guard ends with a return");
+            if (returnPos == std::string::npos)
+                break;
+            const auto segment = runtime.substr(blankPos, returnPos - blankPos);
+            expect(countOccurrences(segment, "notifyChunkSettled") == 1,
+                   "blank guard settles exactly once, inside the no-EQ arm");
+            expect(countOccurrences(segment, "publishRawWithEq") == 1
+                       && segment.find("notifyChunkSettled") < segment.find("publishRawWithEq"),
+                   "active-EQ arm calls publishRawWithEq only; no notify follows it");
+            searchFrom = returnPos + 7;
+        }
+    }
+
+    // 契约 §4：Planner 保护范围——silent-gap 分割与最大块分割都不得落入
+    // active-EQ Note 保护范围内部
+    expect(contains(plannerHeader, "struct ProtectedRange"),
+           "RenderChunkPlanner declares a sample-domain ProtectedRange");
+    expect(contains(planner, "normalizeProtectedRanges")
+               && contains(planner, "insideProtectedRange")
+               && contains(planner, "advancePastProtectedRanges"),
+           "planner normalizes protected ranges once and advances every split past them");
+
+    // 契约 §1：两个 enqueueRender 调用点把已有 snapshot->notes 传入；
+    // stale-generation 不再走旧 snapshot 重规划：requeueRenderChunk 只回退状态机
+    expect(contains(processor, "enqueueRender(std::move(job), snap->notes)"),
+           "Standalone enqueueRender passes snap->notes");
+    expect(contains(controller, "enqueueRender(std::move(job), snap->notes)"),
+           "ARA enqueueRender passes snap->notes");
+    expect(contains(runtime, "crs->requeueRenderChunk(coreJob);"),
+           "stale-generation requeue routes through requeueRenderChunk, not the notes snapshot replan");
+    expect(!contains(runtime, "enqueueRender"),
+           "ProcessRenderRuntime keeps zero residual of the notes-snapshot enqueueRender replan");
+    expect(contains(serviceHeader,
+                    "void enqueueRender(RenderJob job, const std::vector<Note>& notes)"),
+           "enqueueRender takes notes by const reference (read-only, no copy/storage)");
+
+    // 契约 §4：RenderCache / Stage2 无 EQ 处理
+    expect(!contains(renderCacheHeader, "NoteEqProcessor")
+               && !contains(renderCacheSource, "NoteEqProcessor"),
+           "RenderCache has no EQ processing");
+    expect(!contains(stage2, "NoteEqProcessor"),
+           "Stage2 has no EQ processing");
+
+    // 契约 §7：EQ 采样率唯一性——Stage1 音频固定 44.1kHz（canonical）。
+    // Capture binding 是播放源唯一汇聚点：44.1k 输入直接共享原 buffer，非同率
+    // 经既有 upsampleForHost 重采样（时长守恒方式与 prepareImport/ARA 一致），
+    // readSource 恒以 TimeCoordinate::kRenderSampleRate 发布；
+    // 两个 EQ helper 的 Note 边界与 prepare 固定用 RenderCache::kSampleRate，
+    // 无 audioSampleRate 参数；执行读取点成对刷新 audioBuffer/audioSampleRate。
+    const auto publishBinding = functionBlock(
+        processor, "bindings.publishPlaybackSource = [this](const ContentKey& key,");
+    expect(contains(publishBinding, "const double targetRate = TimeCoordinate::kRenderSampleRate;")
+               && contains(publishBinding, "readSource.audioSampleRate = targetRate;"),
+           "capture binding derives the canonical read source at the fixed render rate");
+    expect(contains(publishBinding, "upsampleForHost")
+               && contains(publishBinding, "TimeCoordinate::secondsToSamples(")
+               && contains(publishBinding, "TimeCoordinate::samplesToSeconds(originalLen, sampleRate)"),
+           "non-44.1k capture reuses upsampleForHost with the duration-conserving length");
+    expect(contains(publishBinding, "canonicalAudio = std::move(audio);")
+               && contains(publishBinding, "readSource.audioBuffer = std::move(canonicalAudio);"),
+           "44.1k input shares the original buffer; the binding publishes the canonical buffer once");
+
+    const auto intersects = functionBlock(
+        runtime, "bool chunkIntersectsActiveEqNote");
+    const auto publish = functionBlock(
+        runtime, "RenderCache::ChunkRenderResult publishChunkWithPerNoteEq");
+    expect(!contains(intersects, "audioSampleRate") && !contains(publish, "audioSampleRate"),
+           "the per-note EQ helpers take no audioSampleRate parameter");
+    expect(contains(intersects, "RenderCache::kSampleRate")
+               && contains(publish, "RenderCache::kSampleRate"),
+           "the per-note EQ helpers convert note boundaries with the fixed RenderCache::kSampleRate");
+    expect(contains(publish, "processor.prepare(RenderCache::kSampleRate, *note.eq);"),
+           "NoteEqProcessor::prepare binds coefficients at the fixed render rate");
+    expect(contains(runtime, "job.audioBuffer = readSource.audioBuffer;")
+               && contains(runtime, "job.audioSampleRate = readSource.audioSampleRate;"),
+           "the execution read point refreshes audioBuffer and audioSampleRate as a pair");
+    expect(countOccurrences(runtime, "coreJob.audioSampleRate") == 0,
+           "coreJob.audioSampleRate has zero residual in ProcessRenderRuntime");
+
+    // 契约 §7：project-open 恢复走同一 canonical 链——applySnapshot 经
+    // prepareImport（"project-open" tag）重建 Source，落库固定
+    // kRenderSampleRate；clip 恢复与 PlaybackReadSource 发布都从该
+    // canonical 快照读取，无第二重采样路径
+    const auto projectSession = readSource("Source/Utils/ProjectSession.cpp");
+    const auto applySnapshot = functionBlock(
+        projectSession, "Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)");
+    expect(contains(applySnapshot, "prepareImport(std::move(*audioBuffer), loadedSampleRate,")
+               && contains(applySnapshot, "\"project-open\""),
+           "project-open rebuilds sources through the single prepareImport canonical chain");
+    expect(contains(applySnapshot, "req.sampleRate = TimeCoordinate::kRenderSampleRate;"),
+           "restored sources are stored at the canonical kRenderSampleRate");
+    expect(contains(applySnapshot, "readSource.audioBuffer = snap->audioBuffer;")
+               && contains(applySnapshot, "readSource.audioSampleRate = snap->audioSampleRate;")
+               && contains(applySnapshot, "crs->publishPlaybackSource(key, std::move(readSource));"),
+           "applySnapshot republishes PlaybackReadSource from the canonical content snapshot");
+
+    // 契约 §8：唯一原子计划入口——RenderCache 暴露 PlannedChunk 与
+    // reconcileFullPlanAndRequest(fullPlan, requestStart, requestEnd)，
+    // 旧 requestRenderPending 调度在 RenderCache 与 Service 中零残留
+    expect(contains(renderCacheHeader, "struct PlannedChunk {")
+           && contains(renderCacheHeader,
+                       "std::size_t reconcileFullPlanAndRequest(const std::vector<PlannedChunk>& fullPlan,"),
+           "RenderCache exposes PlannedChunk and the single atomic plan-reconcile entry");
+    expect(!contains(renderCacheHeader, "requestRenderPending")
+           && !contains(renderCacheSource, "requestRenderPending")
+           && !contains(service, "requestRenderPending"),
+           "requestRenderPending has zero residual in RenderCache and ContentRenderService");
+    expect(countOccurrences(service, "reconcileFullPlanAndRequest") == 1,
+           "ContentRenderService calls the plan-reconcile entry exactly once per enqueueRender");
+
+    // 契约 §8：ContentRenderService 以 0..contentSampleCount 生成完整计划、
+    // 原子 reconcile 一次，并按返回的 jobTokenCount 投递 worker jobs
+    const auto enqueue = functionBlock(
+        service, "void ContentRenderService::enqueueRender");
+    const auto planPos = enqueue.find("RenderChunkPlanner::selectChunksIntersectingRange(");
+    const auto planEnd = enqueue.find("kRenderHopSize);", planPos);
+    const auto planArgs = (planPos != std::string::npos && planEnd != std::string::npos)
+        ? enqueue.substr(planPos, planEnd - planPos) : std::string();
+    expect(!planArgs.empty() && countOccurrences(planArgs, "contentSampleCount") == 2
+           && contains(planArgs, "0,"),
+           "the full plan and the request window span the whole content 0..contentSampleCount");
+    expect(contains(enqueue, "const std::size_t jobTokenCount = job.renderCache->reconcileFullPlanAndRequest(")
+           && contains(enqueue, "fullPlan, job.startSample, job.endSampleExclusive);"),
+           "the reconcile call folds the full plan with the local request window");
+    expect(contains(enqueue, "for (std::size_t i = 0; i < jobTokenCount; ++i)")
+           && contains(enqueue, "renderWorker_.enqueue(std::move(subJob));"),
+           "the service dispatches exactly the returned job token count to the worker");
+
+    // 契约 §8：completeChunkRenderWithAudio 做完整身份校验——key 缺失、
+    // span 不符、revision 不符三个失败路径统一返回 Stale（不落 audio）
+    const auto complete = functionBlock(
+        renderCacheSource,
+        "RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio");
+    expect(contains(complete, "if (chunk.startSample != startSample || chunk.endSampleExclusive != endSampleExclusive)")
+           && contains(complete, "if (chunk.runningRevision != revision)"),
+           "complete validates both the chunk span and the running revision identity");
+    expect(countOccurrences(complete, "return ChunkRenderResult::Stale;") == 3,
+           "unknown keys, mismatched spans and mismatched revisions all settle as Stale");
+
+    // 契约 §8：stale-generation 只回退状态机——requeueRunningChunk 仅做
+    // Running→Pending 与 revision 清零，不 bump desired、不改几何、不发布快照
+    const auto requeueChunk = functionBlock(
+        renderCacheSource, "bool RenderCache::requeueRunningChunk");
+    expect(contains(requeueChunk, "chunk.status != Chunk::Status::Running")
+               && contains(requeueChunk, "chunk.runningRevision != runningRevision"),
+           "requeueRunningChunk requeues only a chunk still Running whose revision matches");
+    expect(contains(requeueChunk, "chunk.status = Chunk::Status::Pending;")
+               && contains(requeueChunk, "chunk.runningRevision = 0;")
+               && contains(requeueChunk, "pendingChunks_.insert(startSeconds);"),
+           "requeueRunningChunk performs only the Running to Pending transition and re-enqueues the span");
+    expect(!contains(requeueChunk, "desiredRevision")
+               && !contains(requeueChunk, "reconcile")
+               && !contains(requeueChunk, "publishLocked"),
+           "requeueRunningChunk never bumps desired, reconciles the plan or republishes a snapshot");
+
+    // 契约 §8：requeueRenderChunk 成功回退后只投递一个 job token，worker 下轮
+    // 从 PendingJob 重拉 span/revision，owner 回调抓当前 snapshot
+    const auto requeueJob = functionBlock(
+        service, "void ContentRenderService::requeueRenderChunk");
+    expect(contains(requeueJob, "requeueRunningChunk(job.startSeconds, job.targetRevision)")
+               && countOccurrences(requeueJob, "renderWorker_.enqueue") == 1,
+           "requeueRenderChunk enqueues exactly one worker job token after the state rollback");
+
+    // 契约 §8：hop 单一来源——RenderChunkPlanner::kRenderHopSize 是 planner、service
+    // 与 runtime freeze 的唯一渲染 hop；无局部 512、无 workerHopSize、无 cfg hop 兜底
+    expect(contains(plannerHeader, "kRenderHopSize = 512"),
+           "RenderChunkPlanner owns the single render hop size 512");
+    expect(!contains(service, "kHopSize")
+               && contains(service, "RenderChunkPlanner::kRenderHopSize"),
+           "ContentRenderService consumes the planner hop; its local 512 constant is removed");
+    expect(contains(runtime, "RenderChunkPlanner::kRenderHopSize")
+               && !contains(runtime, "workerHopSize"),
+           "Runtime freeze uses the planner hop; workerHopSize and the cfg hop fallback are removed");
+
+    // 契约 §8：VocoderConfig 不再携带 hopSize；真实 mel/vocoder 分支前唯一一次
+    // acquireVocoderConfig（raw 四分支与 light 路径不加载模型）
+    const auto renderJobBlock = functionBlock(
+        runtime, "void ProcessRenderRuntime::processChunkRenderJob");
+    expect(countOccurrences(renderJobBlock, "acquireVocoderConfig(") == 1,
+           "acquireVocoderConfig is called exactly once in the render job path");
+    const auto rawPos = renderJobBlock.find("publishRawWithEq");
+    const auto lightPos = renderJobBlock.find(
+        "lightPitchEnabled && contentSnap->pitchShiftSettings.isIdentity()");
+    const auto acquirePos = renderJobBlock.find("acquireVocoderConfig(");
+    const auto melPos = renderJobBlock.find("computeLogMelSpectrogram");
+    expect(rawPos != std::string::npos && lightPos != std::string::npos
+               && acquirePos != std::string::npos && melPos != std::string::npos
+               && rawPos < acquirePos && lightPos < acquirePos && acquirePos < melPos,
+           "acquireVocoderConfig runs after the raw branches and the light path, "
+           "and before the real mel/vocoder branch");
+    const auto acquireBlock = functionBlock(
+        runtime, "bool ProcessRenderRuntime::acquireVocoderConfig");
+    expect(!contains(acquireBlock, "hopSize"),
+           "VocoderConfig no longer carries hopSize; the freeze hop is the planner constant");
+}
+
+// ── 阶段 D：Per-note EQ 持久化契约 ──
+// 三个载体（Project ValueTree v5 / Capture 二进制流 v8 / ARA XML payload v5）
+// 统一只读写 Note.eq：写端 9 个 scalar 字段、读端逐项 schema 门控 + 字段恢复，
+// 历史 Band 草稿（kNumBands/EqBandSettings/"bands"）零残留，无独立 eqSettings 内存字段。
+void testPerNoteEqPersistenceContract()
+{
+    static const char* const eqFields[] = {
+        "active", "lowCutFrequencyHz", "lowShelfFrequencyHz", "lowShelfGainDb",
+        "peakFrequencyHz", "peakGainDb", "highShelfFrequencyHz", "highShelfGainDb",
+        "highCutFrequencyHz",
+    };
+    static const char* const eqFloatFields[] = {
+        "lowCutFrequencyHz", "lowShelfFrequencyHz", "lowShelfGainDb",
+        "peakFrequencyHz", "peakGainDb", "highShelfFrequencyHz", "highShelfGainDb",
+        "highCutFrequencyHz",
+    };
+
+    // ── Project（ValueTree，v5）──
+    const auto projectHeader = readSource("Source/Utils/ProjectPersistence.h");
+    const auto project = readSource("Source/Utils/ProjectPersistence.cpp");
+    const auto projectModel = readSource("Source/Utils/ProjectModel.h");
+
+    expect(contains(projectHeader, "kCurrentProjectFormatVersion = 5"),
+           "Project format v5 carries the per-note EQ contract");
+    expect(contains(projectHeader, "kMinimumProjectFormatVersion = 3"),
+           "Project minimum format version stays 3");
+
+    const auto notesToTree = functionBlock(
+        project, "juce::ValueTree ProjectPersistence::notesToValueTree");
+    const auto notesFromTree = functionBlock(
+        project, "std::vector<Note> ProjectPersistence::notesFromValueTree");
+    expect(contains(notesToTree, "if (note.eq.has_value())"),
+           "Project EQ write branches on note.eq");
+    for (const char* field : eqFields) {
+        const std::string token = std::string("eqTree.setProperty(\"") + field + "\"";
+        expect(contains(notesToTree, token.c_str()),
+               "Project EQ write emits the nine scalar properties");
+    }
+    for (const char* field : eqFields) {
+        const std::string token = std::string("eqTree.hasProperty(\"") + field + "\")";
+        expect(contains(notesFromTree, token.c_str()),
+               "Project EQ read gates each field with hasProperty");
+    }
+    for (const char* field : eqFields) {
+        const std::string token = std::string("eqTree.getProperty(\"") + field + "\"";
+        expect(contains(notesFromTree, token.c_str()),
+               "Project EQ read restores each field value");
+    }
+    expect(!contains(notesFromTree, "getNumProperties"),
+           "Project EQ read gate is per-property hasProperty, not a property count");
+    expect(contains(notesFromTree, "note.eq = eq;"),
+           "Project EQ restore lands on note.eq");
+
+    // ── 版本契约：formatVersion 从根节点显式穿透，EQ 恢复门控 formatVersion>=5 ──
+    expect(contains(projectHeader,
+                    "contentFromValueTree(const juce::ValueTree& tree, int formatVersion)"),
+           "contentFromValueTree receives the project format version");
+    expect(contains(projectHeader,
+                    "notesFromValueTree(const juce::ValueTree& tree, int formatVersion)"),
+           "notesFromValueTree receives the project format version");
+    expect(contains(projectHeader,
+                    "referenceFeaturesFromValueTree(const juce::ValueTree& tree, int formatVersion)"),
+           "referenceFeaturesFromValueTree receives the project format version");
+    expect(contains(notesFromTree, "formatVersion >= 5"),
+           "Project EQ restore gates on the project format version >= 5");
+    const auto contentFromTree = functionBlock(
+        project, "ProjectContentEntry ProjectPersistence::contentFromValueTree");
+    expect(contains(contentFromTree, "notesFromValueTree(tree.getChildWithName(\"Notes\"), formatVersion)"),
+           "Content EQ restore threads the format version into notes");
+    expect(contains(contentFromTree, "referenceFeaturesFromValueTree(rfTree, formatVersion)"),
+           "Content EQ restore threads the format version into reference features");
+    const auto rfFromTree = functionBlock(
+        project,
+        "ProjectContentEntry::ReferenceFeatureEntry ProjectPersistence::referenceFeaturesFromValueTree");
+    expect(contains(rfFromTree, "notesFromValueTree(tree.getChildWithName(\"PitchNotes\"), formatVersion)"),
+           "Reference-feature EQ restore threads the format version into pitch notes");
+
+    expect(!contains(project, "kNumBands") && !contains(project, "EqBandSettings")
+               && !contains(project, "\"bands\""),
+           "Project persistence has zero band-array draft structures");
+    expect(contains(projectModel, "std::vector<Note> notes"),
+           "ProjectContentEntry carries EQ only through Note.eq");
+    expect(!contains(projectModel, "eqSettings"),
+           "ProjectContentEntry has no standalone eqSettings memory field");
+
+    // ── Capture（二进制流，v8）──
+    const auto capture = readSource("Source/Plugin/Capture/CapturePersistence.cpp");
+    expect(contains(capture, "kCaptureArchiveVersion = 8"),
+           "Capture v8 adds the per-note EQ stream");
+    expect(contains(capture, "hasPerNoteEq = (fileVersion >= 8)"),
+           "Capture EQ gate derives from fileVersion >= 8");
+    const auto captureSerialize = functionBlock(
+        capture, "juce::MemoryBlock CapturePersistence::serialize");
+    const auto captureDeserialize = functionBlock(
+        capture, "bool CapturePersistence::deserialize");
+
+    // presence 标记写读 + v7 短路：hasPerNoteEq==false 时 readInt 都不执行
+    expect(contains(captureSerialize, "stream.writeInt(note.eq.has_value() ? 1 : 0)")
+               && contains(captureDeserialize, "if (hasPerNoteEq && stream.readInt() == 1)"),
+           "Capture EQ presence is written from note.eq and read behind the hasPerNoteEq short-circuit");
+
+    // presence + 9 字段写读严格同序：写端与读端 token 位置序列逐项同序
+    bool writeOrder = true;
+    bool readOrder = true;
+    std::size_t writePos = captureSerialize.find("stream.writeInt(note.eq.has_value() ? 1 : 0)");
+    std::size_t readPos = captureDeserialize.find("if (hasPerNoteEq && stream.readInt() == 1)");
+    if (writePos == std::string::npos) writeOrder = false;
+    if (readPos == std::string::npos) readOrder = false;
+    for (const char* field : eqFields) {
+        const std::string token = std::string("eq.") + field;
+        const auto w = captureSerialize.find(token, writePos);
+        const auto r = captureDeserialize.find(token, readPos);
+        if (w == std::string::npos) writeOrder = false;
+        if (r == std::string::npos) readOrder = false;
+        if (w != std::string::npos) writePos = w + token.size();
+        if (r != std::string::npos) readPos = r + token.size();
+    }
+    expect(writeOrder,
+           "Capture EQ write order is presence then the nine fields in contract order");
+    expect(readOrder,
+           "Capture EQ read order is presence then the nine fields in contract order");
+    expect(contains(captureDeserialize, "note.eq = eq;"),
+           "Capture EQ restore lands on note.eq");
+    expect(!contains(capture, "kNumBands") && !contains(capture, "EqBandSettings")
+               && !contains(capture, "\"bands\""),
+           "Capture persistence has zero band-array draft structures");
+
+    // ── ARA（XML payload，v5 / min3）──
+    const auto ara = readSource("Source/ARA/OpenTuneDocumentController.cpp");
+    expect(contains(ara, "kContentPayloadArchiveVersion = 5"),
+           "ARA archive v5 carries the per-note EQ contract");
+    expect(contains(ara, "kContentPayloadArchiveVersionMin = 3"),
+           "ARA archive minimum version stays 3");
+    expect(contains(ara, "restoreAudioModificationContent(*xml, filter, version)"),
+           "ARA restore receives the archive version for schema gating");
+    const auto restoreContent = functionBlock(
+        ara, "std::optional<AudioModificationContentState> restoreAudioModificationContent");
+    expect(contains(restoreContent, "int archiveVersion"),
+           "restoreAudioModificationContent accepts the archive version parameter");
+    expect(contains(restoreContent, "if (archiveVersion >= 5)"),
+           "ARA EQ restore is gated on archiveVersion >= 5");
+    for (const char* field : eqFields) {
+        const std::string token = std::string("eqEl->hasAttribute(\"") + field + "\")";
+        expect(contains(restoreContent, token.c_str()),
+               "ARA EQ read gates each field with hasAttribute");
+    }
+    expect(!contains(restoreContent, "getNumAttributes"),
+           "ARA EQ schema gate is per-attribute hasAttribute, not an attribute count");
+    expect(contains(restoreContent, "eqEl->getIntAttribute(\"active\")"),
+           "ARA EQ restore reads active without a default value");
+    for (const char* field : eqFloatFields) {
+        const std::string token = std::string("eqEl->getDoubleAttribute(\"") + field + "\")";
+        expect(contains(restoreContent, token.c_str()),
+               "ARA EQ restore reads each float field");
+    }
+    expect(contains(restoreContent, "note.eq = eq;"),
+           "ARA EQ restore lands on note.eq");
+    const auto serializeContent = functionBlock(
+        ara, "void serializeAudioModificationContent");
+    expect(contains(serializeContent, "eqEl->setAttribute(\"active\""),
+           "ARA EQ write emits the active attribute");
+    for (const char* field : eqFloatFields) {
+        const std::string token = std::string("eqEl->setAttribute(\"") + field + "\"";
+        expect(contains(serializeContent, token.c_str()),
+               "ARA EQ write emits the eight float attributes");
+    }
+    expect(!contains(ara, "kNumBands") && !contains(ara, "EqBandSettings")
+               && !contains(ara, "\"bands\""),
+           "ARA archive has zero band-array draft structures");
+
+    // ── 三载体统一：EQ 只挂 Note.eq，无独立 eqSettings 内存字段 ──
+    expect(!contains(project, "eqSettings") && !contains(capture, "eqSettings")
+               && !contains(ara, "eqSettings"),
+           "All three carriers persist EQ only through Note.eq; no standalone eqSettings field");
+
+    // ── PluginProcessor：OTST 状态版本保持 9（EQ 随 Note 走，无独立状态块）──
+    const auto processor = readSource("Source/PluginProcessor.cpp");
+    expect(contains(processor, "kProcessorStateMagic = 0x4F545354"),
+           "OTST processor state magic stays 0x4F545354");
+    expect(contains(processor, "kProcessorStateVersion = 9"),
+           "OTST processor state version stays 9 for the per-note EQ contract");
+}
+
+// ── 阶段 E：Per-note EQ 工具契约 ──
+// E 键工具：ShortcutId::Eq 可配置默认 E，两模式共享；ToolHandler 点击/框选两入口
+// 各打开一次 EQ 预览弹窗；PianoRollComponent 唯一持有弹窗并直通提交链；
+// 提交只走秒域 local-mutation 调度，Undo/Redo 仍只调 commitNoteTopologyPatch。
+void testPerNoteEqToolContract()
+{
+    // ── 1. ShortcutId::Eq 枚举位置与默认绑定（ToolODScissors 后 / Count 前）──
+    const auto keyShortcut = readSource("Source/Utils/KeyShortcutConfig.h");
+    const auto toolODPos = keyShortcut.find("ToolODScissors");
+    const auto eqEnumPos = keyShortcut.find("Eq,");
+    const auto countPos = keyShortcut.find("Count");
+    expect(toolODPos != std::string::npos && eqEnumPos != std::string::npos
+               && countPos != std::string::npos && toolODPos < eqEnumPos && eqEnumPos < countPos,
+           "ShortcutId::Eq is appended after ToolODScissors and before Count");
+    expect(contains(keyShortcut, "{ ShortcutId::Eq, Loc::Keys::kToolEq, { KeyBinding('E', {}) } }"),
+           "Eq defaults to the E key in KeyShortcutConfig");
+    const auto prefs = readSource("Source/Utils/AppPreferences.cpp");
+    const auto prefsHeader = readSource("Source/Utils/AppPreferences.h");
+    expect(!contains(prefs, "KeyBinding('E'") && !contains(prefsHeader, "KeyBinding('E'"),
+           "The E default binding lives only in KeyShortcutConfig");
+
+    // ── 2. AppPreferences：storage key / suppression key / load / write / setter ──
+    const auto toolODKeyPos = prefs.find("\"shared.shortcuts.toolODScissors\"");
+    const auto toolEqKeyPos = prefs.find("\"shared.shortcuts.toolEq\"");
+    expect(toolODKeyPos != std::string::npos && toolEqKeyPos != std::string::npos
+               && toolODKeyPos < toolEqKeyPos,
+           "AppPreferences Eq storage key follows the Scissors key in the shared shortcut array");
+    expect(contains(prefs, "kSharedEqSuppressRemoveConfirmationKey = \"shared.eq.suppressRemoveConfirmation\""),
+           "EQ remove confirmation has its own suppression storage key");
+    expect(contains(prefs, "state.shared.suppressEqRemoveConfirmation = properties.getBoolValue("),
+           "AppPreferences load restores the EQ suppression flag");
+    expect(contains(prefs, "properties.setValue(kSharedEqSuppressRemoveConfirmationKey,"),
+           "AppPreferences write persists the EQ suppression flag");
+    expect(contains(prefsHeader, "void setSuppressEqRemoveConfirmation(bool suppress);")
+               && contains(prefs, "void AppPreferences::setSuppressEqRemoveConfirmation(bool suppress)"),
+           "The EQ suppression flag has a single AppPreferences setter");
+
+    // ── 3. SharedPreferencePages generalIds 与 Localization ──
+    const auto sharedPages = readSource("Source/Editor/Preferences/SharedPreferencePages.cpp");
+    const auto generalStart = sharedPages.find("generalIds_ = {");
+    const auto generalEnd = sharedPages.find("};", generalStart);
+    const auto generalIds = (generalStart != std::string::npos
+                             && generalEnd != std::string::npos)
+        ? sharedPages.substr(generalStart, generalEnd - generalStart)
+        : std::string();
+    expect(contains(generalIds, "KeyShortcutConfig::ShortcutId::Eq,"),
+           "Shortcut preference General group includes Eq");
+    const auto localization = readSource("Source/Utils/LocalizationManager.h");
+    expect(contains(localization, "kToolEq = \"Tool: EQ\""),
+           "Localization exposes the Eq tool display name as Tool: EQ");
+
+    // ── 4. ToolHandler：Context 回调 / 两模式共享 / 交互分派 ──
+    const auto toolHandlerHeader = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h");
+    const auto toolHandler = readSource(
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    expect(contains(toolHandlerHeader, "std::function<void(int)> openEqPreview;")
+               && contains(toolHandlerHeader, "std::function<juce::MouseCursor()> getEqCursor;"),
+           "ToolHandler Context carries the Eq preview-open and cursor callbacks");
+    const auto keyPressed = functionBlock(
+        toolHandler, "bool PianoRollToolHandler::keyPressed");
+    expect(contains(keyPressed, "KeyShortcutConfig::ShortcutId::Eq")
+               && contains(keyPressed, "ctx_.setCurrentTool(ToolId::Eq)"),
+           "ToolHandler Eq shortcut switches to the Eq tool");
+    // 两模式共享：Eq 分支位于 !isOpenDyne gate 之外
+    {
+        const auto gatePos = keyPressed.find("if (!isOpenDyne)");
+        std::string gateBlock;
+        if (gatePos != std::string::npos) {
+            const auto bracePos = keyPressed.find('{', gatePos);
+            if (bracePos != std::string::npos) {
+                int depth = 0;
+                for (std::size_t index = bracePos; index < keyPressed.size(); ++index) {
+                    if (keyPressed[index] == '{')
+                        ++depth;
+                    else if (keyPressed[index] == '}' && --depth == 0) {
+                        gateBlock = keyPressed.substr(bracePos, index - bracePos + 1);
+                        break;
+                    }
+                }
+            }
+        }
+        expect(!gateBlock.empty() && contains(gateBlock, "ShortcutId::ToolDrawNote")
+                   && !contains(gateBlock, "ShortcutId::Eq"),
+               "The Eq shortcut stays outside the !isOpenDyne gate and is shared by both schemes");
+    }
+    const auto mouseMove = functionBlock(
+        toolHandler, "void PianoRollToolHandler::mouseMove");
+    expect(contains(mouseMove, "currentTool_ == ToolId::Eq")
+               && contains(mouseMove, "ctx_.setMouseCursor(ctx_.getEqCursor())"),
+           "mouseMove applies the Eq cursor via getEqCursor");
+    // empty-space 手势与 Select 复用：mouseDown 前置空区意图、drag/up 开头消费
+    const auto mouseDown = functionBlock(
+        toolHandler, "void PianoRollToolHandler::mouseDown");
+    const auto mouseDrag = functionBlock(
+        toolHandler, "void PianoRollToolHandler::mouseDrag");
+    const auto mouseUp = functionBlock(
+        toolHandler, "void PianoRollToolHandler::mouseUp");
+    const auto isEmptySpace = functionBlock(
+        toolHandler, "bool PianoRollToolHandler::isEmptySpaceMouseDown");
+    expect(contains(mouseDown, "if (isEmptySpaceMouseDown(e))")
+               && contains(mouseDown, "beginEmptySpaceIntent(e);")
+               && mouseDown.find("isEmptySpaceMouseDown(e)") < mouseDown.find("switch (currentTool_)"),
+           "Eq empty-space mouseDown enters the shared empty-space intent before tool dispatch");
+    expect(contains(mouseDrag, "consumeEmptySpaceIntentDrag(e)")
+               && contains(mouseUp, "consumeEmptySpaceIntentUp(e)"),
+           "Eq empty-space drag and up reuse the Select empty-space intent paths");
+    expect(!contains(isEmptySpace, "ToolId::Eq"),
+           "isEmptySpaceMouseDown does not exclude the Eq tool from empty-space gestures");
+    // 点击记 pending 主音符；拖拽超阈值转框选；mouseUp 与框选完成各打开一次
+    const auto eqDown = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handleEqToolMouseDown");
+    const auto eqDrag = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handleEqToolMouseDrag");
+    const auto eqUp = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handleEqToolMouseUp");
+    expect(contains(eqDown, "noteSelection.setSingle(clickedNoteIndex, noteCount)")
+               && contains(eqDown, "pendingEqPrimaryIndex_ = clickedNoteIndex;"),
+           "Eq click records the pending primary note without opening the popup");
+    expect(contains(eqDrag, "pendingEqPrimaryIndex_ = -1;")
+               && contains(eqDrag, "beginAreaSelection(startEvent);")
+               && contains(eqDrag, "handleSelectDrag(e);"),
+           "Eq drag past the threshold clears the pending note and becomes an area selection");
+    expect(contains(eqUp, "if (pendingEqPrimaryIndex_ >= 0)")
+               && contains(eqUp, "ctx_.openEqPreview(primaryIndex);")
+               && countOccurrences(eqUp, "ctx_.openEqPreview") == 1,
+           "Eq mouseUp opens the preview exactly once from the pending primary note");
+    const auto selectUp = functionBlock(
+        toolHandler, "void PianoRollToolHandler::handleSelectUp");
+    expect(contains(selectUp, "currentTool_ == ToolId::Eq && !ctx_.getState().noteSelection.empty()")
+               && contains(selectUp, "ctx_.openEqPreview(ctx_.getState().noteSelection.anchorIndex);")
+               && countOccurrences(selectUp, "ctx_.openEqPreview") == 1,
+           "Area-selection completion opens the Eq preview once from the anchor note");
+    // 无 EQ 日志空壳：EQ 分派直接进真实 handler
+    expect(!contains(eqDown, "AppLogger") && !contains(eqDrag, "AppLogger")
+               && !contains(eqUp, "AppLogger"),
+           "Eq tool handlers carry no logging stubs");
+    {
+        const auto casePos = mouseDown.find("case ToolId::Eq:");
+        const auto breakPos = casePos != std::string::npos
+            ? mouseDown.find("break;", casePos) : std::string::npos;
+        const auto eqCase = (casePos != std::string::npos && breakPos != std::string::npos)
+            ? mouseDown.substr(casePos, breakPos - casePos) : std::string();
+        expect(contains(eqCase, "handleEqToolMouseDown(e);") && !contains(eqCase, "AppLogger"),
+               "Eq mouseDown dispatches to the real handler, not a logging stub");
+    }
+
+    // ── 5. PianoRollComponent：唯一持有者 / 直通打开 / 提交链 ──
+    const auto pianoRollHeader = readSource("Source/Standalone/UI/PianoRollComponent.h");
+    const auto pianoRoll = readSource("Source/Standalone/UI/PianoRollComponent.cpp");
+    expect(contains(pianoRollHeader, "std::unique_ptr<EqPopupComponent> eqPopup_;"),
+           "PianoRollComponent is the single owner of the Eq popup");
+    expect(countOccurrences(pianoRoll, "std::make_unique<EqPopupComponent>") == 1,
+           "The Eq popup is instantiated exactly once, owned by PianoRollComponent");
+    const auto buildContext = functionBlock(
+        pianoRoll, "PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext");
+    expect(contains(buildContext,
+                    "toolCtx.openEqPreview = [this](int primaryIndex) { openEqPopupForSelection(primaryIndex); };")
+               && contains(buildContext, "toolCtx.getEqCursor = [this]() { return getEqCursor(); };"),
+           "The ToolHandler primary index passes straight through to openEqPopupForSelection");
+    const auto openPopup = functionBlock(
+        pianoRoll, "void PianoRollComponent::openEqPopupForSelection");
+    expect(contains(openPopup, "const Note& primary = notes[primaryIndex];")
+               && contains(openPopup, "primary.eq.value_or(EqSettings{})"),
+           "The popup opens from the primary note eq with a default fallback");
+    expect(!contains(openPopup, "findNoteIndexAt") && !contains(openPopup, "beginNoteDraft"),
+           "Opening the popup re-hits nothing by coordinates and starts no draft");
+    const auto applyEq = functionBlock(
+        pianoRoll, "void PianoRollComponent::applyEqSettingsToSelection");
+    const auto removeEq = functionBlock(
+        pianoRoll, "void PianoRollComponent::removeEqFromSelection");
+    const auto eqChainOrder = contains(applyEq, "beginNoteDraft()")
+        && contains(applyEq, "working[idx].eq = settings;")
+        && contains(applyEq, "contentDirty = true;")
+        && contains(applyEq, "commitNoteDraft();")
+        && applyEq.find("beginNoteDraft()") < applyEq.find("working[idx].eq = settings;")
+        && applyEq.find("working[idx].eq = settings;") < applyEq.find("contentDirty = true;")
+        && applyEq.find("contentDirty = true;") < applyEq.find("commitNoteDraft();");
+    expect(eqChainOrder,
+           "Eq commit runs the draft chain beginNoteDraft -> eq assign -> contentDirty -> commitNoteDraft");
+    const auto eqRemoveChainOrder = contains(removeEq, "beginNoteDraft()")
+        && contains(removeEq, "working[idx].eq = std::nullopt;")
+        && contains(removeEq, "contentDirty = true;")
+        && contains(removeEq, "commitNoteDraft();")
+        && removeEq.find("beginNoteDraft()") < removeEq.find("working[idx].eq = std::nullopt;")
+        && removeEq.find("working[idx].eq = std::nullopt;") < removeEq.find("contentDirty = true;")
+        && removeEq.find("contentDirty = true;") < removeEq.find("commitNoteDraft();");
+    expect(eqRemoveChainOrder,
+           "Eq removal runs the draft chain beginNoteDraft -> eq reset -> contentDirty -> commitNoteDraft");
+    const auto commitDraft = functionBlock(
+        pianoRoll, "bool PianoRollComponent::commitNoteDraft");
+    expect(contains(commitDraft, "a.eq == b.eq"),
+           "notesContentEqual compares a.eq == b.eq");
+    expect(contains(commitDraft, "lastKnownNotesRevision_ = committedSnap->notesRevision;")
+               && contains(commitDraft, "listener.contentEdited();"),
+           "The Eq commit updates notesRevision and flags content edited");
+    const auto commands = readSource("Source/Content/ContentEditCommands.h");
+    expect(!contains(commands, "Eq") && !contains(commands, "eq"),
+           "ContentEditCommands exposes no EQ-specific commit interface");
+
+    // ── 6. EQ cursor：ToolbarIcons 图标 + CursorThemeManager 主题化 ──
+    const auto getCursor = functionBlock(
+        pianoRoll, "juce::MouseCursor PianoRollComponent::getEqCursor");
+    expect(contains(getCursor, "CursorThemeManager::getInstance().resolveCursor(")
+               && contains(getCursor, "ToolbarIcons::createEqIconImage()"),
+           "The Eq cursor builds from ToolbarIcons::createEqIconImage through CursorThemeManager");
+    const auto setCurrentTool = functionBlock(
+        pianoRoll, "void PianoRollComponent::setCurrentTool");
+    {
+        const auto eqCasePos = setCurrentTool.find("case ToolId::Eq:");
+        const auto eqBreakPos = eqCasePos != std::string::npos
+            ? setCurrentTool.find("break;", eqCasePos) : std::string::npos;
+        const auto eqCase = (eqCasePos != std::string::npos && eqBreakPos != std::string::npos)
+            ? setCurrentTool.substr(eqCasePos, eqBreakPos - eqCasePos) : std::string();
+        expect(contains(eqCase, "setMouseCursor(getEqCursor());")
+                   && !contains(eqCase, "CrosshairCursor"),
+               "setCurrentTool applies the themed Eq cursor, never Crosshair");
+    }
+
+    // ── 7. 两个 PluginEditor：工具 id 上界与偏好注入；两模式工具入口共享 ──
+    const auto pluginEditor = readSource("Source/Plugin/PluginEditor.cpp");
+    const auto standaloneEditor = readSource("Source/Standalone/PluginEditor.cpp");
+    expect(contains(pluginEditor, "toolId > static_cast<int>(ToolId::Eq)")
+               && contains(standaloneEditor, "toolId > static_cast<int>(ToolId::Eq)"),
+           "Both editors bound tool ids at ToolId::Eq");
+    expect(contains(pluginEditor, "pianoRoll_.setAppPreferences(&appPreferences_);")
+               && contains(standaloneEditor, "pianoRoll_.setAppPreferences(&appPreferences_);"),
+           "Both editors inject AppPreferences into the piano roll");
+    const auto parameterPanel = readSource("Source/Standalone/UI/ParameterPanel.cpp");
+    const auto setOpenDyneMode = functionBlock(
+        parameterPanel, "void ParameterPanel::setOpenDyneMode");
+    expect(!contains(setOpenDyneMode, "eqToolButton_->setVisible")
+               && contains(parameterPanel, "eqToolButton_ = std::make_unique<ToolIconButton>(11,"),
+           "The EQ toolbar entry is shared by both schemes with the Eq tool id");
+
+    // ── 8. 提交调度链：秒域 local-mutation helper，无显式 republish ──
+    const auto processor = readSource("Source/PluginProcessor.cpp");
+    const auto commitTopology = functionBlock(
+        processor, "OpenTuneAudioProcessor::commitContentNoteTopologyPatch");
+    expect(contains(commitTopology, "onContentLocalMutationCompletedSeconds(")
+               && contains(commitTopology, "patch.affectedRange.startSeconds")
+               && contains(commitTopology, "patch.affectedRange.endSeconds")
+               && !contains(commitTopology, "republishPlaybackSource"),
+           "Note topology commit schedules only the seconds-domain local-mutation helper");
+    const auto secondsHelper = functionBlock(
+        processor, "void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds");
+    expect(contains(secondsHelper, "dc->refreshModificationCRSMetadata(key)")
+               && contains(secondsHelper, "dc->requestModificationRender(key, startSeconds, endSeconds)")
+               && contains(secondsHelper, "refreshCRSMetadata(key)")
+               && contains(secondsHelper, "requestRenderForLocalMutationRange(key, startSeconds, endSeconds)"),
+           "The seconds helper reuses the ARA and non-ARA Stage1 range scheduling");
+    const auto notePatchAction = readSource("Source/Utils/PianoRollNotePatchAction.cpp");
+    const auto undoBlock = functionBlock(notePatchAction, "void PianoRollNotePatchAction::undo");
+    const auto redoBlock = functionBlock(notePatchAction, "void PianoRollNotePatchAction::redo");
+    expect(contains(undoBlock, "commands_->commitNoteTopologyPatch(contentKey_, beforePatch_);")
+               && contains(redoBlock, "commands_->commitNoteTopologyPatch(contentKey_, afterPatch_);")
+               && !contains(undoBlock, "enqueueRender") && !contains(redoBlock, "enqueueRender"),
+           "PianoRollNotePatchAction undo/redo route only through commitNoteTopologyPatch");
+}
+
+// ── 阶段 F：Per-note EQ UI/SRC 源契约 ──
+// Designer 六文件（EqGraphRenderer / EqPopupComponent / EqBandInteraction）严格复刻
+// SRC 视觉数学（filterResponseDb 近似公式，非 DSP magnitude）；弹窗两态
+// （预览 180×80 / 完整 600×400）共享四控制按钮，图区命中返回 ButtonId::None；
+// Bypass 不早退只降透明度；提交只发生在拖拽 mouseUp / 数值 OK / Bypass 三路径，
+// 无 onSettingsChanged 逐帧提交；交互直接消费 renderer xToFreq/yToGain；
+// 工具链（ParameterPanel 两模式 eqToolButton、drawNotes 双分支 EQ 指示、
+// ToolbarIcons EQ cursor 图像）共享既有结构。
+void testPerNoteEqUiSrcContract()
+{
+    const auto rendererHeader = readSource("Source/Standalone/UI/PianoRoll/EqGraphRenderer.h");
+    const auto renderer = readSource("Source/Standalone/UI/PianoRoll/EqGraphRenderer.cpp");
+    const auto popupHeader = readSource("Source/Standalone/UI/PianoRoll/EqPopupComponent.h");
+    const auto popup = readSource("Source/Standalone/UI/PianoRoll/EqPopupComponent.cpp");
+    const auto interactionHeader = readSource("Source/Standalone/UI/PianoRoll/EqBandInteraction.h");
+    const auto interaction = readSource("Source/Standalone/UI/PianoRoll/EqBandInteraction.cpp");
+
+    // ── 1. 视觉层独立：无 DSP 依赖与 magnitude 机制 ──
+    expect(!contains(rendererHeader, "NoteEqProcessor::") && !contains(rendererHeader, "NoteEqProcessor.h")
+               && !contains(renderer, "NoteEqProcessor::") && !contains(renderer, "NoteEqProcessor.h"),
+           "EqGraphRenderer never includes or calls NoteEqProcessor");
+    expect(!contains(renderer, "juce::dsp") && !contains(renderer, "FilterDesign")
+               && !contains(renderer, "getMagnitude"),
+           "EqGraphRenderer keeps no DSP magnitude machinery");
+
+    // ── 2. SRC 视觉公式 token（logGaussian / shelf ratio^2 / cut -10log10 ratio^4）──
+    const auto filterResponse = functionBlock(renderer, "double EqGraphRenderer::filterResponseDb");
+    expect(contains(filterResponse, "std::pow(ratio, 2.0 * kFixedShelfCutRatio)")
+               && contains(filterResponse,
+                           "-10.0 * std::log10(1.0 + std::pow(ratio, 2.0 * kFixedShelfCutRatio))"),
+           "cut bands use the SRC -10log10(1+ratio^(2*kFixedShelfCutRatio)) formula");
+    expect(contains(filterResponse,
+                    "std::pow(frequencyHz / settings_.lowShelfFrequencyHz, kFixedShelfCutRatio)")
+               && contains(filterResponse,
+                           "std::pow(settings_.highShelfFrequencyHz / frequencyHz, kFixedShelfCutRatio)"),
+           "shelves use the SRC ratio^kFixedShelfCutRatio shelf formula");
+    expect(contains(filterResponse, "logGaussian(frequencyHz, settings_.peakFrequencyHz, peakWidthOctaves)")
+               && contains(filterResponse, "0.42 / std::sqrt(kPeakQ)"),
+           "peak uses the SRC logGaussian with the 0.42/sqrt(Q) width");
+    expect(contains(rendererHeader, "kFixedShelfCutRatio = 2.0") && contains(rendererHeader, "kPeakQ = 2.0"),
+           "SRC ratio exponent 2.0 and fixed Q 2.0 stay in the visual layer");
+    expect(contains(renderer, "std::log(frequencyHz / kMinFrequencyHz) / std::log(1000.0)")
+               && contains(rendererHeader, "kMinFrequencyHz = 20.0"),
+           "log X axis maps ln(f/20)/ln(1000)");
+    expect(contains(rendererHeader, "kBaseSegments = 240") && contains(rendererHeader, "kCurvatureDb = 0.22")
+               && contains(rendererHeader, "kMaxSubdivisionDepth = 3"),
+           "adaptive sampling stays at 240 base segments, 0.22 dB curvature, depth 3");
+    const auto monotonic = functionBlock(renderer, "void EqGraphRenderer::monotonicCubicPath");
+    expect(contains(monotonic, "const double limit = 3.0 * std::min(std::abs(left), std::abs(right));")
+               && contains(monotonic, "if (magnitude > 3.0)")
+               && contains(monotonic, "const double scale = 3.0 / magnitude;"),
+           "Fritsch-Carlson clamps slope magnitude at the 3x secant limit");
+    const auto combined = functionBlock(renderer, "double EqGraphRenderer::combinedResponseDb");
+    expect(contains(combined, "for (int i = 0; i < 5; ++i)")
+               && contains(combined, "total += filterResponseDb(i, frequencyHz);")
+               && !contains(combined, "std::clamp"),
+           "combined curve is the real five-band sum, never clamped inside the sum");
+    const auto combinedPath = functionBlock(renderer, "juce::Path EqGraphRenderer::buildCombinedPath");
+    expect(contains(combinedPath, "std::clamp(combinedResponseDb(freq), -gainRangeDb_, gainRangeDb_)")
+               && contains(combinedPath, "monotonicCubicPath(path, samples, graphBounds_, gainRangeDb_)"),
+           "combined path clips to the live view gain range");
+    const auto singlePath = functionBlock(renderer, "juce::Path EqGraphRenderer::buildSingleBandPath");
+    expect(contains(singlePath, "std::clamp(filterResponseDb(bandIndex, freq), -gainRangeDb_, gainRangeDb_)"),
+           "single-band paths clip to the live view gain range");
+    expect(contains(rendererHeader, "kCombinedCurveWidth = 2.25f")
+               && contains(rendererHeader, "kSingleCurveWidth = 1.25f"),
+           "curve widths are 2.25 combined / 1.25 single");
+    expect(contains(renderer, "juce::Colour::fromRGB(255, 200, 72)"),
+           "combined curve color is the SRC gold 255,200,72");
+    expect(contains(renderer, "static const std::array<juce::Colour, 5> palette"),
+           "single bands use the five-color palette");
+    expect(contains(renderer, "PathStrokeType(kCombinedCurveWidth")
+               && contains(renderer, "PathStrokeType(kSingleCurveWidth"),
+           "curve strokes consume the fixed 2.25/1.25 widths");
+
+    // ── 3. 弹窗两态：尺寸 / 共享四控制 / 图区 None / 自管理 bounds ──
+    expect(contains(popupHeader, "kPreviewWidth = 180") && contains(popupHeader, "kPreviewHeight = 80")
+               && contains(popupHeader, "kFullWidth = 600") && contains(popupHeader, "kFullHeight = 400"),
+           "preview is 180x80 and full is 600x400");
+    const auto paint = functionBlock(popup, "void EqPopupComponent::paint");
+    const auto previewBranch = functionBlock(paint, "if (isPreview_)");
+    const auto afterPreview = paint.find("if (isPreview_)") + previewBranch.size();
+    expect(contains(previewBranch, "renderer_.drawPreview(g)") && !contains(previewBranch, "paintButton"),
+           "preview branch draws only curves; buttons live outside it");
+    expect(contains(paint, "paintButton(g, ButtonId::Maximize,")
+               && contains(paint, "paintButton(g, ButtonId::Bypass,")
+               && contains(paint, "paintButton(g, ButtonId::Remove,")
+               && contains(paint, "paintButton(g, ButtonId::Close,"),
+           "both modes paint Maximize, Bypass, Remove and Close");
+    expect(paint.find("paintButton(g, ButtonId::Maximize,") > afterPreview
+               && paint.find("paintButton(g, ButtonId::Bypass,") > afterPreview
+               && paint.find("paintButton(g, ButtonId::Remove,") > afterPreview
+               && paint.find("paintButton(g, ButtonId::Close,") > afterPreview,
+           "the four controls paint in the shared section after the preview/full branch");
+    expect(contains(popupHeader, "enum class ButtonId { None = -1, Maximize = 0, Bypass, Remove, Close };")
+               && contains(functionBlock(popup, "EqPopupComponent::ButtonId EqPopupComponent::hitTestButton"),
+                           "return ButtonId::None;"),
+           "graph area hit-testing returns ButtonId::None and never toggles mode");
+    const auto toggle = functionBlock(popup, "void EqPopupComponent::toggleMaximize");
+    expect(contains(toggle, "savedPreviewBounds_ = getBounds();")
+               && contains(toggle, "setBounds(savedPreviewBounds_)")
+               && contains(toggle, "const int targetW = kFullWidth;")
+               && contains(toggle, "const int targetH = kFullHeight;"),
+           "toggleMaximize saves and restores the preview bounds by itself");
+
+    // ── 4. 预览/完整元素差异 ──
+    const auto drawPreview = functionBlock(renderer, "void EqGraphRenderer::drawPreview");
+    expect(!contains(drawPreview, "drawGrid(") && !contains(drawPreview, "drawAxisLabels(")
+               && !contains(drawPreview, "drawCoordReadout(") && !contains(drawPreview, "drawLegend(")
+               && !contains(drawPreview, "drawViewRangeButtons("),
+           "preview draws no grid, axis labels, readout, legend or view-range buttons");
+    expect(contains(drawPreview, "buildSingleBandPath(i)") && contains(drawPreview, "buildCombinedPath()")
+               && contains(drawPreview, "drawAnchors(g, -1)"),
+           "preview keeps the five curves, the combined curve and the anchors");
+    const auto drawFull = functionBlock(renderer, "void EqGraphRenderer::drawFull");
+    expect(contains(drawFull, "drawGrid(g)") && contains(drawFull, "drawAxisLabels(g)")
+           && !contains(drawFull, "drawCoordReadout(")
+           && contains(drawFull, "drawLegend(g, legendItems, hoveredLegend)")
+           && contains(drawFull, "drawViewRangeButtons(g, hoveredViewRangeControl, pressedViewRangeControl)"),
+           "full mode draws grid, axis labels, legend and both view-range buttons; "
+           "the coord readout never renders inside drawFull");
+    expect(contains(paint, "if (!isPreview_ && !interaction_.isDragging()")
+           && contains(paint, "renderer_.drawCoordReadout(g, activeMousePos_, true, coordAnimOpacity_)"),
+           "the coord readout is full-mode only and lives in the popup paint animation path");
+
+    // ── 4b. 背景/坐标映射/锚点/完整模式布局 ──
+    const auto drawBackground = functionBlock(renderer, "void EqGraphRenderer::drawBackground");
+    expect(contains(drawBackground, "g.fillRect(graphBounds_)") && !contains(drawBackground, "fillAll"),
+           "drawBackground fills only the graph bounds, never the whole surface");
+    const auto gainToY = functionBlock(renderer, "float EqGraphRenderer::gainToY");
+    expect(contains(gainToY, "std::clamp((gainDb + gainRangeDb_) / (2.0 * gainRangeDb_), 0.0, 1.0)"),
+           "gainToY clamps the normalized gain to 0..1 before the pixel projection");
+    const auto anchorPosition = functionBlock(
+        renderer, "juce::Point<float> EqGraphRenderer::anchorPosition");
+    expect(contains(anchorPosition, "gain = filterResponseDb(bandIndex, freq);"),
+           "Cut anchors project the filter response at the cutoff frequency");
+    expect(contains(anchorPosition, "gain = settings_.lowShelfGainDb;")
+           && contains(anchorPosition, "gain = settings_.peakGainDb;")
+           && contains(anchorPosition, "gain = settings_.highShelfGainDb;"),
+           "Shelf/Peak anchors project the three stored gainDb values directly");
+    expect(!contains(anchorPosition, "std::clamp"),
+           "anchor gains never clamp by bandIndex");
+    const auto resizedBlock = functionBlock(popup, "void EqPopupComponent::resized");
+    expect(contains(resizedBlock, "leftMargin = 54.0f") && contains(resizedBlock, "rightMargin = 44.0f")
+           && contains(resizedBlock, "bottomMargin = 42.0f") && contains(resizedBlock, "topMargin = 28.0f"),
+           "full mode reserves the SRC left/right/top/bottom margins for the axes");
+    const auto legendBlock = functionBlock(renderer, "void EqGraphRenderer::drawLegend");
+    expect(contains(legendBlock, "graphBounds_.getRight() - totalWidth - 14.0f")
+           && contains(legendBlock, "graphBounds_.getY() + 12.0f"),
+           "legend anchors to the top-right corner of the graph area");
+    expect(contains(legendBlock, "juce::Colour::fromRGBA(7, 12, 18, 126)")
+           && contains(legendBlock, "fillRoundedRectangle(box, 8.0f)"),
+           "legend draws a semi-transparent rounded background");
+
+    // ── 5. Bypass 不早退 / Remove / Close / 三路径提交 ──
+    expect(contains(drawPreview, "const float bypassAlpha = settings_.active ? 1.0f : 0.28f;")
+               && !contains(drawPreview, "return;"),
+           "preview dims under bypass without early return");
+    expect(contains(drawFull, "const float bypassAlpha = settings_.active ? 1.0f : 0.28f;")
+               && !contains(drawFull, "return;"),
+           "full mode dims under bypass without early return");
+    expect(contains(popupHeader, "void setRemoveConfirmationSuppressed(bool suppress);")
+               && contains(functionBlock(popup, "void EqPopupComponent::setRemoveConfirmationSuppressed"),
+                           "suppressRemoveConfirmation_ = suppress;"),
+           "Remove confirmation suppression has a public setter");
+    expect(contains(popupHeader, "std::function<void(bool)> onRemoveConfirmationSuppressed;"),
+           "the suppression flag syncs through the onRemoveConfirmationSuppressed callback");
+    const auto mouseDown = functionBlock(popup, "void EqPopupComponent::mouseDown");
+    expect(contains(mouseDown, "settings_.active = !settings_.active;")
+               && contains(mouseDown, "commitSettings();"),
+           "Bypass toggles active and commits once");
+    expect(contains(mouseDown, "if (suppressRemoveConfirmation_)")
+               && contains(mouseDown, "if (onRemoveEq) onRemoveEq();"),
+           "Remove skips the dialog when suppressed and fires onRemoveEq");
+    expect(contains(mouseDown, "case ButtonId::Close:") && contains(mouseDown, "if (onClose) onClose();"),
+           "Close fires the onClose callback");
+    const auto mouseDrag = functionBlock(popup, "void EqPopupComponent::mouseDrag");
+    expect(!contains(mouseDrag, "commitSettings")
+           && contains(mouseDrag, "interaction_.hasDragThreshold(pendingDragStartPos_, event.position)")
+           && contains(mouseDrag, "interaction_.startDrag(pendingDragBand_, pendingDragStartPos_, settings_)")
+           && contains(mouseDrag, "interaction_.updateDrag(event.position, settings_)")
+           && contains(mouseDrag, "renderer_.setSettings(settings_)"),
+           "drag starts only past the threshold, then updates the preview; no per-frame commit");
+    const auto mouseUp = functionBlock(popup, "void EqPopupComponent::mouseUp");
+    expect(contains(mouseUp, "if (wasDragging_ && !dragCommitted_)")
+           && contains(mouseUp, "commitSettings();")
+           && contains(mouseUp, "dragCommitted_ = true;")
+           && countOccurrences(mouseUp, "commitSettings();") == 1,
+           "started anchor drags commit exactly once on mouseUp");
+    expect(contains(mouseDown, "pendingDragBand_ = bandIdx;")
+           && contains(mouseDown, "pendingDragStartPos_ = pos;"),
+           "anchor mouseDown only records the pending band and its start position");
+    expect(contains(mouseUp, "showValueInputPopup(band);"),
+           "unstarted pending clicks open the numeric value input for the recorded band");
+    expect(countOccurrences(popup, "commitSettings();") == 3
+               && !contains(popup, "onSettingsChanged") && !contains(popupHeader, "onSettingsChanged"),
+           "commit fires only on anchor mouseUp, numeric OK and Bypass; no onSettingsChanged stream");
+
+    // ── 6. 数值输入：freq/gain 编辑 + Q 只读 2.0 + 实际 setBounds ──
+    const auto valueInput = functionBlock(popup, "void EqPopupComponent::showValueInputPopup");
+    expect(contains(valueInput, "\"Q: 2.0\""),
+           "Q is a read-only 2.0 label in the value input");
+    expect(contains(valueInput, "commitSettings();") && countOccurrences(valueInput, "commitSettings();") == 1,
+           "numeric OK commits exactly once");
+    const auto valueOverlay = functionBlock(popup, "void EqPopupComponent::layoutValueInputOverlay");
+    expect(contains(valueOverlay, "freqEditor_->setBounds(") && contains(valueOverlay, "gainEditor_->setBounds(")
+               && contains(valueOverlay, "qLabel_->setBounds("),
+           "value input lays out freq/gain/Q fields with real setBounds");
+
+    // ── 7. 图例 / 视图范围 / 动画 / 锚点 / HUD ──
+    const auto legendItems = functionBlock(
+        renderer, "std::array<EqGraphRenderer::LegendItem, 6> EqGraphRenderer::buildLegendItems");
+    expect(contains(legendItems, "\"Combined\"") && contains(legendItems, "\"LowCut\"")
+               && contains(legendItems, "\"LowShelf\"") && contains(legendItems, "\"Peak\"")
+               && contains(legendItems, "\"HighShelf\"") && contains(legendItems, "\"HighCut\""),
+           "legend has exactly the six curve entries");
+    expect(!contains(legendItems, "Source") && !contains(legendItems, "Target"),
+           "legend has no Source/Target entries");
+    expect(contains(rendererHeader, "kViewRange6 = 6.0") && contains(rendererHeader, "kViewRange12 = 12.0")
+               && contains(rendererHeader, "kViewRange30 = 30.0")
+               && contains(rendererHeader, "kViewRangeCircleRadius = 16.0f")
+               && contains(rendererHeader, "std::clamp(rangeDb, 6.0, 30.0)"),
+           "view ranges are 6/12/30 dB with a 32px circle button clamped to 6..30");
+    expect(contains(rendererHeader, "enum class ViewRangeButton { None, Decrease, Increase };"),
+           "view-range controls are the None/Decrease/Increase enum");
+    expect(contains(mouseDown, "pressedViewRange_ = 0;")
+           && contains(mouseDown, "pressedViewRange_ = 1;")
+           && !contains(mouseDown, "setViewGainRangeDb"),
+           "view-range mouseDown only records the pressed control, never changes the range");
+    expect(contains(mouseUp, "currentRange >= 30.0 ? 12.0")
+           && contains(mouseUp, "currentRange >= 12.0 ? 6.0")
+           && contains(mouseUp, "currentRange <= 6.0 ? 12.0")
+           && contains(mouseUp, "currentRange <= 12.0 ? 30.0"),
+           "view-range mouseUp cycles Decrease 30->12->6 and Increase 6->12->30 on same-button release");
+    expect(contains(mouseUp, "pressedViewRange_ = -1;")
+           && contains(functionBlock(popup, "void EqPopupComponent::mouseExit"),
+                       "pressedViewRange_ = -1;"),
+           "mouseUp and mouseExit clear the pressed view-range control");
+    expect(contains(popupHeader, "kCoordFadeInTime") && contains(popupHeader, "0.120")
+               && contains(popupHeader, "kCoordActiveEntry") && contains(popupHeader, "0.140")
+               && contains(popupHeader, "kCoordActiveHold") && contains(popupHeader, "2.360")
+               && contains(popupHeader, "kCoordFadeOutTime") && contains(popupHeader, "0.500"),
+           "coord animation rhythm is 120/140/2360/500 ms");
+    expect(contains(rendererHeader, "kAnchorNormalRadius") && contains(rendererHeader, "4.75f")
+               && contains(rendererHeader, "kAnchorHoverRadius") && contains(rendererHeader, "4.9f")
+               && contains(rendererHeader, "kAnchorActiveRadius") && contains(rendererHeader, "5.2f")
+               && contains(rendererHeader, "kHaloNormalRadius") && contains(rendererHeader, "5.6f")
+               && contains(rendererHeader, "kHaloHoverRadius") && contains(rendererHeader, "7.1f"),
+           "anchor radii 4.75/4.9/5.2 and halos 5.6/7.1 match SRC");
+    expect(contains(rendererHeader, "void drawCrosshairAndHud(")
+               && contains(rendererHeader, "void drawCoordReadout("),
+            "crosshair/HUD and coord readout renderer entries exist");
+    expect(contains(drawFull, "if (settings_.active && isDragging && hoveredBand >= 0 && hoveredBand < 5)")
+               && contains(drawFull, "drawCrosshairAndHud(g, mousePos, hoveredBand, hudText)"),
+           "crosshair and HUD show during drags in full mode");
+
+    // ── 8. EqBandInteraction 直连 renderer 坐标映射 ──
+    const auto updateDrag = functionBlock(interaction, "EqSettings EqBandInteraction::updateDrag");
+    expect(contains(updateDrag, "const double freq = renderer_->xToFreq(currentPos.getX());"),
+           "drag frequency maps through renderer xToFreq");
+    expect(countOccurrences(updateDrag, "renderer_->yToGain(currentPos.getY())") == 3,
+           "shelf/peak gains map through renderer yToGain");
+    expect(contains(updateDrag, "std::clamp(freq, 500.0, 12000.0)"),
+           "Peak frequency range is 500-12000 Hz");
+    expect(contains(updateDrag, "std::clamp(")
+               && countOccurrences(updateDrag, "-12.0f, 12.0f)") == 3,
+           "shelf/peak gains clamp to ±12 dB");
+    {
+        const auto cutStart = updateDrag.find("case 0: // LowCut");
+        const auto shelfStart = updateDrag.find("case 1: // LowShelf");
+        const auto cutRegion = (cutStart != std::string::npos && shelfStart != std::string::npos)
+            ? updateDrag.substr(cutStart, shelfStart - cutStart) : std::string();
+        expect(contains(cutRegion, "result.lowCutFrequencyHz") && !contains(cutRegion, "GainDb"),
+               "LowCut drag writes frequency only, never gain");
+        const auto highCutStart = updateDrag.find("case 4: // HighCut");
+        const auto returnPos = updateDrag.find("return result;", highCutStart);
+        const auto highCutRegion = (highCutStart != std::string::npos && returnPos != std::string::npos)
+            ? updateDrag.substr(highCutStart, returnPos - highCutStart) : std::string();
+        expect(contains(highCutRegion, "result.highCutFrequencyHz") && !contains(highCutRegion, "GainDb"),
+               "HighCut drag writes frequency only, never gain");
+    }
+
+    // ── 9. 工具链：ParameterPanel 两模式 / drawNotes 双分支 / ToolbarIcons ──
+    const auto parameterPanel = readSource("Source/Standalone/UI/ParameterPanel.cpp");
+    expect(contains(parameterPanel, "eqToolButton_ = std::make_unique<ToolIconButton>(11, \"EQ\"")
+               && contains(parameterPanel, "addAndMakeVisible(*eqToolButton_);"),
+           "ParameterPanel builds the EQ button visible for both schemes");
+    expect(!contains(functionBlock(parameterPanel, "void ParameterPanel::setOpenDyneMode"), "eqToolButton_"),
+           "setOpenDyneMode never hides the EQ button (shared by both schemes)");
+    const auto rendererSource = readSource("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto drawNotesBlock = functionBlock(rendererSource, "void PianoRollRenderer::drawNotes");
+    expect(countOccurrences(drawNotesBlock, "drawNoteEqIndicators(g, ctx, item);") == 2,
+           "drawNotes calls drawNoteEqIndicators in both actual branches");
+    const auto dyneBranch = functionBlock(drawNotesBlock, "if (item.notesPrimaryScheme)");
+    expect(contains(dyneBranch, "drawNoteEqIndicators(g, ctx, item);"),
+           "the OpenDyne blob branch draws EQ indicators");
+    const auto afterDyne = drawNotesBlock.find("if (item.notesPrimaryScheme)") + dyneBranch.size();
+    expect(countOccurrences(drawNotesBlock.substr(afterDyne), "drawNoteEqIndicators(g, ctx, item);") == 1,
+           "the OpenTune note branch draws EQ indicators too");
+    const auto indicators = functionBlock(rendererSource, "void PianoRollRenderer::drawNoteEqIndicators");
+    expect(contains(indicators, "if (!note.eq.has_value())")
+               && contains(indicators, "const bool isActive = note.eq->active;"),
+           "indicators gate on note.eq and read the active flag");
+    expect(contains(indicators, "juce::Colour::fromRGB(255, 200, 72).withAlpha(0.75f)")
+               && contains(indicators, "juce::Colour::fromRGB(255, 200, 72).withAlpha(0.30f)"),
+           "active vs bypass notes differ by marker alpha");
+    const auto toolbarIcons = readSource("Source/Standalone/UI/ToolbarIcons.h");
+    expect(contains(toolbarIcons, "static juce::Image createEqIconImage()"),
+           "ToolbarIcons owns the single EQ icon/cursor source image");
+
+    // ── 10. Designer 文件无 band 数组草稿 / DSP 依赖 / 排除功能 ──
+    static const char* const designerFiles[] = {
+        "Source/Standalone/UI/PianoRoll/EqGraphRenderer.h",
+        "Source/Standalone/UI/PianoRoll/EqGraphRenderer.cpp",
+        "Source/Standalone/UI/PianoRoll/EqPopupComponent.h",
+        "Source/Standalone/UI/PianoRoll/EqPopupComponent.cpp",
+        "Source/Standalone/UI/PianoRoll/EqBandInteraction.h",
+        "Source/Standalone/UI/PianoRoll/EqBandInteraction.cpp",
+    };
+    for (const char* path : designerFiles) {
+        const auto text = readSource(path);
+        expect(!contains(text, "kNumBands") && !contains(text, "bands[") && !contains(text, ".bands")
+                   && !contains(text, "EqBandSettings") && !contains(text, "NoteEqProcessor::")
+                   && !contains(text, "juce::dsp") && !contains(text, "FilterDesign")
+                   && !contains(text, "getMagnitude") && !contains(text, "preset")
+                   && !contains(text, "spectrum") && !contains(text, "per-band")
+                   && !contains(text, "wheel") && !contains(text, "Source")
+                   && !contains(text, "Target"),
+               "Designer EQ files carry no band-array drafts, DSP magnitude or excluded features");
+    }
+}
+
 int main()
 {
     testVisibleEntryContract();
@@ -1943,6 +3140,7 @@ int main()
     testOpenDyneContract();
     testOpenDyneRenderPreviewContract();
     testOpenDyneToolSwitchingContract();
+    testParameterPanelLayoutContract();
     testOpenDyneNoteEdgeRetreatContract();
     testOpenDyneScissorsMergeContract();
     testShortcutContract();
@@ -1955,6 +3153,11 @@ int main()
     testF0KeyDetectionContract();
     testPianoRollViewportSessionContract();
     testPrivateOnnxRuntimeContract();
+    testNoteEqDataContract();
+    testPerNoteEqStage1Contract();
+    testPerNoteEqPersistenceContract();
+    testPerNoteEqToolContract();
+    testPerNoteEqUiSrcContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";

@@ -176,6 +176,13 @@ public:
         std::function<void()> notifyEscapeKey;
         std::function<void(size_t, float, float)> notifyNoteOffsetChanged;
 
+        // === EQ Tool ===
+        // 打开 EQ 弹窗预览：参数为主音符 index（纯点击 = mouseDown 记录的 pending
+        // 主音符；框选 = 完成选择后的 anchor 音符）。只打开弹窗，不改 Note 数据。
+        std::function<void(int)> openEqPreview;
+        // EQ 工具专属光标（组件侧实现），mouseMove 在 Eq 状态经 setMouseCursor 应用。
+        std::function<juce::MouseCursor()> getEqCursor;
+
         std::function<bool(std::vector<ManualCorrectionOp>, int, int, bool)> applyManualCorrection;
         std::function<bool(int, int)> selectNotesOverlappingFrames;
         std::function<std::vector<float>()> getOriginalF0;
@@ -356,6 +363,9 @@ private:
     static constexpr int kScissorsSeparatorTolerancePx = 10;
 
     juce::Point<int> dragStartPos_;
+    // EQ 工具：mouseDown 命中的 pending 主音符 index（纯点击 mouseUp 时消费一次）。
+    // 拖拽超过阈值转为框选时、setTool/cancelActiveMouseGesture 时清理。
+    int pendingEqPrimaryIndex_ = -1;
     double lastDrawTime_ = 0.0;
     float lastDrawF0_ = 0.0f;
     AutomationLane volumeDragBaselineEnvelope_;

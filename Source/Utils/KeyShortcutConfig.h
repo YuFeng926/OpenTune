@@ -38,6 +38,7 @@ enum class ShortcutId {
     ToolODPitch,
     ToolODVolumeEnvelope,
     ToolODScissors,
+    Eq,
     Count
 };
 
@@ -207,6 +208,7 @@ inline const ShortcutInfo kShortcutInfos[] = {
     { ShortcutId::ToolODPitch, Loc::Keys::kToolODPitch, { KeyBinding(juce::KeyPress::F2Key, {}) } },
     { ShortcutId::ToolODVolumeEnvelope, Loc::Keys::kToolODVolumeEnvelope, { KeyBinding(juce::KeyPress::F4Key, {}) } },
     { ShortcutId::ToolODScissors, Loc::Keys::kToolODScissors, { KeyBinding(juce::KeyPress::F6Key, {}) } },
+    { ShortcutId::Eq, Loc::Keys::kToolEq, { KeyBinding('E', {}) } },
 };
 
 inline const size_t kShortcutCount = sizeof(kShortcutInfos) / sizeof(kShortcutInfos[0]);

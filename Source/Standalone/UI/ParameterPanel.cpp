@@ -202,31 +202,6 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
                 g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 0.8f);
             }
         }
-
-        // 图标（绘制在按钮中心，更大更清晰）
-        if (!iconPath_.isEmpty())
-        {
-            const auto iconSize = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.60f;  // 更大图标
-            const auto iconRect = bounds.withSizeKeepingCentre(iconSize, iconSize);
-            
-            if (active)
-                g.setColour(juce::Colour(0xFFFFFFFF));  // 激活时白色图标
-            else
-                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f));  // 普通时粉色图标（更亮）
-            
-            if (fillIcon_)
-                g.fillPath(iconPath_, juce::AffineTransform::scale(iconSize / 24.0f).translated(iconRect.getCentreX() - iconSize * 0.5f, iconRect.getCentreY() - iconSize * 0.5f));
-            else
-                g.strokePath(iconPath_, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),  // 更粗的描边
-                            juce::AffineTransform::scale(iconSize / 24.0f).translated(iconRect.getCentreX() - iconSize * 0.5f, iconRect.getCentreY() - iconSize * 0.5f));
-        }
-        else if (!textIcon_.isEmpty())
-        {
-            // 文字图标（如 AUTO）
-            g.setColour(active ? juce::Colour(0xFFFFFFFF) : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.90f));
-            g.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));  // 更大字体
-            g.drawText(textIcon_, bounds.toNearestInt(), juce::Justification::centred);
-        }
     }
     else if (themeId == ThemeId::Aurora)
     {
@@ -248,10 +223,45 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
         getLookAndFeel().drawButtonBackground(g, *this, base, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
     }
 
-    if (textIcon_.isNotEmpty())
-    {
-        const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown);
+    const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown);
+    const bool isOverdose = (themeId == ThemeId::Overdose);
 
+    if (!iconPath_.isEmpty() && textIcon_.isNotEmpty())
+    {
+        // 图标 + 文本组合模式：上半部分图标，下半部分文本
+        auto fullBounds = getLocalBounds().toFloat();
+        auto iconArea = fullBounds.removeFromTop(fullBounds.getHeight() * 0.55f).reduced(4.0f);
+        auto textArea = fullBounds;
+
+        auto iconColor = active ? juce::Colours::white.withAlpha(0.96f)
+                                : (isOverdose ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f)
+                                              : UIColors::textPrimary);
+        ToolbarIcons::drawIcon(g, iconPath_, iconArea, iconColor, 2.0f, fillIcon_);
+
+        if (subTextIcon_.isNotEmpty())
+        {
+            auto mainTextArea = textArea.removeFromTop(textArea.getHeight() * 0.6f);
+            g.setColour(active ? juce::Colours::white.withAlpha(0.96f)
+                               : (isOverdose ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.90f)
+                                             : UIColors::textPrimary));
+            g.setFont(UIColors::getUIFont(12.0f));
+            g.drawText(textIcon_, mainTextArea, juce::Justification::centredBottom);
+
+            g.setColour(UIColors::textSecondary);
+            g.setFont(UIColors::getUIFont(9.0f));
+            g.drawText(subTextIcon_, textArea, juce::Justification::centredTop);
+        }
+        else
+        {
+            g.setColour(active ? juce::Colours::white.withAlpha(0.96f)
+                               : (isOverdose ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.90f)
+                                             : UIColors::textPrimary));
+            g.setFont(UIColors::getUIFont(12.0f));
+            g.drawText(textIcon_, textArea, juce::Justification::centred);
+        }
+    }
+    else if (textIcon_.isNotEmpty())
+    {
         if (subTextIcon_.isNotEmpty())
         {
             auto textArea = getLocalBounds().toFloat();
@@ -259,7 +269,9 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
             const float subFontSize = 11.0f;
 
             auto mainArea = textArea.removeFromTop(textArea.getHeight() * 0.55f);
-            g.setColour(active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary);
+            g.setColour(active ? juce::Colours::white.withAlpha(0.96f)
+                               : (isOverdose ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.90f)
+                                             : UIColors::textPrimary));
             g.setFont(UIColors::getUIFont(mainFontSize));
             g.drawText(textIcon_, mainArea, juce::Justification::centredBottom);
 
@@ -269,16 +281,19 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
         }
         else
         {
-            g.setColour(active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary);
+            g.setColour(active ? juce::Colours::white.withAlpha(0.96f)
+                               : (isOverdose ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.90f)
+                                             : UIColors::textPrimary));
             g.setFont(UIColors::getUIFont(16.0f));
             g.drawText(textIcon_, getLocalBounds().toFloat(), juce::Justification::centred);
         }
     }
-    else
+    else if (!iconPath_.isEmpty())
     {
         auto iconArea = getLocalBounds().toFloat().reduced(10.0f);
-        const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown);
-        auto iconColor = active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary;
+        auto iconColor = active ? juce::Colours::white.withAlpha(0.96f)
+                                : (isOverdose ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f)
+                                              : UIColors::textPrimary);
 
         // Hover: subtle scale-up (1.08x) and brightness boost
         if (shouldDrawButtonAsHighlighted && !shouldDrawButtonAsDown)
@@ -556,6 +571,7 @@ ParameterPanel::ParameterPanel()
     eqToolButton_ = std::make_unique<ToolIconButton>(11, "EQ", juce::String::fromUTF8(u8"EQ 频率均衡\nE"));
     eqToolButton_->setRadioGroupId(1001);
     eqToolButton_->setIcon(ToolbarIcons::getEqIcon(), false);
+    eqToolButton_->setTextIcon("EQ");
     eqToolButton_->onClick = [this] { onToolClicked(11); };
     addAndMakeVisible(*eqToolButton_);
 
@@ -743,9 +759,9 @@ void ParameterPanel::resized()
 
     if (openDyneMode_)
     {
-        // OpenDyne：8 个按钮 = 4 行 × 2 列
+        // OpenDyne：9 个按钮 = 5 行 × 2 列
         // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、Modulation(F2×2)、Drift(F2×3)、
-        // VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾
+        // VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾，EQ 收尾
         std::vector<juce::Component*> buttons = {
             selectToolButton_.get(),
             pitchToolButton_.get(),
@@ -755,6 +771,7 @@ void ParameterPanel::resized()
             timeToolButton_.get(),
             scissorsToolButton_.get(),
             autoTuneToolButton_.get(),
+            eqToolButton_.get(),
         };
 
         for (int i = 0; i < static_cast<int>(buttons.size()); ++i)

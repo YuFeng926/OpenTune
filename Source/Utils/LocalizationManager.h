@@ -296,6 +296,7 @@ constexpr const char* kToolODSelect = "OD: Select";
 constexpr const char* kToolODPitch = "OD: Pitch";
 constexpr const char* kToolODVolumeEnvelope = "OD: Volume Envelope";
 constexpr const char* kToolODScissors = "OD: Scissors";
+constexpr const char* kToolEq = "Tool: EQ";
 
 constexpr const char* kPitchCorrection = "Pitch correction";
 constexpr const char* kRetuneSpeed = "Retune Speed";
@@ -489,6 +490,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kToolODPitch, "OD: Pitch", "OD: 音高", "OD: ピッチ", "OD: тон", "OD: tono" },
         { Keys::kToolODVolumeEnvelope, "OD: Volume Envelope", "OD: 音量包络", "OD: ボリュームエンベロープ", "OD: огибающая громкости", "OD: envol. volumen" },
         { Keys::kToolODScissors, "OD: Scissors", "OD: 剪刀", "OD: ハサミ", "OD: ножницы", "OD: tijeras" },
+        { Keys::kToolEq, "Tool: EQ", "工具：均衡器", "ツール：イコライザー", "Инструмент: эквалайзер", "Herram: ecualizador" },
         
         { Keys::kPitchCorrection, "Pitch correction", "音高校正", "ピッチ補正", "Коррекция тона", "Corrección de tono" },
         { Keys::kRetuneSpeed, "Retune Speed", "校正速度", "チューン速度", "Скорость коррекции", "Vel. afinación" },

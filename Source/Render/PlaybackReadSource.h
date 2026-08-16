@@ -5,7 +5,6 @@
 #include "../Inference/TimeStretchCache.h"
 #include "../Utils/AutomationLane.h"
 #include "../Utils/TimeGrid.h"
-#include "../Utils/Note.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
 #include <cstdint>
@@ -65,9 +64,6 @@ struct PlaybackReadSource
     uint64_t pitchRevision{0};
     uint64_t timeGridRevision{0};
     uint64_t pitchShiftRevision{0};
-    
-    // Per-note EQ settings (for real-time EQ processing)
-    const std::vector<Note>* notes{nullptr};
 
     PlaybackReadSource() = default;
     PlaybackReadSource(const PlaybackReadSource&) = default;
@@ -97,7 +93,6 @@ struct PlaybackReadSource
         swap(a.pitchRevision, b.pitchRevision);
         swap(a.timeGridRevision, b.timeGridRevision);
         swap(a.pitchShiftRevision, b.pitchShiftRevision);
-        swap(a.notes, b.notes);
     }
 
     bool hasAudio() const noexcept

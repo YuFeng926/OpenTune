@@ -187,6 +187,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
         return processorRef_.getContentSnapshot(key);
     });
+    // EQ popup「以后不再提示」偏好直接注入（无中转层）
+    pianoRoll_.setAppPreferences(&appPreferences_);
 
     applyThemeToEditor(appPreferences_.getState().shared.theme);
 
@@ -292,6 +294,9 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     const auto preferencesState = appPreferences_.getState();
     const auto& sharedPreferences = preferencesState.shared;
     const auto& visualPreferences = sharedPreferences.pianoRollVisualPreferences;
+
+    // EQ popup「以后不再提示」偏好直接注入（无中转层）
+    pianoRoll_.setAppPreferences(&appPreferences_);
 
     languageState_->language = sharedPreferences.language;
 
@@ -789,7 +794,7 @@ void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::PitchDrift)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::Eq)) {
         return;
     }
 

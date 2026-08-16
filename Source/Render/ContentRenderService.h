@@ -51,7 +51,11 @@ public:
 
     void attachExecutionLease(ExecutionLease lease);
     void detachExecutionLease(void* owner);
-    void enqueueRender(RenderJob job);
+    // notes 仅在本调用栈内读取（提取 active-EQ Note 保护范围），不复制、不存储。
+    void enqueueRender(RenderJob job, const std::vector<Note>& notes);
+    // stale-generation 回退：只回退 RenderCache 状态机（Running→Pending）并投递
+    // 一个 job token，不重算几何/快照、不 bump desired。
+    void requeueRenderChunk(const RenderJob& job);
     void beginAsyncRenderJob();
     void completeAsyncRenderJob();
     void pauseRenderWorker();

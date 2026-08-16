@@ -410,6 +410,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 {
     // Wire AppPreferences to processor for getSnapSettings()
     processorRef_.setAppPreferences(&appPreferences_);
+    // EQ popup「以后不再提示」偏好直接注入（无中转层）
+    pianoRoll_.setAppPreferences(&appPreferences_);
 
     // Initialize track volumes array
     lastTrackVolumes_.fill(1.0f);
@@ -1415,6 +1417,9 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     const bool experimentalFeaturesEnabled = sharedPreferences.experimentalFeaturesEnabled;
     const auto referenceAlignMode = sharedPreferences.experimentalReferenceAlignMode;
 
+    // EQ popup「以后不再提示」偏好直接注入（无中转层）
+    pianoRoll_.setAppPreferences(&appPreferences_);
+
     processorRef_.setExperimentalReferenceAlignMode(referenceAlignMode);
     if (appliedReferenceAlignMode_ != referenceAlignMode
         || appliedExperimentalFeaturesEnabled_ != experimentalFeaturesEnabled) {
@@ -1579,7 +1584,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::PitchDrift)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::Eq)) {
         return;
     }
 

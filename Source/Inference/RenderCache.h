@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -42,8 +43,14 @@ public:
     };
 
     // 调度状态管理 API
-    void requestRenderPending(int64_t startSample,
-                              int64_t endSampleExclusive);
+    struct PlannedChunk {
+        int64_t startSample{0};
+        int64_t endSampleExclusive{0};
+    };
+    // 以完整计划原子重建 chunks_/pendingChunks_，返回本次需投递的 worker job token 数。
+    std::size_t reconcileFullPlanAndRequest(const std::vector<PlannedChunk>& fullPlan,
+                                            int64_t requestStartSample,
+                                            int64_t requestEndSampleExclusive);
 
     struct PendingJob {
         double startSeconds{0.0};
@@ -65,6 +72,13 @@ public:
                                                     uint64_t revision);
 
     void completeChunkRenderFailure(double startSeconds, uint64_t revision);
+
+    /**
+     * stale-generation 回退：仅当 chunk 仍正处 Running 且 runningRevision 匹配时，
+     * 把 Running→Pending 并插入待拉取集合、runningRevision 清零。不 bump desired、
+     * 不改几何、不发布快照。返回是否实际回退。
+     */
+    bool requeueRunningChunk(double startSeconds, uint64_t runningRevision);
 
     void markChunkAsBlank(double startSeconds, uint64_t revision);
 

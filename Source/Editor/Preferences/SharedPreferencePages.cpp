@@ -684,7 +684,7 @@ public:
         // 三段式布局：通用 → OpenTune 专属 → OpenDyne 参考
         // 通用: PlayPause, Stop, PlayFromStart, Undo, Redo, Cut, Copy, Paste, SelectAll,
         //        Delete, SplitClip, MergeClips, DuplicateClip, NudgeLeft, NudgeRight,
-        //        ToggleSnap, ToolAutoTune, ToolTimeTool, CancelSelection
+        //        ToggleSnap, ToolAutoTune, ToolTimeTool, CancelSelection, Eq
         generalIds_ = {
             KeyShortcutConfig::ShortcutId::PlayPause, KeyShortcutConfig::ShortcutId::Stop,
             KeyShortcutConfig::ShortcutId::PlayFromStart,
@@ -698,6 +698,7 @@ public:
             KeyShortcutConfig::ShortcutId::ToggleSnap,
             KeyShortcutConfig::ShortcutId::ToolAutoTune, KeyShortcutConfig::ShortcutId::ToolTimeTool,
             KeyShortcutConfig::ShortcutId::CancelSelection,
+            KeyShortcutConfig::ShortcutId::Eq,
         };
         // OpenTune 专属: DrawNote, Select, LineAnchor, HandDraw
         opentuneIds_ = {

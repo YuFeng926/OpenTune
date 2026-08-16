@@ -61,6 +61,7 @@ struct SharedPreferencesState {
     SnapSettings snap;
     TrackColorMode trackColorMode = TrackColorMode::Random;
     KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
+    bool suppressEqRemoveConfirmation = false;  ///< 抑制 EQ 工具删除确认弹窗
     bool lightPitchCorrectionEnabled = false;  ///< 轻量修音开关（AutoTune cycle resampling，默认关）
     PianoGridStyle gridStyle = PianoGridStyle::PianoLanes;
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
@@ -104,6 +105,7 @@ public:
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
     void setTuning(const TuningConfig::TuningSettings& tuning);
     void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
+    void setSuppressEqRemoveConfirmation(bool suppress);
     void setRenderingPriority(RenderingPriority priority);
     void setVocoderModelWeight(VocoderModelWeight weight);
     void setExperimentalFeaturesEnabled(bool enabled);

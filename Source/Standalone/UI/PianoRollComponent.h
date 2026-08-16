@@ -44,6 +44,7 @@
 
 #include "PianoRoll/PianoRollToolHandler.h"
 #include "PianoRoll/InteractionState.h"
+#include "PianoRoll/EqPopupComponent.h"
 #include "TimelineViewportCamera.h"
 #include "TimelineViewportPolicy.h"
 #include "WaveformMipmap.h"
@@ -54,6 +55,7 @@ namespace OpenTune {
 
 class OpenTuneAudioProcessor;
 class PianoKeyAudition;
+class AppPreferences;
 struct PlayHeadState;
 
 struct PianoRollComponentTestProbe;
@@ -136,6 +138,10 @@ public:
     void setPianoKeyAudition(PianoKeyAudition* audition) { pianoKeyAudition_ = audition; }
 
     void setProcessor(OpenTuneAudioProcessor* processor);
+
+    /** 注入 AppPreferences 指针（两个 Editor 构造/同步时直接注入，无中转层）。
+     *  仅用于 EQ popup 的「以后不再提示」偏好读写。 */
+    void setAppPreferences(AppPreferences* prefs) noexcept { appPreferences_ = prefs; }
 
     using ReadContentSnapshotFn = std::function<std::shared_ptr<const EditableContentSnapshot>(ContentKey)>;
     void setReadContentSnapshot(ReadContentSnapshotFn fn) { readContentSnapshot_ = std::move(fn); }
@@ -290,6 +296,15 @@ public:
     void requestContentRedraw();
     void requestThemeRedraw();
 
+    // ── EQ 工具（per-note EQ） ──────────────────────────────────────
+    /** 为当前选中组打开 EQ 预览弹窗：只读选中组与主音符，主音符 eq 有值显示它，
+     *  无值显示 EqSettings 默认；打开零 draft、零提交。主音符 index 由
+     *  ToolHandler 唯一判定并经 toolCtx.openEqPreview 直通。 */
+    void openEqPopupForSelection(int primaryIndex);
+    /** EQ 工具 cursor：ToolbarIcons::createEqIconImage 构造 MouseCursor，
+     *  经 CursorThemeManager::resolveCursor 应用现有主题机制。 */
+    juce::MouseCursor getEqCursor() const;
+
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
     void updateScrollBars();
 
@@ -349,6 +364,16 @@ private:
 
     // ── 内容构建（供 rasterize + overlay 共用） ────────────────
     std::vector<PianoRollRenderer::ContentRenderItem> buildContentRenderItems() const;
+
+    // ── EQ popup ──────────────────────────────────────────────
+    void closeEqPopup();
+    /** 选中组统一写入同一 EqSettings：严格复用 beginNoteDraft → workingNotes →
+     *  contentDirty → pendingUndoDescription → commitNoteDraft，一次原子提交。 */
+    void applyEqSettingsToSelection(const EqSettings& settings);
+    /** 清除选中组全部 Note.eq（nullopt），走同一 draft 提交链。 */
+    void removeEqFromSelection();
+    /** 预览尺寸 180x80 契约，在当前组件范围内靠近选择区放置。 */
+    juce::Rectangle<int> placeEqPopupBounds(const juce::Rectangle<int>& anchor) const;
 
     bool tryConsumeInitialF0View(ContentKey contentKey);
 
@@ -568,6 +593,7 @@ private:
     int waveformBuildTickCounter_ = 0;
 
     OpenTuneAudioProcessor* processor_ = nullptr;
+    AppPreferences* appPreferences_ = nullptr;
 
     ReadContentSnapshotFn readContentSnapshot_;
     std::shared_ptr<ContentEditCommands> contentCommands_;
@@ -631,6 +657,9 @@ private:
 
     // OpenDyne：双击滚动条 → 缩放到全部音符
     std::unique_ptr<juce::MouseListener> fitToAllNotesOnDoubleClick_;
+
+    // per-note EQ 预览弹窗：PianoRollComponent 唯一持有，不经过任何中间转发层
+    std::unique_ptr<EqPopupComponent> eqPopup_;
 
     double playheadTimeForPaint_ = 0.0;
     double pendingSeekTime_{-1.0};
