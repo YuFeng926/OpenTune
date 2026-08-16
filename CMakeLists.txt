@@ -592,6 +592,7 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRoll/EqGraphRenderer.cpp
         Source/Standalone/UI/PianoRoll/EqGraphRenderer.h
         Source/Standalone/UI/PianoRoll/EqBandInteraction.h
+        Source/Standalone/UI/PianoRoll/EqBandInteraction.cpp
         Source/Standalone/UI/PianoRoll/EqPopupComponent.cpp
         Source/Standalone/UI/PianoRoll/EqPopupComponent.h
 
@@ -1337,6 +1338,29 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
     add_test(NAME OpenTuneF0KeyDetectorRuntimeTests COMMAND OpenTuneF0KeyDetectorRuntimeTests)
 
     # ==============================================================================
+    # OpenTuneNoteEqDspRuntimeTests — per-note EQ DSP 运行时测试
+    # 直接调用生产 NoteEqProcessor：两端 8 阶斜率、active=false 旁通、双声道一致、
+    # Note 内分块连续、reset 跨 Note 等于新实例、因果无前振铃。
+    # 数值容差为 DSP 精度，无性能阈值，无绝对时间单位换算。
+    # ==============================================================================
+    add_executable(OpenTuneNoteEqDspRuntimeTests
+        Tests/NoteEqDspRuntimeTests.cpp
+    )
+    target_compile_features(OpenTuneNoteEqDspRuntimeTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneNoteEqDspRuntimeTests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    target_link_libraries(OpenTuneNoteEqDspRuntimeTests
+        PRIVATE
+            juce::juce_audio_basics
+            juce::juce_core
+            juce::juce_dsp
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneNoteEqDspRuntimeTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneNoteEqDspRuntimeTests COMMAND OpenTuneNoteEqDspRuntimeTests)
+
+    # ==============================================================================
     # OpenTuneInferenceProcessIsolationTests — 进程级推理隔离功能合同测试
     # 验证 F0ExtractionService / ReferenceAnalysisService 生命周期合同、
     # CompletionGate 互斥、ProcessRenderRuntime / ProcessF0Runtime detach 非阻塞。
@@ -1520,6 +1544,9 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
         Source/Standalone/UI/PianoRoll/InteractionState.cpp
+        Source/Standalone/UI/PianoRoll/EqGraphRenderer.cpp
+        Source/Standalone/UI/PianoRoll/EqBandInteraction.cpp
+        Source/Standalone/UI/PianoRoll/EqPopupComponent.cpp
         Source/Standalone/UI/MenuBarComponent.cpp
         Source/Standalone/UI/TransportBarComponent.cpp
         Source/Standalone/UI/TopBarComponent.cpp

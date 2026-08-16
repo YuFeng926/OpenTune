@@ -32,7 +32,7 @@ struct Note {
     float pitchDriftScale = 1.0f;    // 漂移修正比例（1.0=原始漂移，0.0=消除漂移，负值=反转，可超出±100%）
     bool isVoiced = true;           // 是否为有声段
     bool dirty = false;             // 脏标记，用于增量渲染
-    std::optional<EqSettings> eq;   // Per-note EQ settings (nullopt = no EQ)
+    std::optional<EqSettings> eq;   // Per-note EQ：nullopt = 无 EQ；active=false = 保留设置但全局旁通
 
     double getDuration() const {
         return endTime - startTime;

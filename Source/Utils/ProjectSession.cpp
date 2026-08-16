@@ -394,19 +394,38 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
             continue;
         }
 
-        SourceStore::CreateSourceRequest req;
-        req.displayName = srcEntry.displayName;
-        req.audioBuffer = audioBuffer;
-        req.sampleRate = loadedSampleRate > 0.0 ? loadedSampleRate : srcEntry.sampleRate;
+        // 经唯一导入 canonical 化链（prepareImport）落库：外部原始 buffer/rate
+        // → 固定 44.1kHz canonical，与交互导入共用同一条重采样/静默检测路径
+        OpenTuneAudioProcessor::PreparedImport prepared;
+        if (!processorRef_.prepareImport(std::move(*audioBuffer), loadedSampleRate,
+                                         srcEntry.displayName, audioFile.getFullPathName(),
+                                         prepared, "project-open")) {
+            AppLogger::log("ProjectSession: prepareImport rejected source "
+                + juce::String(srcEntry.sourceId) + " (" + srcEntry.displayName + "), skipping");
+            continue;
+        }
 
-        sourceStore->createSource(req, srcEntry.sourceId);
+        auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(
+            std::move(prepared.storedAudioBuffer));
+
+        SourceStore::CreateSourceRequest req;
+        req.displayName = prepared.displayName;
+        req.sourceFilePath = prepared.sourceFilePath;
+        req.audioBuffer = storedAudioBuffer;
+        req.sampleRate = TimeCoordinate::kRenderSampleRate;
+
+        if (sourceStore->createSource(req, srcEntry.sourceId) == 0) {
+            AppLogger::log("ProjectSession: Failed to create source "
+                + juce::String(srcEntry.sourceId) + " (" + srcEntry.displayName + "), skipping");
+            continue;
+        }
     }
 
     // 2. 重建 Clips (from StandaloneContentRepository)
     for (const auto& contentEntry : snapshot.contents) {
         // Get source buffer for this clip
         std::shared_ptr<const juce::AudioBuffer<float>> sourceBuf;
-        double sourceSampleRate = 44100.0;
+        double sourceSampleRate = TimeCoordinate::kRenderSampleRate;
 
         if (contentEntry.sourceId == 0
             || !sourceStore->getAudioBuffer(contentEntry.sourceId, sourceBuf)) {

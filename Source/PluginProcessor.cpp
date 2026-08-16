@@ -945,6 +945,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             }
         };
 
+        // Capture 播放源的唯一汇聚点：CaptureSegmentContent 保留宿主率原始 PCM
+        // （不回写 owner），此处派生 CRS canonical 播放源，统一固定 44.1kHz。
+        // 44.1k 输入直接共享原 audio buffer；非同率经既有 upsampleForHost 重采样，
+        // 时长守恒方式与 prepareImport/ARA 完全一致
+        // （secondsToSamples(samplesToSeconds(originalLen, sampleRate), targetRate)）。
         bindings.publishPlaybackSource = [this](const ContentKey& key,
                                                  std::shared_ptr<const juce::AudioBuffer<float>> audio,
                                                  double sampleRate) {
@@ -952,12 +957,34 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             if (audio == nullptr || !key.isValid())
                 return;
 
+            const double targetRate = TimeCoordinate::kRenderSampleRate;
+            std::shared_ptr<const juce::AudioBuffer<float>> canonicalAudio = std::move(audio);
+            if (std::abs(sampleRate - targetRate) > 1.0) {
+                const int numChannels = canonicalAudio->getNumChannels();
+                const int originalLen = canonicalAudio->getNumSamples();
+                const int newLen = juce::jmax(
+                    1,
+                    static_cast<int>(TimeCoordinate::secondsToSamples(
+                        TimeCoordinate::samplesToSeconds(originalLen, sampleRate), targetRate)));
+                auto derived = std::make_shared<juce::AudioBuffer<float>>(numChannels, newLen);
+                for (int ch = 0; ch < numChannels; ++ch) {
+                    auto resampledData = resamplingManager_->upsampleForHost(
+                        canonicalAudio->getReadPointer(ch),
+                        originalLen,
+                        static_cast<int>(sampleRate),
+                        static_cast<int>(targetRate));
+                    const int toCopy = juce::jmin(newLen, static_cast<int>(resampledData.size()));
+                    derived->copyFrom(ch, 0, resampledData.data(), toCopy);
+                }
+                canonicalAudio = std::move(derived);
+            }
+
             auto renderCache = contentRenderService_->getOrCreateRenderCache(key);
             PlaybackReadSource readSource;
             readSource.contentKey = key;
             readSource.renderCache = renderCache;
-            readSource.audioBuffer = std::move(audio);
-            readSource.audioSampleRate = sampleRate;
+            readSource.audioBuffer = std::move(canonicalAudio);
+            readSource.audioSampleRate = targetRate;
             readSource.timeStretchCache = &contentRenderService_->getTimeStretchCache();
             readSource.pitchRevision = 0;
             readSource.pitchShiftRevision = 0;
@@ -2743,6 +2770,20 @@ OpenTuneAudioProcessor::resolveAnalysisAudioProvider(ContentKey key)
 void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
                                                               ContentEditRangeFrames affectedRange)
 {
+    auto snap = getContentSnapshot(key);
+    if (!snap || !snap->pitchCurve) return;
+    const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
+                                 / snap->pitchCurve->getSampleRate();
+    onContentLocalMutationCompletedSeconds(
+        key,
+        static_cast<double>(affectedRange.startFrame) * secondsPerFrame,
+        static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame);
+}
+
+void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey key,
+                                                                     double startSeconds,
+                                                                     double endSeconds)
+{
 #if JucePlugin_Enable_ARA
     if (key.domainKind == DomainKind::ARAAudioModification)
     {
@@ -2750,15 +2791,7 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
         if (dc != nullptr)
         {
             dc->refreshModificationCRSMetadata(key);
-            auto snap = getContentSnapshot(key);
-            if (snap && snap->pitchCurve)
-            {
-                const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
-                                             / snap->pitchCurve->getSampleRate();
-                const double startSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
-                const double endSec   = static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame;
-                dc->requestModificationRender(key, startSec, endSec);
-            }
+            dc->requestModificationRender(key, startSeconds, endSeconds);
         }
         return;
     }
@@ -2766,13 +2799,7 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
 
     // Non-ARA path: processor-local CRS
     refreshCRSMetadata(key);
-    auto snap = getContentSnapshot(key);
-    if (!snap || !snap->pitchCurve) return;
-    const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
-                                 / snap->pitchCurve->getSampleRate();
-    const double startSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
-    const double endSec   = static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame;
-    requestRenderForLocalMutationRange(key, startSec, endSec);
+    requestRenderForLocalMutationRange(key, startSeconds, endSeconds);
 }
 
 void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key)
@@ -2840,7 +2867,7 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     job.startSample = startSample;
     job.endSampleExclusive = endSample;
 
-    crs->enqueueRender(std::move(job));
+    crs->enqueueRender(std::move(job), snap->notes);
 }
 
 void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(ContentKey key)
@@ -4496,7 +4523,11 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
     }
 
     if (ok) {
-        republishPlaybackSource(key);
+        // 根因修复：拓扑 patch 提交后按 patch.affectedRange（秒域）调度局部重渲染，
+        // Undo/Redo 经同一 command（PianoRollNotePatchAction）自动重渲染。
+        // onContentLocalMutationCompletedSeconds 内部刷新/发布 playback source 并调度 Stage1。
+        onContentLocalMutationCompletedSeconds(
+            key, patch.affectedRange.startSeconds, patch.affectedRange.endSeconds);
         auto committedSnap = getContentSnapshot(key);
         jassert(committedSnap != nullptr);
         return committedSnap;

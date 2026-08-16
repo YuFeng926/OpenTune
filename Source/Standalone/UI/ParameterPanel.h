@@ -108,8 +108,10 @@ public:
     void refreshLocalizedText();  // 刷新本地化文本
 
     // ── 固定尺寸常量：resized() 绝对坐标排布的验收基准 ──
-    // OpenDyne 模式内容需求高度：旋钮区 386（header 24 + spacing 12 + row1 143 + spacing 12 + row2 143 + spacing 12 + pitchShift 28 + spacing 12）+ 工具区 338（header 24 + gap 8 + 4×60 按钮 + 3×10 行距 = 302 + PitchGrid 14 + 22）
-    static constexpr int kMinimumContentHeight = 724;
+    // 旋钮区（Overdose/BlueBreeze knobSize=115）：header(36) + row1(155) + row2(155) + pitchShift(40) = 386
+    // 工具区（OpenDyne 9 按钮 / 5 行）：toolsHeader(32) + 5×60 + 4×10 + pitchGrid间隔(14) + pitchGrid(22) = 408
+    // OpenDyne 内容需求 = 386 + 408 = 794
+    static constexpr int kMinimumContentHeight = 794;
     // 面板最小高度 = 内容需求 + reduced(shadowMargin+innerPadding) 上下边距 40
     static constexpr int kMinimumPanelHeight = kMinimumContentHeight + 40;
 

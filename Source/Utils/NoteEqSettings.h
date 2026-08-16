@@ -1,97 +1,56 @@
 #pragma once
 
 /**
- * Per-note EQ settings data structure
- * 
- * 5-band EQ for piano roll notes:
- * - LowCut: 48dB/oct Butterworth highpass (adjustable freq 20-2000Hz)
- * - LowShelf: Low shelf filter (fixed 500Hz, Q=2, adjustable gain ±12dB)
- * - Peak: Parametric peak (adjustable freq 500Hz-12kHz, Q=2, adjustable gain ±12dB)
- * - HighShelf: High shelf filter (fixed 8kHz, Q=2, adjustable gain ±12dB)
- * - HighCut: 48dB/oct Butterworth lowpass (adjustable freq 4000-20000Hz)
+ * Per-note EQ settings — 数据契约（docs/plans/2026-08-13-per-note-eq-tool-plan.md 第 2 节）
+ *
+ * 5 段固定结构，段数与段类型固定，不可增减、不可改类型；type 与 Q 由 DSP 层常量确定，
+ * 不进数据、不进持久化。本结构只保存 9 个用户可调字段：
+ *
+ * active                // 全局启用；false = 保留设置但全局旁通
+ * lowCutFrequencyHz     // 20–20000 Hz，默认 80
+ * lowShelfFrequencyHz   // 20–20000 Hz，默认 500
+ * lowShelfGainDb        // ±12 dB，默认 0
+ * peakFrequencyHz       // 500–12000 Hz，默认 3000
+ * peakGainDb            // ±12 dB，默认 0
+ * highShelfFrequencyHz  // 20–20000 Hz，默认 8000
+ * highShelfGainDb       // ±12 dB，默认 0
+ * highCutFrequencyHz    // 20–20000 Hz，默认 12000
+ *
+ * 禁止保存固定不变的 type 与 Q；禁止 per-band bypass。
  */
-
-#include <optional>
-#include <cmath>
-#include <algorithm>
 
 namespace OpenTune {
 
-struct EqBandSettings {
-    float gainDb = 0.0f;      // Gain in dB (±12)
-    float frequency = 1000.0f; // Frequency in Hz (adjustable for Peak/LowCut/HighCut)
-    
-    static constexpr float kMinGainDb = -12.0f;
-    static constexpr float kMaxGainDb = 12.0f;
-    static constexpr float kMinFreq = 20.0f;
-    static constexpr float kMaxFreq = 20000.0f;
-    
-    void setGainDb(float g) {
-        gainDb = std::clamp(g, kMinGainDb, kMaxGainDb);
-    }
-    
-    void setFrequency(float f) {
-        frequency = std::clamp(f, kMinFreq, kMaxFreq);
-    }
-};
-
 struct EqSettings {
-    static constexpr int kNumBands = 5;
-    
-    EqBandSettings bands[kNumBands];
-    bool active = false;  // Global bypass
-    
-    // Band indices (match Qt EQGraphWidget)
-    static constexpr int kLowCut = 0;
-    static constexpr int kLowShelf = 1;
-    static constexpr int kPeak = 2;
-    static constexpr int kHighShelf = 3;
-    static constexpr int kHighCut = 4;
-    
-    // Fixed frequencies for shelves (from Qt source)
-    static constexpr float kLowShelfFreq = 500.0f;
-    static constexpr float kHighShelfFreq = 8000.0f;
-    static constexpr float kShelfQ = 2.0f;
-    
-    // Default peak frequency
-    static constexpr float kDefaultPeakFreq = 1000.0f;
-    
-    // Frequency ranges for adjustable bands (from Qt source)
-    static constexpr float kLowCutMinFreq = 20.0f;
-    static constexpr float kLowCutMaxFreq = 2000.0f;
-    static constexpr float kHighCutMinFreq = 4000.0f;
-    static constexpr float kHighCutMaxFreq = 20000.0f;
-    static constexpr float kPeakMinFreq = 500.0f;
-    static constexpr float kPeakMaxFreq = 12000.0f;
-    
-    EqSettings() {
-        // Initialize with flat response
-        bands[kLowCut].frequency = 100.0f;    // Default low cut
-        bands[kLowShelf].frequency = kLowShelfFreq;
-        bands[kLowShelf].gainDb = 0.0f;
-        bands[kPeak].frequency = kDefaultPeakFreq;
-        bands[kPeak].gainDb = 0.0f;
-        bands[kHighShelf].frequency = kHighShelfFreq;
-        bands[kHighShelf].gainDb = 0.0f;
-        bands[kHighCut].frequency = 8000.0f;  // Default high cut
+    bool active = true;                    // 全局启用；false = 保留设置但全局旁通
+
+    float lowCutFrequencyHz = 80.0f;       // LowCut 截止频率
+    float lowShelfFrequencyHz = 500.0f;    // LowShelf 中心频率
+    float lowShelfGainDb = 0.0f;           // LowShelf 增益
+    float peakFrequencyHz = 3000.0f;       // Peak 中心频率
+    float peakGainDb = 0.0f;               // Peak 增益
+    float highShelfFrequencyHz = 8000.0f;  // HighShelf 中心频率
+    float highShelfGainDb = 0.0f;          // HighShelf 增益
+    float highCutFrequencyHz = 12000.0f;   // HighCut 截止频率
+
+    // 精确比较 9 个用户可调字段，无容差（C++17 optional<EqSettings> 依赖此 ==）。
+    bool operator==(const EqSettings& other) const noexcept
+    {
+        return active == other.active
+            && lowCutFrequencyHz == other.lowCutFrequencyHz
+            && lowShelfFrequencyHz == other.lowShelfFrequencyHz
+            && lowShelfGainDb == other.lowShelfGainDb
+            && peakFrequencyHz == other.peakFrequencyHz
+            && peakGainDb == other.peakGainDb
+            && highShelfFrequencyHz == other.highShelfFrequencyHz
+            && highShelfGainDb == other.highShelfGainDb
+            && highCutFrequencyHz == other.highCutFrequencyHz;
     }
-    
-    bool isFlat() const {
-        for (const auto& band : bands) {
-            if (std::abs(band.gainDb) > 0.01f) return false;
-        }
-        return true;
+
+    bool operator!=(const EqSettings& other) const noexcept
+    {
+        return !(*this == other);
     }
 };
-
-// Check if two EqSettings are approximately equal
-inline bool eqSettingsEqual(const EqSettings& a, const EqSettings& b, float toleranceDb = 0.01f) {
-    if (a.active != b.active) return false;
-    for (int i = 0; i < EqSettings::kNumBands; ++i) {
-        if (std::abs(a.bands[i].gainDb - b.bands[i].gainDb) > toleranceDb) return false;
-        if (std::abs(a.bands[i].frequency - b.bands[i].frequency) > 0.1f) return false;
-    }
-    return true;
-}
 
 } // namespace OpenTune

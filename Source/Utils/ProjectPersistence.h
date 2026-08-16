@@ -71,17 +71,17 @@ private:
     // 反序列化辅助
     static ProjectSettings settingsFromValueTree(const juce::ValueTree& tree);
     static ProjectSourceEntry sourceFromValueTree(const juce::ValueTree& tree);
-    static ProjectContentEntry contentFromValueTree(const juce::ValueTree& tree);
+    static ProjectContentEntry contentFromValueTree(const juce::ValueTree& tree, int formatVersion);
     static ProjectTrackEntry trackFromValueTree(const juce::ValueTree& tree);
     static ProjectReferenceBinding referenceBindingFromValueTree(const juce::ValueTree& tree);
 
     // 子节点反序列化
-    static std::vector<Note> notesFromValueTree(const juce::ValueTree& tree);
+    static std::vector<Note> notesFromValueTree(const juce::ValueTree& tree, int formatVersion);
     static std::vector<ProjectContentEntry::SegmentEntry> segmentsFromValueTree(const juce::ValueTree& tree);
     static ProjectContentEntry::TimeGridEntry timeGridFromValueTree(const juce::ValueTree& tree);
     static std::vector<ProjectPlacementEntry> placementsFromValueTree(const juce::ValueTree& tree);
     static std::vector<ProjectContentEntry::SilentGapEntry> silentGapsFromValueTree(const juce::ValueTree& tree);
-    static ProjectContentEntry::ReferenceFeatureEntry referenceFeaturesFromValueTree(const juce::ValueTree& tree);
+    static ProjectContentEntry::ReferenceFeatureEntry referenceFeaturesFromValueTree(const juce::ValueTree& tree, int formatVersion);
     static AutomationLane volumeEnvelopeFromValueTree(const juce::ValueTree& tree);
 
     // 子节点序列化

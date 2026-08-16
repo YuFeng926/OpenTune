@@ -32,6 +32,7 @@ constexpr const char* kSharedLightPitchCorrectionEnabledKey = "shared.render.lig
 constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMode";
 constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
 constexpr const char* kSharedGridStyleKey = "shared.pianoRoll.gridStyle";
+constexpr const char* kSharedEqSuppressRemoveConfirmationKey = "shared.eq.suppressRemoveConfirmation";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "shared.shortcuts.playPause",
@@ -61,6 +62,7 @@ constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::Shortcu
     "shared.shortcuts.toolODPitch",
     "shared.shortcuts.toolODVolumeEnvelope",
     "shared.shortcuts.toolODScissors",
+    "shared.shortcuts.toolEq",
 }};
 
 juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storageOptions)
@@ -337,6 +339,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.lightPitchCorrectionEnabled = properties.getBoolValue(
         kSharedLightPitchCorrectionEnabledKey,
         state.shared.lightPitchCorrectionEnabled);
+    state.shared.suppressEqRemoveConfirmation = properties.getBoolValue(
+        kSharedEqSuppressRemoveConfirmationKey,
+        state.shared.suppressEqRemoveConfirmation);
     state.shared.experimentalReferenceAlignMode = fromExperimentalRefAlignModeToken(
         properties.getValue(kSharedExperimentalReferenceAlignKey,
                             toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode)));
@@ -394,6 +399,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         state.shared.experimentalFeaturesEnabled);
     properties.setValue(kSharedLightPitchCorrectionEnabledKey,
                         state.shared.lightPitchCorrectionEnabled);
+    properties.setValue(kSharedEqSuppressRemoveConfirmationKey,
+                        state.shared.suppressEqRemoveConfirmation);
     properties.setValue(kSharedExperimentalReferenceAlignKey,
                         toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode));
     properties.setValue(kSharedSnapEnabledKey, state.shared.snap.enabled);
@@ -526,6 +533,13 @@ void AppPreferences::setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& 
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.shortcuts = shortcuts;
+    saveLocked();
+}
+
+void AppPreferences::setSuppressEqRemoveConfirmation(bool suppress)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.suppressEqRemoveConfirmation = suppress;
     saveLocked();
 }
 

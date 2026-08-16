@@ -2,8 +2,10 @@
 
 #include "../DSP/AutoTunePitchShifter.h"
 #include "../DSP/MelSpectrogram.h"
+#include "../DSP/NoteEqProcessor.h"
 #include "../Inference/ChunkRenderStrategy.h"
 #include "../Inference/VocoderDomain.h"
+#include "../Render/RenderChunkPlanner.h"
 #include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/ChannelLayoutLogger.h"
@@ -263,6 +265,81 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
         completion.chunkSettled(key); // 持锁调用：owner 析构必须先拿同一把锁置 closed，互斥保证无 UAF
 }
 
+// ==============================================================================
+// Per-note EQ 唯一发布（契约 §4/§6/§7）
+// ==============================================================================
+// 所有 Stage1 最终 Note 音频结果（轻量、原始、Vocoder）在写入缓存前统一经
+// 应用 per-note EQ，位于音量包络前（包络只在播放端
+// applyAutomationGain 应用）。notes 只在本调用栈内读取，不复制、不存储。
+// 每个 active Note 用独立 NoteEqProcessor，prepare 按固定渲染率
+// RenderCache::kSampleRate 计算系数并从 Note 起点重置状态，只处理
+// 该 Note 在完整 chunk 内的精确样本范围（RenderChunkPlanner 已保证 chunk
+// 边界不切 Note）。Stage1 音频固定 44.1kHz（canonical），不存在第二采样率轴。
+
+// chunk 发布范围 [trueStartSample, trueEndSample) 是否与任何 active-EQ Note
+// 相交（用于原始路径 Blank/失败条件中的 EQ 排除，契约 §6）。
+// 秒域边界按 RenderCache::kSampleRate 换算，与接入音频的样本域一致。
+bool chunkIntersectsActiveEqNote(const std::vector<Note>& notes,
+                                 const FrozenRenderBoundaries& boundaries)
+{
+    for (const auto& note : notes)
+    {
+        if (!note.eq.has_value() || !note.eq->active)
+            continue;
+
+        const int64_t noteStartSample = TimeCoordinate::secondsToSamplesFloor(
+            note.startTime, RenderCache::kSampleRate);
+        if (noteStartSample >= boundaries.trueEndSample)
+            break;  // notes 按起点升序
+
+        const int64_t noteEndSample = TimeCoordinate::secondsToSamplesCeil(
+            note.endTime, RenderCache::kSampleRate);
+        if (noteEndSample > boundaries.trueStartSample)
+            return true;
+    }
+    return false;
+}
+
+RenderCache::ChunkRenderResult publishChunkWithPerNoteEq(
+    RenderCache& renderCache,
+    const FrozenRenderBoundaries& boundaries,
+    std::vector<float> audio,
+    uint64_t revision,
+    const std::vector<Note>& notes)
+{
+    for (const auto& note : notes)
+    {
+        if (!note.eq.has_value() || !note.eq->active)
+            continue;
+
+        const int64_t noteStartSample = TimeCoordinate::secondsToSamplesFloor(
+            note.startTime, RenderCache::kSampleRate);
+        if (noteStartSample >= boundaries.trueEndSample)
+            break;  // notes 按起点升序
+
+        const int64_t noteEndSample = TimeCoordinate::secondsToSamplesCeil(
+            note.endTime, RenderCache::kSampleRate);
+        const int64_t rangeStart = std::max(noteStartSample, boundaries.trueStartSample);
+        const int64_t rangeEnd = std::min(noteEndSample, boundaries.trueEndSample);
+        if (rangeEnd <= rangeStart)
+            continue;
+
+        // 每个 active Note 独立处理器：prepare 按固定渲染率计算系数并重置状态
+        NoteEqProcessor processor;
+        processor.prepare(RenderCache::kSampleRate, *note.eq);
+
+        float* channelData[1] = {
+            audio.data() + static_cast<size_t>(rangeStart - boundaries.trueStartSample) };
+        juce::AudioBuffer<float> noteBuffer(
+            channelData, 1, static_cast<int>(rangeEnd - rangeStart));
+        processor.process(noteBuffer);
+    }
+
+    return renderCache.completeChunkRenderWithAudio(
+        boundaries.trueStartSample, boundaries.trueEndSample,
+        std::move(audio), revision);
+}
+
 } // namespace
 
 ProcessRenderRuntime& ProcessRenderRuntime::getInstance()
@@ -458,7 +535,6 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
         if (vocoderDomain_ != nullptr)
         {
             out.generation = vocoderGeneration_;
-            out.hopSize = vocoderDomain_->getVocoderHopSize();
             out.melBins = vocoderDomain_->getMelBins();
             out.fMax = vocoderDomain_->getFMax();
             return true;
@@ -490,7 +566,6 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
             vocoderDomain_ = std::move(newDomain);
             ++vocoderGeneration_;
             out.generation = vocoderGeneration_;
-            out.hopSize = vocoderDomain_->getVocoderHopSize();
             out.melBins = vocoderDomain_->getMelBins();
             out.fMax = vocoderDomain_->getFMax();
             published = true;
@@ -533,7 +608,10 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
         return;
     }
+    // 执行读取点成对刷新：canonical 音频与其样本率永远来自同一份最新
+    // PlaybackReadSource 快照，绝不跨快照混用。
     job.audioBuffer = readSource.audioBuffer;
+    job.audioSampleRate = readSource.audioSampleRate;
 
     auto pitchCurve = contentSnap->pitchCurve;
 
@@ -551,26 +629,16 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
 
     if (coreJob.audioBuffer != nullptr)
     {
-        // Vocoder 配置在首次使用前就绪，并一次锁内获取 generation/hop/melBins/fMax：
-        // boundaries 所用 hop 与提交校验的 generation 必须同属一个 domain。
-        if (!acquireVocoderConfig(vocoderCfg))
-        {
-            AppLogger::log("RenderWorker: acquireVocoderConfig FAILED");
-            coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
-            return;
-        }
-
+        // 边界冻结使用唯一渲染 hop（RenderChunkPlanner::kRenderHopSize），与
+        // Vocoder domain 配置无关；vocoder 配置延后到真实 mel/vocoder 分支前获取。
         const int audioNumSamples = coreJob.audioBuffer->getNumSamples();
         const int audioNumChannels = coreJob.audioBuffer->getNumChannels();
-        int workerHopSize = 512;
-        if (vocoderCfg.hopSize > 0)
-            workerHopSize = vocoderCfg.hopSize;
 
         ContentSampleRange contentRange{0, audioNumSamples};
         if (freezeRenderBoundaries(contentRange,
                                    coreJob.startSample,
                                    coreJob.endSampleExclusive,
-                                   workerHopSize,
+                                   RenderChunkPlanner::kRenderHopSize,
                                    boundaries))
         {
             boundariesFrozen = true;
@@ -589,9 +657,41 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         }
     }
 
-    if (!clipFound || !pitchCurve || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen)
+    // 契约 §6：边界冻结后立即计算当前 chunk 是否与 active-EQ Note 相交。
+    // 带 active EQ 的 Note 不得走 Blank：原 Blank/失败条件中若相交则发布原始
+    // monoAudio 的 publishSampleCount 部分并应用 EQ。
+    const bool intersectsActiveEqNote = chunkIntersectsActiveEqNote(
+        contentSnap->notes, boundaries);
+
+    // 原始路径发布：monoAudio 的 publishSampleCount 部分 + per-note EQ（契约 §6）
+    const auto publishRawWithEq = [&]() {
+        std::vector<float> rawAudio(
+            monoAudio.begin(),
+            monoAudio.begin() + static_cast<size_t>(boundaries.publishSampleCount));
+        const auto result = publishChunkWithPerNoteEq(
+            *coreJob.renderCache, boundaries, std::move(rawAudio),
+            coreJob.targetRevision, contentSnap->notes);
+        if (result == RenderCache::ChunkRenderResult::InvalidInput)
+            coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
+        else if (result == RenderCache::ChunkRenderResult::Published)
+            notifyChunkSettled(completion, coreJob.contentKey);
+    };
+
+    if (!clipFound || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen)
     {
+        // 无原始音频可发布：保持既有失败语义
         coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
+        return;
+    }
+
+    if (!pitchCurve)
+    {
+        if (!intersectsActiveEqNote)
+        {
+            coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
+            return;
+        }
+        publishRawWithEq();
         return;
     }
 
@@ -604,8 +704,15 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     auto snap = pitchCurve->getSnapshot();
     if (!snap->hasOriginalF0Data())
     {
-        coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
-        notifyChunkSettled(completion, coreJob.contentKey);
+        if (!intersectsActiveEqNote)
+        {
+            coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
+            notifyChunkSettled(completion, coreJob.contentKey);
+        }
+        else
+        {
+            publishRawWithEq();
+        }
         return;
     }
 
@@ -626,11 +733,18 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     // Blank 判定：仅当全局移调为恒等（effectiveF0 与 originalF0 一致，无差异可
     // 合成）且该 chunk 帧范围内无任何 correction segment 时，才 Blank 回退原始
     // 音频缓存播放。非恒等全局移调即使无 correction 也必须进入 vocoder 全量渲染，
-    // 否则移调不生效。
+    // 否则移调不生效。带 active EQ 的 Note 不得走 Blank：改为发布原始音频并应用 EQ。
     if (contentSnap->pitchShiftSettings.isIdentity() && !snap->hasCorrectionInRange(f0StartFrame, f0EndFrame))
     {
-        coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
-        notifyChunkSettled(completion, coreJob.contentKey);
+        if (!intersectsActiveEqNote)
+        {
+            coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
+            notifyChunkSettled(completion, coreJob.contentKey);
+        }
+        else
+        {
+            publishRawWithEq();
+        }
         return;
     }
 
@@ -648,8 +762,15 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
 
     if (!hasValidF0)
     {
-        coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
-        notifyChunkSettled(completion, coreJob.contentKey);
+        if (!intersectsActiveEqNote)
+        {
+            coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
+            notifyChunkSettled(completion, coreJob.contentKey);
+        }
+        else
+        {
+            publishRawWithEq();
+        }
         return;
     }
 
@@ -678,9 +799,9 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);
 
                 const uint64_t objectId = coreJob.contentKey.objectId;
-                const auto result = coreJob.renderCache->completeChunkRenderWithAudio(
-                    boundaries.trueStartSample, boundaries.trueEndSample,
-                    std::move(shiftedAudio), coreJob.targetRevision);
+                const auto result = publishChunkWithPerNoteEq(
+                    *coreJob.renderCache, boundaries, std::move(shiftedAudio),
+                    coreJob.targetRevision, contentSnap->notes);
 
                 if (result == RenderCache::ChunkRenderResult::InvalidInput)
                 {
@@ -699,9 +820,16 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         }
     }
 
-    // 配置快照（generation/hop/melBins/fMax）已在本函数开头随 acquireVocoderConfig()
-    // 一次锁内获取（vocoderCfg），此处 melBins/fMax 与提交校验的 generation
-    // 同属一个 domain，不存在跨域混用。
+    // 真实 mel/vocoder 分支前唯一一次锁内获取 domain 配置（generation/melBins/fMax）：
+    // raw 四分支与 light 路径已在上方早退，绝不触发模型加载。melBins/fMax 与提交
+    // 校验的 generation 同属一个 domain，不存在跨域混用。
+    if (!acquireVocoderConfig(vocoderCfg))
+    {
+        AppLogger::log("RenderWorker: acquireVocoderConfig FAILED");
+        coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
+        return;
+    }
+
     const int melBins = vocoderCfg.melBins;
     const float fMax = vocoderCfg.fMax;
     if (melBins <= 0)
@@ -781,6 +909,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                              chunkObjId,
                              jobStartSeconds,
                              frozenBoundaries,
+                             contentSnap,   // 现有 shared_ptr：不复制 notes/EqSettings
                              completion = std::move(completion)](
                                  bool success,
                                  const juce::String& error,
@@ -805,9 +934,9 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 return;
             }
 
-            const auto result = renderCache->completeChunkRenderWithAudio(
-                boundaries.trueStartSample, boundaries.trueEndSample,
-                std::move(publishedAudio), targetRevision);
+            const auto result = publishChunkWithPerNoteEq(
+                *renderCache, boundaries, std::move(publishedAudio), targetRevision,
+                contentSnap->notes);
 
             if (result == RenderCache::ChunkRenderResult::InvalidInput)
             {
@@ -838,9 +967,9 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     if (!submitVocoderJob(std::move(vocoderJob), vocoderCfg.generation))
     {
         // stale generation：快照后、提交前另一实例 reset/重建了 domain。
-        // 原样重排队 coreJob（下一轮以新 domain 配置重算），不标记失败
-        // （chunk 保持 Pending，仅归还异步计数）。
-        crs->enqueueRender(std::move(coreJob));
+        // 只回退状态机（Running→Pending）并投递一个 job token，下一轮以新 domain
+        // 配置重算；不 failure、不 settle，仅归还异步计数。
+        crs->requeueRenderChunk(coreJob);
         crs->completeAsyncRenderJob();
         return;
     }

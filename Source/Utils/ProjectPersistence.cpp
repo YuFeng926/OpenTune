@@ -165,7 +165,7 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
         for (int i = 0; i < contentList.getNumChildren(); ++i) {
             auto child = contentList.getChild(i);
             if (child.hasType("Content")) {
-                snapshot.contents.push_back(contentFromValueTree(child));
+                snapshot.contents.push_back(contentFromValueTree(child, version));
             }
         }
     }
@@ -372,7 +372,7 @@ juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry
     return tree;
 }
 
-ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTree& tree)
+ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTree& tree, int formatVersion)
 {
     ProjectContentEntry m;
     m.contentKey.domainKind = static_cast<DomainKind>(static_cast<int>(tree.getProperty("contentDomain", 0)));
@@ -406,7 +406,7 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
     }
 
     // Notes
-    m.notes = notesFromValueTree(tree.getChildWithName("Notes"));
+    m.notes = notesFromValueTree(tree.getChildWithName("Notes"), formatVersion);
 
     // Note topology state（旧工程无该 property 时按 notes 是否为空推断，避免覆盖已有音符）
     m.noteTopologyInitialized = tree.hasProperty("noteTopologyInitialized")
@@ -447,7 +447,7 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
     // ReferenceFeatures
     auto rfTree = tree.getChildWithName("ReferenceFeatures");
     if (rfTree.isValid()) {
-        m.referenceFeatures = referenceFeaturesFromValueTree(rfTree);
+        m.referenceFeatures = referenceFeaturesFromValueTree(rfTree, formatVersion);
     }
 
     return m;
@@ -474,17 +474,19 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
         nt.setProperty("outputGainDb", note.outputGainDb, nullptr);
         nt.setProperty("isVoiced", note.isVoiced ? 1 : 0, nullptr);
         
-        // v5: Per-note EQ settings
+        // v5: Per-note EQ settings — 9 个 scalar properties
         if (note.eq.has_value()) {
             const auto& eq = *note.eq;
             juce::ValueTree eqTree("EqSettings");
             eqTree.setProperty("active", eq.active ? 1 : 0, nullptr);
-            for (int b = 0; b < EqSettings::kNumBands; ++b) {
-                juce::ValueTree bandTree("Band" + juce::String(b));
-                bandTree.setProperty("gainDb", eq.bands[b].gainDb, nullptr);
-                bandTree.setProperty("frequency", eq.bands[b].frequency, nullptr);
-                eqTree.addChild(bandTree, -1, nullptr);
-            }
+            eqTree.setProperty("lowCutFrequencyHz", eq.lowCutFrequencyHz, nullptr);
+            eqTree.setProperty("lowShelfFrequencyHz", eq.lowShelfFrequencyHz, nullptr);
+            eqTree.setProperty("lowShelfGainDb", eq.lowShelfGainDb, nullptr);
+            eqTree.setProperty("peakFrequencyHz", eq.peakFrequencyHz, nullptr);
+            eqTree.setProperty("peakGainDb", eq.peakGainDb, nullptr);
+            eqTree.setProperty("highShelfFrequencyHz", eq.highShelfFrequencyHz, nullptr);
+            eqTree.setProperty("highShelfGainDb", eq.highShelfGainDb, nullptr);
+            eqTree.setProperty("highCutFrequencyHz", eq.highCutFrequencyHz, nullptr);
             nt.addChild(eqTree, -1, nullptr);
         }
         
@@ -493,7 +495,7 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
     return tree;
 }
 
-std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& tree)
+std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& tree, int formatVersion)
 {
     std::vector<Note> notes;
     if (!tree.isValid()) { return notes; }
@@ -513,18 +515,32 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
         note.outputGainDb = child.getProperty("outputGainDb", 0.0f);
         note.isVoiced = static_cast<int>(child.getProperty("isVoiced", 1)) != 0;
         
-        // v5: Per-note EQ settings
+        // v5: Per-note EQ settings — 仅 formatVersion>=5 且 EqSettings 子节点完整含
+        // 9 个 scalar properties 时恢复；v3/v4 一律 nullopt，v5 Band 草稿（缺
+        // scalar schema）仍 nullopt
         auto eqTree = child.getChildWithName("EqSettings");
-        if (eqTree.isValid()) {
+        if (formatVersion >= 5
+            && eqTree.isValid()
+            && eqTree.hasProperty("active")
+            && eqTree.hasProperty("lowCutFrequencyHz")
+            && eqTree.hasProperty("lowShelfFrequencyHz")
+            && eqTree.hasProperty("lowShelfGainDb")
+            && eqTree.hasProperty("peakFrequencyHz")
+            && eqTree.hasProperty("peakGainDb")
+            && eqTree.hasProperty("highShelfFrequencyHz")
+            && eqTree.hasProperty("highShelfGainDb")
+            && eqTree.hasProperty("highCutFrequencyHz"))
+        {
             EqSettings eq;
             eq.active = static_cast<int>(eqTree.getProperty("active", 0)) != 0;
-            for (int b = 0; b < EqSettings::kNumBands; ++b) {
-                auto bandTree = eqTree.getChildWithName("Band" + juce::String(b));
-                if (bandTree.isValid()) {
-                    eq.bands[b].gainDb = bandTree.getProperty("gainDb", 0.0f);
-                    eq.bands[b].frequency = bandTree.getProperty("frequency", 1000.0f);
-                }
-            }
+            eq.lowCutFrequencyHz = eqTree.getProperty("lowCutFrequencyHz", 0.0f);
+            eq.lowShelfFrequencyHz = eqTree.getProperty("lowShelfFrequencyHz", 0.0f);
+            eq.lowShelfGainDb = eqTree.getProperty("lowShelfGainDb", 0.0f);
+            eq.peakFrequencyHz = eqTree.getProperty("peakFrequencyHz", 0.0f);
+            eq.peakGainDb = eqTree.getProperty("peakGainDb", 0.0f);
+            eq.highShelfFrequencyHz = eqTree.getProperty("highShelfFrequencyHz", 0.0f);
+            eq.highShelfGainDb = eqTree.getProperty("highShelfGainDb", 0.0f);
+            eq.highCutFrequencyHz = eqTree.getProperty("highCutFrequencyHz", 0.0f);
             note.eq = eq;
         }
         
@@ -829,7 +845,7 @@ juce::ValueTree ProjectPersistence::referenceFeaturesToValueTree(const ProjectCo
     return tree;
 }
 
-ProjectContentEntry::ReferenceFeatureEntry ProjectPersistence::referenceFeaturesFromValueTree(const juce::ValueTree& tree)
+ProjectContentEntry::ReferenceFeatureEntry ProjectPersistence::referenceFeaturesFromValueTree(const juce::ValueTree& tree, int formatVersion)
 {
     ProjectContentEntry::ReferenceFeatureEntry rf;
     if (!tree.isValid()) { return rf; }
@@ -842,7 +858,7 @@ ProjectContentEntry::ReferenceFeatureEntry ProjectPersistence::referenceFeatures
     rf.errorMessage = getOptionalProperty(tree, "errorMessage", "");
 
     // Pitch notes
-    rf.pitchNotes = notesFromValueTree(tree.getChildWithName("PitchNotes"));
+    rf.pitchNotes = notesFromValueTree(tree.getChildWithName("PitchNotes"), formatVersion);
 
     // Timing anchors
     auto taTree = tree.getChildWithName("TimingAnchors");

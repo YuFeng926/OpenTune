@@ -1077,6 +1077,9 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
         }
+
+        // EQ 指示标记叠加在 OpenDyne blob 上
+        drawNoteEqIndicators(g, ctx, item);
         return;
     }
 
@@ -1164,6 +1167,9 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.drawRect(noteBounds, 1.0f);
         }
     }
+
+    // EQ 指示标记叠加在 OpenTune 音符上
+    drawNoteEqIndicators(g, ctx, item);
 }
 
 void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
@@ -1865,6 +1871,77 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             }
         }
         }
+    }
+}
+
+// ============================================================================
+// EQ 指示标记 — 每个 note.eq.has_value() 音符显示清晰但克制的 EQ 指示
+// ============================================================================
+
+void PianoRollRenderer::drawNoteEqIndicators(juce::Graphics& g,
+                                              const RenderContext& ctx,
+                                              const ContentRenderItem& item)
+{
+    if (item.displayNotes == nullptr || item.displayNotes->empty())
+        return;
+
+    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
+    if (!visibleWindow.isValid())
+        return;
+
+    const auto& notes = *item.displayNotes;
+    auto firstVisibleNote = std::lower_bound(
+        notes.begin(), notes.end(), visibleWindow.visibleContentStartTime,
+        [](const Note& note, double t) { return note.startTime < t; });
+    if (firstVisibleNote != notes.begin())
+    {
+        const auto prev = std::prev(firstVisibleNote);
+        if (prev->endTime > visibleWindow.visibleContentStartTime)
+            firstVisibleNote = prev;
+    }
+    const auto lastVisibleNote = std::lower_bound(
+        firstVisibleNote, notes.end(), visibleWindow.visibleContentEndTime,
+        [](const Note& note, double t) { return note.startTime < t; });
+
+    for (auto it = firstVisibleNote; it != lastVisibleNote; ++it)
+    {
+        const auto& note = *it;
+        if (!note.eq.has_value())
+            continue;
+
+        const bool isActive = note.eq->active;
+        float adjustedPitch = note.getAdjustedPitch();
+        if (adjustedPitch <= 0.0f) continue;
+
+        float midi = ctx.coords.freqToMidi(adjustedPitch);
+        float centerY = ctx.coords.midiToY(midi);
+
+        int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
+        int x2 = sourceTimeToScreenX(note.endTime, ctx, item);
+        if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
+            continue;
+
+        // EQ 指示标记：音符右上角的小三角/条纹，克制不喧宾夺主
+        const float markerSize = juce::jmin(6.0f, (x2 - x1) * 0.25f, ctx.pixelsPerSemitone * 0.5f);
+        if (markerSize < 3.0f)
+            continue;
+
+        const float markerX = static_cast<float>(x2) - markerSize - 1.0f;
+        const float markerY = static_cast<float>(centerY - ctx.pixelsPerSemitone * 0.5f) + 1.0f;
+
+        // 亮金色小标记；active=false 用半透明区分旁通状态
+        const auto markerColor = isActive
+            ? juce::Colour::fromRGB(255, 200, 72).withAlpha(0.75f)
+            : juce::Colour::fromRGB(255, 200, 72).withAlpha(0.30f);
+
+        g.setColour(markerColor);
+        // 小三角形 EQ 标记
+        juce::Path marker;
+        marker.startNewSubPath(markerX, markerY);
+        marker.lineTo(markerX + markerSize, markerY);
+        marker.lineTo(markerX + markerSize, markerY + markerSize);
+        marker.closeSubPath();
+        g.fillPath(marker);
     }
 }
 

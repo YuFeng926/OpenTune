@@ -41,8 +41,9 @@ public:
     virtual bool replaceContentNotesForFullMutation(ContentKey key,
                                                      std::vector<Note> notes) = 0;
 
-    // 只替换 notes、推进 notesRevision/contentRevision、发布新 snapshot、
-    // 不推进 pitchRevision、不请求 render（拓扑语义）。
+    // 只替换 notes（mergeNotesRange 合并入 affectedRange）、推进 notesRevision/contentRevision、
+    // 发布新 snapshot；调用方统一按 affectedRange 调度局部 Stage1 重渲染；
+    // 不推进 pitchRevision、不写 correction segments。
     virtual ContentCommitSnapshot commitNoteTopologyPatch(ContentKey key,
                                                           ContentNoteRangePatch patch) = 0;
 

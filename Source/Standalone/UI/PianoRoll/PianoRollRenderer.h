@@ -141,6 +141,12 @@ public:
     void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     void drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
+
+    /// Draw EQ indicator markers on notes that have EQ settings.
+    /// Shows a small, restrained EQ symbol; active=false still shows (settings preserved)
+    /// but visually distinguishes bypassed state. Does not affect hit area or note theme.
+    void drawNoteEqIndicators(juce::Graphics& g, const RenderContext& ctx,
+                              const ContentRenderItem& item);
 };
 
 } // namespace OpenTune

@@ -341,6 +341,11 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
         return;
     }
 
+    if (currentTool_ == ToolId::Eq) {
+        ctx_.setMouseCursor(ctx_.getEqCursor());
+        return;
+    }
+
     if (currentTool_ != ToolId::Select) {
         return;
     }
@@ -684,6 +689,12 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
         }
     }
 
+    // EQ 工具两种模式共用（ShortcutId::Eq 可配置，默认 E）
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Eq, key)) {
+        ctx_.setCurrentTool(ToolId::Eq);
+        return true;
+    }
+
     // HandDraw 两种模式共用
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolHandDraw, key)) {
         ctx_.setCurrentTool(ToolId::HandDraw);
@@ -936,6 +947,7 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentDrag(const juce::MouseEvent& e
 
     switch (tool) {
         case ToolId::Select:
+        case ToolId::Eq:
         case ToolId::Pitch:
         case ToolId::PitchModulation:
         case ToolId::PitchDrift:
@@ -975,6 +987,10 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
         }
         switch (tool) {
             case ToolId::Select:
+            case ToolId::Eq:
+            case ToolId::Pitch:
+            case ToolId::PitchModulation:
+            case ToolId::PitchDrift:
                 handleSelectUp(e);
                 break;
             case ToolId::HandDraw:
@@ -985,11 +1001,6 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
                 if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
                     handleDrawNoteUp(e);
                 }
-                break;
-            case ToolId::Pitch:
-            case ToolId::PitchModulation:
-            case ToolId::PitchDrift:
-                handleSelectUp(e);
                 break;
             default:
                 break;
@@ -1027,6 +1038,7 @@ void PianoRollToolHandler::cancelActiveMouseGesture()
     auto& state = ctx_.getState();
     state.resetTransient();
     ctx_.clearNoteDraft();
+    pendingEqPrimaryIndex_ = -1;
 }
 
 void PianoRollToolHandler::handleDeleteKey()
@@ -1708,6 +1720,11 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
     if (ctx_.getState().selection.isSelectingArea) {
         ctx_.getState().selection.isSelectingArea = false;
         updateF0SelectionFromNotes(notes);
+        // EQ 工具：框选完成且 selection 非空时，以 anchor 音符打开 EQ 弹窗一次。
+        // 纯点击不进入此处（由 handleEqToolMouseUp 消费 pending 主音符）。
+        if (currentTool_ == ToolId::Eq && !ctx_.getState().noteSelection.empty()) {
+            ctx_.openEqPreview(ctx_.getState().noteSelection.anchorIndex);
+        }
     }
 
     ctx_.getState().selection.isSelectingF0 = false;
@@ -3516,21 +3533,64 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
 
 void PianoRollToolHandler::handleEqToolMouseDown(const juce::MouseEvent& e)
 {
-    // EQ tool: click on a note to open EQ popup
-    // For now, just log the event - actual popup integration will be in Phase 4
-    AppLogger::log("[EQ Tool] mouseDown at (" + juce::String(e.x) + ", " + juce::String(e.y) + ")");
+    const auto& notes = committedNotes(ctx_);
+    const auto sourceTime = pixelXToSourceTime(e.x);
+    if (!sourceTime)
+        return;
+    const auto editRange = sourceEditRange();
+    if (!editRange.contains(*sourceTime))
+        return;
+
+    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+    const int clickedNoteIndex = findNoteIndexAt(notes, *sourceTime, clickedPitch, 1.0f);
+    if (clickedNoteIndex < 0)
+        return;
+
+    auto& noteSelection = ctx_.getState().noteSelection;
+    const int noteCount = static_cast<int>(notes.size());
+    if (noteSelection.isSelected(clickedNoteIndex)) {
+        // 命中已选音符：保留组选中，并把该音符设为 anchor（add 内部维护 anchorIndex）
+        noteSelection.add(clickedNoteIndex, noteCount);
+    } else {
+        noteSelection.setSingle(clickedNoteIndex, noteCount);
+    }
+    updateF0SelectionFromNotes(notes);
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+
+    // 记录 pending 主音符：不立即开弹窗，纯点击 mouseUp 时消费一次
+    pendingEqPrimaryIndex_ = clickedNoteIndex;
 }
 
 void PianoRollToolHandler::handleEqToolMouseDrag(const juce::MouseEvent& e)
 {
-    // EQ tool: drag to adjust EQ parameters on selected note
-    AppLogger::log("[EQ Tool] mouseDrag at (" + juce::String(e.x) + ", " + juce::String(e.y) + ")");
+    // 仅音符点击手势进入：mouseDown 未命中音符的 empty-space 拖拽由
+    // consumeEmptySpaceIntentDrag 处理，不经过此处。
+    if (pendingEqPrimaryIndex_ < 0)
+        return;
+
+    const int dx = e.x - dragStartPos_.x;
+    const int dy = e.y - dragStartPos_.y;
+    const int threshold = ctx_.getDragThreshold();
+    if (dx * dx + dy * dy <= threshold * threshold)
+        return;
+
+    // 超过拖拽阈值：清 pending，从 dragStartPos_ 起严格框选
+    pendingEqPrimaryIndex_ = -1;
+    const auto startEvent = e.withNewPosition(dragStartPos_.toFloat());
+    beginAreaSelection(startEvent);
+    handleSelectDrag(e);
 }
 
 void PianoRollToolHandler::handleEqToolMouseUp(const juce::MouseEvent& e)
 {
-    // EQ tool: release to finalize EQ adjustment
-    AppLogger::log("[EQ Tool] mouseUp at (" + juce::String(e.x) + ", " + juce::String(e.y) + ")");
+    juce::ignoreUnused(e);
+    // 框选路径由 handleSelectUp 完成（isSelectingArea 时 mouseUp 先于 switch 返回），
+    // 此处只处理纯点击：消费 pending 主音符打开 EQ 弹窗一次。
+    if (pendingEqPrimaryIndex_ >= 0) {
+        const int primaryIndex = pendingEqPrimaryIndex_;
+        pendingEqPrimaryIndex_ = -1;
+        ctx_.openEqPreview(primaryIndex);
+    }
 }
 
 } // namespace OpenTune
