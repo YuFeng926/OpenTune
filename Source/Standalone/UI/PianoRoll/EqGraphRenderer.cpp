@@ -13,6 +13,7 @@
  */
 
 #include "EqGraphRenderer.h"
+#include "../AuroraTheme.h"
 
 #include <cmath>
 #include <algorithm>
@@ -21,10 +22,10 @@
 namespace OpenTune {
 
 // ============================================================================
-// 颜色常量（源自 SRC Theme）
+// 颜色常量（源自 Aurora 主题）
 // ============================================================================
 
-juce::Colour EqGraphRenderer::backgroundColor() { return juce::Colour::fromRGB(22, 22, 22); }
+juce::Colour EqGraphRenderer::backgroundColor() { return juce::Colour(Aurora::Colors::PianoRollBg); }
 juce::Colour EqGraphRenderer::gridMajorColor() { return juce::Colour(0xFF6D7681u); }
 juce::Colour EqGraphRenderer::axisLabelColor() { return juce::Colour(0xFFAAB4C0u); }
 juce::Colour EqGraphRenderer::combinedCurveColor() { return juce::Colour::fromRGB(255, 200, 72); }
