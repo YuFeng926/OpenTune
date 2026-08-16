@@ -71,6 +71,8 @@ public:
     void setGraphBounds(juce::Rectangle<float> bounds) { graphBounds_ = bounds; }
     void setViewGainRangeDb(double rangeDb) { gainRangeDb_ = std::clamp(rangeDb, 6.0, 30.0); }
     void setSettings(const EqSettings& s) { settings_ = s; }
+    void setPreviewFreqRange(double minHz, double maxHz) { previewMinFreq_ = minHz; previewMaxFreq_ = maxHz; }
+    void clearPreviewFreqRange() { previewMinFreq_ = kMinFrequencyHz; previewMaxFreq_ = kMaxFrequencyHz; }
     double viewGainRangeDb() const { return gainRangeDb_; }
     juce::Rectangle<float> graphBounds() const { return graphBounds_; }
 
@@ -115,7 +117,7 @@ public:
     juce::Rectangle<float> viewRangeButtonRect(int controlIndex) const;
 
     // ── 锚点（SRC 视觉：halo + lighter 描边 + 序号双层描边） ──
-    void drawAnchors(juce::Graphics& g, int hoveredBand = -1) const;
+    void drawAnchors(juce::Graphics& g, int hoveredBand = -1, bool showNumbers = true) const;
     juce::Point<float> anchorPosition(int bandIndex) const;
     int hitTestAnchor(juce::Point<float> pos, float threshold = 10.0f) const;
 
@@ -134,6 +136,8 @@ public:
 private:
     juce::Rectangle<float> graphBounds_;
     double gainRangeDb_ = 12.0;
+    double previewMinFreq_ = kMinFrequencyHz;
+    double previewMaxFreq_ = kMaxFrequencyHz;
     EqSettings settings_;
     std::array<bool, static_cast<size_t>(CurveId::Count)> curveVisible_ = { true, true, true, true, true, true };
 

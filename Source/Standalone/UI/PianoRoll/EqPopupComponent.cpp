@@ -44,6 +44,11 @@ void EqPopupComponent::setPreviewMode(bool isPreview)
 {
     isPreview_ = isPreview;
     isMaximized_ = !isPreview;
+    // 预览模式设置50-20kHz频率范围，完整模式恢复默认
+    if (isPreview)
+        renderer_.setPreviewFreqRange(50.0, 20000.0);
+    else
+        renderer_.clearPreviewFreqRange();
     // 外部初始调用保持父级设置的 bounds，不误保存/跳变
     resized();
     repaint();
@@ -153,6 +158,52 @@ void EqPopupComponent::paint(juce::Graphics& g)
         renderer_.drawCoordReadout(g, activeMousePos_, true, coordAnimOpacity_);
     }
 
+    // ── 按钮 tooltip ──
+    if (hoveredButton_ >= 0)
+    {
+        const auto id = static_cast<ButtonId>(hoveredButton_);
+        juce::String tooltipText;
+        switch (id)
+        {
+        case ButtonId::Maximize:
+            tooltipText = isMaximized_ ? juce::String::fromUTF8(u8"收起为预览")
+                                       : juce::String::fromUTF8(u8"展开EQ编辑器");
+            break;
+        case ButtonId::Bypass:
+            tooltipText = settings_.active ? juce::String::fromUTF8(u8"旁通EQ")
+                                           : juce::String::fromUTF8(u8"启用EQ");
+            break;
+        case ButtonId::Remove:
+            tooltipText = juce::String::fromUTF8(u8"删除EQ处理");
+            break;
+        case ButtonId::Close:
+            tooltipText = juce::String::fromUTF8(u8"关闭");
+            break;
+        default: break;
+        }
+
+        if (tooltipText.isNotEmpty())
+        {
+            const auto btnRect = buttonBounds(id);
+            const float tooltipH = 16.0f;
+            const float tooltipY = btnRect.getBottom() + 3.0f;
+            // 确保 tooltip 不超出组件底部
+            const float maxY = static_cast<float>(getHeight()) - tooltipH - 2.0f;
+            const float finalY = juce::jmin(tooltipY, maxY);
+
+            g.setColour(EqGraphRenderer::hudBgColor().withAlpha(0.92f));
+            const auto font = juce::Font(juce::FontOptions(10.0f));
+            const auto textW = font.getStringWidthFloat(tooltipText) + 8.0f;
+            const float tooltipX = juce::jmax(2.0f, juce::jmin(btnRect.getX(),
+                                                                static_cast<float>(getWidth()) - textW - 2.0f));
+            g.fillRoundedRectangle(tooltipX, finalY, textW, tooltipH, 3.0f);
+            g.setColour(EqGraphRenderer::hudTextColor());
+            g.setFont(font);
+            g.drawText(tooltipText, juce::Rectangle<float>(tooltipX, finalY, textW, tooltipH),
+                       juce::Justification::centred, false);
+        }
+    }
+
     // ── Remove 确认弹窗 ──
     if (showingRemoveConfirmation_)
     {
@@ -239,26 +290,49 @@ void EqPopupComponent::paintButton(juce::Graphics& g, ButtonId id, juce::Rectang
 
 void EqPopupComponent::paintPowerSymbol(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
 {
+    // 打勾的复选框：外框 + 对勾
+    g.setColour(color);
     const float cx = bounds.getCentreX();
     const float cy = bounds.getCentreY();
-    const float r = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.40f;
+    const float s = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.40f;
 
-    // 电源符号：上缺口圆弧 + 顶部竖线
-    g.setColour(color);
-    g.drawEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f, 1.5f);
-    // 顶部竖线（开口）
-    g.drawLine(cx, cy - r - 2.0f, cx, cy - 1.0f, 1.5f);
+    // 复选框外框
+    g.drawRect(cx - s, cy - s, s * 2.0f, s * 2.0f, 1.5f);
+
+    // 对勾（✓）
+    if (settings_.active)
+    {
+        g.drawLine(cx - s * 0.5f, cy, cx - s * 0.1f, cy + s * 0.4f, 1.8f);
+        g.drawLine(cx - s * 0.1f, cy + s * 0.4f, cx + s * 0.5f, cy - s * 0.4f, 1.8f);
+    }
 }
 
 void EqPopupComponent::paintRemoveIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
 {
-    // 垃圾桶/删除图标：X 形
+    // 垃圾桶图标：盖子 + 桶身 + 竖线
     g.setColour(color);
     const float cx = bounds.getCentreX();
     const float cy = bounds.getCentreY();
-    const float s = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.30f;
-    g.drawLine(cx - s, cy - s, cx + s, cy + s, 1.5f);
-    g.drawLine(cx + s, cy - s, cx - s, cy + s, 1.5f);
+    const float w = bounds.getWidth() * 0.55f;
+    const float h = bounds.getHeight() * 0.60f;
+    const float lidH = h * 0.25f;
+    const float bodyTop = cy - h * 0.5f + lidH + 1.0f;
+    const float bodyBot = cy + h * 0.5f;
+
+    // 桶盖
+    g.drawLine(cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy - h * 0.5f, 1.5f);
+    // 盖子提手
+    g.drawLine(cx - w * 0.2f, cy - h * 0.5f - lidH, cx + w * 0.2f, cy - h * 0.5f - lidH, 1.5f);
+    g.drawLine(cx - w * 0.2f, cy - h * 0.5f, cx - w * 0.2f, cy - h * 0.5f - lidH, 1.5f);
+    g.drawLine(cx + w * 0.2f, cy - h * 0.5f, cx + w * 0.2f, cy - h * 0.5f - lidH, 1.5f);
+    // 桶身
+    g.drawLine(cx - w * 0.4f, bodyTop, cx - w * 0.35f, bodyBot, 1.3f);
+    g.drawLine(cx + w * 0.4f, bodyTop, cx + w * 0.35f, bodyBot, 1.3f);
+    g.drawLine(cx - w * 0.4f, bodyTop, cx + w * 0.4f, bodyTop, 1.3f);
+    g.drawLine(cx - w * 0.35f, bodyBot, cx + w * 0.35f, bodyBot, 1.3f);
+    // 桶身竖线
+    g.drawLine(cx - w * 0.15f, bodyTop + 1.0f, cx - w * 0.15f, bodyBot - 1.0f, 1.0f);
+    g.drawLine(cx + w * 0.15f, bodyTop + 1.0f, cx + w * 0.15f, bodyBot - 1.0f, 1.0f);
 }
 
 void EqPopupComponent::paintMaximizeIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
@@ -696,9 +770,10 @@ void EqPopupComponent::toggleMaximize()
 {
     if (isMaximized_)
     {
-        // 完整→预览：恢复保存的 preview bounds
+        // 完整→预览：恢复保存的 preview bounds，设置预览频率范围
         isMaximized_ = false;
         isPreview_ = true;
+        renderer_.setPreviewFreqRange(50.0, 20000.0);
         if (!savedPreviewBounds_.isEmpty())
             setBounds(savedPreviewBounds_);
         resized();
@@ -706,9 +781,10 @@ void EqPopupComponent::toggleMaximize()
     }
     else
     {
-        // 预览→完整：保存当前 preview bounds，计算 full bounds
+        // 预览→完整：保存当前 preview bounds，计算 full bounds，恢复完整频率范围
         isMaximized_ = true;
         isPreview_ = false;
+        renderer_.clearPreviewFreqRange();
         savedPreviewBounds_ = getBounds();  // 保存当前预览 bounds
 
         // 按 parent local bounds 等比例/夹紧

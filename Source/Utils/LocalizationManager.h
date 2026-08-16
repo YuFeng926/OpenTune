@@ -361,6 +361,12 @@ constexpr const char* kTooltipNoteSplit = "Note Split - Threshold for splitting 
 constexpr const char* kTooltipPitchModulation = "Modulation - Vibrato Depth";
 constexpr const char* kTooltipPitchDrift = "Drift - Pitch Drift Correction";
 
+constexpr const char* kTooltipEqMaximize = "Expand EQ Editor";
+constexpr const char* kTooltipEqMinimize = "Collapse to Preview";
+constexpr const char* kTooltipEqBypass = "Toggle EQ Bypass";
+constexpr const char* kTooltipEqRemove = "Remove EQ from Note";
+constexpr const char* kTooltipEqClose = "Close EQ Editor";
+
 }
 
 inline juce::String get(Language lang, const char* key)
@@ -553,6 +559,11 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTooltipNoteSplit, "Note Split - Threshold for splitting notes", "音符分割 - 控制音符分割阈值", "ノート分割 - ノート分割の閾値を制御", "Разделение нот - порог разделения", "Div. notas - Umbral de división" },
         { Keys::kTooltipPitchModulation, "Modulation - Vibrato Depth", "颤音深度调制", "モジュレーション - ビブラート深度", "Модуляция - глубина вибрато", "Modulación - profundidad de vibrato" },
         { Keys::kTooltipPitchDrift, "Drift - Pitch Drift Correction", "漂移修正", "ドリフト - ピッチドリフト補正", "Дрейф - коррекция дрейфа", "Deriva - corrección de deriva" },
+        { Keys::kTooltipEqMaximize, "Expand EQ Editor", "展开EQ编辑器", "EQエディタを展開", "Развернуть редактор EQ", "Expandir editor EQ" },
+        { Keys::kTooltipEqMinimize, "Collapse to Preview", "收起为预览", "プレビューに折りたたむ", "Свернуть в предпросмотр", "Colapsar a vista previa" },
+        { Keys::kTooltipEqBypass, "Toggle EQ Bypass", "切换EQ旁通", "EQバイパス切替", "Переключить обход EQ", "Alternar bypass EQ" },
+        { Keys::kTooltipEqRemove, "Remove EQ from Note", "删除音符的EQ处理", "ノートからEQを削除", "Удалить EQ из ноты", "Eliminar EQ de la nota" },
+        { Keys::kTooltipEqClose, "Close EQ Editor", "关闭EQ编辑器", "EQエディタを閉じる", "Закрыть редактор EQ", "Cerrar editor EQ" },
         { Keys::kToolPitch, "Pitch", "音高", "ピッチ", "Высота тона", "Tono" },
         { Keys::kToolModulation, "Modulation", "调制", "モジュレーション", "Модуляция", "Modulación" },
         { Keys::kToolDrift, "Drift", "漂移", "ドリフト", "Дрейф", "Deriva" },
