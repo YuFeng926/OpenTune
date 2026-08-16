@@ -49,16 +49,20 @@ juce::Colour EqGraphRenderer::bandColor(int bandIndex)
 
 float EqGraphRenderer::freqToX(double frequencyHz) const
 {
-    const double norm = std::clamp(std::log(frequencyHz / kMinFrequencyHz) / std::log(1000.0), 0.0, 1.0);
+    const double minFreq = previewMinFreq_;
+    const double maxFreq = previewMaxFreq_;
+    const double norm = std::clamp(std::log(frequencyHz / minFreq) / std::log(maxFreq / minFreq), 0.0, 1.0);
     return static_cast<float>(graphBounds_.getX() + norm * graphBounds_.getWidth());
 }
 
 double EqGraphRenderer::xToFreq(float x) const
 {
+    const double minFreq = previewMinFreq_;
+    const double maxFreq = previewMaxFreq_;
     const double norm = std::clamp(
         static_cast<double>(x - graphBounds_.getX()) / std::max(1.0, static_cast<double>(graphBounds_.getWidth())),
         0.0, 1.0);
-    return kMinFrequencyHz * std::pow(1000.0, norm);
+    return minFreq * std::pow(maxFreq / minFreq, norm);
 }
 
 float EqGraphRenderer::gainToY(double gainDb) const
@@ -414,7 +418,7 @@ int EqGraphRenderer::hitTestAnchor(juce::Point<float> pos, float threshold) cons
     return closestBand;
 }
 
-void EqGraphRenderer::drawAnchors(juce::Graphics& g, int hoveredBand) const
+void EqGraphRenderer::drawAnchors(juce::Graphics& g, int hoveredBand, bool showNumbers) const
 {
     for (int i = 0; i < 5; ++i)
     {
@@ -445,26 +449,29 @@ void EqGraphRenderer::drawAnchors(juce::Graphics& g, int hoveredBand) const
                       radius * 2.0f, radius * 2.0f, 1.25f);
 
         // 序号双层描边（黑色外层 + 白色内层，偏移避免遮挡锚点中心）
-        const float numOffsetX = radius + 5.0f;
-        const float numOffsetY = -radius - 2.0f;
+        if (showNumbers)
+        {
+            const float numOffsetX = radius + 5.0f;
+            const float numOffsetY = -radius - 2.0f;
 
-        // 黑色外层
-        g.setColour(juce::Colours::black.withAlpha(0.65f));
-        g.setFont(juce::FontOptions(8.0f));
-        g.drawText(juce::String(i + 1),
-                   juce::Rectangle<float>(pos.x + numOffsetX - 0.5f, pos.y + numOffsetY - 0.5f,
-                                          10.0f, 10.0f),
-                   juce::Justification::centred, false);
-        g.drawText(juce::String(i + 1),
-                   juce::Rectangle<float>(pos.x + numOffsetX + 0.5f, pos.y + numOffsetY + 0.5f,
-                                          10.0f, 10.0f),
-                   juce::Justification::centred, false);
-        // 白色内层
-        g.setColour(juce::Colours::white.withAlpha(0.85f));
-        g.drawText(juce::String(i + 1),
-                   juce::Rectangle<float>(pos.x + numOffsetX, pos.y + numOffsetY,
-                                          10.0f, 10.0f),
-                   juce::Justification::centred, false);
+            // 黑色外层
+            g.setColour(juce::Colours::black.withAlpha(0.65f));
+            g.setFont(juce::FontOptions(8.0f));
+            g.drawText(juce::String(i + 1),
+                       juce::Rectangle<float>(pos.x + numOffsetX - 0.5f, pos.y + numOffsetY - 0.5f,
+                                              10.0f, 10.0f),
+                       juce::Justification::centred, false);
+            g.drawText(juce::String(i + 1),
+                       juce::Rectangle<float>(pos.x + numOffsetX + 0.5f, pos.y + numOffsetY + 0.5f,
+                                              10.0f, 10.0f),
+                       juce::Justification::centred, false);
+            // 白色内层
+            g.setColour(juce::Colours::white.withAlpha(0.85f));
+            g.drawText(juce::String(i + 1),
+                       juce::Rectangle<float>(pos.x + numOffsetX, pos.y + numOffsetY,
+                                              10.0f, 10.0f),
+                       juce::Justification::centred, false);
+        }
     }
 }
 
@@ -828,8 +835,8 @@ void EqGraphRenderer::drawPreview(juce::Graphics& g) const
                                                 juce::PathStrokeType::rounded));
     }
 
-    // 锚点（始终显示，bypass 时降低透明度）
-    drawAnchors(g, -1);
+    // 锚点（始终显示，bypass 时降低透明度，预览模式不显示序号）
+    drawAnchors(g, -1, false);
 }
 
 void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
