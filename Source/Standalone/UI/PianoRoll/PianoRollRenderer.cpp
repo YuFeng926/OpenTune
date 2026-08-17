@@ -1945,4 +1945,12 @@ void PianoRollRenderer::drawNoteEqIndicators(juce::Graphics& g,
     }
 }
 
+void PianoRollRenderer::drawAllEqIndicators(juce::Graphics& g,
+                                             const RenderContext& ctx,
+                                             const std::vector<ContentRenderItem>& items)
+{
+    for (const auto& item : items)
+        drawNoteEqIndicators(g, ctx, item);
+}
+
 } // namespace OpenTune

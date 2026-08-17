@@ -2,8 +2,8 @@
  * EQ Popup Component — per-note EQ 编辑弹窗
  *
  * 两态契约：
- * - 预览：180×80，四控制全部可见（Maximize/Bypass/Remove/Close），5曲线+5 anchors交互，隐藏轴/网格/坐标动画/图例/视图范围
- * - 完整：600×400，完整 UI
+ * - 预览：180×80，四控制全部可见（Maximize/Bypass/Remove/Minimize），5曲线+5 anchors交互，隐藏轴/网格/坐标动画/图例/视图范围
+ * - 完整：600×400，完整 UI（隐藏图例/视图范围/坐标动画，显示滤波器hover淡入淡出）
  *
  * 尺寸自管理（无 parent 回调）：
  * - 首次从预览进入完整时保存当前 preview bounds
@@ -18,7 +18,7 @@
  * - setRemoveConfirmationSuppressed: 设置删除确认抑制
  * - onCommitSettings: anchor mouseUp 每次只触发一次
  * - onRemoveEq: Remove 确认后触发
- * - onClose: Close 触发
+ * - onClose: 关闭触发（通过父级调用 closeEqPopup）
  * - onRemoveConfirmationSuppressed: "不再提示"勾选同步
  */
 
@@ -67,7 +67,7 @@ public:
 
 private:
     // ── 按钮（None = 未命中任何按钮，图区域不得切换模式） ──
-    enum class ButtonId { None = -1, Maximize = 0, Bypass, Remove, Close };
+    enum class ButtonId { None = -1, Maximize = 0, Bypass, Remove, Minimize };
     void paintButton(juce::Graphics& g, ButtonId id, juce::Rectangle<float> bounds, bool hovered) const;
     juce::Rectangle<float> buttonBounds(ButtonId id) const;
     ButtonId hitTestButton(juce::Point<float> pos) const;
@@ -81,10 +81,10 @@ private:
     void dismissRemoveConfirmation();
 
     // ── 绘制按钮图标（图形而非文字） ──
-    void paintPowerSymbol(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
+    void paintBypassIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
     void paintRemoveIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
     void paintMaximizeIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
-    void paintCloseIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
+    void paintMinimizeIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
 
     // ── 状态 ──
     EqSettings settings_;
@@ -95,14 +95,23 @@ private:
     juce::Colour noteColor_ = juce::Colour::fromRGB(100, 100, 100);
     int hoveredBand_ = -1;
     int hoveredButton_ = -1;
-    int hoveredLegend_ = -1;
     int hoveredViewRange_ = -1;
     int pressedViewRange_ = -1;  // -1=无, 0=Decrease(+), 1=Increase(-); mouseDown 记录, mouseUp 提交
     juce::Rectangle<int> savedPreviewBounds_;  // 保存的预览 bounds，用于 Minimize 恢复
 
+    // ── 滤波器 hover 淡入淡出动画（SRC hoverBandInfluence） ──
+    std::array<double, 5> hoverBandAmounts_ = {};
+    double lastHoverFadeTime_ = 0.0;
+    static constexpr double kHoverFadeInTime = 0.50;
+    static constexpr double kHoverFadeOutTime = 0.50;
+
     // 拖拽状态
     bool dragCommitted_ = false;
     bool wasDragging_ = false;
+
+    // 窗口拖拽状态
+    bool draggingWindow_ = false;
+    juce::Point<int> dragOffset_;
 
     // 微拖拽 pending 语义（mouseDown 只记录，mouseDrag 超阈值才 startDrag）
     int pendingDragBand_ = -1;
@@ -124,18 +133,6 @@ private:
     // 活动中的 mousePos
     juce::Point<float> activeMousePos_;
 
-    // ── 坐标反馈 SRC 节奏动画状态 ──
-    enum class CoordAnimState { Idle, FadeIn, Active, FadeOut };
-    CoordAnimState coordAnimState_ = CoordAnimState::Idle;
-    double coordAnimElapsed_ = 0.0;   // 当前阶段累计时间（秒）
-    float coordAnimOpacity_ = 0.0f;   // 0..1 渲染透明度
-    bool mouseInGraph_ = false;       // 鼠标是否在图区域内
-
-    static constexpr double kCoordFadeInTime  = 0.120;  // 120ms fade in
-    static constexpr double kCoordActiveEntry = 0.140;   // 140ms entry
-    static constexpr double kCoordActiveHold  = 2.360;   // 2360ms hold
-    static constexpr double kCoordFadeOutTime = 0.500;    // 500ms fade out
-
     // 布局常量
     static constexpr int kPreviewWidth = 180;
     static constexpr int kPreviewHeight = 80;
@@ -150,7 +147,7 @@ private:
     juce::Rectangle<float> graphAreaBounds() const;
 
     void commitSettings();
-    void updateCoordAnimation(double dt);
+    void updateHoverBandFade(double dt);
     bool graphBoundsContains(juce::Point<float> pos) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EqPopupComponent)

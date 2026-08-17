@@ -11,6 +11,7 @@ namespace OpenTune {
 EqPopupComponent::EqPopupComponent()
 {
     setRepaintsOnMouseActivity(true);
+    setOpaque(false);
     startTimerHz(30);
     interaction_.setRenderer(&renderer_);
 }
@@ -109,10 +110,18 @@ void EqPopupComponent::resized()
 
 void EqPopupComponent::paint(juce::Graphics& g)
 {
-    // 背景
+    const auto bounds = getLocalBounds().toFloat();
+    const float cornerRadius = 8.0f;
+
+    // 背景 — 圆角矩形填充（半透明）
     const auto bgBase = noteColor_.withSaturation(noteColor_.getSaturation() * 0.3f);
     const auto bgColor = bgBase.interpolatedWith(EqGraphRenderer::backgroundColor(), 0.7f);
-    g.fillAll(bgColor);
+    g.setColour(bgColor.withAlpha(0.75f));
+    g.fillRoundedRectangle(bounds, cornerRadius);
+
+    // 圆角描边
+    g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.25f));
+    g.drawRoundedRectangle(bounds.reduced(0.5f), cornerRadius, 1.0f);
 
     // ── 曲线 + anchors 绘制（两态都画，bypass 由 renderer 降透明度） ──
     if (isPreview_)
@@ -122,7 +131,57 @@ void EqPopupComponent::paint(juce::Graphics& g)
     else
     {
         renderer_.drawFull(g, hoveredBand_, activeMousePos_, interaction_.isDragging(),
-                           hoveredLegend_, hoveredViewRange_, pressedViewRange_);
+                           hoveredViewRange_, pressedViewRange_);
+
+        // 滤波器 hover 淡入淡出高亮
+        for (int i = 0; i < 5; ++i)
+        {
+            const double amount = hoverBandAmounts_[static_cast<size_t>(i)];
+            if (amount <= 0.01)
+                continue;
+
+            const auto color = EqGraphRenderer::bandColor(i);
+            const auto bright = color.brighter(0.38f);
+            const float bypassDim = 1.0f;
+            const float a = static_cast<float>(amount);
+
+            // ① 渐变填充影响区（SRC drawHoverBandInfluence 核心）
+            {
+                juce::Graphics::ScopedSaveState saved(g);
+                g.reduceClipRegion(renderer_.graphBounds().toNearestInt().expanded(8));
+                const auto influencePath = renderer_.buildBandInfluencePath(i);
+
+                juce::ColourGradient grad(
+                    bright.withAlpha(0.15f * bypassDim * a), 0.0f, renderer_.graphBounds().getY(),
+                    color.withAlpha(0.0f),                0.0f, renderer_.graphBounds().getBottom(), true);
+                    grad.addColour(0.5, color.withAlpha(0.06f * bypassDim * a));
+                g.setGradientFill(grad);
+                g.fillPath(influencePath);
+            }
+
+            // ② 双层描边
+            const auto curvePath = renderer_.buildSingleBandPath(i);
+
+            g.setColour(bright.withAlpha(0.15f * bypassDim * a));
+            g.strokePath(curvePath, juce::PathStrokeType(2.35f,
+                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+            g.setColour(bright.withAlpha(0.78f * bypassDim * a));
+            g.strokePath(curvePath, juce::PathStrokeType(1.12f,
+                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+            // ③ 锚点径向辉光
+            {
+                const auto node = renderer_.anchorPosition(i);
+                const float r = 13.5f;
+                juce::ColourGradient glow(
+                    bright.withAlpha(0.15f * bypassDim * a), node.x, node.y,
+                    color.withAlpha(0.0f),                    node.x, node.y + r, true);
+                    glow.addColour(0.36, color.withAlpha(0.06f * bypassDim * a));
+                g.setGradientFill(glow);
+                g.fillEllipse(node.x - r, node.y - r, r * 2.0f, r * 2.0f);
+            }
+        }
     }
 
     // ── 四控制按钮：预览模式和完整模式都画 ──
@@ -145,17 +204,10 @@ void EqPopupComponent::paint(juce::Graphics& g)
                     { topBar.getX() + 4.0f + (kBtnSize + kBtnGap) * 2, btnY, kBtnSize, kBtnSize },
                     hoveredButton_ == static_cast<int>(ButtonId::Remove));
 
-        // Close
-        paintButton(g, ButtonId::Close,
+        // Minimize
+        paintButton(g, ButtonId::Minimize,
                     { topBar.getRight() - 4.0f - kBtnSize, btnY, kBtnSize, kBtnSize },
-                    hoveredButton_ == static_cast<int>(ButtonId::Close));
-    }
-
-    // ── 坐标反馈（完整模式，SRC 节奏动画 opacity 驱动） ──
-    if (!isPreview_ && !interaction_.isDragging()
-        && graphBoundsContains(activeMousePos_) && coordAnimOpacity_ > 0.01f)
-    {
-        renderer_.drawCoordReadout(g, activeMousePos_, true, coordAnimOpacity_);
+                    hoveredButton_ == static_cast<int>(ButtonId::Minimize));
     }
 
     // ── 按钮 tooltip ──
@@ -176,8 +228,9 @@ void EqPopupComponent::paint(juce::Graphics& g)
         case ButtonId::Remove:
             tooltipText = juce::String::fromUTF8(u8"删除EQ处理");
             break;
-        case ButtonId::Close:
-            tooltipText = juce::String::fromUTF8(u8"关闭");
+        case ButtonId::Minimize:
+            tooltipText = isMaximized_ ? juce::String::fromUTF8(u8"最小化")
+                                       : juce::String::fromUTF8(u8"展开EQ编辑器");
             break;
         default: break;
         }
@@ -271,7 +324,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
 void EqPopupComponent::paintButton(juce::Graphics& g, ButtonId id, juce::Rectangle<float> bounds, bool hovered) const
 {
     auto color = EqGraphRenderer::axisLabelColor().withAlpha(hovered ? 0.8f : 0.4f);
-    if (id == ButtonId::Close && hovered)
+    if (id == ButtonId::Minimize && hovered)
         color = juce::Colour::fromRGB(220, 60, 60);
 
     g.setColour(color);
@@ -281,29 +334,25 @@ void EqPopupComponent::paintButton(juce::Graphics& g, ButtonId id, juce::Rectang
     switch (id)
     {
     case ButtonId::Maximize: paintMaximizeIcon(g, iconBounds, color); break;
-    case ButtonId::Bypass:   paintPowerSymbol(g, iconBounds, color); break;
+    case ButtonId::Bypass:   paintBypassIcon(g, iconBounds, color); break;
     case ButtonId::Remove:   paintRemoveIcon(g, iconBounds, color); break;
-    case ButtonId::Close:    paintCloseIcon(g, iconBounds, color); break;
+    case ButtonId::Minimize: paintMinimizeIcon(g, iconBounds, color); break;
     case ButtonId::None: break;
     }
 }
 
-void EqPopupComponent::paintPowerSymbol(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
+void EqPopupComponent::paintBypassIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
 {
-    // 打勾的复选框：外框 + 对勾
     g.setColour(color);
     const float cx = bounds.getCentreX();
     const float cy = bounds.getCentreY();
-    const float s = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.40f;
+    const float s = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.55f;
 
-    // 复选框外框
-    g.drawRect(cx - s, cy - s, s * 2.0f, s * 2.0f, 1.5f);
-
-    // 对勾（✓）
+    // 对勾（✓）— 直接画在按钮外层方框上
     if (settings_.active)
     {
-        g.drawLine(cx - s * 0.5f, cy, cx - s * 0.1f, cy + s * 0.4f, 1.8f);
-        g.drawLine(cx - s * 0.1f, cy + s * 0.4f, cx + s * 0.5f, cy - s * 0.4f, 1.8f);
+        g.drawLine(cx - s * 0.45f, cy + s * 0.05f, cx - s * 0.05f, cy + s * 0.40f, 1.8f);
+        g.drawLine(cx - s * 0.05f, cy + s * 0.40f, cx + s * 0.45f, cy - s * 0.35f, 1.8f);
     }
 }
 
@@ -361,15 +410,14 @@ void EqPopupComponent::paintMaximizeIcon(juce::Graphics& g, juce::Rectangle<floa
     }
 }
 
-void EqPopupComponent::paintCloseIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
+void EqPopupComponent::paintMinimizeIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
 {
-    // × 关闭符号
+    // 最小化：水平短横线
     g.setColour(color);
     const float cx = bounds.getCentreX();
     const float cy = bounds.getCentreY();
-    const float s = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.30f;
-    g.drawLine(cx - s, cy - s, cx + s, cy + s, 1.5f);
-    g.drawLine(cx + s, cy - s, cx - s, cy + s, 1.5f);
+    const float s = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.35f;
+    g.drawLine(cx - s, cy, cx + s, cy, 1.5f);
 }
 
 juce::Rectangle<float> EqPopupComponent::buttonBounds(ButtonId id) const
@@ -381,7 +429,7 @@ juce::Rectangle<float> EqPopupComponent::buttonBounds(ButtonId id) const
     case ButtonId::Maximize: return { topBar.getX() + 4.0f, btnY, kBtnSize, kBtnSize };
     case ButtonId::Bypass:   return { topBar.getX() + 4.0f + kBtnSize + kBtnGap, btnY, kBtnSize, kBtnSize };
     case ButtonId::Remove:   return { topBar.getX() + 4.0f + (kBtnSize + kBtnGap) * 2, btnY, kBtnSize, kBtnSize };
-    case ButtonId::Close:    return { topBar.getRight() - 4.0f - kBtnSize, btnY, kBtnSize, kBtnSize };
+    case ButtonId::Minimize: return { topBar.getRight() - 4.0f - kBtnSize, btnY, kBtnSize, kBtnSize };
     case ButtonId::None:     return {};
     }
     return {};
@@ -390,7 +438,7 @@ juce::Rectangle<float> EqPopupComponent::buttonBounds(ButtonId id) const
 EqPopupComponent::ButtonId EqPopupComponent::hitTestButton(juce::Point<float> pos) const
 {
     // 两态都检查四个按钮
-    for (auto id : { ButtonId::Maximize, ButtonId::Bypass, ButtonId::Remove, ButtonId::Close })
+    for (auto id : { ButtonId::Maximize, ButtonId::Bypass, ButtonId::Remove, ButtonId::Minimize })
         if (buttonBounds(id).contains(pos))
             return id;
     // 图区域不切换模式：明确返回 None
@@ -406,7 +454,7 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
     activeMousePos_ = event.position;
     const auto pos = event.position;
 
-    // 按钮悬停（两态都检查四个按钮）
+    // 按钮悬停
     hoveredButton_ = -1;
     for (int i = 0; i < 4; ++i)
     {
@@ -421,7 +469,7 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
     // 锚点悬停
     hoveredBand_ = renderer_.hitTestAnchor(pos, 10.0f);
 
-    // 视图范围按钮悬停 — 0=Decrease(+), 1=Increase(-), -1=无
+    // 视图范围按钮悬停
     if (!isPreview_)
     {
         const auto vr = renderer_.hitTestViewRangeButton(pos);
@@ -436,17 +484,6 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
     {
         hoveredViewRange_ = -1;
     }
-
-    // 图例悬停
-    hoveredLegend_ = -1;
-    if (!isPreview_)
-    {
-        const auto legendItems = renderer_.buildLegendItems();
-        hoveredLegend_ = renderer_.hitTestLegend(pos, legendItems);
-    }
-
-    // 坐标动画：跟踪鼠标是否在图区域内
-    mouseInGraph_ = renderer_.graphBounds().contains(pos);
 
     setMouseCursor(hoveredBand_ >= 0 ? juce::MouseCursor::PointingHandCursor
                    : (hoveredButton_ >= 0 ? juce::MouseCursor::PointingHandCursor
@@ -531,27 +568,17 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
                     repaint();
                 }
                 return;
-            case ButtonId::Close:
-                if (onClose) onClose();
+            case ButtonId::Minimize:
+                if (isMaximized_)
+                    toggleMaximize();
                 return;
             }
         }
     }
 
-    // 图例点击
+    // 视图范围按钮 — SRC press-release：mouseDown 只记录 pressed，不改范围
     if (!isPreview_)
     {
-        const auto legendItems = renderer_.buildLegendItems();
-        const int legendIdx = renderer_.hitTestLegend(pos, legendItems);
-        if (legendIdx >= 0 && legendIdx < 6)
-        {
-            const auto cid = legendItems[static_cast<size_t>(legendIdx)].id;
-            renderer_.setCurveVisible(cid, !renderer_.isCurveVisible(cid));
-            repaint();
-            return;
-        }
-
-        // 视图范围按钮 — SRC press-release：mouseDown 只记录 pressed，不改范围
         const auto vr = renderer_.hitTestViewRangeButton(pos);
         if (vr != EqGraphRenderer::ViewRangeButton::None)
         {
@@ -577,11 +604,35 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
             return;
         }
     }
+
+    // 窗口拖拽 — 点击空白处拖动弹窗位置
+    {
+        draggingWindow_ = true;
+        const auto mouseInParent = getPosition() + event.getPosition().toInt();
+        dragOffset_ = mouseInParent - getPosition();
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+    }
 }
 
 void EqPopupComponent::mouseDrag(const juce::MouseEvent& event)
 {
     activeMousePos_ = event.position;
+
+    // 窗口拖拽
+    if (draggingWindow_)
+    {
+        const auto parentBounds = getParentComponent() != nullptr
+            ? getParentComponent()->getLocalBounds() : getLocalBounds();
+        const auto mouseInParent = getPosition() + event.getPosition().toInt();
+        const int x = juce::jlimit(parentBounds.getX(),
+                                   juce::jmax(parentBounds.getX(), parentBounds.getRight() - getWidth()),
+                                   mouseInParent.x - dragOffset_.x);
+        const int y = juce::jlimit(parentBounds.getY(),
+                                   juce::jmax(parentBounds.getY(), parentBounds.getBottom() - getHeight()),
+                                   mouseInParent.y - dragOffset_.y);
+        setBounds(x, y, getWidth(), getHeight());
+        return;
+    }
 
     // 未启动 drag 时：检查 pending band 是否超过阈值
     if (!interaction_.isDragging())
@@ -603,6 +654,14 @@ void EqPopupComponent::mouseDrag(const juce::MouseEvent& event)
 
 void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
 {
+    // 窗口拖拽结束
+    if (draggingWindow_)
+    {
+        draggingWindow_ = false;
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+
     if (interaction_.isDragging())
     {
         // 启动了 drag：提交一次
@@ -655,110 +714,46 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
 
 void EqPopupComponent::mouseExit(const juce::MouseEvent&)
 {
-    // 只清 hover + pressed，不破坏 pending band
     hoveredBand_ = -1;
     hoveredButton_ = -1;
-    hoveredLegend_ = -1;
     hoveredViewRange_ = -1;
     pressedViewRange_ = -1;
-    mouseInGraph_ = false;
     repaint();
 }
 
 // ============================================================================
-// Timer — 驱动坐标反馈 SRC 节奏动画
+// Timer — 驱动滤波器 hover 淡入淡出动画
 // ============================================================================
 
 void EqPopupComponent::timerCallback()
 {
-    const double dt = 1.0 / 30.0;  // 30Hz timer
+    const double dt = 1.0 / 30.0;
 
-    // 坐标动画
-    updateCoordAnimation(dt);
+    updateHoverBandFade(dt);
 
-    // 拖拽时刷新
     if (interaction_.isDragging())
         repaint();
 
-    // 坐标动画活跃时也刷新
-    if (coordAnimState_ != CoordAnimState::Idle)
-        repaint();
+    // hover 动画活跃时刷新
+    for (int i = 0; i < 5; ++i)
+    {
+        if (hoverBandAmounts_[static_cast<size_t>(i)] > 0.01)
+        {
+            repaint();
+            break;
+        }
+    }
 }
 
-void EqPopupComponent::updateCoordAnimation(double dt)
+void EqPopupComponent::updateHoverBandFade(double dt)
 {
-    if (isPreview_ || interaction_.isDragging())
+    for (int i = 0; i < 5; ++i)
     {
-        coordAnimState_ = CoordAnimState::Idle;
-        coordAnimOpacity_ = 0.0f;
-        coordAnimElapsed_ = 0.0;
-        return;
-    }
-
-    if (mouseInGraph_ && renderer_.graphBounds().contains(activeMousePos_))
-    {
-        switch (coordAnimState_)
-        {
-        case CoordAnimState::Idle:
-            coordAnimState_ = CoordAnimState::FadeIn;
-            coordAnimElapsed_ = 0.0;
-            break;
-        case CoordAnimState::FadeIn:
-            coordAnimElapsed_ += dt;
-            coordAnimOpacity_ = static_cast<float>(coordAnimElapsed_ / kCoordFadeInTime);
-            if (coordAnimElapsed_ >= kCoordFadeInTime)
-            {
-                coordAnimState_ = CoordAnimState::Active;
-                coordAnimElapsed_ = 0.0;
-                coordAnimOpacity_ = 1.0f;
-            }
-            break;
-        case CoordAnimState::Active:
-            coordAnimElapsed_ += dt;
-            coordAnimOpacity_ = 1.0f;
-            if (coordAnimElapsed_ >= kCoordActiveEntry + kCoordActiveHold)
-            {
-                coordAnimState_ = CoordAnimState::FadeOut;
-                coordAnimElapsed_ = 0.0;
-            }
-            break;
-        case CoordAnimState::FadeOut:
-            coordAnimElapsed_ += dt;
-            coordAnimOpacity_ = 1.0f - static_cast<float>(coordAnimElapsed_ / kCoordFadeOutTime);
-            if (coordAnimElapsed_ >= kCoordFadeOutTime)
-            {
-                coordAnimState_ = CoordAnimState::Idle;
-                coordAnimOpacity_ = 0.0f;
-                coordAnimElapsed_ = 0.0;
-            }
-            break;
-        }
-    }
-    else
-    {
-        // 鼠标离开图区域：启动 fade out
-        if (coordAnimState_ != CoordAnimState::Idle && coordAnimState_ != CoordAnimState::FadeOut)
-        {
-            coordAnimState_ = CoordAnimState::FadeOut;
-            coordAnimElapsed_ = 0.0;
-        }
-        else if (coordAnimState_ == CoordAnimState::FadeOut)
-        {
-            coordAnimElapsed_ += dt;
-            coordAnimOpacity_ = 1.0f - static_cast<float>(coordAnimElapsed_ / kCoordFadeOutTime);
-            if (coordAnimElapsed_ >= kCoordFadeOutTime)
-            {
-                coordAnimState_ = CoordAnimState::Idle;
-                coordAnimOpacity_ = 0.0f;
-                coordAnimElapsed_ = 0.0;
-            }
-        }
+        double& amount = hoverBandAmounts_[static_cast<size_t>(i)];
+        if (i == hoveredBand_)
+            amount = std::min(1.0, amount + dt / kHoverFadeInTime);
         else
-        {
-            coordAnimState_ = CoordAnimState::Idle;
-            coordAnimOpacity_ = 0.0f;
-            coordAnimElapsed_ = 0.0;
-        }
+            amount = std::max(0.0, amount - dt / kHoverFadeOutTime);
     }
 }
 
