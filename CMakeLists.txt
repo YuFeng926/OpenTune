@@ -595,6 +595,7 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRoll/EqBandInteraction.cpp
         Source/Standalone/UI/PianoRoll/EqPopupComponent.cpp
         Source/Standalone/UI/PianoRoll/EqPopupComponent.h
+        Source/Standalone/UI/PianoRoll/EqSpectrumAnimation.h
 
         Source/Standalone/UI/ViewMapper.h
         Source/Standalone/UI/MenuBarComponent.cpp

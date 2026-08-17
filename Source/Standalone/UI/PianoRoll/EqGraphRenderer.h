@@ -88,12 +88,17 @@ public:
     juce::Path buildBandInfluencePath(int bandIndex) const;
 
     // ── 渲染入口 ──
-    void drawPreview(juce::Graphics& g) const;
+    void drawPreview(juce::Graphics& g, bool drawBackground = true) const;
     void drawFull(juce::Graphics& g, int hoveredBand = -1,
                   juce::Point<float> mousePos = {}, bool isDragging = false,
                   int hoveredViewRangeControl = -1,
                   int pressedViewRangeControl = -1,
-                  const std::array<double, 5>& hoverBandAmounts = {}) const;
+                  const std::array<double, 5>& hoverBandAmounts = {},
+                  bool drawBackground = true) const;
+
+    // ── 频谱背景动画 ──
+    void drawSpectrumBackground(juce::Graphics& g,
+                                const std::array<float, 128>& spectrum) const;
 
     // ── 图例 ──
     struct LegendItem {
@@ -119,6 +124,10 @@ public:
     void drawAnchors(juce::Graphics& g, int hoveredBand = -1, bool showNumbers = true) const;
     juce::Point<float> anchorPosition(int bandIndex) const;
     int hitTestAnchor(juce::Point<float> pos, float threshold = 10.0f) const;
+
+    // ── 曲线级 hover 检测 ──
+    float curveYAtX(int bandIndex, float x) const;
+    int hitTestCurve(juce::Point<float> pos, float threshold = 12.0f) const;
 
     // ── 十字引导线与 HUD（SRC 虚线节奏） ──
     void drawCrosshairAndHud(juce::Graphics& g, juce::Point<float> pos,

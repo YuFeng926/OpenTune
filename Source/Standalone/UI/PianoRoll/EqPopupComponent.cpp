@@ -11,7 +11,7 @@ namespace OpenTune {
 EqPopupComponent::EqPopupComponent()
 {
     setRepaintsOnMouseActivity(true);
-    setOpaque(true);
+    setOpaque(false);
     startTimerHz(30);
     interaction_.setRenderer(&renderer_);
 }
@@ -32,6 +32,12 @@ void EqPopupComponent::setEqSettings(const EqSettings& settings)
     settings_ = settings;
     renderer_.setSettings(settings);
     dragCommitted_ = false;
+    repaint();
+}
+
+void EqPopupComponent::setNoteColor(juce::Colour color)
+{
+    noteColor_ = color;
     repaint();
 }
 
@@ -63,9 +69,36 @@ juce::Rectangle<float> EqPopupComponent::topBarBounds() const
     return getLocalBounds().toFloat().removeFromTop(kTopBarHeight);
 }
 
+juce::Rectangle<float> EqPopupComponent::graphAreaBounds() const
+{
+    auto bounds = getLocalBounds().toFloat();
+    if (!isPreview_)
+        bounds.removeFromTop(kTopBarHeight);
+    if (isPreview_)
+        return bounds.reduced(2.0f);
+    return bounds.reduced(4.0f, 3.0f);
+}
+
 void EqPopupComponent::resized()
 {
-    renderer_.setGraphBounds(getLocalBounds().toFloat());
+    if (isPreview_)
+    {
+        renderer_.setGraphBounds(graphAreaBounds());
+    }
+    else
+    {
+        // SRC 同职责：为右侧与底部轴标签预留空间
+        constexpr float leftMargin = 54.0f;   // SRC leftAxisWidthPx + leftAxisGraphGapPx
+        constexpr float rightMargin = 44.0f;  // SRC rightAxisWidthPx
+        constexpr float bottomMargin = 42.0f; // SRC graphBottomInsetPx
+        constexpr float topMargin = 28.0f;    // SRC graphTopInsetPx
+        auto area = graphAreaBounds();
+        const float ix = area.getX() + leftMargin;
+        const float iy = area.getY() + topMargin;
+        const float iw = area.getWidth() - leftMargin - rightMargin;
+        const float ih = area.getHeight() - topMargin - bottomMargin;
+        renderer_.setGraphBounds({ ix, iy, iw, ih });
+    }
     // 布局数值输入弹窗控件
     if (showingValueInput_)
         layoutValueInputOverlay();
@@ -77,6 +110,22 @@ void EqPopupComponent::resized()
 
 void EqPopupComponent::paint(juce::Graphics& g)
 {
+    const auto bounds = getLocalBounds().toFloat();
+    const float cornerRadius = 8.0f;
+
+    // 背景 — 圆角矩形填充（半透明）
+    const auto bgBase = noteColor_.withSaturation(noteColor_.getSaturation() * 0.3f);
+    const auto bgColor = bgBase.interpolatedWith(EqGraphRenderer::backgroundColor(), 0.7f);
+    g.setColour(bgColor.withAlpha(0.75f));
+    g.fillRoundedRectangle(bounds, cornerRadius);
+
+    // 圆角描边
+    g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.25f));
+    g.drawRoundedRectangle(bounds.reduced(0.5f), cornerRadius, 1.0f);
+
+    // ── 频谱背景动画 ──
+    renderer_.drawSpectrumBackground(g, spectrumAnim_.data());
+
     // ── 曲线 + anchors 绘制（两态都画，bypass 由 renderer 降透明度） ──
     if (isPreview_)
     {
@@ -85,8 +134,57 @@ void EqPopupComponent::paint(juce::Graphics& g)
     else
     {
         renderer_.drawFull(g, hoveredBand_, activeMousePos_, interaction_.isDragging(),
-                           hoveredViewRange_, pressedViewRange_,
-                           hoverBandAmounts_);
+                           hoveredViewRange_, pressedViewRange_);
+
+        // 滤波器 hover 淡入淡出高亮
+        for (int i = 0; i < 5; ++i)
+        {
+            const double amount = hoverBandAmounts_[static_cast<size_t>(i)];
+            if (amount <= 0.01)
+                continue;
+
+            const auto color = EqGraphRenderer::bandColor(i);
+            const auto bright = color.brighter(0.38f);
+            const float bypassDim = 1.0f;
+            const float a = static_cast<float>(amount);
+
+            // ① 渐变填充影响区（SRC drawHoverBandInfluence 核心）
+            {
+                juce::Graphics::ScopedSaveState saved(g);
+                g.reduceClipRegion(renderer_.graphBounds().toNearestInt().expanded(8));
+                const auto influencePath = renderer_.buildBandInfluencePath(i);
+
+                juce::ColourGradient grad(
+                    bright.withAlpha(0.15f * bypassDim * a), 0.0f, renderer_.graphBounds().getY(),
+                    color.withAlpha(0.0f),                0.0f, renderer_.graphBounds().getBottom(), true);
+                    grad.addColour(0.5, color.withAlpha(0.06f * bypassDim * a));
+                g.setGradientFill(grad);
+                g.fillPath(influencePath);
+            }
+
+            // ② 双层描边
+            const auto curvePath = renderer_.buildSingleBandPath(i);
+
+            g.setColour(bright.withAlpha(0.15f * bypassDim * a));
+            g.strokePath(curvePath, juce::PathStrokeType(2.35f,
+                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+            g.setColour(bright.withAlpha(0.78f * bypassDim * a));
+            g.strokePath(curvePath, juce::PathStrokeType(1.12f,
+                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+            // ③ 锚点径向辉光
+            {
+                const auto node = renderer_.anchorPosition(i);
+                const float r = 13.5f;
+                juce::ColourGradient glow(
+                    bright.withAlpha(0.15f * bypassDim * a), node.x, node.y,
+                    color.withAlpha(0.0f),                    node.x, node.y + r, true);
+                    glow.addColour(0.36, color.withAlpha(0.06f * bypassDim * a));
+                g.setGradientFill(glow);
+                g.fillEllipse(node.x - r, node.y - r, r * 2.0f, r * 2.0f);
+            }
+        }
     }
 
     // ── 四控制按钮：预览模式和完整模式都画 ──
@@ -359,7 +457,7 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
     activeMousePos_ = event.position;
     const auto pos = event.position;
 
-    // ① 最高优先级：顶栏按钮
+    // 按钮悬停
     hoveredButton_ = -1;
     for (int i = 0; i < 4; ++i)
     {
@@ -370,17 +468,13 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
             break;
         }
     }
-    if (hoveredButton_ >= 0)
-    {
-        hoveredBand_ = -1;
-        hoveredViewRange_ = -1;
-        setMouseCursor(juce::MouseCursor::PointingHandCursor);
-        repaint();
-        return;
-    }
 
-    // ② 中优先级：View Range 按钮（完整模式）
-    hoveredViewRange_ = -1;
+    // 锚点悬停 → 曲线级 fallback
+    hoveredBand_ = renderer_.hitTestAnchor(pos, 10.0f);
+    if (hoveredBand_ < 0 && !isPreview_)
+        hoveredBand_ = renderer_.hitTestCurve(pos, 12.0f);
+
+    // 视图范围按钮悬停
     if (!isPreview_)
     {
         const auto vr = renderer_.hitTestViewRangeButton(pos);
@@ -388,19 +482,17 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
             hoveredViewRange_ = 0;
         else if (vr == EqGraphRenderer::ViewRangeButton::Increase)
             hoveredViewRange_ = 1;
+        else
+            hoveredViewRange_ = -1;
     }
-    if (hoveredViewRange_ >= 0)
+    else
     {
-        hoveredBand_ = -1;
-        setMouseCursor(juce::MouseCursor::PointingHandCursor);
-        repaint();
-        return;
+        hoveredViewRange_ = -1;
     }
 
-    // ③ 最低优先级：锚点
-    hoveredBand_ = renderer_.hitTestAnchor(pos, 10.0f);
     setMouseCursor(hoveredBand_ >= 0 ? juce::MouseCursor::PointingHandCursor
-                   : juce::MouseCursor::NormalCursor);
+                   : (hoveredButton_ >= 0 ? juce::MouseCursor::PointingHandCursor
+                                          : juce::MouseCursor::NormalCursor));
 
     repaint();
 }
@@ -593,13 +685,14 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
         return;
     }
 
-    // 未启动 drag：用记录的 band 打开数值输入
+    // 未启动 drag：完整模式下用记录的 band 打开数值输入；预览模式仅反馈选中
     if (pendingDragBand_ >= 0)
     {
         const int band = pendingDragBand_;
         pendingDragBand_ = -1;
         setMouseCursor(juce::MouseCursor::NormalCursor);
-        showValueInputPopup(band);
+        if (!isPreview_)
+            showValueInputPopup(band);
         repaint();
     }
 
@@ -641,7 +734,9 @@ void EqPopupComponent::mouseExit(const juce::MouseEvent&)
 void EqPopupComponent::timerCallback()
 {
     const double dt = 1.0 / 30.0;
+    animTime_ += dt;
 
+    spectrumAnim_.update(animTime_, settings_);
     updateHoverBandFade(dt);
 
     if (interaction_.isDragging())
@@ -656,6 +751,9 @@ void EqPopupComponent::timerCallback()
             break;
         }
     }
+
+    // 频谱动画持续刷新
+    repaint();
 }
 
 void EqPopupComponent::updateHoverBandFade(double dt)
@@ -898,6 +996,15 @@ void EqPopupComponent::dismissRemoveConfirmation()
 {
     showingRemoveConfirmation_ = false;
     repaint();
+}
+
+// ============================================================================
+// 辅助
+// ============================================================================
+
+bool EqPopupComponent::graphBoundsContains(juce::Point<float> pos) const
+{
+    return renderer_.graphBounds().contains(pos);
 }
 
 } // namespace OpenTune

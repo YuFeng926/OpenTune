@@ -27,6 +27,7 @@
 #include "Utils/NoteEqSettings.h"
 #include "EqGraphRenderer.h"
 #include "EqBandInteraction.h"
+#include "EqSpectrumAnimation.h"
 #include <memory>
 
 namespace OpenTune {
@@ -41,6 +42,7 @@ public:
     void setEqSettings(const EqSettings& settings);
     void setPreviewMode(bool isPreview);
     void setRemoveConfirmationSuppressed(bool suppress);
+    void setNoteColor(juce::Colour color);
 
     // ── 回调（由 PianoRollComponent 设置） ──
     std::function<void(const EqSettings&)> onCommitSettings;
@@ -88,6 +90,8 @@ private:
     EqSettings settings_;
     EqGraphRenderer renderer_;
     EqBandInteraction interaction_;
+    EqSpectrumAnimation spectrumAnim_;
+    juce::Colour noteColor_;
     bool isPreview_ = true;
     bool isMaximized_ = false;
     int hoveredBand_ = -1;
@@ -130,6 +134,9 @@ private:
     // 活动中的 mousePos
     juce::Point<float> activeMousePos_;
 
+    // 频谱动画时间
+    double animTime_ = 0.0;
+
     // 布局常量
     static constexpr int kFullWidth = 600;
     static constexpr int kFullHeight = 400;
@@ -139,6 +146,8 @@ private:
 
     // 按钮区域计算
     juce::Rectangle<float> topBarBounds() const;
+    juce::Rectangle<float> graphAreaBounds() const;
+    bool graphBoundsContains(juce::Point<float> pos) const;
 
 
     void commitSettings();
