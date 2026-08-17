@@ -935,7 +935,6 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
 
     eqPopup_ = std::make_unique<EqPopupComponent>();
     addAndMakeVisible(*eqPopup_);
-    eqPopup_->setNoteColor(trackDisplayColour_);
     // 主音符 eq 有值显示它，无值显示 EqSettings 默认；打开零 draft、零提交
     eqPopup_->setEqSettings(primary.eq.value_or(EqSettings{}));
     eqPopup_->setPreviewMode(true);

@@ -617,9 +617,19 @@ public:
 
     /**
      * @brief Create EQ icon image
+     * Draws white bold "EQ" text directly onto a transparent 16×16 canvas.
+     * The path from getEqIcon() is intentionally empty (the toolbar button
+     * renders its own text), so we must not delegate to createIconImage()
+     * which would produce an all-transparent image (→ black cursor on Windows).
      */
     static juce::Image createEqIconImage() {
-        return createIconImage(getEqIcon(), juce::Colours::white);
+        juce::Image image(juce::Image::ARGB, 16, 16, true);
+        juce::Graphics g(image);
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::Font(juce::FontOptions("Roboto", "Bold", 10.0f)));
+        g.drawText("EQ", juce::Rectangle<float>(0.0f, 0.0f, 16.0f, 16.0f),
+                   juce::Justification::centred);
+        return image;
     }
 
     /**

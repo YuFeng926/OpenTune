@@ -91,9 +91,9 @@ double EqGraphRenderer::logGaussian(double frequencyHz, double centerHz, double 
     return std::exp(-(octaves * octaves) / (2.0 * width * width));
 }
 
-double EqGraphRenderer::normToFrequency(double norm)
+double EqGraphRenderer::normToFrequency(double norm) const
 {
-    return kMinFrequencyHz * std::pow(kMaxFrequencyHz / kMinFrequencyHz, norm);
+    return previewMinFreq_ * std::pow(previewMaxFreq_ / previewMinFreq_, norm);
 }
 
 double EqGraphRenderer::filterResponseDb(int bandIndex, double frequencyHz) const
@@ -188,91 +188,159 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
     if (samples.size() < 2)
         return;
 
-    // 转换为像素点（使用传入的 gainRangeDb 映射 Y）
-    std::vector<juce::Point<float>> points;
-    points.reserve(samples.size());
     const double twoRange = 2.0 * gainRangeDb;
-    for (const auto& s : samples)
-    {
-        const float x = static_cast<float>(graphBounds.getX() + s.norm * graphBounds.getWidth());
-        const double gainNorm = (s.gainDb + gainRangeDb) / twoRange;
+
+    auto toPixel = [&](double norm, double gainDb) -> juce::Point<float> {
+        const float x = static_cast<float>(graphBounds.getX() + norm * graphBounds.getWidth());
+        const double gainNorm = (gainDb + gainRangeDb) / twoRange;
         const float y = static_cast<float>(graphBounds.getBottom() - gainNorm * graphBounds.getHeight());
-        points.emplace_back(x, y);
-    }
+        return { x, y };
+    };
 
-    // Fritsch-Carlson 斜率计算（源自 SRC）
-    const size_t n = points.size();
-    std::vector<double> slopes(n, 0.0);
-    std::vector<double> secants(n - 1, 0.0);
-    for (size_t i = 0; i + 1 < n; ++i)
-    {
-        const double dx = static_cast<double>(points[i + 1].getX()) - static_cast<double>(points[i].getX());
-        if (std::abs(dx) > 0.0001)
-            secants[i] = (static_cast<double>(points[i + 1].getY()) - static_cast<double>(points[i].getY())) / dx;
-    }
+    auto isInside = [&](double gainDb) {
+        return gainDb >= -gainRangeDb && gainDb <= gainRangeDb;
+    };
 
-    slopes.front() = secants.front();
-    slopes.back() = secants.back();
-    for (size_t i = 1; i + 1 < n; ++i)
+    // SRC visibleResponseSegmentsFromSamples: 在边界处线性插值
+    auto edgePoint = [&](const ResponseSample& a, const ResponseSample& b, double edgeDb) -> juce::Point<float> {
+        const double dg = b.gainDb - a.gainDb;
+        const double t = std::abs(dg) > 1e-9 ? (edgeDb - a.gainDb) / dg : 0.0;
+        const double edgeNorm = a.norm + t * (b.norm - a.norm);
+        return toPixel(edgeNorm, edgeDb);
+    };
+
+    // ── Step 1: 按增益范围分割可见 segment ──
+    struct Segment { std::vector<juce::Point<float>> points; };
+    std::vector<Segment> segments;
+    Segment current;
+
+    ResponseSample prev {};
+    bool prevInside = false;
+    bool firstPoint = true;
+
+    for (const ResponseSample& curr : samples)
     {
-        const double left = secants[i - 1];
-        const double right = secants[i];
-        if (left == 0.0 || right == 0.0 || (left < 0.0) != (right < 0.0))
+        const bool currInside = isInside(curr.gainDb);
+
+        if (firstPoint)
         {
-            slopes[i] = 0.0;
+            if (currInside)
+                current.points.push_back(toPixel(curr.norm, curr.gainDb));
+            prev = curr;
+            prevInside = currInside;
+            firstPoint = false;
             continue;
         }
-        const double limit = 3.0 * std::min(std::abs(left), std::abs(right));
-        slopes[i] = std::clamp((left + right) * 0.5, -limit, limit);
-    }
-    for (size_t i = 0; i + 1 < n; ++i)
-    {
-        const double secant = secants[i];
-        if (secant == 0.0)
+
+        if (prevInside && !currInside)
         {
-            slopes[i] = 0.0;
-            slopes[i + 1] = 0.0;
+            // inside → outside: 插值边界点，结束当前 segment
+            const double edgeDb = curr.gainDb < -gainRangeDb ? -gainRangeDb : gainRangeDb;
+            current.points.push_back(edgePoint(prev, curr, edgeDb));
+            if (!current.points.empty())
+                segments.push_back(std::move(current));
+            current = Segment{};
+        }
+        else if (!prevInside && currInside)
+        {
+            // outside → inside: 从边界插值点开始新 segment
+            const double edgeDb = prev.gainDb < -gainRangeDb ? -gainRangeDb : gainRangeDb;
+            current.points.push_back(edgePoint(prev, curr, edgeDb));
+            current.points.push_back(toPixel(curr.norm, curr.gainDb));
+        }
+        else if (currInside)
+        {
+            current.points.push_back(toPixel(curr.norm, curr.gainDb));
+        }
+        // both outside: 跳过
+
+        prev = curr;
+        prevInside = currInside;
+    }
+    if (!current.points.empty())
+        segments.push_back(std::move(current));
+
+    // ── Step 2: 每个 segment 独立执行 Fritsch-Carlson 单调三次插值 ──
+    for (const auto& seg : segments)
+    {
+        if (seg.points.size() == 1)
+        {
+            path.startNewSubPath(seg.points[0]);
             continue;
         }
-        if ((slopes[i] < 0.0) != (secant < 0.0))
-            slopes[i] = 0.0;
-        if ((slopes[i + 1] < 0.0) != (secant < 0.0))
-            slopes[i + 1] = 0.0;
-        const double alpha = slopes[i] / secant;
-        const double beta = slopes[i + 1] / secant;
-        const double magnitude = std::sqrt(alpha * alpha + beta * beta);
-        if (magnitude > 3.0)
-        {
-            const double scale = 3.0 / magnitude;
-            slopes[i] *= scale;
-            slopes[i + 1] *= scale;
-        }
-    }
 
-    // 生成贝塞尔路径（slopes 在视觉像素边界处显式窄化到 float）
-    path.startNewSubPath(points[0]);
-    for (size_t i = 0; i + 1 < n; ++i)
-    {
-        const float dx = points[i + 1].getX() - points[i].getX();
-        const float s0 = static_cast<float>(slopes[i]);
-        const float s1 = static_cast<float>(slopes[i + 1]);
-        const juce::Point<float> c1(points[i].getX() + dx / 3.0f,
-                                    points[i].getY() + s0 * dx / 3.0f);
-        const juce::Point<float> c2(points[i + 1].getX() - dx / 3.0f,
-                                    points[i + 1].getY() - s1 * dx / 3.0f);
-        path.cubicTo(c1, c2, points[i + 1]);
+        const size_t n = seg.points.size();
+        std::vector<double> slopes(n, 0.0);
+        std::vector<double> secants(n - 1, 0.0);
+        for (size_t i = 0; i + 1 < n; ++i)
+        {
+            const double dx = static_cast<double>(seg.points[i + 1].getX()) - static_cast<double>(seg.points[i].getX());
+            if (std::abs(dx) > 0.0001)
+                secants[i] = (static_cast<double>(seg.points[i + 1].getY()) - static_cast<double>(seg.points[i].getY())) / dx;
+        }
+
+        slopes.front() = secants.front();
+        slopes.back() = secants.back();
+        for (size_t i = 1; i + 1 < n; ++i)
+        {
+            const double left = secants[i - 1];
+            const double right = secants[i];
+            if (left == 0.0 || right == 0.0 || (left < 0.0) != (right < 0.0))
+            {
+                slopes[i] = 0.0;
+                continue;
+            }
+            const double limit = 3.0 * std::min(std::abs(left), std::abs(right));
+            slopes[i] = std::clamp((left + right) * 0.5, -limit, limit);
+        }
+        for (size_t i = 0; i + 1 < n; ++i)
+        {
+            const double secant = secants[i];
+            if (secant == 0.0)
+            {
+                slopes[i] = 0.0;
+                slopes[i + 1] = 0.0;
+                continue;
+            }
+            if ((slopes[i] < 0.0) != (secant < 0.0))
+                slopes[i] = 0.0;
+            if ((slopes[i + 1] < 0.0) != (secant < 0.0))
+                slopes[i + 1] = 0.0;
+            const double alpha = slopes[i] / secant;
+            const double beta = slopes[i + 1] / secant;
+            const double magnitude = std::sqrt(alpha * alpha + beta * beta);
+            if (magnitude > 3.0)
+            {
+                const double scale = 3.0 / magnitude;
+                slopes[i] *= scale;
+                slopes[i + 1] *= scale;
+            }
+        }
+
+        // 生成贝塞尔路径，每个 segment 独立 startNewSubPath
+        path.startNewSubPath(seg.points[0]);
+        for (size_t i = 0; i + 1 < n; ++i)
+        {
+            const float dx = seg.points[i + 1].getX() - seg.points[i].getX();
+            const float s0 = static_cast<float>(slopes[i]);
+            const float s1 = static_cast<float>(slopes[i + 1]);
+            const juce::Point<float> c1(seg.points[i].getX() + dx / 3.0f,
+                                        seg.points[i].getY() + s0 * dx / 3.0f);
+            const juce::Point<float> c2(seg.points[i + 1].getX() - dx / 3.0f,
+                                        seg.points[i + 1].getY() - s1 * dx / 3.0f);
+            path.cubicTo(c1, c2, seg.points[i + 1]);
+        }
     }
 }
 
 // ============================================================================
-// 曲线路径生成（传递 gainRangeDb 给 monotonicCubicPath，路径裁剪到 [-range,+range]）
+// 曲线路径生成（返回未 clamp 响应，由 monotonicCubicPath 按增益范围分段裁剪）
 // ============================================================================
 
 juce::Path EqGraphRenderer::buildCombinedPath() const
 {
     const auto responseDb = [this](double freq) -> double {
-        // 按当前视图增益范围裁剪到[-range,+range]用于显示
-        return std::clamp(combinedResponseDb(freq), -gainRangeDb_, gainRangeDb_);
+        return combinedResponseDb(freq);
     };
     const auto samples = adaptiveLogResponseSamples(responseDb);
 
@@ -284,8 +352,7 @@ juce::Path EqGraphRenderer::buildCombinedPath() const
 juce::Path EqGraphRenderer::buildSingleBandPath(int bandIndex) const
 {
     const auto responseDb = [this, bandIndex](double freq) -> double {
-        // 单band路径也按视图增益范围裁剪
-        return std::clamp(filterResponseDb(bandIndex, freq), -gainRangeDb_, gainRangeDb_);
+        return filterResponseDb(bandIndex, freq);
     };
     const auto samples = adaptiveLogResponseSamples(responseDb);
 
@@ -383,7 +450,16 @@ void EqGraphRenderer::drawAxisLabels(juce::Graphics& g) const
     g.setColour(axisLabelColor());
     g.setFont(juce::FontOptions(9.0f));
 
-    // 底部频率标签
+    const float gx = graphBounds_.getX();
+    const float gy = graphBounds_.getY();
+    const float gw = graphBounds_.getWidth();
+    const float gh = graphBounds_.getHeight();
+    const float labelH = 12.0f;
+    const float labelW = 24.0f;
+    const float padBottom = 2.0f;   // 内侧底部间距
+    const float padRight = 30.0f;   // 内侧右侧间距 — 避开右上角 Minimize 按钮
+
+    // ── 底部频率标签（图内 overlay，紧贴底边内侧） ──
     static const struct { double freq; const char* label; } freqLabels[] = {
         { 20, "20" }, { 50, "50" }, { 100, "100" }, { 200, "200" },
         { 500, "500" }, { 1000, "1k" }, { 2000, "2k" }, { 5000, "5k" },
@@ -392,23 +468,34 @@ void EqGraphRenderer::drawAxisLabels(juce::Graphics& g) const
     for (const auto& fl : freqLabels)
     {
         const float x = freqToX(fl.freq);
-        if (x >= graphBounds_.getX() && x <= graphBounds_.getRight())
-            g.drawText(fl.label, static_cast<int>(x) - 10, static_cast<int>(graphBounds_.getBottom()) + 2,
-                       20, 12, juce::Justification::centredTop, false);
+        if (x >= gx && x <= gx + gw)
+        {
+            float labelX = x - labelW * 0.5f;
+            // 夹紧：不超出 graphBounds 左右边界
+            labelX = juce::jmax(gx, juce::jmin(labelX, gx + gw - labelW));
+            const float labelY = gy + gh - labelH - padBottom;
+            g.drawText(fl.label, static_cast<int>(labelX), static_cast<int>(labelY),
+                       static_cast<int>(labelW), static_cast<int>(labelH),
+                       juce::Justification::centredBottom, false);
+        }
     }
 
-    // 右侧增益标签 — 按 gainRangeDb_ 生成
+    // ── 右侧增益标签（图内 overlay，紧贴右边内侧） ──
+    const float gainLabelW = 30.0f;
     const double stepDb = gainRangeDb_ <= 12.0 ? 3.0 : 6.0;
     const int steps = static_cast<int>(std::round(gainRangeDb_ / stepDb));
     for (int i = -steps; i <= steps; ++i)
     {
         const double gainDb = static_cast<double>(i) * stepDb;
         const float y = gainToY(gainDb);
-        if (y >= graphBounds_.getY() && y <= graphBounds_.getBottom())
+        if (y >= gy && y <= gy + gh)
         {
             const juce::String text = (gainDb > 0 ? "+" : "") + juce::String(gainDb, 0);
-            g.drawText(text, static_cast<int>(graphBounds_.getRight()) + 2, static_cast<int>(y) - 6,
-                       30, 12, juce::Justification::centredLeft, false);
+            const float labelX = gx + gw - gainLabelW - padRight;
+            const float labelY = juce::jlimit(gy, gy + gh - labelH, y - labelH * 0.5f);
+            g.drawText(text, static_cast<int>(labelX), static_cast<int>(labelY),
+                       static_cast<int>(gainLabelW), static_cast<int>(labelH),
+                       juce::Justification::centredRight, false);
         }
     }
 }
@@ -566,108 +653,6 @@ void EqGraphRenderer::drawCrosshairAndHud(juce::Graphics& g, juce::Point<float> 
 }
 
 // ============================================================================
-// 坐标反馈（SRC 轴边缘动态频率/增益标签与十字线，无浮动 HUD 盒）
-// ============================================================================
-
-void EqGraphRenderer::drawCoordReadout(juce::Graphics& g, juce::Point<float> pos,
-                                       bool showGuides, float opacity) const
-{
-    if (!graphBounds_.contains(pos) || opacity <= 0.01f)
-        return;
-
-    const double freq = xToFreq(pos.x);
-    const double gain = yToGain(pos.y);
-
-    juce::String freqText;
-    if (freq >= 1000.0)
-        freqText = juce::String(freq / 1000.0, 2) + " kHz";
-    else
-        freqText = juce::String(freq, 1) + " Hz";
-
-    juce::String gainText = juce::String(gain, 1) + " dB";
-
-    g.setFont(juce::FontOptions(9.0f));
-    const juce::Font readoutFont(juce::FontOptions(9.0f));
-
-    // 用 GlyphArrangement 测量文本宽度
-    auto measureWidth = [&readoutFont](const juce::String& text) -> float {
-        juce::GlyphArrangement ga;
-        ga.addLineOfText(readoutFont, text, 0.0f, 0.0f);
-        return ga.getNumGlyphs() > 0
-            ? ga.getBoundingBox(0, ga.getNumGlyphs(), false).getWidth()
-            : 0.0f;
-    };
-
-    const float freqWidth = measureWidth(freqText) + 10.0f;
-    const float gainWidth = measureWidth(gainText) + 10.0f;
-    const float labelHeight = 18.0f;
-
-    // 底部轴动态频率标签位置（SRC bottomAxisDynamicLabelRect 逻辑）
-    juce::Rectangle<float> freqRect(pos.x - freqWidth * 0.5f,
-                                    graphBounds_.getBottom() + 2.0f,
-                                    freqWidth, labelHeight);
-    // 夹紧到 graphBounds 下方
-    freqRect.setX(juce::jmax(graphBounds_.getX() - 4.0f, freqRect.getX()));
-    if (freqRect.getRight() > graphBounds_.getRight() + 30.0f)
-        freqRect.setX(graphBounds_.getRight() + 30.0f - freqWidth);
-
-    // 右侧轴动态增益标签位置（SRC rightAxisDynamicLabelRect 逻辑）
-    juce::Rectangle<float> gainRect(graphBounds_.getRight() + 2.0f,
-                                    pos.y - labelHeight * 0.5f,
-                                    gainWidth, labelHeight);
-
-    // 十字线 — SRC cross ticks
-    if (showGuides)
-    {
-        const juce::Colour crossColor = juce::Colour::fromRGBA(245, 249, 255,
-            static_cast<juce::uint8>(184.0f * opacity));
-        g.setColour(crossColor);
-        // 短十字刻度
-        g.drawLine(pos.x - 7.0f, pos.y, pos.x - 2.0f, pos.y, 1.0f);
-        g.drawLine(pos.x + 2.0f, pos.y, pos.x + 7.0f, pos.y, 1.0f);
-        g.drawLine(pos.x, pos.y - 7.0f, pos.x, pos.y - 2.0f, 1.0f);
-        g.drawLine(pos.x, pos.y + 2.0f, pos.x, pos.y + 7.0f, 1.0f);
-
-        // 延伸引导线（到轴边缘）
-        const juce::Colour guideColor = juce::Colour::fromRGBA(255, 255, 255,
-            static_cast<juce::uint8>(42.0f * opacity));
-        g.setColour(guideColor);
-        // 垂直引导线：从 pos 到底部轴
-        if (pos.y < graphBounds_.getBottom() - 2.0f)
-            g.drawLine(pos.x, pos.y + 8.0f, pos.x, graphBounds_.getBottom() - 1.0f, 1.0f);
-        // 水平引导线：从 pos 到右侧轴
-        if (pos.x < graphBounds_.getRight() - 2.0f)
-            g.drawLine(pos.x + 8.0f, pos.y, graphBounds_.getRight() - 1.0f, pos.y, 1.0f);
-    }
-
-    // 底部轴频率标签（SRC 双层描边：glow + 实色）
-    {
-        const juce::Colour glow = juce::Colour::fromRGBA(214, 230, 242,
-            static_cast<juce::uint8>(42.0f * opacity));
-        g.setColour(glow);
-        g.drawText(freqText, freqRect.translated(0.0f, 0.45f),
-                   juce::Justification::centred, false);
-        const juce::Colour textCol = juce::Colour::fromRGBA(244, 248, 252,
-            static_cast<juce::uint8>(244.0f * opacity));
-        g.setColour(textCol);
-        g.drawText(freqText, freqRect, juce::Justification::centred, false);
-    }
-
-    // 右侧轴增益标签
-    {
-        const juce::Colour glow = juce::Colour::fromRGBA(168, 216, 190,
-            static_cast<juce::uint8>(40.0f * opacity));
-        g.setColour(glow);
-        g.drawText(gainText, gainRect.translated(0.0f, 0.45f),
-                   juce::Justification::centred, false);
-        const juce::Colour textCol = juce::Colour::fromRGBA(208, 234, 218,
-            static_cast<juce::uint8>(238.0f * opacity));
-        g.setColour(textCol);
-        g.drawText(gainText, gainRect, juce::Justification::centred, false);
-    }
-}
-
-// ============================================================================
 // 图例（使用 juce::Font 直接测量，不用临时 Graphics）
 // ============================================================================
 
@@ -787,12 +772,13 @@ int EqGraphRenderer::hitTestLegend(juce::Point<float> pos,
 
 juce::Rectangle<float> EqGraphRenderer::viewRangeButtonRect(int controlIndex) const
 {
-    // SRC viewRangeButtonRect: inset=10, buttonSize=32, buttonGap=8
-    const float inset = 10.0f;
+    // 38px top inset = 28px top bar + 10px gap, so View Range 按钮不与顶栏重叠
+    const float topInset = 38.0f;
+    const float leftInset = 10.0f;
     const float buttonSize = kViewRangeCircleRadius * 2.0f;
-    const float centerX = graphBounds_.getX() + inset + kViewRangeCircleRadius
+    const float centerX = graphBounds_.getX() + leftInset + kViewRangeCircleRadius
                           + static_cast<float>(controlIndex) * (buttonSize + kViewRangeButtonGap);
-    const float centerY = graphBounds_.getY() + inset + kViewRangeCircleRadius;
+    const float centerY = graphBounds_.getY() + topInset + kViewRangeCircleRadius;
     return { centerX - kViewRangeCircleRadius, centerY - kViewRangeCircleRadius,
              buttonSize, buttonSize };
 }
@@ -880,16 +866,16 @@ void EqGraphRenderer::drawPreview(juce::Graphics& g) const
 void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                juce::Point<float> mousePos, bool isDragging,
                                int hoveredViewRangeControl,
-                               int pressedViewRangeControl) const
+                               int pressedViewRangeControl,
+                               const std::array<double, 5>& hoverBandAmounts) const
 {
+    // ① background / grid
     drawBackground(g);
     drawGrid(g);
-    drawAxisLabels(g);
 
-    // bypass 时仍绘制全部曲线 + anchors + 视图按钮，以降低透明度表达 bypass 状态
     const float bypassAlpha = settings_.active ? 1.0f : 0.28f;
 
-    // 单滤波器曲线（5 条，线宽 1.25）
+    // ② single band + combined curves
     for (int i = 0; i < 5; ++i)
     {
         const auto path = buildSingleBandPath(i);
@@ -898,8 +884,6 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                                 juce::PathStrokeType::curved,
                                                 juce::PathStrokeType::rounded));
     }
-
-    // Combined 主曲线（线宽 2.25）
     {
         const auto path = buildCombinedPath();
         g.setColour(combinedCurveColor().withAlpha(bypassAlpha));
@@ -908,7 +892,59 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                                 juce::PathStrokeType::rounded));
     }
 
-    // 十字引导线与 HUD（拖拽期间，仅 active 时显示）
+    // ③ hover influence / 双描边 / 辉光
+    for (int i = 0; i < 5; ++i)
+    {
+        const double amount = hoverBandAmounts[static_cast<size_t>(i)];
+        if (amount <= 0.01)
+            continue;
+
+        const auto color = bandColor(i);
+        const auto bright = color.brighter(0.38f);
+        const float a = static_cast<float>(amount);
+
+        // 渐变填充影响区
+        {
+            juce::Graphics::ScopedSaveState saved(g);
+            g.reduceClipRegion(graphBounds_.toNearestInt().expanded(8));
+            const auto influencePath = buildBandInfluencePath(i);
+
+            juce::ColourGradient grad(
+                bright.withAlpha(0.15f * a), 0.0f, graphBounds_.getY(),
+                color.withAlpha(0.0f),        0.0f, graphBounds_.getBottom(), true);
+            grad.addColour(0.5, color.withAlpha(0.06f * a));
+            g.setGradientFill(grad);
+            g.fillPath(influencePath);
+        }
+
+        // 双层描边
+        const auto curvePath = buildSingleBandPath(i);
+
+        g.setColour(bright.withAlpha(0.15f * a));
+        g.strokePath(curvePath, juce::PathStrokeType(2.35f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        g.setColour(bright.withAlpha(0.78f * a));
+        g.strokePath(curvePath, juce::PathStrokeType(1.12f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        // 锚点径向辉光
+        {
+            const auto node = anchorPosition(i);
+            const float r = 13.5f;
+            juce::ColourGradient glow(
+                bright.withAlpha(0.15f * a), node.x, node.y,
+                color.withAlpha(0.0f),        node.x, node.y + r, true);
+            glow.addColour(0.36, color.withAlpha(0.06f * a));
+            g.setGradientFill(glow);
+            g.fillEllipse(node.x - r, node.y - r, r * 2.0f, r * 2.0f);
+        }
+    }
+
+    // ④ 静态轴标签
+    drawAxisLabels(g);
+
+    // ⑤ 拖拽 HUD（十字引导线 + 读数，仅 active + dragging 时显示）
     if (settings_.active && isDragging && hoveredBand >= 0 && hoveredBand < 5)
     {
         const double freq = xToFreq(mousePos.x);
@@ -923,10 +959,10 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
         drawCrosshairAndHud(g, mousePos, hoveredBand, hudText);
     }
 
-    // 锚点（bypass 时仍显示，降低透明度）
+    // ⑥ anchors
     drawAnchors(g, hoveredBand);
 
-    // 视图范围按钮（SRC 双圆形，bypass 时仍显示）
+    // ⑦ View Range 按钮
     drawViewRangeButtons(g, hoveredViewRangeControl, pressedViewRangeControl);
 }
 
