@@ -13,7 +13,6 @@
  *
  * 固定公共 API（契约 §6）：
  * - setEqSettings: 零回调
- * - setNoteColor: 设置背景色
  * - setPreviewMode: 切换预览/完整状态（外部初始调用不改变 bounds）
  * - setRemoveConfirmationSuppressed: 设置删除确认抑制
  * - onCommitSettings: anchor mouseUp 每次只触发一次
@@ -40,7 +39,6 @@ public:
 
     // ── 固定公共 API ──
     void setEqSettings(const EqSettings& settings);
-    void setNoteColor(juce::Colour color);
     void setPreviewMode(bool isPreview);
     void setRemoveConfirmationSuppressed(bool suppress);
 
@@ -92,7 +90,6 @@ private:
     EqBandInteraction interaction_;
     bool isPreview_ = true;
     bool isMaximized_ = false;
-    juce::Colour noteColor_ = juce::Colour::fromRGB(100, 100, 100);
     int hoveredBand_ = -1;
     int hoveredButton_ = -1;
     int hoveredViewRange_ = -1;
@@ -134,8 +131,6 @@ private:
     juce::Point<float> activeMousePos_;
 
     // 布局常量
-    static constexpr int kPreviewWidth = 180;
-    static constexpr int kPreviewHeight = 80;
     static constexpr int kFullWidth = 600;
     static constexpr int kFullHeight = 400;
     static constexpr float kTopBarHeight = 28.0f;
@@ -144,11 +139,10 @@ private:
 
     // 按钮区域计算
     juce::Rectangle<float> topBarBounds() const;
-    juce::Rectangle<float> graphAreaBounds() const;
+
 
     void commitSettings();
     void updateHoverBandFade(double dt);
-    bool graphBoundsContains(juce::Point<float> pos) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EqPopupComponent)
 };

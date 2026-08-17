@@ -22,9 +22,6 @@ public:
     // ── 范围常量（源自 SRC） ──
     static constexpr double kMinFrequencyHz = 20.0;
     static constexpr double kMaxFrequencyHz = 20000.0;
-    // 数据增益范围：±12 dB（数据裁剪边界，不等于视图范围）
-    static constexpr double kMinGainDb = -12.0;
-    static constexpr double kMaxGainDb = 12.0;
 
     // ── 视觉数学常量（源自 SRC EQGraphWidget.cpp） ──
     static constexpr int kBaseSegments = 240;
@@ -95,7 +92,8 @@ public:
     void drawFull(juce::Graphics& g, int hoveredBand = -1,
                   juce::Point<float> mousePos = {}, bool isDragging = false,
                   int hoveredViewRangeControl = -1,
-                  int pressedViewRangeControl = -1) const;
+                  int pressedViewRangeControl = -1,
+                  const std::array<double, 5>& hoverBandAmounts = {}) const;
 
     // ── 图例 ──
     struct LegendItem {
@@ -126,10 +124,6 @@ public:
     void drawCrosshairAndHud(juce::Graphics& g, juce::Point<float> pos,
                              int bandIndex, const juce::String& hudText) const;
 
-    // ── 坐标反馈（SRC 轴边缘动态频率/增益标签与十字线，无浮动 HUD 盒） ──
-    void drawCoordReadout(juce::Graphics& g, juce::Point<float> pos,
-                          bool showGuides, float opacity = 1.0f) const;
-
     // ── 曲线可见性（图例交互） ──
     void setCurveVisible(CurveId id, bool visible) { curveVisible_[static_cast<int>(id)] = visible; }
     bool isCurveVisible(CurveId id) const { return curveVisible_[static_cast<int>(id)]; }
@@ -143,7 +137,7 @@ private:
     std::array<bool, static_cast<size_t>(CurveId::Count)> curveVisible_ = { true, true, true, true, true, true };
 
     static double logGaussian(double frequencyHz, double centerHz, double widthOctaves);
-    static double normToFrequency(double norm);
+    double normToFrequency(double norm) const;
 
     struct ResponseSample { double norm; double gainDb; };
     std::vector<ResponseSample> adaptiveLogResponseSamples(
