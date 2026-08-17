@@ -1245,11 +1245,11 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
                 continue;
 
             // 选中态：透明选区填充 + 高亮描边；中心高光由内容层绘制，F0 保持前景。
-            g.setColour(item.displayColour.brighter(0.55f).withAlpha(0.28f));
+            g.setColour(item.displayColour.brighter(0.55f).withAlpha(0.45f));
             g.fillPath(blob);
 
-            g.setColour(item.displayColour.brighter(0.75f).withAlpha(0.75f));
-            g.strokePath(blob, juce::PathStrokeType(1.5f,
+            g.setColour(item.displayColour.brighter(0.75f).withAlpha(0.90f));
+            g.strokePath(blob, juce::PathStrokeType(1.8f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
         }
@@ -1283,11 +1283,11 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
         // Selection highlight: semi-transparent tint + brighter border (track theme colour)
-        g.setColour(item.displayColour.brighter(0.55f).withAlpha(isAurora ? 0.15f : 0.12f));
+        g.setColour(item.displayColour.brighter(0.55f).withAlpha(isAurora ? 0.30f : 0.25f));
         g.fillRect(noteBounds);
 
-        g.setColour(item.displayColour.brighter(0.75f).withAlpha(isAurora ? 0.72f : 0.60f));
-        g.drawRect(noteBounds, isAurora ? 1.35f : 1.1f);
+        g.setColour(item.displayColour.brighter(0.75f).withAlpha(isAurora ? 0.90f : 0.85f));
+        g.drawRect(noteBounds, isAurora ? 1.5f : 1.2f);
     }
 }
 
