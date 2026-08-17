@@ -415,6 +415,53 @@ void EqGraphRenderer::drawBackground(juce::Graphics& g) const
     g.fillRect(graphBounds_);
 }
 
+void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
+                                              const std::array<float, 128>& spectrum) const
+{
+    const float gx = graphBounds_.getX();
+    const float gy = graphBounds_.getY();
+    const float gw = graphBounds_.getWidth();
+    const float gh = graphBounds_.getHeight();
+    const int numBins = static_cast<int>(spectrum.size());
+
+    // 频谱填充多边形 — 参考 DESIGN_SPEC.md Pass 1
+    juce::Path fillPath;
+    fillPath.startNewSubPath(gx, gy + gh);
+    for (int i = 0; i < numBins; ++i)
+    {
+        const float x = gx + (static_cast<float>(i) / static_cast<float>(numBins - 1)) * gw;
+        const float h = spectrum[static_cast<size_t>(i)] * gh * 0.7f;
+        fillPath.lineTo(x, gy + gh - h);
+    }
+    fillPath.lineTo(gx + gw, gy + gh);
+    fillPath.closeSubPath();
+
+    // 渐变填充 — 青绿色半透明
+    {
+        juce::Graphics::ScopedSaveState saved(g);
+        g.reduceClipRegion(graphBounds_.toNearestInt());
+        juce::ColourGradient grad(
+            juce::Colour::fromRGBA(59, 213, 255, 18), 0.0f, gy,
+            juce::Colour::fromRGBA(59, 213, 255, 0),  0.0f, gy + gh, true);
+        grad.addColour(0.4, juce::Colour::fromRGBA(83, 232, 158, 12));
+        g.setGradientFill(grad);
+        g.fillPath(fillPath);
+    }
+
+    // 频谱轮廓线 — 白色半透明
+    juce::Path linePath;
+    linePath.startNewSubPath(gx, gy + gh);
+    for (int i = 0; i < numBins; ++i)
+    {
+        const float x = gx + (static_cast<float>(i) / static_cast<float>(numBins - 1)) * gw;
+        const float h = spectrum[static_cast<size_t>(i)] * gh * 0.7f;
+        linePath.lineTo(x, gy + gh - h);
+    }
+    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    g.strokePath(linePath, juce::PathStrokeType(1.0f,
+        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
 void EqGraphRenderer::drawGrid(juce::Graphics& g) const
 {
     g.setColour(gridMajorColor());
@@ -541,6 +588,34 @@ int EqGraphRenderer::hitTestAnchor(juce::Point<float> pos, float threshold) cons
     {
         const auto anchorPos = anchorPosition(i);
         const float dist = pos.getDistanceFrom(anchorPos);
+        if (dist < closestDist)
+        {
+            closestDist = dist;
+            closestBand = i;
+        }
+    }
+    return closestBand;
+}
+
+float EqGraphRenderer::curveYAtX(int bandIndex, float x) const
+{
+    const double freq = xToFreq(x);
+    const double gainDb = filterResponseDb(bandIndex, freq);
+    return gainToY(gainDb);
+}
+
+int EqGraphRenderer::hitTestCurve(juce::Point<float> pos, float threshold) const
+{
+    if (!graphBounds_.contains(pos))
+        return -1;
+
+    int closestBand = -1;
+    float closestDist = threshold;
+
+    for (int i = 0; i < 5; ++i)
+    {
+        const float curveY = curveYAtX(i, pos.x);
+        const float dist = std::abs(pos.y - curveY);
         if (dist < closestDist)
         {
             closestDist = dist;
@@ -837,9 +912,10 @@ EqGraphRenderer::ViewRangeButton EqGraphRenderer::hitTestViewRangeButton(juce::P
 // 渲染入口
 // ============================================================================
 
-void EqGraphRenderer::drawPreview(juce::Graphics& g) const
+void EqGraphRenderer::drawPreview(juce::Graphics& g, bool drawBg) const
 {
-    drawBackground(g);
+    if (drawBg)
+        drawBackground(g);
 
     const float bypassAlpha = settings_.active ? 1.0f : 0.28f;
 
@@ -861,16 +937,22 @@ void EqGraphRenderer::drawPreview(juce::Graphics& g) const
     }
 
     drawAnchors(g, -1, false);
+
+    // 窗口边框 — 预览模式需要明确边界
+    g.setColour(axisLabelColor().withAlpha(0.35f));
+    g.drawRoundedRectangle(graphBounds_.reduced(0.5f), 4.0f, 1.0f);
 }
 
 void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                juce::Point<float> mousePos, bool isDragging,
                                int hoveredViewRangeControl,
                                int pressedViewRangeControl,
-                               const std::array<double, 5>& hoverBandAmounts) const
+                               const std::array<double, 5>& hoverBandAmounts,
+                               bool drawBg) const
 {
     // ① background / grid
-    drawBackground(g);
+    if (drawBg)
+        drawBackground(g);
     drawGrid(g);
 
     const float bypassAlpha = settings_.active ? 1.0f : 0.28f;
