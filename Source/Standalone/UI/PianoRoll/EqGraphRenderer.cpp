@@ -26,7 +26,7 @@ namespace OpenTune {
 // ============================================================================
 
 juce::Colour EqGraphRenderer::backgroundColor() { return juce::Colour(Aurora::Colors::PianoRollBg); }
-juce::Colour EqGraphRenderer::gridMajorColor() { return juce::Colour(0xFF6D7681u); }
+juce::Colour EqGraphRenderer::gridMajorColor() { return juce::Colour(0x596D7681u); }
 juce::Colour EqGraphRenderer::axisLabelColor() { return juce::Colour(0xFFAAB4C0u); }
 juce::Colour EqGraphRenderer::combinedCurveColor() { return juce::Colour::fromRGB(255, 200, 72); }
 juce::Colour EqGraphRenderer::hudBgColor() { return juce::Colour::fromRGBA(12, 17, 24, 224); }
@@ -292,6 +292,50 @@ juce::Path EqGraphRenderer::buildSingleBandPath(int bandIndex) const
     juce::Path path;
     monotonicCubicPath(path, samples, graphBounds_, gainRangeDb_);
     return path;
+}
+
+juce::Path EqGraphRenderer::buildBandInfluencePath(int bandIndex) const
+{
+    const auto responseDb = [this, bandIndex](double freq) -> double {
+        return std::clamp(filterResponseDb(bandIndex, freq), -gainRangeDb_, gainRangeDb_);
+    };
+    const auto samples = adaptiveLogResponseSamples(responseDb);
+    if (samples.size() < 2)
+        return {};
+
+    // 从采样点构建曲线折线路径
+    juce::Path curve;
+    curve.startNewSubPath(
+        static_cast<float>(graphBounds_.getX() + graphBounds_.getWidth() * samples.front().norm),
+        gainToY(samples.front().gainDb));
+    for (size_t i = 1; i < samples.size(); ++i)
+        curve.lineTo(
+            static_cast<float>(graphBounds_.getX() + graphBounds_.getWidth() * samples[i].norm),
+            gainToY(samples[i].gainDb));
+
+    // 闭合到 0dB 基线（SRC makeBandInfluencePath 逻辑）
+    const float neutralY = gainToY(0.0);
+    const bool isHighCut = (bandIndex == 4);
+    const bool isLowCut  = (bandIndex == 0);
+
+    if (isHighCut)
+    {
+        curve.lineTo(graphBounds_.getX(), curve.getCurrentPosition().y);
+        curve.lineTo(graphBounds_.getX(), neutralY);
+    }
+    else if (isLowCut)
+    {
+        curve.lineTo(graphBounds_.getRight(), curve.getCurrentPosition().y);
+        curve.lineTo(graphBounds_.getRight(), neutralY);
+    }
+    else
+    {
+        const auto lastPt = curve.getCurrentPosition();
+        curve.lineTo(lastPt.x, neutralY);
+        curve.lineTo(static_cast<float>(graphBounds_.getX() + graphBounds_.getWidth() * samples.front().norm), neutralY);
+    }
+    curve.closeSubPath();
+    return curve;
 }
 
 // ============================================================================
@@ -811,14 +855,10 @@ void EqGraphRenderer::drawPreview(juce::Graphics& g) const
 {
     drawBackground(g);
 
-    // bypass 时仍绘制全部曲线，以降低透明度表达 bypass 状态
     const float bypassAlpha = settings_.active ? 1.0f : 0.28f;
 
-    // 单滤波器曲线（5 条，线宽 1.25）
     for (int i = 0; i < 5; ++i)
     {
-        if (!curveVisible_[static_cast<size_t>(i + 1)])
-            continue;
         const auto path = buildSingleBandPath(i);
         g.setColour(bandColor(i).withAlpha(0.6f * bypassAlpha));
         g.strokePath(path, juce::PathStrokeType(kSingleCurveWidth,
@@ -826,8 +866,6 @@ void EqGraphRenderer::drawPreview(juce::Graphics& g) const
                                                 juce::PathStrokeType::rounded));
     }
 
-    // Combined 主曲线（线宽 2.25）
-    if (curveVisible_[0])
     {
         const auto path = buildCombinedPath();
         g.setColour(combinedCurveColor().withAlpha(bypassAlpha));
@@ -836,27 +874,24 @@ void EqGraphRenderer::drawPreview(juce::Graphics& g) const
                                                 juce::PathStrokeType::rounded));
     }
 
-    // 锚点（始终显示，bypass 时降低透明度，预览模式不显示序号）
     drawAnchors(g, -1, false);
 }
 
 void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                juce::Point<float> mousePos, bool isDragging,
-                               int hoveredLegend, int hoveredViewRangeControl,
+                               int hoveredViewRangeControl,
                                int pressedViewRangeControl) const
 {
     drawBackground(g);
     drawGrid(g);
     drawAxisLabels(g);
 
-    // bypass 时仍绘制全部曲线 + anchors + 图例 + 视图按钮，以降低透明度表达 bypass 状态
+    // bypass 时仍绘制全部曲线 + anchors + 视图按钮，以降低透明度表达 bypass 状态
     const float bypassAlpha = settings_.active ? 1.0f : 0.28f;
 
     // 单滤波器曲线（5 条，线宽 1.25）
     for (int i = 0; i < 5; ++i)
     {
-        if (!curveVisible_[static_cast<size_t>(i + 1)])
-            continue;
         const auto path = buildSingleBandPath(i);
         g.setColour(bandColor(i).withAlpha(0.6f * bypassAlpha));
         g.strokePath(path, juce::PathStrokeType(kSingleCurveWidth,
@@ -865,7 +900,6 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
     }
 
     // Combined 主曲线（线宽 2.25）
-    if (curveVisible_[0])
     {
         const auto path = buildCombinedPath();
         g.setColour(combinedCurveColor().withAlpha(bypassAlpha));
@@ -889,14 +923,8 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
         drawCrosshairAndHud(g, mousePos, hoveredBand, hudText);
     }
 
-    // 坐标反馈 — 不在此处直接绘制，由 EqPopupComponent 的动画路径驱动 drawCoordReadout
-
     // 锚点（bypass 时仍显示，降低透明度）
     drawAnchors(g, hoveredBand);
-
-    // 图例（bypass 时仍显示）
-    const auto legendItems = buildLegendItems();
-    drawLegend(g, legendItems, hoveredLegend);
 
     // 视图范围按钮（SRC 双圆形，bypass 时仍显示）
     drawViewRangeButtons(g, hoveredViewRangeControl, pressedViewRangeControl);

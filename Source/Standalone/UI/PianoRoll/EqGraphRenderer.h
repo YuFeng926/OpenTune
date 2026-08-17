@@ -88,12 +88,13 @@ public:
     // ── 曲线路径 ──
     juce::Path buildCombinedPath() const;
     juce::Path buildSingleBandPath(int bandIndex) const;
+    juce::Path buildBandInfluencePath(int bandIndex) const;
 
     // ── 渲染入口 ──
     void drawPreview(juce::Graphics& g) const;
     void drawFull(juce::Graphics& g, int hoveredBand = -1,
                   juce::Point<float> mousePos = {}, bool isDragging = false,
-                  int hoveredLegend = -1, int hoveredViewRangeControl = -1,
+                  int hoveredViewRangeControl = -1,
                   int pressedViewRangeControl = -1) const;
 
     // ── 图例 ──
