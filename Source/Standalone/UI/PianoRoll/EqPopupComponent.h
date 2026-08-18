@@ -59,7 +59,6 @@ private:
     juce::Rectangle<float> floatingCardBounds() const;
     void paintFloatingCard(juce::Graphics& g, int filterIndex) const;
     void updateCardState();
-    juce::Rectangle<float> cardFilterButtonBounds(const juce::Rectangle<float>& cardBounds, int index, int count) const;
 
     // 卡片内旋钮控件
     void configureCardControls(int filterIndex);
@@ -126,13 +125,12 @@ private:
     static constexpr float kTopBarHeight = 28.0f;
     static constexpr float kBtnSize = 20.0f;
     static constexpr float kBtnGap = 3.0f;
-    static constexpr float kCardWidth = 260.0f;
-    static constexpr float kCardIconRowH = 18.0f;
+    static constexpr float kCardWidth = 208.0f;
     static constexpr float kCardTypeRowH = 22.0f;
     static constexpr float kCardTypeBtnSize = 20.0f;
     static constexpr float kCardTypeBtnGap = 2.0f;
-    static constexpr float kCardColumnWidth = 84.0f;
-    static constexpr float kCardSliderHeight = 84.0f;
+    static constexpr float kCardColumnWidth = 68.0f;
+    static constexpr float kCardSliderHeight = 68.0f;
     static constexpr float kCardLabelHeight = 12.0f;
     static constexpr float kCardPadding = 4.0f;
 

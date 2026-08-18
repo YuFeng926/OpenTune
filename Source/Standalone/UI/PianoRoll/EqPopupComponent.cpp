@@ -23,7 +23,7 @@ EqPopupComponent::EqPopupComponent()
 
     // 频率旋钮
     frequencySlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    frequencySlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 74, 24);
+    frequencySlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 59, 19);
     frequencySlider_.setRange(20.0, 20000.0, 1.0);
     frequencySlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
     frequencySlider_.setDoubleClickReturnValue(true, 1000.0);
@@ -39,7 +39,7 @@ EqPopupComponent::EqPopupComponent()
 
     // 增益旋钮
     gainSlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    gainSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 74, 24);
+    gainSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 59, 19);
     gainSlider_.setRange(-12.0, 12.0, 0.1);
     gainSlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
     gainSlider_.setDoubleClickReturnValue(true, 0.0);
@@ -54,7 +54,7 @@ EqPopupComponent::EqPopupComponent()
 
     // Q 旋钮
     qSlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    qSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 74, 24);
+    qSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 59, 19);
     qSlider_.setRange(0.25, 9.0, 0.01);
     qSlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
     qSlider_.setDoubleClickReturnValue(true, 1.0);
@@ -82,7 +82,7 @@ EqPopupComponent::~EqPopupComponent()
 
 juce::Rectangle<float> EqPopupComponent::floatingCardBounds() const
 {
-    const float cardH = kCardPadding + kCardIconRowH + 3.0f + kCardTypeRowH + 3.0f
+    const float cardH = kCardPadding + kCardTypeRowH + 3.0f
                         + kCardLabelHeight + kCardSliderHeight + kCardPadding;
     const float compW = static_cast<float>(getWidth());
     const float compH = static_cast<float>(getHeight());
@@ -114,31 +114,9 @@ void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex) con
     g.setColour(color.withAlpha(0.45f));
     g.drawRoundedRectangle(card, 6.0f, 1.0f);
 
-    // 顶部：滤波器图标色号矩阵，居中均匀分布
-    {
-        const int n = static_cast<int>(settings_.filters.size());
-        const float iconSize = 18.0f;
-        const float iconGap = 2.0f;
-        const float totalW = n * iconSize + (n - 1) * iconGap;
-        float bx = card.getX() + (card.getWidth() - totalW) * 0.5f;
-        float cy = card.getY() + kCardPadding;
-        for (int i = 0; i < n; ++i)
-        {
-            const bool isActive = (i == filterIndex);
-            const auto c = renderer_.bandColor(i);
-            const juce::Rectangle<float> iconRect(bx, cy, iconSize, kCardIconRowH);
-            g.setColour(isActive ? c.withAlpha(0.85f) : c.withAlpha(0.30f));
-            g.fillRoundedRectangle(iconRect, 3.0f);
-            g.setColour(juce::Colours::white.withAlpha(isActive ? 0.9f : 0.35f));
-            g.setFont(juce::FontOptions(9.0f));
-            g.drawText(juce::String(i + 1), iconRect, juce::Justification::centred, false);
-            bx += iconSize + iconGap;
-        }
-    }
-
     // 滤波器类型按钮行：5 个类型图标，居中排列
     {
-        const float btnY = card.getY() + kCardPadding + kCardIconRowH + 3.0f;
+        const float btnY = card.getY() + kCardPadding;
         const int numTypes = 5;
         const float totalW = numTypes * kCardTypeBtnSize + (numTypes - 1) * kCardTypeBtnGap;
         float bx = card.getX() + (card.getWidth() - totalW) * 0.5f;
@@ -155,29 +133,18 @@ void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex) con
     }
 
     // 旋钮上方标签：Freq / Gain / Q
-    const float labelY = card.getY() + kCardPadding + kCardIconRowH + 3.0f + kCardTypeRowH + 3.0f;
+    const float labelY = card.getY() + kCardPadding + kCardTypeRowH + 3.0f;
     {
         const char* labels[] = { "Freq", "Gain", "Q" };
         for (int i = 0; i < 3; ++i)
         {
             const float x = card.getX() + kCardPadding + static_cast<float>(i) * kCardColumnWidth;
             g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.6f));
-            g.setFont(juce::FontOptions(8.0f));
+            g.setFont(juce::FontOptions(10.0f));
             g.drawText(labels[i], juce::Rectangle<float>(x, labelY, kCardColumnWidth, kCardLabelHeight),
                        juce::Justification::centred, false);
         }
     }
-}
-
-juce::Rectangle<float> EqPopupComponent::cardFilterButtonBounds(
-    const juce::Rectangle<float>& cardBounds, int index, int count) const
-{
-    const float iconSize = 18.0f;
-    const float iconGap = 2.0f;
-    const float totalW = static_cast<float>(count) * iconSize + static_cast<float>(count - 1) * iconGap;
-    const float startX = cardBounds.getX() + (cardBounds.getWidth() - totalW) * 0.5f;
-    const float x = startX + static_cast<float>(index) * (iconSize + iconGap);
-    return { x, cardBounds.getY() + kCardPadding, iconSize, kCardIconRowH };
 }
 
 juce::Rectangle<float> EqPopupComponent::cardFilterTypeButtonBounds(
@@ -187,7 +154,7 @@ juce::Rectangle<float> EqPopupComponent::cardFilterTypeButtonBounds(
     const float totalW = numTypes * kCardTypeBtnSize + (numTypes - 1) * kCardTypeBtnGap;
     const float startX = cardBounds.getX() + (cardBounds.getWidth() - totalW) * 0.5f;
     const float x = startX + static_cast<float>(index) * (kCardTypeBtnSize + kCardTypeBtnGap);
-    const float y = cardBounds.getY() + kCardPadding + kCardIconRowH + 3.0f;
+    const float y = cardBounds.getY() + kCardPadding;
     return { x, y, kCardTypeBtnSize, kCardTypeBtnSize };
 }
 
@@ -345,7 +312,7 @@ void EqPopupComponent::layoutCardControls()
         return;
 
     const auto card = floatingCardBounds();
-    const float sliderY = card.getY() + kCardPadding + kCardIconRowH + 3.0f + kCardTypeRowH + 3.0f + kCardLabelHeight;
+    const float sliderY = card.getY() + kCardPadding + kCardTypeRowH + 3.0f + kCardLabelHeight;
 
     for (int i = 0; i < 3; ++i)
     {
@@ -844,20 +811,6 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
     if (!isPreview_ && cardBand_ >= 0 && !showingRemoveConfirmation_
         && floatingCardBounds().contains(pos))
     {
-        // 命中顶部图标 → 切换 selectedFilterIndex_
-        const int n = static_cast<int>(settings_.filters.size());
-        const auto card = floatingCardBounds();
-        for (int i = 0; i < n; ++i)
-        {
-            if (cardFilterButtonBounds(card, i, n).contains(pos))
-            {
-                selectedFilterIndex_ = i;
-                updateCardState();
-                repaint();
-                return;
-            }
-        }
-
         // 命中滤波器类型按钮 → 切换当前滤波器类型
         const int typeIdx = hitTestFilterTypeButton(pos);
         if (typeIdx >= 0 && typeIdx < 5 && cardBand_ >= 0
