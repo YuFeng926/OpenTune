@@ -80,27 +80,31 @@ EqPopupComponent::~EqPopupComponent()
 // 浮动参数卡
 // ============================================================================
 
-juce::Rectangle<float> EqPopupComponent::floatingCardBounds(juce::Point<float> anchorPos) const
+juce::Rectangle<float> EqPopupComponent::floatingCardBounds() const
 {
     const float cardH = kCardPadding + kCardIconRowH + 3.0f + kCardLabelHeight + kCardSliderHeight + kCardPadding;
-    float x = anchorPos.x + 14.0f;
-    float y = anchorPos.y - cardH * 0.5f;
-    if (x + kCardWidth > static_cast<float>(getWidth()) - 2.0f)
-        x = anchorPos.x - kCardWidth - 14.0f;
+    const float compW = static_cast<float>(getWidth());
+    const float compH = static_cast<float>(getHeight());
+    float x = (compW - kCardWidth) * 0.5f;
+    float y = compH - cardH - 4.0f;
+    // 夹紧到组件边界内
+    const float minX = 2.0f;
+    const float maxX = compW - kCardWidth - 2.0f;
+    if (maxX > minX)
+        x = juce::jlimit(minX, maxX, x);
+    else
+        x = minX;
     const float minY = kTopBarHeight + 2.0f;
-    const float maxY = juce::jmax(minY, static_cast<float>(getHeight()) - cardH - 2.0f);
-    y = juce::jlimit(minY, maxY, y);
-    x = juce::jmax(2.0f, x);
+    y = juce::jmax(minY, y);
     return { x, y, kCardWidth, cardH };
 }
 
-void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex,
-                                          juce::Point<float> anchorPos) const
+void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex) const
 {
     if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
         return;
 
-    const auto card = floatingCardBounds(anchorPos);
+    const auto card = floatingCardBounds();
     const auto color = renderer_.bandColor(filterIndex);
 
     // 卡片背景
@@ -108,24 +112,6 @@ void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex,
     g.fillRoundedRectangle(card, 6.0f);
     g.setColour(color.withAlpha(0.45f));
     g.drawRoundedRectangle(card, 6.0f, 1.0f);
-
-    // 指向锚点的三角形连线
-    {
-        juce::Path arrow;
-        const float tipX = anchorPos.x;
-        const float tipY = anchorPos.y;
-        const bool fromLeft = tipX < card.getX();
-        const float baseX = fromLeft ? card.getX() : card.getRight();
-        const float baseY = juce::jlimit(card.getY() + 8.0f, card.getBottom() - 8.0f, tipY);
-        arrow.startNewSubPath(tipX, tipY);
-        arrow.lineTo(baseX, baseY - 5.0f);
-        arrow.lineTo(baseX, baseY + 5.0f);
-        arrow.closeSubPath();
-        g.setColour(EqGraphRenderer::hudBgColor().withAlpha(0.93f));
-        g.fillPath(arrow);
-        g.setColour(color.withAlpha(0.45f));
-        g.strokePath(arrow, juce::PathStrokeType(1.0f));
-    }
 
     // 顶部：滤波器图标色号矩阵，居中均匀分布
     {
@@ -186,7 +172,6 @@ void EqPopupComponent::updateCardState()
     if (selectedFilterIndex_ >= 0 && selectedFilterIndex_ < static_cast<int>(settings_.filters.size()))
     {
         cardBand_ = selectedFilterIndex_;
-        cardAnchorPos_ = renderer_.anchorPosition(selectedFilterIndex_);
         configureCardControls(selectedFilterIndex_);
     }
     else
@@ -258,7 +243,7 @@ void EqPopupComponent::layoutCardControls()
     if (cardBand_ < 0)
         return;
 
-    const auto card = floatingCardBounds(cardAnchorPos_);
+    const auto card = floatingCardBounds();
     const float sliderY = card.getY() + kCardPadding + kCardIconRowH + 3.0f + kCardLabelHeight;
 
     for (int i = 0; i < 3; ++i)
@@ -268,11 +253,6 @@ void EqPopupComponent::layoutCardControls()
         slider->setBounds(static_cast<int>(x), static_cast<int>(sliderY),
                           static_cast<int>(kCardColumnWidth), static_cast<int>(kCardSliderHeight));
     }
-
-    // 确保控件层级高于父组件曲线绘制
-    if (frequencySlider_.isVisible()) frequencySlider_.toFront(false);
-    if (gainSlider_.isVisible()) gainSlider_.toFront(false);
-    if (qSlider_.isVisible()) qSlider_.toFront(false);
 }
 
 void EqPopupComponent::cardSliderChanged(int parameterIndex)
@@ -305,7 +285,6 @@ void EqPopupComponent::cardSliderChanged(int parameterIndex)
     }
 
     renderer_.setSettings(settings_);
-    cardAnchorPos_ = renderer_.anchorPosition(cardBand_);
     layoutCardControls();
     commitSettings();
     repaint();
@@ -366,7 +345,6 @@ void EqPopupComponent::resized()
     renderer_.setGraphBounds(getLocalBounds().toFloat().reduced(3.0f));
     if (cardBand_ >= 0)
     {
-        cardAnchorPos_ = renderer_.anchorPosition(cardBand_);
         layoutCardControls();
     }
 }
@@ -410,7 +388,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
     // 浮动参数卡（在按钮之上绘制；真实 Slider 子控件由 JUCE 自动绘制）
     if (!isPreview_ && cardBand_ >= 0 && !showingRemoveConfirmation_)
     {
-        paintFloatingCard(g, cardBand_, cardAnchorPos_);
+        paintFloatingCard(g, cardBand_);
     }
 
     // 按钮 tooltip
@@ -664,7 +642,7 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
 
     // 浮动卡片区域 — 最高命中层，不穿透 graph hit-test
     if (!isPreview_ && cardBand_ >= 0 && !showingRemoveConfirmation_
-        && floatingCardBounds(cardAnchorPos_).contains(pos))
+        && floatingCardBounds().contains(pos))
     {
         hoveredBand_ = -1;
         hoveredViewRange_ = -1;
@@ -695,7 +673,6 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
                    : (hoveredViewRange_ >= 0 ? juce::MouseCursor::PointingHandCursor
                                               : juce::MouseCursor::NormalCursor));
 
-    updateCardState();
     repaint();
 }
 
@@ -759,11 +736,11 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
 
     // 完整模式卡片守卫 — 最高优先级，拦截卡片区域所有单击事件
     if (!isPreview_ && cardBand_ >= 0 && !showingRemoveConfirmation_
-        && floatingCardBounds(cardAnchorPos_).contains(pos))
+        && floatingCardBounds().contains(pos))
     {
         // 命中顶部图标 → 切换 selectedFilterIndex_
         const int n = static_cast<int>(settings_.filters.size());
-        const auto card = floatingCardBounds(cardAnchorPos_);
+        const auto card = floatingCardBounds();
         for (int i = 0; i < n; ++i)
         {
             if (cardFilterButtonBounds(card, i, n).contains(pos))
@@ -898,10 +875,9 @@ void EqPopupComponent::mouseDrag(const juce::MouseEvent& event)
 
     settings_ = interaction_.updateDrag(event.position, settings_);
     renderer_.setSettings(settings_);
-    // 拖拽后更新浮动卡片位置
+    // 拖拽时同步卡片控件值（若卡片正在显示该 band）
     if (cardBand_ >= 0 && cardBand_ < static_cast<int>(settings_.filters.size()))
     {
-        cardAnchorPos_ = renderer_.anchorPosition(cardBand_);
         configureCardControls(cardBand_);
     }
     repaint();
@@ -961,7 +937,6 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
                 renderer_.setViewGainRangeDb(newRange);
                 if (cardBand_ >= 0 && cardBand_ < static_cast<int>(settings_.filters.size()))
                 {
-                    cardAnchorPos_ = renderer_.anchorPosition(cardBand_);
                     layoutCardControls();
                 }
             }
@@ -984,7 +959,7 @@ void EqPopupComponent::mouseDoubleClick(const juce::MouseEvent& event)
     const auto pos = event.position;
 
     // 卡片区域内的双击由卡片消费，不穿透到 graph
-    if (cardBand_ >= 0 && floatingCardBounds(cardAnchorPos_).contains(pos))
+    if (cardBand_ >= 0 && floatingCardBounds().contains(pos))
         return;
 
     // 命中已有 anchor → 删除该 filter
@@ -1046,7 +1021,7 @@ void EqPopupComponent::mouseWheelMove(const juce::MouseEvent& event, const juce:
 
     // hover anchor 优先 → selected filter 后备
     if (!isPreview_ && cardBand_ >= 0
-        && floatingCardBounds(cardAnchorPos_).contains(event.position))
+        && floatingCardBounds().contains(event.position))
     {
         return;
     }
