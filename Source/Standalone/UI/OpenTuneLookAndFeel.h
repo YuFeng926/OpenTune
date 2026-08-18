@@ -1066,7 +1066,7 @@ public:
 
         if (themeId == ThemeId::DarkBlueGrey)
         {
-            drawDarkBlueGreyKnob(g, bounds, cx, cy, radius, angle, rotaryStartAngle, rotaryEndAngle, themeStyle);
+            drawDarkBlueGreyKnob(g, bounds, cx, cy, radius, angle, rotaryStartAngle, rotaryEndAngle, themeStyle, slider);
         }
         else if (themeId == ThemeId::BlueBreeze)
         {
@@ -1077,7 +1077,7 @@ public:
             // 统一调用程序化旋钮绘制（拟物风格+线状指针）
             UIColors::drawOverdoseKnob(g, bounds, sliderPosProportional,
                                         slider.isMouseOverOrDragging(),
-                                        rotaryStartAngle, rotaryEndAngle);
+                                        rotaryStartAngle, rotaryEndAngle, &slider);
         }
         else
         {
@@ -1089,7 +1089,10 @@ public:
 
             juce::Path arc;
             arc.addCentredArc(cx, cy, radius * 0.82f, radius * 0.82f, 0.0f, rotaryStartAngle, angle, true);
-            g.setColour(UIColors::knobIndicator);
+            auto arcCol = UIColors::knobIndicator;
+            if (slider.getProperties().contains("arcColor"))
+                arcCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider.getProperties()["arcColor"])));
+            g.setColour(arcCol);
             g.strokePath(arc, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
             juce::Line<float> needle(cx, cy, cx + std::cos(angle) * radius * 0.72f, cy + std::sin(angle) * radius * 0.72f);
@@ -1110,11 +1113,13 @@ public:
                                           normalised,
                                           slider.isMouseOverOrDragging(),
                                           rotaryStartAngle,
-                                          rotaryEndAngle);
+                                          rotaryEndAngle,
+                                          &slider);
     }
 
         void drawDarkBlueGreyKnob(juce::Graphics& g, juce::Rectangle<float> bounds, float cx, float cy, float radius,
-                              float angle, float rotaryStartAngle, float rotaryEndAngle, const ThemeStyle& themeStyle)
+                              float angle, float rotaryStartAngle, float rotaryEndAngle, const ThemeStyle& themeStyle,
+                              const juce::Slider& slider)
     {
         juce::ignoreUnused(themeStyle, cx, cy);
 
@@ -1139,7 +1144,10 @@ public:
 
         juce::Path valuePath;
         valuePath.addCentredArc(center.x, center.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, angle, true);
-        g.setColour(UIColors::accent.withAlpha(0.95f));
+        auto arcCol = UIColors::accent;
+        if (slider.getProperties().contains("arcColor"))
+            arcCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider.getProperties()["arcColor"])));
+        g.setColour(arcCol.withAlpha(0.95f));
         g.strokePath(valuePath, juce::PathStrokeType(4.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         {

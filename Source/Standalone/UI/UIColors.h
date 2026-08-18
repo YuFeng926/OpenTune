@@ -900,7 +900,8 @@ struct UIColors
                                         float normalisedValue,
                                         bool highlighted,
                                         float rotaryStartAngle = juce::MathConstants<float>::pi * 1.25f,
-                                        float rotaryEndAngle = juce::MathConstants<float>::pi * 2.75f)
+                                        float rotaryEndAngle = juce::MathConstants<float>::pi * 2.75f,
+                                        const juce::Slider* slider = nullptr)
     {
         const auto clampedValue = juce::jlimit(0.0f, 1.0f, normalisedValue);
         const auto insetBounds = bounds.reduced(2.0f);
@@ -936,7 +937,10 @@ struct UIColors
 
         juce::Path valueArc;
         valueArc.addCentredArc(centre.x, centre.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, angle, true);
-        g.setColour(accent.withAlpha(highlighted ? 0.66f : 0.40f));
+        auto arcCol = accent;
+        if (slider != nullptr && slider->getProperties().contains("arcColor"))
+            arcCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider->getProperties()["arcColor"])));
+        g.setColour(arcCol.withAlpha(highlighted ? 0.66f : 0.40f));
         g.strokePath(valueArc, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         juce::Path knobPath;
@@ -1220,7 +1224,8 @@ struct UIColors
                                float normalisedValue,
                                bool highlighted = false,
                                float rotaryStartAngle = juce::MathConstants<float>::pi * 1.25f,
-                               float rotaryEndAngle = juce::MathConstants<float>::pi * 2.75f)
+                               float rotaryEndAngle = juce::MathConstants<float>::pi * 2.75f,
+                               const juce::Slider* slider = nullptr)
     {
         const auto clampedValue = juce::jlimit(0.0f, 1.0f, normalisedValue);
         const auto insetBounds = bounds.reduced(2.0f);
@@ -1255,7 +1260,10 @@ struct UIColors
         const auto angle = rotaryStartAngle + (rotaryEndAngle - rotaryStartAngle) * clampedValue;
         juce::Path indicator;
         indicator.addCentredArc(centre.x, centre.y, radius - 4.0f, radius - 4.0f, 0.0f, rotaryStartAngle, angle, true);
-        g.setColour(knobIndicator.withAlpha(highlighted ? 0.96f : 0.82f));
+        auto arcCol = knobIndicator;
+        if (slider != nullptr && slider->getProperties().contains("arcColor"))
+            arcCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider->getProperties()["arcColor"])));
+        g.setColour(arcCol.withAlpha(highlighted ? 0.96f : 0.82f));
         g.strokePath(indicator, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         const auto dotDistance = radius * 0.62f;
@@ -1911,7 +1919,8 @@ struct UIColors
                                  float normalisedValue,
                                  bool highlighted,
                                  float rotaryStartAngle = juce::MathConstants<float>::pi * 1.25f,
-                                 float rotaryEndAngle = juce::MathConstants<float>::pi * 2.75f)
+                                 float rotaryEndAngle = juce::MathConstants<float>::pi * 2.75f,
+                                 const juce::Slider* slider = nullptr)
     {
         const auto clampedValue = juce::jlimit(0.0f, 1.0f, normalisedValue);
         const auto insetBounds = bounds.reduced(2.0f);
@@ -1952,7 +1961,10 @@ struct UIColors
         // 粉色指示弧（当前值到起点的弧，极明亮，极粗且极醒目）
         juce::Path valueArc;
         valueArc.addCentredArc(centre.x, centre.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, angle, true);
-        g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(1.0f));
+        auto arcCol = juce::Colour { Overdose::Colors::PrimaryPink };
+        if (slider != nullptr && slider->getProperties().contains("arcColor"))
+            arcCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider->getProperties()["arcColor"])));
+        g.setColour(arcCol.withAlpha(1.0f));
         g.strokePath(valueArc, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         // 旋钮主体：金属银色渐变（参考图：银色金属质感）

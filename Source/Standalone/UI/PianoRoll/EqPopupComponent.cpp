@@ -14,7 +14,6 @@ namespace OpenTune {
 
 EqPopupComponent::EqPopupComponent()
 {
-    setRepaintsOnMouseActivity(true);
     setOpaque(false);
     startTimerHz(30);
     interaction_.setRenderer(&renderer_);
@@ -24,7 +23,7 @@ EqPopupComponent::EqPopupComponent()
 
     // 频率旋钮
     frequencySlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    frequencySlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 84, 28);
+    frequencySlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 74, 24);
     frequencySlider_.setRange(20.0, 20000.0, 1.0);
     frequencySlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
     frequencySlider_.setDoubleClickReturnValue(true, 1000.0);
@@ -40,7 +39,7 @@ EqPopupComponent::EqPopupComponent()
 
     // 增益旋钮
     gainSlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    gainSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 84, 28);
+    gainSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 74, 24);
     gainSlider_.setRange(-12.0, 12.0, 0.1);
     gainSlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
     gainSlider_.setDoubleClickReturnValue(true, 0.0);
@@ -55,7 +54,7 @@ EqPopupComponent::EqPopupComponent()
 
     // Q 旋钮
     qSlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    qSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 84, 28);
+    qSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 74, 24);
     qSlider_.setRange(0.25, 9.0, 0.01);
     qSlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
     qSlider_.setDoubleClickReturnValue(true, 1.0);
@@ -230,6 +229,13 @@ void EqPopupComponent::configureCardControls(int filterIndex)
 
     // Q 始终显示
     qSlider_.setValue(f.q, juce::dontSendNotification);
+
+    // 设置弧光颜色为滤波器主题色
+    const auto filterColor = renderer_.bandColor(filterIndex);
+    const auto colorVar = static_cast<int>(filterColor.getARGB());
+    frequencySlider_.getProperties().set("arcColor", colorVar);
+    gainSlider_.getProperties().set("arcColor", colorVar);
+    qSlider_.getProperties().set("arcColor", colorVar);
 
     updatingCardControls_ = false;
 
@@ -1121,8 +1127,7 @@ void EqPopupComponent::timerCallback()
         }
     }
 
-    // 频谱动画持续刷新
-    repaint();
+    // hover 动画或拖拽中才刷新
 }
 
 void EqPopupComponent::updateHoverBandFade(double dt)

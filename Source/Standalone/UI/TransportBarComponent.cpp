@@ -1309,7 +1309,7 @@ void TransportBarComponent::resized()
         bpmField_.setBounds(row.removeFromLeft(bpmWidth));
         row.removeFromLeft(spacing);
 
-        const int rootWidth = 60;
+        const int rootWidth = 50;
         const int typeWidth = 180;
 
         scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
@@ -1361,7 +1361,7 @@ void TransportBarComponent::resized()
     tapButton_.setBounds(row.removeFromLeft(buttonWidth));
     row.removeFromLeft(4);
 
-    const int rootWidth = 60;
+    const int rootWidth = 50;
     const int typeWidth = 180;
 
     scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
