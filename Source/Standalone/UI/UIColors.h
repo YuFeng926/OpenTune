@@ -990,7 +990,7 @@ struct UIColors
         g.setGradientFill(rimLight);
         g.strokePath(knobPath, juce::PathStrokeType(highlighted ? 1.15f : 0.85f));
 
-        g.setColour(juce::Colour { BlueBreeze::Colors::KnobEdge }.withAlpha(highlighted ? 0.64f : 0.46f));
+        g.setColour(arcCol.withAlpha(highlighted ? 0.64f : 0.46f));
         g.strokePath(knobPath, juce::PathStrokeType(highlighted ? 1.35f : 1.0f));
 
         const auto dotDistance = radius * 0.62f;
