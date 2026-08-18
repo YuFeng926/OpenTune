@@ -152,11 +152,18 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
                     const int type = static_cast<int>(filterTree.getProperty("type"));
                     if (type < 0 || type > static_cast<int>(EqFilterType::HighCut))
                         return false;
+                    // v7: paletteSlot 属性；v6 旧数据按索引确定性补 slot
+                    const int slot = filterTree.hasProperty("slot")
+                        ? static_cast<int>(filterTree.getProperty("slot", i))
+                        : i;
+                    if (slot < 0 || slot >= EqSettings::kMaxFilters)
+                        return false;
                     eq.filters.push_back({
                         static_cast<EqFilterType>(type),
                         static_cast<float>(filterTree.getProperty("frequencyHz")),
                         static_cast<float>(filterTree.getProperty("gainDb")),
-                        static_cast<float>(filterTree.getProperty("q"))
+                        static_cast<float>(filterTree.getProperty("q")),
+                        slot
                     });
                 }
                 return eq.isValid();
@@ -535,6 +542,7 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
                 fTree.setProperty("frequencyHz", f.frequencyHz, nullptr);
                 fTree.setProperty("gainDb", f.gainDb, nullptr);
                 fTree.setProperty("q", f.q, nullptr);
+                fTree.setProperty("slot", f.paletteSlot, nullptr);
                 eqTree.addChild(fTree, -1, nullptr);
             }
             nt.addChild(eqTree, -1, nullptr);
@@ -601,6 +609,10 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
                     f.frequencyHz = fTree.getProperty("frequencyHz", 1000.0f);
                     f.gainDb = fTree.getProperty("gainDb", 0.0f);
                     f.q = fTree.getProperty("q", 2.0f);
+                    // v7: paletteSlot 属性；v6 旧数据按索引确定性补 slot
+                    f.paletteSlot = fTree.hasProperty("slot")
+                        ? static_cast<int>(fTree.getProperty("slot", fi))
+                        : fi;
                     eq.filters.push_back(f);
                 }
             } else if (eqTree.hasProperty("lowCutFrequencyHz")
@@ -622,11 +634,11 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
                 const float highCutFreq = eqTree.getProperty("highCutFrequencyHz", 12000.0f);
 
                 eq.filters = {
-                    { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f },
-                    { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f },
-                    { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f },
-                    { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f },
-                    { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f }
+                    { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f, 0 },
+                    { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f, 1 },
+                    { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f, 2 },
+                    { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f, 3 },
+                    { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f, 4 }
                 };
                 parsedEq = true;
             }

@@ -30,7 +30,7 @@ namespace OpenTune {
 namespace {
 
 constexpr int kContentPayloadArchiveMagic = 0x4F544143;
-constexpr int kContentPayloadArchiveVersion = 6; // v6: dynamic EQ filter chain (v5 scalar 9-field migrated to Filter sub-nodes)
+constexpr int kContentPayloadArchiveVersion = 7; // v7: EqFilter.paletteSlot (v6 dynamic EQ filters migrated with deterministic slot assignment)
 constexpr int kContentPayloadArchiveVersionMin = 3;
 constexpr int kMaxContentPayloadRecords = 4096;
 
@@ -142,6 +142,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
                 fEl->setAttribute("frequencyHz", f.frequencyHz);
                 fEl->setAttribute("gainDb", f.gainDb);
                 fEl->setAttribute("q", f.q);
+                fEl->setAttribute("slot", f.paletteSlot);
                 eqEl->addChildElement(fEl);
             }
             n->addChildElement(eqEl);
@@ -451,6 +452,7 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                                     parsedEq = false;
                                     break;
                                 }
+                                const int filterIndex = static_cast<int>(eq.filters.size());
                                 EqFilter f;
                                 f.type = static_cast<EqFilterType>(typeInt);
                                 f.frequencyHz = static_cast<float>(
@@ -459,6 +461,10 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                                     fEl->getDoubleAttribute("gainDb", 0.0));
                                 f.q = static_cast<float>(
                                     fEl->getDoubleAttribute("q", 2.0));
+                                // v7: paletteSlot 属性；v6 旧数据按索引确定性补 slot
+                                f.paletteSlot = fEl->hasAttribute("slot")
+                                    ? fEl->getIntAttribute("slot", filterIndex)
+                                    : filterIndex;
                                 eq.filters.push_back(f);
                             }
                         } else if (eqEl->hasAttribute("lowCutFrequencyHz")
@@ -488,11 +494,11 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                                 eqEl->getDoubleAttribute("highCutFrequencyHz", 12000.0));
 
                             eq.filters = {
-                                { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f },
-                                { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f },
-                                { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f },
-                                { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f },
-                                { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f }
+                                { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f, 0 },
+                                { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f, 1 },
+                                { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f, 2 },
+                                { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f, 3 },
+                                { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f, 4 }
                             };
                             parsedEq = true;
                         }

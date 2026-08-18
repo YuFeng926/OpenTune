@@ -21,7 +21,7 @@ namespace {
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 9;   // v9: dynamic EQ filter chain (v8 9-field migrated to Filter sub-nodes)
+    constexpr int kCaptureArchiveVersion = 10;  // v10: EqFilter.paletteSlot (v9 dynamic EQ filters migrated with deterministic slot assignment)
     constexpr int kCaptureArchiveVersionMin = 4;  // v4 files load with pitchDriftScale=1.0
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
@@ -190,7 +190,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 stream.writeFloat(note.outputGainDb);
                 stream.writeInt(note.isVoiced ? 1 : 0);
 
-                // v9: Per-note EQ settings — filter count + per-filter type/frequency/gain/q
+                // v10: Per-note EQ settings — filter count + per-filter type/frequency/gain/q/slot
                 stream.writeInt(note.eq.has_value() ? 1 : 0);
                 if (note.eq.has_value()) {
                     const auto& eq = *note.eq;
@@ -203,6 +203,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                         stream.writeFloat(f.frequencyHz);
                         stream.writeFloat(f.gainDb);
                         stream.writeFloat(f.q);
+                        stream.writeInt(f.paletteSlot);
                     }
                 }
             }
@@ -243,6 +244,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     const bool hasDetectedKeyOrigin = (fileVersion >= 7);
     const bool hasPerNoteEq = (fileVersion >= 8);
     const bool hasDynamicEqFilters = (fileVersion >= 9);
+    const bool hasPaletteSlot = (fileVersion >= 10);
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -348,7 +350,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
                 eq.active = stream.readInt() != 0;
 
                 if (hasDynamicEqFilters) {
-                    // v9: filter count + per-filter type/frequency/gain/q
+                    // v9+: filter count + per-filter type/frequency/gain/q [+ v10 slot]
                     const int filterCount = stream.readInt();
                     if (filterCount <= 0 || filterCount > EqSettings::kMaxFilters)
                         return false;
@@ -366,10 +368,14 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
                         f.frequencyHz = freq;
                         f.gainDb = gain;
                         f.q = q;
+                        // v10: paletteSlot；v9 旧数据按索引确定性补 slot
+                        f.paletteSlot = hasPaletteSlot ? stream.readInt() : fi;
+                        if (f.paletteSlot < 0 || f.paletteSlot >= EqSettings::kMaxFilters)
+                            return false;
                         eq.filters.push_back(f);
                     }
                 } else {
-                    // v8 legacy: 旧 8 float 字段 → 5 个固定过滤器
+                    // v8 legacy: 旧 8 float 字段 → 5 个固定过滤器 + 确定性 paletteSlot 0..4
                     // (active 已在上方读取，此处紧跟 8 个 float)
                     const float lowCutFreq = stream.readFloat();
                     const float lowShelfFreq = stream.readFloat();
@@ -381,11 +387,11 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
                     const float highCutFreq = stream.readFloat();
 
                     eq.filters = {
-                        { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f },
-                        { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f },
-                        { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f },
-                        { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f },
-                        { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f }
+                        { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f, 0 },
+                        { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f, 1 },
+                        { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f, 2 },
+                        { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f, 3 },
+                        { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f, 4 }
                     };
                 }
 

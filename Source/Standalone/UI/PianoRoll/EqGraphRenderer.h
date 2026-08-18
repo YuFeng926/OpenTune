@@ -50,6 +50,10 @@ public:
     static constexpr float kViewRangeCircleRadius = 16.0f;
     static constexpr float kViewRangeButtonGap = 8.0f;
 
+    // ── 10 色调色板（SRC 滤波器 + 频谱颜色循环共享） ──
+    static constexpr int kPaletteSize = 10;
+    static const std::array<juce::Colour, kPaletteSize> kPalette;
+
     // ── 颜色 ──
     static juce::Colour backgroundColor();
     static juce::Colour gridMajorColor();
@@ -57,7 +61,7 @@ public:
     static juce::Colour combinedCurveColor();
     static juce::Colour hudBgColor();
     static juce::Colour hudTextColor();
-    // 按 filterIndex 查 settings_.filters 类型映射颜色
+    // 按 paletteSlot 查 10 色（无效 slot → fallback 按 type）
     juce::Colour bandColor(int filterIndex) const;
 
     EqGraphRenderer() = default;
@@ -91,12 +95,15 @@ public:
                   juce::Point<float> mousePos = {}, bool isDragging = false,
                   int hoveredViewRangeControl = -1,
                   int pressedViewRangeControl = -1,
-                  const std::vector<double>& hoverBandAmounts = {}) const;
+                  const std::vector<double>& hoverBandAmounts = {},
+                  int activeCardBand = -1) const;
 
     // ── 频谱背景动画 ──
     void drawSpectrumBackground(juce::Graphics& g,
                                 const std::array<float, 128>& spectrum,
                                 const std::array<float, 128>& peaks) const;
+    /// 每帧由 timer 调用一次，推进频谱颜色循环插值
+    void advanceSpectrumColorCycle(double dt);
 
     // ── 图例（动态数量） ──
     struct LegendItem {
@@ -145,6 +152,10 @@ public:
         return true;
     }
 
+    // ── paletteSlot 辅助 ──
+    static void assignPaletteSlots(EqSettings& settings);
+    static int getPaletteSlot(const EqFilter& f);
+
 private:
     juce::Rectangle<float> graphBounds_;
     double gainRangeDb_ = 12.0;
@@ -158,6 +169,13 @@ private:
     }();
     mutable std::array<float, 128> spectrumPeakTrace_{};
 
+    // ── 频谱颜色循环状态 ──
+    int spectrumColorIndex_ = 0;
+    int spectrumTargetIndex_ = 1;
+    float spectrumColorProgress_ = 0.0f;
+    static constexpr float kSpectrumColorCycleInterval = 3.0f;
+    float spectrumColorTimer_ = 0.0f;
+
     static double logGaussian(double frequencyHz, double centerHz, double widthOctaves);
     double normToFrequency(double norm) const;
 
@@ -170,6 +188,9 @@ private:
     void drawAxisLabels(juce::Graphics& g) const;
 
     float measureLegendItemWidth(const juce::String& label) const;
+
+    /// 旧 type-based fallback（paletteSlot 无效时使用）
+    static juce::Colour typeFallbackColor(EqFilterType type);
 };
 
 } // namespace OpenTune

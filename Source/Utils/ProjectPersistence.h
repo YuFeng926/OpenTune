@@ -54,7 +54,7 @@ public:
     // 常量
     // ============================================================================
 
-    static constexpr int kCurrentProjectFormatVersion = 6; // v6: dynamic EQ filter chain (v5 scalar 9-field migrated to Filter sub-nodes)
+    static constexpr int kCurrentProjectFormatVersion = 7; // v7: EqFilter.paletteSlot (v6 dynamic EQ filters migrated with deterministic slot assignment)
     static constexpr int kMinimumProjectFormatVersion = 3;
     static constexpr const char* kRootNodeName = "OpenTuneProject";
     static constexpr const char* kProjectFormatVersionAttr = "projectFormatVersion";
