@@ -449,9 +449,31 @@ void EqPopupComponent::paint(juce::Graphics& g)
     const auto bounds = getLocalBounds().toFloat();
     const float cornerRadius = 8.0f;
 
+    // ---- 磨砂玻璃背景：截取父组件内容 → 高斯模糊 → 缓存 ----
+    const auto pos = getPosition();
+    if (blurredBgPosition_ != pos)
+    {
+        blurredBgPosition_ = pos;
+        blurredBgCache_ = {};
+        if (auto* parent = getParentComponent())
+        {
+            const auto snapshot = parent->createComponentSnapshot(
+                getBoundsInParent(), true);
+            if (snapshot.isValid())
+            {
+                blurredBgCache_ = snapshot;
+                blurredBgCache_.getPixelData()->applyGaussianBlurEffect(8.0f);
+            }
+        }
+    }
+    if (blurredBgCache_.isValid())
+    {
+        g.drawImageAt(blurredBgCache_, 0, 0);
+    }
+
     const auto bgBase = noteColor_.withSaturation(noteColor_.getSaturation() * 0.3f);
     const auto bgColor = bgBase.interpolatedWith(EqGraphRenderer::backgroundColor(), 0.7f);
-    g.setColour(bgColor.withAlpha(0.75f));
+    g.setColour(bgColor.withAlpha(0.85f));
     g.fillRoundedRectangle(bounds, cornerRadius);
 
     g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.25f));
@@ -465,6 +487,13 @@ void EqPopupComponent::paint(juce::Graphics& g)
         renderer_.drawFull(g, hoveredBand_, activeMousePos_, interaction_.isDragging(),
                            hoveredViewRange_, pressedViewRange_, hoverBandAmounts_,
                            cardBand_);
+
+    // 顶栏背景：覆盖 grid/axis 穿透，确保右上角按钮在最上层
+    {
+        const auto topBar = topBarBounds();
+        g.setColour(bgColor);
+        g.fillRect(topBar);
+    }
 
     // 四控制按钮
     paintButton(g, ButtonId::Maximize, buttonBounds(ButtonId::Maximize),

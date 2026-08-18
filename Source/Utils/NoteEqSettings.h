@@ -108,14 +108,12 @@ struct EqSettings {
     bool active = true;
     std::vector<EqFilter> filters;
 
-    // 默认构造：旧 5 段固定结构 + 稳定 paletteSlot 0..4，保证旧数据迁移后语义一致
+    // 默认构造：3 段（LowShelf / Peak / HighShelf），不预置高切/低切
     EqSettings()
         : filters{
-              { EqFilterType::LowCut,   80.0f,   0.0f, 0.707f, 0 },
-              { EqFilterType::LowShelf, 500.0f,  0.0f, 2.0f,   1 },
-              { EqFilterType::Peak,     3000.0f, 0.0f, 2.0f,   2 },
-              { EqFilterType::HighShelf,8000.0f, 0.0f, 2.0f,   3 },
-              { EqFilterType::HighCut,  12000.0f,0.0f, 0.707f, 4 }
+              { EqFilterType::LowShelf, 500.0f,  0.0f, 2.0f,   0 },
+              { EqFilterType::Peak,     3000.0f, 0.0f, 2.0f,   1 },
+              { EqFilterType::HighShelf,8000.0f, 0.0f, 2.0f,   2 }
           }
     {
     }

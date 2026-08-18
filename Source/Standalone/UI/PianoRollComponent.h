@@ -312,11 +312,9 @@ private:
     // ── 保留表面状态快照 ──────────────────────────────────────
     juce::Image staticSurface_;
     juce::Image contentSurface_;
-    juce::Image eqIndicatorSurface_;
     ViewportState surfaceView_;
     bool staticDirty_ = true;
     bool contentDirty_ = true;
-    bool eqIndicatorDirty_ = true;
 
     // ── 缩放事务 ──────────────────────────────────────────────
     bool zoomPreviewActive_ = false;
@@ -330,7 +328,6 @@ private:
     void rasterizeDirtySurfaces();
     void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
     void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
-    void rasterizeEqIndicator();
 
     // ── 按坐标域拆分的唯一绘制函数（raster target 与 preview target 共用） ──
     void drawFixedChrome(juce::Graphics& g, juce::Rectangle<int> damage);

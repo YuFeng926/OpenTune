@@ -1014,6 +1014,10 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
                 continue;
 
+            const auto noteColour = note.eq.has_value() && note.eq->active
+                ? item.displayColour.darker(0.30f)
+                : item.displayColour;
+
             // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
             juce::Path blob;
             if (!buildNoteBlobPath(note, ctx, item, energy, item.f0Timeline,
@@ -1022,9 +1026,9 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             // 能量自适应纵向渐变：列式渲染，过渡带亮度和宽窄均随局部 energy 缩放
             {
-                const auto fillTop = item.displayColour.darker(0.22f).withAlpha(0.32f);
-                const auto fillBottom = item.displayColour.darker(0.22f).withAlpha(0.32f);
-                const auto glowCore = item.displayColour
+                const auto fillTop = noteColour.darker(0.22f).withAlpha(0.32f);
+                const auto fillBottom = noteColour.darker(0.22f).withAlpha(0.32f);
+                const auto glowCore = noteColour
                     .interpolatedWith(juce::Colours::white, 0.88f)
                     .withAlpha(0.95f);
 
@@ -1045,7 +1049,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                             energy[static_cast<size_t>(frame)] / clipRefMag)
                         : 0.0f;
 
-                    const auto glowTrans = item.displayColour
+                    const auto glowTrans = noteColour
                         .interpolatedWith(juce::Colours::white, 0.35f * normEnergy)
                         .withAlpha(0.65f + 0.05f * normEnergy);
 
@@ -1072,14 +1076,12 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 g.restoreState();
             }
 
-            g.setColour(item.displayColour.brighter(0.45f).withAlpha(0.55f));
+            g.setColour(noteColour.brighter(0.45f).withAlpha(0.55f));
             g.strokePath(blob, juce::PathStrokeType(0.9f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
         }
 
-        // EQ 指示标记叠加在 OpenDyne blob 上
-        drawNoteEqIndicators(g, ctx, item);
         return;
     }
 
@@ -1108,7 +1110,9 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float w = std::max(1.0f, static_cast<float>(x2 - x1));
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
-        const auto noteColor = item.displayColour;
+        const auto noteColor = note.eq.has_value() && note.eq->active
+            ? item.displayColour.darker(0.30f)
+            : item.displayColour;
 
         if (isAurora)
         {
@@ -1168,8 +1172,6 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
     }
 
-    // EQ 指示标记叠加在 OpenTune 音符上
-    drawNoteEqIndicators(g, ctx, item);
 }
 
 void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
@@ -1872,85 +1874,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         }
         }
     }
-}
-
-// ============================================================================
-// EQ 指示标记 — 每个 note.eq.has_value() 音符显示清晰但克制的 EQ 指示
-// ============================================================================
-
-void PianoRollRenderer::drawNoteEqIndicators(juce::Graphics& g,
-                                              const RenderContext& ctx,
-                                              const ContentRenderItem& item)
-{
-    if (item.displayNotes == nullptr || item.displayNotes->empty())
-        return;
-
-    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
-    if (!visibleWindow.isValid())
-        return;
-
-    const auto& notes = *item.displayNotes;
-    auto firstVisibleNote = std::lower_bound(
-        notes.begin(), notes.end(), visibleWindow.visibleContentStartTime,
-        [](const Note& note, double t) { return note.startTime < t; });
-    if (firstVisibleNote != notes.begin())
-    {
-        const auto prev = std::prev(firstVisibleNote);
-        if (prev->endTime > visibleWindow.visibleContentStartTime)
-            firstVisibleNote = prev;
-    }
-    const auto lastVisibleNote = std::lower_bound(
-        firstVisibleNote, notes.end(), visibleWindow.visibleContentEndTime,
-        [](const Note& note, double t) { return note.startTime < t; });
-
-    for (auto it = firstVisibleNote; it != lastVisibleNote; ++it)
-    {
-        const auto& note = *it;
-        if (!note.eq.has_value())
-            continue;
-
-        const bool isActive = note.eq->active;
-        float adjustedPitch = note.getAdjustedPitch();
-        if (adjustedPitch <= 0.0f) continue;
-
-        float midi = ctx.coords.freqToMidi(adjustedPitch);
-        float centerY = ctx.coords.midiToY(midi);
-
-        int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
-        int x2 = sourceTimeToScreenX(note.endTime, ctx, item);
-        if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
-            continue;
-
-        // EQ 指示标记：音符右上角的小三角/条纹，克制不喧宾夺主
-        const float markerSize = juce::jmin(6.0f, (x2 - x1) * 0.25f, ctx.pixelsPerSemitone * 0.5f);
-        if (markerSize < 3.0f)
-            continue;
-
-        const float markerX = static_cast<float>(x2) - markerSize - 1.0f;
-        const float markerY = static_cast<float>(centerY - ctx.pixelsPerSemitone * 0.5f) + 1.0f;
-
-        // 亮金色小标记；active=false 用半透明区分旁通状态
-        const auto markerColor = isActive
-            ? juce::Colour::fromRGB(255, 200, 72).withAlpha(0.75f)
-            : juce::Colour::fromRGB(255, 200, 72).withAlpha(0.30f);
-
-        g.setColour(markerColor);
-        // 小三角形 EQ 标记
-        juce::Path marker;
-        marker.startNewSubPath(markerX, markerY);
-        marker.lineTo(markerX + markerSize, markerY);
-        marker.lineTo(markerX + markerSize, markerY + markerSize);
-        marker.closeSubPath();
-        g.fillPath(marker);
-    }
-}
-
-void PianoRollRenderer::drawAllEqIndicators(juce::Graphics& g,
-                                             const RenderContext& ctx,
-                                             const std::vector<ContentRenderItem>& items)
-{
-    for (const auto& item : items)
-        drawNoteEqIndicators(g, ctx, item);
 }
 
 } // namespace OpenTune

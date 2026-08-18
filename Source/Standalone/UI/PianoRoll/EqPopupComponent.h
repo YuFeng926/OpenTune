@@ -126,6 +126,10 @@ private:
     bool suppressRemoveConfirmation_ = false;
     juce::Point<float> activeMousePos_;
 
+    // 磨砂玻璃背景缓存
+    juce::Image blurredBgCache_;
+    juce::Point<int> blurredBgPosition_;
+
     static constexpr int kFullWidth = 600;
     static constexpr int kFullHeight = 450;  // 4:3 比例
     static constexpr float kTopBarHeight = 28.0f;

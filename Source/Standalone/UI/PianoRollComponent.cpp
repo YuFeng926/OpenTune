@@ -807,47 +807,24 @@ bool PianoRollComponent::commitNoteDraft()
             && a.eq == b.eq;   // exact optional<EqSettings> 比较（9 字段无容差）
     };
 
-    // Check if only EQ changed (no topology or other property changes)
-    auto notesOnlyEqChanged = [](const Note& a, const Note& b) {
-        return a.endTime == b.endTime
-            && a.pitch == b.pitch
-            && a.pitchOffset == b.pitchOffset
-            && a.retuneSpeed == b.retuneSpeed
-            && a.pitchDriftScale == b.pitchDriftScale
-            && a.vibratoDepth == b.vibratoDepth
-            && a.vibratoRate == b.vibratoRate
-            && a.eq != b.eq;   // Only EQ differs
-    };
-
     size_t i = 0, j = 0;
-    bool hasNonEqChanges = false;
-    bool hasEqOnlyChanges = false;
     while (i < baseline.size() || j < working.size()) {
         const bool bHas = i < baseline.size();
         const bool wHas = j < working.size();
 
         if (bHas && wHas && baseline[i].startTime == working[j].startTime) {
-            // Same position 锟?compare content for modification
             if (!notesContentEqual(baseline[i], working[j])) {
                 dirtyStartTime = std::min(dirtyStartTime, baseline[i].startTime);
                 dirtyEndTime = std::max({dirtyEndTime, baseline[i].endTime, working[j].endTime});
-                if (notesOnlyEqChanged(baseline[i], working[j]))
-                    hasEqOnlyChanges = true;
-                else
-                    hasNonEqChanges = true;
             }
             i++; j++;
         } else if (!wHas || (bHas && baseline[i].startTime < working[j].startTime)) {
-            // Baseline note at earlier position was deleted
             dirtyStartTime = std::min(dirtyStartTime, baseline[i].startTime);
             dirtyEndTime = std::max(dirtyEndTime, baseline[i].endTime);
-            hasNonEqChanges = true;
             i++;
         } else {
-            // Working note at earlier position was inserted
             dirtyStartTime = std::min(dirtyStartTime, working[j].startTime);
             dirtyEndTime = std::max(dirtyEndTime, working[j].endTime);
-            hasNonEqChanges = true;
             j++;
         }
     }
@@ -902,14 +879,7 @@ bool PianoRollComponent::commitNoteDraft()
     clearNoteDraft();
     lastKnownNotesRevision_ = committedSnap->notesRevision;
 
-    // EQ-only changes only need indicator overlay redraw, not full content raster
-    if (hasEqOnlyChanges && !hasNonEqChanges) {
-        eqIndicatorDirty_ = true;
-        rasterizeDirtySurfaces();
-        repaint();
-    } else {
-        requestContentRedraw();
-    }
+    requestContentRedraw();
 
     // 提交成功后沿用 Listener::contentEdited 标记 Standalone dirty
     listeners_.call([](Listener& listener) { listener.contentEdited(); });
@@ -1975,10 +1945,6 @@ void PianoRollComponent::paint(juce::Graphics& g)
         if (contentSurface_.isValid()) {
             g.drawImageAt(contentSurface_, 0, 0, false);
         }
-        // Overlay EQ indicators on top of content
-        if (eqIndicatorSurface_.isValid()) {
-            g.drawImageAt(eqIndicatorSurface_, 0, 0, false);
-        }
     }
 
     const double paintEndMs = juce::Time::getMillisecondCounterHiRes();
@@ -2028,16 +1994,9 @@ void PianoRollComponent::rasterizeDirtySurfaces()
         surfaceView_.verticalScrollOffset = verticalScrollOffset_;
     }
 
-    // eqIndicatorSurface_ 与 contentSurface_ 同尺寸
-    if (!eqIndicatorSurface_.isValid() || eqIndicatorSurface_.getWidth() != vpW || eqIndicatorSurface_.getHeight() != vpH) {
-        eqIndicatorSurface_ = juce::Image(juce::Image::ARGB, vpW, vpH, true);
-        eqIndicatorDirty_ = true;
-    }
-
     // 仅栅格脏表面
     if (staticDirty_) rasterizeStatic();
     if (contentDirty_) rasterizeContent();
-    if (eqIndicatorDirty_) rasterizeEqIndicator();
 }
 
 void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapsedMs)
@@ -2345,49 +2304,9 @@ void PianoRollComponent::rasterizeContent(std::optional<juce::Rectangle<int>> di
 
     if (fullRaster) {
         contentDirty_ = false;
-        // Content changed, so EQ indicators need redraw too
-        eqIndicatorDirty_ = true;
     }
 
     recordRenderProbe(RenderProbePoint::ContentRaster, juce::Time::getMillisecondCounterHiRes() - t0);
-}
-
-void PianoRollComponent::rasterizeEqIndicator()
-{
-    const int w = getTimelineViewportBounds().getWidth();
-    const int h = getTimelineViewportBounds().getHeight();
-    if (!eqIndicatorSurface_.isValid() || w <= 0 || h <= 0) return;
-
-    eqIndicatorSurface_.clear(eqIndicatorSurface_.getBounds());
-
-    juce::Graphics g(eqIndicatorSurface_);
-
-    // Build render items and draw EQ indicators only
-    const auto items = buildContentRenderItems();
-    if (!items.empty()) {
-        PianoRollRenderer::RenderContext renderCtx;
-        renderCtx.width = w;
-        renderCtx.height = h;
-        renderCtx.pianoKeyWidth = pianoKeyWidth_;
-        renderCtx.rulerHeight = 0;
-        renderCtx.pixelsPerSecond = surfaceView_.camera.pixelsPerSecond;
-        renderCtx.pixelsPerSemitone = surfaceView_.pixelsPerSemitone;
-        renderCtx.minMidi = minMidi_;
-        renderCtx.maxMidi = maxMidi_;
-        renderCtx.scaleRootNote = scaleRootNote_;
-        renderCtx.scaleType = scaleType_;
-        renderCtx.noteNameMode = noteNameMode_;
-        renderCtx.showUnvoicedFrames = showUnvoicedFrames_;
-        renderCtx.showOriginalF0 = showOriginalF0_;
-        renderCtx.showCorrectedF0 = showCorrectedF0_;
-        renderCtx.coords = makeViewMapperForView(surfaceView_);
-        renderCtx.rasterBounds = juce::Rectangle<int>(0, 0, w, h);
-        renderCtx.contents = items;
-
-        renderer_->drawAllEqIndicators(g, renderCtx, items);
-    }
-
-    eqIndicatorDirty_ = false;
 }
 
 void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCamera)
