@@ -55,9 +55,9 @@ private:
     juce::Rectangle<float> buttonBounds(ButtonId id) const;
     ButtonId hitTestButton(juce::Point<float> pos) const;
 
-    // 浮动参数卡
-    juce::Rectangle<float> floatingCardBounds(juce::Point<float> anchorPos) const;
-    void paintFloatingCard(juce::Graphics& g, int filterIndex, juce::Point<float> anchorPos) const;
+    // 浮动参数卡（固定底部居中）
+    juce::Rectangle<float> floatingCardBounds() const;
+    void paintFloatingCard(juce::Graphics& g, int filterIndex) const;
     void updateCardState();
     juce::Rectangle<float> cardFilterButtonBounds(const juce::Rectangle<float>& cardBounds, int index, int count) const;
 
@@ -91,7 +91,6 @@ private:
 
     // 浮动参数卡状态
     int cardBand_ = -1;
-    juce::Point<float> cardAnchorPos_;
 
     // 卡片内旋钮控件
     std::unique_ptr<LargeKnobLookAndFeel> cardKnobLookAndFeel_;
