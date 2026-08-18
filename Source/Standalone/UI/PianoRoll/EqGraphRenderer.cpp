@@ -624,7 +624,7 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
         g.reduceClipRegion(graphBounds_.toNearestInt());
         juce::ColourGradient shadowGrad(
             curColor.withAlpha(0.06f), 0.0f, gy + gh - gh * 0.2f,
-            juce::Colour::fromRGBA(0, 0, 0, 0), 0.0f, gy + gh, true);
+            juce::Colour::fromRGBA(0, 0, 0, 0), 0.0f, gy + gh, false);
         g.setGradientFill(shadowGrad);
         g.fillRect(gx, gy + gh - gh * 0.2f, gw, gh * 0.2f);
     }
