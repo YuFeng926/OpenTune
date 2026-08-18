@@ -947,7 +947,7 @@ struct UIColors
         knobPath.addEllipse(knobBounds);
         if (highlighted)
         {
-            juce::DropShadow responseGlow(juce::Colour { BlueBreeze::Colors::KnobGlow }.withAlpha(0.20f),
+            juce::DropShadow responseGlow(arcCol.withAlpha(0.20f),
                                           18,
                                           {});
             responseGlow.drawForPath(g, knobPath);
@@ -1234,12 +1234,16 @@ struct UIColors
         const auto radius = juce::jmin(knobBounds.getWidth(), knobBounds.getHeight()) * 0.5f;
         const auto centre = knobBounds.getCentre();
 
+        auto themeCol = knobIndicator;
+        if (slider != nullptr && slider->getProperties().contains("arcColor"))
+            themeCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider->getProperties()["arcColor"])));
+
         {
             const float alpha = highlighted ? 0.62f : 0.26f;
             const float radiusScale = highlighted ? 0.72f : 0.48f;
             juce::Path glowPath;
             glowPath.addEllipse(knobBounds);
-            juce::DropShadow ds(knobGlow.withMultipliedAlpha(0.42f * alpha),
+            juce::DropShadow ds(themeCol.withMultipliedAlpha(0.42f * alpha),
                                 juce::roundToInt(18.0f * radiusScale),
                                 {});
             ds.drawForPath(g, glowPath);
@@ -1251,7 +1255,7 @@ struct UIColors
         g.setGradientFill(body);
         g.fillEllipse(knobBounds);
 
-        g.setColour(knobGlow.withAlpha(highlighted ? 0.46f : 0.26f));
+        g.setColour(themeCol.withAlpha(highlighted ? 0.46f : 0.26f));
         g.drawEllipse(knobBounds.expanded(1.4f).reduced(0.5f), highlighted ? 2.0f : 1.25f);
 
         g.setColour(knobRim.withAlpha(highlighted ? 0.92f : 0.68f));
@@ -1260,10 +1264,7 @@ struct UIColors
         const auto angle = rotaryStartAngle + (rotaryEndAngle - rotaryStartAngle) * clampedValue;
         juce::Path indicator;
         indicator.addCentredArc(centre.x, centre.y, radius - 4.0f, radius - 4.0f, 0.0f, rotaryStartAngle, angle, true);
-        auto arcCol = knobIndicator;
-        if (slider != nullptr && slider->getProperties().contains("arcColor"))
-            arcCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider->getProperties()["arcColor"])));
-        g.setColour(arcCol.withAlpha(highlighted ? 0.96f : 0.82f));
+        g.setColour(themeCol.withAlpha(highlighted ? 0.96f : 0.82f));
         g.strokePath(indicator, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         const auto dotDistance = radius * 0.62f;
@@ -1972,7 +1973,7 @@ struct UIColors
         knobPath.addEllipse(knobBounds);
         if (highlighted)
         {
-            juce::DropShadow responseGlow(juce::Colour { Overdose::Colors::PinkGlow }.withAlpha(0.20f),
+            juce::DropShadow responseGlow(arcCol.withAlpha(0.20f),
                                            18, {});
             responseGlow.drawForPath(g, knobPath);
         }

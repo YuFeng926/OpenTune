@@ -67,6 +67,12 @@ private:
     void layoutCardControls();
     void cardSliderChanged(int parameterIndex);
 
+    // 卡片内滤波器类型按钮
+    juce::Rectangle<float> cardFilterTypeButtonBounds(const juce::Rectangle<float>& cardBounds, int index) const;
+    void paintFilterTypeButton(juce::Graphics& g, EqFilterType type, const juce::Rectangle<float>& bounds,
+                               bool isActive, bool isHovered) const;
+    int hitTestFilterTypeButton(juce::Point<float> pos) const;
+
     void dismissRemoveConfirmation();
 
     void paintBypassIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
@@ -91,6 +97,7 @@ private:
 
     // 浮动参数卡状态
     int cardBand_ = -1;
+    int hoveredTypeButton_ = -1;
 
     // 卡片内旋钮控件
     std::unique_ptr<LargeKnobLookAndFeel> cardKnobLookAndFeel_;
@@ -115,12 +122,15 @@ private:
     juce::Point<float> activeMousePos_;
 
     static constexpr int kFullWidth = 600;
-    static constexpr int kFullHeight = 400;
+    static constexpr int kFullHeight = 450;  // 4:3 比例
     static constexpr float kTopBarHeight = 28.0f;
     static constexpr float kBtnSize = 20.0f;
     static constexpr float kBtnGap = 3.0f;
     static constexpr float kCardWidth = 260.0f;
     static constexpr float kCardIconRowH = 18.0f;
+    static constexpr float kCardTypeRowH = 22.0f;
+    static constexpr float kCardTypeBtnSize = 20.0f;
+    static constexpr float kCardTypeBtnGap = 2.0f;
     static constexpr float kCardColumnWidth = 84.0f;
     static constexpr float kCardSliderHeight = 84.0f;
     static constexpr float kCardLabelHeight = 12.0f;

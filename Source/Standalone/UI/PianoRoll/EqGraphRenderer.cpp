@@ -49,6 +49,87 @@ juce::Colour EqGraphRenderer::typeFallbackColor(EqFilterType type)
     return kPalette[static_cast<size_t>(type) % kPaletteSize];
 }
 
+// ============================================================================
+// 频谱热力图颜色 — 4 色水平梯度，按频率位置着色（源自 SRC spectrumHeatColor）
+// ============================================================================
+
+juce::Colour EqGraphRenderer::spectrumHeatColor(float norm)
+{
+    // 黄绿 → 绿 → 蓝 → 紫，分段 0/0.34/0.70/1.0 线性插值
+    constexpr float stops[4] = { 0.0f, 0.34f, 0.70f, 1.0f };
+    const juce::Colour colors[4] = {
+        juce::Colour::fromRGB(209, 223, 76),   // 黄绿
+        juce::Colour::fromRGB(42, 225, 150),   // 绿
+        juce::Colour::fromRGB(44, 190, 255),   // 蓝
+        juce::Colour::fromRGB(154, 105, 255),  // 紫
+    };
+
+    const float t = std::clamp(norm, 0.0f, 1.0f);
+    if (t <= stops[1])
+        return colors[0].interpolatedWith(colors[1], t / stops[1]);
+    if (t <= stops[2])
+        return colors[1].interpolatedWith(colors[2], (t - stops[1]) / (stops[2] - stops[1]));
+    return colors[2].interpolatedWith(colors[3], (t - stops[2]) / (stops[3] - stops[2]));
+}
+
+// ============================================================================
+// Catmull-Rom 样条路径构建（源自 SRC smoothPathFromPoints）
+// ============================================================================
+
+juce::Path EqGraphRenderer::catmullRomLinePath(
+    const std::array<juce::Point<float>, 128>& points, int count)
+{
+    juce::Path path;
+    if (count <= 0)
+        return path;
+
+    path.startNewSubPath(points[0]);
+    if (count == 1)
+        return path;
+
+    for (int i = 0; i < count - 1; ++i)
+    {
+        const auto& p0 = points[std::max(0, i - 1)];
+        const auto& p1 = points[i];
+        const auto& p2 = points[i + 1];
+        const auto& p3 = points[std::min(count - 1, i + 2)];
+
+        // Catmull-Rom → Bezier 控制点
+        const auto c1 = p1 + (p2 - p0) / 6.0f;
+        const auto c2 = p2 - (p3 - p1) / 6.0f;
+        path.cubicTo(c1, c2, p2);
+    }
+    return path;
+}
+
+juce::Path EqGraphRenderer::catmullRomFillPath(
+    const std::array<juce::Point<float>, 128>& points, int count, float baseline)
+{
+    juce::Path path;
+    if (count <= 0)
+        return path;
+
+    path.startNewSubPath(points[0].x, baseline);
+    path.lineTo(points[0]);
+
+    // 拼接 Catmull-Rom 曲线顶部
+    for (int i = 0; i < count - 1; ++i)
+    {
+        const auto& p0 = points[std::max(0, i - 1)];
+        const auto& p1 = points[i];
+        const auto& p2 = points[i + 1];
+        const auto& p3 = points[std::min(count - 1, i + 2)];
+
+        const auto c1 = p1 + (p2 - p0) / 6.0f;
+        const auto c2 = p2 - (p3 - p1) / 6.0f;
+        path.cubicTo(c1, c2, p2);
+    }
+
+    path.lineTo(points[count - 1].x, baseline);
+    path.closeSubPath();
+    return path;
+}
+
 int EqGraphRenderer::getPaletteSlot(const EqFilter& f)
 {
     return static_cast<int>(f.paletteSlot);
@@ -164,8 +245,11 @@ double EqGraphRenderer::filterResponseDb(int filterIndex, double frequencyHz) co
     switch (f.type)
     {
     case EqFilterType::LowCut: {
-        const double ratio = static_cast<double>(f.frequencyHz) / frequencyHz;
-        return -10.0 * std::log10(1.0 + std::pow(ratio, 2.0 * kFixedShelfCutRatio));
+        const double w = frequencyHz / static_cast<double>(f.frequencyHz);
+        const double q = static_cast<double>(f.q);
+        const double r = w * w;
+        const double magSq = r * r / (r * r + r / (q * q) + 1.0);
+        return 10.0 * std::log10(std::max(magSq, 1e-30));
     }
     case EqFilterType::LowShelf: {
         const double t = 1.0 / (1.0 + std::pow(frequencyHz / static_cast<double>(f.frequencyHz), kFixedShelfCutRatio));
@@ -180,8 +264,11 @@ double EqGraphRenderer::filterResponseDb(int filterIndex, double frequencyHz) co
         return static_cast<double>(f.gainDb) * t;
     }
     case EqFilterType::HighCut: {
-        const double ratio = frequencyHz / static_cast<double>(f.frequencyHz);
-        return -10.0 * std::log10(1.0 + std::pow(ratio, 2.0 * kFixedShelfCutRatio));
+        const double w = static_cast<double>(f.frequencyHz) / frequencyHz;
+        const double q = static_cast<double>(f.q);
+        const double r = w * w;
+        const double magSq = r * r / (r * r + r / (q * q) + 1.0);
+        return 10.0 * std::log10(std::max(magSq, 1e-30));
     }
     }
     return 0.0;
@@ -491,7 +578,8 @@ void EqGraphRenderer::advanceSpectrumColorCycle(double dt)
 }
 
 // ============================================================================
-// 频谱背景动画 — 多层渐变 + 柔光 + 阴影 + 峰值高亮 + 主线高亮
+// 频谱背景动画 — 热力图渐变填充 + Catmull-Rom 样条 + 辉光 + 峰值轨迹
+// 源自 TPPEQ_频谱动画_34f044a 五层管线，迁移至 JUCE
 // ============================================================================
 
 void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
@@ -504,15 +592,18 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
     const float gh = graphBounds_.getHeight();
     const int numBins = static_cast<int>(spectrum.size());
 
+    // 颜色循环（用于辉光/阴影的基调色）
     const auto curColor = kPalette[static_cast<size_t>(spectrumColorIndex_)]
         .interpolatedWith(kPalette[static_cast<size_t>(spectrumTargetIndex_)],
                           spectrumColorProgress_);
 
+    // ── 构建点集 ──
     std::array<juce::Point<float>, 128> linePoints{};
     std::array<juce::Point<float>, 128> peakPoints{};
     for (int i = 0; i < numBins; ++i)
     {
-        const float x = gx + (static_cast<float>(i) / static_cast<float>(numBins - 1)) * gw;
+        const float norm = static_cast<float>(i) / static_cast<float>(numBins - 1);
+        const float x = gx + norm * gw;
         const float h = std::clamp(spectrum[static_cast<size_t>(i)], 0.0f, 1.0f) * gh * 0.7f;
         const float peak = std::clamp(peaks[static_cast<size_t>(i)], 0.0f, 1.0f);
         spectrumPeakTrace_[static_cast<size_t>(i)] = std::max(
@@ -522,36 +613,10 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
             x, gy + gh - spectrumPeakTrace_[static_cast<size_t>(i)] * gh * 0.7f };
     }
 
-    const auto makeSmoothPath = [](const auto& points, float baseline) {
-        juce::Path path;
-        path.startNewSubPath(points.front());
-        for (size_t i = 1; i < points.size(); ++i)
-        {
-            const auto midpoint = juce::Point<float>(
-                (points[i - 1].x + points[i].x) * 0.5f,
-                (points[i - 1].y + points[i].y) * 0.5f);
-            path.quadraticTo(points[i - 1], midpoint);
-        }
-        path.lineTo(points.back());
-        path.lineTo(points.back().x, baseline);
-        path.lineTo(points.front().x, baseline);
-        path.closeSubPath();
-        return path;
-    };
-
-    const auto makeLinePath = [](const auto& points) {
-        juce::Path path;
-        path.startNewSubPath(points.front());
-        for (size_t i = 1; i < points.size(); ++i)
-        {
-            const auto midpoint = juce::Point<float>(
-                (points[i - 1].x + points[i].x) * 0.5f,
-                (points[i - 1].y + points[i].y) * 0.5f);
-            path.quadraticTo(points[i - 1], midpoint);
-        }
-        path.lineTo(points.back());
-        return path;
-    };
+    // ── Catmull-Rom 样条路径（替代二次贝塞尔，更平滑自然） ──
+    const auto linePath = catmullRomLinePath(linePoints, numBins);
+    const auto fillPath = catmullRomFillPath(linePoints, numBins, gy + gh);
+    const auto peakPath = catmullRomLinePath(peakPoints, numBins);
 
     // ── 层 1：底部阴影（深度感） ──
     {
@@ -564,31 +629,26 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
         g.fillRect(gx, gy + gh - gh * 0.2f, gw, gh * 0.2f);
     }
 
-    // ── 层 2：多色渐变填充（立体感核心） ──
+    // ── 层 2：热力图水平渐变填充（4色频率→颜色映射，核心视觉差异） ──
+    // 源自 SRC spectrumHeatColor：黄绿→绿→蓝→紫，按频率水平分布
     {
         juce::Graphics::ScopedSaveState saved(g);
         g.reduceClipRegion(graphBounds_.toNearestInt());
-        auto fillPath = makeSmoothPath(linePoints, gy + gh);
 
-        const auto color1 = curColor.interpolatedWith(
-            kPalette[(static_cast<size_t>(spectrumColorIndex_) + 3) % kPaletteSize], 0.4f);
-        const auto color2 = curColor.interpolatedWith(
-            kPalette[(static_cast<size_t>(spectrumColorIndex_) + 7) % kPaletteSize], 0.3f);
-
-        juce::ColourGradient grad(
-            color1.withAlpha(0.18f), 0.0f, gy,
-            color2.withAlpha(0.0f),  0.0f, gy + gh, true);
-        grad.addColour(0.35, color1.interpolatedWith(color2, 0.5f).withAlpha(0.08f));
-        grad.addColour(0.7, color2.withAlpha(0.03f));
-        g.setGradientFill(grad);
+        // 水平热力图渐变：低频黄绿 → 中低频绿 → 中高频蓝 → 高频紫
+        juce::ColourGradient heatGrad(
+            spectrumHeatColor(0.0f).withAlpha(0.22f), gx, 0.0f,
+            spectrumHeatColor(1.0f).withAlpha(0.18f), gx + gw, 0.0f, false);
+        heatGrad.addColour(0.34, spectrumHeatColor(0.34f).withAlpha(0.20f));
+        heatGrad.addColour(0.70, spectrumHeatColor(0.70f).withAlpha(0.19f));
+        g.setGradientFill(heatGrad);
         g.fillPath(fillPath);
     }
 
-    // ── 层 3：填充上半柔光（高光带） ──
+    // ── 层 3：填充上半柔光（高光带，增加立体感） ──
     {
         juce::Graphics::ScopedSaveState saved(g);
         g.reduceClipRegion(graphBounds_.toNearestInt());
-        auto fillPath = makeSmoothPath(linePoints, gy + gh);
         juce::ColourGradient glowGrad(
             curColor.brighter(0.4f).withAlpha(0.06f), 0.0f, gy,
             curColor.withAlpha(0.0f), 0.0f, gy + gh * 0.55f, true);
@@ -596,12 +656,14 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
         g.fillPath(fillPath);
     }
 
-    // ── 层 4：峰值 glow + 高亮线 ──
-    const auto peakPath = makeLinePath(peakPoints);
+    // ── 层 4：峰值轨迹（辉光 + 高亮 + 白芯） ──
+    // 辉光宽度随质量等级变化（源自 SRC glowQuality 控制）
     {
+        const float glowWidth = glowQuality_ >= 3 ? 5.5f : glowQuality_ >= 2 ? 4.8f : 3.4f;
+        const float glowAlpha = glowQuality_ >= 3 ? 0.14f : glowQuality_ >= 2 ? 0.12f : 0.08f;
         const auto glowColor = curColor.interpolatedWith(juce::Colours::white, 0.35f);
-        g.setColour(glowColor.withAlpha(0.12f));
-        g.strokePath(peakPath, juce::PathStrokeType(5.5f,
+        g.setColour(glowColor.withAlpha(glowAlpha));
+        g.strokePath(peakPath, juce::PathStrokeType(glowWidth,
             juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
     {
@@ -615,15 +677,15 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
             juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
-    // ── 层 5：主频谱线高亮 ──
-    const auto linePath = makeLinePath(linePoints);
+    // ── 层 5：主频谱线（辉光 + 白色高亮） ──
     {
+        const float glowWidth = glowQuality_ >= 3 ? 3.4f : glowQuality_ >= 2 ? 2.8f : 2.2f;
         g.setColour(curColor.withAlpha(0.10f));
-        g.strokePath(linePath, juce::PathStrokeType(2.8f,
+        g.strokePath(linePath, juce::PathStrokeType(glowWidth,
             juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
     {
-        g.setColour(juce::Colours::white.withAlpha(0.20f));
+        g.setColour(juce::Colours::white.withAlpha(0.22f));
         g.strokePath(linePath, juce::PathStrokeType(1.15f,
             juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }

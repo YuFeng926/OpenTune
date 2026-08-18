@@ -105,6 +105,10 @@ public:
     /// 每帧由 timer 调用一次，推进频谱颜色循环插值
     void advanceSpectrumColorCycle(double dt);
 
+    // ── 辉光质量（1=低, 2=中, 3=高） ──
+    void setGlowQuality(int quality) { glowQuality_ = std::clamp(quality, 1, 3); }
+    int glowQuality() const { return glowQuality_; }
+
     // ── 图例（动态数量） ──
     struct LegendItem {
         bool isCombined = false;
@@ -168,6 +172,7 @@ private:
         return visible;
     }();
     mutable std::array<float, 128> spectrumPeakTrace_{};
+    int glowQuality_ = 2;
 
     // ── 频谱颜色循环状态 ──
     int spectrumColorIndex_ = 0;
@@ -191,6 +196,12 @@ private:
 
     /// 旧 type-based fallback（paletteSlot 无效时使用）
     static juce::Colour typeFallbackColor(EqFilterType type);
+
+    // ── 频谱热力图颜色（4色水平梯度，按频率位置着色） ──
+    static juce::Colour spectrumHeatColor(float norm);
+    // ── Catmull-Rom 样条路径构建 ──
+    static juce::Path catmullRomLinePath(const std::array<juce::Point<float>, 128>& points, int count);
+    static juce::Path catmullRomFillPath(const std::array<juce::Point<float>, 128>& points, int count, float baseline);
 };
 
 } // namespace OpenTune
