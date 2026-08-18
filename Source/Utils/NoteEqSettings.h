@@ -37,6 +37,7 @@ struct EqFilter {
     float gainDb = 0.0f;
     float q = 2.0f;
     int paletteSlot = 0;  // 0..9, stable identity within EqSettings
+    bool bypassed = false;
 
     bool operator==(const EqFilter& other) const noexcept
     {
@@ -44,7 +45,8 @@ struct EqFilter {
             && frequencyHz == other.frequencyHz
             && gainDb == other.gainDb
             && q == other.q
-            && paletteSlot == other.paletteSlot;
+            && paletteSlot == other.paletteSlot
+            && bypassed == other.bypassed;
     }
 
     bool operator!=(const EqFilter& other) const noexcept
@@ -126,6 +128,15 @@ struct EqSettings {
     bool operator!=(const EqSettings& other) const noexcept
     {
         return !(*this == other);
+    }
+
+    /** Remove filter at index; returns true if filters became empty (caller should remove EQ entirely). */
+    bool removeFilter(int index)
+    {
+        if (index < 0 || index >= static_cast<int>(filters.size()))
+            return false;
+        filters.erase(filters.begin() + index);
+        return filters.empty();
     }
 
     bool isValid() const noexcept

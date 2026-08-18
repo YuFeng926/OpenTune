@@ -163,7 +163,8 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
                         static_cast<float>(filterTree.getProperty("frequencyHz")),
                         static_cast<float>(filterTree.getProperty("gainDb")),
                         static_cast<float>(filterTree.getProperty("q")),
-                        slot
+                        static_cast<int>(filterTree.getProperty("slot", i)),
+                        static_cast<int>(filterTree.getProperty("bypassed", 0)) != 0
                     });
                 }
                 return eq.isValid();
@@ -543,6 +544,8 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
                 fTree.setProperty("gainDb", f.gainDb, nullptr);
                 fTree.setProperty("q", f.q, nullptr);
                 fTree.setProperty("slot", f.paletteSlot, nullptr);
+                if (f.bypassed)
+                    fTree.setProperty("bypassed", 1, nullptr);
                 eqTree.addChild(fTree, -1, nullptr);
             }
             nt.addChild(eqTree, -1, nullptr);
