@@ -2,23 +2,11 @@
  * EQ Popup Component — per-note EQ 编辑弹窗
  *
  * 两态契约：
- * - 预览：180×80，四控制全部可见（Maximize/Bypass/Remove/Minimize），5曲线+5 anchors交互，隐藏轴/网格/坐标动画/图例/视图范围
- * - 完整：600×400，完整 UI（隐藏图例/视图范围/坐标动画，显示滤波器hover淡入淡出）
+ * - 预览：180x80，四控制全部可见，动态曲线+anchors交互，隐藏轴/网格/图例/视图范围
+ * - 完整：600x400，完整 UI（滤波器hover淡入淡出）
  *
- * 尺寸自管理（无 parent 回调）：
- * - 首次从预览进入完整时保存当前 preview bounds
- * - 完整尺寸目标600×400，按 parent local bounds 等比例/夹紧
- * - Minimize 恢复保存的 preview bounds
- * - setPreviewMode 外部初始调用保持父级设置的 bounds，不误保存/跳变
- *
- * 固定公共 API（契约 §6）：
- * - setEqSettings: 零回调
- * - setPreviewMode: 切换预览/完整状态（外部初始调用不改变 bounds）
- * - setRemoveConfirmationSuppressed: 设置删除确认抑制
- * - onCommitSettings: anchor mouseUp 每次只触发一次
- * - onRemoveEq: Remove 确认后触发
- * - onClose: 关闭触发（通过父级调用 closeEqPopup）
- * - onRemoveConfirmationSuppressed: "不再提示"勾选同步
+ * 动态滤波器列表：最多 kMaxFilters=10，不假设固定 5 段。
+ * 支持双击创建/删除 anchor，滚轮调 Q（Peak），Minimize 行为随态变化。
  */
 
 #pragma once
@@ -27,7 +15,6 @@
 #include "Utils/NoteEqSettings.h"
 #include "EqGraphRenderer.h"
 #include "EqBandInteraction.h"
-#include "EqSpectrumAnimation.h"
 #include <memory>
 
 namespace OpenTune {
@@ -44,11 +31,12 @@ public:
     void setRemoveConfirmationSuppressed(bool suppress);
     void setNoteColor(juce::Colour color);
 
-    // ── 回调（由 PianoRollComponent 设置） ──
+    // ── 回调 ──
     std::function<void(const EqSettings&)> onCommitSettings;
     std::function<void()> onRemoveEq;
     std::function<void()> onClose;
     std::function<void(bool)> onRemoveConfirmationSuppressed;
+    std::function<void(std::array<float, 128>&, std::array<float, 128>&)> onReadSpectrum;
 
     // ── Component ──
     void paint(juce::Graphics& g) override;
@@ -58,6 +46,8 @@ public:
     void mouseUp(const juce::MouseEvent& event) override;
     void mouseMove(const juce::MouseEvent& event) override;
     void mouseExit(const juce::MouseEvent& event) override;
+    void mouseDoubleClick(const juce::MouseEvent& event) override;
+    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
     // ── Timer ──
     void timerCallback() override;
@@ -66,21 +56,21 @@ public:
     void toggleMaximize();
 
 private:
-    // ── 按钮（None = 未命中任何按钮，图区域不得切换模式） ──
+    // ── 按钮 ──
     enum class ButtonId { None = -1, Maximize = 0, Bypass, Remove, Minimize };
     void paintButton(juce::Graphics& g, ButtonId id, juce::Rectangle<float> bounds, bool hovered) const;
     juce::Rectangle<float> buttonBounds(ButtonId id) const;
     ButtonId hitTestButton(juce::Point<float> pos) const;
 
     // ── 数值输入弹窗 ──
-    void showValueInputPopup(int bandIndex);
+    void showValueInputPopup(int filterIndex);
     void dismissValueInputPopup();
     void layoutValueInputOverlay();
 
     // ── Remove 确认弹窗 ──
     void dismissRemoveConfirmation();
 
-    // ── 绘制按钮图标（图形而非文字） ──
+    // ── 按钮图标 ──
     void paintBypassIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
     void paintRemoveIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
     void paintMaximizeIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
@@ -90,19 +80,21 @@ private:
     EqSettings settings_;
     EqGraphRenderer renderer_;
     EqBandInteraction interaction_;
-    EqSpectrumAnimation spectrumAnim_;
+    std::array<float, 128> spectrum_{};
+    std::array<float, 128> spectrumPeaks_{};
     juce::Colour noteColor_;
     bool isPreview_ = true;
     bool isMaximized_ = false;
     int hoveredBand_ = -1;
     int hoveredButton_ = -1;
     int hoveredViewRange_ = -1;
-    int pressedViewRange_ = -1;  // -1=无, 0=Decrease(+), 1=Increase(-); mouseDown 记录, mouseUp 提交
-    juce::Rectangle<int> savedPreviewBounds_;  // 保存的预览 bounds，用于 Minimize 恢复
+    int pressedViewRange_ = -1;
+    int selectedFilterIndex_ = -1;  // mouseDown 命中 anchor 时记录
+    bool doubleClickHandled_ = false;  // mouseDown 多击已处理 anchor 删除
+    juce::Rectangle<int> savedPreviewBounds_;
 
-    // ── 滤波器 hover 淡入淡出动画（SRC hoverBandInfluence） ──
-    std::array<double, 5> hoverBandAmounts_ = {};
-    double lastHoverFadeTime_ = 0.0;
+    // ── 滤波器 hover 淡入淡出动画 ──
+    std::vector<double> hoverBandAmounts_ = std::vector<double>(EqSettings::kMaxFilters, 0.0);
     static constexpr double kHoverFadeInTime = 0.50;
     static constexpr double kHoverFadeOutTime = 0.50;
 
@@ -114,13 +106,14 @@ private:
     bool draggingWindow_ = false;
     juce::Point<int> dragOffset_;
 
-    // 微拖拽 pending 语义（mouseDown 只记录，mouseDrag 超阈值才 startDrag）
+    // 微拖拽 pending 语义
     int pendingDragBand_ = -1;
     juce::Point<float> pendingDragStartPos_;
 
-    // 数值输入弹窗（overlay 状态，单一管理）
+    // 数值输入弹窗
     bool showingValueInput_ = false;
     int valueInputBand_ = -1;
+    int pendingValueInputBand_ = -1;
     std::unique_ptr<juce::TextEditor> freqEditor_;
     std::unique_ptr<juce::TextEditor> gainEditor_;
     std::unique_ptr<juce::Label> qLabel_;
@@ -134,9 +127,6 @@ private:
     // 活动中的 mousePos
     juce::Point<float> activeMousePos_;
 
-    // 频谱动画时间
-    double animTime_ = 0.0;
-
     // 布局常量
     static constexpr int kFullWidth = 600;
     static constexpr int kFullHeight = 400;
@@ -144,13 +134,10 @@ private:
     static constexpr float kBtnSize = 20.0f;
     static constexpr float kBtnGap = 3.0f;
 
-    // 按钮区域计算
     juce::Rectangle<float> topBarBounds() const;
-    juce::Rectangle<float> graphAreaBounds() const;
-    bool graphBoundsContains(juce::Point<float> pos) const;
-
 
     void commitSettings();
+    bool removeFilterAt(int index);  // 返回 true 表示 onRemoveEq 触发，组件可能已销毁
     void updateHoverBandFade(double dt);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EqPopupComponent)

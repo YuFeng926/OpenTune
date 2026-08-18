@@ -21,7 +21,7 @@ namespace {
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 8;   // v8 adds per-note EQ settings
+    constexpr int kCaptureArchiveVersion = 9;   // v9: dynamic EQ filter chain (v8 9-field migrated to Filter sub-nodes)
     constexpr int kCaptureArchiveVersionMin = 4;  // v4 files load with pitchDriftScale=1.0
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
@@ -190,19 +190,20 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 stream.writeFloat(note.outputGainDb);
                 stream.writeInt(note.isVoiced ? 1 : 0);
 
-                // v8: Per-note EQ settings
+                // v9: Per-note EQ settings — filter count + per-filter type/frequency/gain/q
                 stream.writeInt(note.eq.has_value() ? 1 : 0);
                 if (note.eq.has_value()) {
                     const auto& eq = *note.eq;
                     stream.writeInt(eq.active ? 1 : 0);
-                    stream.writeFloat(eq.lowCutFrequencyHz);
-                    stream.writeFloat(eq.lowShelfFrequencyHz);
-                    stream.writeFloat(eq.lowShelfGainDb);
-                    stream.writeFloat(eq.peakFrequencyHz);
-                    stream.writeFloat(eq.peakGainDb);
-                    stream.writeFloat(eq.highShelfFrequencyHz);
-                    stream.writeFloat(eq.highShelfGainDb);
-                    stream.writeFloat(eq.highCutFrequencyHz);
+                    const int filterCount = static_cast<int>(eq.filters.size());
+                    stream.writeInt(filterCount);
+                    for (int fi = 0; fi < filterCount; ++fi) {
+                        const auto& f = eq.filters[static_cast<size_t>(fi)];
+                        stream.writeInt(static_cast<int>(f.type));
+                        stream.writeFloat(f.frequencyHz);
+                        stream.writeFloat(f.gainDb);
+                        stream.writeFloat(f.q);
+                    }
                 }
             }
             const auto& envelopePoints = snap->volumeEnvelope.points();
@@ -241,6 +242,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     const bool hasUnifiedVolumeEnvelope = (fileVersion >= 6);
     const bool hasDetectedKeyOrigin = (fileVersion >= 7);
     const bool hasPerNoteEq = (fileVersion >= 8);
+    const bool hasDynamicEqFilters = (fileVersion >= 9);
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -340,18 +342,55 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             note.outputGainDb = stream.readFloat();
             note.isVoiced = stream.readInt() != 0;
 
-            // v8: Per-note EQ settings
+            // v8+: Per-note EQ settings
             if (hasPerNoteEq && stream.readInt() == 1) {
                 EqSettings eq;
                 eq.active = stream.readInt() != 0;
-                eq.lowCutFrequencyHz = stream.readFloat();
-                eq.lowShelfFrequencyHz = stream.readFloat();
-                eq.lowShelfGainDb = stream.readFloat();
-                eq.peakFrequencyHz = stream.readFloat();
-                eq.peakGainDb = stream.readFloat();
-                eq.highShelfFrequencyHz = stream.readFloat();
-                eq.highShelfGainDb = stream.readFloat();
-                eq.highCutFrequencyHz = stream.readFloat();
+
+                if (hasDynamicEqFilters) {
+                    // v9: filter count + per-filter type/frequency/gain/q
+                    const int filterCount = stream.readInt();
+                    if (filterCount <= 0 || filterCount > EqSettings::kMaxFilters)
+                        return false;
+                    eq.filters.clear();
+                    eq.filters.reserve(static_cast<size_t>(filterCount));
+                    for (int fi = 0; fi < filterCount; ++fi) {
+                        const int typeInt = stream.readInt();
+                        const float freq = stream.readFloat();
+                        const float gain = stream.readFloat();
+                        const float q = stream.readFloat();
+                        if (typeInt < 0 || typeInt > static_cast<int>(EqFilterType::HighCut))
+                            return false;
+                        EqFilter f;
+                        f.type = static_cast<EqFilterType>(typeInt);
+                        f.frequencyHz = freq;
+                        f.gainDb = gain;
+                        f.q = q;
+                        eq.filters.push_back(f);
+                    }
+                } else {
+                    // v8 legacy: 旧 8 float 字段 → 5 个固定过滤器
+                    // (active 已在上方读取，此处紧跟 8 个 float)
+                    const float lowCutFreq = stream.readFloat();
+                    const float lowShelfFreq = stream.readFloat();
+                    const float lowShelfGain = stream.readFloat();
+                    const float peakFreq = stream.readFloat();
+                    const float peakGain = stream.readFloat();
+                    const float highShelfFreq = stream.readFloat();
+                    const float highShelfGain = stream.readFloat();
+                    const float highCutFreq = stream.readFloat();
+
+                    eq.filters = {
+                        { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f },
+                        { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f },
+                        { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f },
+                        { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f },
+                        { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f }
+                    };
+                }
+
+                if (!eq.isValid())
+                    return false;
                 note.eq = eq;
             }
 

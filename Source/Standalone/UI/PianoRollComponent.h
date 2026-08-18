@@ -301,9 +301,6 @@ public:
      *  无值显示 EqSettings 默认；打开零 draft、零提交。主音符 index 由
      *  ToolHandler 唯一判定并经 toolCtx.openEqPreview 直通。 */
     void openEqPopupForSelection(int primaryIndex);
-    /** EQ 工具 cursor：ToolbarIcons::createEqIconImage 构造 MouseCursor，
-     *  经 CursorThemeManager::resolveCursor 应用现有主题机制。 */
-    juce::MouseCursor getEqCursor() const;
 
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
     void updateScrollBars();
@@ -663,6 +660,9 @@ private:
 
     // per-note EQ 预览弹窗：PianoRollComponent 唯一持有，不经过任何中间转发层
     std::unique_ptr<EqPopupComponent> eqPopup_;
+
+    // EQ 工具 cursor：构造函数初始化列表中从 ToolbarIcons::createEqIconImage 构造一次并 resolveCursor。
+    juce::MouseCursor eqCursor_;
 
     double playheadTimeForPaint_ = 0.0;
     double pendingSeekTime_{-1.0};

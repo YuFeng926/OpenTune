@@ -328,6 +328,7 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
         const auto dirtyBefore = ctx_.getLineAnchorPreviewBounds();
         ctx_.getState().drawing.currentMousePos = e.position;
         if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
+        ctx_.setMouseCursor(juce::MouseCursor::CrosshairCursor);
         return;
     }
 
@@ -338,21 +339,32 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
 
     if (currentTool_ == ToolId::Scissors) {
         updateScissorsPreview(e);
+        ctx_.setMouseCursor(juce::MouseCursor::CrosshairCursor);
         return;
     }
 
     if (currentTool_ == ToolId::Eq) {
-        ctx_.setMouseCursor(ctx_.getEqCursor());
+        ctx_.setMouseCursor(ctx_.eqCursor);
+        return;
+    }
+
+    if (currentTool_ == ToolId::AutoTune) {
+        ctx_.setMouseCursor(juce::MouseCursor::PointingHandCursor);
         return;
     }
 
     if (currentTool_ != ToolId::Select) {
+        // DrawNote / HandDraw / Pitch / PitchModulation / PitchDrift / VolumeEnvelope
+        ctx_.setMouseCursor(juce::MouseCursor::CrosshairCursor);
         return;
     }
 
     const auto projection = ctx_.getContentProjection();
     if (!projection.isValid())
+    {
+        ctx_.setMouseCursor(juce::MouseCursor::NormalCursor);
         return;
+    }
 
     int edgeThreshold = 6;
 

@@ -54,7 +54,7 @@ public:
     // 常量
     // ============================================================================
 
-    static constexpr int kCurrentProjectFormatVersion = 5; // v5 adds per-note EQ settings
+    static constexpr int kCurrentProjectFormatVersion = 6; // v6: dynamic EQ filter chain (v5 scalar 9-field migrated to Filter sub-nodes)
     static constexpr int kMinimumProjectFormatVersion = 3;
     static constexpr const char* kRootNodeName = "OpenTuneProject";
     static constexpr const char* kProjectFormatVersionAttr = "projectFormatVersion";

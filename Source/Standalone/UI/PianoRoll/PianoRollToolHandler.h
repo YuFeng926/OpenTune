@@ -180,8 +180,8 @@ public:
         // 打开 EQ 弹窗预览：参数为主音符 index（纯点击 = mouseDown 记录的 pending
         // 主音符；框选 = 完成选择后的 anchor 音符）。只打开弹窗，不改 Note 数据。
         std::function<void(int)> openEqPreview;
-        // EQ 工具专属光标（组件侧实现），mouseMove 在 Eq 状态经 setMouseCursor 应用。
-        std::function<juce::MouseCursor()> getEqCursor;
+        // EQ 工具专属光标（组件侧构造一次，值拷贝共享 handle）。
+        juce::MouseCursor eqCursor;
 
         std::function<bool(std::vector<ManualCorrectionOp>, int, int, bool)> applyManualCorrection;
         std::function<bool(int, int)> selectNotesOverlappingFrames;

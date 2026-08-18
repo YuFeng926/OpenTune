@@ -1,5 +1,8 @@
 /**
  * EQ Popup Component — per-note EQ 编辑弹窗（实现）
+ *
+ * 动态滤波器列表，最多 kMaxFilters=10。
+ * 双击创建/删除 anchor，滚轮调 Q（Peak），Minimize 行为随态变化。
  */
 
 #include "EqPopupComponent.h"
@@ -32,6 +35,9 @@ void EqPopupComponent::setEqSettings(const EqSettings& settings)
     settings_ = settings;
     renderer_.setSettings(settings);
     dragCommitted_ = false;
+    // 重置 hover 量
+    for (auto& a : hoverBandAmounts_)
+        a = 0.0;
     repaint();
 }
 
@@ -45,12 +51,10 @@ void EqPopupComponent::setPreviewMode(bool isPreview)
 {
     isPreview_ = isPreview;
     isMaximized_ = !isPreview;
-    // 预览模式设置50-20kHz频率范围，完整模式恢复默认
     if (isPreview)
         renderer_.setPreviewFreqRange(50.0, 20000.0);
     else
         renderer_.clearPreviewFreqRange();
-    // 外部初始调用保持父级设置的 bounds，不误保存/跳变
     resized();
     repaint();
 }
@@ -69,37 +73,9 @@ juce::Rectangle<float> EqPopupComponent::topBarBounds() const
     return getLocalBounds().toFloat().removeFromTop(kTopBarHeight);
 }
 
-juce::Rectangle<float> EqPopupComponent::graphAreaBounds() const
-{
-    auto bounds = getLocalBounds().toFloat();
-    if (!isPreview_)
-        bounds.removeFromTop(kTopBarHeight);
-    if (isPreview_)
-        return bounds.reduced(2.0f);
-    return bounds.reduced(4.0f, 3.0f);
-}
-
 void EqPopupComponent::resized()
 {
-    if (isPreview_)
-    {
-        renderer_.setGraphBounds(graphAreaBounds());
-    }
-    else
-    {
-        // SRC 同职责：为右侧与底部轴标签预留空间
-        constexpr float leftMargin = 54.0f;   // SRC leftAxisWidthPx + leftAxisGraphGapPx
-        constexpr float rightMargin = 44.0f;  // SRC rightAxisWidthPx
-        constexpr float bottomMargin = 42.0f; // SRC graphBottomInsetPx
-        constexpr float topMargin = 28.0f;    // SRC graphTopInsetPx
-        auto area = graphAreaBounds();
-        const float ix = area.getX() + leftMargin;
-        const float iy = area.getY() + topMargin;
-        const float iw = area.getWidth() - leftMargin - rightMargin;
-        const float ih = area.getHeight() - topMargin - bottomMargin;
-        renderer_.setGraphBounds({ ix, iy, iw, ih });
-    }
-    // 布局数值输入弹窗控件
+    renderer_.setGraphBounds(getLocalBounds().toFloat().reduced(3.0f));
     if (showingValueInput_)
         layoutValueInputOverlay();
 }
@@ -113,107 +89,33 @@ void EqPopupComponent::paint(juce::Graphics& g)
     const auto bounds = getLocalBounds().toFloat();
     const float cornerRadius = 8.0f;
 
-    // 背景 — 圆角矩形填充（半透明）
     const auto bgBase = noteColor_.withSaturation(noteColor_.getSaturation() * 0.3f);
     const auto bgColor = bgBase.interpolatedWith(EqGraphRenderer::backgroundColor(), 0.7f);
     g.setColour(bgColor.withAlpha(0.75f));
     g.fillRoundedRectangle(bounds, cornerRadius);
 
-    // 圆角描边
     g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.25f));
     g.drawRoundedRectangle(bounds.reduced(0.5f), cornerRadius, 1.0f);
 
-    // ── 频谱背景动画 ──
-    renderer_.drawSpectrumBackground(g, spectrumAnim_.data());
+    renderer_.drawSpectrumBackground(g, spectrum_, spectrumPeaks_);
 
-    // ── 曲线 + anchors 绘制（两态都画，bypass 由 renderer 降透明度） ──
     if (isPreview_)
-    {
         renderer_.drawPreview(g);
-    }
     else
-    {
         renderer_.drawFull(g, hoveredBand_, activeMousePos_, interaction_.isDragging(),
-                           hoveredViewRange_, pressedViewRange_);
+                           hoveredViewRange_, pressedViewRange_, hoverBandAmounts_);
 
-        // 滤波器 hover 淡入淡出高亮
-        for (int i = 0; i < 5; ++i)
-        {
-            const double amount = hoverBandAmounts_[static_cast<size_t>(i)];
-            if (amount <= 0.01)
-                continue;
+    // 四控制按钮
+    paintButton(g, ButtonId::Maximize, buttonBounds(ButtonId::Maximize),
+                hoveredButton_ == static_cast<int>(ButtonId::Maximize));
+    paintButton(g, ButtonId::Bypass, buttonBounds(ButtonId::Bypass),
+                hoveredButton_ == static_cast<int>(ButtonId::Bypass));
+    paintButton(g, ButtonId::Remove, buttonBounds(ButtonId::Remove),
+                hoveredButton_ == static_cast<int>(ButtonId::Remove));
+    paintButton(g, ButtonId::Minimize, buttonBounds(ButtonId::Minimize),
+                hoveredButton_ == static_cast<int>(ButtonId::Minimize));
 
-            const auto color = EqGraphRenderer::bandColor(i);
-            const auto bright = color.brighter(0.38f);
-            const float bypassDim = 1.0f;
-            const float a = static_cast<float>(amount);
-
-            // ① 渐变填充影响区（SRC drawHoverBandInfluence 核心）
-            {
-                juce::Graphics::ScopedSaveState saved(g);
-                g.reduceClipRegion(renderer_.graphBounds().toNearestInt().expanded(8));
-                const auto influencePath = renderer_.buildBandInfluencePath(i);
-
-                juce::ColourGradient grad(
-                    bright.withAlpha(0.15f * bypassDim * a), 0.0f, renderer_.graphBounds().getY(),
-                    color.withAlpha(0.0f),                0.0f, renderer_.graphBounds().getBottom(), true);
-                    grad.addColour(0.5, color.withAlpha(0.06f * bypassDim * a));
-                g.setGradientFill(grad);
-                g.fillPath(influencePath);
-            }
-
-            // ② 双层描边
-            const auto curvePath = renderer_.buildSingleBandPath(i);
-
-            g.setColour(bright.withAlpha(0.15f * bypassDim * a));
-            g.strokePath(curvePath, juce::PathStrokeType(2.35f,
-                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-            g.setColour(bright.withAlpha(0.78f * bypassDim * a));
-            g.strokePath(curvePath, juce::PathStrokeType(1.12f,
-                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-            // ③ 锚点径向辉光
-            {
-                const auto node = renderer_.anchorPosition(i);
-                const float r = 13.5f;
-                juce::ColourGradient glow(
-                    bright.withAlpha(0.15f * bypassDim * a), node.x, node.y,
-                    color.withAlpha(0.0f),                    node.x, node.y + r, true);
-                    glow.addColour(0.36, color.withAlpha(0.06f * bypassDim * a));
-                g.setGradientFill(glow);
-                g.fillEllipse(node.x - r, node.y - r, r * 2.0f, r * 2.0f);
-            }
-        }
-    }
-
-    // ── 四控制按钮：预览模式和完整模式都画 ──
-    {
-        const auto topBar = topBarBounds();
-        const float btnY = (kTopBarHeight - kBtnSize) * 0.5f;
-
-        // Maximize/Minimize
-        paintButton(g, ButtonId::Maximize,
-                    { topBar.getX() + 4.0f, btnY, kBtnSize, kBtnSize },
-                    hoveredButton_ == static_cast<int>(ButtonId::Maximize));
-
-        // Bypass
-        paintButton(g, ButtonId::Bypass,
-                    { topBar.getX() + 4.0f + kBtnSize + kBtnGap, btnY, kBtnSize, kBtnSize },
-                    hoveredButton_ == static_cast<int>(ButtonId::Bypass));
-
-        // Remove
-        paintButton(g, ButtonId::Remove,
-                    { topBar.getX() + 4.0f + (kBtnSize + kBtnGap) * 2, btnY, kBtnSize, kBtnSize },
-                    hoveredButton_ == static_cast<int>(ButtonId::Remove));
-
-        // Minimize
-        paintButton(g, ButtonId::Minimize,
-                    { topBar.getRight() - 4.0f - kBtnSize, btnY, kBtnSize, kBtnSize },
-                    hoveredButton_ == static_cast<int>(ButtonId::Minimize));
-    }
-
-    // ── 按钮 tooltip ──
+    // 按钮 tooltip
     if (hoveredButton_ >= 0)
     {
         const auto id = static_cast<ButtonId>(hoveredButton_);
@@ -232,8 +134,8 @@ void EqPopupComponent::paint(juce::Graphics& g)
             tooltipText = juce::String::fromUTF8(u8"删除EQ处理");
             break;
         case ButtonId::Minimize:
-            tooltipText = isMaximized_ ? juce::String::fromUTF8(u8"最小化")
-                                       : juce::String::fromUTF8(u8"展开EQ编辑器");
+            tooltipText = isPreview_ ? juce::String::fromUTF8(u8"隐藏EQ预览")
+                                     : juce::String::fromUTF8(u8"最小化为预览");
             break;
         default: break;
         }
@@ -243,7 +145,6 @@ void EqPopupComponent::paint(juce::Graphics& g)
             const auto btnRect = buttonBounds(id);
             const float tooltipH = 16.0f;
             const float tooltipY = btnRect.getBottom() + 3.0f;
-            // 确保 tooltip 不超出组件底部
             const float maxY = static_cast<float>(getHeight()) - tooltipH - 2.0f;
             const float finalY = juce::jmin(tooltipY, maxY);
 
@@ -260,7 +161,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
         }
     }
 
-    // ── Remove 确认弹窗 ──
+    // Remove 确认弹窗
     if (showingRemoveConfirmation_)
     {
         const auto area = getLocalBounds().toFloat();
@@ -311,17 +212,16 @@ void EqPopupComponent::paint(juce::Graphics& g)
         g.drawText(juce::String::fromUTF8(u8"取消"), cancelRect, juce::Justification::centred, false);
     }
 
-    // ── 数值输入弹窗遮罩 ──
+    // 数值输入弹窗遮罩
     if (showingValueInput_)
     {
-        // 全区域半透明遮罩
         g.setColour(juce::Colour::fromRGBA(0, 0, 0, 120));
         g.fillRect(getLocalBounds().toFloat());
     }
 }
 
 // ============================================================================
-// 按钮绘制 — 图形化图标
+// 按钮绘制
 // ============================================================================
 
 void EqPopupComponent::paintButton(juce::Graphics& g, ButtonId id, juce::Rectangle<float> bounds, bool hovered) const
@@ -351,7 +251,6 @@ void EqPopupComponent::paintBypassIcon(juce::Graphics& g, juce::Rectangle<float>
     const float cy = bounds.getCentreY();
     const float s = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.55f;
 
-    // 对勾（✓）— 直接画在按钮外层方框上
     if (settings_.active)
     {
         g.drawLine(cx - s * 0.45f, cy + s * 0.05f, cx - s * 0.05f, cy + s * 0.40f, 1.8f);
@@ -361,7 +260,6 @@ void EqPopupComponent::paintBypassIcon(juce::Graphics& g, juce::Rectangle<float>
 
 void EqPopupComponent::paintRemoveIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
 {
-    // 垃圾桶图标：盖子 + 桶身 + 竖线
     g.setColour(color);
     const float cx = bounds.getCentreX();
     const float cy = bounds.getCentreY();
@@ -371,25 +269,20 @@ void EqPopupComponent::paintRemoveIcon(juce::Graphics& g, juce::Rectangle<float>
     const float bodyTop = cy - h * 0.5f + lidH + 1.0f;
     const float bodyBot = cy + h * 0.5f;
 
-    // 桶盖
     g.drawLine(cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy - h * 0.5f, 1.5f);
-    // 盖子提手
     g.drawLine(cx - w * 0.2f, cy - h * 0.5f - lidH, cx + w * 0.2f, cy - h * 0.5f - lidH, 1.5f);
     g.drawLine(cx - w * 0.2f, cy - h * 0.5f, cx - w * 0.2f, cy - h * 0.5f - lidH, 1.5f);
     g.drawLine(cx + w * 0.2f, cy - h * 0.5f, cx + w * 0.2f, cy - h * 0.5f - lidH, 1.5f);
-    // 桶身
     g.drawLine(cx - w * 0.4f, bodyTop, cx - w * 0.35f, bodyBot, 1.3f);
     g.drawLine(cx + w * 0.4f, bodyTop, cx + w * 0.35f, bodyBot, 1.3f);
     g.drawLine(cx - w * 0.4f, bodyTop, cx + w * 0.4f, bodyTop, 1.3f);
     g.drawLine(cx - w * 0.35f, bodyBot, cx + w * 0.35f, bodyBot, 1.3f);
-    // 桶身竖线
     g.drawLine(cx - w * 0.15f, bodyTop + 1.0f, cx - w * 0.15f, bodyBot - 1.0f, 1.0f);
     g.drawLine(cx + w * 0.15f, bodyTop + 1.0f, cx + w * 0.15f, bodyBot - 1.0f, 1.0f);
 }
 
 void EqPopupComponent::paintMaximizeIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
 {
-    // 最大化：向上双箭头；最小化：向下双箭头
     g.setColour(color);
     const float cx = bounds.getCentreX();
     const float cy = bounds.getCentreY();
@@ -397,7 +290,6 @@ void EqPopupComponent::paintMaximizeIcon(juce::Graphics& g, juce::Rectangle<floa
 
     if (isMaximized_)
     {
-        // 向下双箭头（还原）
         g.drawLine(cx, cy - s, cx - s, cy, 1.3f);
         g.drawLine(cx, cy - s, cx + s, cy, 1.3f);
         g.drawLine(cx, cy + 1.0f, cx - s, cy + s + 1.0f, 1.3f);
@@ -405,7 +297,6 @@ void EqPopupComponent::paintMaximizeIcon(juce::Graphics& g, juce::Rectangle<floa
     }
     else
     {
-        // 向上双箭头（最大化）
         g.drawLine(cx, cy + s, cx - s, cy, 1.3f);
         g.drawLine(cx, cy + s, cx + s, cy, 1.3f);
         g.drawLine(cx, cy - 1.0f, cx - s, cy - s - 1.0f, 1.3f);
@@ -415,7 +306,6 @@ void EqPopupComponent::paintMaximizeIcon(juce::Graphics& g, juce::Rectangle<floa
 
 void EqPopupComponent::paintMinimizeIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const
 {
-    // 最小化：水平短横线
     g.setColour(color);
     const float cx = bounds.getCentreX();
     const float cy = bounds.getCentreY();
@@ -440,11 +330,9 @@ juce::Rectangle<float> EqPopupComponent::buttonBounds(ButtonId id) const
 
 EqPopupComponent::ButtonId EqPopupComponent::hitTestButton(juce::Point<float> pos) const
 {
-    // 两态都检查四个按钮
     for (auto id : { ButtonId::Maximize, ButtonId::Bypass, ButtonId::Remove, ButtonId::Minimize })
         if (buttonBounds(id).contains(pos))
             return id;
-    // 图区域不切换模式：明确返回 None
     return ButtonId::None;
 }
 
@@ -457,7 +345,6 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
     activeMousePos_ = event.position;
     const auto pos = event.position;
 
-    // 按钮悬停
     hoveredButton_ = -1;
     for (int i = 0; i < 4; ++i)
     {
@@ -465,16 +352,18 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
         if (buttonBounds(id).contains(pos))
         {
             hoveredButton_ = i;
-            break;
+            hoveredBand_ = -1;
+            hoveredViewRange_ = -1;
+            setMouseCursor(juce::MouseCursor::PointingHandCursor);
+            repaint();
+            return;
         }
     }
 
-    // 锚点悬停 → 曲线级 fallback
     hoveredBand_ = renderer_.hitTestAnchor(pos, 10.0f);
     if (hoveredBand_ < 0 && !isPreview_)
         hoveredBand_ = renderer_.hitTestCurve(pos, 12.0f);
 
-    // 视图范围按钮悬停
     if (!isPreview_)
     {
         const auto vr = renderer_.hitTestViewRangeButton(pos);
@@ -491,8 +380,8 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
     }
 
     setMouseCursor(hoveredBand_ >= 0 ? juce::MouseCursor::PointingHandCursor
-                   : (hoveredButton_ >= 0 ? juce::MouseCursor::PointingHandCursor
-                                          : juce::MouseCursor::NormalCursor));
+                   : (hoveredViewRange_ >= 0 ? juce::MouseCursor::PointingHandCursor
+                                              : juce::MouseCursor::NormalCursor));
 
     repaint();
 }
@@ -502,51 +391,79 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
     if (event.mods.isRightButtonDown())
         return;
 
+    if (event.getNumberOfClicks() >= 2)
+        pendingValueInputBand_ = -1;
+
     const auto pos = event.position;
 
     // Remove 确认弹窗交互
     if (showingRemoveConfirmation_)
     {
-        const auto area = getLocalBounds().toFloat();
-        const float dialogW = 200.0f;
-        const float dialogH = 70.0f;
-        const float dialogX = (area.getWidth() - dialogW) * 0.5f;
-        const float dialogY = (area.getHeight() - dialogH) * 0.5f;
-
-        const auto checkRect = juce::Rectangle<float>(dialogX + 10.0f, dialogY + 28.0f, dialogW - 20.0f, 14.0f);
-        if (checkRect.contains(pos))
-        {
-            suppressRemoveConfirmation_ = !suppressRemoveConfirmation_;
-            if (onRemoveConfirmationSuppressed)
-                onRemoveConfirmationSuppressed(suppressRemoveConfirmation_);
-            repaint();
-            return;
-        }
-
-        const auto okRect = juce::Rectangle<float>(dialogX + 10.0f, dialogY + dialogH - 24.0f, 80.0f, 18.0f);
-        if (okRect.contains(pos))
+        if (event.getNumberOfClicks() >= 2)
         {
             dismissRemoveConfirmation();
-            if (onRemoveEq)
-                onRemoveEq();
-            return;
+            // 继续：双击可能命中 anchor
         }
-
-        const auto cancelRect = juce::Rectangle<float>(dialogX + dialogW - 90.0f, dialogY + dialogH - 24.0f, 80.0f, 18.0f);
-        if (cancelRect.contains(pos))
+        else
         {
-            dismissRemoveConfirmation();
+            const auto area = getLocalBounds().toFloat();
+            const float dialogW = 200.0f;
+            const float dialogH = 70.0f;
+            const float dialogX = (area.getWidth() - dialogW) * 0.5f;
+            const float dialogY = (area.getHeight() - dialogH) * 0.5f;
+
+            const auto checkRect = juce::Rectangle<float>(dialogX + 10.0f, dialogY + 28.0f, dialogW - 20.0f, 14.0f);
+            if (checkRect.contains(pos))
+            {
+                suppressRemoveConfirmation_ = !suppressRemoveConfirmation_;
+                if (onRemoveConfirmationSuppressed)
+                    onRemoveConfirmationSuppressed(suppressRemoveConfirmation_);
+                repaint();
+                return;
+            }
+
+            const auto okRect = juce::Rectangle<float>(dialogX + 10.0f, dialogY + dialogH - 24.0f, 80.0f, 18.0f);
+            if (okRect.contains(pos))
+            {
+                dismissRemoveConfirmation();
+                if (onRemoveEq) onRemoveEq();
+                return;
+            }
+
+            const auto cancelRect = juce::Rectangle<float>(dialogX + dialogW - 90.0f, dialogY + dialogH - 24.0f, 80.0f, 18.0f);
+            if (cancelRect.contains(pos))
+            {
+                dismissRemoveConfirmation();
+                return;
+            }
+
             return;
         }
-
-        return;
     }
 
     // 数值输入弹窗：遮罩拦截
     if (showingValueInput_)
-        return;
+    {
+        if (event.getNumberOfClicks() >= 2)
+            dismissValueInputPopup();
+        else
+            return;
+    }
 
-    // 按钮点击（两态统一：None 则不处理，自然落入图例/视图范围/anchor 路径）
+    // 多击：直接处理 anchor 删除 / 空白交 mouseDoubleClick
+    if (event.getNumberOfClicks() >= 2)
+    {
+        const int hitBand = renderer_.hitTestAnchor(pos, 10.0f);
+        if (hitBand >= 0 && hitBand < static_cast<int>(settings_.filters.size()))
+        {
+            doubleClickHandled_ = true;
+            removeFilterAt(hitBand);
+            return; // 'this' 可能已被销毁
+        }
+        return; // 空白区域：不启动窗口拖动
+    }
+
+    // 按钮点击
     {
         const auto btn = hitTestButton(pos);
         if (btn != ButtonId::None)
@@ -574,14 +491,22 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
                 }
                 return;
             case ButtonId::Minimize:
-                if (isMaximized_)
+                // 预览态：关闭预览窗口（保留已提交 EQ）
+                // 完整态：toggleMaximize 回预览
+                if (isPreview_)
+                {
+                    if (onClose) onClose();
+                }
+                else
+                {
                     toggleMaximize();
+                }
                 return;
             }
         }
     }
 
-    // 视图范围按钮 — SRC press-release：mouseDown 只记录 pressed，不改范围
+    // 视图范围按钮
     if (!isPreview_)
     {
         const auto vr = renderer_.hitTestViewRangeButton(pos);
@@ -596,11 +521,12 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
         }
     }
 
-    // 锚点交互 — 微拖拽 pending 语义：mouseDown 只记录 pending
+    // 锚点交互 — mouseDown 记录 selectedFilterIndex_ + pending drag
     {
         const int bandIdx = renderer_.hitTestAnchor(pos, 10.0f);
-        if (bandIdx >= 0)
+        if (bandIdx >= 0 && bandIdx < static_cast<int>(settings_.filters.size()))
         {
+            selectedFilterIndex_ = bandIdx;
             pendingDragBand_ = bandIdx;
             pendingDragStartPos_ = pos;
             hoveredBand_ = bandIdx;
@@ -610,13 +536,11 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
         }
     }
 
-    // 窗口拖拽 — 点击空白处拖动弹窗位置
-    {
-        draggingWindow_ = true;
-        const auto mouseInParent = getPosition() + event.getPosition().toInt();
-        dragOffset_ = mouseInParent - getPosition();
-        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
-    }
+    // 窗口拖拽 — 保留完整窗口空白拖动语义
+    draggingWindow_ = true;
+    const auto mouseInParent = getPosition() + event.getPosition().toInt();
+    dragOffset_ = mouseInParent - getPosition();
+    setMouseCursor(juce::MouseCursor::DraggingHandCursor);
 }
 
 void EqPopupComponent::mouseDrag(const juce::MouseEvent& event)
@@ -646,7 +570,6 @@ void EqPopupComponent::mouseDrag(const juce::MouseEvent& event)
             return;
         if (!interaction_.hasDragThreshold(pendingDragStartPos_, event.position))
             return;
-        // 超过阈值：启动 drag
         interaction_.startDrag(pendingDragBand_, pendingDragStartPos_, settings_);
         dragCommitted_ = false;
         wasDragging_ = true;
@@ -669,7 +592,6 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
 
     if (interaction_.isDragging())
     {
-        // 启动了 drag：提交一次
         interaction_.endDrag();
         pendingDragBand_ = -1;
         setMouseCursor(juce::MouseCursor::NormalCursor);
@@ -692,11 +614,22 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
         pendingDragBand_ = -1;
         setMouseCursor(juce::MouseCursor::NormalCursor);
         if (!isPreview_)
-            showValueInputPopup(band);
+        {
+            pendingValueInputBand_ = band;
+            const juce::Component::SafePointer<EqPopupComponent> safeThis(this);
+            juce::Timer::callAfterDelay(juce::MouseEvent::getDoubleClickTimeout(),
+                                        [safeThis, band]() {
+                if (safeThis != nullptr && safeThis->pendingValueInputBand_ == band)
+                {
+                    safeThis->pendingValueInputBand_ = -1;
+                    safeThis->showValueInputPopup(band);
+                }
+            });
+        }
         repaint();
     }
 
-    // 视图范围按钮 — SRC press-release：mouseUp 释放仍命中同一按钮时执行切换
+    // 视图范围按钮
     if (pressedViewRange_ >= 0)
     {
         const auto vr = renderer_.hitTestViewRangeButton(event.position);
@@ -706,9 +639,9 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
         {
             const double currentRange = renderer_.viewGainRangeDb();
             double newRange = currentRange;
-            if (pressedViewRange_ == 0)  // Decrease
+            if (pressedViewRange_ == 0)
                 newRange = currentRange >= 30.0 ? 12.0 : (currentRange >= 12.0 ? 6.0 : 6.0);
-            else  // Increase
+            else
                 newRange = currentRange <= 6.0 ? 12.0 : (currentRange <= 12.0 ? 30.0 : 30.0);
             if (newRange != currentRange)
                 renderer_.setViewGainRangeDb(newRange);
@@ -716,6 +649,103 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
         pressedViewRange_ = -1;
         repaint();
     }
+}
+
+void EqPopupComponent::mouseDoubleClick(const juce::MouseEvent& event)
+{
+    if (event.mods.isRightButtonDown())
+        return;
+
+    pendingValueInputBand_ = -1;
+
+    // mouseDown 已处理多击 anchor 删除
+    if (doubleClickHandled_)
+    {
+        doubleClickHandled_ = false;
+        return;
+    }
+
+    // 消除 pending drag 状态（防止 doubleClick 后 mouseUp 误触）
+    pendingDragBand_ = -1;
+
+    // 双击前关闭可能因第一次 click 的 mouseUp 弹出的遮罩层
+    if (showingValueInput_)
+        dismissValueInputPopup();
+    if (showingRemoveConfirmation_)
+        dismissRemoveConfirmation();
+
+    const auto pos = event.position;
+
+    // 命中已有 anchor → 删除该 filter（不要求先选中）
+    const int hitBand = renderer_.hitTestAnchor(pos, 10.0f);
+    if (hitBand >= 0 && hitBand < static_cast<int>(settings_.filters.size()))
+    {
+        removeFilterAt(hitBand);
+        return; // 'this' 可能已被销毁
+    }
+
+    // 未命中 anchor + 完整模式 + 在 graphBounds → 创建新 filter
+    if (!isPreview_ && renderer_.graphBounds().contains(pos)
+        && static_cast<int>(settings_.filters.size()) < EqSettings::kMaxFilters)
+    {
+        double freq = renderer_.xToFreq(pos.x);
+        double gain = renderer_.yToGain(pos.y);
+
+        EqFilter newFilter;
+        if (freq < 200.0)
+            newFilter.type = EqFilterType::LowShelf;
+        else if (freq > 10000.0)
+            newFilter.type = EqFilterType::HighShelf;
+        else
+            newFilter.type = EqFilterType::Peak;
+
+        freq = std::clamp(freq, static_cast<double>(EqSettings::kMinFrequencyHz),
+                          static_cast<double>(EqSettings::kMaxFrequencyHz));
+        gain = std::clamp(gain, static_cast<double>(EqSettings::kMinGainDb),
+                          static_cast<double>(EqSettings::kMaxGainDb));
+
+        newFilter.frequencyHz = static_cast<float>(freq);
+        newFilter.gainDb = static_cast<float>(gain);
+        newFilter.q = 1.0f;
+
+        settings_.filters.push_back(newFilter);
+        const int newIndex = static_cast<int>(settings_.filters.size()) - 1;
+        selectedFilterIndex_ = newIndex;
+        hoveredBand_ = newIndex;
+
+        renderer_.setSettings(settings_);
+        commitSettings();
+        repaint();
+        return;
+    }
+
+    // 预览模式空白双击不创建但消费事件
+}
+
+void EqPopupComponent::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
+{
+    // 始终消费，不调用父类/向上转发，避免 PianoRoll 背景上下滚动
+    const bool selectedIsValid = selectedFilterIndex_ >= 0
+                              && selectedFilterIndex_ < static_cast<int>(settings_.filters.size());
+    int targetBand = selectedIsValid ? selectedFilterIndex_ : hoveredBand_;
+    if (targetBand < 0 || targetBand >= static_cast<int>(settings_.filters.size()))
+        return;
+
+    auto& f = settings_.filters[targetBand];
+    if (f.type != EqFilterType::Peak)
+        return;
+
+    // 基础步进 ±0.08，Shift 细调乘 0.35
+    const double step = 0.08 * (event.mods.isShiftDown() ? 0.35 : 1.0);
+    const double delta = wheel.deltaY > 0 ? step : -step;
+    f.q = static_cast<float>(std::clamp(
+        static_cast<double>(f.q) + delta,
+        static_cast<double>(EqSettings::kMinQ),
+        static_cast<double>(EqSettings::kMaxQ)));
+
+    renderer_.setSettings(settings_);
+    commitSettings();
+    repaint();
 }
 
 void EqPopupComponent::mouseExit(const juce::MouseEvent&)
@@ -728,22 +758,27 @@ void EqPopupComponent::mouseExit(const juce::MouseEvent&)
 }
 
 // ============================================================================
-// Timer — 驱动滤波器 hover 淡入淡出动画
+// Timer
 // ============================================================================
 
 void EqPopupComponent::timerCallback()
 {
     const double dt = 1.0 / 30.0;
-    animTime_ += dt;
-
-    spectrumAnim_.update(animTime_, settings_);
+    if (onReadSpectrum)
+        onReadSpectrum(spectrum_, spectrumPeaks_);
+    else
+    {
+        spectrum_.fill(0.0f);
+        spectrumPeaks_.fill(0.0f);
+    }
     updateHoverBandFade(dt);
 
     if (interaction_.isDragging())
         repaint();
 
-    // hover 动画活跃时刷新
-    for (int i = 0; i < 5; ++i)
+    // hover 动画活跃时刷新（动态数量）
+    const int n = static_cast<int>(settings_.filters.size());
+    for (int i = 0; i < n; ++i)
     {
         if (hoverBandAmounts_[static_cast<size_t>(i)] > 0.01)
         {
@@ -758,7 +793,8 @@ void EqPopupComponent::timerCallback()
 
 void EqPopupComponent::updateHoverBandFade(double dt)
 {
-    for (int i = 0; i < 5; ++i)
+    const int n = static_cast<int>(settings_.filters.size());
+    for (int i = 0; i < n; ++i)
     {
         double& amount = hoverBandAmounts_[static_cast<size_t>(i)];
         if (i == hoveredBand_)
@@ -776,7 +812,6 @@ void EqPopupComponent::toggleMaximize()
 {
     if (isMaximized_)
     {
-        // 完整→预览：恢复保存的 preview bounds，设置预览频率范围
         isMaximized_ = false;
         isPreview_ = true;
         renderer_.setPreviewFreqRange(50.0, 20000.0);
@@ -787,13 +822,11 @@ void EqPopupComponent::toggleMaximize()
     }
     else
     {
-        // 预览→完整：保存当前 preview bounds，计算 full bounds，恢复完整频率范围
         isMaximized_ = true;
         isPreview_ = false;
         renderer_.clearPreviewFreqRange();
-        savedPreviewBounds_ = getBounds();  // 保存当前预览 bounds
+        savedPreviewBounds_ = getBounds();
 
-        // 按 parent local bounds 等比例/夹紧
         const int targetW = kFullWidth;
         const int targetH = kFullHeight;
         int w = targetW;
@@ -802,7 +835,6 @@ void EqPopupComponent::toggleMaximize()
         if (auto* parent = getParentComponent())
         {
             const auto parentBounds = parent->getLocalBounds();
-            // 等比例缩放以适配父级
             if (w > parentBounds.getWidth() || h > parentBounds.getHeight())
             {
                 const double scaleX = static_cast<double>(parentBounds.getWidth()) / w;
@@ -811,7 +843,6 @@ void EqPopupComponent::toggleMaximize()
                 w = static_cast<int>(w * scale);
                 h = static_cast<int>(h * scale);
             }
-            // 在父级内定位：保持锚点位置附近
             const int x = juce::jlimit(parentBounds.getX(),
                                        juce::jmax(parentBounds.getX(), parentBounds.getRight() - w),
                                        getX());
@@ -835,32 +866,56 @@ void EqPopupComponent::commitSettings()
         onCommitSettings(settings_);
 }
 
-// ============================================================================
-// 数值输入弹窗 — unique_ptr + 完整布局
-// ============================================================================
-
-void EqPopupComponent::showValueInputPopup(int bandIndex)
+bool EqPopupComponent::removeFilterAt(int index)
 {
-    showingValueInput_ = true;
-    valueInputBand_ = bandIndex;
+    settings_.filters.erase(settings_.filters.begin() + index);
 
-    double freq = 0.0;
-    double gain = 0.0;
-    switch (bandIndex)
+    if (settings_.filters.empty())
     {
-    case 0: freq = settings_.lowCutFrequencyHz; break;
-    case 1: freq = settings_.lowShelfFrequencyHz; gain = settings_.lowShelfGainDb; break;
-    case 2: freq = settings_.peakFrequencyHz; gain = settings_.peakGainDb; break;
-    case 3: freq = settings_.highShelfFrequencyHz; gain = settings_.highShelfGainDb; break;
-    case 4: freq = settings_.highCutFrequencyHz; break;
+        if (onRemoveEq) onRemoveEq();
+        return true; // 'this' 可能已被销毁
     }
 
-    const auto type = EqBandInteraction::bandType(bandIndex);
-    const bool hasGain = (type == EqBandInteraction::BandType::LowShelf
-                       || type == EqBandInteraction::BandType::Peak
-                       || type == EqBandInteraction::BandType::HighShelf);
+    if (selectedFilterIndex_ == index)
+        selectedFilterIndex_ = -1;
+    else if (selectedFilterIndex_ > index)
+        --selectedFilterIndex_;
 
-    // 创建控件（unique_ptr）
+    if (hoveredBand_ == index)
+        hoveredBand_ = -1;
+    else if (hoveredBand_ > index)
+        --hoveredBand_;
+
+    for (int i = index; i < EqSettings::kMaxFilters - 1; ++i)
+        hoverBandAmounts_[static_cast<size_t>(i)] = hoverBandAmounts_[static_cast<size_t>(i + 1)];
+    hoverBandAmounts_[static_cast<size_t>(EqSettings::kMaxFilters - 1)] = 0.0;
+
+    renderer_.setSettings(settings_);
+    commitSettings();
+    repaint();
+    return false;
+}
+
+// ============================================================================
+// 数值输入弹窗 — 动态 filter index
+// ============================================================================
+
+void EqPopupComponent::showValueInputPopup(int filterIndex)
+{
+    if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
+        return;
+
+    showingValueInput_ = true;
+    valueInputBand_ = filterIndex;
+
+    const auto& f = settings_.filters[filterIndex];
+    const double freq = f.frequencyHz;
+    const double gain = f.gainDb;
+
+    const bool hasGain = (f.type == EqFilterType::LowShelf
+                       || f.type == EqFilterType::Peak
+                       || f.type == EqFilterType::HighShelf);
+
     freqEditor_ = std::make_unique<juce::TextEditor>();
     freqEditor_->setText(juce::String(freq, 0));
     freqEditor_->setFont(juce::Font(juce::FontOptions(11.0f)));
@@ -879,7 +934,8 @@ void EqPopupComponent::showValueInputPopup(int bandIndex)
         gainEditor_->setColour(juce::TextEditor::outlineColourId, EqGraphRenderer::axisLabelColor());
         addAndMakeVisible(gainEditor_.get());
 
-        qLabel_ = std::make_unique<juce::Label>(juce::String(), "Q: 2.0");
+        // 显示当前 Q（动态 filter q 值）
+        qLabel_ = std::make_unique<juce::Label>(juce::String(), "Q: " + juce::String(f.q, 2));
         qLabel_->setFont(juce::Font(juce::FontOptions(10.0f)));
         qLabel_->setColour(juce::Label::textColourId, EqGraphRenderer::axisLabelColor());
         addAndMakeVisible(qLabel_.get());
@@ -889,28 +945,27 @@ void EqPopupComponent::showValueInputPopup(int bandIndex)
     valueInputOk_->setColour(juce::TextButton::buttonColourId, EqGraphRenderer::combinedCurveColor());
     valueInputOk_->setColour(juce::TextButton::textColourOffId, juce::Colours::black);
     valueInputOk_->onClick = [this] {
-        if (freqEditor_ && freqEditor_->getText().isNotEmpty())
+        if (freqEditor_ && freqEditor_->getText().isNotEmpty()
+            && valueInputBand_ >= 0
+            && valueInputBand_ < static_cast<int>(settings_.filters.size()))
         {
+            auto& f = settings_.filters[valueInputBand_];
             const double newFreq = freqEditor_->getText().getDoubleValue();
-            switch (valueInputBand_)
-            {
-            case 0: settings_.lowCutFrequencyHz = std::clamp(static_cast<float>(newFreq), 20.0f, 20000.0f); break;
-            case 1: settings_.lowShelfFrequencyHz = std::clamp(static_cast<float>(newFreq), 20.0f, 20000.0f); break;
-            case 2: settings_.peakFrequencyHz = std::clamp(static_cast<float>(newFreq), 500.0f, 12000.0f); break;
-            case 3: settings_.highShelfFrequencyHz = std::clamp(static_cast<float>(newFreq), 20.0f, 20000.0f); break;
-            case 4: settings_.highCutFrequencyHz = std::clamp(static_cast<float>(newFreq), 20.0f, 20000.0f); break;
-            }
+            // Peak 频率范围 500-12000，其余 20-20000
+            if (f.type == EqFilterType::Peak)
+                f.frequencyHz = std::clamp(static_cast<float>(newFreq), 500.0f, 12000.0f);
+            else
+                f.frequencyHz = std::clamp(static_cast<float>(newFreq), 20.0f, 20000.0f);
         }
-        if (gainEditor_ && gainEditor_->getText().isNotEmpty())
+        if (gainEditor_ && gainEditor_->getText().isNotEmpty()
+            && valueInputBand_ >= 0
+            && valueInputBand_ < static_cast<int>(settings_.filters.size()))
         {
+            auto& f = settings_.filters[valueInputBand_];
             const double newGain = gainEditor_->getText().getDoubleValue();
-            switch (valueInputBand_)
-            {
-            case 1: settings_.lowShelfGainDb = std::clamp(static_cast<float>(newGain), -12.0f, 12.0f); break;
-            case 2: settings_.peakGainDb = std::clamp(static_cast<float>(newGain), -12.0f, 12.0f); break;
-            case 3: settings_.highShelfGainDb = std::clamp(static_cast<float>(newGain), -12.0f, 12.0f); break;
-            }
+            f.gainDb = std::clamp(static_cast<float>(newGain), -12.0f, 12.0f);
         }
+        // type 和 q 保留不变
         renderer_.setSettings(settings_);
         commitSettings();
         dismissValueInputPopup();
@@ -958,10 +1013,11 @@ void EqPopupComponent::layoutValueInputOverlay()
         freqEditor_->setBounds(static_cast<int>(x), static_cast<int>(y),
                                static_cast<int>(fieldW), static_cast<int>(rowH));
 
-    const auto type = EqBandInteraction::bandType(valueInputBand_);
-    const bool hasGain = (type == EqBandInteraction::BandType::LowShelf
-                       || type == EqBandInteraction::BandType::Peak
-                       || type == EqBandInteraction::BandType::HighShelf);
+    const bool hasGain = (valueInputBand_ >= 0
+                       && valueInputBand_ < static_cast<int>(settings_.filters.size()))
+                       && (settings_.filters[valueInputBand_].type == EqFilterType::LowShelf
+                        || settings_.filters[valueInputBand_].type == EqFilterType::Peak
+                        || settings_.filters[valueInputBand_].type == EqFilterType::HighShelf);
 
     if (hasGain)
     {
@@ -996,15 +1052,6 @@ void EqPopupComponent::dismissRemoveConfirmation()
 {
     showingRemoveConfirmation_ = false;
     repaint();
-}
-
-// ============================================================================
-// 辅助
-// ============================================================================
-
-bool EqPopupComponent::graphBoundsContains(juce::Point<float> pos) const
-{
-    return renderer_.graphBounds().contains(pos);
 }
 
 } // namespace OpenTune

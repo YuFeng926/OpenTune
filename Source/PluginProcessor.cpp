@@ -1301,6 +1301,8 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 #endif
     pianoKeyAudition_.loadSamples();
 
+    outputSpectrumAnalyzer_.prepare(sampleRate);
+
     if (auto* captureSession = getCaptureSession())
         captureSession->prepareToPlay(sampleRate, samplesPerBlock, getMainBusNumInputChannels());
 }
@@ -1321,6 +1323,8 @@ void OpenTuneAudioProcessor::releaseResources() {
 
     // Transport reset on release: clear play/loop flags; keep last known time/loop range
     playHeadState_.reset();
+
+    outputSpectrumAnalyzer_.reset();
 
 #if JucePlugin_Enable_ARA
     releaseResourcesForARA();
@@ -1722,6 +1726,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Stopped/Paused with no active transition — only piano audition
     if (phase_ != RuntimePhase::Playing && !transitionActive_) {
         pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
+        outputSpectrumAnalyzer_.push(buffer);
         jassert(standaloneArrangement_ != nullptr);
         for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
             standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
@@ -1906,6 +1911,9 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
+
+    // Standalone 频谱分析：接收最终输出（含 pianoKeyAudition 混音）
+    outputSpectrumAnalyzer_.push(buffer);
 
     // ==== Block-end: cursor advance (unconditional) ====
     audioReadCursor_ = blockEndSample;
@@ -3242,6 +3250,12 @@ void OpenTuneAudioProcessor::pauseAtPosition(double targetSeconds) {
 
 void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
     playHeadState_.isLooping.store(enabled, std::memory_order_relaxed);
+}
+
+void OpenTuneAudioProcessor::copyOutputSpectrum(std::array<float, 128>& spectrum,
+                                                std::array<float, 128>& peaks) const noexcept
+{
+    outputSpectrumAnalyzer_.copySnapshot(spectrum, peaks);
 }
 
 void OpenTuneAudioProcessor::setPosition(double seconds) {

@@ -63,5 +63,5 @@ Python/
 # Project knowledge base
 knowledge/
 
-# Legacy source directory
+# Imported legacy src tree, including its nested Git history and .git.7z archive
 Source/src/
