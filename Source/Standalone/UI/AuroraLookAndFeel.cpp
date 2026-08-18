@@ -46,7 +46,8 @@ void AuroraLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
                              sliderPosProportional,
                              slider.isMouseOverOrDragging(),
                              rotaryStartAngle,
-                             rotaryEndAngle);
+                             rotaryEndAngle,
+                             &slider);
 
     if (slider.isMouseOverOrDragging() && slider.isEnabled())
     {

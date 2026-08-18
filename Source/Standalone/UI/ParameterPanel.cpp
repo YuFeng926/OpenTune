@@ -336,7 +336,8 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
                                    sliderPosProportional,
                                    slider.isMouseOverOrDragging(),
                                    rotaryStartAngle,
-                                   rotaryEndAngle);
+                                   rotaryEndAngle,
+                                   &slider);
         return;
     }
 
@@ -351,7 +352,8 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
                                  sliderPosProportional,
                                  slider.isMouseOverOrDragging(),
                                  rotaryStartAngle,
-                                 rotaryEndAngle);
+                                 rotaryEndAngle,
+                                 &slider);
         return;
     }
 
@@ -366,7 +368,8 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
                                           sliderPosProportional,
                                           slider.isMouseOverOrDragging(),
                                           rotaryStartAngle,
-                                          rotaryEndAngle);
+                                          rotaryEndAngle,
+                                          &slider);
         return;
     }
 

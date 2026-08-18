@@ -123,7 +123,7 @@ private:
     static constexpr float kCardWidth = 260.0f;
     static constexpr float kCardIconRowH = 18.0f;
     static constexpr float kCardColumnWidth = 84.0f;
-    static constexpr float kCardSliderHeight = 96.0f;
+    static constexpr float kCardSliderHeight = 84.0f;
     static constexpr float kCardLabelHeight = 12.0f;
     static constexpr float kCardPadding = 4.0f;
 
