@@ -27,6 +27,7 @@
 #include "SourceStore.h"
 #include "StandaloneArrangement.h"
 #include "DSP/ResamplingManager.h"
+#include "DSP/OutputSpectrumAnalyzer.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/ContentTimelineProjection.h"
 #include "Utils/DetectedKey.h"
@@ -927,6 +928,10 @@ public:
     void setPosition(double seconds);
     void setLoopEnabled(bool enabled);
     bool isPlaying() const noexcept { return playHeadState_.isPlaying.load(std::memory_order_relaxed); }
+
+    /// 从 OutputSpectrumAnalyzer 复制最新128个对数频段：spectrum = 主频谱线，peaks = 峰值线（UI 线程调用）。
+    void copyOutputSpectrum(std::array<float, 128>& spectrum,
+                            std::array<float, 128>& peaks) const noexcept;
     bool isLoopEnabled() const noexcept { return playHeadState_.isLooping.load(std::memory_order_relaxed); }
     double getPosition() const { return playHeadState_.getPresentedPositionSeconds(); }
     HostTransportSnapshot getHostTransportSnapshot() const;
@@ -988,6 +993,7 @@ public:
 private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
+    OutputSpectrumAnalyzer outputSpectrumAnalyzer_;
 
     AppPreferences* appPreferences_{nullptr};
 

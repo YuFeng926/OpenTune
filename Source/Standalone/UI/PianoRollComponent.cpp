@@ -182,7 +182,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.setCurrentTool = [this](ToolId tool) { setCurrentTool(tool); };
     // EQ 工具：主音符 index 由 ToolHandler 唯一判定并直通；EQ cursor 经主题机制应用
     toolCtx.openEqPreview = [this](int primaryIndex) { openEqPopupForSelection(primaryIndex); };
-    toolCtx.getEqCursor = [this]() { return getEqCursor(); };
+    toolCtx.eqCursor = eqCursor_;
     toolCtx.showToolSelectionMenu = [this]() {
         // 在当前鼠标屏幕位置弹出纵向图标工具栏
         auto mousePos = juce::Desktop::getInstance().getMousePosition();
@@ -658,7 +658,9 @@ void PianoRollComponent::initializeToolHandler() {
 }
 
 PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState)
-    : playHeadState_(playHeadState) {
+    : playHeadState_(playHeadState),
+      eqCursor_(CursorThemeManager::getInstance().resolveCursor(
+          juce::MouseCursor(ToolbarIcons::createEqIconImage(), 12, 12))) {
     initializeUIComponents();
     initializeRenderer();
     initializeToolHandler();
@@ -943,6 +945,16 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
     eqPopup_->onCommitSettings = [this](const EqSettings& settings) { applyEqSettingsToSelection(settings); };
     eqPopup_->onRemoveEq = [this]() { removeEqFromSelection(); closeEqPopup(); };
     eqPopup_->onClose = [this]() { closeEqPopup(); };
+    eqPopup_->onReadSpectrum = [this](std::array<float, 128>& spectrum,
+                                      std::array<float, 128>& peaks) {
+        if (processor_ != nullptr)
+            processor_->copyOutputSpectrum(spectrum, peaks);
+        else
+        {
+            spectrum.fill(0.0f);
+            peaks.fill(0.0f);
+        }
+    };
     eqPopup_->onRemoveConfirmationSuppressed = [this](bool suppress) {
         if (appPreferences_ != nullptr)
             appPreferences_->setSuppressEqRemoveConfirmation(suppress);
@@ -968,12 +980,6 @@ void PianoRollComponent::closeEqPopup()
     eqPopup_.reset();
 }
 
-juce::MouseCursor PianoRollComponent::getEqCursor() const
-{
-    // EQ 曲线图标 cursor，经现有主题 cursor 机制应用
-    return CursorThemeManager::getInstance().resolveCursor(
-        juce::MouseCursor(ToolbarIcons::createEqIconImage(), 12, 12));
-}
 
 juce::Rectangle<int> PianoRollComponent::placeEqPopupBounds(const juce::Rectangle<int>& anchor) const
 {
@@ -3675,7 +3681,7 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             break;
         case ToolId::Eq:
             // EQ cursor：EQ 曲线图标经 CursorThemeManager::resolveCursor 应用主题，不是 Crosshair
-            setMouseCursor(getEqCursor());
+            setMouseCursor(eqCursor_);
             break;
     }
 
@@ -3794,11 +3800,15 @@ void PianoRollComponent::removeListener(Listener* listener) {
 }
 
 void PianoRollComponent::mouseMove(const juce::MouseEvent& e) {
+    // 全局手势：Cmd+Alt 缩放 → 仅设 cursor，early return（不交 ToolHandler）
     if (isOpenDyne() && e.mods.isCommandDown() && e.mods.isAltDown() && e.x >= pianoKeyWidth_) {
         setMouseCursor(juce::MouseCursor::CrosshairCursor);
-    } else if (!openDyneZoomPanActive_ && !interactionState_.isPanning) {
-        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
     }
+    // 缩放/平移事务中，cursor 已由 mouseDown/mouseDrag 设置
+    if (openDyneZoomPanActive_ || interactionState_.isPanning)
+        return;
+    // 普通情况：ToolHandler 是唯一 cursor 权威，一次事件最多一次 setMouseCursor
     toolHandler_->mouseMove(e);
 }
 
@@ -4154,7 +4164,8 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
 
 void PianoRollComponent::endOpenDyneZoomPan() {
     openDyneZoomPanActive_ = false;
-    setMouseCursor(juce::MouseCursor::NormalCursor);
+    // 恢复当前工具 cursor，不固定 Normal（Cmd+Alt zoom 优先于 Ctrl pan，zoom 结束应恢复工具态）
+    setCurrentTool(currentTool_);
 }
 
 void PianoRollComponent::saveOpenDyneZoomState() {

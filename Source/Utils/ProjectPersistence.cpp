@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 #include <juce_data_structures/juce_data_structures.h>
+#include <functional>
 
 namespace OpenTune {
 
@@ -122,6 +123,55 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
             + " (supported " + juce::String(kMinimumProjectFormatVersion)
             + "-" + juce::String(kCurrentProjectFormatVersion) + ")";
         return Result<ProjectSnapshot>::failure(Error::fromCode(ErrorCode::InvalidParameter, msg.toStdString()));
+    }
+
+    if (version >= 6)
+    {
+        std::function<bool(const juce::ValueTree&)> validateDynamicEq;
+        validateDynamicEq = [&](const juce::ValueTree& node) -> bool {
+            if (node.hasType("EqSettings"))
+            {
+                if (!node.hasProperty("active")
+                    || node.getNumChildren() <= 0
+                    || node.getNumChildren() > EqSettings::kMaxFilters)
+                    return false;
+
+                EqSettings eq;
+                eq.active = static_cast<int>(node.getProperty("active")) != 0;
+                eq.filters.clear();
+                for (int i = 0; i < node.getNumChildren(); ++i)
+                {
+                    const auto filterTree = node.getChild(i);
+                    if (!filterTree.hasType("Filter")
+                        || !filterTree.hasProperty("type")
+                        || !filterTree.hasProperty("frequencyHz")
+                        || !filterTree.hasProperty("gainDb")
+                        || !filterTree.hasProperty("q"))
+                        return false;
+
+                    const int type = static_cast<int>(filterTree.getProperty("type"));
+                    if (type < 0 || type > static_cast<int>(EqFilterType::HighCut))
+                        return false;
+                    eq.filters.push_back({
+                        static_cast<EqFilterType>(type),
+                        static_cast<float>(filterTree.getProperty("frequencyHz")),
+                        static_cast<float>(filterTree.getProperty("gainDb")),
+                        static_cast<float>(filterTree.getProperty("q"))
+                    });
+                }
+                return eq.isValid();
+            }
+
+            for (int i = 0; i < node.getNumChildren(); ++i)
+                if (!validateDynamicEq(node.getChild(i)))
+                    return false;
+            return true;
+        };
+
+        if (!validateDynamicEq(tree))
+            return Result<ProjectSnapshot>::failure(
+                Error::fromCode(ErrorCode::InvalidParameter,
+                    "Project contains invalid dynamic EqSettings"));
     }
 
     ProjectSnapshot snapshot;
@@ -474,19 +524,19 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
         nt.setProperty("outputGainDb", note.outputGainDb, nullptr);
         nt.setProperty("isVoiced", note.isVoiced ? 1 : 0, nullptr);
         
-        // v5: Per-note EQ settings — 9 个 scalar properties
+        // v6: Per-note EQ settings — active + Filter 子节点列表
         if (note.eq.has_value()) {
             const auto& eq = *note.eq;
             juce::ValueTree eqTree("EqSettings");
             eqTree.setProperty("active", eq.active ? 1 : 0, nullptr);
-            eqTree.setProperty("lowCutFrequencyHz", eq.lowCutFrequencyHz, nullptr);
-            eqTree.setProperty("lowShelfFrequencyHz", eq.lowShelfFrequencyHz, nullptr);
-            eqTree.setProperty("lowShelfGainDb", eq.lowShelfGainDb, nullptr);
-            eqTree.setProperty("peakFrequencyHz", eq.peakFrequencyHz, nullptr);
-            eqTree.setProperty("peakGainDb", eq.peakGainDb, nullptr);
-            eqTree.setProperty("highShelfFrequencyHz", eq.highShelfFrequencyHz, nullptr);
-            eqTree.setProperty("highShelfGainDb", eq.highShelfGainDb, nullptr);
-            eqTree.setProperty("highCutFrequencyHz", eq.highCutFrequencyHz, nullptr);
+            for (const auto& f : eq.filters) {
+                juce::ValueTree fTree("Filter");
+                fTree.setProperty("type", static_cast<int>(f.type), nullptr);
+                fTree.setProperty("frequencyHz", f.frequencyHz, nullptr);
+                fTree.setProperty("gainDb", f.gainDb, nullptr);
+                fTree.setProperty("q", f.q, nullptr);
+                eqTree.addChild(fTree, -1, nullptr);
+            }
             nt.addChild(eqTree, -1, nullptr);
         }
         
@@ -515,33 +565,74 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
         note.outputGainDb = child.getProperty("outputGainDb", 0.0f);
         note.isVoiced = static_cast<int>(child.getProperty("isVoiced", 1)) != 0;
         
-        // v5: Per-note EQ settings — 仅 formatVersion>=5 且 EqSettings 子节点完整含
-        // 9 个 scalar properties 时恢复；v3/v4 一律 nullopt，v5 Band 草稿（缺
-        // scalar schema）仍 nullopt
+        // v5: 旧 scalar 9 字段 → 迁移为 5 个固定过滤器
+        // v6: Filter 子节点列表
         auto eqTree = child.getChildWithName("EqSettings");
         if (formatVersion >= 5
             && eqTree.isValid()
-            && eqTree.hasProperty("active")
-            && eqTree.hasProperty("lowCutFrequencyHz")
-            && eqTree.hasProperty("lowShelfFrequencyHz")
-            && eqTree.hasProperty("lowShelfGainDb")
-            && eqTree.hasProperty("peakFrequencyHz")
-            && eqTree.hasProperty("peakGainDb")
-            && eqTree.hasProperty("highShelfFrequencyHz")
-            && eqTree.hasProperty("highShelfGainDb")
-            && eqTree.hasProperty("highCutFrequencyHz"))
+            && eqTree.hasProperty("active"))
         {
             EqSettings eq;
             eq.active = static_cast<int>(eqTree.getProperty("active", 0)) != 0;
-            eq.lowCutFrequencyHz = eqTree.getProperty("lowCutFrequencyHz", 0.0f);
-            eq.lowShelfFrequencyHz = eqTree.getProperty("lowShelfFrequencyHz", 0.0f);
-            eq.lowShelfGainDb = eqTree.getProperty("lowShelfGainDb", 0.0f);
-            eq.peakFrequencyHz = eqTree.getProperty("peakFrequencyHz", 0.0f);
-            eq.peakGainDb = eqTree.getProperty("peakGainDb", 0.0f);
-            eq.highShelfFrequencyHz = eqTree.getProperty("highShelfFrequencyHz", 0.0f);
-            eq.highShelfGainDb = eqTree.getProperty("highShelfGainDb", 0.0f);
-            eq.highCutFrequencyHz = eqTree.getProperty("highCutFrequencyHz", 0.0f);
-            note.eq = eq;
+            bool parsedEq = false;
+
+            if (formatVersion >= 6) {
+                // v6: 当前格式必须完整合法，不能静默截断或跳过损坏的 Filter。
+                eq.filters.clear();
+                const int numChildren = eqTree.getNumChildren();
+                parsedEq = numChildren > 0 && numChildren <= EqSettings::kMaxFilters;
+                for (int fi = 0; parsedEq && fi < numChildren; ++fi) {
+                    auto fTree = eqTree.getChild(fi);
+                    if (!fTree.hasType("Filter")) { parsedEq = false; break; }
+                    if (!fTree.hasProperty("type")
+                        || !fTree.hasProperty("frequencyHz")
+                        || !fTree.hasProperty("gainDb")
+                        || !fTree.hasProperty("q")) {
+                        parsedEq = false;
+                        break;
+                    }
+                    const int typeInt = static_cast<int>(fTree.getProperty("type", 0));
+                    if (typeInt < 0 || typeInt > static_cast<int>(EqFilterType::HighCut)) {
+                        parsedEq = false;
+                        break;
+                    }
+                    EqFilter f;
+                    f.type = static_cast<EqFilterType>(typeInt);
+                    f.frequencyHz = fTree.getProperty("frequencyHz", 1000.0f);
+                    f.gainDb = fTree.getProperty("gainDb", 0.0f);
+                    f.q = fTree.getProperty("q", 2.0f);
+                    eq.filters.push_back(f);
+                }
+            } else if (eqTree.hasProperty("lowCutFrequencyHz")
+                    && eqTree.hasProperty("lowShelfFrequencyHz")
+                    && eqTree.hasProperty("lowShelfGainDb")
+                    && eqTree.hasProperty("peakFrequencyHz")
+                    && eqTree.hasProperty("peakGainDb")
+                    && eqTree.hasProperty("highShelfFrequencyHz")
+                    && eqTree.hasProperty("highShelfGainDb")
+                    && eqTree.hasProperty("highCutFrequencyHz")) {
+                // v5 legacy: scalar 9 字段 → 5 个固定过滤器
+                const float lowCutFreq = eqTree.getProperty("lowCutFrequencyHz", 80.0f);
+                const float lowShelfFreq = eqTree.getProperty("lowShelfFrequencyHz", 500.0f);
+                const float lowShelfGain = eqTree.getProperty("lowShelfGainDb", 0.0f);
+                const float peakFreq = eqTree.getProperty("peakFrequencyHz", 3000.0f);
+                const float peakGain = eqTree.getProperty("peakGainDb", 0.0f);
+                const float highShelfFreq = eqTree.getProperty("highShelfFrequencyHz", 8000.0f);
+                const float highShelfGain = eqTree.getProperty("highShelfGainDb", 0.0f);
+                const float highCutFreq = eqTree.getProperty("highCutFrequencyHz", 12000.0f);
+
+                eq.filters = {
+                    { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f },
+                    { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f },
+                    { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f },
+                    { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f },
+                    { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f }
+                };
+                parsedEq = true;
+            }
+
+            if (parsedEq && eq.isValid())
+                note.eq = eq;
         }
         
         notes.push_back(note);

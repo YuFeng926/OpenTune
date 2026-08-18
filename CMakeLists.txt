@@ -16,7 +16,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment ta
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.7.1 LANGUAGES CXX C)
+project(OpenTune VERSION 1.7.2 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -595,7 +595,6 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRoll/EqBandInteraction.cpp
         Source/Standalone/UI/PianoRoll/EqPopupComponent.cpp
         Source/Standalone/UI/PianoRoll/EqPopupComponent.h
-        Source/Standalone/UI/PianoRoll/EqSpectrumAnimation.h
 
         Source/Standalone/UI/ViewMapper.h
         Source/Standalone/UI/MenuBarComponent.cpp

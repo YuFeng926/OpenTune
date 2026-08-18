@@ -30,7 +30,7 @@ namespace OpenTune {
 namespace {
 
 constexpr int kContentPayloadArchiveMagic = 0x4F544143;
-constexpr int kContentPayloadArchiveVersion = 5; // v5: Note 子元素携带 EqSettings 契约（9 scalar attributes）
+constexpr int kContentPayloadArchiveVersion = 6; // v6: dynamic EQ filter chain (v5 scalar 9-field migrated to Filter sub-nodes)
 constexpr int kContentPayloadArchiveVersionMin = 3;
 constexpr int kMaxContentPayloadRecords = 4096;
 
@@ -132,18 +132,18 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         n->setAttribute("outputGainDb", note.outputGainDb);
         n->setAttribute("isVoiced", note.isVoiced ? 1 : 0);
         
-        // v5: Per-note EQ settings — 契约 9 个 scalar attributes（active + 8 float 字段）
+        // v6: Per-note EQ settings — active + Filter 子节点列表
         if (note.eq.has_value()) {
             auto* eqEl = new juce::XmlElement("EqSettings");
             eqEl->setAttribute("active", note.eq->active ? 1 : 0);
-            eqEl->setAttribute("lowCutFrequencyHz", note.eq->lowCutFrequencyHz);
-            eqEl->setAttribute("lowShelfFrequencyHz", note.eq->lowShelfFrequencyHz);
-            eqEl->setAttribute("lowShelfGainDb", note.eq->lowShelfGainDb);
-            eqEl->setAttribute("peakFrequencyHz", note.eq->peakFrequencyHz);
-            eqEl->setAttribute("peakGainDb", note.eq->peakGainDb);
-            eqEl->setAttribute("highShelfFrequencyHz", note.eq->highShelfFrequencyHz);
-            eqEl->setAttribute("highShelfGainDb", note.eq->highShelfGainDb);
-            eqEl->setAttribute("highCutFrequencyHz", note.eq->highCutFrequencyHz);
+            for (const auto& f : note.eq->filters) {
+                auto* fEl = new juce::XmlElement("Filter");
+                fEl->setAttribute("type", static_cast<int>(f.type));
+                fEl->setAttribute("frequencyHz", f.frequencyHz);
+                fEl->setAttribute("gainDb", f.gainDb);
+                fEl->setAttribute("q", f.q);
+                eqEl->addChildElement(fEl);
+            }
             n->addChildElement(eqEl);
         }
         
@@ -409,36 +409,98 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 return std::nullopt;
             note.isVoiced = n->getIntAttribute("isVoiced") != 0;
             
-            // v5 起 Note.eq 契约：EqSettings 子元素 9 字段 schema 完整（active + 8 个
-            // float）即恢复，与 Project/Capture 载体同一语义，不做额外 finiteness
-            // 防御；v4 及以下一律不恢复（保持 nullopt），历史错误草稿（Band 子节点
-            // 等）直接丢弃，不兼容。
+            // v5 起 Note.eq 契约：EqSettings 子元素
+            // v5: scalar 9 字段 → 迁移为 5 个固定过滤器
+            // v6: Filter 子节点列表
             if (archiveVersion >= 5)
             {
                 if (auto* eqEl = n->getChildByName("EqSettings"))
                 {
-                    if (eqEl->hasAttribute("active")
-                        && eqEl->hasAttribute("lowCutFrequencyHz")
-                        && eqEl->hasAttribute("lowShelfFrequencyHz")
-                        && eqEl->hasAttribute("lowShelfGainDb")
-                        && eqEl->hasAttribute("peakFrequencyHz")
-                        && eqEl->hasAttribute("peakGainDb")
-                        && eqEl->hasAttribute("highShelfFrequencyHz")
-                        && eqEl->hasAttribute("highShelfGainDb")
-                        && eqEl->hasAttribute("highCutFrequencyHz"))
+                    if (archiveVersion >= 6 && !eqEl->hasAttribute("active"))
+                        return std::nullopt;
+                    if (eqEl->hasAttribute("active"))
                     {
                         EqSettings eq;
                         eq.active = eqEl->getIntAttribute("active") != 0;
-                        eq.lowCutFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("lowCutFrequencyHz"));
-                        eq.lowShelfFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("lowShelfFrequencyHz"));
-                        eq.lowShelfGainDb = static_cast<float>(eqEl->getDoubleAttribute("lowShelfGainDb"));
-                        eq.peakFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("peakFrequencyHz"));
-                        eq.peakGainDb = static_cast<float>(eqEl->getDoubleAttribute("peakGainDb"));
-                        eq.highShelfFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("highShelfFrequencyHz"));
-                        eq.highShelfGainDb = static_cast<float>(eqEl->getDoubleAttribute("highShelfGainDb"));
-                        eq.highCutFrequencyHz = static_cast<float>(eqEl->getDoubleAttribute("highCutFrequencyHz"));
+                        bool parsedEq = false;
 
-                        note.eq = eq;
+                        if (archiveVersion >= 6) {
+                            // v6: 当前格式必须完整合法，不能静默截断或跳过损坏的 Filter。
+                            eq.filters.clear();
+                            int filterCount = 0;
+                            for (auto* ignored : eqEl->getChildWithTagNameIterator("Filter")) {
+                                juce::ignoreUnused(ignored);
+                                ++filterCount;
+                            }
+                            parsedEq = filterCount > 0
+                                    && filterCount <= EqSettings::kMaxFilters
+                                    && filterCount == eqEl->getNumChildElements();
+                            for (auto* fEl : eqEl->getChildWithTagNameIterator("Filter"))
+                            {
+                                if (!parsedEq)
+                                    break;
+                                if (!fEl->hasAttribute("type")
+                                    || !fEl->hasAttribute("frequencyHz")
+                                    || !fEl->hasAttribute("gainDb")
+                                    || !fEl->hasAttribute("q")) {
+                                    parsedEq = false;
+                                    break;
+                                }
+                                const int typeInt = fEl->getIntAttribute("type", 0);
+                                if (typeInt < 0 || typeInt > static_cast<int>(EqFilterType::HighCut)) {
+                                    parsedEq = false;
+                                    break;
+                                }
+                                EqFilter f;
+                                f.type = static_cast<EqFilterType>(typeInt);
+                                f.frequencyHz = static_cast<float>(
+                                    fEl->getDoubleAttribute("frequencyHz", 1000.0));
+                                f.gainDb = static_cast<float>(
+                                    fEl->getDoubleAttribute("gainDb", 0.0));
+                                f.q = static_cast<float>(
+                                    fEl->getDoubleAttribute("q", 2.0));
+                                eq.filters.push_back(f);
+                            }
+                        } else if (eqEl->hasAttribute("lowCutFrequencyHz")
+                                && eqEl->hasAttribute("lowShelfFrequencyHz")
+                                && eqEl->hasAttribute("lowShelfGainDb")
+                                && eqEl->hasAttribute("peakFrequencyHz")
+                                && eqEl->hasAttribute("peakGainDb")
+                                && eqEl->hasAttribute("highShelfFrequencyHz")
+                                && eqEl->hasAttribute("highShelfGainDb")
+                                && eqEl->hasAttribute("highCutFrequencyHz")) {
+                            // v5 legacy: scalar 9 字段 → 5 个固定过滤器
+                            const float lowCutFreq = static_cast<float>(
+                                eqEl->getDoubleAttribute("lowCutFrequencyHz", 80.0));
+                            const float lowShelfFreq = static_cast<float>(
+                                eqEl->getDoubleAttribute("lowShelfFrequencyHz", 500.0));
+                            const float lowShelfGain = static_cast<float>(
+                                eqEl->getDoubleAttribute("lowShelfGainDb", 0.0));
+                            const float peakFreq = static_cast<float>(
+                                eqEl->getDoubleAttribute("peakFrequencyHz", 3000.0));
+                            const float peakGain = static_cast<float>(
+                                eqEl->getDoubleAttribute("peakGainDb", 0.0));
+                            const float highShelfFreq = static_cast<float>(
+                                eqEl->getDoubleAttribute("highShelfFrequencyHz", 8000.0));
+                            const float highShelfGain = static_cast<float>(
+                                eqEl->getDoubleAttribute("highShelfGainDb", 0.0));
+                            const float highCutFreq = static_cast<float>(
+                                eqEl->getDoubleAttribute("highCutFrequencyHz", 12000.0));
+
+                            eq.filters = {
+                                { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f },
+                                { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f },
+                                { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f },
+                                { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f },
+                                { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f }
+                            };
+                            parsedEq = true;
+                        }
+
+                        if (archiveVersion >= 6 && (!parsedEq || !eq.isValid()))
+                            return std::nullopt;
+                        if (parsedEq && eq.isValid())
+                            note.eq = eq;
                     }
                 }
             }

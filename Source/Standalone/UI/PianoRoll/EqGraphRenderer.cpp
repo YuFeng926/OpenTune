@@ -1,15 +1,8 @@
 /**
- * EQ Graph Renderer — 严格复刻 SRC 视觉数学的曲线渲染引擎（实现）
+ * EQ Graph Renderer — 动态滤波器列表曲线渲染引擎（实现）
  *
  * 视觉数学全部从 SRC (EQGraphWidget.cpp) 迁移，严禁调用 NoteEqProcessor/DSP。
- * 数学公式参考：
- *   - filterResponseDb: SRC line 6591-6615
- *   - logGaussian: SRC line 364-369
- *   - adaptiveLogResponseSamples: SRC line 6140-6176
- *   - forEachMonotoneCubicSegment (Fritsch-Carlson): SRC line 799-874
- *   - bandColor: SRC line 6199-6213
- *   - Theme constants: SRC line 393-403
- *   - Anchor visuals: SRC radius/halo/stroke
+ * 所有循环按 settings_.filters.size() 动态迭代，不假设固定 5 段。
  */
 
 #include "EqGraphRenderer.h"
@@ -22,7 +15,7 @@
 namespace OpenTune {
 
 // ============================================================================
-// 颜色常量（源自 Aurora 主题）
+// 颜色常量
 // ============================================================================
 
 juce::Colour EqGraphRenderer::backgroundColor() { return juce::Colour(Aurora::Colors::PianoRollBg); }
@@ -32,16 +25,20 @@ juce::Colour EqGraphRenderer::combinedCurveColor() { return juce::Colour::fromRG
 juce::Colour EqGraphRenderer::hudBgColor() { return juce::Colour::fromRGBA(12, 17, 24, 224); }
 juce::Colour EqGraphRenderer::hudTextColor() { return juce::Colour::fromRGB(230, 236, 243); }
 
-juce::Colour EqGraphRenderer::bandColor(int bandIndex)
+// 按 EqFilterType 映射 5 色调色板
+static const std::array<juce::Colour, 5> kTypePalette = {
+    juce::Colour::fromRGB(255, 190, 66),   // LowCut  - 金橙
+    juce::Colour::fromRGB(59, 213, 255),   // LowShelf - 青
+    juce::Colour::fromRGB(157, 116, 255),  // Peak    - 紫
+    juce::Colour::fromRGB(255, 111, 184),  // HighShelf - 粉
+    juce::Colour::fromRGB(83, 232, 158),   // HighCut - 绿
+};
+
+juce::Colour EqGraphRenderer::bandColor(int filterIndex) const
 {
-    static const std::array<juce::Colour, 5> palette = {
-        juce::Colour::fromRGB(255, 190, 66),   // 0 LowCut  - 金橙
-        juce::Colour::fromRGB(59, 213, 255),   // 1 LowShelf - 青
-        juce::Colour::fromRGB(157, 116, 255),  // 2 Peak    - 紫
-        juce::Colour::fromRGB(255, 111, 184),  // 3 HighShelf - 粉
-        juce::Colour::fromRGB(83, 232, 158),   // 4 HighCut - 绿
-    };
-    return palette[static_cast<size_t>(bandIndex)];
+    if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
+        return juce::Colours::grey;
+    return kTypePalette[static_cast<size_t>(settings_.filters[filterIndex].type)];
 }
 
 // ============================================================================
@@ -81,7 +78,7 @@ double EqGraphRenderer::yToGain(float y) const
 }
 
 // ============================================================================
-// 视觉响应计算 — 严格复刻 SRC filterResponseDb (EQGraphWidget.cpp:6591-6615)
+// 视觉响应计算 — 使用动态 filter 的 type/frequency/gain/q
 // ============================================================================
 
 double EqGraphRenderer::logGaussian(double frequencyHz, double centerHz, double widthOctaves)
@@ -96,28 +93,33 @@ double EqGraphRenderer::normToFrequency(double norm) const
     return previewMinFreq_ * std::pow(previewMaxFreq_ / previewMinFreq_, norm);
 }
 
-double EqGraphRenderer::filterResponseDb(int bandIndex, double frequencyHz) const
+double EqGraphRenderer::filterResponseDb(int filterIndex, double frequencyHz) const
 {
-    switch (bandIndex)
+    if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
+        return 0.0;
+
+    const auto& f = settings_.filters[filterIndex];
+
+    switch (f.type)
     {
-    case 0: { // LowCut — SRC line 6609-6612
-        const double ratio = settings_.lowCutFrequencyHz / frequencyHz;
+    case EqFilterType::LowCut: {
+        const double ratio = static_cast<double>(f.frequencyHz) / frequencyHz;
         return -10.0 * std::log10(1.0 + std::pow(ratio, 2.0 * kFixedShelfCutRatio));
     }
-    case 1: { // LowShelf — SRC line 6597-6599
-        const double t = 1.0 / (1.0 + std::pow(frequencyHz / settings_.lowShelfFrequencyHz, kFixedShelfCutRatio));
-        return settings_.lowShelfGainDb * t;
+    case EqFilterType::LowShelf: {
+        const double t = 1.0 / (1.0 + std::pow(frequencyHz / static_cast<double>(f.frequencyHz), kFixedShelfCutRatio));
+        return static_cast<double>(f.gainDb) * t;
     }
-    case 2: { // Peak — SRC line 6595-6596
-        const double peakWidthOctaves = 0.42 / std::sqrt(kPeakQ);
-        return settings_.peakGainDb * logGaussian(frequencyHz, settings_.peakFrequencyHz, peakWidthOctaves);
+    case EqFilterType::Peak: {
+        const double peakWidthOctaves = 0.42 / std::sqrt(std::max(0.25, static_cast<double>(f.q)));
+        return static_cast<double>(f.gainDb) * logGaussian(frequencyHz, f.frequencyHz, peakWidthOctaves);
     }
-    case 3: { // HighShelf — SRC line 6601-6603
-        const double t = 1.0 / (1.0 + std::pow(settings_.highShelfFrequencyHz / frequencyHz, kFixedShelfCutRatio));
-        return settings_.highShelfGainDb * t;
+    case EqFilterType::HighShelf: {
+        const double t = 1.0 / (1.0 + std::pow(static_cast<double>(f.frequencyHz) / frequencyHz, kFixedShelfCutRatio));
+        return static_cast<double>(f.gainDb) * t;
     }
-    case 4: { // HighCut — SRC line 6605-6608
-        const double ratio = frequencyHz / settings_.highCutFrequencyHz;
+    case EqFilterType::HighCut: {
+        const double ratio = frequencyHz / static_cast<double>(f.frequencyHz);
         return -10.0 * std::log10(1.0 + std::pow(ratio, 2.0 * kFixedShelfCutRatio));
     }
     }
@@ -127,14 +129,13 @@ double EqGraphRenderer::filterResponseDb(int bandIndex, double frequencyHz) cons
 double EqGraphRenderer::combinedResponseDb(double frequencyHz) const
 {
     double total = 0.0;
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < static_cast<int>(settings_.filters.size()); ++i)
         total += filterResponseDb(i, frequencyHz);
-    // 返回真实求和，不固定 clamp ±12；路径生成按 gainRangeDb_ 裁剪
     return total;
 }
 
 // ============================================================================
-// 自适应对数响应采样 — 严格复刻 SRC adaptiveLogResponseSamples (line 6140-6176)
+// 自适应对数响应采样
 // ============================================================================
 
 std::vector<EqGraphRenderer::ResponseSample> EqGraphRenderer::adaptiveLogResponseSamples(
@@ -176,8 +177,7 @@ std::vector<EqGraphRenderer::ResponseSample> EqGraphRenderer::adaptiveLogRespons
 }
 
 // ============================================================================
-// Fritsch-Carlson 单调三次插值 — 严格复刻 SRC forEachMonotoneCubicSegment (line 799-874)
-// gainRangeDb 从外部传入，用于 Y 映射和路径裁剪
+// Fritsch-Carlson 单调三次插值
 // ============================================================================
 
 void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
@@ -201,7 +201,6 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
         return gainDb >= -gainRangeDb && gainDb <= gainRangeDb;
     };
 
-    // SRC visibleResponseSegmentsFromSamples: 在边界处线性插值
     auto edgePoint = [&](const ResponseSample& a, const ResponseSample& b, double edgeDb) -> juce::Point<float> {
         const double dg = b.gainDb - a.gainDb;
         const double t = std::abs(dg) > 1e-9 ? (edgeDb - a.gainDb) / dg : 0.0;
@@ -209,7 +208,6 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
         return toPixel(edgeNorm, edgeDb);
     };
 
-    // ── Step 1: 按增益范围分割可见 segment ──
     struct Segment { std::vector<juce::Point<float>> points; };
     std::vector<Segment> segments;
     Segment current;
@@ -234,7 +232,6 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
 
         if (prevInside && !currInside)
         {
-            // inside → outside: 插值边界点，结束当前 segment
             const double edgeDb = curr.gainDb < -gainRangeDb ? -gainRangeDb : gainRangeDb;
             current.points.push_back(edgePoint(prev, curr, edgeDb));
             if (!current.points.empty())
@@ -243,7 +240,6 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
         }
         else if (!prevInside && currInside)
         {
-            // outside → inside: 从边界插值点开始新 segment
             const double edgeDb = prev.gainDb < -gainRangeDb ? -gainRangeDb : gainRangeDb;
             current.points.push_back(edgePoint(prev, curr, edgeDb));
             current.points.push_back(toPixel(curr.norm, curr.gainDb));
@@ -252,7 +248,6 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
         {
             current.points.push_back(toPixel(curr.norm, curr.gainDb));
         }
-        // both outside: 跳过
 
         prev = curr;
         prevInside = currInside;
@@ -260,7 +255,6 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
     if (!current.points.empty())
         segments.push_back(std::move(current));
 
-    // ── Step 2: 每个 segment 独立执行 Fritsch-Carlson 单调三次插值 ──
     for (const auto& seg : segments)
     {
         if (seg.points.size() == 1)
@@ -317,7 +311,6 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
             }
         }
 
-        // 生成贝塞尔路径，每个 segment 独立 startNewSubPath
         path.startNewSubPath(seg.points[0]);
         for (size_t i = 0; i + 1 < n; ++i)
         {
@@ -334,7 +327,7 @@ void EqGraphRenderer::monotonicCubicPath(juce::Path& path,
 }
 
 // ============================================================================
-// 曲线路径生成（返回未 clamp 响应，由 monotonicCubicPath 按增益范围分段裁剪）
+// 曲线路径生成
 // ============================================================================
 
 juce::Path EqGraphRenderer::buildCombinedPath() const
@@ -349,10 +342,10 @@ juce::Path EqGraphRenderer::buildCombinedPath() const
     return path;
 }
 
-juce::Path EqGraphRenderer::buildSingleBandPath(int bandIndex) const
+juce::Path EqGraphRenderer::buildSingleBandPath(int filterIndex) const
 {
-    const auto responseDb = [this, bandIndex](double freq) -> double {
-        return filterResponseDb(bandIndex, freq);
+    const auto responseDb = [this, filterIndex](double freq) -> double {
+        return filterResponseDb(filterIndex, freq);
     };
     const auto samples = adaptiveLogResponseSamples(responseDb);
 
@@ -361,16 +354,19 @@ juce::Path EqGraphRenderer::buildSingleBandPath(int bandIndex) const
     return path;
 }
 
-juce::Path EqGraphRenderer::buildBandInfluencePath(int bandIndex) const
+juce::Path EqGraphRenderer::buildBandInfluencePath(int filterIndex) const
 {
-    const auto responseDb = [this, bandIndex](double freq) -> double {
-        return std::clamp(filterResponseDb(bandIndex, freq), -gainRangeDb_, gainRangeDb_);
+    if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
+        return {};
+
+    const auto& f = settings_.filters[filterIndex];
+    const auto responseDb = [this, filterIndex](double freq) -> double {
+        return std::clamp(filterResponseDb(filterIndex, freq), -gainRangeDb_, gainRangeDb_);
     };
     const auto samples = adaptiveLogResponseSamples(responseDb);
     if (samples.size() < 2)
         return {};
 
-    // 从采样点构建曲线折线路径
     juce::Path curve;
     curve.startNewSubPath(
         static_cast<float>(graphBounds_.getX() + graphBounds_.getWidth() * samples.front().norm),
@@ -380,10 +376,9 @@ juce::Path EqGraphRenderer::buildBandInfluencePath(int bandIndex) const
             static_cast<float>(graphBounds_.getX() + graphBounds_.getWidth() * samples[i].norm),
             gainToY(samples[i].gainDb));
 
-    // 闭合到 0dB 基线（SRC makeBandInfluencePath 逻辑）
     const float neutralY = gainToY(0.0);
-    const bool isHighCut = (bandIndex == 4);
-    const bool isLowCut  = (bandIndex == 0);
+    const bool isHighCut = (f.type == EqFilterType::HighCut);
+    const bool isLowCut  = (f.type == EqFilterType::LowCut);
 
     if (isHighCut)
     {
@@ -406,17 +401,12 @@ juce::Path EqGraphRenderer::buildBandInfluencePath(int bandIndex) const
 }
 
 // ============================================================================
-// 背景/网格/轴标签
+// 频谱背景动画
 // ============================================================================
 
-void EqGraphRenderer::drawBackground(juce::Graphics& g) const
-{
-    g.setColour(backgroundColor());
-    g.fillRect(graphBounds_);
-}
-
 void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
-                                              const std::array<float, 128>& spectrum) const
+                                              const std::array<float, 128>& spectrum,
+                                              const std::array<float, 128>& peaks) const
 {
     const float gx = graphBounds_.getX();
     const float gy = graphBounds_.getY();
@@ -424,19 +414,39 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
     const float gh = graphBounds_.getHeight();
     const int numBins = static_cast<int>(spectrum.size());
 
-    // 频谱填充多边形 — 参考 DESIGN_SPEC.md Pass 1
-    juce::Path fillPath;
-    fillPath.startNewSubPath(gx, gy + gh);
+    std::array<juce::Point<float>, 128> linePoints{};
+    std::array<juce::Point<float>, 128> peakPoints{};
     for (int i = 0; i < numBins; ++i)
     {
         const float x = gx + (static_cast<float>(i) / static_cast<float>(numBins - 1)) * gw;
-        const float h = spectrum[static_cast<size_t>(i)] * gh * 0.7f;
-        fillPath.lineTo(x, gy + gh - h);
+        const float h = std::clamp(spectrum[static_cast<size_t>(i)], 0.0f, 1.0f) * gh * 0.7f;
+        const float peak = std::clamp(peaks[static_cast<size_t>(i)], 0.0f, 1.0f);
+        spectrumPeakTrace_[static_cast<size_t>(i)] = std::max(
+            peak, std::max(0.0f, spectrumPeakTrace_[static_cast<size_t>(i)] - 0.012f));
+        linePoints[static_cast<size_t>(i)] = { x, gy + gh - h };
+        peakPoints[static_cast<size_t>(i)] = {
+            x, gy + gh - spectrumPeakTrace_[static_cast<size_t>(i)] * gh * 0.7f };
     }
-    fillPath.lineTo(gx + gw, gy + gh);
-    fillPath.closeSubPath();
 
-    // 渐变填充 — 青绿色半透明
+    const auto makeSmoothPath = [](const auto& points, float baseline) {
+        juce::Path path;
+        path.startNewSubPath(points.front());
+        for (size_t i = 1; i < points.size(); ++i)
+        {
+            const auto midpoint = juce::Point<float>(
+                (points[i - 1].x + points[i].x) * 0.5f,
+                (points[i - 1].y + points[i].y) * 0.5f);
+            path.quadraticTo(points[i - 1], midpoint);
+        }
+        path.lineTo(points.back());
+        path.lineTo(points.back().x, baseline);
+        path.lineTo(points.front().x, baseline);
+        path.closeSubPath();
+        return path;
+    };
+
+    auto fillPath = makeSmoothPath(linePoints, gy + gh);
+
     {
         juce::Graphics::ScopedSaveState saved(g);
         g.reduceClipRegion(graphBounds_.toNearestInt());
@@ -448,25 +458,42 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
         g.fillPath(fillPath);
     }
 
-    // 频谱轮廓线 — 白色半透明
-    juce::Path linePath;
-    linePath.startNewSubPath(gx, gy + gh);
-    for (int i = 0; i < numBins; ++i)
-    {
-        const float x = gx + (static_cast<float>(i) / static_cast<float>(numBins - 1)) * gw;
-        const float h = spectrum[static_cast<size_t>(i)] * gh * 0.7f;
-        linePath.lineTo(x, gy + gh - h);
-    }
-    g.setColour(juce::Colours::white.withAlpha(0.08f));
-    g.strokePath(linePath, juce::PathStrokeType(1.0f,
+    const auto makeLinePath = [](const auto& points) {
+        juce::Path path;
+        path.startNewSubPath(points.front());
+        for (size_t i = 1; i < points.size(); ++i)
+        {
+            const auto midpoint = juce::Point<float>(
+                (points[i - 1].x + points[i].x) * 0.5f,
+                (points[i - 1].y + points[i].y) * 0.5f);
+            path.quadraticTo(points[i - 1], midpoint);
+        }
+        path.lineTo(points.back());
+        return path;
+    };
+
+    const auto peakPath = makeLinePath(peakPoints);
+    g.setColour(juce::Colour::fromRGBA(130, 245, 222, 0x22));
+    g.strokePath(peakPath, juce::PathStrokeType(4.8f,
+        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour(juce::Colour::fromRGBA(180, 255, 236, 0x58));
+    g.strokePath(peakPath, juce::PathStrokeType(1.0f,
+        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    const auto linePath = makeLinePath(linePoints);
+    g.setColour(juce::Colours::white.withAlpha(0.14f));
+    g.strokePath(linePath, juce::PathStrokeType(1.25f,
         juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
+
+// ============================================================================
+// 网格 / 轴标签
+// ============================================================================
 
 void EqGraphRenderer::drawGrid(juce::Graphics& g) const
 {
     g.setColour(gridMajorColor());
 
-    // 垂直网格线（频率）
     static const double freqs[] = { 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
     for (double freq : freqs)
     {
@@ -475,7 +502,6 @@ void EqGraphRenderer::drawGrid(juce::Graphics& g) const
             g.drawVerticalLine(static_cast<int>(x), graphBounds_.getY(), graphBounds_.getBottom());
     }
 
-    // 水平网格线（增益）— 按 gainRangeDb_ 生成
     const double stepDb = gainRangeDb_ <= 12.0 ? 3.0 : 6.0;
     const int steps = static_cast<int>(std::round(gainRangeDb_ / stepDb));
     for (int i = -steps; i <= steps; ++i)
@@ -486,7 +512,6 @@ void EqGraphRenderer::drawGrid(juce::Graphics& g) const
             g.drawHorizontalLine(static_cast<int>(y), graphBounds_.getX(), graphBounds_.getRight());
     }
 
-    // 0 dB 基准线（稍亮）
     g.setColour(axisLabelColor().withAlpha(0.6f));
     const float zeroY = gainToY(0.0);
     g.drawHorizontalLine(static_cast<int>(zeroY), graphBounds_.getX(), graphBounds_.getRight());
@@ -503,10 +528,9 @@ void EqGraphRenderer::drawAxisLabels(juce::Graphics& g) const
     const float gh = graphBounds_.getHeight();
     const float labelH = 12.0f;
     const float labelW = 24.0f;
-    const float padBottom = 2.0f;   // 内侧底部间距
-    const float padRight = 30.0f;   // 内侧右侧间距 — 避开右上角 Minimize 按钮
+    const float padBottom = 2.0f;
+    const float padRight = 30.0f;
 
-    // ── 底部频率标签（图内 overlay，紧贴底边内侧） ──
     static const struct { double freq; const char* label; } freqLabels[] = {
         { 20, "20" }, { 50, "50" }, { 100, "100" }, { 200, "200" },
         { 500, "500" }, { 1000, "1k" }, { 2000, "2k" }, { 5000, "5k" },
@@ -518,7 +542,6 @@ void EqGraphRenderer::drawAxisLabels(juce::Graphics& g) const
         if (x >= gx && x <= gx + gw)
         {
             float labelX = x - labelW * 0.5f;
-            // 夹紧：不超出 graphBounds 左右边界
             labelX = juce::jmax(gx, juce::jmin(labelX, gx + gw - labelW));
             const float labelY = gy + gh - labelH - padBottom;
             g.drawText(fl.label, static_cast<int>(labelX), static_cast<int>(labelY),
@@ -527,7 +550,6 @@ void EqGraphRenderer::drawAxisLabels(juce::Graphics& g) const
         }
     }
 
-    // ── 右侧增益标签（图内 overlay，紧贴右边内侧） ──
     const float gainLabelW = 30.0f;
     const double stepDb = gainRangeDb_ <= 12.0 ? 3.0 : 6.0;
     const int steps = static_cast<int>(std::round(gainRangeDb_ / stepDb));
@@ -548,34 +570,23 @@ void EqGraphRenderer::drawAxisLabels(juce::Graphics& g) const
 }
 
 // ============================================================================
-// 锚点绘制 — SRC 视觉：radius 4.75/hover 4.9/active 5.2, halo 5.6/7.1
-// lighter 描边, 序号偏移双层描边
+// 锚点绘制 — 使用动态 filter 数据
 // ============================================================================
 
-juce::Point<float> EqGraphRenderer::anchorPosition(int bandIndex) const
+juce::Point<float> EqGraphRenderer::anchorPosition(int filterIndex) const
 {
-    double freq = 0.0;
-    switch (bandIndex)
-    {
-    case 0: freq = settings_.lowCutFrequencyHz; break;
-    case 1: freq = settings_.lowShelfFrequencyHz; break;
-    case 2: freq = settings_.peakFrequencyHz; break;
-    case 3: freq = settings_.highShelfFrequencyHz; break;
-    case 4: freq = settings_.highCutFrequencyHz; break;
-    }
-    // SRC nodeGainDb: Cut uses filterResponseDb at cutoff, Shelf/Peak uses gainDb directly
+    if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
+        return {};
+
+    const auto& f = settings_.filters[filterIndex];
+    const double freq = static_cast<double>(f.frequencyHz);
+
     double gain = 0.0;
-    if (bandIndex == 0 || bandIndex == 4)  // LowCut / HighCut
-        gain = filterResponseDb(bandIndex, freq);
-    else  // LowShelf / Peak / HighShelf
-    {
-        switch (bandIndex)
-        {
-        case 1: gain = settings_.lowShelfGainDb; break;
-        case 2: gain = settings_.peakGainDb; break;
-        case 3: gain = settings_.highShelfGainDb; break;
-        }
-    }
+    if (f.type == EqFilterType::LowCut || f.type == EqFilterType::HighCut)
+        gain = filterResponseDb(filterIndex, freq);
+    else
+        gain = static_cast<double>(f.gainDb);
+
     return { freqToX(freq), gainToY(gain) };
 }
 
@@ -583,8 +594,9 @@ int EqGraphRenderer::hitTestAnchor(juce::Point<float> pos, float threshold) cons
 {
     int closestBand = -1;
     float closestDist = threshold;
+    const int n = static_cast<int>(settings_.filters.size());
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < n; ++i)
     {
         const auto anchorPos = anchorPosition(i);
         const float dist = pos.getDistanceFrom(anchorPos);
@@ -597,10 +609,10 @@ int EqGraphRenderer::hitTestAnchor(juce::Point<float> pos, float threshold) cons
     return closestBand;
 }
 
-float EqGraphRenderer::curveYAtX(int bandIndex, float x) const
+float EqGraphRenderer::curveYAtX(int filterIndex, float x) const
 {
     const double freq = xToFreq(x);
-    const double gainDb = filterResponseDb(bandIndex, freq);
+    const double gainDb = filterResponseDb(filterIndex, freq);
     return gainToY(gainDb);
 }
 
@@ -611,8 +623,9 @@ int EqGraphRenderer::hitTestCurve(juce::Point<float> pos, float threshold) const
 
     int closestBand = -1;
     float closestDist = threshold;
+    const int n = static_cast<int>(settings_.filters.size());
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < n; ++i)
     {
         const float curveY = curveYAtX(i, pos.x);
         const float dist = std::abs(pos.y - curveY);
@@ -627,41 +640,34 @@ int EqGraphRenderer::hitTestCurve(juce::Point<float> pos, float threshold) const
 
 void EqGraphRenderer::drawAnchors(juce::Graphics& g, int hoveredBand, bool showNumbers) const
 {
-    for (int i = 0; i < 5; ++i)
+    const int n = static_cast<int>(settings_.filters.size());
+
+    for (int i = 0; i < n; ++i)
     {
         const auto pos = anchorPosition(i);
-        // 锚点始终可见/可命中，不因 ±6 视图消失 — 不裁剪到 graphBounds_
-
         const bool isHovered = (i == hoveredBand);
         const auto color = bandColor(i);
 
-        // SRC 锚点半径：normal 4.75, hover 4.9
         const float radius = isHovered ? kAnchorHoverRadius : kAnchorNormalRadius;
-        // SRC 光晕：normal 5.6, hover 7.1
         const float haloRadius = isHovered ? kHaloHoverRadius : kHaloNormalRadius;
 
-        // 径向光晕（halo）
         g.setColour(color.withAlpha(isHovered ? 0.30f : 0.15f));
         g.fillEllipse(pos.x - haloRadius, pos.y - haloRadius,
                       haloRadius * 2.0f, haloRadius * 2.0f);
 
-        // 锚点填充圆
         g.setColour(color);
         g.fillEllipse(pos.x - radius, pos.y - radius,
                       radius * 2.0f, radius * 2.0f);
 
-        // lighter 描边（SRC 风格，白色高光）
         g.setColour(juce::Colours::white.withAlpha(isHovered ? 0.85f : 0.60f));
         g.drawEllipse(pos.x - radius, pos.y - radius,
                       radius * 2.0f, radius * 2.0f, 1.25f);
 
-        // 序号双层描边（黑色外层 + 白色内层，偏移避免遮挡锚点中心）
         if (showNumbers)
         {
             const float numOffsetX = radius + 5.0f;
             const float numOffsetY = -radius - 2.0f;
 
-            // 黑色外层
             g.setColour(juce::Colours::black.withAlpha(0.65f));
             g.setFont(juce::FontOptions(8.0f));
             g.drawText(juce::String(i + 1),
@@ -672,7 +678,6 @@ void EqGraphRenderer::drawAnchors(juce::Graphics& g, int hoveredBand, bool showN
                        juce::Rectangle<float>(pos.x + numOffsetX + 0.5f, pos.y + numOffsetY + 0.5f,
                                               10.0f, 10.0f),
                        juce::Justification::centred, false);
-            // 白色内层
             g.setColour(juce::Colours::white.withAlpha(0.85f));
             g.drawText(juce::String(i + 1),
                        juce::Rectangle<float>(pos.x + numOffsetX, pos.y + numOffsetY,
@@ -683,7 +688,7 @@ void EqGraphRenderer::drawAnchors(juce::Graphics& g, int hoveredBand, bool showN
 }
 
 // ============================================================================
-// 十字引导线与 HUD（SRC 虚线节奏风格）
+// 十字引导线与 HUD
 // ============================================================================
 
 void EqGraphRenderer::drawCrosshairAndHud(juce::Graphics& g, juce::Point<float> pos,
@@ -694,14 +699,10 @@ void EqGraphRenderer::drawCrosshairAndHud(juce::Graphics& g, juce::Point<float> 
 
     const auto color = bandColor(bandIndex);
 
-    // 水平引导线（SRC 虚线节奏：alpha 0.25，使用点画线）
     g.setColour(color.withAlpha(0.25f));
     g.drawHorizontalLine(static_cast<int>(pos.y), graphBounds_.getX(), graphBounds_.getRight());
-
-    // 垂直引导线
     g.drawVerticalLine(static_cast<int>(pos.x), graphBounds_.getY(), graphBounds_.getBottom());
 
-    // HUD 文本框（圆角 4.0f，SRC 风格）
     if (!hudText.isEmpty())
     {
         g.setFont(juce::FontOptions(10.0f));
@@ -728,7 +729,7 @@ void EqGraphRenderer::drawCrosshairAndHud(juce::Graphics& g, juce::Point<float> 
 }
 
 // ============================================================================
-// 图例（使用 juce::Font 直接测量，不用临时 Graphics）
+// 图例（动态数量，按 settings_.filters 构建）
 // ============================================================================
 
 float EqGraphRenderer::measureLegendItemWidth(const juce::String& label) const
@@ -740,19 +741,45 @@ float EqGraphRenderer::measureLegendItemWidth(const juce::String& label) const
         : 0.0f;
 }
 
-std::array<EqGraphRenderer::LegendItem, 6> EqGraphRenderer::buildLegendItems() const
+std::vector<EqGraphRenderer::LegendItem> EqGraphRenderer::buildLegendItems() const
 {
-    return {{
-        { CurveId::Combined, "Combined", combinedCurveColor(), curveVisible_[0] },
-        { CurveId::LowCut, "LowCut", bandColor(0), curveVisible_[1] },
-        { CurveId::LowShelf, "LowShelf", bandColor(1), curveVisible_[2] },
-        { CurveId::Peak, "Peak", bandColor(2), curveVisible_[3] },
-        { CurveId::HighShelf, "HighShelf", bandColor(3), curveVisible_[4] },
-        { CurveId::HighCut, "HighCut", bandColor(4), curveVisible_[5] },
-    }};
+    std::vector<LegendItem> items;
+    items.reserve(settings_.filters.size() + 1);
+
+    {
+        LegendItem combined;
+        combined.isCombined = true;
+        combined.filterIndex = -1;
+        combined.label = "Combined";
+        combined.color = combinedCurveColor();
+        combined.enabled = true;
+        items.push_back(combined);
+    }
+
+    for (int i = 0; i < static_cast<int>(settings_.filters.size()); ++i)
+    {
+        const auto& f = settings_.filters[i];
+        juce::String label;
+        switch (f.type)
+        {
+        case EqFilterType::LowCut:    label = "LowCut";    break;
+        case EqFilterType::LowShelf:  label = "LowShelf";  break;
+        case EqFilterType::Peak:      label = "Peak";      break;
+        case EqFilterType::HighShelf: label = "HighShelf"; break;
+        case EqFilterType::HighCut:   label = "HighCut";   break;
+        }
+        LegendItem item;
+        item.isCombined = false;
+        item.filterIndex = i;
+        item.label = label;
+        item.color = bandColor(i);
+        item.enabled = isCurveVisible(i);
+        items.push_back(item);
+    }
+    return items;
 }
 
-juce::Rectangle<float> EqGraphRenderer::legendBounds(const std::array<LegendItem, 6>& items) const
+juce::Rectangle<float> EqGraphRenderer::legendBounds(const std::vector<LegendItem>& items) const
 {
     float totalWidth = 0.0f;
     const float itemHeight = 12.0f;
@@ -762,11 +789,10 @@ juce::Rectangle<float> EqGraphRenderer::legendBounds(const std::array<LegendItem
     for (const auto& item : items)
         totalWidth += swatchW + measureLegendItemWidth(item.label) + gap;
 
-    // SRC: top-right of graph area, inset 14px from right edge, 12px from top
     return { graphBounds_.getRight() - totalWidth - 14.0f, graphBounds_.getY() + 12.0f, totalWidth, itemHeight };
 }
 
-void EqGraphRenderer::drawLegend(juce::Graphics& g, const std::array<LegendItem, 6>& items,
+void EqGraphRenderer::drawLegend(juce::Graphics& g, const std::vector<LegendItem>& items,
                                  int hoveredLegendIndex) const
 {
     g.setFont(juce::FontOptions(9.0f));
@@ -774,14 +800,12 @@ void EqGraphRenderer::drawLegend(juce::Graphics& g, const std::array<LegendItem,
     const float gap = 8.0f;
     const float itemH = 12.0f;
 
-    // SRC: top-right — compute total width to position from right edge
     float totalWidth = 0.0f;
     for (const auto& item : items)
         totalWidth += swatchW + measureLegendItemWidth(item.label) + gap;
     float x = graphBounds_.getRight() - totalWidth - 14.0f;
     const float y = graphBounds_.getY() + 12.0f;
 
-    // SRC: semi-transparent rounded background with border
     const juce::Rectangle<float> box(x - 10.0f, y - 5.0f, totalWidth + 16.0f, itemH + 10.0f);
     g.setColour(juce::Colour::fromRGBA(7, 12, 18, 126));
     g.fillRoundedRectangle(box, 8.0f);
@@ -794,14 +818,12 @@ void EqGraphRenderer::drawLegend(juce::Graphics& g, const std::array<LegendItem,
         const bool hovered = (static_cast<int>(i) == hoveredLegendIndex);
         const float textW = measureLegendItemWidth(item.label);
 
-        // 色条
         auto color = item.color;
         if (!item.enabled)
             color = color.withAlpha(0.25f);
         g.setColour(color);
         g.fillRect(x, y + 2.0f, swatchW, itemH - 4.0f);
 
-        // 文字
         g.setColour(item.enabled ? axisLabelColor() : axisLabelColor().withAlpha(0.35f));
         g.drawText(item.label, juce::Rectangle<float>(x + swatchW + 2.0f, y, textW, itemH),
                    juce::Justification::centredLeft, false);
@@ -817,13 +839,12 @@ void EqGraphRenderer::drawLegend(juce::Graphics& g, const std::array<LegendItem,
 }
 
 int EqGraphRenderer::hitTestLegend(juce::Point<float> pos,
-                                   const std::array<LegendItem, 6>& items) const
+                                   const std::vector<LegendItem>& items) const
 {
     const float swatchW = 14.0f;
     const float gap = 8.0f;
     const float itemH = 12.0f;
 
-    // SRC: top-right — same layout as drawLegend/legendBounds
     float totalWidth = 0.0f;
     for (const auto& item : items)
         totalWidth += swatchW + measureLegendItemWidth(item.label) + gap;
@@ -842,13 +863,12 @@ int EqGraphRenderer::hitTestLegend(juce::Point<float> pos,
 }
 
 // ============================================================================
-// 视图范围按钮 — SRC 双圆形 Decrease(+，30→12→6) / Increase(-，6→12→30)
+// 视图范围按钮
 // ============================================================================
 
 juce::Rectangle<float> EqGraphRenderer::viewRangeButtonRect(int controlIndex) const
 {
-    // 38px top inset = 28px top bar + 10px gap, so View Range 按钮不与顶栏重叠
-    const float topInset = 38.0f;
+    const float topInset = 27.0f;
     const float leftInset = 10.0f;
     const float buttonSize = kViewRangeCircleRadius * 2.0f;
     const float centerX = graphBounds_.getX() + leftInset + kViewRangeCircleRadius
@@ -864,7 +884,6 @@ void EqGraphRenderer::drawViewRangeButtons(juce::Graphics& g,
     for (int ci = 0; ci < 2; ++ci)
     {
         const auto button = viewRangeButtonRect(ci);
-        // SRC: face 24x24 centered in 32px button, pressed/hover shrink 1px
         juce::Rectangle<float> face = button.withSizeKeepingCentre(24.0f, 24.0f);
 
         juce::Colour fill = juce::Colour::fromRGBA(18, 26, 34, 226);
@@ -887,13 +906,12 @@ void EqGraphRenderer::drawViewRangeButtons(juce::Graphics& g,
         g.setColour(stroke);
         g.drawEllipse(face, 1.0f);
 
-        // SRC: 符号 — Decrease(+), Increase(-)
         const float cx = button.getCentreX();
         const float cy = button.getCentreY();
         constexpr float half = 5.2f;
         g.setColour(juce::Colour::fromRGBA(220, 230, 238, 238));
         g.drawLine(cx - half, cy, cx + half, cy, 1.45f);
-        if (ci == 0)  // Decrease = '+'
+        if (ci == 0)
             g.drawLine(cx, cy - half, cx, cy + half, 1.45f);
     }
 }
@@ -909,17 +927,15 @@ EqGraphRenderer::ViewRangeButton EqGraphRenderer::hitTestViewRangeButton(juce::P
 }
 
 // ============================================================================
-// 渲染入口
+// 渲染入口 — 动态迭代 filters
 // ============================================================================
 
-void EqGraphRenderer::drawPreview(juce::Graphics& g, bool drawBg) const
+void EqGraphRenderer::drawPreview(juce::Graphics& g) const
 {
-    if (drawBg)
-        drawBackground(g);
-
     const float bypassAlpha = settings_.active ? 1.0f : 0.28f;
+    const int n = static_cast<int>(settings_.filters.size());
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < n; ++i)
     {
         const auto path = buildSingleBandPath(i);
         g.setColour(bandColor(i).withAlpha(0.6f * bypassAlpha));
@@ -928,6 +944,7 @@ void EqGraphRenderer::drawPreview(juce::Graphics& g, bool drawBg) const
                                                 juce::PathStrokeType::rounded));
     }
 
+    if (n > 0)
     {
         const auto path = buildCombinedPath();
         g.setColour(combinedCurveColor().withAlpha(bypassAlpha));
@@ -938,7 +955,6 @@ void EqGraphRenderer::drawPreview(juce::Graphics& g, bool drawBg) const
 
     drawAnchors(g, -1, false);
 
-    // 窗口边框 — 预览模式需要明确边界
     g.setColour(axisLabelColor().withAlpha(0.35f));
     g.drawRoundedRectangle(graphBounds_.reduced(0.5f), 4.0f, 1.0f);
 }
@@ -947,18 +963,14 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                juce::Point<float> mousePos, bool isDragging,
                                int hoveredViewRangeControl,
                                int pressedViewRangeControl,
-                               const std::array<double, 5>& hoverBandAmounts,
-                               bool drawBg) const
+                               const std::vector<double>& hoverBandAmounts) const
 {
-    // ① background / grid
-    if (drawBg)
-        drawBackground(g);
     drawGrid(g);
 
     const float bypassAlpha = settings_.active ? 1.0f : 0.28f;
+    const int n = static_cast<int>(settings_.filters.size());
 
-    // ② single band + combined curves
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < n; ++i)
     {
         const auto path = buildSingleBandPath(i);
         g.setColour(bandColor(i).withAlpha(0.6f * bypassAlpha));
@@ -966,6 +978,7 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                                 juce::PathStrokeType::curved,
                                                 juce::PathStrokeType::rounded));
     }
+    if (n > 0)
     {
         const auto path = buildCombinedPath();
         g.setColour(combinedCurveColor().withAlpha(bypassAlpha));
@@ -974,60 +987,9 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                                 juce::PathStrokeType::rounded));
     }
 
-    // ③ hover influence / 双描边 / 辉光
-    for (int i = 0; i < 5; ++i)
-    {
-        const double amount = hoverBandAmounts[static_cast<size_t>(i)];
-        if (amount <= 0.01)
-            continue;
-
-        const auto color = bandColor(i);
-        const auto bright = color.brighter(0.38f);
-        const float a = static_cast<float>(amount);
-
-        // 渐变填充影响区
-        {
-            juce::Graphics::ScopedSaveState saved(g);
-            g.reduceClipRegion(graphBounds_.toNearestInt().expanded(8));
-            const auto influencePath = buildBandInfluencePath(i);
-
-            juce::ColourGradient grad(
-                bright.withAlpha(0.15f * a), 0.0f, graphBounds_.getY(),
-                color.withAlpha(0.0f),        0.0f, graphBounds_.getBottom(), true);
-            grad.addColour(0.5, color.withAlpha(0.06f * a));
-            g.setGradientFill(grad);
-            g.fillPath(influencePath);
-        }
-
-        // 双层描边
-        const auto curvePath = buildSingleBandPath(i);
-
-        g.setColour(bright.withAlpha(0.15f * a));
-        g.strokePath(curvePath, juce::PathStrokeType(2.35f,
-            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        g.setColour(bright.withAlpha(0.78f * a));
-        g.strokePath(curvePath, juce::PathStrokeType(1.12f,
-            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        // 锚点径向辉光
-        {
-            const auto node = anchorPosition(i);
-            const float r = 13.5f;
-            juce::ColourGradient glow(
-                bright.withAlpha(0.15f * a), node.x, node.y,
-                color.withAlpha(0.0f),        node.x, node.y + r, true);
-            glow.addColour(0.36, color.withAlpha(0.06f * a));
-            g.setGradientFill(glow);
-            g.fillEllipse(node.x - r, node.y - r, r * 2.0f, r * 2.0f);
-        }
-    }
-
-    // ④ 静态轴标签
     drawAxisLabels(g);
 
-    // ⑤ 拖拽 HUD（十字引导线 + 读数，仅 active + dragging 时显示）
-    if (settings_.active && isDragging && hoveredBand >= 0 && hoveredBand < 5)
+    if (settings_.active && isDragging && hoveredBand >= 0 && hoveredBand < n)
     {
         const double freq = xToFreq(mousePos.x);
         const double gain = yToGain(mousePos.y);
@@ -1041,11 +1003,57 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
         drawCrosshairAndHud(g, mousePos, hoveredBand, hudText);
     }
 
-    // ⑥ anchors
     drawAnchors(g, hoveredBand);
 
-    // ⑦ View Range 按钮
     drawViewRangeButtons(g, hoveredViewRangeControl, pressedViewRangeControl);
+
+    // hover influence — 动态数量
+    for (int i = 0; i < n; ++i)
+    {
+        if (i >= static_cast<int>(hoverBandAmounts.size()))
+            break;
+        const double amount = hoverBandAmounts[static_cast<size_t>(i)];
+        if (amount <= 0.01)
+            continue;
+
+        const auto color = bandColor(i);
+        const auto bright = color.brighter(0.38f);
+        const float a = static_cast<float>(amount);
+
+        {
+            juce::Graphics::ScopedSaveState saved(g);
+            g.reduceClipRegion(graphBounds_.toNearestInt().expanded(8));
+            const auto influencePath = buildBandInfluencePath(i);
+
+            juce::ColourGradient grad(
+                bright.withAlpha(0.15f * a), 0.0f, graphBounds_.getY(),
+                color.withAlpha(0.0f),        0.0f, graphBounds_.getBottom(), true);
+            grad.addColour(0.5, color.withAlpha(0.06f * a));
+            g.setGradientFill(grad);
+            g.fillPath(influencePath);
+        }
+
+        const auto curvePath = buildSingleBandPath(i);
+
+        g.setColour(bright.withAlpha(0.15f * a));
+        g.strokePath(curvePath, juce::PathStrokeType(2.35f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        g.setColour(bright.withAlpha(0.78f * a));
+        g.strokePath(curvePath, juce::PathStrokeType(1.12f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        {
+            const auto node = anchorPosition(i);
+            const float r = 13.5f;
+            juce::ColourGradient glow(
+                bright.withAlpha(0.15f * a), node.x, node.y,
+                color.withAlpha(0.0f),        node.x, node.y + r, true);
+            glow.addColour(0.36, color.withAlpha(0.06f * a));
+            g.setGradientFill(glow);
+            g.fillEllipse(node.x - r, node.y - r, r * 2.0f, r * 2.0f);
+        }
+    }
 }
 
 } // namespace OpenTune
