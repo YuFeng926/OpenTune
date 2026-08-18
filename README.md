@@ -296,20 +296,21 @@ OpenTune/
 **Windows (Visual Studio + CMake)**
 
 ```powershell
-# 生成 ARA 与 non-ARA 两套 VS 解决方案（必须使用 "Visual Studio 17 2022" 生成器）。
+# 生成 ARA2 VST3 VS 解决方案（必须使用 "Visual Studio 17 2022" 生成器）。
 # Codex/桌面 shell 下配置和编译都使用 PATH workaround，避免 Path/PATH 撞键影响 MSBuild。
 cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --preset windows-ara-vs2022"
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --preset windows-nonara-vs2022"
 
 # 编译 Release 版本
 cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_VST3"
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-nonara-release --target OpenTune_VST3"
 cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_Standalone"
 ```
 
+同一个 ARA2 VST3 二进制在未绑定 ARA 的普通 VST3 宿主中会自然回退到 Capture 流程，
+不再单独生成 non-ARA 插件。
+
 如需在 Visual Studio IDE 中开发：
 1. 执行上述 `cmake --preset ...` 命令
-2. 打开 `build-ara-overlay-vs18-clean/OpenTune.sln` 或 `build-nonara-overlay-vs18-clean/OpenTune.sln`
+2. 打开 `build-ara-overlay-vs18-clean/OpenTune.sln`
 3. 将 `OpenTune_Standalone` 或 `OpenTune_VST3` 设为启动项目
 4. 选择 Release/x64 配置，编译运行
 
@@ -327,8 +328,7 @@ cmake --build build --config Release
 | 格式 | Windows | macOS |
 |------|---------|-------|
 | Standalone | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/Standalone/OpenTune.exe` | `build/OpenTune_artefacts/Release/Standalone/OpenTune.app` |
-| VST3 ARA | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` |
-| VST3 non-ARA | `build-nonara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | N/A |
+| VST3 ARA2 | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` |
 
 构建完成后，运行时 DLL、模型文件、D3D12 目录会自动复制到产物目录旁，无需手动操作。
 

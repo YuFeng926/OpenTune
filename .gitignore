@@ -3,7 +3,6 @@ Build/
 build-vs/
 build-*/
 build-ara-overlay-vs18-clean/
-build-nonara-overlay-vs18-clean/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake

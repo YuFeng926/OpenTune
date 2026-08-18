@@ -18,7 +18,7 @@ function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
 
     file(READ "${vst3_cpp_path}" vst3_client_source)
 
-    # ---- Patch 1: zero-data transport-only branch (ARA + non-ARA) ---------------
+    # ---- Patch 1: zero-data transport-only branch -------------------------------
     # JUCE's VST3 process() guards processAudio<sample type>() behind
     #   if (data.numSamples != 0 || data.numInputs != 0 || data.numOutputs != 0)
     # so a zero-sample block that still carries a real ProcessContext is
@@ -102,23 +102,22 @@ function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
         endif()
     endif()
 
-    # ---- Patch 2: ARA 1.x legacy bind (ARA only) ---------------------------------
-    if(OPENTUNE_ENABLE_ARA)
-        set(ara_patched_needle
-            "return bindToDocumentControllerWithRoles (controllerRef, 0, 0);")
-        string(FIND "${vst3_client_source}" "${ara_patched_needle}" ara_patched_pos)
-        if(NOT ara_patched_pos EQUAL -1)
-            message(STATUS
-                "JUCE VST3 client already supports legacy ARA bind; skipping ARA patch")
-        else()
-            set(ara_upstream_snippet [=[
+    # ---- Patch 2: ARA 1.x legacy bind -------------------------------------------
+    set(ara_patched_needle
+        "return bindToDocumentControllerWithRoles (controllerRef, 0, 0);")
+    string(FIND "${vst3_client_source}" "${ara_patched_needle}" ara_patched_pos)
+    if(NOT ara_patched_pos EQUAL -1)
+        message(STATUS
+            "JUCE VST3 client already supports legacy ARA bind; skipping ARA patch")
+    else()
+        set(ara_upstream_snippet [=[
     const ARA::ARAPlugInExtensionInstance* PLUGIN_API bindToDocumentController (ARA::ARADocumentControllerRef /*controllerRef*/) SMTG_OVERRIDE
     {
         ARA_VALIDATE_API_STATE (false && "call is deprecated in ARA 2, host must not call this");
         return nullptr;
     }
 ]=])
-            set(ara_patched_snippet [=[
+        set(ara_patched_snippet [=[
     const ARA::ARAPlugInExtensionInstance* PLUGIN_API bindToDocumentController (ARA::ARADocumentControllerRef controllerRef) SMTG_OVERRIDE
     {
         // ARA SDK 2.x deprecates this entry point, but ARA 1.x hosts still call it.
@@ -127,24 +126,23 @@ function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
     }
 ]=])
 
-            string(FIND "${vst3_client_source}" "${ara_upstream_snippet}" ara_upstream_pos)
-            if(ara_upstream_pos EQUAL -1)
-                string(REPLACE "\n" "\r\n" ara_upstream_snippet_crlf "${ara_upstream_snippet}")
-                string(REPLACE "\n" "\r\n" ara_patched_snippet_crlf "${ara_patched_snippet}")
-                string(FIND "${vst3_client_source}" "${ara_upstream_snippet_crlf}" ara_upstream_crlf_pos)
+        string(FIND "${vst3_client_source}" "${ara_upstream_snippet}" ara_upstream_pos)
+        if(ara_upstream_pos EQUAL -1)
+            string(REPLACE "\n" "\r\n" ara_upstream_snippet_crlf "${ara_upstream_snippet}")
+            string(REPLACE "\n" "\r\n" ara_patched_snippet_crlf "${ara_patched_snippet}")
+            string(FIND "${vst3_client_source}" "${ara_upstream_snippet_crlf}" ara_upstream_crlf_pos)
 
-                if(ara_upstream_crlf_pos EQUAL -1)
-                    message(FATAL_ERROR
-                        "OpenTune JUCE VST3 client overlay cannot be generated. Inspect ${vst3_cpp_path}; "
-                        "the vendored JUCE VST3 ARA entry point no longer matches the audited source.")
-                endif()
-
-                string(REPLACE "${ara_upstream_snippet_crlf}" "${ara_patched_snippet_crlf}"
-                       vst3_client_source "${vst3_client_source}")
-            else()
-                string(REPLACE "${ara_upstream_snippet}" "${ara_patched_snippet}"
-                       vst3_client_source "${vst3_client_source}")
+            if(ara_upstream_crlf_pos EQUAL -1)
+                message(FATAL_ERROR
+                    "OpenTune JUCE VST3 client overlay cannot be generated. Inspect ${vst3_cpp_path}; "
+                    "the vendored JUCE VST3 ARA entry point no longer matches the audited source.")
             endif()
+
+            string(REPLACE "${ara_upstream_snippet_crlf}" "${ara_patched_snippet_crlf}"
+                   vst3_client_source "${vst3_client_source}")
+        else()
+            string(REPLACE "${ara_upstream_snippet}" "${ara_patched_snippet}"
+                   vst3_client_source "${vst3_client_source}")
         endif()
     endif()
 
