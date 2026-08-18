@@ -1258,7 +1258,7 @@ struct UIColors
         g.setColour(themeCol.withAlpha(highlighted ? 0.46f : 0.26f));
         g.drawEllipse(knobBounds.expanded(1.4f).reduced(0.5f), highlighted ? 2.0f : 1.25f);
 
-        g.setColour(knobRim.withAlpha(highlighted ? 0.92f : 0.68f));
+        g.setColour(themeCol.withAlpha(highlighted ? 0.92f : 0.68f));
         g.drawEllipse(knobBounds.reduced(0.5f), highlighted ? 1.45f : 1.15f);
 
         const auto angle = rotaryStartAngle + (rotaryEndAngle - rotaryStartAngle) * clampedValue;
@@ -1932,13 +1932,18 @@ struct UIColors
         const auto ringRadius = radius + juce::jmax(5.0f, side * 0.085f);
         const auto angle = rotaryStartAngle + (rotaryEndAngle - rotaryStartAngle) * clampedValue;
 
-        // 粉色轨道环（参考图：非常粗且明亮的粉色环，极醒目）
+        // 滤波器颜色：优先取 arcColor 属性，否则用主题默认色
+        auto arcCol = juce::Colour { Overdose::Colors::PrimaryPink };
+        if (slider != nullptr && slider->getProperties().contains("arcColor"))
+            arcCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider->getProperties()["arcColor"])));
+
+        // 轨道环（跟随滤波器颜色）
         juce::Path ringPath;
         ringPath.addCentredArc(centre.x, centre.y, ringRadius, ringRadius, 0.0f, 0.0f, juce::MathConstants<float>::twoPi, true);
-        g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(1.0f));
+        g.setColour(arcCol.withAlpha(1.0f));
         g.strokePath(ringPath, juce::PathStrokeType(6.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-        // 粉刻度（参考图：非常清晰可见的粉色刻度线，极粗且极明显）
+        // 刻度线（跟随滤波器颜色）
         static constexpr int tickCount = 34;
         for (int i = 0; i < tickCount; ++i)
         {
@@ -1953,18 +1958,13 @@ struct UIColors
                 centre.x + outer * std::sin(tickAngle),
                 centre.y - outer * std::cos(tickAngle)
             };
-            g.setColour((isMajor ? juce::Colour { Overdose::Colors::PrimaryPink }
-                                 : juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(1.0f))
-                            .withAlpha(isMajor ? 1.0f : 1.0f));
+            g.setColour(arcCol.withAlpha(isMajor ? 1.0f : 0.6f));
             g.drawLine(tick, isMajor ? 3.5f : 2.6f);
         }
 
-        // 粉色指示弧（当前值到起点的弧，极明亮，极粗且极醒目）
+        // 指示弧（当前值到起点）
         juce::Path valueArc;
         valueArc.addCentredArc(centre.x, centre.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, angle, true);
-        auto arcCol = juce::Colour { Overdose::Colors::PrimaryPink };
-        if (slider != nullptr && slider->getProperties().contains("arcColor"))
-            arcCol = juce::Colour(static_cast<juce::uint32>(static_cast<int>(slider->getProperties()["arcColor"])));
         g.setColour(arcCol.withAlpha(1.0f));
         g.strokePath(valueArc, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 

@@ -1073,7 +1073,7 @@ int EqGraphRenderer::hitTestLegend(juce::Point<float> pos,
 
 juce::Rectangle<float> EqGraphRenderer::viewRangeButtonRect(int controlIndex) const
 {
-    const float topInset = 27.0f;
+    const float topInset = 12.0f;
     const float leftInset = 10.0f;
     const float buttonSize = kViewRangeCircleRadius * 2.0f;
     const float centerX = graphBounds_.getX() + leftInset + kViewRangeCircleRadius

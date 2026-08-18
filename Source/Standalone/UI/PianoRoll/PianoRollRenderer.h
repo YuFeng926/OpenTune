@@ -142,16 +142,7 @@ public:
 
     void drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
 
-    /// Draw EQ indicator markers on notes that have EQ settings.
-    /// Shows a small, restrained EQ symbol; active=false still shows (settings preserved)
-    /// but visually distinguishes bypassed state. Does not affect hit area or note theme.
-    void drawNoteEqIndicators(juce::Graphics& g, const RenderContext& ctx,
-                              const ContentRenderItem& item);
 
-    /// Draw all EQ indicators independently (for overlay layer rendering).
-    /// This allows EQ-only changes to redraw indicators without triggering full content raster.
-    void drawAllEqIndicators(juce::Graphics& g, const RenderContext& ctx,
-                             const std::vector<ContentRenderItem>& items);
 };
 
 } // namespace OpenTune

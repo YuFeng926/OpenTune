@@ -27,6 +27,30 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
       "OPENTUNE_ENABLE_ARA": "OFF"
       }
+    },
+    {
+      "name": "windows-ara-ninja",
+      "displayName": "Windows Ninja Release (ARA)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-ara-ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_MAKE_PROGRAM": "F:/VSC/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+        "OPENTUNE_ENABLE_ARA": "ON"
+      }
+    },
+    {
+      "name": "windows-nonara-ninja",
+      "displayName": "Windows Ninja Release (non-ARA)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-nonara-ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_MAKE_PROGRAM": "F:/VSC/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+        "OPENTUNE_ENABLE_ARA": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -39,6 +63,14 @@
       "name": "windows-nonara-release",
       "configurePreset": "windows-nonara-vs2022",
       "configuration": "Release"
+    },
+    {
+      "name": "windows-ara-ninja-release",
+      "configurePreset": "windows-ara-ninja"
+    },
+    {
+      "name": "windows-nonara-ninja-release",
+      "configurePreset": "windows-nonara-ninja"
     }
   ]
 }
