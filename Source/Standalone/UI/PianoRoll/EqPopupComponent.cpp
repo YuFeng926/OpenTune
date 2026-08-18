@@ -455,28 +455,6 @@ void EqPopupComponent::paint(juce::Graphics& g)
     const auto bounds = getLocalBounds().toFloat();
     const float cornerRadius = 8.0f;
 
-    // ---- 磨砂玻璃背景：截取父组件内容 → 高斯模糊 → 缓存 ----
-    const auto pos = getPosition();
-    if (blurredBgPosition_ != pos)
-    {
-        blurredBgPosition_ = pos;
-        blurredBgCache_ = {};
-        if (auto* parent = getParentComponent())
-        {
-            const auto snapshot = parent->createComponentSnapshot(
-                getBoundsInParent(), true);
-            if (snapshot.isValid())
-            {
-                blurredBgCache_ = snapshot;
-                blurredBgCache_.getPixelData()->applyGaussianBlurEffect(4.0f);
-            }
-        }
-    }
-    if (blurredBgCache_.isValid())
-    {
-        g.drawImageAt(blurredBgCache_, 0, 0);
-    }
-
     const auto bgBase = noteColor_.withSaturation(noteColor_.getSaturation() * 0.3f);
     const auto bgColor = bgBase.interpolatedWith(EqGraphRenderer::backgroundColor(), 0.7f);
     g.setColour(bgColor.withAlpha(0.85f));
