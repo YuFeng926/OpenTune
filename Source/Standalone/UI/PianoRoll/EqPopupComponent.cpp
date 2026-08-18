@@ -15,7 +15,7 @@ namespace OpenTune {
 EqPopupComponent::EqPopupComponent()
 {
     setOpaque(false);
-    startTimerHz(30);
+    startTimerHz(60);
     interaction_.setRenderer(&renderer_);
 
     // 创建旋钮 LookAndFeel
@@ -82,7 +82,8 @@ EqPopupComponent::~EqPopupComponent()
 
 juce::Rectangle<float> EqPopupComponent::floatingCardBounds() const
 {
-    const float cardH = kCardPadding + kCardIconRowH + 3.0f + kCardLabelHeight + kCardSliderHeight + kCardPadding;
+    const float cardH = kCardPadding + kCardIconRowH + 3.0f + kCardTypeRowH + 3.0f
+                        + kCardLabelHeight + kCardSliderHeight + kCardPadding;
     const float compW = static_cast<float>(getWidth());
     const float compH = static_cast<float>(getHeight());
     float x = (compW - kCardWidth) * 0.5f;
@@ -135,8 +136,26 @@ void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex) con
         }
     }
 
+    // 滤波器类型按钮行：5 个类型图标，居中排列
+    {
+        const float btnY = card.getY() + kCardPadding + kCardIconRowH + 3.0f;
+        const int numTypes = 5;
+        const float totalW = numTypes * kCardTypeBtnSize + (numTypes - 1) * kCardTypeBtnGap;
+        float bx = card.getX() + (card.getWidth() - totalW) * 0.5f;
+        const auto currentType = settings_.filters[filterIndex].type;
+        for (int i = 0; i < numTypes; ++i)
+        {
+            const auto type = static_cast<EqFilterType>(i);
+            const bool isActive = (type == currentType);
+            const bool isHov = (i == hoveredTypeButton_);
+            const juce::Rectangle<float> btnRect(bx, btnY, kCardTypeBtnSize, kCardTypeBtnSize);
+            paintFilterTypeButton(g, type, btnRect, isActive, isHov);
+            bx += kCardTypeBtnSize + kCardTypeBtnGap;
+        }
+    }
+
     // 旋钮上方标签：Freq / Gain / Q
-    const float labelY = card.getY() + kCardPadding + kCardIconRowH + 3.0f;
+    const float labelY = card.getY() + kCardPadding + kCardIconRowH + 3.0f + kCardTypeRowH + 3.0f;
     {
         const char* labels[] = { "Freq", "Gain", "Q" };
         for (int i = 0; i < 3; ++i)
@@ -159,6 +178,88 @@ juce::Rectangle<float> EqPopupComponent::cardFilterButtonBounds(
     const float startX = cardBounds.getX() + (cardBounds.getWidth() - totalW) * 0.5f;
     const float x = startX + static_cast<float>(index) * (iconSize + iconGap);
     return { x, cardBounds.getY() + kCardPadding, iconSize, kCardIconRowH };
+}
+
+juce::Rectangle<float> EqPopupComponent::cardFilterTypeButtonBounds(
+    const juce::Rectangle<float>& cardBounds, int index) const
+{
+    const int numTypes = 5;
+    const float totalW = numTypes * kCardTypeBtnSize + (numTypes - 1) * kCardTypeBtnGap;
+    const float startX = cardBounds.getX() + (cardBounds.getWidth() - totalW) * 0.5f;
+    const float x = startX + static_cast<float>(index) * (kCardTypeBtnSize + kCardTypeBtnGap);
+    const float y = cardBounds.getY() + kCardPadding + kCardIconRowH + 3.0f;
+    return { x, y, kCardTypeBtnSize, kCardTypeBtnSize };
+}
+
+int EqPopupComponent::hitTestFilterTypeButton(juce::Point<float> pos) const
+{
+    if (cardBand_ < 0 || cardBand_ >= static_cast<int>(settings_.filters.size()))
+        return -1;
+    const auto card = floatingCardBounds();
+    for (int i = 0; i < 5; ++i)
+    {
+        if (cardFilterTypeButtonBounds(card, i).contains(pos))
+            return i;
+    }
+    return -1;
+}
+
+void EqPopupComponent::paintFilterTypeButton(juce::Graphics& g, EqFilterType type,
+    const juce::Rectangle<float>& bounds, bool isActive, bool isHovered) const
+{
+    const float inset = 5.0f;
+    const float left = bounds.getX() + inset;
+    const float right = bounds.getRight() - inset;
+    const float top = bounds.getY() + inset;
+    const float bottom = bounds.getBottom() - inset;
+    const float mid = (top + bottom) * 0.5f;
+
+    // 背景
+    auto bgColor = isActive
+        ? juce::Colour::fromRGBA(255, 255, 255, 32)
+        : (isHovered ? juce::Colour::fromRGBA(255, 255, 255, 16) : juce::Colour::fromRGBA(0, 0, 0, 0));
+    g.setColour(bgColor);
+    g.fillRoundedRectangle(bounds, 3.0f);
+
+    // 边框
+    g.setColour(juce::Colours::white.withAlpha(isActive ? 0.55f : (isHovered ? 0.25f : 0.12f)));
+    g.drawRoundedRectangle(bounds, 3.0f, 0.8f);
+
+    // 图标曲线颜色
+    auto curveColor = isActive
+        ? juce::Colours::white.withAlpha(0.95f)
+        : juce::Colours::white.withAlpha(isHovered ? 0.65f : 0.30f);
+    g.setColour(curveColor);
+
+    juce::Path p;
+    switch (type)
+    {
+    case EqFilterType::LowCut:
+        p.startNewSubPath(left, bottom);
+        p.cubicTo(left, mid, left, mid, right, top);
+        break;
+    case EqFilterType::LowShelf:
+        p.startNewSubPath(left, bottom);
+        p.lineTo(left + (right - left) * 0.4f, bottom);
+        p.cubicTo(left + (right - left) * 0.6f, bottom, left + (right - left) * 0.4f, top, right, top);
+        break;
+    case EqFilterType::Peak:
+        p.startNewSubPath(left, mid);
+        p.lineTo(left + (right - left) * 0.25f, mid);
+        p.cubicTo(left + (right - left) * 0.35f, top, left + (right - left) * 0.65f, top, left + (right - left) * 0.75f, mid);
+        p.lineTo(right, mid);
+        break;
+    case EqFilterType::HighShelf:
+        p.startNewSubPath(left, top);
+        p.lineTo(left + (right - left) * 0.4f, top);
+        p.cubicTo(left + (right - left) * 0.6f, top, left + (right - left) * 0.4f, bottom, right, bottom);
+        break;
+    case EqFilterType::HighCut:
+        p.startNewSubPath(left, top);
+        p.cubicTo(left, mid, left, mid, right, bottom);
+        break;
+    }
+    g.strokePath(p, juce::PathStrokeType(1.3f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void EqPopupComponent::updateCardState()
@@ -244,7 +345,7 @@ void EqPopupComponent::layoutCardControls()
         return;
 
     const auto card = floatingCardBounds();
-    const float sliderY = card.getY() + kCardPadding + kCardIconRowH + 3.0f + kCardLabelHeight;
+    const float sliderY = card.getY() + kCardPadding + kCardIconRowH + 3.0f + kCardTypeRowH + 3.0f + kCardLabelHeight;
 
     for (int i = 0; i < 3; ++i)
     {
@@ -587,12 +688,14 @@ juce::Rectangle<float> EqPopupComponent::buttonBounds(ButtonId id) const
 {
     const auto topBar = topBarBounds();
     const float btnY = (kTopBarHeight - kBtnSize) * 0.5f;
+    // 右上角排列：最小化-最大化-删除-旁通（从右到左）
+    const float startX = topBar.getRight() - 4.0f - kBtnSize;
     switch (id)
     {
-    case ButtonId::Maximize: return { topBar.getX() + 4.0f, btnY, kBtnSize, kBtnSize };
-    case ButtonId::Bypass:   return { topBar.getX() + 4.0f + kBtnSize + kBtnGap, btnY, kBtnSize, kBtnSize };
-    case ButtonId::Remove:   return { topBar.getX() + 4.0f + (kBtnSize + kBtnGap) * 2, btnY, kBtnSize, kBtnSize };
-    case ButtonId::Minimize: return { topBar.getRight() - 4.0f - kBtnSize, btnY, kBtnSize, kBtnSize };
+    case ButtonId::Bypass:   return { startX, btnY, kBtnSize, kBtnSize };
+    case ButtonId::Remove:   return { startX - (kBtnSize + kBtnGap), btnY, kBtnSize, kBtnSize };
+    case ButtonId::Maximize: return { startX - (kBtnSize + kBtnGap) * 2, btnY, kBtnSize, kBtnSize };
+    case ButtonId::Minimize: return { startX - (kBtnSize + kBtnGap) * 3, btnY, kBtnSize, kBtnSize };
     case ButtonId::None:     return {};
     }
     return {};
@@ -646,7 +749,10 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
     {
         hoveredBand_ = -1;
         hoveredViewRange_ = -1;
-        setMouseCursor(juce::MouseCursor::NormalCursor);
+        hoveredTypeButton_ = hitTestFilterTypeButton(pos);
+        setMouseCursor(hoveredTypeButton_ >= 0 ? juce::MouseCursor::PointingHandCursor
+                                               : juce::MouseCursor::NormalCursor);
+        repaint();
         return;
     }
 
@@ -751,6 +857,33 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
                 return;
             }
         }
+
+        // 命中滤波器类型按钮 → 切换当前滤波器类型
+        const int typeIdx = hitTestFilterTypeButton(pos);
+        if (typeIdx >= 0 && typeIdx < 5 && cardBand_ >= 0
+            && cardBand_ < static_cast<int>(settings_.filters.size()))
+        {
+            auto& f = settings_.filters[cardBand_];
+            const auto newType = static_cast<EqFilterType>(typeIdx);
+            if (f.type != newType)
+            {
+                f.type = newType;
+                // 频率范围适配
+                if (newType == EqFilterType::Peak)
+                    f.frequencyHz = std::clamp(f.frequencyHz, 500.0f, 12000.0f);
+                else
+                    f.frequencyHz = std::clamp(f.frequencyHz, 20.0f, 20000.0f);
+                // Cut 类型增益归零
+                if (newType == EqFilterType::LowCut || newType == EqFilterType::HighCut)
+                    f.gainDb = 0.0f;
+                renderer_.setSettings(settings_);
+                configureCardControls(cardBand_);
+                commitSettings();
+                repaint();
+            }
+            return;
+        }
+
         // 卡片其余空白区域 → 消费事件
         return;
     }
@@ -1034,9 +1167,7 @@ void EqPopupComponent::mouseWheelMove(const juce::MouseEvent& event, const juce:
 
     auto& f = settings_.filters[targetBand];
 
-    // 非 Peak 类型也消费事件（不修改 Q 但阻止滚轮传播）
-    if (f.type != EqFilterType::Peak)
-        return;
+    // 所有类型均支持 Q 滚轮调节
 
     // 基础步进 ±0.08，Shift 细调乘 0.35
     const double step = 0.08 * (event.mods.isShiftDown() ? 0.35 : 1.0);
@@ -1076,7 +1207,7 @@ void EqPopupComponent::mouseExit(const juce::MouseEvent&)
 
 void EqPopupComponent::timerCallback()
 {
-    const double dt = 1.0 / 30.0;
+    const double dt = 1.0 / 60.0;
     if (onReadSpectrum)
         onReadSpectrum(spectrum_, spectrumPeaks_);
     else
@@ -1088,21 +1219,8 @@ void EqPopupComponent::timerCallback()
     renderer_.advanceSpectrumColorCycle(dt);
     updateHoverBandFade(dt);
 
-    if (interaction_.isDragging())
-        repaint();
-
-    // hover 动画活跃时刷新（动态数量）
-    const int n = static_cast<int>(settings_.filters.size());
-    for (int i = 0; i < n; ++i)
-    {
-        if (hoverBandAmounts_[static_cast<size_t>(i)] > 0.01)
-        {
-            repaint();
-            break;
-        }
-    }
-
-    // hover 动画或拖拽中才刷新
+    // 频谱动画每帧刷新（60fps 流畅动画）
+    repaint();
 }
 
 void EqPopupComponent::updateHoverBandFade(double dt)

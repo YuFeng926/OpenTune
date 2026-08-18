@@ -983,8 +983,8 @@ void PianoRollComponent::closeEqPopup()
 
 juce::Rectangle<int> PianoRollComponent::placeEqPopupBounds(const juce::Rectangle<int>& anchor) const
 {
-    constexpr int kEqPreviewWidth = 180;   // 契约：3 × 工具图标宽
-    constexpr int kEqPreviewHeight = 80;   // 契约：2 × 工具图标高
+    constexpr int kEqPreviewWidth = 180;   // 4:3 比例
+    constexpr int kEqPreviewHeight = 135;  // 4:3 比例
     constexpr int kMargin = 8;
     const auto componentBounds = getLocalBounds();
 

@@ -4,9 +4,8 @@
  * Per-note EQ processor — 动态滤波器链 DSP
  *
  * - 动态遍历 EqSettings.filters 向量，按类型分配二阶段：
- *   - LowCut / HighCut：JUCE FilterDesign 8 阶 Butterworth，4 个最小相位二阶段级联
- *   - LowShelf / HighShelf：RBJ 最小相位二阶段
- *   - Peak：RBJ 最小相位二阶段，使用 filter.q（默认 2.0）
+ *   - 所有类型（LowCut / HighCut / LowShelf / HighShelf / Peak）均使用 JUCE IIR 二阶段，
+ *     LowCut / HighCut 通过 makeHighPass / makeLowPass 支持 Q 可调。
  * - 预分配最大 kMaxFilters*kMaxSectionsPerFilter 的固定 std::array 状态，零动态分配。
  * - prepare 在渲染工作线程计算系数并绑定到状态；process 音频线程零分配。
  * - magnitudeDb 遍历动态 section，只读频响查询。
@@ -23,9 +22,7 @@ namespace OpenTune {
 
 class NoteEqProcessor {
 public:
-    static constexpr int kButterworthOrder = 8;
-    static constexpr int kSectionsPerCut = kButterworthOrder / 2;
-    static constexpr int kMaxSectionsPerFilter = kSectionsPerCut;  // Cut 最多 4 个二阶段
+    static constexpr int kMaxSectionsPerFilter = 1;  // 每个滤波器 1 个二阶段
     static constexpr int kMaxTotalSections = EqSettings::kMaxFilters * kMaxSectionsPerFilter;
     static constexpr int kMaxChannels = 2;
 
@@ -125,22 +122,16 @@ private:
                 break;
 
             switch (filter.type) {
-            case EqFilterType::LowCut: {
-                const auto lowCut = juce::dsp::FilterDesign<float>::
-                    designIIRHighpassHighOrderButterworthMethod(
-                        filter.frequencyHz, sampleRate, kButterworthOrder);
-                for (int i = 0; i < kSectionsPerCut && sectionIdx < kMaxTotalSections; ++i)
-                    coefficients[static_cast<size_t>(sectionIdx++)] = lowCut[i];
+            case EqFilterType::LowCut:
+                coefficients[static_cast<size_t>(sectionIdx++)] =
+                    juce::dsp::IIR::Coefficients<float>::makeHighPass(
+                        sampleRate, filter.frequencyHz, filter.q);
                 break;
-            }
-            case EqFilterType::HighCut: {
-                const auto highCut = juce::dsp::FilterDesign<float>::
-                    designIIRLowpassHighOrderButterworthMethod(
-                        filter.frequencyHz, sampleRate, kButterworthOrder);
-                for (int i = 0; i < kSectionsPerCut && sectionIdx < kMaxTotalSections; ++i)
-                    coefficients[static_cast<size_t>(sectionIdx++)] = highCut[i];
+            case EqFilterType::HighCut:
+                coefficients[static_cast<size_t>(sectionIdx++)] =
+                    juce::dsp::IIR::Coefficients<float>::makeLowPass(
+                        sampleRate, filter.frequencyHz, filter.q);
                 break;
-            }
             case EqFilterType::LowShelf:
                 coefficients[static_cast<size_t>(sectionIdx++)] =
                     juce::dsp::IIR::Coefficients<float>::makeLowShelf(
