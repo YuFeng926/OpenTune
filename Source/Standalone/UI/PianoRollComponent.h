@@ -657,6 +657,7 @@ private:
 
     // per-note EQ 预览弹窗：PianoRollComponent 唯一持有，不经过任何中间转发层
     std::unique_ptr<EqPopupComponent> eqPopup_;
+    std::vector<int> eqEditTargetIndices_; // EQ 弹窗绑定的目标音符索引快照
 
     // EQ 工具 cursor：构造函数初始化列表中从 ToolbarIcons::createEqIconImage 构造一次并 resolveCursor。
     juce::MouseCursor eqCursor_;

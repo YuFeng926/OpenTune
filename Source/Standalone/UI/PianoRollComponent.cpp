@@ -905,6 +905,12 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
 
     const Note& primary = notes[primaryIndex];
 
+    // 快照当前有效选中索引，供后续 apply/remove 使用
+    eqEditTargetIndices_.clear();
+    for (int idx : interactionState_.noteSelection.selectedIndices)
+        if (idx >= 0 && idx < static_cast<int>(notes.size()))
+            eqEditTargetIndices_.push_back(idx);
+
     eqPopup_ = std::make_unique<EqPopupComponent>();
     addAndMakeVisible(*eqPopup_);
     // 主音符 eq 有值显示它，无值显示 EqSettings 默认；打开零 draft、零提交
@@ -944,6 +950,7 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
 
 void PianoRollComponent::closeEqPopup()
 {
+    eqEditTargetIndices_.clear();
     if (eqPopup_ == nullptr)
         return;
     removeChildComponent(eqPopup_.get());
@@ -977,7 +984,7 @@ void PianoRollComponent::applyEqSettingsToSelection(const EqSettings& settings)
 {
     if (!editedContentKey_.isValid() || processor_ == nullptr)
         return;
-    const auto& selected = interactionState_.noteSelection.selectedIndices;
+    const auto& selected = eqEditTargetIndices_;
     if (selected.empty())
         return;
 
@@ -997,7 +1004,7 @@ void PianoRollComponent::removeEqFromSelection()
 {
     if (!editedContentKey_.isValid() || processor_ == nullptr)
         return;
-    const auto& selected = interactionState_.noteSelection.selectedIndices;
+    const auto& selected = eqEditTargetIndices_;
     if (selected.empty())
         return;
 
