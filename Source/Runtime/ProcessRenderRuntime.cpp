@@ -274,7 +274,7 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
 // 每个 active Note 使用局部 NoteEqProcessor，prepare 按固定渲染率计算系数并从
 // Note 起点重置状态，只处理该 Note 在完整 chunk 内的精确样本范围。
 // RenderChunkPlanner 已保证 active-EQ Note 不跨 chunk；Stage1 音频固定 44.1kHz。
-constexpr int kNoteEqBoundaryFadeSamples = 8;
+constexpr int kNoteEqBoundaryFadeSamples = 12;
 
 // chunk 发布范围 [trueStartSample, trueEndSample) 是否与任何 active-EQ Note
 // 相交（用于原始路径 Blank/失败条件中的 EQ 排除，契约 §6）。
