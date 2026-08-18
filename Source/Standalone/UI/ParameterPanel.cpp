@@ -762,7 +762,7 @@ void ParameterPanel::resized()
 
     if (openDyneMode_)
     {
-        // OpenDyne：9 个按钮 = 5 行 × 2 列
+        // OpenDyne：10 个按钮 = 5 行 × 2 列
         // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、Modulation(F2×2)、Drift(F2×3)、
         // VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾，EQ 收尾
         std::vector<juce::Component*> buttons = {
@@ -773,6 +773,7 @@ void ParameterPanel::resized()
             volumeEnvelopeToolButton_.get(),
             timeToolButton_.get(),
             scissorsToolButton_.get(),
+            handDrawToolButton_.get(),
             autoTuneToolButton_.get(),
             eqToolButton_.get(),
         };
