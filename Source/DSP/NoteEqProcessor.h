@@ -120,6 +120,8 @@ private:
         for (const auto& filter : settings.filters) {
             if (sectionIdx >= kMaxTotalSections)
                 break;
+            if (filter.bypassed)
+                continue;
 
             switch (filter.type) {
             case EqFilterType::LowCut:

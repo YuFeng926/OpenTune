@@ -55,6 +55,11 @@ private:
     juce::Rectangle<float> buttonBounds(ButtonId id) const;
     ButtonId hitTestButton(juce::Point<float> pos) const;
 
+    // 卡片内旁通/删除按钮（仅完整视图）
+    enum class CardButton { None = -1, Bypass = 0, Remove = 1 };
+    juce::Rectangle<float> cardButtonBounds(CardButton btn, const juce::Rectangle<float>& cardBounds) const;
+    CardButton hitTestCardButton(juce::Point<float> pos) const;
+
     // 浮动参数卡（固定底部居中）
     juce::Rectangle<float> floatingCardBounds() const;
     void paintFloatingCard(juce::Graphics& g, int filterIndex) const;
@@ -97,6 +102,7 @@ private:
     // 浮动参数卡状态
     int cardBand_ = -1;
     int hoveredTypeButton_ = -1;
+    int hoveredCardButton_ = -1;
 
     // 卡片内旋钮控件
     std::unique_ptr<LargeKnobLookAndFeel> cardKnobLookAndFeel_;

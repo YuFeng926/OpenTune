@@ -21,7 +21,7 @@ namespace {
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 10;  // v10: EqFilter.paletteSlot (v9 dynamic EQ filters migrated with deterministic slot assignment)
+    constexpr int kCaptureArchiveVersion = 11;  // v11: EqFilter.bypassed (per-filter bypass)
     constexpr int kCaptureArchiveVersionMin = 4;  // v4 files load with pitchDriftScale=1.0
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
@@ -204,6 +204,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                         stream.writeFloat(f.gainDb);
                         stream.writeFloat(f.q);
                         stream.writeInt(f.paletteSlot);
+                        stream.writeInt(f.bypassed ? 1 : 0);
                     }
                 }
             }
@@ -245,6 +246,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     const bool hasPerNoteEq = (fileVersion >= 8);
     const bool hasDynamicEqFilters = (fileVersion >= 9);
     const bool hasPaletteSlot = (fileVersion >= 10);
+    const bool hasPerFilterBypassed = (fileVersion >= 11);
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -372,6 +374,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
                         f.paletteSlot = hasPaletteSlot ? stream.readInt() : fi;
                         if (f.paletteSlot < 0 || f.paletteSlot >= EqSettings::kMaxFilters)
                             return false;
+                        if (hasPerFilterBypassed)
+                            f.bypassed = stream.readInt() != 0;
                         eq.filters.push_back(f);
                     }
                 } else {

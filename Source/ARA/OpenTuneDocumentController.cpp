@@ -143,6 +143,8 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
                 fEl->setAttribute("gainDb", f.gainDb);
                 fEl->setAttribute("q", f.q);
                 fEl->setAttribute("slot", f.paletteSlot);
+                if (f.bypassed)
+                    fEl->setAttribute("bypassed", 1);
                 eqEl->addChildElement(fEl);
             }
             n->addChildElement(eqEl);
@@ -465,6 +467,7 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                                 f.paletteSlot = fEl->hasAttribute("slot")
                                     ? fEl->getIntAttribute("slot", filterIndex)
                                     : filterIndex;
+                                f.bypassed = fEl->getIntAttribute("bypassed", 0) != 0;
                                 eq.filters.push_back(f);
                             }
                         } else if (eqEl->hasAttribute("lowCutFrequencyHz")

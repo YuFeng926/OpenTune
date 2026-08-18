@@ -145,6 +145,28 @@ void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex) con
                        juce::Justification::centred, false);
         }
     }
+
+    // 卡片右上角：旁通 + 删除按钮
+    {
+        const bool bypassed = settings_.filters[filterIndex].bypassed;
+        const auto bypassBounds = cardButtonBounds(CardButton::Bypass, card);
+        const auto removeBounds = cardButtonBounds(CardButton::Remove, card);
+        const bool hovBypass = (hoveredCardButton_ == static_cast<int>(CardButton::Bypass));
+        const bool hovRemove = (hoveredCardButton_ == static_cast<int>(CardButton::Remove));
+
+        auto bypassCol = EqGraphRenderer::axisLabelColor().withAlpha(bypassed ? 0.8f : (hovBypass ? 0.6f : 0.35f));
+        auto removeCol = EqGraphRenderer::axisLabelColor().withAlpha(hovRemove ? 0.8f : 0.35f);
+        if (hovRemove)
+            removeCol = juce::Colour::fromRGB(220, 60, 60).withAlpha(0.8f);
+
+        g.setColour(bypassCol);
+        g.drawRoundedRectangle(bypassBounds, 3.0f, 1.0f);
+        paintBypassIcon(g, bypassBounds.reduced(4.0f), bypassCol);
+
+        g.setColour(removeCol);
+        g.drawRoundedRectangle(removeBounds, 3.0f, 1.0f);
+        paintRemoveIcon(g, removeBounds.reduced(4.0f), removeCol);
+    }
 }
 
 juce::Rectangle<float> EqPopupComponent::cardFilterTypeButtonBounds(
@@ -235,6 +257,7 @@ void EqPopupComponent::updateCardState()
     {
         hideCardControls();
         cardBand_ = -1;
+        hoveredCardButton_ = -1;
         return;
     }
     if (selectedFilterIndex_ >= 0 && selectedFilterIndex_ < static_cast<int>(settings_.filters.size()))
@@ -505,6 +528,45 @@ void EqPopupComponent::paint(juce::Graphics& g)
         }
     }
 
+    // 卡片按钮 tooltip（仅完整视图）
+    if (!isPreview_ && hoveredCardButton_ >= 0 && cardBand_ >= 0
+        && cardBand_ < static_cast<int>(settings_.filters.size()))
+    {
+        const auto cardBtn = static_cast<CardButton>(hoveredCardButton_);
+        const auto card = floatingCardBounds();
+        const auto btnRect = cardButtonBounds(cardBtn, card);
+        juce::String tooltipText;
+        if (cardBtn == CardButton::Bypass)
+        {
+            const bool bypassed = settings_.filters[cardBand_].bypassed;
+            tooltipText = bypassed ? juce::String::fromUTF8(u8"启用此滤波器")
+                                  : juce::String::fromUTF8(u8"旁通此滤波器");
+        }
+        else if (cardBtn == CardButton::Remove)
+        {
+            tooltipText = juce::String::fromUTF8(u8"删除此滤波器");
+        }
+
+        if (tooltipText.isNotEmpty())
+        {
+            const float tooltipH = 16.0f;
+            const float tooltipY = btnRect.getBottom() + 3.0f;
+            const float maxY = static_cast<float>(getHeight()) - tooltipH - 2.0f;
+            const float finalY = juce::jmin(tooltipY, maxY);
+
+            g.setColour(EqGraphRenderer::hudBgColor().withAlpha(0.92f));
+            const auto font = juce::Font(juce::FontOptions(10.0f));
+            const auto textW = font.getStringWidthFloat(tooltipText) + 8.0f;
+            const float tooltipX = juce::jmax(2.0f, juce::jmin(btnRect.getX(),
+                                                                 static_cast<float>(getWidth()) - textW - 2.0f));
+            g.fillRoundedRectangle(tooltipX, finalY, textW, tooltipH, 3.0f);
+            g.setColour(EqGraphRenderer::hudTextColor());
+            g.setFont(font);
+            g.drawText(tooltipText, juce::Rectangle<float>(tooltipX, finalY, textW, tooltipH),
+                       juce::Justification::centred, false);
+        }
+    }
+
     // Remove 确认弹窗
     if (showingRemoveConfirmation_)
     {
@@ -564,6 +626,8 @@ void EqPopupComponent::paint(juce::Graphics& g)
 
 void EqPopupComponent::paintButton(juce::Graphics& g, ButtonId id, juce::Rectangle<float> bounds, bool hovered) const
 {
+    if (bounds.isEmpty())
+        return;
     auto color = EqGraphRenderer::axisLabelColor().withAlpha(hovered ? 0.8f : 0.4f);
     if (id == ButtonId::Minimize && hovered)
         color = juce::Colour::fromRGB(220, 60, 60);
@@ -655,15 +719,32 @@ juce::Rectangle<float> EqPopupComponent::buttonBounds(ButtonId id) const
 {
     const auto topBar = topBarBounds();
     const float btnY = (kTopBarHeight - kBtnSize) * 0.5f;
-    // 右上角排列：最小化-最大化-删除-旁通（从右到左）
-    const float startX = topBar.getRight() - 4.0f - kBtnSize;
-    switch (id)
+
+    if (isPreview_)
     {
-    case ButtonId::Bypass:   return { startX, btnY, kBtnSize, kBtnSize };
-    case ButtonId::Remove:   return { startX - (kBtnSize + kBtnGap), btnY, kBtnSize, kBtnSize };
-    case ButtonId::Maximize: return { startX - (kBtnSize + kBtnGap) * 2, btnY, kBtnSize, kBtnSize };
-    case ButtonId::Minimize: return { startX - (kBtnSize + kBtnGap) * 3, btnY, kBtnSize, kBtnSize };
-    case ButtonId::None:     return {};
+        // 预览模式：4 按钮全在顶栏右上角
+        const float startX = topBar.getRight() - 4.0f - kBtnSize;
+        switch (id)
+        {
+        case ButtonId::Bypass:   return { startX, btnY, kBtnSize, kBtnSize };
+        case ButtonId::Remove:   return { startX - (kBtnSize + kBtnGap), btnY, kBtnSize, kBtnSize };
+        case ButtonId::Maximize: return { startX - (kBtnSize + kBtnGap) * 2, btnY, kBtnSize, kBtnSize };
+        case ButtonId::Minimize: return { startX - (kBtnSize + kBtnGap) * 3, btnY, kBtnSize, kBtnSize };
+        case ButtonId::None:     return {};
+        }
+    }
+    else
+    {
+        // 完整视图：顶栏只有最大化/最小化
+        const float startX = topBar.getRight() - 4.0f - kBtnSize;
+        switch (id)
+        {
+        case ButtonId::Maximize: return { startX, btnY, kBtnSize, kBtnSize };
+        case ButtonId::Minimize: return { startX - (kBtnSize + kBtnGap), btnY, kBtnSize, kBtnSize };
+        case ButtonId::Bypass:   return {};
+        case ButtonId::Remove:   return {};
+        case ButtonId::None:     return {};
+        }
     }
     return {};
 }
@@ -674,6 +755,34 @@ EqPopupComponent::ButtonId EqPopupComponent::hitTestButton(juce::Point<float> po
         if (buttonBounds(id).contains(pos))
             return id;
     return ButtonId::None;
+}
+
+// 卡片右上角按钮：旁通 + 删除（仅完整视图）
+juce::Rectangle<float> EqPopupComponent::cardButtonBounds(
+    CardButton btn, const juce::Rectangle<float>& cardBounds) const
+{
+    const float size = kCardTypeBtnSize;
+    const float gap = kCardTypeBtnGap;
+    const float x = cardBounds.getRight() - kCardPadding - size;
+    const float y = cardBounds.getY() + kCardPadding;
+    switch (btn)
+    {
+    case CardButton::Remove: return { x, y, size, size };
+    case CardButton::Bypass: return { x - size - gap, y, size, size };
+    case CardButton::None:   return {};
+    }
+    return {};
+}
+
+EqPopupComponent::CardButton EqPopupComponent::hitTestCardButton(juce::Point<float> pos) const
+{
+    if (isPreview_ || cardBand_ < 0)
+        return CardButton::None;
+    const auto card = floatingCardBounds();
+    for (auto btn : { CardButton::Remove, CardButton::Bypass })
+        if (cardButtonBounds(btn, card).contains(pos))
+            return btn;
+    return CardButton::None;
 }
 
 // ============================================================================
@@ -717,13 +826,17 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
         hoveredBand_ = -1;
         hoveredViewRange_ = -1;
         hoveredTypeButton_ = hitTestFilterTypeButton(pos);
-        setMouseCursor(hoveredTypeButton_ >= 0 ? juce::MouseCursor::PointingHandCursor
-                                               : juce::MouseCursor::NormalCursor);
+        const auto cardBtn = hitTestCardButton(pos);
+        hoveredCardButton_ = static_cast<int>(cardBtn);
+        const bool hasHover = hoveredTypeButton_ >= 0 || cardBtn != CardButton::None;
+        setMouseCursor(hasHover ? juce::MouseCursor::PointingHandCursor
+                                : juce::MouseCursor::NormalCursor);
         repaint();
         return;
     }
 
     hoveredBand_ = renderer_.hitTestAnchor(pos, 10.0f);
+    hoveredCardButton_ = -1;
     if (hoveredBand_ < 0 && !isPreview_)
         hoveredBand_ = renderer_.hitTestCurve(pos, 12.0f);
 
@@ -811,6 +924,50 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
     if (!isPreview_ && cardBand_ >= 0 && !showingRemoveConfirmation_
         && floatingCardBounds().contains(pos))
     {
+        // 卡片右上角按钮：旁通 / 删除
+        const auto cardBtn = hitTestCardButton(pos);
+        if (cardBtn != CardButton::None && cardBand_ >= 0
+            && cardBand_ < static_cast<int>(settings_.filters.size()))
+        {
+            if (cardBtn == CardButton::Bypass)
+            {
+                auto& f = settings_.filters[cardBand_];
+                f.bypassed = !f.bypassed;
+                renderer_.setSettings(settings_);
+                commitSettings();
+                repaint();
+            }
+            else if (cardBtn == CardButton::Remove)
+            {
+                const int idx = cardBand_;
+                hideCardControls();
+                const bool empty = settings_.removeFilter(idx);
+                if (empty)
+                {
+                    if (onRemoveEq) onRemoveEq();
+                    return; // 'this' 可能已被销毁
+                }
+                // 更新选中索引
+                if (selectedFilterIndex_ == idx)
+                    selectedFilterIndex_ = -1;
+                else if (selectedFilterIndex_ > idx)
+                    --selectedFilterIndex_;
+                if (hoveredBand_ == idx)
+                    hoveredBand_ = -1;
+                else if (hoveredBand_ > idx)
+                    --hoveredBand_;
+                if (cardBand_ == idx)
+                    cardBand_ = -1;
+                else if (cardBand_ > idx)
+                    --cardBand_;
+                renderer_.setSettings(settings_);
+                updateCardState();
+                commitSettings();
+                repaint();
+            }
+            return;
+        }
+
         // 命中滤波器类型按钮 → 切换当前滤波器类型
         const int typeIdx = hitTestFilterTypeButton(pos);
         if (typeIdx >= 0 && typeIdx < 5 && cardBand_ >= 0
@@ -1151,6 +1308,7 @@ void EqPopupComponent::mouseExit(const juce::MouseEvent&)
     hoveredButton_ = -1;
     hoveredViewRange_ = -1;
     pressedViewRange_ = -1;
+    hoveredCardButton_ = -1;
     repaint();
 }
 
