@@ -260,9 +260,9 @@ BpmValueField::LayoutRects BpmValueField::calculateLayout() const
 {
     auto content = getLocalBounds().reduced(4, 0);
 
-    // 拍号区域：右侧固定紧凑分配 (denominator 18 + slash 6 + numerator 18 = 42px)
+    // 拍号区域：右侧固定紧凑分配 (denominator 18 + slash 8 + numerator 18 = 44px)
     auto denom = content.removeFromRight(18);
-    auto slash = content.removeFromRight(6);
+    auto slash = content.removeFromRight(8);
     auto num = content.removeFromRight(18);
 
     // BPM 与拍号之间保留 4px 分隔带，divider 落在该区域内
@@ -381,11 +381,11 @@ void BpmValueField::paint(juce::Graphics& g)
     g.setFont(UIColors::getLabelFont(UIColors::navFontHeight - 4.0f));
 
     // Numerator
-    g.drawFittedText(juce::String(timeSigNum_), lr.numerator, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText(juce::String(timeSigNum_), lr.numerator, juce::Justification::centred, 1, 0.0f);
     // Slash
-    g.drawFittedText("/", lr.slash, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText("/", lr.slash, juce::Justification::centred, 1, 0.0f);
     // Denominator
-    g.drawFittedText(juce::String(timeSigDenom_), lr.denominator, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText(juce::String(timeSigDenom_), lr.denominator, juce::Justification::centred, 1, 0.0f);
 
     // Caret for BPM editing - 与居中文本起点一致
     if (isEditing_ && showCaret_)
