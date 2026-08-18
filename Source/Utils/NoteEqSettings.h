@@ -3,7 +3,7 @@
 /**
  * Per-note EQ settings — 动态滤波器链数据契约
  *
- * 支持最多 kMaxFilters 个滤波器，每个滤波器含 type/frequency/gain/q。
+ * 支持最多 kMaxFilters 个滤波器，每个滤波器含 type/frequency/gain/q/paletteSlot。
  * active 控制全局启用/旁通；filters 向量控制滤波器链。
  *
  * 默认构造生成旧 5 段固定结构（LowCut 80 / LowShelf 500 0dB / Peak 3000 0dB q=2 /
@@ -21,6 +21,8 @@
 
 namespace OpenTune {
 
+constexpr int kEqMaxFilters = 10;  // 上限，同时作为 paletteSlot 范围的上界
+
 enum class EqFilterType : uint8_t {
     LowCut,
     LowShelf,
@@ -34,13 +36,15 @@ struct EqFilter {
     float frequencyHz = 1000.0f;
     float gainDb = 0.0f;
     float q = 2.0f;
+    int paletteSlot = 0;  // 0..9, stable identity within EqSettings
 
     bool operator==(const EqFilter& other) const noexcept
     {
         return type == other.type
             && frequencyHz == other.frequencyHz
             && gainDb == other.gainDb
-            && q == other.q;
+            && q == other.q
+            && paletteSlot == other.paletteSlot;
     }
 
     bool operator!=(const EqFilter& other) const noexcept
@@ -52,6 +56,8 @@ struct EqFilter {
     {
         const int t = static_cast<int>(type);
         if (t < 0 || t > 4)
+            return false;
+        if (paletteSlot < 0 || paletteSlot >= kEqMaxFilters)
             return false;
         if (!std::isfinite(frequencyHz) || !std::isfinite(gainDb) || !std::isfinite(q))
             return false;
@@ -80,7 +86,7 @@ struct EqFilter {
 };
 
 struct EqSettings {
-    static constexpr int kMaxFilters = 10;
+    static constexpr int kMaxFilters = kEqMaxFilters;
 
     // 频率范围 Hz
     static constexpr float kMinFrequencyHz = 20.0f;
@@ -100,14 +106,14 @@ struct EqSettings {
     bool active = true;
     std::vector<EqFilter> filters;
 
-    // 默认构造：旧 5 段固定结构，保证 v5 数据迁移后语义一致
+    // 默认构造：旧 5 段固定结构 + 稳定 paletteSlot 0..4，保证旧数据迁移后语义一致
     EqSettings()
         : filters{
-              { EqFilterType::LowCut,   80.0f,   0.0f, 0.707f },
-              { EqFilterType::LowShelf, 500.0f,  0.0f, 2.0f  },
-              { EqFilterType::Peak,     3000.0f, 0.0f, 2.0f  },
-              { EqFilterType::HighShelf,8000.0f, 0.0f, 2.0f  },
-              { EqFilterType::HighCut,  12000.0f,0.0f, 0.707f }
+              { EqFilterType::LowCut,   80.0f,   0.0f, 0.707f, 0 },
+              { EqFilterType::LowShelf, 500.0f,  0.0f, 2.0f,   1 },
+              { EqFilterType::Peak,     3000.0f, 0.0f, 2.0f,   2 },
+              { EqFilterType::HighShelf,8000.0f, 0.0f, 2.0f,   3 },
+              { EqFilterType::HighCut,  12000.0f,0.0f, 0.707f, 4 }
           }
     {
     }
@@ -129,6 +135,13 @@ struct EqSettings {
         for (const auto& f : filters)
             if (!f.isValid())
                 return false;
+        // paletteSlot 唯一性校验
+        bool used[kEqMaxFilters] = {};
+        for (const auto& f : filters) {
+            if (used[f.paletteSlot])
+                return false;
+            used[f.paletteSlot] = true;
+        }
         return true;
     }
 };

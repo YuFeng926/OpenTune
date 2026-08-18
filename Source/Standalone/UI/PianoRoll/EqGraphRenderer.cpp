@@ -15,6 +15,23 @@
 namespace OpenTune {
 
 // ============================================================================
+// 10 色调色板（SRC 滤波器 + 频谱颜色循环共享）
+// ============================================================================
+
+const std::array<juce::Colour, 10> EqGraphRenderer::kPalette = {
+    juce::Colour::fromRGB(255, 190, 66),   // 0  金橙
+    juce::Colour::fromRGB(59, 213, 255),   // 1  青
+    juce::Colour::fromRGB(157, 116, 255),  // 2  紫
+    juce::Colour::fromRGB(255, 111, 184),  // 3  粉
+    juce::Colour::fromRGB(83, 232, 158),   // 4  绿
+    juce::Colour::fromRGB(255, 128, 74),   // 5  橙
+    juce::Colour::fromRGB(112, 168, 255),  // 6  蓝
+    juce::Colour::fromRGB(223, 238, 84),   // 7  黄绿
+    juce::Colour::fromRGB(45, 222, 203),   // 8  青绿
+    juce::Colour::fromRGB(255, 86, 112),   // 9  红
+};
+
+// ============================================================================
 // 颜色常量
 // ============================================================================
 
@@ -25,20 +42,64 @@ juce::Colour EqGraphRenderer::combinedCurveColor() { return juce::Colour::fromRG
 juce::Colour EqGraphRenderer::hudBgColor() { return juce::Colour::fromRGBA(12, 17, 24, 224); }
 juce::Colour EqGraphRenderer::hudTextColor() { return juce::Colour::fromRGB(230, 236, 243); }
 
-// 按 EqFilterType 映射 5 色调色板
-static const std::array<juce::Colour, 5> kTypePalette = {
-    juce::Colour::fromRGB(255, 190, 66),   // LowCut  - 金橙
-    juce::Colour::fromRGB(59, 213, 255),   // LowShelf - 青
-    juce::Colour::fromRGB(157, 116, 255),  // Peak    - 紫
-    juce::Colour::fromRGB(255, 111, 184),  // HighShelf - 粉
-    juce::Colour::fromRGB(83, 232, 158),   // HighCut - 绿
-};
+// ── paletteSlot 辅助 ──
+
+juce::Colour EqGraphRenderer::typeFallbackColor(EqFilterType type)
+{
+    return kPalette[static_cast<size_t>(type) % kPaletteSize];
+}
+
+int EqGraphRenderer::getPaletteSlot(const EqFilter& f)
+{
+    return static_cast<int>(f.paletteSlot);
+}
 
 juce::Colour EqGraphRenderer::bandColor(int filterIndex) const
 {
     if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
         return juce::Colours::grey;
-    return kTypePalette[static_cast<size_t>(settings_.filters[filterIndex].type)];
+    const auto& f = settings_.filters[filterIndex];
+    const int slot = getPaletteSlot(f);
+    if (slot >= 0 && slot < kPaletteSize)
+        return kPalette[static_cast<size_t>(slot)];
+    return typeFallbackColor(f.type);
+}
+
+void EqGraphRenderer::assignPaletteSlots(EqSettings& settings)
+{
+    // 1. 每个有效 slot 仅保留首次遇到的 filter，其余标记为需要重分配
+    std::array<bool, kPaletteSize> claimed{};
+    for (auto& f : settings.filters)
+    {
+        const int slot = getPaletteSlot(f);
+        if (slot >= 0 && slot < kPaletteSize && !claimed[static_cast<size_t>(slot)])
+            claimed[static_cast<size_t>(slot)] = true;
+        else
+            f.paletteSlot = -1;
+    }
+
+    // 2. 收集空闲 slot 并真正随机打散
+    std::vector<int> freeSlots;
+    freeSlots.reserve(kPaletteSize);
+    for (int i = 0; i < kPaletteSize; ++i)
+        if (!claimed[static_cast<size_t>(i)])
+            freeSlots.push_back(i);
+    auto& rng = juce::Random::getSystemRandom();
+    for (int i = static_cast<int>(freeSlots.size()) - 1; i > 0; --i)
+    {
+        const int j = rng.nextInt(i + 1);
+        std::swap(freeSlots[static_cast<size_t>(i)], freeSlots[static_cast<size_t>(j)]);
+    }
+
+    // 3. 为需要重分配的 filter 从空闲列表顺序取（已 shuffle）
+    int freeIdx = 0;
+    for (auto& f : settings.filters)
+    {
+        if (getPaletteSlot(f) >= 0)
+            continue;
+        if (freeIdx < static_cast<int>(freeSlots.size()))
+            f.paletteSlot = static_cast<uint8_t>(freeSlots[freeIdx++]);
+    }
 }
 
 // ============================================================================
@@ -401,7 +462,36 @@ juce::Path EqGraphRenderer::buildBandInfluencePath(int filterIndex) const
 }
 
 // ============================================================================
-// 频谱背景动画
+// 频谱颜色循环 — 由 timer 每帧调用，不在 paint() 里随机
+// ============================================================================
+
+void EqGraphRenderer::advanceSpectrumColorCycle(double dt)
+{
+    spectrumColorTimer_ += static_cast<float>(dt);
+    if (spectrumColorTimer_ >= kSpectrumColorCycleInterval)
+    {
+        spectrumColorTimer_ -= kSpectrumColorCycleInterval;
+        spectrumColorIndex_ = spectrumTargetIndex_;
+
+        // 随机选择下一个目标色（不等于当前）
+        int nextTarget;
+        auto& rng = juce::Random::getSystemRandom();
+        do {
+            nextTarget = rng.nextInt(kPaletteSize);
+        } while (nextTarget == spectrumColorIndex_ && kPaletteSize > 1);
+
+        spectrumTargetIndex_ = nextTarget;
+        spectrumColorProgress_ = 0.0f;
+    }
+    else
+    {
+        spectrumColorProgress_ = std::clamp(
+            spectrumColorTimer_ / kSpectrumColorCycleInterval, 0.0f, 1.0f);
+    }
+}
+
+// ============================================================================
+// 频谱背景动画 — 多层渐变 + 柔光 + 阴影 + 峰值高亮 + 主线高亮
 // ============================================================================
 
 void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
@@ -413,6 +503,10 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
     const float gw = graphBounds_.getWidth();
     const float gh = graphBounds_.getHeight();
     const int numBins = static_cast<int>(spectrum.size());
+
+    const auto curColor = kPalette[static_cast<size_t>(spectrumColorIndex_)]
+        .interpolatedWith(kPalette[static_cast<size_t>(spectrumTargetIndex_)],
+                          spectrumColorProgress_);
 
     std::array<juce::Point<float>, 128> linePoints{};
     std::array<juce::Point<float>, 128> peakPoints{};
@@ -445,19 +539,6 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
         return path;
     };
 
-    auto fillPath = makeSmoothPath(linePoints, gy + gh);
-
-    {
-        juce::Graphics::ScopedSaveState saved(g);
-        g.reduceClipRegion(graphBounds_.toNearestInt());
-        juce::ColourGradient grad(
-            juce::Colour::fromRGBA(59, 213, 255, 18), 0.0f, gy,
-            juce::Colour::fromRGBA(59, 213, 255, 0),  0.0f, gy + gh, true);
-        grad.addColour(0.4, juce::Colour::fromRGBA(83, 232, 158, 12));
-        g.setGradientFill(grad);
-        g.fillPath(fillPath);
-    }
-
     const auto makeLinePath = [](const auto& points) {
         juce::Path path;
         path.startNewSubPath(points.front());
@@ -472,18 +553,80 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
         return path;
     };
 
-    const auto peakPath = makeLinePath(peakPoints);
-    g.setColour(juce::Colour::fromRGBA(130, 245, 222, 0x22));
-    g.strokePath(peakPath, juce::PathStrokeType(4.8f,
-        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    g.setColour(juce::Colour::fromRGBA(180, 255, 236, 0x58));
-    g.strokePath(peakPath, juce::PathStrokeType(1.0f,
-        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    // ── 层 1：底部阴影（深度感） ──
+    {
+        juce::Graphics::ScopedSaveState saved(g);
+        g.reduceClipRegion(graphBounds_.toNearestInt());
+        juce::ColourGradient shadowGrad(
+            curColor.withAlpha(0.06f), 0.0f, gy + gh - gh * 0.2f,
+            juce::Colour::fromRGBA(0, 0, 0, 0), 0.0f, gy + gh, true);
+        g.setGradientFill(shadowGrad);
+        g.fillRect(gx, gy + gh - gh * 0.2f, gw, gh * 0.2f);
+    }
 
+    // ── 层 2：多色渐变填充（立体感核心） ──
+    {
+        juce::Graphics::ScopedSaveState saved(g);
+        g.reduceClipRegion(graphBounds_.toNearestInt());
+        auto fillPath = makeSmoothPath(linePoints, gy + gh);
+
+        const auto color1 = curColor.interpolatedWith(
+            kPalette[(static_cast<size_t>(spectrumColorIndex_) + 3) % kPaletteSize], 0.4f);
+        const auto color2 = curColor.interpolatedWith(
+            kPalette[(static_cast<size_t>(spectrumColorIndex_) + 7) % kPaletteSize], 0.3f);
+
+        juce::ColourGradient grad(
+            color1.withAlpha(0.18f), 0.0f, gy,
+            color2.withAlpha(0.0f),  0.0f, gy + gh, true);
+        grad.addColour(0.35, color1.interpolatedWith(color2, 0.5f).withAlpha(0.08f));
+        grad.addColour(0.7, color2.withAlpha(0.03f));
+        g.setGradientFill(grad);
+        g.fillPath(fillPath);
+    }
+
+    // ── 层 3：填充上半柔光（高光带） ──
+    {
+        juce::Graphics::ScopedSaveState saved(g);
+        g.reduceClipRegion(graphBounds_.toNearestInt());
+        auto fillPath = makeSmoothPath(linePoints, gy + gh);
+        juce::ColourGradient glowGrad(
+            curColor.brighter(0.4f).withAlpha(0.06f), 0.0f, gy,
+            curColor.withAlpha(0.0f), 0.0f, gy + gh * 0.55f, true);
+        g.setGradientFill(glowGrad);
+        g.fillPath(fillPath);
+    }
+
+    // ── 层 4：峰值 glow + 高亮线 ──
+    const auto peakPath = makeLinePath(peakPoints);
+    {
+        const auto glowColor = curColor.interpolatedWith(juce::Colours::white, 0.35f);
+        g.setColour(glowColor.withAlpha(0.12f));
+        g.strokePath(peakPath, juce::PathStrokeType(5.5f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    {
+        g.setColour(curColor.withAlpha(0.45f));
+        g.strokePath(peakPath, juce::PathStrokeType(2.2f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.55f));
+        g.strokePath(peakPath, juce::PathStrokeType(0.9f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+    // ── 层 5：主频谱线高亮 ──
     const auto linePath = makeLinePath(linePoints);
-    g.setColour(juce::Colours::white.withAlpha(0.14f));
-    g.strokePath(linePath, juce::PathStrokeType(1.25f,
-        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    {
+        g.setColour(curColor.withAlpha(0.10f));
+        g.strokePath(linePath, juce::PathStrokeType(2.8f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.20f));
+        g.strokePath(linePath, juce::PathStrokeType(1.15f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
 }
 
 // ============================================================================
@@ -963,7 +1106,8 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
                                juce::Point<float> mousePos, bool isDragging,
                                int hoveredViewRangeControl,
                                int pressedViewRangeControl,
-                               const std::vector<double>& hoverBandAmounts) const
+                               const std::vector<double>& hoverBandAmounts,
+                               int activeCardBand) const
 {
     drawGrid(g);
 
@@ -1004,6 +1148,15 @@ void EqGraphRenderer::drawFull(juce::Graphics& g, int hoveredBand,
     }
 
     drawAnchors(g, hoveredBand);
+
+    // floating card 活动锚点高亮环
+    if (activeCardBand >= 0 && activeCardBand < n)
+    {
+        const auto pos = anchorPosition(activeCardBand);
+        const auto color = bandColor(activeCardBand);
+        g.setColour(color.withAlpha(0.35f));
+        g.drawEllipse(pos.x - 9.0f, pos.y - 9.0f, 18.0f, 18.0f, 1.5f);
+    }
 
     drawViewRangeButtons(g, hoveredViewRangeControl, pressedViewRangeControl);
 
