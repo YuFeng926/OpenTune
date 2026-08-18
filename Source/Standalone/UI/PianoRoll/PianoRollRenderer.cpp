@@ -1080,6 +1080,14 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.strokePath(blob, juce::PathStrokeType(0.9f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
+
+            if (note.eq.has_value() && note.eq->active)
+            {
+                g.setColour(item.displayColour.withAlpha(0.85f));
+                g.strokePath(blob, juce::PathStrokeType(2.0f,
+                                                        juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+            }
         }
 
         return;
@@ -1133,6 +1141,12 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.56f));
             g.drawRect(noteBounds, 1.0f);
 
+            if (note.eq.has_value() && note.eq->active)
+            {
+                g.setColour(item.displayColour.withAlpha(0.85f));
+                g.drawRect(noteBounds.expanded(1.0f), 2.0f);
+            }
+
             g.setColour(UIColors::glassHighlight.withAlpha(0.14f));
             g.drawLine(noteBounds.getX() + 1.0f,
                        noteBounds.getY() + 1.0f,
@@ -1161,6 +1175,12 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.48f));
             g.drawRect(noteBounds, 0.9f);
+
+            if (note.eq.has_value() && note.eq->active)
+            {
+                g.setColour(item.displayColour.withAlpha(0.85f));
+                g.drawRect(noteBounds.expanded(1.5f), 2.0f);
+            }
         }
         else
         {
@@ -1169,6 +1189,12 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
             g.drawRect(noteBounds, 1.0f);
+
+            if (note.eq.has_value() && note.eq->active)
+            {
+                g.setColour(item.displayColour.withAlpha(0.85f));
+                g.drawRect(noteBounds.expanded(1.0f), 2.0f);
+            }
         }
     }
 
