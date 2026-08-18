@@ -8,48 +8,23 @@
   "configurePresets": [
     {
       "name": "windows-ara-vs2022",
-      "displayName": "Windows VS2022 Release Tree (ARA)",
+      "displayName": "Windows VS2022 Release Tree (ARA2 VST3)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build-ara-overlay-vs18-clean",
       "cacheVariables": {
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "OPENTUNE_ENABLE_ARA": "ON"
-      }
-    },
-    {
-      "name": "windows-nonara-vs2022",
-      "displayName": "Windows VS2022 Release Tree (non-ARA)",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build-nonara-overlay-vs18-clean",
-      "cacheVariables": {
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-      "OPENTUNE_ENABLE_ARA": "OFF"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
       "name": "windows-ara-ninja",
-      "displayName": "Windows Ninja Release (ARA)",
+      "displayName": "Windows Ninja Release (ARA2 VST3)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-ara-ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_MAKE_PROGRAM": "F:/VSC/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
-        "OPENTUNE_ENABLE_ARA": "ON"
-      }
-    },
-    {
-      "name": "windows-nonara-ninja",
-      "displayName": "Windows Ninja Release (non-ARA)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-nonara-ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_MAKE_PROGRAM": "F:/VSC/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
-        "OPENTUNE_ENABLE_ARA": "OFF"
+        "CMAKE_MAKE_PROGRAM": "F:/VSC/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
       }
     }
   ],
@@ -60,17 +35,8 @@
       "configuration": "Release"
     },
     {
-      "name": "windows-nonara-release",
-      "configurePreset": "windows-nonara-vs2022",
-      "configuration": "Release"
-    },
-    {
       "name": "windows-ara-ninja-release",
       "configurePreset": "windows-ara-ninja"
-    },
-    {
-      "name": "windows-nonara-ninja-release",
-      "configurePreset": "windows-nonara-ninja"
     }
   ]
 }

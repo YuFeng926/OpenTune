@@ -271,10 +271,10 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
 // 所有 Stage1 最终 Note 音频结果（轻量、原始、Vocoder）在写入缓存前统一经
 // 应用 per-note EQ，位于音量包络前（包络只在播放端
 // applyAutomationGain 应用）。notes 只在本调用栈内读取，不复制、不存储。
-// 每个 active Note 用独立 NoteEqProcessor，prepare 按固定渲染率
-// RenderCache::kSampleRate 计算系数并从 Note 起点重置状态，只处理
-// 该 Note 在完整 chunk 内的精确样本范围（RenderChunkPlanner 已保证 chunk
-// 边界不切 Note）。Stage1 音频固定 44.1kHz（canonical），不存在第二采样率轴。
+// 每个 active Note 使用局部 NoteEqProcessor，prepare 按固定渲染率计算系数并从
+// Note 起点重置状态，只处理该 Note 在完整 chunk 内的精确样本范围。
+// RenderChunkPlanner 已保证 active-EQ Note 不跨 chunk；Stage1 音频固定 44.1kHz。
+constexpr int kNoteEqBoundaryFadeSamples = 8;
 
 // chunk 发布范围 [trueStartSample, trueEndSample) 是否与任何 active-EQ Note
 // 相交（用于原始路径 Blank/失败条件中的 EQ 排除，契约 §6）。
@@ -324,15 +324,55 @@ RenderCache::ChunkRenderResult publishChunkWithPerNoteEq(
         if (rangeEnd <= rangeStart)
             continue;
 
-        // 每个 active Note 独立处理器：prepare 按固定渲染率计算系数并重置状态
+        // planner 保证 active-EQ Note 不跨 chunk，因此处理器仅在本 Note 内存在，
+        // 不需要共享状态或跨 chunk 缓存。
         NoteEqProcessor processor;
         processor.prepare(RenderCache::kSampleRate, *note.eq);
 
-        float* channelData[1] = {
-            audio.data() + static_cast<size_t>(rangeStart - boundaries.trueStartSample) };
-        juce::AudioBuffer<float> noteBuffer(
-            channelData, 1, static_cast<int>(rangeEnd - rangeStart));
-        processor.process(noteBuffer);
+        const size_t audioOffset = static_cast<size_t>(rangeStart - boundaries.trueStartSample);
+        const int noteSampleCount = static_cast<int>(rangeEnd - rangeStart);
+        const bool fadeIn = rangeStart == noteStartSample;
+        const bool fadeOut = rangeEnd == noteEndSample;
+
+        if (!fadeIn && !fadeOut)
+        {
+            float* channelData[1] = { audio.data() + audioOffset };
+            juce::AudioBuffer<float> noteBuffer(channelData, 1, noteSampleCount);
+            processor.process(noteBuffer);
+            continue;
+        }
+
+        std::vector<float> filtered(static_cast<size_t>(noteSampleCount));
+        std::copy_n(audio.data() + audioOffset, noteSampleCount, filtered.data());
+        float* filteredData[1] = { filtered.data() };
+        juce::AudioBuffer<float> filteredBuffer(filteredData, 1, noteSampleCount);
+        processor.process(filteredBuffer);
+
+        const int fadeInSamples = std::min(kNoteEqBoundaryFadeSamples, noteSampleCount);
+        const int fadeOutSamples = std::min(kNoteEqBoundaryFadeSamples, noteSampleCount);
+        for (int i = 0; i < noteSampleCount; ++i)
+        {
+            float wetMix = 1.0f;
+            if (fadeIn)
+            {
+                const float weight = fadeInSamples > 1
+                    ? static_cast<float>(i) / static_cast<float>(fadeInSamples - 1)
+                    : 0.0f;
+                wetMix = std::min(wetMix, weight);
+            }
+            if (fadeOut)
+            {
+                const int distanceFromEnd = noteSampleCount - 1 - i;
+                const float weight = fadeOutSamples > 1
+                    ? static_cast<float>(distanceFromEnd) / static_cast<float>(fadeOutSamples - 1)
+                    : 0.0f;
+                wetMix = std::min(wetMix, weight);
+            }
+
+            const float dry = audio[audioOffset + static_cast<size_t>(i)];
+            const float wet = filtered[static_cast<size_t>(i)];
+            audio[audioOffset + static_cast<size_t>(i)] = dry + (wet - dry) * wetMix;
+        }
     }
 
     return renderCache.completeChunkRenderWithAudio(

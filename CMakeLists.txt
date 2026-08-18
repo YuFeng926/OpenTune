@@ -22,7 +22,6 @@ project(OpenTune VERSION 1.7.2 LANGUAGES CXX C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(OPENTUNE_THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty")
-option(OPENTUNE_ENABLE_ARA "Build VST3 with ARA extension support" ON)
 
 # ==============================================================================
 # C++ Standard
@@ -65,18 +64,15 @@ add_subdirectory("${OPENTUNE_JUCE_DIR}/extras/Build" "${JUCE_BINARY_DIR}/extras/
 add_subdirectory("${OPENTUNE_JUCE_DIR}/modules" "${JUCE_BINARY_DIR}/modules")
 opentune_use_juce_vst3_client_ara_legacy_bind_overlay("${OPENTUNE_JUCE_DIR}")
 
-# Set ARA SDK path for JUCE before creating plugin targets (align with VST3 reference workspace)
-if(OPENTUNE_ENABLE_ARA)
-    if(EXISTS "${ARA_SDK_PATH}")
-        juce_set_ara_sdk_path("${ARA_SDK_PATH}")
-        message(STATUS "ARA SDK found at: ${ARA_SDK_PATH} (VST3 ARA support enabled)")
-    else()
-        message(WARNING "ARA SDK not found at ${ARA_SDK_PATH}. VST3 ARA features will be disabled.")
-        message(STATUS "To enable ARA, clone: git clone --recursive --branch releases/${OPENTUNE_ARA_SDK_VERSION} https://github.com/Celemony/ARA_SDK")
-    endif()
-else()
-    message(STATUS "VST3 ARA support disabled by OPENTUNE_ENABLE_ARA=OFF")
+# ARA2 VST3 is the only plugin build. Hosts without ARA binding use the same
+# binary and naturally fall back to the Capture workflow at runtime.
+if(NOT EXISTS "${ARA_SDK_PATH}")
+    message(FATAL_ERROR
+        "ARA SDK ${OPENTUNE_ARA_SDK_VERSION} is required at ${ARA_SDK_PATH}. "
+        "Clone it with: git clone --recursive --branch releases/${OPENTUNE_ARA_SDK_VERSION} https://github.com/Celemony/ARA_SDK")
 endif()
+juce_set_ara_sdk_path("${ARA_SDK_PATH}")
+message(STATUS "ARA SDK found at: ${ARA_SDK_PATH} (ARA2 VST3 enabled)")
 
 # ==============================================================================
 # ONNX Runtime Configuration
@@ -348,8 +344,8 @@ juce_add_plugin(OpenTune
     # Formats (Standalone + VST3 dual-format build)
     FORMATS Standalone VST3
 
-    # Enable ARA Extension (VST3 target only, but required here for SDK detection)
-    IS_ARA_EFFECT ${OPENTUNE_ENABLE_ARA}
+    # The VST3 binary always includes the ARA2 extension.
+    IS_ARA_EFFECT TRUE
     
     # Plugin Type
     IS_SYNTH FALSE
@@ -760,27 +756,24 @@ if(MSVC)
     target_compile_options(OpenTune_VST3 PRIVATE /utf-8 /bigobj)
 endif()
 
-# ARA files (VST3 ARA extension build only)
-if(OPENTUNE_ENABLE_ARA)
-    target_sources(OpenTune PRIVATE
-        Source/ARA/AudioSource.cpp
-        Source/ARA/AudioSource.h
-        Source/ARA/AudioModification.cpp
-        Source/ARA/AudioModification.h
-        Source/ARA/PlaybackRegion.cpp
-        Source/ARA/PlaybackRegion.h
-        Source/ARA/OpenTuneDocumentController.cpp
-        Source/ARA/OpenTuneDocumentController.h
-        Source/ARA/OpenTuneEditorView.cpp
-        Source/ARA/OpenTuneEditorView.h
-        Source/ARA/OpenTunePlaybackRenderer.cpp
-        Source/ARA/OpenTunePlaybackRenderer.h
-    )
-endif()
+# ARA2 document integration is always compiled into the VST3 binary.
+target_sources(OpenTune PRIVATE
+    Source/ARA/AudioSource.cpp
+    Source/ARA/AudioSource.h
+    Source/ARA/AudioModification.cpp
+    Source/ARA/AudioModification.h
+    Source/ARA/PlaybackRegion.cpp
+    Source/ARA/PlaybackRegion.h
+    Source/ARA/OpenTuneDocumentController.cpp
+    Source/ARA/OpenTuneDocumentController.h
+    Source/ARA/OpenTuneEditorView.cpp
+    Source/ARA/OpenTuneEditorView.h
+    Source/ARA/OpenTunePlaybackRenderer.cpp
+    Source/ARA/OpenTunePlaybackRenderer.h
+)
 
-# Capture module (VST3 non-ARA capture workflow)
-# Runtime-isolated: included unconditionally in shared lib; CaptureSession is only
-# instantiated when getWrapperType() == wrapperType_VST3.
+# Runtime fallback for VST3 hosts that do not bind the ARA2 extension.
+# CaptureSession remains part of the same ARA2-capable VST3 binary.
 target_sources(OpenTune PRIVATE
     Source/Plugin/Capture/CaptureRingBuffer.cpp
     Source/Plugin/Capture/CaptureRingBuffer.h
