@@ -15,6 +15,8 @@
 
 namespace OpenTune {
 
+class LargeKnobLookAndFeel;
+
 class EqPopupComponent : public juce::Component,
                           public juce::Timer {
 public:
@@ -57,10 +59,14 @@ private:
     juce::Rectangle<float> floatingCardBounds(juce::Point<float> anchorPos) const;
     void paintFloatingCard(juce::Graphics& g, int filterIndex, juce::Point<float> anchorPos) const;
     void updateCardState();
+    juce::Rectangle<float> cardFilterButtonBounds(const juce::Rectangle<float>& cardBounds, int index, int count) const;
 
-    void showValueInputPopup(int filterIndex);
-    void dismissValueInputPopup();
-    void layoutValueInputOverlay();
+    // 卡片内旋钮控件
+    void configureCardControls(int filterIndex);
+    void hideCardControls();
+    void layoutCardControls();
+    void cardSliderChanged(int parameterIndex);
+
     void dismissRemoveConfirmation();
 
     void paintBypassIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
@@ -81,12 +87,18 @@ private:
     int hoveredViewRange_ = -1;
     int pressedViewRange_ = -1;
     int selectedFilterIndex_ = -1;
-    int pendingValueInputBand_ = -1;
     juce::Rectangle<int> savedPreviewBounds_;
 
     // 浮动参数卡状态
     int cardBand_ = -1;
     juce::Point<float> cardAnchorPos_;
+
+    // 卡片内旋钮控件
+    std::unique_ptr<LargeKnobLookAndFeel> cardKnobLookAndFeel_;
+    juce::Slider frequencySlider_;
+    juce::Slider gainSlider_;
+    juce::Slider qSlider_;
+    bool updatingCardControls_ = false;
 
     std::vector<double> hoverBandAmounts_ = std::vector<double>(EqSettings::kMaxFilters, 0.0);
     static constexpr double kHoverFadeInTime = 0.50;
@@ -99,14 +111,6 @@ private:
     int pendingDragBand_ = -1;
     juce::Point<float> pendingDragStartPos_;
 
-    bool showingValueInput_ = false;
-    int valueInputBand_ = -1;
-    std::unique_ptr<juce::TextEditor> freqEditor_;
-    std::unique_ptr<juce::TextEditor> gainEditor_;
-    std::unique_ptr<juce::Label> qLabel_;
-    std::unique_ptr<juce::TextButton> valueInputOk_;
-    std::unique_ptr<juce::TextButton> valueInputCancel_;
-
     bool showingRemoveConfirmation_ = false;
     bool suppressRemoveConfirmation_ = false;
     juce::Point<float> activeMousePos_;
@@ -116,9 +120,12 @@ private:
     static constexpr float kTopBarHeight = 28.0f;
     static constexpr float kBtnSize = 20.0f;
     static constexpr float kBtnGap = 3.0f;
-    static constexpr float kCardWidth = 220.0f;
-    static constexpr float kCardRowHeight = 20.0f;
-    static constexpr float kCardButtonHeight = 18.0f;
+    static constexpr float kCardWidth = 260.0f;
+    static constexpr float kCardIconRowH = 18.0f;
+    static constexpr float kCardColumnWidth = 84.0f;
+    static constexpr float kCardSliderHeight = 96.0f;
+    static constexpr float kCardLabelHeight = 12.0f;
+    static constexpr float kCardPadding = 4.0f;
 
     juce::Rectangle<float> topBarBounds() const;
     void commitSettings();

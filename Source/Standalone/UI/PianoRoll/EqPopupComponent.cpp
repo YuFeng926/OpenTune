@@ -6,6 +6,7 @@
  */
 
 #include "EqPopupComponent.h"
+#include "../ParameterPanel.h"
 #include "../UIColors.h"
 #include <cmath>
 
@@ -17,13 +18,63 @@ EqPopupComponent::EqPopupComponent()
     setOpaque(false);
     startTimerHz(30);
     interaction_.setRenderer(&renderer_);
+
+    // 创建旋钮 LookAndFeel
+    cardKnobLookAndFeel_ = std::make_unique<LargeKnobLookAndFeel>();
+
+    // 频率旋钮
+    frequencySlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    frequencySlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 84, 28);
+    frequencySlider_.setRange(20.0, 20000.0, 1.0);
+    frequencySlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
+    frequencySlider_.setDoubleClickReturnValue(true, 1000.0);
+    frequencySlider_.setTextValueSuffix(" Hz");
+    frequencySlider_.setNumDecimalPlacesToDisplay(0);
+    frequencySlider_.setSkewFactorFromMidPoint(1000.0);
+    frequencySlider_.setLookAndFeel(cardKnobLookAndFeel_.get());
+    frequencySlider_.setScrollWheelEnabled(false);
+    frequencySlider_.setPopupDisplayEnabled(false, false, nullptr);
+    frequencySlider_.onValueChange = [this] { cardSliderChanged(0); };
+    addAndMakeVisible(frequencySlider_);
+    frequencySlider_.setVisible(false);
+
+    // 增益旋钮
+    gainSlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    gainSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 84, 28);
+    gainSlider_.setRange(-12.0, 12.0, 0.1);
+    gainSlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
+    gainSlider_.setDoubleClickReturnValue(true, 0.0);
+    gainSlider_.setTextValueSuffix(" dB");
+    gainSlider_.setNumDecimalPlacesToDisplay(1);
+    gainSlider_.setLookAndFeel(cardKnobLookAndFeel_.get());
+    gainSlider_.setScrollWheelEnabled(false);
+    gainSlider_.setPopupDisplayEnabled(false, false, nullptr);
+    gainSlider_.onValueChange = [this] { cardSliderChanged(1); };
+    addAndMakeVisible(gainSlider_);
+    gainSlider_.setVisible(false);
+
+    // Q 旋钮
+    qSlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    qSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 84, 28);
+    qSlider_.setRange(0.25, 9.0, 0.01);
+    qSlider_.setRotaryParameters(juce::degreesToRadians(210.0f), juce::degreesToRadians(510.0f), true);
+    qSlider_.setDoubleClickReturnValue(true, 1.0);
+    qSlider_.setNumDecimalPlacesToDisplay(2);
+    qSlider_.setLookAndFeel(cardKnobLookAndFeel_.get());
+    qSlider_.setScrollWheelEnabled(false);
+    qSlider_.setPopupDisplayEnabled(false, false, nullptr);
+    qSlider_.onValueChange = [this] { cardSliderChanged(2); };
+    addAndMakeVisible(qSlider_);
+    qSlider_.setVisible(false);
 }
 
 EqPopupComponent::~EqPopupComponent()
 {
     stopTimer();
-    dismissValueInputPopup();
-    dismissRemoveConfirmation();
+    frequencySlider_.setLookAndFeel(nullptr);
+    gainSlider_.setLookAndFeel(nullptr);
+    qSlider_.setLookAndFeel(nullptr);
+    showingRemoveConfirmation_ = false;
 }
 
 // ============================================================================
@@ -32,9 +83,7 @@ EqPopupComponent::~EqPopupComponent()
 
 juce::Rectangle<float> EqPopupComponent::floatingCardBounds(juce::Point<float> anchorPos) const
 {
-    float cardH = kCardRowHeight * 3.0f + kCardButtonHeight + 14.0f;
-    if (showingValueInput_)
-        cardH += kCardButtonHeight + 6.0f; // OK/Cancel row + gap
+    const float cardH = kCardPadding + kCardIconRowH + 3.0f + kCardLabelHeight + kCardSliderHeight + kCardPadding;
     float x = anchorPos.x + 14.0f;
     float y = anchorPos.y - cardH * 0.5f;
     if (x + kCardWidth > static_cast<float>(getWidth()) - 2.0f)
@@ -52,24 +101,23 @@ void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex,
     if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
         return;
 
-    const auto& f = settings_.filters[filterIndex];
-    const auto cardBounds = floatingCardBounds(anchorPos);
+    const auto card = floatingCardBounds(anchorPos);
     const auto color = renderer_.bandColor(filterIndex);
 
     // 卡片背景
     g.setColour(EqGraphRenderer::hudBgColor().withAlpha(0.93f));
-    g.fillRoundedRectangle(cardBounds, 6.0f);
+    g.fillRoundedRectangle(card, 6.0f);
     g.setColour(color.withAlpha(0.45f));
-    g.drawRoundedRectangle(cardBounds, 6.0f, 1.0f);
+    g.drawRoundedRectangle(card, 6.0f, 1.0f);
 
     // 指向锚点的三角形连线
     {
         juce::Path arrow;
         const float tipX = anchorPos.x;
         const float tipY = anchorPos.y;
-        const bool fromLeft = tipX < cardBounds.getX();
-        const float baseX = fromLeft ? cardBounds.getX() : cardBounds.getRight();
-        const float baseY = juce::jlimit(cardBounds.getY() + 8.0f, cardBounds.getBottom() - 8.0f, tipY);
+        const bool fromLeft = tipX < card.getX();
+        const float baseX = fromLeft ? card.getX() : card.getRight();
+        const float baseY = juce::jlimit(card.getY() + 8.0f, card.getBottom() - 8.0f, tipY);
         arrow.startNewSubPath(tipX, tipY);
         arrow.lineTo(baseX, baseY - 5.0f);
         arrow.lineTo(baseX, baseY + 5.0f);
@@ -80,105 +128,181 @@ void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex,
         g.strokePath(arrow, juce::PathStrokeType(1.0f));
     }
 
-    const float cx = cardBounds.getX() + 6.0f;
-    float cy = cardBounds.getY() + 5.0f;
-
-    // 滤波器选择按钮行
-    g.setFont(juce::FontOptions(9.0f));
-    const int n = static_cast<int>(settings_.filters.size());
-    float bx = cx;
-    for (int i = 0; i < n; ++i)
+    // 顶部：滤波器图标色号矩阵，居中均匀分布
     {
-        const float bw = 18.0f;
-        const juce::Rectangle<float> btnRect(bx, cy, bw, kCardButtonHeight);
-        const bool isActive = (i == filterIndex);
-        const auto btnColor = renderer_.bandColor(i);
-        g.setColour(isActive ? btnColor.withAlpha(0.75f) : btnColor.withAlpha(0.25f));
-        g.fillRoundedRectangle(btnRect, 3.0f);
-        g.setColour(isActive ? juce::Colours::white.withAlpha(0.9f)
-                             : juce::Colours::white.withAlpha(0.4f));
-        g.drawText(juce::String(i + 1), btnRect, juce::Justification::centred, false);
-        bx += bw + 2.0f;
-    }
-    cy += kCardButtonHeight + 4.0f;
-
-    // Frequency
-    g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.6f));
-    g.setFont(juce::FontOptions(9.0f));
-    g.drawText("Freq", juce::Rectangle<float>(cx, cy, 32.0f, kCardRowHeight),
-               juce::Justification::centredLeft, false);
-    g.setColour(EqGraphRenderer::hudTextColor());
-    g.setFont(juce::FontOptions(10.0f));
-    juce::String freqStr;
-    if (f.frequencyHz >= 1000.0f)
-        freqStr = juce::String(f.frequencyHz / 1000.0f, 1) + " kHz";
-    else
-        freqStr = juce::String(static_cast<int>(f.frequencyHz)) + " Hz";
-    g.drawText(freqStr, juce::Rectangle<float>(cx + 34.0f, cy, kCardWidth - 40.0f, kCardRowHeight),
-               juce::Justification::centredLeft, false);
-    cy += kCardRowHeight;
-
-    // Gain
-    const bool hasGain = (f.type == EqFilterType::LowShelf
-                       || f.type == EqFilterType::Peak
-                       || f.type == EqFilterType::HighShelf);
-    if (hasGain)
-    {
-        g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.6f));
-        g.setFont(juce::FontOptions(9.0f));
-        g.drawText("Gain", juce::Rectangle<float>(cx, cy, 32.0f, kCardRowHeight),
-                   juce::Justification::centredLeft, false);
-        g.setColour(EqGraphRenderer::hudTextColor());
-        g.setFont(juce::FontOptions(10.0f));
-        g.drawText(juce::String(f.gainDb, 1) + " dB",
-                   juce::Rectangle<float>(cx + 34.0f, cy, kCardWidth - 40.0f, kCardRowHeight),
-                   juce::Justification::centredLeft, false);
-        cy += kCardRowHeight;
+        const int n = static_cast<int>(settings_.filters.size());
+        const float iconSize = 18.0f;
+        const float iconGap = 2.0f;
+        const float totalW = n * iconSize + (n - 1) * iconGap;
+        float bx = card.getX() + (card.getWidth() - totalW) * 0.5f;
+        float cy = card.getY() + kCardPadding;
+        for (int i = 0; i < n; ++i)
+        {
+            const bool isActive = (i == filterIndex);
+            const auto c = renderer_.bandColor(i);
+            const juce::Rectangle<float> iconRect(bx, cy, iconSize, kCardIconRowH);
+            g.setColour(isActive ? c.withAlpha(0.85f) : c.withAlpha(0.30f));
+            g.fillRoundedRectangle(iconRect, 3.0f);
+            g.setColour(juce::Colours::white.withAlpha(isActive ? 0.9f : 0.35f));
+            g.setFont(juce::FontOptions(9.0f));
+            g.drawText(juce::String(i + 1), iconRect, juce::Justification::centred, false);
+            bx += iconSize + iconGap;
+        }
     }
 
-    // Q（Peak 时显示）
-    if (f.type == EqFilterType::Peak)
+    // 旋钮上方标签：Freq / Gain / Q
+    const float labelY = card.getY() + kCardPadding + kCardIconRowH + 3.0f;
     {
-        g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.6f));
-        g.setFont(juce::FontOptions(9.0f));
-        g.drawText("Q", juce::Rectangle<float>(cx, cy, 32.0f, kCardRowHeight),
-                   juce::Justification::centredLeft, false);
-        g.setColour(EqGraphRenderer::hudTextColor());
-        g.setFont(juce::FontOptions(10.0f));
-        g.drawText(juce::String(f.q, 2),
-                   juce::Rectangle<float>(cx + 34.0f, cy, kCardWidth - 40.0f, kCardRowHeight),
-                   juce::Justification::centredLeft, false);
+        const char* labels[] = { "Freq", "Gain", "Q" };
+        for (int i = 0; i < 3; ++i)
+        {
+            const float x = card.getX() + kCardPadding + static_cast<float>(i) * kCardColumnWidth;
+            g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.6f));
+            g.setFont(juce::FontOptions(8.0f));
+            g.drawText(labels[i], juce::Rectangle<float>(x, labelY, kCardColumnWidth, kCardLabelHeight),
+                       juce::Justification::centred, false);
+        }
     }
+}
+
+juce::Rectangle<float> EqPopupComponent::cardFilterButtonBounds(
+    const juce::Rectangle<float>& cardBounds, int index, int count) const
+{
+    const float iconSize = 18.0f;
+    const float iconGap = 2.0f;
+    const float totalW = static_cast<float>(count) * iconSize + static_cast<float>(count - 1) * iconGap;
+    const float startX = cardBounds.getX() + (cardBounds.getWidth() - totalW) * 0.5f;
+    const float x = startX + static_cast<float>(index) * (iconSize + iconGap);
+    return { x, cardBounds.getY() + kCardPadding, iconSize, kCardIconRowH };
 }
 
 void EqPopupComponent::updateCardState()
 {
     if (isPreview_ || showingRemoveConfirmation_)
     {
+        hideCardControls();
         cardBand_ = -1;
         return;
     }
-    if (showingValueInput_ && valueInputBand_ >= 0
-        && valueInputBand_ < static_cast<int>(settings_.filters.size()))
-    {
-        cardBand_ = valueInputBand_;
-        cardAnchorPos_ = renderer_.anchorPosition(valueInputBand_);
-        return;
-    }
-    if (hoveredBand_ >= 0 && hoveredBand_ < static_cast<int>(settings_.filters.size()))
-    {
-        cardBand_ = hoveredBand_;
-        cardAnchorPos_ = renderer_.anchorPosition(hoveredBand_);
-    }
-    else if (selectedFilterIndex_ >= 0 && selectedFilterIndex_ < static_cast<int>(settings_.filters.size()))
+    if (selectedFilterIndex_ >= 0 && selectedFilterIndex_ < static_cast<int>(settings_.filters.size()))
     {
         cardBand_ = selectedFilterIndex_;
         cardAnchorPos_ = renderer_.anchorPosition(selectedFilterIndex_);
+        configureCardControls(selectedFilterIndex_);
     }
     else
     {
+        hideCardControls();
         cardBand_ = -1;
     }
+}
+
+// ============================================================================
+// 卡片内旋钮控件
+// ============================================================================
+
+void EqPopupComponent::configureCardControls(int filterIndex)
+{
+    if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
+    {
+        hideCardControls();
+        return;
+    }
+
+    const auto& f = settings_.filters[filterIndex];
+
+    updatingCardControls_ = true;
+
+    // 频率范围：Peak 使用 500..12000，其余 20..20000
+    const double freqMin = (f.type == EqFilterType::Peak) ? 500.0 : 20.0;
+    const double freqMax = (f.type == EqFilterType::Peak) ? 12000.0 : 20000.0;
+    frequencySlider_.setRange(freqMin, freqMax, 1.0);
+    frequencySlider_.setSkewFactorFromMidPoint(1000.0);
+    frequencySlider_.setValue(f.frequencyHz, juce::dontSendNotification);
+
+    // Gain 仅 LowShelf/Peak/HighShelf 启用
+    const bool hasGain = (f.type == EqFilterType::LowShelf
+                       || f.type == EqFilterType::Peak
+                       || f.type == EqFilterType::HighShelf);
+    gainSlider_.setEnabled(hasGain);
+    gainSlider_.setAlpha(hasGain ? 1.0f : 0.3f);
+    gainSlider_.setValue(f.gainDb, juce::dontSendNotification);
+
+    // Q 始终显示
+    qSlider_.setValue(f.q, juce::dontSendNotification);
+
+    updatingCardControls_ = false;
+
+    frequencySlider_.setVisible(true);
+    gainSlider_.setVisible(true);
+    qSlider_.setVisible(true);
+
+    layoutCardControls();
+}
+
+void EqPopupComponent::hideCardControls()
+{
+    frequencySlider_.setVisible(false);
+    gainSlider_.setVisible(false);
+    qSlider_.setVisible(false);
+}
+
+void EqPopupComponent::layoutCardControls()
+{
+    if (cardBand_ < 0)
+        return;
+
+    const auto card = floatingCardBounds(cardAnchorPos_);
+    const float sliderY = card.getY() + kCardPadding + kCardIconRowH + 3.0f + kCardLabelHeight;
+
+    for (int i = 0; i < 3; ++i)
+    {
+        const float x = card.getX() + kCardPadding + static_cast<float>(i) * kCardColumnWidth;
+        auto* slider = (i == 0) ? &frequencySlider_ : (i == 1) ? &gainSlider_ : &qSlider_;
+        slider->setBounds(static_cast<int>(x), static_cast<int>(sliderY),
+                          static_cast<int>(kCardColumnWidth), static_cast<int>(kCardSliderHeight));
+    }
+
+    // 确保控件层级高于父组件曲线绘制
+    if (frequencySlider_.isVisible()) frequencySlider_.toFront(false);
+    if (gainSlider_.isVisible()) gainSlider_.toFront(false);
+    if (qSlider_.isVisible()) qSlider_.toFront(false);
+}
+
+void EqPopupComponent::cardSliderChanged(int parameterIndex)
+{
+    if (updatingCardControls_)
+        return;
+    if (cardBand_ < 0 || cardBand_ >= static_cast<int>(settings_.filters.size()))
+        return;
+
+    auto& f = settings_.filters[cardBand_];
+
+    switch (parameterIndex)
+    {
+    case 0: // Frequency
+    {
+        const double freqMin = (f.type == EqFilterType::Peak) ? 500.0 : 20.0;
+        const double freqMax = (f.type == EqFilterType::Peak) ? 12000.0 : 20000.0;
+        f.frequencyHz = static_cast<float>(juce::jlimit(freqMin, freqMax, frequencySlider_.getValue()));
+        break;
+    }
+    case 1: // Gain
+        f.gainDb = static_cast<float>(juce::jlimit(-12.0, 12.0, gainSlider_.getValue()));
+        break;
+    case 2: // Q
+        f.q = static_cast<float>(juce::jlimit(
+            static_cast<double>(EqSettings::kMinQ),
+            static_cast<double>(EqSettings::kMaxQ),
+            qSlider_.getValue()));
+        break;
+    }
+
+    renderer_.setSettings(settings_);
+    cardAnchorPos_ = renderer_.anchorPosition(cardBand_);
+    layoutCardControls();
+    commitSettings();
+    repaint();
 }
 
 // ============================================================================
@@ -187,7 +311,7 @@ void EqPopupComponent::updateCardState()
 
 void EqPopupComponent::setEqSettings(const EqSettings& settings)
 {
-    dismissValueInputPopup();
+    hideCardControls();
     settings_ = settings;
     renderer_.setSettings(settings_);
     dragCommitted_ = false;
@@ -205,7 +329,7 @@ void EqPopupComponent::setNoteColor(juce::Colour color)
 
 void EqPopupComponent::setPreviewMode(bool isPreview)
 {
-    dismissValueInputPopup();
+    hideCardControls();
     isPreview_ = isPreview;
     isMaximized_ = !isPreview;
     cardBand_ = -1;
@@ -234,8 +358,11 @@ juce::Rectangle<float> EqPopupComponent::topBarBounds() const
 void EqPopupComponent::resized()
 {
     renderer_.setGraphBounds(getLocalBounds().toFloat().reduced(3.0f));
-    if (showingValueInput_)
-        layoutValueInputOverlay();
+    if (cardBand_ >= 0)
+    {
+        cardAnchorPos_ = renderer_.anchorPosition(cardBand_);
+        layoutCardControls();
+    }
 }
 
 // ============================================================================
@@ -274,7 +401,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
     paintButton(g, ButtonId::Minimize, buttonBounds(ButtonId::Minimize),
                 hoveredButton_ == static_cast<int>(ButtonId::Minimize));
 
-    // 浮动参数卡（在按钮之上绘制）
+    // 浮动参数卡（在按钮之上绘制；真实 Slider 子控件由 JUCE 自动绘制）
     if (!isPreview_ && cardBand_ >= 0 && !showingRemoveConfirmation_)
     {
         paintFloatingCard(g, cardBand_, cardAnchorPos_);
@@ -504,6 +631,16 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
     activeMousePos_ = event.position;
     const auto pos = event.position;
 
+    if (showingRemoveConfirmation_)
+    {
+        hoveredBand_ = -1;
+        hoveredButton_ = -1;
+        hoveredViewRange_ = -1;
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        repaint();
+        return;
+    }
+
     hoveredButton_ = -1;
     for (int i = 0; i < 4; ++i)
     {
@@ -519,15 +656,13 @@ void EqPopupComponent::mouseMove(const juce::MouseEvent& event)
         }
     }
 
-    // 浮动卡片区域不穿透 graph hit-test
+    // 浮动卡片区域 — 最高命中层，不穿透 graph hit-test
     if (!isPreview_ && cardBand_ >= 0 && !showingRemoveConfirmation_
         && floatingCardBounds(cardAnchorPos_).contains(pos))
     {
-        hoveredBand_ = cardBand_;
+        hoveredBand_ = -1;
         hoveredViewRange_ = -1;
-        setMouseCursor(juce::MouseCursor::PointingHandCursor);
-        updateCardState();
-        repaint();
+        setMouseCursor(juce::MouseCursor::NormalCursor);
         return;
     }
 
@@ -562,9 +697,6 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
 {
     if (event.mods.isRightButtonDown())
         return;
-
-    if (event.getNumberOfClicks() >= 2)
-        pendingValueInputBand_ = -1;
 
     const auto pos = event.position;
 
@@ -613,48 +745,31 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
         }
     }
 
-    if (showingValueInput_ && cardBand_ >= 0
-        && !floatingCardBounds(cardAnchorPos_).contains(pos))
-    {
-        dismissValueInputPopup();
-    }
-
     // 多击：交 mouseDoubleClick 处理
     if (event.getNumberOfClicks() >= 2)
     {
         return;
     }
 
-    // 浮动参数卡 filter 按钮点击
-    if (cardBand_ >= 0 && !isPreview_)
+    // 完整模式卡片守卫 — 最高优先级，拦截卡片区域所有单击事件
+    if (!isPreview_ && cardBand_ >= 0 && !showingRemoveConfirmation_
+        && floatingCardBounds(cardAnchorPos_).contains(pos))
     {
-        const auto cardBounds = floatingCardBounds(cardAnchorPos_);
-        const float btnRowY = cardBounds.getY() + 5.0f;
-        const float btnRowH = kCardButtonHeight;
-        const juce::Rectangle<float> btnRowArea(cardBounds.getX(), btnRowY, kCardWidth, btnRowH);
-
-        if (pos.getY() >= btnRowY && pos.getY() < btnRowY + btnRowH && pos.getX() >= cardBounds.getX() && pos.getX() <= cardBounds.getRight())
+        // 命中顶部图标 → 切换 selectedFilterIndex_
+        const int n = static_cast<int>(settings_.filters.size());
+        const auto card = floatingCardBounds(cardAnchorPos_);
+        for (int i = 0; i < n; ++i)
         {
-            float bx = cardBounds.getX() + 6.0f;
-            const int n = static_cast<int>(settings_.filters.size());
-            for (int i = 0; i < n; ++i)
+            if (cardFilterButtonBounds(card, i, n).contains(pos))
             {
-                const float bw = 18.0f;
-                const juce::Rectangle<float> btnRect(bx, btnRowY, bw, btnRowH);
-                if (btnRect.contains(pos))
-                {
-                    selectedFilterIndex_ = i;
-                    dismissValueInputPopup();
-                    showValueInputPopup(i);
-                    repaint();
-                    return;
-                }
-                bx += bw + 2.0f;
-            }
-
-            if (floatingCardBounds(cardAnchorPos_).contains(pos))
+                selectedFilterIndex_ = i;
+                updateCardState();
+                repaint();
                 return;
+            }
         }
+        // 卡片其余空白区域 → 消费事件
+        return;
     }
 
     // 按钮点击
@@ -681,6 +796,7 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
                 else
                 {
                     showingRemoveConfirmation_ = true;
+                    hideCardControls();
                     repaint();
                 }
                 return;
@@ -720,12 +836,15 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
         const int bandIdx = renderer_.hitTestAnchor(pos, 10.0f);
         if (bandIdx >= 0 && bandIdx < static_cast<int>(settings_.filters.size()))
         {
-            if (showingValueInput_)
-                dismissValueInputPopup();
-            selectedFilterIndex_ = bandIdx;
+            // 点击已选中的锚点 → 取消选中并隐藏卡片
+            if (selectedFilterIndex_ == bandIdx)
+                selectedFilterIndex_ = -1;
+            else
+                selectedFilterIndex_ = bandIdx;
             pendingDragBand_ = bandIdx;
             pendingDragStartPos_ = pos;
             hoveredBand_ = bandIdx;
+            updateCardState();
             setMouseCursor(juce::MouseCursor::NoCursor);
             repaint();
             return;
@@ -775,7 +894,10 @@ void EqPopupComponent::mouseDrag(const juce::MouseEvent& event)
     renderer_.setSettings(settings_);
     // 拖拽后更新浮动卡片位置
     if (cardBand_ >= 0 && cardBand_ < static_cast<int>(settings_.filters.size()))
+    {
         cardAnchorPos_ = renderer_.anchorPosition(cardBand_);
+        configureCardControls(cardBand_);
+    }
     repaint();
 }
 
@@ -806,25 +928,11 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
         return;
     }
 
-    // 未启动 drag：完整模式下用记录的 band 打开数值输入；预览模式仅反馈选中
+    // 未启动 drag：单击锚点仅结束 pending drag，不再打开任何输入入口
     if (pendingDragBand_ >= 0)
     {
-        const int band = pendingDragBand_;
         pendingDragBand_ = -1;
         setMouseCursor(juce::MouseCursor::NormalCursor);
-        if (!isPreview_)
-        {
-            pendingValueInputBand_ = band;
-            const juce::Component::SafePointer<EqPopupComponent> safeThis(this);
-            juce::Timer::callAfterDelay(juce::MouseEvent::getDoubleClickTimeout(),
-                                        [safeThis, band]() {
-                if (safeThis != nullptr && safeThis->pendingValueInputBand_ == band)
-                {
-                    safeThis->pendingValueInputBand_ = -1;
-                    safeThis->showValueInputPopup(band);
-                }
-            });
-        }
         repaint();
     }
 
@@ -843,7 +951,14 @@ void EqPopupComponent::mouseUp(const juce::MouseEvent& event)
             else
                 newRange = currentRange <= 6.0 ? 12.0 : (currentRange <= 12.0 ? 30.0 : 30.0);
             if (newRange != currentRange)
+            {
                 renderer_.setViewGainRangeDb(newRange);
+                if (cardBand_ >= 0 && cardBand_ < static_cast<int>(settings_.filters.size()))
+                {
+                    cardAnchorPos_ = renderer_.anchorPosition(cardBand_);
+                    layoutCardControls();
+                }
+            }
         }
         pressedViewRange_ = -1;
         repaint();
@@ -855,11 +970,8 @@ void EqPopupComponent::mouseDoubleClick(const juce::MouseEvent& event)
     if (event.mods.isRightButtonDown())
         return;
 
-    pendingValueInputBand_ = -1;
     pendingDragBand_ = -1;
 
-    if (showingValueInput_)
-        dismissValueInputPopup();
     if (showingRemoveConfirmation_)
         dismissRemoveConfirmation();
 
@@ -877,8 +989,8 @@ void EqPopupComponent::mouseDoubleClick(const juce::MouseEvent& event)
         return;
     }
 
-    // 未命中 anchor + 完整模式 + 在 graphBounds → 创建新 filter
-    if (!isPreview_ && renderer_.graphBounds().contains(pos)
+    // 未命中 anchor + 在 graphBounds → 创建新 filter
+    if (renderer_.graphBounds().contains(pos)
         && static_cast<int>(settings_.filters.size()) < EqSettings::kMaxFilters)
     {
         double freq = renderer_.xToFreq(pos.x);
@@ -893,8 +1005,11 @@ void EqPopupComponent::mouseDoubleClick(const juce::MouseEvent& event)
         else
             newFilter.type = EqFilterType::Peak;
 
-        freq = std::clamp(freq, static_cast<double>(EqSettings::kMinFrequencyHz),
-                          static_cast<double>(EqSettings::kMaxFrequencyHz));
+        if (newFilter.type == EqFilterType::Peak)
+            freq = std::clamp(freq, 500.0, 12000.0);
+        else
+            freq = std::clamp(freq, static_cast<double>(EqSettings::kMinFrequencyHz),
+                              static_cast<double>(EqSettings::kMaxFrequencyHz));
         gain = std::clamp(gain, static_cast<double>(EqSettings::kMinGainDb),
                           static_cast<double>(EqSettings::kMaxGainDb));
 
@@ -920,7 +1035,16 @@ void EqPopupComponent::mouseWheelMove(const juce::MouseEvent& event, const juce:
 {
     // 始终消费，不调用父类/向上转发
 
+    if (showingRemoveConfirmation_)
+        return;
+
     // hover anchor 优先 → selected filter 后备
+    if (!isPreview_ && cardBand_ >= 0
+        && floatingCardBounds(cardAnchorPos_).contains(event.position))
+    {
+        return;
+    }
+
     int targetBand = renderer_.hitTestAnchor(event.position, 10.0f);
     if (targetBand < 0 || targetBand >= static_cast<int>(settings_.filters.size()))
         targetBand = selectedFilterIndex_;
@@ -942,8 +1066,15 @@ void EqPopupComponent::mouseWheelMove(const juce::MouseEvent& event, const juce:
         static_cast<double>(EqSettings::kMaxQ)));
 
     renderer_.setSettings(settings_);
-    if (qLabel_ && valueInputBand_ == targetBand)
-        qLabel_->setText(juce::String(f.q, 2), juce::dontSendNotification);
+
+    // 如果卡片正显示该 band，同步 Q 旋钮
+    if (cardBand_ == targetBand && !updatingCardControls_)
+    {
+        updatingCardControls_ = true;
+        qSlider_.setValue(f.q, juce::dontSendNotification);
+        updatingCardControls_ = false;
+    }
+
     commitSettings();
     updateCardState();
     repaint();
@@ -1013,7 +1144,7 @@ void EqPopupComponent::updateHoverBandFade(double dt)
 
 void EqPopupComponent::toggleMaximize()
 {
-    dismissValueInputPopup();
+    hideCardControls();
     if (isMaximized_)
     {
         isMaximized_ = false;
@@ -1061,6 +1192,7 @@ void EqPopupComponent::toggleMaximize()
             setBounds(getX(), getY(), w, h);
         }
         resized();
+        updateCardState();
         repaint();
     }
 }
@@ -1073,8 +1205,7 @@ void EqPopupComponent::commitSettings()
 
 bool EqPopupComponent::removeFilterAt(int index)
 {
-    if (showingValueInput_)
-        dismissValueInputPopup();
+    hideCardControls();
     settings_.filters.erase(settings_.filters.begin() + index);
 
     if (settings_.filters.empty())
@@ -1093,7 +1224,6 @@ bool EqPopupComponent::removeFilterAt(int index)
     else if (hoveredBand_ > index)
         --hoveredBand_;
 
-    // cardBand_ 修正：与 selectedFilterIndex_ 同逻辑
     if (cardBand_ == index)
         cardBand_ = -1;
     else if (cardBand_ > index)
@@ -1104,172 +1234,10 @@ bool EqPopupComponent::removeFilterAt(int index)
     hoverBandAmounts_[static_cast<size_t>(EqSettings::kMaxFilters - 1)] = 0.0;
 
     renderer_.setSettings(settings_);
+    updateCardState();
     commitSettings();
     repaint();
     return false;
-}
-
-// ============================================================================
-// 数值输入弹窗 — 动态 filter index
-// ============================================================================
-
-void EqPopupComponent::showValueInputPopup(int filterIndex)
-{
-    if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
-        return;
-
-    if (showingValueInput_)
-        dismissValueInputPopup();
-
-    showingValueInput_ = true;
-    valueInputBand_ = filterIndex;
-    cardBand_ = filterIndex;
-    cardAnchorPos_ = renderer_.anchorPosition(filterIndex);
-
-    const auto& f = settings_.filters[filterIndex];
-    const double freq = f.frequencyHz;
-    const double gain = f.gainDb;
-
-    const bool hasGain = (f.type == EqFilterType::LowShelf
-                       || f.type == EqFilterType::Peak
-                       || f.type == EqFilterType::HighShelf);
-
-    freqEditor_ = std::make_unique<juce::TextEditor>();
-    freqEditor_->setText(juce::String(freq, 0));
-    freqEditor_->setFont(juce::Font(juce::FontOptions(11.0f)));
-    freqEditor_->setColour(juce::TextEditor::backgroundColourId, EqGraphRenderer::hudBgColor());
-    freqEditor_->setColour(juce::TextEditor::textColourId, EqGraphRenderer::hudTextColor());
-    freqEditor_->setColour(juce::TextEditor::outlineColourId, EqGraphRenderer::axisLabelColor());
-    addAndMakeVisible(freqEditor_.get());
-
-    if (hasGain)
-    {
-        gainEditor_ = std::make_unique<juce::TextEditor>();
-        gainEditor_->setText(juce::String(gain, 1));
-        gainEditor_->setFont(juce::Font(juce::FontOptions(11.0f)));
-        gainEditor_->setColour(juce::TextEditor::backgroundColourId, EqGraphRenderer::hudBgColor());
-        gainEditor_->setColour(juce::TextEditor::textColourId, EqGraphRenderer::hudTextColor());
-        gainEditor_->setColour(juce::TextEditor::outlineColourId, EqGraphRenderer::axisLabelColor());
-        addAndMakeVisible(gainEditor_.get());
-
-        if (f.type == EqFilterType::Peak)
-            qLabel_ = std::make_unique<juce::Label>(juce::String(), juce::String(f.q, 2));
-        if (qLabel_)
-        {
-            qLabel_->setFont(juce::Font(juce::FontOptions(10.0f)));
-            qLabel_->setColour(juce::Label::textColourId, EqGraphRenderer::hudTextColor());
-            addAndMakeVisible(qLabel_.get());
-        }
-    }
-
-    valueInputOk_ = std::make_unique<juce::TextButton>("OK");
-    valueInputOk_->setColour(juce::TextButton::buttonColourId, EqGraphRenderer::combinedCurveColor());
-    valueInputOk_->setColour(juce::TextButton::textColourOffId, juce::Colours::black);
-    valueInputOk_->onClick = [this] {
-        if (freqEditor_ && freqEditor_->getText().isNotEmpty()
-            && valueInputBand_ >= 0
-            && valueInputBand_ < static_cast<int>(settings_.filters.size()))
-        {
-            auto& f = settings_.filters[valueInputBand_];
-            const double newFreq = freqEditor_->getText().getDoubleValue();
-            // Peak 频率范围 500-12000，其余 20-20000
-            if (f.type == EqFilterType::Peak)
-                f.frequencyHz = std::clamp(static_cast<float>(newFreq), 500.0f, 12000.0f);
-            else
-                f.frequencyHz = std::clamp(static_cast<float>(newFreq), 20.0f, 20000.0f);
-        }
-        if (gainEditor_ && gainEditor_->getText().isNotEmpty()
-            && valueInputBand_ >= 0
-            && valueInputBand_ < static_cast<int>(settings_.filters.size()))
-        {
-            auto& f = settings_.filters[valueInputBand_];
-            const double newGain = gainEditor_->getText().getDoubleValue();
-            f.gainDb = std::clamp(static_cast<float>(newGain), -12.0f, 12.0f);
-        }
-        // type 和 q 保留不变
-        renderer_.setSettings(settings_);
-        commitSettings();
-        dismissValueInputPopup();
-        repaint();
-    };
-    addAndMakeVisible(valueInputOk_.get());
-
-    valueInputCancel_ = std::make_unique<juce::TextButton>(juce::String::fromUTF8(u8"取消"));
-    valueInputCancel_->setColour(juce::TextButton::buttonColourId, EqGraphRenderer::axisLabelColor().withAlpha(0.4f));
-    valueInputCancel_->setColour(juce::TextButton::textColourOffId, EqGraphRenderer::hudTextColor());
-    valueInputCancel_->onClick = [this] { dismissValueInputPopup(); repaint(); };
-    addAndMakeVisible(valueInputCancel_.get());
-
-    layoutValueInputOverlay();
-    repaint();
-}
-
-void EqPopupComponent::dismissValueInputPopup()
-{
-    showingValueInput_ = false;
-    valueInputBand_ = -1;
-    freqEditor_.reset();
-    gainEditor_.reset();
-    qLabel_.reset();
-    valueInputOk_.reset();
-    valueInputCancel_.reset();
-    if (!isPreview_ && !showingRemoveConfirmation_)
-        updateCardState();
-}
-
-void EqPopupComponent::layoutValueInputOverlay()
-{
-    if (cardBand_ < 0)
-        return;
-
-    const auto card = floatingCardBounds(cardAnchorPos_);
-    const float panelX = card.getX();
-    const float panelY = card.getY();
-    const float panelW = card.getWidth();
-
-    const float rowH = 20.0f;
-    const float gap = 6.0f;
-    const float fieldW = panelW - 48.0f;
-
-    float y = panelY + kCardButtonHeight + 9.0f;
-    const float x = panelX + 40.0f;
-
-    if (freqEditor_)
-        freqEditor_->setBounds(static_cast<int>(x), static_cast<int>(y),
-                               static_cast<int>(fieldW), static_cast<int>(rowH));
-
-    const bool hasGain = (valueInputBand_ >= 0
-                       && valueInputBand_ < static_cast<int>(settings_.filters.size()))
-                       && (settings_.filters[valueInputBand_].type == EqFilterType::LowShelf
-                        || settings_.filters[valueInputBand_].type == EqFilterType::Peak
-                        || settings_.filters[valueInputBand_].type == EqFilterType::HighShelf);
-
-    if (hasGain)
-    {
-        y += rowH;
-        if (gainEditor_)
-            gainEditor_->setBounds(static_cast<int>(x), static_cast<int>(y),
-                                   static_cast<int>(fieldW), static_cast<int>(rowH));
-    }
-
-    if (qLabel_)
-    {
-        y += rowH;
-        qLabel_->setBounds(static_cast<int>(x), static_cast<int>(y),
-                           static_cast<int>(fieldW), static_cast<int>(rowH));
-    }
-
-    const float btnW = 60.0f;
-    const float buttonY = card.getBottom() - rowH - 5.0f;
-    float buttonX = panelX + (panelW - btnW * 2.0f - gap) * 0.5f;
-
-    if (valueInputOk_)
-        valueInputOk_->setBounds(static_cast<int>(buttonX), static_cast<int>(buttonY),
-                                 static_cast<int>(btnW), static_cast<int>(rowH));
-    buttonX += btnW + gap;
-    if (valueInputCancel_)
-        valueInputCancel_->setBounds(static_cast<int>(buttonX), static_cast<int>(buttonY),
-                                     static_cast<int>(btnW), static_cast<int>(rowH));
 }
 
 // ============================================================================
@@ -1279,6 +1247,7 @@ void EqPopupComponent::layoutValueInputOverlay()
 void EqPopupComponent::dismissRemoveConfirmation()
 {
     showingRemoveConfirmation_ = false;
+    updateCardState();
     repaint();
 }
 
