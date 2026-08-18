@@ -433,7 +433,13 @@ juce::Rectangle<float> EqPopupComponent::topBarBounds() const
 
 void EqPopupComponent::resized()
 {
-    renderer_.setGraphBounds(getLocalBounds().toFloat().reduced(3.0f));
+    auto bounds = getLocalBounds().toFloat();
+    // 图谱边界从顶部栏下方开始，左右和底部保留3像素内边距
+    const float left = bounds.getX() + 3.0f;
+    const float right = bounds.getRight() - 3.0f;
+    const float top = kTopBarHeight;
+    const float bottom = bounds.getBottom() - 3.0f;
+    renderer_.setGraphBounds({left, top, right - left, bottom - top});
     if (cardBand_ >= 0)
     {
         layoutCardControls();
@@ -462,7 +468,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
             if (snapshot.isValid())
             {
                 blurredBgCache_ = snapshot;
-                blurredBgCache_.getPixelData()->applyGaussianBlurEffect(8.0f);
+                blurredBgCache_.getPixelData()->applyGaussianBlurEffect(4.0f);
             }
         }
     }
