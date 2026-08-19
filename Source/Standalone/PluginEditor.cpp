@@ -628,19 +628,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         processorRef_.resetInferenceBackend(true);
     }
 
-// Enable native title bar (system-style maximize/minimize/close buttons)
-    juce::Timer::callAfterDelay(60, [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)]
-    {
-        if (safeThis == nullptr) return;
-        if (auto* window = safeThis->findParentComponentOfClass<juce::DocumentWindow>())
-        {
-// Use native title bar for standard maximize button
-            window->setUsingNativeTitleBar(true);
-            window->setColour(juce::DocumentWindow::backgroundColourId, UIColors::backgroundMedium);
-            window->repaint();
-        }
-    });
-
 // Playhead render via VBlank overlay; main editor heartbeat reduced to 30Hz to ease message thread pressure
     startTimerHz(kHeartbeatHzIdle);
 
