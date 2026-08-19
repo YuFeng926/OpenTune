@@ -111,6 +111,13 @@
     <tr><td><strong>Barra de vista general de la línea de tiempo</strong></td><td>Nueva barra de vista general con memoria de la vista del rollo de piano</td></tr>
     <tr><td><strong>Temas de cursor del ratón</strong></td><td>3 estilos de cursor: Adwaita, Capitaine, Breeze</td></tr>
     <tr><td><strong>Diseño de atajos en tres secciones</strong></td><td>La página de configuración de atajos se divide en secciones General/OpenTune/OpenDyne</td></tr>
+    <tr><td><strong>Edición EQ a nivel de nota</strong></td><td>Nueva función de edición EQ a nivel de nota, con filtros dinámicos y cadena de espectro real</td></tr>
+    <tr><td><strong>Cambio de estilo de cuadrícula</strong></td><td>Cambio de estilo de cuadrícula del piano roll (PianoLanes/EqualSpacing)</td></tr>
+    <tr><td><strong>Brillo de fondo del piano roll</strong></td><td>Deslizador de brillo de fondo del piano roll en la página de vista de configuración (0%-200%, predeterminado 100%)</td></tr>
+    <tr><td><strong>Pesos de codificador dual</strong></td><td>Selección de dos pesos de codificador: Community (versión comunitaria) y Coulin9 v4 (versión profesional)</td></tr>
+    <tr><td><strong>Frecuencia de tono de referencia configurable</strong></td><td>El usuario puede configurar la frecuencia de referencia (400-500Hz), reemplazando los 440Hz codificados</td></tr>
+    <tr><td><strong>Modo de captura VST3 sin ARA</strong></td><td>Nuevo modo de captura VST3 sin ARA, compatible con flujo de trabajo de captura→renderizado→reproducción estilo Melodyne Transfer</td></tr>
+    <tr><td><strong>Doble clic de tijeras para fusionar</strong></td><td>Doble clic en la línea de separación para fusionar notas adyacentes, compatible con fusión en cadena de notas múltiples seleccionadas</td></tr>
 </table>
 
 <h3>🐛 Correcciones y optimizaciones</h3>
@@ -152,7 +159,7 @@
 <h3>Requisitos mínimos</h3>
 <table>
     <tr><th width="25%">Elemento</th><th>Requisito</th></tr>
-    <tr><td>Sistema operativo</td><td>Windows 10/11 (64 bits) o macOS 11+</td></tr>
+    <tr><td>Sistema operativo</td><td>Windows 10/11 (64 bits) o macOS 14.0+ (Sonoma)</td></tr>
     <tr><td>Procesador</td><td>Intel Core i5 o procesador AMD equivalente</td></tr>
     <tr><td>Memoria RAM</td><td>8 GB RAM</td></tr>
     <tr><td>Espacio en disco</td><td>500 MB de espacio disponible (incluye modelos IA)</td></tr>
@@ -360,8 +367,8 @@
 </div>
 
 <div class="tool-card">
-    <h4>TimeTool — Herramienta de tiempo (Atajo: T) [Experimental, solo en la versión independiente]</h4>
-    <p>Se deben habilitar las funciones experimentales en Preferencias antes de usar. No está disponible en los modos VST3 ni ARA. Arrastre los marcadores de tiempo para ajustar el tiempo de salida del audio, logrando efectos de estiramiento/compresión temporal. Al entrar en la vista TimeTool, las teclas del piano, las notas y la curva F0 se ocultan automáticamente, centrándose en la edición en el dominio temporal.</p>
+    <h4>TimeTool — Herramienta de tiempo (Atajo: T) [Solo en la versión independiente]</h4>
+    <p>Arrastre los marcadores de tiempo para ajustar el tiempo de salida del audio, logrando efectos de estiramiento/compresión temporal. Al entrar en la vista TimeTool, las teclas del piano, las notas y la curva F0 se ocultan automáticamente, centrándose en la edición en el dominio temporal.</p>
     <p><strong>Operaciones</strong>: arrastrar marcadores para ajustar el tiempo de salida; Shift+clic para selección múltiple de marcadores; Alt+arrastre para liberar el límite de separación mínima; doble clic en área vacía para insertar un nuevo marcador; Supr elimina los marcadores seleccionados (extremos protegidos); clic en área vacía para reubicar el cabezal de reproducción.</p>
     <p><strong>Extremos y renderizado</strong>: los extremos inicial y final están fijos, la duración total permanece sin cambios. La edición no vuelve a ejecutar la corrección de tono; una vez completada la canonización actual, se encola una reconstrucción única de estiramiento temporal de la Etapa 2 (algoritmo WSOLA de SoundTouch).</p>
 </div>
@@ -440,7 +447,7 @@
     <li>Barra de herramientas vertical con clic derecho</li>
     <li>Herramientas de modulación y deriva de tono</li>
     <li>Herramienta de envolvente de volumen</li>
-    <li>Herramienta Tijeras (comportamiento estilo Melodyne: cortar al pasar la línea vertical)</li>
+    <li>Herramienta Tijeras (comportamiento estilo Melodyne: cortar al pasar la línea vertical, doble clic en la línea de separación fusiona notas adyacentes)</li>
     <li>Modo de ajuste a la cuadrícula de tono + ajuste automático</li>
     <li>Barra de navegación de vista general estilo Melodyne</li>
     <li>Zoom estilo Melodyne: Cmd+Alt doble clic, flechas para zoom preciso</li>
