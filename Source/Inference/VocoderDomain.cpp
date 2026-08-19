@@ -47,7 +47,6 @@ bool VocoderDomain::submit(Job job) {
     VocoderRenderScheduler::Job schedulerJob;
     schedulerJob.f0 = std::move(job.f0);
     schedulerJob.mel = std::move(job.mel);
-    schedulerJob.chunkKey = job.chunkKey;
     schedulerJob.onComplete = std::move(job.onComplete);
     return scheduler_->submit(std::move(schedulerJob));
 }

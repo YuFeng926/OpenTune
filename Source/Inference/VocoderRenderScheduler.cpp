@@ -44,55 +44,44 @@ void VocoderRenderScheduler::shutdown() {
         worker_->join();
     }
     
+    std::deque<std::function<void()>> completions;
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
         while (!jobQueue_.empty()) {
             auto job = std::move(jobQueue_.front());
             jobQueue_.pop_front();
-            if (job.onComplete) {
-                job.onComplete(false, "Scheduler shutdown", {});
-            }
+            if (job.onComplete)
+                completions.push_back([callback = std::move(job.onComplete)] {
+                    callback(JobResult::Cancelled, "Scheduler shutdown", {});
+                });
+        }
+        while (!completionQueue_.empty())
+        {
+            completions.push_back(std::move(completionQueue_.front()));
+            completionQueue_.pop_front();
         }
     }
+    for (auto& completion : completions)
+        completion();
 }
 
 bool VocoderRenderScheduler::submit(Job job) {
-    std::function<void(bool, const juce::String&, const std::vector<float>&)> supersededCallback;
-
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
         if (!acceptingJobs_.load())
             return false;
 
-        // 同 chunkKey 替换
-        bool replaced = false;
-        if (job.chunkKey != 0) {
-            for (auto& existing : jobQueue_) {
-                if (existing.chunkKey == job.chunkKey) {
-                    supersededCallback = std::move(existing.onComplete);
-                    existing = std::move(job);
-                    replaced = true;
-                    break;
-                }
-            }
+        if (static_cast<int>(jobQueue_.size()) >= kMaxQueueDepth) {
+            auto discarded = std::move(jobQueue_.front());
+            jobQueue_.pop_front();
+            if (discarded.onComplete)
+                completionQueue_.push_back([callback = std::move(discarded.onComplete)] {
+                    callback(JobResult::Cancelled, "Queue overflow: job discarded", {});
+                });
         }
-
-        if (!replaced) {
-            if (static_cast<int>(jobQueue_.size()) >= kMaxQueueDepth) {
-                auto discarded = std::move(jobQueue_.front());
-                jobQueue_.pop_front();
-                if (discarded.onComplete) {
-                    discarded.onComplete(false, "Queue overflow: job discarded", {});
-                }
-            }
-            jobQueue_.push_back(std::move(job));
-        }
+        jobQueue_.push_back(std::move(job));
     }
 
-    // 旧 job 的 onComplete 在锁外执行，避免死锁
-    if (supersededCallback) {
-        supersededCallback(false, "Superseded by newer revision", {});
-    }
     queueCV_.notify_one();
     return true;
 }
@@ -105,11 +94,21 @@ void VocoderRenderScheduler::workerThread() {
         {
             std::unique_lock<std::mutex> lock(queueMutex_);
             queueCV_.wait(lock, [this] { 
-                return !jobQueue_.empty() || !acceptingJobs_.load(std::memory_order_acquire);
+                return !jobQueue_.empty()
+                    || !completionQueue_.empty()
+                    || !acceptingJobs_.load(std::memory_order_acquire);
             });
             
             shutdownRequested = !acceptingJobs_.load(std::memory_order_acquire);
             
+            if (!completionQueue_.empty()) {
+                auto completion = std::move(completionQueue_.front());
+                completionQueue_.pop_front();
+                lock.unlock();
+                completion();
+                continue;
+            }
+
             if (!jobQueue_.empty()) {
                 job = std::move(jobQueue_.front());
                 jobQueue_.pop_front();
@@ -118,7 +117,7 @@ void VocoderRenderScheduler::workerThread() {
         
         if (job.onComplete) {
             if (shutdownRequested) {
-                job.onComplete(false, "Scheduler shutdown", {});
+                job.onComplete(JobResult::Cancelled, "Scheduler shutdown", {});
             } else {
                 AppLogger::log("VocoderTrace: dequeued job f0_frames=" + juce::String(job.f0.size()));
                 AppLogger::log("VocoderTrace: run start");
@@ -133,13 +132,16 @@ void VocoderRenderScheduler::workerThread() {
                     
                     if (result.ok()) {
                         AppLogger::log("VocoderTrace: synthesis complete samples=" + juce::String(result.value().size()));
-                        job.onComplete(true, "", result.value());
+                        job.onComplete(JobResult::Succeeded, "", result.value());
                     } else {
-                        job.onComplete(false, juce::String(result.error().fullMessage()), {});
+                        const auto resultType = acceptingJobs_.load(std::memory_order_acquire)
+                            ? JobResult::Failed
+                            : JobResult::Cancelled;
+                        job.onComplete(resultType, juce::String(result.error().fullMessage()), {});
                     }
                 } else {
                     AppLogger::log("VocoderTrace: run end");
-                    job.onComplete(false, "Vocoder service not available", {});
+                    job.onComplete(JobResult::Failed, "Vocoder service not available", {});
                 }
             }
         }

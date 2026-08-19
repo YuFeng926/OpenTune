@@ -210,10 +210,14 @@ void AudioModification::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 {
     content->analysis.pitchCurve = std::move(curve);
     content->analysis.f0Lifecycle = AnalysisLifecycle::Ready;
-    applyOriginalF0State(OriginalF0State::Ready);
+    // Set state directly without calling applyOriginalF0State to avoid double
+    // contentRevision bump: applyOriginalF0State conditionally increments, but
+    // the explicit increment below always fires, guaranteeing exactly one bump.
+    if (content->analysis.originalF0State != OriginalF0State::Ready)
+        content->analysis.originalF0State = OriginalF0State::Ready;
     ++content->analysis.analysisRevision;
     ++content->editable.pitchRevision;
-    // OriginalF0 只更新分析数据和 UI revision，不触发音频渲染
+    ++content->contentRevision;
 }
 
 void AudioModification::submitSilentGaps(std::vector<SilentGap> gaps)

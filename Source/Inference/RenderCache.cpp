@@ -298,6 +298,7 @@ void RenderCache::clear() {
             globalCacheCurrentBytes().fetch_sub(chunkBytes, std::memory_order_relaxed);
         }
         chunks_.clear();
+        pendingChunks_.clear();
         publishLocked();
     }
 
@@ -324,19 +325,18 @@ void RenderCache::clear() {
 // 调度状态管理实现
 // ---------------------------------------------------------------------------
 
-std::size_t RenderCache::reconcileFullPlanAndRequest(
+RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
     const std::vector<PlannedChunk>& fullPlan,
     int64_t requestStartSample,
-    int64_t requestEndSampleExclusive)
+    int64_t requestEndSampleExclusive,
+    uint64_t contentRevision)
 {
-    // 唯一调用方 ContentRenderService 在调用前已保证 fullPlan 非空（chunkRanges.empty() 早退）。
     jassert(!fullPlan.empty());
-
-    // fullPlan 由 RenderChunkPlanner 保证升序且互不重叠：内部不变量用 jassert 表达。
     jassert(requestEndSampleExclusive > requestStartSample);
+    jassert(contentRevision != 0);
 
+    ReconcileResult result;
     bool geometryChanged = false;
-    std::size_t jobTokenCount = 0;
 
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
@@ -362,7 +362,6 @@ std::size_t RenderCache::reconcileFullPlanAndRequest(
             const double startSeconds = projectRenderSeconds(planned.startSample);
             const int64_t endSampleExclusive = planned.endSampleExclusive;
 
-            // 旧 span 起点早于本计划：不在 fullPlan 中，彻底移除并回收内存记账
             while (oldIt != chunks_.end() && oldIt->first < startSeconds)
             {
                 reclaimChunkBytes(oldIt->second);
@@ -384,54 +383,79 @@ std::size_t RenderCache::reconcileFullPlanAndRequest(
 
             if (sameSpan)
             {
-                // 完整同几何：保留 audio/status/desired/running/published
                 newChunk = oldIt->second;
                 ++oldIt;
 
                 if (intersectsRequest)
                 {
-                    ++newChunk.desiredRevision;
-                    switch (newChunk.status)
+                    const bool contentUnchanged = contentRevision == newChunk.lastRequestedContentRevision;
+                    const bool alreadySettled = (newChunk.status == Chunk::Status::Idle
+                            && newChunk.publishedRevision > 0
+                            && newChunk.publishedRevision == newChunk.desiredRevision)
+                        || newChunk.status == Chunk::Status::Blank;
+
+                    // Same geometry + same contentRevision → no-op for
+                    // Pending, Running, Blank, and successful Idle.
+                    // Only Failed allows explicit same-version retry.
+                    if (contentUnchanged && alreadySettled)
                     {
-                        case Chunk::Status::Idle:
-                        case Chunk::Status::Blank:
-                            newChunk.status = Chunk::Status::Pending;
+                        // no-op
+                    }
+                    else if (contentUnchanged && newChunk.status == Chunk::Status::Pending)
+                    {
+                        // Already queued for same revision: no-op
+                    }
+                    else if (contentUnchanged && newChunk.status == Chunk::Status::Running)
+                    {
+                        // Already executing for same revision: no-op
+                    }
+                    else if (contentUnchanged && newChunk.status == Chunk::Status::Failed)
+                    {
+                        // Same revision retry: re-queue
+                        ++newChunk.desiredRevision;
+                        newChunk.status = Chunk::Status::Pending;
+                        newChunk.runningRevision = 0;
+                        newChunk.publishedRevision = 0;
+                        newChunk.audio = nullptr;
+                        newPendingChunks.insert(startSeconds);
+                        ++result.workerTokenCount;
+                        result.stateChanged = true;
+                    }
+                    else
+                    {
+                        ++newChunk.desiredRevision;
+                        newChunk.lastRequestedContentRevision = contentRevision;
+                        if (newChunk.status == Chunk::Status::Pending)
+                        {
                             newPendingChunks.insert(startSeconds);
-                            ++jobTokenCount;
-                            break;
-                        case Chunk::Status::Running:
+                        }
+                        else
+                        {
+                            newChunk.status = Chunk::Status::Pending;
                             newChunk.runningRevision = 0;
-                            newChunk.status = Chunk::Status::Pending;
                             newPendingChunks.insert(startSeconds);
-                            ++jobTokenCount;
-                            break;
-                        case Chunk::Status::Pending:
-                            // job 尚在队列待拉取：只更新 revision，不重复计 worker token
-                            newPendingChunks.insert(startSeconds);
-                            break;
+                            ++result.workerTokenCount;
+                        }
+                        result.stateChanged = true;
                     }
                 }
                 else if (newChunk.status == Chunk::Status::Pending)
                 {
-                    // 未命中本次 request，但队列中已有 job 待拉取：必须留在 pending 集合
                     newPendingChunks.insert(startSeconds);
                 }
             }
             else
             {
-                // 几何新增（无旧槽）或几何改变（同 start 不同 span）
                 geometryChanged = true;
 
                 if (oldIt != chunks_.end() && oldIt->first == startSeconds)
                 {
-                    // 同 start 旧槽：清旧 audio 及内存记账，desired 基线递增
                     reclaimChunkBytes(oldIt->second);
                     newChunk.desiredRevision = oldIt->second.desiredRevision + 1;
                     ++oldIt;
                 }
                 else
                 {
-                    // 新增：desired 从 1 开始
                     newChunk.desiredRevision = 1;
                 }
 
@@ -439,30 +463,29 @@ std::size_t RenderCache::reconcileFullPlanAndRequest(
                 newChunk.runningRevision = 0;
                 newChunk.publishedRevision = 0;
                 newChunk.audio = nullptr;
+                newChunk.lastRequestedContentRevision = contentRevision;
                 newPendingChunks.insert(startSeconds);
-                ++jobTokenCount;
+                ++result.workerTokenCount;
+                result.stateChanged = true;
             }
 
             newChunks.emplace(startSeconds, std::move(newChunk));
         }
 
-        // 旧 span 不在 fullPlan 中：彻底移除并回收内存记账
         for (; oldIt != chunks_.end(); ++oldIt)
         {
             reclaimChunkBytes(oldIt->second);
             geometryChanged = true;
+            result.stateChanged = true;
         }
 
         chunks_ = std::move(newChunks);
         pendingChunks_ = std::move(newPendingChunks);
 
-        // 几何变化时锁内发布新 canonical snapshot；同几何局部重渲保留旧 canonical
-        // 直到新结果发布。
         if (geometryChanged)
             publishLocked();
     }
 
-    // 几何变化后锁外重建 prepared snapshot 一次
     if (geometryChanged)
         rebuildPrepared();
 
@@ -470,10 +493,11 @@ std::size_t RenderCache::reconcileFullPlanAndRequest(
         " fullPlan=" + juce::String(static_cast<juce::int64>(fullPlan.size()))
         + " requestStart=" + juce::String(requestStartSample)
         + " requestEnd=" + juce::String(requestEndSampleExclusive)
-        + " jobTokens=" + juce::String(static_cast<juce::int64>(jobTokenCount))
+        + " jobTokens=" + juce::String(static_cast<juce::int64>(result.workerTokenCount))
+        + " stateChanged=" + juce::String(result.stateChanged ? 1 : 0)
         + " geometryChanged=" + juce::String(geometryChanged ? 1 : 0));
 
-    return jobTokenCount;
+    return result;
 }
 
 bool RenderCache::getNextPendingJob(PendingJob& outJob) {
@@ -568,19 +592,9 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
         size_t peak = globalCachePeakBytes().load(std::memory_order_relaxed);
         while (newCurrent > peak && !globalCachePeakBytes().compare_exchange_weak(peak, newCurrent, std::memory_order_relaxed)) {}
 
-        const size_t limit = globalCacheLimitBytes().load(std::memory_order_relaxed);
-        Chunk* currentChunk = &chunk;
-        if (newCurrent > limit && !chunks_.empty()) {
-            for (auto evictIt = chunks_.begin(); evictIt != chunks_.end(); ++evictIt) {
-                if (&evictIt->second == currentChunk) continue;
-                const size_t evictBytes = (evictIt->second.audio ? evictIt->second.audio->size() : 0) * sizeof(float);
-                if (evictBytes == 0) continue;
-                globalCacheCurrentBytes().fetch_sub(evictBytes, std::memory_order_relaxed);
-                evictIt->second.audio.reset();
-                evictIt->second.publishedRevision = 0;
-                break;
-            }
-        }
+        // Diagnostic: memory stats only. No inter-chunk eviction — the RenderCache
+        // contract requires complete canonical PCM resident for all chunks.
+        (void)globalCacheLimitBytes().load(std::memory_order_relaxed);
 
         publishLocked();
     } // SpinLock released
@@ -594,29 +608,44 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
 }
 
 void RenderCache::completeChunkRenderFailure(double startSeconds, uint64_t revision) {
-    const juce::SpinLock::ScopedLockType guard(lock_);
-    auto it = chunks_.find(startSeconds);
-    if (it == chunks_.end()) {
-        AppLogger::log("RenderCache::completeChunkRenderFailure NOT_FOUND start=" + juce::String(startSeconds, 3));
-        return;
+    bool hadAudio = false;
+    {
+        const juce::SpinLock::ScopedLockType guard(lock_);
+        auto it = chunks_.find(startSeconds);
+        if (it == chunks_.end()) {
+            AppLogger::log("RenderCache::completeChunkRenderFailure NOT_FOUND start=" + juce::String(startSeconds, 3));
+            return;
+        }
+
+        auto& chunk = it->second;
+
+        if (chunk.runningRevision != revision) {
+            AppLogger::log("RenderCache::completeChunkRenderFailure STALE runningRevision="
+                + juce::String(static_cast<juce::int64>(chunk.runningRevision))
+                + " != completionRev=" + juce::String(static_cast<juce::int64>(revision))
+                + " -> ignore");
+            return;
+        }
+
+        hadAudio = chunk.audio != nullptr && !chunk.audio->empty();
+        if (hadAudio)
+        {
+            const size_t bytes = chunk.audio->size() * sizeof(float);
+            globalCacheCurrentBytes().fetch_sub(bytes, std::memory_order_relaxed);
+            chunk.audio.reset();
+        }
+        chunk.publishedRevision = 0;
+        chunk.status = Chunk::Status::Failed;
+        chunk.runningRevision = 0;
+        publishLocked();
+
+        AppLogger::log("RenderCache::completeChunkRenderFailure start=" + juce::String(startSeconds, 3)
+            + " revision=" + juce::String(static_cast<juce::int64>(revision))
+            + " desired=" + juce::String(static_cast<juce::int64>(chunk.desiredRevision)));
     }
 
-    auto& chunk = it->second;
-
-    if (chunk.runningRevision != revision) {
-        AppLogger::log("RenderCache::completeChunkRenderFailure STALE runningRevision="
-            + juce::String(static_cast<juce::int64>(chunk.runningRevision))
-            + " != completionRev=" + juce::String(static_cast<juce::int64>(revision))
-            + " -> ignore");
-        return;
-    }
-
-    chunk.status = Chunk::Status::Idle;
-    chunk.runningRevision = 0;
-
-    AppLogger::log("RenderCache::completeChunkRenderFailure start=" + juce::String(startSeconds, 3)
-        + " revision=" + juce::String(static_cast<juce::int64>(revision))
-        + " desired=" + juce::String(static_cast<juce::int64>(chunk.desiredRevision)));
+    if (hadAudio)
+        rebuildPrepared();
 }
 
 bool RenderCache::requeueRunningChunk(double startSeconds, uint64_t runningRevision) {
@@ -651,6 +680,7 @@ RenderCache::ChunkStats RenderCache::getChunkStats() const {
             case Chunk::Status::Pending: ++stats.pending; break;
             case Chunk::Status::Running: ++stats.running; break;
             case Chunk::Status::Blank: ++stats.blank; break;
+            case Chunk::Status::Failed: ++stats.failed; break;
         }
     }
     return stats;
@@ -673,6 +703,7 @@ RenderCache::StateSnapshot RenderCache::getStateSnapshot() const {
             case Chunk::Status::Pending: ++snapshot.chunkStats.pending; break;
             case Chunk::Status::Running: ++snapshot.chunkStats.running; break;
             case Chunk::Status::Blank: ++snapshot.chunkStats.blank; break;
+            case Chunk::Status::Failed: ++snapshot.chunkStats.failed; break;
         }
     }
     return snapshot;
@@ -692,6 +723,9 @@ bool RenderCache::isCanonicalSettled() const
 
         if (chunk.status == Chunk::Status::Blank)
             continue;
+
+        if (chunk.status == Chunk::Status::Failed)
+            return false;
 
         if (chunk.status != Chunk::Status::Idle
             || chunk.audio == nullptr

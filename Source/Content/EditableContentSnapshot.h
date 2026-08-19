@@ -48,6 +48,21 @@ struct EditableContentSnapshot
     uint64_t outputGainRevision{0};
     uint64_t contentRevision{0};
 
+    /** Authoritative F0 availability check: pitchCurve exists, OriginalF0
+     *  non-empty, hopSize > 0, sampleRate > 0. All Stage1 render decisions
+     *  should gate on this, never on originalF0State enum alone. */
+    bool hasUsableOriginalF0() const
+    {
+        if (!pitchCurve)
+            return false;
+        const auto snap = pitchCurve->getSnapshot();
+        if (!snap)
+            return false;
+        return !snap->getOriginalF0().empty()
+            && snap->getHopSize() > 0
+            && snap->getSampleRate() > 0.0;
+    }
+
     template <typename Sink>
     void forEachEffectiveF0Span(int startFrame, int endFrame, Sink&& sink) const
     {

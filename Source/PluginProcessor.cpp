@@ -1139,11 +1139,11 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
         + juce::String(forceCpu ? "true" : "false"));
     
-    // 1. 暂停 render worker（本 owner 的 CRS）
+    // 暂停 render worker（本 owner 的 CRS）
     if (contentRenderService_)
         contentRenderService_->pauseRenderWorker();
 
-    // 2. 耗时 reset（Session 销毁、按当前配置重建、AccelerationDetector
+    // 耗时 reset（Session 销毁、按当前配置重建、AccelerationDetector
     //    reset/detect）全部在 ProcessRenderRuntime 的进程寿命 control worker 上
     //    串行执行；UI 线程只投递命令并立即返回。completion 经
     //    MessageManager::callAsync 回消息线程；gate 已关闭时不访问 processor。
@@ -1153,7 +1153,6 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
         std::lock_guard<std::mutex> lk(gate->mutex);
         if (gate->closed)
             return;   // owner 已析构：不访问 processor
-        // 3. 后端重建完成后才恢复 render worker（vocoder 由重建/lazy 路径重新初始化）
         if (processor->contentRenderService_)
             processor->contentRenderService_->resumeRenderWorker();
         AppLogger::info("[Processor] Inference backend reset complete");
@@ -2845,6 +2844,8 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
 {
     auto snap = getContentSnapshot(key);
     if (!snap) return;
+    if (!snap->hasUsableOriginalF0()) return;
+
     auto* crs = resolveMutableLocalContentRenderService(key);
     if (crs == nullptr) return;
 
@@ -2874,6 +2875,7 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     job.audioSampleRate = crsSampleRate;
     job.startSample = startSample;
     job.endSampleExclusive = endSample;
+    job.contentRevision = snap->contentRevision;
 
     crs->enqueueRender(std::move(job), snap->notes);
 }
@@ -3702,6 +3704,9 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Ready);
             if (processor->pendingTimeToolSeedKeys_.count(capturedRequest.contentKey) != 0)
                 processor->ensureTimeToolAnchorSeed(capturedRequest.contentKey);
+
+            // F0 就绪后请求完整渲染：此前因无 F0 而 Blank 的 chunk 需重新渲染
+            processor->requestFullContentRender(capturedRequest.contentKey);
         });
 
     if (submitResult != F0ExtractionService::SubmitResult::Accepted) {

@@ -358,11 +358,19 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
                 "Cannot apply snapshot: core stores unavailable"));
     }
 
+    if (auto* crs = processorRef_.getContentRenderService())
+        crs->drainRenderWorker();
+
     sourceStore->clear();
     contentRepo->clear();
     arrangement->clear();
 
     processorRef_.getUndoManager().clear();
+
+    // Clear CRS derived state (playback sources, render caches, stretchers,
+    // time stretch cache) to prevent cross-project key collisions.
+    if (auto* crs = processorRef_.getContentRenderService())
+        crs->clearAll();
 
     // 获取工程文件所在目录（用于解析相对路径）
     const auto projectDir = currentProjectFile_.getParentDirectory();
@@ -508,8 +516,13 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
             clip->applyTimeGrid(tgSnapshot);
         }
 
-        // 恢复 Original F0 state
-        clip->applyOriginalF0State(static_cast<OriginalF0State>(contentEntry.originalF0State));
+        // 恢复 Original F0 state — Ready 和 Extracting 都归一化为 NotRequested，
+        // 让 F0 提取流程重新分析。
+        auto restoredF0State = static_cast<OriginalF0State>(contentEntry.originalF0State);
+        if (restoredF0State == OriginalF0State::Ready
+            || restoredF0State == OriginalF0State::Extracting)
+            restoredF0State = OriginalF0State::NotRequested;
+        clip->applyOriginalF0State(restoredF0State);
 
         // 恢复 Pitch shift settings
         PitchShiftSettings pitchShift;
@@ -626,7 +639,11 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
     processorRef_.setTimeSignature(snapshot.settings.timeSignatureNumerator,
                                    snapshot.settings.timeSignatureDenominator);
 
-    // Rehydrate CRS derived truth from restored owner state
+    // Rehydrate CRS derived truth from restored owner state.
+    // Use requestContentRefresh (preserveCorrectionsOutsideChangedRange=true) to
+    // trigger F0 analysis for NotRequested content — cannot just NotRequested and
+    // never analyze.
+    std::set<ContentKey> uniqueKeys;
     for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
     {
         const int placementCount = getStandalonePlacementCount(processorRef_, trackId);
@@ -659,11 +676,13 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
             }
 
             processorRef_.refreshCRSMetadata(key);
-            if (auto snap = processorRef_.getContentSnapshot(key))
+
+            if (uniqueKeys.insert(key).second)
             {
-                const double durationSeconds = snap->sourceWindow.durationSeconds();
-                if (durationSeconds > 0.0)
-                    processorRef_.requestFullContentRender(key);
+                OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
+                refreshRequest.contentKey = key;
+                refreshRequest.preserveCorrectionsOutsideChangedRange = true;
+                processorRef_.requestContentRefresh(refreshRequest);
             }
         }
     }
@@ -778,6 +797,12 @@ void ProjectSession::newProject()
     auto* sourceStore = processorRef_.getSourceStore();
     auto* contentRepo = processorRef_.getStandaloneContentRepository();
     auto* arrangement = processorRef_.getStandaloneArrangement();
+
+    if (auto* crs = processorRef_.getContentRenderService())
+    {
+        crs->drainRenderWorker();
+        crs->clearAll();
+    }
 
     if (sourceStore) { sourceStore->clear(); }
     if (contentRepo) { contentRepo->clear(); }
