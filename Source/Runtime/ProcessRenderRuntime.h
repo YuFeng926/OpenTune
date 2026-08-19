@@ -71,6 +71,7 @@ public:
      */
     bool submitVocoderJob(VocoderDomain::Job job, uint64_t expectedGeneration);
     bool isVocoderReady() const noexcept;
+    bool isVocoderReconfiguring() const noexcept;
 
 private:
     // 进程寿命 heap 单例（getInstance 显式 new、永不析构）：control worker
@@ -130,6 +131,17 @@ private:
     bool vocoderInitializing_{false};  // vocoderMutex_ 保护：RenderWorker 正在锁外首次创建
     int clientCount_{0};      // vocoderMutex_ 保护：客户端租约计数（仅计数，不触发释放）
     uint64_t vocoderGeneration_{0};  // vocoderMutex_ 保护
+
+    // Deferred retry list: jobs that failed with generation mismatch or cancelled
+    // during reconfigureVocoder. Flushed after new domain is published and
+    // reconfiguring_ is cleared.
+    struct DeferredRetry {
+        std::weak_ptr<ContentRenderService> crs;
+        RenderJob job;
+    };
+    std::vector<DeferredRetry> deferredRetries_; // vocoderMutex_ protected
+
+    void deferOrRequeue(std::shared_ptr<ContentRenderService> crs, RenderJob job);
 
     ProcessRenderRuntime(const ProcessRenderRuntime&) = delete;
     ProcessRenderRuntime& operator=(const ProcessRenderRuntime&) = delete;

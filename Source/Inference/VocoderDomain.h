@@ -5,21 +5,20 @@
 #include <vector>
 #include <functional>
 #include "../Utils/Error.h"
+#include "VocoderRenderScheduler.h"
 
 namespace Ort { struct Env; }
 
 namespace OpenTune {
 
-class VocoderInferenceService;
-class VocoderRenderScheduler;
-
 class VocoderDomain {
 public:
+    using JobResult = VocoderRenderScheduler::JobResult;
+
     struct Job {
-        uint64_t chunkKey{0};
         std::vector<float> f0;
         std::vector<float> mel;
-        std::function<void(bool, const juce::String&, const std::vector<float>&)> onComplete;
+        std::function<void(JobResult, const juce::String&, const std::vector<float>&)> onComplete;
     };
 
     VocoderDomain(std::shared_ptr<Ort::Env> env);

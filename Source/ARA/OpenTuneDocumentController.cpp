@@ -2030,6 +2030,9 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
 
                 if (mod->audioModification != nullptr)
                     mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+                // F0 commit → form "committed data → request current version render" transaction
+                requestFullModificationRender(key);
             }
         });
 }
@@ -2186,14 +2189,15 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     if (readSource.audioBuffer == nullptr || readSource.audioSampleRate <= 0.0)
         return;
 
-    const int startSample = static_cast<int>(startSeconds * readSource.audioSampleRate);
-    const int endSample = static_cast<int>(endSeconds * readSource.audioSampleRate);
-
-    // Enqueue render request: job carries content identity and sample range.
-    // RenderWorker resolves start/end/targetRevision from PendingJob when executing.
+    // F0 可用性判定：用真实数据而非枚举标志
     auto snap = snapshotAudioModification(key);
     if (!snap)
-        return;  // ARA 缺 snapshot：不排无意义任务
+        return;
+    if (!snap->hasUsableOriginalF0())
+        return;
+
+    const int startSample = static_cast<int>(startSeconds * readSource.audioSampleRate);
+    const int endSample = static_cast<int>(endSeconds * readSource.audioSampleRate);
 
     RenderJob job;
     job.contentKey = key;
@@ -2202,8 +2206,7 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     job.startSample = startSample;
     job.endSampleExclusive = endSample;
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
-
-    // Silent gaps carry chunk-planning metadata into enqueueRender.
+    job.contentRevision = snap->contentRevision;
     job.silentGaps = snap->silentGaps;
 
     contentRenderService_->enqueueRender(std::move(job), snap->notes);

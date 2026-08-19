@@ -33,13 +33,15 @@ public:
             Idle,    // 无待处理渲染需求
             Pending, // 有待渲染需求，等 Worker 拉取
             Running, // 正在渲染中
-            Blank    // 空白区域（无有效F0），无需渲染
+            Blank,   // 空白区域（无有效F0），无需渲染
+            Failed   // 显式失败：后端推理错误，需重试才能再次运行
         };
         Status status{Status::Idle};
 
         uint64_t desiredRevision{0};    // 目标版本（用户最新编辑产生）
         uint64_t runningRevision{0};   // 当前正在运行的 revision（在 Pending→Running 时记录）
         uint64_t publishedRevision{0};  // 已成功发布的版本
+        uint64_t lastRequestedContentRevision{0}; // 上次 reconcile 时的内容版本，用于去重
     };
 
     // 调度状态管理 API
@@ -48,9 +50,15 @@ public:
         int64_t endSampleExclusive{0};
     };
     // 以完整计划原子重建 chunks_/pendingChunks_，返回本次需投递的 worker job token 数。
-    std::size_t reconcileFullPlanAndRequest(const std::vector<PlannedChunk>& fullPlan,
-                                            int64_t requestStartSample,
-                                            int64_t requestEndSampleExclusive);
+    // contentRevision 来自 EditableContentSnapshot：同几何且同内容版本时跳过 desiredRevision 递增。
+    struct ReconcileResult {
+        std::size_t workerTokenCount{0};
+        bool stateChanged{false};
+    };
+    ReconcileResult reconcileFullPlanAndRequest(const std::vector<PlannedChunk>& fullPlan,
+                                                int64_t requestStartSample,
+                                                int64_t requestEndSampleExclusive,
+                                                uint64_t contentRevision);
 
     struct PendingJob {
         double startSeconds{0.0};
@@ -87,7 +95,8 @@ public:
         int pending{0};
         int running{0};
         int blank{0};
-        int total() const { return idle + pending + running + blank; }
+        int failed{0};
+        int total() const { return idle + pending + running + blank + failed; }
         bool hasActiveWork() const { return pending > 0 || running > 0; }
     };
     ChunkStats getChunkStats() const;

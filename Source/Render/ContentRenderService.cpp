@@ -112,12 +112,15 @@ void ContentRenderService::enqueueRender(RenderJob job, const std::vector<Note>&
         fullPlan.push_back({range.startSample, range.endSampleExclusive});
 
     // A new Stage1 batch supersedes every derived Stage2 result once, not per chunk.
-    timeStretchCache_.invalidate(job.contentKey);
+    // Only invalidate when state actually changed — a no-op reconcile must not destroy
+    // existing TimeStretchCache entries.
+    const auto reconcileResult = job.renderCache->reconcileFullPlanAndRequest(
+        fullPlan, job.startSample, job.endSampleExclusive, job.contentRevision);
 
-    // 一次原子 reconcile 完整计划与局部 request；返回本次需投递的 worker job
-    // token 数（worker 执行时经 getNextPendingJob 拉取实际 span/revision）。
-    const std::size_t jobTokenCount = job.renderCache->reconcileFullPlanAndRequest(
-        fullPlan, job.startSample, job.endSampleExclusive);
+    if (reconcileResult.stateChanged)
+        timeStretchCache_.invalidate(job.contentKey);
+
+    const std::size_t jobTokenCount = reconcileResult.workerTokenCount;
 
     for (std::size_t i = 0; i < jobTokenCount; ++i)
     {

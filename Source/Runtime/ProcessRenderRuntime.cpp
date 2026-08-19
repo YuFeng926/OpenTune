@@ -469,8 +469,6 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
         retiredDomain = std::move(vocoderDomain_); // O(1)：锁内只摘除所有权
         ++vocoderGeneration_;                      // 立即拒绝全部旧配置快照
 
-        // 首次惰性创建也在锁外执行。control worker 只在后台等待它完成并清理，
-        // UI 线程从不等待该条件；reconfiguring_ 使新的 acquire 快速失败。
         vocoderStateCv_.wait(lock, [this] { return !vocoderInitializing_; });
     }
 
@@ -487,6 +485,7 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
     // 严格先销毁旧 Session，再创建新 Session；新旧显存不并存。
     auto newDomain = createVocoderDomain(targetWeight);
 
+    std::vector<DeferredRetry> readyRetries;
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
         if (currentVocoderModelWeight_ == targetWeight)
@@ -496,8 +495,31 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
                 ++vocoderGeneration_; // 新 domain 获得独立代际
         }
         vocoderReconfiguring_ = false;
+        readyRetries = std::move(deferredRetries_);
     }
     vocoderStateCv_.notify_all();
+
+    // Flush deferred retries outside vocoderMutex_: new domain is already
+    // published (or creation failed and vocoderDomain_ remains null).
+    // Directly check domain presence — never call acquireVocoderConfig here
+    // which would trigger recursive domain creation.
+    const bool domainAvailable = [&]() {
+        std::lock_guard<std::mutex> lk(vocoderMutex_);
+        return vocoderDomain_ != nullptr;
+    }();
+
+    for (auto& retry : readyRetries)
+    {
+        auto crsShared = retry.crs.lock();
+        if (!crsShared)
+            continue;
+
+        if (domainAvailable)
+            crsShared->requeueRenderChunk(retry.job);
+        else
+            retry.job.renderCache->completeChunkRenderFailure(
+                retry.job.startSeconds, retry.job.targetRevision);
+    }
 }
 
 void ProcessRenderRuntime::postControlCommand(ControlCommand command)
@@ -571,7 +593,7 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
     uint64_t creationGeneration = 0;
 
     {
-        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        std::unique_lock<std::mutex> lock(vocoderMutex_);
         if (vocoderDomain_ != nullptr)
         {
             out.generation = vocoderGeneration_;
@@ -580,7 +602,22 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
             return true;
         }
 
-        if (vocoderReconfiguring_ || vocoderInitializing_)
+        if (vocoderInitializing_)
+        {
+            vocoderStateCv_.wait(lock, [this] {
+                return !vocoderInitializing_ || vocoderReconfiguring_;
+            });
+
+            if (vocoderDomain_ != nullptr)
+            {
+                out.generation = vocoderGeneration_;
+                out.melBins = vocoderDomain_->getMelBins();
+                out.fMax = vocoderDomain_->getFMax();
+                return true;
+            }
+        }
+
+        if (vocoderReconfiguring_)
             return false;
 
         vocoderInitializing_ = true;
@@ -627,6 +664,26 @@ bool ProcessRenderRuntime::isVocoderReady() const noexcept
 {
     std::lock_guard<std::mutex> lock(vocoderMutex_);
     return vocoderDomain_ != nullptr;
+}
+
+bool ProcessRenderRuntime::isVocoderReconfiguring() const noexcept
+{
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    return vocoderReconfiguring_;
+}
+
+void ProcessRenderRuntime::deferOrRequeue(
+    std::shared_ptr<ContentRenderService> crs, RenderJob job)
+{
+    bool shouldDefer = false;
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        shouldDefer = vocoderReconfiguring_;
+        if (shouldDefer)
+            deferredRetries_.push_back({crs, std::move(job)});
+    }
+    if (!shouldDefer)
+        crs->requeueRenderChunk(std::move(job));
 }
 
 void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
@@ -865,6 +922,17 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     // 校验的 generation 同属一个 domain，不存在跨域混用。
     if (!acquireVocoderConfig(vocoderCfg))
     {
+        if (isVocoderReconfiguring())
+        {
+            RenderJob requeueJob;
+            requeueJob.kind = RenderJob::Kind::Stage1Render;
+            requeueJob.contentKey = coreJob.contentKey;
+            requeueJob.renderCache = coreJob.renderCache;
+            requeueJob.startSeconds = relChunkStartSec;
+            requeueJob.targetRevision = coreJob.targetRevision;
+            deferOrRequeue(crs, std::move(requeueJob));
+            return;
+        }
         AppLogger::log("RenderWorker: acquireVocoderConfig FAILED");
         coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
         return;
@@ -929,8 +997,6 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                          allowTrailingExtension);
 
     VocoderDomain::Job vocoderJob;
-    vocoderJob.chunkKey = (coreJob.contentKey.objectId << 32)
-        | static_cast<uint64_t>(static_cast<uint32_t>(coreJob.startSample));
     vocoderJob.f0 = std::move(vocoderF0);
     vocoderJob.mel = std::move(mel);
 
@@ -942,7 +1008,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                                                                     TimeCoordinate::kRenderSampleRate);
     const FrozenRenderBoundaries frozenBoundaries = boundaries;
 
-    vocoderJob.onComplete = [crs,
+    vocoderJob.onComplete = [this, crs,
                              renderCache,
                              targetRevision,
                              captureContentKey,
@@ -951,7 +1017,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                              frozenBoundaries,
                              contentSnap,   // 现有 shared_ptr：不复制 notes/EqSettings
                              completion = std::move(completion)](
-                                 bool success,
+                                 VocoderRenderScheduler::JobResult result,
                                  const juce::String& error,
                                  const std::vector<float>& audio)
     {
@@ -963,7 +1029,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
 
         const auto& boundaries = frozenBoundaries;
 
-        if (success)
+        if (result == VocoderRenderScheduler::JobResult::Succeeded)
         {
             std::vector<float> publishedAudio;
             if (!preparePublishedAudioFromSynthesis(boundaries, audio, publishedAudio))
@@ -974,28 +1040,37 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 return;
             }
 
-            const auto result = publishChunkWithPerNoteEq(
+            const auto publishResult = publishChunkWithPerNoteEq(
                 *renderCache, boundaries, std::move(publishedAudio), targetRevision,
                 contentSnap->notes);
 
-            if (result == RenderCache::ChunkRenderResult::InvalidInput)
+            if (publishResult == RenderCache::ChunkRenderResult::InvalidInput)
             {
-                // 输入无效：调用方 bug，走 failure 收口
                 renderCache->completeChunkRenderFailure(jobStartSeconds, targetRevision);
                 return;
             }
 
-            if (result == RenderCache::ChunkRenderResult::Stale)
+            if (publishResult == RenderCache::ChunkRenderResult::Stale)
             {
-                // stale completion：chunk 已被新编辑重新调度，无需再调用 completeChunkRenderFailure
                 return;
             }
 
-            // Published
             notifyChunkSettled(completion, captureContentKey);
+        }
+        else if (result == VocoderRenderScheduler::JobResult::Cancelled)
+        {
+            // Cancelled (scheduler shutdown, superseded, queue overflow): requeue or defer
+            RenderJob requeueJob;
+            requeueJob.kind = RenderJob::Kind::Stage1Render;
+            requeueJob.contentKey = captureContentKey;
+            requeueJob.renderCache = renderCache;
+            requeueJob.startSeconds = jobStartSeconds;
+            requeueJob.targetRevision = targetRevision;
+            deferOrRequeue(crs, std::move(requeueJob));
         }
         else
         {
+            // Failed: real inference error
             AppLogger::error("ChunkRender: vocoder failed objId="
                 + juce::String(static_cast<juce::int64>(chunkObjId))
                 + " error=" + error);
@@ -1006,10 +1081,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     crs->beginAsyncRenderJob();
     if (!submitVocoderJob(std::move(vocoderJob), vocoderCfg.generation))
     {
-        // stale generation：快照后、提交前另一实例 reset/重建了 domain。
-        // 只回退状态机（Running→Pending）并投递一个 job token，下一轮以新 domain
-        // 配置重算；不 failure、不 settle，仅归还异步计数。
-        crs->requeueRenderChunk(coreJob);
+        // stale generation or reconfiguring: deferOrRequeue handles both paths
+        deferOrRequeue(crs, std::move(coreJob));
         crs->completeAsyncRenderJob();
         return;
     }

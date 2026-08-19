@@ -31,6 +31,7 @@ struct RenderJob
 
     uint64_t targetRevision{0};
 
+    uint64_t contentRevision{0};      // 来自 EditableContentSnapshot，用于 reconcile 去重
     uint64_t pitchRevision{0};
     uint64_t pitchShiftRevision{0};
     uint64_t timeGridRevision{0};

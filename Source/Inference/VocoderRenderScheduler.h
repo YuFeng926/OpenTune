@@ -27,11 +27,16 @@ class VocoderInferenceService;
  */
 class VocoderRenderScheduler {
 public:
+    enum class JobResult : uint8_t {
+        Succeeded,
+        Cancelled,
+        Failed
+    };
+
     struct Job {
-        uint64_t chunkKey{0};
         std::vector<float> f0;
         std::vector<float> mel;
-        std::function<void(bool, const juce::String&, const std::vector<float>&)> onComplete;
+        std::function<void(JobResult, const juce::String&, const std::vector<float>&)> onComplete;
     };
 
     VocoderRenderScheduler();
@@ -63,6 +68,7 @@ private:
 
     VocoderInferenceService* service_{nullptr};
     std::deque<Job> jobQueue_;
+    std::deque<std::function<void()>> completionQueue_;
     mutable std::mutex queueMutex_;
     std::condition_variable queueCV_;
     std::unique_ptr<std::thread> worker_;
