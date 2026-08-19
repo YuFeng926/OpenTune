@@ -134,9 +134,9 @@ OpenTune/
 | **编译器** | Visual Studio 2022 (MSVC 17+) | Xcode 14+ / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
 | **C++ 标准** | C++17 | C++17 |
-| **构建系统** | MSBuild (VS Generator) | Xcode |
+| **构建系统** | MSBuild (VS Generator) / Ninja | Xcode |
 
-> ⚠️ **Windows 构建必须使用 Visual Studio Generator + MSBuild**，不支持 Ninja 或其他生成器。
+> **注意：** Windows 构建支持 Visual Studio Generator + MSBuild 或 Ninja 两种方式。推荐使用 Visual Studio Generator 进行完整开发，Ninja 适合快速构建。
 
 ### 依赖准备
 
@@ -303,8 +303,16 @@ OpenTune/
 cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --preset windows-ara-vs2022"
 
 # 编译 Release 版本
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_VST3"
+cmd /v/on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_VST3"
 cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_Standalone"
+```
+
+**Windows (Ninja + CMake)**
+
+```powershell
+# 使用 Ninja 快速构建（需要 Ninja 在 PATH 中）
+cmake --preset windows-ara-ninja
+cmake --build --preset windows-ara-ninja-release
 ```
 
 同一个 ARA2 VST3 二进制在未绑定 ARA 的普通 VST3 宿主中会自然回退到 Capture 流程，
@@ -345,7 +353,7 @@ cmake --build build --config Release
 | `ONNX Runtime DirectML DLL missing` | DML 版运行时 DLL 缺失 | 确认 `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` 存在 |
 | `ARA SDK not found` | ARA SDK 未克隆 | 执行步骤 2 的 git clone 命令 |
 | MSVC 链接错误 LNK2019 | MSVC 运行时不匹配 | 本项目使用静态 CRT (`/MT`)，确保依赖库一致 |
-| Ninja 生成器报错 | 不支持 Ninja | 只能使用 `"Visual Studio 17 2022"` 生成器 |
+| Ninja 构建失败 | Ninja 未安装或不在 PATH 中 | 确保 Ninja 已安装并在系统 PATH 中，或使用 Visual Studio Generator |
 
 
 ## 🤝 参与贡献
