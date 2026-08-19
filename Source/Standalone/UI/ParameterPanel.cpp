@@ -536,7 +536,7 @@ ParameterPanel::ParameterPanel()
     timeToolButton_->setRadioGroupId(1001);
     timeToolButton_->setIcon(ToolbarIcons::getTimeToolIcon(), false);
     timeToolButton_->onClick = [this] { onToolClicked(5); };
-    // OpenTune 初态隐藏：OpenDyne 始终可见可选，OpenTune 受 experimental 控制
+    // Time 两种模式均仅在 experimental 开启时可见
     addChildComponent(*timeToolButton_);
 
     // ── OpenDyne 工具按钮（OpenDyne 专属，OpenTune 初态隐藏） ──
@@ -762,7 +762,7 @@ void ParameterPanel::resized()
 
     if (openDyneMode_)
     {
-        // OpenDyne：10 个按钮 = 5 行 × 2 列
+        // OpenDyne：Time 仅在 experimental 开启时加入布局
         // Melodyne 纵向顺序：Select(F1)、Pitch(F2)、Modulation(F2×2)、Drift(F2×3)、
         // VolumeEnvelope(F4)、Time(T)、Scissors(F6)，AUTO 瞬时命令收尾，EQ 收尾
         std::vector<juce::Component*> buttons = {
@@ -771,12 +771,13 @@ void ParameterPanel::resized()
             pitchModulationToolButton_.get(),
             pitchDriftToolButton_.get(),
             volumeEnvelopeToolButton_.get(),
-            timeToolButton_.get(),
-            scissorsToolButton_.get(),
-            handDrawToolButton_.get(),
-            autoTuneToolButton_.get(),
-            eqToolButton_.get(),
         };
+        if (experimentalFeaturesEnabled_)
+            buttons.push_back(timeToolButton_.get());
+        buttons.push_back(scissorsToolButton_.get());
+        buttons.push_back(handDrawToolButton_.get());
+        buttons.push_back(autoTuneToolButton_.get());
+        buttons.push_back(eqToolButton_.get());
 
         for (int i = 0; i < static_cast<int>(buttons.size()); ++i)
         {
@@ -794,26 +795,15 @@ void ParameterPanel::resized()
     }
     else
     {
-        // OpenTune：按钮数组构造（与 experimental 过滤逻辑保持现状）
+        // OpenTune：Time 仅在 experimental 开启时加入布局
         std::vector<juce::Component*> buttons;
         if (selectToolButton_) buttons.push_back(selectToolButton_.get());
         if (drawNoteToolButton_) buttons.push_back(drawNoteToolButton_.get());
         if (lineAnchorToolButton_) buttons.push_back(lineAnchorToolButton_.get());
         if (handDrawToolButton_) buttons.push_back(handDrawToolButton_.get());
-        if (timeToolButton_) buttons.push_back(timeToolButton_.get());
+        if (experimentalFeaturesEnabled_ && timeToolButton_) buttons.push_back(timeToolButton_.get());
         if (autoTuneToolButton_) buttons.push_back(autoTuneToolButton_.get());
         if (eqToolButton_) buttons.push_back(eqToolButton_.get());
-
-        if (!experimentalFeaturesEnabled_ && timeToolButton_)
-        {
-            for (auto it = buttons.begin(); it != buttons.end();)
-            {
-                if (*it == timeToolButton_.get())
-                    it = buttons.erase(it);
-                else
-                    ++it;
-            }
-        }
 
         for (int i = 0; i < static_cast<int>(buttons.size()); ++i)
         {
@@ -952,7 +942,7 @@ void ParameterPanel::setActiveTool(int toolId)
     if (drawNoteToolButton_) drawNoteToolButton_->setToggleState(toolId == 2, juce::dontSendNotification);
     if (lineAnchorToolButton_) lineAnchorToolButton_->setToggleState(toolId == 3, juce::dontSendNotification);
     if (handDrawToolButton_) handDrawToolButton_->setToggleState(toolId == 4, juce::dontSendNotification);
-    if (timeToolButton_) timeToolButton_->setToggleState(toolId == 5, juce::dontSendNotification);
+    if (timeToolButton_) timeToolButton_->setToggleState(toolId == 5 && experimentalFeaturesEnabled_, juce::dontSendNotification);
     // OpenDyne 工具
     if (pitchToolButton_) pitchToolButton_->setToggleState(toolId == 6, juce::dontSendNotification);
     if (volumeEnvelopeToolButton_) volumeEnvelopeToolButton_->setToggleState(toolId == 7, juce::dontSendNotification);
@@ -970,12 +960,11 @@ void ParameterPanel::setExperimentalFeaturesEnabled(bool enabled)
 
     experimentalFeaturesEnabled_ = enabled;
     if (timeToolButton_ != nullptr) {
-        // Time 在 OpenDyne 始终可见可选，不受 experimental 影响；OpenTune 继续受 experimental 控制
-        if (!enabled && !openDyneMode_) {
+        if (!enabled) {
             timeToolButton_->setToggleState(false, juce::dontSendNotification);
             timeToolButton_->setBounds({});
         }
-        timeToolButton_->setVisible(openDyneMode_ || enabled);
+        timeToolButton_->setVisible(enabled);
     }
     resized();
     repaint();
@@ -1002,9 +991,9 @@ void ParameterPanel::setOpenDyneMode(bool enabled)
     if (scissorsToolButton_)             scissorsToolButton_->setVisible(enabled);
     pitchGridSelector_.setVisible(enabled);
 
-    // Time 在 OpenDyne 始终可见可选；在 OpenTune 受 experimental 开关控制；切换时保持当前选择
+    // Time 在两种模式均仅受 experimental 开关控制
     if (timeToolButton_)
-        timeToolButton_->setVisible(enabled || experimentalFeaturesEnabled_);
+        timeToolButton_->setVisible(experimentalFeaturesEnabled_);
 
     // Select tooltip 的快捷键随 scheme 切换（OpenDyne F1 / OpenTune 3）
     refreshLocalizedText();
