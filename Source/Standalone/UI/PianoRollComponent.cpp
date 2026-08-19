@@ -3292,8 +3292,10 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
     }
 
     if (highestMidi > lowestMidi) {
-        pixelsPerSemitone_ = static_cast<float>(contentHeight) / (highestMidi - lowestMidi);
-        verticalScrollOffset_ = (maxMidi_ - highestMidi) * pixelsPerSemitone_;
+        // +2 semitones padding: +1 for highest note's top half, +1 for lowest note's bottom half
+        const float midiSpan = highestMidi - lowestMidi + 2.0f;
+        pixelsPerSemitone_ = static_cast<float>(contentHeight) / midiSpan;
+        verticalScrollOffset_ = (maxMidi_ - highestMidi - 1.0f) * pixelsPerSemitone_;
     } else {
         const float startMidi = mapper.freqToMidi(startFrequency);
         verticalScrollOffset_ = (maxMidi_ - startMidi) * pixelsPerSemitone_ - contentHeight * 0.5f;
