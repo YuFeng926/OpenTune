@@ -120,73 +120,23 @@ double noteTransitionFrameAt(const Note& leftNote,
     return 0.5 * (leftNote.endTime + rightNote.startTime) / secondsPerFrame;
 }
 
-float noteBoundaryShiftSemitoneOffset(const std::vector<Note>& notes,
-                                      const std::vector<size_t>& relevantNoteIndices,
-                                      const std::vector<float>& noteAnchorMidis,
-                                      size_t activeNoteIndex,
-                                      float activeOffsetSemitones,
-                                       int frame,
-                                       double secondsPerFrame,
-                                       float frameRetuneSpeed)
+struct NoteTransitionSpan
 {
-    const int maxBridgeFrames = PitchCurve::getCorrectedF0BoundaryContextFrames();
-    const int bridgeFrames = static_cast<int>(std::lround(
-        static_cast<float>(maxBridgeFrames) * (1.0f - juce::jlimit(0.0f, 1.0f, frameRetuneSpeed))));
-    if (bridgeFrames <= 0) {
-        return activeOffsetSemitones;
-    }
+    size_t leftNoteIndex = 0;
+    size_t rightNoteIndex = 0;
+    double boundaryFrame = 0.0;
+    double halfWidthFrames = 0.0;
+};
 
-    const auto activeIt = std::find(relevantNoteIndices.begin(), relevantNoteIndices.end(), activeNoteIndex);
-    if (activeIt == relevantNoteIndices.end()) {
-        return activeOffsetSemitones;
-    }
-
-    const auto transitionOffsetFor = [&](size_t otherNoteIndex,
-                                         double boundaryFrame,
-                                         bool activeIsRight) -> std::optional<float> {
-        const float otherAnchorMidi = noteAnchorMidis[otherNoteIndex];
-        const float activeAnchorMidi = noteAnchorMidis[activeNoteIndex];
-        if (otherAnchorMidi <= 0.0f || activeAnchorMidi <= 0.0f) {
-            return std::nullopt;
-        }
-
-        const double distance = std::abs((static_cast<double>(frame) + 0.5) - boundaryFrame);
-        if (distance > static_cast<double>(bridgeFrames)) {
-            return std::nullopt;
-        }
-
-        const float otherOffset = PitchUtils::freqToMidi(notes[otherNoteIndex].getAdjustedPitch()) - otherAnchorMidi;
-        const float t = static_cast<float>((static_cast<double>(frame) + 0.5 - (boundaryFrame - bridgeFrames))
-                                           / static_cast<double>(bridgeFrames * 2));
-        const float w = smootherstep(t);
-        return activeIsRight
-            ? otherOffset + (activeOffsetSemitones - otherOffset) * w
-            : activeOffsetSemitones + (otherOffset - activeOffsetSemitones) * w;
-    };
-
-    const auto position = static_cast<size_t>(std::distance(relevantNoteIndices.begin(), activeIt));
-    if (position > 0) {
-        const size_t leftNoteIndex = relevantNoteIndices[position - 1];
-        const auto bridged = transitionOffsetFor(leftNoteIndex,
-                                                 noteTransitionFrameAt(notes[leftNoteIndex], notes[activeNoteIndex], secondsPerFrame),
-                                                 true);
-        if (bridged.has_value()) {
-            return *bridged;
-        }
-    }
-
-    if (position + 1 < relevantNoteIndices.size()) {
-        const size_t rightNoteIndex = relevantNoteIndices[position + 1];
-        const auto bridged = transitionOffsetFor(rightNoteIndex,
-                                                 noteTransitionFrameAt(notes[activeNoteIndex], notes[rightNoteIndex], secondsPerFrame),
-                                                 false);
-        if (bridged.has_value()) {
-            return *bridged;
-        }
-    }
-
-    return activeOffsetSemitones;
-}
+struct NoteCorrectionInfo
+{
+    float anchorPitch = 0.0f;
+    float anchorMidi = 0.0f;
+    float targetMidi = 0.0f;
+    float retuneSpeed = 0.0f;
+    float rotationRad = 0.0f;
+    double timeCenterSeconds = 0.0;
+};
 
 } // namespace
 
@@ -223,8 +173,8 @@ F0FrameRange PitchCurve::expandNoteBasedCorrectionRange(int startFrame, int endF
     }
 
     return {
-        std::max(0, rangeStart - getCorrectedF0BoundaryContextFrames()),
-        std::min(frameCount, rangeEnd + getCorrectedF0BoundaryContextFrames())
+        std::max(0, rangeStart - 2 * getCorrectedF0BoundaryContextFrames()),
+        std::min(frameCount, rangeEnd + 2 * getCorrectedF0BoundaryContextFrames())
     };
 }
 
@@ -268,15 +218,7 @@ void PitchCurve::applyCorrectionToRange(
     auto correctionSegments = oldSnapshot->getCorrectionSegments();
     clearSegmentsInRangePreserveOutside(correctionSegments, calculationStartFrame, calculationEndFrame);
 
-    struct NoteCorrectionInfo {
-        float anchorPitch = 0.0f;
-        float anchorMidi = 0.0f;
-        float rotationRad = 0.0f;
-        double timeCenterSeconds = 0.0;
-    };
-
     std::vector<NoteCorrectionInfo> noteInfos(notes.size());
-    std::vector<float> noteAnchorMidis(notes.size(), 0.0f);
 
     const float radToDeg = 180.0f / juce::MathConstants<float>::pi;
     const float slopeAngleMinDeg = 10.0f;
@@ -304,12 +246,17 @@ void PitchCurve::applyCorrectionToRange(
         if (anchorPitch <= 0.0f) anchorPitch = note.pitch;
         info.anchorPitch = anchorPitch;
         info.anchorMidi = PitchUtils::freqToMidi(anchorPitch);
+        info.targetMidi = PitchUtils::freqToMidi(note.getAdjustedPitch());
+        info.retuneSpeed = juce::jlimit(
+            0.0f, 1.0f, note.retuneSpeed >= 0.0f ? note.retuneSpeed : retuneSpeed);
         info.timeCenterSeconds = (note.startTime + note.endTime) * 0.5;
 
         if (info.anchorMidi > 0.0f && noteStartFrame < noteEndFrame) {
             std::vector<float> voicedTimes;
             std::vector<float> voicedMidis;
-            for (size_t f = noteStartFrame; f < noteEndFrame && f < originalF0.size(); ++f) {
+            for (int f = static_cast<int>(noteStartFrame);
+                 f < static_cast<int>(noteEndFrame) && f < static_cast<int>(originalF0.size());
+                 ++f) {
                 const float rawF0 = originalF0[f];
                 const float f0 = rawF0 > 0.0f ? rawF0 * sourcePitchRatio : rawF0;
                 if (f0 <= 0.0f) continue;
@@ -347,7 +294,6 @@ void PitchCurve::applyCorrectionToRange(
         }
 
         noteInfos[noteIndex] = info;
-        noteAnchorMidis[noteIndex] = info.anchorMidi;
     }
 
     if (relevantNoteIndices.empty()) {
@@ -357,6 +303,59 @@ void PitchCurve::applyCorrectionToRange(
         [&notes](size_t left, size_t right) {
             return notes[left].startTime < notes[right].startTime;
         });
+
+    const double defaultHalfWidthFrames =
+        static_cast<double>(getCorrectedF0BoundaryContextFrames());
+    const auto calculateTransitionSpan = [&](size_t position)
+        -> std::optional<NoteTransitionSpan> {
+        if (position + 1 >= relevantNoteIndices.size()) {
+            return std::nullopt;
+        }
+
+        const size_t leftIndex = relevantNoteIndices[position];
+        const size_t rightIndex = relevantNoteIndices[position + 1];
+        const double gapFrames =
+            (notes[rightIndex].startTime - notes[leftIndex].endTime) / secondsPerFrame;
+        if (gapFrames >= 2.0 * defaultHalfWidthFrames) {
+            return std::nullopt;
+        }
+
+        const double boundaryFrame =
+            noteTransitionFrameAt(notes[leftIndex], notes[rightIndex], secondsPerFrame);
+        double halfWidthFrames = defaultHalfWidthFrames;
+
+        if (position > 0) {
+            const size_t previousLeftIndex = relevantNoteIndices[position - 1];
+            const size_t previousRightIndex = relevantNoteIndices[position];
+            const double previousGapFrames =
+                (notes[previousRightIndex].startTime - notes[previousLeftIndex].endTime)
+                / secondsPerFrame;
+            if (previousGapFrames < 2.0 * defaultHalfWidthFrames) {
+                const double previousBoundaryFrame = noteTransitionFrameAt(
+                    notes[previousLeftIndex], notes[previousRightIndex], secondsPerFrame);
+                halfWidthFrames = std::min(
+                    halfWidthFrames,
+                    boundaryFrame - 0.5 * (previousBoundaryFrame + boundaryFrame));
+            }
+        }
+
+        if (position + 2 < relevantNoteIndices.size()) {
+            const size_t nextLeftIndex = relevantNoteIndices[position + 1];
+            const size_t nextRightIndex = relevantNoteIndices[position + 2];
+            const double nextGapFrames =
+                (notes[nextRightIndex].startTime - notes[nextLeftIndex].endTime)
+                / secondsPerFrame;
+            if (nextGapFrames < 2.0 * defaultHalfWidthFrames) {
+                const double nextBoundaryFrame = noteTransitionFrameAt(
+                    notes[nextLeftIndex], notes[nextRightIndex], secondsPerFrame);
+                halfWidthFrames = std::min(
+                    halfWidthFrames,
+                    0.5 * (boundaryFrame + nextBoundaryFrame) - boundaryFrame);
+            }
+        }
+
+        return NoteTransitionSpan{leftIndex, rightIndex, boundaryFrame, halfWidthFrames};
+    };
 
     // 预计算每个音符的漂移分量d(t)：零相位汉宁窗FIR，完整音符作为分析域
     // 偏差相对anchorPitch（原始音高）计算，确保：
@@ -407,6 +406,20 @@ void PitchCurve::applyCorrectionToRange(
     }
 
     std::vector<float> correctedF0Buffer(calculationEndFrame - calculationStartFrame, 0.0f);
+    size_t activeNoteCursor = 0;
+    size_t transitionPairCursor = 0;
+    std::optional<NoteTransitionSpan> currentTransitionSpan;
+    const auto updateCurrentTransitionSpan = [&]() {
+        currentTransitionSpan.reset();
+        while (transitionPairCursor + 1 < relevantNoteIndices.size()) {
+            currentTransitionSpan = calculateTransitionSpan(transitionPairCursor);
+            if (currentTransitionSpan.has_value()) {
+                return;
+            }
+            ++transitionPairCursor;
+        }
+    };
+    updateCurrentTransitionSpan();
 
     for (int i = calculationStartFrame; i < calculationEndFrame; ++i) {
         const float rawF0 = originalF0[i];
@@ -418,63 +431,102 @@ void PitchCurve::applyCorrectionToRange(
 
         const double timeSeconds = f0tl.timeAtFrame(i);
 
+        while (activeNoteCursor < relevantNoteIndices.size()
+               && timeSeconds >= notes[relevantNoteIndices[activeNoteCursor]].endTime) {
+            ++activeNoteCursor;
+        }
+
         const Note* activeNote = nullptr;
         size_t activeNoteIndex = 0;
-        for (size_t relevantPosition = 0; relevantPosition < relevantNoteIndices.size(); ++relevantPosition) {
-            const size_t idx = relevantNoteIndices[relevantPosition];
+        if (activeNoteCursor < relevantNoteIndices.size()) {
+            const size_t idx = relevantNoteIndices[activeNoteCursor];
             const auto& note = notes[idx];
             if (timeSeconds >= note.startTime && timeSeconds < note.endTime) {
                 activeNote = &note;
                 activeNoteIndex = idx;
+            }
+        }
+
+        const double frameCenter = static_cast<double>(i) + 0.5;
+        while (currentTransitionSpan.has_value()) {
+            const auto& span = *currentTransitionSpan;
+            const double spanEnd = span.boundaryFrame + span.halfWidthFrames;
+            if (frameCenter < spanEnd) {
                 break;
+            }
+            ++transitionPairCursor;
+            updateCurrentTransitionSpan();
+        }
+
+        const NoteTransitionSpan* transitionSpan = nullptr;
+        if (currentTransitionSpan.has_value()) {
+            const auto& span = *currentTransitionSpan;
+            const double spanStart = span.boundaryFrame - span.halfWidthFrames;
+            if (frameCenter >= spanStart)
+                transitionSpan = &span;
+        }
+
+        float targetMidi = 0.0f;
+        float anchorMidi = 0.0f;
+        float transitionRetuneSpeed = 0.0f;
+        bool hasTransitionContext = false;
+        if (transitionSpan != nullptr) {
+            const auto& leftInfo = noteInfos[transitionSpan->leftNoteIndex];
+            const auto& rightInfo = noteInfos[transitionSpan->rightNoteIndex];
+            if (leftInfo.anchorMidi > 0.0f
+                && rightInfo.anchorMidi > 0.0f
+                && transitionSpan->halfWidthFrames > 0.0) {
+                const float t = static_cast<float>(
+                    (frameCenter - (transitionSpan->boundaryFrame - transitionSpan->halfWidthFrames))
+                    / (transitionSpan->halfWidthFrames * 2.0));
+                const float w = smootherstep(t);
+                targetMidi = leftInfo.targetMidi + (rightInfo.targetMidi - leftInfo.targetMidi) * w;
+                anchorMidi = leftInfo.anchorMidi + (rightInfo.anchorMidi - leftInfo.anchorMidi) * w;
+                transitionRetuneSpeed = leftInfo.retuneSpeed
+                    + (rightInfo.retuneSpeed - leftInfo.retuneSpeed) * w;
+                hasTransitionContext = true;
             }
         }
 
         if (activeNote) {
-            float frameRetuneSpeed = retuneSpeed;
-            if (activeNote->retuneSpeed >= 0.0f) {
-                frameRetuneSpeed = activeNote->retuneSpeed;
+            const auto& activeInfo = noteInfos[activeNoteIndex];
+            if (!hasTransitionContext) {
+                targetMidi = activeInfo.targetMidi;
+                anchorMidi = activeInfo.anchorMidi;
+                transitionRetuneSpeed = activeInfo.retuneSpeed;
             }
 
-            float targetBaseF0 = activeNote->getAdjustedPitch();
-            float targetF0 = targetBaseF0;
-
+            float vibratoOffsetSemitones = 0.0f;
             float noteVibratoDepth = vibratoDepth;
             float noteVibratoRate = vibratoRate;
             if (activeNote->vibratoDepth >= 0.0f) noteVibratoDepth = activeNote->vibratoDepth;
             if (activeNote->vibratoRate >= 0.0f) noteVibratoRate = activeNote->vibratoRate;
             if (noteVibratoDepth > 0.0f) {
-                double timeInNote = timeSeconds - activeNote->startTime;
-                float depthSemitones = (noteVibratoDepth / 100.0f) * 1.0f;
-                float lfoValue = depthSemitones * std::sin(2.0f * juce::MathConstants<float>::pi * noteVibratoRate * (float)timeInNote);
-                targetF0 *= std::pow(2.0f, lfoValue / 12.0f);
+                const double timeInNote = timeSeconds - activeNote->startTime;
+                const float depthSemitones = (noteVibratoDepth / 100.0f) * 1.0f;
+                vibratoOffsetSemitones = depthSemitones * std::sin(
+                    2.0f * juce::MathConstants<float>::pi * noteVibratoRate * static_cast<float>(timeInNote));
             }
 
+            const float targetBaseF0 = PitchUtils::midiToFreq(targetMidi);
+            const float targetF0 = PitchUtils::midiToFreq(targetMidi + vibratoOffsetSemitones);
+
             float baseF0 = f0;
-            if (noteInfos[activeNoteIndex].rotationRad != 0.0f) {
+            if (activeInfo.rotationRad != 0.0f) {
                 const double tSec = timeSeconds;
-                float x = static_cast<float>(tSec - noteInfos[activeNoteIndex].timeCenterSeconds);
-                float y = PitchUtils::freqToMidi(f0) - noteInfos[activeNoteIndex].anchorMidi;
-                float c = std::cos(noteInfos[activeNoteIndex].rotationRad);
-                float s = std::sin(noteInfos[activeNoteIndex].rotationRad);
+                float x = static_cast<float>(tSec - activeInfo.timeCenterSeconds);
+                float y = PitchUtils::freqToMidi(f0) - activeInfo.anchorMidi;
+                float c = std::cos(activeInfo.rotationRad);
+                float s = std::sin(activeInfo.rotationRad);
                 float yRot = x * s + y * c;
-                baseF0 = PitchUtils::midiToFreq(noteInfos[activeNoteIndex].anchorMidi + yRot);
+                baseF0 = PitchUtils::midiToFreq(activeInfo.anchorMidi + yRot);
             }
 
             float shiftedF0 = baseF0;
-            if (noteInfos[activeNoteIndex].anchorPitch > 0.0f && targetBaseF0 > 0.0f) {
-                const float activeOffsetSemitones =
-                    PitchUtils::freqToMidi(targetBaseF0) - noteInfos[activeNoteIndex].anchorMidi;
-                const float dynamicOffsetSemitones = noteBoundaryShiftSemitoneOffset(notes,
-                                                                                     relevantNoteIndices,
-                                                                                     noteAnchorMidis,
-                                                                                     activeNoteIndex,
-                                                                                     activeOffsetSemitones,
-                                                                                      i,
-                                                                                      secondsPerFrame,
-                                                                                      frameRetuneSpeed);
-                float shiftRatio = std::pow(2.0f, dynamicOffsetSemitones / 12.0f);
-                shiftedF0 = baseF0 * shiftRatio;
+            if (activeInfo.anchorPitch > 0.0f && targetBaseF0 > 0.0f) {
+                const float sourceResidualSemitones =
+                    PitchUtils::freqToMidi(baseF0) - anchorMidi;
+                shiftedF0 = PitchUtils::midiToFreq(targetMidi + sourceResidualSemitones);
             }
 
             // --- Pitch Drift: scale only the slow drift component d(t), leave vibrato untouched ---
@@ -490,41 +542,62 @@ void PitchCurve::applyCorrectionToRange(
                         const int localFrame = i - driftInfo.noteStartFrame;
                         const float driftComponent = driftInfo.driftComponent[localFrame];
                         
-                        // devSemitones = midi(shiftedF0) - midi(targetBaseF0) = midi(f0) - midi(anchorPitch)
-                        // 这是因为pitch shift是常量偏移
-                        const float devSemitones = PitchUtils::freqToMidi(shiftedF0) - PitchUtils::freqToMidi(targetBaseF0);
+                        // Deviation is measured around the current absolute
+                        // transition target, after target/anchor interpolation.
+                        const float devSemitones = PitchUtils::freqToMidi(shiftedF0) - targetMidi;
                         // 调制分量m(t) = devSemitones - d(t)
                         const float modulationComponent = devSemitones - driftComponent;
                         
                         // 缩放漂移分量，保留调制分量不变
-                        // f'(t) = targetBaseF0 + s·d(t) + m(t)
+                        // f'(t) = transitionTarget + s*d(t) + m(t)
                         const float scaledDev = driftComponent * framePitchDriftScale + modulationComponent;
-                        shiftedF0 = PitchUtils::midiToFreq(PitchUtils::freqToMidi(targetBaseF0) + scaledDev);
+                        shiftedF0 = PitchUtils::midiToFreq(targetMidi + scaledDev);
                     }
                 }
             }
 
-            correctedF0Buffer[i - calculationStartFrame] = PitchUtils::mixRetune(shiftedF0, targetF0, frameRetuneSpeed);
+            correctedF0Buffer[i - calculationStartFrame] = PitchUtils::mixRetune(
+                shiftedF0, targetF0, transitionRetuneSpeed);
         } else {
-            // Gap frame between notes: shift F0 by nearest relevant note's pitch ratio
-            // to maintain continuity with dragged notes.
-            float gapShiftRatio = 1.0f;
+            if (hasTransitionContext) {
+                const float sourceResidualSemitones =
+                    PitchUtils::freqToMidi(f0) - anchorMidi;
+                const float correctedMidi = targetMidi
+                    + sourceResidualSemitones * (1.0f - transitionRetuneSpeed);
+                correctedF0Buffer[i - calculationStartFrame] = PitchUtils::midiToFreq(correctedMidi);
+                continue;
+            }
+
+            const NoteCorrectionInfo* nearestInfo = nullptr;
             float bestDist = 1e30f;
-            for (size_t ri = 0; ri < relevantNoteIndices.size(); ++ri) {
-                const size_t idx = relevantNoteIndices[ri];
+            const size_t firstCandidatePosition = activeNoteCursor > 0 ? activeNoteCursor - 1 : 0;
+            for (size_t candidatePosition = firstCandidatePosition;
+                 candidatePosition < relevantNoteIndices.size()
+                     && candidatePosition <= activeNoteCursor;
+                 ++candidatePosition) {
+                const size_t idx = relevantNoteIndices[candidatePosition];
                 const auto& note = notes[idx];
-                const float anchor = noteInfos[idx].anchorPitch;
-                const float target = note.getAdjustedPitch();
-                if (anchor <= 0.0f || target <= 0.0f) continue;
+                const auto& info = noteInfos[idx];
+                if (info.anchorPitch <= 0.0f || info.anchorMidi <= 0.0f)
+                    continue;
                 const float dist = (timeSeconds < note.startTime)
                     ? static_cast<float>(note.startTime - timeSeconds)
                     : static_cast<float>(timeSeconds - note.endTime);
                 if (dist < bestDist) {
                     bestDist = dist;
-                    gapShiftRatio = target / anchor;
+                    nearestInfo = &info;
                 }
             }
-            correctedF0Buffer[i - calculationStartFrame] = f0 * gapShiftRatio;
+
+            if (nearestInfo != nullptr) {
+                const float sourceResidualSemitones =
+                    PitchUtils::freqToMidi(f0) - nearestInfo->anchorMidi;
+                const float correctedMidi = nearestInfo->targetMidi
+                    + sourceResidualSemitones * (1.0f - nearestInfo->retuneSpeed);
+                correctedF0Buffer[i - calculationStartFrame] = PitchUtils::midiToFreq(correctedMidi);
+            } else {
+                correctedF0Buffer[i - calculationStartFrame] = f0;
+            }
         }
     }
 
