@@ -3262,15 +3262,47 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
         timelineSeconds,
         0.0,
         camera_.pixelsPerSecond);
+    const auto resolvedCamera = TimelineViewportPolicy::resolve(request);
+    const double visibleEndSeconds = TimelineViewportPolicy::visibleEndSeconds(resolvedCamera,
+                                                                                 contentWidth);
     const auto mapper = makeViewMapper();
-    const float startMidi = mapper.freqToMidi(startFrequency);
-    verticalScrollOffset_ = (maxMidi_ - startMidi) * pixelsPerSemitone_ - contentHeight * 0.5f;
+    float highestMidi = -std::numeric_limits<float>::infinity();
+    float lowestMidi = std::numeric_limits<float>::infinity();
+    for (const auto& note : getCommittedNotes()) {
+        const float adjustedPitch = note.getAdjustedPitch();
+        if (!(std::isfinite(adjustedPitch) && adjustedPitch > 0.0f))
+            continue;
+
+        const double noteTimelineStart = projection.projectContentTimeToTimeline(
+            snapshot->timeGrid->tauForward(note.startTime));
+        const double noteTimelineEnd = projection.projectContentTimeToTimeline(
+            snapshot->timeGrid->tauForward(note.endTime));
+        if (!std::isfinite(noteTimelineStart) || !std::isfinite(noteTimelineEnd)
+            || noteTimelineEnd <= resolvedCamera.visibleStartSeconds
+            || noteTimelineStart >= visibleEndSeconds) {
+            continue;
+        }
+
+        const float noteMidi = mapper.freqToMidi(adjustedPitch);
+        if (!std::isfinite(noteMidi))
+            continue;
+        highestMidi = std::max(highestMidi, noteMidi);
+        lowestMidi = std::min(lowestMidi, noteMidi);
+    }
+
+    if (highestMidi > lowestMidi) {
+        pixelsPerSemitone_ = static_cast<float>(contentHeight) / (highestMidi - lowestMidi);
+        verticalScrollOffset_ = (maxMidi_ - highestMidi) * pixelsPerSemitone_;
+    } else {
+        const float startMidi = mapper.freqToMidi(startFrequency);
+        verticalScrollOffset_ = (maxMidi_ - startMidi) * pixelsPerSemitone_ - contentHeight * 0.5f;
+    }
     verticalScrollOffset_ = std::clamp(verticalScrollOffset_, 0.0f, juce::jmax(0.0f, getTotalHeight() - static_cast<float>(contentHeight)));
 
     // 纵向变化 + 相机定位 → 标记脏让 applyRasterCamera 全量重建
     staticDirty_ = true;
     contentDirty_ = true;
-    activateTimelineCamera(TimelineViewportPolicy::resolve(request));
+    activateTimelineCamera(resolvedCamera);
     pendingInitialF0ViewContentKey_ = ContentKey{};
     return true;
 }
