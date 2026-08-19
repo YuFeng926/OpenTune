@@ -132,9 +132,9 @@ OpenTune/
 | **Compiler** | Visual Studio 2022 (MSVC 17+) | Xcode 14+ / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
 | **C++ Standard** | C++17 | C++17 |
-| **Build System** | MSBuild (VS Generator) | Xcode |
+| **Build System** | MSBuild (VS Generator) / Ninja | Xcode |
 
-> ⚠️ **Windows builds must use Visual Studio Generator + MSBuild**, Ninja and other generators are not supported.
+> **Note:** Windows builds support both Visual Studio Generator + MSBuild and Ninja. Visual Studio Generator is recommended for full development, while Ninja is suitable for quick builds.
 
 ### Dependency Preparation
 
@@ -305,6 +305,14 @@ cmd /v/on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --b
 cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_Standalone"
 ```
 
+**Windows (Ninja + CMake)**
+
+```powershell
+# Quick build with Ninja (requires Ninja in PATH)
+cmake --preset windows-ara-ninja
+cmake --build --preset windows-ara-ninja-release
+```
+
 The same ARA2 VST3 binary will naturally fall back to the Capture workflow in standard VST3 hosts without ARA binding, and no separate non-ARA plugin is generated.
 
 For development in Visual Studio IDE:
@@ -342,7 +350,7 @@ After build completion, runtime DLLs, model files, and D3D12 directory will be a
 | `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` exists |
 | `ARA SDK not found` | ARA SDK not cloned | Execute step 2 git clone command |
 | MSVC link error LNK2019 | MSVC runtime mismatch | This project uses static CRT (`/MT`), ensure dependency libraries are consistent |
-| Ninja generator error | Ninja not supported | Can only use `"Visual Studio 17 2022"` generator
+| Ninja build failure | Ninja not installed or not in PATH | Ensure Ninja is installed and in system PATH, or use Visual Studio Generator |
 
 
 ## 🤝 Contributing
