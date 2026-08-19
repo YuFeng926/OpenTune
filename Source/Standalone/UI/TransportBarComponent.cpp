@@ -628,6 +628,19 @@ void UnifiedToolbarButton::setSolidIcon(bool solid)
     repaint();
 }
 
+void UnifiedToolbarButton::setAccentColour(juce::Colour c)
+{
+    accentColour_ = c;
+    hasAccent_ = true;
+    repaint();
+}
+
+void UnifiedToolbarButton::clearAccentColour()
+{
+    hasAccent_ = false;
+    repaint();
+}
+
 void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
@@ -678,27 +691,42 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(p);
-            juce::ColourGradient idle(
-                juce::Colour(0xFFEDE9F3),
-                bounds.getX(), bounds.getY(),
-                juce::Colour(0xFFAFA7CD),
-                bounds.getX(), bounds.getBottom(),
-                false);
-            idle.addColour(0.45f, juce::Colour(0xFFC6C0DE));
-            g.setGradientFill(idle);
+            if (hasAccent_)
+            {
+                // 强调色按钮：accentColour 亮→暗渐变
+                juce::ColourGradient idle(
+                    accentColour_.brighter(0.45f),
+                    bounds.getX(), bounds.getY(),
+                    accentColour_.darker(0.18f),
+                    bounds.getX(), bounds.getBottom(),
+                    false);
+                idle.addColour(0.45f, accentColour_);
+                g.setGradientFill(idle);
+            }
+            else
+            {
+                juce::ColourGradient idle(
+                    juce::Colour(0xFFEDE9F3),
+                    bounds.getX(), bounds.getY(),
+                    juce::Colour(0xFFAFA7CD),
+                    bounds.getX(), bounds.getBottom(),
+                    false);
+                idle.addColour(0.45f, juce::Colour(0xFFC6C0DE));
+                g.setGradientFill(idle);
+            }
             g.fillPath(p);
 
-            // 顶部细高光（参考图：EDE9F3 亮顶）
+            // 顶部细高光
             g.setColour(juce::Colour(0xFFFFFFFF).withAlpha(0.35f));
             g.drawLine(bounds.getX() + radius, bounds.getY() + 1.0f,
                        bounds.getRight() - radius, bounds.getY() + 1.0f, 1.0f);
 
-            // 底部紫灰压暗（浮雕收边，柔和）
+            // 底部压暗（浮雕收边）
             auto bottomShade = bounds.withTrimmedTop(bounds.getHeight() * 0.62f);
             juce::ColourGradient bs(
                 juce::Colours::transparentBlack,
                 bottomShade.getCentreX(), bottomShade.getY(),
-                juce::Colour(0xFF51406F).withAlpha(0.10f),
+                (hasAccent_ ? accentColour_.darker(0.35f) : juce::Colour(0xFF51406F)).withAlpha(0.10f),
                 bottomShade.getCentreX(), bottomShade.getBottom(), false);
             g.setGradientFill(bs);
             g.fillRect(bottomShade);
@@ -709,18 +737,34 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(p);
-            juce::ColourGradient activeFill(
-                juce::Colour(0xFFF9E4F2),
-                bounds.getX(), bounds.getY(),
-                juce::Colour(0xFFD2B3DB),
-                bounds.getX(), bounds.getBottom(),
-                false);
-            activeFill.addColour(0.45f, juce::Colour(0xFFE7D7ED));
-            activeFill.addColour(0.78f, juce::Colour(0xFFDDC0E2));
-            g.setGradientFill(activeFill);
+            if (hasAccent_)
+            {
+                // 强调色按钮激活态：accentColour 亮→暗渐变（比 idle 更鲜艳）
+                juce::ColourGradient activeFill(
+                    accentColour_.brighter(0.55f),
+                    bounds.getX(), bounds.getY(),
+                    accentColour_,
+                    bounds.getX(), bounds.getBottom(),
+                    false);
+                activeFill.addColour(0.45f, accentColour_.brighter(0.25f));
+                activeFill.addColour(0.78f, accentColour_.brighter(0.08f));
+                g.setGradientFill(activeFill);
+            }
+            else
+            {
+                juce::ColourGradient activeFill(
+                    juce::Colour(0xFFF9E4F2),
+                    bounds.getX(), bounds.getY(),
+                    juce::Colour(0xFFD2B3DB),
+                    bounds.getX(), bounds.getBottom(),
+                    false);
+                activeFill.addColour(0.45f, juce::Colour(0xFFE7D7ED));
+                activeFill.addColour(0.78f, juce::Colour(0xFFDDC0E2));
+                g.setGradientFill(activeFill);
+            }
             g.fillPath(p);
 
-            // 顶部柔和高光（克制，以浅粉紫渐变为主）
+            // 顶部柔和高光
             auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.38f);
             juce::ColourGradient hl(
                 juce::Colour(0xFFFFFFFF).withAlpha(0.28f),
@@ -731,12 +775,12 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             g.setGradientFill(hl);
             g.fillRect(topHighlight);
 
-            // 底部微压暗（浮雕收边，柔和）
+            // 底部微压暗
             auto bottomShade = bounds.withTrimmedTop(bounds.getHeight() * 0.60f);
             juce::ColourGradient bs(
                 juce::Colours::transparentBlack,
                 bottomShade.getCentreX(), bottomShade.getY(),
-                juce::Colour(0xFF803090).withAlpha(0.10f),
+                (hasAccent_ ? accentColour_.darker(0.30f) : juce::Colour(0xFF803090)).withAlpha(0.10f),
                 bottomShade.getCentreX(), bottomShade.getBottom(), false);
             g.setGradientFill(bs);
             g.fillRect(bottomShade);
@@ -766,12 +810,14 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             g.fillRect(bounds);
         }
 
-        // 粉紫描边：激活时清晰（参考图 #B951A7），普通时低透明
+        // 描边：激活时清晰，普通时低透明
         {
             const float outlineAlpha = isActive ? (isSegmentRole ? 0.85f : 0.95f)
                                                 : (isHover ? 0.45f : 0.28f);
             const float outlineWidth = isActive ? 1.3f : (isHover ? 1.0f : 0.8f);
-            g.setColour(juce::Colour(0xFFB951A7).withAlpha(outlineAlpha));
+            const auto outlineColour = hasAccent_ ? accentColour_.darker(0.25f)
+                                                  : juce::Colour(0xFFB951A7);
+            g.setColour(outlineColour.withAlpha(outlineAlpha));
             g.strokePath(p, juce::PathStrokeType(outlineWidth));
         }
 
@@ -798,13 +844,32 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                                       roundBottomLeft, roundBottomRight);
         }
 
-        OpenTuneLookAndFeel::drawBlueBreezeSurface(g,
-                                                   bounds,
-                                                   radius,
-                                                   isHover,
-                                                   shouldDrawButtonAsDown,
-                                                   isActive,
-                                                   &p);
+        if (hasAccent_)
+        {
+            // 强调色按钮：accentColour 渐变填充
+            juce::Graphics::ScopedSaveState clipState(g);
+            g.reduceClipRegion(p);
+            juce::ColourGradient grad(
+                accentColour_.brighter(0.35f),
+                bounds.getX(), bounds.getY(),
+                accentColour_.darker(0.15f),
+                bounds.getX(), bounds.getBottom(),
+                false);
+            g.setGradientFill(grad);
+            g.fillPath(p);
+            g.setColour(accentColour_.darker(0.20f).withAlpha(isActive ? 0.85f : 0.30f));
+            g.strokePath(p, juce::PathStrokeType(isActive ? 1.3f : 0.8f));
+        }
+        else
+        {
+            OpenTuneLookAndFeel::drawBlueBreezeSurface(g,
+                                                       bounds,
+                                                       radius,
+                                                       isHover,
+                                                       shouldDrawButtonAsDown,
+                                                       isActive,
+                                                       &p);
+        }
 
         if (connectedEdges_ != None)
         {
@@ -826,16 +891,35 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                                       roundBottomLeft, roundBottomRight);
         }
 
-        UIColors::drawAuroraButtonChrome(g,
-                                         bounds,
-                                         radius,
-                                         isHover,
-                                         shouldDrawButtonAsDown,
-                                         isToggled,
-                                         {},
-                                         {},
-                                         &p,
-                                         kAuroraToolbarChromeIntensity);
+        if (hasAccent_)
+        {
+            // 强调色按钮：accentColour 渐变填充
+            juce::Graphics::ScopedSaveState clipState(g);
+            g.reduceClipRegion(p);
+            juce::ColourGradient grad(
+                accentColour_.brighter(0.35f),
+                bounds.getX(), bounds.getY(),
+                accentColour_.darker(0.15f),
+                bounds.getX(), bounds.getBottom(),
+                false);
+            g.setGradientFill(grad);
+            g.fillPath(p);
+            g.setColour(accentColour_.darker(0.20f).withAlpha(isActive ? 0.85f : 0.30f));
+            g.strokePath(p, juce::PathStrokeType(isActive ? 1.3f : 0.8f));
+        }
+        else
+        {
+            UIColors::drawAuroraButtonChrome(g,
+                                             bounds,
+                                             radius,
+                                             isHover,
+                                             shouldDrawButtonAsDown,
+                                             isToggled,
+                                             {},
+                                             {},
+                                             &p,
+                                             kAuroraToolbarChromeIntensity);
+        }
     }
     else
     {
@@ -854,7 +938,11 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     juce::Colour iconColor;
     if (themeId == ThemeId::BlueBreeze)
     {
-        if (isActive)
+        if (hasAccent_)
+        {
+            iconColor = juce::Colour(0xFFFFFFFF); // 强调色按钮：白色图标
+        }
+        else if (isActive)
         {
             iconColor = juce::Colour(BlueBreeze::Colors::AccentBlue); // Active = Blue Icon
         }
@@ -873,7 +961,12 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     }
     else if (themeId == ThemeId::Overdose)
     {
-        if (isActive)
+        if (hasAccent_)
+        {
+            // 强调色按钮：白色图标（与彩色背景形成对比）
+            iconColor = juce::Colour(0xFFFFFFFF);
+        }
+        else if (isActive)
             iconColor = juce::Colour(0xFFEC4BAB);       // 激活：亮粉（参考图 #EC4BAB）
         else if (isHover)
             iconColor = juce::Colour(0xFFEC4BAB).brighter(0.12f);
@@ -882,7 +975,11 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     }
     else if (themeId == ThemeId::Aurora)
     {
-        if (!isEnabled())
+        if (hasAccent_)
+        {
+            iconColor = juce::Colour(0xFFFFFFFF); // 强调色按钮：白色图标
+        }
+        else if (!isEnabled())
             iconColor = UIColors::textDisabled.withAlpha(0.46f);
         else if (isActive)
             iconColor = UIColors::textPrimary.withAlpha(0.96f);
@@ -915,18 +1012,26 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     // 参考图图标特征：深紫黑描边 + 鲜艳粉色主体
     if (themeId == ThemeId::Overdose)
     {
-        const auto deepOutline = juce::Colour(0xFF0C0010).withAlpha(isActive ? 0.95f : 0.80f);
-        if (solidIcon_)
+        if (hasAccent_)
         {
-            // 实心图标（播放三角/暂停条/停止方块）：粉色填充 + 深紫黑描边
-            ToolbarIcons::drawIcon(g, path, iconArea, deepOutline, 2.2f, false);
-            ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.0f, true);
+            // 强调色按钮：白色填充图标（与彩色背景形成对比）
+            ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.5f, solidIcon_);
         }
         else
         {
-            // 线条型图标（文件/铅笔/眼睛/循环）：深紫黑粗线 + 粉色细芯
-            ToolbarIcons::drawIcon(g, path, iconArea, deepOutline, 3.6f, false);
-            ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.7f, false);
+            const auto deepOutline = juce::Colour(0xFF0C0010).withAlpha(isActive ? 0.95f : 0.80f);
+            if (solidIcon_)
+            {
+                // 实心图标（播放三角/暂停条/停止方块）：粉色填充 + 深紫黑描边
+                ToolbarIcons::drawIcon(g, path, iconArea, deepOutline, 2.2f, false);
+                ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.0f, true);
+            }
+            else
+            {
+                // 线条型图标（文件/铅笔/眼睛/循环）：深紫黑粗线 + 粉色细芯
+                ToolbarIcons::drawIcon(g, path, iconArea, deepOutline, 3.6f, false);
+                ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.7f, false);
+            }
         }
     }
     else
@@ -994,6 +1099,7 @@ TransportBarComponent::TransportBarComponent()
     recordButton_.onClick = [this] { onRecordClicked(); };
     recordButton_.setTooltip(LOC(kTooltipRecord));
     recordButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
+    recordButton_.setAccentColour(juce::Colour(0xFFE53935)); // 鲜艳红色填充
     addAndMakeVisible(recordButton_);
 
     // Setup Track View Button

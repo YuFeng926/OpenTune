@@ -39,6 +39,9 @@ public:
     void setConnectedEdges(int edges);
     // 实心图标（如播放三角/暂停条/停止方块）：粉色填充 + 深描边；默认线条型
     void setSolidIcon(bool solid);
+    // 设置强调色：按钮背景渐变和描边使用此颜色（而非主题默认色）
+    void setAccentColour(juce::Colour c);
+    void clearAccentColour();
 
     void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
 
@@ -47,6 +50,8 @@ private:
     juce::Path toggledIconPath_;
     int connectedEdges_ = None;
     bool solidIcon_ = false;
+    juce::Colour accentColour_;
+    bool hasAccent_ = false;
 };
 
 class DigitalTimeDisplay : public juce::Component,
