@@ -350,10 +350,11 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             { { ToolId::Pitch,     "Pitch",    "F2",  []{ return makeToolIcon(ToolId::Pitch); } }, true },
             { { ToolId::HandDraw,  "Hand Draw","5",   []{ return ToolbarIcons::getHandDrawIcon(); } } },
             { { ToolId::VolumeEnvelope, "Volume", "F4", []{ return makeToolIcon(ToolId::VolumeEnvelope); } } },
-            { { ToolId::TimeTool,  "Time",     "T",   []{ return makeToolIcon(ToolId::TimeTool); } } },
-            { { ToolId::Scissors,  "Scissors", "F6",  []{ return makeToolIcon(ToolId::Scissors); } } },
-            { { ToolId::Eq,        "EQ",       "E",   []{ return makeToolIcon(ToolId::Eq); } } },
         };
+        if (experimentalFeaturesEnabled_)
+            mainItems.push_back({ { ToolId::TimeTool, "Time", "T", []{ return makeToolIcon(ToolId::TimeTool); } } });
+        mainItems.push_back({ { ToolId::Scissors, "Scissors", "F6", []{ return makeToolIcon(ToolId::Scissors); } } });
+        mainItems.push_back({ { ToolId::Eq, "EQ", "E", []{ return makeToolIcon(ToolId::Eq); } } });
         subItems = {
             { ToolId::PitchModulation, "Modulation", "F2x2", []{ return makeToolIcon(ToolId::PitchModulation); } },
             { ToolId::PitchDrift,      "Drift",      "F2x3", []{ return makeToolIcon(ToolId::PitchDrift); } },
@@ -365,7 +366,7 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             { { ToolId::LineAnchor, "Line Anchor", "4", []{ return ToolbarIcons::getLineAnchorIcon(); } } },
             { { ToolId::HandDraw,   "Hand Draw",   "5", []{ return ToolbarIcons::getHandDrawIcon(); } } },
         };
-        // Time 与侧栏一致：OpenTune 仅 experimental 开启时可选（OpenDyne 分支恒含）
+        // Time 与侧栏一致：两种模式均仅在 experimental 开启时可选
         if (experimentalFeaturesEnabled_)
             mainItems.push_back({ { ToolId::TimeTool, "Time", "T", []{ return makeToolIcon(ToolId::TimeTool); } } });
     }
@@ -3553,8 +3554,8 @@ void PianoRollComponent::ensureOpenDyneNotesIfNeeded()
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {
-    // OpenDyne：Time 始终有效；OpenTune：Time 受 experimental 门控
-    if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_ && !isOpenDyne()) {
+    // Time 仅在 experimental 开启时有效
+    if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_) {
         tool = ToolId::Select;
     }
 
@@ -3667,9 +3668,9 @@ void PianoRollComponent::setExperimentalFeaturesEnabled(bool enabled)
         return;
     }
 
+    dismissToolPopup();
     experimentalFeaturesEnabled_ = enabled;
-    // 关闭 experimental 仅令 OpenTune 的 Time 回落 Select；OpenDyne 的 Time 保持
-    if (!enabled && !isOpenDyne() && currentTool_ == ToolId::TimeTool) {
+    if (!enabled && currentTool_ == ToolId::TimeTool) {
         setCurrentTool(ToolId::Select);
         return;
     }
