@@ -32,7 +32,7 @@ class ModelPathResolver {
 public:
     static bool ensureOnnxRuntimeLoaded() {
 #if defined(_WIN32)
-        if (::GetModuleHandleW(L"OpenTuneOnnxRuntime_1_24_4.dll") != nullptr) {
+        if (::GetModuleHandleW(L"OpenTuneOnnxRuntime_1_23_0.dll") != nullptr) {
             return true;
         }
 
@@ -42,11 +42,11 @@ public:
         const juce::File programDataRoot = juce::File::getSpecialLocation(juce::File::commonApplicationDataDirectory)
             .getChildFile("OpenTune");
 
-        // 唯一 DLL 名 OpenTuneOnnxRuntime_1_24_4.dll：带版本后缀，绝不装载宿主的同名裸 DLL
+        // 唯一 DLL 名 OpenTuneOnnxRuntime_1_23_0.dll：带版本后缀，绝不装载宿主的同名裸 DLL
         const juce::File candidates[] = {
-            programFilesRoot.getChildFile("OpenTuneOnnxRuntime_1_24_4.dll"),
-            programDataRoot.getChildFile("OpenTuneOnnxRuntime_1_24_4.dll"),
-            moduleFile.getParentDirectory().getChildFile("OpenTuneOnnxRuntime_1_24_4.dll")
+            programFilesRoot.getChildFile("OpenTuneOnnxRuntime_1_23_0.dll"),
+            programDataRoot.getChildFile("OpenTuneOnnxRuntime_1_23_0.dll"),
+            moduleFile.getParentDirectory().getChildFile("OpenTuneOnnxRuntime_1_23_0.dll")
         };
 
         for (const auto& candidate : candidates) {

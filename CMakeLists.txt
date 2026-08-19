@@ -8,15 +8,15 @@ cmake_minimum_required(VERSION 3.22)
 # ==============================================================================
 # macOS Deployment Target (must be set before project() to take effect)
 # Locks both the binary's LC_VERSION_MIN_MACOSX and Info.plist LSMinimumSystemVersion
-# to macOS 14 (Sonoma) — required because bundled libonnxruntime 1.24.4 was built
-# for macOS 14+ and its internal API references would lazy-bind fail on older systems.
+# to macOS 13.3 (Ventura) — required because bundled libonnxruntime 1.23.0 was built
+# for macOS 13.3+ and its internal API references would lazy-bind fail on older systems.
 # ==============================================================================
-set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target")
 
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.7.2 LANGUAGES CXX C)
+project(OpenTune VERSION 1.7.3 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -213,8 +213,8 @@ if(WIN32)
     opentune_find_windows_um_x64_lib("d3d12" OPENTUNE_D3D12_SYSTEM_LIB)
     opentune_find_windows_um_x64_lib("dxgi" OPENTUNE_DXGI_SYSTEM_LIB)
 
-    # CPU ONNX Runtime v1.24.4: headers + libs
-    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-win-x64-1.24.4")
+    # CPU ONNX Runtime v1.23.0: headers + libs
+    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-win-x64-1.23.0")
     if(NOT DEFINED ONNXRUNTIME_ROOT OR "${ONNXRUNTIME_ROOT}" STREQUAL "")
         set(ONNXRUNTIME_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}" CACHE PATH "ONNX Runtime CPU root directory" FORCE)
     elseif(NOT EXISTS "${ONNXRUNTIME_ROOT}" AND EXISTS "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}")
@@ -223,8 +223,8 @@ if(WIN32)
     endif()
 
 elseif(APPLE)
-    # ---- macOS: arm64-only, ONNX Runtime v1.24.4 with CoreML ----
-    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-arm64-1.24.4")
+    # ---- macOS: universal2 (arm64 + x86_64), ONNX Runtime v1.23.0 with CoreML ----
+    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-universal2-1.23.0")
     if(NOT DEFINED ONNXRUNTIME_ROOT OR "${ONNXRUNTIME_ROOT}" STREQUAL "")
         set(ONNXRUNTIME_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}"
             CACHE PATH "ONNX Runtime root directory" FORCE)
@@ -246,8 +246,8 @@ if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
 endif()
 
 if(WIN32)
-    # DirectML ONNX Runtime v1.24.4: runtime DLLs + DML provider headers
-    set(OPENTUNE_DEFAULT_ONNXRUNTIME_DML_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-dml-1.24.4")
+    # DirectML ONNX Runtime v1.23.0: runtime DLLs + DML provider headers
+    set(OPENTUNE_DEFAULT_ONNXRUNTIME_DML_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-dml-1.23.0")
     if(NOT DEFINED ONNXRUNTIME_DML_ROOT OR "${ONNXRUNTIME_DML_ROOT}" STREQUAL "")
         set(ONNXRUNTIME_DML_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_DML_ROOT}" CACHE PATH "ONNX Runtime DirectML package root" FORCE)
     elseif(NOT EXISTS "${ONNXRUNTIME_DML_ROOT}" AND EXISTS "${OPENTUNE_DEFAULT_ONNXRUNTIME_DML_ROOT}")
@@ -278,12 +278,12 @@ if(WIN32)
     # 运行时 DLL 唯一名（Windows）：OpenTune 专用 ONNX Runtime 运行库，带版本后缀，
     # 绝不使用裸名 onnxruntime.dll，避免与宿主 DAW 自带同名 DLL 撞名。
     # 源仍是第三方包内 onnxruntime.dll（builtin DML），仅输出改名。
-    set(OPENTUNE_ORT_DLL_NAME "OpenTuneOnnxRuntime_1_24_4.dll")
+    set(OPENTUNE_ORT_DLL_NAME "OpenTuneOnnxRuntime_1_23_0.dll")
 
     # 用 MSVC lib.exe 从项目内 .def（导出表取自上述 DML DLL 精确导出）生成与新 DLL 名
     # 匹配的导入库，供 OpenTune / Standalone / VST3 / Windows 测试目标链接。
-    set(OPENTUNE_ORT_DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneOnnxRuntime_1_24_4.def")
-    set(OPENTUNE_ORT_IMPORT_LIB "${CMAKE_CURRENT_BINARY_DIR}/OpenTuneOnnxRuntime_1_24_4.lib")
+    set(OPENTUNE_ORT_DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneOnnxRuntime_1_23_0.def")
+    set(OPENTUNE_ORT_IMPORT_LIB "${CMAKE_CURRENT_BINARY_DIR}/OpenTuneOnnxRuntime_1_23_0.lib")
     add_custom_command(
         OUTPUT "${OPENTUNE_ORT_IMPORT_LIB}"
         COMMAND "${CMAKE_AR}" /NOLOGO
@@ -300,7 +300,7 @@ if(WIN32)
         message(FATAL_ERROR "ONNX Runtime DirectML DLL missing: ${ONNXRUNTIME_DLL}")
     endif()
 
-    message(STATUS "ONNX Runtime version: 1.24.4")
+    message(STATUS "ONNX Runtime version: 1.23.0")
     message(STATUS "ONNX Runtime CPU root: ${ONNXRUNTIME_ROOT}")
     message(STATUS "ONNX Runtime DML root: ${ONNXRUNTIME_DML_ROOT}")
     message(STATUS "ONNX Runtime DLL source: ${ONNXRUNTIME_DLL}")
@@ -314,7 +314,7 @@ if(WIN32)
     message(STATUS "DirectX Agility SDK version token: ${OPENTUNE_D3D12_SDK_VERSION}")
 
 elseif(APPLE)
-    message(STATUS "ONNX Runtime version: 1.24.4 (macOS arm64)")
+    message(STATUS "ONNX Runtime version: 1.23.0 (macOS universal2)")
     message(STATUS "ONNX Runtime root: ${ONNXRUNTIME_ROOT}")
 endif()
 
@@ -368,7 +368,7 @@ juce_add_plugin(OpenTune
     "<plist version=\"1.0\">
     <dict>
         <key>LSMinimumSystemVersion</key>
-        <string>14.0</string>
+        <string>13.3</string>
         <key>LSApplicationCategoryType</key>
         <string>public.app-category.music</string>
         <key>NSHumanReadableCopyright</key>
@@ -1074,7 +1074,7 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Frameworks"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.1.24.4.dylib"
+            "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.1.23.0.dylib"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Frameworks/"
         COMMENT "Copying ONNX Runtime dylib to app bundle Frameworks..."
     )
@@ -1208,7 +1208,7 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.1.24.4.dylib"
+                "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.1.23.0.dylib"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks/"
             COMMENT "Copying ONNX Runtime dylib to VST3 bundle Frameworks..."
         )

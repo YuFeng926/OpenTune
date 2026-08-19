@@ -106,7 +106,7 @@ Copy the `OpenTune.vst3` folder to `C:\Program Files\Common Files\VST3\` to load
 ```
 OpenTune/
 ├── OpenTune.exe
-├── OpenTuneOnnxRuntime_1_24_4.dll ← ONNX Runtime (built-in DirectML)
+├── OpenTuneOnnxRuntime_1_23_0.dll ← ONNX Runtime (built-in DirectML)
 ├── DirectML.dll             ← DirectML runtime
 ├── D3D12/
 │   ├── D3D12Core.dll        ← DirectX Agility SDK
@@ -169,16 +169,16 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-#### 4. ONNX Runtime (v1.24.4)
+#### 4. ONNX Runtime (v1.23.0)
 
-This project requires **two** ONNX Runtime packages (Windows): the CPU version provides headers, and the DML version provides the original `onnxruntime.dll` (with built-in DirectML support). The build system generates a dedicated import library and outputs the runtime DLL as `OpenTuneOnnxRuntime_1_24_4.dll`.
+This project requires **two** ONNX Runtime packages (Windows): the CPU version provides headers, and the DML version provides the original `onnxruntime.dll` (with built-in DirectML support). The build system generates a dedicated import library and outputs the runtime DLL as `OpenTuneOnnxRuntime_1_23_0.dll`.
 
 **Windows** — Download and extract to `ThirdParty/`:
 
 | Package | Link | Extract to |
 |---------|------|------------|
-| ONNX Runtime CPU | [onnxruntime-win-x64-1.24.4.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip) | `ThirdParty/onnxruntime-win-x64-1.24.4/` |
-| ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.24.4.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.24.4) | `ThirdParty/onnxruntime-dml-1.24.4/` |
+| ONNX Runtime CPU | [onnxruntime-win-x64-1.23.0.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-win-x64-1.23.0.zip) | `ThirdParty/onnxruntime-win-x64-1.23.0/` |
+| ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.23.0.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.23.0) | `ThirdParty/onnxruntime-dml-1.23.0/` |
 
 > **Tip:** Rename `.nupkg` to `.zip` before extracting.
 
@@ -186,13 +186,13 @@ This project requires **two** ONNX Runtime packages (Windows): the CPU version p
 
 ```
 ThirdParty/
-├── onnxruntime-win-x64-1.24.4/       ← CPU version (for compilation linking)
+├── onnxruntime-win-x64-1.23.0/       ← CPU version (for compilation linking)
 │   ├── include/
 │   │   └── onnxruntime_cxx_api.h      ← CMake checks for this file
 │   └── lib/
 │       └── onnxruntime.lib            ← Upstream package file; OpenTune doesn't link directly
 │
-└── onnxruntime-dml-1.24.4/            ← DML version (runtime DLL + DML provider headers)
+└── onnxruntime-dml-1.23.0/            ← DML version (runtime DLL + DML provider headers)
     ├── build/native/include/
     │   └── dml_provider_factory.h     ← DirectML EP registration header
     └── runtimes/win-x64/native/
@@ -200,26 +200,26 @@ ThirdParty/
 ```
 
 **Why are two packages needed?**
-- **CPU package** (`onnxruntime-win-x64-1.24.4`): Provides C++ API headers (`onnxruntime_cxx_api.h`).
-- **DML package** (`onnxruntime-dml-1.24.4`): Provides the original `onnxruntime.dll` with compiled DirectML Execution Provider and `dml_provider_factory.h`. CMake generates `OpenTuneOnnxRuntime_1_24_4.lib` based on the project's `.def` file and renames the source DLL to `OpenTuneOnnxRuntime_1_24_4.dll` for deployment.
+- **CPU package** (`onnxruntime-win-x64-1.23.0`): Provides C++ API headers (`onnxruntime_cxx_api.h`).
+- **DML package** (`onnxruntime-dml-1.23.0`): Provides the original `onnxruntime.dll` with compiled DirectML Execution Provider and `dml_provider_factory.h`. CMake generates `OpenTuneOnnxRuntime_1_23_0.lib` based on the project's `.def` file and renames the source DLL to `OpenTuneOnnxRuntime_1_23_0.dll` for deployment.
 
-**macOS (Apple Silicon)**:
+**macOS (Apple Silicon + Intel)**:
 
-macOS only requires one package, with CoreML EP built-in:
+macOS only requires one universal2 package (supports arm64 + x86_64), with CoreML EP built-in:
 
 ```bash
 cd ThirdParty
-curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz | tar xz
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-osx-universal2-1.23.0.tgz | tar xz
 cd ..
 ```
 
 Extracted structure:
 ```
-ThirdParty/onnxruntime-osx-arm64-1.24.4/
+ThirdParty/onnxruntime-osx-universal2-1.23.0/
 ├── include/
 │   └── onnxruntime_cxx_api.h
 └── lib/
-    └── libonnxruntime.1.24.4.dylib
+    └── libonnxruntime.1.23.0.dylib
 ```
 
 #### 5. DirectML & DirectX Agility SDK (Windows only)
@@ -275,9 +275,9 @@ OpenTune/
 ├── ThirdParty/
 │   ├── ARA_SDK-releases-2.2.0/           ← ARA SDK
 │   ├── r8brain-free-src-master/          ← Resampling library
-│   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
-│   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
-│   ├── onnxruntime-osx-arm64-1.24.4/    ← ONNX Runtime (macOS)
+│   ├── onnxruntime-win-x64-1.23.0/      ← ONNX Runtime CPU (Windows)
+│   ├── onnxruntime-dml-1.23.0/           ← ONNX Runtime DML (Windows)
+│   ├── onnxruntime-osx-universal2-1.23.0/ ← ONNX Runtime (macOS, universal2)
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
 │   └── microsoft.direct3d.d3d12.1.619.1/ ← D3D12 Agility SDK (Windows)
 ├── models/
@@ -341,11 +341,11 @@ After build completion, runtime DLLs, model files, and D3D12 directory will be a
 
 | Symptom | Cause | Solution |
 |---------|-------|----------|
-| `ONNX Runtime C++ API header not found` | CPU version ONNX Runtime not placed correctly | Verify `ThirdParty/onnxruntime-win-x64-1.24.4/include/onnxruntime_cxx_api.h` exists |
-| `DirectML provider header missing` | DML version NuGet package not extracted correctly | Verify `ThirdParty/onnxruntime-dml-1.24.4/build/native/include/dml_provider_factory.h` exists |
+| `ONNX Runtime C++ API header not found` | CPU version ONNX Runtime not placed correctly | Verify `ThirdParty/onnxruntime-win-x64-1.23.0/include/onnxruntime_cxx_api.h` exists |
+| `DirectML provider header missing` | DML version NuGet package not extracted correctly | Verify `ThirdParty/onnxruntime-dml-1.23.0/build/native/include/dml_provider_factory.h` exists |
 | `DirectML header missing` | DirectML NuGet package not extracted | Verify `ThirdParty/microsoft.ai.directml.1.15.4/include/DirectML.h` exists |
 | `D3D12 header missing from Agility SDK` | D3D12 NuGet package not extracted | Verify `ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native/include/d3d12.h` exists |
-| `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` exists |
+| `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.23.0/runtimes/win-x64/native/onnxruntime.dll` exists |
 | `ARA SDK not found` | ARA SDK not cloned | Execute step 2 git clone command |
 | MSVC link error LNK2019 | MSVC runtime mismatch | This project uses static CRT (`/MT`), ensure dependency libraries are consistent |
 | Ninja build failure | Ninja not installed or not in PATH | Ensure Ninja is installed and in system PATH, or use Visual Studio Generator |

@@ -50,7 +50,7 @@ gratefully acknowledge the work of their authors.
 ## ONNX Runtime
 - **License**: MIT
 - **Project**: https://onnxruntime.ai/
-- **Version**: 1.24.4
+- **Version**: 1.23.0
 - **Use**: Cross-platform AI inference (CPU on all platforms; DirectML
   on Windows; CoreML on macOS).
 
