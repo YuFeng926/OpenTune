@@ -1,5 +1,7 @@
 <div align="center">
 
+[English](README.en.md) | 中文
+
 ## OpenTune – AI 智能修音软件
 <img width="1672" height="941" alt="OpenTune主图" src="https://github.com/user-attachments/assets/822c7d23-9e12-4f26-afd7-5ae1587d46c7" />
 
