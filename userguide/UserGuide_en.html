@@ -112,6 +112,13 @@
     <tr><td><strong>Timeline Overview Strip</strong></td><td>New timeline overview strip with piano roll viewport memory</td></tr>
     <tr><td><strong>Mouse Cursor Themes</strong></td><td>3 selectable cursor styles: Adwaita, Capitaine, Breeze</td></tr>
     <tr><td><strong>Shortcut Three-section Layout</strong></td><td>Shortcut settings page divided into General/OpenTune/OpenDyne sections</td></tr>
+    <tr><td><strong>Note-level EQ Editing</strong></td><td>Note-level EQ editing with dynamic filters and real spectrum chain</td></tr>
+    <tr><td><strong>Grid Style Switching</strong></td><td>Piano roll grid style switching between PianoLanes and EqualSpacing</td></tr>
+    <tr><td><strong>Piano Roll Background Brightness</strong></td><td>Settings &rarr; View page adds a piano roll background brightness slider (0%&ndash;200%, default 100%)</td></tr>
+    <tr><td><strong>Dual Vocoder Weights</strong></td><td>Supports Community (community edition) and Coulin9 v4 (professional edition) vocoder weight selection</td></tr>
+    <tr><td><strong>Reference Pitch Frequency</strong></td><td>User-configurable reference pitch frequency (400&ndash;500 Hz), replacing the hardcoded 440 Hz</td></tr>
+    <tr><td><strong>VST3 Non-ARA Capture Mode</strong></td><td>New VST3 non-ARA capture mode supporting Melodyne Transfer-style capture &rarr; render &rarr; playback workflow</td></tr>
+    <tr><td><strong>Scissors Double-Click Merge</strong></td><td>Double-click a split line to merge adjacent notes; supports chained merge of multiple selected notes</td></tr>
 </table>
 
 <h3>🐛 Fixes &amp; Optimizations</h3>
@@ -153,7 +160,7 @@
 <h3>Minimum Requirements</h3>
 <table>
     <tr><th width="25%">Item</th><th>Requirement</th></tr>
-    <tr><td>Operating System</td><td>Windows 10/11 (64-bit) or macOS 11+</td></tr>
+    <tr><td>Operating System</td><td>Windows 10/11 (64-bit) or macOS 14.0+ (Sonoma)</td></tr>
     <tr><td>Processor</td><td>Intel Core i5 or equivalent AMD processor</td></tr>
     <tr><td>Memory</td><td>8 GB RAM</td></tr>
     <tr><td>Storage</td><td>500 MB free space (including AI models)</td></tr>
@@ -361,8 +368,8 @@
 </div>
 
 <div class="tool-card">
-    <h4>TimeTool — Time Tool (Shortcut: T) [Experimental, Standalone-only]</h4>
-    <p>Enable experimental features in Preferences before use. It is not available in VST3 or ARA. Drag time handles to adjust the output time of audio, achieving time-stretch/compression effects. When entering TimeTool view, piano keys and notes/pitch curves are automatically hidden, focusing on time-based editing.</p>
+    <h4>TimeTool — Time Tool (Shortcut: T)</h4>
+    <p>Drag time handles to adjust the output time of audio, achieving time-stretch/compression effects. When entering TimeTool view, piano keys and notes/pitch curves are automatically hidden, focusing on time-based editing.</p>
     <p><strong>Operations</strong>: Drag handles to adjust output time; Shift+click to multi-select handles; Alt+drag to relax the minimum-spacing constraint; double-click blank area to insert a new handle; Delete removes selected handles (endpoints protected); click blank area to reposition playhead.</p>
     <p><strong>Endpoints &amp; Rendering</strong>: First and last endpoints are fixed, total duration stays unchanged. Editing does not re-run pitch correction; once the current processing pass completes, a one-off time-stretch rebuild is queued.</p>
 </div>
@@ -442,7 +449,7 @@
     <li>Pitch Modulation tool</li>
     <li>Pitch Drift tool</li>
     <li>Volume Envelope tool</li>
-    <li>Scissors tool (Melodyne behavior: cuts when the vertical line passes through)</li>
+    <li>Scissors tool (Melodyne behavior: cuts when the vertical line passes through; double-click a split line to merge adjacent notes)</li>
     <li>Pitch grid snap + one-click snap</li>
     <li>Melodyne-style overview navigation strip</li>
     <li>Melodyne-style zoom: Cmd+Alt double-click focus/restore, arrow key precise zoom</li>

@@ -111,6 +111,13 @@
     <tr><td><strong>时间轴总览条</strong></td><td>新增时间轴总览条与钢琴卷帘视口记忆</td></tr>
     <tr><td><strong>鼠标光标主题</strong></td><td>3 种可选光标样式：Adwaita、Capitaine、Breeze</td></tr>
     <tr><td><strong>快捷键三段式布局</strong></td><td>快捷键设置页分为通用/OpenTune/OpenDyne 三段</td></tr>
+    <tr><td><strong>音符级 EQ 编辑</strong></td><td>新增音符级 EQ 编辑功能，支持动态滤波器与真实频谱链路</td></tr>
+    <tr><td><strong>网格样式切换</strong></td><td>新增钢琴卷帘网格样式切换（PianoLanes/EqualSpacing）</td></tr>
+    <tr><td><strong>钢琴卷帘背景亮度</strong></td><td>设置页视图页面新增钢琴卷帘背景亮度滑块（0%-200%，默认100%）</td></tr>
+    <tr><td><strong>双声码器权重</strong></td><td>支持 Community（社区版）和 Coulin9 v4（专业版）两种声码器权重选择</td></tr>
+    <tr><td><strong>参考音高基准频率</strong></td><td>用户可配置基准频率（400-500Hz），替换硬编码 440Hz</td></tr>
+    <tr><td><strong>VST3 non-ARA 捕获模式</strong></td><td>新增 VST3 non-ARA 捕获模式，支持 Melodyne Transfer 风格的捕获→渲染→回放工作流</td></tr>
+    <tr><td><strong>剪刀双击合并</strong></td><td>双击分离线合并相邻音符，支持多选中音符链式合并</td></tr>
 </table>
 
 <h3>🐛 修复与优化</h3>
@@ -152,7 +159,7 @@
 <h3>最低配置</h3>
 <table>
     <tr><th width="25%">项目</th><th>要求</th></tr>
-    <tr><td>操作系统</td><td>Windows 10/11 (64位) 或 macOS 11+</td></tr>
+    <tr><td>操作系统</td><td>Windows 10/11 (64位) 或 macOS 14.0+ (Sonoma)</td></tr>
     <tr><td>处理器</td><td>Intel Core i5 或同等性能 AMD 处理器</td></tr>
     <tr><td>内存</td><td>8 GB RAM</td></tr>
     <tr><td>存储空间</td><td>500 MB 可用空间（含 AI 模型）</td></tr>
@@ -360,8 +367,8 @@
 </div>
 
 <div class="tool-card">
-    <h4>TimeTool — 时间工具 (快捷键: T) [实验性功能，仅 Standalone]</h4>
-    <p>需在偏好设置中启用实验性功能后方可使用。VST3 与 ARA 模式不提供此工具。拖拽时间手柄调整音频的输出时间，实现时间拉伸/压缩效果。进入时间工具视图时，钢琴键与音符/F0 曲线自动隐藏，专注时间域编辑。</p>
+    <h4>TimeTool — 时间工具 (快捷键: T) [仅 Standalone]</h4>
+    <p>拖拽时间手柄调整音频的输出时间，实现时间拉伸/压缩效果。进入时间工具视图时，钢琴键与音符/F0 曲线自动隐藏，专注时间域编辑。</p>
     <p><strong>操作</strong>：拖拽手柄调整输出时间；Shift+点击多选手柄；Alt+拖拽解除最小间距钳制；双击空白插入新手柄；Delete 删除选中手柄（端点保护）；空白区点击重定位播放头。</p>
     <p><strong>端点与渲染</strong>：首尾两端点固定，总时长保持不变。编辑不重跑音高校正；当前 canonical 完整后，排入一次 SoundTouch WSOLA Stage2 时间拉伸重建。</p>
 </div>
@@ -441,7 +448,7 @@
     <li>音高调制工具</li>
     <li>音高漂移工具</li>
     <li>音量包络工具</li>
-    <li>剪刀切割工具（Melodyne 行为：切点竖线穿过即切）</li>
+    <li>剪刀切割工具（Melodyne 行为：切点竖线穿过即切，双击分离线合并相邻音符）</li>
     <li>音高网格吸附 + 一键吸附</li>
     <li>Melodyne 式概览导航条</li>
     <li>Melodyne 式缩放：Cmd+Alt 双击聚焦/恢复、方向键精确缩放</li>

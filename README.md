@@ -71,8 +71,6 @@ GPU 加速推理：Windows DirectML / macOS CoreML
 这是早期测试版本，可能存在少量 bug，性能也尚未完全优化。欢迎下载试用，并通过 Issues 或 Discussion 提出宝贵意见、功能需求或使用中遇到的问题。我们会根据反馈积极改进。
 
 已知限制：
-- 首次加载模型时会有短暂延迟（GPU 初始化）
-- 超长音频（>10 分钟）的处理时间较长
 - VST3 ARA 模式需要宿主支持 ARA2（如 Studio One、Logic Pro）
 
 

@@ -69,8 +69,6 @@ Open source and free: Permanently free, community-driven, continuously iterating
 This is an early test version, which may have some bugs and performance not yet fully optimized. Feel free to download and try it out, and share your valuable feedback, feature requests, or issues encountered through Issues or Discussion. We will actively improve based on feedback.
 
 Known limitations:
-- Brief delay on first model load (GPU initialization)
-- Longer processing time for very long audio (>10 minutes)
 - VST3 ARA mode requires host support for ARA2 (e.g., Studio One, Logic Pro)
 
 
