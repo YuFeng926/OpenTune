@@ -7,6 +7,16 @@
   },
   "configurePresets": [
     {
+      "name": "macos-ara-ninja",
+      "displayName": "macOS Ninja Release (ARA2 VST3)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-ara-ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
       "name": "windows-ara-vs2022",
       "displayName": "Windows VS2022 Release Tree (ARA2 VST3)",
       "generator": "Visual Studio 17 2022",
@@ -29,6 +39,10 @@
     }
   ],
   "buildPresets": [
+    {
+      "name": "macos-ara-release",
+      "configurePreset": "macos-ara-ninja"
+    },
     {
       "name": "windows-ara-release",
       "configurePreset": "windows-ara-vs2022",
