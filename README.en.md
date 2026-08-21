@@ -319,6 +319,13 @@ For development in Visual Studio IDE:
 3. Set `OpenTune_Standalone` or `OpenTune_VST3` as the startup project
 4. Select Release/x64 configuration, compile and run
 
+**macOS (Ninja + CMake)**
+
+```bash
+cmake --preset macos-ara-ninja
+cmake --build --preset macos-ara-release
+```
+
 **macOS (Xcode + CMake)**
 
 ```bash

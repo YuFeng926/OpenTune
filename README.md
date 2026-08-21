@@ -322,6 +322,13 @@ cmake --build --preset windows-ara-ninja-release
 3. 将 `OpenTune_Standalone` 或 `OpenTune_VST3` 设为启动项目
 4. 选择 Release/x64 配置，编译运行
 
+**macOS (Ninja + CMake)**
+
+```bash
+cmake --preset macos-ara-ninja
+cmake --build --preset macos-ara-release
+```
+
 **macOS (Xcode + CMake)**
 
 ```bash
