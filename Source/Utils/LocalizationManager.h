@@ -294,6 +294,8 @@ constexpr const char* kToolScissors = "Tool: Scissors";
 constexpr const char* kCancelSelection = "Cancel Selection";
 constexpr const char* kToolODSelect = "OD: Select";
 constexpr const char* kToolODPitch = "OD: Pitch";
+constexpr const char* kToolODPitchModulation = "OD: Pitch Modulation";
+constexpr const char* kToolODPitchDrift = "OD: Pitch Drift";
 constexpr const char* kToolODVolumeEnvelope = "OD: Volume Envelope";
 constexpr const char* kToolODScissors = "OD: Scissors";
 constexpr const char* kToolEq = "Tool: EQ";
@@ -494,6 +496,8 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kCancelSelection, "Cancel Selection", "取消选择", "選択解除", "Отменить выбор", "Cancelar selección" },
         { Keys::kToolODSelect, "OD: Select", "OD: 选择", "OD: 選択", "OD: выбор", "OD: seleccionar" },
         { Keys::kToolODPitch, "OD: Pitch", "OD: 音高", "OD: ピッチ", "OD: тон", "OD: tono" },
+        { Keys::kToolODPitchModulation, "OD: Pitch Modulation", "OD: 音高调制", "OD: ピッチ変調", "OD: модуляция тона", "OD: modulación tono" },
+        { Keys::kToolODPitchDrift, "OD: Pitch Drift", "OD: 音高漂移", "OD: ピッチドリフト", "OD: дрифт тона", "OD: deriva tono" },
         { Keys::kToolODVolumeEnvelope, "OD: Volume Envelope", "OD: 音量包络", "OD: ボリュームエンベロープ", "OD: огибающая громкости", "OD: envol. volumen" },
         { Keys::kToolODScissors, "OD: Scissors", "OD: 剪刀", "OD: ハサミ", "OD: ножницы", "OD: tijeras" },
         { Keys::kToolEq, "Tool: EQ", "工具：均衡器", "ツール：イコライザー", "Инструмент: эквалайзер", "Herram: ecualizador" },

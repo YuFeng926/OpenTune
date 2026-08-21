@@ -707,9 +707,10 @@ public:
             KeyShortcutConfig::ShortcutId::ToolDrawNote, KeyShortcutConfig::ShortcutId::ToolSelect,
             KeyShortcutConfig::ShortcutId::ToolLineAnchor, KeyShortcutConfig::ShortcutId::ToolHandDraw,
         };
-        // OpenDyne 专属: Select, Pitch, VolumeEnvelope, Scissors
+        // OpenDyne 专属: Select, Pitch, PitchModulation, PitchDrift, VolumeEnvelope, Scissors
         opendyneIds_ = {
             KeyShortcutConfig::ShortcutId::ToolODSelect, KeyShortcutConfig::ShortcutId::ToolODPitch,
+            KeyShortcutConfig::ShortcutId::ToolODPitchModulation, KeyShortcutConfig::ShortcutId::ToolODPitchDrift,
             KeyShortcutConfig::ShortcutId::ToolODVolumeEnvelope, KeyShortcutConfig::ShortcutId::ToolODScissors,
         };
 

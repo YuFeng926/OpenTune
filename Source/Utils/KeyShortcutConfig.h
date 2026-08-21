@@ -36,6 +36,8 @@ enum class ShortcutId {
     // OpenDyne tools (Melodyne-style)
     ToolODSelect,
     ToolODPitch,
+    ToolODPitchModulation,
+    ToolODPitchDrift,
     ToolODVolumeEnvelope,
     ToolODScissors,
     Eq,
@@ -175,8 +177,13 @@ private:
 
 inline const ShortcutInfo kShortcutInfos[] = {
     { ShortcutId::PlayPause, Loc::Keys::kPlayPause, { KeyBinding(juce::KeyPress::spaceKey, {}) } },
+#if JUCE_MAC
+    { ShortcutId::Stop, Loc::Keys::kStop, { KeyBinding('.', {}) } },
+    { ShortcutId::PlayFromStart, Loc::Keys::kPlayFromStart, { KeyBinding('.', juce::ModifierKeys::commandModifier) } },
+#else
     { ShortcutId::Stop, Loc::Keys::kStop, { KeyBinding(juce::KeyPress::returnKey, {}) } },
     { ShortcutId::PlayFromStart, Loc::Keys::kPlayFromStart, { KeyBinding('A', {}) } },
+#endif
     { ShortcutId::Undo, Loc::Keys::kUndo, { KeyBinding('Z', juce::ModifierKeys::commandModifier) } },
     { ShortcutId::Redo, Loc::Keys::kRedo, { 
         KeyBinding('Y', juce::ModifierKeys::commandModifier),
@@ -191,8 +198,13 @@ inline const ShortcutInfo kShortcutInfos[] = {
         KeyBinding(juce::KeyPress::backspaceKey, {}),
         KeyBinding('1', {})
     } },
+#if JUCE_MAC
+    { ShortcutId::SplitClip, Loc::Keys::kSplitClip, { KeyBinding('E', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::MergeClips, Loc::Keys::kMergeClips, { KeyBinding('J', juce::ModifierKeys::commandModifier) } },
+#else
     { ShortcutId::SplitClip, Loc::Keys::kSplitClip, { KeyBinding('S', {}) } },
     { ShortcutId::MergeClips, Loc::Keys::kMergeClips, { KeyBinding('M', {}) } },
+#endif
     { ShortcutId::DuplicateClip, Loc::Keys::kDuplicateClip, { KeyBinding('D', juce::ModifierKeys::commandModifier) } },
     { ShortcutId::NudgeLeft, Loc::Keys::kNudgeLeft, { KeyBinding(juce::KeyPress::leftKey, {}) } },
     { ShortcutId::NudgeRight, Loc::Keys::kNudgeRight, { KeyBinding(juce::KeyPress::rightKey, {}) } },
@@ -204,10 +216,22 @@ inline const ShortcutInfo kShortcutInfos[] = {
     { ShortcutId::ToolAutoTune, Loc::Keys::kToolAutoTune, { KeyBinding('6', {}) } },
     { ShortcutId::ToolTimeTool, Loc::Keys::kToolTimeTool, { KeyBinding('t', {}) } },
     { ShortcutId::CancelSelection, Loc::Keys::kCancelSelection, { KeyBinding(juce::KeyPress::escapeKey, {}) } },
+#if JUCE_MAC
+    // OpenDyne工具按界面顺序分配数字键1-6
+    { ShortcutId::ToolODSelect, Loc::Keys::kToolODSelect, { KeyBinding('1', {}) } },
+    { ShortcutId::ToolODPitch, Loc::Keys::kToolODPitch, { KeyBinding('2', {}) } },
+    { ShortcutId::ToolODPitchModulation, Loc::Keys::kToolODPitchModulation, { KeyBinding('3', {}) } },
+    { ShortcutId::ToolODPitchDrift, Loc::Keys::kToolODPitchDrift, { KeyBinding('4', {}) } },
+    { ShortcutId::ToolODVolumeEnvelope, Loc::Keys::kToolODVolumeEnvelope, { KeyBinding('5', {}) } },
+    { ShortcutId::ToolODScissors, Loc::Keys::kToolODScissors, { KeyBinding('6', {}) } },
+#else
     { ShortcutId::ToolODSelect, Loc::Keys::kToolODSelect, { KeyBinding(juce::KeyPress::F1Key, {}) } },
     { ShortcutId::ToolODPitch, Loc::Keys::kToolODPitch, { KeyBinding(juce::KeyPress::F2Key, {}) } },
+    { ShortcutId::ToolODPitchModulation, Loc::Keys::kToolODPitchModulation, {} },
+    { ShortcutId::ToolODPitchDrift, Loc::Keys::kToolODPitchDrift, {} },
     { ShortcutId::ToolODVolumeEnvelope, Loc::Keys::kToolODVolumeEnvelope, { KeyBinding(juce::KeyPress::F4Key, {}) } },
     { ShortcutId::ToolODScissors, Loc::Keys::kToolODScissors, { KeyBinding(juce::KeyPress::F6Key, {}) } },
+#endif
     { ShortcutId::Eq, Loc::Keys::kToolEq, { KeyBinding('E', {}) } },
 };
 

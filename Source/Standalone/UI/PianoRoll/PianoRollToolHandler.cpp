@@ -616,20 +616,15 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
             return true;
         }
         if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolODPitch, key)) {
-            // Melodyne-style cycling: Pitch -> PitchModulation -> PitchDrift
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastF2PressTime_).count();
-            if (elapsed < kF2DoubleClickMs && f2PressCount_ > 0) {
-                f2PressCount_ = (f2PressCount_ % 3) + 1;
-            } else {
-                f2PressCount_ = 1;
-            }
-            lastF2PressTime_ = now;
-            switch (f2PressCount_) {
-                case 1: ctx_.setCurrentTool(ToolId::Pitch); break;
-                case 2: ctx_.setCurrentTool(ToolId::PitchModulation); break;
-                case 3: ctx_.setCurrentTool(ToolId::PitchDrift); break;
-            }
+            ctx_.setCurrentTool(ToolId::Pitch);
+            return true;
+        }
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolODPitchModulation, key)) {
+            ctx_.setCurrentTool(ToolId::PitchModulation);
+            return true;
+        }
+        if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolODPitchDrift, key)) {
+            ctx_.setCurrentTool(ToolId::PitchDrift);
             return true;
         }
         if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolODVolumeEnvelope, key)) {
