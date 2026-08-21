@@ -326,15 +326,6 @@ cmake --preset macos-ara-ninja
 cmake --build --preset macos-ara-release
 ```
 
-**macOS (Xcode + CMake)**
-
-```bash
-cmake -B build -G Xcode
-cmake --build build --config Release
-```
-
-Or open `build/OpenTune.xcodeproj` in Xcode for development and debugging.
-
 ### Build Artifacts
 
 | Format | Windows | macOS |
