@@ -478,8 +478,37 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
 
 void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
 {
-    if (consumeEmptySpaceIntentDrag(e)) {
-        return;
+    // 空区拖拽→框选：超过阈值直接启动框选（消除 EmptySpaceMouseIntent 平行路径）
+    if (ctx_.getState().emptySpaceIntent.active) {
+        const auto& intent = ctx_.getState().emptySpaceIntent;
+        const int dx = e.x - intent.mouseDownPos.x;
+        const int dy = e.y - intent.mouseDownPos.y;
+        const int threshold = ctx_.getDragThreshold();
+        if (dx * dx + dy * dy > threshold * threshold) {
+            const auto tool = intent.tool;
+            const auto mouseDownPos = intent.mouseDownPos;
+            ctx_.getState().emptySpaceIntent.clear();
+
+            if (tool == ToolId::Select || tool == ToolId::Eq
+                || tool == ToolId::Pitch || tool == ToolId::PitchModulation
+                || tool == ToolId::PitchDrift) {
+                beginAreaSelection(e.withNewPosition(mouseDownPos.toFloat()));
+                handleSelectDrag(e);
+                return;
+            }
+            // DrawNote / HandDraw：保持旧路径
+            auto startEvent = e.withNewPosition(mouseDownPos.toFloat());
+            if (tool == ToolId::DrawNote
+                && !AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+                handleDrawNoteMouseDown(startEvent);
+                handleDrawNoteDrag(e);
+            } else if (tool == ToolId::HandDraw) {
+                handleDrawCurveTool(startEvent);
+                handleDrawCurveTool(e);
+            }
+            return;
+        }
+        return; // 仍在死区，消费事件
     }
 
     // 框选进行中（含 Pitch 工具空区拖拽启动的框选），统一走 Select drag 处理，
@@ -558,7 +587,48 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
     if (e.mods.isPopupMenu())
         return;
 
-    if (consumeEmptySpaceIntentUp(e)) {
+    // 空区点击/拖拽完成（消除 EmptySpaceMouseIntent 平行路径）
+    if (ctx_.getState().emptySpaceIntent.active) {
+        const auto& intent = ctx_.getState().emptySpaceIntent;
+        const int dx = e.x - intent.mouseDownPos.x;
+        const int dy = e.y - intent.mouseDownPos.y;
+        const int threshold = ctx_.getDragThreshold();
+
+        if (dx * dx + dy * dy > threshold * threshold) {
+            // 拖拽完成：根据工具类型调用对应 up 处理
+            const auto tool = intent.tool;
+            ctx_.getState().emptySpaceIntent.clear();
+
+            if (tool == ToolId::Select || tool == ToolId::Eq
+                || tool == ToolId::Pitch || tool == ToolId::PitchModulation
+                || tool == ToolId::PitchDrift) {
+                handleSelectUp(e);
+            } else if (tool == ToolId::HandDraw) {
+                handleDrawCurveUp(e);
+            } else if (tool == ToolId::DrawNote
+                && !AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
+                handleDrawNoteUp(e);
+            }
+            return;
+        }
+
+        // 纯单击空白：取消当前选中 + 清除框选残留状态 + 移动播放头
+        deselectAllNotes();
+        updateF0SelectionFromNotes(committedNotes(ctx_));
+        auto& sel = ctx_.getState().selection;
+        sel.isSelectingArea = false;
+        sel.hasSelectionArea = false;
+        sel.selectionStartTime = 0.0;
+        sel.selectionEndTime = 0.0;
+        sel.selectionStartMidi = 0.0f;
+        sel.selectionEndMidi = 0.0f;
+        if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+
+        if (intent.mouseDownTime >= 0.0) {
+            ctx_.notifyPlayheadChange(intent.mouseDownTime);
+        }
+
+        ctx_.getState().emptySpaceIntent.clear();
         return;
     }
 
@@ -932,112 +1002,6 @@ void PianoRollToolHandler::beginEmptySpaceIntent(const juce::MouseEvent& e)
     intent.tool = currentTool_;
     intent.mouseDownPos = e.getPosition();
     intent.mouseDownTime = ctx_.getViewMapper().xToTime(e.x);
-}
-
-bool PianoRollToolHandler::consumeEmptySpaceIntentDrag(const juce::MouseEvent& e)
-{
-    auto& intent = ctx_.getState().emptySpaceIntent;
-    if (!intent.active) {
-        return false;
-    }
-
-    const int dx = e.x - intent.mouseDownPos.x;
-    const int dy = e.y - intent.mouseDownPos.y;
-    const int threshold = ctx_.getDragThreshold();
-    if (dx * dx + dy * dy <= threshold * threshold) {
-        return true;
-    }
-
-    const auto startEvent = eventAtEmptySpaceMouseDown(e);
-    const ToolId tool = intent.tool;
-    intent.clear();
-
-    switch (tool) {
-        case ToolId::Select:
-        case ToolId::Eq:
-        case ToolId::Pitch:
-        case ToolId::PitchModulation:
-        case ToolId::PitchDrift:
-            beginAreaSelection(startEvent);
-            handleSelectDrag(e);
-            return true;
-        case ToolId::DrawNote:
-            // OpenDyne（NotesPrimary）：DrawNote 新建音符路径不进入。
-            if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
-                handleDrawNoteMouseDown(startEvent);
-                handleDrawNoteDrag(e);
-            }
-            return true;
-        case ToolId::HandDraw:
-            handleDrawCurveTool(startEvent);
-            handleDrawCurveTool(e);
-            return true;
-        default:
-            return true;
-    }
-}
-
-bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
-{
-    auto& intent = ctx_.getState().emptySpaceIntent;
-    if (!intent.active) {
-        return false;
-    }
-
-    const int dx = e.x - intent.mouseDownPos.x;
-    const int dy = e.y - intent.mouseDownPos.y;
-    const int threshold = ctx_.getDragThreshold();
-    if (dx * dx + dy * dy > threshold * threshold) {
-        const ToolId tool = intent.tool;
-        if (!consumeEmptySpaceIntentDrag(e)) {
-            return true;
-        }
-        switch (tool) {
-            case ToolId::Select:
-            case ToolId::Eq:
-            case ToolId::Pitch:
-            case ToolId::PitchModulation:
-            case ToolId::PitchDrift:
-                handleSelectUp(e);
-                break;
-            case ToolId::HandDraw:
-                handleDrawCurveUp(e);
-                break;
-            case ToolId::DrawNote:
-                // OpenDyne（NotesPrimary）：DrawNote 新建音符路径不进入。
-                if (!AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
-                    handleDrawNoteUp(e);
-                }
-                break;
-            default:
-                break;
-        }
-        return true;
-    }
-
-    // 纯单击空白：取消当前选中 + 清除框选残留状态 + 移动播放头
-    deselectAllNotes();
-    updateF0SelectionFromNotes(committedNotes(ctx_));
-    auto& sel = ctx_.getState().selection;
-    sel.isSelectingArea = false;
-    sel.hasSelectionArea = false;
-    sel.selectionStartTime = 0.0;
-    sel.selectionEndTime = 0.0;
-    sel.selectionStartMidi = 0.0f;
-    sel.selectionEndMidi = 0.0f;
-    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
-
-    if (intent.mouseDownTime >= 0.0) {
-        ctx_.notifyPlayheadChange(intent.mouseDownTime);
-    }
-
-    intent.clear();
-    return true;
-}
-
-juce::MouseEvent PianoRollToolHandler::eventAtEmptySpaceMouseDown(const juce::MouseEvent& e)
-{
-    return e.withNewPosition(ctx_.getState().emptySpaceIntent.mouseDownPos.toFloat());
 }
 
 void PianoRollToolHandler::cancelActiveMouseGesture()

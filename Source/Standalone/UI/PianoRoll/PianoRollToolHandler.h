@@ -311,9 +311,6 @@ private:
     void beginF0SelectionAt(const juce::MouseEvent& e, int frameIndex);
     void updateF0SelectionDrag(const juce::MouseEvent& e);
     void beginEmptySpaceIntent(const juce::MouseEvent& e);
-    bool consumeEmptySpaceIntentDrag(const juce::MouseEvent& e);
-    bool consumeEmptySpaceIntentUp(const juce::MouseEvent& e);
-    juce::MouseEvent eventAtEmptySpaceMouseDown(const juce::MouseEvent& e);
     void cancelActiveMouseGesture();
 
     void deleteSelectedNotes(std::vector<Note>& notes);
