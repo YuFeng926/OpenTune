@@ -218,8 +218,28 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
     const auto plan = currentPlan_.load(std::memory_order_acquire);
     const auto positionTime = positionInfo.getTimeInSeconds();
 
-    const bool hasRenderContent = crs != nullptr
+    bool hasRenderContent = crs != nullptr
         && plan != nullptr && !plan->items.empty() && positionTime.hasValue();
+
+    // ARA: renderer only owns audio within PlaybackRegion time ranges.
+    // When the playhead is outside all items, fall back to passthrough so
+    // the host input is not replaced with silence.
+    if (hasRenderContent)
+    {
+        const double blockStart = *positionTime;
+        const double blockEnd = blockStart
+            + static_cast<double>(numSamples) / hostSampleRate_;
+        hasRenderContent = false;
+        for (const auto& r : plan->items)
+        {
+            if (blockEnd > r.startInPlaybackTime && blockStart < r.endInPlaybackTime())
+            {
+                hasRenderContent = true;
+                break;
+            }
+        }
+    }
+
     const bool wantRender = hasRenderContent
         && shouldRenderAraPlaybackBlock(realtime, positionInfo.getIsPlaying());
 
