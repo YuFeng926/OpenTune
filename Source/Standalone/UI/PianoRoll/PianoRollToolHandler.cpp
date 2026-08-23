@@ -669,7 +669,6 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
             handleEqToolMouseUp(e);
             break;
         default:
-            ctx_.getState().noteDrag.draggedNoteIndex = -1;
             break;
     }
 }
@@ -1186,11 +1185,10 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
         if (noteSelection.isSelected(clickedNoteIndex)) {
             // OpenDyne Main/Select 与普通模式一致：允许对选中音符进行 pitch 拖拽。
-            beginNotePitchDrag(clickedNoteIndex, notes);
+            beginNotePitchDrag(notes);
         } else {
             // Note was not selected - start selection area or clear
             if (!isCtrlDown) {
-                ctx_.getState().noteDrag.draggedNoteIndex = -1;
                 ctx_.getState().noteDrag.draggedNoteIndices.clear();
                 ctx_.getState().noteDrag.previewSnapshot.reset();
             }
@@ -1220,7 +1218,6 @@ void PianoRollToolHandler::beginAreaSelection(const juce::MouseEvent& e)
 
     deselectAllNotes();
     updateF0SelectionFromNotes(committedNotes(ctx_));
-    ctx_.getState().noteDrag.draggedNoteIndex = -1;
     ctx_.getState().noteDrag.draggedNoteIndices.clear();
     ctx_.getState().noteDrag.previewSnapshot.reset();
     ctx_.getState().noteResize.isResizing = false;
@@ -1566,17 +1563,9 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         return;
     }
 
-    if (ctx_.getState().noteDrag.draggedNoteIndex >= 0) {
+    if (!ctx_.getState().noteDrag.draggedNoteIndices.empty()) {
         dragNotePitch(e);
         return;
-    }
-
-    const auto& notes = displayNotes(ctx_);
-    const auto selected = collectSelectedNoteIndices(notes);
-    if (!selected.empty()) {
-        ctx_.getState().noteDrag.draggedNoteIndex = selected.front();
-        ctx_.getState().noteDrag.draggedNoteIndices = selected;
-        ctx_.getState().noteDrag.isDraggingNotes = true;
     }
 }
 
@@ -1602,9 +1591,9 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 {
     bool suppressFinalNoteDraftCommit = false;
 
-    // 只要 mouseDown 落在音符上（draggedNoteIndex >= 0）就进入 endNotePitchDrag：
+    // 只要 mouseDown 落在音符上（draggedNoteIndices 非空）就进入 endNotePitchDrag：
     // 无实际拖拽的点击也在其内部走统一终止路径（noteDrag.clear + draft 清理）。
-    if (ctx_.getState().noteDrag.draggedNoteIndex >= 0) {
+    if (!ctx_.getState().noteDrag.draggedNoteIndices.empty()) {
         suppressFinalNoteDraftCommit = endNotePitchDrag(e);
     }
 
@@ -1713,10 +1702,9 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 // OpenDyne 由 Pitch Grid 三态决定（KeyScale 走 quantizeMidiToActiveScale）。
 // ============================================================================
 
-void PianoRollToolHandler::beginNotePitchDrag(int clickedNoteIndex, const std::vector<Note>& notes)
+void PianoRollToolHandler::beginNotePitchDrag(const std::vector<Note>& notes)
 {
     auto& state = ctx_.getState();
-    state.noteDrag.draggedNoteIndex = clickedNoteIndex;
     state.noteDrag.draggedNoteIndices = collectSelectedNoteIndices(notes);
     state.noteDrag.previewSnapshot.reset();
 }
@@ -1849,7 +1837,7 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
         return;
     }
 
-    if (state.noteDrag.draggedNoteIndex < 0 || state.noteDrag.draggedNoteIndices.empty()) {
+    if (state.noteDrag.draggedNoteIndices.empty()) {
         return;
     }
 
@@ -1973,7 +1961,7 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
         return true;
     }
 
-    if (state.noteDrag.draggedNoteIndex < 0) {
+    if (state.noteDrag.draggedNoteIndices.empty()) {
         return false;
     }
 
@@ -2071,12 +2059,12 @@ void PianoRollToolHandler::handlePitchToolMouseDown(const juce::MouseEvent& e)
     // PitchModulation / PitchDrift：记录拖拽起点，初始化选中音符索引
     if (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift) {
         dragStartPos_ = e.position.toInt();
-        beginNotePitchDrag(clickedNoteIndex, notes);
+        beginNotePitchDrag(notes);
         return;
     }
 
     // Pitch Tool (F2×1)：启动 pitch drag
-    beginNotePitchDrag(clickedNoteIndex, notes);
+    beginNotePitchDrag(notes);
 }
 
 void PianoRollToolHandler::handlePitchToolMouseUp(const juce::MouseEvent& e)

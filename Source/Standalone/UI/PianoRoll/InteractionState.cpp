@@ -156,7 +156,6 @@ void NoteSelectionState::setFromIndices(std::vector<int> indices, int noteCount)
 
 void NoteDragState::clear()
 {
-    draggedNoteIndex = -1;
     draggedNoteIndices.clear();
     isDraggingNotes = false;
     previewSnapshot.reset();

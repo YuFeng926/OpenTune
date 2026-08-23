@@ -244,7 +244,7 @@ private:
 
     // === OpenDyne（NotesPrimary）工具 ===
     // 唯一 pitch-drag 内部流程：OpenTune Select 与 OpenDyne Pitch 共用。
-    void beginNotePitchDrag(int clickedNoteIndex, const std::vector<Note>& notes);
+    void beginNotePitchDrag(const std::vector<Note>& notes);
     void dragNotePitch(const juce::MouseEvent& e);
     bool endNotePitchDrag(const juce::MouseEvent& e);
     // 唯一拖拽 editRange：只聚合实际变化的音符（普通 Pitch 比 pitchOffset、

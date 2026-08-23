@@ -58,7 +58,6 @@ struct NoteSelectionState
 
 struct NoteDragState
 {
-    int draggedNoteIndex = -1;
     std::vector<int> draggedNoteIndices;
     bool isDraggingNotes = false;
 
