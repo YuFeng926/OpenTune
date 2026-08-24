@@ -530,7 +530,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
 
             g.setColour(EqGraphRenderer::hudBgColor().withAlpha(0.92f));
             const auto font = juce::Font(juce::FontOptions(10.0f));
-            const auto textW = font.getStringWidthFloat(tooltipText) + 8.0f;
+            const auto textW = juce::TextLayout::getStringWidth(font, tooltipText) + 8.0f;
             const float tooltipX = juce::jmax(2.0f, juce::jmin(btnRect.getX(),
                                                                 static_cast<float>(getWidth()) - textW - 2.0f));
             g.fillRoundedRectangle(tooltipX, finalY, textW, tooltipH, 3.0f);
@@ -569,7 +569,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
 
             g.setColour(EqGraphRenderer::hudBgColor().withAlpha(0.92f));
             const auto font = juce::Font(juce::FontOptions(10.0f));
-            const auto textW = font.getStringWidthFloat(tooltipText) + 8.0f;
+            const auto textW = juce::TextLayout::getStringWidth(font, tooltipText) + 8.0f;
             const float tooltipX = juce::jmax(2.0f, juce::jmin(btnRect.getX(),
                                                                  static_cast<float>(getWidth()) - textW - 2.0f));
             g.fillRoundedRectangle(tooltipX, finalY, textW, tooltipH, 3.0f);

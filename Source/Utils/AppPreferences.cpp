@@ -1,7 +1,6 @@
 #include "AppPreferences.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <limits>
 
@@ -33,37 +32,6 @@ constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMo
 constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
 constexpr const char* kSharedGridStyleKey = "shared.pianoRoll.gridStyle";
 constexpr const char* kSharedEqSuppressRemoveConfirmationKey = "shared.eq.suppressRemoveConfirmation";
-
-constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
-    "shared.shortcuts.playPause",
-    "shared.shortcuts.stop",
-    "shared.shortcuts.playFromStart",
-    "shared.shortcuts.undo",
-    "shared.shortcuts.redo",
-    "shared.shortcuts.cut",
-    "shared.shortcuts.copy",
-    "shared.shortcuts.paste",
-    "shared.shortcuts.selectAll",
-    "shared.shortcuts.delete",
-    "shared.shortcuts.splitClip",
-    "shared.shortcuts.mergeClips",
-    "shared.shortcuts.duplicateClip",
-    "shared.shortcuts.nudgeLeft",
-    "shared.shortcuts.nudgeRight",
-    "shared.shortcuts.toggleSnap",
-    "shared.shortcuts.toolDrawNote",
-    "shared.shortcuts.toolSelect",
-    "shared.shortcuts.toolLineAnchor",
-    "shared.shortcuts.toolHandDraw",
-    "shared.shortcuts.toolAutoTune",
-    "shared.shortcuts.toolTimeTool",
-    "shared.shortcuts.cancelSelection",
-    "shared.shortcuts.toolODSelect",
-    "shared.shortcuts.toolODPitch",
-    "shared.shortcuts.toolODVolumeEnvelope",
-    "shared.shortcuts.toolODScissors",
-    "shared.shortcuts.toolEq",
-}};
 
 juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storageOptions)
 {
@@ -286,15 +254,15 @@ KeyShortcutConfig::KeyShortcutSettings decodeShortcutSettings(const juce::Proper
 {
     auto settings = KeyShortcutConfig::KeyShortcutSettings::getDefault();
 
-    for (size_t index = 0; index < kShortcutStorageKeys.size(); ++index) {
-        const auto stored = properties.getValue(kShortcutStorageKeys[index], {});
+    for (const auto& info : KeyShortcutConfig::kShortcutInfos) {
+        const auto stored = properties.getValue(info.storageKey, {});
         if (stored.isEmpty()) {
             continue;
         }
 
         KeyShortcutConfig::ShortcutBinding decoded;
         if (KeyShortcutConfig::parseShortcutBinding(stored, decoded) && !decoded.bindings.empty()) {
-            settings.bindings[index] = std::move(decoded);
+            settings.bindings[static_cast<size_t>(info.id)] = std::move(decoded);
         }
     }
 
@@ -416,8 +384,10 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     }
     properties.setValue(kSharedRecentProjectsKey, recentPaths.joinIntoString("|"));
 
-    for (size_t index = 0; index < kShortcutStorageKeys.size(); ++index) {
-        properties.setValue(kShortcutStorageKeys[index], KeyShortcutConfig::toCanonicalString(state.shared.shortcuts.bindings[index]));
+    for (const auto& info : KeyShortcutConfig::kShortcutInfos) {
+        properties.setValue(info.storageKey,
+                            KeyShortcutConfig::toCanonicalString(
+                                state.shared.shortcuts.bindings[static_cast<size_t>(info.id)]));
     }
 }
 

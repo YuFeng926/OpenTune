@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
+#include <initializer_list>
 #include <vector>
 #include "LocalizationManager.h"
 
@@ -67,8 +68,22 @@ struct KeyBinding {
 
 struct ShortcutInfo {
     ShortcutId id;
+    const char* storageKey;
     const char* displayNameKey;
     std::vector<KeyBinding> defaultBindings;
+
+    template <size_t StorageKeySize>
+    ShortcutInfo(ShortcutId shortcutId,
+                 const char (&key)[StorageKeySize],
+                 const char* displayName,
+                 std::initializer_list<KeyBinding> defaults)
+        : id(shortcutId)
+        , storageKey(key)
+        , displayNameKey(displayName)
+        , defaultBindings(defaults)
+    {
+        static_assert(StorageKeySize > 1, "Shortcut storage key must not be empty");
+    }
 };
 
 struct ShortcutBinding {
@@ -176,66 +191,68 @@ private:
 };
 
 inline const ShortcutInfo kShortcutInfos[] = {
-    { ShortcutId::PlayPause, Loc::Keys::kPlayPause, { KeyBinding(juce::KeyPress::spaceKey, {}) } },
+    { ShortcutId::PlayPause, "shared.shortcuts.playPause", Loc::Keys::kPlayPause, { KeyBinding(juce::KeyPress::spaceKey, {}) } },
 #if JUCE_MAC
-    { ShortcutId::Stop, Loc::Keys::kStop, { KeyBinding('.', {}) } },
-    { ShortcutId::PlayFromStart, Loc::Keys::kPlayFromStart, { KeyBinding('.', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::Stop, "shared.shortcuts.stop", Loc::Keys::kStop, { KeyBinding('.', {}) } },
+    { ShortcutId::PlayFromStart, "shared.shortcuts.playFromStart", Loc::Keys::kPlayFromStart, { KeyBinding('.', juce::ModifierKeys::commandModifier) } },
 #else
-    { ShortcutId::Stop, Loc::Keys::kStop, { KeyBinding(juce::KeyPress::returnKey, {}) } },
-    { ShortcutId::PlayFromStart, Loc::Keys::kPlayFromStart, { KeyBinding('A', {}) } },
+    { ShortcutId::Stop, "shared.shortcuts.stop", Loc::Keys::kStop, { KeyBinding(juce::KeyPress::returnKey, {}) } },
+    { ShortcutId::PlayFromStart, "shared.shortcuts.playFromStart", Loc::Keys::kPlayFromStart, { KeyBinding('A', {}) } },
 #endif
-    { ShortcutId::Undo, Loc::Keys::kUndo, { KeyBinding('Z', juce::ModifierKeys::commandModifier) } },
-    { ShortcutId::Redo, Loc::Keys::kRedo, { 
+    { ShortcutId::Undo, "shared.shortcuts.undo", Loc::Keys::kUndo, { KeyBinding('Z', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::Redo, "shared.shortcuts.redo", Loc::Keys::kRedo, {
         KeyBinding('Y', juce::ModifierKeys::commandModifier),
         KeyBinding('Z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier)
     } },
-    { ShortcutId::Cut, Loc::Keys::kCut, { KeyBinding('X', juce::ModifierKeys::commandModifier) } },
-    { ShortcutId::Copy, Loc::Keys::kCopy, { KeyBinding('C', juce::ModifierKeys::commandModifier) } },
-    { ShortcutId::Paste, Loc::Keys::kPaste, { KeyBinding('V', juce::ModifierKeys::commandModifier) } },
-    { ShortcutId::SelectAll, Loc::Keys::kSelectAll, { KeyBinding('A', juce::ModifierKeys::commandModifier) } },
-    { ShortcutId::Delete, Loc::Keys::kDelete, { 
+    { ShortcutId::Cut, "shared.shortcuts.cut", Loc::Keys::kCut, { KeyBinding('X', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::Copy, "shared.shortcuts.copy", Loc::Keys::kCopy, { KeyBinding('C', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::Paste, "shared.shortcuts.paste", Loc::Keys::kPaste, { KeyBinding('V', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::SelectAll, "shared.shortcuts.selectAll", Loc::Keys::kSelectAll, { KeyBinding('A', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::Delete, "shared.shortcuts.delete", Loc::Keys::kDelete, {
         KeyBinding(juce::KeyPress::deleteKey, {}),
         KeyBinding(juce::KeyPress::backspaceKey, {}),
         KeyBinding('1', {})
     } },
 #if JUCE_MAC
-    { ShortcutId::SplitClip, Loc::Keys::kSplitClip, { KeyBinding('E', juce::ModifierKeys::commandModifier) } },
-    { ShortcutId::MergeClips, Loc::Keys::kMergeClips, { KeyBinding('J', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::SplitClip, "shared.shortcuts.splitClip", Loc::Keys::kSplitClip, { KeyBinding('E', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::MergeClips, "shared.shortcuts.mergeClips", Loc::Keys::kMergeClips, { KeyBinding('J', juce::ModifierKeys::commandModifier) } },
 #else
-    { ShortcutId::SplitClip, Loc::Keys::kSplitClip, { KeyBinding('S', {}) } },
-    { ShortcutId::MergeClips, Loc::Keys::kMergeClips, { KeyBinding('M', {}) } },
+    { ShortcutId::SplitClip, "shared.shortcuts.splitClip", Loc::Keys::kSplitClip, { KeyBinding('S', {}) } },
+    { ShortcutId::MergeClips, "shared.shortcuts.mergeClips", Loc::Keys::kMergeClips, { KeyBinding('M', {}) } },
 #endif
-    { ShortcutId::DuplicateClip, Loc::Keys::kDuplicateClip, { KeyBinding('D', juce::ModifierKeys::commandModifier) } },
-    { ShortcutId::NudgeLeft, Loc::Keys::kNudgeLeft, { KeyBinding(juce::KeyPress::leftKey, {}) } },
-    { ShortcutId::NudgeRight, Loc::Keys::kNudgeRight, { KeyBinding(juce::KeyPress::rightKey, {}) } },
-    { ShortcutId::ToggleSnap, Loc::Keys::kToggleSnap, { KeyBinding('S', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier) } },
-    { ShortcutId::ToolDrawNote, Loc::Keys::kToolDrawNote, { KeyBinding('2', {}) } },
-    { ShortcutId::ToolSelect, Loc::Keys::kToolSelect, { KeyBinding('3', {}) } },
-    { ShortcutId::ToolLineAnchor, Loc::Keys::kToolLineAnchor, { KeyBinding('4', {}) } },
-    { ShortcutId::ToolHandDraw, Loc::Keys::kToolHandDraw, { KeyBinding('5', {}) } },
-    { ShortcutId::ToolAutoTune, Loc::Keys::kToolAutoTune, { KeyBinding('6', {}) } },
-    { ShortcutId::ToolTimeTool, Loc::Keys::kToolTimeTool, { KeyBinding('t', {}) } },
-    { ShortcutId::CancelSelection, Loc::Keys::kCancelSelection, { KeyBinding(juce::KeyPress::escapeKey, {}) } },
+    { ShortcutId::DuplicateClip, "shared.shortcuts.duplicateClip", Loc::Keys::kDuplicateClip, { KeyBinding('D', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::NudgeLeft, "shared.shortcuts.nudgeLeft", Loc::Keys::kNudgeLeft, { KeyBinding(juce::KeyPress::leftKey, {}) } },
+    { ShortcutId::NudgeRight, "shared.shortcuts.nudgeRight", Loc::Keys::kNudgeRight, { KeyBinding(juce::KeyPress::rightKey, {}) } },
+    { ShortcutId::ToggleSnap, "shared.shortcuts.toggleSnap", Loc::Keys::kToggleSnap, { KeyBinding('S', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier) } },
+    { ShortcutId::ToolDrawNote, "shared.shortcuts.toolDrawNote", Loc::Keys::kToolDrawNote, { KeyBinding('2', {}) } },
+    { ShortcutId::ToolSelect, "shared.shortcuts.toolSelect", Loc::Keys::kToolSelect, { KeyBinding('3', {}) } },
+    { ShortcutId::ToolLineAnchor, "shared.shortcuts.toolLineAnchor", Loc::Keys::kToolLineAnchor, { KeyBinding('4', {}) } },
+    { ShortcutId::ToolHandDraw, "shared.shortcuts.toolHandDraw", Loc::Keys::kToolHandDraw, { KeyBinding('5', {}) } },
+    { ShortcutId::ToolAutoTune, "shared.shortcuts.toolAutoTune", Loc::Keys::kToolAutoTune, { KeyBinding('6', {}) } },
+    { ShortcutId::ToolTimeTool, "shared.shortcuts.toolTimeTool", Loc::Keys::kToolTimeTool, { KeyBinding('t', {}) } },
+    { ShortcutId::CancelSelection, "shared.shortcuts.cancelSelection", Loc::Keys::kCancelSelection, { KeyBinding(juce::KeyPress::escapeKey, {}) } },
 #if JUCE_MAC
     // OpenDyne工具按界面顺序分配数字键1-6
-    { ShortcutId::ToolODSelect, Loc::Keys::kToolODSelect, { KeyBinding('1', {}) } },
-    { ShortcutId::ToolODPitch, Loc::Keys::kToolODPitch, { KeyBinding('2', {}) } },
-    { ShortcutId::ToolODPitchModulation, Loc::Keys::kToolODPitchModulation, { KeyBinding('3', {}) } },
-    { ShortcutId::ToolODPitchDrift, Loc::Keys::kToolODPitchDrift, { KeyBinding('4', {}) } },
-    { ShortcutId::ToolODVolumeEnvelope, Loc::Keys::kToolODVolumeEnvelope, { KeyBinding('5', {}) } },
-    { ShortcutId::ToolODScissors, Loc::Keys::kToolODScissors, { KeyBinding('6', {}) } },
+    { ShortcutId::ToolODSelect, "shared.shortcuts.toolODSelect", Loc::Keys::kToolODSelect, { KeyBinding('1', {}) } },
+    { ShortcutId::ToolODPitch, "shared.shortcuts.toolODPitch", Loc::Keys::kToolODPitch, { KeyBinding('2', {}) } },
+    { ShortcutId::ToolODPitchModulation, "shared.shortcuts.toolODPitchModulation", Loc::Keys::kToolODPitchModulation, { KeyBinding('3', {}) } },
+    { ShortcutId::ToolODPitchDrift, "shared.shortcuts.toolODPitchDrift", Loc::Keys::kToolODPitchDrift, { KeyBinding('4', {}) } },
+    { ShortcutId::ToolODVolumeEnvelope, "shared.shortcuts.toolODVolumeEnvelope", Loc::Keys::kToolODVolumeEnvelope, { KeyBinding('5', {}) } },
+    { ShortcutId::ToolODScissors, "shared.shortcuts.toolODScissors", Loc::Keys::kToolODScissors, { KeyBinding('6', {}) } },
 #else
-    { ShortcutId::ToolODSelect, Loc::Keys::kToolODSelect, { KeyBinding(juce::KeyPress::F1Key, {}) } },
-    { ShortcutId::ToolODPitch, Loc::Keys::kToolODPitch, { KeyBinding(juce::KeyPress::F2Key, {}) } },
-    { ShortcutId::ToolODPitchModulation, Loc::Keys::kToolODPitchModulation, {} },
-    { ShortcutId::ToolODPitchDrift, Loc::Keys::kToolODPitchDrift, {} },
-    { ShortcutId::ToolODVolumeEnvelope, Loc::Keys::kToolODVolumeEnvelope, { KeyBinding(juce::KeyPress::F4Key, {}) } },
-    { ShortcutId::ToolODScissors, Loc::Keys::kToolODScissors, { KeyBinding(juce::KeyPress::F6Key, {}) } },
+    { ShortcutId::ToolODSelect, "shared.shortcuts.toolODSelect", Loc::Keys::kToolODSelect, { KeyBinding(juce::KeyPress::F1Key, {}) } },
+    { ShortcutId::ToolODPitch, "shared.shortcuts.toolODPitch", Loc::Keys::kToolODPitch, { KeyBinding(juce::KeyPress::F2Key, {}) } },
+    { ShortcutId::ToolODPitchModulation, "shared.shortcuts.toolODPitchModulation", Loc::Keys::kToolODPitchModulation, {} },
+    { ShortcutId::ToolODPitchDrift, "shared.shortcuts.toolODPitchDrift", Loc::Keys::kToolODPitchDrift, {} },
+    { ShortcutId::ToolODVolumeEnvelope, "shared.shortcuts.toolODVolumeEnvelope", Loc::Keys::kToolODVolumeEnvelope, { KeyBinding(juce::KeyPress::F4Key, {}) } },
+    { ShortcutId::ToolODScissors, "shared.shortcuts.toolODScissors", Loc::Keys::kToolODScissors, { KeyBinding(juce::KeyPress::F6Key, {}) } },
 #endif
-    { ShortcutId::Eq, Loc::Keys::kToolEq, { KeyBinding('E', {}) } },
+    { ShortcutId::Eq, "shared.shortcuts.toolEq", Loc::Keys::kToolEq, { KeyBinding('E', {}) } },
 };
 
-inline const size_t kShortcutCount = sizeof(kShortcutInfos) / sizeof(kShortcutInfos[0]);
+inline constexpr size_t kShortcutCount = sizeof(kShortcutInfos) / sizeof(kShortcutInfos[0]);
+static_assert(kShortcutCount == static_cast<size_t>(ShortcutId::Count),
+              "Every ShortcutId must have exactly one ShortcutInfo entry");
 
 inline juce::String getShortcutDisplayName(ShortcutId id)
 {
@@ -252,7 +269,7 @@ struct KeyShortcutSettings {
         for (size_t i = 0; i < kShortcutCount; ++i)
         {
             const auto& info = kShortcutInfos[i];
-            auto idx = static_cast<size_t>(info.id);
+            const auto idx = static_cast<size_t>(info.id);
             for (const auto& binding : info.defaultBindings)
                 bindings[idx].addBinding(binding);
         }
