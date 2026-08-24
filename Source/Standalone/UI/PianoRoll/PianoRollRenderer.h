@@ -107,8 +107,7 @@ public:
         bool showCorrectedF0 = true;
 
         bool hasF0Selection = false;
-        int f0SelectionStartFrame = -1;
-        int f0SelectionEndFrameExclusive = -1;
+        std::vector<std::pair<int, int>> f0SelectionRanges;  // {startFrame, endFrameExclusive}，排序归并
 
         ViewMapper coords;
 

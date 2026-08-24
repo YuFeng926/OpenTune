@@ -749,7 +749,6 @@ void PianoRollComponent::refreshEditedContentNotes()
         }
     }
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
-    syncF0SelectionToSelectedNotes();
 }
 
 const std::vector<Note>& PianoRollComponent::getCommittedNotes() const
@@ -865,7 +864,6 @@ bool PianoRollComponent::commitNoteDraft()
 
     cachedNotes_ = committedSnap->notes;
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
-    syncF0SelectionToSelectedNotes();
 
     // Build the before-patch from baseline notes in the same seconds range.
     // Note-only undo uses seconds-based PianoRollNotePatchAction — no frame
@@ -1120,7 +1118,6 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     // Update local caches from committed state
     cachedNotes_ = committedSnap->notes;
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
-    syncF0SelectionToSelectedNotes();
 
     if (committedSnap->pitchCurve) {
         applyEditedContentCurve(committedSnap->pitchCurve);
@@ -1256,9 +1253,11 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
     const auto f0tl = currentF0Timeline();
     if (notes.empty() || f0tl.isEmpty()) {
         interactionState_.noteSelection.clear();
-        interactionState_.selection.hasSelectionArea = false;
+        interactionState_.frameSelection.clear();
         interactionState_.selection.isSelectingArea = false;
-        interactionState_.selection.clearF0Selection();
+        interactionState_.selection.isSelectingF0 = false;
+        interactionState_.selection.f0SelectionAnchorFrame = -1;
+        interactionState_.selection.f0SelectionCurrentFrame = -1;
         overlay_->repaint();
         return false;
     }
@@ -1281,13 +1280,8 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
 
     interactionState_.noteSelection.setFromIndices(std::move(selectedIndices),
                                                    static_cast<int>(notes.size()));
-    interactionState_.selection.hasSelectionArea = false;
     interactionState_.selection.isSelectingArea = false;
-    if (anyOverlap) {
-        interactionState_.selection.setF0Range(selectionRange.startFrame, selectionRange.endFrameExclusive);
-    } else {
-        interactionState_.selection.clearF0Selection();
-    }
+    // 帧选择由 collectSelectedFrameRanges 从 noteSelection 按需派生
     overlay_->repaint();
 
     return anyOverlap;
@@ -1338,7 +1332,8 @@ juce::Rectangle<int> PianoRollComponent::getNotesBounds(const std::vector<Note>&
 
 juce::Rectangle<int> PianoRollComponent::getSelectionBounds() const
 {
-    if (!interactionState_.selection.hasSelectionArea) {
+    // 框选矩形仅在拖拽中绘制
+    if (!interactionState_.selection.isSelectingArea) {
         return {};
     }
 
@@ -1764,14 +1759,9 @@ void PianoRollComponent::drawSelectedNoteHighlights(juce::Graphics& g)
 
 void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
 {
-    // F0 高亮范围 = 当前有效选择范围：音符派生 F0 选择优先，无音符时回退到框选/全选选区。
-    int selStartFrame = 0;
-    int selEndFrameExclusive = 0;
-    if (!getF0SelectionFrameRange(selStartFrame, selEndFrameExclusive)) {
-        if (!getSelectionAreaFrameRange(selStartFrame, selEndFrameExclusive)) {
-            return;
-        }
-    }
+    // 高亮 = 完整 F0 选择集合（音符派生 + 显式帧选择），多区间精确渲染
+    const auto frameSel = collectSelectedFrameRanges();
+    if (frameSel.empty()) return;
 
     juce::Graphics::ScopedSaveState ss(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
@@ -1788,8 +1778,7 @@ void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
     ctx.showOriginalF0 = showOriginalF0_;
     ctx.coords = makeViewMapper();
     ctx.hasF0Selection = true;
-    ctx.f0SelectionStartFrame = selStartFrame;
-    ctx.f0SelectionEndFrameExclusive = selEndFrameExclusive;
+    ctx.f0SelectionRanges = frameSel.ranges;
     ctx.contents = buildContentRenderItems();
 
     for (const auto& item : ctx.contents) {
@@ -1895,8 +1884,9 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
 }
 
 void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
-    if (!interactionState_.selection.hasSelectionArea) return;
-    if (!toolHandler_ || !interactionState_.selection.isSelectingArea) return;
+    // 框选矩形仅在拖拽中绘制
+    if (!interactionState_.selection.isSelectingArea) return;
+    if (!toolHandler_) return;
 
     double startTime = std::min(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
     double endTime = std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
@@ -2508,35 +2498,54 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
     return false;
 }
 
-bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate, int startFrame, int endFrameExclusive) {
-    if (!currentCurve_ || endFrameExclusive <= startFrame) return false;
-    if (!currentCurve_->hasCorrectionInRange(startFrame, endFrameExclusive)) return false;
+bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate,
+                                                    const std::vector<std::pair<int, int>>& frameRanges)
+{
+    if (!currentCurve_ || frameRanges.empty()) return false;
     const auto contentSnapshot = readEditedSnapshot();
     if (contentSnapshot == nullptr) return false;
 
     auto notes = getEditedContentNotesCopy();
-    // 帧范围参数调节 = 把当前全局参数应用到该范围音符，同步写入音符字段
+    // 帧范围参数调节 = 把当前全局参数应用到范围内音符，同步写入音符字段
     // （否则 PitchCurve 渲染时音符级旧值覆盖新全局参数）。
     const auto f0tl = currentF0Timeline();
-    const double rangeStartSec = f0tl.timeAtFrame(startFrame);
-    const double rangeEndSec = f0tl.timeAtFrame(endFrameExclusive);
-    for (auto& note : notes) {
-        if (note.endTime > rangeStartSec && note.startTime < rangeEndSec) {
-            note.retuneSpeed = retuneSpeed;
-            note.vibratoDepth = vibratoDepth;
-            note.vibratoRate = vibratoRate;
-            note.dirty = true;
+    for (const auto& [startFrame, endFrameExclusive] : frameRanges) {
+        if (endFrameExclusive <= startFrame) continue;
+        const double rangeStartSec = f0tl.timeAtFrame(startFrame);
+        const double rangeEndSec = f0tl.timeAtFrame(endFrameExclusive);
+        for (auto& note : notes) {
+            if (note.endTime > rangeStartSec && note.startTime < rangeEndSec) {
+                note.retuneSpeed = retuneSpeed;
+                note.vibratoDepth = vibratoDepth;
+                note.vibratoRate = vibratoRate;
+                note.dirty = true;
+            }
         }
     }
+
     auto editedCurve = currentCurve_->clone();
-    editedCurve->applyCorrectionToRange(notes, startFrame, endFrameExclusive,
-                                        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-                                        retuneSpeed, vibratoDepth, vibratoRate);
+    bool anyBaked = false;
+    for (const auto& [startFrame, endFrameExclusive] : frameRanges) {
+        if (endFrameExclusive <= startFrame) continue;
+        if (!currentCurve_->hasCorrectionInRange(startFrame, endFrameExclusive)) continue;
+        editedCurve->applyCorrectionToRange(notes, startFrame, endFrameExclusive,
+                                            static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
+                                            retuneSpeed, vibratoDepth, vibratoRate);
+        anyBaked = true;
+    }
+    if (!anyBaked) return false;
 
     const auto snap = editedCurve->getSnapshot();
     auto allSegments = snap->getCorrectionSegments();
-    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(startFrame,
-                                                                          endFrameExclusive,
+    // affectedRange 取所有选中范围的扩展并集
+    int unionStart = frameRanges.front().first;
+    int unionEnd = frameRanges.front().second;
+    for (const auto& [s, e] : frameRanges) {
+        unionStart = std::min(unionStart, s);
+        unionEnd = std::max(unionEnd, e);
+    }
+    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(unionStart,
+                                                                          unionEnd,
                                                                           currentF0Timeline().endFrameExclusive());
 
     if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, allSegments, affectedRange)) {
@@ -2561,59 +2570,10 @@ bool PianoRollComponent::getFrameRangeForTimeSpan(double startTime, double endTi
     return endFrameExclusive > startFrame;
 }
 
-bool PianoRollComponent::getSelectedNotesFrameRange(int& startFrame, int& endFrameExclusive) const
+FrameSelection PianoRollComponent::collectSelectedFrameRanges() const
 {
-    const auto notes = getEditedContentNotesCopy();
-    double minStart = std::numeric_limits<double>::max();
-    double maxEnd = -1.0;
-    for (int noteIndex : interactionState_.noteSelection.selectedIndices) {
-        if (noteIndex < 0 || noteIndex >= static_cast<int>(notes.size())) {
-            continue;
-        }
-        const auto& note = notes[static_cast<size_t>(noteIndex)];
-        minStart = std::min(minStart, note.startTime);
-        maxEnd = std::max(maxEnd, note.endTime);
-    }
-    return maxEnd > minStart && getFrameRangeForTimeSpan(minStart, maxEnd, startFrame, endFrameExclusive);
-}
-
-void PianoRollComponent::syncF0SelectionToSelectedNotes()
-{
-    int startFrame = 0;
-    int endFrameExclusive = 0;
-    if (getSelectedNotesFrameRange(startFrame, endFrameExclusive)) {
-        interactionState_.selection.setF0Range(startFrame, endFrameExclusive);
-        return;
-    }
-
-    interactionState_.selection.clearF0Selection();
-}
-
-bool PianoRollComponent::getSelectionAreaFrameRange(int& startFrame, int& endFrameExclusive) const
-{
-    if (!interactionState_.selection.hasSelectionArea) { startFrame = 0; endFrameExclusive = 0; return false; }
-    const double s = std::min(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-    const double e = std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-    return getFrameRangeForTimeSpan(s, e, startFrame, endFrameExclusive);
-}
-
-bool PianoRollComponent::getF0SelectionFrameRange(int& startFrame, int& endFrameExclusive) const
-{
-    startFrame = 0;
-    endFrameExclusive = 0;
-
-    if (currentCurve_ == nullptr || !interactionState_.selection.hasF0Selection) {
-        return false;
-    }
-
-    const auto f0tl = currentF0Timeline();
-    if (f0tl.isEmpty()) return false;
-
-    const auto range = f0tl.rangeForFrames(interactionState_.selection.selectedF0StartFrame,
-                                           interactionState_.selection.selectedF0EndFrameExclusive);
-    startFrame = range.startFrame;
-    endFrameExclusive = range.endFrameExclusive;
-    return endFrameExclusive > startFrame;
+    if (toolHandler_) return toolHandler_->collectSelectedFrameRanges();
+    return {};
 }
 
 bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
@@ -2621,21 +2581,12 @@ bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
     pendingUndoDescription_ = TRANS("Edit retune speed");
     if (!currentCurve_) return false;
 
-    int selectedNotesStartFrame = 0;
-    int selectedNotesEndFrameExclusive = 0;
-    const bool hasSelectedNotesRange = getSelectedNotesFrameRange(selectedNotesStartFrame,
-                                                                  selectedNotesEndFrameExclusive);
-
-    int frameSelectionStartFrame = 0;
-    int frameSelectionEndFrameExclusive = 0;
-    const bool hasF0SelectionRange = getF0SelectionFrameRange(frameSelectionStartFrame,
-                                                              frameSelectionEndFrameExclusive);
-    const bool hasSelectionAreaRange = hasF0SelectionRange
-        || getSelectionAreaFrameRange(frameSelectionStartFrame, frameSelectionEndFrameExclusive);
+    const bool hasSelectedNotes = !interactionState_.noteSelection.empty();
+    const auto frameSel = collectSelectedFrameRanges();
 
     AudioEditingScheme::ParameterTargetContext context;
-    context.hasSelectedNotes = hasSelectedNotesRange;
-    context.hasFrameSelection = hasSelectionAreaRange;
+    context.hasSelectedNotes = hasSelectedNotes;
+    context.hasFrameSelection = !frameSel.empty();
 
     switch (AudioEditingScheme::resolveParameterTarget(context)) {
         case AudioEditingScheme::ParameterTarget::SelectedNotes:
@@ -2644,8 +2595,7 @@ bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
             return applyParameterToFrameRange(speed,
                                               currentVibratoDepth_,
                                               currentVibratoRate_,
-                                              frameSelectionStartFrame,
-                                              frameSelectionEndFrameExclusive);
+                                              frameSel.ranges);
         default:
             break;
     }
@@ -2672,21 +2622,12 @@ bool PianoRollComponent::applyVibratoParameterToSelection(VibratoParam param, fl
     value = clampValue();
     if (!currentCurve_) return false;
 
-    int selectedNotesStartFrame = 0;
-    int selectedNotesEndFrameExclusive = 0;
-    const bool hasSelectedNotesRange = getSelectedNotesFrameRange(selectedNotesStartFrame,
-                                                                  selectedNotesEndFrameExclusive);
-
-    int frameSelectionStartFrame = 0;
-    int frameSelectionEndFrameExclusive = 0;
-    const bool hasF0SelectionRange = getF0SelectionFrameRange(frameSelectionStartFrame,
-                                                              frameSelectionEndFrameExclusive);
-    const bool hasSelectionAreaRange = hasF0SelectionRange
-        || getSelectionAreaFrameRange(frameSelectionStartFrame, frameSelectionEndFrameExclusive);
+    const bool hasSelectedNotes = !interactionState_.noteSelection.empty();
+    const auto frameSel = collectSelectedFrameRanges();
 
     AudioEditingScheme::ParameterTargetContext context;
-    context.hasSelectedNotes = hasSelectedNotesRange;
-    context.hasFrameSelection = hasSelectionAreaRange;
+    context.hasSelectedNotes = hasSelectedNotes;
+    context.hasFrameSelection = !frameSel.empty();
 
     switch (AudioEditingScheme::resolveParameterTarget(context)) {
         case AudioEditingScheme::ParameterTarget::SelectedNotes:
@@ -2700,7 +2641,7 @@ bool PianoRollComponent::applyVibratoParameterToSelection(VibratoParam param, fl
                 currentRetuneSpeed_,
                 (param == VibratoParam::Depth) ? value : currentVibratoDepth_,
                 (param == VibratoParam::Rate) ? value : currentVibratoRate_,
-                frameSelectionStartFrame, frameSelectionEndFrameExclusive);
+                frameSel.ranges);
         default:
             return false;
     }
@@ -3064,9 +3005,11 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
         lastKnownTimeGridRevision_ = 0;
         // 切换编辑目标时清空全部选择状态，避免旧 clip 选择残留
         interactionState_.noteSelection.clear();
-        interactionState_.selection.clearF0Selection();
-        interactionState_.selection.hasSelectionArea = false;
+        interactionState_.frameSelection.clear();
         interactionState_.selection.isSelectingArea = false;
+        interactionState_.selection.isSelectingF0 = false;
+        interactionState_.selection.f0SelectionAnchorFrame = -1;
+        interactionState_.selection.f0SelectionCurrentFrame = -1;
         interactionState_.selection.selectionStartTime = 0.0;
         interactionState_.selection.selectionEndTime = 0.0;
         interactionState_.selection.selectionStartMidi = 0.0f;
@@ -3610,7 +3553,10 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             interactionState_.noteDrag.clear();
             interactionState_.noteResize.clear();
             clearNoteDraft();
-            interactionState_.selection.clearF0Selection();
+            interactionState_.frameSelection.clear();
+            interactionState_.selection.isSelectingF0 = false;
+            interactionState_.selection.f0SelectionAnchorFrame = -1;
+            interactionState_.selection.f0SelectionCurrentFrame = -1;
         } else if (currentTool_ == ToolId::TimeTool) {
             interactionState_.timeTool.clear();
         }
@@ -4551,7 +4497,6 @@ void PianoRollComponent::pasteNotes()
             }
         }
     }
-    syncF0SelectionToSelectedNotes();
 
     requestContentRedraw();
     overlay_->repaint();
@@ -4935,46 +4880,24 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
 
     // ── OpenDyne：AUTO 按钮 = Auto Snap 一键吸附（Melodyne 语义）──
     // 有选中音符时只吸附选中音符；未选中任何音符时才对全量吸附。
-    // 分流位于选区解析（getSelectedNotesFrameRange）之前，目标集合由 applyAutoSnapToAllNotes 内部决定
+    // 分流位于选区解析（collectSelectedFrameRanges）之前，目标集合由 applyAutoSnapToAllNotes 内部决定
     if (AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_)) {
         return applyAutoSnapToAllNotes(snap, f0tl);
     }
 
-    // ── OpenTune：原选区解析 + autoTuneContentRange 逻辑 ──
-    int selectedNotesStartFrame = 0;
-    int selectedNotesEndFrameExclusive = 0;
-    const bool hasSelectedNotesRange = getSelectedNotesFrameRange(selectedNotesStartFrame,
-                                                                   selectedNotesEndFrameExclusive);
-
-    int selectionAreaStartFrame = 0;
-    int selectionAreaEndFrameExclusive = 0;
-    const bool hasSelectionAreaRange = getSelectionAreaFrameRange(selectionAreaStartFrame,
-                                                                   selectionAreaEndFrameExclusive);
-
-    int f0SelectionStartFrame = 0;
-    int f0SelectionEndFrameExclusive = 0;
-    const bool hasF0SelectionRange = getF0SelectionFrameRange(f0SelectionStartFrame,
-                                                              f0SelectionEndFrameExclusive);
-
-    AudioEditingScheme::AutoTuneTargetContext targetContext;
-    targetContext.totalFrameCount = f0tl.endFrameExclusive();
-    if (hasSelectedNotesRange) {
-        targetContext.selectedNotesRange = { selectedNotesStartFrame, selectedNotesEndFrameExclusive };
-    }
-    if (hasSelectionAreaRange) {
-        targetContext.selectionAreaRange = { selectionAreaStartFrame, selectionAreaEndFrameExclusive };
-    }
-    if (hasF0SelectionRange) {
-        targetContext.f0SelectionRange = { f0SelectionStartFrame, f0SelectionEndFrameExclusive };
+    // ── OpenTune：选区解析 + autoTuneContentRange 逻辑 ──
+    // auto-tune 是连续吸附操作：作用于选中范围的并集（包围区间）。
+    // 无任何选择时保持既有行为：整段吸附（WholeClip）。
+    const auto sel = collectSelectedFrameRanges();
+    F0FrameRange requestedRange;
+    if (!sel.empty()) {
+        requestedRange = { sel.ranges.front().first, sel.ranges.back().second };
+    } else {
+        requestedRange = { 0, f0tl.endFrameExclusive() };
     }
 
-    const auto targetDecision = AudioEditingScheme::resolveAutoTuneRange(targetContext);
-    if (targetDecision.target == AudioEditingScheme::AutoTuneTarget::None) {
-        return { AutoTuneApplyStatus::NoTargetSelection };
-    }
-
-    const auto targetRange = f0tl.rangeForFrames(targetDecision.range.startFrame,
-                                                 targetDecision.range.endFrameExclusive);
+    const auto targetRange = f0tl.rangeForFrames(requestedRange.startFrame,
+                                                 requestedRange.endFrameExclusive);
     if (targetRange.isEmpty()) {
         return { AutoTuneApplyStatus::EmptyTargetRange };
     }

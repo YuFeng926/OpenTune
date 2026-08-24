@@ -614,14 +614,12 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
 
         // 纯单击空白：取消当前选中 + 清除框选残留状态 + 移动播放头
         deselectAllNotes();
-        updateF0SelectionFromNotes(committedNotes(ctx_));
+        ctx_.getState().frameSelection.clear();
         auto& sel = ctx_.getState().selection;
         sel.isSelectingArea = false;
-        sel.hasSelectionArea = false;
-        sel.selectionStartTime = 0.0;
-        sel.selectionEndTime = 0.0;
-        sel.selectionStartMidi = 0.0f;
-        sel.selectionEndMidi = 0.0f;
+        sel.isSelectingF0 = false;
+        sel.f0SelectionAnchorFrame = -1;
+        sel.f0SelectionCurrentFrame = -1;
         if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 
         if (intent.mouseDownTime >= 0.0) {
@@ -720,25 +718,7 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
             selectAllNotes(notes);
         }
         
-        const auto& committed = committedNotes(ctx_);
-        
-        ctx_.getState().selection.hasSelectionArea = true;
-        ctx_.getState().selection.selectionStartMidi = ctx_.getMinMidi();
-        ctx_.getState().selection.selectionEndMidi = ctx_.getMaxMidi();
-        ctx_.getState().selection.selectionStartTime = 0.0;
-        
-        if (hasCurve) {
-            const auto f0tl = ctx_.getF0Timeline();
-            ctx_.getState().selection.selectionEndTime = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(f0tl.endFrameExclusive());
-        } else {
-            double maxEnd = 0.0;
-            for (const auto& n : committed) {
-                maxEnd = std::max(maxEnd, n.endTime);
-            }
-            ctx_.getState().selection.selectionEndTime = maxEnd;
-        }
-        
-        updateF0SelectionFromNotes(committed);
+        // F0 范围从 noteSelection 按需派生，无需同步。
         if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
         return true;
     }
@@ -951,22 +931,6 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
     return bestFrame >= 0;
 }
 
-void PianoRollToolHandler::beginF0SelectionAt(const juce::MouseEvent& e, int frameIndex)
-{
-    juce::ignoreUnused(e);
-    auto& state = ctx_.getState();
-    state.noteSelection.clear();
-    state.noteDrag.clear();
-    state.noteResize.clear();
-    state.selection.hasSelectionArea = false;
-    state.selection.isSelectingArea = false;
-    state.selection.isSelectingF0 = true;
-    state.selection.f0SelectionAnchorFrame = frameIndex;
-    state.selection.setF0Range(frameIndex, frameIndex + 1);
-    ctx_.clearNoteDraft();
-    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
-}
-
 void PianoRollToolHandler::updateF0SelectionDrag(const juce::MouseEvent& e)
 {
     auto& selection = ctx_.getState().selection;
@@ -976,7 +940,9 @@ void PianoRollToolHandler::updateF0SelectionDrag(const juce::MouseEvent& e)
 
     const auto f0tl = ctx_.getF0Timeline();
     if (f0tl.isEmpty()) {
-        selection.clearF0Selection();
+        selection.isSelectingF0 = false;
+        selection.f0SelectionAnchorFrame = -1;
+        selection.f0SelectionCurrentFrame = -1;
         return;
     }
 
@@ -984,13 +950,17 @@ void PianoRollToolHandler::updateF0SelectionDrag(const juce::MouseEvent& e)
     if (!sourceTime)
         return;
 
-    const auto editRange = sourceEditRange();
-
     const int frame = juce::jlimit(0, f0tl.endFrameExclusive() - 1, f0tl.frameAtOrBefore(*sourceTime));
-    const int startFrame = std::min(selection.f0SelectionAnchorFrame, frame);
-    const int endFrameExclusive = std::max(selection.f0SelectionAnchorFrame, frame) + 1;
-    selection.setF0Range(startFrame, endFrameExclusive);
-    selection.isSelectingF0 = true;
+    selection.f0SelectionCurrentFrame = frame;
+
+    // 拖拽中：收集锚点到当前位置之间所有有效 F0 帧
+    const double anchorTime = f0tl.timeAtFrame(selection.f0SelectionAnchorFrame);
+    const double currentTime = f0tl.timeAtFrame(frame);
+    const double t0 = std::min(anchorTime, currentTime);
+    const double t1 = std::max(anchorTime, currentTime);
+    ctx_.getState().frameSelection.clear();
+    collectF0StretchesInRange(t0, t1, ctx_.getState().frameSelection);
+
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 }
 
@@ -1060,8 +1030,7 @@ void PianoRollToolHandler::handleDeleteKey()
     }
 
     deleteSelectedNotes(notes);
-    // 删除后清除残留的框选区域标记（与旧区域删除行为一致）
-    ctx_.getState().selection.hasSelectionArea = false;
+    // 删除后 noteSelection 已清空，F0 范围自动从空 noteSelection 计算。
 
     ctx_.getNoteDraft().contentDirty = true;
     ctx_.getNoteDraft().workingNotes = notes;
@@ -1154,11 +1123,11 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
                 const int noteCount = static_cast<int>(notes.size());
                 if (!noteSelection.isSelected(noteIndex) && !isCtrlDown && !isShiftDown) {
                     noteSelection.setSingle(noteIndex, noteCount);
+                    ctx_.getState().frameSelection.clear();   // 纯点击替换全部选择
                 } else {
                     noteSelection.add(noteIndex, noteCount);
                 }
 
-                updateF0SelectionFromNotes(notes);
                 if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
                 return;
             }
@@ -1179,9 +1148,8 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
             }
         } else if (!noteSelection.isSelected(clickedNoteIndex) || (isOpenDyne && noteSelection.isAllSelected(noteCount))) {
             noteSelection.setSingle(clickedNoteIndex, noteCount);
+            ctx_.getState().frameSelection.clear();   // 纯点击替换全部选择
         }
-
-        updateF0SelectionFromNotes(notes);
 
         if (noteSelection.isSelected(clickedNoteIndex)) {
             // OpenDyne Main/Select 与普通模式一致：允许对选中音符进行 pitch 拖拽。
@@ -1198,7 +1166,27 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
     } else {
         int f0Frame = -1;
         if (hitTestF0Curve(e, f0Frame)) {
-            beginF0SelectionAt(e, f0Frame);
+            int segStart = 0, segEnd = 0;
+            if (findF0ContiguousStretch(f0Frame, segStart, segEnd)) {
+                auto& sel = ctx_.getState().selection;
+                auto& fs = ctx_.getState().frameSelection;
+                if (isCtrlDown) {
+                    // Ctrl：复选追加该段，不进入拖拽
+                    fs.addRange(segStart, segEnd);
+                } else {
+                    ctx_.getState().noteSelection.clear();
+                    ctx_.getState().noteDrag.clear();
+                    ctx_.getState().noteResize.clear();
+                    fs.clear();
+                    fs.addRange(segStart, segEnd);
+                    // 接通拖拽状态机：后续拖拽经 updateF0SelectionDrag 扩展选择
+                    sel.isSelectingArea = false;
+                    sel.isSelectingF0 = true;
+                    sel.f0SelectionAnchorFrame = f0Frame;
+                    sel.f0SelectionCurrentFrame = f0Frame;
+                }
+                if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+            }
             return;
         }
         beginAreaSelection(e);
@@ -1217,7 +1205,7 @@ void PianoRollToolHandler::beginAreaSelection(const juce::MouseEvent& e)
         return;
 
     deselectAllNotes();
-    updateF0SelectionFromNotes(committedNotes(ctx_));
+    ctx_.getState().frameSelection.clear();
     ctx_.getState().noteDrag.draggedNoteIndices.clear();
     ctx_.getState().noteDrag.previewSnapshot.reset();
     ctx_.getState().noteResize.isResizing = false;
@@ -1226,7 +1214,6 @@ void PianoRollToolHandler::beginAreaSelection(const juce::MouseEvent& e)
 
     if (e.x > ctx_.getPianoKeyWidth()) {
         ctx_.getState().selection.isSelectingArea = true;
-        ctx_.getState().selection.hasSelectionArea = true;
         ctx_.getState().selection.selectionStartTime = std::max(0.0, *sourceTime);
         ctx_.getState().selection.selectionEndTime = ctx_.getState().selection.selectionStartTime;
         float midiVal = juce::jlimit(ctx_.getMinMidi(), ctx_.getMaxMidi(),
@@ -1235,7 +1222,6 @@ void PianoRollToolHandler::beginAreaSelection(const juce::MouseEvent& e)
         ctx_.getState().selection.selectionEndMidi = midiVal;
     } else {
         ctx_.getState().selection.isSelectingArea = false;
-        ctx_.getState().selection.hasSelectionArea = false;
     }
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 }
@@ -1360,9 +1346,9 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
         } else {
             if (!noteSelection.isSelected(existingNoteIndex)) {
                 noteSelection.setSingle(existingNoteIndex, noteCount);
+                ctx_.getState().frameSelection.clear();
             }
         }
-        updateF0SelectionFromNotes(committedNotes);
         if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
     }
     
@@ -1483,7 +1469,10 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         }
         ctx_.getState().noteSelection.setFromIndices(std::move(selectedIndices),
                                                      static_cast<int>(notes.size()));
-        updateF0SelectionFromNotes(notes);
+        // 显式 F0 选择 = 框选时间范围内所有有效帧；音符派生范围由
+        // collectSelectedFrameRanges 在消费时按需合并，不在此存储。
+        ctx_.getState().frameSelection.clear();
+        collectF0StretchesInRange(selStartTime, selEndTime, ctx_.getState().frameSelection);
         if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
         return;
     }
@@ -1679,7 +1668,8 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 
     if (ctx_.getState().selection.isSelectingArea) {
         ctx_.getState().selection.isSelectingArea = false;
-        updateF0SelectionFromNotes(notes);
+        // frameSelection 已在拖拽中构建（框内显式 F0），音符派生范围由
+        // collectSelectedFrameRanges 消费时按需合并，此处不再重建。
         // EQ 工具：框选完成且 selection 非空时，以 anchor 音符打开 EQ 弹窗一次。
         // 纯点击不进入此处（由 handleEqToolMouseUp 消费 pending 主音符）。
         if (currentTool_ == ToolId::Eq && !ctx_.getState().noteSelection.empty()) {
@@ -1689,6 +1679,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 
     ctx_.getState().selection.isSelectingF0 = false;
     ctx_.getState().selection.f0SelectionAnchorFrame = -1;
+    ctx_.getState().selection.f0SelectionCurrentFrame = -1;
     // note drag 终止状态由 endNotePitchDrag 唯一清理（noteDrag.clear），不再局部写
     ctx_.clearNoteDraft();
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
@@ -2047,10 +2038,8 @@ void PianoRollToolHandler::handlePitchToolMouseDown(const juce::MouseEvent& e)
     } else {
         // 点击未选中音符或全选状态：单选该音符
         noteSelection.setSingle(clickedNoteIndex, noteCount);
+        ctx_.getState().frameSelection.clear();
     }
-    // 清除旧框选矩形，F0 编辑范围由实际 draggedNoteIndices 计算
-    ctx_.getState().selection.hasSelectionArea = false;
-    updateF0SelectionFromNotes(notes);
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 
     if (!noteSelection.isSelected(clickedNoteIndex))
@@ -2185,9 +2174,10 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEv
         return;
 
     auto& state = ctx_.getState();
-    if (!state.noteSelection.isSelected(clickedNoteIndex) || state.noteSelection.isAllSelected(static_cast<int>(notes.size())))
+    if (!state.noteSelection.isSelected(clickedNoteIndex) || state.noteSelection.isAllSelected(static_cast<int>(notes.size()))) {
         state.noteSelection.setSingle(clickedNoteIndex, static_cast<int>(notes.size()));
-    updateF0SelectionFromNotes(notes);
+        state.frameSelection.clear();
+    }
 
     state.isVolumeDragging = true;
     const auto snap = ctx_.getEditableContentSnapshot();
@@ -2267,7 +2257,7 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolDoubleClick(const juce::Mouse
     state.isVolumeDragging = false;
     state.volumePreviewEnvelope.clear();
     state.noteSelection.setSingle(noteIndex, static_cast<int>(notes.size()));
-    updateF0SelectionFromNotes(notes);
+    state.frameSelection.clear();
     if (ctx_.invalidateSelectionFeedback)
         ctx_.invalidateSelectionFeedback();
 
@@ -2449,7 +2439,6 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
     }
     if (lastRightIdx >= 0 && lastRightIdx < static_cast<int>(newNotes.size())) {
         state.noteSelection.setSingle(lastRightIdx, static_cast<int>(newNotes.size()));
-        updateF0SelectionFromNotes(newNotes);
     }
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 
@@ -2783,7 +2772,6 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
         if (newSelectedIndex >= 0) {
             ctx_.getState().noteSelection.setSingle(newSelectedIndex,
                                                     static_cast<int>(notes.size()));
-            updateF0SelectionFromNotes(notes);
         }
     }
 
@@ -2840,7 +2828,9 @@ void PianoRollToolHandler::deleteSelectedNotes(std::vector<Note>& notes)
         notes.end()
     );
     ctx_.getState().noteSelection.clear();
-    ctx_.getState().selection.clearF0Selection();
+    ctx_.getState().selection.isSelectingF0 = false;
+    ctx_.getState().selection.f0SelectionAnchorFrame = -1;
+    ctx_.getState().selection.f0SelectionCurrentFrame = -1;
 }
 
 void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
@@ -3046,35 +3036,93 @@ void PianoRollToolHandler::selectNotesBetween(const std::vector<Note>& notes, in
     ctx_.getState().noteSelection.selectRange(startIndex, endIndex, notes);
 }
 
-void PianoRollToolHandler::updateF0SelectionFromNotes(const std::vector<Note>& notes)
+// ============================================================================
+// F0 选择：帧段收集与连续段查找
+//
+// 有效性判定统一为 effective F0（data * gain > 0），与 hitTestF0Curve 一致。
+// ============================================================================
+
+void PianoRollToolHandler::collectF0StretchesInRange(double startTime, double endTime, FrameSelection& out) const
 {
-    const auto selectedIndices = collectSelectedNoteIndices(notes);
-    if (selectedIndices.empty()) {
-        ctx_.getState().selection.clearF0Selection();
-        return;
-    }
-
-    double minStart = 1e30;
-    double maxEnd = -1e30;
-    for (int index : selectedIndices) {
-        const auto& note = notes[static_cast<size_t>(index)];
-        minStart = std::min(minStart, note.startTime);
-        maxEnd = std::max(maxEnd, note.endTime);
-    }
-
-    auto curve = ctx_.getPitchCurve();
-    if (!curve) {
-        ctx_.getState().selection.clearF0Selection();
-        return;
-    }
     const auto f0tl = ctx_.getF0Timeline();
-    if (f0tl.isEmpty()) {
-        ctx_.getState().selection.clearF0Selection();
-        return;
+    if (f0tl.isEmpty()) return;
+    // 与 F0Timeline::rangeForTimes 一致的端点语义
+    collectF0StretchesInFrames(f0tl.frameAtOrBefore(startTime),
+                               f0tl.exclusiveFrameAt(endTime), out);
+}
+
+void PianoRollToolHandler::collectF0StretchesInFrames(int startFrame, int endFrameExclusive, FrameSelection& out) const
+{
+    if (endFrameExclusive <= startFrame) return;
+
+    auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (!contentSnapshot) return;
+
+    contentSnapshot->forEachEffectiveF0Span(startFrame, endFrameExclusive,
+        [&](int spanStart, const float* data, int length, float gain) {
+            for (int i = 0; i < length; ++i) {
+                if (data[i] * gain > 0.0f)
+                    out.addRange(spanStart + i, spanStart + i + 1);
+            }
+        });
+}
+
+FrameSelection PianoRollToolHandler::buildFrameSelectionForNotes(const std::vector<Note>& notes) const
+{
+    FrameSelection out;
+    const auto& selectedIndices = ctx_.getState().noteSelection.selectedIndices;
+    if (selectedIndices.empty()) return out;
+
+    const auto f0tl = ctx_.getF0Timeline();
+    if (f0tl.isEmpty()) return out;
+
+    constexpr int kGapMarginFrames = 10;   // 音符前后间隙上下文（帧）
+    for (int idx : selectedIndices) {
+        if (idx < 0 || idx >= static_cast<int>(notes.size())) continue;
+        const auto& note = notes[static_cast<size_t>(idx)];
+        const auto range = f0tl.rangeForTimesWithMargin(note.startTime, note.endTime, kGapMarginFrames);
+        collectF0StretchesInFrames(range.startFrame, range.endFrameExclusive, out);
     }
-    const auto selectedRange = f0tl.nonEmptyRangeForTimes(minStart, maxEnd);
-    ctx_.getState().selection.setF0Range(selectedRange.startFrame,
-                                         selectedRange.endFrameExclusive);
+    return out;
+}
+
+bool PianoRollToolHandler::findF0ContiguousStretch(int frame, int& outStart, int& outEndExclusive) const
+{
+    auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (!contentSnapshot) return false;
+    auto curve = ctx_.getPitchCurve();
+    if (!curve) return false;
+    auto snapshot = curve->getSnapshot();
+    if (!snapshot || snapshot->isEmpty()) return false;
+
+    const int n = static_cast<int>(snapshot->size());
+    if (frame < 0 || frame >= n) return false;
+
+    // 一次遍历构建有效帧掩码，再向两侧扩展
+    std::vector<char> effective(static_cast<size_t>(n), 0);
+    contentSnapshot->forEachEffectiveF0Span(0, n,
+        [&](int spanStart, const float* data, int length, float gain) {
+            for (int i = 0; i < length; ++i) {
+                const size_t f = static_cast<size_t>(spanStart + i);
+                if (f < effective.size() && data[i] * gain > 0.0f)
+                    effective[f] = 1;
+            }
+        });
+
+    if (!effective[static_cast<size_t>(frame)]) return false;   // 中心帧必须有效
+
+    outStart = frame;
+    outEndExclusive = frame + 1;
+    while (outStart > 0 && effective[static_cast<size_t>(outStart - 1)]) --outStart;
+    while (outEndExclusive < n && effective[static_cast<size_t>(outEndExclusive)]) ++outEndExclusive;
+    return true;
+}
+
+FrameSelection PianoRollToolHandler::collectSelectedFrameRanges() const
+{
+    FrameSelection result = buildFrameSelectionForNotes(ctx_.getCommittedNotes());
+    result.merge(ctx_.getState().frameSelection);
+    return result;
 }
 
 // ============================================================================
@@ -3512,8 +3560,8 @@ void PianoRollToolHandler::handleEqToolMouseDown(const juce::MouseEvent& e)
         noteSelection.add(clickedNoteIndex, noteCount);
     } else {
         noteSelection.setSingle(clickedNoteIndex, noteCount);
+        ctx_.getState().frameSelection.clear();
     }
-    updateF0SelectionFromNotes(notes);
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 
     // 记录 pending 主音符：不立即开弹窗，纯点击 mouseUp 时消费一次

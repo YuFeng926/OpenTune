@@ -5,6 +5,7 @@
 #include <utility>
 #include <memory>
 #include "Utils/Note.h"
+#include "Utils/F0Timeline.h"
 #include "Utils/AutomationLane.h"
 #include "UI/ToolIds.h"
 #include "Utils/TimeGrid.h"   // vocal-time-stretch §8.3 — Time tool
@@ -19,23 +20,38 @@ enum class NoteResizeEdge
     Right
 };
 
+// F0 帧选择：存储选中的帧范围集合（排序、不重叠、不相邻）
+struct FrameSelection
+{
+    std::vector<std::pair<int, int>> ranges;  // {startFrame, endFrameExclusive}，已排序归并
+
+    bool empty() const noexcept { return ranges.empty(); }
+    void clear() noexcept { ranges.clear(); }
+
+    // 添加一个帧范围（自动合并重叠/相邻范围）
+    void addRange(int startFrame, int endFrameExclusive);
+
+    // 合并另一个 FrameSelection
+    void merge(const FrameSelection& other);
+
+private:
+    // 排序 + 归并重叠/相邻范围
+    void normalize();
+};
+
 struct SelectionState
 {
-    bool hasSelectionArea = false;
+    // 框选拖拽中间态（仅拖拽中使用，mouseUp 后清零）
     bool isSelectingArea = false;
     double selectionStartTime = 0.0;
     double selectionEndTime = 0.0;
     float selectionStartMidi = 0.0f;
     float selectionEndMidi = 0.0f;
-    
-    int selectedF0StartFrame = -1;
-    int selectedF0EndFrameExclusive = -1;
-    bool hasF0Selection = false;
+
+    // F0 拖拽中间态（仅拖拽中使用，mouseUp 后清零）
     bool isSelectingF0 = false;
     int f0SelectionAnchorFrame = -1;
-    
-    void setF0Range(int startFrame, int endFrameExclusive);
-    void clearF0Selection();
+    int f0SelectionCurrentFrame = -1;
 };
 
 struct NoteSelectionState
@@ -215,6 +231,7 @@ class InteractionState
 public:
     SelectionState selection;
     NoteSelectionState noteSelection;
+    FrameSelection frameSelection;        // F0 帧选择（独立于音符选择）
     NoteInteractionDraft noteDraft;
     NoteDragState noteDrag;
     NoteResizeState noteResize;

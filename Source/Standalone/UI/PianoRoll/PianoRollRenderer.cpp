@@ -1477,11 +1477,7 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
     if (!item.pitchSnapshot || item.pitchSnapshot->size() == 0) return;
     if (item.notesPrimaryScheme) return;   // OpenDyne：notes-primary 无 F0 框选
     if (!ctx.showOriginalF0) return;
-    if (!ctx.hasF0Selection) return;
-
-    const int selStartFrame = ctx.f0SelectionStartFrame;
-    const int selEndFrame = ctx.f0SelectionEndFrameExclusive;
-    if (selEndFrame <= selStartFrame) return;
+    if (!ctx.hasF0Selection || ctx.f0SelectionRanges.empty()) return;
 
     const auto visibleWindow = computeFullViewportTimeWindow(ctx, item);
     if (!visibleWindow.isValid()) return;
@@ -1518,21 +1514,6 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
         return ctx.coords.freqToY(frequency);
     };
 
-    const int selStart = std::max(selStartFrame, startFrame);
-    const int selEnd = std::min(selEndFrame, endFrame);
-    if (selEnd <= selStart) return;
-
-    const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
-    const int origEnd = std::min(selEnd, static_cast<int>(originalF0.size()));
-    if (origEnd <= selStart) return;
-
-    auto selectionProducer = [&](auto&& sink) {
-        sink(selStart, originalF0.data() + selStart, origEnd - selStart, 1.0f);
-    };
-
-    const auto visualSegments = buildF0VisualSegments(
-        originalEnergy, origEnd, visualOptions, makeFrameToX, makeFrameToY, selectionProducer);
-
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
@@ -1546,51 +1527,69 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
     const float glowLineWidth = selectionLineWidth + (isAurora ? 2.2f : 1.8f);
     const juce::PathStrokeType glowStrokeType(glowLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
 
-    for (const auto& segment : visualSegments) {
-        if (segment.points.empty()) continue;
+    // 每个选中范围独立裁剪到可见窗口并绘制
+    for (const auto& [selStartFrame, selEndFrame] : ctx.f0SelectionRanges) {
+        const int selStart = std::max(selStartFrame, startFrame);
+        const int selEnd = std::min(selEndFrame, endFrame);
+        if (selEnd <= selStart) continue;
 
-        if (segment.points.size() == 1) {
-            const auto& p = segment.points.front();
-            juce::Path ptPath;
-            ptPath.startNewSubPath(p.x - 0.01f, p.y);
-            ptPath.lineTo(p.x + 0.01f, p.y);
+        const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+        const int origEnd = std::min(selEnd, static_cast<int>(originalF0.size()));
+        if (origEnd <= selStart) continue;
+
+        auto selectionProducer = [&](auto&& sink) {
+            sink(selStart, originalF0.data() + selStart, origEnd - selStart, 1.0f);
+        };
+
+        const auto visualSegments = buildF0VisualSegments(
+            originalEnergy, origEnd, visualOptions, makeFrameToX, makeFrameToY, selectionProducer);
+
+        for (const auto& segment : visualSegments) {
+            if (segment.points.empty()) continue;
+
+            if (segment.points.size() == 1) {
+                const auto& p = segment.points.front();
+                juce::Path ptPath;
+                ptPath.startNewSubPath(p.x - 0.01f, p.y);
+                ptPath.lineTo(p.x + 0.01f, p.y);
+                if (isAurora) {
+                    g.setColour(selectionColour.withAlpha(0.10f));
+                    g.strokePath(ptPath, glowStrokeType);
+                    g.setColour(selectionColour.withAlpha(0.96f));
+                    g.strokePath(ptPath, selectionStrokeType);
+                } else if (isBlueBreeze || isOverdose) {
+                    g.setColour(selectionColour.withAlpha(0.075f));
+                    g.strokePath(ptPath, glowStrokeType);
+                    g.setColour(selectionColour.withAlpha(0.96f));
+                    g.strokePath(ptPath, selectionStrokeType);
+                } else {
+                    g.setColour(selectionColour.withAlpha(0.96f));
+                    g.strokePath(ptPath, selectionStrokeType);
+                }
+                continue;
+            }
+
+            juce::Path runPath;
+            if (segment.useLinearPath) {
+                appendLinearF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+            } else {
+                appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+            }
+
             if (isAurora) {
                 g.setColour(selectionColour.withAlpha(0.10f));
-                g.strokePath(ptPath, glowStrokeType);
+                g.strokePath(runPath, glowStrokeType);
                 g.setColour(selectionColour.withAlpha(0.96f));
-                g.strokePath(ptPath, selectionStrokeType);
+                g.strokePath(runPath, selectionStrokeType);
             } else if (isBlueBreeze || isOverdose) {
                 g.setColour(selectionColour.withAlpha(0.075f));
-                g.strokePath(ptPath, glowStrokeType);
+                g.strokePath(runPath, glowStrokeType);
                 g.setColour(selectionColour.withAlpha(0.96f));
-                g.strokePath(ptPath, selectionStrokeType);
+                g.strokePath(runPath, selectionStrokeType);
             } else {
                 g.setColour(selectionColour.withAlpha(0.96f));
-                g.strokePath(ptPath, selectionStrokeType);
+                g.strokePath(runPath, selectionStrokeType);
             }
-            continue;
-        }
-
-        juce::Path runPath;
-        if (segment.useLinearPath) {
-            appendLinearF0Path(runPath, segment.points, 0, segment.points.size() - 1);
-        } else {
-            appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
-        }
-
-        if (isAurora) {
-            g.setColour(selectionColour.withAlpha(0.10f));
-            g.strokePath(runPath, glowStrokeType);
-            g.setColour(selectionColour.withAlpha(0.96f));
-            g.strokePath(runPath, selectionStrokeType);
-        } else if (isBlueBreeze || isOverdose) {
-            g.setColour(selectionColour.withAlpha(0.075f));
-            g.strokePath(runPath, glowStrokeType);
-            g.setColour(selectionColour.withAlpha(0.96f));
-            g.strokePath(runPath, selectionStrokeType);
-        } else {
-            g.setColour(selectionColour.withAlpha(0.96f));
-            g.strokePath(runPath, selectionStrokeType);
         }
     }
 }

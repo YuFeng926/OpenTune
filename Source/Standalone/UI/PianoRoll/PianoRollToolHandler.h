@@ -230,6 +230,10 @@ public:
     // 删除键命令入口（Delete/Backspace/'1'/Cut 共用）：删除选中音符与选区内容
     void handleDeleteKey();
 
+    // 收集当前完整 F0 选择范围（音符派生 + 显式帧选择，排序归并）。
+    // 唯一派生路径：渲染高亮、参数操作、auto-tune 都从这里取范围。
+    FrameSelection collectSelectedFrameRanges() const;
+
 private:
     // === 各工具的 mouseDown/mouseDrag/mouseUp 分派 ===
     void handleSelectTool(const juce::MouseEvent& e);
@@ -308,7 +312,6 @@ private:
     bool isEmptySpaceMouseDown(const juce::MouseEvent& e);
     bool hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e);
     bool hitTestF0Curve(const juce::MouseEvent& e, int& frameIndex) const;
-    void beginF0SelectionAt(const juce::MouseEvent& e, int frameIndex);
     void updateF0SelectionDrag(const juce::MouseEvent& e);
     void beginEmptySpaceIntent(const juce::MouseEvent& e);
     void cancelActiveMouseGesture();
@@ -322,7 +325,13 @@ private:
     void selectAllNotes(const std::vector<Note>& notes);
     int findLastSelectedNoteIndex(const std::vector<Note>& notes);
     void selectNotesBetween(const std::vector<Note>& notes, int startIndex, int endIndex);
-    void updateF0SelectionFromNotes(const std::vector<Note>& notes);
+    // 收集指定时间范围内所有有效 F0 帧的连续段
+    void collectF0StretchesInRange(double startTime, double endTime, FrameSelection& out) const;
+    void collectF0StretchesInFrames(int startFrame, int endFrameExclusive, FrameSelection& out) const;
+    // 为选中音符构建帧选择（含前后间隙）
+    FrameSelection buildFrameSelectionForNotes(const std::vector<Note>& notes) const;
+    // 找到指定帧所在的连续 F0 段
+    bool findF0ContiguousStretch(int frame, int& outStart, int& outEndExclusive) const;
 
     // ⚡️ vocal-time-stretch §8.5 — 唯一时间域转换链
     //

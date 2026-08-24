@@ -4,26 +4,6 @@
 
 namespace OpenTune {
 
-void SelectionState::setF0Range(int startFrame, int endFrameExclusive)
-{
-    if (endFrameExclusive <= startFrame) {
-        clearF0Selection();
-        return;
-    }
-    selectedF0StartFrame = startFrame;
-    selectedF0EndFrameExclusive = endFrameExclusive;
-    hasF0Selection = true;
-}
-
-void SelectionState::clearF0Selection()
-{
-    selectedF0StartFrame = -1;
-    selectedF0EndFrameExclusive = -1;
-    hasF0Selection = false;
-    isSelectingF0 = false;
-    f0SelectionAnchorFrame = -1;
-}
-
 void NoteSelectionState::clear()
 {
     selectedIndices.clear();
@@ -171,6 +151,38 @@ void NoteResizeState::clear()
     originalEndTime = 0.0;
 }
 
+// ============================================================================
+// FrameSelection
+// ============================================================================
+
+void FrameSelection::addRange(int startFrame, int endFrameExclusive)
+{
+    if (endFrameExclusive <= startFrame) return;
+    ranges.emplace_back(startFrame, endFrameExclusive);
+    normalize();
+}
+
+void FrameSelection::normalize()
+{
+    std::sort(ranges.begin(), ranges.end());
+    std::vector<std::pair<int, int>> merged;
+    merged.reserve(ranges.size());
+    for (const auto& r : ranges) {
+        if (!merged.empty() && r.first <= merged.back().second)
+            merged.back().second = std::max(merged.back().second, r.second);
+        else
+            merged.push_back(r);
+    }
+    ranges = std::move(merged);
+}
+
+void FrameSelection::merge(const FrameSelection& other)
+{
+    if (this == &other) return;
+    for (const auto& r : other.ranges)
+        addRange(r.first, r.second);
+}
+
 void NoteInteractionDraft::clear()
 {
     active = false;
@@ -192,6 +204,7 @@ void InteractionState::resetTransient() noexcept
     selection.isSelectingArea = false;
     selection.isSelectingF0 = false;
     selection.f0SelectionAnchorFrame = -1;
+    selection.f0SelectionCurrentFrame = -1;
     noteDraft.clear();
     noteDrag.clear();
     noteResize.clear();
