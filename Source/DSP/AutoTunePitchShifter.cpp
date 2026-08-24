@@ -16,7 +16,9 @@ void AutoTunePitchShifter::reset() {
     std::fill(buffer_.begin(), buffer_.end(), 0.0f);
     writePos_ = 0;
     inputAddr_ = 0.0;
-    outputAddr_ = -5.0;  // Read pointer lags write by 5 samples (patent: Output_addr - 5)
+    // 起始 -1：配合 kLookaheadSamples 预喂，使第 i 次迭代的读地址恰好为 i，
+    // 输出与输入严格样本对齐。
+    outputAddr_ = -1.0;
     resampleRate_ = 1.0;
     inCrossfade_ = false;
     crossfadeRemaining_ = 0;
@@ -86,14 +88,30 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
     const float* input, int numSamples,
     const float* originalF0, const float* correctedF0,
     int numF0Frames, double f0FrameRate,
-    double firstSampleFramePhase)
+    double firstSampleFramePhase,
+    const float* lookahead, int numLookaheadSamples)
 {
     std::vector<float> output(static_cast<size_t>(numSamples), 0.0f);
 
+    // 拼接发布窗口与前视：读指针消费 inputExt[0 .. numSamples+kLookaheadSamples-1]。
+    // 前视不足处补零（仅影响 clip 最后一个 chunk 末尾 5 样本的渲染精度）。
+    std::vector<float> inputExt(static_cast<size_t>(numSamples) + kLookaheadSamples, 0.0f);
+    std::copy(input, input + numSamples, inputExt.begin());
+    if (lookahead != nullptr && numLookaheadSamples > 0)
+    {
+        std::copy(lookahead,
+                  lookahead + std::min(numLookaheadSamples, kLookaheadSamples),
+                  inputExt.begin() + numSamples);
+    }
+
     const double samplesPerF0Frame = sampleRate_ / f0FrameRate;
 
+    // 预喂前视样本：先于输出消费未来数据，消除读指针固有群延迟
+    for (int i = 0; i < kLookaheadSamples; ++i)
+        feedSample(inputExt[static_cast<size_t>(i)]);
+
     for (int i = 0; i < numSamples; ++i) {
-        feedSample(input[i]);
+        feedSample(inputExt[static_cast<size_t>(i) + kLookaheadSamples]);
 
         // Determine which F0 frame this sample belongs to
         const int f0Frame = std::clamp(

@@ -883,6 +883,21 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             {
                 AutoTunePitchShifter autoTuneShifter(RenderCache::kSampleRate);
                 const int safeNumF0Frames = std::min(numF0Frames, originalF0Size - f0StartFrame);
+
+                // 前视上下文：shifter 需消费发布窗口之后的 kLookaheadSamples 个
+                // 未来样本以实现零延迟输出。clip 末尾不足时补零，仅影响最后一个
+                // chunk 尾部 5 样本的渲染精度。
+                float shifterLookahead[AutoTunePitchShifter::kLookaheadSamples] = {};
+                {
+                    const int64_t clipNumSamples = coreJob.audioBuffer->getNumSamples();
+                    const int64_t tailStart = boundaries.trueStartSample + boundaries.publishSampleCount;
+                    const float* clipCh0 = coreJob.audioBuffer->getReadPointer(0);
+                    const int64_t avail = std::clamp<int64_t>(
+                        clipNumSamples - tailStart, 0, AutoTunePitchShifter::kLookaheadSamples);
+                    for (int64_t i = 0; i < avail; ++i)
+                        shifterLookahead[i] = clipCh0[tailStart + i];
+                }
+
                 auto shiftedAudio = autoTuneShifter.shiftChunk(
                     monoAudio.data(),
                     static_cast<int>(boundaries.publishSampleCount),
@@ -890,7 +905,9 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     effectiveF0.data(),
                     safeNumF0Frames,
                     f0FrameRate,
-                    firstSampleFramePhase);
+                    firstSampleFramePhase,
+                    shifterLookahead,
+                    AutoTunePitchShifter::kLookaheadSamples);
 
                 if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount)
                     shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);

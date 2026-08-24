@@ -10,9 +10,9 @@ namespace OpenTune {
 /// Lightweight per-sample pitch shifter based on adaptive resampling rate
 /// with cycle insertion/deletion (the reference flow method, patent expired 2018).
 ///
-/// O(1) per sample, no FFT, fixed memory, deterministic latency (~5 samples).
-///
-/// Usage range: corrections < 100 cents. For larger shifts, use NSF-HiFiGAN vocoder.
+/// O(1) per sample, no FFT, fixed memory. Zero output latency: the internal
+/// read pointer's inherent group delay is cancelled by consuming
+/// kLookaheadSamples of future input supplied by the caller (lookahead tail).
 class AutoTunePitchShifter {
 public:
     explicit AutoTunePitchShifter(double sampleRate);
@@ -21,20 +21,31 @@ public:
     /// Reset internal state (call between non-contiguous audio segments).
     void reset();
 
+    /// Future samples the shifter consumes before producing output; cancels
+    /// the read pointer's inherent group delay so output[i] aligns with input[i].
+    /// Callers must supply this many trailing clip samples via shiftChunk().
+    static constexpr int kLookaheadSamples = 5;
+
     /// Process a chunk of audio with per-frame F0 guidance.
-    /// Drop-in replacement for the legacy cycle-resampling pitch shifter.
-    /// @param input         Source audio (mono, sampleRate)
-    /// @param numSamples    Number of input samples
+    /// @param input         Source audio to publish (mono, sampleRate)
+    /// @param numSamples    Number of publish samples
     /// @param originalF0    Detected F0 per frame (Hz, f0FrameRate fps)
     /// @param correctedF0   Target F0 per frame (Hz, f0FrameRate fps)
     /// @param numF0Frames   Number of F0 frames
     /// @param f0FrameRate   F0 frame rate (typically 100.0)
-    /// @return Pitch-shifted audio (same length as input)
+    /// @param firstSampleFramePhase F0 frame phase of the first publish sample
+    /// @param lookahead     Samples following input in the source clip
+    ///                      (kLookaheadSamples expected; shorter tails are
+    ///                      zero-padded, only affects clip-final chunks)
+    /// @param numLookaheadSamples Available lookahead samples (<= kLookaheadSamples)
+    /// @return Pitch-shifted audio, strictly sample-aligned with input
     std::vector<float> shiftChunk(
         const float* input, int numSamples,
         const float* originalF0, const float* correctedF0,
         int numF0Frames, double f0FrameRate,
-        double firstSampleFramePhase);
+        double firstSampleFramePhase,
+        const float* lookahead = nullptr,
+        int numLookaheadSamples = 0);
 
 private:
     double sampleRate_;
