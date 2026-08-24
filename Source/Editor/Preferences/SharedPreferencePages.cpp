@@ -242,10 +242,21 @@ public:
             addAndMakeVisible(experimentalReferenceAlignModeSelector_);
         }
 
+        initialiseToggleButton(lightPitchCorrectionToggle_);
+        lightPitchCorrectionToggle_.setButtonText(
+            juce::String::fromUTF8(u8"音质优化模式（小幅修正使用周期重采样，超低延迟零相位伪影）"));
+        lightPitchCorrectionToggle_.setToggleState(state.shared.lightPitchCorrectionEnabled,
+                                                   juce::dontSendNotification);
+        lightPitchCorrectionToggle_.onClick = [this] {
+            appPreferences_.setLightPitchCorrectionEnabled(lightPitchCorrectionToggle_.getToggleState());
+            notifyChanged();
+        };
+        addAndMakeVisible(lightPitchCorrectionToggle_);
+
         // Publish preferred height for parent containers
         {
             const int vPad = 4 * 2; // reduced(10, 4) vertical
-            const int rows = isVst3Plugin_ ? 2 : 4; // 插件隐藏实验控件
+            const int rows = isVst3Plugin_ ? 3 : 5; // 插件隐藏实验控件
             const int rowH = 34;
             const int gaps = 8 * (rows - 1) + (isVst3Plugin_ ? 0 : 4); // 行间 8px；实验模式下额外 hint 前 4px
             const int hintHeight = isVst3Plugin_ ? 0 : 42;
@@ -287,6 +298,10 @@ public:
             experimentalReferenceAlignModeLabel_.setBounds(row.removeFromLeft(labelWidth));
             experimentalReferenceAlignModeSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
         }
+
+        bounds.removeFromTop(8);
+        row = bounds.removeFromTop(rowHeight);
+        lightPitchCorrectionToggle_.setBounds(row.removeFromLeft(labelWidth + selectorWidth + 80));
     }
 
 private:
@@ -310,6 +325,7 @@ private:
     juce::Label experimentalFeaturesHintLabel_;
     juce::Label experimentalReferenceAlignModeLabel_;
     juce::ComboBox experimentalReferenceAlignModeSelector_;
+    juce::ToggleButton lightPitchCorrectionToggle_;
 };
 
 class SharedEditingPage final : public juce::Component
