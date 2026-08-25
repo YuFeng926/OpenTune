@@ -5,7 +5,7 @@
  * 
  * 静息处（Silent Gap）定义：
  * - 电平低于阈值（默认 -35dBFS）
- * - 持续时长不小于 30ms
+ * - 持续时长不小于 100ms
  * 
  * 用途：
  * - 作为渲染 chunk 的天然边界
@@ -85,10 +85,10 @@ public:
     struct DetectionConfig {
         float strictThreshold_dB = -35.0f;        // 原规则：总电平低于该值直接判静息
         float relaxedTotalThreshold_dB = -30.0f;  // 放宽规则：总电平上限
-        float lowBandThreshold_dB = -30.0f;       // 放宽规则：低频带(<=lowBandUpperHz)上限
+        float lowBandThreshold_dB = -40.0f;       // 放宽规则：低频带(<=lowBandUpperHz)上限
         double highPassCutoffHz = 60.0;           // 检测前高通截止频率
         double lowBandUpperHz = 3000.0;           // 低频带上限频率
-        double minGapDurationMs = 30.0;           // 最小静息时长
+        double minGapDurationMs = 100.0;          // 最小静息时长
     };
 
     // ============================================================================
@@ -111,7 +111,7 @@ public:
     static constexpr double kLowBandUpperHz = 3000.0;
 
     /** 最小静息时长（ms，配置初始值） */
-    static constexpr double kMinGapDurationMs = 30.0;
+    static constexpr double kMinGapDurationMs = 100.0;
 
     /** 获取当前检测配置（线程安全） */
     static DetectionConfig getConfig();
@@ -159,10 +159,10 @@ public:
     
     /**
      * 获取最小静息持续时长（秒）
-     * @param minDurationMs 最小持续时长（毫秒，默认 30ms）
+     * @param minDurationMs 最小持续时长（毫秒，默认 100ms）
      * @return 秒数
      */
-    static double getMinGapDurationSec(double minDurationMs = 30.0) {
+    static double getMinGapDurationSec(double minDurationMs = 100.0) {
         return minDurationMs / 1000.0;
     }
     
