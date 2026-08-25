@@ -231,27 +231,16 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.grabKeyboardFocus = [this]() { grabKeyboardFocus(); };
     toolCtx.getAudioEditingScheme = [this]() { return audioEditingScheme_; };
     toolCtx.notifyPlayheadChange = [this](double time) {
-        // Clamp seek time to active item's timeline range so the host never
-        // receives a playback-position request outside any PlaybackRegion.
-        double seekTime = time;
-        if (const auto* placement = findEditedPlacement())
-        {
-            const auto& proj = placement->projection;
-            seekTime = juce::jlimit(proj.timelineStartSeconds,
-                                     proj.timelineEndSeconds(),
-                                     time);
-        }
-
         const auto seekRevision = playHeadState_.hostPositionRevision.load(std::memory_order_acquire);
         bool requestDispatched = false;
         listeners_.call([&](Listener& l) {
-            if (l.playheadPositionChangeRequested(seekTime))
+            if (l.playheadPositionChangeRequested(time))
                 requestDispatched = true;
         });
         userScrollHold_ = false;
         if (requestDispatched) {
             seekSentRevision_ = seekRevision;
-            pendingSeekTime_ = seekTime;
+            pendingSeekTime_ = time;
         } else {
             pendingSeekTime_ = -1.0;
             seekSentRevision_ = 0;

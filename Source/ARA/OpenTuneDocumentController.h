@@ -241,7 +241,7 @@ private:
     void readRestoredAudio(const AudioSource* enabledSource);
     bool birthContentForModification(AudioModification& modification);
     void removeCRSArtifactsForModification(const AudioModification& modification);
-    void scheduleAsyncF0Extraction(ContentKey contentKey,
+    bool scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate,
                                    juce::ARAAudioModification* hostModification);

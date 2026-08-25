@@ -4,12 +4,12 @@
  * 静息处检测工具类
  * 
  * 静息处（Silent Gap）定义：
- * - 电平低于阈值（默认 -40dBFS）
- * - 持续时长不小于 50ms
+ * - 电平低于阈值（默认 -35dBFS）
+ * - 持续时长不小于 30ms
  * 
  * 用途：
  * - 作为渲染 chunk 的天然边界
- * - 避免在有声区域做 crossfade 导致的相位问题
+ * - 边界处施加交叉淡化（默认10ms）避免硬切分
  * - 保护辅音和尾音不被切断
  * 
  * 设计原则：
@@ -83,26 +83,26 @@ struct SilentGap {
 class SilentGapDetector {
 public:
     struct DetectionConfig {
-        float strictThreshold_dB = -40.0f;        // 原规则：总电平低于该值直接判静息
+        float strictThreshold_dB = -35.0f;        // 原规则：总电平低于该值直接判静息
         float relaxedTotalThreshold_dB = -30.0f;  // 放宽规则：总电平上限
-        float lowBandThreshold_dB = -40.0f;       // 放宽规则：低频带(<=lowBandUpperHz)上限
+        float lowBandThreshold_dB = -30.0f;       // 放宽规则：低频带(<=lowBandUpperHz)上限
         double highPassCutoffHz = 60.0;           // 检测前高通截止频率
         double lowBandUpperHz = 3000.0;           // 低频带上限频率
-        double minGapDurationMs = 100.0;          // 最小静息时长
+        double minGapDurationMs = 30.0;           // 最小静息时长
     };
 
     // ============================================================================
     // 默认参数定义（用于初始化配置）
     // ============================================================================
     
-    /** 默认静息阈值 -40dBFS（配置初始值） */
-    static constexpr float kDefaultThreshold_dB = -40.0f;
+    /** 默认静息阈值 -35dBFS（配置初始值） */
+    static constexpr float kDefaultThreshold_dB = -35.0f;
     
     /** 放宽判定：总电平阈值 -30dBFS（配置初始值） */
     static constexpr float kRelaxedTotalThreshold_dB = -30.0f;
 
-    /** 放宽判定：低频带(<=3kHz)平均电平阈值 -40dBFS（配置初始值） */
-    static constexpr float kLowBandThreshold_dB = -40.0f;
+    /** 放宽判定：低频带(<=3kHz)平均电平阈值 -30dBFS（配置初始值） */
+    static constexpr float kLowBandThreshold_dB = -30.0f;
 
     /** 预处理高通截止频率（Hz，配置初始值） */
     static constexpr double kHighPassCutoffHz = 60.0;
@@ -111,7 +111,7 @@ public:
     static constexpr double kLowBandUpperHz = 3000.0;
 
     /** 最小静息时长（ms，配置初始值） */
-    static constexpr double kMinGapDurationMs = 100.0;
+    static constexpr double kMinGapDurationMs = 30.0;
 
     /** 获取当前检测配置（线程安全） */
     static DetectionConfig getConfig();
@@ -132,7 +132,7 @@ public:
      * 注意：音频必须是 44.1kHz 采样率（符合内部存储标准）
      * 
      * @param audio 音频缓冲区（44.1kHz）
-     * @param threshold_dB 电平阈值（默认 -40dBFS）
+     * @param threshold_dB 电平阈值（默认 -35dBFS）
      * @return 按起始 sample 排序的静息处列表（sample span）
      */
     static std::vector<SilentGap> detectAllGaps(
@@ -159,10 +159,10 @@ public:
     
     /**
      * 获取最小静息持续时长（秒）
-     * @param minDurationMs 最小持续时长（毫秒，默认 100ms）
+     * @param minDurationMs 最小持续时长（毫秒，默认 30ms）
      * @return 秒数
      */
-    static double getMinGapDurationSec(double minDurationMs = 100.0) {
+    static double getMinGapDurationSec(double minDurationMs = 30.0) {
         return minDurationMs / 1000.0;
     }
     

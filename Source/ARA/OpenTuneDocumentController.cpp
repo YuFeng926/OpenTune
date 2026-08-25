@@ -1857,7 +1857,7 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     if (!alreadyHasF0)
     {
         modification.submitSilentGaps(SilentGapDetector::detectAllGapsAdaptive(storedBuffer));
-        modification.applyOriginalF0State(OriginalF0State::NotRequested);
+        modification.applyOriginalF0State(OriginalF0State::Extracting);
     }
     auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(storedBuffer));
 
@@ -1882,7 +1882,7 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         requestFullModificationRender(modification.contentKey());
 
     // 9. Schedule async F0 extraction via CRS (skip if F0 already available)
-    if (!alreadyHasF0 && contentRenderService_ != nullptr)
+    if (!alreadyHasF0)
     {
         auto* hostModification = modification.audioModification;
         scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate, hostModification);
@@ -1912,32 +1912,58 @@ void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioMo
 // not user intent. 新内容仅由用户 Read（requestReadAudioForPlaybackRegions）读取；
 // archive 恢复且已有有效 F0 的内容在 endEditing/access 后自动重建 PCM。
 
-void OpenTuneDocumentController::scheduleAsyncF0Extraction(
+bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     ContentKey key,
     std::vector<float> channel0Data,
     double sourceSampleRate,
     juce::ARAAudioModification* hostModification)
 {
-    if (!contentF0ExtractionService_)
-        return;
+    // Pre-check failures: mark matching content Failed so Extracting is not permanent
+    auto markFailedIfCurrentBirth = [&](uint64_t birth) {
+        if (auto* m = findAudioModificationByContentKey(key))
+        {
+            if (m->birthRevision == birth
+                && (hostModification == nullptr || m->audioModification == hostModification))
+            {
+                m->applyOriginalF0State(OriginalF0State::Failed);
+                if (m->audioModification != nullptr)
+                    m->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+            }
+        }
+    };
 
-    // 当前 wrapper 或 Host pointer 缺失时不提交任务
-    if (hostModification == nullptr)
-        return;
-
-    auto f0Svc = ProcessF0Runtime::getInstance().getF0Service();
-    if (!f0Svc)
-        return;
-
-    auto crs = contentRenderService_;
-
-    // Capture current birthRevision before submission (#B.3)
+    // Capture current birthRevision before any early return
     uint64_t birthRevision = 0;
     if (auto* mod = findAudioModificationByContentKey(key))
         birthRevision = mod->birthRevision;
 
-    // Submit real ARA AudioModification ContentKey to F0 extraction service
-    contentF0ExtractionService_->submit(
+    if (!contentF0ExtractionService_)
+    {
+        markFailedIfCurrentBirth(birthRevision);
+        return false;
+    }
+
+    if (hostModification == nullptr)
+    {
+        markFailedIfCurrentBirth(birthRevision);
+        return false;
+    }
+
+    auto f0Svc = ProcessF0Runtime::getInstance().getF0Service();
+    if (!f0Svc)
+    {
+        markFailedIfCurrentBirth(birthRevision);
+        return false;
+    }
+
+    auto crs = contentRenderService_;
+    if (!crs)
+    {
+        markFailedIfCurrentBirth(birthRevision);
+        return false;
+    }
+
+    auto submitResult = contentF0ExtractionService_->submit(
         F0RequestKey{key},
         [f0Svc, data = std::move(channel0Data), sourceSampleRate, birthRevision, leaseToken = asyncLeaseToken_](const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
         {
@@ -1977,8 +2003,21 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
             if (leaseToken && !leaseToken->load(std::memory_order_acquire))
                 return;
 
+            // Non-destruction CRS unavailability: set Failed to avoid latch stall
             if (crs == nullptr)
+            {
+                if (auto* mod = findAudioModificationByContentKey(key))
+                {
+                    if (mod->birthRevision == birthRevision
+                        && (hostModification == nullptr || mod->audioModification == hostModification)
+                        && mod->audioModification != nullptr)
+                    {
+                        mod->applyOriginalF0State(OriginalF0State::Failed);
+                        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+                    }
+                }
                 return;
+            }
 
             if (!result.success || result.f0.empty())
             {
@@ -2035,6 +2074,24 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 requestFullModificationRender(key);
             }
         });
+
+    // Non-Accepted: set Failed if current modification still matches this submission
+    if (submitResult != F0ExtractionService::SubmitResult::Accepted)
+    {
+        if (auto* mod = findAudioModificationByContentKey(key))
+        {
+            if (mod->birthRevision == birthRevision
+                && (hostModification == nullptr || mod->audioModification == hostModification))
+            {
+                mod->applyOriginalF0State(OriginalF0State::Failed);
+                if (mod->audioModification != nullptr)
+                    mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+            }
+        }
+        return false;
+    }
+
+    return true;
 }
 
 // Per architecture: DC owns CRS and installs render execution lease.

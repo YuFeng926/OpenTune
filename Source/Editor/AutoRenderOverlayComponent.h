@@ -114,8 +114,8 @@ inline AutoRenderOverlayDecision evaluateAutoRenderOverlay(const RenderStatusSna
 }
 
 /**
- * Blocking overlay used while content analysis or render work owns the UI.
- * It covers PianoRoll, paints a spinner, and consumes pointer/key input.
+ * Visual overlay used while content analysis or render work is in progress.
+ * It covers PianoRoll and paints a spinner, but does not consume any input.
  */
 class AutoRenderOverlayComponent : public juce::Component,
                                     private juce::Timer
@@ -123,8 +123,8 @@ class AutoRenderOverlayComponent : public juce::Component,
 public:
     AutoRenderOverlayComponent()
     {
-        setInterceptsMouseClicks(true, true);
-        setWantsKeyboardFocus(true);
+        setInterceptsMouseClicks(false, false);
+        setWantsKeyboardFocus(false);
         setAlwaysOnTop(true);
     }
     ~AutoRenderOverlayComponent() override = default;
@@ -243,21 +243,6 @@ public:
             startTimer(16);
         else
             stopTimer();
-    }
-
-    // 拦截所有输入事件
-    void mouseDown(const juce::MouseEvent& e) override { juce::ignoreUnused(e); }
-    void mouseUp(const juce::MouseEvent& e) override { juce::ignoreUnused(e); }
-    void mouseDrag(const juce::MouseEvent& e) override { juce::ignoreUnused(e); }
-    void mouseMove(const juce::MouseEvent& e) override { juce::ignoreUnused(e); }
-    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override 
-    { 
-        juce::ignoreUnused(e, wheel); 
-    }
-    bool keyPressed(const juce::KeyPress& key) override 
-    { 
-        juce::ignoreUnused(key); 
-        return true;
     }
 
 private:
