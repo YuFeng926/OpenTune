@@ -10,9 +10,10 @@ namespace OpenTune {
 /// Lightweight per-sample pitch shifter based on adaptive resampling rate
 /// with cycle insertion/deletion (the reference flow method, patent expired 2018).
 ///
-/// O(1) per sample, no FFT, fixed memory. Zero output latency: the internal
-/// read pointer's inherent group delay is cancelled by consuming
-/// kLookaheadSamples of future input supplied by the caller (lookahead tail).
+/// Uses autocorrelation for precise cycle boundary detection at jump points,
+/// eliminating crossfade artifacts. O(N) per jump, O(1) per sample otherwise.
+/// Zero output latency: the internal read pointer's inherent group delay is
+/// cancelled by consuming kLookaheadSamples of future input supplied by the caller.
 class AutoTunePitchShifter {
 public:
     explicit AutoTunePitchShifter(double sampleRate);
@@ -60,11 +61,11 @@ private:
     double inputAddr_ = 0.0;     // write pointer (total samples fed)
     double resampleRate_ = 1.0;  // current playback rate (smoothed)
 
-    // Crossfade state
-    static constexpr int kCrossfadeSamples = 32;  // ~0.7ms @ 44.1kHz, smooth cycle boundaries
-    bool inCrossfade_ = false;
-    int crossfadeRemaining_ = 0;
-    double crossfadeFromAddr_ = 0.0;
+    // Autocorrelation cycle boundary detection
+    static constexpr double kAutocorrSearchRatio = 0.10;  // ±10% of estimated period
+    static constexpr int kAutocorrSearchMinMargin = 8;    // minimum margin for high freq
+    static constexpr int kAutocorrMinOverlap = 16;        // minimum overlap for correlation
+    int findCycleBoundary(double approxPeriod) const;
 
     // Configuration
     static constexpr int kMaxPeriodSamples = 1024;  // ~43 Hz @ 44.1kHz

@@ -20,8 +20,6 @@ void AutoTunePitchShifter::reset() {
     // 输出与输入严格样本对齐。
     outputAddr_ = -1.0;
     resampleRate_ = 1.0;
-    inCrossfade_ = false;
-    crossfadeRemaining_ = 0;
 }
 
 float AutoTunePitchShifter::readInterpolated(double addr) const {
@@ -42,6 +40,58 @@ void AutoTunePitchShifter::feedSample(float sample) {
     inputAddr_ += 1.0;
 }
 
+int AutoTunePitchShifter::findCycleBoundary(double approxPeriod) const {
+    const int periodInt = static_cast<int>(std::round(approxPeriod));
+
+    // 搜索范围：周期的 ±10%，至少 ±8 样本
+    const int margin = std::max(kAutocorrSearchMinMargin,
+                                static_cast<int>(std::round(approxPeriod * kAutocorrSearchRatio)));
+
+    // 用 outputAddr_ 四舍五入作为搜索锚点，避免截断误差
+    const int anchor = static_cast<int>(std::round(
+        std::fmod(outputAddr_ + static_cast<double>(bufferSize_) * 100.0,
+                  static_cast<double>(bufferSize_))));
+    if (anchor < 0 || anchor >= bufferSize_) return periodInt;
+
+    const int availableBack = anchor;
+
+    int bestLag = periodInt;
+    float bestCorr = -1.0f;
+
+    const int searchMin = std::max(kMinPeriodSamples, periodInt - margin);
+    const int searchMax = std::min(kMaxPeriodSamples, periodInt + margin);
+
+    for (int lag = searchMin; lag <= searchMax; ++lag) {
+        const int overlap = std::min(lag, availableBack);
+        if (overlap < kAutocorrMinOverlap) continue;
+
+        float corr = 0.0f;
+        float energy0 = 0.0f;
+        float energy1 = 0.0f;
+
+        for (int k = 0; k < overlap; ++k) {
+            const int idx0 = (anchor - k + bufferSize_) % bufferSize_;
+            const int idx1 = (anchor - k - lag + bufferSize_ * 2) % bufferSize_;
+            const float s0 = buffer_[static_cast<size_t>(idx0)];
+            const float s1 = buffer_[static_cast<size_t>(idx1)];
+            corr += s0 * s1;
+            energy0 += s0 * s0;
+            energy1 += s1 * s1;
+        }
+
+        const float denom = std::sqrt(energy0 * energy1);
+        if (denom < 1e-10f) continue;
+        const float normalizedCorr = corr / denom;
+
+        if (normalizedCorr > bestCorr) {
+            bestCorr = normalizedCorr;
+            bestLag = lag;
+        }
+    }
+
+    return bestLag;
+}
+
 float AutoTunePitchShifter::processSample(double currentPeriod, double targetResampleRate) {
     // Smooth resample rate toward target (retune speed, Claim 9-10)
     resampleRate_ += (targetResampleRate - resampleRate_) * (1.0 - kDecayPerSample);
@@ -54,34 +104,16 @@ float AutoTunePitchShifter::processSample(double currentPeriod, double targetRes
 
     if (drift > currentPeriod) {
         // Overrun: read pointer ahead of write -> skip back one cycle
-        crossfadeFromAddr_ = outputAddr_;
-        outputAddr_ -= currentPeriod;
-        inCrossfade_ = true;
-        crossfadeRemaining_ = kCrossfadeSamples;
+        // 用自相关精确定位周期边界
+        const int exactPeriod = findCycleBoundary(currentPeriod);
+        outputAddr_ -= static_cast<double>(exactPeriod);
     } else if (drift < -currentPeriod) {
         // Underrun: read pointer behind write -> skip forward one cycle
-        crossfadeFromAddr_ = outputAddr_;
-        outputAddr_ += currentPeriod;
-        inCrossfade_ = true;
-        crossfadeRemaining_ = kCrossfadeSamples;
+        const int exactPeriod = findCycleBoundary(currentPeriod);
+        outputAddr_ += static_cast<double>(exactPeriod);
     }
 
-    // Read output with crossfade at cycle boundaries
-    float sample;
-    if (inCrossfade_ && crossfadeRemaining_ > 0) {
-        const float progress = 1.0f - static_cast<float>(crossfadeRemaining_)
-                                      / static_cast<float>(kCrossfadeSamples);
-        const float fromSample = readInterpolated(crossfadeFromAddr_);
-        const float toSample = readInterpolated(outputAddr_);
-        sample = fromSample + (toSample - fromSample) * progress;
-        crossfadeFromAddr_ += resampleRate_;
-        --crossfadeRemaining_;
-        if (crossfadeRemaining_ <= 0) inCrossfade_ = false;
-    } else {
-        sample = readInterpolated(outputAddr_);
-    }
-
-    return sample;
+    return readInterpolated(outputAddr_);
 }
 
 std::vector<float> AutoTunePitchShifter::shiftChunk(
