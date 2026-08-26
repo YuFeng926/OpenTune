@@ -17,7 +17,7 @@ install_manifest.txt
 !cmake/*.cmake
 models/
 pc_nsf_hifigan_44.1k_ONNX/
-docs/plans/
+docs/
 docs/UserGuide.html
 .*/
 Logs/
