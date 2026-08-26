@@ -742,6 +742,9 @@ public:
      */
     void setVocoderModelWeight(VocoderModelWeight weight);
 
+    /** 清除缓存并重新渲染所有 clip（UI 线程调用）。 */
+    void invalidateAllContentCaches();
+
     bool isInferenceReady() const { return ProcessF0Runtime::getInstance().isReady(); }
 
     bool isVocoderReady() const { return ProcessRenderRuntime::getInstance().isVocoderReady(); }

@@ -859,10 +859,14 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
         processorRef_.setVocoderModelWeight(weight);
     };
+    auto onLightPitchCorrectionChanged = [this](bool) {
+        processorRef_.invalidateAllContentCaches();
+    };
     auto audioPage = SharedPreferencePages::createRenderingPriorityComponent(
         appPreferences_, [this] { syncSharedAppPreferences(); },
         [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
         std::move(onVocoderModelWeightChanged),
+        std::move(onLightPitchCorrectionChanged),
         true);
     const int audioPageHeight = SharedPreferencePages::getRenderingPriorityPageHeight(*audioPage);
     pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage), audioPageHeight });

@@ -169,13 +169,15 @@ std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::create
     AppPreferences& appPreferences,
     std::function<void()> onPreferencesChanged,
     std::function<void(bool forceCpu)> onRenderingPriorityChanged,
-    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged)
+    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+    std::function<void(bool)> onLightPitchCorrectionChanged)
 {
     std::vector<TabbedPreferencesDialog::PageSpec> pages;
     auto renderingPriorityComponent = SharedPreferencePages::createRenderingPriorityComponent(
         appPreferences, onPreferencesChanged,
         std::move(onRenderingPriorityChanged),
         std::move(onVocoderModelWeightChanged),
+        std::move(onLightPitchCorrectionChanged),
         false);
     if (audioDeviceManager != nullptr) {
         // renderingPriorityComponent 高度 + AudioDeviceSelectorComponent 高度

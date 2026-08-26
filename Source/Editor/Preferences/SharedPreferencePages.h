@@ -17,6 +17,7 @@ struct SharedPreferencePages {
         std::function<void()> onPreferencesChanged,
         std::function<void(bool forceCpu)> onRenderingPriorityChanged,
         std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+        std::function<void(bool)> onLightPitchCorrectionChanged,
         bool isVst3Plugin);
 
     // 读取 createRenderingPriorityComponent 返回组件的 preferredHeight 属性

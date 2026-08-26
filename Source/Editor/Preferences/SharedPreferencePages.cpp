@@ -159,11 +159,13 @@ public:
                     std::function<void()> onPreferencesChanged,
                     std::function<void(bool)> onRenderingPriorityChanged,
                     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+                    std::function<void(bool)> onLightPitchCorrectionChanged,
                     bool isVst3Plugin)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
         , onRenderingPriorityChanged_(std::move(onRenderingPriorityChanged))
         , onVocoderModelWeightChanged_(std::move(onVocoderModelWeightChanged))
+        , onLightPitchCorrectionChanged_(std::move(onLightPitchCorrectionChanged))
         , isVst3Plugin_(isVst3Plugin)
     {
         auto state = appPreferences_.getState();
@@ -248,7 +250,10 @@ public:
         lightPitchCorrectionToggle_.setToggleState(state.shared.lightPitchCorrectionEnabled,
                                                    juce::dontSendNotification);
         lightPitchCorrectionToggle_.onClick = [this] {
-            appPreferences_.setLightPitchCorrectionEnabled(lightPitchCorrectionToggle_.getToggleState());
+            const bool enabled = lightPitchCorrectionToggle_.getToggleState();
+            appPreferences_.setLightPitchCorrectionEnabled(enabled);
+            if (onLightPitchCorrectionChanged_)
+                onLightPitchCorrectionChanged_(enabled);
             notifyChanged();
         };
         addAndMakeVisible(lightPitchCorrectionToggle_);
@@ -316,6 +321,7 @@ private:
     std::function<void()> onPreferencesChanged_;
     std::function<void(bool)> onRenderingPriorityChanged_;
     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged_;
+    std::function<void(bool)> onLightPitchCorrectionChanged_;
     bool isVst3Plugin_ = false;
     juce::Label renderingPriorityLabel_;
     juce::ComboBox renderingPrioritySelector_;
@@ -998,12 +1004,14 @@ std::unique_ptr<juce::Component> SharedPreferencePages::createRenderingPriorityC
     std::function<void()> onPreferencesChanged,
     std::function<void(bool forceCpu)> onRenderingPriorityChanged,
     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+    std::function<void(bool)> onLightPitchCorrectionChanged,
     bool isVst3Plugin)
 {
     return std::make_unique<SharedAudioPage>(appPreferences,
                                               std::move(onPreferencesChanged),
                                               std::move(onRenderingPriorityChanged),
                                               std::move(onVocoderModelWeightChanged),
+                                              std::move(onLightPitchCorrectionChanged),
                                               isVst3Plugin);
 }
 

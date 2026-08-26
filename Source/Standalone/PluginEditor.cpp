@@ -2408,12 +2408,16 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
         processorRef_.setVocoderModelWeight(weight);
     };
+    auto onLightPitchCorrectionChanged = [this](bool) {
+        processorRef_.invalidateAllContentCaches();
+    };
     auto pages = StandalonePreferencePages::createAudioPages(
         holder != nullptr ? &holder->deviceManager : nullptr,
         appPreferences_,
         [this] { syncSharedAppPreferences(); },
         [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
-        std::move(onVocoderModelWeightChanged));
+        std::move(onVocoderModelWeightChanged),
+        std::move(onLightPitchCorrectionChanged));
 
     auto sharedPages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); }, false);
     pages.insert(pages.end(),

@@ -1189,6 +1189,19 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
     });
 }
 
+void OpenTuneAudioProcessor::invalidateAllContentCaches()
+{
+    if (contentRenderService_ && standaloneContentRepository_) {
+        const auto keys = standaloneContentRepository_->getAllClips();
+        for (const auto key : keys) {
+            if (auto cache = contentRenderService_->getRenderCache(key))
+                cache->clear();
+            requestFullContentRender(key);
+        }
+        contentRenderService_->getTimeStretchCache().clear();
+    }
+}
+
 // ============================================================================
 // JUCE AudioProcessor 标准接口
 // ============================================================================
