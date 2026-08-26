@@ -1283,3 +1283,18 @@ message(STATUS "JUCE Path:        ${OPENTUNE_JUCE_DIR}")
 message(STATUS "Plugin Formats:   Standalone + VST3")
 message(STATUS "========================================")
 message(STATUS "")
+
+# ==============================================================================
+# Tests (optional, pure standard library — no JUCE / ONNX Runtime linkage)
+# ==============================================================================
+option(OPENTUNE_BUILD_TESTS "Build AutoTune tests" OFF)
+if(OPENTUNE_BUILD_TESTS)
+    enable_testing()
+    add_executable(OpenTuneAutoTuneTests
+        Tests/AutoTunePitchShifterTests.cpp
+        Source/DSP/AutoTunePitchShifter.cpp
+    )
+    target_include_directories(OpenTuneAutoTuneTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    add_test(NAME AutoTunePitchShifterTests COMMAND OpenTuneAutoTuneTests)
+endif()

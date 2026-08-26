@@ -1,35 +1,34 @@
 #include "AutoTunePitchShifter.h"
 
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstdint>
+
 namespace OpenTune {
 
 AutoTunePitchShifter::AutoTunePitchShifter(double sampleRate)
     : sampleRate_(sampleRate)
 {
-    bufferSize_ = kMaxPeriodSamples * 4;
-    buffer_.resize(static_cast<size_t>(bufferSize_), 0.0f);
-    reset();
 }
 
-AutoTunePitchShifter::~AutoTunePitchShifter() = default;
-
-void AutoTunePitchShifter::reset() {
-    std::fill(buffer_.begin(), buffer_.end(), 0.0f);
-    writePos_ = 0;
-    inputAddr_ = 0.0;
-    // 起始 -1：配合 kLookaheadSamples 预喂，使第 i 次迭代的读地址恰好为 i，
-    // 输出与输入严格样本对齐。
-    outputAddr_ = -1.0;
-    resampleRate_ = 1.0;
+bool AutoTunePitchShifter::isReadable(double addr) const {
+    const auto first = static_cast<int64_t>(std::floor(addr));
+    const auto oldest = static_cast<int64_t>(std::floor(
+        std::max(0.0, inputAddr_ - static_cast<double>(bufferSize_))));
+    return first >= oldest && static_cast<double>(first + 1) < inputAddr_;
 }
 
 float AutoTunePitchShifter::readInterpolated(double addr) const {
+    assert(isReadable(addr));
+
     double wrapped = std::fmod(addr, static_cast<double>(bufferSize_));
-    if (wrapped < 0.0) wrapped += static_cast<double>(bufferSize_);
+    if (wrapped < 0.0)
+        wrapped += static_cast<double>(bufferSize_);
 
     const int idx0 = static_cast<int>(wrapped);
     const int idx1 = (idx0 + 1) % bufferSize_;
     const float frac = static_cast<float>(wrapped - static_cast<double>(idx0));
-
     return buffer_[static_cast<size_t>(idx0)] * (1.0f - frac)
          + buffer_[static_cast<size_t>(idx1)] * frac;
 }
@@ -40,80 +39,31 @@ void AutoTunePitchShifter::feedSample(float sample) {
     inputAddr_ += 1.0;
 }
 
-int AutoTunePitchShifter::findCycleBoundary(double approxPeriod) const {
-    const int periodInt = static_cast<int>(std::round(approxPeriod));
+float AutoTunePitchShifter::processSample(double cyclePeriod,
+                                          double targetResampleRate) {
+    if (cyclePeriod > 0.0)
+        resampleRate_ += (targetResampleRate - resampleRate_) * (1.0 - kDecayPerSample);
+    else
+        resampleRate_ = 1.0;
 
-    // 搜索范围：周期的 ±10%，至少 ±8 样本
-    const int margin = std::max(kAutocorrSearchMinMargin,
-                                static_cast<int>(std::round(approxPeriod * kAutocorrSearchRatio)));
-
-    // 用 outputAddr_ 四舍五入作为搜索锚点，避免截断误差
-    const int anchor = static_cast<int>(std::round(
-        std::fmod(outputAddr_ + static_cast<double>(bufferSize_) * 100.0,
-                  static_cast<double>(bufferSize_))));
-    if (anchor < 0 || anchor >= bufferSize_) return periodInt;
-
-    const int availableBack = anchor;
-
-    int bestLag = periodInt;
-    float bestCorr = -1.0f;
-
-    const int searchMin = std::max(kMinPeriodSamples, periodInt - margin);
-    const int searchMax = std::min(kMaxPeriodSamples, periodInt + margin);
-
-    for (int lag = searchMin; lag <= searchMax; ++lag) {
-        const int overlap = std::min(lag, availableBack);
-        if (overlap < kAutocorrMinOverlap) continue;
-
-        float corr = 0.0f;
-        float energy0 = 0.0f;
-        float energy1 = 0.0f;
-
-        for (int k = 0; k < overlap; ++k) {
-            const int idx0 = (anchor - k + bufferSize_) % bufferSize_;
-            const int idx1 = (anchor - k - lag + bufferSize_ * 2) % bufferSize_;
-            const float s0 = buffer_[static_cast<size_t>(idx0)];
-            const float s1 = buffer_[static_cast<size_t>(idx1)];
-            corr += s0 * s1;
-            energy0 += s0 * s0;
-            energy1 += s1 * s1;
-        }
-
-        const float denom = std::sqrt(energy0 * energy1);
-        if (denom < 1e-10f) continue;
-        const float normalizedCorr = corr / denom;
-
-        if (normalizedCorr > bestCorr) {
-            bestCorr = normalizedCorr;
-            bestLag = lag;
-        }
-    }
-
-    return bestLag;
-}
-
-float AutoTunePitchShifter::processSample(double currentPeriod, double targetResampleRate) {
-    // Smooth resample rate toward target (retune speed, Claim 9-10)
-    resampleRate_ += (targetResampleRate - resampleRate_) * (1.0 - kDecayPerSample);
-
-    // Advance output pointer (Claim 5)
     outputAddr_ += resampleRate_;
 
-    // Cycle correction: overrun/underrun detection (Claim 5)
-    const double drift = outputAddr_ - inputAddr_;
-
-    if (drift > currentPeriod) {
-        // Overrun: read pointer ahead of write -> skip back one cycle
-        // 用自相关精确定位周期边界
-        const int exactPeriod = findCycleBoundary(currentPeriod);
-        outputAddr_ -= static_cast<double>(exactPeriod);
-    } else if (drift < -currentPeriod) {
-        // Underrun: read pointer behind write -> skip forward one cycle
-        const int exactPeriod = findCycleBoundary(currentPeriod);
-        outputAddr_ += static_cast<double>(exactPeriod);
+    if (cyclePeriod > 0.0) {
+        if (resampleRate_ > 1.0 && outputAddr_ > inputAddr_) {
+            outputAddr_ -= cyclePeriod;
+            assert(isReadable(outputAddr_ - kLookaheadSamples));
+        }
+        else if (resampleRate_ <= 1.0
+                 && outputAddr_ + cyclePeriod < inputAddr_) {
+            outputAddr_ += cyclePeriod;
+            assert(isReadable(outputAddr_ - kLookaheadSamples));
+        }
     }
 
-    return readInterpolated(outputAddr_);
+    const double readAddr = outputAddr_ - kLookaheadSamples;
+    assert(isReadable(readAddr));
+    const float sample = readInterpolated(readAddr);
+    return sample;
 }
 
 std::vector<float> AutoTunePitchShifter::shiftChunk(
@@ -121,56 +71,69 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
     const float* originalF0, const float* correctedF0,
     int numF0Frames, double f0FrameRate,
     double firstSampleFramePhase,
-    const float* lookahead, int numLookaheadSamples)
+    const float* lookahead, int numLookaheadSamples,
+    const float* lookbehind, int numLookbehindSamples)
 {
     std::vector<float> output(static_cast<size_t>(numSamples), 0.0f);
+    if (numSamples == 0)
+        return output;
 
-    // 拼接发布窗口与前视：读指针消费 inputExt[0 .. numSamples+kLookaheadSamples-1]。
-    // 前视不足处补零（仅影响 clip 最后一个 chunk 末尾 5 样本的渲染精度）。
-    std::vector<float> inputExt(static_cast<size_t>(numSamples) + kLookaheadSamples, 0.0f);
-    std::copy(input, input + numSamples, inputExt.begin());
-    if (lookahead != nullptr && numLookaheadSamples > 0)
-    {
-        std::copy(lookahead,
-                  lookahead + std::min(numLookaheadSamples, kLookaheadSamples),
-                  inputExt.begin() + numSamples);
+    assert(numLookaheadSamples >= 0);
+    assert(numLookaheadSamples <= kLookaheadSamples);
+    assert(numLookaheadSamples == 0 || lookahead != nullptr);
+    assert(numLookbehindSamples >= 0);
+    assert(numLookbehindSamples == 0 || lookbehind != nullptr);
+
+    double largestCyclePeriod = 0.0;
+    for (int i = 0; i < numF0Frames; ++i) {
+        if (originalF0[i] > 0.0f)
+            largestCyclePeriod = std::max(
+                largestCyclePeriod,
+                sampleRate_ / static_cast<double>(originalF0[i]));
     }
+
+    const int requiredBufferSize = static_cast<int>(std::ceil(largestCyclePeriod))
+        + kLookaheadSamples + 2;
+    bufferSize_ = requiredBufferSize;
+    buffer_.assign(static_cast<size_t>(bufferSize_), 0.0f);
+    writePos_ = 0;
+    inputAddr_ = 0.0;
+    outputAddr_ = static_cast<double>(kLookaheadSamples - 1);
+    resampleRate_ = 1.0;
+
+    for (int i = 0; i < numLookbehindSamples; ++i)
+        feedSample(lookbehind[i]);
+
+    std::vector<float> inputExt(
+        static_cast<size_t>(numSamples) + kLookaheadSamples, 0.0f);
+    std::copy(input, input + numSamples, inputExt.begin());
+    if (numLookaheadSamples > 0)
+        std::copy(lookahead,
+                  lookahead + numLookaheadSamples,
+                  inputExt.begin() + numSamples);
 
     const double samplesPerF0Frame = sampleRate_ / f0FrameRate;
 
-    // 预喂前视样本：先于输出消费未来数据，消除读指针固有群延迟
     for (int i = 0; i < kLookaheadSamples; ++i)
         feedSample(inputExt[static_cast<size_t>(i)]);
+
+    outputAddr_ = inputAddr_ - 1.0;
 
     for (int i = 0; i < numSamples; ++i) {
         feedSample(inputExt[static_cast<size_t>(i) + kLookaheadSamples]);
 
-        // Determine which F0 frame this sample belongs to
         const int f0Frame = std::clamp(
-            static_cast<int>(std::floor(firstSampleFramePhase + static_cast<double>(i) / samplesPerF0Frame)),
+            static_cast<int>(std::floor(
+                firstSampleFramePhase + static_cast<double>(i) / samplesPerF0Frame)),
             0, numF0Frames - 1);
 
-        const float origF0 = originalF0[f0Frame];
-        const float corrF0 = correctedF0[f0Frame];
+        const double original = static_cast<double>(originalF0[f0Frame]);
+        const double corrected = static_cast<double>(correctedF0[f0Frame]);
+        const bool voiced = original > 0.0 && corrected > 0.0;
+        const double cyclePeriod = voiced ? sampleRate_ / original : 0.0;
+        const double targetRate = voiced ? corrected / original : 1.0;
 
-        double currentPeriod;
-        double targetResampleRate;
-
-        if (origF0 > 0.0f && corrF0 > 0.0f) {
-            currentPeriod = sampleRate_ / static_cast<double>(origF0);
-            targetResampleRate = static_cast<double>(corrF0) / static_cast<double>(origF0);
-        } else {
-            // Unvoiced: passthrough
-            currentPeriod = static_cast<double>(kMaxPeriodSamples);
-            targetResampleRate = 1.0;
-        }
-
-        // Clamp period to valid range
-        currentPeriod = std::clamp(currentPeriod,
-            static_cast<double>(kMinPeriodSamples),
-            static_cast<double>(kMaxPeriodSamples));
-
-        output[static_cast<size_t>(i)] = processSample(currentPeriod, targetResampleRate);
+        output[static_cast<size_t>(i)] = processSample(cyclePeriod, targetRate);
     }
 
     return output;
