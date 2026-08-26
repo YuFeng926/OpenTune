@@ -52,6 +52,7 @@ void RenderCache::publishLocked() {
         pc.startSample = chunk.startSample;
         pc.endSampleExclusive = chunk.endSampleExclusive;
         pc.audio = chunk.audio;
+        pc.publishedRevision = chunk.publishedRevision;
         snapshot->chunks.push_back(pc);
     }
     auto oldSnapshot = std::atomic_load(&publishedSnapshot_);
@@ -80,33 +81,55 @@ void RenderCache::rebuildPrepared()
 
     double targetSr = preparedSampleRate_;
     auto canonicalSnap = std::atomic_load(&publishedSnapshot_);
+    auto oldPrep = std::atomic_load(&preparedSnapshot_);
+
+    // 增量复用仅当目标率与旧 prepared 快照一致时成立；换率必须全量重建。
+    const bool rateUnchanged =
+        oldPrep != nullptr && std::abs(oldPrep->sampleRate - targetSr) < 1.0;
+    std::map<int64_t, const PublishedPreparedChunk*> previous;
+    if (rateUnchanged) {
+        for (const auto& pc : oldPrep->chunks)
+            previous.emplace(pc.startSample, &pc);
+    }
 
     // Build prepared snapshot: empty canonical → publish empty prepared with target rate
     auto prepSnap = std::make_shared<PublishedPreparedSnapshot>();
     prepSnap->sampleRate = targetSr;
 
     if (targetSr > 0.0 && canonicalSnap && !canonicalSnap->chunks.empty()) {
-        if (std::abs(targetSr - kSampleRate) < 1.0) {
-            // Alias canonical chunks
-            prepSnap->chunks.reserve(canonicalSnap->chunks.size());
-            for (const auto& chunk : canonicalSnap->chunks) {
-                if (!chunk.audio || chunk.audio->empty()) continue;
-                PublishedPreparedChunk pc;
-                pc.startSample = chunk.startSample;
-                pc.endSampleExclusive = chunk.endSampleExclusive;
-                pc.audio = chunk.audio;
-                prepSnap->chunks.push_back(std::move(pc));
-            }
-        } else {
-            // r8brain resample
-            prepSnap->chunks.reserve(canonicalSnap->chunks.size());
-            for (const auto& chunk : canonicalSnap->chunks) {
-                if (!chunk.audio || chunk.audio->empty()) continue;
+        prepSnap->chunks.reserve(canonicalSnap->chunks.size());
+        for (const auto& chunk : canonicalSnap->chunks) {
+            if (!chunk.audio || chunk.audio->empty()) continue;
 
-                const int64_t prepStart = TimeCoordinate::sampleRateProject(
-                    chunk.startSample, kSampleRate, targetSr);
-                const int64_t prepEnd = TimeCoordinate::sampleRateProject(
-                    chunk.endSampleExclusive, kSampleRate, targetSr);
+            const int64_t prepStart = TimeCoordinate::sampleRateProject(
+                chunk.startSample, kSampleRate, targetSr);
+            const int64_t prepEnd = TimeCoordinate::sampleRateProject(
+                chunk.endSampleExclusive, kSampleRate, targetSr);
+            const bool aliasCanonical = std::abs(targetSr - kSampleRate) < 1.0;
+
+            PublishedPreparedChunk pc;
+            pc.startSample = prepStart;
+            pc.endSampleExclusive = prepEnd;
+
+            // 增量复用：canonical 内容未变（同 span、同 revision）时直接共享旧
+            // prepared PCM，跳过 r8brain 重采样。条件从严：任何不匹配都重采样，
+            // 宁可重做不可复用过期音频。
+            auto prevIt = previous.find(prepStart);
+            if (!aliasCanonical
+                && prevIt != previous.end()
+                && prevIt->second->endSampleExclusive == prepEnd
+                && prevIt->second->sourceRevision == chunk.publishedRevision)
+            {
+                pc.audio = prevIt->second->audio;
+                pc.sourceRevision = prevIt->second->sourceRevision;
+                prepSnap->chunks.push_back(std::move(pc));
+                continue;
+            }
+
+            if (aliasCanonical) {
+                pc.audio = chunk.audio;
+                pc.sourceRevision = chunk.publishedRevision;
+            } else {
                 const int outputLength = static_cast<int>(prepEnd - prepStart);
                 if (outputLength <= 0) continue;
 
@@ -117,12 +140,11 @@ void RenderCache::rebuildPrepared()
                     static_cast<int>(targetSr),
                     outputLength);
 
-                PublishedPreparedChunk pc;
-                pc.startSample = prepStart;
-                pc.endSampleExclusive = prepEnd;
                 pc.audio = std::make_shared<const std::vector<float>>(std::move(resampled));
-                prepSnap->chunks.push_back(std::move(pc));
+                pc.sourceRevision = chunk.publishedRevision;
             }
+
+            prepSnap->chunks.push_back(std::move(pc));
         }
     }
 

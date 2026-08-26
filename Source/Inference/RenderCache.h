@@ -14,8 +14,6 @@
 #include "Utils/TimeCoordinate.h"
 #include "../DSP/ResamplingManager.h"
 
-struct RenderCacheTestAccessor;
-
 namespace OpenTune {
 
 class RenderCache {
@@ -146,6 +144,7 @@ private:
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         std::shared_ptr<const std::vector<float>> audio;
+        uint64_t publishedRevision{0};  // 生成该 chunk 音频的渲染版本
     };
 
     struct PublishedRenderSnapshot {
@@ -159,6 +158,7 @@ private:
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         std::shared_ptr<const std::vector<float>> audio;
+        uint64_t sourceRevision{0};  // canonical publishedRevision 该 prepared 结果所基于的内容版本
     };
 
     struct PublishedPreparedSnapshot {
@@ -166,7 +166,6 @@ private:
         std::vector<PublishedPreparedChunk> chunks;  // sorted by startSample ascending
     };
 
-    friend struct RenderCacheTestAccessor;
     mutable juce::SpinLock lock_;
     std::map<double, Chunk> chunks_;
     std::set<double> pendingChunks_;

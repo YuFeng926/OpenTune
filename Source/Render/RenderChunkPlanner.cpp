@@ -6,7 +6,7 @@ namespace OpenTune {
 
 namespace {
 
-constexpr double kMaxRenderChunkDurationSeconds = 15.0;
+constexpr double kMaxRenderChunkDurationSeconds = 8.0;
 constexpr int64_t kMaxRenderChunkSamples = static_cast<int64_t>(
     kMaxRenderChunkDurationSeconds * TimeCoordinate::kRenderSampleRate);
 
