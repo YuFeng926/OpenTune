@@ -16,7 +16,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment ta
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.7.3 LANGUAGES CXX C)
+project(OpenTune VERSION 1.7.4 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -556,6 +556,8 @@ target_sources(OpenTune
         Source/DSP/ReferenceAutoAlign.h
         Source/DSP/AutoTunePitchShifter.cpp
         Source/DSP/AutoTunePitchShifter.h
+        Source/DSP/AutoTunePeriodDetector.cpp
+        Source/DSP/AutoTunePeriodDetector.h
         Source/DSP/NoteEqProcessor.h
 
         # UI Layer
@@ -1293,6 +1295,7 @@ if(OPENTUNE_BUILD_TESTS)
     add_executable(OpenTuneAutoTuneTests
         Tests/AutoTunePitchShifterTests.cpp
         Source/DSP/AutoTunePitchShifter.cpp
+        Source/DSP/AutoTunePeriodDetector.cpp
     )
     target_include_directories(OpenTuneAutoTuneTests
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)

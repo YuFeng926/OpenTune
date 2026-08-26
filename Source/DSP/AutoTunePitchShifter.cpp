@@ -40,11 +40,18 @@ void AutoTunePitchShifter::feedSample(float sample) {
 }
 
 float AutoTunePitchShifter::processSample(double cyclePeriod,
-                                          double targetResampleRate) {
-    if (cyclePeriod > 0.0)
-        resampleRate_ += (targetResampleRate - resampleRate_) * (1.0 - kDecayPerSample);
-    else
+                                          double targetResampleRate,
+                                          bool updateResampleRate) {
+    if (cyclePeriod > 0.0) {
+        // Resample_Rate1 smoothing runs only when a fresh period measurement
+        // arrives; between detector tracking events the held rate persists.
+        if (updateResampleRate)
+            resampleRate_ += (targetResampleRate - resampleRate_)
+                * (1.0 - kDecayPerTrackingUpdate);
+    }
+    else {
         resampleRate_ = 1.0;
+    }
 
     outputAddr_ += resampleRate_;
 
@@ -72,7 +79,9 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
     int numF0Frames, double f0FrameRate,
     double firstSampleFramePhase,
     const float* lookahead, int numLookaheadSamples,
-    const float* lookbehind, int numLookbehindSamples)
+    const float* lookbehind, int numLookbehindSamples,
+    const AutoTunePeriodDetector::DetectedPeriod* detectorPeriods,
+    int numDetectorSamples)
 {
     std::vector<float> output(static_cast<size_t>(numSamples), 0.0f);
     if (numSamples == 0)
@@ -83,13 +92,28 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
     assert(numLookaheadSamples == 0 || lookahead != nullptr);
     assert(numLookbehindSamples >= 0);
     assert(numLookbehindSamples == 0 || lookbehind != nullptr);
+    assert(numDetectorSamples >= 0);
+    assert(numDetectorSamples == 0 || detectorPeriods != nullptr);
+    assert(detectorPeriods == nullptr || numDetectorSamples >= numSamples);
 
     double largestCyclePeriod = 0.0;
-    for (int i = 0; i < numF0Frames; ++i) {
-        if (originalF0[i] > 0.0f)
-            largestCyclePeriod = std::max(
-                largestCyclePeriod,
-                sampleRate_ / static_cast<double>(originalF0[i]));
+    if (detectorPeriods != nullptr) {
+        largestCyclePeriod = static_cast<double>(
+            AutoTunePeriodDetector::kMaxFullLag);
+        for (int i = 0; i < numSamples && i < numDetectorSamples; ++i) {
+            if (detectorPeriods[i].valid)
+                largestCyclePeriod = std::max(
+                    largestCyclePeriod,
+                    static_cast<double>(detectorPeriods[i].periodSamples));
+        }
+    }
+    else {
+        for (int i = 0; i < numF0Frames; ++i) {
+            if (originalF0[i] > 0.0f)
+                largestCyclePeriod = std::max(
+                    largestCyclePeriod,
+                    sampleRate_ / static_cast<double>(originalF0[i]));
+        }
     }
 
     const int requiredBufferSize = static_cast<int>(std::ceil(largestCyclePeriod))
@@ -127,13 +151,51 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
                 firstSampleFramePhase + static_cast<double>(i) / samplesPerF0Frame)),
             0, numF0Frames - 1);
 
-        const double original = static_cast<double>(originalF0[f0Frame]);
         const double corrected = static_cast<double>(correctedF0[f0Frame]);
-        const bool voiced = original > 0.0 && corrected > 0.0;
-        const double cyclePeriod = voiced ? sampleRate_ / original : 0.0;
-        const double targetRate = voiced ? corrected / original : 1.0;
 
-        output[static_cast<size_t>(i)] = processSample(cyclePeriod, targetRate);
+        // The detector shadow supplies the measured period. The post-processed
+        // originalF0 remains only as the project's voiced/unvoiced gate; its
+        // numeric F0 value is never used as the measured period in shadow mode.
+        double cyclePeriod = 0.0;
+        double targetRate = 1.0;
+        if (detectorPeriods != nullptr) {
+            const auto& det = detectorPeriods[i];
+            const bool sourceVoiced = originalF0[f0Frame] > 0.0f;
+            if (!sourceVoiced) {
+                // Unvoiced neutral section: sample-exact passthrough with the
+                // chunk-local output pointer reset (project UV semantics).
+                resampleRate_ = 1.0;
+                outputAddr_ = inputAddr_ - 1.0;
+                output[static_cast<size_t>(i)] = inputExt[static_cast<size_t>(i)];
+                continue;
+            }
+            if (det.valid && det.periodSamples > 0.0f && corrected > 0.0) {
+                cyclePeriod = static_cast<double>(det.periodSamples);
+                // Desired F0 comes from correctedF0 (effectiveF0). The smoothed
+                // rate is refreshed only on detector tracking/acquisition
+                // update events; hop-held samples keep the established rate.
+                targetRate = corrected * cyclePeriod / sampleRate_;
+                output[static_cast<size_t>(i)] =
+                    processSample(cyclePeriod, targetRate, det.trackingUpdated);
+                continue;
+            }
+            // Voiced detector failure follows the detector failure semantics:
+            // force rate 1 and keep walking the normal resampled path without
+            // relocating outputAddr_, preserving resampler address continuity
+            // until the next valid detection.
+            output[static_cast<size_t>(i)] = processSample(0.0, 1.0);
+            continue;
+        }
+        else {
+            const double original = static_cast<double>(originalF0[f0Frame]);
+            if (original > 0.0 && corrected > 0.0) {
+                cyclePeriod = sampleRate_ / original;
+                targetRate = corrected / original;
+            }
+        }
+
+        output[static_cast<size_t>(i)] =
+            processSample(cyclePeriod, targetRate);
     }
 
     return output;

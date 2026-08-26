@@ -6,6 +6,7 @@
 // runs standalone via the OPENTUNE_BUILD_TESTS CMake option.
 // ==============================================================================
 
+#include "DSP/AutoTunePeriodDetector.h"
 #include "DSP/AutoTunePitchShifter.h"
 
 #include <algorithm>
@@ -78,6 +79,35 @@ std::vector<float> makeSineSegment(double freqHz, double sampleRate,
         const double sample = static_cast<double>(firstSample + i);
         out[static_cast<size_t>(i)] = static_cast<float>(
             amp * std::sin(kTwoPi * freqHz * sample / sampleRate));
+    }
+    return out;
+}
+
+// Phase-continuous sine in the period domain: holds startPeriod samples for
+// holdLeadingSamples, ramps the instantaneous period linearly to endPeriod
+// over glideSamples, then holds endPeriod for holdTrailingSamples. Exact
+// per-sample periods make detector boundary assertions deterministic.
+std::vector<float> makeHoldGlideHoldSine(double startPeriod, double endPeriod,
+                                         int holdLeadingSamples,
+                                         int glideSamples,
+                                         int holdTrailingSamples, double amp)
+{
+    const int total = holdLeadingSamples + glideSamples + holdTrailingSamples;
+    std::vector<float> out(static_cast<size_t>(total));
+    double phase = 0.0;
+    for (int i = 0; i < total; ++i) {
+        double period = startPeriod;
+        if (i >= holdLeadingSamples + glideSamples) {
+            period = endPeriod;
+        } else if (i >= holdLeadingSamples) {
+            const double t =
+                static_cast<double>(i - holdLeadingSamples)
+                / static_cast<double>(glideSamples);
+            period = startPeriod + (endPeriod - startPeriod) * t;
+        }
+        phase += kTwoPi / period;
+        out[static_cast<size_t>(i)] =
+            static_cast<float>(amp * std::sin(phase));
     }
     return out;
 }
@@ -527,6 +557,684 @@ void testTailChunksWithShortLookahead()
     }
 }
 
+// ---------------------------------------------------------------------------
+// 6. Detector shadow source: a fixed sine must lock every frame onto the true
+//    period, and white noise must report valid == false everywhere.
+// ---------------------------------------------------------------------------
+void testDetectorFixedSineValidPeriod()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr double kFreq = 220.0; // period ~200.45 samples (fractional)
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 2048;
+
+    // Phase-continuous stream: prefix then input, as in the render path.
+    const std::vector<float> stream = makeSineSegment(
+        kFreq, kSampleRate, -kPrefix, kPrefix + kNumSamples, 0.5);
+
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+        static_cast<double>(kSampleRate));
+
+    expectTrue(static_cast<int>(frames.size()) == kNumSamples,
+               "detector sine: one result per input sample");
+
+    const double expectedPeriod = static_cast<double>(kSampleRate) / kFreq;
+    int validCount = 0;
+    double maxPeriodErr = 0.0;
+    for (const auto& f : frames) {
+        if (!f.valid)
+            continue;
+        ++validCount;
+        maxPeriodErr = std::max(maxPeriodErr,
+            std::fabs(static_cast<double>(f.periodSamples) - expectedPeriod));
+    }
+    expectTrue(validCount == kNumSamples,
+               "detector sine: every frame locks onto the tone");
+    expectTrue(maxPeriodErr <= 2.0,
+               "detector sine: refined period within 2 samples of SR/freq");
+}
+
+void testDetectorRejectsNoise()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 2048;
+
+    const std::vector<float> stream =
+        makeNoise(kPrefix + kNumSamples, 20240726u);
+
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+        static_cast<double>(kSampleRate));
+
+    expectTrue(static_cast<int>(frames.size()) == kNumSamples,
+               "detector noise: one result per input sample");
+    bool anyValid = false;
+    for (int t = 0; t < kNumSamples && !anyValid; ++t)
+        anyValid = frames[static_cast<size_t>(t)].valid;
+    expectTrue(!anyValid,
+               "detector noise: every frame must report valid == false");
+}
+
+void testDetectorTracksLowAndHighTones()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 4096;
+
+    // 882 Hz has a 50-sample period on the fixed 44.1 kHz grid. The reference
+    // 8-sample coarse candidate quantization otherwise makes 1000 Hz choose
+    // its 88-sample second minimum during the strict full-rate confirmation.
+    for (const double frequency : {110.0, 882.0})
+    {
+        const std::vector<float> stream = makeSineSegment(
+            frequency, kSampleRate, -kPrefix, kPrefix + kNumSamples, 0.5);
+        const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+            stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+            static_cast<double>(kSampleRate));
+
+        const double expectedPeriod = static_cast<double>(kSampleRate) / frequency;
+        int validCount = 0;
+        double maxPeriodError = 0.0;
+        for (const auto& frame : frames)
+        {
+            if (!frame.valid)
+                continue;
+            ++validCount;
+            maxPeriodError = std::max(maxPeriodError,
+                std::fabs(static_cast<double>(frame.periodSamples) - expectedPeriod));
+        }
+
+        expectTrue(validCount > kNumSamples * 3 / 4,
+                   "detector range: tone remains valid after initialization");
+        expectTrue(maxPeriodError < expectedPeriod * 0.12,
+                   "detector range: period stays within 12 percent");
+    }
+}
+
+void testDetectorDropsOutAcrossNoise()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kToneSamples = 2304;
+    constexpr int kNoiseSamples = 2048;
+    constexpr int kNumSamples = kToneSamples + kNoiseSamples + kToneSamples;
+
+    const std::vector<float> prefix = makeSineSegment(
+        220.0, kSampleRate, -kPrefix, kPrefix, 0.5);
+    const std::vector<float> firstTone = makeSineSegment(
+        220.0, kSampleRate, 0, kToneSamples, 0.5);
+    const std::vector<float> noise = makeNoise(kNoiseSamples, 20260826u);
+    const std::vector<float> lastTone = makeSineSegment(
+        220.0, kSampleRate, kToneSamples + kNoiseSamples, kToneSamples, 0.5);
+
+    std::vector<float> input(static_cast<size_t>(kNumSamples));
+    std::copy(firstTone.begin(), firstTone.end(), input.begin());
+    std::copy(noise.begin(), noise.end(), input.begin() + kToneSamples);
+    std::copy(lastTone.begin(), lastTone.end(),
+              input.begin() + kToneSamples + kNoiseSamples);
+    std::vector<std::uint8_t> inputVoiced(static_cast<size_t>(kNumSamples), 1);
+    std::fill(inputVoiced.begin() + kToneSamples,
+              inputVoiced.begin() + kToneSamples + kNoiseSamples,
+              static_cast<std::uint8_t>(0));
+    const std::vector<std::uint8_t> prefixVoiced(
+        static_cast<size_t>(kPrefix), static_cast<std::uint8_t>(1));
+
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        prefix.data(), kPrefix, input.data(), kNumSamples,
+        static_cast<double>(kSampleRate),
+        prefixVoiced.data(), inputVoiced.data());
+
+    bool invalidInNoise = false;
+    for (int i = kToneSamples + kNoiseSamples / 4;
+         i < kToneSamples + kNoiseSamples * 3 / 4;
+         ++i)
+    {
+        if (!frames[static_cast<size_t>(i)].valid)
+        {
+            invalidInNoise = true;
+            break;
+        }
+    }
+
+    bool validAfterNoise = false;
+    for (int i = kToneSamples + kNoiseSamples;
+         i < kNumSamples;
+         ++i)
+    {
+        if (frames[static_cast<size_t>(i)].valid)
+        {
+            validAfterNoise = true;
+            break;
+        }
+    }
+
+
+    expectTrue(invalidInNoise,
+               "detector transition: noise region becomes invalid");
+    expectTrue(validAfterNoise,
+               "detector transition: voiced period reacquires after noise");
+}
+
+void testDetectorRequiresCompleteHistory()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples - 2;
+    constexpr int kNumSamples = 1;
+
+    const std::vector<float> prefix = makeSineSegment(
+        220.0, kSampleRate, -kPrefix, kPrefix, 0.5);
+    const std::vector<float> input = makeSineSegment(
+        220.0, kSampleRate, 0, kNumSamples, 0.5);
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        prefix.data(), kPrefix, input.data(), kNumSamples,
+        static_cast<double>(kSampleRate));
+
+    bool anyValid = false;
+    for (const auto& frame : frames)
+        anyValid = anyValid || frame.valid;
+    expectTrue(!anyValid,
+               "detector history: incomplete current context stays invalid");
+}
+
+void testDetectorHonorsVoicedMask()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 1024;
+
+    const std::vector<float> prefix = makeSineSegment(
+        220.0, kSampleRate, -kPrefix, kPrefix, 0.5);
+    const std::vector<float> input = makeSineSegment(
+        220.0, kSampleRate, 0, kNumSamples, 0.5);
+    const std::vector<std::uint8_t> prefixVoiced(
+        static_cast<size_t>(kPrefix), static_cast<std::uint8_t>(1));
+    const std::vector<std::uint8_t> inputUnvoiced(
+        static_cast<size_t>(kNumSamples), static_cast<std::uint8_t>(0));
+
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        prefix.data(), kPrefix, input.data(), kNumSamples,
+        static_cast<double>(kSampleRate),
+        prefixVoiced.data(), inputUnvoiced.data());
+
+    bool anyValid = false;
+    for (const auto& frame : frames)
+        anyValid = anyValid || frame.valid;
+    expectTrue(!anyValid,
+               "detector UV mask: unvoiced mask overrides periodic waveform");
+}
+
+// The shifter must consume the detector shadow source: the measured cycle
+// period comes from the detector, and the output still follows correctedF0.
+void testShifterUsesDetectorShadowSource()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr double kFreq = 307.8;
+    constexpr double kCorrected = 300.0;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 22050;
+    constexpr int kBegin = 5000;
+    constexpr int kEnd = 20000;
+
+    const std::vector<float> stream = makeSineSegment(
+        kFreq, kSampleRate, -kPrefix, kPrefix + kNumSamples, 0.5);
+    const std::vector<float> tail = makeSineSegment(
+        kFreq, kSampleRate, kPrefix + kNumSamples,
+        Shifter::kLookaheadSamples, 0.5);
+
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+        static_cast<double>(kSampleRate));
+
+    // RMVPE originalF0 deliberately matches the tone here; the measured
+    // period must come from the detector shadow either way.
+    const float rmvpeF0 = 220.0f;
+    const float correctedF0 = static_cast<float>(kCorrected);
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const std::vector<float> out = shifter.shiftChunk(
+        stream.data() + kPrefix, kNumSamples, &rmvpeF0, &correctedF0,
+        1, 100.0, 0.0, tail.data(), Shifter::kLookaheadSamples,
+        stream.data(), kPrefix,
+        frames.data(), static_cast<int>(frames.size()));
+
+    const int crossings = countPositiveZeroCrossings(out, kBegin, kEnd);
+    const double duration = static_cast<double>(kEnd - kBegin) / kSampleRate;
+    const double expected = kCorrected * duration;
+    expectTrue(std::fabs(static_cast<double>(crossings) - expected)
+                   < expected * 0.03,
+               "detector shadow: output frequency follows correctedF0");
+}
+
+// All-invalid detector frames must force exact neutral passthrough even when
+// originalF0/correctedF0 demand a shift (RMVPE originalF0 is ignored).
+void testShifterStaysNeutralWhenDetectorInvalid()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kNumSamples = 4096;
+    constexpr int kLook = Shifter::kLookaheadSamples;
+
+    const std::vector<float> stream = makeNoise(kNumSamples + kLook, 99u);
+    const float* lookahead = stream.data() + kNumSamples;
+
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> invalid(
+        static_cast<size_t>(kNumSamples)); // default: valid == false
+    const float originalF0 = 220.0f;
+    const float correctedF0 = 240.0f;
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const std::vector<float> out = shifter.shiftChunk(
+        stream.data(), kNumSamples, &originalF0, &correctedF0, 1, 100.0,
+        0.0, lookahead, kLook, nullptr, 0,
+        invalid.data(), kNumSamples);
+
+    expectTrue(static_cast<int>(out.size()) == kNumSamples,
+               "neutral: length preserved");
+    double maxErr = 0.0;
+    for (int i = 0; i < kNumSamples; ++i) {
+        maxErr = std::max(maxErr, std::fabs(static_cast<double>(
+            out[static_cast<size_t>(i)] - stream[static_cast<size_t>(i)])));
+    }
+    expectTrue(maxErr <= 1e-5,
+               "neutral: invalid detector forces sample-exact passthrough");
+}
+
+void testShifterUsesFinalF0ZeroAsUvGate()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kNumSamples = 4096;
+    constexpr int kLook = Shifter::kLookaheadSamples;
+
+    const std::vector<float> stream = makeNoise(kNumSamples + kLook, 100u);
+    const float* lookahead = stream.data() + kNumSamples;
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> detected(
+        static_cast<size_t>(kNumSamples));
+    for (auto& frame : detected) {
+        frame.periodSamples = 200.0f;
+        frame.valid = true;
+    }
+
+    // This is the post-processed finalF0/OriginalF0 UV representation used by
+    // the UI: zero means unvoiced. It must override a valid detector result.
+    const float finalF0 = 0.0f;
+    const float correctedF0 = 240.0f;
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const std::vector<float> out = shifter.shiftChunk(
+        stream.data(), kNumSamples, &finalF0, &correctedF0, 1, 100.0,
+        0.0, lookahead, kLook, nullptr, 0,
+        detected.data(), kNumSamples);
+
+    double maxErr = 0.0;
+    for (int i = 0; i < kNumSamples; ++i) {
+        maxErr = std::max(maxErr, std::fabs(static_cast<double>(
+            out[static_cast<size_t>(i)] - stream[static_cast<size_t>(i)])));
+    }
+    expectTrue(maxErr <= 1e-5,
+               "UV gate: finalF0 zero forces neutral passthrough even with a valid detector");
+}
+
+// Detector tracking/acquisition update events: trackingUpdated marks exactly
+// the refreshed measurements; hop-held repeats must bit-exactly reproduce the
+// last updated period so consumers can gate smoothed-rate refreshes on it.
+void testDetectorMarksTrackingUpdateEvents()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr double kFreq = 220.0;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 2048;
+
+    const std::vector<float> stream = makeSineSegment(
+        kFreq, kSampleRate, -kPrefix, kPrefix + kNumSamples, 0.5);
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+        static_cast<double>(kSampleRate));
+
+    expectTrue(static_cast<int>(frames.size()) == kNumSamples,
+               "events: one result per input sample");
+
+    int updates = 0;
+    bool sawHeldRepeat = false;
+    bool haveEvent = false;
+    float lastEventPeriod = 0.0f;
+    for (int i = 0; i < kNumSamples; ++i) {
+        const auto& frame = frames[static_cast<size_t>(i)];
+        if (frame.trackingUpdated) {
+            expectTrue(frame.valid,
+                       "events: a tracking update must carry a valid period");
+            ++updates;
+            lastEventPeriod = frame.periodSamples;
+            haveEvent = true;
+        }
+        else if (frame.valid) {
+            expectTrue(haveEvent,
+                       "events: held results only follow an update event");
+            expectTrue(frame.periodSamples == lastEventPeriod,
+                       "events: hop-held frames repeat the last updated "
+                       "period exactly");
+            sawHeldRepeat = true;
+        }
+    }
+
+    expectTrue(updates >= kNumSamples / 5 - 8,
+               "events: a locked tone refreshes on nearly every 5-sample interval");
+    expectTrue(sawHeldRepeat,
+               "events: hop-held valid frames exist between updates");
+}
+
+// Resample-rate smoothing must be driven by detector update events only.
+// With events present the output converges onto the correction target; with
+// the same valid periods but no events the held rate stays 1 and the chunk is
+// an exact passthrough.
+void testShifterUpdatesRateOnlyOnDetectorEvents()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kNumSamples = 8192;
+    constexpr int kLook = Shifter::kLookaheadSamples;
+    // Up-shifts remove whole cycles by moving the output pointer backward one
+    // period; like the render path, supply preceding history so early cycle
+    // jumps stay inside the readable ring.
+    constexpr int kHistorySamples = 256;
+
+    const std::vector<float> stream = makeNoise(kNumSamples + kLook, 4242u);
+    const float* lookahead = stream.data() + kNumSamples;
+    const std::vector<float> history =
+        makeNoise(kHistorySamples, 777u);
+
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> frames(
+        static_cast<size_t>(kNumSamples));
+    for (int i = 0; i < kNumSamples; ++i) {
+        frames[static_cast<size_t>(i)].periodSamples = 200.0f;
+        frames[static_cast<size_t>(i)].valid = true;
+    }
+
+    const float originalF0 = 220.0f;  // voiced gate open throughout
+    const float correctedF0 = 240.0f; // demands an upward retune
+
+    // A) Updates every 5 samples: the smoothed rate must leave 1.0 and chase
+    //    the corrected target, clearly departing from passthrough.
+    for (int i = 0; i < kNumSamples; ++i)
+        frames[static_cast<size_t>(i)].trackingUpdated = (i % 5 == 0);
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const std::vector<float> out = shifter.shiftChunk(
+        stream.data(), kNumSamples, &originalF0, &correctedF0, 1, 100.0,
+        0.0, lookahead, kLook, history.data(), kHistorySamples,
+        frames.data(), kNumSamples);
+
+    expectTrue(allFinite(out), "rate events: all outputs finite");
+    double maxDiff = 0.0;
+    for (int i = 1024; i < kNumSamples; ++i) {
+        maxDiff = std::max(maxDiff, std::fabs(static_cast<double>(
+            out[static_cast<size_t>(i)] - stream[static_cast<size_t>(i)])));
+    }
+    expectTrue(maxDiff > 0.05,
+               "rate events: periodic tracking updates drive the retune");
+
+    // B) Same valid periods but zero update events: the rate stays held at
+    //    1.0 and the output remains a sample-exact passthrough.
+    for (auto& frame : frames)
+        frame.trackingUpdated = false;
+
+    Shifter held(static_cast<double>(kSampleRate));
+    const std::vector<float> outHeld = held.shiftChunk(
+        stream.data(), kNumSamples, &originalF0, &correctedF0, 1, 100.0,
+        0.0, lookahead, kLook, history.data(), kHistorySamples,
+        frames.data(), kNumSamples);
+
+    double maxErr = 0.0;
+    for (int i = 0; i < kNumSamples; ++i) {
+        maxErr = std::max(maxErr, std::fabs(static_cast<double>(
+            outHeld[static_cast<size_t>(i)] - stream[static_cast<size_t>(i)])));
+    }
+    expectTrue(maxErr <= 1e-5,
+               "rate events: without updates the held rate keeps exact neutral");
+}
+
+// Voiced detector failure must keep walking the continuous resampled path at
+// rate 1 (detector failure semantics) instead of resetting the chunk-local
+// output pointer. After a retuned section, the accumulated resampler offset
+// survives into the failure stretch, so the output is NOT snapped back to the
+// raw input.
+void testShifterKeepsAddressContinuityThroughVoicedFailure()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kNumSamples = 6000;
+    constexpr int kValidLead = 3000;
+    constexpr int kFailureSamples = 1000;
+    constexpr int kLook = Shifter::kLookaheadSamples;
+    // The retuned lead-in removes whole cycles (rate > 1); supply preceding
+    // history as the render path does so cycle jumps remain readable.
+    constexpr int kHistorySamples = 256;
+
+    const std::vector<float> stream = makeNoise(kNumSamples + kLook, 20260826u);
+    const float* lookahead = stream.data() + kNumSamples;
+    const std::vector<float> history = makeNoise(kHistorySamples, 424242u);
+
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> frames(
+        static_cast<size_t>(kNumSamples));
+    for (int i = 0; i < kNumSamples; ++i) {
+        auto& frame = frames[static_cast<size_t>(i)];
+        frame.periodSamples = 200.0f;
+        frame.valid = (i < kValidLead || i >= kValidLead + kFailureSamples);
+        frame.trackingUpdated = frame.valid && (i % 5 == 0);
+    }
+
+    const float originalF0 = 220.0f;  // voiced gate open: failures here are
+    const float correctedF0 = 240.0f; // detector failures, not UV neutrals
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const std::vector<float> out = shifter.shiftChunk(
+        stream.data(), kNumSamples, &originalF0, &correctedF0, 1, 100.0,
+        0.0, lookahead, kLook, history.data(), kHistorySamples,
+        frames.data(), kNumSamples);
+
+    expectTrue(static_cast<int>(out.size()) == kNumSamples,
+               "continuity: length preserved");
+    expectTrue(allFinite(out), "continuity: all outputs finite");
+
+    const int begin = kValidLead + 200;
+    const int end = kValidLead + kFailureSamples - 200;
+    const double diff = meanAbsDiffRange(out, stream, begin, end);
+    expectTrue(diff > 0.1,
+               "continuity: voiced failure keeps the resampler offset instead "
+               "of resetting to raw input");
+}
+
+// Full-rate lag limits (16 .. 880): boundary tones must lock inside the
+// limits, and out-of-range periods must fail cleanly without fabricating a
+// clamped or relocated "valid" result.
+void testDetectorFullRateLagBounds()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 4096;
+    using Detector = OpenTune::AutoTunePeriodDetector;
+
+    auto runTone = [&](double frequency) {
+        const std::vector<float> stream = makeSineSegment(
+            frequency, kSampleRate, -kPrefix, kPrefix + kNumSamples, 0.5);
+        return Detector::analyze(
+            stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+            static_cast<double>(kSampleRate));
+    };
+
+    // Periods hugging both limits from the inside: ~24.5 samples (1800 Hz,
+    // just above kMinFullLag = 16) and ~864.7 samples (51 Hz, just below
+    // kMaxFullLag = 880).
+    for (const double frequency : {1800.0, 51.0})
+    {
+        const auto frames = runTone(frequency);
+        const double expected = static_cast<double>(kSampleRate) / frequency;
+        int validCount = 0;
+        double maxErr = 0.0;
+        for (const auto& frame : frames)
+        {
+            if (!frame.valid)
+                continue;
+            ++validCount;
+            expectTrue(
+                frame.periodSamples
+                    >= static_cast<float>(Detector::kMinFullLag)
+                && frame.periodSamples
+                    <= static_cast<float>(Detector::kMaxFullLag),
+                "bounds: in-range boundary lock stays within [16, 880]");
+            maxErr = std::max(maxErr,
+                std::fabs(static_cast<double>(frame.periodSamples) - expected));
+        }
+        expectTrue(validCount > 0,
+                   "bounds: boundary-inside tone achieves a lock");
+        expectTrue(maxErr <= expected * 0.12,
+                   "bounds: boundary lock stays within 12 percent of truth");
+    }
+
+    // A period above the upper limit (~900 samples at 49 Hz) has no
+    // representable coarse candidate: detection must fail cleanly on every
+    // sample instead of fabricating or clamping a period.
+    {
+        const auto frames = runTone(49.0);
+        int validCount = 0;
+        for (const auto& frame : frames)
+        {
+            if (!frame.valid)
+                continue;
+            ++validCount;
+            expectTrue(
+                frame.periodSamples
+                    >= static_cast<float>(Detector::kMinFullLag)
+                && frame.periodSamples
+                    <= static_cast<float>(Detector::kMaxFullLag),
+                "bounds: no valid result may fall outside [16, 880]");
+        }
+        expectTrue(validCount == 0,
+                   "bounds: over-limit period produces no fabricated result");
+    }
+
+    // A period below the lower limit (~15.2 samples at 2900 Hz) cannot be
+    // represented on the full-rate lag grid either. The coarse stage may only
+    // lock onto a far harmonic multiple, so every reported frame must still
+    // respect the [16, 880] invariant - never an out-of-range forgery.
+    {
+        const auto frames = runTone(2900.0);
+        for (const auto& frame : frames)
+        {
+            if (!frame.valid)
+                continue;
+            expectTrue(
+                frame.periodSamples
+                    >= static_cast<float>(Detector::kMinFullLag)
+                && frame.periodSamples
+                    <= static_cast<float>(Detector::kMaxFullLag),
+                "bounds: sub-limit harmonic lock stays within [16, 880]");
+        }
+    }
+}
+
+// Tracking-window boundary semantics (EH_OFFSET): the eight-lag
+// neighborhood may overhang [16, 880]; only the nominal center (N/2,
+// zero-based index 3) must stay inside. A slow period glide must therefore
+// stay locked all the way to periods of exactly 16 and exactly 880 - steady
+// regions the previous whole-array bounds pre-rejected - and every valid
+// result must remain inside [16, 880] with no fabricated or clamped values.
+void testDetectorTracksBoundaryCenterPeriods()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kPrefix =
+        OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    using Detector = OpenTune::AutoTunePeriodDetector;
+
+    // Lower boundary: seed at 23.0 samples (an off-grid start whose coarse
+    // confirmation prefers the fundamental over the 48-sample octave by a
+    // wide margin), glide to 17.0, hold. A steady lock at 17 requires window
+    // bases 14/15 - neighborhoods with centers inside [16, 880] but whose
+    // low lags overhang the bound; the previous whole-array rule (base >= 16)
+    // rejected them outright and died once the period fell below ~19.
+    {
+        constexpr int kLeadIn = 192;
+        constexpr int kGlide = 600;
+        constexpr int kHold = 1600;
+        constexpr int kNumInput = kLeadIn + kGlide + kHold;
+
+        const std::vector<float> stream = makeHoldGlideHoldSine(
+            23.0, 17.0, kPrefix + kLeadIn, kGlide, kHold, 0.5);
+        const auto frames = Detector::analyze(
+            stream.data(), kPrefix, stream.data() + kPrefix, kNumInput,
+            static_cast<double>(kSampleRate));
+
+        expectTrue(static_cast<int>(frames.size()) == kNumInput,
+                   "boundary glide low: one result per input sample");
+        float minValidPeriod = 1e9f;
+        int tailLocks = 0;
+        for (int i = 0; i < kNumInput; ++i)
+        {
+            const auto& frame = frames[static_cast<size_t>(i)];
+            if (!frame.valid)
+                continue;
+            expectTrue(
+                frame.periodSamples
+                    >= static_cast<float>(Detector::kMinFullLag)
+                && frame.periodSamples
+                    <= static_cast<float>(Detector::kMaxFullLag),
+                "boundary glide low: every valid period stays in [16, 880]");
+            minValidPeriod = std::min(minValidPeriod, frame.periodSamples);
+            if (i >= kNumInput - kHold && frame.periodSamples <= 18.0f)
+                ++tailLocks;
+        }
+        expectTrue(minValidPeriod <= 17.5f,
+                   "boundary glide low: tracking descends past the previous "
+                   "whole-array floor (~19) toward the 16 limit");
+        expectTrue(tailLocks >= 100,
+                   "boundary glide low: near-16 period stays locked through "
+                   "the held tail");
+    }
+
+    // Upper boundary: seed at 866.0 samples (inside the initial window, so
+    // the first evaluation slides right instead of failing on an edge index),
+    // glide to 878.5, hold. A steady lock there needs bases 874/875 - centers
+    // inside [16, 880] whose high lags overhang toward 880; the previous
+    // whole-array cap (base + 7 <= 880, so base <= 873) blocked that slide
+    // and died once the period passed ~877.
+    {
+        constexpr int kLeadIn = 192;
+        constexpr int kGlide = 1250;
+        constexpr int kHold = 1800;
+        constexpr int kNumInput = kLeadIn + kGlide + kHold;
+
+        const std::vector<float> stream = makeHoldGlideHoldSine(
+            866.0, 878.5, kPrefix + kLeadIn, kGlide, kHold, 0.5);
+        const auto frames = Detector::analyze(
+            stream.data(), kPrefix, stream.data() + kPrefix, kNumInput,
+            static_cast<double>(kSampleRate));
+
+        expectTrue(static_cast<int>(frames.size()) == kNumInput,
+                   "boundary glide high: one result per input sample");
+        float maxValidPeriod = 0.0f;
+        int tailLocks = 0;
+        for (int i = 0; i < kNumInput; ++i)
+        {
+            const auto& frame = frames[static_cast<size_t>(i)];
+            if (!frame.valid)
+                continue;
+            expectTrue(
+                frame.periodSamples
+                    >= static_cast<float>(Detector::kMinFullLag)
+                && frame.periodSamples
+                    <= static_cast<float>(Detector::kMaxFullLag),
+                "boundary glide high: every valid period stays in [16, 880]");
+            maxValidPeriod = std::max(maxValidPeriod, frame.periodSamples);
+            if (i >= kNumInput - kHold && frame.periodSamples >= 877.5f)
+                ++tailLocks;
+        }
+        expectTrue(maxValidPeriod >= 877.2f,
+                   "boundary glide high: tracking ascends past the previous "
+                   "whole-array cap (~877) toward the 880 limit");
+        expectTrue(tailLocks >= 100,
+                   "boundary glide high: near-880 period stays locked through "
+                   "the held tail");
+    }
+}
+
 } // namespace
 
 int main()
@@ -540,6 +1248,20 @@ int main()
     testNonIdentityDoesNotMoveChunkStart();
     testF0FramePhaseUsesLaterFrames();
     testTailChunksWithShortLookahead();
+    testDetectorFixedSineValidPeriod();
+    testDetectorRejectsNoise();
+    testDetectorTracksLowAndHighTones();
+    testDetectorDropsOutAcrossNoise();
+    testDetectorRequiresCompleteHistory();
+    testDetectorHonorsVoicedMask();
+    testShifterUsesFinalF0ZeroAsUvGate();
+    testShifterUsesDetectorShadowSource();
+    testShifterStaysNeutralWhenDetectorInvalid();
+    testDetectorMarksTrackingUpdateEvents();
+    testShifterUpdatesRateOnlyOnDetectorEvents();
+    testShifterKeepsAddressContinuityThroughVoicedFailure();
+    testDetectorFullRateLagBounds();
+    testDetectorTracksBoundaryCenterPeriods();
 
     if (g_failures == 0) {
         std::printf("All AutoTunePitchShifter tests passed.\n");

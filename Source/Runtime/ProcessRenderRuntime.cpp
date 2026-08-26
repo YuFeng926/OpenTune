@@ -1,5 +1,6 @@
 #include "ProcessRenderRuntime.h"
 
+#include "../DSP/AutoTunePeriodDetector.h"
 #include "../DSP/AutoTunePitchShifter.h"
 #include "../DSP/MelSpectrogram.h"
 #include "../DSP/NoteEqProcessor.h"
@@ -23,8 +24,8 @@ namespace OpenTune {
 
 namespace {
 
-// 静息处边界交叉淡化时长（10ms @ 44.1kHz）
-constexpr int kSilentGapBoundaryFadeSamples = 441;
+// 临时关闭静息处边界淡化，用于隔离 AutoTune 卡顿根因。
+constexpr int kSilentGapBoundaryFadeSamples = 0;
 
 // ==============================================================================
 // Effective F0 Materialization
@@ -378,8 +379,7 @@ RenderCache::ChunkRenderResult publishChunkWithPerNoteEq(
         }
     }
 
-    // 静息处边界交叉淡化（10ms）：chunk 起点 fade-in，终点 fade-out
-    // 避免硬切分导致的咔嗒声，让相邻 chunk 拼接平滑
+    // 静息处边界淡化（诊断阶段临时关闭）：chunk 起点 fade-in，终点 fade-out。
     const int totalSamples = static_cast<int>(audio.size());
     const int fadeSamples = std::min(kSilentGapBoundaryFadeSamples, totalSamples / 2);
     if (fadeSamples > 1)
@@ -925,18 +925,10 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     for (int64_t i = 0; i < avail; ++i)
                         shifterLookahead[i] = clipCh0[tailStart + i];
 
-                    double largestCyclePeriod = 0.0;
-                    for (int i = 0; i < safeNumF0Frames; ++i)
-                    {
-                        const float f0 = originalF0Full[static_cast<size_t>(f0StartFrame + i)];
-                        if (f0 > 0.0f)
-                            largestCyclePeriod = std::max(
-                                largestCyclePeriod,
-                                RenderCache::kSampleRate / static_cast<double>(f0));
-                    }
-
-                    const int lookbehindCapacity = static_cast<int>(
-                        std::ceil(largestCyclePeriod))
+                    // 周期检测器需要完整 coarse window 及其因果 FIR 历史，
+                    // 其固定上下文长度由 detector 自身声明。
+                    const int lookbehindCapacity =
+                        AutoTunePeriodDetector::kRequiredLookbehindSamples
                         + AutoTunePitchShifter::kLookaheadSamples + 2;
                     const int64_t lookbehindStart = std::max<int64_t>(
                         0, boundaries.trueStartSample - lookbehindCapacity);
@@ -944,6 +936,47 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     shifterLookbehindSamples = static_cast<int>(
                         boundaries.trueStartSample - lookbehindStart);
                 }
+
+                // Chunk-local 双阶段周期检测：downsampled lag 粗搜 + full-rate
+                // V=E-2H 局部精搜，逐样本输出 period/valid 影子源交给 shifter。
+                const int detectorNumSamples =
+                    static_cast<int>(boundaries.publishSampleCount);
+                const double samplesPerF0Frame = RenderCache::kSampleRate / f0FrameRate;
+                std::vector<std::uint8_t> detectorLookbehindVoiced(
+                    static_cast<size_t>(shifterLookbehindSamples), 0);
+                std::vector<std::uint8_t> detectorInputVoiced(
+                    static_cast<size_t>(detectorNumSamples), 0);
+                const auto frameIsVoiced = [&](double globalFramePosition) {
+                    const int frame = static_cast<int>(std::floor(globalFramePosition));
+                    if (frame < 0 || frame >= originalF0Size)
+                        return static_cast<std::uint8_t>(0);
+                    return originalF0Full[static_cast<size_t>(frame)] > 0.0f
+                        ? static_cast<std::uint8_t>(1)
+                        : static_cast<std::uint8_t>(0);
+                };
+                const double trueStartGlobalFramePosition = trueStartSeconds * f0FrameRate;
+                const double lookbehindFirstFramePosition = trueStartGlobalFramePosition
+                    - static_cast<double>(shifterLookbehindSamples) / samplesPerF0Frame;
+                for (int i = 0; i < shifterLookbehindSamples; ++i)
+                {
+                    detectorLookbehindVoiced[static_cast<size_t>(i)] = frameIsVoiced(
+                        lookbehindFirstFramePosition
+                        + static_cast<double>(i) / samplesPerF0Frame);
+                }
+                for (int i = 0; i < detectorNumSamples; ++i)
+                {
+                    detectorInputVoiced[static_cast<size_t>(i)] = frameIsVoiced(
+                        trueStartGlobalFramePosition
+                        + static_cast<double>(i) / samplesPerF0Frame);
+                }
+
+                const std::vector<AutoTunePeriodDetector::DetectedPeriod>
+                    detectorFrames = AutoTunePeriodDetector::analyze(
+                        shifterLookbehind, shifterLookbehindSamples,
+                        monoAudio.data(), detectorNumSamples,
+                        RenderCache::kSampleRate,
+                        detectorLookbehindVoiced.data(),
+                        detectorInputVoiced.data());
 
                 auto shiftedAudio = autoTuneShifter.shiftChunk(
                     monoAudio.data(),
@@ -956,7 +989,9 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     shifterLookahead,
                     shifterLookaheadSamples,
                     shifterLookbehind,
-                    shifterLookbehindSamples);
+                    shifterLookbehindSamples,
+                    detectorFrames.data(),
+                    detectorNumSamples);
 
                 const uint64_t objectId = coreJob.contentKey.objectId;
                 const auto result = publishChunkWithPerNoteEq(
