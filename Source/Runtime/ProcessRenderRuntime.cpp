@@ -941,42 +941,14 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 // V=E-2H 局部精搜，逐样本输出 period/valid 影子源交给 shifter。
                 const int detectorNumSamples =
                     static_cast<int>(boundaries.publishSampleCount);
-                const double samplesPerF0Frame = RenderCache::kSampleRate / f0FrameRate;
-                std::vector<std::uint8_t> detectorLookbehindVoiced(
-                    static_cast<size_t>(shifterLookbehindSamples), 0);
-                std::vector<std::uint8_t> detectorInputVoiced(
-                    static_cast<size_t>(detectorNumSamples), 0);
-                const auto frameIsVoiced = [&](double globalFramePosition) {
-                    const int frame = static_cast<int>(std::floor(globalFramePosition));
-                    if (frame < 0 || frame >= originalF0Size)
-                        return static_cast<std::uint8_t>(0);
-                    return originalF0Full[static_cast<size_t>(frame)] > 0.0f
-                        ? static_cast<std::uint8_t>(1)
-                        : static_cast<std::uint8_t>(0);
-                };
-                const double trueStartGlobalFramePosition = trueStartSeconds * f0FrameRate;
-                const double lookbehindFirstFramePosition = trueStartGlobalFramePosition
-                    - static_cast<double>(shifterLookbehindSamples) / samplesPerF0Frame;
-                for (int i = 0; i < shifterLookbehindSamples; ++i)
-                {
-                    detectorLookbehindVoiced[static_cast<size_t>(i)] = frameIsVoiced(
-                        lookbehindFirstFramePosition
-                        + static_cast<double>(i) / samplesPerF0Frame);
-                }
-                for (int i = 0; i < detectorNumSamples; ++i)
-                {
-                    detectorInputVoiced[static_cast<size_t>(i)] = frameIsVoiced(
-                        trueStartGlobalFramePosition
-                        + static_cast<double>(i) / samplesPerF0Frame);
-                }
-
+                // UV/V is decided by the waveform detector itself.  RMVPE's
+                // originalF0 remains the editable source/target track, but it
+                // must not gate the AutoTune detector's periodicity analysis.
                 const std::vector<AutoTunePeriodDetector::DetectedPeriod>
                     detectorFrames = AutoTunePeriodDetector::analyze(
                         shifterLookbehind, shifterLookbehindSamples,
                         monoAudio.data(), detectorNumSamples,
-                        RenderCache::kSampleRate,
-                        detectorLookbehindVoiced.data(),
-                        detectorInputVoiced.data());
+                        RenderCache::kSampleRate);
 
                 auto shiftedAudio = autoTuneShifter.shiftChunk(
                     monoAudio.data(),

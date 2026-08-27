@@ -10,13 +10,15 @@ namespace OpenTune {
 ///
 /// The measured cycle period source is either the supplied originalF0 track
 /// or, when a detector shadow source is provided, per-sample detected periods
-/// from AutoTunePeriodDetector. In shadow mode, post-processed originalF0 is
-/// used only as the project's voiced/unvoiced gate; zero-F0 frames run neutral.
-/// The desired pitch always comes from correctedF0 (effectiveF0). The output
-/// pointer is resampled with a floating-point rate and one floating-point
-/// cycle period is inserted or removed when the pointer crosses the input
-/// pointer. Five samples of lookahead are consumed so output time is aligned
-/// with the published input window.
+/// from AutoTunePeriodDetector. In shadow mode the detector's valid flag
+/// determines voiced/unvoiced — the resampler never hard-resets, preserving
+/// address continuity across all transitions. The desired pitch always comes
+/// from correctedF0 (effectiveF0); a missing target remains neutral rather
+/// than becoming an RMVPE-derived UV decision. The output pointer is resampled
+/// with a floating-point rate and one floating-point cycle period is inserted
+/// or removed when the pointer crosses the input pointer. Five samples of
+/// lookahead are consumed so output time is aligned with the published input
+/// window.
 class AutoTunePitchShifter {
 public:
     explicit AutoTunePitchShifter(double sampleRate);
@@ -35,10 +37,11 @@ public:
         int numLookbehindSamples = 0,
         // Optional per-sample detected period shadow source, parallel to
         // input. Non-null replaces originalF0 as the measured period source.
-        // Unvoiced gate samples run sample-exact neutral passthrough; voiced
-        // detector failures keep rate 1 on the continuous resampled path.
-        // The smoothed resample rate is refreshed only on trackingUpdated
-        // events from the detector.
+        // The detector's valid flag drives the resampler: valid periods
+        // trigger cycle-correct resampling; invalid periods (including
+        // unvoiced sections) run neutral passthrough with address continuity
+        // preserved. The smoothed resample rate is refreshed only on
+        // trackingUpdated events from the detector.
         const AutoTunePeriodDetector::DetectedPeriod* detectorPeriods = nullptr,
         int numDetectorSamples = 0);
 

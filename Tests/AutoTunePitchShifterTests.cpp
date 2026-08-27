@@ -674,17 +674,10 @@ void testDetectorDropsOutAcrossNoise()
     std::copy(noise.begin(), noise.end(), input.begin() + kToneSamples);
     std::copy(lastTone.begin(), lastTone.end(),
               input.begin() + kToneSamples + kNoiseSamples);
-    std::vector<std::uint8_t> inputVoiced(static_cast<size_t>(kNumSamples), 1);
-    std::fill(inputVoiced.begin() + kToneSamples,
-              inputVoiced.begin() + kToneSamples + kNoiseSamples,
-              static_cast<std::uint8_t>(0));
-    const std::vector<std::uint8_t> prefixVoiced(
-        static_cast<size_t>(kPrefix), static_cast<std::uint8_t>(1));
 
     const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
         prefix.data(), kPrefix, input.data(), kNumSamples,
-        static_cast<double>(kSampleRate),
-        prefixVoiced.data(), inputVoiced.data());
+        static_cast<double>(kSampleRate));
 
     bool invalidInNoise = false;
     for (int i = kToneSamples + kNoiseSamples / 4;
@@ -736,33 +729,6 @@ void testDetectorRequiresCompleteHistory()
         anyValid = anyValid || frame.valid;
     expectTrue(!anyValid,
                "detector history: incomplete current context stays invalid");
-}
-
-void testDetectorHonorsVoicedMask()
-{
-    constexpr int kSampleRate = 44100;
-    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
-    constexpr int kNumSamples = 1024;
-
-    const std::vector<float> prefix = makeSineSegment(
-        220.0, kSampleRate, -kPrefix, kPrefix, 0.5);
-    const std::vector<float> input = makeSineSegment(
-        220.0, kSampleRate, 0, kNumSamples, 0.5);
-    const std::vector<std::uint8_t> prefixVoiced(
-        static_cast<size_t>(kPrefix), static_cast<std::uint8_t>(1));
-    const std::vector<std::uint8_t> inputUnvoiced(
-        static_cast<size_t>(kNumSamples), static_cast<std::uint8_t>(0));
-
-    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
-        prefix.data(), kPrefix, input.data(), kNumSamples,
-        static_cast<double>(kSampleRate),
-        prefixVoiced.data(), inputUnvoiced.data());
-
-    bool anyValid = false;
-    for (const auto& frame : frames)
-        anyValid = anyValid || frame.valid;
-    expectTrue(!anyValid,
-               "detector UV mask: unvoiced mask overrides periodic waveform");
 }
 
 // The shifter must consume the detector shadow source: the measured cycle
@@ -840,39 +806,40 @@ void testShifterStaysNeutralWhenDetectorInvalid()
                "neutral: invalid detector forces sample-exact passthrough");
 }
 
-void testShifterUsesFinalF0ZeroAsUvGate()
+void testShifterUsesDetectorValidityForUv()
 {
     constexpr int kSampleRate = 44100;
-    constexpr int kNumSamples = 4096;
+    constexpr double kSourceFrequency = 220.0;
+    constexpr double kTargetFrequency = 240.0;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 22050;
     constexpr int kLook = Shifter::kLookaheadSamples;
 
-    const std::vector<float> stream = makeNoise(kNumSamples + kLook, 100u);
-    const float* lookahead = stream.data() + kNumSamples;
-    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> detected(
-        static_cast<size_t>(kNumSamples));
-    for (auto& frame : detected) {
-        frame.periodSamples = 200.0f;
-        frame.valid = true;
-    }
+    const std::vector<float> stream = makeSineSegment(
+        kSourceFrequency, kSampleRate, -kPrefix, kPrefix + kNumSamples + kLook, 0.5);
+    const auto detected = OpenTune::AutoTunePeriodDetector::analyze(
+        stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+        static_cast<double>(kSampleRate));
 
-    // This is the post-processed finalF0/OriginalF0 UV representation used by
-    // the UI: zero means unvoiced. It must override a valid detector result.
-    const float finalF0 = 0.0f;
-    const float correctedF0 = 240.0f;
+    // RMVPE's finalF0 is zero here, but the waveform is periodic and the
+    // detector is valid. AutoTune must follow detector validity, not RMVPE UV.
+    const float rmvpeF0 = 0.0f;
+    const float correctedF0 = static_cast<float>(kTargetFrequency);
 
     Shifter shifter(static_cast<double>(kSampleRate));
     const std::vector<float> out = shifter.shiftChunk(
-        stream.data(), kNumSamples, &finalF0, &correctedF0, 1, 100.0,
-        0.0, lookahead, kLook, nullptr, 0,
-        detected.data(), kNumSamples);
+        stream.data() + kPrefix, kNumSamples, &rmvpeF0, &correctedF0, 1, 100.0,
+        0.0, stream.data() + kPrefix + kNumSamples, kLook,
+        stream.data(), kPrefix, detected.data(), static_cast<int>(detected.size()));
 
-    double maxErr = 0.0;
-    for (int i = 0; i < kNumSamples; ++i) {
-        maxErr = std::max(maxErr, std::fabs(static_cast<double>(
-            out[static_cast<size_t>(i)] - stream[static_cast<size_t>(i)])));
-    }
-    expectTrue(maxErr <= 1e-5,
-               "UV gate: finalF0 zero forces neutral passthrough even with a valid detector");
+    constexpr int kBegin = 5000;
+    constexpr int kEnd = 20000;
+    const int crossings = countPositiveZeroCrossings(out, kBegin, kEnd);
+    const double duration = static_cast<double>(kEnd - kBegin) / kSampleRate;
+    const double measuredFrequency = static_cast<double>(crossings) / duration;
+    expectTrue(measuredFrequency > kTargetFrequency * 0.9
+                   && measuredFrequency < kTargetFrequency * 1.1,
+               "UV source: detector-valid periodic input follows correctedF0 even when RMVPE F0 is zero");
 }
 
 // Detector tracking/acquisition update events: trackingUpdated marks exactly
@@ -1551,8 +1518,7 @@ int main()
     testDetectorTracksLowAndHighTones();
     testDetectorDropsOutAcrossNoise();
     testDetectorRequiresCompleteHistory();
-    testDetectorHonorsVoicedMask();
-    testShifterUsesFinalF0ZeroAsUvGate();
+    testShifterUsesDetectorValidityForUv();
     testShifterUsesDetectorShadowSource();
     testShifterStaysNeutralWhenDetectorInvalid();
     testDetectorMarksTrackingUpdateEvents();

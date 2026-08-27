@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <vector>
 
 namespace OpenTune {
@@ -26,9 +25,7 @@ public:
     static std::vector<DetectedPeriod> analyze(
         const float* lookbehind, int numLookbehindSamples,
         const float* input, int numInputSamples,
-        double sampleRate,
-        const std::uint8_t* lookbehindVoiced = nullptr,
-        const std::uint8_t* inputVoiced = nullptr);
+        double sampleRate);
 
     /// the reference flow coarse-stage decimation factor.
     static constexpr int kDecimFactor = 8;

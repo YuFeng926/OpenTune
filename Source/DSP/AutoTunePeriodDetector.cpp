@@ -107,24 +107,8 @@ double lowPassAt(const std::vector<float>& samples, int index)
     return value;
 }
 
-bool allVoicedInRange(const std::vector<std::uint8_t>& voiced,
-                      int begin, int end)
-{
-    if (voiced.empty())
-        return true;
-    if (begin < 0 || end > static_cast<int>(voiced.size()) || begin > end)
-        return false;
-    for (int i = begin; i < end; ++i)
-    {
-        if (voiced[static_cast<size_t>(i)] == 0)
-            return false;
-    }
-    return true;
-}
-
 std::optional<CoarseAcquisition> coarsePeriod(
     const std::vector<float>& samples,
-    const std::vector<std::uint8_t>& voiced,
     int endIndex)
 {
     constexpr int kWindow = AutoTunePeriodDetector::kCoarseWindowSamples;
@@ -133,8 +117,6 @@ std::optional<CoarseAcquisition> coarsePeriod(
         return std::nullopt;
 
     const int begin = endIndex - kWindow + 1;
-    if (!allVoicedInRange(voiced, begin - kFilterHistory, endIndex + 1))
-        return std::nullopt;
 
     // Keep the decimation phase fixed in the concatenated input stream.
     const int firstDecimated = begin
@@ -331,9 +313,7 @@ std::vector<AutoTunePeriodDetector::DetectedPeriod>
 AutoTunePeriodDetector::analyze(
     const float* lookbehind, int numLookbehindSamples,
     const float* input, int numInputSamples,
-    double sampleRate,
-    const std::uint8_t* lookbehindVoiced,
-    const std::uint8_t* inputVoiced)
+    double sampleRate)
 {
     // The reference flow defines the lag grid for a preferred 44.1 kHz sample rate.
     // These constants are sample-domain values and are intentionally not
@@ -352,13 +332,6 @@ AutoTunePeriodDetector::analyze(
     if (prefix > 0)
         std::copy(lookbehind, lookbehind + prefix, samples.begin());
     std::copy(input, input + numInputSamples, samples.begin() + prefix);
-
-    std::vector<std::uint8_t> voiced(static_cast<size_t>(prefix + numInputSamples), 1);
-    if (lookbehindVoiced != nullptr)
-        std::copy(lookbehindVoiced, lookbehindVoiced + prefix, voiced.begin());
-    if (inputVoiced != nullptr)
-        std::copy(inputVoiced, inputVoiced + numInputSamples,
-                  voiced.begin() + prefix);
 
     std::array<EHValue, kTrackingLagCount> tracking{};
     int ehOffset = kMinFullLag;
@@ -402,13 +375,8 @@ AutoTunePeriodDetector::analyze(
         return true;
     };
 
-    const auto voicedForTracking = [&](int endIndex, int base) {
-        const int maxLag = base + kTrackingLagCount - 1;
-        return allVoicedInRange(voiced, endIndex - 2 * maxLag + 1, endIndex + 1);
-    };
-
     const auto acquire = [&](int endIndex) {
-        const auto seed = coarsePeriod(samples, voiced, endIndex);
+        const auto seed = coarsePeriod(samples, endIndex);
         if (!seed.has_value())
             return false;
 
@@ -430,13 +398,6 @@ AutoTunePeriodDetector::analyze(
         // (initialization or the every-5-samples event); hop-held repeats and
         // failures leave it false.
         bool rateUpdated = false;
-        if (voiced[static_cast<size_t>(endIndex)] == 0)
-        {
-            held = {};
-            trackingInitialized = false;
-            result[static_cast<size_t>(i)] = held;
-            continue;
-        }
 
         bool initializedNow = false;
         if (!trackingInitialized && acquire(endIndex))
@@ -452,8 +413,7 @@ AutoTunePeriodDetector::analyze(
             continue;
         }
 
-        if (!voicedForTracking(endIndex, ehOffset)
-            || (!initializedNow && !updateTracking(endIndex)))
+        if (!initializedNow && !updateTracking(endIndex))
         {
             held = {};
             trackingInitialized = false;
@@ -487,8 +447,7 @@ AutoTunePeriodDetector::analyze(
             if (bestIndex < kTrackingCenterIndex)
             {
                 const int newBase = ehOffset - 1;
-                if (newBase + kTrackingCenterIndex < kMinFullLag
-                    || !voicedForTracking(endIndex, newBase))
+                if (newBase + kTrackingCenterIndex < kMinFullLag)
                 {
                     held = {};
                     trackingInitialized = false;
@@ -512,8 +471,7 @@ AutoTunePeriodDetector::analyze(
             else if (bestIndex > kTrackingCenterIndex + 1)
             {
                 const int newBase = ehOffset + 1;
-                if (newBase + kTrackingCenterIndex > kMaxFullLag
-                    || !voicedForTracking(endIndex, newBase))
+                if (newBase + kTrackingCenterIndex > kMaxFullLag)
                 {
                     held = {};
                     trackingInitialized = false;

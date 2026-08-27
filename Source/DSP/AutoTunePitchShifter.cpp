@@ -153,36 +153,30 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
 
         const double corrected = static_cast<double>(correctedF0[f0Frame]);
 
-        // The detector shadow supplies the measured period. The post-processed
-        // originalF0 remains only as the project's voiced/unvoiced gate; its
-        // numeric F0 value is never used as the measured period in shadow mode.
+        // The detector shadow supplies both the measured period and the
+        // voiced/unvoiced decision via its valid flag.  The resampler never
+        // hard-resets — address continuity is always preserved.
         double cyclePeriod = 0.0;
         double targetRate = 1.0;
         if (detectorPeriods != nullptr) {
             const auto& det = detectorPeriods[i];
-            const bool sourceVoiced = originalF0[f0Frame] > 0.0f;
-            if (!sourceVoiced) {
-                // Unvoiced neutral section: sample-exact passthrough with the
-                // chunk-local output pointer reset (project UV semantics).
-                resampleRate_ = 1.0;
-                outputAddr_ = inputAddr_ - 1.0;
-                output[static_cast<size_t>(i)] = inputExt[static_cast<size_t>(i)];
-                continue;
-            }
-            if (det.valid && det.periodSamples > 0.0f && corrected > 0.0) {
+            if (det.valid && det.periodSamples > 0.0f) {
                 cyclePeriod = static_cast<double>(det.periodSamples);
                 // Desired F0 comes from correctedF0 (effectiveF0). The smoothed
                 // rate is refreshed only on detector tracking/acquisition
                 // update events; hop-held samples keep the established rate.
-                targetRate = corrected * cyclePeriod / sampleRate_;
+                // A missing effective target is not UV: keep the detector's
+                // measured source pitch as a neutral 1:1 AutoTune target.
+                targetRate = corrected > 0.0
+                    ? corrected * cyclePeriod / sampleRate_
+                    : 1.0;
                 output[static_cast<size_t>(i)] =
                     processSample(cyclePeriod, targetRate, det.trackingUpdated);
                 continue;
             }
-            // Voiced detector failure follows the detector failure semantics:
-            // force rate 1 and keep walking the normal resampled path without
-            // relocating outputAddr_, preserving resampler address continuity
-            // until the next valid detection.
+            // Detector failure (including unvoiced sections where the detector
+            // outputs valid=false): preserve address continuity at rate 1,
+            // maintaining resampler state until the next valid detection.
             output[static_cast<size_t>(i)] = processSample(0.0, 1.0);
             continue;
         }
