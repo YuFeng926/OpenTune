@@ -40,6 +40,8 @@ public:
     float getConfidenceThreshold() const override { return confidenceThreshold_; }
     float getF0Min() const override { return f0Min_; }
     float getF0Max() const override { return f0Max_; }
+    void setInterpUV(bool interp) { interpUV_ = interp; }
+    bool getInterpUV() const { return interpUV_; }
 
     struct PreflightResult {
         bool success = false;
@@ -77,9 +79,11 @@ private:
 
     juce::dsp::FFT forwardFFT_;
 
-    float confidenceThreshold_ = 0.05f;
+    float confidenceThreshold_ = 0.006f; // 对齐官方 torchfcpe 默认值
     float f0Min_ = F0_MIN_DEFAULT;
     float f0Max_ = F0_MAX_DEFAULT;
+
+    bool interpUV_ = false; // 对齐官方 interp_uv（默认关闭）
 
     void initMelFilterbank();
     void initHannWindow();
@@ -87,6 +91,7 @@ private:
 
     std::vector<std::vector<float>> extractMel(const std::vector<float>& audio);
     std::vector<float> decodeF0(const float* latent, int numFrames, float threshold);
+    static void interpF0Gaps(std::vector<float>& f0);
 
     static float centToF0(float cent) {
         return 10.0f * std::pow(2.0f, cent / 1200.0f);

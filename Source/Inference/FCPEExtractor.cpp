@@ -232,6 +232,61 @@ std::vector<float> FCPEExtractor::decodeF0(const float* latent, int numFrames, f
 }
 
 // ============================================================
+// interp_uv — 对齐官方 batch_interp_with_replacement_detach
+// 对 unvoiced 帧 (f0==0) 用相邻 voiced 帧线性插值填充
+// ============================================================
+
+void FCPEExtractor::interpF0Gaps(std::vector<float>& f0)
+{
+    if (f0.empty()) return;
+
+    // 收集 voiced 帧索引和 f0 值
+    std::vector<int> voicedIdx;
+    std::vector<float> voicedF0;
+    for (int i = 0; i < static_cast<int>(f0.size()); ++i)
+    {
+        if (f0[i] > 0.0f)
+        {
+            voicedIdx.push_back(i);
+            voicedF0.push_back(f0[i]);
+        }
+    }
+
+    if (voicedIdx.empty()) return; // 全部 unvoiced，无法插值
+
+    // 对每个 unvoiced 帧做线性插值（Hz 空间，与官方一致）
+    for (int i = 0; i < static_cast<int>(f0.size()); ++i)
+    {
+        if (f0[i] > 0.0f) continue;
+
+        // 找第一个 voiced 索引 >= i
+        auto it = std::lower_bound(voicedIdx.begin(), voicedIdx.end(), i);
+
+        if (it == voicedIdx.begin())
+        {
+            // i 在第一个 voiced 帧之前 → clamp 到第一个 voiced f0
+            f0[i] = voicedF0.front();
+        }
+        else if (it == voicedIdx.end())
+        {
+            // i 在最后一个 voiced 帧之后 → clamp 到最后一个 voiced f0
+            f0[i] = voicedF0.back();
+        }
+        else
+        {
+            // i 在两个 voiced 帧之间 → 线性插值
+            int rightIdx = *it;
+            int leftIdx = *(it - 1);
+            float rightF0 = voicedF0[it - voicedIdx.begin()];
+            float leftF0 = voicedF0[it - voicedIdx.begin() - 1];
+
+            float t = static_cast<float>(i - leftIdx) / static_cast<float>(rightIdx - leftIdx);
+            f0[i] = leftF0 + t * (rightF0 - leftF0);
+        }
+    }
+}
+
+// ============================================================
 // Main extraction pipeline
 // ============================================================
 
@@ -266,6 +321,28 @@ std::vector<float> FCPEExtractor::extractF0(
 
     if (audio16k.empty())
         throw std::runtime_error("[FCPE] Resampling failed");
+
+    // ---- 前处理：对齐 RMVPEExtractor ----
+
+    // 1. 高通滤波：50Hz Butterworth 8阶（48dB/oct）
+    auto coefficients = juce::dsp::FilterDesign<float>::designIIRHighpassHighOrderButterworthMethod(
+        50.0f, static_cast<float>(SAMPLE_RATE), 8);
+    float* channelData = audio16k.data();
+    juce::dsp::AudioBlock<float> block(&channelData, 1, audio16k.size());
+    juce::dsp::ProcessContextReplacing<float> context(block);
+    for (auto& coefs : coefficients)
+    {
+        juce::dsp::IIR::Filter<float> filter;
+        filter.coefficients = coefs;
+        filter.reset();
+        filter.process(context);
+    }
+
+    // 2. 噪声门：-50dBFS（|sample| < 0.00316 → 0）
+    constexpr float kNoiseGateThreshold = 0.00316227766f;
+    for (auto& sample : audio16k)
+        if (std::abs(sample) < kNoiseGateThreshold)
+            sample = 0.0f;
 
     if (progressCallback) progressCallback(0.3f);
 
@@ -303,6 +380,26 @@ std::vector<float> FCPEExtractor::extractF0(
         outputTensors[0].GetTensorTypeAndShapeInfo().GetElementCount() / OUT_DIMS);
 
     auto f0 = decodeF0(outputData, outFrames, confidenceThreshold_);
+
+    // ---- 后处理：对齐官方 torchfcpe infer() ----
+
+    // 1. f0Min 过滤：低于 f0Min 的帧置零（官方: uv = (f0 < f0_min); f0 *= (1-uv)）
+    if (f0Min_ > 0.0f)
+    {
+        for (auto& v : f0)
+            if (v > 0.0f && v < f0Min_) v = 0.0f;
+    }
+
+    // 2. f0Max 钳位：超过 f0Max 的帧截断（官方: f0[f0 > f0_max] = f0_max）
+    if (f0Max_ > 0.0f)
+    {
+        for (auto& v : f0)
+            if (v > f0Max_) v = f0Max_;
+    }
+
+    // 3. interp_uv：对 unvoiced 帧用相邻 voiced 帧线性插值（官方默认关闭）
+    if (interpUV_)
+        interpF0Gaps(f0);
 
     if (partialCallback && !f0.empty())
         partialCallback(f0, 0);
