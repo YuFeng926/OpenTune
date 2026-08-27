@@ -742,6 +742,8 @@ public:
      */
     void setVocoderModelWeight(VocoderModelWeight weight);
 
+    bool setF0ModelType(F0ModelType type);
+
     /** 清除缓存并重新渲染所有 clip（UI 线程调用）。 */
     void invalidateAllContentCaches();
 

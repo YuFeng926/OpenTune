@@ -6,6 +6,8 @@
 #include <mutex>
 #include <vector>
 
+#include "../Inference/IF0Extractor.h"
+
 namespace Ort { struct Env; }
 
 namespace OpenTune {
@@ -17,7 +19,7 @@ struct Note;
 
 /**
  * Process-level inference runtime singleton.
- * Owns the single Ort::Env, the F0InferenceService (rmvpe.onnx ~350MB) and
+ * Owns the single Ort::Env, the process-level F0InferenceService and
  * the process-level GameNoteGenerator (GAME-small, single lazy instance).
  * All processors and document controllers share this one instance.
  *
@@ -28,7 +30,7 @@ struct Note;
  * teardown and is released only at process exit. Client lease: attach() at
  * construction, detach() at destruction; detach() only decrements the counter
  * and never releases f0Service_ / ortEnv_ / the GAME generator — a later
- * instance reuses the same services without rebuilding the ~350MB rmvpe.
+ * instance reuses the same services without rebuilding the selected F0 model.
  */
 class ProcessF0Runtime
 {
@@ -41,6 +43,7 @@ public:
     void detach();
 
     bool initialize(const std::string& modelsDir);
+    bool initialize(const std::string& modelsDir, F0ModelType initialModel);
 
     std::shared_ptr<Ort::Env> getOrtEnv() const;
     std::shared_ptr<F0InferenceService> getF0Service() const;

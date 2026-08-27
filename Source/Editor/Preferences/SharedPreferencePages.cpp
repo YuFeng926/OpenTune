@@ -5,8 +5,10 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include "Standalone/UI/UIColors.h"
+#include "Inference/ModelFactory.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/LocalizationManager.h"
+#include "Utils/ModelPathResolver.h"
 
 namespace OpenTune {
 
@@ -159,12 +161,14 @@ public:
                     std::function<void()> onPreferencesChanged,
                     std::function<void(bool)> onRenderingPriorityChanged,
                     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+                    std::function<bool(F0ModelType)> onF0ModelChanged,
                     std::function<void(bool)> onLightPitchCorrectionChanged,
                     bool isVst3Plugin)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
         , onRenderingPriorityChanged_(std::move(onRenderingPriorityChanged))
         , onVocoderModelWeightChanged_(std::move(onVocoderModelWeightChanged))
+        , onF0ModelChanged_(std::move(onF0ModelChanged))
         , onLightPitchCorrectionChanged_(std::move(onLightPitchCorrectionChanged))
         , isVst3Plugin_(isVst3Plugin)
     {
@@ -207,6 +211,34 @@ public:
                 onVocoderModelWeightChanged_(w);
             if (onPreferencesChanged_)
                 onPreferencesChanged_();
+        };
+
+        initialiseLabel(f0ModelLabel_, juce::String::fromUTF8(u8"音高检测模型"));
+        addAndMakeVisible(f0ModelLabel_);
+
+        const auto f0Models = ModelFactory::getAvailableF0Models(
+            ModelPathResolver::getModelsDirectory());
+        for (const auto& model : f0Models) {
+            const int itemId = static_cast<int>(model.type) + 1;
+            f0ModelSelector_.addItem(model.displayName, itemId);
+            f0ModelSelector_.setItemEnabled(itemId, model.isAvailable);
+        }
+        f0ModelSelector_.setSelectedId(
+            static_cast<int>(state.shared.f0ModelType) + 1,
+            juce::dontSendNotification);
+        initialiseComboBox(f0ModelSelector_);
+        addAndMakeVisible(f0ModelSelector_);
+
+        f0ModelSelector_.onChange = [this] {
+            const auto type = static_cast<F0ModelType>(f0ModelSelector_.getSelectedId() - 1);
+            const auto previousType = appPreferences_.getF0ModelType();
+            if (onF0ModelChanged_ && !onF0ModelChanged_(type)) {
+                f0ModelSelector_.setSelectedId(static_cast<int>(previousType) + 1,
+                                               juce::dontSendNotification);
+                return;
+            }
+            appPreferences_.setF0ModelType(type);
+            notifyChanged();
         };
 
         if (!isVst3Plugin_) {
@@ -261,7 +293,7 @@ public:
         // Publish preferred height for parent containers
         {
             const int vPad = 4 * 2; // reduced(10, 4) vertical
-            const int rows = isVst3Plugin_ ? 3 : 5; // 插件隐藏实验控件
+            const int rows = isVst3Plugin_ ? 4 : 6; // 插件隐藏实验控件
             const int rowH = 34;
             const int gaps = 8 * (rows - 1) + (isVst3Plugin_ ? 0 : 4); // 行间 8px；实验模式下额外 hint 前 4px
             const int hintHeight = isVst3Plugin_ ? 0 : 42;
@@ -289,6 +321,11 @@ public:
         row = bounds.removeFromTop(rowHeight);
         vocoderWeightLabel_.setBounds(row.removeFromLeft(labelWidth));
         vocoderWeightSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
+
+        bounds.removeFromTop(8);
+        row = bounds.removeFromTop(rowHeight);
+        f0ModelLabel_.setBounds(row.removeFromLeft(labelWidth));
+        f0ModelSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
 
         if (!isVst3Plugin_) {
             bounds.removeFromTop(8);
@@ -321,12 +358,15 @@ private:
     std::function<void()> onPreferencesChanged_;
     std::function<void(bool)> onRenderingPriorityChanged_;
     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged_;
+    std::function<bool(F0ModelType)> onF0ModelChanged_;
     std::function<void(bool)> onLightPitchCorrectionChanged_;
     bool isVst3Plugin_ = false;
     juce::Label renderingPriorityLabel_;
     juce::ComboBox renderingPrioritySelector_;
     juce::Label vocoderWeightLabel_;
     juce::ComboBox vocoderWeightSelector_;
+    juce::Label f0ModelLabel_;
+    juce::ComboBox f0ModelSelector_;
     juce::ToggleButton experimentalFeaturesToggle_;
     juce::Label experimentalFeaturesHintLabel_;
     juce::Label experimentalReferenceAlignModeLabel_;
@@ -1004,15 +1044,17 @@ std::unique_ptr<juce::Component> SharedPreferencePages::createRenderingPriorityC
     std::function<void()> onPreferencesChanged,
     std::function<void(bool forceCpu)> onRenderingPriorityChanged,
     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+    std::function<bool(F0ModelType)> onF0ModelChanged,
     std::function<void(bool)> onLightPitchCorrectionChanged,
     bool isVst3Plugin)
 {
     return std::make_unique<SharedAudioPage>(appPreferences,
-                                              std::move(onPreferencesChanged),
-                                              std::move(onRenderingPriorityChanged),
-                                              std::move(onVocoderModelWeightChanged),
-                                              std::move(onLightPitchCorrectionChanged),
-                                              isVst3Plugin);
+                                               std::move(onPreferencesChanged),
+                                               std::move(onRenderingPriorityChanged),
+                                               std::move(onVocoderModelWeightChanged),
+                                               std::move(onF0ModelChanged),
+                                               std::move(onLightPitchCorrectionChanged),
+                                               isVst3Plugin);
 }
 
 int SharedPreferencePages::getRenderingPriorityPageHeight(

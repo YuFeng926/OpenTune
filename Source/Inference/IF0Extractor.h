@@ -9,7 +9,8 @@ namespace Ort { struct RunOptions; }
 namespace OpenTune {
 
 enum class F0ModelType {
-    RMVPE = 0    // Robust Multi-scale Vocal Pitch Estimator (361MB)
+    RMVPE = 0,   // Robust Multi-scale Vocal Pitch Estimator (361MB)
+    FCPE = 1     // Fast Context-based Pitch Estimation (43MB, DML-capable)
 };
 
 struct F0ModelInfo {

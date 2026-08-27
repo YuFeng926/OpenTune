@@ -666,6 +666,12 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 // Apply persisted vocoder model weight bias at startup
     const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
     processorRef_.setVocoderModelWeight(weight);
+
+    // Apply persisted F0 model type at startup
+    const auto f0Type = appPreferences_.getState().shared.f0ModelType;
+    if ((f0Type != F0ModelType::RMVPE || processorRef_.isInferenceReady())
+        && !processorRef_.setF0ModelType(f0Type))
+        appPreferences_.setF0ModelType(F0ModelType::RMVPE);
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
@@ -2408,6 +2414,9 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
         processorRef_.setVocoderModelWeight(weight);
     };
+    auto onF0ModelChanged = [this](F0ModelType type) {
+        return processorRef_.setF0ModelType(type);
+    };
     auto onLightPitchCorrectionChanged = [this](bool) {
         processorRef_.invalidateAllContentCaches();
     };
@@ -2417,6 +2426,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         [this] { syncSharedAppPreferences(); },
         [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
         std::move(onVocoderModelWeightChanged),
+        std::move(onF0ModelChanged),
         std::move(onLightPitchCorrectionChanged));
 
     auto sharedPages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); }, false);

@@ -910,7 +910,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                         result.energy = computeFrameEnergy(
                             src, numSamples, static_cast<int>(sr),
                             result.f0, result.f0SampleRate, result.hopSize);
-                        result.modelName = "RMVPE";
+                        result.modelName = f0Svc->getCurrentF0Model() == F0ModelType::FCPE ? "FCPE" : "RMVPE";
                         result.success = true;
                         return result;
                     },
@@ -1069,7 +1069,11 @@ bool OpenTuneAudioProcessor::ensureF0Ready()
     if (ProcessF0Runtime::getInstance().isReady())
         return true;
     const auto modelsDir = ModelPathResolver::getModelsDirectory();
-    return ProcessF0Runtime::getInstance().initialize(modelsDir);
+    if (appPreferences_ == nullptr)
+        return ProcessF0Runtime::getInstance().initialize(modelsDir);
+
+    const auto initialModel = appPreferences_->getState().shared.f0ModelType;
+    return ProcessF0Runtime::getInstance().initialize(modelsDir, initialModel);
 }
 
 OpenTuneAudioProcessor::AutoRefAvailability
@@ -1200,6 +1204,25 @@ void OpenTuneAudioProcessor::invalidateAllContentCaches()
         }
         contentRenderService_->getTimeStretchCache().clear();
     }
+}
+
+bool OpenTuneAudioProcessor::setF0ModelType(F0ModelType type)
+{
+    auto& f0Runtime = ProcessF0Runtime::getInstance();
+    if (!f0Runtime.isReady()
+        && !f0Runtime.initialize(ModelPathResolver::getModelsDirectory(), type))
+        return false;
+
+    auto f0Svc = ProcessF0Runtime::getInstance().getF0Service();
+    if (!f0Svc) {
+        AppLogger::warn("[Processor] F0 service not ready, cannot switch model");
+        return false;
+    }
+    if (!f0Svc->setF0Model(type)) {
+        AppLogger::error("[Processor] Failed to switch F0 model");
+        return false;
+    }
+    return true;
 }
 
 // ============================================================================
@@ -5094,8 +5117,14 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     }
 
     if (!ok) return false;
-    onContentLocalMutationCompleted(
-        key, ContentEditRangeFrames{startFrame, endFrameExclusive});
+
+    // render range 必须覆盖 applyCorrectionToRange 的 calculationRange（两侧各
+    // expand getCorrectedF0BoundaryContextFrames 帧），否则边界处 chunk 保留旧
+    // 音频，与新 correction segment 产生不连续 → click。
+    const int maxFrame = static_cast<int>(snap->pitchCurve->getSnapshot()->getOriginalF0().size());
+    const auto expandedRange = PitchCurve::expandNoteBasedCorrectionRange(
+        startFrame, endFrameExclusive, maxFrame);
+    onContentLocalMutationCompleted(key, expandedRange);
     return true;
 }
 

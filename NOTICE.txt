@@ -91,3 +91,10 @@ TERMS OF REDISTRIBUTIONS:
 4. If you fine-tuned or modified the weights, leave a notice about what has been changed.
 5. (Optional) Leave a link to the official release page of the vocoder, and tell users
    that other versions and future updates of this vocoder can be obtained from the website.
+
+
+--- FCPE F0 Model ---
+
+The FCPE model is from the CNChTu/FCPE project and is provided under the MIT License.
+The model is distributed as an ONNX export; its inference front-end and decoder in
+OpenTune are based on the corresponding PitchNet implementation.

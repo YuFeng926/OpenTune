@@ -532,6 +532,8 @@ target_sources(OpenTune
         # AI Model Implementations
         Source/Inference/RMVPEExtractor.cpp
         Source/Inference/RMVPEExtractor.h
+        Source/Inference/FCPEExtractor.cpp
+        Source/Inference/FCPEExtractor.h
         Source/Inference/PCNSFHifiGANVocoder.cpp
         Source/Inference/PCNSFHifiGANVocoder.h
         Source/Inference/GameNoteGenerator.cpp
@@ -994,6 +996,7 @@ set(HIFIGAN_MODEL_COMMUNITY "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ON
 # Coulin9 微调版声码器权重（实验性）
 set(HIFIGAN_MODEL_COULIN9   "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx")
 set(RMVPE_MODEL             "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
+set(FCPE_MODEL              "${CMAKE_CURRENT_SOURCE_DIR}/models/fcpe.onnx")
 set(GAME_MODEL_DIR          "${CMAKE_CURRENT_SOURCE_DIR}/models/GAME")
 
 if(EXISTS "${GAME_MODEL_DIR}")
@@ -1067,6 +1070,9 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RMVPE_MODEL}"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/rmvpe.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FCPE_MODEL}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/fcpe.onnx"
         ${STANDALONE_GAME_MODEL_COPY_COMMANDS}
         COMMENT "Copying AI models to Standalone..."
     )
@@ -1095,6 +1101,9 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RMVPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/rmvpe.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FCPE_MODEL}"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/fcpe.onnx"
         ${STANDALONE_APPLE_GAME_MODEL_COPY_COMMANDS}
         COMMENT "Copying AI models to app bundle Resources..."
     )
@@ -1200,6 +1209,9 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${RMVPE_MODEL}"
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/rmvpe.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FCPE_MODEL}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/fcpe.onnx"
             ${VST3_GAME_MODEL_COPY_COMMANDS}
             COMMENT "Copying AI models to VST3 plugin..."
         )
@@ -1230,6 +1242,9 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${RMVPE_MODEL}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/rmvpe.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FCPE_MODEL}"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/fcpe.onnx"
             ${VST3_APPLE_GAME_MODEL_COPY_COMMANDS}
             COMMENT "Copying AI models to VST3 bundle Resources..."
         )

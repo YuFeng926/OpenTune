@@ -28,6 +28,7 @@ constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
 constexpr const char* kSharedSnapModeKey = "shared.snap.mode";
 constexpr const char* kSharedTrackColorModeKey = "shared.trackColor.mode";
 constexpr const char* kSharedLightPitchCorrectionEnabledKey = "shared.rendering.lightPitchCorrection";
+constexpr const char* kSharedF0ModelTypeKey = "shared.f0.modelType";
 constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMode";
 constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
 constexpr const char* kSharedGridStyleKey = "shared.pianoRoll.gridStyle";
@@ -218,6 +219,21 @@ static VocoderModelWeight fromVocoderWeightToken(const juce::String& token)
     return VocoderModelWeight::Community;
 }
 
+static juce::String toF0ModelTypeToken(F0ModelType type)
+{
+    switch (type) {
+        case F0ModelType::RMVPE: return "rmvpe";
+        case F0ModelType::FCPE: return "fcpe";
+    }
+    return "rmvpe";
+}
+
+static F0ModelType fromF0ModelTypeToken(const juce::String& token)
+{
+    if (token == "fcpe") return F0ModelType::FCPE;
+    return F0ModelType::RMVPE;
+}
+
 static juce::String toExperimentalRefAlignModeToken(ExperimentalReferenceAlignMode mode)
 {
     switch (mode) {
@@ -307,6 +323,8 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.lightPitchCorrectionEnabled = properties.getBoolValue(
         kSharedLightPitchCorrectionEnabledKey,
         state.shared.lightPitchCorrectionEnabled);
+    state.shared.f0ModelType = fromF0ModelTypeToken(
+        properties.getValue(kSharedF0ModelTypeKey, toF0ModelTypeToken(state.shared.f0ModelType)));
     state.shared.suppressEqRemoveConfirmation = properties.getBoolValue(
         kSharedEqSuppressRemoveConfirmationKey,
         state.shared.suppressEqRemoveConfirmation);
@@ -367,6 +385,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         state.shared.experimentalFeaturesEnabled);
     properties.setValue(kSharedLightPitchCorrectionEnabledKey,
                         state.shared.lightPitchCorrectionEnabled);
+    properties.setValue(kSharedF0ModelTypeKey,
+                        toF0ModelTypeToken(state.shared.f0ModelType));
     properties.setValue(kSharedEqSuppressRemoveConfirmationKey,
                         state.shared.suppressEqRemoveConfirmation);
     properties.setValue(kSharedExperimentalReferenceAlignKey,
@@ -637,6 +657,19 @@ void AppPreferences::setLightPitchCorrectionEnabled(bool enabled)
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.lightPitchCorrectionEnabled = enabled;
     saveLocked();
+}
+
+void AppPreferences::setF0ModelType(F0ModelType type)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.f0ModelType = type;
+    saveLocked();
+}
+
+F0ModelType AppPreferences::getF0ModelType() const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return state_.shared.f0ModelType;
 }
 
 void AppPreferences::setTimelineDisplayMode(TimelineDisplayMode mode)

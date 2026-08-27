@@ -194,6 +194,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     startTimerHz(kHeartbeatHz);
 
+    const auto f0Type = appPreferences_.getState().shared.f0ModelType;
+    if ((f0Type != F0ModelType::RMVPE || processorRef_.isInferenceReady())
+        && !processorRef_.setF0ModelType(f0Type))
+        appPreferences_.setF0ModelType(F0ModelType::RMVPE);
+
     grabKeyboardFocus();
 }
 
@@ -859,6 +864,9 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
         processorRef_.setVocoderModelWeight(weight);
     };
+    auto onF0ModelChanged = [this](F0ModelType type) {
+        return processorRef_.setF0ModelType(type);
+    };
     auto onLightPitchCorrectionChanged = [this](bool) {
         processorRef_.invalidateAllContentCaches();
     };
@@ -866,6 +874,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         appPreferences_, [this] { syncSharedAppPreferences(); },
         [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
         std::move(onVocoderModelWeightChanged),
+        std::move(onF0ModelChanged),
         std::move(onLightPitchCorrectionChanged),
         true);
     const int audioPageHeight = SharedPreferencePages::getRenderingPriorityPageHeight(*audioPage);

@@ -15,13 +15,20 @@ public:
         resamplingManager_ = std::make_shared<ResamplingManager>();
     }
 
-    bool initialize(const std::string& modelDir) {
+    bool initialize(const std::string& modelDir, F0ModelType initialModel) {
         try {
             modelDir_ = modelDir;
 
             auto extractorResult = ModelFactory::createF0Extractor(
-                F0ModelType::RMVPE, modelDir, *env_, resamplingManager_
+                initialModel, modelDir, *env_, resamplingManager_
             );
+
+            if (!extractorResult && initialModel != F0ModelType::RMVPE) {
+                AppLogger::warn("[F0InferenceService] Preferred F0 model unavailable; falling back to RMVPE");
+                extractorResult = ModelFactory::createF0Extractor(
+                    F0ModelType::RMVPE, modelDir, *env_, resamplingManager_);
+                initialModel = F0ModelType::RMVPE;
+            }
 
             if (!extractorResult) {
                 AppLogger::error("[F0InferenceService] Failed to load F0 model: " 
@@ -32,14 +39,18 @@ public:
             {
                 std::unique_lock<std::shared_mutex> lock(extractorMutex_);
                 currentExtractor_ = std::move(extractorResult).value();
-                currentModelType_ = F0ModelType::RMVPE;
+                currentModelType_ = initialModel;
             }
 
             initialized_.store(true, std::memory_order_release);
 #if defined(__APPLE__)
-            AppLogger::info("[F0InferenceService] Initialized with RMVPE model (CoreML)");
+            AppLogger::info("[F0InferenceService] Initialized with "
+                + juce::String(initialModel == F0ModelType::FCPE ? "FCPE" : "RMVPE")
+                + " model (CoreML)");
 #else
-            AppLogger::info("[F0InferenceService] Initialized with RMVPE model (CPU-only)");
+            AppLogger::info("[F0InferenceService] Initialized with "
+                + juce::String(initialModel == F0ModelType::FCPE ? "FCPE" : "RMVPE")
+                + " model (CPU/DML)");
 #endif
             return true;
 
@@ -58,7 +69,7 @@ public:
         std::function<void(const std::vector<float>&, int)> partialCallback)
     {
         if (!initialized_.load(std::memory_order_acquire)) {
-            if (!initialize(modelDir_)) {
+            if (!initialize(modelDir_, F0ModelType::RMVPE)) {
                 return Result<std::vector<float>>::failure(
                     ErrorCode::NotInitialized, "F0InferenceService failed to re-initialize");
             }
@@ -274,8 +285,8 @@ F0InferenceService::F0InferenceService(std::shared_ptr<Ort::Env> env)
 
 F0InferenceService::~F0InferenceService() = default;
 
-bool F0InferenceService::initialize(const std::string& modelDir) {
-    return pImpl_->initialize(modelDir);
+bool F0InferenceService::initialize(const std::string& modelDir, F0ModelType initialModel) {
+    return pImpl_->initialize(modelDir, initialModel);
 }
 
 Result<std::vector<float>> F0InferenceService::extractF0(

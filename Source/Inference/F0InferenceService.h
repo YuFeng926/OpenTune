@@ -53,7 +53,8 @@ public:
      * @param modelDir Path to model directory
      * @return true if initialization successful
      */
-    bool initialize(const std::string& modelDir);
+    bool initialize(const std::string& modelDir,
+                    F0ModelType initialModel = F0ModelType::RMVPE);
 
     /**
      * Extract F0 from audio

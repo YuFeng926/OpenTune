@@ -4,6 +4,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include "Inference/IF0Extractor.h"
 #include "Standalone/UI/UIColors.h"
 #include "Editor/Preferences/SharedPreferencePages.h"
 
@@ -170,6 +171,7 @@ std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::create
     std::function<void()> onPreferencesChanged,
     std::function<void(bool forceCpu)> onRenderingPriorityChanged,
     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
+    std::function<bool(F0ModelType)> onF0ModelChanged,
     std::function<void(bool)> onLightPitchCorrectionChanged)
 {
     std::vector<TabbedPreferencesDialog::PageSpec> pages;
@@ -177,6 +179,7 @@ std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::create
         appPreferences, onPreferencesChanged,
         std::move(onRenderingPriorityChanged),
         std::move(onVocoderModelWeightChanged),
+        std::move(onF0ModelChanged),
         std::move(onLightPitchCorrectionChanged),
         false);
     if (audioDeviceManager != nullptr) {

@@ -28,12 +28,16 @@ public:
 
     static std::vector<F0ModelInfo> getAvailableF0Models(const std::string& modelDir);
 
-    static Ort::SessionOptions createF0SessionOptions(bool& outGpuMode);
+    static Ort::SessionOptions createF0SessionOptions(
+        F0ModelType type,
+        bool& outGpuMode,
+        bool forceCpu = false);
 
 private:
     static std::unique_ptr<Ort::Session> loadF0Session(
         const std::string& modelPath,
         Ort::Env& env,
+        F0ModelType type,
         bool& outGpuMode
     );
 };

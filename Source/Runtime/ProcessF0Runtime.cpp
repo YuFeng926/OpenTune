@@ -3,6 +3,7 @@
 #include "../Inference/GameNoteGenerator.h"
 #include "../Utils/ModelPathResolver.h"
 #include "../Utils/AccelerationDetector.h"
+#include "../Utils/AppPreferences.h"
 #include "../Utils/AppLogger.h"
 
 #include <onnxruntime_cxx_api.h>
@@ -49,6 +50,16 @@ std::shared_ptr<F0InferenceService> ProcessF0Runtime::getF0Service() const
 
 bool ProcessF0Runtime::initialize(const std::string& modelsDir)
 {
+    if (ready_.load(std::memory_order_acquire)
+        || initAttempted_.load(std::memory_order_acquire))
+        return ready_.load(std::memory_order_acquire);
+
+    AppPreferences preferences;
+    return initialize(modelsDir, preferences.getF0ModelType());
+}
+
+bool ProcessF0Runtime::initialize(const std::string& modelsDir, F0ModelType initialModel)
+{
     if (ready_.load(std::memory_order_acquire))
         return true;
 
@@ -76,7 +87,7 @@ bool ProcessF0Runtime::initialize(const std::string& modelsDir)
         ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
         f0Service_ = std::make_shared<F0InferenceService>(ortEnv_);
 
-        if (!f0Service_->initialize(modelsDir))
+        if (!f0Service_->initialize(modelsDir, initialModel))
         {
             AppLogger::log("ProcessF0Runtime: F0 initialize failed");
             f0Service_.reset();
