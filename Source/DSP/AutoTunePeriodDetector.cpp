@@ -262,10 +262,54 @@ std::optional<CoarseAcquisition> coarsePeriod(
             const double tieMargin =
                 kTieMarginScale
                 * std::max(firstCand->energy, secondCand->energy);
-            if (secondCand->score + tieMargin < firstCand->score)
-                selectedPeriod = secondCand->lag;
+
+            // ── Sub-harmonic consistency check ──────────────────────────
+            // When secondLag ≈ 2 × firstLag AND the EH scores are within
+            // tie margin (a "tie"), the raw scores alone cannot reliably
+            // distinguish P+non-stationarity from genuine 2P.  We verify
+            // that P is also a good prediction lag inside the 2P window.
+            //
+            // If P passes the periodicity threshold in the 2P context,
+            // the signal is P-periodic → select P.  Otherwise normal
+            // tie-breaking applies.
+            //
+            // Only triggered on "ties" to avoid disrupting weak-fundamental
+            // cases where secondCand (the longer period) genuinely wins.
+            constexpr double kHarmonicRatioTolerance = 0.15;
+            const double ratio = static_cast<double>(secondCand->lag)
+                / static_cast<double>(firstCand->lag);
+            const bool isHarmonicRelation = std::fabs(ratio - 2.0)
+                < kHarmonicRatioTolerance * 2.0;
+
+            const bool scoresTied =
+                std::fabs(firstCand->score - secondCand->score) <= tieMargin;
+
+            if (isHarmonicRelation && scoresTied)
+            {
+                const auto ehAtHalf = computeEHAt(
+                    samples, endIndex, firstCand->lag);
+                if (ehAtHalf.has_value()
+                    && ehAtHalf->energy >= kMinimumEnergy
+                    && ehAtHalf->value()
+                        <= kPeriodicityEpsilon * ehAtHalf->energy)
+                {
+                    selectedPeriod = firstCand->lag;
+                }
+                else
+                {
+                    if (secondCand->score < firstCand->score)
+                        selectedPeriod = secondCand->lag;
+                    else
+                        selectedPeriod = firstCand->lag;
+                }
+            }
             else
-                selectedPeriod = firstCand->lag;
+            {
+                if (secondCand->score + tieMargin < firstCand->score)
+                    selectedPeriod = secondCand->lag;
+                else
+                    selectedPeriod = firstCand->lag;
+            }
         }
         else if (firstCand.has_value())
             selectedPeriod = firstCand->lag;
