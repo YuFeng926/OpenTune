@@ -5124,7 +5124,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     const int maxFrame = static_cast<int>(snap->pitchCurve->getSnapshot()->getOriginalF0().size());
     const auto expandedRange = PitchCurve::expandNoteBasedCorrectionRange(
         startFrame, endFrameExclusive, maxFrame);
-    onContentLocalMutationCompleted(key, expandedRange);
+    onContentLocalMutationCompleted(key, ContentEditRangeFrames{ expandedRange.startFrame, expandedRange.endFrameExclusive });
     return true;
 }
 
