@@ -16,8 +16,10 @@ constexpr int kTrackingLagCount = 8;
 // center index must stay inside [kMinFullLag, kMaxFullLag].
 constexpr int kTrackingCenterIndex = kTrackingLagCount / 2 - 1;
 constexpr int kTrackingUpdateInterval = 5;
-// The patent permits eps in [0, 0.4]; the stricter project setting avoids
-// accepting short-window noise minima while retaining the patent test form.
+// the reference flow permits eps in [0, 0.4]. The wider value is used in coarse
+// acquisition to tolerate decimated-domain quantisation error; the stricter
+// value is used in full-rate tracking to reject noise.
+constexpr double kCoarseEpsilon = 0.4;
 constexpr double kPeriodicityEpsilon = 0.1;
 constexpr double kMinimumEnergy = 1.0e-6;
 constexpr double kReferenceSampleRate = 44100.0;
@@ -173,7 +175,7 @@ std::optional<CoarseAcquisition> coarsePeriod(
 
         const EHValue& current = values[static_cast<size_t>(lag)];
         const double currentValue = current.value();
-        return currentValue <= kPeriodicityEpsilon * current.energy
+        return currentValue <= kCoarseEpsilon * current.energy
             && currentValue <= values[static_cast<size_t>(lag - 1)].value()
             && currentValue <= values[static_cast<size_t>(lag + 1)].value();
     };
@@ -208,15 +210,69 @@ std::optional<CoarseAcquisition> coarsePeriod(
         if (secondLag == 0)
             return std::nullopt;
 
-        const int firstPeriod = firstLag * AutoTunePeriodDetector::kDecimFactor;
-        const int secondPeriod = secondLag * AutoTunePeriodDetector::kDecimFactor;
-        const auto firstFull = computeEHAt(samples, endIndex, firstPeriod);
-        const auto secondFull = computeEHAt(samples, endIndex, secondPeriod);
-        if (!firstFull.has_value() || !secondFull.has_value())
-            return std::nullopt;
+        // Full-rate confirmation: search ±(kDecimFactor/2) around each
+        // coarse candidate's full-rate center (8*lag), intersected with
+        // [kMinFullLag, kMaxFullLag]. Both candidates are confirmed; the
+        // best is chosen by score with an energy-scaled tie margin.
+        constexpr int kHalfWindow =
+            AutoTunePeriodDetector::kDecimFactor / 2;
 
-        selectedPeriod = firstFull->value() <= secondFull->value()
-            ? firstPeriod : secondPeriod;
+        struct FullRateCandidate {
+            int lag = 0;
+            double score = std::numeric_limits<double>::infinity();
+            double energy = 0.0;
+        };
+
+        const auto confirmCandidate = [&](int coarseLag)
+            -> std::optional<FullRateCandidate>
+        {
+            const int center =
+                coarseLag * AutoTunePeriodDetector::kDecimFactor;
+            FullRateCandidate best{};
+            for (int lag = center - kHalfWindow;
+                 lag <= center + kHalfWindow; ++lag)
+            {
+                if (lag < AutoTunePeriodDetector::kMinFullLag
+                    || lag > AutoTunePeriodDetector::kMaxFullLag)
+                    continue;
+                const auto eh = computeEHAt(samples, endIndex, lag);
+                if (!eh.has_value())
+                    continue;
+                if (eh->energy < kMinimumEnergy)
+                    continue;
+                const double v = eh->value();
+                if (v > kPeriodicityEpsilon * eh->energy)
+                    continue;
+                if (v < best.score
+                    || (v == best.score && lag < best.lag))
+                {
+                    best = FullRateCandidate{lag, v, eh->energy};
+                }
+            }
+            return best.lag > 0
+                ? std::optional<FullRateCandidate>(best)
+                : std::nullopt;
+        };
+
+        constexpr double kTieMarginScale = 0.005;
+        const auto firstCand = confirmCandidate(firstLag);
+        const auto secondCand = confirmCandidate(secondLag);
+        if (firstCand.has_value() && secondCand.has_value())
+        {
+            const double tieMargin =
+                kTieMarginScale
+                * std::max(firstCand->energy, secondCand->energy);
+            if (secondCand->score + tieMargin < firstCand->score)
+                selectedPeriod = secondCand->lag;
+            else
+                selectedPeriod = firstCand->lag;
+        }
+        else if (firstCand.has_value())
+            selectedPeriod = firstCand->lag;
+        else if (secondCand.has_value())
+            selectedPeriod = secondCand->lag;
+        else
+            return std::nullopt;
     }
 
     if (selectedPeriod < AutoTunePeriodDetector::kMinFullLag

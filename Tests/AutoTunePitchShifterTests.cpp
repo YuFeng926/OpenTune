@@ -1235,6 +1235,208 @@ void testDetectorTracksBoundaryCenterPeriods()
     }
 }
 
+// 1000 Hz sine on 44.1 kHz has a 44.1-sample period that sits between the
+// 8-sample coarse candidate quantisation grid points. A detector bug can lock
+// onto the 88.2-sample second autocorrelation minimum (2× true period) and
+// propagate it through the resampler so the rendered output jumps to ~2000 Hz.
+// This test feeds the full lookbehind, originalF0 == correctedF0 (no shift
+// requested), and verifies both the detector period and the output frequency.
+void testDetectorShadowDoesNotRenderOctaveAtQuantizedBoundary()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr double kFreq = 1000.0;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 4096;
+
+    // Phase-continuous stream: kPrefix lookbehind samples then the input.
+    const std::vector<float> stream = makeSineSegment(
+        kFreq, kSampleRate, -kPrefix, kPrefix + kNumSamples, 0.5);
+
+    // ---- Detector period assertion ----
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+        static_cast<double>(kSampleRate));
+
+    const double expectedPeriod = static_cast<double>(kSampleRate) / kFreq; // 44.1
+    int validCount = 0;
+    double maxPeriodErr = 0.0;
+    for (const auto& f : frames) {
+        if (!f.valid)
+            continue;
+        ++validCount;
+        maxPeriodErr = std::max(maxPeriodErr,
+            std::fabs(static_cast<double>(f.periodSamples) - expectedPeriod));
+    }
+
+    expectTrue(validCount > kNumSamples * 3 / 4,
+               "octave guard: 1000 Hz achieves a valid lock on most samples");
+    expectTrue(maxPeriodErr < 3.0,
+               "octave guard: detected period stays close to 44.1 samples "
+               "(must not lock onto the 88-sample 2× harmonic)");
+
+    // ---- Rendered output frequency assertion ----
+    // originalF0 == correctedF0: no pitch shift, so the output must still be
+    // ~1000 Hz. If the resampler uses the doubled period the output would
+    // render at ~2000 Hz.
+    const float f0 = static_cast<float>(kFreq);
+    const std::vector<float> tail = makeSineSegment(
+        kFreq, kSampleRate, kPrefix + kNumSamples,
+        Shifter::kLookaheadSamples, 0.5);
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const std::vector<float> out = shifter.shiftChunk(
+        stream.data() + kPrefix, kNumSamples, &f0, &f0,
+        1, 100.0, 0.0, tail.data(), Shifter::kLookaheadSamples,
+        stream.data(), kPrefix,
+        frames.data(), static_cast<int>(frames.size()));
+
+    expectTrue(static_cast<int>(out.size()) == kNumSamples,
+               "octave guard: output length preserved");
+    expectTrue(allFinite(out),
+               "octave guard: output is finite");
+
+    // Measure zero-crossing frequency over the second half to avoid
+    // startup transients.
+    constexpr int kHalf = kNumSamples / 2;
+    const int crossings = countPositiveZeroCrossings(out, kHalf, kNumSamples);
+    const double duration = static_cast<double>(kNumSamples - kHalf) / kSampleRate;
+    const double measuredFreq = static_cast<double>(crossings) / duration;
+
+    // The measured frequency must be within ~10% of 1000 Hz. A 2× lock would
+    // yield ~2000 Hz; accept anything 900..1100 Hz as correct.
+    expectTrue(measuredFreq > 900.0 && measuredFreq < 1100.0,
+               "octave guard: rendered output frequency is within 10% of 1000 Hz");
+}
+
+// 500 Hz sine on 44.1 kHz has an 88.2-sample period — exactly the 2× of the
+// 1000 Hz test case. A detector bug that unconditionally halves the period
+// would lock onto ~44.1 and render ~1000 Hz. This test verifies the detector
+// reports the true ~88.2-sample period and the rendered output stays at 500 Hz.
+void testDetectorShadowDoesNotHalvePeriod()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr double kFreq = 500.0;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 4096;
+
+    const std::vector<float> stream = makeSineSegment(
+        kFreq, kSampleRate, -kPrefix, kPrefix + kNumSamples, 0.5);
+
+    // ---- Detector period assertion ----
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+        static_cast<double>(kSampleRate));
+
+    const double expectedPeriod = static_cast<double>(kSampleRate) / kFreq; // 88.2
+    int validCount = 0;
+    double maxPeriodErr = 0.0;
+    for (const auto& f : frames) {
+        if (!f.valid)
+            continue;
+        ++validCount;
+        maxPeriodErr = std::max(maxPeriodErr,
+            std::fabs(static_cast<double>(f.periodSamples) - expectedPeriod));
+    }
+
+    expectTrue(validCount > kNumSamples * 3 / 4,
+               "500 Hz shadow: achieves a valid lock on most samples");
+    expectTrue(maxPeriodErr < expectedPeriod * 0.12,
+               "500 Hz shadow: detected period stays within 12% of 88.2 "
+               "(must not lock onto ~44.1 half-period)");
+
+    // ---- Rendered output frequency assertion ----
+    const float f0 = static_cast<float>(kFreq);
+    const std::vector<float> tail = makeSineSegment(
+        kFreq, kSampleRate, kPrefix + kNumSamples,
+        Shifter::kLookaheadSamples, 0.5);
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const std::vector<float> out = shifter.shiftChunk(
+        stream.data() + kPrefix, kNumSamples, &f0, &f0,
+        1, 100.0, 0.0, tail.data(), Shifter::kLookaheadSamples,
+        stream.data(), kPrefix,
+        frames.data(), static_cast<int>(frames.size()));
+
+    expectTrue(static_cast<int>(out.size()) == kNumSamples,
+               "500 Hz shadow: output length preserved");
+    expectTrue(allFinite(out),
+               "500 Hz shadow: output is finite");
+
+    constexpr int kHalf = kNumSamples / 2;
+    const int crossings = countPositiveZeroCrossings(out, kHalf, kNumSamples);
+    const double duration = static_cast<double>(kNumSamples - kHalf) / kSampleRate;
+    const double measuredFreq = static_cast<double>(crossings) / duration;
+
+    // Must be near 500 Hz; a period-halved lock would yield ~1000 Hz.
+    expectTrue(measuredFreq > 400.0 && measuredFreq < 600.0,
+               "500 Hz shadow: rendered output frequency is ~500 Hz, not ~1000 Hz");
+}
+
+// the reference flow weak-fundamental regression: a mixture whose 220 Hz fundamental is
+// 20 dB below its 440 Hz harmonic (0.05 vs 0.5). The detector must lock onto
+// the true 220 Hz period (~200.45 samples at 44.1 kHz), not the dominant 440 Hz
+// harmonic (~100.23 samples). Feeding the full lookbehind and verifying the
+// majority of valid frames land near Fs/220.
+void testDetectorWeakFundamentalLocksToTruePeriod()
+{
+    constexpr double kSampleRate = 44100.0;
+    constexpr double kFundamental = 220.0;          // weak component
+    constexpr double kHarmonic = 440.0;              // dominant component
+    constexpr double kAmpFundamental = 0.05;         // 20 dB below harmonic
+    constexpr double kAmpHarmonic = 0.5;
+    constexpr int kPrefix =
+        OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kNumSamples = 4096;
+
+    const double expectedPeriod = kSampleRate / kFundamental; // ~200.45
+
+    // Phase-continuous mixed waveform: accumulate independent phases so there
+    // is no discontinuity at the prefix/input seam.
+    const int total = kPrefix + kNumSamples;
+    std::vector<float> stream(static_cast<size_t>(total));
+    double phase220 = 0.0;
+    double phase440 = 0.0;
+    for (int n = -kPrefix; n < kNumSamples; ++n) {
+        phase220 += kTwoPi * kFundamental / kSampleRate;
+        phase440 += kTwoPi * kHarmonic / kSampleRate;
+        const float sample = static_cast<float>(
+            kAmpFundamental * std::sin(phase220)
+            + kAmpHarmonic * std::sin(phase440));
+        stream[static_cast<size_t>(n + kPrefix)] = sample;
+    }
+
+    const auto frames = OpenTune::AutoTunePeriodDetector::analyze(
+        stream.data(), kPrefix, stream.data() + kPrefix, kNumSamples,
+        kSampleRate);
+
+    expectTrue(static_cast<int>(frames.size()) == kNumSamples,
+               "weak fundamental: one result per input sample");
+
+    int validCount = 0;
+    int nearFundamental = 0;
+    int nearHarmonic = 0;
+    for (const auto& f : frames) {
+        if (!f.valid)
+            continue;
+        ++validCount;
+        const double err =
+            std::fabs(static_cast<double>(f.periodSamples) - expectedPeriod);
+        if (err < 8.0)
+            ++nearFundamental;
+        if (std::fabs(static_cast<double>(f.periodSamples)
+                      - kSampleRate / kHarmonic) < 8.0)
+            ++nearHarmonic;
+    }
+
+    expectTrue(validCount > kNumSamples / 2,
+               "weak fundamental: majority of frames are valid");
+    expectTrue(nearFundamental > validCount / 2,
+               "weak fundamental: most valid frames lock near Fs/220 (~200), "
+               "not Fs/440 (~100)");
+    expectTrue(nearHarmonic < validCount / 4,
+               "weak fundamental: few frames lock onto the 440 Hz harmonic");
+}
+
 } // namespace
 
 int main()
@@ -1262,6 +1464,9 @@ int main()
     testShifterKeepsAddressContinuityThroughVoicedFailure();
     testDetectorFullRateLagBounds();
     testDetectorTracksBoundaryCenterPeriods();
+    testDetectorShadowDoesNotRenderOctaveAtQuantizedBoundary();
+    testDetectorShadowDoesNotHalvePeriod();
+    testDetectorWeakFundamentalLocksToTruePeriod();
 
     if (g_failures == 0) {
         std::printf("All AutoTunePitchShifter tests passed.\n");
