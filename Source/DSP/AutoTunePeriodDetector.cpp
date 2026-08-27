@@ -547,6 +547,46 @@ AutoTunePeriodDetector::analyze(
         result[static_cast<size_t>(i)].trackingUpdated = rateUpdated;
     }
 
+    // ── Post-pass: octave-jump correction ──────────────────────────────
+    // Mirrors the RMVPEExtractor::fixOctaveErrors pattern: a simple
+    // forward + backward scan through consecutive valid frames.  When the
+    // period ratio between neighbours is ≈2.0, snap the outlier back.
+    // The bidirectional scan ensures that a single misplaced frame
+    // (whether it jumped up or dropped down) is caught regardless of
+    // scan direction.
+    //
+    // The tolerance is deliberately tight (±10%) to avoid interfering
+    // with normal frequency glides or vibrato, where the period changes
+    // smoothly by small ratios between frames.
+    {
+        constexpr float kOctaveLow = 1.85f;
+        constexpr float kOctaveHigh = 2.15f;
+
+        // Forward pass: if curr ≈ 2× prev, curr is wrong → snap to prev.
+        for (int i = 1; i < numInputSamples; ++i)
+        {
+            auto& prev = result[static_cast<size_t>(i - 1)];
+            auto& curr = result[static_cast<size_t>(i)];
+            if (!prev.valid || !curr.valid)
+                continue;
+            const float ratio = curr.periodSamples / prev.periodSamples;
+            if (ratio > kOctaveLow && ratio < kOctaveHigh)
+                curr.periodSamples = prev.periodSamples;
+        }
+
+        // Backward pass: if prev ≈ 2× next, prev is wrong → snap to next.
+        for (int i = numInputSamples - 2; i >= 0; --i)
+        {
+            auto& curr = result[static_cast<size_t>(i)];
+            auto& next = result[static_cast<size_t>(i + 1)];
+            if (!curr.valid || !next.valid)
+                continue;
+            const float ratio = curr.periodSamples / next.periodSamples;
+            if (ratio > kOctaveLow && ratio < kOctaveHigh)
+                curr.periodSamples = next.periodSamples;
+        }
+    }
+
     return result;
 }
 
