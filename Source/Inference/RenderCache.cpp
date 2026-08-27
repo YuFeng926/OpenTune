@@ -326,7 +326,6 @@ void RenderCache::clear() {
 
     {
         std::lock_guard<std::mutex> lg(preparedBuildMutex_);
-        preparedSampleRate_ = 0.0;
 
         if (preparedMemoryUsage_ > 0) {
             globalCacheCurrentBytes().fetch_sub(preparedMemoryUsage_, std::memory_order_relaxed);
