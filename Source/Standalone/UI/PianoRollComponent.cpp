@@ -1515,6 +1515,39 @@ void PianoRollComponent::drawPlayheadOverlay(juce::Graphics& g)
     g.fillPath(kPlayheadTriangle, juce::AffineTransform::translation(anchorX, 0.0f));
 }
 
+void PianoRollComponent::drawPlayheadNoteHighlight(juce::Graphics& g)
+{
+    const bool playing = playHeadState_.isPlaying.load(std::memory_order_relaxed);
+    if (!playing || playheadTimeForPaint_ <= 0.0) return;
+
+    juce::Graphics::ScopedSaveState ss(g);
+    g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
+
+    PianoRollRenderer::RenderContext ctx;
+    ctx.width = getTimelineViewportBounds().getWidth();
+    ctx.height = getTimelineContentViewportHeight();
+    ctx.pianoKeyWidth = pianoKeyWidth_;
+    ctx.pixelsPerSecond = camera_.pixelsPerSecond;
+    ctx.pixelsPerSemitone = pixelsPerSemitone_;
+    ctx.minMidi = minMidi_;
+    ctx.maxMidi = maxMidi_;
+    ctx.coords = makeViewMapper();
+    ctx.contents = buildContentRenderItems();
+
+    for (const auto& item : ctx.contents) {
+        if (!item.active || !item.displayNotes) continue;
+        std::vector<int> hitIndices;
+        const auto* notes = item.displayNotes;
+        for (int i = 0; i < static_cast<int>(notes->size()); ++i) {
+            const auto& n = (*notes)[i];
+            if (playheadTimeForPaint_ >= n.startTime && playheadTimeForPaint_ < n.endTime)
+                hitIndices.push_back(i);
+        }
+        if (!hitIndices.empty())
+            renderer_->drawSelectedNoteHighlights(g, ctx, *notes, hitIndices, item);
+    }
+}
+
 // ============================================================================
 // drawTransientOverlay 鈥?paint transient interaction previews
 // ============================================================================

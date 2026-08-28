@@ -16,6 +16,9 @@ void PianoRollOverlayComponent::paint(juce::Graphics& g)
     // 1. 播放头
     owner_.drawPlayheadOverlay(g);
 
+    // 1b. 播放头经过音符高亮
+    owner_.drawPlayheadNoteHighlight(g);
+
     // 2. 交互 Overlay（选中高亮、框选、绘制预览、ghost 把手等）
     owner_.drawTransientOverlay(g);
 

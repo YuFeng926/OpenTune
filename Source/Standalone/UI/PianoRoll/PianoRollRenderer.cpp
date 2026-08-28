@@ -1088,6 +1088,29 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                                         juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
             }
+
+            // ── HiFiGAN vocoder glow on blob ──
+            if (item.pitchSnapshot != nullptr
+                && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline))
+            {
+                g.saveState();
+                g.reduceClipRegion(blob);
+
+                juce::ColourGradient glow(juce::Colours::white.withAlpha(0.07f),
+                                          static_cast<float>(x1), centerY - halfH,
+                                          juce::Colours::transparentWhite,
+                                          static_cast<float>(x2), centerY + halfH,
+                                          false);
+                g.setGradientFill(glow);
+                g.fillPath(blob);
+
+                g.setColour(juce::Colours::white.withAlpha(0.10f));
+                g.strokePath(blob, juce::PathStrokeType(1.0f,
+                                                        juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+
+                g.restoreState();
+            }
         }
 
         return;
@@ -1195,6 +1218,30 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 g.setColour(item.displayColour.withAlpha(0.85f));
                 g.drawRect(noteBounds.expanded(1.0f), 2.0f);
             }
+        }
+
+        // ── HiFiGAN vocoder glow: subtle top-left light source ──
+        if (item.pitchSnapshot != nullptr
+            && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline))
+        {
+            g.saveState();
+            g.reduceClipRegion(noteBounds.toType<int>());
+
+            juce::ColourGradient glow(juce::Colours::white.withAlpha(0.09f),
+                                      noteBounds.getX(), noteBounds.getY(),
+                                      juce::Colours::transparentWhite,
+                                      noteBounds.getRight(), noteBounds.getBottom(),
+                                      false);
+            g.setGradientFill(glow);
+            g.fillRect(noteBounds);
+
+            g.setColour(juce::Colours::white.withAlpha(0.14f));
+            g.drawLine(noteBounds.getX() + 0.5f, noteBounds.getY() + 0.5f,
+                       noteBounds.getRight() - 0.5f, noteBounds.getY() + 0.5f, 1.0f);
+            g.drawLine(noteBounds.getX() + 0.5f, noteBounds.getY() + 0.5f,
+                       noteBounds.getX() + 0.5f, noteBounds.getBottom() - 0.5f, 1.0f);
+
+            g.restoreState();
         }
     }
 
@@ -1894,6 +1941,35 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     g.strokePath(runPath, juce::PathStrokeType(0.55f,
                                                               juce::PathStrokeType::curved,
                                                               juce::PathStrokeType::rounded));
+                }
+            }
+        }
+
+        // ── HiFiGAN vocoder glow: extra wide, low-alpha pass ──
+        if (item.pitchSnapshot != nullptr) {
+            bool hasVocoder = false;
+            for (int f = startFrame; f < endFrame; ++f) {
+                if (item.pitchSnapshot->isVocoderFrame(f)) { hasVocoder = true; break; }
+            }
+            if (hasVocoder) {
+                const float extraGlowWidth = lineWidth + (isAurora ? 4.0f : 3.0f);
+                const juce::PathStrokeType extraGlowStroke(extraGlowWidth,
+                    juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+
+                for (const auto& segment : visualSegments) {
+                    if (segment.points.empty()) continue;
+                    juce::Path glowPath;
+                    if (segment.points.size() == 1) {
+                        const auto& p = segment.points.front();
+                        glowPath.startNewSubPath(p.x - 0.01f, p.y);
+                        glowPath.lineTo(p.x + 0.01f, p.y);
+                    } else if (segment.useLinearPath) {
+                        appendLinearF0Path(glowPath, segment.points, 0, segment.points.size() - 1);
+                    } else {
+                        appendSmoothedF0Path(glowPath, segment.points, 0, segment.points.size() - 1);
+                    }
+                    g.setColour(juce::Colours::white.withAlpha(0.05f));
+                    g.strokePath(glowPath, extraGlowStroke);
                 }
             }
         }

@@ -32,11 +32,21 @@ void FCPEExtractor::initMelFilterbank()
 {
     const int numBins = N_FFT / 2 + 1;
 
-    auto hzToMel = [](float hz) -> float {
-        return 2595.0f * std::log10(1.0f + hz / 700.0f);
+    // Slaney mel scale (librosa default htk=False)
+    // 线性 <1000Hz，对数 ≥1000Hz
+    const float fSp = 200.0f / 3.0f;
+    const float minLogMel = 1000.0f / fSp;
+    const float logStep = std::log(6.4f) / 27.0f;
+
+    auto hzToMel = [fSp, minLogMel, logStep](float hz) -> float {
+        if (hz < 1000.0f)
+            return hz / fSp;
+        return minLogMel + std::log(hz / 1000.0f) / logStep;
     };
-    auto melToHz = [](float mel) -> float {
-        return 700.0f * (std::pow(10.0f, mel / 2595.0f) - 1.0f);
+    auto melToHz = [fSp, minLogMel, logStep](float mel) -> float {
+        if (mel < minLogMel)
+            return fSp * mel;
+        return 1000.0f * std::exp(logStep * (mel - minLogMel));
     };
 
     const float melMin = hzToMel(0.0f);

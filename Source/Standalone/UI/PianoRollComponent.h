@@ -419,6 +419,7 @@ private:
 
     // ── Overlay 绘制委托（由 PianoRollOverlayComponent 调用） ──
     void drawPlayheadOverlay(juce::Graphics& g);
+    void drawPlayheadNoteHighlight(juce::Graphics& g);
     void drawTransientOverlay(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
     void drawLineAnchorPreview(juce::Graphics& g);

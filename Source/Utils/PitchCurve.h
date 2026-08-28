@@ -6,9 +6,11 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <cmath>
 #include "F0Timeline.h"
 #include "Note.h"
 #include "PitchUtils.h"
+#include "../Inference/ChunkRenderStrategy.h"
 
 namespace OpenTune {
 
@@ -35,6 +37,27 @@ struct PitchCorrectionSegment {
         : startFrame(start), endFrame(end), f0Data(data), source(src) {}
 };
 
+static std::vector<bool> computeVocoderMask(
+    const std::vector<float>& originalF0,
+    const std::vector<PitchCorrectionSegment>& correctionSegments)
+{
+    const int numFrames = static_cast<int>(originalF0.size());
+    std::vector<bool> mask(numFrames, false);
+    for (const auto& seg : correctionSegments) {
+        for (int f = seg.startFrame; f < seg.endFrame && f < numFrames; ++f) {
+            const float original = originalF0[static_cast<size_t>(f)];
+            if (original <= 0.0f) continue;
+            const int offset = f - seg.startFrame;
+            if (offset < 0 || offset >= static_cast<int>(seg.f0Data.size())) continue;
+            const float corrected = seg.f0Data[static_cast<size_t>(offset)];
+            if (corrected <= 0.0f) continue;
+            if (std::abs(1200.0f * std::log2f(corrected / original)) >= kPitchShiftThresholdCents)
+                mask[static_cast<size_t>(f)] = true;
+        }
+    }
+    return mask;
+}
+
 class PitchCurveSnapshot {
 public:
     PitchCurveSnapshot(
@@ -50,6 +73,7 @@ public:
         , hopSize_(hopSize)
         , sampleRate_(sampleRate)
         , renderGeneration_(renderGeneration)
+        , vocoderMask_(computeVocoderMask(originalF0_, correctionSegments_))
     {}
 
     const std::vector<float>& getOriginalF0() const { return originalF0_; }
@@ -112,6 +136,18 @@ public:
 
     bool hasOriginalF0Data() const { return !originalF0_.empty(); }
 
+    bool isVocoderFrame(int frame) const {
+        return frame >= 0 && static_cast<size_t>(frame) < vocoderMask_.size() && vocoderMask_[static_cast<size_t>(frame)];
+    }
+
+    bool noteNeedsVocoder(double startTime, double endTime, const F0Timeline& tl) const {
+        if (vocoderMask_.empty()) return false;
+        const auto range = tl.rangeForTimes(startTime, endTime);
+        for (int f = range.startFrame; f < range.endFrameExclusive; ++f)
+            if (isVocoderFrame(f)) return true;
+        return false;
+    }
+
 private:
     const std::vector<float> originalF0_;
     const std::vector<float> originalEnergy_;
@@ -119,6 +155,7 @@ private:
     const int hopSize_;
     const double sampleRate_;
     const uint64_t renderGeneration_;
+    const std::vector<bool> vocoderMask_;
 };
 
 class PitchCurve {
