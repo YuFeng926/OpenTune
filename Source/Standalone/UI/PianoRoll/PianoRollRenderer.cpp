@@ -1096,7 +1096,8 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 g.saveState();
                 g.reduceClipRegion(blob);
 
-                juce::ColourGradient glow(juce::Colours::white.withAlpha(0.07f),
+                const auto glowColour = item.displayColour.brighter(0.4f);
+                juce::ColourGradient glow(glowColour.withAlpha(0.18f),
                                           static_cast<float>(x1), centerY - halfH,
                                           juce::Colours::transparentWhite,
                                           static_cast<float>(x2), centerY + halfH,
@@ -1104,8 +1105,8 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 g.setGradientFill(glow);
                 g.fillPath(blob);
 
-                g.setColour(juce::Colours::white.withAlpha(0.10f));
-                g.strokePath(blob, juce::PathStrokeType(1.0f,
+                g.setColour(item.displayColour.brighter(0.5f).withAlpha(0.28f));
+                g.strokePath(blob, juce::PathStrokeType(1.2f,
                                                         juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
 
@@ -1227,7 +1228,8 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.saveState();
             g.reduceClipRegion(noteBounds.toType<int>());
 
-            juce::ColourGradient glow(juce::Colours::white.withAlpha(0.09f),
+            const auto glowColour = item.displayColour.brighter(0.4f);
+            juce::ColourGradient glow(glowColour.withAlpha(0.20f),
                                       noteBounds.getX(), noteBounds.getY(),
                                       juce::Colours::transparentWhite,
                                       noteBounds.getRight(), noteBounds.getBottom(),
@@ -1235,11 +1237,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(glow);
             g.fillRect(noteBounds);
 
-            g.setColour(juce::Colours::white.withAlpha(0.14f));
+            g.setColour(item.displayColour.brighter(0.6f).withAlpha(0.32f));
             g.drawLine(noteBounds.getX() + 0.5f, noteBounds.getY() + 0.5f,
-                       noteBounds.getRight() - 0.5f, noteBounds.getY() + 0.5f, 1.0f);
+                       noteBounds.getRight() - 0.5f, noteBounds.getY() + 0.5f, 1.2f);
             g.drawLine(noteBounds.getX() + 0.5f, noteBounds.getY() + 0.5f,
-                       noteBounds.getX() + 0.5f, noteBounds.getBottom() - 0.5f, 1.0f);
+                       noteBounds.getX() + 0.5f, noteBounds.getBottom() - 0.5f, 1.2f);
 
             g.restoreState();
         }
@@ -1952,7 +1954,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 if (item.pitchSnapshot->isVocoderFrame(f)) { hasVocoder = true; break; }
             }
             if (hasVocoder) {
-                const float extraGlowWidth = lineWidth + (isAurora ? 4.0f : 3.0f);
+                const float extraGlowWidth = lineWidth + 2.5f;
                 const juce::PathStrokeType extraGlowStroke(extraGlowWidth,
                     juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
 
@@ -1968,7 +1970,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     } else {
                         appendSmoothedF0Path(glowPath, segment.points, 0, segment.points.size() - 1);
                     }
-                    g.setColour(juce::Colours::white.withAlpha(0.05f));
+                    g.setColour(colour.withAlpha(0.14f));
                     g.strokePath(glowPath, extraGlowStroke);
                 }
             }
