@@ -54,7 +54,7 @@ public:
      * @return true if initialization successful
      */
     bool initialize(const std::string& modelDir,
-                    F0ModelType initialModel = F0ModelType::RMVPE);
+                    F0ModelType initialModel = F0ModelType::FCPE);
 
     /**
      * Extract F0 from audio

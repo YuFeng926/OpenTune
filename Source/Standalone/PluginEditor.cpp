@@ -671,7 +671,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     const auto f0Type = appPreferences_.getState().shared.f0ModelType;
     if ((f0Type != F0ModelType::RMVPE || processorRef_.isInferenceReady())
         && !processorRef_.setF0ModelType(f0Type))
-        appPreferences_.setF0ModelType(F0ModelType::RMVPE);
+        appPreferences_.setF0ModelType(F0ModelType::FCPE);
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()

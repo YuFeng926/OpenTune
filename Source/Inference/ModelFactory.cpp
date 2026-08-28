@@ -126,13 +126,14 @@ bool ModelFactory::isModelAvailable(F0ModelType type, const std::string& modelDi
 std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& modelDir) {
     std::vector<F0ModelInfo> models;
 
+    // RMVPE disabled - mark as unavailable
     F0ModelInfo rmvpe;
     rmvpe.type = F0ModelType::RMVPE;
     rmvpe.name = "rmvpe";
     rmvpe.displayName = "RMVPE (Robust)";
     rmvpe.modelSizeBytes = 361 * 1024 * 1024;
-    rmvpe.isAvailable = isModelAvailable(F0ModelType::RMVPE, modelDir);
-    models.push_back(rmvpe);
+    rmvpe.isAvailable = false;  // Disabled - FCPE is the default model
+    // models.push_back(rmvpe);  // Don't include in available models list
 
     F0ModelInfo fcpe;
     fcpe.type = F0ModelType::FCPE;

@@ -23,12 +23,13 @@ public:
                 initialModel, modelDir, *env_, resamplingManager_
             );
 
-            if (!extractorResult && initialModel != F0ModelType::RMVPE) {
-                AppLogger::warn("[F0InferenceService] Preferred F0 model unavailable; falling back to RMVPE");
-                extractorResult = ModelFactory::createF0Extractor(
-                    F0ModelType::RMVPE, modelDir, *env_, resamplingManager_);
-                initialModel = F0ModelType::RMVPE;
-            }
+            // RMVPE disabled - no fallback to RMVPE anymore
+            // if (!extractorResult && initialModel != F0ModelType::RMVPE) {
+            //     AppLogger::warn("[F0InferenceService] Preferred F0 model unavailable; falling back to RMVPE");
+            //     extractorResult = ModelFactory::createF0Extractor(
+            //         F0ModelType::RMVPE, modelDir, *env_, resamplingManager_);
+            //     initialModel = F0ModelType::RMVPE;
+            // }
 
             if (!extractorResult) {
                 AppLogger::error("[F0InferenceService] Failed to load F0 model: " 
@@ -69,7 +70,13 @@ public:
         std::function<void(const std::vector<float>&, int)> partialCallback)
     {
         if (!initialized_.load(std::memory_order_acquire)) {
-            if (!initialize(modelDir_, F0ModelType::RMVPE)) {
+            // RMVPE disabled - use current model type instead of hardcoded RMVPE
+            F0ModelType fallbackModel;
+            {
+                std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+                fallbackModel = currentModelType_;
+            }
+            if (!initialize(modelDir_, fallbackModel)) {
                 return Result<std::vector<float>>::failure(
                     ErrorCode::NotInitialized, "F0InferenceService failed to re-initialize");
             }
@@ -266,7 +273,7 @@ private:
     std::shared_ptr<Ort::Env> env_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::unique_ptr<IF0Extractor> currentExtractor_;
-    F0ModelType currentModelType_{F0ModelType::RMVPE};
+    F0ModelType currentModelType_{F0ModelType::FCPE};
     std::string modelDir_;
     mutable std::shared_mutex extractorMutex_;
     std::atomic<bool> initialized_{false};

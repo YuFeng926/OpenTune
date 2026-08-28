@@ -223,8 +223,19 @@ public:
             f0ModelSelector_.addItem(model.displayName, itemId);
             f0ModelSelector_.setItemEnabled(itemId, model.isAvailable);
         }
+        // Ensure selected model is available; fallback to FCPE if not (e.g., old RMVPE config)
+        auto selectedType = state.shared.f0ModelType;
+        bool found = false;
+        for (const auto& model : f0Models) {
+            if (model.type == selectedType && model.isAvailable) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            selectedType = F0ModelType::FCPE;
         f0ModelSelector_.setSelectedId(
-            static_cast<int>(state.shared.f0ModelType) + 1,
+            static_cast<int>(selectedType) + 1,
             juce::dontSendNotification);
         initialiseComboBox(f0ModelSelector_);
         addAndMakeVisible(f0ModelSelector_);

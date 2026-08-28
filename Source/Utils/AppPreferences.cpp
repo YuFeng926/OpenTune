@@ -225,13 +225,14 @@ static juce::String toF0ModelTypeToken(F0ModelType type)
         case F0ModelType::RMVPE: return "rmvpe";
         case F0ModelType::FCPE: return "fcpe";
     }
-    return "rmvpe";
+    return "fcpe";  // Default to FCPE (RMVPE disabled)
 }
 
 static F0ModelType fromF0ModelTypeToken(const juce::String& token)
 {
     if (token == "fcpe") return F0ModelType::FCPE;
-    return F0ModelType::RMVPE;
+    if (token == "rmvpe") return F0ModelType::RMVPE;
+    return F0ModelType::FCPE;  // Default to FCPE (RMVPE disabled)
 }
 
 static juce::String toExperimentalRefAlignModeToken(ExperimentalReferenceAlignMode mode)
