@@ -15,7 +15,9 @@ install_manifest.txt
 *.dir/
 !cmake/
 !cmake/*.cmake
-models/
+models/*
+!models/fcpe.onnx
+!models/GAME/
 pc_nsf_hifigan_44.1k_ONNX/
 docs/
 docs/UserGuide.html
@@ -33,6 +35,7 @@ spike/
 *.ilk
 *.exp
 *.onnx
+!models/fcpe.onnx
 *.dmg
 
 # macOS metadata
