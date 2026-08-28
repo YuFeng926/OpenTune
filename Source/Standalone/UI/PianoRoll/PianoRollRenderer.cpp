@@ -937,6 +937,61 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     g.drawVerticalLine(w, 0.0f, static_cast<float>(height));
 }
 
+// HiFiGAN vocoder: warm/cool colour shift based on correction magnitude and note frequency.
+// Low freq → warm (orange), high freq → cool (blue). Shift proportional to cents deviation.
+static juce::Colour vocoderShiftedColour(
+    juce::Colour base,
+    const Note& note,
+    const PitchCurveSnapshot& snap,
+    const F0Timeline& tl)
+{
+    if (snap.isEmpty() || note.getAdjustedPitch() <= 0.0f)
+        return base;
+
+    const auto range = tl.rangeForTimes(note.startTime, note.endTime);
+    float totalCents = 0.0f;
+    int count = 0;
+    for (int f = range.startFrame; f < range.endFrameExclusive; ++f) {
+        if (f < 0 || f >= static_cast<int>(snap.size())) continue;
+        const float original = snap.getOriginalF0()[static_cast<size_t>(f)];
+        if (original <= 0.0f) continue;
+        float corrected = original;
+        for (const auto& seg : snap.getCorrectionSegments()) {
+            if (f >= seg.startFrame && f < seg.endFrame) {
+                const int off = f - seg.startFrame;
+                if (off < static_cast<int>(seg.f0Data.size()) && seg.f0Data[off] > 0.0f)
+                    corrected = seg.f0Data[off];
+                break;
+            }
+        }
+        if (corrected <= 0.0f || corrected == original) continue;
+        totalCents += std::abs(1200.0f * std::log2f(corrected / original));
+        ++count;
+    }
+    if (count == 0) return base;
+
+    const float avgCents = totalCents / static_cast<float>(count);
+
+    constexpr float kMinCents = 75.0f;
+    constexpr float kMaxCents = 300.0f;
+    const float t = juce::jlimit(0.0f, 1.0f, (avgCents - kMinCents) / (kMaxCents - kMinCents));
+
+    const float midi = PitchUtils::freqToMidi(note.getAdjustedPitch());
+    constexpr float kLowMidi = 48.0f;
+    constexpr float kHighMidi = 72.0f;
+    const float freqBias = juce::jlimit(-1.0f, 1.0f,
+        (midi - (kLowMidi + kHighMidi) * 0.5f) / ((kHighMidi - kLowMidi) * 0.5f));
+
+    static const juce::Colour kWarmTarget(0xFFFFA040);
+    static const juce::Colour kCoolTarget(0xFF40A0FF);
+
+    const auto target = freqBias < 0.0f
+        ? base.interpolatedWith(kWarmTarget, t * -freqBias)
+        : base.interpolatedWith(kCoolTarget, t * freqBias);
+
+    return base.interpolatedWith(target, t);
+}
+
 void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                   const RenderContext& ctx,
                                   const ContentRenderItem& item)
@@ -1018,6 +1073,12 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 ? item.displayColour.darker(0.30f)
                 : item.displayColour;
 
+            const bool isVocoder = item.pitchSnapshot != nullptr
+                && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline);
+            const auto drawColour = isVocoder
+                ? vocoderShiftedColour(noteColour, note, *item.pitchSnapshot, item.f0Timeline)
+                : noteColour;
+
             // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
             juce::Path blob;
             if (!buildNoteBlobPath(note, ctx, item, energy, item.f0Timeline,
@@ -1026,9 +1087,9 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             // 能量自适应纵向渐变：列式渲染，过渡带亮度和宽窄均随局部 energy 缩放
             {
-                const auto fillTop = noteColour.darker(0.22f).withAlpha(0.32f);
-                const auto fillBottom = noteColour.darker(0.22f).withAlpha(0.32f);
-                const auto glowCore = noteColour
+                const auto fillTop = drawColour.darker(0.22f).withAlpha(0.32f);
+                const auto fillBottom = drawColour.darker(0.22f).withAlpha(0.32f);
+                const auto glowCore = drawColour
                     .interpolatedWith(juce::Colours::white, 0.88f)
                     .withAlpha(0.95f);
 
@@ -1049,7 +1110,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                             energy[static_cast<size_t>(frame)] / clipRefMag)
                         : 0.0f;
 
-                    const auto glowTrans = noteColour
+                    const auto glowTrans = drawColour
                         .interpolatedWith(juce::Colours::white, 0.35f * normEnergy)
                         .withAlpha(0.65f + 0.05f * normEnergy);
 
@@ -1076,7 +1137,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 g.restoreState();
             }
 
-            g.setColour(noteColour.brighter(0.45f).withAlpha(0.55f));
+            g.setColour(drawColour.brighter(0.45f).withAlpha(0.55f));
             g.strokePath(blob, juce::PathStrokeType(0.9f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
@@ -1087,30 +1148,6 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 g.strokePath(blob, juce::PathStrokeType(2.0f,
                                                         juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
-            }
-
-            // ── HiFiGAN vocoder glow on blob ──
-            if (item.pitchSnapshot != nullptr
-                && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline))
-            {
-                g.saveState();
-                g.reduceClipRegion(blob);
-
-                const auto glowColour = item.displayColour.brighter(0.4f);
-                juce::ColourGradient glow(glowColour.withAlpha(0.18f),
-                                          static_cast<float>(x1), centerY - halfH,
-                                          juce::Colours::transparentWhite,
-                                          static_cast<float>(x2), centerY + halfH,
-                                          false);
-                g.setGradientFill(glow);
-                g.fillPath(blob);
-
-                g.setColour(item.displayColour.brighter(0.5f).withAlpha(0.28f));
-                g.strokePath(blob, juce::PathStrokeType(1.2f,
-                                                        juce::PathStrokeType::curved,
-                                                        juce::PathStrokeType::rounded));
-
-                g.restoreState();
             }
         }
 
@@ -1146,13 +1183,19 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             ? item.displayColour.darker(0.30f)
             : item.displayColour;
 
+        const bool isVocoder = item.pitchSnapshot != nullptr
+            && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline);
+        const auto drawColor = isVocoder
+            ? vocoderShiftedColour(noteColor, note, *item.pitchSnapshot, item.f0Timeline)
+            : noteColor;
+
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(kNoteBodyFillAlpha));
+            g.setColour(drawColor.withAlpha(kNoteBodyFillAlpha));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
-            juce::ColourGradient topSheen(noteColor.brighter(0.58f).withAlpha(0.12f),
+            juce::ColourGradient topSheen(drawColor.brighter(0.58f).withAlpha(0.12f),
                                           topSheenBounds.getX(),
                                           topSheenBounds.getY(),
                                           juce::Colours::transparentWhite,
@@ -1180,11 +1223,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(kNoteBodyFillAlpha));
+            g.setColour(drawColor.withAlpha(kNoteBodyFillAlpha));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
-            juce::ColourGradient topSheen(noteColor.brighter(0.42f).withAlpha(0.10f),
+            juce::ColourGradient topSheen(drawColor.brighter(0.42f).withAlpha(0.10f),
                                           topSheenBounds.getX(),
                                           topSheenBounds.getY(),
                                           juce::Colours::transparentWhite,
@@ -1208,7 +1251,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else
         {
-            g.setColour(noteColor.withAlpha(kNoteBodyFillAlpha));
+            g.setColour(drawColor.withAlpha(kNoteBodyFillAlpha));
             g.fillRect(noteBounds);
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
@@ -1219,31 +1262,6 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 g.setColour(item.displayColour.withAlpha(0.85f));
                 g.drawRect(noteBounds.expanded(1.0f), 2.0f);
             }
-        }
-
-        // ── HiFiGAN vocoder glow: subtle top-left light source ──
-        if (item.pitchSnapshot != nullptr
-            && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline))
-        {
-            g.saveState();
-            g.reduceClipRegion(noteBounds.toType<int>());
-
-            const auto glowColour = item.displayColour.brighter(0.4f);
-            juce::ColourGradient glow(glowColour.withAlpha(0.20f),
-                                      noteBounds.getX(), noteBounds.getY(),
-                                      juce::Colours::transparentWhite,
-                                      noteBounds.getRight(), noteBounds.getBottom(),
-                                      false);
-            g.setGradientFill(glow);
-            g.fillRect(noteBounds);
-
-            g.setColour(item.displayColour.brighter(0.6f).withAlpha(0.32f));
-            g.drawLine(noteBounds.getX() + 0.5f, noteBounds.getY() + 0.5f,
-                       noteBounds.getRight() - 0.5f, noteBounds.getY() + 0.5f, 1.2f);
-            g.drawLine(noteBounds.getX() + 0.5f, noteBounds.getY() + 0.5f,
-                       noteBounds.getX() + 0.5f, noteBounds.getBottom() - 0.5f, 1.2f);
-
-            g.restoreState();
         }
     }
 
@@ -1943,35 +1961,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     g.strokePath(runPath, juce::PathStrokeType(0.55f,
                                                               juce::PathStrokeType::curved,
                                                               juce::PathStrokeType::rounded));
-                }
-            }
-        }
-
-        // ── HiFiGAN vocoder glow: extra wide, low-alpha pass ──
-        if (item.pitchSnapshot != nullptr) {
-            bool hasVocoder = false;
-            for (int f = startFrame; f < endFrame; ++f) {
-                if (item.pitchSnapshot->isVocoderFrame(f)) { hasVocoder = true; break; }
-            }
-            if (hasVocoder) {
-                const float extraGlowWidth = lineWidth + 2.5f;
-                const juce::PathStrokeType extraGlowStroke(extraGlowWidth,
-                    juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
-
-                for (const auto& segment : visualSegments) {
-                    if (segment.points.empty()) continue;
-                    juce::Path glowPath;
-                    if (segment.points.size() == 1) {
-                        const auto& p = segment.points.front();
-                        glowPath.startNewSubPath(p.x - 0.01f, p.y);
-                        glowPath.lineTo(p.x + 0.01f, p.y);
-                    } else if (segment.useLinearPath) {
-                        appendLinearF0Path(glowPath, segment.points, 0, segment.points.size() - 1);
-                    } else {
-                        appendSmoothedF0Path(glowPath, segment.points, 0, segment.points.size() - 1);
-                    }
-                    g.setColour(colour.withAlpha(0.14f));
-                    g.strokePath(glowPath, extraGlowStroke);
                 }
             }
         }
