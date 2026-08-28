@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <utility>
 
 namespace OpenTune {
 
@@ -123,6 +124,7 @@ struct F0VisualPoint
     float x = 0.0f;
     float y = 0.0f;
     float levelHotMix = 0.0f;
+    juce::Colour noteColour; // 音符实际颜色（考虑修正幅度）
 };
 
 struct F0VisualSegment
@@ -279,14 +281,16 @@ static bool buildNoteBlobPath(
 /// Pass 1 computes energy min/max across valid F0 frequencies.
 /// Pass 2 builds visual segments with bucket min/max envelope for LOD, linear path for downsampled, Bézier for full-resolution.
 /// Producer receives a sink(startFrame, data, length, gain).
-template <typename SpanProducer, typename FX, typename FY>
+/// frameToColour maps globalFrame → colour (used for CorrectedF0 gradient tinting).
+template <typename SpanProducer, typename FX, typename FY, typename FC>
 static std::vector<F0VisualSegment> buildF0VisualSegments(
     const std::vector<float>* originalEnergy,
     int endFrameExclusive,
     const F0VisualBuildOptions& options,
     FX&& frameToX,
     FY&& frameToY,
-    SpanProducer&& emitSpans)
+    SpanProducer&& emitSpans,
+    FC&& frameToColour)
 {
     std::vector<F0VisualSegment> segments;
 
@@ -319,6 +323,7 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
         float yMax = 0.0f;
         float hotMixAccum = 0.0f;
         int pointCount = 0;
+        juce::Colour noteColour; // 音符颜色（用于bucket平均）
 
         void clear() noexcept {
             active = false;
@@ -326,6 +331,7 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
             yMax = std::numeric_limits<float>::lowest();
             hotMixAccum = 0.0f;
             pointCount = 0;
+            noteColour = juce::Colours::grey;
         }
     };
 
@@ -339,9 +345,9 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
             return;
         }
         const float avgHotMix = bucket.hotMixAccum / static_cast<float>(bucket.pointCount);
-        currentSegment.points.push_back({ bucketAnchorX, bucket.yMin, avgHotMix });
+        currentSegment.points.push_back({ bucketAnchorX, bucket.yMin, avgHotMix, bucket.noteColour });
         if (bucket.yMin != bucket.yMax) {
-            currentSegment.points.push_back({ bucketAnchorX, bucket.yMax, avgHotMix });
+            currentSegment.points.push_back({ bucketAnchorX, bucket.yMax, avgHotMix, bucket.noteColour });
         }
         bucket.clear();
     };
@@ -380,9 +386,11 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
                 levelHotMix = kMaxHotMix * smootherStep(normalizedEnergy);
             }
 
+            const juce::Colour noteColour = frameToColour(globalFrame);
+
             if (targetPointSpacing <= 0.0f) {
                 flushBucket();
-                currentSegment.points.push_back({ x, y, levelHotMix });
+                currentSegment.points.push_back({ x, y, levelHotMix, noteColour });
                 continue;
             }
 
@@ -393,10 +401,22 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
                 bucket.yMax = y;
                 bucket.hotMixAccum = levelHotMix;
                 bucket.pointCount = 1;
+                bucket.noteColour = noteColour;
                 continue;
             }
 
             if (std::abs(x - bucketAnchorX) < targetPointSpacing) {
+                if (noteColour != bucket.noteColour) {
+                    flushBucket();
+                    bucket.active = true;
+                    bucketAnchorX = x;
+                    bucket.yMin = y;
+                    bucket.yMax = y;
+                    bucket.hotMixAccum = levelHotMix;
+                    bucket.pointCount = 1;
+                    bucket.noteColour = noteColour;
+                    continue;
+                }
                 bucket.yMin = std::min(bucket.yMin, y);
                 bucket.yMax = std::max(bucket.yMax, y);
                 bucket.hotMixAccum += levelHotMix;
@@ -412,12 +432,29 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
             bucket.yMax = y;
             bucket.hotMixAccum = levelHotMix;
             bucket.pointCount = 1;
+            bucket.noteColour = noteColour;
         }
     });
 
     flushSegment();
 
     return segments;
+}
+
+// Convenience overload for OriginalF0 / F0 selection: no per-frame colour callback.
+template <typename SpanProducer, typename FX, typename FY>
+static std::vector<F0VisualSegment> buildF0VisualSegments(
+    const std::vector<float>* originalEnergy,
+    int endFrameExclusive,
+    const F0VisualBuildOptions& options,
+    FX&& frameToX,
+    FY&& frameToY,
+    SpanProducer&& emitSpans)
+{
+    return buildF0VisualSegments(originalEnergy, endFrameExclusive, options,
+        std::forward<FX>(frameToX), std::forward<FY>(frameToY),
+        std::forward<SpanProducer>(emitSpans),
+        [](int) { return juce::Colours::grey; });
 }
 
 } // namespace
@@ -992,6 +1029,22 @@ static juce::Colour vocoderShiftedColour(
     return base.interpolatedWith(target, t);
 }
 
+// Compute the final display colour for a note, fully reusing drawNotes logic:
+// base = EQ active ? item.displayColour.darker(0.30f) : item.displayColour
+// if vocoder-needed, shift via vocoderShiftedColour; otherwise return base.
+static juce::Colour computeNoteDisplayColour(
+    const PianoRollRenderer::ContentRenderItem& item,
+    const Note& note)
+{
+    const auto base = (note.eq.has_value() && note.eq->active)
+        ? item.displayColour.darker(0.30f)
+        : item.displayColour;
+    if (item.pitchSnapshot
+        && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline))
+        return vocoderShiftedColour(base, note, *item.pitchSnapshot, item.f0Timeline);
+    return base;
+}
+
 void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                   const RenderContext& ctx,
                                   const ContentRenderItem& item)
@@ -1069,15 +1122,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
                 continue;
 
-            const auto noteColour = note.eq.has_value() && note.eq->active
-                ? item.displayColour.darker(0.30f)
-                : item.displayColour;
-
-            const bool isVocoder = item.pitchSnapshot != nullptr
-                && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline);
-            const auto drawColour = isVocoder
-                ? vocoderShiftedColour(noteColour, note, *item.pitchSnapshot, item.f0Timeline)
-                : noteColour;
+            const auto drawColour = computeNoteDisplayColour(item, note);
 
             // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
             juce::Path blob;
@@ -1179,15 +1224,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float w = std::max(1.0f, static_cast<float>(x2 - x1));
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
-        const auto noteColor = note.eq.has_value() && note.eq->active
-            ? item.displayColour.darker(0.30f)
-            : item.displayColour;
-
-        const bool isVocoder = item.pitchSnapshot != nullptr
-            && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline);
-        const auto drawColor = isVocoder
-            ? vocoderShiftedColour(noteColor, note, *item.pitchSnapshot, item.f0Timeline)
-            : noteColor;
+        const auto drawColor = computeNoteDisplayColour(item, note);
 
         if (isAurora)
         {
@@ -1817,23 +1854,42 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     });
         };
 
-        const auto visualSegments = buildF0VisualSegments(
-            originalEnergy, endFrame, visualOptions, makeFrameToX, makeFrameToY, correctedProducer);
+        // frameToColour: 基于有序不重叠音符，单调递进查找当前帧所属音符的最终实际颜色
+        const auto& notes = *item.displayNotes;
+        auto noteIt = notes.begin();
+        const auto noteEndIt = notes.end();
+        bool hasNoteColour = false;
+        juce::Colour currentNoteColour = item.displayColour;
+        auto frameToColour = [&](int globalFrame) -> juce::Colour {
+            const double timeSec = item.f0Timeline.timeAtFrame(globalFrame);
+            while (noteIt != noteEndIt && noteIt->endTime <= timeSec) {
+                ++noteIt;
+                hasNoteColour = false;
+            }
+            if (noteIt != noteEndIt && noteIt->startTime <= timeSec) {
+                if (!hasNoteColour) {
+                    currentNoteColour = computeNoteDisplayColour(item, *noteIt);
+                    hasNoteColour = true;
+                }
+                return currentNoteColour;
+            }
+            return item.displayColour;
+        };
 
-        const juce::Colour colour = UIColors::correctedF0;
+        const auto visualSegments = buildF0VisualSegments(
+            originalEnergy, endFrame, visualOptions, makeFrameToX, makeFrameToY, correctedProducer,
+            frameToColour);
+
         static const juce::Colour kLevelHotGold { 0xFFFFC24A };
-        static const juce::Colour kOpenDyneBrightCurve { 0xFFFF9C1A }; // 暗轨→深黄橙（原亮金降饱和）
-        static const juce::Colour kOpenDyneDarkCurve   { 0xFF196FC4 }; // 亮轨→主题蓝
-        const auto blendLevelHotColour = [&](juce::Colour base, float hm) {
-            if (!item.notesPrimaryScheme)
-                return base.interpolatedWith(kLevelHotGold,
-                    juce::jlimit(0.0f, 0.42f, hm));
-            // OpenDyne：HSL 感知亮度决定对比色基调，再叠 levelHotMix 暖化
-            const float lum = (0.299f * item.displayColour.getRed()
-                             + 0.587f * item.displayColour.getGreen()
-                             + 0.114f * item.displayColour.getBlue()) / 255.0f;
+        static const juce::Colour kBrightCurve { 0xFFFF9C1A }; // 暗轨→深黄橙（原亮金降饱和）
+        static const juce::Colour kDarkCurve   { 0xFF196FC4 }; // 亮轨→主题蓝
+        // 基于音符实际颜色（考虑修正幅度）的感知亮度选择对比色基调
+        const auto blendLevelHotColourFromNote = [&](juce::Colour noteColour, float hm) {
+            const float lum = (0.299f * noteColour.getRed()
+                             + 0.587f * noteColour.getGreen()
+                             + 0.114f * noteColour.getBlue()) / 255.0f;
             const auto contrastBase = lum < 0.5f
-                ? kOpenDyneDarkCurve : kOpenDyneBrightCurve;
+                ? kDarkCurve : kBrightCurve;
             return contrastBase.interpolatedWith(kLevelHotGold,
                 juce::jlimit(0.0f, 0.42f, hm));
         };
@@ -1855,21 +1911,21 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 ptPath.startNewSubPath(p.x - 0.01f, p.y);
                 ptPath.lineTo(p.x + 0.01f, p.y);
                 if (isAurora) {
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * 0.095f));
+                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.095f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * 0.20f));
+                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.20f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(1.0f));
+                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else if (isBlueBreeze || isOverdose) {
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * 0.070f));
+                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.070f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * 0.15f));
+                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.15f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(1.0f));
+                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else {
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(1.0f));
+                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 }
                 continue;
@@ -1895,8 +1951,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     grad.point2 = { rightX, 0.0f };
                     for (const auto& pt : pts) {
                         const juce::Colour c = brighter
-                            ? blendLevelHotColour(colour, pt.levelHotMix).brighter(0.20f)
-                            : blendLevelHotColour(colour, pt.levelHotMix);
+                            ? blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix).brighter(0.20f)
+                            : blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix);
                         const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
                         grad.addColour(pos, c.withAlpha(alpha * alphaScale));
                     }
@@ -1924,8 +1980,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     grad.point2 = { rightX, 0.0f };
                     for (const auto& pt : pts) {
                         const juce::Colour c = brighter
-                            ? blendLevelHotColour(colour, pt.levelHotMix).brighter(0.16f)
-                            : blendLevelHotColour(colour, pt.levelHotMix);
+                            ? blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix).brighter(0.16f)
+                            : blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix);
                         const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
                         grad.addColour(pos, c.withAlpha(alpha * alphaScale));
                     }
@@ -1951,7 +2007,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 grad.point1 = { leftX, 0.0f };
                 grad.point2 = { rightX, 0.0f };
                 for (const auto& pt : pts) {
-                    const juce::Colour c = blendLevelHotColour(colour, pt.levelHotMix);
+                    const juce::Colour c = blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix);
                     const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
                     grad.addColour(pos, c.withAlpha(1.0f));
                 }
