@@ -1318,5 +1318,10 @@ if(OPENTUNE_BUILD_TESTS)
     )
     target_include_directories(OpenTuneAutoTuneTests
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        # 与主工程目标一致：/utf-8 消除 C4819（源码含 UTF-8 注释字符），
+        # /EHsc 消除 C4530（std::vector 实例化含异常处理）。
+        target_compile_options(OpenTuneAutoTuneTests PRIVATE /utf-8 /EHsc)
+    endif()
     add_test(NAME AutoTunePitchShifterTests COMMAND OpenTuneAutoTuneTests)
 endif()

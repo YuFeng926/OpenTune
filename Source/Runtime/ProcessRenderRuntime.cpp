@@ -939,16 +939,19 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
 
                 // Chunk-local 双阶段周期检测：downsampled lag 粗搜 + full-rate
                 // V=E-2H 局部精搜，逐样本输出 period/valid 影子源交给 shifter。
+                // FCPE F0 hint provides an octave prior for coarse acquisition.
                 const int detectorNumSamples =
                     static_cast<int>(boundaries.publishSampleCount);
                 // UV/V is decided by the waveform detector itself.  RMVPE's
                 // originalF0 remains the editable source/target track, but it
                 // must not gate the AutoTune detector's periodicity analysis.
+                const float* f0HintPtr = originalF0Full.data() + f0StartFrame;
                 const std::vector<AutoTunePeriodDetector::DetectedPeriod>
                     detectorFrames = AutoTunePeriodDetector::analyze(
                         shifterLookbehind, shifterLookbehindSamples,
                         monoAudio.data(), detectorNumSamples,
-                        RenderCache::kSampleRate);
+                        RenderCache::kSampleRate,
+                        f0HintPtr, safeNumF0Frames, f0FrameRate);
 
                 auto shiftedAudio = autoTuneShifter.shiftChunk(
                     monoAudio.data(),

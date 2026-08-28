@@ -22,10 +22,17 @@ public:
 
     /// Analyzes prefix (samples immediately preceding input[0]) + input and
     /// returns exactly numInputSamples results, one per input sample.
+    /// @param fcpeF0Hint  Optional per-frame FCPE F0 array (Hz, >0 = voiced).
+    ///                    Used as octave prior for coarse acquisition when
+    ///                    available.  May be nullptr when no AI F0 is present.
+    /// @param f0HintFrameRate  Frame rate of fcpeF0Hint (e.g. 100.0).
     static std::vector<DetectedPeriod> analyze(
         const float* lookbehind, int numLookbehindSamples,
         const float* input, int numInputSamples,
-        double sampleRate);
+        double sampleRate,
+        const float* fcpeF0Hint = nullptr,
+        int numF0HintFrames = 0,
+        double f0HintFrameRate = 0.0);
 
     /// the reference flow coarse-stage decimation factor.
     static constexpr int kDecimFactor = 8;
@@ -39,11 +46,13 @@ public:
 
     /// Fixed causal anti-alias FIR used before 8:1 decimation.
     static constexpr int kCoarseFilterTaps = 63;
-    /// Number of full-rate samples retained for coarse acquisition.
+    /// Number of full-rate samples retained for coarse acquisition (default).
     static constexpr int kCoarseWindowSamples = 2048;
+    /// Larger coarse window for cross-validation (low-frequency robustness).
+    static constexpr int kCoarseWindowSamplesLarge = 4096;
     /// History required by the causal FIR and coarse window.
     static constexpr int kRequiredLookbehindSamples =
-        kCoarseWindowSamples + kCoarseFilterTaps - 1;
+        kCoarseWindowSamplesLarge + kCoarseFilterTaps - 1;
 };
 
 } // namespace OpenTune

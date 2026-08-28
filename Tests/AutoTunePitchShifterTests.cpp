@@ -692,6 +692,8 @@ void testDetectorDropsOutAcrossNoise()
     }
 
     bool validAfterNoise = false;
+    int firstValidAfterNoise = -1;
+    int validAfterNoiseCount = 0;
     for (int i = kToneSamples + kNoiseSamples;
          i < kNumSamples;
          ++i)
@@ -699,15 +701,251 @@ void testDetectorDropsOutAcrossNoise()
         if (frames[static_cast<size_t>(i)].valid)
         {
             validAfterNoise = true;
-            break;
+            if (firstValidAfterNoise < 0)
+                firstValidAfterNoise = i;
+            ++validAfterNoiseCount;
         }
     }
+
+    std::printf("NOISE_TRANSITION firstValidAfterNoise=%d validCount=%d\n",
+                firstValidAfterNoise, validAfterNoiseCount);
 
 
     expectTrue(invalidInNoise,
                "detector transition: noise region becomes invalid");
     expectTrue(validAfterNoise,
                "detector transition: voiced period reacquires after noise");
+}
+
+// Diagnostic case for a short V -> UV -> V gap where the pitch curve still
+// carries positive source and target F0 values (for example, after a short
+// RMVPE gap fill). The detector trace and the shifter-vs-neutral trace are
+// printed so boundary behavior can be inspected without changing production
+// logic.
+void testShortUvGapWithPositiveCorrectedF0()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr double kVoicedFrequency = 220.0;
+    constexpr double kSourceF0 = 220.0;
+    constexpr double kCorrectedF0 = 240.0;
+    constexpr double kF0FrameRate = 100.0;
+    constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
+    constexpr int kLeadSamples = 2200;
+    constexpr int kGapSamples = 1323;
+    constexpr int kTailSamples = 2200;
+    constexpr int kLookahead = Shifter::kLookaheadSamples;
+    constexpr int kNumSamples = kLeadSamples + kGapSamples + kTailSamples;
+    constexpr int kHistoryPrintRadius = 24;
+
+    const std::vector<float> prefix = makeSineSegment(
+        kVoicedFrequency, kSampleRate, -kPrefix, kPrefix, 0.5);
+    const std::vector<float> lead = makeSineSegment(
+        kVoicedFrequency, kSampleRate, 0, kLeadSamples, 0.5);
+    std::vector<float> gap = makeNoise(kGapSamples, 20260828u);
+    for (float& sample : gap)
+        sample *= 0.25f;
+    const std::vector<float> tail = makeSineSegment(
+        kVoicedFrequency, kSampleRate, kLeadSamples + kGapSamples,
+        kTailSamples + kLookahead, 0.5);
+
+    std::vector<float> input;
+    input.reserve(static_cast<size_t>(kNumSamples));
+    input.insert(input.end(), lead.begin(), lead.end());
+    input.insert(input.end(), gap.begin(), gap.end());
+    input.insert(input.end(), tail.begin(), tail.begin() + kTailSamples);
+
+    std::vector<float> fullStream;
+    fullStream.reserve(static_cast<size_t>(kPrefix + kNumSamples + kLookahead));
+    fullStream.insert(fullStream.end(), prefix.begin(), prefix.end());
+    fullStream.insert(fullStream.end(), input.begin(), input.end());
+    fullStream.insert(fullStream.end(), tail.begin() + kTailSamples, tail.end());
+
+    const auto detected = OpenTune::AutoTunePeriodDetector::analyze(
+        fullStream.data(), kPrefix, input.data(), kNumSamples,
+        static_cast<double>(kSampleRate));
+
+    const int numF0Frames = static_cast<int>(std::ceil(
+        static_cast<double>(kNumSamples) / kSampleRate * kF0FrameRate)) + 1;
+    std::vector<float> originalF0(static_cast<size_t>(numF0Frames),
+                                  static_cast<float>(kSourceF0));
+    std::vector<float> correctedF0(static_cast<size_t>(numF0Frames),
+                                   static_cast<float>(kCorrectedF0));
+
+    Shifter actualShifter(static_cast<double>(kSampleRate));
+    const std::vector<float> actual = actualShifter.shiftChunk(
+        input.data(), kNumSamples, originalF0.data(), correctedF0.data(),
+        numF0Frames, kF0FrameRate, 0.0,
+        fullStream.data() + kPrefix + kNumSamples, kLookahead,
+        prefix.data(), kPrefix,
+        detected.data(), static_cast<int>(detected.size()));
+
+    // Isolate the effect of detector-valid samples inside the known UV gap.
+    // The voiced portions retain the real detector trace, so this is not an
+    // all-invalid reset comparison and does not discard the lead-in state.
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> masked = detected;
+    for (int i = kLeadSamples; i < kLeadSamples + kGapSamples; ++i)
+    {
+        masked[static_cast<size_t>(i)].periodSamples = 0.0f;
+        masked[static_cast<size_t>(i)].valid = false;
+        masked[static_cast<size_t>(i)].trackingUpdated = false;
+    }
+    Shifter maskedShifter(static_cast<double>(kSampleRate));
+    const std::vector<float> maskedOutput = maskedShifter.shiftChunk(
+        input.data(), kNumSamples, originalF0.data(), correctedF0.data(),
+        numF0Frames, kF0FrameRate, 0.0,
+        fullStream.data() + kPrefix + kNumSamples, kLookahead,
+        prefix.data(), kPrefix,
+        masked.data(), static_cast<int>(masked.size()));
+
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> invalid(
+        static_cast<size_t>(kNumSamples));
+    Shifter neutralShifter(static_cast<double>(kSampleRate));
+    const std::vector<float> neutral = neutralShifter.shiftChunk(
+        input.data(), kNumSamples, originalF0.data(), correctedF0.data(),
+        numF0Frames, kF0FrameRate, 0.0,
+        fullStream.data() + kPrefix + kNumSamples, kLookahead,
+        prefix.data(), kPrefix,
+        invalid.data(), static_cast<int>(invalid.size()));
+
+    int leadValid = 0;
+    int gapValid = 0;
+    int middleGapInvalid = 0;
+    int tailValid = 0;
+    int firstGapInvalid = -1;
+    int lastGapValid = -1;
+    int firstTailValid = -1;
+    int gapValidAfterFirstInvalid = 0;
+    int firstGapRelock = -1;
+    double gapInputDiff = 0.0;
+    double gapNeutralDiff = 0.0;
+    double gapMaxNeutralDiff = 0.0;
+    double gapMaskedDiff = 0.0;
+    double gapMaxMaskedDiff = 0.0;
+    for (int i = 0; i < kNumSamples; ++i)
+    {
+        const auto& frame = detected[static_cast<size_t>(i)];
+        if (i < kLeadSamples && frame.valid)
+            ++leadValid;
+        if (i >= kLeadSamples && i < kLeadSamples + kGapSamples)
+        {
+            if (frame.valid)
+            {
+                ++gapValid;
+                lastGapValid = i;
+                if (firstGapInvalid >= 0)
+                {
+                    ++gapValidAfterFirstInvalid;
+                    if (firstGapRelock < 0)
+                        firstGapRelock = i;
+                }
+            }
+            else if (firstGapInvalid < 0)
+                firstGapInvalid = i;
+            if (i >= kLeadSamples + kGapSamples / 3
+                && i < kLeadSamples + kGapSamples * 2 / 3
+                && !frame.valid)
+                ++middleGapInvalid;
+            gapInputDiff += std::fabs(static_cast<double>(
+                actual[static_cast<size_t>(i)] - input[static_cast<size_t>(i)]));
+            const double neutralDiff = std::fabs(static_cast<double>(
+                actual[static_cast<size_t>(i)] - neutral[static_cast<size_t>(i)]));
+            gapNeutralDiff += neutralDiff;
+            gapMaxNeutralDiff = std::max(gapMaxNeutralDiff, neutralDiff);
+            const double maskedDiff = std::fabs(static_cast<double>(
+                actual[static_cast<size_t>(i)]
+                - maskedOutput[static_cast<size_t>(i)]));
+            gapMaskedDiff += maskedDiff;
+            gapMaxMaskedDiff = std::max(gapMaxMaskedDiff, maskedDiff);
+        }
+        if (i >= kLeadSamples + kGapSamples && frame.valid)
+        {
+            ++tailValid;
+            if (firstTailValid < 0)
+                firstTailValid = i;
+        }
+    }
+
+    std::printf(
+        "SHORT_UV_SUMMARY gap=[%d,%d) leadValid=%d/%d gapValid=%d/%d "
+        "firstGapInvalid=%d lastGapValid=%d firstTailValid=%d "
+        "gapValidAfterFirstInvalid=%d firstGapRelock=%d "
+        "middleGapInvalid=%d tailValid=%d/%d gapMeanAbsOutInput=%.9f "
+        "gapMeanAbsOutNeutral=%.9f gapMaxAbsOutNeutral=%.9f "
+        "gapMeanAbsActualMasked=%.9f gapMaxAbsActualMasked=%.9f\n",
+        kLeadSamples, kLeadSamples + kGapSamples,
+        leadValid, kLeadSamples, gapValid, kGapSamples,
+        firstGapInvalid, lastGapValid, firstTailValid,
+        gapValidAfterFirstInvalid, firstGapRelock,
+        middleGapInvalid, tailValid, kTailSamples,
+        gapInputDiff / static_cast<double>(kGapSamples),
+        gapNeutralDiff / static_cast<double>(kGapSamples),
+        gapMaxNeutralDiff,
+        gapMaskedDiff / static_cast<double>(kGapSamples),
+        gapMaxMaskedDiff);
+
+    const auto printTraceWindow = [&](int centre, const char* label) {
+        if (centre < 0)
+            return;
+        const int firstTrace = std::max(0, centre - kHistoryPrintRadius);
+        const int lastTrace = std::min(kNumSamples, centre + kHistoryPrintRadius + 1);
+        for (int i = firstTrace; i < lastTrace; ++i)
+        {
+            if (i != firstTrace && i != centre && i != lastTrace - 1
+                && ((i - firstTrace) % 8 != 0))
+                continue;
+            const int f0Frame = std::clamp(
+                static_cast<int>(std::floor(static_cast<double>(i) / kSampleRate
+                                            * kF0FrameRate)),
+                0, numF0Frames - 1);
+            const auto& frame = detected[static_cast<size_t>(i)];
+            const double outInputDiff = std::fabs(static_cast<double>(
+                actual[static_cast<size_t>(i)] - input[static_cast<size_t>(i)]));
+            const double outNeutralDiff = std::fabs(static_cast<double>(
+                actual[static_cast<size_t>(i)] - neutral[static_cast<size_t>(i)]));
+            const double outMaskedDiff = std::fabs(static_cast<double>(
+                actual[static_cast<size_t>(i)] - maskedOutput[static_cast<size_t>(i)]));
+            std::printf(
+                "SHORT_UV_TRACE label=%s i=%d region=%s valid=%d period=%.6f "
+                "trackingUpdated=%d "
+                "originalF0=%.3f correctedF0=%.3f outInputDiff=%.9f "
+                "outNeutralDiff=%.9f outMaskedDiff=%.9f\n",
+                label, i,
+                i < kLeadSamples ? "V1" : (i < kLeadSamples + kGapSamples ? "UV" : "V2"),
+                frame.valid ? 1 : 0, static_cast<double>(frame.periodSamples),
+                frame.trackingUpdated ? 1 : 0,
+                static_cast<double>(originalF0[static_cast<size_t>(f0Frame)]),
+                static_cast<double>(correctedF0[static_cast<size_t>(f0Frame)]),
+                outInputDiff, outNeutralDiff, outMaskedDiff);
+        }
+    };
+
+    printTraceWindow(kLeadSamples, "gap_start");
+    printTraceWindow(firstGapInvalid, "first_invalid");
+    printTraceWindow(kLeadSamples + kGapSamples, "gap_end");
+    printTraceWindow(firstTailValid, "tail_reacquire");
+
+    expectTrue(static_cast<int>(maskedOutput.size()) == kNumSamples,
+               "short UV: masked output length matches input");
+    expectTrue(allFinite(maskedOutput), "short UV: masked output is finite");
+    expectTrue(firstGapInvalid >= kLeadSamples,
+               "short UV: detector eventually reports an invalid gap sample");
+    expectTrue(firstTailValid >= kLeadSamples + kGapSamples,
+               "short UV: detector eventually reacquires the trailing voiced segment");
+    expectTrue(gapValidAfterFirstInvalid == 0,
+               "short UV: detector must not relock inside the same unvoiced gap");
+    expectTrue(originalF0.front() > 0.0f && correctedF0.front() > 0.0f,
+               "short UV: positive F0 guidance remains active through the gap");
+
+    expectTrue(leadValid > kLeadSamples * 3 / 4,
+               "short UV: leading voiced segment remains detected");
+    expectTrue(tailValid > kTailSamples / 2,
+               "short UV: trailing voiced segment reacquires");
+    expectTrue(middleGapInvalid > 0,
+               "short UV: middle of the unvoiced gap eventually becomes invalid");
+    expectTrue(static_cast<int>(detected.size()) == kNumSamples,
+               "short UV: detector result length matches input");
+    expectTrue(allFinite(actual), "short UV: actual output is finite");
+    expectTrue(allFinite(neutral), "short UV: neutral output is finite");
 }
 
 void testDetectorRequiresCompleteHistory()
@@ -1517,6 +1755,7 @@ int main()
     testDetectorRejectsNoise();
     testDetectorTracksLowAndHighTones();
     testDetectorDropsOutAcrossNoise();
+    testShortUvGapWithPositiveCorrectedF0();
     testDetectorRequiresCompleteHistory();
     testShifterUsesDetectorValidityForUv();
     testShifterUsesDetectorShadowSource();

@@ -109,9 +109,11 @@ double lowPassAt(const std::vector<float>& samples, int index)
 
 std::optional<CoarseAcquisition> coarsePeriod(
     const std::vector<float>& samples,
-    int endIndex)
+    int endIndex,
+    int windowSamples = AutoTunePeriodDetector::kCoarseWindowSamples,
+    double fcpeHintPeriod = 0.0)
 {
-    constexpr int kWindow = AutoTunePeriodDetector::kCoarseWindowSamples;
+    const int kWindow = windowSamples;
     constexpr int kFilterHistory = AutoTunePeriodDetector::kCoarseFilterTaps - 1;
     if (endIndex + 1 < kWindow + kFilterHistory)
         return std::nullopt;
@@ -299,6 +301,32 @@ std::optional<CoarseAcquisition> coarsePeriod(
             selectedPeriod = secondCand->lag;
         else
             return std::nullopt;
+
+        // ── FCPE octave prior ─────────────────────────────────────────
+        // When an AI F0 hint is available, verify that the selected period
+        // is within ±1 octave of the reference.  If not, pick the confirmed
+        // candidate closest to the reference.  This prevents the EH-first
+        // heuristic from locking onto a subharmonic when the AI model
+        // confidently reports the correct octave.
+        if (fcpeHintPeriod > 0.0 && selectedPeriod > 0)
+        {
+            constexpr double kOctaveRange = 0.5;
+            const double ref = fcpeHintPeriod;
+            const double selD = static_cast<double>(selectedPeriod);
+            if (std::fabs(selD - ref) / ref > kOctaveRange)
+            {
+                auto pickClosest = [&](int lag) -> bool {
+                    if (lag <= 0) return false;
+                    const double d = static_cast<double>(lag);
+                    return std::fabs(d - ref) / ref <= kOctaveRange;
+                };
+                if (pickClosest(firstCand.has_value() ? firstCand->lag : 0))
+                    selectedPeriod = firstCand->lag;
+                else if (pickClosest(secondCand.has_value() ? secondCand->lag : 0))
+                    selectedPeriod = secondCand->lag;
+                // Both outside ±1 oct → keep EH-selected period (graceful degradation)
+            }
+        }
     }
 
     if (selectedPeriod < AutoTunePeriodDetector::kMinFullLag
@@ -313,7 +341,10 @@ std::vector<AutoTunePeriodDetector::DetectedPeriod>
 AutoTunePeriodDetector::analyze(
     const float* lookbehind, int numLookbehindSamples,
     const float* input, int numInputSamples,
-    double sampleRate)
+    double sampleRate,
+    const float* fcpeF0Hint,
+    int numF0HintFrames,
+    double f0HintFrameRate)
 {
     // The reference flow defines the lag grid for a preferred 44.1 kHz sample rate.
     // These constants are sample-domain values and are intentionally not
@@ -333,10 +364,37 @@ AutoTunePeriodDetector::analyze(
         std::copy(lookbehind, lookbehind + prefix, samples.begin());
     std::copy(input, input + numInputSamples, samples.begin() + prefix);
 
+    // ── FCPE hint interpolation helper ────────────────────────────────
+    // Maps a sample-domain endIndex (in the concatenated buffer) to the
+    // reference period derived from the FCPE F0 array.  Returns 0 when
+    // no hint is available or the interpolated F0 is unvoiced (≤ 0).
+    const auto hintPeriodAt = [&](int endIndex) -> double {
+        if (fcpeF0Hint == nullptr || numF0HintFrames <= 0
+            || f0HintFrameRate <= 0.0)
+            return 0.0;
+        const double samplePos =
+            static_cast<double>(endIndex - prefix);
+        const double framePos = samplePos / kReferenceSampleRate * f0HintFrameRate;
+        const int frame = std::clamp(
+            static_cast<int>(std::floor(framePos)),
+            0, numF0HintFrames - 1);
+        const float f0 = fcpeF0Hint[frame];
+        return f0 > 0.0f ? kReferenceSampleRate / static_cast<double>(f0) : 0.0;
+    };
+
     std::array<EHValue, kTrackingLagCount> tracking{};
     int ehOffset = kMinFullLag;
     bool trackingInitialized = false;
     DetectedPeriod held;
+    // Failure-recovery state: after any tracking failure we record the
+    // sample index where the failure occurred and the last reliably held
+    // period.  On subsequent samples the detector first tries to
+    // re-establish tracking using that period (only when the entire EH
+    // window is guaranteed to sit in post-failure data), and only falls
+    // back to coarse acquisition once kRequiredLookbehindSamples of
+    // post-failure history have accumulated.
+    int failureSampleIndex = -1;
+    double lastReliablePeriod = 0.0;
 
     const auto initializeTracking = [&](int endIndex, int base) {
         const int centerLag = base + kTrackingCenterIndex;
@@ -375,8 +433,48 @@ AutoTunePeriodDetector::analyze(
         return true;
     };
 
-    const auto acquire = [&](int endIndex) {
-        const auto seed = coarsePeriod(samples, endIndex);
+    const auto acquire = [&](int endIndex, bool useLargeWindow) {
+        // The public history contract covers the larger coarse window.  Do
+        // not silently fall back to the shorter window when that context is
+        // incomplete; otherwise kRequiredLookbehindSamples is misleading and
+        // chunk-start detection becomes dependent on the fallback path.
+        if (endIndex + 1 < kRequiredLookbehindSamples)
+            return false;
+
+        const double hintPeriod = hintPeriodAt(endIndex);
+
+        // ── Multi-window cross-validation ─────────────────────────────
+        // Run coarse acquisition at two window sizes.  When they agree
+        // the result is robust; when they disagree, the FCPE hint
+        // (highest-priority octave prior) picks the correct one.
+        const auto seedA = coarsePeriod(
+            samples, endIndex, kCoarseWindowSamples, hintPeriod);
+        const auto seedB = useLargeWindow
+            ? coarsePeriod(
+                samples, endIndex, kCoarseWindowSamplesLarge, hintPeriod)
+            : std::optional<CoarseAcquisition>{};
+
+        const auto selectSeed = [&]() -> std::optional<CoarseAcquisition> {
+            if (seedA.has_value() && seedB.has_value())
+            {
+                if (seedA->selectedPeriod == seedB->selectedPeriod)
+                    return seedA;
+                // Disagreement: use FCPE hint to pick closer candidate.
+                if (hintPeriod > 0.0)
+                {
+                    const double diffA = std::fabs(
+                        static_cast<double>(seedA->selectedPeriod) - hintPeriod);
+                    const double diffB = std::fabs(
+                        static_cast<double>(seedB->selectedPeriod) - hintPeriod);
+                    return diffA <= diffB ? seedA : seedB;
+                }
+                // No hint: prefer larger window (better low-frequency resolution).
+                return seedB;
+            }
+            return seedA.has_value() ? seedA : seedB;
+        };
+
+        const auto seed = selectSeed();
         if (!seed.has_value())
             return false;
 
@@ -388,7 +486,19 @@ AutoTunePeriodDetector::analyze(
         return initializeTracking(endIndex, base);
     };
 
-    if (prefix > 0 && acquire(prefix - 1))
+    // Unified failure transition: preserve the last reliable period for
+    // recovery, clear held, and record the failure position.
+    const auto failTracking = [&](int sampleEndIndex,
+                                  bool preserveFailureBoundary = false) {
+        if (!preserveFailureBoundary && held.valid)
+            lastReliablePeriod = held.periodSamples;
+        held = {};
+        trackingInitialized = false;
+        if (!preserveFailureBoundary)
+            failureSampleIndex = sampleEndIndex;
+    };
+
+    if (prefix > 0 && acquire(prefix - 1, true))
         trackingInitialized = true;
 
     for (int i = 0; i < numInputSamples; ++i)
@@ -400,10 +510,72 @@ AutoTunePeriodDetector::analyze(
         bool rateUpdated = false;
 
         bool initializedNow = false;
-        if (!trackingInitialized && acquire(endIndex))
+        bool initializedFromRecovery = false;
+        if (!trackingInitialized)
         {
-            trackingInitialized = true;
-            initializedNow = true;
+            if (failureSampleIndex < 0)
+            {
+                // No prior failure: normal initial/post-prefix acquisition.
+                if (acquire(endIndex, true))
+                {
+                    trackingInitialized = true;
+                    initializedNow = true;
+                }
+            }
+            else
+            {
+                // Recovery after tracking failure: search only around the
+                // last reliable period using current post-failure samples.
+                // This avoids a global coarse relock onto stale pre-failure V
+                // while still allowing a small period change at V recovery.
+                int recoveryLag = 0;
+                double recoveryScore = std::numeric_limits<double>::infinity();
+                const int recoveryCenter = static_cast<int>(
+                    std::round(lastReliablePeriod));
+                for (int lag = recoveryCenter - kTrackingLagCount;
+                     lag <= recoveryCenter + kTrackingLagCount; ++lag)
+                {
+                    if (lag < kMinFullLag || lag > kMaxFullLag)
+                        continue;
+                    const int base = lag - kTrackingCenterIndex;
+                    const int maxLag = base + kTrackingLagCount - 1;
+                    if (lastReliablePeriod <= 0.0
+                        || endIndex - 2 * maxLag + 1 <= failureSampleIndex)
+                        continue;
+                    const auto eh = computeEHAt(samples, endIndex, lag);
+                    if (!eh.has_value()
+                        || !std::isfinite(eh->value())
+                        || eh->energy < kMinimumEnergy
+                        || eh->value() > kPeriodicityEpsilon * eh->energy)
+                        continue;
+                    if (eh->value() < recoveryScore)
+                    {
+                        recoveryScore = eh->value();
+                        recoveryLag = lag;
+                    }
+                }
+
+                if (recoveryLag > 0
+                    && initializeTracking(
+                        endIndex, recoveryLag - kTrackingCenterIndex))
+                {
+                    trackingInitialized = true;
+                    initializedNow = true;
+                    initializedFromRecovery = true;
+                }
+                else if (endIndex - failureSampleIndex + 1
+                         >= kCoarseWindowSamples + kCoarseFilterTaps - 1)
+                {
+                    // Coarse fallback uses the short window only after its
+                    // complete window and FIR history are post-failure.
+                    if (acquire(endIndex, false))
+                    {
+                        trackingInitialized = true;
+                        initializedNow = true;
+                        initializedFromRecovery = true;
+                    }
+                }
+            }
         }
 
         if (!trackingInitialized)
@@ -415,8 +587,7 @@ AutoTunePeriodDetector::analyze(
 
         if (!initializedNow && !updateTracking(endIndex))
         {
-            held = {};
-            trackingInitialized = false;
+            failTracking(endIndex, initializedFromRecovery);
             result[static_cast<size_t>(i)] = held;
             continue;
         }
@@ -434,8 +605,7 @@ AutoTunePeriodDetector::analyze(
             // Lmin == 1 or Lmin == N is a tracking failure in Figure 5A.
             if (bestIndex == 0 || bestIndex == kTrackingLagCount - 1)
             {
-                held = {};
-                trackingInitialized = false;
+                failTracking(endIndex, initializedFromRecovery);
                 result[static_cast<size_t>(i)] = held;
                 continue;
             }
@@ -449,8 +619,7 @@ AutoTunePeriodDetector::analyze(
                 const int newBase = ehOffset - 1;
                 if (newBase + kTrackingCenterIndex < kMinFullLag)
                 {
-                    held = {};
-                    trackingInitialized = false;
+                    failTracking(endIndex, initializedFromRecovery);
                     result[static_cast<size_t>(i)] = held;
                     continue;
                 }
@@ -460,8 +629,7 @@ AutoTunePeriodDetector::analyze(
                 const auto eh = computeEHAt(samples, endIndex, newBase);
                 if (!eh.has_value())
                 {
-                    held = {};
-                    trackingInitialized = false;
+                    failTracking(endIndex, initializedFromRecovery);
                     result[static_cast<size_t>(i)] = held;
                     continue;
                 }
@@ -473,8 +641,7 @@ AutoTunePeriodDetector::analyze(
                 const int newBase = ehOffset + 1;
                 if (newBase + kTrackingCenterIndex > kMaxFullLag)
                 {
-                    held = {};
-                    trackingInitialized = false;
+                    failTracking(endIndex, initializedFromRecovery);
                     result[static_cast<size_t>(i)] = held;
                     continue;
                 }
@@ -485,8 +652,7 @@ AutoTunePeriodDetector::analyze(
                     samples, endIndex, newBase + kTrackingLagCount - 1);
                 if (!eh.has_value())
                 {
-                    held = {};
-                    trackingInitialized = false;
+                    failTracking(endIndex, initializedFromRecovery);
                     result[static_cast<size_t>(i)] = held;
                     continue;
                 }
@@ -503,8 +669,7 @@ AutoTunePeriodDetector::analyze(
             }
             if (bestIndex == 0 || bestIndex == kTrackingLagCount - 1)
             {
-                held = {};
-                trackingInitialized = false;
+                failTracking(endIndex, initializedFromRecovery);
                 result[static_cast<size_t>(i)] = held;
                 continue;
             }
@@ -514,8 +679,7 @@ AutoTunePeriodDetector::analyze(
                 || best.energy < kMinimumEnergy
                 || best.value() > kPeriodicityEpsilon * best.energy)
             {
-                held = {};
-                trackingInitialized = false;
+                failTracking(endIndex, initializedFromRecovery);
                 result[static_cast<size_t>(i)] = held;
                 continue;
             }
@@ -534,13 +698,13 @@ AutoTunePeriodDetector::analyze(
 
             if (refined < kMinFullLag || refined > kMaxFullLag)
             {
-                held = {};
-                trackingInitialized = false;
+                failTracking(endIndex, initializedFromRecovery);
             }
             else
             {
                 held.periodSamples = static_cast<float>(refined);
                 held.valid = true;
+                lastReliablePeriod = held.periodSamples;
                 rateUpdated = true;
             }
         }
