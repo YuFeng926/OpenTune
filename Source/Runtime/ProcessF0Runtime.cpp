@@ -15,7 +15,7 @@ ProcessF0Runtime& ProcessF0Runtime::getInstance()
 {
     // 进程寿命 heap 单例：显式分配、永不析构，避免 DLL detach（持 loader lock）
     // 时执行静态析构。VST3 构建中模块已被 pin（Vst3ModulePin.cpp），单例与其
-    // 持有的 Env / 服务存活到进程退出，实例卸载不释放任何资源。
+    // 持有的 Env / 服务存活到进程退出；F0 session 由 extractF0 按需创建并返回前析构。
     static auto* instance = new ProcessF0Runtime();
     return *instance;
 }
@@ -29,9 +29,8 @@ void ProcessF0Runtime::attach()
 void ProcessF0Runtime::detach()
 {
     // 只递减客户端租约计数：服务是进程寿命的（VST3 模块 pin / Standalone 进程
-    // 寿命），不在此释放 f0Service_/ortEnv_/gameNoteGenerator_。后续实例复用
-    // 同一 Env 与 Session，避免重建 ~350MB rmvpe 与重复模型加载。显式释放
-    // 不存在：资源随进程退出由系统回收。
+    // 寿命），不在此释放 f0Service_/ortEnv_/gameNoteGenerator_。F0 session
+    // 由 extractF0 按需创建，在该调用返回前析构。
     std::lock_guard<std::mutex> lock(initMutex_);
     --clientCount_;
 }
@@ -96,7 +95,7 @@ bool ProcessF0Runtime::initialize(const std::string& modelsDir, F0ModelType init
         }
 
         ready_.store(true, std::memory_order_release);
-        AppLogger::log("ProcessF0Runtime: F0 inference service initialized (process-level)");
+        AppLogger::log("ProcessF0Runtime: F0 inference service configured (session created on demand)");
     }
     catch (const std::exception& e)
     {

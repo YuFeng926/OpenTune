@@ -1,0 +1,12 @@
+{
+    "samplerate": 44100,
+    "timestep": 0.01,
+    "languages": {
+        "en": 1,
+        "ja": 2,
+        "yue": 3,
+        "zh": 4
+    },
+    "loop": true,
+    "embedding_dim": 128
+}

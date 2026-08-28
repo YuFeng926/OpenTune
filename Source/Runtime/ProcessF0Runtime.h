@@ -26,11 +26,12 @@ struct Note;
  * Process-lifetime heap singleton: getInstance() allocates once and never
  * destroys it, so no static destructor ever runs at DLL detach (loader lock
  * held). In the VST3 build the module itself is pinned for process lifetime
- * (Source/Utils/Vst3ModulePin.cpp), so everything below survives instance
- * teardown and is released only at process exit. Client lease: attach() at
- * construction, detach() at destruction; detach() only decrements the counter
- * and never releases f0Service_ / ortEnv_ / the GAME generator — a later
- * instance reuses the same services without rebuilding the selected F0 model.
+ * (Source/Utils/Vst3ModulePin.cpp), so Env/service state survives instance
+ * teardown and is released only at process exit. The F0 service configures
+ * on init and creates/destroys ONNX sessions on demand per extraction call.
+ * Client lease: attach() at construction, detach() at destruction; detach()
+ * only decrements the counter and never releases f0Service_ / ortEnv_ /
+ * the GAME generator.
  */
 class ProcessF0Runtime
 {

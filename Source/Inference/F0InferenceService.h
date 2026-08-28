@@ -26,22 +26,29 @@ struct F0RunOwnerState {
 };
 
 /**
- * F0InferenceService - F0 extraction service (process-level shared ONNX session)
+ * F0InferenceService - F0 extraction service (process-level shared service)
  *
  * Responsibilities:
- * - Manage F0 extractor lifecycle (shared session across all callers)
- * - Serialize inference: DML contract allows only one Run() on a session at a time
+ * - Configure F0 extraction: store model directory, selected model type, and
+ *   extraction parameters (confidence, f0Min, f0Max) without loading an ONNX
+ *   session. isInitialized() reflects "service configured", not "session loaded".
+ * - On-demand session lifecycle: each extractF0() call creates a local
+ *   Ort::Session via ModelFactory, runs inference, and destroys the session
+ *   before returning. No session persists across calls.
+ * - Serialize inference: DML contract allows only one Run() at a time;
+ *   runMutex_ admission gate ensures serial execution.
  * - Run lease admission gate: waiters queue on runCv_; cancellation is per-owner
  *   state (pending leases are flagged cancelled and exit without taking the gate,
  *   the active lease is terminated via SetTerminate)
  * - Owner closure is persistent: terminateActiveRun sets state->closed; late-arriving
  *   leases from a closed owner are rejected at admission
- * - Single state lock (runMutex_) linearizes lease admission, termination and
- *   RunOptions mutation, eliminating TOCTOU between owner checks and SetTerminate
- * - Handle model switching and configuration
+ * - Handle model switching: setF0Model() updates the selected model without
+ *   creating a session; the next admitted extractF0() uses the new model.
+ *   An admitted call keeps its configuration snapshot for the whole extraction.
  *
- * Thread-safe: Yes (runMutex_ serializes all Runs; extractorMutex_ guards model access)
- * Lifecycle: Model loaded on demand, released explicitly by caller after use
+ * Thread-safe: Yes (runMutex_ serializes all Runs; extractorMutex_ guards config)
+ * Lifecycle: Ort::Env/service are process-level; sessions are created on demand
+ *   per extractF0() call and destroyed before the call returns.
  */
 class F0InferenceService {
 public:
@@ -49,9 +56,10 @@ public:
     ~F0InferenceService();
 
     /**
-     * Initialize F0 service with model directory
+     * Configure F0 service: save model directory and selected model type.
+     * Does NOT load an ONNX session; sessions are created on demand in extractF0().
      * @param modelDir Path to model directory
-     * @return true if initialization successful
+     * @return true if model file exists and service is configured
      */
     bool initialize(const std::string& modelDir,
                     F0ModelType initialModel = F0ModelType::FCPE);
@@ -88,9 +96,9 @@ public:
     void terminateActiveRun(const std::shared_ptr<F0RunOwnerState>& ownerState);
 
     /**
-     * Set F0 model type
+     * Set F0 model type (does not create a session; next extractF0 uses new model)
      * @param type F0 model type (e.g., RMVPE)
-     * @return true if model switched successfully
+     * @return true if model file exists and selection updated
      */
     bool setF0Model(F0ModelType type);
 
