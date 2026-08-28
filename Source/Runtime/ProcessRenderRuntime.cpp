@@ -24,8 +24,8 @@ namespace OpenTune {
 
 namespace {
 
-// 静息处边界交叉淡化时长（10ms @ 44.1kHz）
-constexpr int kSilentGapBoundaryFadeSamples = 441;
+// 临时关闭静息处边界淡化
+constexpr int kSilentGapBoundaryFadeSamples = 0;
 
 // ==============================================================================
 // Effective F0 Materialization
