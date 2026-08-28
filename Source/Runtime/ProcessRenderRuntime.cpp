@@ -24,8 +24,8 @@ namespace OpenTune {
 
 namespace {
 
-// 临时关闭静息处边界淡化，用于隔离 AutoTune 卡顿根因。
-constexpr int kSilentGapBoundaryFadeSamples = 0;
+// 静息处边界交叉淡化时长（10ms @ 44.1kHz）
+constexpr int kSilentGapBoundaryFadeSamples = 441;
 
 // ==============================================================================
 // Effective F0 Materialization
