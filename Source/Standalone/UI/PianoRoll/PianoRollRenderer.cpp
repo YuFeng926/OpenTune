@@ -1795,22 +1795,26 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         }
     }
 
-    // Draw effective corrected F0 (thicker).
+    // Draw corrected F0 (thicker).
     // 拖拽预览 item 已携带临时 snapshot（noteDrag.previewSnapshot）：其 pitchCurve
     // 是 clone + applyCorrectionToRange 的烘焙结果，OpenTune 的 shouldDrawCorrected
     // 由该临时 curve 的 correction layer 自然成立，无需任何覆盖注入。
     // OpenDyne（notesPrimaryScheme）：显示有效F0（修正段+回退OriginalF0）；
-    // OpenTune：仅存在修正层/非恒等pitchShift 时才显示CorrectedF0，
-    // 无修正时只显示OriginalF0红色细线。
+    // OpenTune：仅 correction segment 覆盖的区域（绘制的音符范围）派生CorrectedF0，
+    // 其余区域只显示OriginalF0红色细线。
     if (ctx.showCorrectedF0 && item.ownerSnapshot) {
-        const bool hasCorrections = item.pitchSnapshot->hasCorrectionLayer()
-            || !item.ownerSnapshot->pitchShiftSettings.isIdentity();
         const bool shouldDrawCorrected = item.notesPrimaryScheme
             ? item.pitchSnapshot->hasOriginalF0Data()
-            : hasCorrections;
+            : item.pitchSnapshot->hasCorrectionLayer();
         if (shouldDrawCorrected) {
         auto correctedProducer = [&](auto&& sink) {
-            item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
+            if (item.notesPrimaryScheme)
+                item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
+            else
+                item.pitchSnapshot->forEachCorrectionF0Span(startFrame, endFrame,
+                    [&](int spanStartFrame, const float* values, int count) {
+                        sink(spanStartFrame, values, count, 1.0f);
+                    });
         };
 
         const auto visualSegments = buildF0VisualSegments(
