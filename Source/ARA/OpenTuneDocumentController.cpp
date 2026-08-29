@@ -2316,6 +2316,124 @@ bool OpenTuneDocumentController::requestSetPlaybackPosition(double timeInSeconds
     return true;
 }
 
+void OpenTuneDocumentController::observeHostPlaybackState(bool isPlaying) noexcept
+{
+    auto state = playbackCommandState_.load(std::memory_order_acquire);
+    auto next = state + kStateVersionIncrement;
+
+    // Publish this observation and, when it matches the request that was
+    // present in the same snapshot, confirm that request. A failed CAS means a
+    // newer request or observation won the race; do not spin on the audio thread
+    // or reinterpret this old PositionInfo against the newer state.
+    next |= kObservedValid;
+    if (isPlaying)
+        next |= kObservedPlaying;
+    else
+        next &= ~kObservedPlaying;
+
+    const bool pending = (state & kRequestPending) != 0;
+    const bool targetPlaying = (state & kTargetPlaying) != 0;
+    if (pending && targetPlaying == isPlaying)
+        next &= ~kRequestPending;
+
+    if ((next & kRequestPending) == 0)
+    {
+        if (isPlaying)
+            next |= kTargetPlaying;
+        else
+            next &= ~kTargetPlaying;
+    }
+
+    playbackCommandState_.compare_exchange_strong(state,
+                                                  next,
+                                                  std::memory_order_acq_rel,
+                                                  std::memory_order_relaxed);
+}
+
+void OpenTuneDocumentController::markPlaybackRequest(bool shouldPlay) noexcept
+{
+    auto state = playbackCommandState_.load(std::memory_order_acquire);
+    for (;;)
+    {
+        auto next = state + kStateVersionIncrement;
+        next |= kRequestPending;
+        if (shouldPlay)
+            next |= kTargetPlaying;
+        else
+            next &= ~kTargetPlaying;
+
+        if (playbackCommandState_.compare_exchange_weak(state,
+                                                        next,
+                                                        std::memory_order_acq_rel,
+                                                        std::memory_order_acquire))
+            return;
+    }
+}
+
+bool OpenTuneDocumentController::requestTogglePlayback(bool fallbackObservedPlaying)
+{
+    // Message-thread only. Check host availability first.
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+
+    auto* playbackController = dc->getHostPlaybackController();
+    if (playbackController == nullptr)
+        return false;
+
+    auto state = playbackCommandState_.load(std::memory_order_acquire);
+    bool newTarget = false;
+    for (;;)
+    {
+        const bool pending = (state & kRequestPending) != 0;
+        const bool targetPlaying = (state & kTargetPlaying) != 0;
+        const bool observedValid = (state & kObservedValid) != 0;
+        const bool observedPlaying = (state & kObservedPlaying) != 0;
+
+        // Decision priority: pending target (flip) > valid shared observed (flip)
+        // > caller's local processor snapshot as first-contact fallback.
+        if (pending)
+            newTarget = !targetPlaying;
+        else if (observedValid)
+            newTarget = !observedPlaying;
+        else
+            newTarget = !fallbackObservedPlaying;
+
+        auto next = state + kStateVersionIncrement;
+        next |= kRequestPending;
+        if (newTarget)
+            next |= kTargetPlaying;
+        else
+            next &= ~kTargetPlaying;
+
+        if (playbackCommandState_.compare_exchange_weak(state,
+                                                        next,
+                                                        std::memory_order_acq_rel,
+                                                        std::memory_order_acquire))
+            break;
+    }
+
+    if (newTarget)
+    {
+        playbackController->requestStartPlayback();
+        AppLogger::log("ARA-TRANSPORT: toggle target=start observed="
+            + juce::String((state & kObservedValid)
+                ? ((state & kObservedPlaying) ? "true" : "false")
+                : "unknown")
+            + " fallback=" + juce::String(fallbackObservedPlaying ? "true" : "false"));
+    }
+    else
+    {
+        playbackController->requestStopPlayback();
+        AppLogger::log("ARA-TRANSPORT: toggle target=stop observed="
+            + juce::String((state & kObservedValid)
+                ? ((state & kObservedPlaying) ? "true" : "false")
+                : "unknown")
+            + " fallback=" + juce::String(fallbackObservedPlaying ? "true" : "false"));
+    }
+    return true;
+}
+
 bool OpenTuneDocumentController::requestStartPlayback()
 {
     auto* dc = getDocumentController();
@@ -2326,6 +2444,7 @@ bool OpenTuneDocumentController::requestStartPlayback()
     if (playbackController == nullptr)
         return false;
 
+    markPlaybackRequest(true);
     playbackController->requestStartPlayback();
     return true;
 }
@@ -2340,6 +2459,7 @@ bool OpenTuneDocumentController::requestStopPlayback()
     if (playbackController == nullptr)
         return false;
 
+    markPlaybackRequest(false);
     playbackController->requestStopPlayback();
     return true;
 }

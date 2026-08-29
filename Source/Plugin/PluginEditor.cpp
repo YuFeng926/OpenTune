@@ -1195,8 +1195,15 @@ bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
 
 void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
 {
+#if JucePlugin_Enable_ARA
+    if (auto* docController = processorRef_.getDocumentController()) {
+        if (!docController->requestTogglePlayback(processorRef_.isPlaying()))
+            AppLogger::log("ARA: requestTogglePlayback failed — host playback controller unavailable");
+        return;
+    }
+#endif
+    // Non-ARA VST3: host-controlled transport. Use per-processor isPlaying as fallback.
     const bool isPlaying = processorRef_.isPlaying();
-
     if (isPlaying) {
         pauseRequested();
     } else {

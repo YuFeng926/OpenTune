@@ -1415,6 +1415,9 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         AppLogger::log("ARA: didBindToARA - DC owns its CRS lease; processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
             + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc))
+            + " playbackRenderer=" + juce::String(isPlaybackRenderer() ? "true" : "false")
+            + " editorRenderer=" + juce::String(isEditorRenderer() ? "true" : "false")
+            + " editorView=" + juce::String(isEditorView() ? "true" : "false")
             + " araBound=true");
 
         // Replay any pre-bind state that was cached by setStateInformation.
@@ -1520,6 +1523,14 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // 1) Update processor-owned canonical transport truth first (no-op if nullopt).
     playHeadState_.update(hostPosOpt);
+
+#if JucePlugin_Enable_ARA
+    // REAPER may split ARA roles across processor instances. Publish the host's
+    // playing flag to the shared document before zero-sample transport blocks return.
+    if (hostPosOpt.hasValue() && isBoundToARA())
+        if (auto* dc = getDocumentController())
+            dc->observeHostPlaybackState(hostPosOpt->getIsPlaying());
+#endif
 
     // 2) Publish presentation projection anchor (before any early return).
     //    VST3/ARA: only when the host supplied timeInSeconds in this block.

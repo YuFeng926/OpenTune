@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <map>
 #include <optional>
@@ -158,6 +159,8 @@ public:
     bool requestSetPlaybackPosition(double timeInSeconds);
     bool requestStartPlayback();
     bool requestStopPlayback();
+    bool requestTogglePlayback(bool fallbackObservedPlaying);
+    void observeHostPlaybackState(bool isPlaying) noexcept;
     // ARA2 official one-way HostPlaybackController requests for loop control.
     // Per ARA2 spec, host may ignore/delay/quantize; loop truth is observed
     // via companion PositionInfo in processBlock, never written here.
@@ -185,6 +188,28 @@ private:
     std::shared_ptr<ContentRenderService> contentRenderService_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::unique_ptr<F0ExtractionService> contentF0ExtractionService_;
+
+    // Shared across every ARA role bound to this document. One versioned,
+    // CAS-protected word prevents an old PositionInfo observation from clearing
+    // a newer UI request, including an ABA sequence of rapid toggles.
+    //
+    // Bit layout (low four bits are flags; the upper bits are a change version):
+    //   bit 0 kObservedValid   — false until first observeHostPlaybackState sets it
+    //   bit 1 kObservedPlaying — last confirmed host playing state
+    //   bit 2 kRequestPending  — a start/stop request is in flight
+    //   bit 3 kTargetPlaying   — desired playing state when pending resolves
+    //   bits 4..63             — incremented on every successful state change
+    //
+    // Invariant: observeHostPlaybackState makes one CAS attempt per host
+    // observation. If another request/observation wins the race, this snapshot
+    // is discarded; the next processBlock supplies a fresh observation.
+    static constexpr std::uint64_t kObservedValid   = 1ull << 0;
+    static constexpr std::uint64_t kObservedPlaying = 1ull << 1;
+    static constexpr std::uint64_t kRequestPending  = 1ull << 2;
+    static constexpr std::uint64_t kTargetPlaying   = 1ull << 3;
+    static constexpr std::uint64_t kStateVersionIncrement = 1ull << 4;
+    std::atomic<std::uint64_t> playbackCommandState_{0};
+    void markPlaybackRequest(bool shouldPlay) noexcept;
 
     // 服务租约 token：DC 析构时置 false，后台 F0 work 持有 shared_ptr 可安全检查
     std::shared_ptr<std::atomic<bool>> asyncLeaseToken_;
