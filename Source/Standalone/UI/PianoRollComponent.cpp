@@ -765,7 +765,8 @@ bool PianoRollComponent::commitNoteDraft()
             && a.pitchDriftScale == b.pitchDriftScale
             && a.vibratoDepth == b.vibratoDepth
             && a.vibratoRate == b.vibratoRate
-            && a.eq == b.eq;   // exact optional<EqSettings> 比较（9 字段无容差）
+            && a.noteSplitCents == b.noteSplitCents
+            && a.eq == b.eq;
     };
 
     size_t i = 0, j = 0;
@@ -1410,7 +1411,8 @@ bool PianoRollComponent::applyManualCorrectionPatch(const std::vector<PianoRollT
             op.startFrame,
             op.endFrameExclusive,
             op.f0Data,
-            op.source);
+            op.source,
+            op.parameterSnapshot);
     }
 
     // dirtyStartFrame/dirtyEndFrame 是所有 manual ops 的 dirty 帧并集（含端点）。
@@ -2409,225 +2411,6 @@ void PianoRollComponent::setInferenceActive(bool active)
 {
     inferenceActive_ = active;
     waveformBuildTickCounter_ = 0;
-}
-
-bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, float vibratoDepth, float vibratoRate) {
-    auto notes = getEditedContentNotesCopy();
-    const auto f0tl = currentF0Timeline();
-    if (f0tl.isEmpty()) return false;
-    const auto contentSnapshot = readEditedSnapshot();
-    if (contentSnapshot == nullptr) return false;
-
-    double dirtyStartTime = 1e30;
-    double dirtyEndTime = -1e30;
-    bool anySelected = false;
-
-    interactionState_.noteSelection.trimToNoteCount(static_cast<int>(notes.size()));
-    for (int noteIndex : interactionState_.noteSelection.selectedIndices) {
-        auto& n = notes[static_cast<size_t>(noteIndex)];
-        anySelected = true;
-        n.retuneSpeed = retuneSpeed;
-        n.vibratoDepth = vibratoDepth;
-        n.vibratoRate = vibratoRate;
-        n.dirty = true;
-        dirtyStartTime = std::min(dirtyStartTime, n.startTime);
-        dirtyEndTime = std::max(dirtyEndTime, n.endTime);
-    }
-    if (!anySelected) return false;
-
-    if (dirtyEndTime > dirtyStartTime && currentCurve_) {
-        const auto editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
-        if (!editRange.isEmpty()) {
-            auto clonedCurve = currentCurve_->clone();
-            clonedCurve->applyCorrectionToRange(
-                notes, editRange.startFrame, editRange.endFrameExclusive,
-                static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-                retuneSpeed, vibratoDepth, vibratoRate);
-            auto snap = clonedCurve->getSnapshot();
-
-            const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
-                editRange.startFrame,
-                editRange.endFrameExclusive,
-                f0tl.endFrameExclusive());
-
-            // Extract notes overlapping the expanded affected range (not just dirty range)
-            const double affectedStartSec = f0tl.timeAtFrame(affectedRange.startFrame);
-            const double affectedEndSec = f0tl.timeAtFrame(affectedRange.endFrameExclusive);
-            auto overlapsRange = [affectedStartSec, affectedEndSec](const Note& n) {
-                return n.endTime > affectedStartSec && n.startTime < affectedEndSec;
-            };
-            std::vector<Note> notesInRange;
-            for (const auto& n : notes) {
-                if (overlapsRange(n)) notesInRange.push_back(n);
-            }
-
-            // Extract segments overlapping the affected range (range-scoped, not full)
-            auto allSegments = snap->getCorrectionSegments();
-            std::vector<PitchCorrectionSegment> segmentsInRange;
-            for (const auto& seg : allSegments) {
-                if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
-                    segmentsInRange.push_back(seg);
-            }
-
-            if (!commitEditedContentNotesAndSegments(*contentSnapshot, notesInRange, segmentsInRange, affectedRange)) {
-                return false;
-            }
-
-            listeners_.call([affectedRange](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1); });
-    return true;
-        }
-    }
-
-    return false;
-}
-
-bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate,
-                                                    const std::vector<std::pair<int, int>>& frameRanges)
-{
-    if (!currentCurve_ || frameRanges.empty()) return false;
-    const auto contentSnapshot = readEditedSnapshot();
-    if (contentSnapshot == nullptr) return false;
-
-    auto notes = getEditedContentNotesCopy();
-    // 帧范围参数调节 = 把当前全局参数应用到范围内音符，同步写入音符字段
-    // （否则 PitchCurve 渲染时音符级旧值覆盖新全局参数）。
-    const auto f0tl = currentF0Timeline();
-    for (const auto& [startFrame, endFrameExclusive] : frameRanges) {
-        if (endFrameExclusive <= startFrame) continue;
-        const double rangeStartSec = f0tl.timeAtFrame(startFrame);
-        const double rangeEndSec = f0tl.timeAtFrame(endFrameExclusive);
-        for (auto& note : notes) {
-            if (note.endTime > rangeStartSec && note.startTime < rangeEndSec) {
-                note.retuneSpeed = retuneSpeed;
-                note.vibratoDepth = vibratoDepth;
-                note.vibratoRate = vibratoRate;
-                note.dirty = true;
-            }
-        }
-    }
-
-    auto editedCurve = currentCurve_->clone();
-    bool anyBaked = false;
-    for (const auto& [startFrame, endFrameExclusive] : frameRanges) {
-        if (endFrameExclusive <= startFrame) continue;
-        if (!currentCurve_->hasCorrectionInRange(startFrame, endFrameExclusive)) continue;
-        editedCurve->applyCorrectionToRange(notes, startFrame, endFrameExclusive,
-                                            static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-                                            retuneSpeed, vibratoDepth, vibratoRate);
-        anyBaked = true;
-    }
-    if (!anyBaked) return false;
-
-    const auto snap = editedCurve->getSnapshot();
-    auto allSegments = snap->getCorrectionSegments();
-    // affectedRange 取所有选中范围的扩展并集
-    int unionStart = frameRanges.front().first;
-    int unionEnd = frameRanges.front().second;
-    for (const auto& [s, e] : frameRanges) {
-        unionStart = std::min(unionStart, s);
-        unionEnd = std::max(unionEnd, e);
-    }
-    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(unionStart,
-                                                                          unionEnd,
-                                                                          currentF0Timeline().endFrameExclusive());
-
-    if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, allSegments, affectedRange)) {
-        return false;
-    }
-
-    const int notifyEndFrame = std::max(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
-    listeners_.call([affectedRange, notifyEndFrame](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, notifyEndFrame); });
-    return true;
-}
-
-bool PianoRollComponent::getFrameRangeForTimeSpan(double startTime, double endTime, int& startFrame, int& endFrameExclusive) const
-{
-    startFrame = 0;
-    endFrameExclusive = 0;
-    if (currentCurve_ == nullptr || endTime <= startTime) return false;
-    const auto f0tl = currentF0Timeline();
-    if (f0tl.isEmpty()) return false;
-    const auto range = f0tl.nonEmptyRangeForTimes(startTime, endTime);
-    startFrame = range.startFrame;
-    endFrameExclusive = range.endFrameExclusive;
-    return endFrameExclusive > startFrame;
-}
-
-FrameSelection PianoRollComponent::collectSelectedFrameRanges() const
-{
-    if (toolHandler_) return toolHandler_->collectSelectedFrameRanges();
-    return {};
-}
-
-bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
-    speed = juce::jlimit(0.0f, 1.0f, speed);
-    pendingUndoDescription_ = TRANS("Edit retune speed");
-    if (!currentCurve_) return false;
-
-    const bool hasSelectedNotes = !interactionState_.noteSelection.empty();
-    const auto frameSel = collectSelectedFrameRanges();
-
-    AudioEditingScheme::ParameterTargetContext context;
-    context.hasSelectedNotes = hasSelectedNotes;
-    context.hasFrameSelection = !frameSel.empty();
-
-    switch (AudioEditingScheme::resolveParameterTarget(context)) {
-        case AudioEditingScheme::ParameterTarget::SelectedNotes:
-            return applyNoteParameterToSelectedNotes(speed, currentVibratoDepth_, currentVibratoRate_);
-        case AudioEditingScheme::ParameterTarget::FrameSelection:
-            return applyParameterToFrameRange(speed,
-                                              currentVibratoDepth_,
-                                              currentVibratoRate_,
-                                              frameSel.ranges);
-        default:
-            break;
-    }
-
-    return false;
-}
-
-bool PianoRollComponent::applyVibratoDepthToSelection(float depth) {
-    pendingUndoDescription_ = TRANS("修改颤音深度");
-    return applyVibratoParameterToSelection(VibratoParam::Depth, depth);
-}
-
-bool PianoRollComponent::applyVibratoRateToSelection(float rate) {
-    pendingUndoDescription_ = TRANS("修改颤音速率");
-    return applyVibratoParameterToSelection(VibratoParam::Rate, rate);
-}
-
-bool PianoRollComponent::applyVibratoParameterToSelection(VibratoParam param, float value) {
-    auto clampValue = [&]() -> float {
-        return (param == VibratoParam::Depth) ? juce::jlimit(0.0f, 100.0f, value)
-                                              : juce::jlimit(0.1f, 30.0f, value);
-    };
-    
-    value = clampValue();
-    if (!currentCurve_) return false;
-
-    const bool hasSelectedNotes = !interactionState_.noteSelection.empty();
-    const auto frameSel = collectSelectedFrameRanges();
-
-    AudioEditingScheme::ParameterTargetContext context;
-    context.hasSelectedNotes = hasSelectedNotes;
-    context.hasFrameSelection = !frameSel.empty();
-
-    switch (AudioEditingScheme::resolveParameterTarget(context)) {
-        case AudioEditingScheme::ParameterTarget::SelectedNotes:
-        {
-            float effectiveDepth = (param == VibratoParam::Depth) ? value : currentVibratoDepth_;
-            float effectiveRate = (param == VibratoParam::Rate) ? value : currentVibratoRate_;
-            return applyNoteParameterToSelectedNotes(currentRetuneSpeed_, effectiveDepth, effectiveRate);
-        }
-        case AudioEditingScheme::ParameterTarget::FrameSelection:
-            return applyParameterToFrameRange(
-                currentRetuneSpeed_,
-                (param == VibratoParam::Depth) ? value : currentVibratoDepth_,
-                (param == VibratoParam::Rate) ? value : currentVibratoRate_,
-                frameSel.ranges);
-        default:
-            return false;
-    }
 }
 
 bool PianoRollComponent::getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const

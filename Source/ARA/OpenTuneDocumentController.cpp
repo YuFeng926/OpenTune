@@ -129,6 +129,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         n->setAttribute("pitchDriftScale", note.pitchDriftScale);
         n->setAttribute("vibratoDepth", note.vibratoDepth);
         n->setAttribute("vibratoRate", note.vibratoRate);
+        n->setAttribute("noteSplitCents", note.noteSplitCents);
         n->setAttribute("outputGainDb", note.outputGainDb);
         n->setAttribute("isVoiced", note.isVoiced ? 1 : 0);
         
@@ -256,6 +257,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
             n->setAttribute("pitchDriftScale", note.pitchDriftScale);
             n->setAttribute("vibratoDepth", note.vibratoDepth);
             n->setAttribute("vibratoRate", note.vibratoRate);
+            n->setAttribute("noteSplitCents", note.noteSplitCents);
             n->setAttribute("outputGainDb", note.outputGainDb);
             rf->addChildElement(n);
         }
@@ -399,12 +401,13 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             note.pitchDriftScale = static_cast<float>(n->getDoubleAttribute("pitchDriftScale", 1.0));
             note.vibratoDepth = static_cast<float>(n->getDoubleAttribute("vibratoDepth"));
             note.vibratoRate = static_cast<float>(n->getDoubleAttribute("vibratoRate"));
+            note.noteSplitCents = static_cast<float>(n->getDoubleAttribute("noteSplitCents", PitchControlConfig::kDefaultNoteSplitCents));
 
             // 验证浮点值的有效性，时间长度与速度、振幅率都必须为有限值
             if (!std::isfinite(note.pitch) || !std::isfinite(note.originalPitch) ||
                 !std::isfinite(note.pitchOffset) || !std::isfinite(note.retuneSpeed) ||
                 !std::isfinite(note.vibratoDepth) || !std::isfinite(note.vibratoRate) ||
-                !std::isfinite(note.pitchDriftScale))
+                !std::isfinite(note.pitchDriftScale) || !std::isfinite(note.noteSplitCents))
                 return std::nullopt;
 
             note.outputGainDb = static_cast<float>(n->getDoubleAttribute("outputGainDb"));
@@ -757,6 +760,7 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 note.pitchDriftScale = static_cast<float>(n->getDoubleAttribute("pitchDriftScale", 1.0));
                 note.vibratoDepth = static_cast<float>(n->getDoubleAttribute("vibratoDepth"));
                 note.vibratoRate = static_cast<float>(n->getDoubleAttribute("vibratoRate"));
+                note.noteSplitCents = static_cast<float>(n->getDoubleAttribute("noteSplitCents", PitchControlConfig::kDefaultNoteSplitCents));
                 note.outputGainDb = static_cast<float>(n->getDoubleAttribute("outputGainDb"));
 
                 if (!std::isfinite(note.startTime) || !std::isfinite(note.endTime) ||

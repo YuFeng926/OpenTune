@@ -207,13 +207,10 @@ public:
 
     void setRetuneSpeed(float speed) { currentRetuneSpeed_ = speed; }
     float getCurrentRetuneSpeed() const { return currentRetuneSpeed_; }
-    bool applyRetuneSpeedToSelection(float speed);
     void setVibratoDepth(float depth) { currentVibratoDepth_ = depth; }
     float getCurrentVibratoDepth() const { return currentVibratoDepth_; }
-    bool applyVibratoDepthToSelection(float depth);
     void setVibratoRate(float rate) { currentVibratoRate_ = rate; }
     float getCurrentVibratoRate() const { return currentVibratoRate_; }
-    bool applyVibratoRateToSelection(float rate);
     bool getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const;
 
     AudioEditingScheme::ParameterEditResult editParameter(AudioEditingScheme::ParameterId id, float value);
@@ -383,9 +380,6 @@ private:
 
     enum class VibratoParam { Depth, Rate };
 
-    bool applyNoteParameterToSelectedNotes(float retuneSpeed, float vibratoDepth, float vibratoRate);
-    bool applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate,
-                                    const std::vector<std::pair<int, int>>& frameRanges);
     bool getFrameRangeForTimeSpan(double startTime, double endTime, int& startFrame, int& endFrameExclusive) const;
     // 当前完整 F0 选择范围（音符派生 + 显式帧选择），委托 ToolHandler
     FrameSelection collectSelectedFrameRanges() const;
@@ -621,8 +615,6 @@ private:
     void recordUndoAction(const juce::String& description, F0FrameRange affectedRange);
 
     std::vector<PitchCorrectionSegment> getCurrentSegments() const;
-    
-    bool applyVibratoParameterToSelection(VibratoParam param, float value);
     
 
     bool applyTimelineContentPlacements(std::vector<TimelineContentPlacement> placements,

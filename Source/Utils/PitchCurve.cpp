@@ -619,7 +619,8 @@ void PitchCurve::applyCorrectionToRange(
 }
 
 void PitchCurve::setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                          PitchCorrectionSegment::Source source) {
+                                          PitchCorrectionSegment::Source source,
+                                          const PitchCorrectionSegment::ParameterSnapshot& snapshot) {
     if (startFrame >= endFrame || f0Data.empty()) {
         return;
     }
@@ -628,6 +629,8 @@ void PitchCurve::setManualCorrectionRange(int startFrame, int endFrame, const st
     auto correctionSegments = oldSnapshot->getCorrectionSegments();
     
     PitchCorrectionSegment newSeg(startFrame, endFrame, f0Data, source);
+    newSeg.baseF0Data = f0Data;
+    newSeg.parameterSnapshot = snapshot;
     clearSegmentsInRangePreserveOutside(correctionSegments, startFrame, endFrame);
     insertSegmentSorted(correctionSegments, std::move(newSeg));
 

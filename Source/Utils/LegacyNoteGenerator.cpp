@@ -241,6 +241,10 @@ std::vector<Note> LegacyNoteGenerator::generate(
                     current             = Note{};
                     current.startTime   = frameToTime(i);
                     current.isVoiced    = true;
+                    current.retuneSpeed = params.retuneSpeed;
+                    current.vibratoDepth = params.vibratoDepth;
+                    current.vibratoRate = params.vibratoRate;
+                    current.pitchDriftScale = params.pitchDriftScale;
                     segmentPitchSum     = 0.0;
                     segmentPitchCount   = 0;
                 }

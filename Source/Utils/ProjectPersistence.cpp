@@ -529,6 +529,7 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
         nt.setProperty("pitchDriftScale", note.pitchDriftScale, nullptr);
         nt.setProperty("vibratoDepth", note.vibratoDepth, nullptr);
         nt.setProperty("vibratoRate", note.vibratoRate, nullptr);
+        nt.setProperty("noteSplitCents", note.noteSplitCents, nullptr);
         nt.setProperty("outputGainDb", note.outputGainDb, nullptr);
         nt.setProperty("isVoiced", note.isVoiced ? 1 : 0, nullptr);
         
@@ -573,6 +574,7 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
         note.pitchDriftScale = child.getProperty("pitchDriftScale", 1.0f);
         note.vibratoDepth = child.getProperty("vibratoDepth", PitchControlConfig::kDefaultVibratoDepth);
         note.vibratoRate = child.getProperty("vibratoRate", PitchControlConfig::kDefaultVibratoRateHz);
+        note.noteSplitCents = child.getProperty("noteSplitCents", PitchControlConfig::kDefaultNoteSplitCents);
         note.outputGainDb = child.getProperty("outputGainDb", 0.0f);
         note.isVoiced = static_cast<int>(child.getProperty("isVoiced", 1)) != 0;
         

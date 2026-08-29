@@ -288,7 +288,8 @@ public:
     static F0FrameRange expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept;
 
     void setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                   PitchCorrectionSegment::Source source);
+                                   PitchCorrectionSegment::Source source,
+                                   const PitchCorrectionSegment::ParameterSnapshot& snapshot = {});
 
     void clearCorrectionRange(int startFrame, int endFrame);
 

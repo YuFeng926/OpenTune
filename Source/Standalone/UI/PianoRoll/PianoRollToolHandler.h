@@ -85,6 +85,7 @@ public:
         int endFrameExclusive = 0;
         std::vector<float> f0Data;
         PitchCorrectionSegment::Source source = PitchCorrectionSegment::Source::HandDraw;
+        PitchCorrectionSegment::ParameterSnapshot parameterSnapshot;
     };
 
     // PianoRoll 组件提供的回调上下文。
