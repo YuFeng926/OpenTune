@@ -1745,7 +1745,7 @@ void PianoRollComponent::drawSelectedNoteHighlights(juce::Graphics& g)
 void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
 {
     // 高亮 = 完整 F0 选择集合（音符派生 + 显式帧选择），多区间精确渲染
-    const auto frameSel = collectSelectedFrameRanges();
+    const auto frameSel = toolHandler_->collectSelectedFrameRanges();
     if (frameSel.empty()) return;
 
     juce::Graphics::ScopedSaveState ss(g);
@@ -2456,7 +2456,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
     }
 
     const bool hasSelectedNotes = !interactionState_.noteSelection.empty();
-    const auto frameSel = collectSelectedFrameRanges();
+    const auto frameSel = toolHandler_->collectSelectedFrameRanges();
 
     AudioEditingScheme::ParameterTargetContext context;
     context.hasSelectedNotes = hasSelectedNotes;
@@ -4898,7 +4898,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     // ── OpenTune：选区解析 + autoTuneContentRange 逻辑 ──
     // auto-tune 是连续吸附操作：作用于选中范围的并集（包围区间）。
     // 无任何选择时保持既有行为：整段吸附（WholeClip）。
-    const auto sel = collectSelectedFrameRanges();
+    const auto sel = toolHandler_->collectSelectedFrameRanges();
     F0FrameRange requestedRange;
     if (!sel.empty()) {
         requestedRange = { sel.ranges.front().first, sel.ranges.back().second };

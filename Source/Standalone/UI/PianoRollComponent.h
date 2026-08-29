@@ -381,8 +381,6 @@ private:
     enum class VibratoParam { Depth, Rate };
 
     bool getFrameRangeForTimeSpan(double startTime, double endTime, int& startFrame, int& endFrameExclusive) const;
-    // 当前完整 F0 选择范围（音符派生 + 显式帧选择），委托 ToolHandler
-    FrameSelection collectSelectedFrameRanges() const;
 
     juce::ScrollBar verticalScrollBar_{ true };
     SmallButton scrollModeToggleButton_;
