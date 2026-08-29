@@ -80,13 +80,9 @@ struct NoteSegmentationPolicy {
 
 struct NoteGeneratorParams {
     NoteSegmentationPolicy policy;
-    // NOTE: retuneSpeed / vibratoDepth / vibratoRate 是全局（clip 级）参数：
-    // 生成音符时不再烘焙进 Note 字段（音符保持 -1 = 跟随全局），
-    // 仅在 applyCorrectionToRange 烘焙修正曲线时作为全局参数传入；
-    // 音符级显式参数只由用户编辑（applyNoteParameterToSelectedNotes）写入。
-    float retuneSpeed  = -1.0f;
-    float vibratoDepth = -1.0f;
-    float vibratoRate  = -1.0f;
+    float retuneSpeed  = PitchControlConfig::kDefaultRetuneSpeedNormalized;
+    float vibratoDepth = PitchControlConfig::kDefaultVibratoDepth;
+    float vibratoRate  = PitchControlConfig::kDefaultVibratoRateHz;
     float pitchDriftScale = 1.0f;
 };
 

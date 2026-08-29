@@ -61,10 +61,10 @@ namespace {
             stream.writeInt(segment.endFrame);
             writeFloatVector(stream, segment.f0Data);
             stream.writeInt(static_cast<int>(segment.source));
-            stream.writeFloat(segment.retuneSpeed);
-            stream.writeFloat(segment.pitchDriftScale);
-            stream.writeFloat(segment.vibratoDepth);
-            stream.writeFloat(segment.vibratoRate);
+            stream.writeFloat(segment.parameterSnapshot.retuneSpeed);
+            stream.writeFloat(segment.parameterSnapshot.pitchDriftScale);
+            stream.writeFloat(segment.parameterSnapshot.vibratoDepth);
+            stream.writeFloat(segment.parameterSnapshot.vibratoRate);
         }
     }
 
@@ -88,11 +88,11 @@ namespace {
             segment.endFrame = stream.readInt();
             segment.f0Data = readFloatVector(stream);
             segment.source = static_cast<PitchCorrectionSegment::Source>(stream.readInt());
-            segment.retuneSpeed = stream.readFloat();
+            segment.parameterSnapshot.retuneSpeed = stream.readFloat();
             if (hasPitchDriftScale)
-                segment.pitchDriftScale = stream.readFloat();
-            segment.vibratoDepth = stream.readFloat();
-            segment.vibratoRate = stream.readFloat();
+                segment.parameterSnapshot.pitchDriftScale = stream.readFloat();
+            segment.parameterSnapshot.vibratoDepth = stream.readFloat();
+            segment.parameterSnapshot.vibratoRate = stream.readFloat();
             segments.push_back(std::move(segment));
         }
         curve->replaceCorrectionSegments(segments);

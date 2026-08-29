@@ -16,8 +16,16 @@
 #include <optional>
 
 #include "NoteEqSettings.h"
+#include "PitchControlConfig.h"
 
 namespace OpenTune {
+
+struct NoteDefaults {
+    float retuneSpeed = PitchControlConfig::kDefaultRetuneSpeedNormalized;
+    float vibratoDepth = PitchControlConfig::kDefaultVibratoDepth;
+    float vibratoRate = PitchControlConfig::kDefaultVibratoRateHz;
+    float noteSplitCents = PitchControlConfig::kDefaultNoteSplitCents;
+};
 
 struct Note {
     double startTime = 0.0;         // 起始时间（秒）
@@ -25,9 +33,10 @@ struct Note {
     float pitch = 0.0f;             // 基准音高 (Hz)
     float originalPitch = 0.0f;     // 当前 Effective F0 域 correction anchor (Hz)，已含全局 pitchRatio
     float pitchOffset = 0.0f;       // 音高偏移（半音），用于拖拽调整
-    float retuneSpeed = -1.0f;      // 重调速度（-1表示使用默认值）
-    float vibratoDepth = -1.0f;     // 颤音深度（-1表示使用默认值）
-    float vibratoRate = -1.0f;      // 颤音速率（-1表示使用默认值）
+    float retuneSpeed = PitchControlConfig::kDefaultRetuneSpeedNormalized;
+    float vibratoDepth = PitchControlConfig::kDefaultVibratoDepth;
+    float vibratoRate = PitchControlConfig::kDefaultVibratoRateHz;
+    float noteSplitCents = PitchControlConfig::kDefaultNoteSplitCents;
     float outputGainDb = 0.0f;     // 旧工程兼容字段；由 VolumeEnvelope 在 note.startTime 处派生
     float pitchDriftScale = 1.0f;    // 漂移修正比例（1.0=原始漂移，0.0=消除漂移，负值=反转，可超出±100%）
     bool isVoiced = true;           // 是否为有声段

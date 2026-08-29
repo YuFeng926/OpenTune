@@ -761,40 +761,34 @@ bool OpenTuneAudioProcessorEditor::handleEditorShortcut(const juce::KeyPress& ke
 void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
 {
     const float normalized = speed / 100.0f;
-    pianoRoll_.setRetuneSpeed(normalized);
-    if (pianoRoll_.applyRetuneSpeedToSelection(normalized)) {
-        return;
+    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::RetuneSpeed, normalized);
+    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
+        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::RetuneSpeed, normalized);
     }
-    const float depth = parameterPanel_.getVibratoDepth();
-    const float rate = parameterPanel_.getVibratoRate();
-    pianoRoll_.applyCorrectionToEntireClip(normalized, depth, rate);
 }
 
 void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
 {
-    if (pianoRoll_.applyVibratoDepthToSelection(value)) {
-        return;
+    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::VibratoDepth, value);
+    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
+        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::VibratoDepth, value);
     }
-    pianoRoll_.setVibratoDepth(value);
-    const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
-    const float rate = parameterPanel_.getVibratoRate();
-    pianoRoll_.applyCorrectionToEntireClip(speed, value, rate);
 }
 
 void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
 {
-    if (pianoRoll_.applyVibratoRateToSelection(value)) {
-        return;
+    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::VibratoRate, value);
+    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
+        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::VibratoRate, value);
     }
-    pianoRoll_.setVibratoRate(value);
-    const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
-    const float depth = parameterPanel_.getVibratoDepth();
-    pianoRoll_.applyCorrectionToEntireClip(speed, depth, value);
 }
 
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 {
-    pianoRoll_.setNoteSplit(value);
+    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
+    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
+        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::NoteSplit, value);
+    }
 }
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)

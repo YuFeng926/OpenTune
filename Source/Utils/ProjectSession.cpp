@@ -156,10 +156,10 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
                 segEntry.startFrame = seg.startFrame;
                 segEntry.endFrame = seg.endFrame;
                 segEntry.source = static_cast<uint8_t>(seg.source);
-                segEntry.retuneSpeed = seg.retuneSpeed;
-                segEntry.pitchDriftScale = seg.pitchDriftScale;
-                segEntry.vibratoDepth = seg.vibratoDepth;
-                segEntry.vibratoRate = seg.vibratoRate;
+                segEntry.retuneSpeed = seg.parameterSnapshot.retuneSpeed;
+                segEntry.pitchDriftScale = seg.parameterSnapshot.pitchDriftScale;
+                segEntry.vibratoDepth = seg.parameterSnapshot.vibratoDepth;
+                segEntry.vibratoRate = seg.parameterSnapshot.vibratoRate;
                 // Always serialize f0Data —HandDraw/LineAnchor segments rely on it
                 segEntry.f0Data = seg.f0Data;
                 entry.correctionSegments.push_back(segEntry);

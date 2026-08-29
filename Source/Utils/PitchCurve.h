@@ -18,6 +18,15 @@ struct PitchCorrectionSegment {
     int startFrame;
     int endFrame;
     std::vector<float> f0Data;
+    std::vector<float> baseF0Data;
+
+    struct ParameterSnapshot {
+        float retuneSpeed = PitchControlConfig::kDefaultRetuneSpeedNormalized;
+        float vibratoDepth = PitchControlConfig::kDefaultVibratoDepth;
+        float vibratoRate = PitchControlConfig::kDefaultVibratoRateHz;
+        float pitchDriftScale = 1.0f;
+    };
+    ParameterSnapshot parameterSnapshot;
 
     enum class Source : uint8_t {
         None = 0,
@@ -26,11 +35,6 @@ struct PitchCorrectionSegment {
         LineAnchor = 3
     };
     Source source = Source::None;
-
-    float retuneSpeed = -1.0f;
-    float vibratoDepth = -1.0f;
-    float vibratoRate = -1.0f;
-    float pitchDriftScale = 1.0f;
 
     PitchCorrectionSegment() = default;
     PitchCorrectionSegment(int start, int end, const std::vector<float>& data, Source src = Source::None)

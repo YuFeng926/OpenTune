@@ -29,6 +29,14 @@ enum class ParameterTarget
     FrameSelection
 };
 
+enum class ParameterId
+{
+    RetuneSpeed = 0,
+    VibratoDepth,
+    VibratoRate,
+    NoteSplit
+};
+
 struct ParameterTargetContext
 {
     bool hasSelectedNotes = false;
@@ -55,6 +63,19 @@ struct AutoTuneDecision
 {
     AutoTuneTarget target = AutoTuneTarget::None;
     FrameRange range;
+};
+
+enum class ParameterEditStatus
+{
+    NoTarget = 0,
+    Applied,
+    Failed
+};
+
+struct ParameterEditResult
+{
+    ParameterEditStatus status = ParameterEditStatus::NoTarget;
+    bool changed = false;
 };
 
 inline bool usesNotesPrimaryScheme(Scheme scheme) noexcept

@@ -216,8 +216,11 @@ public:
     bool applyVibratoRateToSelection(float rate);
     bool getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const;
 
-    // 手动 AUTO / OpenDyne 导入 AUTO 共用的 canonical 参数源：
-    // segmentationPolicy_ + currentRetuneSpeed_/currentVibratoDepth_/currentVibratoRate_。
+    AudioEditingScheme::ParameterEditResult editParameter(AudioEditingScheme::ParameterId id, float value);
+    void setCreationDefault(AudioEditingScheme::ParameterId id, float value);
+    float getCreationDefault(AudioEditingScheme::ParameterId id) const;
+    NoteDefaults getCurrentNoteDefaults() const noexcept;
+
     NoteGeneratorParams getCurrentAutoTuneParams() const noexcept
     {
         NoteGeneratorParams params;
@@ -233,7 +236,6 @@ public:
     void clearLineAnchorSegmentSelection();
     void setNoteSplit(float value);
 
-    bool applyCorrectionToEntireClip(float retuneSpeed, float vibratoDepth, float vibratoRate);
     double getContentDurationSeconds() const;
     std::pair<double, double> getSelectionTimeRange() const
     {

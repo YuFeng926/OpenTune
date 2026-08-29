@@ -174,10 +174,10 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
             s->setAttribute("startFrame", seg.startFrame);
             s->setAttribute("endFrame", seg.endFrame);
             s->setAttribute("source", static_cast<int>(seg.source));
-            s->setAttribute("retuneSpeed", seg.retuneSpeed);
-            s->setAttribute("pitchDriftScale", seg.pitchDriftScale);
-            s->setAttribute("vibratoDepth", seg.vibratoDepth);
-            s->setAttribute("vibratoRate", seg.vibratoRate);
+            s->setAttribute("retuneSpeed", seg.parameterSnapshot.retuneSpeed);
+            s->setAttribute("pitchDriftScale", seg.parameterSnapshot.pitchDriftScale);
+            s->setAttribute("vibratoDepth", seg.parameterSnapshot.vibratoDepth);
+            s->setAttribute("vibratoRate", seg.parameterSnapshot.vibratoRate);
             const juce::MemoryBlock f0Data(seg.f0Data.data(), seg.f0Data.size() * sizeof(float));
             s->setAttribute("f0Base64", f0Data.toBase64Encoding());
             editable->addChildElement(s);
@@ -569,13 +569,13 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             if (seg.source < PitchCorrectionSegment::Source::None || seg.source > PitchCorrectionSegment::Source::LineAnchor)
                 return std::nullopt;
 
-            seg.retuneSpeed = static_cast<float>(s->getDoubleAttribute("retuneSpeed"));
-            seg.pitchDriftScale = static_cast<float>(s->getDoubleAttribute("pitchDriftScale", 1.0));
-            seg.vibratoDepth = static_cast<float>(s->getDoubleAttribute("vibratoDepth"));
-            seg.vibratoRate = static_cast<float>(s->getDoubleAttribute("vibratoRate"));
+            seg.parameterSnapshot.retuneSpeed = static_cast<float>(s->getDoubleAttribute("retuneSpeed"));
+            seg.parameterSnapshot.pitchDriftScale = static_cast<float>(s->getDoubleAttribute("pitchDriftScale", 1.0));
+            seg.parameterSnapshot.vibratoDepth = static_cast<float>(s->getDoubleAttribute("vibratoDepth"));
+            seg.parameterSnapshot.vibratoRate = static_cast<float>(s->getDoubleAttribute("vibratoRate"));
 
             // 再次验证浮点值的有效性
-            if (!std::isfinite(seg.retuneSpeed) || !std::isfinite(seg.vibratoDepth) || !std::isfinite(seg.vibratoRate) || !std::isfinite(seg.pitchDriftScale))
+            if (!std::isfinite(seg.parameterSnapshot.retuneSpeed) || !std::isfinite(seg.parameterSnapshot.vibratoDepth) || !std::isfinite(seg.parameterSnapshot.vibratoRate) || !std::isfinite(seg.parameterSnapshot.pitchDriftScale))
                 return std::nullopt;
 
             juce::MemoryBlock f0Data;

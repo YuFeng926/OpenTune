@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <vector>
+#include "PitchControlConfig.h"
 
 #include "DetectedKey.h"
 #include "../Utils/Note.h"
@@ -105,10 +106,10 @@ struct ProjectContentEntry {
         int startFrame{0};
         int endFrame{0};
         uint8_t source{0};              // PitchCorrectionSegment::Source 枚举值
-        float retuneSpeed{-1.0f};
+        float retuneSpeed{PitchControlConfig::kDefaultRetuneSpeedNormalized};
         float pitchDriftScale = 1.0f;
-        float vibratoDepth{-1.0f};
-        float vibratoRate{-1.0f};
+        float vibratoDepth{PitchControlConfig::kDefaultVibratoDepth};
+        float vibratoRate{PitchControlConfig::kDefaultVibratoRateHz};
         std::vector<float> f0Data;
     };
     std::vector<SegmentEntry> correctionSegments;

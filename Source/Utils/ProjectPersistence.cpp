@@ -569,10 +569,10 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
         note.pitch = child.getProperty("pitch", 0.0f);
         note.originalPitch = child.getProperty("originalPitch", 0.0f);
         note.pitchOffset = child.getProperty("pitchOffset", 0.0f);
-        note.retuneSpeed = child.getProperty("retuneSpeed", -1.0f);
+        note.retuneSpeed = child.getProperty("retuneSpeed", PitchControlConfig::kDefaultRetuneSpeedNormalized);
         note.pitchDriftScale = child.getProperty("pitchDriftScale", 1.0f);
-        note.vibratoDepth = child.getProperty("vibratoDepth", -1.0f);
-        note.vibratoRate = child.getProperty("vibratoRate", -1.0f);
+        note.vibratoDepth = child.getProperty("vibratoDepth", PitchControlConfig::kDefaultVibratoDepth);
+        note.vibratoRate = child.getProperty("vibratoRate", PitchControlConfig::kDefaultVibratoRateHz);
         note.outputGainDb = child.getProperty("outputGainDb", 0.0f);
         note.isVoiced = static_cast<int>(child.getProperty("isVoiced", 1)) != 0;
         
@@ -649,7 +649,16 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
             if (parsedEq && eq.isValid())
                 note.eq = eq;
         }
-        
+
+        if (formatVersion < 8) {
+            if (note.retuneSpeed < 0.0f)
+                note.retuneSpeed = PitchControlConfig::kDefaultRetuneSpeedNormalized;
+            if (note.vibratoDepth < 0.0f)
+                note.vibratoDepth = PitchControlConfig::kDefaultVibratoDepth;
+            if (note.vibratoRate < 0.0f)
+                note.vibratoRate = PitchControlConfig::kDefaultVibratoRateHz;
+        }
+
         notes.push_back(note);
     }
     return notes;
@@ -717,10 +726,10 @@ std::vector<ProjectContentEntry::SegmentEntry> ProjectPersistence::segmentsFromV
         seg.startFrame = static_cast<int>(child.getProperty("startFrame", 0));
         seg.endFrame = static_cast<int>(child.getProperty("endFrame", 0));
         seg.source = static_cast<uint8_t>(static_cast<int>(child.getProperty("source", 0)));
-        seg.retuneSpeed = child.getProperty("retuneSpeed", -1.0f);
+        seg.retuneSpeed = child.getProperty("retuneSpeed", PitchControlConfig::kDefaultRetuneSpeedNormalized);
         seg.pitchDriftScale = child.getProperty("pitchDriftScale", 1.0f);
-        seg.vibratoDepth = child.getProperty("vibratoDepth", -1.0f);
-        seg.vibratoRate = child.getProperty("vibratoRate", -1.0f);
+        seg.vibratoDepth = child.getProperty("vibratoDepth", PitchControlConfig::kDefaultVibratoDepth);
+        seg.vibratoRate = child.getProperty("vibratoRate", PitchControlConfig::kDefaultVibratoRateHz);
         // Deserialize f0Data
         auto f0DataBase64 = child.getProperty("f0Data", juce::String{}).toString();
         if (f0DataBase64.isNotEmpty()) {

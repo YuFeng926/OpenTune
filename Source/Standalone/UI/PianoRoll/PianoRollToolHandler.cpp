@@ -2082,7 +2082,7 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
     if (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift) {
         const auto& note = notes[static_cast<size_t>(clickedNoteIndex)];
         float currentVal = (currentTool_ == ToolId::PitchModulation)
-            ? (note.retuneSpeed >= 0.0f ? note.retuneSpeed : ctx_.getRetuneSpeed())
+            ? note.retuneSpeed
             : note.pitchDriftScale;
         float newVal = (currentVal > 0.5f) ? 0.0f : 1.0f;
 
@@ -2744,8 +2744,9 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
         finalNote.endTime = endTime;
         finalNote.pitch = ctx_.getDrawingNotePitch();
         finalNote.pitchOffset = 0.0f;
-        // 不烘焙 retuneSpeed/vibratoDepth/vibratoRate：保持 -1 跟随全局，
-        // 音符级显式参数只由用户编辑（applyNoteParameterToSelectedNotes）写入。
+        finalNote.retuneSpeed = ctx_.getRetuneSpeed();
+        finalNote.vibratoDepth = ctx_.getVibratoDepth();
+        finalNote.vibratoRate = ctx_.getVibratoRate();
         finalNote.dirty = true;
 
         float newPip = ctx_.calculateEffectivePIP(finalNote);

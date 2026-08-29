@@ -1592,43 +1592,42 @@ void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
 {
     float normalizedSpeed = speed / 100.0f;
-    pianoRoll_.setRetuneSpeed(normalizedSpeed);
-    if (pianoRoll_.applyRetuneSpeedToSelection(normalizedSpeed)) {
-        return;
+    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::RetuneSpeed, normalizedSpeed);
+    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
+        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::RetuneSpeed, normalizedSpeed);
     }
-
-    const float vibratoDepth = parameterPanel_.getVibratoDepth();
-    const float vibratoRate = parameterPanel_.getVibratoRate();
-    pianoRoll_.applyCorrectionToEntireClip(normalizedSpeed, vibratoDepth, vibratoRate);
-
-    projectSession_.markDirty();
+    if (result.changed)
+        projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
 {
-    if (pianoRoll_.applyVibratoDepthToSelection(value)) return;
-    pianoRoll_.setVibratoDepth(value);
-    const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
-    const float rate = parameterPanel_.getVibratoRate();
-    pianoRoll_.applyCorrectionToEntireClip(speed, value, rate);
-
-    projectSession_.markDirty();
+    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::VibratoDepth, value);
+    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
+        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::VibratoDepth, value);
+    }
+    if (result.changed)
+        projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
 {
-    if (pianoRoll_.applyVibratoRateToSelection(value)) return;
-    pianoRoll_.setVibratoRate(value);
-    const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
-    const float depth = parameterPanel_.getVibratoDepth();
-    pianoRoll_.applyCorrectionToEntireClip(speed, depth, value);
-
-    projectSession_.markDirty();
+    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::VibratoRate, value);
+    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
+        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::VibratoRate, value);
+    }
+    if (result.changed)
+        projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 {
-    pianoRoll_.setNoteSplit(value);
+    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
+    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
+        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::NoteSplit, value);
+    }
+    if (result.changed)
+        projectSession_.markDirty();
 }
 
 // ============================================================================

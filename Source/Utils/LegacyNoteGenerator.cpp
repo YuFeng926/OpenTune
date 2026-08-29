@@ -149,9 +149,6 @@ void LegacyNoteGenerator::commitNote(
         if (rep > 0.0f) {
             current.originalPitch = rep;
             current.pitch         = quantisePitch(rep);
-            // 不烘焙 retuneSpeed/vibratoDepth/vibratoRate/pitchDriftScale：
-            // 保持 Note 默认值（-1/-1/-1/1.0 = 跟随全局），全局滑块调节才能生效；
-            // 音符级显式参数只由用户编辑（applyNoteParameterToSelectedNotes）写入。
             out.push_back(current);
         }
     }
@@ -216,6 +213,10 @@ std::vector<Note> LegacyNoteGenerator::generate(
                 current             = Note{};
                 current.startTime   = frameToTime(i);
                 current.isVoiced    = true;
+                current.retuneSpeed = params.retuneSpeed;
+                current.vibratoDepth = params.vibratoDepth;
+                current.vibratoRate = params.vibratoRate;
+                current.pitchDriftScale = params.pitchDriftScale;
                 pitches.clear();
                 energyBuf.clear();
                 inNote                    = true;

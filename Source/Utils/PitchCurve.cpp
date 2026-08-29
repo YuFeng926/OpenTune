@@ -247,8 +247,7 @@ void PitchCurve::applyCorrectionToRange(
         info.anchorPitch = anchorPitch;
         info.anchorMidi = PitchUtils::freqToMidi(anchorPitch);
         info.targetMidi = PitchUtils::freqToMidi(note.getAdjustedPitch());
-        info.retuneSpeed = juce::jlimit(
-            0.0f, 1.0f, note.retuneSpeed >= 0.0f ? note.retuneSpeed : retuneSpeed);
+        info.retuneSpeed = juce::jlimit(0.0f, 1.0f, note.retuneSpeed);
         info.timeCenterSeconds = (note.startTime + note.endTime) * 0.5;
 
         if (info.anchorMidi > 0.0f && noteStartFrame < noteEndFrame) {
@@ -497,10 +496,8 @@ void PitchCurve::applyCorrectionToRange(
             }
 
             float vibratoOffsetSemitones = 0.0f;
-            float noteVibratoDepth = vibratoDepth;
-            float noteVibratoRate = vibratoRate;
-            if (activeNote->vibratoDepth >= 0.0f) noteVibratoDepth = activeNote->vibratoDepth;
-            if (activeNote->vibratoRate >= 0.0f) noteVibratoRate = activeNote->vibratoRate;
+            float noteVibratoDepth = activeNote->vibratoDepth;
+            float noteVibratoRate = activeNote->vibratoRate;
             if (noteVibratoDepth > 0.0f) {
                 const double timeInNote = timeSeconds - activeNote->startTime;
                 const float depthSemitones = (noteVibratoDepth / 100.0f) * 1.0f;
@@ -602,10 +599,10 @@ void PitchCurve::applyCorrectionToRange(
     }
 
     PitchCorrectionSegment newSeg(calculationStartFrame, calculationEndFrame, correctedF0Buffer, PitchCorrectionSegment::Source::NoteBased);
-    newSeg.retuneSpeed = retuneSpeed;
-    newSeg.vibratoDepth = vibratoDepth;
-    newSeg.vibratoRate = vibratoRate;
-    newSeg.pitchDriftScale = pitchDriftScale;
+    newSeg.parameterSnapshot.retuneSpeed = retuneSpeed;
+    newSeg.parameterSnapshot.vibratoDepth = vibratoDepth;
+    newSeg.parameterSnapshot.vibratoRate = vibratoRate;
+    newSeg.parameterSnapshot.pitchDriftScale = pitchDriftScale;
 
     insertSegmentSorted(correctionSegments, std::move(newSeg));
 
