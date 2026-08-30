@@ -113,6 +113,8 @@ private:
     std::vector<float> magnitudeBuffer_; // 幅度谱缓冲区
 
     int lastNumSamples_ = 0;  // 用于缓冲区复用判断
+    int padLeft_ = 0;         // 左侧 reflect padding 样本数
+    int padRight_ = 0;        // 右侧 reflect padding 样本数（匹配 Python 非对称 padding）
 };
 
 MelResult computeLogMelSpectrogram(const float* audio,

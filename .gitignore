@@ -68,3 +68,6 @@ knowledge/
 
 # Imported legacy src tree, including its nested Git history and .git.7z archive
 Source/src/
+
+# Ad-hoc verification scripts and intermediate artifacts
+tools/

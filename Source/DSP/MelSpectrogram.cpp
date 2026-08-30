@@ -158,11 +158,14 @@ void MelSpectrogramProcessor::resizeBuffers(int numSamples)
 {
     if (numSamples != lastNumSamples_)
     {
-        // Match training-time pad: (win_size - hop_length) // 2 (wav2mel.py:62-66).
-        // NOT n_fft / 2 — padding offset controls per-frame center alignment;
-        // n_fft / 2 would shift every frame center by 256 samples vs training.
-        const int pad = (config_.winLength - config_.hopLength) / 2;
-        paddedAudio_.resize((size_t) numSamples + (size_t) pad * 2);
+        // Match training-time asymmetric padding (wav2mel.py:64-72):
+        //   padLeft  = (win_size - hop_length) // 2     = 768
+        //   padRight = (win_size - hop_length + 1) // 2 = 769
+        // Python uses integer division with +1 on the right, producing 1 more
+        // sample on the right.  Reproduce exactly to avoid per-frame misalignment.
+        padLeft_  = (config_.winLength - config_.hopLength) / 2;
+        padRight_ = (config_.winLength - config_.hopLength + 1) / 2;
+        paddedAudio_.resize((size_t) numSamples + (size_t) padLeft_ + (size_t) padRight_);
         lastNumSamples_ = numSamples;
     }
 }
@@ -183,12 +186,9 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
     resizeBuffers(numSamples);
 
     const int nFftBins = config_.nFft / 2 + 1;
-    // Pad must match training-time `(win_size - hop_length) // 2` (wav2mel.py:62-66).
-    // resizeBuffers uses the same formula; keep them in lockstep.
-    const int pad = (config_.winLength - config_.hopLength) / 2;
 
     for (int i = 0; i < (int) paddedAudio_.size(); ++i)
-        paddedAudio_[(size_t) i] = audio[(size_t) reflectIndex(i - pad, numSamples)];
+        paddedAudio_[(size_t) i] = audio[(size_t) reflectIndex(i - padLeft_, numSamples)];
 
     std::vector<float> melSums((size_t) config_.nMels);
     std::vector<float> logResults((size_t) config_.nMels);

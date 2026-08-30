@@ -51,136 +51,66 @@ std::vector<float> materializeEffectiveF0Range(
 // ==============================================================================
 // F0 Gap Filling for Vocoder (Mel Frame Space)
 // ==============================================================================
-// 在渲染提交前填补 vocoderF0 的零值间隙：
-//   1. 内部间隙：≤50帧用 log-domain 线性插值填充
-//   2. 边界延伸：起点/终点若为零，向边界外查询并延伸填充
-//      - 检测延伸方向是否有 voiced 段，有则延伸到该段起点为止
+// 对齐训练代码 interp_uv=True（utils/wav2F0.interp_f0）：
+//   在 log2 频域对所有 unvoiced（f0==0）帧做 np.interp 等价线性插值：
+//   - 内部间隙：log2 域左右 voiced 帧线性插值（无大小限制）
+//   - 前导零帧：flat clamp 到第一个 voiced 帧的 log2(F0)
+//   - 尾部零帧：flat clamp 到最后一个 voiced 帧的 log2(F0)
+//   - 全零输入：保持全零
 //
-// 目的：消除 PC-NSF-HiFiGAN 在 F0 不连续处的相位震荡（低频砰砰声）
-void fillF0GapsForVocoder(
-    std::vector<float>& f0,
-    const EditableContentSnapshot& contentSnap,
-    double frameStartTimeSec,
-    double frameEndTimeSec,
-    double hopDuration,
-    double f0FrameRate,
-    bool allowTrailingExtension)
+// 旧实现有两大不一致：(1) 内部间隙 ≤50 帧限制（训练无此限制）；
+// (2) 前导/尾部通过 contentSnap 边界查询 + 几何均值延伸（训练只做 flat clamp）。
+// 这两处偏差导致 vocoder 拿到的 F0 与训练不一致，产生相位震荡（低频砰砰声）。
+void fillF0GapsForVocoder(std::vector<float>& f0)
 {
     if (f0.empty()) return;
 
-    constexpr int maxGapFrames = 50;  // ~580ms at 86fps
     const int n = static_cast<int>(f0.size());
 
-    // ---- Step 1: Fill internal gaps with log-domain interpolation ----
+    // 收集所有 voiced 帧的索引和 log2(F0) 值
+    std::vector<int> voicedIdx;
+    std::vector<float> voicedLogF0;
+    voicedIdx.reserve(n);
+    voicedLogF0.reserve(n);
+    for (int i = 0; i < n; ++i)
     {
-        int i = 0;
-        while (i < n) {
-            // Find next voiced frame
-            while (i < n && f0[static_cast<size_t>(i)] <= 0.0f) ++i;
-            if (i >= n) break;
-
-            // Find voiced segment end
-            int segEnd = i;
-            while (segEnd < n && f0[static_cast<size_t>(segEnd)] > 0.0f) ++segEnd;
-
-            // Find next voiced segment after gap
-            int gapStart = segEnd;
-            while (gapStart < n && f0[static_cast<size_t>(gapStart)] <= 0.0f) ++gapStart;
-
-            if (gapStart >= n) break;  // No more voiced segments
-
-            int gapLen = gapStart - segEnd;
-            if (gapLen > 0 && gapLen <= maxGapFrames) {
-                // Fill gap with log-domain interpolation
-                const float fStart = f0[static_cast<size_t>(segEnd - 1)];
-                const float fEnd = f0[static_cast<size_t>(gapStart)];
-                const float logStart = std::log2(std::max(fStart, 1e-6f));
-                const float logEnd = std::log2(std::max(fEnd, 1e-6f));
-                for (int j = 0; j < gapLen; ++j) {
-                    float t = static_cast<float>(j + 1) / static_cast<float>(gapLen + 1);
-                    f0[static_cast<size_t>(segEnd + j)] = std::pow(2.0f, logStart + (logEnd - logStart) * t);
-                }
-            }
-
-            i = gapStart;
+        if (f0[static_cast<size_t>(i)] > 0.0f)
+        {
+            voicedIdx.push_back(i);
+            voicedLogF0.push_back(std::log2(f0[static_cast<size_t>(i)]));
         }
     }
 
-    // ---- Step 2: Extend leading zeros (f0[0] == 0) ----
-    if (n > 0 && f0[0] <= 0.0f) {
-        // Find first voiced frame in current chunk
-        int firstVoicedIdx = 0;
-        while (firstVoicedIdx < n && f0[static_cast<size_t>(firstVoicedIdx)] <= 0.0f) ++firstVoicedIdx;
+    // 全部 unvoiced → 保持全零（对齐 interp_f0 中 uv.all() 分支）
+    if (voicedIdx.empty()) return;
 
-        if (firstVoicedIdx < n) {
-            const float firstVoicedF0 = f0[static_cast<size_t>(firstVoicedIdx)];
+    // 对每个 unvoiced 帧在 log2 域做线性插值
+    // 等价于 np.interp(x_unvoiced, x_voiced, f0_log2_voiced)
+    for (int i = 0; i < n; ++i)
+    {
+        if (f0[static_cast<size_t>(i)] > 0.0f) continue;
 
-            const int lookbackF0Frames = 100;
-            const int queryStartFrame = static_cast<int>(std::floor(frameStartTimeSec * f0FrameRate)) - lookbackF0Frames;
-            const int queryEndFrame = static_cast<int>(std::floor(frameStartTimeSec * f0FrameRate));
+        auto it = std::lower_bound(voicedIdx.begin(), voicedIdx.end(), i);
 
-            std::vector<float> prevF0 = materializeEffectiveF0Range(
-                contentSnap, queryStartFrame, queryEndFrame);
-
-            float extendF0 = 0.0f;
-            for (int j = static_cast<int>(prevF0.size()) - 1; j >= 0; --j) {
-                if (prevF0[static_cast<size_t>(j)] > 0.0f) {
-                    extendF0 = prevF0[static_cast<size_t>(j)];
-                    break;
-                }
-            }
-
-            if (extendF0 > 0.0f) {
-                const float fillF0 = (extendF0 > 0.0f && firstVoicedF0 > 0.0f)
-                    ? std::sqrt(extendF0 * firstVoicedF0)
-                    : (firstVoicedF0 > 0.0f ? firstVoicedF0 : extendF0);
-
-                for (int j = 0; j < firstVoicedIdx; ++j) {
-                    float t = static_cast<float>(j) / static_cast<float>(firstVoicedIdx + 1);
-                    float logFill = std::log2(std::max(fillF0, 1e-6f));
-                    float logFirst = std::log2(std::max(firstVoicedF0, 1e-6f));
-                    f0[static_cast<size_t>(j)] = std::pow(2.0f, logFill + (logFirst - logFill) * t);
-                }
-            }
+        if (it == voicedIdx.begin())
+        {
+            // 前导零帧：flat clamp 到第一个 voiced F0
+            f0[static_cast<size_t>(i)] = std::pow(2.0f, voicedLogF0.front());
         }
-    }
-
-    // ---- Step 3: Extend trailing zeros (f0[n-1] == 0) ----
-    if (allowTrailingExtension && n > 0 && f0[static_cast<size_t>(n - 1)] <= 0.0f) {
-        int lastVoicedIdx = n - 1;
-        while (lastVoicedIdx >= 0 && f0[static_cast<size_t>(lastVoicedIdx)] <= 0.0f) --lastVoicedIdx;
-
-        if (lastVoicedIdx >= 0) {
-            const float lastVoicedF0 = f0[static_cast<size_t>(lastVoicedIdx)];
-
-            const int lookaheadF0Frames = 100;
-            const int queryStartFrame = static_cast<int>(std::ceil(frameEndTimeSec * f0FrameRate));
-            const int queryEndFrame = queryStartFrame + lookaheadF0Frames;
-
-            std::vector<float> nextF0 = materializeEffectiveF0Range(
-                contentSnap, queryStartFrame, queryEndFrame);
-
-            float extendF0 = 0.0f;
-            for (size_t j = 0; j < nextF0.size(); ++j) {
-                if (nextF0[j] > 0.0f) {
-                    extendF0 = nextF0[j];
-                    break;
-                }
-            }
-
-            if (extendF0 > 0.0f || lastVoicedF0 > 0.0f) {
-                const float fillF0 = (extendF0 > 0.0f && lastVoicedF0 > 0.0f)
-                    ? std::sqrt(extendF0 * lastVoicedF0)
-                    : (lastVoicedF0 > 0.0f ? lastVoicedF0 : extendF0);
-
-                const int trailingLen = n - lastVoicedIdx - 1;
-                for (int j = 0; j < trailingLen; ++j) {
-                    float t = static_cast<float>(j + 1) / static_cast<float>(trailingLen + 1);
-                    float logLast = std::log2(std::max(lastVoicedF0, 1e-6f));
-                    float logFill = std::log2(std::max(fillF0, 1e-6f));
-                    f0[static_cast<size_t>(lastVoicedIdx + 1 + j)] = std::pow(2.0f, logLast + (logFill - logLast) * t);
-                }
-            }
+        else if (it == voicedIdx.end())
+        {
+            // 尾部零帧：flat clamp 到最后一个 voiced F0
+            f0[static_cast<size_t>(i)] = std::pow(2.0f, voicedLogF0.back());
+        }
+        else
+        {
+            // 内部零帧：log2 域线性插值
+            const int rightIdx = *it;
+            const int leftIdx = *(it - 1);
+            const float rightLogF0 = voicedLogF0[static_cast<size_t>(it - voicedIdx.begin())];
+            const float leftLogF0 = voicedLogF0[static_cast<size_t>(it - voicedIdx.begin() - 1)];
+            const float t = static_cast<float>(i - leftIdx) / static_cast<float>(rightIdx - leftIdx);
+            f0[static_cast<size_t>(i)] = std::pow(2.0f, leftLogF0 + t * (rightLogF0 - leftLogF0));
         }
     }
 }
@@ -1039,6 +969,14 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     auto mel = std::move(melResult).value();
     const int actualFrames = static_cast<int>(mel.size() / melConfig.nMels);
 
+    // Training applies interp_uv=True to the complete F0 timeline before the
+    // vocoder sees it.  Interpolating only this render chunk misses voiced
+    // frames on the other side of an all-unvoiced chunk.
+    const auto& originalF0 = snap->getOriginalF0();
+    auto vocoderSourceF0 = materializeEffectiveF0Range(
+        *contentSnap, 0, static_cast<int>(originalF0.size()));
+    fillF0GapsForVocoder(vocoderSourceF0);
+
     vocoderF0.assign(static_cast<size_t>(actualFrames), 0.0f);
     for (int i = 0; i < actualFrames; ++i)
     {
@@ -1051,8 +989,14 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             continue;
         const int srcIdx1 = std::min(srcIdx0 + 1, numF0Frames - 1);
         const double frac = srcPos - static_cast<double>(srcIdx0);
-        const float f0_0 = effectiveF0[static_cast<size_t>(srcIdx0)];
-        const float f0_1 = effectiveF0[static_cast<size_t>(srcIdx1)];
+        const int globalIdx0 = f0StartFrame + srcIdx0;
+        const int globalIdx1 = f0StartFrame + srcIdx1;
+        const float f0_0 = globalIdx0 >= 0
+            && globalIdx0 < static_cast<int>(vocoderSourceF0.size())
+            ? vocoderSourceF0[static_cast<size_t>(globalIdx0)] : 0.0f;
+        const float f0_1 = globalIdx1 >= 0
+            && globalIdx1 < static_cast<int>(vocoderSourceF0.size())
+            ? vocoderSourceF0[static_cast<size_t>(globalIdx1)] : 0.0f;
         if (f0_0 > 0.0f && f0_1 > 0.0f)
             vocoderF0[static_cast<size_t>(i)] =
                 static_cast<float>(std::exp(std::log(f0_0) * (1.0 - frac) + std::log(f0_1) * frac));
@@ -1061,15 +1005,6 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         else if (f0_1 > 0.0f)
             vocoderF0[static_cast<size_t>(i)] = f0_1;
     }
-
-    const bool allowTrailingExtension = !(boundaries.synthSampleCount > boundaries.publishSampleCount);
-    fillF0GapsForVocoder(vocoderF0,
-                         *contentSnap,
-                         trueStartSeconds,
-                         trueEndSeconds,
-                         hopDuration,
-                         f0FrameRate,
-                         allowTrailingExtension);
 
     VocoderDomain::Job vocoderJob;
     vocoderJob.f0 = std::move(vocoderF0);
