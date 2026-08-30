@@ -187,7 +187,6 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 stream.writeFloat(note.pitchDriftScale);
                 stream.writeFloat(note.vibratoDepth);
                 stream.writeFloat(note.vibratoRate);
-                stream.writeFloat(note.noteSplitCents);
                 stream.writeFloat(note.outputGainDb);
                 stream.writeInt(note.isVoiced ? 1 : 0);
 
@@ -344,7 +343,6 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
                 note.pitchDriftScale = stream.readFloat();
             note.vibratoDepth = stream.readFloat();
             note.vibratoRate = stream.readFloat();
-            note.noteSplitCents = stream.readFloat();
             note.outputGainDb = stream.readFloat();
             note.isVoiced = stream.readInt() != 0;
 

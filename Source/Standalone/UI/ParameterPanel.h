@@ -119,7 +119,6 @@ public:
     float getRetuneSpeed() const;
     float getVibratoDepth() const;
     float getVibratoRate() const;
-    float getNoteSplit() const;
 
 private:
     class ToolIconButton : public juce::Button

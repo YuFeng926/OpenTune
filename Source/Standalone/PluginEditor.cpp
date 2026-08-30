@@ -559,9 +559,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // parameterPanel_.setRetuneSpeed(processorRef_.getRetuneSpeed());
     parameterPanel_.setRetuneSpeed(PitchControlConfig::kDefaultRetuneSpeedPercent);
     pianoRoll_.setRetuneSpeed(PitchControlConfig::kDefaultRetuneSpeedNormalized);
-    parameterPanel_.setNoteSplit(PitchControlConfig::kDefaultNoteSplitCents);
-    pianoRoll_.setNoteSplit(PitchControlConfig::kDefaultNoteSplitCents);
-    
+
     addAndMakeVisible(parameterPanel_);
 
     arrangementView_.addListener(this);
@@ -1622,10 +1620,8 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
 
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 {
+    // NoTarget 时 editParameter 内部已回落更新创建默认值
     auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
-    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
-        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::NoteSplit, value);
-    }
     if (result.changed)
         projectSession_.markDirty();
 }

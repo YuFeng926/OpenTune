@@ -20,13 +20,6 @@
 
 namespace OpenTune {
 
-struct NoteDefaults {
-    float retuneSpeed = PitchControlConfig::kDefaultRetuneSpeedNormalized;
-    float vibratoDepth = PitchControlConfig::kDefaultVibratoDepth;
-    float vibratoRate = PitchControlConfig::kDefaultVibratoRateHz;
-    float noteSplitCents = PitchControlConfig::kDefaultNoteSplitCents;
-};
-
 struct Note {
     double startTime = 0.0;         // 起始时间（秒）
     double endTime = 0.0;           // 结束时间（秒）
@@ -36,7 +29,6 @@ struct Note {
     float retuneSpeed = PitchControlConfig::kDefaultRetuneSpeedNormalized;
     float vibratoDepth = PitchControlConfig::kDefaultVibratoDepth;
     float vibratoRate = PitchControlConfig::kDefaultVibratoRateHz;
-    float noteSplitCents = PitchControlConfig::kDefaultNoteSplitCents;
     float outputGainDb = 0.0f;     // 旧工程兼容字段；由 VolumeEnvelope 在 note.startTime 处派生
     float pitchDriftScale = 1.0f;    // 漂移修正比例（1.0=原始漂移，0.0=消除漂移，负值=反转，可超出±100%）
     bool isVoiced = true;           // 是否为有声段

@@ -1324,4 +1324,13 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneAutoTuneTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME AutoTunePitchShifterTests COMMAND OpenTuneAutoTuneTests)
+
+    # 纯结构体契约测试（JUCE-free）：字段与真实 Note/PitchControlConfig 漂移时编译失败
+    add_executable(OpenTunePitchParameterTests
+        Tests/PitchParameterContractTests.cpp
+    )
+    if(MSVC)
+        target_compile_options(OpenTunePitchParameterTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME PitchParameterContractTests COMMAND OpenTunePitchParameterTests)
 endif()

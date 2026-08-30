@@ -15,9 +15,6 @@ namespace OpenTune::PitchControlConfig {
     constexpr float kDefaultRetuneSpeedNormalized = 0.15f;
     constexpr float kDefaultVibratoDepth = 0.0f;
     constexpr float kDefaultVibratoRateHz = 7.5f;
-    constexpr float kDefaultNoteSplitCents = 80.0f;
-    constexpr float kMinNoteSplitCents = 0.0f;
-    constexpr float kMaxNoteSplitCents = 200.0f;
 }
 
 // Minimal Note struct matching the project's Note fields
@@ -30,7 +27,6 @@ struct TestNote {
     float retuneSpeed = OpenTune::PitchControlConfig::kDefaultRetuneSpeedNormalized;
     float vibratoDepth = OpenTune::PitchControlConfig::kDefaultVibratoDepth;
     float vibratoRate = OpenTune::PitchControlConfig::kDefaultVibratoRateHz;
-    float noteSplitCents = OpenTune::PitchControlConfig::kDefaultNoteSplitCents;
     float pitchDriftScale = 1.0f;
     bool dirty = false;
 };
@@ -45,7 +41,6 @@ struct TestSegment {
     float retuneSpeed = OpenTune::PitchControlConfig::kDefaultRetuneSpeedNormalized;
     float vibratoDepth = OpenTune::PitchControlConfig::kDefaultVibratoDepth;
     float vibratoRate = OpenTune::PitchControlConfig::kDefaultVibratoRateHz;
-    float noteSplitCents = OpenTune::PitchControlConfig::kDefaultNoteSplitCents;
     std::vector<float> baseF0Data;
 };
 
@@ -58,12 +53,11 @@ static void test_note_concrete_defaults()
     assert(note.retuneSpeed == OpenTune::PitchControlConfig::kDefaultRetuneSpeedNormalized);
     assert(note.vibratoDepth == OpenTune::PitchControlConfig::kDefaultVibratoDepth);
     assert(note.vibratoRate == OpenTune::PitchControlConfig::kDefaultVibratoRateHz);
-    assert(note.noteSplitCents == OpenTune::PitchControlConfig::kDefaultNoteSplitCents);
     std::cout << "  PASS: test_note_concrete_defaults\n";
 }
 
 // ============================================================================
-// Test 2: Note copy preserves all four parameters
+// Test 2: Note copy preserves parameters
 // ============================================================================
 static void test_note_copy_preserves_params()
 {
@@ -71,13 +65,11 @@ static void test_note_copy_preserves_params()
     original.retuneSpeed = 0.8f;
     original.vibratoDepth = 5.0f;
     original.vibratoRate = 12.0f;
-    original.noteSplitCents = 50.0f;
 
     TestNote copy = original;
     assert(copy.retuneSpeed == 0.8f);
     assert(copy.vibratoDepth == 5.0f);
     assert(copy.vibratoRate == 12.0f);
-    assert(copy.noteSplitCents == 50.0f);
     std::cout << "  PASS: test_note_copy_preserves_params\n";
 }
 
@@ -131,7 +123,7 @@ static void test_parameter_target_priority()
 }
 
 // ============================================================================
-// Test 4: LegacyNoteGenerator-style commitNote writes four values
+// Test 4: LegacyNoteGenerator-style commitNote writes parameter values
 // ============================================================================
 static void test_generator_writes_four_values()
 {
@@ -140,12 +132,10 @@ static void test_generator_writes_four_values()
     note.retuneSpeed = 0.7f;
     note.vibratoDepth = 3.0f;
     note.vibratoRate = 8.0f;
-    note.noteSplitCents = 60.0f;
 
     assert(note.retuneSpeed == 0.7f);
     assert(note.vibratoDepth == 3.0f);
     assert(note.vibratoRate == 8.0f);
-    assert(note.noteSplitCents == 60.0f);
     std::cout << "  PASS: test_generator_writes_four_values\n";
 }
 
@@ -257,7 +247,6 @@ static void test_negative_param_normalization()
     note.retuneSpeed = -1.0f;
     note.vibratoDepth = -1.0f;
     note.vibratoRate = -1.0f;
-    note.noteSplitCents = -1.0f;
 
     // Apply normalization (matching Persistence code)
     if (note.retuneSpeed < 0.0f)
@@ -266,13 +255,10 @@ static void test_negative_param_normalization()
         note.vibratoDepth = OpenTune::PitchControlConfig::kDefaultVibratoDepth;
     if (note.vibratoRate < 0.0f)
         note.vibratoRate = OpenTune::PitchControlConfig::kDefaultVibratoRateHz;
-    if (note.noteSplitCents < 0.0f)
-        note.noteSplitCents = OpenTune::PitchControlConfig::kDefaultNoteSplitCents;
 
     assert(note.retuneSpeed == OpenTune::PitchControlConfig::kDefaultRetuneSpeedNormalized);
     assert(note.vibratoDepth == OpenTune::PitchControlConfig::kDefaultVibratoDepth);
     assert(note.vibratoRate == OpenTune::PitchControlConfig::kDefaultVibratoRateHz);
-    assert(note.noteSplitCents == OpenTune::PitchControlConfig::kDefaultNoteSplitCents);
 
     std::cout << "  PASS: test_negative_param_normalization\n";
 }

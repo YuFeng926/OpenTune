@@ -72,7 +72,9 @@ struct ScaleSnapConfig {
 };
 
 struct NoteSegmentationPolicy {
-    float transitionThresholdCents = 50.0f;
+    // 与 UI 旋钮默认值一致（PitchControlConfig::kDefaultNoteSplitCents），
+    // 三形态（Standalone/VST3/ARA）共享同一默认策略，不依赖 editor 初始化调用。
+    float transitionThresholdCents = PitchControlConfig::kDefaultNoteSplitCents;
     float gapBridgeMs              = 10.0f;
     float minDurationMs            = 20.0f;
     float tailExtendMs             = 15.0f;

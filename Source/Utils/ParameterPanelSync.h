@@ -9,12 +9,10 @@ struct ParameterPanelSyncContext {
     float selectedNoteRetuneSpeedPercent = 0.0f;
     float selectedNoteVibratoDepth = 0.0f;
     float selectedNoteVibratoRate = 0.0f;
-    float selectedNoteNoteSplitCents = 0.0f;
 
     float clipRetuneSpeedPercent = 0.0f;
     float clipVibratoDepth = 0.0f;
     float clipVibratoRate = 0.0f;
-    float clipNoteSplitCents = 0.0f;
 
     bool wasShowingSelectionParameters = false;
 };
@@ -28,9 +26,6 @@ struct ParameterPanelSyncDecision {
 
     bool shouldSetVibratoRate = false;
     float vibratoRate = 0.0f;
-
-    bool shouldSetNoteSplit = false;
-    float noteSplitCents = 0.0f;
 
     bool nextShowingSelectionParameters = false;
 };
@@ -55,8 +50,6 @@ inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
         decision.vibratoDepth = context.selectedNoteVibratoDepth;
         decision.shouldSetVibratoRate = true;
         decision.vibratoRate = context.selectedNoteVibratoRate;
-        decision.shouldSetNoteSplit = true;
-        decision.noteSplitCents = context.selectedNoteNoteSplitCents;
         decision.nextShowingSelectionParameters = true;
         return decision;
     }
@@ -71,8 +64,6 @@ inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
     decision.vibratoDepth = context.clipVibratoDepth;
     decision.shouldSetVibratoRate = true;
     decision.vibratoRate = context.clipVibratoRate;
-    decision.shouldSetNoteSplit = true;
-    decision.noteSplitCents = context.clipNoteSplitCents;
     decision.nextShowingSelectionParameters = false;
     return decision;
 }

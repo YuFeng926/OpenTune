@@ -478,6 +478,9 @@ ParameterPanel::ParameterPanel()
                    PitchControlConfig::kDefaultNoteSplitCents,
                    " cents");
     noteSplitSlider_.getProperties().set("minimalKnob", true);
+    // NoteSplit 触发范围重分割（拓扑重建+undo 事务），代价远高于其他参数旋钮：
+    // 拖动期间不逐格提交，释放时才通知一次（滚轮/键盘无拖拽语义，逐次提交，频率低可接受）。
+    noteSplitSlider_.setChangeNotificationOnlyOnRelease(true);
     noteSplitSlider_.onValueChange = [this] { onNoteSplitChanged(); };
     addAndMakeVisible(noteSplitSlider_);
     noteSplitSlider_.setTooltip(LOC(kTooltipNoteSplit));
@@ -1059,11 +1062,6 @@ float ParameterPanel::getVibratoRate() const
 void ParameterPanel::setNoteSplit(float value)
 {
     noteSplitSlider_.setValue(value, juce::dontSendNotification);
-}
-
-float ParameterPanel::getNoteSplit() const
-{
-    return static_cast<float>(noteSplitSlider_.getValue());
 }
 
 void ParameterPanel::onRetuneSpeedChanged()

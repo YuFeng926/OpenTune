@@ -215,8 +215,6 @@ public:
 
     AudioEditingScheme::ParameterEditResult editParameter(AudioEditingScheme::ParameterId id, float value);
     void setCreationDefault(AudioEditingScheme::ParameterId id, float value);
-    float getCreationDefault(AudioEditingScheme::ParameterId id) const;
-    NoteDefaults getCurrentNoteDefaults() const noexcept;
 
     NoteGeneratorParams getCurrentAutoTuneParams() const noexcept
     {
@@ -231,7 +229,6 @@ public:
     void selectLineAnchorSegment(int idx);
     void toggleLineAnchorSegmentSelection(int idx);
     void clearLineAnchorSegmentSelection();
-    void setNoteSplit(float value);
 
     double getContentDurationSeconds() const;
     std::pair<double, double> getSelectionTimeRange() const

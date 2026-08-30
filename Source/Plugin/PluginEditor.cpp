@@ -785,10 +785,8 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
 
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 {
-    auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
-    if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
-        pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::NoteSplit, value);
-    }
+    // NoTarget 时 editParameter 内部已回落更新创建默认值
+    pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
 }
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)

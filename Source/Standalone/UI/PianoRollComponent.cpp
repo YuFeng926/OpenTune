@@ -765,7 +765,6 @@ bool PianoRollComponent::commitNoteDraft()
             && a.pitchDriftScale == b.pitchDriftScale
             && a.vibratoDepth == b.vibratoDepth
             && a.vibratoRate == b.vibratoRate
-            && a.noteSplitCents == b.noteSplitCents
             && a.eq == b.eq;
     };
 
@@ -2465,6 +2464,8 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
     const auto target = AudioEditingScheme::resolveParameterTarget(context);
 
     if (target == AudioEditingScheme::ParameterTarget::None) {
+        // 无目标：契约内回落为创建默认值更新（编辑器无需再补偿）
+        setCreationDefault(id, value);
         result.status = AudioEditingScheme::ParameterEditStatus::NoTarget;
         return result;
     }
@@ -2478,6 +2479,74 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) {
         result.status = AudioEditingScheme::ParameterEditStatus::Failed;
+        return result;
+    }
+
+    // NoteSplit 是区段属性，不按音符存储：更新创建默认值（策略阈值）后，
+    // 有选中范围时对范围并集重新分割（复用 AUTO 范围重生成路径，含修正曲线重建），
+    // 无选中范围时仅更新默认值（由编辑器回落 setCreationDefault）。
+    if (id == AudioEditingScheme::ParameterId::NoteSplit) {
+        segmentationPolicy_.transitionThresholdCents = value;
+
+        F0FrameRange requestedRange{0, 0};
+        if (target == AudioEditingScheme::ParameterTarget::SelectedNotes) {
+            interactionState_.noteSelection.trimToNoteCount(static_cast<int>(notes.size()));
+            double selStartTime = 1e30;
+            double selEndTime = -1e30;
+            for (int noteIndex : interactionState_.noteSelection.selectedIndices) {
+                const auto& n = notes[static_cast<size_t>(noteIndex)];
+                selStartTime = std::min(selStartTime, n.startTime);
+                selEndTime = std::max(selEndTime, n.endTime);
+            }
+            if (selEndTime > selStartTime)
+                requestedRange = f0tl.rangeForTimes(selStartTime, selEndTime);
+        } else if (!frameSel.ranges.empty()) {
+            requestedRange = { frameSel.ranges.front().first, frameSel.ranges.back().second };
+        }
+
+        if (requestedRange.endFrameExclusive <= requestedRange.startFrame) {
+            // 无可分割范围：仅更新创建默认值（与 NoTarget 同语义）
+            result.status = AudioEditingScheme::ParameterEditStatus::NoTarget;
+            return result;
+        }
+
+        const auto postSnapCfg = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
+        captureBeforeUndoSnapshot();
+        pendingUndoDescription_ = TRANS("重新分割音符");
+
+        if (!contentCommands_->autoTuneContentRange(
+                editedContentKey_,
+                requestedRange.startFrame,
+                requestedRange.endFrameExclusive,
+                getCurrentAutoTuneParams(),
+                postSnapCfg)) {
+            // 提交失败：废弃本次 undo 临时快照，避免污染后续编辑的事务状态
+            undoSnapshotCaptured_ = false;
+            result.status = AudioEditingScheme::ParameterEditStatus::Failed;
+            return result;
+        }
+
+        {
+            auto autoSnap = readEditedSnapshot();
+            if (autoSnap) {
+                lastKnownNotesRevision_ = autoSnap->notesRevision;
+                lastKnownPitchRevision_ = autoSnap->pitchRevision;
+            }
+        }
+
+        refreshEditedContentNotes();
+
+        auto committedCurve = readEditedSnapshot();
+        if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
+            setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
+        }
+
+        const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
+            requestedRange.startFrame, requestedRange.endFrameExclusive, f0tl.endFrameExclusive());
+        recordUndoAction(pendingUndoDescription_, affectedRange);
+
+        result.status = AudioEditingScheme::ParameterEditStatus::Applied;
+        result.changed = true;
         return result;
     }
 
@@ -2511,10 +2580,6 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
                     oldValue = n.vibratoRate;
                     n.vibratoRate = value;
                     break;
-                case AudioEditingScheme::ParameterId::NoteSplit:
-                    oldValue = n.noteSplitCents;
-                    n.noteSplitCents = value;
-                    break;
             }
             if (std::abs(value - oldValue) > 1e-6f)
                 result.changed = true;
@@ -2530,17 +2595,6 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
         }
 
         if (!result.changed) {
-            result.status = AudioEditingScheme::ParameterEditStatus::Applied;
-            return result;
-        }
-
-        if (id == AudioEditingScheme::ParameterId::NoteSplit) {
-            pendingUndoDescription_ = TRANS("Edit note split");
-            auto dummyRange = F0FrameRange{0, 0};
-            if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, {}, dummyRange)) {
-                result.status = AudioEditingScheme::ParameterEditStatus::Failed;
-                return result;
-            }
             result.status = AudioEditingScheme::ParameterEditStatus::Applied;
             return result;
         }
@@ -2594,7 +2648,6 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
             case AudioEditingScheme::ParameterId::RetuneSpeed: effectiveRetuneSpeed = value; break;
             case AudioEditingScheme::ParameterId::VibratoDepth: effectiveVibratoDepth = value; break;
             case AudioEditingScheme::ParameterId::VibratoRate: effectiveVibratoRate = value; break;
-            case AudioEditingScheme::ParameterId::NoteSplit: break;
         }
         auto editedCurve = currentCurve_->clone();
         bool anyBaked = false;
@@ -2655,29 +2708,6 @@ void PianoRollComponent::setCreationDefault(AudioEditingScheme::ParameterId id, 
                 PitchControlConfig::kMaxNoteSplitCents, value);
             break;
     }
-}
-
-float PianoRollComponent::getCreationDefault(AudioEditingScheme::ParameterId id) const {
-    switch (id) {
-        case AudioEditingScheme::ParameterId::RetuneSpeed:
-            return currentRetuneSpeed_;
-        case AudioEditingScheme::ParameterId::VibratoDepth:
-            return currentVibratoDepth_;
-        case AudioEditingScheme::ParameterId::VibratoRate:
-            return currentVibratoRate_;
-        case AudioEditingScheme::ParameterId::NoteSplit:
-            return segmentationPolicy_.transitionThresholdCents;
-    }
-    return 0.0f;
-}
-
-NoteDefaults PianoRollComponent::getCurrentNoteDefaults() const noexcept {
-    NoteDefaults defaults;
-    defaults.retuneSpeed = currentRetuneSpeed_;
-    defaults.vibratoDepth = currentVibratoDepth_;
-    defaults.vibratoRate = currentVibratoRate_;
-    defaults.noteSplitCents = segmentationPolicy_.transitionThresholdCents;
-    return defaults;
 }
 
 int PianoRollComponent::findLineAnchorSegmentNear(int x, int y) const
@@ -2749,18 +2779,6 @@ void PianoRollComponent::toggleLineAnchorSegmentSelection(int idx)
 void PianoRollComponent::clearLineAnchorSegmentSelection()
 {
     interactionState_.selectedLineAnchorSegmentIds.clear();
-}
-
-void PianoRollComponent::setNoteSplit(float value) {
-    // Note Split 控制音高分割阈值（cents）
-    segmentationPolicy_.transitionThresholdCents = juce::jlimit(
-        OpenTune::PitchControlConfig::kMinNoteSplitCents,
-        OpenTune::PitchControlConfig::kMaxNoteSplitCents,
-        value);
-
-    // Note Split 仅更新分段策略参数，不触发 AUTO 重新生成
-    // AUTO 操作由用户主动触发，使用当前策略执行分割
-    repaint();
 }
 
 void PianoRollComponent::resized() {
