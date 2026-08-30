@@ -27,6 +27,10 @@ public:
     // with the model. fmax is not encoded in ONNX schema, so this contract
     // is the only safeguard against silent config drift.
     virtual float getFMax() const = 0;
+
+    // Sidecar override: apply fmax from the weight's companion yaml
+    // (VocoderFactory calls this before the Nyquist validation).
+    virtual void setMelFMax(float fMax) = 0;
 };
 
 } // namespace OpenTune

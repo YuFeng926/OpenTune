@@ -442,18 +442,20 @@ void ProcessRenderRuntime::detach()
     --clientCount_;
 }
 
-std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, VocoderModelWeight weight)
+std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight)
 {
-    switch (weight)
-    {
-        case VocoderModelWeight::Community: return modelDir + "/hifigan.onnx";
-        case VocoderModelWeight::Coulin9V4: return modelDir + "/hifigan_coulin9.onnx";
-    }
+    // 权重标识即文件名：vocoder_weights/ 优先（用户放置的可切换权重），
+    // 未命中时回退 models/ 根目录（内置权重）。
+    const juce::File dirWeight = juce::File(modelDir)
+        .getChildFile("vocoder_weights")
+        .getChildFile(juce::String(weight));
+    if (dirWeight.existsAsFile())
+        return dirWeight.getFullPathName().toStdString();
 
-    return modelDir + "/hifigan.onnx";
+    return modelDir + "/" + weight;
 }
 
-std::unique_ptr<VocoderDomain> ProcessRenderRuntime::createVocoderDomain(VocoderModelWeight weight)
+std::unique_ptr<VocoderDomain> ProcessRenderRuntime::createVocoderDomain(const VocoderModelWeight& weight)
 {
     // 该函数始终在 vocoderMutex_ 外执行。ORT Env 初始化、模型加载、Session
     // 创建和失败清理都可能耗时，绝不能阻塞 UI 的 detach/isVocoderReady。
@@ -574,7 +576,7 @@ void ProcessRenderRuntime::controlWorkerLoop()
     }
 }
 
-void ProcessRenderRuntime::setVocoderModelWeight(VocoderModelWeight weight, std::function<void()> completion)
+void ProcessRenderRuntime::setVocoderModelWeight(const VocoderModelWeight& weight, std::function<void()> completion)
 {
     // UI 线程只投递命令并立即返回；Session 销毁与重建由 control worker 串行执行。
     ControlCommand command;

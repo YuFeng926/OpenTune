@@ -740,7 +740,7 @@ public:
      * 模型切换完成后才清 RenderCache/TimeStretchCache 并恢复 render worker。
      * gate 关闭后回调直接丢弃。调用方负责持久化偏好。
      */
-    void setVocoderModelWeight(VocoderModelWeight weight);
+    void setVocoderModelWeight(const VocoderModelWeight& weight);
 
     bool setF0ModelType(F0ModelType type);
 

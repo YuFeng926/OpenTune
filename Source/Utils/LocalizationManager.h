@@ -252,8 +252,6 @@ constexpr const char* kGpuFirst = "GPU First";
 constexpr const char* kCpuFirst = "CPU First";
 
 constexpr const char* kVocoderWeight = "Vocoder Model";
-constexpr const char* kVocoderWeightCommunity = "Community Vocoder";
-constexpr const char* kVocoderWeightCoulin9 = "Coulin9 Fine-tuned (Experimental)";
 
 constexpr const char* kSetShortcut = "Set Shortcut";
 constexpr const char* kPressNewKeyCombination = "Press the new key combination";
@@ -460,8 +458,6 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kGpuFirst, "GPU First", "GPU 优先", "GPU 優先", "GPU приоритет", "GPU primero" },
         { Keys::kCpuFirst, "CPU First", "CPU 优先", "CPU 優先", "CPU приоритет", "CPU primero" },
         { Keys::kVocoderWeight, "Vocoder Model", "声码器模型", "ボコーダーモデル", "Модель вокодера", "Modelo de vocoder" },
-        { Keys::kVocoderWeightCommunity, "Community Vocoder", "社区声码器", "コミュニティボコーダー", "Пользовательский вокодер", "Vocoder comunitario" },
-        { Keys::kVocoderWeightCoulin9, "Coulin9 Fine-tuned (Experimental)", "Coulin9 微调版（实验性）", "Coulin9 微調整版（実験的）", "Coulin9 дообученная (экспериментальная)", "Coulin9 afinada (Experimental)" },
 
         { Keys::kSetShortcut, "Set Shortcut", "设置快捷键", "ショートカットを設定", "Назначить сочетание", "Atajo" },
         { Keys::kPressNewKeyCombination, "Press the new key combination", "按下新的组合键", "新しいキーの組み合わせを押してください", "Нажмите сочетание", "Pulse combinación" },

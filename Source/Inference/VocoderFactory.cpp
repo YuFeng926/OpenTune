@@ -5,9 +5,44 @@
 #endif
 #include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
+#include <optional>
 #include <unordered_map>
 
 namespace OpenTune {
+
+namespace {
+
+// 权重旁 <同名>.yaml sidecar：读取 mel_fmax。fmax 不在 ONNX schema 内
+// （见 VocoderInterface 注释），训练时 mel 滤波器组参数只能随权重走配置文件。
+std::optional<float> loadSidecarMelFMax(const std::string& modelPath)
+{
+    const juce::File yamlFile = juce::File(modelPath).withFileExtension("yaml");
+    if (!yamlFile.existsAsFile())
+        return std::nullopt;
+
+    const auto lines = juce::StringArray::fromLines(yamlFile.loadFileAsString());
+    for (const auto& line : lines) {
+        const auto trimmed = line.trim();
+        if (!trimmed.startsWith("mel_fmax"))
+            continue;
+        const float value = trimmed.fromFirstOccurrenceOf(":", false, false).trim().getFloatValue();
+        if (value > 0.0f)
+            return value;
+    }
+    return std::nullopt;
+}
+
+void applySidecarConfig(const std::string& modelPath, VocoderInterface& vocoder)
+{
+    const auto fMax = loadSidecarMelFMax(modelPath);
+    if (fMax.has_value()) {
+        vocoder.setMelFMax(*fMax);
+        AppLogger::info("[VocoderFactory] Sidecar mel_fmax=" + juce::String(*fMax)
+            + " (" + juce::File(modelPath).getFileName() + ".yaml)");
+    }
+}
+
+} // namespace
 
 VocoderCreationResult VocoderFactory::create(
     const std::string& modelPath,
@@ -30,6 +65,8 @@ VocoderCreationResult VocoderFactory::create(
             auto vocoder = std::make_unique<DmlVocoder>(modelPath, env, adapterIndex);
 
             AppLogger::info("[VocoderFactory] DML vocoder created successfully");
+
+            applySidecarConfig(modelPath, *vocoder);
 
             const float fmax = vocoder->getFMax();
             const float nyquist = static_cast<float>(vocoder->getSampleRate()) * 0.5f;
@@ -95,6 +132,8 @@ VocoderCreationResult VocoderFactory::create(
 
         const juce::String backendStr = (selectedBackend == VocoderBackend::CoreML) ? "CoreML" : "CPU";
         AppLogger::info("[VocoderFactory] " + backendStr + " vocoder created successfully");
+
+        applySidecarConfig(modelPath, *vocoder);
 
         const float fmax = vocoder->getFMax();
         const float nyquist = static_cast<float>(vocoder->getSampleRate()) * 0.5f;

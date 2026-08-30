@@ -7,6 +7,7 @@
 #include "../Utils/AppLogger.h"
 #include "../Utils/Error.h"
 #include <juce_core/juce_core.h>
+#include <algorithm>
 #include <iomanip>
 #ifdef _WIN32
 #include <dml_provider_factory.h>
@@ -144,6 +145,43 @@ std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& m
     models.push_back(fcpe);
 
     return models;
+}
+
+std::vector<VocoderWeightInfo> ModelFactory::getAvailableVocoderWeights(const std::string& modelDir) {
+    std::vector<VocoderWeightInfo> weights;
+
+    const auto pushWeight = [&weights](const juce::File& file) {
+        weights.push_back({ file.getFileName().toStdString(),
+                            file.getFileNameWithoutExtension().toStdString() });
+    };
+
+    // 内置权重（models/ 根目录）
+    const juce::File root(modelDir);
+    for (const auto* name : { kVocoderWeightCommunity, kVocoderWeightCoulin9 }) {
+        const juce::File f = root.getChildFile(name);
+        if (f.existsAsFile())
+            pushWeight(f);
+    }
+
+    // 用户权重目录 models/vocoder_weights/*.onnx（同名覆盖内置，不重复列出）
+    const juce::File dir = root.getChildFile("vocoder_weights");
+    if (dir.isDirectory()) {
+        juce::Array<juce::File> files;
+        dir.findChildFiles(files, juce::File::findFiles, false, "*.onnx");
+        std::vector<juce::File> sorted(files.begin(), files.end());
+        std::sort(sorted.begin(), sorted.end(), [](const juce::File& a, const juce::File& b) {
+            return a.getFileName() < b.getFileName();
+        });
+        for (const auto& f : sorted) {
+            const auto name = f.getFileName().toStdString();
+            const bool duplicated = std::any_of(weights.begin(), weights.end(),
+                                                [&name](const VocoderWeightInfo& w) { return w.fileName == name; });
+            if (!duplicated)
+                pushWeight(f);
+        }
+    }
+
+    return weights;
 }
 
 // ==============================================================================

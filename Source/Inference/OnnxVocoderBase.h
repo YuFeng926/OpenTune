@@ -34,7 +34,8 @@ public:
     int getHopSize() const override { return 512; }
     int getSampleRate() const override { return 44100; }
     int getMelBins() const override { return static_cast<int>(melBinsHint_); }
-    float getFMax() const override { return 16000.0f; }
+    float getFMax() const override { return fMax_; }
+    void setMelFMax(float fMax) override { fMax_ = fMax; }
 
 protected:
     void detectInputOutputNames();
@@ -60,6 +61,7 @@ protected:
     int f0Index_ = -1;
     int uvIndex_ = -1;
     int64_t melBinsHint_ = 128;
+    float fMax_ = 16000.0f;
     bool melNeedsTranspose_ = false;
 };
 

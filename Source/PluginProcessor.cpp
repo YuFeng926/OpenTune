@@ -1163,7 +1163,7 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     });
 }
 
-void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
+void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& weight)
 {
     // 1. 暂停 render worker（本 owner 的 CRS）
     if (contentRenderService_)

@@ -2,6 +2,7 @@
 
 #include "IF0Extractor.h"
 #include "../Utils/Error.h"
+#include "../Utils/VocoderModelWeight.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>
 #include <string>
@@ -10,6 +11,12 @@
 namespace OpenTune {
 
 class ResamplingManager;
+
+/** @brief 可用声码器权重信息（下拉框列表项）。 */
+struct VocoderWeightInfo {
+    std::string fileName;      // 权重文件名（含 .onnx），即持久化标识
+    std::string displayName;   // 显示名（去扩展名）
+};
 
 class ModelFactory {
 public:
@@ -27,6 +34,9 @@ public:
     static bool isModelAvailable(F0ModelType type, const std::string& modelDir);
 
     static std::vector<F0ModelInfo> getAvailableF0Models(const std::string& modelDir);
+
+    /** @brief 扫描可用声码器权重：内置（models/ 根目录）+ vocoder_weights/*.onnx，按文件名排序。 */
+    static std::vector<VocoderWeightInfo> getAvailableVocoderWeights(const std::string& modelDir);
 
     static Ort::SessionOptions createF0SessionOptions(
         F0ModelType type,

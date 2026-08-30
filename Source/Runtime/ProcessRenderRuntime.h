@@ -53,7 +53,7 @@ public:
      * completion 经 MessageManager::callAsync 投递回消息线程；调用方在其
      * completion gate 关闭后直接丢弃（不访问 owner）。
      */
-    void setVocoderModelWeight(VocoderModelWeight weight, std::function<void()> completion);
+    void setVocoderModelWeight(const VocoderModelWeight& weight, std::function<void()> completion);
     void resetVocoder(std::function<void()> completion);
     void resetInferenceBackend(bool forceCpu, std::function<void()> completion);
 
@@ -79,11 +79,11 @@ private:
     ProcessRenderRuntime();
     ~ProcessRenderRuntime() = default;
 
-    static std::string modelPathForWeight(const std::string& modelDir, VocoderModelWeight weight);
+    static std::string modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight);
 
     // 在锁外创建并初始化完整 domain。模型加载、Session 创建和失败清理均不得
     // 持有 vocoderMutex_，保证 UI 查询与实例 detach 永远只经历短临界区。
-    std::unique_ptr<VocoderDomain> createVocoderDomain(VocoderModelWeight weight);
+    std::unique_ptr<VocoderDomain> createVocoderDomain(const VocoderModelWeight& weight);
 
     // 一次锁内“确保 domain 并返回 generation/melBins/fMax”：配置与 domain
     // 同代生成，杜绝跨域混用（旧 generation 配置配新 domain 等）。
@@ -106,7 +106,7 @@ private:
         };
 
         Type type{Type::ResetVocoder};
-        VocoderModelWeight weight{VocoderModelWeight::Community};
+        VocoderModelWeight weight{kDefaultVocoderWeight};
         bool forceCpu{false};
         std::function<void()> completion;
     };
@@ -124,7 +124,7 @@ private:
     std::deque<ControlCommand> controlQueue_;
 
     std::unique_ptr<VocoderDomain> vocoderDomain_;
-    VocoderModelWeight currentVocoderModelWeight_{VocoderModelWeight::Community};
+    VocoderModelWeight currentVocoderModelWeight_{kDefaultVocoderWeight};
     mutable std::mutex vocoderMutex_;
     std::condition_variable vocoderStateCv_;
     bool vocoderReconfiguring_{false}; // vocoderMutex_ 保护：control worker 已摘除旧 domain

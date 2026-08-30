@@ -204,19 +204,18 @@ RenderingPriority renderingPriorityFromToken(const juce::String& token)
     return RenderingPriority::GpuFirst;
 }
 
-static juce::String toVocoderWeightToken(VocoderModelWeight w)
+static juce::String toVocoderWeightToken(const VocoderModelWeight& w)
 {
-    switch (w) {
-        case VocoderModelWeight::Community: return "community";
-        case VocoderModelWeight::Coulin9V4: return "coulin9-v4";
-    }
-    return "community";
+    return juce::String(w);
 }
 
 static VocoderModelWeight fromVocoderWeightToken(const juce::String& token)
 {
-    if (token == "coulin9-v4") return VocoderModelWeight::Coulin9V4;
-    return VocoderModelWeight::Community;
+    // 旧版枚举 token 迁移到文件名标识
+    if (token == "community") return kVocoderWeightCommunity;
+    if (token == "coulin9-v4") return kVocoderWeightCoulin9;
+    if (token.isEmpty()) return kDefaultVocoderWeight;
+    return token.toStdString();
 }
 
 static juce::String toF0ModelTypeToken(F0ModelType type)
@@ -541,7 +540,7 @@ void AppPreferences::setRenderingPriority(RenderingPriority priority)
     saveLocked();
 }
 
-void AppPreferences::setVocoderModelWeight(VocoderModelWeight weight)
+void AppPreferences::setVocoderModelWeight(const VocoderModelWeight& weight)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.vocoderModelWeight = weight;

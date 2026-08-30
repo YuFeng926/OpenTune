@@ -197,18 +197,35 @@ public:
         initialiseLabel(vocoderWeightLabel_, LOC(kVocoderWeight));
         addAndMakeVisible(vocoderWeightLabel_);
 
-        vocoderWeightSelector_.addItem(LOC(kVocoderWeightCommunity), 1);
-        vocoderWeightSelector_.addItem(LOC(kVocoderWeightCoulin9), 2);
-        auto weight = appPreferences_.getState().shared.vocoderModelWeight;
-        vocoderWeightSelector_.setSelectedId(static_cast<int>(weight) + 1, juce::dontSendNotification);
+        vocoderWeights_ = ModelFactory::getAvailableVocoderWeights(
+            ModelPathResolver::getModelsDirectory());
+        for (size_t i = 0; i < vocoderWeights_.size(); ++i)
+            vocoderWeightSelector_.addItem(juce::String(vocoderWeights_[i].displayName),
+                                           static_cast<int>(i) + 1);
+
+        // 选择当前权重；已持久化的权重文件缺失时回退第一项
+        const auto& currentWeight = state.shared.vocoderModelWeight;
+        int selectedWeightId = 0;
+        for (size_t i = 0; i < vocoderWeights_.size(); ++i) {
+            if (vocoderWeights_[i].fileName == currentWeight) {
+                selectedWeightId = static_cast<int>(i) + 1;
+                break;
+            }
+        }
+        if (selectedWeightId == 0 && !vocoderWeights_.empty())
+            selectedWeightId = 1;
+        vocoderWeightSelector_.setSelectedId(selectedWeightId, juce::dontSendNotification);
         initialiseComboBox(vocoderWeightSelector_);
         addAndMakeVisible(vocoderWeightSelector_);
 
         vocoderWeightSelector_.onChange = [this] {
-            const auto w = static_cast<VocoderModelWeight>(vocoderWeightSelector_.getSelectedId() - 1);
-            appPreferences_.setVocoderModelWeight(w);
+            const int id = vocoderWeightSelector_.getSelectedId();
+            if (id <= 0 || id > static_cast<int>(vocoderWeights_.size()))
+                return;
+            const auto& weight = vocoderWeights_[static_cast<size_t>(id) - 1].fileName;
+            appPreferences_.setVocoderModelWeight(weight);
             if (onVocoderModelWeightChanged_)
-                onVocoderModelWeightChanged_(w);
+                onVocoderModelWeightChanged_(weight);
             if (onPreferencesChanged_)
                 onPreferencesChanged_();
         };
@@ -372,6 +389,7 @@ private:
     std::function<bool(F0ModelType)> onF0ModelChanged_;
     std::function<void(bool)> onLightPitchCorrectionChanged_;
     bool isVst3Plugin_ = false;
+    std::vector<VocoderWeightInfo> vocoderWeights_;
     juce::Label renderingPriorityLabel_;
     juce::ComboBox renderingPrioritySelector_;
     juce::Label vocoderWeightLabel_;

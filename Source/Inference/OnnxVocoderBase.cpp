@@ -80,13 +80,16 @@ void OnnxVocoderBase::detectInputOutputNames() {
 
     if (melIndex_ >= 0 && melIndex_ < static_cast<int>(inputShapes_.size())) {
         const auto& melShape = inputShapes_[static_cast<size_t>(melIndex_)];
+        // 最后一个静态维(>1)即 mel bins：兼容 frames-major [1,T,bins] 与
+        // bins-major [1,bins,T] 两种导出布局（动态帧维在 ORT shape 中为 0）。
+        int64_t shapeBins = 0;
         for (auto d : melShape) {
-            if (d > 1 && d != 128) {
-                melBinsHint_ = d;
-                break;
-            }
+            if (d > 1)
+                shapeBins = d;
         }
-        melNeedsTranspose_ = (melShape.size() == 3 && melShape[2] == 128);
+        if (shapeBins > 0)
+            melBinsHint_ = shapeBins;
+        melNeedsTranspose_ = (melShape.size() == 3 && shapeBins > 0 && melShape[2] == shapeBins);
     }
 }
 
