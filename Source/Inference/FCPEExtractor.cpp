@@ -102,7 +102,7 @@ void FCPEExtractor::initHannWindow()
 {
     hannWindow_.resize(WIN_SIZE);
     for (int i = 0; i < WIN_SIZE; ++i)
-        hannWindow_[i] = 0.5f * (1.0f - std::cos(2.0f * juce::MathConstants<float>::pi * i / (WIN_SIZE - 1)));
+        hannWindow_[i] = 0.5f * (1.0f - std::cos(2.0f * juce::MathConstants<float>::pi * i / WIN_SIZE));
 }
 
 void FCPEExtractor::initCentTable()

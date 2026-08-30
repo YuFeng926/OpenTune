@@ -25,10 +25,10 @@ struct MelSpectrogramConfig
     int nMels = 128;
     float fMin = 40.0f;
     float fMax = 16000.0f;
-    // Match training-time `process.py::dynamic_range_compression_torch(clip_val=1e-9)`.
-    // Lower than 1e-5 default so silent / low-energy mel bins reach the same
-    // -20.7 nepers floor the vocoder was trained on.
-    float logEps = 1.0e-9f;
+    // Match training collater clamp: torch.clamp(audio_mel, min=np.log(1e-5)).
+    // The collater overrides the 1e-9 floor from process.py, so the model
+    // only ever sees mel >= ln(1e-5) ≈ -11.51.
+    float logEps = 1.0e-5f;
 
     size_t hash() const noexcept
     {
@@ -44,6 +44,7 @@ struct MelSpectrogramConfig
         combine(nMels);
         combine(static_cast<int>(fMin * 1000));
         combine(static_cast<int>(fMax * 1000));
+        combine(static_cast<int>(logEps * 1e9f));
         return h;
     }
 };
