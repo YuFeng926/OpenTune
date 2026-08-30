@@ -190,6 +190,9 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
     for (int i = 0; i < (int) paddedAudio_.size(); ++i)
         paddedAudio_[(size_t) i] = audio[(size_t) reflectIndex(i - pad, numSamples)];
 
+    std::vector<float> melSums((size_t) config_.nMels);
+    std::vector<float> logResults((size_t) config_.nMels);
+
     for (int frame = 0; frame < numFrames; ++frame)
     {
         const int startSample = frame * config_.hopLength;
@@ -210,20 +213,18 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
 
         // 应用Mel滤波器组: 点积 → epsilon clamping → 向量化 log
         const auto& simd = SimdAccelerator::getInstance();
-        float melSums[128];
-        const int nMelsActual = std::min(config_.nMels, 128);
-        for (int m = 0; m < nMelsActual; ++m)
+        const int nMels = config_.nMels;
+        for (int m = 0; m < nMels; ++m)
         {
-            melSums[m] = simd.dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
-            melSums[m] = std::max(config_.logEps, melSums[m]);
+            melSums[(size_t) m] = simd.dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
+            melSums[(size_t) m] = std::max(config_.logEps, melSums[(size_t) m]);
         }
 
-        float logResults[128];
-        simd.vectorLog(logResults, melSums, static_cast<size_t>(nMelsActual));
+        simd.vectorLog(logResults.data(), melSums.data(), static_cast<size_t>(nMels));
 
-        for (int m = 0; m < nMelsActual; ++m)
+        for (int m = 0; m < nMels; ++m)
         {
-            output[(size_t) m * (size_t) numFrames + (size_t) frame] = logResults[m];
+            output[(size_t) m * (size_t) numFrames + (size_t) frame] = logResults[(size_t) m];
         }
     }
 
