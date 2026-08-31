@@ -194,12 +194,11 @@ struct PlayHeadPresentationProjection
 // the presentation epoch.
 //
 // update() contract (per docs/plans/2026-07-15-ara-playhead-official-state-hard-cut.md §3):
-//  1. nullopt: no-op. Do not clear fields, do not fake stopped, do not bump revision.
-//  2. valid PositionInfo but no timeInSeconds: keep last valid time, do not bump
-//     revision; still write isPlaying/isLooping from this PositionInfo and loop
-//     points if present.
-//  3. valid PositionInfo with timeInSeconds: write time BEFORE isPlaying, bump
-//     hostPositionRevision; write isLooping and loop points if present.
+//  1. nullopt: no-op. Do not clear fields or fake stopped.
+//  2. valid PositionInfo but no timeInSeconds: keep the last valid time; still
+//     write isPlaying/isLooping and loop points when present.
+//  3. valid PositionInfo with timeInSeconds: write time before isPlaying, then
+//     write isLooping and loop points when present.
 //
 // reset() contract (only prepareToPlay/releaseResources call it):
 //  - clear isPlaying/isLooping; keep last time/loop range; bump presentationEpoch.
@@ -211,7 +210,6 @@ struct PlayHeadState
     std::atomic<double>  timeInSeconds { 0.0 };
     std::atomic<double>  loopPpqStart { 0.0 };
     std::atomic<double>  loopPpqEnd { 0.0 };
-    std::atomic<uint64_t> hostPositionRevision { 0 };
     std::atomic<uint64_t> presentationEpoch { 0 };
 
     PlayHeadPresentationProjection presentationProjection;
@@ -247,10 +245,7 @@ struct PlayHeadState
         // Write time-in-seconds before isPlaying so a reader that acquires
         // isPlaying==false sees this block's canonical time.
         if (const auto timeSeconds = positionInfo.getTimeInSeconds())
-        {
             timeInSeconds.store(*timeSeconds, std::memory_order_relaxed);
-            hostPositionRevision.fetch_add(1, std::memory_order_acq_rel);
-        }
 
         if (const auto loopPoints = positionInfo.getLoopPoints())
         {

@@ -3064,7 +3064,6 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
 bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSeconds)
 {
     // Standalone: canonical state is already synced via processorRef_.setPosition().
-    // Return false to indicate no ARA request was made (Standalone is not ARA-bound).
     processorRef_.setPosition(timeSeconds);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Seek);
     return false;

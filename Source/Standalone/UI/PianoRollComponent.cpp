@@ -231,20 +231,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.grabKeyboardFocus = [this]() { grabKeyboardFocus(); };
     toolCtx.getAudioEditingScheme = [this]() { return audioEditingScheme_; };
     toolCtx.notifyPlayheadChange = [this](double time) {
-        const auto seekRevision = playHeadState_.hostPositionRevision.load(std::memory_order_acquire);
-        bool requestDispatched = false;
-        listeners_.call([&](Listener& l) {
-            if (l.playheadPositionChangeRequested(time))
-                requestDispatched = true;
-        });
+        listeners_.call([time](Listener& l) { l.playheadPositionChangeRequested(time); });
         userScrollHold_ = false;
-        if (requestDispatched) {
-            seekSentRevision_ = seekRevision;
-            pendingSeekTime_ = time;
-        } else {
-            pendingSeekTime_ = -1.0;
-            seekSentRevision_ = 0;
-        }
     };
     toolCtx.notifyPitchCurveEdited = [this](int s, int e) {
         listeners_.call([s, e](Listener& l) { l.pitchCurveEdited(s, e); });
@@ -3383,18 +3371,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         lastObservedPlayHeadPlaying_ = playingNow;
     }
 
-    // 解 pending seek
-    const double currentPlayheadTime = playHeadState_.getPresentedPositionSeconds();
-    double playheadTime = currentPlayheadTime;
-    if (pendingSeekTime_ >= 0.0) {
-        const auto hostRevision = playHeadState_.hostPositionRevision.load(std::memory_order_acquire);
-        if (hostRevision != seekSentRevision_) {
-            pendingSeekTime_ = -1.0;
-            seekSentRevision_ = 0;
-        } else {
-            playheadTime = pendingSeekTime_;
-        }
-    }
+    const double playheadTime = playHeadState_.getPresentedPositionSeconds();
 
     // 自动跟随：仅 playing && !userScrollHold_
     if (playingNow && !userScrollHold_) {

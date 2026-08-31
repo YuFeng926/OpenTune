@@ -652,8 +652,6 @@ private:
     juce::MouseCursor eqCursor_;
 
     double playheadTimeForPaint_ = 0.0;
-    double pendingSeekTime_{-1.0};
-    uint64_t seekSentRevision_{0};
 
     juce::ListenerList<Listener> listeners_;
     

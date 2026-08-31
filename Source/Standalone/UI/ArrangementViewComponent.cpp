@@ -2128,7 +2128,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         // drive processor.setPosition (Standalone) or ARA requestSetPlaybackPosition.
         const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
-        playheadTimeForPaint_ = newPosSeconds;
         requestTransition_ = true;
         repaint();
         isDraggingPlayhead_ = true;
@@ -2140,7 +2139,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         // Clicked on empty area — emit seek request and clear selection
         const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
-        playheadTimeForPaint_ = newPosSeconds;
         requestTransition_ = true;
         repaint();
 
@@ -2308,7 +2306,6 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     {
         const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
-        playheadTimeForPaint_ = newPosSeconds;
         requestTransition_ = true;
         repaint();
         return;

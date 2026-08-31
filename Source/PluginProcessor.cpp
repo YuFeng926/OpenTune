@@ -1615,10 +1615,17 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const double deviceSampleRate = currentSampleRate_.load();
     const int rampTotal = static_cast<int>(TimeCoordinate::secondsToSamples(kTransportRampDurationSeconds, deviceSampleRate));
 
+    // Capture the transport generation and command snapshot before consumption.
+    // A control write racing this block must not be followed by an old cursor
+    // mirror at block end.
+    const uint64_t blockEpoch = playHeadState_.presentationEpoch.load(std::memory_order_acquire);
+    const uint64_t blockControlSequence = controlSequence_.load(std::memory_order_acquire);
+    bool controlSnapshotStable = (blockControlSequence & 1u) == 0;
+
     // ==== BLOCK START: Consume seqlock command snapshot ====
     {
-        uint64_t seq1 = controlSequence_.load(std::memory_order_acquire);
-        if ((seq1 & 1) == 0 && seq1 != 0 && seq1 != appliedControlSequence_) {
+        const uint64_t seq1 = blockControlSequence;
+        if (controlSnapshotStable && seq1 != 0 && seq1 != appliedControlSequence_) {
             TransportCommand cmd = pendingCommand_.load(std::memory_order_relaxed);
             double presTime = pendingPresentationTime_.load(std::memory_order_relaxed);
             double compTime = pendingCompletionTime_.load(std::memory_order_relaxed);
@@ -1768,11 +1775,12 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                     break;
                 }
             }
+            else
+            {
+                controlSnapshotStable = false;
+            }
         }
     }
-
-    // Capture epoch AFTER command consumption
-    const uint64_t blockEpoch = playHeadState_.presentationEpoch.load(std::memory_order_acquire);
 
     // Determine read cursor for this block (fixed from audioReadCursor_)
     const int64_t blockStartSample = audioReadCursor_;
@@ -1785,7 +1793,9 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
             standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
         }
-        if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
+        if (controlSnapshotStable
+            && controlSequence_.load(std::memory_order_acquire) == blockControlSequence
+            && playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
             const double posSec = TimeCoordinate::samplesToSeconds(transportCursor_, deviceSampleRate);
             playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
             playHeadState_.isPlaying.store(false, std::memory_order_release);
@@ -1806,7 +1816,10 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Publish projection: Playing (including fade-in), NOT during fade-out
     {
         const bool publishProjection = (phase_ == RuntimePhase::Playing)
-            && !(transitionActive_ && targetOutputGain_ == 0.0f);
+            && !(transitionActive_ && targetOutputGain_ == 0.0f)
+            && controlSnapshotStable
+            && controlSequence_.load(std::memory_order_acquire) == blockControlSequence
+            && playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch;
         if (publishProjection) {
             const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
             playHeadState_.presentationProjection.publish(currentPosSeconds, nowClock, blockEndSeconds, blockEpoch);
@@ -1994,7 +2007,9 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     // UI mirror update (only if epoch unchanged during this block)
-    if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
+    if (controlSnapshotStable
+        && controlSequence_.load(std::memory_order_acquire) == blockControlSequence
+        && playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
         const double posSec = TimeCoordinate::samplesToSeconds(transportCursor_, deviceSampleRate);
         playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
 
