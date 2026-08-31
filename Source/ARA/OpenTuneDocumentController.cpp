@@ -397,8 +397,10 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             note.pitchOffset = static_cast<float>(n->getDoubleAttribute("pitchOffset"));
             note.retuneSpeed = static_cast<float>(n->getDoubleAttribute("retuneSpeed"));
             note.pitchDriftScale = static_cast<float>(n->getDoubleAttribute("pitchDriftScale", 1.0));
-            note.vibratoDepth = static_cast<float>(n->getDoubleAttribute("vibratoDepth"));
-            note.vibratoRate = static_cast<float>(n->getDoubleAttribute("vibratoRate"));
+            note.vibratoDepth = static_cast<float>(n->getDoubleAttribute(
+                "vibratoDepth", PitchControlConfig::kDefaultVibratoDepth));
+            note.vibratoRate = static_cast<float>(n->getDoubleAttribute(
+                "vibratoRate", PitchControlConfig::kDefaultVibratoRateHz));
 
             // 验证浮点值的有效性，时间长度与速度、振幅率都必须为有限值
             if (!std::isfinite(note.pitch) || !std::isfinite(note.originalPitch) ||
@@ -755,8 +757,10 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 note.pitchOffset = static_cast<float>(n->getDoubleAttribute("pitchOffset"));
                 note.retuneSpeed = static_cast<float>(n->getDoubleAttribute("retuneSpeed"));
                 note.pitchDriftScale = static_cast<float>(n->getDoubleAttribute("pitchDriftScale", 1.0));
-                note.vibratoDepth = static_cast<float>(n->getDoubleAttribute("vibratoDepth"));
-                note.vibratoRate = static_cast<float>(n->getDoubleAttribute("vibratoRate"));
+                note.vibratoDepth = static_cast<float>(n->getDoubleAttribute(
+                    "vibratoDepth", PitchControlConfig::kDefaultVibratoDepth));
+                note.vibratoRate = static_cast<float>(n->getDoubleAttribute(
+                    "vibratoRate", PitchControlConfig::kDefaultVibratoRateHz));
                 note.outputGainDb = static_cast<float>(n->getDoubleAttribute("outputGainDb"));
 
                 if (!std::isfinite(note.startTime) || !std::isfinite(note.endTime) ||

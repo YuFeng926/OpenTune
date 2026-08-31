@@ -506,7 +506,6 @@ void PitchCurve::applyCorrectionToRange(
             }
 
             const float targetBaseF0 = PitchUtils::midiToFreq(targetMidi);
-            const float targetF0 = PitchUtils::midiToFreq(targetMidi + vibratoOffsetSemitones);
 
             float baseF0 = f0;
             if (activeInfo.rotationRad != 0.0f) {
@@ -553,8 +552,13 @@ void PitchCurve::applyCorrectionToRange(
                 }
             }
 
-            correctedF0Buffer[i - calculationStartFrame] = PitchUtils::mixRetune(
-                shiftedF0, targetF0, transitionRetuneSpeed);
+            // Vibrato is a per-note modulation, independent of retune strength.
+            const float correctedBaseF0 = PitchUtils::mixRetune(
+                shiftedF0, targetBaseF0, transitionRetuneSpeed);
+            correctedF0Buffer[i - calculationStartFrame] = correctedBaseF0 > 0.0f
+                ? PitchUtils::midiToFreq(
+                    PitchUtils::freqToMidi(correctedBaseF0) + vibratoOffsetSemitones)
+                : correctedBaseF0;
         } else {
             if (hasTransitionContext) {
                 const float sourceResidualSemitones =

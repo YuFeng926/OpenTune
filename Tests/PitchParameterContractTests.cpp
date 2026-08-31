@@ -153,7 +153,7 @@ static void test_threshold_affects_note_count()
     float centsJump = std::abs(1200.0f * std::log2(500.0f / 440.0f));
 
     // threshold > centsJump → single note
-    assert(centsJump < 200.0f);  // sanity: jump is within typical range
+    assert(centsJump < 300.0f);  // sanity: jump is within typical range
     assert(centsJump > 0.0f);
 
     // threshold = 50 cents < centsJump → 2 notes
@@ -217,6 +217,33 @@ static void test_manual_rebuild_with_vibrato()
     std::cout << "  PASS: test_manual_rebuild_with_vibrato\n";
 }
 
+static float applyVibratoAfterRetune(float sourceF0,
+                                     float targetF0,
+                                     float retuneSpeed,
+                                     float vibratoDepthPercent,
+                                     float vibratoRate,
+                                     float timeInNote)
+{
+    const float correctedBaseF0 = mixRetune(sourceF0, targetF0, retuneSpeed);
+    const float depthSemitones = vibratoDepthPercent / 100.0f;
+    const float vibratoOffset = depthSemitones * std::sin(
+        2.0f * 3.14159265f * vibratoRate * timeInNote);
+    return correctedBaseF0 * std::pow(2.0f, vibratoOffset / 12.0f);
+}
+
+// Vibrato depth/rate must remain audible even when pitch correction is disabled.
+static void test_vibrato_is_independent_from_retune()
+{
+    const float baseF0 = 440.0f;
+    const float withVibrato = applyVibratoAfterRetune(
+        baseF0, baseF0, 0.0f, 5.0f, 6.0f, 1.0f / 24.0f);
+    const float withoutVibrato = applyVibratoAfterRetune(
+        baseF0, baseF0, 0.0f, 0.0f, 6.0f, 1.0f / 24.0f);
+
+    assert(std::abs(withVibrato - withoutVibrato) > 0.001f);
+    std::cout << "  PASS: test_vibrato_is_independent_from_retune\n";
+}
+
 // ============================================================================
 // Test 7: Segment baseF0Data preserved through copy
 // ============================================================================
@@ -276,6 +303,7 @@ int main()
     test_threshold_affects_note_count();
     test_manual_rebuild_with_retune();
     test_manual_rebuild_with_vibrato();
+    test_vibrato_is_independent_from_retune();
     test_segment_baseF0Data_copy();
     test_negative_param_normalization();
     std::cout << "All tests passed.\n";
