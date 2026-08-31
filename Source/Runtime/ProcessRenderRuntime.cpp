@@ -9,6 +9,7 @@
 #include "../Render/RenderChunkPlanner.h"
 #include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
+#include "../Utils/AppPreferences.h"
 #include "../Utils/ChannelLayoutLogger.h"
 #include "../Utils/ModelPathResolver.h"
 #include "../Utils/PitchCurve.h"
@@ -349,6 +350,11 @@ ProcessRenderRuntime& ProcessRenderRuntime::getInstance()
 
 ProcessRenderRuntime::ProcessRenderRuntime()
 {
+    // 启动前从持久化配置读取 vocoder 模型权重，确保首次 lazy 加载使用用户
+    // 实际选择的权重（而非硬编码默认值）。
+    const auto prefs = AppPreferences().getState().shared.vocoderModelWeight;
+    currentVocoderModelWeight_ = prefs;
+
     // 进程寿命 control worker：模型切换/后端重置的耗时 Session 销毁、按当前
     // 配置重建与 AccelerationDetector reset/detect 全部在此串行执行；UI 线程
     // 只投递命令并立即返回。单例永不析构，线程随进程退出回收，绝不在实例
@@ -399,6 +405,8 @@ std::unique_ptr<VocoderDomain> ProcessRenderRuntime::createVocoderDomain(const V
 
     auto domain = std::make_unique<VocoderDomain>(env);
     const auto modelPath = modelPathForWeight(modelsDir, weight);
+    AppLogger::info("VocoderDomain: loading weight=" + juce::String(weight)
+        + " modelPath=" + modelPath);
     if (!domain->initialize(modelPath))
         return nullptr;
 

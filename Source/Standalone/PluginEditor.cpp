@@ -661,10 +661,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     syncSharedAppPreferences();
 
-// Apply persisted vocoder model weight bias at startup
-    const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
-    processorRef_.setVocoderModelWeight(weight);
-
     // Apply persisted F0 model type at startup
     const auto f0Type = appPreferences_.getState().shared.f0ModelType;
     if ((f0Type != F0ModelType::RMVPE || processorRef_.isInferenceReady())
