@@ -7,11 +7,10 @@ cmake_minimum_required(VERSION 3.22)
 
 # ==============================================================================
 # macOS Deployment Target (must be set before project() to take effect)
-# Locks both the binary's LC_VERSION_MIN_MACOSX and Info.plist LSMinimumSystemVersion
-# to macOS 13.3 (Ventura) — required because bundled libonnxruntime 1.23.0 was built
-# for macOS 13.3+ and its internal API references would lazy-bind fail on older systems.
+# Locks both the binary's LC_BUILD_VERSION and Info.plist LSMinimumSystemVersion
+# to macOS 14.0 (Sonoma), matching the bundled ONNX Runtime 1.24.4 dylib.
 # ==============================================================================
-set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target")
 
 # ==============================================================================
 # Project Definition
@@ -223,8 +222,10 @@ if(WIN32)
     endif()
 
 elseif(APPLE)
-    # ---- macOS: universal2 (arm64 + x86_64), ONNX Runtime v1.23.0 with CoreML ----
-    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-universal2-1.23.0")
+    # ---- macOS: Apple Silicon, ONNX Runtime v1.24.4 with CoreML ----
+    set(OPENTUNE_ONNXRUNTIME_VERSION "1.24.4")
+    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
+        "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-arm64-${OPENTUNE_ONNXRUNTIME_VERSION}")
     if(NOT DEFINED ONNXRUNTIME_ROOT OR "${ONNXRUNTIME_ROOT}" STREQUAL "")
         set(ONNXRUNTIME_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}"
             CACHE PATH "ONNX Runtime root directory" FORCE)
@@ -243,6 +244,14 @@ set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
 # Verify core header exists
 if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
     message(FATAL_ERROR "ONNX Runtime C++ API header not found at ${ONNXRUNTIME_INCLUDE_DIR}")
+endif()
+
+if(APPLE)
+    set(ONNXRUNTIME_DYLIB
+        "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.${OPENTUNE_ONNXRUNTIME_VERSION}.dylib")
+    if(NOT EXISTS "${ONNXRUNTIME_DYLIB}")
+        message(FATAL_ERROR "ONNX Runtime dylib not found at ${ONNXRUNTIME_DYLIB}")
+    endif()
 endif()
 
 if(WIN32)
@@ -314,8 +323,9 @@ if(WIN32)
     message(STATUS "DirectX Agility SDK version token: ${OPENTUNE_D3D12_SDK_VERSION}")
 
 elseif(APPLE)
-    message(STATUS "ONNX Runtime version: 1.23.0 (macOS universal2)")
+    message(STATUS "ONNX Runtime version: ${OPENTUNE_ONNXRUNTIME_VERSION} (macOS arm64)")
     message(STATUS "ONNX Runtime root: ${ONNXRUNTIME_ROOT}")
+    message(STATUS "ONNX Runtime dylib: ${ONNXRUNTIME_DYLIB}")
 endif()
 
 # ==============================================================================
@@ -901,7 +911,7 @@ if(WIN32)
     target_link_libraries(OpenTune PRIVATE "${OPENTUNE_ORT_IMPORT_LIB}")
     add_dependencies(OpenTune OpenTuneOnnxRuntimeImportLib)
 elseif(APPLE)
-    target_link_libraries(OpenTune PRIVATE "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.dylib")
+    target_link_libraries(OpenTune PRIVATE "${ONNXRUNTIME_DYLIB}")
     target_link_libraries(OpenTune PRIVATE "-framework Accelerate")
 endif()
 
@@ -973,10 +983,15 @@ elseif(APPLE)
     # NSHumanReadableCopyright / NSMicrophoneUsageDescription) is injected via
     # juce_add_plugin's PLIST_TO_MERGE above — no second pass needed here.
 
-    # Set rpath so the app bundle can find the embedded dylib
+    # Build distributable bundles with only bundle-relative runtime search paths.
+    # BUILD_WITH_INSTALL_RPATH prevents CMake from embedding ONNXRUNTIME_LIB_DIR.
     set_target_properties(OpenTune_Standalone PROPERTIES
-        BUILD_RPATH "@executable_path/../Frameworks"
+        BUILD_WITH_INSTALL_RPATH TRUE
         INSTALL_RPATH "@executable_path/../Frameworks"
+    )
+    set_target_properties(OpenTune_VST3 PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "@loader_path/../Frameworks"
     )
 
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html" PROPERTIES
@@ -1107,7 +1122,7 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Frameworks"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.1.23.0.dylib"
+            "${ONNXRUNTIME_DYLIB}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Frameworks/"
         COMMENT "Copying ONNX Runtime dylib to app bundle Frameworks..."
     )
@@ -1243,7 +1258,7 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.1.23.0.dylib"
+                "${ONNXRUNTIME_DYLIB}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks/"
             COMMENT "Copying ONNX Runtime dylib to VST3 bundle Frameworks..."
         )

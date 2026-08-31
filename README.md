@@ -129,12 +129,13 @@ OpenTune/
 |------|---------|-------|
 | **系统** | Windows 10 1903+ | macOS 14.0+ (Sonoma) |
 | **架构** | x64 | arm64 (Apple Silicon) |
-| **编译器** | Visual Studio 2022 (MSVC 17+) | Xcode 14+ / Apple Clang |
+| **编译器** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
 | **C++ 标准** | C++17 | C++17 |
-| **构建系统** | MSBuild (VS Generator) / Ninja | Xcode |
+| **构建系统** | MSBuild (VS Generator) / Ninja | Ninja |
 
 > **注意：** Windows 构建支持 Visual Studio Generator + MSBuild 或 Ninja 两种方式。推荐使用 Visual Studio Generator 进行完整开发，Ninja 适合快速构建。
+> macOS Release 与 DMG 打包使用 `macos-ara-ninja` 预设，因此需要安装 Ninja。
 
 ### 依赖准备
 
@@ -171,7 +172,7 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-#### 4. ONNX Runtime (v1.23.0)
+#### 4. ONNX Runtime（Windows v1.23.0 / macOS v1.24.4）
 
 本项目需要 **两个** ONNX Runtime 包（Windows）：CPU 版提供头文件，DML 版提供原始 `onnxruntime.dll`（内置 DirectML 支持）。构建系统生成专用导入库，并把运行时 DLL 输出为 `OpenTuneOnnxRuntime_1_23_0.dll`。
 
@@ -205,23 +206,23 @@ ThirdParty/
 - **CPU 包** (`onnxruntime-win-x64-1.23.0`)：提供 C++ API 头文件（`onnxruntime_cxx_api.h`）。
 - **DML 包** (`onnxruntime-dml-1.23.0`)：提供编译了 DirectML Execution Provider 的原始 `onnxruntime.dll` 和 `dml_provider_factory.h`。CMake 根据项目内 `.def` 生成 `OpenTuneOnnxRuntime_1_23_0.lib`，并把源 DLL 改名部署为 `OpenTuneOnnxRuntime_1_23_0.dll`。
 
-**macOS (Apple Silicon + Intel)**：
+**macOS (Apple Silicon, arm64)**：
 
-macOS 只需一个 universal2 包（支持 arm64 + x86_64），CoreML EP 已内置：
+macOS 使用一个 arm64 v1.24.4 包，CoreML EP 已内置。该运行库最低支持 macOS 14.0：
 
 ```bash
 cd ThirdParty
-curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-osx-universal2-1.23.0.tgz | tar xz
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz | tar xz
 cd ..
 ```
 
 解压后结构：
 ```
-ThirdParty/onnxruntime-osx-universal2-1.23.0/
+ThirdParty/onnxruntime-osx-arm64-1.24.4/
 ├── include/
 │   └── onnxruntime_cxx_api.h
 └── lib/
-    └── libonnxruntime.1.23.0.dylib
+    └── libonnxruntime.1.24.4.dylib
 ```
 
 #### 5. DirectML & DirectX Agility SDK（仅 Windows）

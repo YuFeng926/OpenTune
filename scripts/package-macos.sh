@@ -17,7 +17,7 @@ STAGING="${ROOT_DIR}/dist/staging"
 DMG_DIR="${ROOT_DIR}/dist"
 APP_NAME="OpenTune"
 VERSION=$(sed -n 's/.*project(OpenTune VERSION \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "${ROOT_DIR}/CMakeLists.txt")
-DMG_NAME="${APP_NAME}-${VERSION}-macOS-universal2"
+DMG_NAME="${APP_NAME}-${VERSION}-macOS-arm64"
 SIGN_IDENTITY="-"
 
 # ── 参数解析 ──────────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ for arg in "$@"; do
 done
 
 # ── 工具检查 ──────────────────────────────────────────────────────────────────
-for cmd in cmake ninja hdiutil codesign xattr; do
+for cmd in cmake ninja hdiutil codesign xattr otool lipo; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "❌ 缺少工具: $cmd"
         exit 1
@@ -76,6 +76,80 @@ fi
 echo "▶ 产物验证"
 echo "  Standalone.app: $(du -sh "${APP_BUNDLE}" | cut -f1)"
 echo "  VST3.vst3:      $(du -sh "${VST3_BUNDLE}" | cut -f1)"
+
+validate_bundle_linkage() {
+    local bundle="$1"
+    local expected_rpath="$2"
+    local label="$3"
+    local binary="${bundle}/Contents/MacOS/${APP_NAME}"
+    local rpaths
+    local ort_dependency
+    local ort_filename
+    local ort_library
+    local binary_archs
+    local ort_archs
+
+    if [ ! -f "${binary}" ]; then
+        echo "❌ ${label} 二进制不存在: ${binary}"
+        exit 1
+    fi
+
+    rpaths="$(otool -l "${binary}" | awk '
+        $1 == "cmd" && $2 == "LC_RPATH" {
+            getline
+            getline
+            print $2
+        }
+    ')"
+
+    if ! printf '%s\n' "${rpaths}" | awk -v expected="${expected_rpath}" '
+        $0 == expected { found = 1 }
+        END { exit found ? 0 : 1 }
+    '; then
+        echo "❌ ${label} 缺少 LC_RPATH: ${expected_rpath}"
+        printf '  当前 RPATH:\n%s\n' "${rpaths}"
+        exit 1
+    fi
+
+    if printf '%s\n' "${rpaths}" | awk '
+        substr($0, 1, 1) == "/" { found = 1 }
+        END { exit found ? 0 : 1 }
+    '; then
+        echo "❌ ${label} 包含构建机绝对 LC_RPATH"
+        printf '  当前 RPATH:\n%s\n' "${rpaths}"
+        exit 1
+    fi
+
+    ort_dependency="$(otool -L "${binary}" | awk '
+        $1 ~ /^@rpath\/libonnxruntime\.[0-9].*\.dylib$/ {
+            print $1
+            exit
+        }
+    ')"
+    if [ -z "${ort_dependency}" ]; then
+        echo "❌ ${label} 未通过 @rpath 链接版本化 ONNX Runtime"
+        exit 1
+    fi
+
+    ort_filename="${ort_dependency#@rpath/}"
+    ort_library="${bundle}/Contents/Frameworks/${ort_filename}"
+    if [ ! -f "${ort_library}" ]; then
+        echo "❌ ${label} 缺少嵌入式运行库: ${ort_library}"
+        exit 1
+    fi
+
+    binary_archs="$(lipo -archs "${binary}")"
+    ort_archs="$(lipo -archs "${ort_library}")"
+    if [ "${binary_archs}" != "arm64" ] || [ "${ort_archs}" != "arm64" ]; then
+        echo "❌ ${label} 架构不一致: binary=${binary_archs}, onnxruntime=${ort_archs}"
+        exit 1
+    fi
+
+    echo "  ✓ ${label}: ${expected_rpath}, ${ort_filename}, arm64"
+}
+
+validate_bundle_linkage "${APP_BUNDLE}" "@executable_path/../Frameworks" "Standalone"
+validate_bundle_linkage "${VST3_BUNDLE}" "@loader_path/../Frameworks" "VST3"
 
 # ── 清理 staging ─────────────────────────────────────────────────────────────
 echo "▶ 准备安装包 staging"
@@ -292,6 +366,10 @@ codesign --force --deep --sign - "${STAGING}/${APP_NAME}.app" 2>/dev/null
 echo "  ✓ ${APP_NAME}.app"
 codesign --force --deep --sign - "${STAGING}/${APP_NAME}.vst3" 2>/dev/null
 echo "  ✓ ${APP_NAME}.vst3"
+codesign --verify --deep --strict --verbose=2 "${STAGING}/${APP_NAME}.app"
+codesign --verify --deep --strict --verbose=2 "${STAGING}/${APP_NAME}.vst3"
+validate_bundle_linkage "${STAGING}/${APP_NAME}.app" "@executable_path/../Frameworks" "Staged Standalone"
+validate_bundle_linkage "${STAGING}/${APP_NAME}.vst3" "@loader_path/../Frameworks" "Staged VST3"
 
 # ── 统计 staging 大小 ─────────────────────────────────────────────────────────
 STAGING_SIZE=$(du -sh "${STAGING}" | cut -f1)

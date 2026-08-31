@@ -13,7 +13,8 @@
       "binaryDir": "${sourceDir}/build-ara-ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_OSX_ARCHITECTURES": "arm64"
       }
     },
     {

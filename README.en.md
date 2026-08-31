@@ -127,12 +127,13 @@ OpenTune/
 |-------------|---------|-------|
 | **System** | Windows 10 1903+ | macOS 14.0+ (Sonoma) |
 | **Architecture** | x64 | arm64 (Apple Silicon) |
-| **Compiler** | Visual Studio 2022 (MSVC 17+) | Xcode 14+ / Apple Clang |
+| **Compiler** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
 | **C++ Standard** | C++17 | C++17 |
-| **Build System** | MSBuild (VS Generator) / Ninja | Xcode |
+| **Build System** | MSBuild (VS Generator) / Ninja | Ninja |
 
 > **Note:** Windows builds support both Visual Studio Generator + MSBuild and Ninja. Visual Studio Generator is recommended for full development, while Ninja is suitable for quick builds.
+> macOS Release and DMG packaging use the `macos-ara-ninja` preset, so Ninja must be installed.
 
 ### Dependency Preparation
 
@@ -169,7 +170,7 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-#### 4. ONNX Runtime (v1.23.0)
+#### 4. ONNX Runtime (Windows v1.23.0 / macOS v1.24.4)
 
 This project requires **two** ONNX Runtime packages (Windows): the CPU version provides headers, and the DML version provides the original `onnxruntime.dll` (with built-in DirectML support). The build system generates a dedicated import library and outputs the runtime DLL as `OpenTuneOnnxRuntime_1_23_0.dll`.
 
@@ -203,23 +204,23 @@ ThirdParty/
 - **CPU package** (`onnxruntime-win-x64-1.23.0`): Provides C++ API headers (`onnxruntime_cxx_api.h`).
 - **DML package** (`onnxruntime-dml-1.23.0`): Provides the original `onnxruntime.dll` with compiled DirectML Execution Provider and `dml_provider_factory.h`. CMake generates `OpenTuneOnnxRuntime_1_23_0.lib` based on the project's `.def` file and renames the source DLL to `OpenTuneOnnxRuntime_1_23_0.dll` for deployment.
 
-**macOS (Apple Silicon + Intel)**:
+**macOS (Apple Silicon, arm64)**:
 
-macOS only requires one universal2 package (supports arm64 + x86_64), with CoreML EP built-in:
+macOS uses one arm64 v1.24.4 package with the CoreML EP built in. This runtime requires macOS 14.0 or later:
 
 ```bash
 cd ThirdParty
-curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-osx-universal2-1.23.0.tgz | tar xz
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz | tar xz
 cd ..
 ```
 
 Extracted structure:
 ```
-ThirdParty/onnxruntime-osx-universal2-1.23.0/
+ThirdParty/onnxruntime-osx-arm64-1.24.4/
 ├── include/
 │   └── onnxruntime_cxx_api.h
 └── lib/
-    └── libonnxruntime.1.23.0.dylib
+    └── libonnxruntime.1.24.4.dylib
 ```
 
 #### 5. DirectML & DirectX Agility SDK (Windows only)
