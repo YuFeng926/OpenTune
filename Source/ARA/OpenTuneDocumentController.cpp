@@ -2287,6 +2287,31 @@ void OpenTuneDocumentController::requestFullModificationRender(ContentKey key)
     requestModificationRender(key, 0.0, totalSeconds);
 }
 
+void OpenTuneDocumentController::invalidateAllModificationCaches()
+{
+    if (contentRenderService_ == nullptr)
+        return;
+
+    for (const auto& mod : audioModifications_)
+    {
+        if (!mod.isRenderable())
+            continue;
+        const auto key = mod.contentKey();
+        if (!key.isValid())
+            continue;
+        if (auto cache = contentRenderService_->getRenderCache(key))
+            cache->clear();
+    }
+    contentRenderService_->getTimeStretchCache().clear();
+
+    for (const auto& mod : audioModifications_)
+    {
+        if (!mod.isRenderable())
+            continue;
+        requestFullModificationRender(mod.contentKey());
+    }
+}
+
 bool OpenTuneDocumentController::removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion)
 {
     const auto oldSize = playbackRegions_.size();

@@ -71,6 +71,7 @@ public:
     void refreshModificationCRSMetadata(ContentKey key);
     void requestModificationRender(ContentKey key, double startSeconds, double endSeconds);
     void requestFullModificationRender(ContentKey key);
+    void invalidateAllModificationCaches();
     // ============================================================
     // 编辑器只读内容访问器（通过 ContentKey 路由到 AudioModification + CRS）
     // ARA 模式下编辑器不经过 content owner，直接读 AudioModification.content

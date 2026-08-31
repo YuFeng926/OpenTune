@@ -1188,6 +1188,10 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& wei
             }
             processor->contentRenderService_->getTimeStretchCache().clear();
         }
+#if JucePlugin_Enable_ARA
+        if (auto* dc = processor->getDocumentController())
+            dc->invalidateAllModificationCaches();
+#endif
         if (processor->contentRenderService_)
             processor->contentRenderService_->resumeRenderWorker();
     });
@@ -1204,6 +1208,10 @@ void OpenTuneAudioProcessor::invalidateAllContentCaches()
         }
         contentRenderService_->getTimeStretchCache().clear();
     }
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        dc->invalidateAllModificationCaches();
+#endif
 }
 
 bool OpenTuneAudioProcessor::setF0ModelType(F0ModelType type)
