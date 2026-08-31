@@ -2379,6 +2379,35 @@ void OpenTuneDocumentController::observeHostPlaybackState(bool isPlaying) noexce
                                                   std::memory_order_relaxed);
 }
 
+void OpenTuneDocumentController::observeHostPlaybackPosition(
+    const juce::Optional<juce::AudioPlayHead::PositionInfo>& positionInfo,
+    double blockDurationSeconds) noexcept
+{
+    // Update the CAS-based play/stop observation first (preserves existing logic).
+    if (positionInfo.hasValue())
+        observeHostPlaybackState(positionInfo->getIsPlaying());
+
+    // Update document-shared canonical transport truth from any role's processBlock.
+    const uint64_t epoch = sharedPlayHeadState_.update(positionInfo);
+
+    // Publish projection anchor with CAS: multi-writer safe (multiple ARA roles
+    // may call this from their processBlock). On contention, skip — canonical
+    // atomics already hold the latest truth, so UI falls back to timeInSeconds.
+    // Only publish when blockDurationSeconds > 0 (real audio data); zero-sample
+    // blocks still update canonical state but must not publish a zero-horizon projection.
+    if (blockDurationSeconds > 0.0 && positionInfo.hasValue())
+    {
+        if (const auto timeSec = positionInfo->getTimeInSeconds())
+        {
+            const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
+            const double horizon = *timeSec + blockDurationSeconds;
+            if (sharedPlayHeadState_.timeInSeconds.load(std::memory_order_relaxed) == *timeSec)
+                sharedPlayHeadState_.presentationProjection.tryPublish(
+                    *timeSec, nowClock, horizon, epoch);
+        }
+    }
+}
+
 void OpenTuneDocumentController::markPlaybackRequest(bool shouldPlay) noexcept
 {
     auto state = playbackCommandState_.load(std::memory_order_acquire);

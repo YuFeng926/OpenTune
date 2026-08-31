@@ -16,6 +16,7 @@
 #include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
 #include "../Content/ContentKey.h"
+#include "../Utils/PlayHeadState.h"
 #include "PlaybackRegion.h"
 
 namespace OpenTune {
@@ -162,6 +163,12 @@ public:
     bool requestStopPlayback();
     bool requestTogglePlayback(bool fallbackObservedPlaying);
     void observeHostPlaybackState(bool isPlaying) noexcept;
+    // Publish host PositionInfo to document-shared PlayHeadState. Called from
+    // processBlock of any ARA role that receives a host PositionInfo. The CAS
+    // projection handles multi-writer contention; canonical atomics always win.
+    void observeHostPlaybackPosition(
+        const juce::Optional<juce::AudioPlayHead::PositionInfo>& positionInfo,
+        double blockDurationSeconds) noexcept;
     // ARA2 official one-way HostPlaybackController requests for loop control.
     // Per ARA2 spec, host may ignore/delay/quantize; loop truth is observed
     // via companion PositionInfo in processBlock, never written here.
@@ -215,6 +222,11 @@ private:
     // 服务租约 token：DC 析构时置 false，后台 F0 work 持有 shared_ptr 可安全检查
     std::shared_ptr<std::atomic<bool>> asyncLeaseToken_;
 
+    // Document-level shared PlayHeadState: all ARA roles within this document
+    // share one canonical transport truth. Any processor's processBlock writes;
+    // UI (PluginEditor) reads via getSharedPlayHeadState().
+    PlayHeadState sharedPlayHeadState_;
+
     // Stage1 → Stage2 异步完成回调 gate，跟随 DC 析构关闭。
     std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate_;
     void handleStage1ChunkSettled(ContentKey key);
@@ -237,6 +249,10 @@ private:
     const AudioModification* findAudioModificationByContentKey(const ContentKey& key) const;
 
 public:
+    /** Shared PlayHeadState for all ARA roles bound to this document. Any
+     *  processor whose processBlock is called writes here; UI binds to this. */
+    const PlayHeadState& getSharedPlayHeadState() const noexcept { return sharedPlayHeadState_; }
+
     // ARA mutation API — Processor delegates ARA writes here
     bool applyNotesToModification(const ContentKey& key, std::vector<Note> notes);
     // Volume envelope 编辑不触发神经渲染。

@@ -1407,6 +1407,16 @@ OpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() cons
     return juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(controller);
 }
 
+const PlayHeadState& OpenTuneAudioProcessor::getPlayHeadState() const noexcept
+{
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+        if (auto* dc = getDocumentController())
+            return dc->getSharedPlayHeadState();
+#endif
+    return playHeadState_;
+}
+
 void OpenTuneAudioProcessor::didBindToARA() noexcept
 {
     juce::AudioProcessorARAExtension::didBindToARA();
@@ -1530,19 +1540,33 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             hostPosOpt = hostPlayHead->getPosition();
 
     // 1) Update processor-owned canonical transport truth first (no-op if nullopt).
-    playHeadState_.update(hostPosOpt);
+    //    In ARA mode the shared DC-owned PlayHeadState is the single canonical
+    //    truth; processor-local playHeadState_ is unused and must not be written.
+#if JucePlugin_Enable_ARA
+    if (!isBoundToARA())
+#endif
+        playHeadState_.update(hostPosOpt);
 
 #if JucePlugin_Enable_ARA
     // REAPER may split ARA roles across processor instances. Publish the host's
-    // playing flag to the shared document before zero-sample transport blocks return.
+    // full PositionInfo to the shared document-level PlayHeadState before
+    // zero-sample transport blocks return. This ensures all ARA roles (including
+    // ones that never receive processBlock) see the same transport truth.
     if (hostPosOpt.hasValue() && isBoundToARA())
         if (auto* dc = getDocumentController())
-            dc->observeHostPlaybackState(hostPosOpt->getIsPlaying());
+            dc->observeHostPlaybackPosition(hostPosOpt,
+                (numSamples > 0)
+                    ? static_cast<double>(numSamples) / currentSampleRate_.load(std::memory_order_relaxed)
+                    : 0.0);
 #endif
 
     // 2) Publish presentation projection anchor (before any early return).
     //    VST3/ARA: only when the host supplied timeInSeconds in this block.
     //    Standalone: publish later, after reading currentPosSeconds/blockDuration.
+    //    In ARA mode the DC publishes its own projection; skip processor-local.
+#if JucePlugin_Enable_ARA
+    if (!isBoundToARA())
+#endif
     {
         const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
         const double blockDur = (numSamples > 0)

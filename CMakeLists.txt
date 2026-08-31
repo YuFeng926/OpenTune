@@ -641,6 +641,7 @@ target_sources(OpenTune
         Source/Utils/AppPreferences.h
         Source/Utils/PianoRollVisualPreferences.h
         Source/Utils/PitchUtils.h
+        Source/Utils/PlayHeadState.h
         Source/Utils/DetectedKey.h
         Source/Utils/Note.h
         Source/Utils/NoteEqSettings.h

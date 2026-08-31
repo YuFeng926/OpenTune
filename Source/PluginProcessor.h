@@ -44,6 +44,7 @@
 #include "Utils/PianoKeyAudition.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlacementClipboard.h"
+#include "Utils/PlayHeadState.h"
 #include "Utils/TrackConstants.h"
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/PlaybackAudioReader.h"
@@ -90,186 +91,7 @@ struct DeleteOutcome {
     ContentKey contentKey;
 };
 
-// ============================================================================
-// PlayHeadPresentationProjection — single-writer seqlock projection anchor
-// ============================================================================
-//
-// Audio thread is the sole regular writer. UI thread reads snapshots.
-// sequence=0 means no anchor published yet; odd means writer inside; even means valid.
-//
-// projectAt(nowClockSeconds) = min(horizon, anchorPosition + max(0, nowClock - anchorClock))
-// The horizon is the end of the committed audio block; UI never paints beyond it.
-//
-// All anchor fields are std::atomic to avoid UB from concurrent reads under seqlock.
-// Field accesses use memory_order_relaxed; ordering between field stores/loads
-// and the seqlock sequence is provided by the two acquire loads.
-struct PlayHeadPresentationProjection
-{
-    // seqlock sequence (even=valid snapshot, odd=writer active, 0=never published)
-    std::atomic<uint64_t> sequence{0};
-
-    std::atomic<double>   anchorPositionSeconds{0.0};
-    std::atomic<double>   anchorClockSeconds{0.0};
-    std::atomic<double>   horizonPositionSeconds{0.0};
-    std::atomic<uint64_t> anchorEpoch{0};
-
-    struct Snapshot
-    {
-        double anchorPosition = 0.0;
-        double anchorClock    = 0.0;
-        double horizon        = 0.0;
-        uint64_t epoch        = 0;
-        bool     valid        = false;
-
-        double projectAt(double nowClockSeconds) const
-        {
-            if (!valid) return 0.0;
-            const double elapsed = nowClockSeconds - anchorClock;
-            if (elapsed <= 0.0) return anchorPosition;
-            const double projected = anchorPosition + elapsed;
-            return (projected > horizon) ? horizon : projected;
-        }
-    };
-
-    // Seqlock reader with two acquire sequence loads. sequence==0 (never published)
-    // returns invalid Snapshot immediately; odd sequence (writer inside) retries.
-    Snapshot load() const
-    {
-        for (;;)
-        {
-            const uint64_t seq0 = sequence.load(std::memory_order_acquire);
-            if (seq0 == 0)
-                return {};
-            if (seq0 & 1)
-                continue;
-
-            Snapshot snap;
-            snap.anchorPosition = anchorPositionSeconds.load(std::memory_order_relaxed);
-            snap.anchorClock    = anchorClockSeconds.load(std::memory_order_relaxed);
-            snap.horizon        = horizonPositionSeconds.load(std::memory_order_relaxed);
-            snap.epoch          = anchorEpoch.load(std::memory_order_relaxed);
-
-            const uint64_t seq1 = sequence.load(std::memory_order_acquire);
-            if (seq0 == seq1)
-            {
-                snap.valid = true;
-                return snap;
-            }
-        }
-    }
-
-    // Single-writer publish: fetch_add acq_rel enters odd phase; fetch_add release
-    // commits even phase and makes field stores visible to readers.
-    void publish(double positionSec, double nowClockSec, double horizonSec, uint64_t epoch)
-    {
-        sequence.fetch_add(1, std::memory_order_acq_rel);  // enter write (odd)
-        anchorPositionSeconds.store(positionSec,  std::memory_order_relaxed);
-        anchorClockSeconds.store(nowClockSec,      std::memory_order_relaxed);
-        horizonPositionSeconds.store(horizonSec,    std::memory_order_relaxed);
-        anchorEpoch.store(epoch,                    std::memory_order_relaxed);
-        sequence.fetch_add(1, std::memory_order_release);  // commit (even)
-    }
-};
-
-// ============================================================================
-// PlayHeadState — processor-owned canonical transport truth
-// ============================================================================
-//
-// Each OpenTuneAudioProcessor owns exactly one PlayHeadState. It is updated
-// only from the processor's own processBlock() by consuming the host
-// AudioPlayHead::PositionInfo exactly once per block. UI binds to a const,
-// non-owning reference and reads atomics directly. ARA transport requests
-// are single-direction HostPlaybackController requests and never write back
-// here. DocumentController does NOT own transport state.
-//
-// presentationEpoch is incremented on every discrete control change
-// (play/stop/seek/reset); the audio thread publishes projection anchors
-// tagged with the current epoch. UI projection is only valid when
-// anchorEpoch == presentationEpoch; otherwise fall back to canonical time.
-//
-// isPlaying is the release/acquire publication point between writer
-// (audio/control thread) and reader (UI thread). getPresentedPositionAt
-// acquires isPlaying; when it sees false, timeInSeconds is guaranteed
-// visible. When it sees true, the projection path handles ordering via
-// the presentation epoch.
-//
-// update() contract (per docs/plans/2026-07-15-ara-playhead-official-state-hard-cut.md §3):
-//  1. nullopt: no-op. Do not clear fields or fake stopped.
-//  2. valid PositionInfo but no timeInSeconds: keep the last valid time; still
-//     write isPlaying/isLooping and loop points when present.
-//  3. valid PositionInfo with timeInSeconds: write time before isPlaying, then
-//     write isLooping and loop points when present.
-//
-// reset() contract (only prepareToPlay/releaseResources call it):
-//  - clear isPlaying/isLooping; keep last time/loop range; bump presentationEpoch.
-//
-struct PlayHeadState
-{
-    std::atomic<bool>    isPlaying { false };
-    std::atomic<bool>    isLooping { false };
-    std::atomic<double>  timeInSeconds { 0.0 };
-    std::atomic<double>  loopPpqStart { 0.0 };
-    std::atomic<double>  loopPpqEnd { 0.0 };
-    std::atomic<uint64_t> presentationEpoch { 0 };
-
-    PlayHeadPresentationProjection presentationProjection;
-
-    // ---- presented-position API (UI entry point) ----
-
-    double getPresentedPositionAt(double nowClockSeconds) const
-    {
-        if (!isPlaying.load(std::memory_order_acquire))
-            return timeInSeconds.load(std::memory_order_relaxed);
-
-        const auto snap = presentationProjection.load();
-        if (!snap.valid || snap.epoch != presentationEpoch.load(std::memory_order_acquire))
-            return timeInSeconds.load(std::memory_order_relaxed);
-
-        return snap.projectAt(nowClockSeconds);
-    }
-
-    double getPresentedPositionSeconds() const
-    {
-        return getPresentedPositionAt(juce::Time::getMillisecondCounterHiRes() * 0.001);
-    }
-
-    // ---- canonical-state update (audio thread only) ----
-
-    void update(const juce::Optional<juce::AudioPlayHead::PositionInfo>& info)
-    {
-        if (!info.hasValue())
-            return;
-
-        const auto& positionInfo = *info;
-
-        // Write time-in-seconds before isPlaying so a reader that acquires
-        // isPlaying==false sees this block's canonical time.
-        if (const auto timeSeconds = positionInfo.getTimeInSeconds())
-            timeInSeconds.store(*timeSeconds, std::memory_order_relaxed);
-
-        if (const auto loopPoints = positionInfo.getLoopPoints())
-        {
-            loopPpqStart.store(loopPoints->ppqStart, std::memory_order_relaxed);
-            loopPpqEnd.store(loopPoints->ppqEnd, std::memory_order_relaxed);
-        }
-
-        isLooping.store(positionInfo.getIsLooping(), std::memory_order_relaxed);
-
-        // isPlaying release publishes timeInSeconds/loop written above.
-        // Pairs with getPresentedPositionAt's isPlaying acquire: when
-        // the UI sees false, the canonical pause position is visible.
-        isPlaying.store(positionInfo.getIsPlaying(), std::memory_order_release);
-    }
-
-    // reset() is only called from prepareToPlay/releaseResources on the audio thread.
-    // Bumps presentationEpoch so that any stale projection anchor is invalidated.
-    void reset()
-    {
-        isPlaying.store(false, std::memory_order_release);
-        isLooping.store(false, std::memory_order_relaxed);
-        presentationEpoch.fetch_add(1, std::memory_order_release);
-    }
-};
+// PlayHeadPresentationProjection and PlayHeadState are defined in Utils/PlayHeadState.h
 
 #if JucePlugin_Enable_ARA
 class OpenTuneDocumentController;
@@ -927,17 +749,21 @@ public:
     void pauseAtPosition(double targetSeconds);
     void setPosition(double seconds);
     void setLoopEnabled(bool enabled);
-    bool isPlaying() const noexcept { return playHeadState_.isPlaying.load(std::memory_order_relaxed); }
+    bool isPlaying() const noexcept { return getPlayHeadState().isPlaying.load(std::memory_order_relaxed); }
 
     /// 从 OutputSpectrumAnalyzer 复制最新128个对数频段：spectrum = 主频谱线，peaks = 峰值线（UI 线程调用）。
     void copyOutputSpectrum(std::array<float, 128>& spectrum,
                             std::array<float, 128>& peaks) const noexcept;
-    bool isLoopEnabled() const noexcept { return playHeadState_.isLooping.load(std::memory_order_relaxed); }
-    double getPosition() const { return playHeadState_.getPresentedPositionSeconds(); }
+    bool isLoopEnabled() const noexcept { return getPlayHeadState().isLooping.load(std::memory_order_relaxed); }
+    double getPosition() const { return getPlayHeadState().getPresentedPositionSeconds(); }
     HostTransportSnapshot getHostTransportSnapshot() const;
 
-    /** Canonical processor-owned transport truth; UI binds a const non-owning reference. */
-    const PlayHeadState& getPlayHeadState() const noexcept { return playHeadState_; }
+    /** Canonical transport truth; UI binds a const non-owning reference.
+     *  In ARA mode, returns the document-level shared state so all roles
+     *  (including ones that never receive processBlock) see the same truth.
+     *  In Standalone/non-ARA VST3, returns this processor's local state.
+     *  Defined in PluginProcessor.cpp (requires complete OpenTuneDocumentController type). */
+    const PlayHeadState& getPlayHeadState() const noexcept;
 
     double getPlayStartPosition() const { return playStartPosition_.load(); }
 
