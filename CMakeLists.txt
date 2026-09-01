@@ -6,12 +6,29 @@
 cmake_minimum_required(VERSION 3.22)
 
 # ==============================================================================
-# macOS Deployment Target (must be set before project() to take effect)
-# Actual value is determined by architecture in the APPLE section below:
-#   x86_64 → 13.3 (matches ORT 1.23.0 universal2)
-#   arm64  → 14.0 (matches ORT 1.24.4 arm64)
+# macOS architecture and deployment target must be set before project() so CMake
+# writes the same minimum version into the Mach-O load commands and Info.plist.
+#   x86_64 -> ORT 1.23.0 universal2, macOS 13.3+
+#   arm64  -> ORT 1.24.4 arm64, macOS 14.0+
 # ==============================================================================
-set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target")
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "")
+        if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
+            set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "macOS architectures" FORCE)
+        else()
+            set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "macOS architectures" FORCE)
+        endif()
+    endif()
+
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target" FORCE)
+    elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target" FORCE)
+    else()
+        message(FATAL_ERROR
+            "Unsupported macOS architecture '${CMAKE_OSX_ARCHITECTURES}'. Use x86_64 or arm64.")
+    endif()
+endif()
 
 # ==============================================================================
 # Project Definition
@@ -228,10 +245,8 @@ elseif(APPLE)
     # arm64  → ORT 1.24.4 arm64     (deployment target 14.0)
     if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
         set(OPENTUNE_ONNXRUNTIME_VERSION "1.23.0")
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target" FORCE)
     else()
         set(OPENTUNE_ONNXRUNTIME_VERSION "1.24.4")
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target" FORCE)
     endif()
 
     if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")

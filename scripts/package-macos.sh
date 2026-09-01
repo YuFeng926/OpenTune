@@ -23,6 +23,7 @@ SIGN_IDENTITY="-"
 SKIP_BUILD=false
 CLEAN=false
 ARCH=""
+PREV_ARG=""
 for arg in "$@"; do
     case "$arg" in
         --skip-build) SKIP_BUILD=true ;;
@@ -60,8 +61,10 @@ for arg in "$@"; do
     PREV_ARG="$arg"
 done
 
-# 如果 --arch 是单独的 flag (no = form)，上面已处理；这里再检查旧模式
-# 遍历参数时 PREV_ARG 可能已设，但 for 循环已结束，上面 case 内已处理了 = 形式
+if [ "${PREV_ARG}" = "--arch" ]; then
+    echo "❌ --arch 缺少值（仅支持 intel|silicon）"
+    exit 1
+fi
 
 # ── 自动检测架构 ──────────────────────────────────────────────────────────────
 if [ -z "${ARCH}" ]; then
@@ -86,7 +89,7 @@ case "${ARCH}" in
         OSX_ARCH="arm64"
         PRESET="macos-silicon-ara-ninja"
         BUILD_DIR="${ROOT_DIR}/build-silicon-ninja"
-        DMG_ARCH_LABEL="Universal"
+        DMG_ARCH_LABEL="Apple-Silicon"
         ;;
     *)
         echo "❌ 无效架构: ${ARCH}（仅支持 intel|silicon）"
@@ -200,7 +203,8 @@ validate_bundle_linkage() {
 
     binary_archs="$(lipo -archs "${binary}")"
     ort_archs="$(lipo -archs "${ort_library}")"
-    if [ "${binary_archs}" != "${OSX_ARCH}" ] || [ "${ort_archs}" != "${OSX_ARCH}" ]; then
+    if ! printf '%s\n' "${binary_archs}" | tr ' ' '\n' | grep -Fxq "${OSX_ARCH}" \
+        || ! printf '%s\n' "${ort_archs}" | tr ' ' '\n' | grep -Fxq "${OSX_ARCH}"; then
         echo "❌ ${label} 架构不一致: binary=${binary_archs}, onnxruntime=${ort_archs}, expected=${OSX_ARCH}"
         exit 1
     fi

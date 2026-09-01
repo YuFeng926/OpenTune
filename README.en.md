@@ -86,7 +86,7 @@ Extract the ZIP package and run `OpenTune.exe` directly. Keep the `models/`, `D3
 Copy the `OpenTune.vst3` folder to `C:\Program Files\Common Files\VST3\` to load the plugin in your DAW.
 
 ### macOS
-1. Download `OpenTune-<version>-macOS-arm64.dmg` and double-click to mount.
+1. Download the matching `OpenTune-<version>-macOS-Intel.dmg` or `OpenTune-<version>-macOS-Apple-Silicon.dmg` for your Mac architecture and double-click to mount.
 2. Double-click **install.command** in the mounted disk window (if blocked by Gatekeeper on first run, go to "System Settings → Privacy & Security" and click *Open Anyway*; or right-click the script in the DMG window → *Open*).
 3. The terminal will automatically execute:
     - Copy `OpenTune.app` to `/Applications/` and remove the quarantine attribute;
@@ -170,7 +170,7 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-#### 4. ONNX Runtime (Windows v1.24.4 / macOS v1.24.4)
+#### 4. ONNX Runtime (Windows v1.24.4 / macOS Intel v1.23.0 / macOS Apple Silicon v1.24.4)
 
 This project requires **two** ONNX Runtime packages (Windows): the CPU version provides headers, and the DML version provides the original `onnxruntime.dll` (with built-in DirectML support). The build system generates a dedicated import library and outputs the runtime DLL as `OpenTuneOnnxRuntime_1_24_4.dll`.
 

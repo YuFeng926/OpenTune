@@ -88,7 +88,7 @@ AI 的存在是为了帮助人，以人为本，带来更好的创作体验。
 将 `OpenTune.vst3` 文件夹复制到 `C:\Program Files\Common Files\VST3\` 即可在 DAW 中加载插件。
 
 ### macOS
-1. 下载 `OpenTune-<version>-macOS-arm64.dmg`，双击挂载。
+1. 根据 Mac 架构下载对应的 `OpenTune-<version>-macOS-Intel.dmg` 或 `OpenTune-<version>-macOS-Apple-Silicon.dmg`，双击挂载。
 2. 在挂载出的磁盘窗口中双击 **install.command**（如首次执行被 Gatekeeper 拦截，请到「系统设置 → 隐私与安全性」点击 *仍要打开*；或在 DMG 窗口右键脚本 → *打开*）。
 3. 终端会自动执行：
     - 把 `OpenTune.app` 拷贝到 `/Applications/` 并去除 quarantine 属性；
@@ -172,7 +172,7 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-#### 4. ONNX Runtime（Windows v1.24.4 / macOS v1.24.4）
+#### 4. ONNX Runtime（Windows v1.24.4 / macOS Intel v1.23.0 / macOS Apple Silicon v1.24.4）
 
 本项目需要 **两个** ONNX Runtime 包（Windows）：CPU 版提供头文件，DML 版提供原始 `onnxruntime.dll`（内置 DirectML 支持）。构建系统生成专用导入库，并把运行时 DLL 输出为 `OpenTuneOnnxRuntime_1_24_4.dll`。
 
