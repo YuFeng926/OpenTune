@@ -200,6 +200,11 @@ public:
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
 
+    std::optional<double> getPendingSeekTime() const noexcept
+    {
+        return pendingSeekTime_ >= 0.0 ? std::optional<double>(pendingSeekTime_) : std::nullopt;
+    }
+
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
     bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
 
@@ -652,6 +657,8 @@ private:
     juce::MouseCursor eqCursor_;
 
     double playheadTimeForPaint_ = 0.0;
+    double pendingSeekTime_ = -1.0;  // -1.0 sentinel: no pending seek
+    uint64_t pendingSeekEpoch_ = 0;
 
     juce::ListenerList<Listener> listeners_;
     

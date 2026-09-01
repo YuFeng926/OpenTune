@@ -988,7 +988,8 @@ void OpenTuneAudioProcessorEditor::playRequested()
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        if (!docController->requestStartPlayback())
+        const double pendingSeek = pianoRoll_.getPendingSeekTime().value_or(-1.0);
+        if (!docController->requestStartPlayback(pendingSeek))
             AppLogger::log("ARA: requestStartPlayback failed — host playback controller unavailable");
         return;
     }
@@ -1138,14 +1139,15 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     }
 
     dc->requestReadAudioForPlaybackRegionsAsync([this, dc, regionCount = static_cast<int>(allRegions.size())](int refreshed) {
-        if (refreshed == -1) return; // cancelled
-
-        if (refreshed == 0) {
+        if (refreshed < 0) {
             juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                    "Read Audio",
                                                    "Audio regions could not be processed.");
             return;
         }
+
+        if (refreshed == 0)
+            return;
 
         AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
             + " AudioModification(s) from " + juce::String(regionCount)
@@ -1188,7 +1190,8 @@ void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        if (!docController->requestTogglePlayback(processorRef_.isPlaying()))
+        const double pendingSeek = pianoRoll_.getPendingSeekTime().value_or(-1.0);
+        if (!docController->requestTogglePlayback(processorRef_.isPlaying(), pendingSeek))
             AppLogger::log("ARA: requestTogglePlayback failed — host playback controller unavailable");
         return;
     }

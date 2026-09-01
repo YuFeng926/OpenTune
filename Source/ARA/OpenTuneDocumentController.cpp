@@ -930,7 +930,7 @@ OpenTuneDocumentController::getFocusedEditorPlaybackRegionProjection() const
 int OpenTuneDocumentController::requestReadAudioForPlaybackRegions()
 {
     // 用户 Read 入口：新内容/未材质化内容的显式读取请求。
-    // 已 Ready 的内容已有 PCM，无需重复读取。
+    // Ready/Rendering 视为幂等无操作（不调用 birth，不计失败）。
 
     std::set<juce::String> uniqueModIds;
     for (const auto& region : playbackRegions_)
@@ -943,27 +943,44 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegions()
         return 0;
 
     int refreshedCount = 0;
+    bool anyFailure = false;
 
     for (const auto& modId : uniqueModIds)
     {
         auto* modification = findAudioModification(modId);
         if (modification == nullptr)
+        {
+            anyFailure = true;
+            continue;
+        }
+
+        // Ready 或 Rendering：幂等无操作，不调用 birth，不计失败
+        if (modification->birthState == AudioModificationBirthState::Ready
+            || modification->birthState == AudioModificationBirthState::Rendering)
             continue;
 
-        // 仅 WaitingForSource / Failed 的内容由用户 Read 触发 birth；
-        // Ready（已材质化）、Rendering（进行中）、Empty（无 content）跳过。
-        if (modification->birthState != AudioModificationBirthState::WaitingForSource
-            && modification->birthState != AudioModificationBirthState::Failed)
+        // WaitingForSource 或 Failed：调用 birth；成功计入 refreshedCount；失败标记失败
+        if (modification->birthState == AudioModificationBirthState::WaitingForSource
+            || modification->birthState == AudioModificationBirthState::Failed)
+        {
+            if (birthContentForModification(*modification))
+                ++refreshedCount;
+            else
+                anyFailure = true;
             continue;
+        }
 
-        if (birthContentForModification(*modification))
-            ++refreshedCount;
+        // Empty 或其它不可处理状态：标记失败
+        anyFailure = true;
     }
 
     if (refreshedCount > 0)
         refreshRegisteredRenderers(publishModelChange());
 
-    return refreshedCount;
+    // A positive count means at least one region was materialized. Keep that
+    // successful path alive even when another region failed; -1 is reserved
+    // for the all-failed case so the editor does not discard successful work.
+    return refreshedCount > 0 ? refreshedCount : (anyFailure ? -1 : 0);
 }
 
 void OpenTuneDocumentController::requestReadAudioForPlaybackRegionsAsync(
@@ -2428,7 +2445,7 @@ void OpenTuneDocumentController::markPlaybackRequest(bool shouldPlay) noexcept
     }
 }
 
-bool OpenTuneDocumentController::requestTogglePlayback(bool fallbackObservedPlaying)
+bool OpenTuneDocumentController::requestTogglePlayback(bool fallbackObservedPlaying, double pendingSeekTime)
 {
     // Message-thread only. Check host availability first.
     auto* dc = getDocumentController();
@@ -2473,6 +2490,8 @@ bool OpenTuneDocumentController::requestTogglePlayback(bool fallbackObservedPlay
 
     if (newTarget)
     {
+        if (pendingSeekTime >= 0.0)
+            playbackController->requestSetPlaybackPosition(pendingSeekTime);
         playbackController->requestStartPlayback();
         AppLogger::log("ARA-TRANSPORT: toggle target=start observed="
             + juce::String((state & kObservedValid)
@@ -2492,7 +2511,7 @@ bool OpenTuneDocumentController::requestTogglePlayback(bool fallbackObservedPlay
     return true;
 }
 
-bool OpenTuneDocumentController::requestStartPlayback()
+bool OpenTuneDocumentController::requestStartPlayback(double pendingSeekTime)
 {
     auto* dc = getDocumentController();
     if (dc == nullptr)
@@ -2501,6 +2520,9 @@ bool OpenTuneDocumentController::requestStartPlayback()
     auto* playbackController = dc->getHostPlaybackController();
     if (playbackController == nullptr)
         return false;
+
+    if (pendingSeekTime >= 0.0)
+        playbackController->requestSetPlaybackPosition(pendingSeekTime);
 
     markPlaybackRequest(true);
     playbackController->requestStartPlayback();

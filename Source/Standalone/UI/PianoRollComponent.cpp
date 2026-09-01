@@ -231,7 +231,23 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.grabKeyboardFocus = [this]() { grabKeyboardFocus(); };
     toolCtx.getAudioEditingScheme = [this]() { return audioEditingScheme_; };
     toolCtx.notifyPlayheadChange = [this](double time) {
-        listeners_.call([time](Listener& l) { l.playheadPositionChangeRequested(time); });
+        const uint64_t seekEpoch = playHeadState_.presentationEpoch.load(std::memory_order_acquire);
+        bool accepted = false;
+        listeners_.call([&accepted, time](Listener& l) {
+            if (l.playheadPositionChangeRequested(time))
+                accepted = true;
+        });
+        if (accepted) {
+            pendingSeekTime_ = time;
+            pendingSeekEpoch_ = seekEpoch;
+            playheadTimeForPaint_ = time;
+            overlay_->repaint();
+        } else {
+            pendingSeekTime_ = -1.0;
+            pendingSeekEpoch_ = 0;
+            playheadTimeForPaint_ = playHeadState_.getPresentedPositionSeconds();
+            overlay_->repaint();
+        }
         userScrollHold_ = false;
     };
     toolCtx.notifyPitchCurveEdited = [this](int s, int e) {
@@ -3004,6 +3020,9 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
     }
 
     if (contentChanged) {
+        // 切换编辑目标：清除 pending seek，避免跨 region 复用
+        pendingSeekTime_ = -1.0;
+        pendingSeekEpoch_ = 0;
         // 切换编辑目标：EQ 弹窗由选中组驱动，内容切换即失效
         closeEqPopup();
         if (!contentKey.isValid())
@@ -3371,7 +3390,18 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         lastObservedPlayHeadPlaying_ = playingNow;
     }
 
-    const double playheadTime = playHeadState_.getPresentedPositionSeconds();
+    double playheadTime = playHeadState_.getPresentedPositionSeconds();
+    if (pendingSeekTime_ >= 0.0) {
+        const uint64_t currentEpoch = playHeadState_.presentationEpoch.load(std::memory_order_acquire);
+        const double canonicalTime = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+        if (currentEpoch != pendingSeekEpoch_
+            && (canonicalTime == pendingSeekTime_ || playingNow)) {
+            pendingSeekTime_ = -1.0;  // host observed the request or started playback
+            pendingSeekEpoch_ = 0;
+        } else {
+            playheadTime = pendingSeekTime_;
+        }
+    }
 
     // 自动跟随：仅 playing && !userScrollHold_
     if (playingNow && !userScrollHold_) {

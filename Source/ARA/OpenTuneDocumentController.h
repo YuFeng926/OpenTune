@@ -159,9 +159,9 @@ public:
     void willDestroyAudioSource(juce::ARAAudioSource* audioSource) override;
 
     bool requestSetPlaybackPosition(double timeInSeconds);
-    bool requestStartPlayback();
+    bool requestStartPlayback(double pendingSeekTime = -1.0);
     bool requestStopPlayback();
-    bool requestTogglePlayback(bool fallbackObservedPlaying);
+    bool requestTogglePlayback(bool fallbackObservedPlaying, double pendingSeekTime = -1.0);
     void observeHostPlaybackState(bool isPlaying) noexcept;
     // Publish host PositionInfo to document-shared PlayHeadState. Called from
     // processBlock of any ARA role that receives a host PositionInfo. The CAS
