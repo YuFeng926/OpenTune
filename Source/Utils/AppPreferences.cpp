@@ -221,17 +221,16 @@ static VocoderModelWeight fromVocoderWeightToken(const juce::String& token)
 static juce::String toF0ModelTypeToken(F0ModelType type)
 {
     switch (type) {
-        case F0ModelType::RMVPE: return "rmvpe";
         case F0ModelType::FCPE: return "fcpe";
     }
-    return "fcpe";  // Default to FCPE (RMVPE disabled)
+    return "fcpe";
 }
 
 static F0ModelType fromF0ModelTypeToken(const juce::String& token)
 {
     if (token == "fcpe") return F0ModelType::FCPE;
-    if (token == "rmvpe") return F0ModelType::RMVPE;
-    return F0ModelType::FCPE;  // Default to FCPE (RMVPE disabled)
+    if (token == "rmvpe") return F0ModelType::FCPE;  // legacy: migrate to FCPE
+    return F0ModelType::FCPE;
 }
 
 static juce::String toExperimentalRefAlignModeToken(ExperimentalReferenceAlignMode mode)

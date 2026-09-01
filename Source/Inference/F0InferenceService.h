@@ -97,7 +97,7 @@ public:
 
     /**
      * Set F0 model type (does not create a session; next extractF0 uses new model)
-     * @param type F0 model type (e.g., RMVPE)
+     * @param type F0 model type (e.g., FCPE)
      * @return true if model file exists and selection updated
      */
     bool setF0Model(F0ModelType type);

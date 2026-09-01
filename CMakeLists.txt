@@ -530,8 +530,6 @@ target_sources(OpenTune
         Source/Inference/OnnxVocoderBase.cpp
 
         # AI Model Implementations
-        Source/Inference/RMVPEExtractor.cpp
-        Source/Inference/RMVPEExtractor.h
         Source/Inference/FCPEExtractor.cpp
         Source/Inference/FCPEExtractor.h
         Source/Inference/PCNSFHifiGANVocoder.cpp
@@ -996,7 +994,6 @@ endif()
 set(HIFIGAN_MODEL_COMMUNITY "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx")
 # Coulin9 微调版声码器权重（实验性）
 set(HIFIGAN_MODEL_COULIN9   "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx")
-set(RMVPE_MODEL             "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
 set(FCPE_MODEL              "${CMAKE_CURRENT_SOURCE_DIR}/models/fcpe.onnx")
 set(GAME_MODEL_DIR          "${CMAKE_CURRENT_SOURCE_DIR}/models/GAME")
 
@@ -1098,10 +1095,6 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/vocoder_weights"
         ${STANDALONE_VOCODER_WEIGHT_COPY_COMMANDS}
-        # RMVPE disabled - FCPE is the default model (smaller, faster, DML-capable)
-        # COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        #     "${RMVPE_MODEL}"
-        #     "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/rmvpe.onnx"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FCPE_MODEL}"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/fcpe.onnx"
@@ -1131,10 +1124,6 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/vocoder_weights"
         ${STANDALONE_APPLE_VOCODER_WEIGHT_COPY_COMMANDS}
-        # RMVPE disabled - FCPE is the default model (smaller, faster, DML-capable)
-        # COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        #     "${RMVPE_MODEL}"
-        #     "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/rmvpe.onnx"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FCPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/fcpe.onnx"
@@ -1241,10 +1230,6 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/vocoder_weights"
             ${VST3_VOCODER_WEIGHT_COPY_COMMANDS}
-            # RMVPE disabled - FCPE is the default model (smaller, faster, DML-capable)
-            # COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            #     "${RMVPE_MODEL}"
-            #     "$<TARGET_FILE_DIR:OpenTune_VST3>/models/rmvpe.onnx"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${FCPE_MODEL}"
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/fcpe.onnx"
@@ -1276,10 +1261,6 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/vocoder_weights"
             ${VST3_APPLE_VOCODER_WEIGHT_COPY_COMMANDS}
-            # RMVPE disabled - FCPE is the default model (smaller, faster, DML-capable)
-            # COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            #     "${RMVPE_MODEL}"
-            #     "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/rmvpe.onnx"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${FCPE_MODEL}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/fcpe.onnx"

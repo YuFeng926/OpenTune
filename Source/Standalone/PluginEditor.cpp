@@ -663,8 +663,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // Apply persisted F0 model type at startup
     const auto f0Type = appPreferences_.getState().shared.f0ModelType;
-    if ((f0Type != F0ModelType::RMVPE || processorRef_.isInferenceReady())
-        && !processorRef_.setF0ModelType(f0Type))
+    if (!processorRef_.setF0ModelType(f0Type))
         appPreferences_.setF0ModelType(F0ModelType::FCPE);
 }
 

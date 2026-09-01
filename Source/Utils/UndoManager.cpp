@@ -21,7 +21,6 @@ void UndoManager::addAction(std::unique_ptr<UndoAction> action)
 
     // cursor_ always points past the last action
     cursor_ = static_cast<int>(actions_.size());
-    notifyChange();
 }
 
 UndoAction* UndoManager::undo()
@@ -33,7 +32,6 @@ UndoAction* UndoManager::undo()
     auto* action = actions_[--cursor_].get();
     action->undo();
     isPerformingUndoRedo_ = false;
-    notifyChange();
     return action;
 }
 
@@ -46,7 +44,6 @@ UndoAction* UndoManager::redo()
     auto* action = actions_[cursor_++].get();
     action->redo();
     isPerformingUndoRedo_ = false;
-    notifyChange();
     return action;
 }
 
@@ -64,27 +61,6 @@ void UndoManager::clear()
 {
     actions_.clear();
     cursor_ = 0;
-    notifyChange();
-}
-
-juce::String UndoManager::getUndoDescription() const
-{
-    if (!canUndo())
-        return {};
-    return actions_[cursor_ - 1]->getDescription();
-}
-
-juce::String UndoManager::getRedoDescription() const
-{
-    if (!canRedo())
-        return {};
-    return actions_[cursor_]->getDescription();
-}
-
-void UndoManager::notifyChange()
-{
-    if (onChange_)
-        onChange_();
 }
 
 } // namespace OpenTune

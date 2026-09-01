@@ -43,32 +43,9 @@ struct SilentGap {
 
     bool isValid() const { return endSampleExclusive > startSample; }
 
-    double startSeconds() const
-    {
-        return TimeCoordinate::samplesToSeconds(startSample, TimeCoordinate::kRenderSampleRate);
-    }
-
-    double endSeconds() const
-    {
-        return TimeCoordinate::samplesToSeconds(endSampleExclusive, TimeCoordinate::kRenderSampleRate);
-    }
-
-    int64_t midpointSample() const { return startSample + sampleCount() / 2; }
-
-    double midpointSeconds() const
-    {
-        return TimeCoordinate::samplesToSeconds(midpointSample(), TimeCoordinate::kRenderSampleRate);
-    }
-
     bool containsSample(int64_t sample) const
     {
         return sample >= startSample && sample < endSampleExclusive;
-    }
-
-    /** 检查某个时间位置是否在此静息处内 */
-    bool contains(double seconds) const
-    {
-        return containsSample(TimeCoordinate::secondsToSamples(seconds, TimeCoordinate::kRenderSampleRate));
     }
 };
 
@@ -118,9 +95,6 @@ public:
     
     /** 固定采样率 44.1kHz（内部音频存储标准） */
     static constexpr double kInternalSampleRate = TimeCoordinate::kRenderSampleRate;
-    
-    /** 最大搜索距离（秒，默认 20 秒） */
-    static constexpr double kMaxSearchDistanceSec = 20.0;
     
     // ============================================================================
     // 静息处检测
@@ -182,12 +156,7 @@ private:
      */
     static float calculateRmsDb(const float* data, int64_t numSamples);
     
-    /**
-     * 使用二分查找在排序的静息处列表中查找
-     */
-    static std::vector<SilentGap>::const_iterator findGapAtOrAfter(
-        const std::vector<SilentGap>& gaps,
-        int64_t positionSample);
+
 };
 
 } // namespace OpenTune

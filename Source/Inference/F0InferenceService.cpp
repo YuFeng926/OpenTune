@@ -33,15 +33,7 @@ public:
         currentModelType_ = initialModel;
         initialized_.store(true, std::memory_order_release);
 
-#if defined(__APPLE__)
-        AppLogger::info("[F0InferenceService] Configured with "
-            + juce::String(initialModel == F0ModelType::FCPE ? "FCPE" : "RMVPE")
-            + " model (CoreML, session created on demand)");
-#else
-        AppLogger::info("[F0InferenceService] Configured with "
-            + juce::String(initialModel == F0ModelType::FCPE ? "FCPE" : "RMVPE")
-            + " model (CPU/DML, session created on demand)");
-#endif
+        AppLogger::info("[F0InferenceService] Configured with FCPE model (session created on demand)");
         return true;
     }
 
@@ -205,9 +197,7 @@ public:
         }
 
         currentModelType_ = type;
-        AppLogger::info("[F0InferenceService] Selected model: "
-            + juce::String(type == F0ModelType::FCPE ? "FCPE" : "RMVPE")
-            + " (session will be created on next extraction)");
+        AppLogger::info("[F0InferenceService] Selected model: FCPE (session will be created on next extraction)");
         return true;
     }
 

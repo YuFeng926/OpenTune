@@ -106,7 +106,7 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
 
     out.hopSize = hopSize;
     out.f0SampleRate = f0SampleRate;
-    out.modelName = f0Service.getCurrentF0Model() == F0ModelType::FCPE ? "FCPE" : "RMVPE";
+    out.modelName = f0Service.getCurrentF0Model() == F0ModelType::FCPE ? "FCPE" : "FCPE";
 
     {
         out.firstVoicedFrame = -1;

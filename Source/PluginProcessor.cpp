@@ -910,7 +910,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                         result.energy = computeFrameEnergy(
                             src, numSamples, static_cast<int>(sr),
                             result.f0, result.f0SampleRate, result.hopSize);
-                        result.modelName = f0Svc->getCurrentF0Model() == F0ModelType::FCPE ? "FCPE" : "RMVPE";
+                         result.modelName = f0Svc->getCurrentF0Model() == F0ModelType::FCPE ? "FCPE" : "FCPE";
                         result.success = true;
                         return result;
                     },

@@ -72,9 +72,9 @@ public:
         smoothedBins_.fill(0.0f);
         peakBins_.fill(0.0f);
         for (auto& value : outputSpectrumBins_)
-            value.store(0.0f, std::memory_order_relaxed);
+            value = 0.0f;
         for (auto& value : outputPeakBins_)
-            value.store(0.0f, std::memory_order_relaxed);
+            value = 0.0f;
 
         publishSequence_.fetch_add(1, std::memory_order_release);
     }
@@ -128,8 +128,6 @@ public:
     void copySnapshot(std::array<float, kNumBins>& spectrum,
                       std::array<float, kNumBins>& peaks) const noexcept
     {
-        std::array<float, kNumBins> nextSpectrum{};
-        std::array<float, kNumBins> nextPeaks{};
         for (int attempt = 0; attempt < 3; ++attempt)
         {
             const uint64_t before = publishSequence_.load(std::memory_order_acquire);
@@ -144,19 +142,13 @@ public:
 
             for (int i = 0; i < kNumBins; ++i)
             {
-                nextSpectrum[static_cast<size_t>(i)] =
-                    outputSpectrumBins_[static_cast<size_t>(i)].load(std::memory_order_relaxed);
-                nextPeaks[static_cast<size_t>(i)] =
-                    outputPeakBins_[static_cast<size_t>(i)].load(std::memory_order_relaxed);
+                spectrum[static_cast<size_t>(i)] = outputSpectrumBins_[static_cast<size_t>(i)];
+                peaks[static_cast<size_t>(i)] = outputPeakBins_[static_cast<size_t>(i)];
             }
 
             const uint64_t after = publishSequence_.load(std::memory_order_acquire);
             if (before == after)
-            {
-                spectrum = nextSpectrum;
-                peaks = nextPeaks;
                 return;
-            }
         }
     }
 
@@ -219,10 +211,8 @@ private:
         publishSequence_.fetch_add(1, std::memory_order_acq_rel);
         for (int i = 0; i < kNumBins; ++i)
         {
-            outputSpectrumBins_[static_cast<size_t>(i)].store(
-                smoothedBins_[static_cast<size_t>(i)], std::memory_order_relaxed);
-            outputPeakBins_[static_cast<size_t>(i)].store(
-                peakBins_[static_cast<size_t>(i)], std::memory_order_relaxed);
+            outputSpectrumBins_[static_cast<size_t>(i)] = smoothedBins_[static_cast<size_t>(i)];
+            outputPeakBins_[static_cast<size_t>(i)] = peakBins_[static_cast<size_t>(i)];
         }
         publishSequence_.fetch_add(1, std::memory_order_release);
     }
@@ -244,8 +234,8 @@ private:
     int samplesSinceAnalysis_ = 0;
 
     std::atomic<uint64_t> publishSequence_{0};
-    std::array<std::atomic<float>, kNumBins> outputSpectrumBins_{};
-    std::array<std::atomic<float>, kNumBins> outputPeakBins_{};
+    std::array<float, kNumBins> outputSpectrumBins_{};
+    std::array<float, kNumBins> outputPeakBins_{};
 };
 
 } // namespace OpenTune

@@ -237,24 +237,6 @@ double TimeGridSnapshot::tauInverse(double outputSeconds) const noexcept
     return left.source_seconds + t * (right.source_seconds - left.source_seconds);
 }
 
-bool TimeGridSnapshot::isIdentityInRange(double t_src_a, double t_src_b) const noexcept
-{
-    if (handles_.empty()) return true;
-    if (t_src_b <= t_src_a) return true;
-
-    // Find first handle with source_seconds > t_src_a, and walk until source_seconds >= t_src_b.
-    auto it = std::upper_bound(handles_.begin(), handles_.end(), t_src_a,
-        [](double s, const TimeHandle& h) { return s < h.source_seconds; });
-    // Also include the handle immediately before (if any) since the segment starts there
-    if (it != handles_.begin()) --it;
-
-    while (it != handles_.end() && it->source_seconds <= t_src_b) {
-        if (it->output_seconds != it->source_seconds) return false;
-        ++it;
-    }
-    return true;
-}
-
 bool TimeGridSnapshot::isIdentity() const noexcept
 {
     for (const auto& h : handles_) {
@@ -279,11 +261,6 @@ TimeGrid::TimeGrid(std::shared_ptr<const TimeGridSnapshot> initial)
 std::shared_ptr<const TimeGridSnapshot> TimeGrid::getSnapshot() const noexcept
 {
     return std::atomic_load(&snapshot_);
-}
-
-void TimeGrid::setSnapshot(std::shared_ptr<const TimeGridSnapshot> newSnapshot) noexcept
-{
-    std::atomic_store(&snapshot_, std::move(newSnapshot));
 }
 
 } // namespace OpenTune

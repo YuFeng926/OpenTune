@@ -11,7 +11,6 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
-#include <functional>
 #include <memory>
 #include <vector>
 
@@ -28,8 +27,6 @@ public:
 
 class UndoManager {
 public:
-    using ChangeCallback = std::function<void()>;
-
     void addAction(std::unique_ptr<UndoAction> action);
     UndoAction* undo();   // Returns the undone action, or nullptr
     UndoAction* redo();   // Returns the redone action, or nullptr
@@ -37,19 +34,11 @@ public:
     bool canRedo() const;
     void clear();
 
-    juce::String getUndoDescription() const;
-    juce::String getRedoDescription() const;
-
-    void setOnChange(ChangeCallback cb) { onChange_ = std::move(cb); }
-
 private:
     std::vector<std::unique_ptr<UndoAction>> actions_;
     int cursor_{0};  // 指向下一个可 redo 的位置（即当前栈顶 + 1）
     static constexpr int maxSize_{500};  // 最大历史层数
     bool isPerformingUndoRedo_{false};  // 防止 undo/redo 执行期间递归 addAction
-    ChangeCallback onChange_;
-
-    void notifyChange();
 };
 
 } // namespace OpenTune

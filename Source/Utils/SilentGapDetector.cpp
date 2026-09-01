@@ -81,16 +81,7 @@ float SilentGapDetector::calculateRmsDb(const float* data, int64_t numSamples)
     return linearToDb(rms);
 }
 
-std::vector<SilentGap>::const_iterator SilentGapDetector::findGapAtOrAfter(
-    const std::vector<SilentGap>& gaps,
-    int64_t positionSample)
-{
-    // 二分查找：找到第一个 endSampleExclusive > positionSample 的静息处
-    return std::lower_bound(gaps.begin(), gaps.end(), positionSample,
-        [](const SilentGap& gap, int64_t posSample) {
-            return gap.endSampleExclusive <= posSample;
-        });
-}
+
 
 // ============================================================================
 // 静息处检测
@@ -238,10 +229,8 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
 
 std::vector<SilentGap> SilentGapDetector::detectAllGapsAdaptive(
     const juce::AudioBuffer<float>& audio,
-    double maxSearchDistanceSec)
+    double /*maxSearchDistanceSec*/)
 {
-    // maxSearchDistanceSec 参数保留用于将来扩展，当前使用主检测逻辑
-    juce::ignoreUnused(maxSearchDistanceSec);
     return detectAllGaps(audio);
 }
 

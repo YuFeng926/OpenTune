@@ -9,7 +9,6 @@ namespace Ort { struct RunOptions; }
 namespace OpenTune {
 
 enum class F0ModelType {
-    RMVPE = 0,   // Robust Multi-scale Vocal Pitch Estimator (361MB)
     FCPE = 1     // Fast Context-based Pitch Estimation (43MB, DML-capable)
 };
 
@@ -24,7 +23,7 @@ struct F0ModelInfo {
 /**
  * @brief Abstract interface for F0 (fundamental frequency) extraction models
  *
- * This interface allows using RMVPE F0 extraction algorithm at runtime.
+ * This interface allows using FCPE F0 extraction algorithm at runtime.
  *
  * All implementations must:
  * - Accept raw audio at any sample rate
@@ -72,7 +71,7 @@ public:
 
     /**
      * @brief Get human-readable model name
-     * @return Model name (e.g., "RMVPE (Robust)")
+     * @return Model name (e.g., "FCPE")
      */
     virtual std::string getName() const = 0;
 

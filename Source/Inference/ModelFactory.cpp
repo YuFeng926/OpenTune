@@ -1,5 +1,4 @@
 #include "ModelFactory.h"
-#include "RMVPEExtractor.h"
 #include "FCPEExtractor.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/CpuBudgetManager.h"
@@ -79,9 +78,6 @@ ModelFactory::F0ExtractorResult ModelFactory::createF0Extractor(
         AppLogger::info("[ModelFactory] Loaded F0 model (" + backendStr + "): " + juce::String(modelPath));
 
         switch (type) {
-            case F0ModelType::RMVPE:
-                return F0ExtractorResult::success(
-                    std::make_unique<RMVPEExtractor>(std::move(session), resampler));
             case F0ModelType::FCPE:
                 return F0ExtractorResult::success(
                     std::make_unique<FCPEExtractor>(std::move(session), resampler));
@@ -102,8 +98,6 @@ ModelFactory::F0ExtractorResult ModelFactory::createF0Extractor(
 
 std::string ModelFactory::getModelPath(F0ModelType type, const std::string& modelDir) {
     switch (type) {
-        case F0ModelType::RMVPE:
-            return modelDir + "/rmvpe.onnx";
         case F0ModelType::FCPE:
             return modelDir + "/fcpe.onnx";
     }
@@ -126,15 +120,6 @@ bool ModelFactory::isModelAvailable(F0ModelType type, const std::string& modelDi
 
 std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& modelDir) {
     std::vector<F0ModelInfo> models;
-
-    // RMVPE disabled - mark as unavailable
-    F0ModelInfo rmvpe;
-    rmvpe.type = F0ModelType::RMVPE;
-    rmvpe.name = "rmvpe";
-    rmvpe.displayName = "RMVPE (Robust)";
-    rmvpe.modelSizeBytes = 361 * 1024 * 1024;
-    rmvpe.isAvailable = false;  // Disabled - FCPE is the default model
-    // models.push_back(rmvpe);  // Don't include in available models list
 
     F0ModelInfo fcpe;
     fcpe.type = F0ModelType::FCPE;

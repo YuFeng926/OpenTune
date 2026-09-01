@@ -126,13 +126,6 @@ public:
     double tauInverse(double outputSeconds) const noexcept;
 
     /**
-     * 检查 [t_src_a, t_src_b] 区间内是否所有 handle 的 output_seconds == source_seconds.
-     * 用于 Stage 2 bypass 判定。
-     * 时间复杂度: O(log H + K)，K = 区间内 handle 数 (典型 <10)。
-     */
-    bool isIdentityInRange(double t_src_a, double t_src_b) const noexcept;
-
-    /**
      * 检查整个 snapshot 是否为恒等映射 (所有 handle output==source).
      * O(N).
      */
@@ -157,7 +150,6 @@ public:
     explicit TimeGrid(std::shared_ptr<const TimeGridSnapshot> initial);
 
     std::shared_ptr<const TimeGridSnapshot> getSnapshot() const noexcept;
-    void setSnapshot(std::shared_ptr<const TimeGridSnapshot> newSnapshot) noexcept;
 
 private:
     std::shared_ptr<const TimeGridSnapshot> snapshot_;
