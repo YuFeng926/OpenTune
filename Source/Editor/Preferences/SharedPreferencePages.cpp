@@ -305,8 +305,7 @@ public:
         }
 
         initialiseToggleButton(lightPitchCorrectionToggle_);
-        lightPitchCorrectionToggle_.setButtonText(
-            juce::String::fromUTF8(u8"音质优化模式（小幅修正使用周期重采样，超低延迟零相位伪影）"));
+        lightPitchCorrectionToggle_.setButtonText(LOC(kHybridMode));
         lightPitchCorrectionToggle_.setToggleState(state.shared.lightPitchCorrectionEnabled,
                                                    juce::dontSendNotification);
         lightPitchCorrectionToggle_.onClick = [this] {
