@@ -1271,8 +1271,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         arrangementView_.onHeartbeatTick();
     }
 
+    pianoRoll_.onHeartbeatTick();
+
     if (pianoRoll_.isShowing()) {
-        pianoRoll_.onHeartbeatTick();
         overviewStrip_.onHeartbeatTick(pianoRoll_.editedContentKey(),
                                        pianoRoll_.activeContentProjection(),
                                        pianoRoll_.timelineCamera(),
@@ -2436,7 +2437,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     options.dialogTitle = "Preferences";
     options.dialogBackgroundColour = UIColors::backgroundDark;
     options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = true;
+    options.useNativeTitleBar = false;
     options.resizable = true;
     options.useBottomRightCornerResizer = true;
     options.launchAsync();
@@ -2527,6 +2528,10 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
         openTuneLookAndFeel_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
         openTuneLookAndFeel_.setColour(juce::TextButton::textColourOnId, UIColors::textPrimary);
     }
+
+    // Install process-wide default so orphaned AlertWindows / DialogWindow title
+    // bars always use Aurora glass styling regardless of current editor theme.
+    AuroraLookAndFeel::installAsDefault();
 
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
 
@@ -2899,6 +2904,7 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
     opts.dialogBackgroundColour = UIColors::backgroundDark;
     opts.componentToCentreAround = this;
     opts.escapeKeyTriggersCloseButton = true;
+    opts.useNativeTitleBar = false;
     opts.launchAsync();
 }
 

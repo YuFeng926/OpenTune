@@ -108,7 +108,7 @@ AI 的存在是为了帮助人，以人为本，带来更好的创作体验。
 ```
 OpenTune/
 ├── OpenTune.exe
-├── OpenTuneOnnxRuntime_1_23_0.dll ← ONNX Runtime (内置 DirectML)
+├── OpenTuneOnnxRuntime_1_24_4.dll ← ONNX Runtime (内置 DirectML)
 ├── DirectML.dll             ← DirectML 运行时
 ├── D3D12/
 │   ├── D3D12Core.dll        ← DirectX Agility SDK
@@ -127,15 +127,15 @@ OpenTune/
 
 | 需求 | Windows | macOS |
 |------|---------|-------|
-| **系统** | Windows 10 1903+ | macOS 14.0+ (Sonoma) |
-| **架构** | x64 | arm64 (Apple Silicon) |
+| **系统** | Windows 10 1903+ | macOS 13.3+ (Intel) / 14.0+ (Apple Silicon) |
+| **架构** | x64 | x86_64 (Intel) / arm64 (Apple Silicon) |
 | **编译器** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
 | **C++ 标准** | C++17 | C++17 |
 | **构建系统** | MSBuild (VS Generator) / Ninja | Ninja |
 
 > **注意：** Windows 构建支持 Visual Studio Generator + MSBuild 或 Ninja 两种方式。推荐使用 Visual Studio Generator 进行完整开发，Ninja 适合快速构建。
-> macOS Release 与 DMG 打包使用 `macos-ara-ninja` 预设，因此需要安装 Ninja。
+> macOS Release 与 DMG 打包使用 `macos-silicon-ara-ninja`（Apple Silicon）或 `macos-intel-ara-ninja`（Intel）预设，因此需要安装 Ninja。
 
 ### 依赖准备
 
@@ -172,16 +172,16 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-#### 4. ONNX Runtime（Windows v1.23.0 / macOS v1.24.4）
+#### 4. ONNX Runtime（Windows v1.24.4 / macOS v1.24.4）
 
-本项目需要 **两个** ONNX Runtime 包（Windows）：CPU 版提供头文件，DML 版提供原始 `onnxruntime.dll`（内置 DirectML 支持）。构建系统生成专用导入库，并把运行时 DLL 输出为 `OpenTuneOnnxRuntime_1_23_0.dll`。
+本项目需要 **两个** ONNX Runtime 包（Windows）：CPU 版提供头文件，DML 版提供原始 `onnxruntime.dll`（内置 DirectML 支持）。构建系统生成专用导入库，并把运行时 DLL 输出为 `OpenTuneOnnxRuntime_1_24_4.dll`。
 
 **Windows** — 下载并解压到 `ThirdParty/`：
 
 | 包 | 链接 | 解压到 |
 |----|------|--------|
-| ONNX Runtime CPU | [onnxruntime-win-x64-1.23.0.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-win-x64-1.23.0.zip) | `ThirdParty/onnxruntime-win-x64-1.23.0/` |
-| ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.23.0.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.23.0) | `ThirdParty/onnxruntime-dml-1.23.0/` |
+| ONNX Runtime CPU | [onnxruntime-win-x64-1.24.4.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip) | `ThirdParty/onnxruntime-win-x64-1.24.4/` |
+| ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.24.4.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.24.4) | `ThirdParty/onnxruntime-dml-1.24.4/` |
 
 > **提示：** 将 `.nupkg` 改名为 `.zip` 后解压。
 
@@ -189,13 +189,13 @@ cd ..
 
 ```
 ThirdParty/
-├── onnxruntime-win-x64-1.23.0/       ← CPU 版（编译时链接用）
+├── onnxruntime-win-x64-1.24.4/       ← CPU 版（编译时链接用）
 │   ├── include/
 │   │   └── onnxruntime_cxx_api.h      ← CMake 检测此文件是否存在
 │   └── lib/
 │       └── onnxruntime.lib            ← 上游包文件；OpenTune 不直接链接
 │
-└── onnxruntime-dml-1.23.0/            ← DML 版（运行时 DLL + DML provider 头文件）
+└── onnxruntime-dml-1.24.4/            ← DML 版（运行时 DLL + DML provider 头文件）
     ├── build/native/include/
     │   └── dml_provider_factory.h     ← DirectML EP 注册头文件
     └── runtimes/win-x64/native/
@@ -203,12 +203,24 @@ ThirdParty/
 ```
 
 **为什么需要两个包？**
-- **CPU 包** (`onnxruntime-win-x64-1.23.0`)：提供 C++ API 头文件（`onnxruntime_cxx_api.h`）。
-- **DML 包** (`onnxruntime-dml-1.23.0`)：提供编译了 DirectML Execution Provider 的原始 `onnxruntime.dll` 和 `dml_provider_factory.h`。CMake 根据项目内 `.def` 生成 `OpenTuneOnnxRuntime_1_23_0.lib`，并把源 DLL 改名部署为 `OpenTuneOnnxRuntime_1_23_0.dll`。
+- **CPU 包** (`onnxruntime-win-x64-1.24.4`)：提供 C++ API 头文件（`onnxruntime_cxx_api.h`）。
+- **DML 包** (`onnxruntime-dml-1.24.4`)：提供编译了 DirectML Execution Provider 的原始 `onnxruntime.dll` 和 `dml_provider_factory.h`。CMake 根据项目内 `.def` 生成 `OpenTuneOnnxRuntime_1_24_4.lib`，并把源 DLL 改名部署为 `OpenTuneOnnxRuntime_1_24_4.dll`。
+
+**macOS (Intel, x86_64)**：
+
+macOS Intel 使用仓库中现有的 universal2 包（实际按 x86_64 构建），CoreML EP 已内置。该运行库最低支持 macOS 13.3：
+
+```
+ThirdParty/onnxruntime-osx-universal2-1.23.0/   ← 已包含在仓库中，无需额外下载
+├── include/
+│   └── onnxruntime_cxx_api.h
+└── lib/
+    └── libonnxruntime.1.23.0.dylib
+```
 
 **macOS (Apple Silicon, arm64)**：
 
-macOS 使用一个 arm64 v1.24.4 包，CoreML EP 已内置。该运行库最低支持 macOS 14.0：
+macOS Apple Silicon 使用 arm64 v1.24.4 包，CoreML EP 已内置。该运行库最低支持 macOS 14.0。**请手动下载并解压到指定目录**（仓库不包含此文件）：
 
 ```bash
 cd ThirdParty
@@ -232,7 +244,7 @@ ThirdParty/onnxruntime-osx-arm64-1.24.4/
 | 包 | 版本 | 下载 | 解压到 |
 |----|------|------|--------|
 | Microsoft.AI.DirectML | 1.15.4 | [NuGet](https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4) | `ThirdParty/microsoft.ai.directml.1.15.4/` |
-| Microsoft.Direct3D.D3D12 | 1.619.1 | [NuGet](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.619.1) | `ThirdParty/microsoft.direct3d.d3d12.1.619.1/` |
+| Microsoft.Direct3D.D3D12 | 1.619.5 | [NuGet](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.619.5) | `ThirdParty/microsoft.direct3d.d3d12.1.619.5/` |
 
 > 下载 `.nupkg` 后改名为 `.zip` 解压。
 
@@ -246,7 +258,7 @@ ThirdParty/microsoft.ai.directml.1.15.4/
     ├── DirectML.dll
     └── DirectML.lib
 
-ThirdParty/microsoft.direct3d.d3d12.1.619.1/
+ThirdParty/microsoft.direct3d.d3d12.1.619.5/
 └── build/native/
     ├── include/
     │   ├── d3d12.h
@@ -278,11 +290,12 @@ OpenTune/
 ├── ThirdParty/
 │   ├── ARA_SDK-releases-2.2.0/           ← ARA SDK
 │   ├── r8brain-free-src-master/          ← 重采样库
-│   ├── onnxruntime-win-x64-1.23.0/      ← ONNX Runtime CPU (Windows)
-│   ├── onnxruntime-dml-1.23.0/           ← ONNX Runtime DML (Windows)
-│   ├── onnxruntime-osx-universal2-1.23.0/ ← ONNX Runtime (macOS, universal2)
+│   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
+│   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
+│   ├── onnxruntime-osx-universal2-1.23.0/ ← ONNX Runtime (macOS Intel, universal2)
+│   ├── onnxruntime-osx-arm64-1.24.4/     ← ONNX Runtime (macOS Apple Silicon, arm64)
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
-│   └── microsoft.direct3d.d3d12.1.619.1/ ← D3D12 Agility SDK (Windows)
+│   └── microsoft.direct3d.d3d12.1.619.5/ ← D3D12 Agility SDK (Windows)
 ├── models/
 │   └── rmvpe.onnx
 ├── pc_nsf_hifigan_44.1k_ONNX/
@@ -326,8 +339,22 @@ cmake --build --preset windows-ara-ninja-release
 **macOS (Ninja + CMake)**
 
 ```bash
-cmake --preset macos-ara-ninja
-cmake --build --preset macos-ara-release
+# Apple Silicon (arm64)
+cmake --preset macos-silicon-ara-ninja
+cmake --build --preset macos-silicon-ara-release
+
+# Intel (x86_64)
+cmake --preset macos-intel-ara-ninja
+cmake --build --preset macos-intel-ara-release
+```
+
+打包命令：
+```bash
+# Apple Silicon
+./scripts/package-macos.sh --arch silicon
+
+# Intel
+./scripts/package-macos.sh --arch intel
 ```
 
 ### 构建产物
@@ -343,11 +370,11 @@ cmake --build --preset macos-ara-release
 
 | 症状 | 原因 | 解决方法 |
 |------|------|----------|
-| `ONNX Runtime C++ API header not found` | CPU 版 ONNX Runtime 未放对位置 | 确认 `ThirdParty/onnxruntime-win-x64-1.23.0/include/onnxruntime_cxx_api.h` 存在 |
-| `DirectML provider header missing` | DML 版 NuGet 包未正确解压 | 确认 `ThirdParty/onnxruntime-dml-1.23.0/build/native/include/dml_provider_factory.h` 存在 |
+| `ONNX Runtime C++ API header not found` | CPU 版 ONNX Runtime 未放对位置 | 确认 `ThirdParty/onnxruntime-win-x64-1.24.4/include/onnxruntime_cxx_api.h` 存在 |
+| `DirectML provider header missing` | DML 版 NuGet 包未正确解压 | 确认 `ThirdParty/onnxruntime-dml-1.24.4/build/native/include/dml_provider_factory.h` 存在 |
 | `DirectML header missing` | DirectML NuGet 包未解压 | 确认 `ThirdParty/microsoft.ai.directml.1.15.4/include/DirectML.h` 存在 |
-| `D3D12 header missing from Agility SDK` | D3D12 NuGet 包未解压 | 确认 `ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native/include/d3d12.h` 存在 |
-| `ONNX Runtime DirectML DLL missing` | DML 版运行时 DLL 缺失 | 确认 `ThirdParty/onnxruntime-dml-1.23.0/runtimes/win-x64/native/onnxruntime.dll` 存在 |
+| `D3D12 header missing from Agility SDK` | D3D12 NuGet 包未解压 | 确认 `ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include/d3d12.h` 存在 |
+| `ONNX Runtime DirectML DLL missing` | DML 版运行时 DLL 缺失 | 确认 `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` 存在 |
 | `ARA SDK not found` | ARA SDK 未克隆 | 执行步骤 2 的 git clone 命令 |
 | MSVC 链接错误 LNK2019 | MSVC 运行时不匹配 | 本项目使用静态 CRT (`/MT`)，确保依赖库一致 |
 | Ninja 构建失败 | Ninja 未安装或不在 PATH 中 | 确保 Ninja 已安装并在系统 PATH 中，或使用 Visual Studio Generator |

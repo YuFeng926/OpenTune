@@ -3305,6 +3305,29 @@ void PianoRollComponent::onHeartbeatTick()
     // 结算 Failed/Ready-无目标 的 pending；正常 Ready 定位仍需 isShowing/isVisible。
     tryConsumeInitialF0View(editedContentKey_);
 
+    // 波形缓存增量构建在可见性 guard 之前：导入音频后即使钢琴卷帘尚未显示也预先构建
+    if (showWaveform_ || isOpenDyne()) {
+        bool progressed = false;
+        if (inferenceActive_) {
+            waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;
+            if (waveformBuildTickCounter_ == 0)
+                progressed = waveformMipmapCache_.buildIncremental(0.15);
+        } else {
+            waveformBuildTickCounter_ = 0;
+            progressed = waveformMipmapCache_.buildIncremental(0.75);
+        }
+
+        // 每次产生构建进度即重栅格 content surface：任一 complete 非空 level
+        // 出现即可显示，不等待全量 6 级完成；仅在可见时栅格/重绘
+        if (progressed && isShowing()) {
+            contentDirty_ = true;
+            rasterizeDirtySurfaces();
+            repaint();
+        }
+    } else {
+        waveformBuildTickCounter_ = 0;
+    }
+
     if (!isShowing())
         return;
 
@@ -3326,29 +3349,6 @@ void PianoRollComponent::onHeartbeatTick()
             repaint();
         }
     }
-
-    if (showWaveform_ || isOpenDyne()) {
-        bool progressed = false;
-        if (inferenceActive_) {
-            waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;
-            if (waveformBuildTickCounter_ == 0)
-                progressed = waveformMipmapCache_.buildIncremental(0.15);
-        } else {
-            waveformBuildTickCounter_ = 0;
-            progressed = waveformMipmapCache_.buildIncremental(0.75);
-        }
-
-        // 每次产生构建进度即重栅格 content surface：任一 complete 非空 level
-        // 出现即可显示，不等待全量 6 级完成
-        if (progressed) {
-            contentDirty_ = true;
-            rasterizeDirtySurfaces();
-            repaint();
-        }
-    } else {
-        waveformBuildTickCounter_ = 0;
-    }
-
 }
 
 void PianoRollComponent::onScrollVBlankCallback(double timestampSec)

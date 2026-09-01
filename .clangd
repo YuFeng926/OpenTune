@@ -59,12 +59,12 @@ CompileFlags:
     # ---- 第三方库（与真实构建 include 列表对齐）----
     - "-IG:/Opentune0723/ThirdParty/r8brain-free-src-master"
     - "-IG:/Opentune0723/ThirdParty/soundtouch-2.3.3/include"
-    - "-IG:/Opentune0723/ThirdParty/onnxruntime-win-x64-1.23.0/include"
-    - "-IG:/Opentune0723/ThirdParty/onnxruntime-dml-1.23.0/build/native/include"
+    - "-IG:/Opentune0723/ThirdParty/onnxruntime-win-x64-1.24.4/include"
+    - "-IG:/Opentune0723/ThirdParty/onnxruntime-dml-1.24.4/build/native/include"
     - "-IG:/Opentune0723/build-ara-overlay-vs18-clean/onnxruntime_dml_include"
-    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native/include"
-    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native/include/d3dx12"
-    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native"
+    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include"
+    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include/d3dx12"
+    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native"
     - "-IG:/Opentune0723/ThirdParty/microsoft.ai.directml.1.15.4/include"
     - "-IG:/Opentune0723/ThirdParty/ARA_SDK-releases-2.2.0"
 

@@ -3,39 +3,99 @@
 # OpenTune - macOS 打包脚本
 # 功能：构建 + ad-hoc 签名 + 生成 DMG 安装包
 # 用法：
-#   ./scripts/package-macos.sh                # Release 构建 + 打包
-#   ./scripts/package-macos.sh --skip-build   # 跳过构建，直接打包已有产物
-#   ./scripts/package-macos.sh --clean        # 清空构建目录后重新构建
+#   ./scripts/package-macos.sh                     # 根据当前架构自动选择
+#   ./scripts/package-macos.sh --arch intel        # Intel (x86_64) 构建 + 打包
+#   ./scripts/package-macos.sh --arch silicon      # Apple Silicon (arm64) 构建 + 打包
+#   ./scripts/package-macos.sh --skip-build        # 跳过构建，直接打包已有产物
+#   ./scripts/package-macos.sh --clean             # 清空构建目录后重新构建
 # ==============================================================================
 set -euo pipefail
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${ROOT_DIR}/build-ara-ninja"
-ARTIFACTS="${BUILD_DIR}/OpenTune_artefacts/Release"
 STAGING="${ROOT_DIR}/dist/staging"
 DMG_DIR="${ROOT_DIR}/dist"
 APP_NAME="OpenTune"
 VERSION=$(sed -n 's/.*project(OpenTune VERSION \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "${ROOT_DIR}/CMakeLists.txt")
-DMG_NAME="${APP_NAME}-${VERSION}-macOS-arm64"
 SIGN_IDENTITY="-"
 
 # ── 参数解析 ──────────────────────────────────────────────────────────────────
 SKIP_BUILD=false
 CLEAN=false
+ARCH=""
 for arg in "$@"; do
     case "$arg" in
         --skip-build) SKIP_BUILD=true ;;
         --clean)      CLEAN=true ;;
+        --arch)
+            # handled via next arg
+            ;;
+        --arch=intel)
+            ARCH="intel"
+            ;;
+        --arch=silicon)
+            ARCH="silicon"
+            ;;
+        --arch=*)
+            echo "❌ 未知架构: ${arg#--arch=}（仅支持 intel|silicon）"
+            exit 1
+            ;;
         -h|--help)
-            echo "用法: $0 [--skip-build] [--clean]"
-            echo "  --skip-build  跳过构建，直接打包已有产物"
-            echo "  --clean       清空构建目录后重新构建"
+            echo "用法: $0 [--arch intel|silicon] [--skip-build] [--clean]"
+            echo "  --arch ARCH  指定目标架构: intel (x86_64) 或 silicon (arm64)"
+            echo "  --skip-build 跳过构建，直接打包已有产物"
+            echo "  --clean      清空构建目录后重新构建"
             exit 0
             ;;
-        *) echo "未知参数: $arg"; exit 1 ;;
+        *)
+            # Handle --arch <value> form (space-separated)
+            if [ "${PREV_ARG:-}" = "--arch" ]; then
+                ARCH="$arg"
+                PREV_ARG=""
+                continue
+            fi
+            echo "未知参数: $arg"; exit 1
+            ;;
     esac
+    PREV_ARG="$arg"
 done
+
+# 如果 --arch 是单独的 flag (no = form)，上面已处理；这里再检查旧模式
+# 遍历参数时 PREV_ARG 可能已设，但 for 循环已结束，上面 case 内已处理了 = 形式
+
+# ── 自动检测架构 ──────────────────────────────────────────────────────────────
+if [ -z "${ARCH}" ]; then
+    HOST_ARCH="$(uname -m)"
+    if [ "${HOST_ARCH}" = "arm64" ]; then
+        ARCH="silicon"
+    else
+        ARCH="intel"
+    fi
+    echo "▶ 未指定 --arch，根据当前主机架构自动选择: ${ARCH} (${HOST_ARCH})"
+fi
+
+# ── 根据架构确定 preset / build dir / artifact / DMG 名 ─────────────────────
+case "${ARCH}" in
+    intel)
+        OSX_ARCH="x86_64"
+        PRESET="macos-intel-ara-ninja"
+        BUILD_DIR="${ROOT_DIR}/build-intel-ninja"
+        DMG_ARCH_LABEL="Intel"
+        ;;
+    silicon)
+        OSX_ARCH="arm64"
+        PRESET="macos-silicon-ara-ninja"
+        BUILD_DIR="${ROOT_DIR}/build-silicon-ninja"
+        DMG_ARCH_LABEL="Universal"
+        ;;
+    *)
+        echo "❌ 无效架构: ${ARCH}（仅支持 intel|silicon）"
+        exit 1
+        ;;
+esac
+
+ARTIFACTS="${BUILD_DIR}/OpenTune_artefacts/Release"
+DMG_NAME="${APP_NAME}-${VERSION}-macOS-${DMG_ARCH_LABEL}"
 
 # ── 工具检查 ──────────────────────────────────────────────────────────────────
 for cmd in cmake ninja hdiutil codesign xattr otool lipo; do
@@ -47,14 +107,14 @@ done
 
 # ── 构建 ──────────────────────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" = false ]; then
-    echo "▶ 构建 OpenTune ${VERSION} (Release, Ninja)"
+    echo "▶ 构建 OpenTune ${VERSION} (${ARCH} / ${OSX_ARCH}, Release, Ninja)"
 
     if [ "$CLEAN" = true ] && [ -d "${BUILD_DIR}" ]; then
         echo "  清空构建目录..."
         rm -rf "${BUILD_DIR}"
     fi
 
-    cmake --preset macos-ara-ninja --warn-uninitialized 2>&1 | tail -5
+    cmake --preset "${PRESET}" --warn-uninitialized 2>&1 | tail -5
     cmake --build "${BUILD_DIR}" --parallel 2>&1 | tail -10
 
     echo "✅ 构建完成"
@@ -140,12 +200,12 @@ validate_bundle_linkage() {
 
     binary_archs="$(lipo -archs "${binary}")"
     ort_archs="$(lipo -archs "${ort_library}")"
-    if [ "${binary_archs}" != "arm64" ] || [ "${ort_archs}" != "arm64" ]; then
-        echo "❌ ${label} 架构不一致: binary=${binary_archs}, onnxruntime=${ort_archs}"
+    if [ "${binary_archs}" != "${OSX_ARCH}" ] || [ "${ort_archs}" != "${OSX_ARCH}" ]; then
+        echo "❌ ${label} 架构不一致: binary=${binary_archs}, onnxruntime=${ort_archs}, expected=${OSX_ARCH}"
         exit 1
     fi
 
-    echo "  ✓ ${label}: ${expected_rpath}, ${ort_filename}, arm64"
+    echo "  ✓ ${label}: ${expected_rpath}, ${ort_filename}, ${OSX_ARCH}"
 }
 
 validate_bundle_linkage "${APP_BUNDLE}" "@executable_path/../Frameworks" "Standalone"
@@ -403,6 +463,7 @@ echo "════════════════════════�
 echo "  文件: ${DMG_PATH}"
 echo "  大小: ${DMG_SIZE}"
 echo "  版本: ${VERSION}"
+echo "  架构: ${ARCH} (${OSX_ARCH})"
 echo ""
 echo "  安装方式：双击 DMG → 双击「安装 OpenTune.command」"
 echo "  或直接拖拽 .app 到 /Applications，.vst3 到 VST3 目录"

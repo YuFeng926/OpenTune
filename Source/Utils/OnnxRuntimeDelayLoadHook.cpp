@@ -92,20 +92,20 @@ static HMODULE loadOnnxRuntimeFromCandidates()
 
     std::vector<std::wstring> candidates;
 
-    // 唯一 DLL 名 OpenTuneOnnxRuntime_1_23_0.dll：带版本后缀避免与宿主/DAW 自带的
+    // 唯一 DLL 名 OpenTuneOnnxRuntime_1_24_4.dll：带版本后缀避免与宿主/DAW 自带的
     // 同名裸 DLL 撞名，插件场景下不会误载宿主的裸名 DLL。
     // 优先搜索模块所在目录（Standalone应用最常见的部署方式）
     // 这是最常用的情况：DLL与exe在同一目录
     if (!moduleDir.empty()) {
-        candidates.push_back(joinPath(moduleDir, L"OpenTuneOnnxRuntime_1_23_0.dll"));
+        candidates.push_back(joinPath(moduleDir, L"OpenTuneOnnxRuntime_1_24_4.dll"));
     }
 
     // 然后搜索系统安装路径（用于共享安装场景）
     if (!programFiles.empty()) {
-        candidates.push_back(joinPath(joinPath(programFiles, L"OpenTune"), L"OpenTuneOnnxRuntime_1_23_0.dll"));
+        candidates.push_back(joinPath(joinPath(programFiles, L"OpenTune"), L"OpenTuneOnnxRuntime_1_24_4.dll"));
     }
     if (!programData.empty()) {
-        candidates.push_back(joinPath(joinPath(programData, L"OpenTune"), L"OpenTuneOnnxRuntime_1_23_0.dll"));
+        candidates.push_back(joinPath(joinPath(programData, L"OpenTune"), L"OpenTuneOnnxRuntime_1_24_4.dll"));
     }
 
     for (const auto& p : candidates) {
@@ -122,11 +122,11 @@ static FARPROC WINAPI onnxRuntimeDelayLoadHook(unsigned dliNotify, PDelayLoadInf
         return nullptr;
     }
 
-    if (_stricmp(pdli->szDll, "OpenTuneOnnxRuntime_1_23_0.dll") != 0) {
+    if (_stricmp(pdli->szDll, "OpenTuneOnnxRuntime_1_24_4.dll") != 0) {
         return nullptr;
     }
 
-    if (::GetModuleHandleW(L"OpenTuneOnnxRuntime_1_23_0.dll") != nullptr) {
+    if (::GetModuleHandleW(L"OpenTuneOnnxRuntime_1_24_4.dll") != nullptr) {
         return nullptr;
     }
 

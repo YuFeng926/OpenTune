@@ -954,6 +954,10 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
         openTuneLookAndFeel_.setColour(juce::TextButton::textColourOnId, UIColors::textPrimary);
     }
 
+    // Install process-wide default so orphaned AlertWindows / DialogWindow title
+    // bars always use Aurora glass styling regardless of current editor theme.
+    AuroraLookAndFeel::installAsDefault();
+
     topBar_.applyTheme();
     parameterPanel_.applyTheme();
     pianoRoll_.setPlayheadColour(UIColors::playhead);

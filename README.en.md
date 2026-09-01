@@ -106,7 +106,7 @@ Copy the `OpenTune.vst3` folder to `C:\Program Files\Common Files\VST3\` to load
 ```
 OpenTune/
 ├── OpenTune.exe
-├── OpenTuneOnnxRuntime_1_23_0.dll ← ONNX Runtime (built-in DirectML)
+├── OpenTuneOnnxRuntime_1_24_4.dll ← ONNX Runtime (built-in DirectML)
 ├── DirectML.dll             ← DirectML runtime
 ├── D3D12/
 │   ├── D3D12Core.dll        ← DirectX Agility SDK
@@ -125,15 +125,15 @@ OpenTune/
 
 | Requirement | Windows | macOS |
 |-------------|---------|-------|
-| **System** | Windows 10 1903+ | macOS 14.0+ (Sonoma) |
-| **Architecture** | x64 | arm64 (Apple Silicon) |
+| **System** | Windows 10 1903+ | macOS 13.3+ (Intel) / 14.0+ (Apple Silicon) |
+| **Architecture** | x64 | x86_64 (Intel) / arm64 (Apple Silicon) |
 | **Compiler** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
 | **C++ Standard** | C++17 | C++17 |
 | **Build System** | MSBuild (VS Generator) / Ninja | Ninja |
 
 > **Note:** Windows builds support both Visual Studio Generator + MSBuild and Ninja. Visual Studio Generator is recommended for full development, while Ninja is suitable for quick builds.
-> macOS Release and DMG packaging use the `macos-ara-ninja` preset, so Ninja must be installed.
+> macOS Release and DMG packaging use the `macos-silicon-ara-ninja` (Apple Silicon) or `macos-intel-ara-ninja` (Intel) preset, so Ninja must be installed.
 
 ### Dependency Preparation
 
@@ -170,16 +170,16 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-#### 4. ONNX Runtime (Windows v1.23.0 / macOS v1.24.4)
+#### 4. ONNX Runtime (Windows v1.24.4 / macOS v1.24.4)
 
-This project requires **two** ONNX Runtime packages (Windows): the CPU version provides headers, and the DML version provides the original `onnxruntime.dll` (with built-in DirectML support). The build system generates a dedicated import library and outputs the runtime DLL as `OpenTuneOnnxRuntime_1_23_0.dll`.
+This project requires **two** ONNX Runtime packages (Windows): the CPU version provides headers, and the DML version provides the original `onnxruntime.dll` (with built-in DirectML support). The build system generates a dedicated import library and outputs the runtime DLL as `OpenTuneOnnxRuntime_1_24_4.dll`.
 
 **Windows** — Download and extract to `ThirdParty/`:
 
 | Package | Link | Extract to |
 |---------|------|------------|
-| ONNX Runtime CPU | [onnxruntime-win-x64-1.23.0.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-win-x64-1.23.0.zip) | `ThirdParty/onnxruntime-win-x64-1.23.0/` |
-| ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.23.0.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.23.0) | `ThirdParty/onnxruntime-dml-1.23.0/` |
+| ONNX Runtime CPU | [onnxruntime-win-x64-1.24.4.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip) | `ThirdParty/onnxruntime-win-x64-1.24.4/` |
+| ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.24.4.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.24.4) | `ThirdParty/onnxruntime-dml-1.24.4/` |
 
 > **Tip:** Rename `.nupkg` to `.zip` before extracting.
 
@@ -187,13 +187,13 @@ This project requires **two** ONNX Runtime packages (Windows): the CPU version p
 
 ```
 ThirdParty/
-├── onnxruntime-win-x64-1.23.0/       ← CPU version (for compilation linking)
+├── onnxruntime-win-x64-1.24.4/       ← CPU version (for compilation linking)
 │   ├── include/
 │   │   └── onnxruntime_cxx_api.h      ← CMake checks for this file
 │   └── lib/
 │       └── onnxruntime.lib            ← Upstream package file; OpenTune doesn't link directly
 │
-└── onnxruntime-dml-1.23.0/            ← DML version (runtime DLL + DML provider headers)
+└── onnxruntime-dml-1.24.4/            ← DML version (runtime DLL + DML provider headers)
     ├── build/native/include/
     │   └── dml_provider_factory.h     ← DirectML EP registration header
     └── runtimes/win-x64/native/
@@ -201,12 +201,24 @@ ThirdParty/
 ```
 
 **Why are two packages needed?**
-- **CPU package** (`onnxruntime-win-x64-1.23.0`): Provides C++ API headers (`onnxruntime_cxx_api.h`).
-- **DML package** (`onnxruntime-dml-1.23.0`): Provides the original `onnxruntime.dll` with compiled DirectML Execution Provider and `dml_provider_factory.h`. CMake generates `OpenTuneOnnxRuntime_1_23_0.lib` based on the project's `.def` file and renames the source DLL to `OpenTuneOnnxRuntime_1_23_0.dll` for deployment.
+- **CPU package** (`onnxruntime-win-x64-1.24.4`): Provides C++ API headers (`onnxruntime_cxx_api.h`).
+- **DML package** (`onnxruntime-dml-1.24.4`): Provides the original `onnxruntime.dll` with compiled DirectML Execution Provider and `dml_provider_factory.h`. CMake generates `OpenTuneOnnxRuntime_1_24_4.lib` based on the project's `.def` file and renames the source DLL to `OpenTuneOnnxRuntime_1_24_4.dll` for deployment.
+
+**macOS (Intel, x86_64)**:
+
+macOS Intel uses the existing universal2 package from the repository (built as x86_64), with CoreML EP built in. This runtime requires macOS 13.3 or later:
+
+```
+ThirdParty/onnxruntime-osx-universal2-1.23.0/   ← Already included in the repository, no download needed
+├── include/
+│   └── onnxruntime_cxx_api.h
+└── lib/
+    └── libonnxruntime.1.23.0.dylib
+```
 
 **macOS (Apple Silicon, arm64)**:
 
-macOS uses one arm64 v1.24.4 package with the CoreML EP built in. This runtime requires macOS 14.0 or later:
+macOS Apple Silicon uses the arm64 v1.24.4 package with CoreML EP built in. This runtime requires macOS 14.0 or later. **Please download and extract to the specified directory manually** (not included in the repository):
 
 ```bash
 cd ThirdParty
@@ -230,7 +242,7 @@ These two NuGet packages provide the DirectML runtime and latest D3D12 support r
 | Package | Version | Download | Extract to |
 |---------|---------|----------|------------|
 | Microsoft.AI.DirectML | 1.15.4 | [NuGet](https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4) | `ThirdParty/microsoft.ai.directml.1.15.4/` |
-| Microsoft.Direct3D.D3D12 | 1.619.1 | [NuGet](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.619.1) | `ThirdParty/microsoft.direct3d.d3d12.1.619.1/` |
+| Microsoft.Direct3D.D3D12 | 1.619.5 | [NuGet](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.619.5) | `ThirdParty/microsoft.direct3d.d3d12.1.619.5/` |
 
 > After downloading `.nupkg`, rename to `.zip` and extract.
 
@@ -244,7 +256,7 @@ ThirdParty/microsoft.ai.directml.1.15.4/
     ├── DirectML.dll
     └── DirectML.lib
 
-ThirdParty/microsoft.direct3d.d3d12.1.619.1/
+ThirdParty/microsoft.direct3d.d3d12.1.619.5/
 └── build/native/
     ├── include/
     │   ├── d3d12.h
@@ -276,11 +288,12 @@ OpenTune/
 ├── ThirdParty/
 │   ├── ARA_SDK-releases-2.2.0/           ← ARA SDK
 │   ├── r8brain-free-src-master/          ← Resampling library
-│   ├── onnxruntime-win-x64-1.23.0/      ← ONNX Runtime CPU (Windows)
-│   ├── onnxruntime-dml-1.23.0/           ← ONNX Runtime DML (Windows)
-│   ├── onnxruntime-osx-universal2-1.23.0/ ← ONNX Runtime (macOS, universal2)
+│   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
+│   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
+│   ├── onnxruntime-osx-universal2-1.23.0/ ← ONNX Runtime (macOS Intel, universal2)
+│   ├── onnxruntime-osx-arm64-1.24.4/     ← ONNX Runtime (macOS Apple Silicon, arm64)
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
-│   └── microsoft.direct3d.d3d12.1.619.1/ ← D3D12 Agility SDK (Windows)
+│   └── microsoft.direct3d.d3d12.1.619.5/ ← D3D12 Agility SDK (Windows)
 ├── models/
 │   └── rmvpe.onnx
 ├── pc_nsf_hifigan_44.1k_ONNX/
@@ -323,8 +336,22 @@ For development in Visual Studio IDE:
 **macOS (Ninja + CMake)**
 
 ```bash
-cmake --preset macos-ara-ninja
-cmake --build --preset macos-ara-release
+# Apple Silicon (arm64)
+cmake --preset macos-silicon-ara-ninja
+cmake --build --preset macos-silicon-ara-release
+
+# Intel (x86_64)
+cmake --preset macos-intel-ara-ninja
+cmake --build --preset macos-intel-ara-release
+```
+
+Packaging commands:
+```bash
+# Apple Silicon
+./scripts/package-macos.sh --arch silicon
+
+# Intel
+./scripts/package-macos.sh --arch intel
 ```
 
 ### Build Artifacts
@@ -340,11 +367,11 @@ After build completion, runtime DLLs, model files, and D3D12 directory will be a
 
 | Symptom | Cause | Solution |
 |---------|-------|----------|
-| `ONNX Runtime C++ API header not found` | CPU version ONNX Runtime not placed correctly | Verify `ThirdParty/onnxruntime-win-x64-1.23.0/include/onnxruntime_cxx_api.h` exists |
-| `DirectML provider header missing` | DML version NuGet package not extracted correctly | Verify `ThirdParty/onnxruntime-dml-1.23.0/build/native/include/dml_provider_factory.h` exists |
+| `ONNX Runtime C++ API header not found` | CPU version ONNX Runtime not placed correctly | Verify `ThirdParty/onnxruntime-win-x64-1.24.4/include/onnxruntime_cxx_api.h` exists |
+| `DirectML provider header missing` | DML version NuGet package not extracted correctly | Verify `ThirdParty/onnxruntime-dml-1.24.4/build/native/include/dml_provider_factory.h` exists |
 | `DirectML header missing` | DirectML NuGet package not extracted | Verify `ThirdParty/microsoft.ai.directml.1.15.4/include/DirectML.h` exists |
-| `D3D12 header missing from Agility SDK` | D3D12 NuGet package not extracted | Verify `ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native/include/d3d12.h` exists |
-| `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.23.0/runtimes/win-x64/native/onnxruntime.dll` exists |
+| `D3D12 header missing from Agility SDK` | D3D12 NuGet package not extracted | Verify `ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include/d3d12.h` exists |
+| `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` exists |
 | `ARA SDK not found` | ARA SDK not cloned | Execute step 2 git clone command |
 | MSVC link error LNK2019 | MSVC runtime mismatch | This project uses static CRT (`/MT`), ensure dependency libraries are consistent |
 | Ninja build failure | Ninja not installed or not in PATH | Ensure Ninja is installed and in system PATH, or use Visual Studio Generator |

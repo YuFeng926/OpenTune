@@ -120,7 +120,7 @@ bool AccelerationDetector::detectDirectML() {
     selectedGpu_ = gpuDevices_[0];
     dmlAdapterIndex_ = static_cast<int>(selectedGpu_.adapterIndex);
 
-    // 用 ORT API 判断 DML EP 是否编译进当前 OpenTuneOnnxRuntime_1_23_0.dll
+    // 用 ORT API 判断 DML EP 是否编译进当前 OpenTuneOnnxRuntime_1_24_4.dll
     Ort::InitApi();
     auto& api = Ort::GetApi();
     const OrtDmlApi* dmlApi = nullptr;

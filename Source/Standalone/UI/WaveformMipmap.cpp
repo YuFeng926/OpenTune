@@ -54,7 +54,7 @@ bool WaveformMipmap::buildIncremental(double timeBudgetMs)
     const double startMs = juce::Time::getMillisecondCounterHiRes();
     bool levelCompleted = false;
     
-    for (int level = 0; level < kNumLevels; ++level)
+    for (int level = kNumLevels - 1; level >= 0; --level)
     {
         if (levels_[level].complete)
             continue;

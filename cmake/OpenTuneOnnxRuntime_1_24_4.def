@@ -1,17 +1,17 @@
 ; ==============================================================================
-; OpenTuneOnnxRuntime_1_23_0.def
+; OpenTuneOnnxRuntime_1_24_4.def
 ; Import library definition for the renamed ONNX Runtime runtime DLL
-; (OpenTuneOnnxRuntime_1_23_0.dll).
+; (OpenTuneOnnxRuntime_1_24_4.dll).
 ;
 ; Exports taken verbatim from the exact DirectML build export table:
-;   ThirdParty/onnxruntime-dml-1.23.0/runtimes/win-x64/native/onnxruntime.dll
+;   ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll
 ; (dumpbin /exports: OrtGetApiBase, OrtSessionOptionsAppendExecutionProvider_CPU,
 ;  OrtSessionOptionsAppendExecutionProvider_DML, OrtSessionOptionsAppendExecutionProviderEx_DML)
 ;
 ; Consumed by CMakeLists.txt: MSVC lib.exe (/DEF) generates the matching import
-; library OpenTuneOnnxRuntime_1_23_0.lib inside the build tree.
+; library OpenTuneOnnxRuntime_1_24_4.lib inside the build tree.
 ; ==============================================================================
-LIBRARY OpenTuneOnnxRuntime_1_23_0.dll
+LIBRARY OpenTuneOnnxRuntime_1_24_4.dll
 EXPORTS
     OrtGetApiBase
     OrtSessionOptionsAppendExecutionProvider_CPU

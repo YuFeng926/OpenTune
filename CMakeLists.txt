@@ -7,8 +7,9 @@ cmake_minimum_required(VERSION 3.22)
 
 # ==============================================================================
 # macOS Deployment Target (must be set before project() to take effect)
-# Locks both the binary's LC_BUILD_VERSION and Info.plist LSMinimumSystemVersion
-# to macOS 14.0 (Sonoma), matching the bundled ONNX Runtime 1.24.4 dylib.
+# Actual value is determined by architecture in the APPLE section below:
+#   x86_64 → 13.3 (matches ORT 1.23.0 universal2)
+#   arm64  → 14.0 (matches ORT 1.24.4 arm64)
 # ==============================================================================
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target")
 
@@ -80,7 +81,7 @@ if(WIN32)
     # ---- Windows: vendored DirectML + D3D12 Agility SDK ----
 
     set(OPENTUNE_DIRECTML_VERSION "1.15.4" CACHE STRING "Microsoft.AI.DirectML NuGet version")
-    set(OPENTUNE_D3D12_AGILITY_VERSION "1.619.1" CACHE STRING "Microsoft.Direct3D.D3D12 NuGet version")
+    set(OPENTUNE_D3D12_AGILITY_VERSION "1.619.5" CACHE STRING "Microsoft.Direct3D.D3D12 NuGet version")
 
     if(OPENTUNE_DIRECTML_VERSION VERSION_LESS "1.13.0")
         message(FATAL_ERROR "DirectML version must be >= 1.13.0")
@@ -212,8 +213,8 @@ if(WIN32)
     opentune_find_windows_um_x64_lib("d3d12" OPENTUNE_D3D12_SYSTEM_LIB)
     opentune_find_windows_um_x64_lib("dxgi" OPENTUNE_DXGI_SYSTEM_LIB)
 
-    # CPU ONNX Runtime v1.23.0: headers + libs
-    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-win-x64-1.23.0")
+    # CPU ONNX Runtime v1.24.4: headers + libs
+    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-win-x64-1.24.4")
     if(NOT DEFINED ONNXRUNTIME_ROOT OR "${ONNXRUNTIME_ROOT}" STREQUAL "")
         set(ONNXRUNTIME_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}" CACHE PATH "ONNX Runtime CPU root directory" FORCE)
     elseif(NOT EXISTS "${ONNXRUNTIME_ROOT}" AND EXISTS "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}")
@@ -222,10 +223,24 @@ if(WIN32)
     endif()
 
 elseif(APPLE)
-    # ---- macOS: Apple Silicon, ONNX Runtime v1.24.4 with CoreML ----
-    set(OPENTUNE_ONNXRUNTIME_VERSION "1.24.4")
-    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
-        "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-arm64-${OPENTUNE_ONNXRUNTIME_VERSION}")
+    # ---- macOS: architecture-dependent ONNX Runtime version ----
+    # x86_64 → ORT 1.23.0 universal2 (deployment target 13.3)
+    # arm64  → ORT 1.24.4 arm64     (deployment target 14.0)
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+        set(OPENTUNE_ONNXRUNTIME_VERSION "1.23.0")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target" FORCE)
+    else()
+        set(OPENTUNE_ONNXRUNTIME_VERSION "1.24.4")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target" FORCE)
+    endif()
+
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+        set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
+            "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION}")
+    else()
+        set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
+            "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-arm64-${OPENTUNE_ONNXRUNTIME_VERSION}")
+    endif()
     if(NOT DEFINED ONNXRUNTIME_ROOT OR "${ONNXRUNTIME_ROOT}" STREQUAL "")
         set(ONNXRUNTIME_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}"
             CACHE PATH "ONNX Runtime root directory" FORCE)
@@ -255,8 +270,8 @@ if(APPLE)
 endif()
 
 if(WIN32)
-    # DirectML ONNX Runtime v1.23.0: runtime DLLs + DML provider headers
-    set(OPENTUNE_DEFAULT_ONNXRUNTIME_DML_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-dml-1.23.0")
+    # DirectML ONNX Runtime v1.24.4: runtime DLLs + DML provider headers
+    set(OPENTUNE_DEFAULT_ONNXRUNTIME_DML_ROOT "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-dml-1.24.4")
     if(NOT DEFINED ONNXRUNTIME_DML_ROOT OR "${ONNXRUNTIME_DML_ROOT}" STREQUAL "")
         set(ONNXRUNTIME_DML_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_DML_ROOT}" CACHE PATH "ONNX Runtime DirectML package root" FORCE)
     elseif(NOT EXISTS "${ONNXRUNTIME_DML_ROOT}" AND EXISTS "${OPENTUNE_DEFAULT_ONNXRUNTIME_DML_ROOT}")
@@ -287,12 +302,12 @@ if(WIN32)
     # 运行时 DLL 唯一名（Windows）：OpenTune 专用 ONNX Runtime 运行库，带版本后缀，
     # 绝不使用裸名 onnxruntime.dll，避免与宿主 DAW 自带同名 DLL 撞名。
     # 源仍是第三方包内 onnxruntime.dll（builtin DML），仅输出改名。
-    set(OPENTUNE_ORT_DLL_NAME "OpenTuneOnnxRuntime_1_23_0.dll")
+    set(OPENTUNE_ORT_DLL_NAME "OpenTuneOnnxRuntime_1_24_4.dll")
 
     # 用 MSVC lib.exe 从项目内 .def（导出表取自上述 DML DLL 精确导出）生成与新 DLL 名
     # 匹配的导入库，供 OpenTune / Standalone / VST3 / Windows 测试目标链接。
-    set(OPENTUNE_ORT_DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneOnnxRuntime_1_23_0.def")
-    set(OPENTUNE_ORT_IMPORT_LIB "${CMAKE_CURRENT_BINARY_DIR}/OpenTuneOnnxRuntime_1_23_0.lib")
+    set(OPENTUNE_ORT_DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneOnnxRuntime_1_24_4.def")
+    set(OPENTUNE_ORT_IMPORT_LIB "${CMAKE_CURRENT_BINARY_DIR}/OpenTuneOnnxRuntime_1_24_4.lib")
     add_custom_command(
         OUTPUT "${OPENTUNE_ORT_IMPORT_LIB}"
         COMMAND "${CMAKE_AR}" /NOLOGO
@@ -309,7 +324,7 @@ if(WIN32)
         message(FATAL_ERROR "ONNX Runtime DirectML DLL missing: ${ONNXRUNTIME_DLL}")
     endif()
 
-    message(STATUS "ONNX Runtime version: 1.23.0")
+    message(STATUS "ONNX Runtime version: 1.24.4")
     message(STATUS "ONNX Runtime CPU root: ${ONNXRUNTIME_ROOT}")
     message(STATUS "ONNX Runtime DML root: ${ONNXRUNTIME_DML_ROOT}")
     message(STATUS "ONNX Runtime DLL source: ${ONNXRUNTIME_DLL}")
@@ -323,7 +338,7 @@ if(WIN32)
     message(STATUS "DirectX Agility SDK version token: ${OPENTUNE_D3D12_SDK_VERSION}")
 
 elseif(APPLE)
-    message(STATUS "ONNX Runtime version: ${OPENTUNE_ONNXRUNTIME_VERSION} (macOS arm64)")
+    message(STATUS "ONNX Runtime version: ${OPENTUNE_ONNXRUNTIME_VERSION} (macOS ${CMAKE_OSX_ARCHITECTURES})")
     message(STATUS "ONNX Runtime root: ${ONNXRUNTIME_ROOT}")
     message(STATUS "ONNX Runtime dylib: ${ONNXRUNTIME_DYLIB}")
 endif()
@@ -378,7 +393,7 @@ juce_add_plugin(OpenTune
     "<plist version=\"1.0\">
     <dict>
         <key>LSMinimumSystemVersion</key>
-        <string>13.3</string>
+        <string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string>
         <key>LSApplicationCategoryType</key>
         <string>public.app-category.music</string>
         <key>NSHumanReadableCopyright</key>
