@@ -10,13 +10,13 @@ namespace OpenTune {
 namespace {
 
 constexpr int kTrackingLagCount = 8;
-// Reference Fig. 5A places the nominal center N/2 at 1-based window position
-// 4, i.e. zero-based index 3. Per the reference EH_OFFSET semantics the
-// eight-lag neighborhood may extend past the full-rate lag bounds; only this
-// center index must stay inside [kMinFullLag, kMaxFullLag].
+// The nominal center N/2 sits at 1-based window position 4, i.e. zero-based
+// index 3. Per the EH_OFFSET semantics the eight-lag neighborhood may extend
+// past the full-rate lag bounds; only this center index must stay inside
+// [kMinFullLag, kMaxFullLag].
 constexpr int kTrackingCenterIndex = kTrackingLagCount / 2 - 1;
 constexpr int kTrackingUpdateInterval = 5;
-// the reference flow permits eps in [0, 0.4]. The wider value is used in coarse
+// eps in [0, 0.4]. The wider value is used in coarse acquisition to tolerate
 // acquisition to tolerate decimated-domain quantisation error; the stricter
 // value is used in full-rate tracking to reject noise.
 constexpr double kCoarseEpsilon = 0.4;
@@ -346,7 +346,7 @@ AutoTunePeriodDetector::analyze(
     int numF0HintFrames,
     double f0HintFrameRate)
 {
-    // The reference flow defines the lag grid for a preferred 44.1 kHz sample rate.
+    // The lag grid is defined for a preferred 44.1 kHz sample rate.
     // These constants are sample-domain values and are intentionally not
     // rescaled for other rates.
     (void)sampleRate;
@@ -480,7 +480,7 @@ AutoTunePeriodDetector::analyze(
 
         // Seat the nominal center (zero-based kTrackingCenterIndex) on N/2;
         // the surrounding neighborhood may overhang [16, 880] per the
-        // patent's EH_OFFSET semantics. initializeTracking validates that
+        // EH_OFFSET semantics. initializeTracking validates that
         // center against the full-rate lag bounds.
         const int base = seed->selectedPeriod - kTrackingCenterIndex;
         return initializeTracking(endIndex, base);

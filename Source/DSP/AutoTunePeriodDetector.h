@@ -4,7 +4,7 @@
 
 namespace OpenTune {
 
-/// Chunk-local render-rate period detector following the the reference flow flow:
+/// Chunk-local render-rate period detector with a coarse-then-confirm flow:
 /// coarse LPF/downsampling acquisition, full-rate fundamental confirmation,
 /// and an eight-lag E/H tracking window.
 class AutoTunePeriodDetector {
@@ -34,13 +34,13 @@ public:
         int numF0HintFrames = 0,
         double f0HintFrameRate = 0.0);
 
-    /// the reference flow coarse-stage decimation factor.
+    /// Coarse-stage decimation factor.
     static constexpr int kDecimFactor = 8;
     /// Coarse lag bounds at the decimated rate.
     static constexpr int kMinDecimLag = 2;
     static constexpr int kMaxDecimLag = 110;
 
-    /// Full-rate lag bounds for the reference 44.1 kHz sample grid.
+    /// Full-rate lag bounds for the 44.1 kHz reference sample grid.
     static constexpr int kMinFullLag = kMinDecimLag * kDecimFactor;
     static constexpr int kMaxFullLag = kMaxDecimLag * kDecimFactor;
 

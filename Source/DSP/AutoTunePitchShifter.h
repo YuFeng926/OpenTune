@@ -6,7 +6,7 @@
 
 namespace OpenTune {
 
-/// Per-sample pitch correction following the reference flow correction mode.
+/// Per-sample pitch correction with floating-point cycle resampling.
 ///
 /// The measured cycle period source is either the supplied originalF0 track
 /// or, when a detector shadow source is provided, per-sample detected periods

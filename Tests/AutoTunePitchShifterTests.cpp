@@ -623,7 +623,7 @@ void testDetectorTracksLowAndHighTones()
     constexpr int kPrefix = OpenTune::AutoTunePeriodDetector::kRequiredLookbehindSamples;
     constexpr int kNumSamples = 4096;
 
-    // 882 Hz has a 50-sample period on the fixed 44.1 kHz grid. The reference
+    // 882 Hz has a 50-sample period on the fixed 44.1 kHz grid. The
     // 8-sample coarse candidate quantization otherwise makes 1000 Hz choose
     // its 88-sample second minimum during the strict full-rate confirmation.
     for (const double frequency : {110.0, 882.0})
@@ -1577,7 +1577,7 @@ void testDetectorShadowDoesNotHalvePeriod()
                "500 Hz shadow: rendered output frequency is ~500 Hz, not ~1000 Hz");
 }
 
-// the reference flow weak-fundamental regression: a mixture whose 220 Hz fundamental is
+// Weak-fundamental regression: a mixture whose 220 Hz fundamental is
 // 20 dB below its 440 Hz harmonic (0.05 vs 0.5). The detector must lock onto
 // the true 220 Hz period (~200.45 samples at 44.1 kHz), not the dominant 440 Hz
 // harmonic (~100.23 samples). Feeding the full lookbehind and verifying the
