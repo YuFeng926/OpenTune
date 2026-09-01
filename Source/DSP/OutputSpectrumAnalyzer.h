@@ -58,8 +58,6 @@ public:
 
     void reset()
     {
-        publishSequence_.fetch_add(1, std::memory_order_acq_rel);
-
         writePos_ = 0;
         samplesFilled_ = 0;
         samplesSinceAnalysis_ = 0;
@@ -71,12 +69,7 @@ public:
         framePower_.fill(0.0f);
         smoothedBins_.fill(0.0f);
         peakBins_.fill(0.0f);
-        for (auto& value : outputSpectrumBins_)
-            value = 0.0f;
-        for (auto& value : outputPeakBins_)
-            value = 0.0f;
-
-        publishSequence_.fetch_add(1, std::memory_order_release);
+        publishSnapshot();
     }
 
     void push(const juce::AudioBuffer<float>& buffer) noexcept
@@ -126,36 +119,45 @@ public:
     }
 
     void copySnapshot(std::array<float, kNumBins>& spectrum,
-                      std::array<float, kNumBins>& peaks) const noexcept
+                       std::array<float, kNumBins>& peaks) const noexcept
     {
-        for (int attempt = 0; attempt < 3; ++attempt)
+        const int state = middleSnapshotState_.load(std::memory_order_acquire);
+        if ((state & kSnapshotDirtyBit) != 0)
         {
-            const uint64_t before = publishSequence_.load(std::memory_order_acquire);
-            if (before & 1u)
-                continue;
-            if (before == 0)
-            {
-                spectrum.fill(0.0f);
-                peaks.fill(0.0f);
-                return;
-            }
-
-            for (int i = 0; i < kNumBins; ++i)
-            {
-                spectrum[static_cast<size_t>(i)] = outputSpectrumBins_[static_cast<size_t>(i)];
-                peaks[static_cast<size_t>(i)] = outputPeakBins_[static_cast<size_t>(i)];
-            }
-
-            const uint64_t after = publishSequence_.load(std::memory_order_acquire);
-            if (before == after)
-                return;
+            const int latest = middleSnapshotState_.exchange(readerSnapshotIndex_,
+                                                              std::memory_order_acq_rel);
+            readerSnapshotIndex_ = latest & kSnapshotIndexMask;
         }
+
+        const auto& snapshot = snapshots_[static_cast<size_t>(readerSnapshotIndex_)];
+        spectrum = snapshot.spectrum;
+        peaks = snapshot.peaks;
     }
 
 private:
     static constexpr float kAttack = 0.34f;
     static constexpr float kRelease = 0.09f;
     static constexpr float kPeakDecay = 0.08f;
+    static constexpr int kSnapshotIndexMask = 0x3;
+    static constexpr int kSnapshotDirtyBit = 0x4;
+
+    struct Snapshot
+    {
+        std::array<float, kNumBins> spectrum{};
+        std::array<float, kNumBins> peaks{};
+    };
+
+    void publishSnapshot() noexcept
+    {
+        auto& target = snapshots_[static_cast<size_t>(writerSnapshotIndex_)];
+        target.spectrum = smoothedBins_;
+        target.peaks = peakBins_;
+
+        const int previousMiddle = middleSnapshotState_.exchange(
+            writerSnapshotIndex_ | kSnapshotDirtyBit,
+            std::memory_order_acq_rel);
+        writerSnapshotIndex_ = previousMiddle & kSnapshotIndexMask;
+    }
 
     void analyzeFrame(int endWritePos) noexcept
     {
@@ -208,13 +210,7 @@ private:
             peak = std::max(peak - kPeakDecay, smoothed);
         }
 
-        publishSequence_.fetch_add(1, std::memory_order_acq_rel);
-        for (int i = 0; i < kNumBins; ++i)
-        {
-            outputSpectrumBins_[static_cast<size_t>(i)] = smoothedBins_[static_cast<size_t>(i)];
-            outputPeakBins_[static_cast<size_t>(i)] = peakBins_[static_cast<size_t>(i)];
-        }
-        publishSequence_.fetch_add(1, std::memory_order_release);
+        publishSnapshot();
     }
 
     double sampleRate_ = 0.0;
@@ -233,9 +229,12 @@ private:
     int samplesFilled_ = 0;
     int samplesSinceAnalysis_ = 0;
 
-    std::atomic<uint64_t> publishSequence_{0};
-    std::array<float, kNumBins> outputSpectrumBins_{};
-    std::array<float, kNumBins> outputPeakBins_{};
+    // SPSC triple buffer: reader and writer each own one slot; the atomic
+    // middle slot transfers ownership, so ordinary float arrays never race.
+    std::array<Snapshot, 3> snapshots_{};
+    int writerSnapshotIndex_{1};
+    mutable int readerSnapshotIndex_{0};
+    mutable std::atomic<int> middleSnapshotState_{2};
 };
 
 } // namespace OpenTune

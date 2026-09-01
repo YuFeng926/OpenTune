@@ -43,6 +43,8 @@ struct SilentGap {
 
     bool isValid() const { return endSampleExclusive > startSample; }
 
+    int64_t midpointSample() const { return startSample + sampleCount() / 2; }
+
     bool containsSample(int64_t sample) const
     {
         return sample >= startSample && sample < endSampleExclusive;

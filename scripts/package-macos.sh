@@ -153,7 +153,7 @@ MODELS_DEST="/Applications/${APP_NAME}/models"
 if [ -d "${MODELS_SRC}" ]; then
     mkdir -p "${MODELS_DEST}"
     # 仅在目标不存在或为空时复制，避免重复拷贝大文件
-    if [ ! -f "${MODELS_DEST}/rmvpe.onnx" ]; then
+    if [ ! -f "${MODELS_DEST}/fcpe.onnx" ]; then
         echo "▶ 部署共享模型到 /Applications/OpenTune/models（供 VST3 使用）"
         cp -R "${MODELS_SRC}/." "${MODELS_DEST}/"
         echo "  ✓ 模型部署完成"
@@ -242,7 +242,7 @@ MODELS_SRC="${APP_DEST}/Contents/Resources/models"
 MODELS_DEST="/Applications/${APP_NAME}/models"
 if [ -d "${MODELS_SRC}" ]; then
     mkdir -p "${MODELS_DEST}"
-    if [ ! -f "${MODELS_DEST}/rmvpe.onnx" ]; then
+    if [ ! -f "${MODELS_DEST}/fcpe.onnx" ]; then
         echo "▶ Deploying shared models to /Applications/OpenTune/models (for VST3)"
         cp -R "${MODELS_SRC}/." "${MODELS_DEST}/"
         echo "  ✓ Models deployed"
