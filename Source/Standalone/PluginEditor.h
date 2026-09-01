@@ -229,6 +229,18 @@ private:
     double computeTrackAppendStartSeconds(int trackId) const;
     void releaseImportBatchSlot(int batchId);
 
+    /// 串行 project worker：join 旧任务后执行新任务。消息线程调用。
+    void joinAndRun(std::thread& worker, std::function<void()> task);
+
+    /// 异步保存工程。消息线程捕获快照，后台线程执行 I/O，完成后 callAsync 回消息线程。
+    /// @param newFilePath 非空时先 setCurrentProjectFile 再保存（Save As 语义）
+    /// @param onComplete 保存完成后回调（可选，在消息线程执行）
+    void saveProject(juce::File newFilePath, std::function<void()> onComplete = nullptr);
+
+    /// 异步打开工程：join 旧 project worker 任务后执行 openProject(file)，
+    /// 完成后 callAsync 回消息线程刷新 UI 或显示错误。
+    void openProjectFile(const juce::File& file);
+
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences appPreferences_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;
@@ -321,12 +333,15 @@ private:
     ContentKey rmvpeOverlayTargetContentKey_;
 
 
-    // Export worker thread management
+    // Project worker thread: serial executor for save/open file I/O.
+    // All project I/O jobs are logically serial (save→open pipeline proves it),
+    // so a single join-before-spawn worker replaces the former save/open pair.
+    std::thread projectWorker_;
+    // Export worker thread management (independent: export may be long-running)
     std::thread exportWorker_;
-    // Save worker thread (joinable, same pattern as exportWorker_)
-    std::thread saveWorker_;
-    // Open worker thread (for async project loading)
-    std::thread openWorker_;
+    // Export running flag. NOT derivable from exportWorker_.joinable(): a
+    // finished-but-unjoined thread is still joinable, so the atomic is the
+    // only correct "export completed" signal.
     std::atomic<bool> exportInProgress_{false};
 
     // Detached-safe background tasks (import/deferred post-process)
