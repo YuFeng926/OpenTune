@@ -691,11 +691,7 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
         exportWorker_.join();
     }
 
-    // Safely join project worker thread (save/open) if it exists
-    if (projectWorker_.joinable())
-    {
-        projectWorker_.join();
-    }
+    projectWorkerPool_.removeAllJobs(false, -1);
 
     // Remove custom LookAndFeel
     setLookAndFeel(nullptr);
@@ -748,37 +744,48 @@ void OpenTuneAudioProcessorEditor::waitForBackgroundUiTasks()
 }
 
 // ============================================================
-// Project worker：save/open 串行执行（消息线程调用）
+// Project save/open: message-thread state, single-worker I/O
 // ============================================================
 
-void OpenTuneAudioProcessorEditor::joinAndRun(std::thread& worker, std::function<void()> task)
+bool OpenTuneAudioProcessorEditor::rejectProjectOperationIfBusy()
 {
-    if (worker.joinable())
-        worker.join();
-    worker = std::thread(std::move(task));
+    if (!projectOperationBusy_)
+        return false;
+
+    ConfirmDialogContent::showMessage(
+        this,
+        juce::String::fromUTF8(u8"\u5DE5\u7A0B\u64CD\u4F5C"),
+        juce::String::fromUTF8(u8"\u53E6\u4E00\u4E2A\u5DE5\u7A0B\u64CD\u4F5C\u6B63\u5728\u8FDB\u884C\u4E2D\u3002"));
+    return true;
 }
 
-void OpenTuneAudioProcessorEditor::saveProject(juce::File newFilePath, std::function<void()> onComplete)
+void OpenTuneAudioProcessorEditor::saveProject(juce::File targetFile,
+                                               bool openChooserAfterSave,
+                                               juce::File openAfterSave)
 {
-    // Join 旧 project I/O 后才允许在消息线程访问 ProjectSession（prepareSave 捕获契约）。
-    if (projectWorker_.joinable())
-        projectWorker_.join();
+    if (rejectProjectOperationIfBusy())
+        return;
 
-    if (newFilePath != juce::File())
-        projectSession_.setCurrentProjectFile(newFilePath);
+    projectOperationBusy_ = true;
+    const auto path = targetFile != juce::File{}
+        ? targetFile
+        : projectSession_.getCurrentProjectFile();
+    auto task = projectSession_.prepareSave(path);
+    const uint64_t generation = projectSession_.getDirtyGeneration();
 
-    // Capture snapshot and paths on message thread — ProjectSession only accessed here
-    auto task = projectSession_.prepareSave();
-    const uint64_t gen = projectSession_.getDirtyGeneration();
-    const auto path = task.targetFile;
-
-    projectWorker_ = std::thread([safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
-                                  task = std::move(task), gen, path,
-                                  onComplete = std::move(onComplete)]() mutable {
-        // Background thread: pure file I/O only
+    projectWorkerPool_.addJob(
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
+         task = std::move(task), generation, path,
+         openChooserAfterSave,
+         openAfterSave = std::move(openAfterSave)]() mutable {
         auto result = ProjectSession::executeSaveToFile(task);
-        juce::MessageManager::callAsync([safeThis, result, gen, path, onComplete = std::move(onComplete)]() {
-            if (safeThis == nullptr) return;
+        juce::MessageManager::callAsync(
+            [safeThis, result, generation, path,
+             openChooserAfterSave,
+             openAfterSave = std::move(openAfterSave)]() mutable {
+            if (safeThis == nullptr)
+                return;
+
             if (!result.ok()) {
                 ConfirmDialogContent::launch(
                     new ConfirmDialogContent(
@@ -786,44 +793,80 @@ void OpenTuneAudioProcessorEditor::saveProject(juce::File newFilePath, std::func
                         result.error().fullMessage(),
                         { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                     safeThis.getComponent());
+                safeThis->projectOperationBusy_ = false;
                 return;
             }
-            if (safeThis->projectSession_.getDirtyGeneration() == gen)
+
+            safeThis->projectSession_.setCurrentProjectFile(path);
+            if (safeThis->projectSession_.getDirtyGeneration() == generation)
                 safeThis->projectSession_.clearDirty();
             safeThis->projectSession_.pushRecentProject(path);
             safeThis->syncRecentProjectsToMenu();
             safeThis->updateTitleWithProjectPath();
-            if (onComplete)
-                onComplete();
+
+            if (openAfterSave != juce::File{}) {
+                safeThis->startOpenProject(openAfterSave);
+                return;
+            }
+
+            if (openChooserAfterSave)
+                safeThis->launchOpenProjectChooser();
+            safeThis->projectOperationBusy_ = false;
         });
     });
 }
 
 void OpenTuneAudioProcessorEditor::openProjectFile(const juce::File& file)
 {
-    joinAndRun(projectWorker_,
-        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this), file]() {
-            auto result = safeThis->projectSession_.openProject(file);
+    if (rejectProjectOperationIfBusy())
+        return;
 
-            juce::MessageManager::callAsync([safeThis, result, file]() {
-                if (safeThis == nullptr) return;
+    projectOperationBusy_ = true;
+    startOpenProject(file);
+}
 
-                if (!result.ok()) {
-                    ConfirmDialogContent::launch(
-                        new ConfirmDialogContent(
-                            juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
-                            result.error().fullMessage(),
-                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                        safeThis.getComponent());
-                    safeThis->projectSession_.clearRecentProjects();
-                    return;
-                }
+void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
+{
+    const auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
+    projectWorkerPool_.addJob(
+        [this, safeThis, file]() {
+        auto preparedResult = std::make_shared<Result<ProjectSession::PreparedOpen>>(
+            projectSession_.prepareOpen(file));
+        juce::MessageManager::callAsync([safeThis, preparedResult]() mutable {
+            if (safeThis == nullptr)
+                return;
 
-                safeThis->syncRecentProjectsToMenu();
-                safeThis->updateTitleWithProjectPath();
-                safeThis->refreshAllUIFromProject();
-            });
+            if (!preparedResult->ok()) {
+                ConfirmDialogContent::launch(
+                    new ConfirmDialogContent(
+                        juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
+                        preparedResult->error().fullMessage(),
+                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                    safeThis.getComponent());
+                safeThis->projectSession_.clearRecentProjects();
+                safeThis->projectOperationBusy_ = false;
+                return;
+            }
+
+            auto commitResult = safeThis->projectSession_.commitPreparedOpen(
+                std::move(*preparedResult).value());
+            if (!commitResult.ok()) {
+                ConfirmDialogContent::launch(
+                    new ConfirmDialogContent(
+                        juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
+                        commitResult.error().fullMessage(),
+                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                    safeThis.getComponent());
+                safeThis->projectOperationBusy_ = false;
+                return;
+            }
+
+            safeThis->syncRecentProjectsToMenu();
+            safeThis->updateTitleWithProjectPath();
+            safeThis->refreshAllUIFromProject();
+            safeThis->projectOperationBusy_ = false;
         });
+    });
 }
 
 bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
@@ -2259,11 +2302,14 @@ void OpenTuneAudioProcessorEditor::saveProjectRequested()
         saveProjectAsRequested();
         return;
     }
-    saveProject(juce::File(), nullptr);
+    saveProject(juce::File());
 }
 
 void OpenTuneAudioProcessorEditor::openProjectRequested()
 {
+    if (rejectProjectOperationIfBusy())
+        return;
+
     if (!projectSession_.isDirty()) {
         launchOpenProjectChooser();
         return;
@@ -2280,10 +2326,7 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
                         safeThis->saveProjectAsThenOpenProject();
                         return;
                     }
-                    safeThis->saveProject(juce::File(), [safeThis]() {
-                        if (safeThis == nullptr) return;
-                        safeThis->launchOpenProjectChooser();
-                    });
+                    safeThis->saveProject(juce::File(), true);
                 }, true },
               { juce::String("Do Not Save"), [safeThis] {
                     if (safeThis == nullptr) return;
@@ -2310,6 +2353,9 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 
 void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
 {
+    if (rejectProjectOperationIfBusy())
+        return;
+
     auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
@@ -2328,22 +2374,14 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
                     juce::String("The target project file already exists. Overwrite it?"),
                     { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, file] {
                             if (safeThis == nullptr) return;
-                            safeThis->saveProject(file, [safeThis]() {
-                                if (safeThis == nullptr) return;
-                                safeThis->refreshAllUIFromProject();
-                                safeThis->launchOpenProjectChooser();
-                            });
+                            safeThis->saveProject(file, true);
                         }, true },
                       { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
                 safeThis.getComponent());
             return;
         }
 
-        safeThis->saveProject(file, [safeThis]() {
-            if (safeThis == nullptr) return;
-            safeThis->refreshAllUIFromProject();
-            safeThis->launchOpenProjectChooser();
-        });
+        safeThis->saveProject(file, true);
     });
 }
 
@@ -3151,6 +3189,9 @@ void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 
 void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
 {
+    if (rejectProjectOperationIfBusy())
+        return;
+
     auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
@@ -3169,20 +3210,22 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
                     juce::String("The target project file already exists. Overwrite it?"),
                     { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, file] {
                             if (safeThis == nullptr) return;
-                            safeThis->saveProject(file, nullptr);
+                            safeThis->saveProject(file);
                         }, true },
                       { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
                 safeThis.getComponent());
             return; // Don't continue in outer callback — the inner callback handles save
         }
 
-        safeThis->saveProject(file, nullptr);
+        safeThis->saveProject(file);
     });
 }
 
 void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& file)
 {
-    if (projectWorker_.joinable()) projectWorker_.join();
+    if (rejectProjectOperationIfBusy())
+        return;
+
     if (!projectSession_.isDirty()) {
         openProjectFile(file);
         return;
@@ -3208,11 +3251,7 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
 
                             auto handleSaveAndOpen = [safeThis, file](const juce::File& saveFile) {
                                 if (safeThis == nullptr) return;
-                                // Save to saveFile, then open the recent file after save completes
-                                safeThis->saveProject(saveFile, [safeThis, file]() {
-                                    if (safeThis == nullptr) return;
-                                    safeThis->openProjectFile(file);
-                                });
+                                safeThis->saveProject(saveFile, false, file);
                             };
 
                             if (saveFile.existsAsFile()) {
@@ -3231,10 +3270,7 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                         });
                         return;
                     }
-                    safeThis->saveProject(juce::File(), [safeThis, file]() {
-                        if (safeThis == nullptr) return;
-                        safeThis->openProjectFile(file);
-                    });
+                    safeThis->saveProject(juce::File(), false, file);
                   }, true },
 { juce::String("Do Not Save"), [safeThis, file] {
                      if (safeThis == nullptr) return;

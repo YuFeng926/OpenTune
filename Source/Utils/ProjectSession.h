@@ -21,12 +21,12 @@
 
 #include <juce_core/juce_core.h>
 
+#include "../PluginProcessor.h"
 #include "ProjectModel.h"
 #include "Error.h"
 
 namespace OpenTune {
 
-class OpenTuneAudioProcessor;
 class AppPreferences;
 
 class ProjectSession {
@@ -78,42 +78,12 @@ public:
     uint64_t getDirtyGeneration() const noexcept;
 
     // ============================================================================
-    // 工程操作
-    // ============================================================================
-
-    /**
-     * 打开工程文件。
-     * 调用方应先在外部判断是否需要保存当前工程。
-     *
-     * @param file .otproj 文件路径
-     * @return Result<void> 成功或失败原因
-     */
-    Result<void> openProject(const juce::File& file);
-
-    /**
-     * 保存工程到当前关联路径。
-     * 如果从未保存过（hasProjectPath() == false），应在外部先调用 saveProjectAs()。
-     *
-     * @return Result<void> 成功或失败原因
-     */
-    Result<void> saveProject();
-
-    /**
-     * 另存为工程到新路径。
-     * 会创建新工程目录、复制媒体文件、更新工程路径。
-     *
-     * @param file 新 .otproj 文件路径
-     * @return Result<void> 成功或失败原因
-     */
-    Result<void> saveProjectAs(const juce::File& file);
-
-    // ============================================================================
-    // 分步保存（分离 UI 线程和文件 I/O 线程）
+    // 两阶段工程 I/O
     // ============================================================================
 
     /**
      * 保存工作单元。
-     * prepareSave() 在消息线程构造此结构（captureSnapshot + 路径捕获）；
+     * prepareSave(targetFile) 在消息线程构造此结构（captureSnapshot + 目标路径）；
      * executeSaveToFile() 在后台线程消费此结构（纯文件 I/O）。
      */
     struct SaveTask {
@@ -122,8 +92,8 @@ public:
         juce::File mediaDirectory;
     };
 
-    /** 在消息线程调用：捕获快照 + 路径。返回的 SaveTask 供后台线程使用。 */
-    SaveTask prepareSave();
+    /** 在消息线程调用：捕获目标文件快照。返回的 SaveTask 供后台线程使用。 */
+    SaveTask prepareSave(const juce::File& targetFile);
 
     /**
      * 在后台线程调用：纯文件 I/O。
@@ -131,24 +101,28 @@ public:
      */
     static Result<void> executeSaveToFile(SaveTask& task);
 
-    /** 设置当前工程文件路径（用于 saveProjectAs 的场景） */
+    /** 保存成功后在消息线程提交当前工程文件路径。 */
     void setCurrentProjectFile(const juce::File& file);
 
-    /**
-     * 清空当前工程状态（新建工程）。
-     * 会清除 tracks、placements、contents、sources，重置路径和脏标记。
-     */
-    void newProject();
+    struct PreparedProjectSource {
+        uint64_t sourceId{0};
+        OpenTuneAudioProcessor::PreparedImport preparedImport;
+    };
 
-    // ============================================================================
-    // 快照抓取/应用（供序列化使用）
-    // ============================================================================
+    struct PreparedOpen {
+        ProjectSnapshot snapshot;
+        juce::File projectFile;
+        std::vector<PreparedProjectSource> sources;
+    };
+
+    /** 在后台线程读取工程媒体并执行 canonical import 预处理。 */
+    Result<PreparedOpen> prepareOpen(const juce::File& file);
+
+    /** 在消息线程一次性提交已预处理的工程数据。 */
+    Result<void> commitPreparedOpen(PreparedOpen&& preparedOpen);
 
     /** 从当前运行时状态抓取完整工程快照 */
     ProjectSnapshot captureSnapshot() const;
-
-    /** 将工程快照应用到当前运行时状态 */
-    Result<void> applySnapshot(const ProjectSnapshot& snapshot);
 
     // ============================================================================
     // 最近工程列表管理
@@ -167,9 +141,6 @@ private:
     // ============================================================================
     // 媒体辅助
     // ============================================================================
-
-    /** 获取工程文件所在目录的媒体子目录 */
-    juce::File getProjectMediaDirectory() const;
 
     /** 复制所有引用媒体到指定媒体目录（静态，纯文件 I/O） */
     static Result<void> copyMediaToProjectDirectory(ProjectSnapshot& snapshot, const juce::File& mediaDir);

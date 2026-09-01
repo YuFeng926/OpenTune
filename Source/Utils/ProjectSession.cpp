@@ -278,7 +278,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
 }
 
 // ============================================================================
-// 快照应用
+// 两阶段打开
 // ============================================================================
 
 namespace {
@@ -343,19 +343,70 @@ static std::shared_ptr<const juce::AudioBuffer<float>> rebuildStandaloneClipAudi
 }
 } // namespace
 
-Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
+Result<ProjectSession::PreparedOpen> ProjectSession::prepareOpen(const juce::File& file)
 {
+    ProjectPersistence persistence;
+    auto readResult = persistence.readProjectFile(file);
+    if (!readResult.ok())
+        return Result<PreparedOpen>::failure(readResult.error());
+
+    PreparedOpen preparedOpen;
+    preparedOpen.snapshot = std::move(readResult).value();
+    preparedOpen.projectFile = file;
+    preparedOpen.sources.reserve(preparedOpen.snapshot.sources.size());
+
+    const auto projectDirectory = file.getParentDirectory();
+    for (const auto& sourceEntry : preparedOpen.snapshot.sources) {
+        juce::File audioFile;
+        if (sourceEntry.relativeMediaPath.isNotEmpty())
+            audioFile = projectDirectory.getChildFile(sourceEntry.relativeMediaPath);
+
+        if (!audioFile.existsAsFile() && sourceEntry.originalImportPath.isNotEmpty())
+            audioFile = juce::File(sourceEntry.originalImportPath);
+
+        double loadedSampleRate = 0.0;
+        auto audioBuffer = audioFile.existsAsFile()
+            ? loadAudioFile(audioFile, loadedSampleRate)
+            : nullptr;
+        if (!audioBuffer) {
+            AppLogger::log("ProjectSession: Failed to load audio for source "
+                + juce::String(sourceEntry.sourceId) + " (" + sourceEntry.displayName + "), skipping");
+            continue;
+        }
+
+        OpenTuneAudioProcessor::PreparedImport preparedImport;
+        if (!processorRef_.prepareImport(std::move(*audioBuffer), loadedSampleRate,
+                                         sourceEntry.displayName, audioFile.getFullPathName(),
+                                         preparedImport, "project-open")) {
+            AppLogger::log("ProjectSession: prepareImport rejected source "
+                + juce::String(sourceEntry.sourceId) + " (" + sourceEntry.displayName + "), skipping");
+            continue;
+        }
+
+        PreparedProjectSource preparedSource;
+        preparedSource.sourceId = sourceEntry.sourceId;
+        preparedSource.preparedImport = std::move(preparedImport);
+        preparedOpen.sources.push_back(std::move(preparedSource));
+    }
+
+    return Result<PreparedOpen>::success(std::move(preparedOpen));
+}
+
+Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
+{
+    const auto& snapshot = preparedOpen.snapshot;
+
     // 清空当前状态
     auto* sourceStore = processorRef_.getSourceStore();
     auto* contentRepo = processorRef_.getStandaloneContentRepository();
     auto* arrangement = processorRef_.getStandaloneArrangement();
 
-    // All three stores are essential for applying a snapshot
+    // All three stores are essential for committing a project.
     if (!sourceStore || !contentRepo || !arrangement) {
-        AppLogger::error("ProjectSession: Cannot apply snapshot —one or more core stores are unavailable");
+        AppLogger::error("ProjectSession: Cannot commit project —one or more core stores are unavailable");
         return Result<void>::failure(
             Error::fromCode(ErrorCode::InvalidParameter,
-                "Cannot apply snapshot: core stores unavailable"));
+                "Cannot commit project: core stores unavailable"));
     }
 
     if (auto* crs = processorRef_.getContentRenderService())
@@ -372,47 +423,9 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
     if (auto* crs = processorRef_.getContentRenderService())
         crs->clearAll();
 
-    // 获取工程文件所在目录（用于解析相对路径）
-    const auto projectDir = currentProjectFile_.getParentDirectory();
-
     // 1. 重建 Sources
-    for (const auto& srcEntry : snapshot.sources) {
-        juce::File audioFile;
-
-        // 优先从相对路径加载
-        if (srcEntry.relativeMediaPath.isNotEmpty() && projectDir != juce::File{}) {
-            audioFile = projectDir.getChildFile(srcEntry.relativeMediaPath);
-        }
-
-        // 回退到原始路径
-        if (!audioFile.existsAsFile() && srcEntry.originalImportPath.isNotEmpty()) {
-            audioFile = juce::File(srcEntry.originalImportPath);
-        }
-
-        double loadedSampleRate = 0.0;
-        std::shared_ptr<juce::AudioBuffer<float>> audioBuffer;
-
-        if (audioFile.existsAsFile()) {
-            audioBuffer = loadAudioFile(audioFile, loadedSampleRate);
-        }
-
-        if (!audioBuffer) {
-            AppLogger::log("ProjectSession: Failed to load audio for source "
-                + juce::String(srcEntry.sourceId) + " (" + srcEntry.displayName + "), skipping");
-            continue;
-        }
-
-        // 经唯一导入 canonical 化链（prepareImport）落库：外部原始 buffer/rate
-        // → 固定 44.1kHz canonical，与交互导入共用同一条重采样/静默检测路径
-        OpenTuneAudioProcessor::PreparedImport prepared;
-        if (!processorRef_.prepareImport(std::move(*audioBuffer), loadedSampleRate,
-                                         srcEntry.displayName, audioFile.getFullPathName(),
-                                         prepared, "project-open")) {
-            AppLogger::log("ProjectSession: prepareImport rejected source "
-                + juce::String(srcEntry.sourceId) + " (" + srcEntry.displayName + "), skipping");
-            continue;
-        }
-
+    for (auto& preparedSource : preparedOpen.sources) {
+        auto& prepared = preparedSource.preparedImport;
         auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(
             std::move(prepared.storedAudioBuffer));
 
@@ -422,9 +435,9 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         req.audioBuffer = storedAudioBuffer;
         req.sampleRate = TimeCoordinate::kRenderSampleRate;
 
-        if (sourceStore->createSource(req, srcEntry.sourceId) == 0) {
+        if (sourceStore->createSource(req, preparedSource.sourceId) == 0) {
             AppLogger::log("ProjectSession: Failed to create source "
-                + juce::String(srcEntry.sourceId) + " (" + srcEntry.displayName + "), skipping");
+                + juce::String(preparedSource.sourceId) + " (" + prepared.displayName + "), skipping");
             continue;
         }
     }
@@ -630,10 +643,6 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
             anyBindingLost = true;
         }
     }
-    if (anyBindingLost) {
-        markDirty(); // 工程损坏：部分reference binding 无法恢复
-    }
-
     // 恢复工程设置
     processorRef_.setBpm(snapshot.settings.bpm);
     processorRef_.setTimeSignature(snapshot.settings.timeSignatureNumerator,
@@ -687,70 +696,15 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         }
     }
 
-    return Result<void>::success();
-}
-
-// ============================================================================
-// 工程操作
-// ============================================================================
-
-Result<void> ProjectSession::openProject(const juce::File& file)
-{
-    ProjectPersistence persistence;
-    auto result = persistence.readProjectFile(file);
-    if (!result.ok()) {
-        return Result<void>::failure(result.error());
-    }
-
-    auto& snapshot = result.value();
-    currentProjectFile_ = file;
-    auto applyResult = applySnapshot(snapshot);
-    if (!applyResult.ok()) {
-        return applyResult;
-    }
-
-    // 恢复持久化工程身份
+    currentProjectFile_ = preparedOpen.projectFile;
     cachedProjectId_ = snapshot.header.projectId;
     cachedCreatedAt_ = snapshot.header.createdAt;
-
-    // 保留 applySnapshot 中因绑定丢失设置的脏标记
-    const bool repairedDuringLoad = dirty_;
     clearDirty();
-    if (repairedDuringLoad) {
+    if (anyBindingLost)
         markDirty();
-    }
-    pushRecentProject(file);
+    pushRecentProject(preparedOpen.projectFile);
+
     return Result<void>::success();
-}
-
-Result<void> ProjectSession::saveProject()
-{
-    if (!hasProjectPath()) {
-        return Result<void>::failure(
-            Error::fromCode(ErrorCode::InvalidParameter,
-                "No project path set; use Save Project As... first"));
-    }
-
-    auto task = prepareSave();
-    auto result = executeSaveToFile(task);
-    if (!result.ok()) {
-        return result;
-    }
-
-    clearDirty();
-    pushRecentProject(currentProjectFile_);
-    return Result<void>::success();
-}
-
-Result<void> ProjectSession::saveProjectAs(const juce::File& file)
-{
-    auto oldFile = currentProjectFile_;
-    currentProjectFile_ = file;
-    auto result = saveProject();
-    if (!result.ok()) {
-        currentProjectFile_ = oldFile;
-    }
-    return result;
 }
 
 void ProjectSession::setCurrentProjectFile(const juce::File& file)
@@ -762,12 +716,13 @@ void ProjectSession::setCurrentProjectFile(const juce::File& file)
 // 分步保存
 // ============================================================================
 
-ProjectSession::SaveTask ProjectSession::prepareSave()
+ProjectSession::SaveTask ProjectSession::prepareSave(const juce::File& targetFile)
 {
     SaveTask task;
     task.snapshot = captureSnapshot();
-    task.targetFile = currentProjectFile_;
-    task.mediaDirectory = getProjectMediaDirectory();
+    task.snapshot.header.projectName = targetFile.getFileNameWithoutExtension();
+    task.targetFile = targetFile;
+    task.mediaDirectory = targetFile.getParentDirectory().getChildFile(kMediaDirectoryName);
     return task;
 }
 
@@ -792,39 +747,9 @@ Result<void> ProjectSession::executeSaveToFile(SaveTask& task)
     return Result<void>::success();
 }
 
-void ProjectSession::newProject()
-{
-    auto* sourceStore = processorRef_.getSourceStore();
-    auto* contentRepo = processorRef_.getStandaloneContentRepository();
-    auto* arrangement = processorRef_.getStandaloneArrangement();
-
-    if (auto* crs = processorRef_.getContentRenderService())
-    {
-        crs->drainRenderWorker();
-        crs->clearAll();
-    }
-
-    if (sourceStore) { sourceStore->clear(); }
-    if (contentRepo) { contentRepo->clear(); }
-    if (arrangement) { arrangement->clear(); }
-
-    processorRef_.getUndoManager().clear();
-
-    cachedProjectId_ = {};
-    cachedCreatedAt_ = {};
-    currentProjectFile_ = juce::File{};
-    clearDirty();
-}
-
 // ============================================================================
 // 媒体复制
 // ============================================================================
-
-juce::File ProjectSession::getProjectMediaDirectory() const
-{
-    if (!hasProjectPath()) { return {}; }
-    return currentProjectFile_.getParentDirectory().getChildFile(kMediaDirectoryName);
-}
 
 juce::String ProjectSession::generateMediaFileName(const ProjectSourceEntry& source)
 {

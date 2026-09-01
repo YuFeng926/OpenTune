@@ -229,17 +229,16 @@ private:
     double computeTrackAppendStartSeconds(int trackId) const;
     void releaseImportBatchSlot(int batchId);
 
-    /// 串行 project worker：join 旧任务后执行新任务。消息线程调用。
-    void joinAndRun(std::thread& worker, std::function<void()> task);
+    bool rejectProjectOperationIfBusy();
 
-    /// 异步保存工程。消息线程捕获快照，后台线程执行 I/O，完成后 callAsync 回消息线程。
-    /// @param newFilePath 非空时先 setCurrentProjectFile 再保存（Save As 语义）
-    /// @param onComplete 保存完成后回调（可选，在消息线程执行）
-    void saveProject(juce::File newFilePath, std::function<void()> onComplete = nullptr);
+    /// 异步保存工程。消息线程捕获目标快照，单线程池执行 I/O。
+    void saveProject(juce::File targetFile,
+                     bool openChooserAfterSave = false,
+                     juce::File openAfterSave = {});
 
-    /// 异步打开工程：join 旧 project worker 任务后执行 openProject(file)，
-    /// 完成后 callAsync 回消息线程刷新 UI 或显示错误。
+    /// 异步打开工程：worker 预处理，消息线程提交运行时状态。
     void openProjectFile(const juce::File& file);
+    void startOpenProject(const juce::File& file);
 
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences appPreferences_;
@@ -333,10 +332,9 @@ private:
     ContentKey rmvpeOverlayTargetContentKey_;
 
 
-    // Project worker thread: serial executor for save/open file I/O.
-    // All project I/O jobs are logically serial (save→open pipeline proves it),
-    // so a single join-before-spawn worker replaces the former save/open pair.
-    std::thread projectWorker_;
+    juce::ThreadPool projectWorkerPool_{1};
+    // Message-thread only; includes the posted completion and direct continuation.
+    bool projectOperationBusy_{false};
     // Export worker thread management (independent: export may be long-running)
     std::thread exportWorker_;
     // Export running flag. NOT derivable from exportWorker_.joinable(): a
