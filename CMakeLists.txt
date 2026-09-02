@@ -683,6 +683,7 @@ target_sources(OpenTune
         Source/Utils/DetectedKey.h
         Source/Utils/Note.h
         Source/Utils/NoteEqSettings.h
+        Source/Utils/SpectrumDisplayData.h
         Source/Utils/OnnxRuntimeDelayLoadHook.cpp
         Source/Utils/ModelPathResolver.h
         Source/Utils/ProjectModel.cpp

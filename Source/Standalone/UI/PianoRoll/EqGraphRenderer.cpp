@@ -77,7 +77,7 @@ juce::Colour EqGraphRenderer::spectrumHeatColor(float norm)
 // ============================================================================
 
 juce::Path EqGraphRenderer::catmullRomLinePath(
-    const std::array<juce::Point<float>, 128>& points, int count)
+    const std::array<juce::Point<float>, kSpectrumDisplayPoints>& points, int count)
 {
     juce::Path path;
     if (count <= 0)
@@ -103,7 +103,7 @@ juce::Path EqGraphRenderer::catmullRomLinePath(
 }
 
 juce::Path EqGraphRenderer::catmullRomFillPath(
-    const std::array<juce::Point<float>, 128>& points, int count, float baseline)
+    const std::array<juce::Point<float>, kSpectrumDisplayPoints>& points, int count, float baseline)
 {
     juce::Path path;
     if (count <= 0)
@@ -583,8 +583,8 @@ void EqGraphRenderer::advanceSpectrumColorCycle(double dt)
 // ============================================================================
 
 void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
-                                              const std::array<float, 128>& spectrum,
-                                              const std::array<float, 128>& peaks) const
+                                              const SpectrumArray& spectrum,
+                                              const SpectrumArray& peaks) const
 {
     const float gx = graphBounds_.getX();
     const float gy = graphBounds_.getY();
@@ -598,8 +598,8 @@ void EqGraphRenderer::drawSpectrumBackground(juce::Graphics& g,
                           spectrumColorProgress_);
 
     // ── 构建点集 ──
-    std::array<juce::Point<float>, 128> linePoints{};
-    std::array<juce::Point<float>, 128> peakPoints{};
+    std::array<juce::Point<float>, kSpectrumDisplayPoints> linePoints{};
+    std::array<juce::Point<float>, kSpectrumDisplayPoints> peakPoints{};
     for (int i = 0; i < numBins; ++i)
     {
         const float norm = static_cast<float>(i) / static_cast<float>(numBins - 1);

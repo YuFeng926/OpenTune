@@ -885,8 +885,8 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
     eqPopup_->onCommitSettings = [this](const EqSettings& settings) { applyEqSettingsToSelection(settings); };
     eqPopup_->onRemoveEq = [this]() { removeEqFromSelection(); closeEqPopup(); };
     eqPopup_->onClose = [this]() { closeEqPopup(); };
-    eqPopup_->onReadSpectrum = [this](std::array<float, 128>& spectrum,
-                                      std::array<float, 128>& peaks) {
+    eqPopup_->onReadSpectrum = [this](SpectrumArray& spectrum,
+                                      SpectrumArray& peaks) {
         if (processor_ != nullptr)
             processor_->copyOutputSpectrum(spectrum, peaks);
         else

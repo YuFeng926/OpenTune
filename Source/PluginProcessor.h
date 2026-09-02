@@ -28,6 +28,7 @@
 #include "StandaloneArrangement.h"
 #include "DSP/ResamplingManager.h"
 #include "DSP/OutputSpectrumAnalyzer.h"
+#include "Utils/SpectrumDisplayData.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/ContentTimelineProjection.h"
 #include "Utils/DetectedKey.h"
@@ -751,9 +752,9 @@ public:
     void setLoopEnabled(bool enabled);
     bool isPlaying() const noexcept { return getPlayHeadState().isPlaying.load(std::memory_order_relaxed); }
 
-    /// 从 OutputSpectrumAnalyzer 复制最新128个对数频段：spectrum = 主频谱线，peaks = 峰值线（UI 线程调用）。
-    void copyOutputSpectrum(std::array<float, 128>& spectrum,
-                            std::array<float, 128>& peaks) const noexcept;
+    /// 从 OutputSpectrumAnalyzer 复制最新 684 个对数频段：spectrum = 主频谱线，peaks = 峰值线（UI 线程调用）。
+    void copyOutputSpectrum(SpectrumArray& spectrum,
+                            SpectrumArray& peaks) const noexcept;
     bool isLoopEnabled() const noexcept { return getPlayHeadState().isLooping.load(std::memory_order_relaxed); }
     double getPosition() const { return getPlayHeadState().getPresentedPositionSeconds(); }
     HostTransportSnapshot getHostTransportSnapshot() const;

@@ -9,6 +9,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Utils/NoteEqSettings.h"
+#include "Utils/SpectrumDisplayData.h"
 #include "EqGraphRenderer.h"
 #include "EqBandInteraction.h"
 #include <memory>
@@ -32,7 +33,7 @@ public:
     std::function<void()> onRemoveEq;
     std::function<void()> onClose;
     std::function<void(bool)> onRemoveConfirmationSuppressed;
-    std::function<void(std::array<float, 128>&, std::array<float, 128>&)> onReadSpectrum;
+    std::function<void(SpectrumArray&, SpectrumArray&)> onReadSpectrum;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -87,8 +88,8 @@ private:
     EqSettings settings_;
     EqGraphRenderer renderer_;
     EqBandInteraction interaction_;
-    std::array<float, 128> spectrum_{};
-    std::array<float, 128> spectrumPeaks_{};
+    SpectrumArray spectrum_{};
+    SpectrumArray spectrumPeaks_{};
     juce::Colour noteColor_;
     bool isPreview_ = true;
     bool isMaximized_ = false;

@@ -3348,8 +3348,8 @@ void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
     playHeadState_.isLooping.store(enabled, std::memory_order_relaxed);
 }
 
-void OpenTuneAudioProcessor::copyOutputSpectrum(std::array<float, 128>& spectrum,
-                                                std::array<float, 128>& peaks) const noexcept
+void OpenTuneAudioProcessor::copyOutputSpectrum(SpectrumArray& spectrum,
+                                                SpectrumArray& peaks) const noexcept
 {
     outputSpectrumAnalyzer_.copySnapshot(spectrum, peaks);
 }

@@ -4,9 +4,13 @@
  * Standalone 最终输出频谱分析器。
  *
  * 音频线程只写固定数组并执行预分配的 FFT；UI 线程通过原子快照读取。
- * 频谱横轴固定为 20 Hz–20 kHz，与 EQ 图的对数轴一致。
+ * 频谱横轴固定为 20 Hz–20 kHz 的 684 个对数采样点，与 EQ 图的对数轴一致。
+ *
+ * FFT 输出在每个显示频率点上做小数 bin 线性插值（非整数 bin 区间平均），
+ * 正确处理 JUCE performRealOnlyForwardTransform 的 real-only 布局。
  */
 
+#include "Utils/SpectrumDisplayData.h"
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
 #include <array>
@@ -21,7 +25,6 @@ class OutputSpectrumAnalyzer
 {
 public:
     static constexpr int kFftSize = 2048;
-    static constexpr int kNumBins = 128;
     static constexpr int kHalfFft = kFftSize / 2;
     static constexpr int kHopSize = 256;
     static constexpr int kMaxChannels = 2;
@@ -33,7 +36,7 @@ public:
     void prepare(double sampleRate)
     {
         sampleRate_ = sampleRate;
-        fft_ = std::make_unique<juce::dsp::FFT>(11);
+        fft_ = std::make_unique<juce::dsp::FFT>(11); // 2^11 = 2048
 
         constexpr float twoPi = 6.2831853071795864769f;
         for (int i = 0; i < kFftSize; ++i)
@@ -41,15 +44,15 @@ public:
                 0.5f * (1.0f - std::cos(twoPi * static_cast<float>(i)
                                          / static_cast<float>(kFftSize)));
 
-        const float binHz = static_cast<float>(sampleRate) / static_cast<float>(kFftSize);
-        const float logMin = std::log10(20.0f);
-        const float logMax = std::log10(20000.0f);
-        for (int i = 0; i <= kNumBins; ++i)
+        // 预计算 684 个对数频率点：20 * pow(20000/20, i/683)
+        constexpr float logMin = 1.30102999566f; // log10(20)
+        constexpr float logMax = 4.30102999566f; // log10(20000)
+        for (int i = 0; i < kSpectrumDisplayPoints; ++i)
         {
-            const float norm = static_cast<float>(i) / static_cast<float>(kNumBins);
-            const float frequency = std::pow(10.0f, logMin + (logMax - logMin) * norm);
-            logBinEdges_[static_cast<size_t>(i)] = std::clamp(
-                static_cast<int>(std::round(frequency / binHz)), 0, kHalfFft);
+            const float norm = static_cast<float>(i)
+                             / static_cast<float>(kSpectrumDisplayPoints - 1);
+            displayFreqs_[static_cast<size_t>(i)] =
+                std::pow(10.0f, logMin + (logMax - logMin) * norm);
         }
 
         reset();
@@ -118,8 +121,8 @@ public:
         }
     }
 
-    void copySnapshot(std::array<float, kNumBins>& spectrum,
-                       std::array<float, kNumBins>& peaks) const noexcept
+    void copySnapshot(SpectrumArray& spectrum,
+                       SpectrumArray& peaks) const noexcept
     {
         const int state = middleSnapshotState_.load(std::memory_order_acquire);
         if ((state & kSnapshotDirtyBit) != 0)
@@ -143,8 +146,8 @@ private:
 
     struct Snapshot
     {
-        std::array<float, kNumBins> spectrum{};
-        std::array<float, kNumBins> peaks{};
+        SpectrumArray spectrum{};
+        SpectrumArray peaks{};
     };
 
     void publishSnapshot() noexcept
@@ -176,54 +179,73 @@ private:
             std::memset(fftData.data() + kFftSize, 0, sizeof(float) * kFftSize);
             fft_->performRealOnlyForwardTransform(fftData.data());
 
-            for (int bin = 0; bin < kNumBins; ++bin)
+            const float* data = fftData.data();
+            const float sampleRateF = static_cast<float>(sampleRate_);
+
+            // 对每个显示频率点，在 FFT 幅度谱上做小数 bin 线性插值
+            for (int dp = 0; dp < kSpectrumDisplayPoints; ++dp)
             {
-                const int lo = logBinEdges_[static_cast<size_t>(bin)];
-                const int hi = std::max(logBinEdges_[static_cast<size_t>(bin + 1)], lo + 1);
-                float power = 0.0f;
-                int count = 0;
-                for (int fftBin = lo; fftBin < hi && fftBin < kHalfFft; ++fftBin)
-                {
-                    const float real = fftData[static_cast<size_t>(2 * fftBin)];
-                    const float imag = fftData[static_cast<size_t>(2 * fftBin + 1)];
-                    power += real * real + imag * imag;
-                    ++count;
-                }
-                if (count > 0)
-                    framePower_[static_cast<size_t>(bin)] += power / static_cast<float>(count);
+                const float binPos = displayFreqs_[static_cast<size_t>(dp)]
+                                   * static_cast<float>(kFftSize) / sampleRateF;
+                const int binLo = std::max(0, std::min(static_cast<int>(binPos), kHalfFft));
+                const int binHi = std::min(binLo + 1, kHalfFft);
+                const float frac = std::clamp(
+                    binPos - static_cast<float>(binLo), 0.0f, 1.0f);
+
+                // JUCE real-only FFT 布局：
+                //   bin 0     → data[0]（纯实数）
+                //   bin k > 0 → data[2k] + j*data[2k+1]
+                //   Nyquist   → data[1]（纯实数）
+                const float magLo = magFromBin(data, binLo);
+                const float magHi = magFromBin(data, binHi);
+                const float mag = magLo + frac * (magHi - magLo);
+
+                framePower_[static_cast<size_t>(dp)] += mag * mag;
             }
         }
 
         const float channelScale = 1.0f / static_cast<float>(historyChannels_);
-        for (int bin = 0; bin < kNumBins; ++bin)
+        for (int dp = 0; dp < kSpectrumDisplayPoints; ++dp)
         {
-            const float magnitude = std::sqrt(framePower_[static_cast<size_t>(bin)] * channelScale);
+            const float magnitude = std::sqrt(framePower_[static_cast<size_t>(dp)] * channelScale);
             const float level = (2.0f * magnitude) / (static_cast<float>(kFftSize) * 0.5f);
             const float db = 20.0f * std::log10(std::max(level, 1.0e-10f));
             const float scaled = std::clamp((db + 80.0f) / 80.0f, 0.0f, 1.0f);
 
-            float& smoothed = smoothedBins_[static_cast<size_t>(bin)];
+            float& smoothed = smoothedBins_[static_cast<size_t>(dp)];
             const float alpha = scaled > smoothed ? kAttack : kRelease;
             smoothed += alpha * (scaled - smoothed);
 
-            float& peak = peakBins_[static_cast<size_t>(bin)];
+            float& peak = peakBins_[static_cast<size_t>(dp)];
             peak = std::max(peak - kPeakDecay, smoothed);
         }
 
         publishSnapshot();
     }
 
+    /// JUCE real-only FFT 幅度提取：正确处理 bin 0 和 Nyquist
+    static float magFromBin(const float* data, int bin) noexcept
+    {
+        if (bin == 0)
+            return std::abs(data[0]);
+        if (bin == kHalfFft)
+            return std::abs(data[1]);
+        const float re = data[2 * bin];
+        const float im = data[2 * bin + 1];
+        return std::sqrt(re * re + im * im);
+    }
+
     double sampleRate_ = 0.0;
     bool prepared_ = false;
     std::unique_ptr<juce::dsp::FFT> fft_;
     std::array<float, kFftSize> hannWindow_{};
-    std::array<int, kNumBins + 1> logBinEdges_{};
+    std::array<float, kSpectrumDisplayPoints> displayFreqs_{};
 
     std::array<std::array<float, kFftSize>, kMaxChannels> history_{};
     std::array<std::array<float, kFftSize * 2>, kMaxChannels> fftData_{};
-    std::array<float, kNumBins> framePower_{};
-    std::array<float, kNumBins> smoothedBins_{};
-    std::array<float, kNumBins> peakBins_{};
+    std::array<float, kSpectrumDisplayPoints> framePower_{};
+    SpectrumArray smoothedBins_{};
+    SpectrumArray peakBins_{};
     int historyChannels_ = 0;
     int writePos_ = 0;
     int samplesFilled_ = 0;

@@ -15,6 +15,7 @@
 #include <functional>
 
 #include "Utils/NoteEqSettings.h"
+#include "Utils/SpectrumDisplayData.h"
 
 namespace OpenTune {
 
@@ -100,8 +101,8 @@ public:
 
     // ── 频谱背景动画 ──
     void drawSpectrumBackground(juce::Graphics& g,
-                                const std::array<float, 128>& spectrum,
-                                const std::array<float, 128>& peaks) const;
+                                const SpectrumArray& spectrum,
+                                const SpectrumArray& peaks) const;
     /// 每帧由 timer 调用一次，推进频谱颜色循环插值
     void advanceSpectrumColorCycle(double dt);
 
@@ -171,7 +172,7 @@ private:
         visible.fill(true);
         return visible;
     }();
-    mutable std::array<float, 128> spectrumPeakTrace_{};
+    mutable SpectrumArray spectrumPeakTrace_{};
     int glowQuality_ = 2;
 
     // ── 频谱颜色循环状态 ──
@@ -200,8 +201,8 @@ private:
     // ── 频谱热力图颜色（4色水平梯度，按频率位置着色） ──
     static juce::Colour spectrumHeatColor(float norm);
     // ── Catmull-Rom 样条路径构建 ──
-    static juce::Path catmullRomLinePath(const std::array<juce::Point<float>, 128>& points, int count);
-    static juce::Path catmullRomFillPath(const std::array<juce::Point<float>, 128>& points, int count, float baseline);
+    static juce::Path catmullRomLinePath(const std::array<juce::Point<float>, kSpectrumDisplayPoints>& points, int count);
+    static juce::Path catmullRomFillPath(const std::array<juce::Point<float>, kSpectrumDisplayPoints>& points, int count, float baseline);
 };
 
 } // namespace OpenTune
