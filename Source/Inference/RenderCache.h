@@ -47,10 +47,10 @@ public:
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
     };
-    // 以完整计划原子重建 chunks_/pendingChunks_，返回本次需投递的 worker job token 数。
-    // contentRevision 来自 EditableContentSnapshot：同几何且同内容版本时跳过 desiredRevision 递增。
+    // 以完整计划原子重建 chunks_/pendingChunks_，返回当前需要物理排队的
+    // Stage1 chunk 身份。contentRevision 来自 EditableContentSnapshot：同几何且
+    // 同内容版本时跳过 desiredRevision 递增。
     struct ReconcileResult {
-        std::size_t workerTokenCount{0};
         bool stateChanged{false};
     };
     ReconcileResult reconcileFullPlanAndRequest(const std::vector<PlannedChunk>& fullPlan,
@@ -64,7 +64,9 @@ public:
         int64_t endSampleExclusive{0};
         uint64_t targetRevision{0};
     };
-    bool getNextPendingJob(PendingJob& outJob);
+    // 仅领取指定 startSample 的 pending chunk，并原子地转为 Running。
+    bool claimPendingJob(int64_t startSample, PendingJob& outJob);
+    std::vector<int64_t> getPendingChunkStarts() const;
 
     enum class ChunkRenderResult : uint8_t {
         Published,
@@ -84,7 +86,7 @@ public:
      * 把 Running→Pending 并插入待拉取集合、runningRevision 清零。不 bump desired、
      * 不改几何、不发布快照。返回是否实际回退。
      */
-    bool requeueRunningChunk(double startSeconds, uint64_t runningRevision);
+    bool requeueRunningChunk(int64_t startSample, uint64_t runningRevision);
 
     void markChunkAsBlank(double startSeconds, uint64_t revision);
 
@@ -168,7 +170,7 @@ private:
 
     mutable juce::SpinLock lock_;
     std::map<double, Chunk> chunks_;
-    std::set<double> pendingChunks_;
+    std::set<int64_t> pendingChunks_;
 
     std::shared_ptr<const PublishedRenderSnapshot> publishedSnapshot_;
     std::shared_ptr<const PublishedPreparedSnapshot> preparedSnapshot_;

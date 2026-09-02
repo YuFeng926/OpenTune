@@ -55,6 +55,8 @@ std::shared_ptr<RenderCache> ContentRenderService::getRenderCache(ContentKey key
 
 void ContentRenderService::removeRenderCache(ContentKey key)
 {
+    if (auto cache = renderCaches_.get(key))
+        renderWorker_.discardStage1Queue(cache.get());
     renderCaches_.remove(key);
 }
 
@@ -120,26 +122,22 @@ void ContentRenderService::enqueueRender(RenderJob job, const std::vector<Note>&
     if (reconcileResult.stateChanged)
         timeStretchCache_.invalidate(job.contentKey);
 
-    const std::size_t jobTokenCount = reconcileResult.workerTokenCount;
-
-    for (std::size_t i = 0; i < jobTokenCount; ++i)
-    {
-        RenderJob subJob = job;
-        renderWorker_.enqueue(std::move(subJob));
-    }
+    renderWorker_.syncStage1Queue(job);
 }
 
 void ContentRenderService::requeueRenderChunk(const RenderJob& job)
 {
     jassert(job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr);
 
-    // 只回退状态机：成功回退后仅投递一个 job token，worker 下轮从 PendingJob
+    // 只回退状态机：成功回退后仅投递一个带身份的 pending chunk，worker 下轮
     // 重拉 span/revision，owner 回调抓当前 snapshot。不重算几何、不 bump desired。
-    const bool requeued = job.renderCache->requeueRunningChunk(job.startSeconds, job.targetRevision);
+    const bool requeued = job.renderCache->requeueRunningChunk(
+        job.startSample, job.targetRevision);
     if (!requeued)
         return;
 
     RenderJob subJob = job;
+    subJob.queuedChunkStartSample = job.startSample;
     renderWorker_.enqueue(std::move(subJob));
 }
 
@@ -181,6 +179,7 @@ void ContentRenderService::removeStretcher(ContentKey key)
 void ContentRenderService::clearAll()
 {
     playbackSources_.clear();
+    renderWorker_.discardAllStage1Queue();
     renderCaches_.clear();
     stretchers_.clear();
     timeStretchCache_.clear();

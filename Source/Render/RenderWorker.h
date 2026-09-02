@@ -31,7 +31,7 @@ struct RenderExecutionLease
 /**
  * RenderWorker — 异步渲染队列和工作线程。
  * 
- * 管理 chunk render 队列、worker thread 生命周期、execution lease。
+ * 管理带身份的 Stage1 chunk 队列、Stage2 队列、worker thread 生命周期和 execution lease。
  */
 class RenderWorker
 {
@@ -51,6 +51,11 @@ public:
      */
     void detachExecutionLease(void* owner);
 
+    // Synchronize the physical Stage1 queue with the cache's pending chunk set.
+    // One queued item is allowed for each (RenderCache, chunk start) identity.
+    void syncStage1Queue(const RenderJob& templateJob);
+    void discardStage1Queue(RenderCache* cache);
+    void discardAllStage1Queue();
     void enqueue(RenderJob job);
     void beginAsyncJob();
     void completeAsyncJob();
@@ -72,6 +77,7 @@ public:
 
 private:
     void loop();
+    void enqueueLocked(RenderJob job);
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;

@@ -29,6 +29,10 @@ struct RenderJob
     int64_t startSample{0};
     int64_t endSampleExclusive{0};
 
+    // Stage1 queue identity. The RenderCache owns the current revision; this
+    // field only identifies which pending chunk the worker is allowed to claim.
+    int64_t queuedChunkStartSample{-1};
+
     uint64_t targetRevision{0};
 
     uint64_t contentRevision{0};      // 来自 EditableContentSnapshot，用于 reconcile 去重

@@ -942,6 +942,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.contentKey = coreJob.contentKey;
             requeueJob.renderCache = coreJob.renderCache;
             requeueJob.startSeconds = relChunkStartSec;
+            requeueJob.startSample = coreJob.startSample;
             requeueJob.targetRevision = coreJob.targetRevision;
             deferOrRequeue(crs, std::move(requeueJob));
             return;
@@ -1024,9 +1025,10 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const uint64_t chunkObjId = captureContentKey.objectId;
     const double jobStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
                                                                     TimeCoordinate::kRenderSampleRate);
+    const int64_t jobStartSample = boundaries.trueStartSample;
     const FrozenRenderBoundaries frozenBoundaries = boundaries;
 
-    vocoderJob.onComplete = [this, crs,
+    vocoderJob.onComplete = [this, crs, jobStartSample,
                              renderCache,
                              targetRevision,
                              captureContentKey,
@@ -1083,6 +1085,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.contentKey = captureContentKey;
             requeueJob.renderCache = renderCache;
             requeueJob.startSeconds = jobStartSeconds;
+            requeueJob.startSample = jobStartSample;
             requeueJob.targetRevision = targetRevision;
             deferOrRequeue(crs, std::move(requeueJob));
         }
