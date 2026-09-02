@@ -33,7 +33,7 @@ endif()
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.7.6 LANGUAGES CXX C)
+project(OpenTune VERSION 1.7.7 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -1041,35 +1041,6 @@ set(HIFIGAN_MODEL_COMMUNITY "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ON
 set(FCPE_MODEL              "${CMAKE_CURRENT_SOURCE_DIR}/models/fcpe.onnx")
 set(GAME_MODEL_DIR          "${CMAKE_CURRENT_SOURCE_DIR}/models/GAME")
 
-# 可切换声码器权重：仓库 models/vocoder_weights/ 下的 .onnx + 同名 .yaml sidecar
-# 一并部署到四个目标位置；新权重放入该目录重新 configure 即随包分发
-file(GLOB VOCODER_WEIGHT_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/models/vocoder_weights/*.onnx"
-    "${CMAKE_CURRENT_SOURCE_DIR}/models/vocoder_weights/*.yaml")
-
-set(STANDALONE_VOCODER_WEIGHT_COPY_COMMANDS)
-set(STANDALONE_APPLE_VOCODER_WEIGHT_COPY_COMMANDS)
-set(VST3_VOCODER_WEIGHT_COPY_COMMANDS)
-set(VST3_APPLE_VOCODER_WEIGHT_COPY_COMMANDS)
-foreach(_weightFile ${VOCODER_WEIGHT_FILES})
-    list(APPEND STANDALONE_VOCODER_WEIGHT_COPY_COMMANDS
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_weightFile}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/vocoder_weights/")
-    list(APPEND STANDALONE_APPLE_VOCODER_WEIGHT_COPY_COMMANDS
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_weightFile}"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/vocoder_weights/")
-    list(APPEND VST3_VOCODER_WEIGHT_COPY_COMMANDS
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_weightFile}"
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/models/vocoder_weights/")
-    list(APPEND VST3_APPLE_VOCODER_WEIGHT_COPY_COMMANDS
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_weightFile}"
-            "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/vocoder_weights/")
-endforeach()
-
 if(EXISTS "${GAME_MODEL_DIR}")
     message(STATUS "GAME note generator model bundle found: ${GAME_MODEL_DIR}")
     set(STANDALONE_GAME_MODEL_COPY_COMMANDS
@@ -1133,9 +1104,6 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${HIFIGAN_MODEL_COMMUNITY}"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/hifigan.onnx"
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/vocoder_weights"
-        ${STANDALONE_VOCODER_WEIGHT_COPY_COMMANDS}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FCPE_MODEL}"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/fcpe.onnx"
@@ -1159,9 +1127,6 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${HIFIGAN_MODEL_COMMUNITY}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/hifigan.onnx"
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/vocoder_weights"
-        ${STANDALONE_APPLE_VOCODER_WEIGHT_COPY_COMMANDS}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FCPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/fcpe.onnx"
@@ -1262,9 +1227,6 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${HIFIGAN_MODEL_COMMUNITY}"
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/hifigan.onnx"
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/vocoder_weights"
-            ${VST3_VOCODER_WEIGHT_COPY_COMMANDS}
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${FCPE_MODEL}"
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/fcpe.onnx"
@@ -1290,9 +1252,6 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${HIFIGAN_MODEL_COMMUNITY}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/hifigan.onnx"
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/vocoder_weights"
-            ${VST3_APPLE_VOCODER_WEIGHT_COPY_COMMANDS}
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${FCPE_MODEL}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/fcpe.onnx"
