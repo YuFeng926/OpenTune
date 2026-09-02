@@ -249,7 +249,7 @@ private:
     SmallButtonLookAndFeel smallButtonLookAndFeel_;
 
     enum class ScrollMode { Page, Continuous };
-    ScrollMode scrollMode_{ ScrollMode::Continuous };
+    ScrollMode scrollMode_{ ScrollMode::Page };
 
     TimelineDisplayMode displayMode_ = TimelineDisplayMode::Time;
 

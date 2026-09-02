@@ -504,7 +504,7 @@ private:
 private:
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
     float verticalScrollOffset_ = 0.0f;
-    ScrollMode scrollMode_ = ScrollMode::Continuous;
+    ScrollMode scrollMode_ = ScrollMode::Page;
 
     const PlayHeadState& playHeadState_;
     bool lastObservedPlayHeadPlaying_{false};
