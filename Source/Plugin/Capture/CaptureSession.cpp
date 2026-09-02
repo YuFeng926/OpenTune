@@ -373,9 +373,9 @@ void CaptureSession::tick()
     }
 
     // 3. Read Processing segments' F0 state directly from content owner.
-    // No reentrant callback — tick() owns the lock while scanning.
     {
         std::vector<ContentKey> failedKeys;
+        std::vector<ContentKey> keysToRender;
 
         {
             std::lock_guard<std::mutex> lock(mutableMutex_);
@@ -409,11 +409,8 @@ void CaptureSession::tick()
                     // requestFullRender 仅出现在跃迁路径，无"每 tick 触发"残留。
                     // 重复提交会在渲染窗口内（>33ms）把 Running chunk 取消并重启，
                     // 30Hz tick 下渲染永远无法完成。
-                    if (seg.lastObservedF0State != OriginalF0State::Ready) {
-                        if (bindings_.requestFullRender) {
-                            bindings_.requestFullRender(seg.contentKey);
-                        }
-                    }
+                    if (seg.lastObservedF0State != OriginalF0State::Ready)
+                        keysToRender.push_back(seg.contentKey);
                     anyChange = true;
                 }
                 // 记录本次观察状态（NotRequested/Extracting/Ready），作为跃迁检测基线；
@@ -422,6 +419,11 @@ void CaptureSession::tick()
 
                 ++it;
             }
+        }
+
+        if (bindings_.requestFullRender) {
+            for (const auto& key : keysToRender)
+                bindings_.requestFullRender(key);
         }
 
         if (bindings_.retireSegment) {
@@ -723,22 +725,25 @@ uint64_t CaptureSession::testInjectEditedSegment(double T_start,
                                                   uint64_t segmentId,
                                                   std::shared_ptr<juce::AudioBuffer<float>> pcm)
 {
-    std::lock_guard<std::mutex> lock(mutableMutex_);
-    auto seg = std::make_unique<CaptureSegment>();
-    const uint64_t id = segmentId > 0 ? segmentId : nextId();
-    seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, id, 0};
-    seg->creationOrder = id;
-    seg->captureSampleRate = currentSampleRate_;
-    seg->captureChannels = pcm ? pcm->getNumChannels() : 2;
-    seg->T_start.store(T_start, std::memory_order_release);
-    seg->anchored.store(true, std::memory_order_release);
-    seg->durationSeconds = durationSeconds;
-    seg->content = std::make_unique<CaptureSegmentContent>(id);
-    if (pcm)
-        seg->content->applyAudioBuffer(*pcm, currentSampleRate_);
-    seg->state.store(SegmentState::Edited, std::memory_order_release);
-    activeDisplaySegmentId_ = id;
-    mutableSegments_.push_back(std::move(seg));
+    uint64_t id = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutableMutex_);
+        auto seg = std::make_unique<CaptureSegment>();
+        id = segmentId > 0 ? segmentId : nextId();
+        seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, id, 0};
+        seg->creationOrder = id;
+        seg->captureSampleRate = currentSampleRate_;
+        seg->captureChannels = pcm ? pcm->getNumChannels() : 2;
+        seg->T_start.store(T_start, std::memory_order_release);
+        seg->anchored.store(true, std::memory_order_release);
+        seg->durationSeconds = durationSeconds;
+        seg->content = std::make_unique<CaptureSegmentContent>(id);
+        if (pcm)
+            seg->content->applyAudioBuffer(*pcm, currentSampleRate_);
+        seg->state.store(SegmentState::Edited, std::memory_order_release);
+        activeDisplaySegmentId_ = id;
+        mutableSegments_.push_back(std::move(seg));
+    }
     publishSegmentsView();
     return id;
 }
@@ -751,28 +756,32 @@ uint64_t CaptureSession::testInjectProcessingSegment(double T_start,
                                                       std::shared_ptr<juce::AudioBuffer<float>> pcm,
                                                       double sampleRate)
 {
-    std::lock_guard<std::mutex> lock(mutableMutex_);
-    auto seg = std::make_unique<CaptureSegment>();
-    const uint64_t id = segmentId > 0 ? segmentId : nextId();
-    seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, id, 0};
-    seg->creationOrder = id;
-    seg->captureSampleRate = sampleRate;
-    seg->captureChannels = pcm ? pcm->getNumChannels() : 1;
-    seg->T_start.store(T_start, std::memory_order_release);
-    seg->anchored.store(true, std::memory_order_release);
-    seg->durationSeconds = durationSeconds;
-    seg->content = std::make_unique<CaptureSegmentContent>(id);
-    if (pcm)
-        seg->content->applyAudioBuffer(*pcm, sampleRate);
-    seg->content->applyOriginalF0State(OriginalF0State::Extracting);
-    seg->state.store(SegmentState::Processing, std::memory_order_release);
-    mutableSegments_.push_back(std::move(seg));
+    uint64_t id = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutableMutex_);
+        auto seg = std::make_unique<CaptureSegment>();
+        id = segmentId > 0 ? segmentId : nextId();
+        seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, id, 0};
+        seg->creationOrder = id;
+        seg->captureSampleRate = sampleRate;
+        seg->captureChannels = pcm ? pcm->getNumChannels() : 1;
+        seg->T_start.store(T_start, std::memory_order_release);
+        seg->anchored.store(true, std::memory_order_release);
+        seg->durationSeconds = durationSeconds;
+        seg->content = std::make_unique<CaptureSegmentContent>(id);
+        if (pcm)
+            seg->content->applyAudioBuffer(*pcm, sampleRate);
+        seg->content->applyOriginalF0State(OriginalF0State::Extracting);
+        seg->state.store(SegmentState::Processing, std::memory_order_release);
+        mutableSegments_.push_back(std::move(seg));
+    }
     publishSegmentsView();
     return id;
 }
 
 void CaptureSession::publishSegmentsView()
 {
+    std::lock_guard<std::mutex> lock(mutableMutex_);
     auto view = std::make_shared<SegmentsView>();
     view->snapshot.reserve(mutableSegments_.size());
     for (const auto& seg : mutableSegments_)
