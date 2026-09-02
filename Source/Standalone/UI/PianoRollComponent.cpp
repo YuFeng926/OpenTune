@@ -3317,10 +3317,13 @@ void PianoRollComponent::onHeartbeatTick()
             progressed = waveformMipmapCache_.buildIncremental(0.75);
         }
 
-        // 每次产生构建进度即重栅格 content surface：任一 complete 非空 level
-        // 出现即可显示，不等待全量 6 级完成；仅在可见时栅格/重绘
-        if (progressed && isShowing()) {
+        // 先持久化构建进度，再按可见性决定是否立即提交 surface。
+        if (progressed) {
             contentDirty_ = true;
+        }
+
+        // 隐藏期间完成构建后，第一次显示后的心跳消费 contentDirty_。
+        if (isShowing() && contentDirty_) {
             rasterizeDirtySurfaces();
             repaint();
         }
@@ -3363,6 +3366,76 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
     bool playStateChanged = (playingNow != lastObservedPlayHeadPlaying_);
 
+    // ── Helper: note highlight visual bounds using an arbitrary camera ──
+    // Mirrors getNoteBounds' geometry but accepts a camera parameter so old/new
+    // projection can differ.  For OpenDyne blobs the vertical extent covers the
+    // worst-case blob envelope (kBlobHalfKeys × maxGain = 3.75 × pps).
+    auto noteHighlightBounds = [this](const Note& n,
+                                      const TimelineViewportCamera& cam) -> juce::Rectangle<int> {
+        const float adjustedPitch = n.getAdjustedPitch();
+        if (adjustedPitch <= 0.0f)
+            return {};
+
+        const SourceEditRange srcRange = sourceEditRange();
+        if (n.endTime <= srcRange.startSeconds || n.startTime >= srcRange.endSeconds)
+            return {};
+
+        const ViewportState view{ cam, pixelsPerSemitone_, verticalScrollOffset_ };
+        const auto mapper = makeViewMapperForView(view);
+
+        const int x1 = mapper.timeToX(sourceTimeToTimelineTime(n.startTime));
+        const int x2 = mapper.timeToX(sourceTimeToTimelineTime(n.endTime));
+        const int width = std::max(1, x2 - x1);
+        const float midi = mapper.freqToMidi(adjustedPitch);
+        const float cy = mapper.midiToY(midi);
+
+        // Base: standard note rectangle + 4 px expansion
+        const int top = static_cast<int>(std::floor(cy - pixelsPerSemitone_ * 0.5f));
+        const int height = std::max(1, static_cast<int>(std::ceil(pixelsPerSemitone_)));
+        auto rect = juce::Rectangle<int>(x1, top, width, height).expanded(4);
+
+        // OpenDyne blob envelope: up to ±3.75 × pixelsPerSemitone from centre
+        if (isOpenDyne()) {
+            constexpr float kBlobHalfKeys = 1.5f;
+            constexpr float kMaxGain = 2.5f;
+            const float halfH = pixelsPerSemitone_ * kBlobHalfKeys * kMaxGain;
+            const int blobTop = static_cast<int>(std::floor(cy - halfH));
+            const int blobBottom = static_cast<int>(std::ceil(cy + halfH));
+            rect = rect.getUnion(
+                juce::Rectangle<int>(x1, blobTop, width,
+                                     std::max(1, blobBottom - blobTop)).expanded(1));
+        }
+
+        return rect.translated(0, rulerHeight_)
+                   .getIntersection(getTimelineViewportBounds());
+    };
+
+    struct HitNotes {
+        std::vector<int> indices;
+        std::vector<Note> notes;
+    };
+
+    // ── Helper: collect hit notes (same display items and condition as drawPlayheadNoteHighlight) ──
+    // Condition: playing && time > 0 && note.startTime ≤ time < note.endTime
+    auto collectHitNotes = [this](double time, bool playing) -> HitNotes {
+        if (!playing || time <= 0.0)
+            return {};
+        HitNotes hits;
+        for (const auto& item : buildContentRenderItems()) {
+            if (!item.active || item.displayNotes == nullptr)
+                continue;
+
+            const auto& notes = *item.displayNotes;
+            for (int i = 0; i < static_cast<int>(notes.size()); ++i) {
+                if (time >= notes[i].startTime && time < notes[i].endTime) {
+                    hits.indices.push_back(i);
+                    hits.notes.push_back(notes[static_cast<size_t>(i)]);
+                }
+            }
+        }
+        return hits;
+    };
+
     // 旧播放头 bounds + fixedCentre（在 seek/camera 更新前用旧 state 计算）
     struct BoundsWithFixed { juce::Rectangle<int> bounds; bool fixedCentre = false; };
     auto playheadBoundsAt = [this](double t, bool isPlaying, bool continuousFollow) -> BoundsWithFixed {
@@ -3379,9 +3452,14 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
                  pres.fixedCentre };
     };
 
-    const double oldCameraStart = camera_.visibleStartSeconds;
+    const auto oldCamera = camera_;
+    const double oldCameraStart = oldCamera.visibleStartSeconds;
     const bool oldIsContFollow = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
     const bool oldPlaying = lastObservedPlayHeadPlaying_;
+
+    // ── Collect OLD hit notes (before any state update) ──
+    const auto oldHits = collectHitNotes(playheadTimeForPaint_, oldPlaying);
+
     const auto oldPH = playheadBoundsAt(playheadTimeForPaint_, oldPlaying, oldIsContFollow);
 
     // 播放状态切换
@@ -3422,14 +3500,28 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     const bool newIsContFollow = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
     const auto newPH = playheadBoundsAt(playheadTime, playingNow, newIsContFollow);
 
-    // 稳定 CONT 居中且无状态变化 → 不重绘
+    // ── Collect NEW hit notes (after camera/playhead update) ──
+    const auto newHits = collectHitNotes(playheadTime, playingNow);
+
+    // ── Compute repaint damage ──
+    juce::Rectangle<int> damage;
+
+    // Strip repaint: playhead line/triangle/glow — gated by stableCont
     const bool stableCont = oldPH.fixedCentre && newPH.fixedCentre;
-    const bool needsRepaint = (playStateChanged || timeChanged || cameraChanged) && !stableCont;
-    if (needsRepaint) {
-        juce::Rectangle<int> repaintBounds = oldPH.bounds.getUnion(newPH.bounds);
-        if (!repaintBounds.isEmpty())
-            overlay_->repaint(repaintBounds);
+    const bool needsStripRepaint = (playStateChanged || timeChanged || cameraChanged) && !stableCont;
+    if (needsStripRepaint)
+        damage = oldPH.bounds.getUnion(newPH.bounds);
+
+    // Highlight repaint: note hit set changed — NOT gated by stableCont
+    if (oldHits.indices != newHits.indices) {
+        for (const auto& note : oldHits.notes)
+            damage = damage.getUnion(noteHighlightBounds(note, oldCamera));
+        for (const auto& note : newHits.notes)
+            damage = damage.getUnion(noteHighlightBounds(note, camera_));
     }
+
+    if (!damage.isEmpty())
+        overlay_->repaint(damage);
 }
 
 void PianoRollComponent::commitViewportRequest(TimelineViewportRequest req)

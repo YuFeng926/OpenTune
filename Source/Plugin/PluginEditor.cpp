@@ -359,8 +359,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     // Heartbeat ticks first — match Standalone pattern: overview/camera
     // state is stable before any content projection runs.
+    // pianoRoll_ heartbeat runs unconditionally so VST3/ARA can advance
+    // WaveformMipmapCache even before the PianoRoll is showing.
+    pianoRoll_.onHeartbeatTick();
     if (pianoRoll_.isShowing()) {
-        pianoRoll_.onHeartbeatTick();
         overviewStrip_.onHeartbeatTick(pianoRoll_.editedContentKey(),
                                        pianoRoll_.activeContentProjection(),
                                        pianoRoll_.timelineCamera(),
@@ -1461,11 +1463,15 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         detectedKey = snap ? snap->detectedKey : DetectedKey{};
     }
 
+    // ARA snapshots intentionally do not carry PCM; the waveform source lives
+    // in CRS and is registered by setEditedContent(). Install explicit
+    // placements first so setEditedContent() cannot derive an empty placement
+    // set and prune that freshly registered ARA waveform source.
+    pianoRoll_.setTimelineContentPlacements(sync.placements);
     pianoRoll_.setEditedContent(sync.activeContentKey,
                                 curve,
                                 syncBuffer,
                                 static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
-    pianoRoll_.setTimelineContentPlacements(sync.placements);
 
     // Viewport restore or fit on placement switch
     if (identityChanged && sync.activePlacementIdentity.has_value()) {
