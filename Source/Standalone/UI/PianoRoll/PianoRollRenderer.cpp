@@ -319,16 +319,16 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
 
     struct BucketAccumulator {
         bool active = false;
-        float yMin = 0.0f;
-        float yMax = 0.0f;
+        float xAccum = 0.0f;
+        float yAccum = 0.0f;
         float hotMixAccum = 0.0f;
         int pointCount = 0;
         juce::Colour noteColour; // 音符颜色（用于bucket平均）
 
         void clear() noexcept {
             active = false;
-            yMin = std::numeric_limits<float>::max();
-            yMax = std::numeric_limits<float>::lowest();
+            xAccum = 0.0f;
+            yAccum = 0.0f;
             hotMixAccum = 0.0f;
             pointCount = 0;
             noteColour = juce::Colours::grey;
@@ -344,11 +344,11 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
             bucket.clear();
             return;
         }
-        const float avgHotMix = bucket.hotMixAccum / static_cast<float>(bucket.pointCount);
-        currentSegment.points.push_back({ bucketAnchorX, bucket.yMin, avgHotMix, bucket.noteColour });
-        if (bucket.yMin != bucket.yMax) {
-            currentSegment.points.push_back({ bucketAnchorX, bucket.yMax, avgHotMix, bucket.noteColour });
-        }
+        const float n = static_cast<float>(bucket.pointCount);
+        const float avgX = bucket.xAccum / n;
+        const float avgY = bucket.yAccum / n;
+        const float avgHotMix = bucket.hotMixAccum / n;
+        currentSegment.points.push_back({ avgX, avgY, avgHotMix, bucket.noteColour });
         bucket.clear();
     };
 
@@ -397,8 +397,8 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
             if (!bucket.active) {
                 bucket.active = true;
                 bucketAnchorX = x;
-                bucket.yMin = y;
-                bucket.yMax = y;
+                bucket.xAccum = x;
+                bucket.yAccum = y;
                 bucket.hotMixAccum = levelHotMix;
                 bucket.pointCount = 1;
                 bucket.noteColour = noteColour;
@@ -410,15 +410,15 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
                     flushBucket();
                     bucket.active = true;
                     bucketAnchorX = x;
-                    bucket.yMin = y;
-                    bucket.yMax = y;
+                    bucket.xAccum = x;
+                    bucket.yAccum = y;
                     bucket.hotMixAccum = levelHotMix;
                     bucket.pointCount = 1;
                     bucket.noteColour = noteColour;
                     continue;
                 }
-                bucket.yMin = std::min(bucket.yMin, y);
-                bucket.yMax = std::max(bucket.yMax, y);
+                bucket.xAccum += x;
+                bucket.yAccum += y;
                 bucket.hotMixAccum += levelHotMix;
                 ++bucket.pointCount;
                 continue;
@@ -428,8 +428,8 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
 
             bucket.active = true;
             bucketAnchorX = x;
-            bucket.yMin = y;
-            bucket.yMax = y;
+            bucket.xAccum = x;
+            bucket.yAccum = y;
             bucket.hotMixAccum = levelHotMix;
             bucket.pointCount = 1;
             bucket.noteColour = noteColour;
