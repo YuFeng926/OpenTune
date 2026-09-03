@@ -710,13 +710,17 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
 
         if (!sync.placements.empty()) {
             sync.activeContentKey = chooseActiveCaptureContentKey(*session, processorRef_.getPosition());
-            const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
-                                                               sync.placements.end(),
-                                                               [&sync](const auto& placement) {
-                                                                   return placement.contentKey == sync.activeContentKey;
-                                                               });
-            if (!activeBelongsToPlacements)
+            const auto activeIt = std::find_if(sync.placements.begin(),
+                                               sync.placements.end(),
+                                               [&sync](const auto& placement) {
+                                                   return placement.contentKey == sync.activeContentKey;
+                                               });
+            if (activeIt == sync.placements.end()) {
                 sync.activeContentKey = {};
+            } else {
+                sync.activePlacementIdentity = PianoRollPlacementIdentity{
+                    activeIt->contentKey, activeIt->projection};
+            }
 
             sync.timelineViewStartSeconds = 0.0;
             sync.timelineViewEndSeconds = viewEndSeconds;
@@ -1484,6 +1488,8 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         } else {
             pianoRoll_.resetUserZoomFlag();
             pianoRoll_.fitToScreen();
+            if (sync.activeContentKey.domainKind == DomainKind::RegularVST3Capture)
+                pianoRoll_.requestInitialF0View(sync.activeContentKey);
         }
     }
 
