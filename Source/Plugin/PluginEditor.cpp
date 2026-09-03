@@ -336,10 +336,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 {
     syncSharedAppPreferences();
 
-    // Drive non-ARA capture state machine: Pending -> Processing -> Edited
+    // Non-ARA capture state is driven by the processor's own Timer (tick()).
+    // Editor only syncs UI state from the capture session.
     if (auto* session = processorRef_.getCaptureSession()) {
-        session->tick();
-
         // Sync record button visual state
         using OpenTune::Capture::SessionState;
         switch (session->getGlobalState()) {

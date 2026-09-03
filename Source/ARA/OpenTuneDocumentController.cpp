@@ -2157,7 +2157,7 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
     auto* mod = findAudioModificationByContentKey(job.contentKey);
     if (mod == nullptr || !mod->isRenderable())
     {
-        job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
+        job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
         return;
     }
 
@@ -2166,14 +2166,14 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
         || !contentRenderService_->getPlaybackReadSource(job.contentKey, readSource)
         || readSource.audioBuffer == nullptr)
     {
-        job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
+        job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
         return;
     }
 
     auto snap = snapshotAudioModification(job.contentKey);
     if (!snap)
     {
-        job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
+        job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
         return;
     }
 

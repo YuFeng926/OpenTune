@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "../../Content/ContentKey.h"
 #include "../../Content/CaptureSegmentContent.h"
@@ -23,27 +24,39 @@ namespace OpenTune::Capture {
  * Pending    : capture stopped, waiting for a safe message-thread drain/submit
  * Processing : submitted; F0/Vocoder rendering in progress
  * Edited     : rendered; eligible for replacement playback
+ * Failed     : render or F0 analysis failed; content preserved, not blocking next capture
  */
 enum class SegmentState : int
 {
     Capturing = 0,
     Pending,
     Processing,
-    Edited
+    Edited,
+    Failed
+};
+
+/**
+ * Pre-allocated metadata for one continuous run of captured PCM within a CaptureSegment.
+ * Audio thread writes only within pre-allocated capacity; message thread reads at drain time.
+ */
+struct CapturedSpan
+{
+    int64_t hostStartSample = 0;   // absolute host sample at span start
+    int pcmOffsetSamples = 0;      // offset into drained FIFO buffer
+    int sampleCount = 0;           // number of samples accepted by fifo.write
 };
 
 /**
  * One captured take. Owned by CaptureSession's mutableSegments_.
  *
  * Audio thread reads:
- *   - state (atomic), T_start (atomic), durationSeconds, anchored (atomic)
+ *   - state (atomic), anchored (atomic), hostStartSample (atomic), hostSampleCount (atomic)
  *
  * Audio thread writes:
  *   - fifo (via CaptureRingBuffer::write)
- *   - anchored.store(true) + T_start.store(host_t) on first isPlaying block after arm
- *   - stopRequested.store(true) when reaching duration cap or transport stop
+ *   - anchored.store(true) + hostStartSample.store(sample) on first isPlaying block after arm
  *
- * Message thread writes everything else (creation, state transitions).
+ * Message thread writes everything else (creation, state transitions, T_start/durationSeconds).
  *
  * Lifetime: segment object stays alive in CaptureSession until reclaim sweep
  * confirms no audio block can still see its pointer in published view.
@@ -67,23 +80,34 @@ struct CaptureSegment
     /** Maximum samples (= 600 s × captureSampleRate, set at arm time). */
     int maxSamples = 0;
 
-    /** Anchor: first audio block with advancing host transport sets anchored=true and stores host_t into T_start. */
+    /** Anchor: first isPlaying audio block sets anchored=true and stores hostAbsoluteSample into hostStartSample. */
     std::atomic<bool> anchored { false };
-    std::atomic<double> T_start { 0.0 };
 
-    /** Filled at stopCapture (message thread). Length of accepted PCM in seconds. */
+    /** Authoritative absolute host sample range. Set at finalize (message thread).
+     *  Audio thread reads for playback hit detection via containsAbsoluteSample. */
+    std::atomic<int64_t> hostStartSample { 0 };
+    std::atomic<int64_t> hostSampleCount { 0 };
+
+    /** UI/persistence presentation fields. Computed from hostStartSample/hostSampleCount
+     *  at finalize time (message thread). NOT used by audio thread for positioning. */
+    std::atomic<double> T_start { 0.0 };
     double durationSeconds = 0.0;
 
     /** Lifecycle state. Audio thread reads, message thread writes (with publish-subscribe). */
     std::atomic<SegmentState> state { SegmentState::Capturing };
 
-    /** Set by audio thread when capture must end (duration cap or transport discontinuity). */
-    std::atomic<bool> stopRequested { false };
+    /** Atomic writer-active handshake. Audio thread CAS true before writing to FIFO;
+     *  message thread tick() only drains after this reads false. Replaces
+     *  the old pendingDrainTicks countdown with a deterministic lock-free handshake. */
+    std::atomic<bool> writerActive { false };
 
-    /** Message-thread countdown before draining a stopped capture.
-     *  This gives any in-flight audio block that already passed the Capturing state
-     *  check time to leave CaptureRingBuffer::write before FIFO release. */
-    int pendingDrainTicks = 0;
+    /** Number of populated span entries in spans[]. Audio thread writes (monotonically
+     *  increasing), message thread reads at drain time. Bounded by spans.size(). */
+    std::atomic<int> numSpans { 0 };
+
+    /** Pre-allocated span metadata array. Capacity covers the full PCM budget, so
+     *  the audio thread never needs to allocate or silently lose a discontinuity. */
+    std::vector<CapturedSpan> spans;
 
     /** Message-thread only: 上次 tick 观察到的 F0 状态。tick() 仅在跃迁
      *  （非 Ready → Ready，含首次观察即 Ready）时提交一次 requestFullRender，
@@ -106,11 +130,20 @@ struct CaptureSegment
     /** Compute end time (only valid for Edited segments). */
     double endTime() const noexcept { return T_start.load(std::memory_order_acquire) + durationSeconds; }
 
-    /** Test if host_t is in [T_start, T_start + duration). */
+    /** Test if host_t is in [T_start, T_start + duration). UI/display path only. */
     bool containsTime(double host_t) const noexcept
     {
         const double start = T_start.load(std::memory_order_acquire);
         return host_t >= start && host_t < start + durationSeconds;
+    }
+
+    /** Test if an absolute host sample falls within this segment's captured range.
+     *  Audio thread uses this for playback hit detection — no seconds conversion. */
+    bool containsAbsoluteSample(int64_t sample) const noexcept
+    {
+        const int64_t start = hostStartSample.load(std::memory_order_acquire);
+        const int64_t count = hostSampleCount.load(std::memory_order_acquire);
+        return count > 0 && sample >= start && sample < start + count;
     }
 };
 

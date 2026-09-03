@@ -363,7 +363,7 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
 
-        std::map<double, Chunk> newChunks;
+        std::map<int64_t, Chunk> newChunks;
         std::set<int64_t> newPendingChunks;
 
         const auto reclaimChunkBytes = [](const Chunk& chunk) {
@@ -381,10 +381,11 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
             if (i > 0)
                 jassert(planned.startSample >= fullPlan[i - 1].endSampleExclusive);
 
-            const double startSeconds = projectRenderSeconds(planned.startSample);
+            const int64_t startSample = planned.startSample;
+            const double startSeconds = projectRenderSeconds(startSample);
             const int64_t endSampleExclusive = planned.endSampleExclusive;
 
-            while (oldIt != chunks_.end() && oldIt->first < startSeconds)
+            while (oldIt != chunks_.end() && oldIt->first < startSample)
             {
                 reclaimChunkBytes(oldIt->second);
                 geometryChanged = true;
@@ -397,7 +398,7 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
             newChunk.endSampleExclusive = endSampleExclusive;
 
             const bool sameSpan = oldIt != chunks_.end()
-                && oldIt->first == startSeconds
+                && oldIt->first == startSample
                 && oldIt->second.endSampleExclusive == endSampleExclusive;
 
             const bool intersectsRequest = planned.startSample < requestEndSampleExclusive
@@ -468,7 +469,7 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
             {
                 geometryChanged = true;
 
-                if (oldIt != chunks_.end() && oldIt->first == startSeconds)
+                if (oldIt != chunks_.end() && oldIt->first == startSample)
                 {
                     reclaimChunkBytes(oldIt->second);
                     newChunk.desiredRevision = oldIt->second.desiredRevision + 1;
@@ -488,7 +489,7 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
                 result.stateChanged = true;
             }
 
-            newChunks.emplace(startSeconds, std::move(newChunk));
+            newChunks.emplace(startSample, std::move(newChunk));
         }
 
         for (; oldIt != chunks_.end(); ++oldIt)
@@ -501,13 +502,13 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
         chunks_ = std::move(newChunks);
         pendingChunks_ = std::move(newPendingChunks);
         pendingChunkCount = pendingChunks_.size();
-
-        if (geometryChanged)
-            publishLocked();
+        // Do NOT publish or rebuild on geometry change: the old snapshot (or empty
+        // initial) stays visible to the audio thread until all chunks are settled.
+        // completeChunkRenderWithAudio / markChunkAsBlank gate on isCanonicalSettled.
     }
 
-    if (geometryChanged)
-        rebuildPrepared();
+    // Do NOT rebuild prepared on geometry change: completeChunkRenderWithAudio /
+    // markChunkAsBlank will rebuild only when all chunks are canonical settled.
 
     AppLogger::log("RenderCache::reconcileFullPlanAndRequest"
         " fullPlan=" + juce::String(static_cast<juce::int64>(fullPlan.size()))
@@ -522,13 +523,12 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
 
 bool RenderCache::claimPendingJob(int64_t startSample, PendingJob& outJob) {
     const juce::SpinLock::ScopedLockType guard(lock_);
-    const double startSec = projectRenderSeconds(startSample);
     auto pendingIt = pendingChunks_.find(startSample);
     if (pendingIt == pendingChunks_.end()) {
         return false;
     }
 
-    auto it = chunks_.find(startSec);
+    auto it = chunks_.find(startSample);
     if (it == chunks_.end()) {
         pendingChunks_.erase(pendingIt);
         return false;
@@ -550,7 +550,7 @@ bool RenderCache::claimPendingJob(int64_t startSample, PendingJob& outJob) {
     outJob.endSampleExclusive = chunk.endSampleExclusive;
     outJob.targetRevision = chunk.desiredRevision;
 
-    AppLogger::log("RenderCache::claimPendingJob start=" + juce::String(startSec, 3)
+    AppLogger::log("RenderCache::claimPendingJob start=" + juce::String(projectRenderSeconds(startSample), 3)
         + " startSample=" + juce::String(chunk.startSample)
         + " endSampleExclusive=" + juce::String(chunk.endSampleExclusive)
         + " revision=" + juce::String(static_cast<juce::int64>(chunk.desiredRevision)));
@@ -591,7 +591,7 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
 
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
-        auto it = chunks_.find(startSeconds);
+        auto it = chunks_.find(startSample);
         if (it == chunks_.end())
             return ChunkRenderResult::Stale;
 
@@ -624,26 +624,35 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
         // Diagnostic: memory stats only. No inter-chunk eviction — the RenderCache
         // contract requires complete canonical PCM resident for all chunks.
         (void)globalCacheLimitBytes().load(std::memory_order_relaxed);
-
-        publishLocked();
     } // SpinLock released
 
-    // Rebuild prepared outside SpinLock — rebuildPrepared locks preparedBuildMutex_ internally
-    rebuildPrepared();
+    // Only publish and rebuild prepared when ALL chunks are canonical settled.
+    // Partial chunk completion must not update the audio-thread-visible snapshot.
+    bool shouldPublish = false;
+    {
+        const juce::SpinLock::ScopedLockType guard2(lock_);
+        shouldPublish = isCanonicalSettledLocked_();
+        if (shouldPublish)
+            publishLocked();
+    }
+    if (shouldPublish)
+        rebuildPrepared();
 
-    AppLogger::log("RenderCache::completeChunkRenderWithAudio PUBLISHED start=" + juce::String(startSeconds, 3)
+    AppLogger::log("RenderCache::completeChunkRenderWithAudio "
+        + juce::String(shouldPublish ? "PUBLISHED" : "SETTLED")
+        + " start=" + juce::String(startSeconds, 3)
         + " revision=" + juce::String(static_cast<juce::int64>(revision)));
     return ChunkRenderResult::Published;
 }
 
-void RenderCache::completeChunkRenderFailure(double startSeconds, uint64_t revision) {
-    bool hadAudio = false;
+bool RenderCache::completeChunkRenderFailure(int64_t startSample, uint64_t revision) {
+    const double startSeconds = projectRenderSeconds(startSample);
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
-        auto it = chunks_.find(startSeconds);
+        auto it = chunks_.find(startSample);
         if (it == chunks_.end()) {
             AppLogger::log("RenderCache::completeChunkRenderFailure NOT_FOUND start=" + juce::String(startSeconds, 3));
-            return;
+            return false;
         }
 
         auto& chunk = it->second;
@@ -653,11 +662,10 @@ void RenderCache::completeChunkRenderFailure(double startSeconds, uint64_t revis
                 + juce::String(static_cast<juce::int64>(chunk.runningRevision))
                 + " != completionRev=" + juce::String(static_cast<juce::int64>(revision))
                 + " -> ignore");
-            return;
+            return false;
         }
 
-        hadAudio = chunk.audio != nullptr && !chunk.audio->empty();
-        if (hadAudio)
+        if (chunk.audio != nullptr && !chunk.audio->empty())
         {
             const size_t bytes = chunk.audio->size() * sizeof(float);
             globalCacheCurrentBytes().fetch_sub(bytes, std::memory_order_relaxed);
@@ -666,21 +674,22 @@ void RenderCache::completeChunkRenderFailure(double startSeconds, uint64_t revis
         chunk.publishedRevision = 0;
         chunk.status = Chunk::Status::Failed;
         chunk.runningRevision = 0;
-        publishLocked();
+        // Do NOT publish on failure: the old snapshot (or empty) remains visible
+        // to the audio thread. Failure keeps this chunk unsettled.
 
         AppLogger::log("RenderCache::completeChunkRenderFailure start=" + juce::String(startSeconds, 3)
             + " revision=" + juce::String(static_cast<juce::int64>(revision))
             + " desired=" + juce::String(static_cast<juce::int64>(chunk.desiredRevision)));
     }
 
-    if (hadAudio)
-        rebuildPrepared();
+    // Failure must NOT trigger rebuildPrepared: the old snapshot stays visible.
+    return true;
 }
 
 bool RenderCache::requeueRunningChunk(int64_t startSample, uint64_t runningRevision) {
     const juce::SpinLock::ScopedLockType guard(lock_);
     const double startSeconds = projectRenderSeconds(startSample);
-    auto it = chunks_.find(startSeconds);
+    auto it = chunks_.find(startSample);
     if (it == chunks_.end())
         return false;
 
@@ -741,9 +750,8 @@ RenderCache::StateSnapshot RenderCache::getStateSnapshot() const {
     return snapshot;
 }
 
-bool RenderCache::isCanonicalSettled() const
+bool RenderCache::isCanonicalSettledLocked_() const
 {
-    const juce::SpinLock::ScopedLockType guard(lock_);
     if (chunks_.empty())
         return false;
 
@@ -771,11 +779,18 @@ bool RenderCache::isCanonicalSettled() const
     return true;
 }
 
-void RenderCache::markChunkAsBlank(double startSeconds, uint64_t revision) {
+bool RenderCache::isCanonicalSettled() const
+{
+    const juce::SpinLock::ScopedLockType guard(lock_);
+    return isCanonicalSettledLocked_();
+}
+
+void RenderCache::markChunkAsBlank(int64_t startSample, uint64_t revision) {
+    const double startSeconds = projectRenderSeconds(startSample);
     int64_t endSample = 0;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
-        auto it = chunks_.find(startSeconds);
+        auto it = chunks_.find(startSample);
         if (it == chunks_.end()) {
             return;
         }
@@ -803,11 +818,19 @@ void RenderCache::markChunkAsBlank(double startSeconds, uint64_t revision) {
         }
         chunk.publishedRevision = 0;
         endSample = chunk.endSampleExclusive;
-        publishLocked();
     } // SpinLock released
 
-    // Rebuild prepared outside SpinLock — rebuildPrepared locks preparedBuildMutex_ internally
-    rebuildPrepared();
+    // Only publish and rebuild prepared when ALL chunks are canonical settled.
+    // Partial chunk completion must not update the audio-thread-visible snapshot.
+    bool shouldPublish = false;
+    {
+        const juce::SpinLock::ScopedLockType guard2(lock_);
+        shouldPublish = isCanonicalSettledLocked_();
+        if (shouldPublish)
+            publishLocked();
+    }
+    if (shouldPublish)
+        rebuildPrepared();
 
     AppLogger::log("RenderCache::markChunkAsBlank start=" + juce::String(startSeconds, 3)
         + " endSampleExclusive=" + juce::String(endSample)

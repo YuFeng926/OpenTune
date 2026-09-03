@@ -17,12 +17,12 @@
 namespace OpenTune::Capture {
 
 namespace {
-    // CAPz v6: per-segment fixed bytes + embedded PCM audio + unified VolumeEnvelope.
+    // CAPz v12: per-segment fixed bytes + embedded PCM audio + unified VolumeEnvelope + authoritative hostStartSample/hostSampleCount.
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 11;  // v11: EqFilter.bypassed (per-filter bypass)
-    constexpr int kCaptureArchiveVersionMin = 4;  // v4 files load with pitchDriftScale=1.0
+    constexpr int kCaptureArchiveVersion = 12;  // v12: authoritative hostStartSample/hostSampleCount
+    constexpr int kCaptureArchiveVersionMin = 12;  // only v12 accepted; no old-format migration
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
     {
@@ -153,6 +153,9 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
             stream.writeDouble(seg->captureSampleRate);
             stream.writeInt(seg->captureChannels);
             stream.writeInt(static_cast<int>(s));
+            // v12+: authoritative absolute sample range (sole recovery truth for playback position).
+            stream.writeInt64(seg->hostStartSample.load(std::memory_order_acquire));
+            stream.writeInt64(seg->hostSampleCount.load(std::memory_order_acquire));
 
             int numSamples = 0;
             int numChannels = 0;
@@ -238,15 +241,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         return false;
     }
     const int fileVersion = stream.readInt();
-    if (fileVersion < kCaptureArchiveVersionMin || fileVersion > kCaptureArchiveVersion)
+    if (fileVersion != kCaptureArchiveVersion)
         return false;
-    const bool hasPitchDriftScale = (fileVersion >= 5);
-    const bool hasUnifiedVolumeEnvelope = (fileVersion >= 6);
-    const bool hasDetectedKeyOrigin = (fileVersion >= 7);
-    const bool hasPerNoteEq = (fileVersion >= 8);
-    const bool hasDynamicEqFilters = (fileVersion >= 9);
-    const bool hasPaletteSlot = (fileVersion >= 10);
-    const bool hasPerFilterBypassed = (fileVersion >= 11);
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -273,6 +269,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         double   captureSampleRate;
         int      captureChannels;
         SegmentState segmentState{SegmentState::Processing};
+        int64_t  hostStartSample{0};
+        int64_t  hostSampleCount{0};
         std::shared_ptr<juce::AudioBuffer<float>> audio;
         OriginalF0State originalF0State{OriginalF0State::NotRequested};
         DetectedKey detectedKey;
@@ -307,6 +305,9 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         p.captureSampleRate = stream.readDouble();
         p.captureChannels   = stream.readInt();
         p.segmentState      = static_cast<SegmentState>(stream.readInt());
+        // v12+: authoritative absolute sample range.
+        p.hostStartSample   = stream.readInt64();
+        p.hostSampleCount   = stream.readInt64();
 
         const int numAudioSamples  = stream.readInt();
         const int numAudioChannels = stream.readInt();
@@ -321,11 +322,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         p.detectedKey.root = static_cast<Key>(stream.readInt());
         p.detectedKey.scale = static_cast<Scale>(stream.readInt());
         p.detectedKey.confidence = stream.readFloat();
-        // v6 及更旧数据无 origin：按 confidence 迁移
-        p.detectedKey.origin = hasDetectedKeyOrigin
-            ? static_cast<Origin>(stream.readInt())
-            : DetectedKey::originFromLegacyConfidence(p.detectedKey.confidence);
-        p.pitchCurve = readPitchCurve(stream, hasPitchDriftScale);
+        p.detectedKey.origin = static_cast<Origin>(stream.readInt());
+        p.pitchCurve = readPitchCurve(stream, /*hasPitchDriftScale=*/true);
 
         const int noteCount = stream.readInt();
         if (noteCount < 0)
@@ -339,64 +337,40 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             note.originalPitch = stream.readFloat();
             note.pitchOffset = stream.readFloat();
             note.retuneSpeed = stream.readFloat();
-            if (hasPitchDriftScale)
-                note.pitchDriftScale = stream.readFloat();
+            note.pitchDriftScale = stream.readFloat();
             note.vibratoDepth = stream.readFloat();
             note.vibratoRate = stream.readFloat();
             note.outputGainDb = stream.readFloat();
             note.isVoiced = stream.readInt() != 0;
 
-            // v8+: Per-note EQ settings
-            if (hasPerNoteEq && stream.readInt() == 1) {
+            // Per-note EQ settings
+            if (stream.readInt() == 1) {
                 EqSettings eq;
                 eq.active = stream.readInt() != 0;
 
-                if (hasDynamicEqFilters) {
-                    // v9+: filter count + per-filter type/frequency/gain/q [+ v10 slot]
-                    const int filterCount = stream.readInt();
-                    if (filterCount <= 0 || filterCount > EqSettings::kMaxFilters)
+                // v9+: filter count + per-filter type/frequency/gain/q [+ v10 slot]
+                const int filterCount = stream.readInt();
+                if (filterCount <= 0 || filterCount > EqSettings::kMaxFilters)
+                    return false;
+                eq.filters.clear();
+                eq.filters.reserve(static_cast<size_t>(filterCount));
+                for (int fi = 0; fi < filterCount; ++fi) {
+                    const int typeInt = stream.readInt();
+                    const float freq = stream.readFloat();
+                    const float gain = stream.readFloat();
+                    const float q = stream.readFloat();
+                    if (typeInt < 0 || typeInt > static_cast<int>(EqFilterType::HighCut))
                         return false;
-                    eq.filters.clear();
-                    eq.filters.reserve(static_cast<size_t>(filterCount));
-                    for (int fi = 0; fi < filterCount; ++fi) {
-                        const int typeInt = stream.readInt();
-                        const float freq = stream.readFloat();
-                        const float gain = stream.readFloat();
-                        const float q = stream.readFloat();
-                        if (typeInt < 0 || typeInt > static_cast<int>(EqFilterType::HighCut))
-                            return false;
-                        EqFilter f;
-                        f.type = static_cast<EqFilterType>(typeInt);
-                        f.frequencyHz = freq;
-                        f.gainDb = gain;
-                        f.q = q;
-                        // v10: paletteSlot；v9 旧数据按索引确定性补 slot
-                        f.paletteSlot = hasPaletteSlot ? stream.readInt() : fi;
-                        if (f.paletteSlot < 0 || f.paletteSlot >= EqSettings::kMaxFilters)
-                            return false;
-                        if (hasPerFilterBypassed)
-                            f.bypassed = stream.readInt() != 0;
-                        eq.filters.push_back(f);
-                    }
-                } else {
-                    // v8 legacy: 旧 8 float 字段 → 5 个固定过滤器 + 确定性 paletteSlot 0..4
-                    // (active 已在上方读取，此处紧跟 8 个 float)
-                    const float lowCutFreq = stream.readFloat();
-                    const float lowShelfFreq = stream.readFloat();
-                    const float lowShelfGain = stream.readFloat();
-                    const float peakFreq = stream.readFloat();
-                    const float peakGain = stream.readFloat();
-                    const float highShelfFreq = stream.readFloat();
-                    const float highShelfGain = stream.readFloat();
-                    const float highCutFreq = stream.readFloat();
-
-                    eq.filters = {
-                        { EqFilterType::LowCut,   lowCutFreq,   0.0f,    0.707f, 0 },
-                        { EqFilterType::LowShelf, lowShelfFreq, lowShelfGain, 2.0f, 1 },
-                        { EqFilterType::Peak,     peakFreq,     peakGain, 2.0f, 2 },
-                        { EqFilterType::HighShelf,highShelfFreq,highShelfGain, 2.0f, 3 },
-                        { EqFilterType::HighCut,  highCutFreq,  0.0f,    0.707f, 4 }
-                    };
+                    EqFilter f;
+                    f.type = static_cast<EqFilterType>(typeInt);
+                    f.frequencyHz = freq;
+                    f.gainDb = gain;
+                    f.q = q;
+                    f.paletteSlot = stream.readInt();
+                    if (f.paletteSlot < 0 || f.paletteSlot >= EqSettings::kMaxFilters)
+                        return false;
+                    f.bypassed = stream.readInt() != 0;
+                    eq.filters.push_back(f);
                 }
 
                 if (!eq.isValid())
@@ -406,7 +380,6 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
 
             p.notes.push_back(note);
         }
-        // 旧归档无该 property 时按 notes 是否为空推断，避免覆盖已有音符拓扑事实。
         p.noteTopologyInitialized = segNode.hasProperty("noteTopologyInitialized")
             ? static_cast<int>(segNode.getProperty("noteTopologyInitialized", 0)) != 0
             : !p.notes.empty();
@@ -421,13 +394,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             point.gainDb = stream.readFloat();
             envelopePoints.push_back(point);
         }
-        if (hasUnifiedVolumeEnvelope) {
-            p.volumeEnvelope = AutomationLane::fromSnapshot(envelopePoints);
-        } else {
-            p.volumeEnvelope = AutomationLane::sum(
-                AutomationLane::fromLegacyNoteGains(p.notes),
-                AutomationLane::fromLegacyStepPoints(envelopePoints));
-        }
+        p.volumeEnvelope = AutomationLane::fromSnapshot(envelopePoints);
         p.pitchShiftSettings.semitone = stream.readInt();
         p.pitchShiftSettings.cents = stream.readInt();
         if (p.pitchCurve == nullptr
@@ -454,8 +421,12 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         seg->creationOrder = p.creationOrder;
         seg->captureSampleRate = p.captureSampleRate;
         seg->captureChannels = p.captureChannels;
-        seg->T_start.store(p.T_start, std::memory_order_release);
         seg->anchored.store(true, std::memory_order_release);
+        // v12+: restore authoritative absolute sample range directly from persisted values.
+        seg->hostStartSample.store(p.hostStartSample, std::memory_order_release);
+        seg->hostSampleCount.store(p.hostSampleCount, std::memory_order_release);
+        // T_start/durationSeconds: UI/presentation only; also restored from persisted values.
+        seg->T_start.store(p.T_start, std::memory_order_release);
         seg->durationSeconds = p.durationSeconds;
 
         seg->content = std::make_unique<CaptureSegmentContent>(p.id);
@@ -482,7 +453,9 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         seg->content->editable().noteTopologyInitialized = p.noteTopologyInitialized;
 
         const bool ready = p.originalF0State == OriginalF0State::Ready;
-        const auto restoredState = ready ? SegmentState::Edited : p.segmentState;
+        // Preserve Failed state: do not promote to Edited even if F0 is Ready.
+        const auto restoredState = (ready && p.segmentState != SegmentState::Failed)
+            ? SegmentState::Edited : p.segmentState;
         seg->state.store(restoredState, std::memory_order_release);
         const auto restoredKey = seg->contentKey;
 

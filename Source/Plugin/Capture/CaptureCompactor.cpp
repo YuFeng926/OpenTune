@@ -6,11 +6,13 @@ namespace OpenTune::Capture {
 namespace {
     bool fullyCovers(const CaptureSegment& outer, const CaptureSegment& inner) noexcept
     {
-        const double outerStart = outer.T_start.load(std::memory_order_acquire);
-        const double outerEnd = outerStart + outer.durationSeconds;
-        const double innerStart = inner.T_start.load(std::memory_order_acquire);
-        const double innerEnd = innerStart + inner.durationSeconds;
-        return outerStart <= innerStart && innerEnd <= outerEnd;
+        const int64_t outerStart = outer.hostStartSample.load(std::memory_order_acquire);
+        const int64_t outerCount = outer.hostSampleCount.load(std::memory_order_acquire);
+        const int64_t innerStart = inner.hostStartSample.load(std::memory_order_acquire);
+        const int64_t innerCount = inner.hostSampleCount.load(std::memory_order_acquire);
+        return outerCount > 0 && innerCount > 0
+            && outerStart <= innerStart
+            && innerStart + innerCount <= outerStart + outerCount;
     }
 }
 

@@ -16,7 +16,8 @@
 
 namespace OpenTune::Capture {
 
-/** Aggregated session state derived from segment states. */
+/** Aggregated session state derived from segment states.
+ *  Failed segments are intentionally ignored — they do not block next capture. */
 enum class SessionState : int
 {
     Idle = 0,         // no Capturing / Processing segment exists (Edited segments may exist)
@@ -35,11 +36,14 @@ struct SegmentInfo
 };
 
 /**
- * Audio-thread-callable: replace [destStart, destStart+numSamples) of buffer with rendered audio
+ * Audio-thread-callable: replace a sub-range of buffer with rendered audio
  * from the given segment. Implementation:
- *   - clear destination range
+ *   - clear [destStart, destStart+numSamples)
  *   - call contentRenderService->getPlaybackReadSource(ContentKey{RegularVST3Capture, segmentId, 0}, ...)
  *
+ * readStartSample is the absolute relative sample offset into the segment's
+ * rendered content (in targetSampleRate units). CaptureSession computes the
+ * block/segment overlap and passes only the intersecting sub-range.
  * Uses segment ContentKey directly.
  * Captures a small (one-pointer) lambda; no heap allocation expected when called.
  */
@@ -47,14 +51,11 @@ using ReplaceWithRenderedFn = std::function<void(juce::AudioBuffer<float>& buffe
                                                   int destStart,
                                                   int numSamples,
                                                   ContentKey segmentContentKey,
-                                                  double readStartSeconds,
+                                                  int64_t readStartSample,
                                                   double targetSampleRate)>;
 
 /** Message-thread compaction sink: tell the processor to retire segment content. */
 using RetireSegmentFn = std::function<void(ContentKey segmentContentKey)>;
-
-/** Notification sink for UI: a segment has reached Edited state. */
-using ActiveSegmentChangedFn = std::function<void(ContentKey segmentContentKey)>;
 
 /** Message-thread re-render trigger for an existing segment content (no new clip created).
  *  Used by CapturePersistence::deserialize to repopulate RenderCache after restore — the
@@ -72,10 +73,6 @@ using PublishPlaybackSourceFn = std::function<void(const ContentKey& key,
  *  does not re-run F0 analysis — uses the already-restored pitch curve. */
 using RequestFullRenderFn = std::function<void(ContentKey)>;
 
-/** Callback from render pipeline when CRS render is complete and ready for playback.
- *  Triggers segment state transition from Processing to Edited. */
-using OnRenderCompleteFn = std::function<void(ContentKey)>;
-
 /** Bundle of processor-side callbacks injected at CaptureSession construction. */
 struct ProcessorBindings
 {
@@ -84,7 +81,6 @@ struct ProcessorBindings
     RefreshSegmentFn refreshSegment;
     PublishPlaybackSourceFn publishPlaybackSource;
     RequestFullRenderFn requestFullRender;
-    OnRenderCompleteFn onRenderComplete;
 };
 
 /**
@@ -139,27 +135,33 @@ public:
     // ─── Audio thread ──────────────────────────────────────────────────────
     /**
      * Process one audio block. Behavior depends on current segments:
-     *   - If any Edited segment covers host_t  → buffer.clear() + write rendered audio.
-     *   - Else                                  → leave buffer untouched (dry pass-through).
-     *   - If a Capturing segment exists and host_t advances continuously → write dry copy to its fifo.
+     *   - If any Edited segment covers hostAbsoluteSample → replace overlapping sub-range with rendered audio.
+     *   - Else                                           → leave buffer untouched (dry pass-through).
+     *   - If a Capturing segment exists and isPlaying → write dry copy to its fifo.
+     *   - hostAbsoluteSample is the sole source of truth for audio positioning.
+     *   - isPlaying is the host's authoritative transport state.
+     *   - hostAbsoluteSample < 0 → early return (both capture and playback skipped).
      */
     void processBlock(juce::AudioBuffer<float>& buffer,
-                      double hostTimeSeconds,
+                      int64_t hostAbsoluteSample,
                       double hostSampleRate,
                       bool isPlaying) noexcept;
 
     /** Periodic message-thread tick (~30 Hz from PluginEditor timer). Promotes Pending -> Processing
-     *  after capture drain, and Processing -> Edited when CaptureSegmentContent F0 state is Ready. */
+     *  after capture drain, and Processing -> Edited when CaptureSegmentContent F0 state is Ready.
+     *  Failed segments (F0 analysis or render failure) are not promoted by tick. */
     void tick();
 
     // ─── Notification injection (message thread) ───────────────────────────
-    void setActiveSegmentChangedCallback(ActiveSegmentChangedFn fn);
 
     /** Called by render pipeline when CRS render cache is complete and ready for playback.
      *  Transitions segment from Processing to Edited state. */
     void onRenderComplete(ContentKey segmentContentKey);
+    /** Called by the render pipeline when the current chunk fails. */
+    void onRenderFailed(ContentKey segmentContentKey);
 
-    /** Commit F0 extraction result to segment content. Does not promote lifecycle. */
+    /** Commit F0 extraction result to segment content. When state is Failed,
+     *  transitions segment lifecycle to Failed (content preserved, not deleted). */
     bool commitSegmentF0Result(ContentKey segmentContentKey,
                                std::shared_ptr<PitchCurve> pitchCurve,
                                OriginalF0State state);
@@ -232,7 +234,6 @@ private:
     uint64_t nextId() noexcept;
 
     ProcessorBindings bindings_;
-    ActiveSegmentChangedFn activeSegmentChanged_;
 
     // Configured at prepareToPlay
     double currentSampleRate_ = 44100.0;
@@ -262,11 +263,6 @@ private:
 
     // Audio-thread scratch (allocated in prepareToPlay; resized only on message thread).
     juce::AudioBuffer<float> dryScratch_;
-
-    // Audio-thread only: tracks the previous block's host time. Used to detect "transport
-    // is running" by observing host_t advance, even when the host reports isPlaying=false
-    // (FL Studio / some Reaper configs do that). Sentinel <0 means "no prior block seen".
-    double lastSeenHostTime_ { -1.0 };
 
     // Single source of truth for the capture channel layout. Set by prepareToPlay
     // from the host's declared input bus, snapshotted into each CaptureSegment at

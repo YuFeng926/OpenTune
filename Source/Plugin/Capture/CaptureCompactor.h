@@ -9,9 +9,12 @@
 namespace OpenTune::Capture {
 
 /**
- * Compaction utility: when a new Edited segment fully covers the time range of
- * an older segment, the older segment becomes unreachable in playback (because
- * processBlock reverse-iterates and the newer one wins). Removing it frees PCM.
+ * Compaction utility: when a new Edited segment fully covers the sample range
+ * of an older segment, the older segment becomes unreachable in playback
+ * (because processBlock reverse-iterates and the newer one wins). Removing it
+ * frees PCM.
+ *
+ * Uses hostStartSample/hostSampleCount for coverage judgment (not seconds).
  *
  * Partial overlaps are intentionally NOT split — keeping older segments simpler;
  * playback resolution handles them correctly via reverse-iterate.
@@ -20,9 +23,9 @@ class CaptureCompactor
 {
 public:
     /**
-     * Walk 'segments' and remove every segment whose [T_start, T_start+duration)
-     * is fully contained in 'newlyEdited'. The newlyEdited segment itself is
-     * never removed.
+     * Walk 'segments' and remove every segment whose
+     * [hostStartSample, hostStartSample+hostSampleCount) is fully contained in
+     * 'newlyEdited'. The newlyEdited segment itself is never removed.
      *
      * Returns the removed unique_ptrs (caller is responsible for deferred
      * reclamation; CaptureSession parks them in pendingReclaim_ for a grace

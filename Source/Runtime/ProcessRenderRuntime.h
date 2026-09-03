@@ -28,6 +28,7 @@ public:
     {
         std::shared_ptr<CompletionGate> gate;
         std::function<void(ContentKey)> chunkSettled;
+        std::function<void(ContentKey)> chunkFailed;
     };
 
     static ProcessRenderRuntime& getInstance();

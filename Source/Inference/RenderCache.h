@@ -79,7 +79,7 @@ public:
                                                     std::vector<float>&& audio,
                                                     uint64_t revision);
 
-    void completeChunkRenderFailure(double startSeconds, uint64_t revision);
+    bool completeChunkRenderFailure(int64_t startSample, uint64_t revision);
 
     /**
      * stale-generation 回退：仅当 chunk 仍正处 Running 且 runningRevision 匹配时，
@@ -88,7 +88,7 @@ public:
      */
     bool requeueRunningChunk(int64_t startSample, uint64_t runningRevision);
 
-    void markChunkAsBlank(double startSeconds, uint64_t revision);
+    void markChunkAsBlank(int64_t startSample, uint64_t revision);
 
     struct ChunkStats {
         int idle{0};
@@ -169,7 +169,7 @@ private:
     };
 
     mutable juce::SpinLock lock_;
-    std::map<double, Chunk> chunks_;
+    std::map<int64_t, Chunk> chunks_;
     std::set<int64_t> pendingChunks_;
 
     std::shared_ptr<const PublishedRenderSnapshot> publishedSnapshot_;
@@ -190,6 +190,8 @@ private:
     void publishLocked();
     void rebuildPrepared();
     void pruneRetiredSnapshotsLocked() const;
+    // Settled check callable only when lock_ is already held (avoids recursive lock).
+    bool isCanonicalSettledLocked_() const;
 
 public:
     static std::atomic<size_t>& globalCacheLimitBytes();

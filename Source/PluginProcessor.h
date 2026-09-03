@@ -155,7 +155,8 @@ namespace Capture {
  * 管理多轨道、Clip、音高曲线、渲染缓存等核心数据。
  */
 class OpenTuneAudioProcessor : public juce::AudioProcessor,
-                               public juce::AsyncUpdater
+                               public juce::AsyncUpdater,
+                               public juce::Timer
 #if JucePlugin_Enable_ARA
                            , public juce::AudioProcessorARAExtension
 #endif
@@ -253,6 +254,7 @@ public:
     void setStateInformation(const void* data, int sizeInBytes) override;
 
     void handleAsyncUpdate() override;
+    void timerCallback() override;
 
     double getSampleRate() const { return currentSampleRate_.load(std::memory_order_relaxed); }
     

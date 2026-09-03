@@ -730,13 +730,19 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 
             auto contentSnap = getContentSnapshot(job.contentKey);
             if (!contentSnap) {
-                job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
+                if (job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
+                    if (auto* session = getCaptureSession())
+                        session->onRenderFailed(job.contentKey);
                 return;
             }
             ProcessRenderRuntime::CompletionContext completion;
             completion.gate = completionGate_;
             completion.chunkSettled = [this](ContentKey key) {
                 handleStage1ChunkSettled(key);
+            };
+            completion.chunkFailed = [this](ContentKey key) {
+                if (auto* session = getCaptureSession())
+                    session->onRenderFailed(key);
             };
             const bool lightPitchEnabled = appPreferences_ != nullptr
                 && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
@@ -838,7 +844,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
         bindings.replaceWithRendered = [this](juce::AudioBuffer<float>& buffer,
                                                int destStart, int numSamples,
                                                ContentKey segmentContentKey,
-                                               double readStartSeconds,
+                                               int64_t readStartSample,
                                                double targetSampleRate) {
             // Capture segment contentKey is the CRS content key.
             jassert(contentRenderService_ != nullptr);
@@ -846,15 +852,13 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             PlaybackReadSource readSource;
             if (!contentRenderService_->getPlaybackReadSource(segmentContentKey, readSource)
                 || !readSource.hasAudio()) {
-                buffer.clear(destStart, numSamples);
                 return;
             }
             ::OpenTune::PlaybackReadRequest req;
             req.source = readSource;
-            req.readStartSample = TimeCoordinate::secondsToSamples(readStartSeconds, targetSampleRate);
+            req.readStartSample = readStartSample;
             req.targetSampleRate = targetSampleRate;
             req.numSamples = numSamples;
-            buffer.clear(destStart, numSamples);
             readPlaybackAudio(req, buffer, destStart);
         };
 
@@ -880,17 +884,21 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                     ? snap->audioSampleRate : segment->captureSampleRate;
                 ContentKey segContentKey = segment->contentKey;
                 auto gate = completionGate_;
-                auto f0Svc = ProcessF0Runtime::getInstance().getF0Service();
 
                 f0ExtractionService_.submit(
                     F0RequestKey{segContentKey},
-                    [audio, sr, segContentKey, f0Svc](const std::shared_ptr<F0RunOwnerState>& runOwnerState) -> F0ExtractionService::Result {
+                    [audio, sr, segContentKey](const std::shared_ptr<F0RunOwnerState>& runOwnerState) -> F0ExtractionService::Result {
                         F0ExtractionService::Result result;
                         result.contentKey = segContentKey;
                         if (!audio || audio->getNumSamples() == 0) {
                             result.errorMessage = "no_audio_data";
                             return result;
                         }
+                        // Lazy initialize F0 runtime and resolve service inside worker.
+                        auto& f0Runtime = ProcessF0Runtime::getInstance();
+                        if (!f0Runtime.isReady())
+                            f0Runtime.initialize(ModelPathResolver::getModelsDirectory());
+                        auto f0Svc = f0Runtime.getF0Service();
                         if (!f0Svc) {
                             result.errorMessage = "no_f0_service";
                             return result;
@@ -1002,12 +1010,8 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             requestFullContentRender(key);
         };
 
-        bindings.onRenderComplete = [this](ContentKey key) {
-            if (auto* session = getCaptureSession())
-                session->onRenderComplete(key);
-        };
-
         captureSession_ = std::make_unique<Capture::CaptureSession>(std::move(bindings));
+        startTimerHz(30);
         AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
     }
@@ -1026,6 +1030,9 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
         + " araBound=false"
 #endif
     );
+
+    // Stop the tick timer first — no more timerCallback after this point.
+    stopTimer();
 
     // 析构最前段生命周期动作（此后再无异步任务访问裸 this）：
     // 1) 关闭 completion gate：与持锁进入的 F0 commit / chunkSettled / 模型切换
@@ -1612,20 +1619,22 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 #endif
 
     // --- Non-ARA VST3 capture path: dry pass-through + capture session ---
-    // Uses the same hostPosOpt read above. No second getPosition(), no zero fallback.
-    // When the host did not supply timeInSeconds, fall back to the processor-owned
-    // PlayHeadState's last valid time — never reset to 0.0.
+    // Host absolute sample (from PositionInfo::getTimeInSamples()) is the sole source
+    // of truth for audio positioning. No fallback from timeInSeconds.
     if (auto* captureSession = getCaptureSession())
     {
         if (hostPosOpt.hasValue())
             updateHostTransportSnapshot(*hostPosOpt);
 
-        const double host_t = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
-        const bool isPlayingNow = hostPosOpt.hasValue()
-            ? hostPosOpt->getIsPlaying()
-            : playHeadState_.isPlaying.load(std::memory_order_relaxed);
+        int64_t hostAbsoluteSample = -1;
+        bool isPlaying = false;
+        if (hostPosOpt.hasValue()) {
+            if (auto timeInSamples = hostPosOpt->getTimeInSamples())
+                hostAbsoluteSample = *timeInSamples;
+            isPlaying = hostPosOpt->getIsPlaying();
+        }
 
-        captureSession->processBlock(buffer, host_t, getSampleRate(), isPlayingNow);
+        captureSession->processBlock(buffer, hostAbsoluteSample, getSampleRate(), isPlaying);
         pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
         return;
     }
@@ -2695,6 +2704,12 @@ void OpenTuneAudioProcessor::handleAsyncUpdate()
     runReclaimSweepOnMessageThread();
 }
 
+void OpenTuneAudioProcessor::timerCallback()
+{
+    if (auto* session = getCaptureSession())
+        session->tick();
+}
+
 void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
 {
     cancelPendingUpdate();
@@ -2999,8 +3014,13 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(ContentKey key)
 {
     refreshCRSMetadata(key);
 
-    if (auto* session = getCaptureSession())
-        session->onRenderComplete(key);
+    // Only transition to Edited when ALL chunks are canonical settled.
+    // Partial completion must not promote the segment prematurely.
+    if (auto* session = getCaptureSession()) {
+        auto cache = contentRenderService_->getRenderCache(key);
+        if (cache && cache->isCanonicalSettled())
+            session->onRenderComplete(key);
+    }
 
     enqueueStandaloneStage2WhenCanonicalSettled(key);
 }
