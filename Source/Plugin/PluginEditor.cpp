@@ -997,7 +997,7 @@ void OpenTuneAudioProcessorEditor::playRequested()
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        const double pendingSeek = pianoRoll_.getPendingSeekTime().value_or(-1.0);
+        const double pendingSeek = pianoRoll_.consumePendingSeekTime();
         if (!docController->requestStartPlayback(pendingSeek))
             AppLogger::log("ARA: requestStartPlayback failed — host playback controller unavailable");
         return;
@@ -1199,7 +1199,7 @@ void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        const double pendingSeek = pianoRoll_.getPendingSeekTime().value_or(-1.0);
+        const double pendingSeek = pianoRoll_.consumePendingSeekTime();
         if (!docController->requestTogglePlayback(processorRef_.isPlaying(), pendingSeek))
             AppLogger::log("ARA: requestTogglePlayback failed — host playback controller unavailable");
         return;

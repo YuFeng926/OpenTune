@@ -200,9 +200,12 @@ public:
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
 
-    std::optional<double> getPendingSeekTime() const noexcept
+    double consumePendingSeekTime() noexcept
     {
-        return pendingSeekTime_ >= 0.0 ? std::optional<double>(pendingSeekTime_) : std::nullopt;
+        double val = pendingSeekTime_;
+        pendingSeekTime_ = -1.0;
+        pendingSeekEpoch_ = 0;
+        return val;
     }
 
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
