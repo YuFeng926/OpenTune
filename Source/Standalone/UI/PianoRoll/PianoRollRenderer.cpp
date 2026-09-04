@@ -565,6 +565,16 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const double contentVisibleDuration = visibleWindow.visibleContentEndTime - visibleWindow.visibleContentStartTime;
     if (contentVisibleDuration <= 0.0) return;
 
+    // Clip pixel loop to segment timeline bounds. Without this, pixels outside
+    // [timelineStartSeconds, timelineEndSeconds] get clamped by tauInverse to
+    // boundary peaks, drawing a solid bar of waveform amplitude beyond the
+    // segment edges (visible when T_start > 0, e.g. capture segments).
+    const int segStartX = ctx.coords.timeToX(item.projection.timelineStartSeconds);
+    const int segEndX = ctx.coords.timeToX(item.projection.timelineEndSeconds());
+    const int drawStartX = std::max(startX, segStartX);
+    const int drawEndX = std::min(endX, segEndX);
+    if (drawEndX <= drawStartX) return;
+
     const float centerY = ctx.height / 2.0f;
     const float amplitudeScale = ctx.height / 2.0f;
 
@@ -582,7 +592,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     // (output time) reads from the SOURCE peaks at the tau-inverted time.
     jassert(item.timeGrid);
 
-    for (int x = startX; x < endX; ++x)
+    for (int x = drawStartX; x < drawEndX; ++x)
     {
         double matTime = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x));
         matTime = item.timeGrid->tauInverse(matTime);
