@@ -361,17 +361,31 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // pianoRoll_ heartbeat runs unconditionally so VST3/ARA can advance
     // WaveformMipmapCache even before the PianoRoll is showing.
     pianoRoll_.onHeartbeatTick();
-    if (pianoRoll_.isShowing()) {
-        overviewStrip_.onHeartbeatTick(pianoRoll_.editedContentKey(),
-                                       pianoRoll_.activeContentProjection(),
-                                       pianoRoll_.timelineCamera(),
-                                       pianoRoll_.timelinePolicyViewportWidth());
-    }
 
     // Content projection after heartbeat: publish the previous frame's stable
     // camera first (heartbeat ticks have settled), then sync this frame's content.
     // Running before heartbeat would cause a duplicate resolve race.
     const auto sync = syncContentProjectionToPianoRoll();
+
+    // Overview update: regular capture uses multi-segment overview path;
+    // ARA/other paths continue using the single-content onHeartbeatTick.
+    if (pianoRoll_.isShowing()) {
+        if (sync.isRegularVst3Capture)
+        {
+            overviewStrip_.onHeartbeatTickRegular(sync.placements,
+                                                  sync.timelineViewStartSeconds,
+                                                  sync.timelineViewEndSeconds,
+                                                  pianoRoll_.timelineCamera(),
+                                                  pianoRoll_.timelinePolicyViewportWidth());
+        }
+        else
+        {
+            overviewStrip_.onHeartbeatTick(pianoRoll_.editedContentKey(),
+                                           pianoRoll_.activeContentProjection(),
+                                           pianoRoll_.timelineCamera(),
+                                           pianoRoll_.timelinePolicyViewportWidth());
+        }
+    }
 
     // Continuously remember viewport for stable placement restore
     rememberPresentedPianoRollViewport();
@@ -701,6 +715,7 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
 #endif
 
     if (auto* session = processorRef_.getCaptureSession()) {
+        sync.isRegularVst3Capture = true;
         double viewEndSeconds = 0.0;
         for (const auto& segment : session->listEditedSegments()) {
             const auto projection = makeCaptureSegmentProjection(segment);

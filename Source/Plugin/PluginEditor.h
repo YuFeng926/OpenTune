@@ -119,6 +119,7 @@ private:
         std::optional<PianoRollPlacementIdentity> activePlacementIdentity;
         double timelineViewStartSeconds = 0.0;
         double timelineViewEndSeconds = 0.0;
+        bool isRegularVst3Capture = false;
 
         bool hasPlacements() const noexcept
         {

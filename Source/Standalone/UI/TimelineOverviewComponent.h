@@ -2,11 +2,13 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cstdint>
+#include <vector>
 
 #include "../../Content/ContentKey.h"
 #include "../../Utils/ContentTimelineProjection.h"
 #include "TimelineViewportCamera.h"
 #include "WaveformMipmap.h"
+#include "PianoRoll/PianoRollRenderer.h"
 
 namespace OpenTune {
 
@@ -33,6 +35,15 @@ public:
                          TimelineViewportCamera camera,
                          int viewportWidthPx);
 
+    /// Regular-capture multi-segment overview entry.
+    /// placements: full set of TimelineContentPlacement (order preserved).
+    /// timelineStart/timelineEnd: overall timeline range computed by Plugin.
+    void onHeartbeatTickRegular(std::vector<TimelineContentPlacement> placements,
+                                double timelineStart,
+                                double timelineEnd,
+                                TimelineViewportCamera camera,
+                                int viewportWidthPx);
+
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
 
@@ -54,13 +65,16 @@ private:
 
     juce::Rectangle<float> getContentBounds() const noexcept;
     uint64_t calculateContentSignature() const;
+    uint64_t calculateRegularSignature() const;
     Geometry calculateGeometry() const;
+    Geometry calculateRegularGeometry() const;
     void requestNavigation(double visibleStartSeconds);
     void updateMouseCursor(juce::Point<float> position);
 
     WaveformMipmapCache& waveformMipmapCache_;
     juce::ListenerList<Listener> listeners_;
 
+    // Single-content mode (ARA / Standalone)
     ContentKey contentKey_{};
     ContentTimelineProjection projection_{};
     TimelineViewportCamera camera_{};
@@ -68,6 +82,13 @@ private:
     int viewportWidthPx_ = 0;
     uint64_t lastSignature_ = 0;
     float lastBuildProgress_ = 0.0f;
+
+    // Regular-capture multi-segment mode
+    bool regularCaptureMode_ = false;
+    std::vector<TimelineContentPlacement> regularPlacements_;
+    double regularTimelineStart_ = 0.0;
+    double regularTimelineEnd_ = 0.0;
+    uint64_t lastRegularSignature_ = 0;
 
     bool isDragging_ = false;
     double dragPointerOffsetSeconds_ = 0.0;
