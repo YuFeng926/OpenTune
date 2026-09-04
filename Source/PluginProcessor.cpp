@@ -944,6 +944,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                                     segContentKey, std::move(pitchCurve),
                                     OriginalF0State::Ready)) {
                                 updateContentKeyFromOriginalF0(segContentKey);
+                                requestFullContentRender(segContentKey);
                             }
                             if (pendingTimeToolSeedKeys_.count(segContentKey) != 0)
                                 ensureTimeToolAnchorSeed(segContentKey);
