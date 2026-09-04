@@ -373,7 +373,25 @@ ProcessRenderRuntime::ProcessRenderRuntime()
     // 启动前从持久化配置读取 vocoder 模型权重，确保首次 lazy 加载使用用户
     // 实际选择的权重（而非硬编码默认值）。
     const auto prefs = AppPreferences().getState().shared.vocoderModelWeight;
+    const auto modelsDir = ModelPathResolver::getModelsDirectory();
     currentVocoderModelWeight_ = prefs;
+
+    // 持久化权重可能已被新版本停止打包；只回退到项目保证提供的内置默认权重。
+    // 默认权重也缺失时保留原值，让后续 createVocoderDomain 报出真实错误。
+    const auto resolvedPath = modelPathForWeight(modelsDir, prefs);
+    if (!juce::File(resolvedPath).existsAsFile()) {
+        AppLogger::warn("[ProcessRenderRuntime] Persisted vocoder weight not found: "
+            + juce::String(prefs) + " (" + resolvedPath + ")");
+
+        if (prefs != kDefaultVocoderWeight) {
+            const auto defaultPath = modelPathForWeight(modelsDir, kDefaultVocoderWeight);
+            if (juce::File(defaultPath).existsAsFile()) {
+                AppLogger::warn("[ProcessRenderRuntime] Falling back to default weight: "
+                    + juce::String(kDefaultVocoderWeight));
+                currentVocoderModelWeight_ = kDefaultVocoderWeight;
+            }
+        }
+    }
 
     // 进程寿命 control worker：模型切换/后端重置的耗时 Session 销毁、按当前
     // 配置重建与 AccelerationDetector reset/detect 全部在此串行执行；UI 线程
