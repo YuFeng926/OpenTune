@@ -138,7 +138,6 @@ struct PianoRollViewportPrimitive
 
 struct PluginPianoRollSessionState
 {
-    std::optional<PianoRollPlacementIdentity> lastActivePlacement;
     std::vector<std::pair<PianoRollPlacementIdentity, PianoRollViewportPrimitive>> remembered;
 };
 
@@ -600,14 +599,11 @@ public:
     // ========================================================================
     // Plugin piano roll session memory (message thread only; never serialized)
     // ========================================================================
-    /** 记住 placement 的最后完整镜头，并更新 last-active 身份。 */
+    /** 记住 placement 的最后完整镜头。 */
     void rememberPianoRollViewport(PianoRollPlacementIdentity placement, PianoRollViewportPrimitive viewport);
 
     /** 读取 placement 记住的镜头；无记录返回 nullopt。 */
     std::optional<PianoRollViewportPrimitive> readPianoRollViewport(const PianoRollPlacementIdentity& placement) const;
-
-    /** 最后活动的 placement 身份；无记录返回 nullopt。 */
-    std::optional<PianoRollPlacementIdentity> lastActivePianoRollPlacement() const noexcept;
 
     // ⚡️ vocal-time-stretch §3.6 — TimeGrid accessors per content
     bool ensureTimeToolAnchorSeed(ContentKey key);

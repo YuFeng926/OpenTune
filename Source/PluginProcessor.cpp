@@ -5313,7 +5313,6 @@ ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
 void OpenTuneAudioProcessor::rememberPianoRollViewport(
     PianoRollPlacementIdentity placement, PianoRollViewportPrimitive viewport)
 {
-    pianoRollSession_.lastActivePlacement = placement;
     auto& remembered = pianoRollSession_.remembered;
     const auto it = std::find_if(remembered.begin(), remembered.end(),
                                  [&placement](const auto& entry) { return entry.first == placement; });
@@ -5332,11 +5331,6 @@ std::optional<PianoRollViewportPrimitive> OpenTuneAudioProcessor::readPianoRollV
     if (it == remembered.end())
         return std::nullopt;
     return it->second;
-}
-
-std::optional<PianoRollPlacementIdentity> OpenTuneAudioProcessor::lastActivePianoRollPlacement() const noexcept
-{
-    return pianoRollSession_.lastActivePlacement;
 }
 
 } // namespace OpenTune

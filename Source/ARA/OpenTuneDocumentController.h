@@ -122,13 +122,14 @@ public:
         const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const;
     std::vector<PlaybackRegionProjection> getEditorSelectionPlaybackRegionProjections() const;
     std::optional<PlaybackRegionProjection> getFocusedEditorPlaybackRegionProjection() const;
-    // 用户 Read 入口：新内容/未材质化内容的显式读取请求。
+    // 用户 Read 入口：只读取当前 focused PlaybackRegion 对应的内容。
     // archive 恢复且已有有效 F0 的内容由 readRestoredAudio 自动读取，无需此入口。
-    int requestReadAudioForPlaybackRegions();
+    int requestReadAudioForPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     // ARA SDK requires DocumentController operations on main thread.
     // This method executes synchronously to comply with ARA thread constraints.
     // Callers should display a loading overlay before calling if UI responsiveness is needed.
-    void requestReadAudioForPlaybackRegionsAsync(std::function<void(int)> completionCallback);
+    void requestReadAudioForPlaybackRegionAsync(juce::ARAPlaybackRegion* playbackRegion,
+                                                std::function<void(int)> completionCallback);
     void setEditorViewSelectionPlaybackRegions(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);

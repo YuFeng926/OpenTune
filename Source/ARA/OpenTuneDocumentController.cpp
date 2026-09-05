@@ -22,7 +22,6 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
-#include <set>
 #include <utility>
 
 namespace OpenTune {
@@ -927,69 +926,43 @@ OpenTuneDocumentController::getFocusedEditorPlaybackRegionProjection() const
     return projections.front();
 }
 
-int OpenTuneDocumentController::requestReadAudioForPlaybackRegions()
+int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
+    juce::ARAPlaybackRegion* playbackRegion)
 {
-    // 用户 Read 入口：新内容/未材质化内容的显式读取请求。
-    // Ready/Rendering 视为幂等无操作（不调用 birth，不计失败）。
+    if (playbackRegion == nullptr)
+        return -1;
 
-    std::set<juce::String> uniqueModIds;
-    for (const auto& region : playbackRegions_)
-    {
-        if (region.hasValidPlacement())
-            uniqueModIds.insert(region.audioModificationPersistentId);
-    }
+    if (findPlaybackRegion(playbackRegion) == nullptr)
+        return -1;
 
-    if (uniqueModIds.empty())
+    auto* modification = findAudioModification(playbackRegion->getAudioModification());
+    if (modification == nullptr)
+        return -1;
+
+    // Ready 或 Rendering：幂等无操作，不调用 birth，不计失败。
+    if (modification->birthState == AudioModificationBirthState::Ready
+        || modification->birthState == AudioModificationBirthState::Rendering)
         return 0;
 
-    int refreshedCount = 0;
-    bool anyFailure = false;
+    if (modification->birthState != AudioModificationBirthState::WaitingForSource
+        && modification->birthState != AudioModificationBirthState::Failed)
+        return -1;
 
-    for (const auto& modId : uniqueModIds)
-    {
-        auto* modification = findAudioModification(modId);
-        if (modification == nullptr)
-        {
-            anyFailure = true;
-            continue;
-        }
+    if (!birthContentForModification(*modification))
+        return -1;
 
-        // Ready 或 Rendering：幂等无操作，不调用 birth，不计失败
-        if (modification->birthState == AudioModificationBirthState::Ready
-            || modification->birthState == AudioModificationBirthState::Rendering)
-            continue;
-
-        // WaitingForSource 或 Failed：调用 birth；成功计入 refreshedCount；失败标记失败
-        if (modification->birthState == AudioModificationBirthState::WaitingForSource
-            || modification->birthState == AudioModificationBirthState::Failed)
-        {
-            if (birthContentForModification(*modification))
-                ++refreshedCount;
-            else
-                anyFailure = true;
-            continue;
-        }
-
-        // Empty 或其它不可处理状态：标记失败
-        anyFailure = true;
-    }
-
-    if (refreshedCount > 0)
-        refreshRegisteredRenderers(publishModelChange());
-
-    // A positive count means at least one region was materialized. Keep that
-    // successful path alive even when another region failed; -1 is reserved
-    // for the all-failed case so the editor does not discard successful work.
-    return refreshedCount > 0 ? refreshedCount : (anyFailure ? -1 : 0);
+    refreshRegisteredRenderers(publishModelChange());
+    return 1;
 }
 
-void OpenTuneDocumentController::requestReadAudioForPlaybackRegionsAsync(
+void OpenTuneDocumentController::requestReadAudioForPlaybackRegionAsync(
+    juce::ARAPlaybackRegion* playbackRegion,
     std::function<void(int)> completionCallback)
 {
     // ARA SDK requires DocumentController operations on main thread.
     // This method now executes synchronously to comply with ARA thread constraints.
     // Callers should display a loading overlay before calling if UI responsiveness is needed.
-    const int count = requestReadAudioForPlaybackRegions();
+    const int count = requestReadAudioForPlaybackRegion(playbackRegion);
     if (completionCallback)
         completionCallback(count);
 }
@@ -1073,7 +1046,6 @@ void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModi
                                           }),
                            playbackRegions_.end());
     reconcileEditorSelectionPlaybackRegions();
-
     // 直接按 Host 指针 erase，不先把匹配字段置空
     // persistent-id→ContentKey 映射保持稳定（araPersistentIdsByObjectId_ 不动）
     // 新 Host modification 仍创建新 wrapper
@@ -1602,13 +1574,16 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
     projection.displayColour = placement.displayColour;
 
     const auto* modification = findAudioModification(placement.audioModificationPersistentId);
-    if (modification == nullptr || !modification->hasContentState())
+    if (modification == nullptr)
+        return projection;
+
+    projection.contentKey = modification->contentKey();
+    if (!modification->hasContentState())
         return projection;
 
     projection.contentWindow = modification->content->sourceWindow;
     projection.contentRevision = modification->content->contentRevision;
     projection.contentDurationSeconds = modification->content->sourceWindow.durationSeconds();
-    projection.contentKey = modification->contentKey();
     // playbackSourceReady 仅用于 renderer 严格 gate（isPlaybackRenderable）；
     // UI projection 不再以它阻断，WaitingForSource 也能产出有效 contentKey/content snapshot。
     projection.playbackSourceReady = modification->isRenderable();
@@ -1930,7 +1905,7 @@ void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioMo
 }
 
 // Removed rebuildCRSForSource per architecture: sample access enable is permission,
-// not user intent. 新内容仅由用户 Read（requestReadAudioForPlaybackRegions）读取；
+// not user intent. 新内容仅由用户 Read（requestReadAudioForPlaybackRegion）读取；
 // archive 恢复且已有有效 F0 的内容在 endEditing/access 后自动重建 PCM。
 
 bool OpenTuneDocumentController::scheduleAsyncF0Extraction(

@@ -631,84 +631,21 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
 
 #if JucePlugin_Enable_ARA
     if (const auto* dc = processorRef_.getDocumentController()) {
-        const auto regions = dc->getPlaybackRegionProjections();
-
-        // Build identity+placement pairs for all valid regions.
-        struct RegionEntry {
-            PianoRollPlacementIdentity identity;
-            TimelineContentPlacement placement;
-        };
-        std::vector<RegionEntry> entries;
-        for (const auto& region : regions) {
-            if (!region.contentKey.isValid())
-                continue;
-            const auto projection = makePianoRollLocalProjection(region);
-            if (!projection.isValid())
-                continue;
-            RegionEntry entry;
-            entry.identity.contentKey = region.contentKey;
-            entry.identity.projection = projection;
-            // 宿主未提供 ARA 标准颜色时采用插件产品默认色
-            entry.placement = makePlacement(region.contentKey, projection,
-                                            region.displayColour.value_or(UIColors::noteBlock));
-            entries.push_back(std::move(entry));
-        }
-
-        if (entries.empty())
+        const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection();
+        if (!focusedRegion.has_value() || !focusedRegion->contentKey.isValid())
             return sync;
 
-        // Resolve active placement: focused → lastActive → earliest
-        const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection();
-        std::optional<PianoRollPlacementIdentity> activeIdentity;
+        const auto projection = makePianoRollLocalProjection(*focusedRegion);
+        if (!projection.isValid())
+            return sync;
 
-        if (focusedRegion.has_value() && focusedRegion->contentKey.isValid()) {
-            const auto focusedProj = makePianoRollLocalProjection(*focusedRegion);
-            if (focusedProj.isValid()) {
-                PianoRollPlacementIdentity focusedIdentity{
-                    focusedRegion->contentKey, focusedProj};
-                // Only adopt focused identity if it matches an entry exactly
-                const bool matched = std::any_of(entries.begin(), entries.end(),
-                    [&](const auto& e) { return e.identity == focusedIdentity; });
-                if (matched)
-                    activeIdentity = focusedIdentity;
-            }
-        }
-
-        // last-active → earliest fallback
-        if (!activeIdentity.has_value()) {
-            activeIdentity = processorRef_.lastActivePianoRollPlacement();
-            if (activeIdentity.has_value()) {
-                // Verify it still exists among current entries
-                const bool found = std::any_of(entries.begin(), entries.end(),
-                    [&](const auto& e) { return e.identity == *activeIdentity; });
-                if (!found)
-                    activeIdentity = std::nullopt;
-            }
-        }
-
-        if (!activeIdentity.has_value()) {
-            // Fallback: earliest timeline item
-            const auto* earliest = &entries.front();
-            for (const auto& e : entries) {
-                if (e.identity.projection.timelineStartSeconds
-                    < earliest->identity.projection.timelineStartSeconds)
-                    earliest = &e;
-            }
-            activeIdentity = earliest->identity;
-        }
-
-        sync.activePlacementIdentity = activeIdentity;
-        sync.activeContentKey = activeIdentity->contentKey;
-
-        // Put active placement at front so findEditedPlacement() resolves correctly.
-        auto activeIt = std::find_if(entries.begin(), entries.end(),
-            [&](const auto& e) { return e.identity == *activeIdentity; });
-        if (activeIt != entries.end()) {
-            sync.placements.push_back(std::move(activeIt->placement));
-            entries.erase(activeIt);
-        }
-        for (auto& e : entries)
-            sync.placements.push_back(std::move(e.placement));
+        sync.activeContentKey = focusedRegion->contentKey;
+        sync.activePlacementIdentity = PianoRollPlacementIdentity{
+            sync.activeContentKey, projection};
+        sync.placements.push_back(makePlacement(
+            sync.activeContentKey,
+            projection,
+            focusedRegion->displayColour.value_or(UIColors::noteBlock)));
 
         return sync;
     }
@@ -1157,42 +1094,45 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(&processorRef_))
         + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc)));
 
-    const auto allRegions = dc->getPlaybackRegionProjections();
-    if (allRegions.empty()) {
-        return;  // 无 region 时静默返回
-    }
+    const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection();
+    if (!focusedRegion.has_value() || focusedRegion->playbackRegion == nullptr)
+        return;
 
-    dc->requestReadAudioForPlaybackRegionsAsync([this, dc, regionCount = static_cast<int>(allRegions.size())](int refreshed) {
-        if (refreshed < 0) {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                   "Read Audio",
-                                                   "Audio regions could not be processed.");
-            return;
-        }
-
-        if (refreshed == 0)
-            return;
-
-        AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
-            + " AudioModification(s) from " + juce::String(regionCount)
-            + " playback region(s)");
-
-        // 遮罩覆盖本次读取的全部 modification：F0 提取 + note 生成完成前保持"正在处理音频"
-        rmvpeOverlayTargetContentKeys_.clear();
-        for (const auto& projection : dc->getPlaybackRegionProjections()) {
-            if (projection.contentKey.isValid()) {
-                rmvpeOverlayTargetContentKeys_.push_back(projection.contentKey);
-                // F0 状态机基线重置：防止 F0 完成早于首次 timer 观察导致跳变丢失
-                lastObservedOriginalF0States_[projection.contentKey] = OriginalF0State::NotRequested;
-                // 捕获 OpenDyne 一次性音符生成意图，F0 Ready 跳变时消费
-                if (pianoRoll_.isOpenDyne())
-                    pendingNoteGenerationOnReady_[projection.contentKey] = pianoRoll_.getCurrentAutoTuneParams();
-                else
-                    pendingNoteGenerationOnReady_.erase(projection.contentKey);
+    const auto targetPlaybackRegion = focusedRegion->playbackRegion;
+    dc->requestReadAudioForPlaybackRegionAsync(
+        targetPlaybackRegion,
+        [this, dc, targetPlaybackRegion](int refreshed) {
+            if (refreshed < 0) {
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                       "Read Audio",
+                                                       "Audio regions could not be processed.");
+                return;
             }
-        }
-        rmvpeOverlayLatched_ = true;
-    });
+
+            if (refreshed == 0)
+                return;
+
+            AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
+                + " AudioModification(s) for focused playback region");
+
+            // 遮罩只覆盖本次读取的 focused modification。
+            rmvpeOverlayTargetContentKeys_.clear();
+            const auto targetProjections = dc->getPlaybackRegionProjectionsFor(
+                std::vector<juce::ARAPlaybackRegion*>{targetPlaybackRegion});
+            if (targetProjections.empty() || !targetProjections.front().contentKey.isValid())
+                return;
+
+            const auto targetKey = targetProjections.front().contentKey;
+            rmvpeOverlayTargetContentKeys_.push_back(targetKey);
+            // F0 状态机基线重置：防止 F0 完成早于首次 timer 观察导致跳变丢失
+            lastObservedOriginalF0States_[targetKey] = OriginalF0State::NotRequested;
+            // 捕获 OpenDyne 一次性音符生成意图，F0 Ready 跳变时消费
+            if (pianoRoll_.isOpenDyne())
+                pendingNoteGenerationOnReady_[targetKey] = pianoRoll_.getCurrentAutoTuneParams();
+            else
+                pendingNoteGenerationOnReady_.erase(targetKey);
+            rmvpeOverlayLatched_ = true;
+        });
 #endif
 }
 
