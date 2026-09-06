@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <cstdint>
 #include <memory>
 
 namespace OpenTune {
@@ -43,12 +44,16 @@ public:
     const AraSourceShape& getShape() const noexcept { return shape_; }
     juce::ARAAudioSource* getAraAudioSource() const noexcept { return identity_.audioSource; }
     std::shared_ptr<ARA::PlugIn::HostAudioReader> shareReaderLease() const noexcept { return readerLease_; }
+    uint64_t getSampleContentGeneration() const noexcept { return sampleContentGeneration_; }
+
+    void incrementSampleContentGeneration() noexcept { ++sampleContentGeneration_; }
 
 private:
     AraSourceIdentity identity_;
     AraSourceShape shape_;
     bool sampleAccessEnabled_{false};
     std::shared_ptr<ARA::PlugIn::HostAudioReader> readerLease_;
+    uint64_t sampleContentGeneration_{0};
 };
 
 } // namespace OpenTune

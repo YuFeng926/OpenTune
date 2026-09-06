@@ -1115,6 +1115,9 @@ void OpenTuneAudioProcessorEditor::recordRequested()
             AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
                 + " AudioModification(s) for focused playback region");
 
+            // ARA Read 成功且已清旧 curve 后，立即同步投影，让旧 F0 不等待 timer 才消失
+            syncContentProjectionToPianoRoll();
+
             // 遮罩只覆盖本次读取的 focused modification。
             rmvpeOverlayTargetContentKeys_.clear();
             const auto targetProjections = dc->getPlaybackRegionProjectionsFor(

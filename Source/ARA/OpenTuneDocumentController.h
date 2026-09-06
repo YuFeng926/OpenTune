@@ -287,7 +287,9 @@ private:
     bool scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate,
-                                   juce::ARAAudioModification* hostModification);
+                                   juce::ARAAudioModification* hostModification,
+                                   OriginalF0InputStamp stamp);
+    static OriginalF0InputStamp makeF0InputStamp(const AudioSource& source, const AudioModification& modification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void installDocumentRenderExecution();
     void processDocumentRenderJob(RenderJob& job);

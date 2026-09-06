@@ -939,14 +939,101 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
     if (modification == nullptr)
         return -1;
 
-    // Ready 或 Rendering：幂等无操作，不调用 birth，不计失败。
-    if (modification->birthState == AudioModificationBirthState::Ready
-        || modification->birthState == AudioModificationBirthState::Rendering)
+    // 构造当前输入 stamp，基于 FCPE 实际输入内容版本判定
+    auto* source = findAudioSource(modification->audioModification != nullptr
+                                       ? modification->audioModification->getAudioSource()
+                                       : nullptr);
+    const auto currentStamp = makeF0InputStamp(
+        source != nullptr ? *source : AudioSource{},
+        *modification);
+
+    const bool hasValidF0 = modification->hasContentState()
+        && modification->content->analysis.originalF0State == OriginalF0State::Ready
+        && modification->content->analysis.pitchCurve != nullptr
+        && modification->content->analysis.pitchCurve->hasOriginalF0Data();
+
+    const bool sameStamp = modification->originalF0InputStamp.has_value()
+        && modification->originalF0InputStamp.value() == currentStamp;
+
+    // 同输入已 materialized：no-op
+    if (sameStamp && hasValidF0
+        && modification->birthState == AudioModificationBirthState::Ready)
+    {
+        AppLogger::log("ReadAudio: same-input no-op, key="
+            + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
         return 0;
+    }
+
+    // 同输入正在提取 F0：no-op
+    if (sameStamp
+        && modification->hasContentState()
+        && modification->content->analysis.originalF0State == OriginalF0State::Extracting)
+    {
+        AppLogger::log("ReadAudio: same-input extracting no-op, key="
+            + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
+        return 0;
+    }
+
+    // 同输入正在构建 CRS：no-op
+    if (sameStamp && modification->birthState == AudioModificationBirthState::Rendering)
+    {
+        AppLogger::log("ReadAudio: same-input rendering no-op, key="
+            + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
+        return 0;
+    }
+
+    // 同输入 + 有效旧 F0 + 未 materialize：调用 birthContentForModification
+    // 保留 archive F0、只重建 CRS，不重新提交 FCPE
+    if (sameStamp && hasValidF0
+        && (modification->birthState == AudioModificationBirthState::WaitingForSource
+            || modification->birthState == AudioModificationBirthState::Failed))
+    {
+        AppLogger::log("ReadAudio: same-input materialize, key="
+            + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
+        if (!birthContentForModification(*modification))
+            return -1;
+        refreshRegisteredRenderers(publishModelChange());
+        return 1;
+    }
+
+    // stamp 不同或没有有效 F0：force-refresh
+    if (modification->originalF0InputStamp.has_value()
+        && modification->originalF0InputStamp.value() != currentStamp)
+    {
+        AppLogger::log("ReadAudio: force-refresh, key="
+            + juce::String(static_cast<juce::int64>(modification->contentKey().objectId))
+            + " oldGen=" + juce::String(static_cast<juce::int64>(modification->originalF0InputStamp->sourceSampleGeneration))
+            + " newGen=" + juce::String(static_cast<juce::int64>(currentStamp.sourceSampleGeneration)));
+    }
+    else if (!hasValidF0)
+    {
+        AppLogger::log("ReadAudio: no valid F0, birth, key="
+            + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
+    }
+    else
+    {
+        AppLogger::log("ReadAudio: untracked force-refresh, key="
+            + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
+    }
+
+    // force-refresh 前确认 modification 有 content state 且 source 有效；
+    // 不在无效 source 情况下先清掉旧内容
+    if (!modification->hasContentState())
+        return -1;
+    if (source == nullptr || !source->getShape().isValid())
+        return -1;
+
+    // 取消旧 F0 任务、清除 CRS 派生物、invalidateDerivedContent 清除旧 pitchCurve
+    removeCRSArtifactsForModification(*modification);
+    modification->invalidateDerivedContent();
+    // invalidateDerivedContent 已清除 analysis（含 pitchCurve）和 originalF0InputStamp
 
     if (modification->birthState != AudioModificationBirthState::WaitingForSource
         && modification->birthState != AudioModificationBirthState::Failed)
         return -1;
+
+    // 设置当前 stamp
+    modification->originalF0InputStamp = currentStamp;
 
     if (!birthContentForModification(*modification))
         return -1;
@@ -1111,6 +1198,9 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
         // When signal changed:
         //   - Invalidate ALL derived artifacts (CRS + analysis)
         const bool signalChanged = scopeFlags.affectSamples();
+
+        if (signalChanged)
+            source->incrementSampleContentGeneration();
 
         for (auto& modification : audioModifications_)
         {
@@ -1705,8 +1795,28 @@ void OpenTuneDocumentController::readRestoredAudio(const AudioSource* enabledSou
         if (!hasPlaybackRegion)
             continue;
 
+        // 复用 archive F0 前，建立当前运行时 stamp，使后续 Read 能命中 same-input no-op
+        if (auto* source = findAudioSource(mod.content->sourceWindow.sourcePersistentId))
+            mod.originalF0InputStamp = makeF0InputStamp(*source, mod);
+
         birthContentForModification(mod);
     }
+}
+
+OriginalF0InputStamp OpenTuneDocumentController::makeF0InputStamp(const AudioSource& source, const AudioModification& modification)
+{
+    OriginalF0InputStamp stamp;
+    stamp.sourcePersistentId = source.getIdentity().persistentId;
+    stamp.sourceSampleGeneration = source.getSampleContentGeneration();
+    stamp.sourceSampleRate = source.getShape().sourceSampleRate;
+    stamp.numSamples = source.getShape().numSamples;
+    stamp.numChannels = source.getShape().numChannels;
+    if (modification.hasContentState())
+    {
+        stamp.sourceStartSeconds = modification.content->sourceWindow.sourceStartSeconds;
+        stamp.sourceEndSeconds = modification.content->sourceWindow.sourceEndSeconds;
+    }
+    return stamp;
 }
 
 bool OpenTuneDocumentController::birthContentForModification(AudioModification& modification)
@@ -1743,7 +1853,12 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
 
     // 若已有 valid F0（恢复路径），跳过重复提取，避免新旧重叠。
     // 验证 pitchCurve 实际包含 F0 数据，防止空 pitchCurve 误判为已提取。
-    const bool alreadyHasF0 = content.analysis.originalF0State == OriginalF0State::Ready
+    // 同时要求 stamp 与当前 source stamp 相等，force refresh 后不得走 archive reuse。
+    const auto currentStamp = makeF0InputStamp(*source, modification);
+    const bool stampMatches = modification.originalF0InputStamp.has_value()
+        && modification.originalF0InputStamp.value() == currentStamp;
+    const bool alreadyHasF0 = stampMatches
+        && content.analysis.originalF0State == OriginalF0State::Ready
         && content.analysis.pitchCurve != nullptr
         && content.analysis.pitchCurve->hasOriginalF0Data();
 
@@ -1881,7 +1996,7 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     if (!alreadyHasF0)
     {
         auto* hostModification = modification.audioModification;
-        scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate, hostModification);
+        scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate, hostModification, currentStamp);
     }
 
     return true;
@@ -1912,7 +2027,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     ContentKey key,
     std::vector<float> channel0Data,
     double sourceSampleRate,
-    juce::ARAAudioModification* hostModification)
+    juce::ARAAudioModification* hostModification,
+    OriginalF0InputStamp stamp)
 {
     // Pre-check failures: mark matching content Failed so Extracting is not permanent
     auto markFailedIfCurrentBirth = [&](uint64_t birth) {
@@ -1994,7 +2110,7 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             result.energy = std::move(energy);
             return result;
         },
-        [this, crs, key, birthRevision, hostModification, leaseToken = asyncLeaseToken_](F0ExtractionService::Result&& result) mutable
+        [this, crs, key, birthRevision, hostModification, stamp, leaseToken = asyncLeaseToken_](F0ExtractionService::Result&& result) mutable
         {
             if (leaseToken && !leaseToken->load(std::memory_order_acquire))
                 return;
@@ -2026,6 +2142,16 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                         return; // Stale completion - modification restarted
                     if (mod->audioModification != hostModification)
                         return; // Stale completion - new Host AudioModification reused same ContentKey + birthRevision
+                    // Stamp 必须与提交时捕获的 stamp 一致；从当前 source 重新构造 stamp 比对，
+                    // 防止 source shape/generation 变化未走 affectSamples invalidation
+                    if (!mod->originalF0InputStamp.has_value() || mod->originalF0InputStamp.value() != stamp)
+                        return; // Stale completion - source changed during extraction
+                    auto* currentSource = this->findAudioSource(mod->content->sourceWindow.sourcePersistentId);
+                    if (currentSource == nullptr)
+                        return; // Stale completion - source no longer available
+                    const auto nowStamp = makeF0InputStamp(*currentSource, *mod);
+                    if (nowStamp != stamp)
+                        return; // Stale completion - source shape/generation changed during extraction
 
                     mod->applyOriginalF0State(OriginalF0State::Failed);
                     if (mod->audioModification != nullptr)
@@ -2043,6 +2169,16 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                     return; // Stale completion - modification restarted
                 if (mod->audioModification != hostModification)
                     return; // Stale completion - new Host AudioModification reused same ContentKey + birthRevision
+                // Stamp 必须与提交时捕获的 stamp 一致；从当前 source 重新构造 stamp 比对，
+                // 防止 source shape/generation 变化未走 affectSamples invalidation
+                if (!mod->originalF0InputStamp.has_value() || mod->originalF0InputStamp.value() != stamp)
+                    return; // Stale completion - source changed during extraction
+                auto* currentSource = this->findAudioSource(mod->content->sourceWindow.sourcePersistentId);
+                if (currentSource == nullptr)
+                    return; // Stale completion - source no longer available
+                const auto nowStamp = makeF0InputStamp(*currentSource, *mod);
+                if (nowStamp != stamp)
+                    return; // Stale completion - source shape/generation changed during extraction
 
                 // Rebuild pitchCurve from Result
                 auto pitchCurve = std::make_shared<PitchCurve>();
@@ -2062,6 +2198,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 }
 
                 mod->applyOriginalF0(std::move(pitchCurve));
+                // 保存 stamp，确保后续 Read 可命中 same-input no-op
+                mod->originalF0InputStamp = stamp;
 
                 if (mod->audioModification != nullptr)
                     mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);

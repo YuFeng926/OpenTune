@@ -5,6 +5,7 @@
 #include "../Content/AudioModificationContentState.h"
 #include "../Content/EditableContentSnapshot.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -21,6 +22,30 @@ enum class AudioModificationBirthState
     Failed
 };
 
+struct OriginalF0InputStamp
+{
+    juce::String sourcePersistentId;
+    uint64_t sourceSampleGeneration{0};
+    double sourceStartSeconds{0.0};
+    double sourceEndSeconds{0.0};
+    double sourceSampleRate{0.0};
+    int64_t numSamples{0};
+    int numChannels{0};
+
+    bool operator==(const OriginalF0InputStamp& rhs) const noexcept
+    {
+        return sourcePersistentId == rhs.sourcePersistentId
+            && sourceSampleGeneration == rhs.sourceSampleGeneration
+            && std::abs(sourceStartSeconds - rhs.sourceStartSeconds) < 1e-9
+            && std::abs(sourceEndSeconds - rhs.sourceEndSeconds) < 1e-9
+            && std::abs(sourceSampleRate - rhs.sourceSampleRate) < 1e-9
+            && numSamples == rhs.numSamples
+            && numChannels == rhs.numChannels;
+    }
+
+    bool operator!=(const OriginalF0InputStamp& rhs) const noexcept { return !(*this == rhs); }
+};
+
 struct AudioModification
 {
     juce::ARAAudioModification* audioModification{nullptr};
@@ -32,6 +57,7 @@ struct AudioModification
     AudioModificationBirthState birthState{AudioModificationBirthState::Empty};
     // 内容所有权
     std::optional<AudioModificationContentState> content;
+    std::optional<OriginalF0InputStamp> originalF0InputStamp;
 
     // 身份更新
     void updateIdentity(juce::ARAAudioModification* modification);
