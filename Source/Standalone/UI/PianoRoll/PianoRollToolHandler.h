@@ -147,7 +147,6 @@ public:
 
         std::function<double()> getDrawingNoteStartTime;
         std::function<void(double)> setDrawingNoteStartTime;
-        std::function<double()> getDrawingNoteEndTime;
         std::function<void(double)> setDrawingNoteEndTime;
         std::function<float()> getDrawingNotePitch;
         std::function<void(float)> setDrawingNotePitch;
@@ -320,6 +319,13 @@ private:
     void deleteSelectedNotes(std::vector<Note>& notes);
 
     // === Note 选择辅助 ===
+    struct NoteHitResult
+    {
+        int noteIndex = -1;
+        NoteResizeEdge edge = NoteResizeEdge::None;
+    };
+
+    NoteHitResult hitTestNoteAt(const std::vector<Note>& notes, const juce::MouseEvent& e) const;
     int findNoteIndexAt(const std::vector<Note>& notes, double time, float targetPitchHz, float pitchToleranceSemitones);
     std::vector<int> collectSelectedNoteIndices(const std::vector<Note>& notes);
     void deselectAllNotes();
@@ -354,11 +360,6 @@ private:
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;
     PitchGridMode pitchGridMode_ = PitchGridMode::KeyScale;
-
-    // F2 连按计数（Melodyne-style: F2×1=Pitch, F2×2=Modulation, F2×3=Drift）
-    int f2PressCount_ = 0;
-    std::chrono::steady_clock::time_point lastF2PressTime_{};
-    static constexpr int kF2DoubleClickMs = 400;
 
     // Scissors 自定义双击检测：记录上一次点击的时间戳和位置
     // 在 handleScissorsToolUp 中检测：800ms / 30px 内的同位置点击触发合并。

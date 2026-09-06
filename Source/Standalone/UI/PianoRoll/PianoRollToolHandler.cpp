@@ -15,6 +15,9 @@ using ManualOp = PianoRollToolHandler::ManualCorrectionOp;
 
 namespace {
 
+constexpr int kNoteResizeEdgeThresholdPx = 6;
+constexpr float kNotePitchHitToleranceSemitones = 1.0f;
+
 void selectNotesForEditedFrameRange(PianoRollToolHandler::Context& ctx,
                                     int startFrame,
                                     int endFrameExclusive)
@@ -316,6 +319,43 @@ SourceEditRange PianoRollToolHandler::sourceEditRange(double minDurationSeconds)
     return SourceEditRange::fromTimeGrid(*grid, minDurationSeconds);
 }
 
+PianoRollToolHandler::NoteHitResult PianoRollToolHandler::hitTestNoteAt(
+    const std::vector<Note>& notes,
+    const juce::MouseEvent& e) const
+{
+    const auto mapper = ctx_.getViewMapper();
+    const float mousePitch = mapper.yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
+    const float mouseMidi = mapper.freqToMidi(mousePitch);
+
+    for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
+        const auto& note = notes[static_cast<size_t>(noteIndex)];
+        const float noteMidi = mapper.freqToMidi(note.getAdjustedPitch());
+        if (std::abs(mouseMidi - noteMidi) > kNotePitchHitToleranceSemitones)
+            continue;
+
+        const int x1 = sourceTimeToScreenX(note.startTime);
+        const int x2 = sourceTimeToScreenX(note.endTime);
+        const int left = std::min(x1, x2);
+        const int right = std::max(x1, x2);
+        if (e.x < left || e.x > right)
+            continue;
+
+        const int width = right - left;
+        // x1..x2 is an inclusive pixel range; width 13 still has no interior pixel.
+        if (width <= 2 * kNoteResizeEdgeThresholdPx + 1)
+            return { noteIndex, NoteResizeEdge::None };
+
+        if (e.x - left <= kNoteResizeEdgeThresholdPx)
+            return { noteIndex, x1 <= x2 ? NoteResizeEdge::Left : NoteResizeEdge::Right };
+        if (right - e.x <= kNoteResizeEdgeThresholdPx)
+            return { noteIndex, x1 <= x2 ? NoteResizeEdge::Right : NoteResizeEdge::Left };
+
+        return { noteIndex, NoteResizeEdge::None };
+    }
+
+    return {};
+}
+
 void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
 // 鼠标移动处理：更新光标形状（音符边缘调整、线锚点预览）
 {
@@ -366,34 +406,12 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
         return;
     }
 
-    int edgeThreshold = 6;
-
-    bool cursorSet = false;
-    float mousePitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-    float mouseMidiVal = ctx_.getViewMapper().freqToMidi(mousePitch);
-
-    for (const auto& note : displayNotes(ctx_)) {
-        const int x1 = sourceTimeToScreenX(note.startTime);
-        const int x2 = sourceTimeToScreenX(note.endTime);
-        
-        bool nearLeft = std::abs(e.x - x1) <= edgeThreshold;
-        bool nearRight = std::abs(e.x - x2) <= edgeThreshold;
-        
-        float noteMidi = ctx_.getViewMapper().freqToMidi(note.getAdjustedPitch());
-        bool onNote = std::abs(mouseMidiVal - noteMidi) < 1.0f;
-        
-        if ((nearLeft || nearRight) && onNote) {
-            ctx_.setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
-            cursorSet = true;
-            break;
-        } else if (e.x >= x1 && e.x <= x2 && onNote) {
-            ctx_.setMouseCursor(juce::MouseCursor::UpDownLeftRightResizeCursor);
-            cursorSet = true;
-            break;
-        }
-    }
-
-    if (!cursorSet) {
+    const auto hit = hitTestNoteAt(displayNotes(ctx_), e);
+    if (hit.noteIndex >= 0 && hit.edge != NoteResizeEdge::None) {
+        ctx_.setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+    } else if (hit.noteIndex >= 0) {
+        ctx_.setMouseCursor(juce::MouseCursor::UpDownLeftRightResizeCursor);
+    } else {
         ctx_.setMouseCursor(juce::MouseCursor::NormalCursor);
     }
 }
@@ -830,30 +848,12 @@ bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
     const auto sourceTime = pixelXToSourceTime(e.x);
     if (!sourceTime)
         return false;
+
     const auto editRange = sourceEditRange();
     if (!editRange.contains(*sourceTime))
         return false;
 
-    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-    const float mouseMidi = ctx_.getViewMapper().freqToMidi(clickedPitch);
-    constexpr int edgeThreshold = 6;
-
-    for (const auto& note : displayNotes(ctx_)) {
-        const float noteMidi = ctx_.getViewMapper().freqToMidi(note.getAdjustedPitch());
-        if (std::abs(mouseMidi - noteMidi) >= 1.0f) {
-            continue;
-        }
-
-        const int x1 = sourceTimeToScreenX(note.startTime);
-        const int x2 = sourceTimeToScreenX(note.endTime);
-        const bool insideBody = e.x >= x1 && e.x <= x2;
-        const bool nearEdge = std::abs(e.x - x1) <= edgeThreshold || std::abs(e.x - x2) <= edgeThreshold;
-        if (insideBody || nearEdge) {
-            return true;
-        }
-    }
-
-    return false;
+    return hitTestNoteAt(displayNotes(ctx_), e).noteIndex >= 0;
 }
 
 bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameIndex) const
@@ -1090,48 +1090,36 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
     if (!editRange.contains(*sourceTime))
         return;
 
-    float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
-
-    const int clickedNoteIndex = findNoteIndexAt(notes, *sourceTime, clickedPitch, 1.0f);
+    const auto hit = hitTestNoteAt(notes, e);
+    const int clickedNoteIndex = hit.noteIndex >= 0 && hit.edge == NoteResizeEdge::None
+        ? hit.noteIndex
+        : -1;
 
     bool isCtrlDown = e.mods.isCtrlDown() || e.mods.isCommandDown();
 
     bool isOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
-    int edgeThreshold = 6;
-    float mouseMidi = ctx_.getViewMapper().freqToMidi(clickedPitch);
     bool isShiftDown = e.mods.isShiftDown();
 
-    for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
-        const auto& note = notes[static_cast<size_t>(noteIndex)];
-        const int x1 = sourceTimeToScreenX(note.startTime);
-        const int x2 = sourceTimeToScreenX(note.endTime);
+    if (hit.noteIndex >= 0 && hit.edge != NoteResizeEdge::None) {
+        const auto& note = notes[static_cast<size_t>(hit.noteIndex)];
+        ctx_.getState().noteResize.isResizing = true;
+        ctx_.getState().noteResize.isDirty = false;
+        ctx_.getState().noteResize.noteIndex = hit.noteIndex;
+        ctx_.getState().noteResize.edge = hit.edge;
+        ctx_.getState().noteResize.originalStartTime = note.startTime;
+        ctx_.getState().noteResize.originalEndTime = note.endTime;
 
-        bool nearLeft = std::abs(e.x - x1) <= edgeThreshold;
-        bool nearRight = std::abs(e.x - x2) <= edgeThreshold;
-
-        if (nearLeft || nearRight) {
-            float noteMidi = ctx_.getViewMapper().freqToMidi(note.getAdjustedPitch());
-            if (std::abs(mouseMidi - noteMidi) < 1.0f) {
-                ctx_.getState().noteResize.isResizing = true;
-                ctx_.getState().noteResize.isDirty = false;
-                ctx_.getState().noteResize.noteIndex = noteIndex;
-                ctx_.getState().noteResize.edge = nearLeft ? NoteResizeEdge::Left : NoteResizeEdge::Right;
-                ctx_.getState().noteResize.originalStartTime = note.startTime;
-                ctx_.getState().noteResize.originalEndTime = note.endTime;
-
-                auto& noteSelection = ctx_.getState().noteSelection;
-                const int noteCount = static_cast<int>(notes.size());
-                if (!noteSelection.isSelected(noteIndex) && !isCtrlDown && !isShiftDown) {
-                    noteSelection.setSingle(noteIndex, noteCount);
-                    ctx_.getState().frameSelection.clear();   // 纯点击替换全部选择
-                } else {
-                    noteSelection.add(noteIndex, noteCount);
-                }
-
-                if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
-                return;
-            }
+        auto& noteSelection = ctx_.getState().noteSelection;
+        const int noteCount = static_cast<int>(notes.size());
+        if (!noteSelection.isSelected(hit.noteIndex) && !isCtrlDown && !isShiftDown) {
+            noteSelection.setSingle(hit.noteIndex, noteCount);
+            ctx_.getState().frameSelection.clear();   // 纯点击替换全部选择
+        } else {
+            noteSelection.add(hit.noteIndex, noteCount);
         }
+
+        if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+        return;
     }
 
     if (clickedNoteIndex >= 0) {
