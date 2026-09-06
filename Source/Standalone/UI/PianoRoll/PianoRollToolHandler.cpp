@@ -1838,10 +1838,8 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
         deltaSemitones = 12.0f * std::log2(currentF0 / startF0);
     }
 
-    // OpenDyne Pitch Tool：Alt 拖拽期间临时解除吸附（保留连续 cents）；
-    // OpenTune Select：固定 Chromatic 半音吸附，允许全部音高，不读活动调式。
-    const bool openDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
-    const bool altBypass = openDyne && e.mods.isAltDown();
+    // Alt 拖拽期间临时解除吸附（保留连续 cents），OpenTune/OpenDyne 统一。
+    const bool altBypass = e.mods.isAltDown();
 
     auto& notes = workingDraftNotes(ctx_);
     resetDraftNotesToBaseline(ctx_);
@@ -1851,27 +1849,22 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
         // 连续基准 MIDI（不提前取整）：SNAP 目标全程保持连续语义
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
         const float targetMidi = baseMidi + initialOffset + deltaSemitones;
-        // OpenDyne：Pitch Grid 三态决定吸附方式；Alt 拖拽临时解除吸附（保留连续 cents）；OpenTune 固定半音
+        // Pitch Grid 三态决定吸附方式；Alt 拖拽临时解除吸附（保留连续 cents）
         float snappedMidi = targetMidi;
         if (!altBypass) {
-            if (!openDyne) {
-                // OpenTune：固定 Chromatic，吸附到最近半音，允许全部音高
-                snappedMidi = std::round(targetMidi);
-            } else {
-                switch (pitchGridMode_) {
-                    case PitchGridMode::NoSnap:
-                        // 自由模式：不吸附，保留连续 cents
-                        break;
-                    case PitchGridMode::Chromatic:
-                        snappedMidi = std::round(targetMidi);  // 吸附到最近半音
-                        break;
-                    case PitchGridMode::KeyScale: {
-                        // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
-                        const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-                        const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-                        snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
-                        break;
-                    }
+            switch (pitchGridMode_) {
+                case PitchGridMode::NoSnap:
+                    // 自由模式：不吸附，保留连续 cents
+                    break;
+                case PitchGridMode::Chromatic:
+                    snappedMidi = std::round(targetMidi);  // 吸附到最近半音
+                    break;
+                case PitchGridMode::KeyScale: {
+                    // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
+                    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+                    const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+                    snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
+                    break;
                 }
             }
         }
