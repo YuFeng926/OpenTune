@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.22)
 # ==============================================================================
 # macOS architecture and deployment target must be set before project() so CMake
 # writes the same minimum version into the Mach-O load commands and Info.plist.
-#   x86_64 -> ORT 1.23.0 universal2, macOS 13.3+
+#   x86_64 -> ORT 1.23.0 universal2, macOS 13.4+
 #   arm64  -> ORT 1.24.4 arm64, macOS 14.0+
 # ==============================================================================
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
@@ -21,7 +21,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     endif()
 
     if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target" FORCE)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.4" CACHE STRING "Minimum macOS deployment target" FORCE)
     elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
         set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target" FORCE)
     else()
@@ -241,7 +241,7 @@ if(WIN32)
 
 elseif(APPLE)
     # ---- macOS: architecture-dependent ONNX Runtime version ----
-    # x86_64 → ORT 1.23.0 universal2 (deployment target 13.3)
+    # x86_64 → ORT 1.23.0 universal2 (deployment target 13.4)
     # arm64  → ORT 1.24.4 arm64     (deployment target 14.0)
     if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
         set(OPENTUNE_ONNXRUNTIME_VERSION "1.23.0")

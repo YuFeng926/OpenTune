@@ -127,7 +127,7 @@ OpenTune/
 
 | 需求 | Windows | macOS |
 |------|---------|-------|
-| **系统** | Windows 10 1903+ | macOS 13.3+ (Intel) / 14.0+ (Apple Silicon) |
+| **系统** | Windows 10 1903+ | macOS 13.4+ (Intel) / 14.0+ (Apple Silicon) |
 | **架构** | x64 | x86_64 (Intel) / arm64 (Apple Silicon) |
 | **编译器** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
@@ -208,7 +208,7 @@ ThirdParty/
 
 **macOS (Intel, x86_64)**：
 
-macOS Intel 使用仓库中现有的 universal2 包（实际按 x86_64 构建），CoreML EP 已内置。该运行库最低支持 macOS 13.3：
+macOS Intel 使用仓库中现有的 universal2 包（实际按 x86_64 构建），CoreML EP 已内置。该运行库最低支持 macOS 13.4：
 
 ```
 ThirdParty/onnxruntime-osx-universal2-1.23.0/   ← 已包含在仓库中，无需额外下载

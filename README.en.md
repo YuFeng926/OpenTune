@@ -125,7 +125,7 @@ OpenTune/
 
 | Requirement | Windows | macOS |
 |-------------|---------|-------|
-| **System** | Windows 10 1903+ | macOS 13.3+ (Intel) / 14.0+ (Apple Silicon) |
+| **System** | Windows 10 1903+ | macOS 13.4+ (Intel) / 14.0+ (Apple Silicon) |
 | **Architecture** | x64 | x86_64 (Intel) / arm64 (Apple Silicon) |
 | **Compiler** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
@@ -206,7 +206,7 @@ ThirdParty/
 
 **macOS (Intel, x86_64)**:
 
-macOS Intel uses the existing universal2 package from the repository (built as x86_64), with CoreML EP built in. This runtime requires macOS 13.3 or later:
+macOS Intel uses the existing universal2 package from the repository (built as x86_64), with CoreML EP built in. This runtime requires macOS 13.4 or later:
 
 ```
 ThirdParty/onnxruntime-osx-universal2-1.23.0/   ← Already included in the repository, no download needed
