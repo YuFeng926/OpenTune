@@ -202,10 +202,12 @@ public:
 
     double consumePendingSeekTime() noexcept
     {
-        double val = pendingSeekTime_;
-        pendingSeekTime_ = -1.0;
-        pendingSeekEpoch_ = 0;
-        return val;
+        // Do NOT reset pendingSeekTime_ here. The paint logic in
+        // PianoRollComponent.cpp clears it when the host actually observes
+        // the seek request (canonicalTime matches or playback starts). Resetting
+        // here would cause a paint cycle to briefly show the old host position
+        // before the seek is processed, resulting in visible playhead jitter.
+        return pendingSeekTime_;
     }
 
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
