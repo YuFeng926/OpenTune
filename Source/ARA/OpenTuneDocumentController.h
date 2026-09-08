@@ -147,6 +147,7 @@ public:
     void didAddPlaybackRegionToAudioModification(juce::ARAAudioModification* audioModification,
                                                  juce::ARAPlaybackRegion* playbackRegion) override;
 
+    void didAddAudioSourceToDocument(juce::ARADocument* document, juce::ARAAudioSource* audioSource) override;
     void didUpdateAudioSourceProperties(juce::ARAAudioSource* audioSource) override;
     void doUpdateAudioSourceContent(juce::ARAAudioSource* audioSource,
                                     juce::ARAContentUpdateScopes scopeFlags) override;

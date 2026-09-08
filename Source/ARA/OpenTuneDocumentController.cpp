@@ -1172,6 +1172,11 @@ void OpenTuneDocumentController::didAddPlaybackRegionToAudioModification(
     refreshRegisteredRenderers(publishModelChange());
 }
 
+void OpenTuneDocumentController::didAddAudioSourceToDocument(juce::ARADocument* /*document*/, juce::ARAAudioSource* audioSource)
+{
+    ensureAudioSource(audioSource);
+}
+
 void OpenTuneDocumentController::didUpdateAudioSourceProperties(juce::ARAAudioSource* audioSource)
 {
     auto& source = ensureAudioSource(audioSource);
