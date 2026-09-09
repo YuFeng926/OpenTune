@@ -120,6 +120,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // VST3 ARA layout: show record button, hide standalone transport group
     transportBar_.setLayoutProfile(TransportBarComponent::LayoutProfile::VST3AraSingleClip);
 
+    // ARA read requires a valid focused region.
+    if (!processorRef_.getCaptureSession())
+        transportBar_.setRecordButtonEnabled(false);
+
     // Sync initial transport state from processor
     transportBar_.setPlaying(processorRef_.isPlaying());
     transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
@@ -366,6 +370,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // camera first (heartbeat ticks have settled), then sync this frame's content.
     // Running before heartbeat would cause a duplicate resolve race.
     const auto sync = syncContentProjectionToPianoRoll();
+
+    // Regular VST3 capture is managed above via setRecordButtonState.
+    if (!sync.isRegularVst3Capture)
+        transportBar_.setRecordButtonEnabled(sync.hasActiveContent());
 
     // Overview update: regular capture uses multi-segment overview path;
     // ARA/other paths continue using the single-content onHeartbeatTick.
@@ -1096,7 +1104,14 @@ void OpenTuneAudioProcessorEditor::recordRequested()
 
     const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection();
     if (!focusedRegion.has_value() || focusedRegion->playbackRegion == nullptr)
+    {
+        AppLogger::log("VST3 recordRequested mode=ara-bound focused region unavailable");
+        transportBar_.setRecordButtonEnabled(false);
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "Read Audio",
+                                               "The selected item is not ready. Please re-select and try again.");
         return;
+    }
 
     const auto targetPlaybackRegion = focusedRegion->playbackRegion;
     dc->requestReadAudioForPlaybackRegionAsync(

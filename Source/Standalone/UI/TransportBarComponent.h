@@ -193,6 +193,10 @@ public:
      *  Processing: disabled to prevent re-triggering during render */
     void setRecordButtonState(RecordButtonState state);
 
+    /** Directly control record button enabled state. For ARA-bound VST3:
+     *  button is only clickable when a valid focused region/content exists. */
+    void setRecordButtonEnabled(bool enabled);
+
     void setBpm(double bpm);
     double getBpm() const;
 

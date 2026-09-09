@@ -1466,6 +1466,15 @@ void TransportBarComponent::setRecordButtonState(RecordButtonState state)
     recordButton_.repaint();
 }
 
+void TransportBarComponent::setRecordButtonEnabled(bool enabled)
+{
+    if (recordButton_.isEnabled() == enabled)
+        return;
+
+    recordButton_.setEnabled(enabled);
+    recordButton_.repaint();
+}
+
 void TransportBarComponent::setWorkspaceView(bool workspaceView)
 {
     workspaceView_ = workspaceView;
