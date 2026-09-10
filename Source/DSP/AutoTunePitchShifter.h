@@ -32,18 +32,11 @@ public:
         double firstSampleFramePhase,
         const float* lookahead = nullptr,
         int numLookaheadSamples = 0,
-        // Samples immediately preceding input[0]; needed for cycle jumps.
         const float* lookbehind = nullptr,
         int numLookbehindSamples = 0,
-        // Optional per-sample detected period shadow source, parallel to
-        // input. Non-null replaces originalF0 as the measured period source.
-        // The detector's valid flag drives the resampler: valid periods
-        // trigger cycle-correct resampling; invalid periods (including
-        // unvoiced sections) run neutral passthrough with address continuity
-        // preserved. The smoothed resample rate is refreshed only on
-        // trackingUpdated events from the detector.
         const AutoTunePeriodDetector::DetectedPeriod* detectorPeriods = nullptr,
-        int numDetectorSamples = 0);
+        int numDetectorSamples = 0,
+        bool snapMode = false);
 
 private:
     double sampleRate_;
@@ -64,7 +57,8 @@ private:
     /// updateResampleRate == false keeps the currently held smoothed rate
     /// (detector shadow hop-held samples between tracking update events).
     float processSample(double cyclePeriod, double targetResampleRate,
-                        bool updateResampleRate = true);
+                        bool updateResampleRate = true,
+                        bool snapMode = false);
 };
 
 } // namespace OpenTune

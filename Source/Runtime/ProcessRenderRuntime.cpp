@@ -936,6 +936,12 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                         RenderCache::kSampleRate,
                         f0HintPtr, safeNumF0Frames, f0FrameRate);
 
+                // snapMode：所有音符 retuneSpeed 均为 1.0 时，DSP 跳过 EMA 直接锁定
+                bool snapMode = true;
+                for (const auto& n : contentSnap->notes) {
+                    if (n.retuneSpeed < 1.0f) { snapMode = false; break; }
+                }
+
                 auto shiftedAudio = autoTuneShifter.shiftChunk(
                     monoAudio.data(),
                     static_cast<int>(boundaries.publishSampleCount),
@@ -949,7 +955,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     shifterLookbehind,
                     shifterLookbehindSamples,
                     detectorFrames.data(),
-                    detectorNumSamples);
+                    detectorNumSamples,
+                    snapMode);
 
                 const uint64_t objectId = coreJob.contentKey.objectId;
                 const auto result = publishChunkWithPerNoteEq(

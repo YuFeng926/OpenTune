@@ -125,7 +125,8 @@ struct NoteTransitionSpan
     size_t leftNoteIndex = 0;
     size_t rightNoteIndex = 0;
     double boundaryFrame = 0.0;
-    double halfWidthFrames = 0.0;
+    double leftHalfWidthFrames = 0.0;   // boundary 左侧过渡宽度，由左音符 retuneSpeed 缩放
+    double rightHalfWidthFrames = 0.0;  // boundary 右侧过渡宽度，由右音符 retuneSpeed 缩放
 };
 
 struct NoteCorrectionInfo
@@ -315,25 +316,34 @@ void PitchCurve::applyCorrectionToRange(
         const size_t rightIndex = relevantNoteIndices[position + 1];
         const double gapFrames =
             (notes[rightIndex].startTime - notes[leftIndex].endTime) / secondsPerFrame;
-        if (gapFrames >= 2.0 * defaultHalfWidthFrames) {
+        // 最大可能 span 需要的间隙（两侧都取 default 时的总宽度）
+        const double maxLeftHalf = defaultHalfWidthFrames * (1.0 - noteInfos[leftIndex].retuneSpeed);
+        const double maxRightHalf = defaultHalfWidthFrames * (1.0 - noteInfos[rightIndex].retuneSpeed);
+        if (gapFrames >= maxLeftHalf + maxRightHalf) {
             return std::nullopt;
         }
 
         const double boundaryFrame =
             noteTransitionFrameAt(notes[leftIndex], notes[rightIndex], secondsPerFrame);
-        double halfWidthFrames = defaultHalfWidthFrames;
+        double leftHalf = maxLeftHalf;
+        double rightHalf = maxRightHalf;
 
+        // 防止相邻过渡区重叠：clip 到前一边界的中点
         if (position > 0) {
             const size_t previousLeftIndex = relevantNoteIndices[position - 1];
             const size_t previousRightIndex = relevantNoteIndices[position];
             const double previousGapFrames =
                 (notes[previousRightIndex].startTime - notes[previousLeftIndex].endTime)
                 / secondsPerFrame;
-            if (previousGapFrames < 2.0 * defaultHalfWidthFrames) {
+            const double prevMaxLeftHalf = defaultHalfWidthFrames
+                * (1.0 - noteInfos[previousLeftIndex].retuneSpeed);
+            const double prevMaxRightHalf = defaultHalfWidthFrames
+                * (1.0 - noteInfos[previousRightIndex].retuneSpeed);
+            if (previousGapFrames < prevMaxLeftHalf + prevMaxRightHalf) {
                 const double previousBoundaryFrame = noteTransitionFrameAt(
                     notes[previousLeftIndex], notes[previousRightIndex], secondsPerFrame);
-                halfWidthFrames = std::min(
-                    halfWidthFrames,
+                leftHalf = std::min(
+                    leftHalf,
                     boundaryFrame - 0.5 * (previousBoundaryFrame + boundaryFrame));
             }
         }
@@ -344,16 +354,20 @@ void PitchCurve::applyCorrectionToRange(
             const double nextGapFrames =
                 (notes[nextRightIndex].startTime - notes[nextLeftIndex].endTime)
                 / secondsPerFrame;
-            if (nextGapFrames < 2.0 * defaultHalfWidthFrames) {
+            const double nextMaxLeftHalf = defaultHalfWidthFrames
+                * (1.0 - noteInfos[nextLeftIndex].retuneSpeed);
+            const double nextMaxRightHalf = defaultHalfWidthFrames
+                * (1.0 - noteInfos[nextRightIndex].retuneSpeed);
+            if (nextGapFrames < nextMaxLeftHalf + nextMaxRightHalf) {
                 const double nextBoundaryFrame = noteTransitionFrameAt(
                     notes[nextLeftIndex], notes[nextRightIndex], secondsPerFrame);
-                halfWidthFrames = std::min(
-                    halfWidthFrames,
+                rightHalf = std::min(
+                    rightHalf,
                     0.5 * (boundaryFrame + nextBoundaryFrame) - boundaryFrame);
             }
         }
 
-        return NoteTransitionSpan{leftIndex, rightIndex, boundaryFrame, halfWidthFrames};
+        return NoteTransitionSpan{leftIndex, rightIndex, boundaryFrame, leftHalf, rightHalf};
     };
 
     // 预计算每个音符的漂移分量d(t)：零相位汉宁窗FIR，完整音符作为分析域
@@ -449,7 +463,7 @@ void PitchCurve::applyCorrectionToRange(
         const double frameCenter = static_cast<double>(i) + 0.5;
         while (currentTransitionSpan.has_value()) {
             const auto& span = *currentTransitionSpan;
-            const double spanEnd = span.boundaryFrame + span.halfWidthFrames;
+            const double spanEnd = span.boundaryFrame + span.rightHalfWidthFrames;
             if (frameCenter < spanEnd) {
                 break;
             }
@@ -460,7 +474,7 @@ void PitchCurve::applyCorrectionToRange(
         const NoteTransitionSpan* transitionSpan = nullptr;
         if (currentTransitionSpan.has_value()) {
             const auto& span = *currentTransitionSpan;
-            const double spanStart = span.boundaryFrame - span.halfWidthFrames;
+            const double spanStart = span.boundaryFrame - span.leftHalfWidthFrames;
             if (frameCenter >= spanStart)
                 transitionSpan = &span;
         }
@@ -472,12 +486,13 @@ void PitchCurve::applyCorrectionToRange(
         if (transitionSpan != nullptr) {
             const auto& leftInfo = noteInfos[transitionSpan->leftNoteIndex];
             const auto& rightInfo = noteInfos[transitionSpan->rightNoteIndex];
+            const double totalWidth = transitionSpan->leftHalfWidthFrames + transitionSpan->rightHalfWidthFrames;
             if (leftInfo.anchorMidi > 0.0f
                 && rightInfo.anchorMidi > 0.0f
-                && transitionSpan->halfWidthFrames > 0.0) {
+                && totalWidth > 0.0) {
                 const float t = static_cast<float>(
-                    (frameCenter - (transitionSpan->boundaryFrame - transitionSpan->halfWidthFrames))
-                    / (transitionSpan->halfWidthFrames * 2.0));
+                    (frameCenter - (transitionSpan->boundaryFrame - transitionSpan->leftHalfWidthFrames))
+                    / totalWidth);
                 const float w = smootherstep(t);
                 targetMidi = leftInfo.targetMidi + (rightInfo.targetMidi - leftInfo.targetMidi) * w;
                 anchorMidi = leftInfo.anchorMidi + (rightInfo.anchorMidi - leftInfo.anchorMidi) * w;

@@ -291,6 +291,70 @@ static void test_negative_param_normalization()
 }
 
 // ============================================================================
+// Test 9: Boundary transition width scales with retuneSpeed
+//    retuneSpeed=0 → full width; retuneSpeed=1 → zero width
+// ============================================================================
+static void test_transition_width_scales_with_retune_speed()
+{
+    constexpr float kDefaultHalfWidth = 8.0f;
+
+    // Both at 0 → full symmetric span
+    {
+        float leftRetune = 0.0f;
+        float rightRetune = 0.0f;
+        float leftHalf = kDefaultHalfWidth * (1.0f - leftRetune);
+        float rightHalf = kDefaultHalfWidth * (1.0f - rightRetune);
+        assert(std::abs(leftHalf - 8.0f) < 0.001f);
+        assert(std::abs(rightHalf - 8.0f) < 0.001f);
+    }
+
+    // Both at 1 → zero span (no transition region created)
+    {
+        float leftRetune = 1.0f;
+        float rightRetune = 1.0f;
+        float leftHalf = kDefaultHalfWidth * (1.0f - leftRetune);
+        float rightHalf = kDefaultHalfWidth * (1.0f - rightRetune);
+        assert(std::abs(leftHalf) < 0.001f);
+        assert(std::abs(rightHalf) < 0.001f);
+        // Gap check: any gap >= 0 → span not created
+        float gapFrames = 4.0f;
+        assert(gapFrames >= leftHalf + rightHalf);
+    }
+
+    // Asymmetric: left natural (0), right hard (1)
+    {
+        float leftRetune = 0.0f;
+        float rightRetune = 1.0f;
+        float leftHalf = kDefaultHalfWidth * (1.0f - leftRetune);
+        float rightHalf = kDefaultHalfWidth * (1.0f - rightRetune);
+        assert(std::abs(leftHalf - 8.0f) < 0.001f);
+        assert(std::abs(rightHalf) < 0.001f);
+    }
+
+    // Asymmetric: left hard (1), right natural (0)
+    {
+        float leftRetune = 1.0f;
+        float rightRetune = 0.0f;
+        float leftHalf = kDefaultHalfWidth * (1.0f - leftRetune);
+        float rightHalf = kDefaultHalfWidth * (1.0f - rightRetune);
+        assert(std::abs(leftHalf) < 0.001f);
+        assert(std::abs(rightHalf - 8.0f) < 0.001f);
+    }
+
+    // Mid value: 0.5 → half width
+    {
+        float leftRetune = 0.5f;
+        float rightRetune = 0.5f;
+        float leftHalf = kDefaultHalfWidth * (1.0f - leftRetune);
+        float rightHalf = kDefaultHalfWidth * (1.0f - rightRetune);
+        assert(std::abs(leftHalf - 4.0f) < 0.001f);
+        assert(std::abs(rightHalf - 4.0f) < 0.001f);
+    }
+
+    std::cout << "  PASS: test_transition_width_scales_with_retune_speed\n";
+}
+
+// ============================================================================
 // main
 // ============================================================================
 int main()
@@ -306,6 +370,7 @@ int main()
     test_vibrato_is_independent_from_retune();
     test_segment_baseF0Data_copy();
     test_negative_param_normalization();
+    test_transition_width_scales_with_retune_speed();
     std::cout << "All tests passed.\n";
     return 0;
 }

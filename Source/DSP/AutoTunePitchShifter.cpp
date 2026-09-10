@@ -41,13 +41,18 @@ void AutoTunePitchShifter::feedSample(float sample) {
 
 float AutoTunePitchShifter::processSample(double cyclePeriod,
                                           double targetResampleRate,
-                                          bool updateResampleRate) {
+                                          bool updateResampleRate,
+                                          bool snapMode) {
     if (cyclePeriod > 0.0) {
-        // Resample_Rate1 smoothing runs only when a fresh period measurement
-        // arrives; between detector tracking events the held rate persists.
-        if (updateResampleRate)
-            resampleRate_ += (targetResampleRate - resampleRate_)
-                * (1.0 - kDecayPerTrackingUpdate);
+        if (updateResampleRate) {
+            if (snapMode) {
+                // retuneSpeed=100：直接锁定目标，不走 EMA
+                resampleRate_ = targetResampleRate;
+            } else {
+                resampleRate_ += (targetResampleRate - resampleRate_)
+                    * (1.0 - kDecayPerTrackingUpdate);
+            }
+        }
     }
     else {
         resampleRate_ = 1.0;
@@ -81,7 +86,8 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
     const float* lookahead, int numLookaheadSamples,
     const float* lookbehind, int numLookbehindSamples,
     const AutoTunePeriodDetector::DetectedPeriod* detectorPeriods,
-    int numDetectorSamples)
+    int numDetectorSamples,
+    bool snapMode)
 {
     std::vector<float> output(static_cast<size_t>(numSamples), 0.0f);
     if (numSamples == 0)
@@ -171,13 +177,13 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
                     ? corrected * cyclePeriod / sampleRate_
                     : 1.0;
                 output[static_cast<size_t>(i)] =
-                    processSample(cyclePeriod, targetRate, det.trackingUpdated);
+                    processSample(cyclePeriod, targetRate, det.trackingUpdated, snapMode);
                 continue;
             }
             // Detector failure (including unvoiced sections where the detector
             // outputs valid=false): preserve address continuity at rate 1,
             // maintaining resampler state until the next valid detection.
-            output[static_cast<size_t>(i)] = processSample(0.0, 1.0);
+            output[static_cast<size_t>(i)] = processSample(0.0, 1.0, true, snapMode);
             continue;
         }
         else {
@@ -189,7 +195,7 @@ std::vector<float> AutoTunePitchShifter::shiftChunk(
         }
 
         output[static_cast<size_t>(i)] =
-            processSample(cyclePeriod, targetRate);
+            processSample(cyclePeriod, targetRate, true, snapMode);
     }
 
     return output;
