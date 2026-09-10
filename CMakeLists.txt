@@ -419,6 +419,11 @@ juce_add_plugin(OpenTune
     </plist>"
 )
 
+if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR)
+    set_target_properties(OpenTune_vst3_helper PROPERTIES
+        OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+endif()
+
 # ==============================================================================
 # Binary Data (Resources)
 # ==============================================================================
