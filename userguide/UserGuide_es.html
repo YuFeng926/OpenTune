@@ -159,7 +159,7 @@
 <h3>Requisitos mínimos</h3>
 <table>
     <tr><th width="25%">Elemento</th><th>Requisito</th></tr>
-    <tr><td>Sistema operativo</td><td>Windows 10/11 (64 bits) o macOS 14.0+ (Sonoma)</td></tr>
+    <tr><td>Sistema operativo</td><td>Windows 10/11 (64 bits) o macOS 13.4+ (Intel) / 14.0+ (Apple Silicon)</td></tr>
     <tr><td>Procesador</td><td>Intel Core i5 o procesador AMD equivalente</td></tr>
     <tr><td>Memoria RAM</td><td>8 GB RAM</td></tr>
     <tr><td>Espacio en disco</td><td>500 MB de espacio disponible (incluye modelos IA)</td></tr>
@@ -387,7 +387,7 @@
     <ul>
         <li><strong>Valores bajos (0–30%)</strong>: Preserva el vibrato natural, ideal para sonido realista</li>
         <li><strong>Valores medios (30–70%)</strong>: Equilibra precisión y naturalidad</li>
-        <li><strong>Valores altos (70–100%)</strong>: Corrección precisa, produce un efecto Auto-Tune notable</li>
+        <li><strong>Valores altos (70–100%)</strong>: Corrección precisa, produce un efecto Auto-Tune notable; al 100% el borde de la nota cambia de forma instantánea, sin transición</li>
     </ul>
     <p><strong>Por nota</strong>: Ajuste tras seleccionar notas; solo afecta las notas seleccionadas.</p>
 </div>
@@ -436,6 +436,7 @@
 <h3>9.1 Edición OpenTune (predeterminado)</h3>
 <ul>
     <li>Modo tradicional de edición de forma de onda y notas</li>
+    <li>El arrastre de notas se ajusta a la cuadrícula de tono (mismo comportamiento que el modo OpenDyne)</li>
     <li>Rueda: desplazamiento vertical / Shift+rueda zoom vertical / Ctrl+rueda zoom horizontal / Alt+rueda desplazamiento horizontal</li>
     <li>Barra de herramientas horizontal</li>
 </ul>
@@ -469,7 +470,7 @@
     <tr><td>Tema</td><td>Aurora</td><td>Aurora</td></tr>
     <tr><td>Modo de edición</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
     <tr><td>Prioridad de renderizado</td><td>Prioridad GPU / Prioridad CPU</td><td>Prioridad GPU</td></tr>
-    <tr><td>Pesos del modelo de vocoder</td><td>Community / Coulin9 v4 (profesional)</td><td>Community</td></tr>
+    <tr><td>Pesos del modelo de vocoder</td><td>Community / Coulin9 v4 (profesional); revierte automáticamente al predeterminado si no está disponible</td><td>Community</td></tr>
     <tr><td>Sensibilidad de zoom horizontal</td><td>Controla la velocidad de zoom horizontal con la rueda del ratón</td><td>1.0</td></tr>
     <tr><td>Sensibilidad de zoom vertical</td><td>Controla la velocidad de zoom vertical con la rueda del ratón</td><td>1.0</td></tr>
     <tr><td>Velocidad de desplazamiento</td><td>Velocidad de desplazamiento de la vista</td><td>1.0</td></tr>
@@ -620,9 +621,12 @@
     <li>Se carga como extensión VST3 + ARA2 en DAW compatibles (como Studio One, Cubase, Logic Pro)</li>
     <li>El DAW proporciona los datos de audio fuente mediante el protocolo ARA, sin necesidad de importar/exportar archivos</li>
     <li>Los resultados de edición se reflejan en tiempo real en la reproducción de la línea de tiempo del DAW</li>
-    <li>Compatible con sincronización de transporte del host (Play/Stop/Seek) y seguimiento de BPM</li>
+    <li>Compatible con sincronización de transporte del host (Play/Stop/Seek) y seguimiento de BPM; el seguimiento de reproducción es estable, sin vibración del cabezal</li>
     <li>Compatible con vinculación de múltiples regiones ARA; varias regiones de la misma fuente comparten el estado de edición</li>
     <li>Autoalineación de referencia: en modo ARA, el tono de referencia se alinea automáticamente entre regiones, mejorando la consistencia de la edición multipista</li>
+    <li>La lectura y edición solo afectan al clip de audio seleccionado actualmente; el botón de lectura no está disponible hasta que el clip enfocado esté listo</li>
+    <li>La curva de tono original se actualiza automáticamente al cambiar el audio de entrada</li>
+    <li>Los clips capturados en el host se renderizan automáticamente cuando el análisis de tono está listo, sin clips perdidos ni retrasados</li>
     <li>El modo plugin VST3 oculta elementos de menú exclusivos de la versión independiente, como proyecto/importar/exportar</li>
 </ul>
 

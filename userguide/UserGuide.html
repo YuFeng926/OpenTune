@@ -159,7 +159,7 @@
 <h3>最低配置</h3>
 <table>
     <tr><th width="25%">项目</th><th>要求</th></tr>
-    <tr><td>操作系统</td><td>Windows 10/11 (64位) 或 macOS 14.0+ (Sonoma)</td></tr>
+    <tr><td>操作系统</td><td>Windows 10/11 (64位) 或 macOS 13.4+（Intel 芯片）/ 14.0+（Apple Silicon）</td></tr>
     <tr><td>处理器</td><td>Intel Core i5 或同等性能 AMD 处理器</td></tr>
     <tr><td>内存</td><td>8 GB RAM</td></tr>
     <tr><td>存储空间</td><td>500 MB 可用空间（含 AI 模型）</td></tr>
@@ -387,7 +387,7 @@
     <ul>
         <li><strong>低值 (0–30%)</strong>：保留自然颤音，适合追求真实感</li>
         <li><strong>中值 (30–70%)</strong>：平衡精度与自然度</li>
-        <li><strong>高值 (70–100%)</strong>：精确校正，产生明显的 Auto-Tune 效果</li>
+        <li><strong>高值 (70–100%)</strong>：精确校正，产生明显的 Auto-Tune 效果；拉满 100% 时音符边界为瞬时阶跃切换，无过渡</li>
     </ul>
     <p><strong>逐音符</strong>：选中音符后调整，只影响选中音符。</p>
 </div>
@@ -436,6 +436,7 @@
 <h3>9.1 OpenTune 编辑（默认）</h3>
 <ul>
     <li>传统波形+音符编辑模式</li>
+    <li>音符拖拽吸附到音高网格（与 OpenDyne 方案行为一致）</li>
     <li>滚轮：垂直滚动 / Shift+滚轮垂直缩放 / Ctrl+滚轮水平缩放 / Alt+滚轮水平滚动</li>
     <li>工具栏横向排列</li>
 </ul>
@@ -470,7 +471,7 @@
     <tr><td>主题</td><td>Aurora</td><td>Aurora</td></tr>
     <tr><td>编辑方案</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
     <tr><td>渲染优先级</td><td>GPU 优先 / CPU 优先</td><td>GPU 优先</td></tr>
-    <tr><td>声码器模型权重</td><td>Community（社区版）/ Coulin9 v4（专业版）</td><td>Community</td></tr>
+    <tr><td>声码器模型权重</td><td>Community（社区版）/ Coulin9 v4（专业版）；所选权重不可用时自动回退到默认</td><td>Community</td></tr>
     <tr><td>水平缩放灵敏度</td><td>控制鼠标滚轮水平缩放速度</td><td>1.0</td></tr>
     <tr><td>垂直缩放灵敏度</td><td>控制鼠标滚轮垂直缩放速度</td><td>1.0</td></tr>
     <tr><td>滚动速度</td><td>视图滚动速度</td><td>1.0</td></tr>
@@ -623,9 +624,12 @@
     <li>以 VST3 + ARA2 扩展加载到兼容 DAW（如 Studio One、Cubase、Logic Pro）</li>
     <li>DAW 通过 ARA 协议提供音频源数据，无需导入/导出文件</li>
     <li>编辑结果实时反映到 DAW 时间线播放中</li>
-    <li>支持宿主传输同步（Play/Stop/Seek）和 BPM 跟随</li>
+    <li>支持宿主传输同步（Play/Stop/Seek）和 BPM 跟随；跳转与播放跟随稳定，播放头不再抖动</li>
     <li>支持 ARA 多 region 绑定，同一 source 的多个 region 共享编辑状态</li>
     <li>参考自动对齐：ARA 模式下多 region 之间自动对齐参考音高，提升多轨编辑一致性</li>
+    <li>读取与编辑只作用于当前选中的音频段落，多段落工程不再相互干扰；焦点段落就绪前读取按钮暂时不可用</li>
+    <li>修改输入音频后，原始音高曲线自动刷新</li>
+    <li>在宿主中采集的音频段会在音高分析就绪后自动完成渲染，段落不再缺失或延迟显示</li>
     <li>VST3 插件模式下隐藏项目/导入/导出等 Standalone 专有菜单项</li>
 </ul>
 

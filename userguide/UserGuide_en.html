@@ -160,7 +160,7 @@
 <h3>Minimum Requirements</h3>
 <table>
     <tr><th width="25%">Item</th><th>Requirement</th></tr>
-    <tr><td>Operating System</td><td>Windows 10/11 (64-bit) or macOS 14.0+ (Sonoma)</td></tr>
+    <tr><td>Operating System</td><td>Windows 10/11 (64-bit) or macOS 13.4+ (Intel) / 14.0+ (Apple Silicon)</td></tr>
     <tr><td>Processor</td><td>Intel Core i5 or equivalent AMD processor</td></tr>
     <tr><td>Memory</td><td>8 GB RAM</td></tr>
     <tr><td>Storage</td><td>500 MB free space (including AI models)</td></tr>
@@ -388,7 +388,7 @@
     <ul>
         <li><strong>Low (0&ndash;30%)</strong>: Preserves natural vibrato — ideal for a realistic feel</li>
         <li><strong>Medium (30&ndash;70%)</strong>: Balances precision and naturalness</li>
-        <li><strong>High (70&ndash;100%)</strong>: Precise correction — produces the distinct Auto-Tune effect</li>
+        <li><strong>High (70&ndash;100%)</strong>: Precise correction — produces the distinct Auto-Tune effect; at the full 100% setting, note boundaries switch instantly with no transition</li>
     </ul>
     <p><strong>Per-note</strong>: Select a note before adjusting to affect only that note.</p>
 </div>
@@ -437,6 +437,7 @@
 <h3>9.1 OpenTune Editing (Default)</h3>
 <ul>
     <li>Traditional waveform + note editing mode</li>
+    <li>Note dragging snaps to the pitch grid (same behavior as the OpenDyne scheme)</li>
     <li>Wheel: Vertical scroll / Shift+Wheel vertical zoom / Ctrl+Wheel horizontal zoom / Alt+Wheel horizontal scroll</li>
     <li>Horizontal toolbar layout</li>
 </ul>
@@ -471,7 +472,7 @@
     <tr><td>Theme</td><td>Aurora</td><td>Aurora</td></tr>
     <tr><td>Editing Scheme</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
     <tr><td>Render Priority</td><td>GPU Preferred / CPU Preferred</td><td>GPU Preferred</td></tr>
-    <tr><td>Vocoder Model Weights</td><td>Community / Coulin9 v4 (Professional)</td><td>Community</td></tr>
+    <tr><td>Vocoder Model Weights</td><td>Community / Coulin9 v4 (Professional); falls back to the default automatically if unavailable</td><td>Community</td></tr>
     <tr><td>Horizontal Zoom Sensitivity</td><td>Controls mouse wheel horizontal zoom speed</td><td>1.0</td></tr>
     <tr><td>Vertical Zoom Sensitivity</td><td>Controls mouse wheel vertical zoom speed</td><td>1.0</td></tr>
     <tr><td>Scroll Speed</td><td>View scrolling speed</td><td>1.0</td></tr>
@@ -624,9 +625,12 @@
     <li>Loaded as a VST3 + ARA2 extension in compatible DAWs (e.g., Studio One, Cubase, Logic Pro)</li>
     <li>The DAW provides audio source data via the ARA protocol — no file import/export needed</li>
     <li>Editing results are reflected in real time during DAW timeline playback</li>
-    <li>Supports host transport sync (Play/Stop/Seek) and BPM following</li>
+    <li>Supports host transport sync (Play/Stop/Seek) and BPM following; seeking and playback follow steadily, with no playhead jitter</li>
     <li>Supports ARA multi-region binding; multiple regions on the same source share editing state</li>
     <li>Reference auto-alignment: reference pitch is automatically aligned across ARA regions, improving multi-track editing consistency</li>
+    <li>Reading and editing apply only to the currently selected audio clip — multiple clips no longer interfere with each other; the read button is temporarily unavailable until the focused clip is ready</li>
+    <li>The original pitch curve refreshes automatically when the input audio changes</li>
+    <li>Audio clips captured in the host render automatically once pitch analysis is ready — clips are no longer missing or delayed</li>
     <li>VST3 plugin mode hides Standalone-exclusive menu items such as project / import / export</li>
 </ul>
 
