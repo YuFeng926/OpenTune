@@ -120,9 +120,21 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // VST3 ARA layout: show record button, hide standalone transport group
     transportBar_.setLayoutProfile(TransportBarComponent::LayoutProfile::VST3AraSingleClip);
 
-    // ARA read requires a valid focused region.
-    if (!processorRef_.getCaptureSession())
-        transportBar_.setRecordButtonEnabled(false);
+    // Sync initial record button state for ARA mode.
+    // Button is available once ARA is bound + at least one PlaybackRegion exists;
+    // it does NOT wait for notifySelection (ARA spec: selection is a loose hint,
+    // not a completion signal).
+    if (!processorRef_.getCaptureSession()) {
+        auto* editorView = getARAEditorView();
+        if (editorView != nullptr) {
+            auto& selection = editorView->getViewSelection();
+            auto playbackRegions = selection.getEffectivePlaybackRegions<juce::ARAPlaybackRegion>();
+            processorRef_.getDocumentController()->setEditorViewSelectionPlaybackRegions(std::move(playbackRegions));
+        }
+        const auto* dc = processorRef_.getDocumentController();
+        transportBar_.setRecordButtonEnabled(dc != nullptr
+            && !dc->getEditorSelectionPlaybackRegionProjections().empty());
+    }
 
     // Sync initial transport state from processor
     transportBar_.setPlaying(processorRef_.isPlaying());
@@ -372,8 +384,15 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     const auto sync = syncContentProjectionToPianoRoll();
 
     // Regular VST3 capture is managed above via setRecordButtonState.
-    if (!sync.isRegularVst3Capture)
-        transportBar_.setRecordButtonEnabled(sync.hasActiveContent());
+    // ARA mode: button enabled once ARA bound + any PlaybackRegion exists
+    // (does NOT wait for notifySelection — ARA spec treats selection as a
+    // loose hint, not a readiness gate).
+    if (!sync.isRegularVst3Capture) {
+        const auto* dc = processorRef_.getDocumentController();
+        if (dc != nullptr)
+            transportBar_.setRecordButtonEnabled(
+                !dc->getEditorSelectionPlaybackRegionProjections().empty());
+    }
 
     // Overview update: regular capture uses multi-segment overview path;
     // ARA/other paths continue using the single-content onHeartbeatTick.
@@ -639,21 +658,63 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
 
 #if JucePlugin_Enable_ARA
     if (const auto* dc = processorRef_.getDocumentController()) {
+        // Build identity+placement pairs from all valid regions.
+        const auto allRegions = dc->getPlaybackRegionProjections();
+        std::vector<TimelineContentPlacement> allPlacements;
+        for (const auto& region : allRegions) {
+            if (!region.contentKey.isValid())
+                continue;
+            const auto projection = makePianoRollLocalProjection(region);
+            if (!projection.isValid())
+                continue;
+            allPlacements.push_back(makePlacement(region.contentKey, projection,
+                region.displayColour.value_or(UIColors::noteBlock)));
+        }
+
+        if (allPlacements.empty())
+            return sync;
+
+        // Resolve active placement: focused → earliest
         const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection();
-        if (!focusedRegion.has_value() || !focusedRegion->contentKey.isValid())
-            return sync;
+        std::optional<PianoRollPlacementIdentity> activeIdentity;
 
-        const auto projection = makePianoRollLocalProjection(*focusedRegion);
-        if (!projection.isValid())
-            return sync;
+        if (focusedRegion.has_value() && focusedRegion->contentKey.isValid()) {
+            const auto focusedProj = makePianoRollLocalProjection(*focusedRegion);
+            if (focusedProj.isValid()) {
+                PianoRollPlacementIdentity focusedIdentity{
+                    focusedRegion->contentKey, focusedProj};
+                // Only adopt focused identity if it matches a placement exactly
+                const bool matched = std::any_of(allPlacements.begin(), allPlacements.end(),
+                    [&](const auto& p) { return p.contentKey == focusedIdentity.contentKey
+                        && p.projection.timelineStartSeconds == focusedIdentity.projection.timelineStartSeconds; });
+                if (matched)
+                    activeIdentity = focusedIdentity;
+            }
+        }
 
-        sync.activeContentKey = focusedRegion->contentKey;
-        sync.activePlacementIdentity = PianoRollPlacementIdentity{
-            sync.activeContentKey, projection};
-        sync.placements.push_back(makePlacement(
-            sync.activeContentKey,
-            projection,
-            focusedRegion->displayColour.value_or(UIColors::noteBlock)));
+        // Fallback: earliest timeline item
+        if (!activeIdentity.has_value()) {
+            const auto* earliest = &allPlacements.front();
+            for (const auto& p : allPlacements) {
+                if (p.projection.timelineStartSeconds < earliest->projection.timelineStartSeconds)
+                    earliest = &p;
+            }
+            activeIdentity = PianoRollPlacementIdentity{earliest->contentKey, earliest->projection};
+        }
+
+        sync.activePlacementIdentity = activeIdentity;
+        sync.activeContentKey = activeIdentity->contentKey;
+
+        // Put active placement at front so findEditedPlacement() resolves correctly.
+        auto activeIt = std::find_if(allPlacements.begin(), allPlacements.end(),
+            [&](const auto& p) { return p.contentKey == activeIdentity->contentKey
+                && p.projection.timelineStartSeconds == activeIdentity->projection.timelineStartSeconds; });
+        if (activeIt != allPlacements.end()) {
+            sync.placements.push_back(std::move(*activeIt));
+            allPlacements.erase(activeIt);
+        }
+        for (auto& p : allPlacements)
+            sync.placements.push_back(std::move(p));
 
         return sync;
     }
