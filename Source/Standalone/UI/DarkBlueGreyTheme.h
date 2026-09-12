@@ -81,9 +81,6 @@ namespace DarkBlueGrey {
         static const juce::uint32 WaveformOutline = 0xFF0C3C4A;
         static const juce::uint32 PianoWaveform   = 0xFF0C3C4A;
 
-        // 音阶
-        static const juce::uint32 ScaleHighlight = 0x30A8C0D8;
-
         // 旋钮
         static const juce::uint32 KnobBody      = 0xFF0F141B;
         static const juce::uint32 KnobIndicator = 0xFFE6EDF5;

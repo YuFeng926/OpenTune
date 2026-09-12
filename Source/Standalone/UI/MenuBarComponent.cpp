@@ -64,6 +64,16 @@ void MenuBarComponent::setShowUnvoicedFrames(bool shouldShow)
     menuItemsChanged();
 }
 
+void MenuBarComponent::setPitchLaneVisualMode(PitchLaneVisualMode mode)
+{
+    if (pitchLaneVisualMode_ == mode) {
+        return;
+    }
+
+    pitchLaneVisualMode_ = mode;
+    menuItemsChanged();
+}
+
 juce::StringArray MenuBarComponent::getMenuBarNames()
 {
     return { LOC(kFile), LOC(kEdit), LOC(kView) };
@@ -121,7 +131,8 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
         case 2:  // View
         {
             menu.addItem(ShowWaveform, LOC(kShowWaveform), true, processor_.getShowWaveform());
-            menu.addItem(ShowLanes, LOC(kShowLanes), true, processor_.getShowLanes());
+            menu.addItem(PianoKeyLanes, LOC(kPianoKeyLanes), true,
+                         pitchLaneVisualMode_ == PitchLaneVisualMode::PianoKeys);
 
             juce::PopupMenu noteLabelMenu;
             noteLabelMenu.addItem(NoteNameModeShowAll, LOC(kNoteLabelsShowAll), true, noteNameMode_ == NoteNameMode::ShowAll);
@@ -226,11 +237,13 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             menuItemsChanged();
             break;
         }
-        case ShowLanes:
+        case PianoKeyLanes:
         {
-            bool newState = !processor_.getShowLanes();
-            processor_.setShowLanes(newState);
-            listeners_.call([newState](Listener& l) { l.showLanesToggled(newState); });
+            // 点击在 PianoKeys/ScaleAssist 间切换
+            const auto newState = (pitchLaneVisualMode_ == PitchLaneVisualMode::PianoKeys)
+                ? PitchLaneVisualMode::ScaleAssist
+                : PitchLaneVisualMode::PianoKeys;
+            listeners_.call([newState](Listener& l) { l.pitchLaneVisualModeChanged(newState); });
             menuItemsChanged();
             break;
         }

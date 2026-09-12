@@ -3,6 +3,7 @@
 #include "../UIColors.h"
 #include "../../../Utils/AppLogger.h"
 #include "../../../Utils/NoteGeneratorTypes.h"
+#include "../../../Utils/ScaleUiMapping.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -13,42 +14,8 @@
 namespace OpenTune {
 
 // ============================================================================
-// Shared scale computation helper
+// Visible time window helpers
 // ============================================================================
-static std::array<bool, 12> buildInScalePitchClasses(int scaleType, int rootNote) noexcept
-{
-    std::array<bool, 12> result{};
-    static constexpr int kScaleTypeChromatic = 3;
-
-    if (scaleType == kScaleTypeChromatic) {
-        result.fill(true);
-        return result;
-    }
-
-    result.fill(false);
-    const int rootPc = juce::jlimit(0, 11, rootNote);
-
-    // Map UI scaleType (1-8) to ScaleMode enum
-    ScaleMode mode = ScaleMode::Major;
-    switch (scaleType) {
-        case 1: mode = ScaleMode::Major; break;
-        case 2: mode = ScaleMode::Minor; break;
-        case 4: mode = ScaleMode::HarmonicMinor; break;
-        case 5: mode = ScaleMode::Dorian; break;
-        case 6: mode = ScaleMode::Mixolydian; break;
-        case 7: mode = ScaleMode::PentatonicMajor; break;
-        case 8: mode = ScaleMode::PentatonicMinor; break;
-        default: mode = ScaleMode::Major; break;
-    }
-
-    int count = 0;
-    const int* intervals = ScaleSnapConfig::semitones(mode, count);
-    for (int i = 0; i < count; ++i)
-        result[static_cast<std::size_t>((rootPc + intervals[i]) % 12)] = true;
-
-    return result;
-}
-
 namespace {
 
 struct VisibleTimeWindow {
@@ -672,12 +639,10 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     const float blackKeyWidthRatio = 0.6f;
     const float blackKeyW = w * blackKeyWidthRatio;
     static constexpr int kScaleTypeChromatic = 3;
-    static constexpr float kOutOfScaleDimAmount = 0.30f;
 
     const bool isBlueBreeze = UIColors::currentThemeId() == ThemeId::BlueBreeze;
     const bool isOverdose = UIColors::currentThemeId() == ThemeId::Overdose;
     const bool isLightTheme = isBlueBreeze || isOverdose;
-    const float outOfScaleDimAmount = isLightTheme ? 0.06f : kOutOfScaleDimAmount;
     const auto& overdoseAtlas = UiAssets::get(UiAssetId::PianoKeyAtlas);
     const bool hasOverdoseAtlas = isOverdose && overdoseAtlas.isValid() && overdoseAtlas.getHeight() >= 5;
     const int overdoseAtlasSliceHeight = hasOverdoseAtlas ? overdoseAtlas.getHeight() / 5 : 0;
@@ -702,9 +667,6 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     static constexpr float kShowAllLabelsMinPPS = 14.0f;
     static constexpr float kShowCOnlyMinPPS = 12.0f;
 
-    // Build scale pitch-class membership using shared helper (supports all 8 scale types)
-    const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
-
     // Compute effective note name display mode (zoom-adaptive downgrade)
     int effectiveNoteNameMode = static_cast<int>(ctx.noteNameMode); // 0=ShowAll, 1=COnly, 2=Hide
     if (effectiveNoteNameMode == 0 && ctx.pixelsPerSemitone < kShowAllLabelsMinPPS)
@@ -712,27 +674,28 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     if (effectiveNoteNameMode <= 1 && ctx.pixelsPerSemitone < kShowCOnlyMinPPS)
         effectiveNoteNameMode = 2; // downgrade to hidden
 
-    // Accidental preference: sharp or flat based on root note
-    const bool useFlats = (ctx.scaleType != kScaleTypeChromatic) ? kUseFlatsByRoot[juce::jlimit(0, 11, ctx.scaleRootNote)] : false;
+    // EqualSpacing: shift keyboard up half a key so key centers align with grid lines (matching note rendering)
+    const float keyYOffset = (ctx.coords.gridStyle == PianoGridStyle::EqualSpacing)
+                             ? -(ctx.pixelsPerSemitone * 0.5f) : 0.0f;
 
-    const auto isMidiInCurrentScale = [&inScalePitchClass](int midiNote) noexcept {
-        const int pitchClass = ((midiNote % 12) + 12) % 12;
-        return inScalePitchClass[static_cast<std::size_t>(pitchClass)];
-    };
+    // Scale mask for ScaleAssist — PianoKeys 不查询；Chromatic 全 True→WhiteKey
+    const bool isScaleAssist = (ctx.pitchLaneVisualMode == PitchLaneVisualMode::ScaleAssist);
+    const auto inScalePitchClass = isScaleAssist
+        ? buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote)
+        : std::array<bool, 12>{};
+    const bool useFlats = ctx.scaleType != kScaleTypeChromatic
+        && kUseFlatsByRoot[juce::jlimit(0, 11, ctx.scaleRootNote)];
 
     g.setColour(isLightTheme ? UIColors::keyBedWhite : UIColors::backgroundDark);
     g.fillRect(0, 0, w, height);
 
     juce::Colour cWhite1 = isLightTheme ? UIColors::keyBedWhite : juce::Colour(0xFFF7F9F9);
     juce::Colour cWhite2 = isOverdose ? juce::Colour { Overdose::Colors::KeyBedWhiteBottom }
-                          : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBedBottom } : juce::Colour(0xFFECF0F1));
+                              : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBedBottom } : juce::Colour(0xFFECF0F1));
 
     juce::Colour cBlackBottom = isOverdose ? juce::Colour { Overdose::Colors::KeyBedBlackBottom }
-                             : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBlackBottom } : juce::Colour(0xFF1B2026));
+                                  : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBlackBottom } : juce::Colour(0xFF1B2026));
 
-    // EqualSpacing: shift keyboard up half a key so key centers align with grid lines (matching note rendering)
-    const float keyYOffset = (ctx.coords.gridStyle == PianoGridStyle::EqualSpacing)
-                             ? -(ctx.pixelsPerSemitone * 0.5f) : 0.0f;
 
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
@@ -743,40 +706,43 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         if (y < -50.0f || y > height + 50.0f) continue;
 
         int noteInOctave = drawMidi % 12;
-        bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
-                          noteInOctave == 8 || noteInOctave == 10);
+        const bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
+                                noteInOctave == 8 || noteInOctave == 10);
+        const int pitchClass = ((midi % 12) + 12) % 12;
+        const bool inScale = isScaleAssist
+            && inScalePitchClass[static_cast<std::size_t>(pitchClass)];
+        const auto visualRole = classifyPitchRow(ctx.pitchLaneVisualMode, midi, inScale);
 
         float drawH = h + 1.0f;
 
         if (!isBlackKey)
         {
-            const bool inScale = isMidiInCurrentScale(drawMidi);
-
+            // Physical white key: full-width rectangle
             juce::Rectangle<float> keyRect(0.0f, y, static_cast<float>(w), drawH);
 
-            const juce::Colour whiteA = inScale ? cWhite1 : cWhite1.darker(outOfScaleDimAmount);
-            const juce::Colour whiteB = inScale ? cWhite2 : cWhite2.darker(outOfScaleDimAmount);
+            juce::Colour c1, c2;
+            if (visualRole == PitchRowVisualRole::WhiteKey) {
+                c1 = cWhite1;
+                c2 = cWhite2;
+            } else {
+                // visualRole == BlackKey: use black key gradient
+                c1 = isLightTheme ? UIColors::keyBedBlack : juce::Colour(0xFF34495E);
+                c2 = cBlackBottom;
+            }
 
-            juce::ColourGradient grad(whiteA,
+            juce::ColourGradient grad(c1,
                                       static_cast<float>(0),
                                       y,
-                                       whiteB.interpolatedWith(UIColors::keyBedDivider, isLightTheme ? 0.08f : 0.0f),
+                                      c2.interpolatedWith(UIColors::keyBedDivider, isLightTheme ? 0.08f : 0.0f),
                                       static_cast<float>(0 + w),
                                       y + drawH,
                                       false);
-            if (isLightTheme)
-                grad.addColour(0.16, whiteA.interpolatedWith(juce::Colours::white, 0.12f));
+            if (isLightTheme && visualRole == PitchRowVisualRole::WhiteKey)
+                grad.addColour(0.16, c1.interpolatedWith(juce::Colours::white, 0.12f));
             g.setGradientFill(grad);
             g.fillRect(keyRect);
 
-            // Scale highlight overlay on in-scale white keys
-            if (inScale && ctx.scaleType != kScaleTypeChromatic)
-            {
-                g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
-                g.fillRect(keyRect);
-            }
-
-            if (isLightTheme)
+            if (isLightTheme && visualRole == PitchRowVisualRole::WhiteKey)
             {
                 g.setColour(juce::Colours::white.withAlpha(0.24f));
                 g.drawLine(keyRect.getX() + 2.0f, keyRect.getY() + 1.0f,
@@ -799,42 +765,55 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                 const int tw = w - 4;
                 const int th = static_cast<int>(h);
 
-                // White key: dark outline + light text
-                g.setColour(juce::Colours::black.withAlpha(0.5f));
-                for (int ox = -1; ox <= 1; ++ox)
-                    for (int oy = -1; oy <= 1; ++oy)
-                        if (ox != 0 || oy != 0)
-                            g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
+                if (visualRole == PitchRowVisualRole::WhiteKey) {
+                    // White key: dark outline + light text
+                    g.setColour(juce::Colours::black.withAlpha(0.5f));
+                    for (int ox = -1; ox <= 1; ++ox)
+                        for (int oy = -1; oy <= 1; ++oy)
+                            if (ox != 0 || oy != 0)
+                                g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
 
-                const juce::Colour noteLabelColour = isLightTheme
-                    ? juce::Colour(0xFF25303A).withMultipliedAlpha(inScale ? 0.90f : 0.62f)
-                    : juce::Colour(0xFFE0E0E0).withMultipliedAlpha(inScale ? 1.0f : 0.78f);
-                g.setColour(noteLabelColour);
-                g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
+                    const juce::Colour noteLabelColour = isLightTheme
+                        ? juce::Colour(0xFF25303A).withMultipliedAlpha(0.90f)
+                        : juce::Colour(0xFFE0E0E0).withMultipliedAlpha(1.0f);
+                    g.setColour(noteLabelColour);
+                    g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
+                } else {
+                    // visualRole == BlackKey on physical white key: light outline + dark text
+                    g.setColour(juce::Colours::white.withAlpha(0.7f));
+                    for (int ox = -1; ox <= 1; ++ox)
+                        for (int oy = -1; oy <= 1; ++oy)
+                            if (ox != 0 || oy != 0)
+                                g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
+
+                    g.setColour(juce::Colour(0xFF2A2A2A));
+                    g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
+                }
             }
         } else {
-            const bool inScale = isMidiInCurrentScale(drawMidi);
-
+            // Physical black key: extension
             juce::Rectangle<float> extensionRect(blackKeyW, y, static_cast<float>(w) - blackKeyW, drawH);
 
-            const juce::Colour extensionA = inScale ? cWhite1 : cWhite1.darker(outOfScaleDimAmount);
-            const juce::Colour extensionB = inScale ? cWhite2 : cWhite2.darker(outOfScaleDimAmount);
-            juce::ColourGradient grad(extensionA,
+            juce::Colour extA, extB;
+            if (!isScaleAssist || visualRole == PitchRowVisualRole::WhiteKey) {
+                // White extension (PianoKeys mode always, or ScaleAssist in-scale)
+                extA = cWhite1;
+                extB = cWhite2;
+            } else {
+                // Dark extension (ScaleAssist out-of-scale)
+                extA = isLightTheme ? UIColors::keyBedBlack : juce::Colour(0xFF34495E);
+                extB = cBlackBottom;
+            }
+
+            juce::ColourGradient grad(extA,
                                       static_cast<float>(0) + blackKeyW,
                                       y,
-                                      extensionB.interpolatedWith(UIColors::keyBedDivider, isLightTheme ? 0.08f : 0.0f),
+                                      extB.interpolatedWith(UIColors::keyBedDivider, isLightTheme ? 0.08f : 0.0f),
                                       static_cast<float>(0 + w),
                                       y + drawH,
                                       false);
             g.setGradientFill(grad);
             g.fillRect(extensionRect);
-
-            // Scale highlight overlay on in-scale black key extension area
-            if (inScale && ctx.scaleType != kScaleTypeChromatic)
-            {
-                g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
-                g.fillRect(extensionRect);
-            }
 
             g.setColour(UIColors::panelBorder.withAlpha(isLightTheme ? 0.22f : 1.0f));
             g.drawLine(blackKeyW, y + h * 0.5f, static_cast<float>(w), y + h * 0.5f, 1.0f);
@@ -865,30 +844,115 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         if (y < -50.0f || y > height + 50.0f) continue;
 
         int noteInOctave = drawMidi % 12;
-        bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
-                          noteInOctave == 8 || noteInOctave == 10);
+        const bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
+                                noteInOctave == 8 || noteInOctave == 10);
+        const int pitchClass = ((midi % 12) + 12) % 12;
+        const bool inScale = isScaleAssist
+            && inScalePitchClass[static_cast<std::size_t>(pitchClass)];
+        const auto visualRole = classifyPitchRow(ctx.pitchLaneVisualMode, midi, inScale);
 
         if (isBlackKey)
         {
-            const bool inScale = isMidiInCurrentScale(drawMidi);
-
             float keyH = h * 0.8f;
             float keyY = y + (h - keyH) * 0.5f;
 
             juce::Rectangle<float> keyRect(0.0f, keyY, blackKeyW, keyH);
-            const bool useOverdoseAtlas = hasOverdoseAtlas && overdoseAtlasSliceHeight > 0;
 
-            if (useOverdoseAtlas)
+            if (visualRole == PitchRowVisualRole::BlackKey)
             {
-                const auto sliceIndex = overdoseAtlasSliceIndex(noteInOctave);
-                UiAssets::drawAssetSliceStretch(g,
-                                               UiAssetId::PianoKeyAtlas,
-                                               keyRect,
-                                               { 0, sliceIndex * overdoseAtlasSliceHeight,
-                                                 overdoseAtlas.getWidth(), overdoseAtlasSliceHeight });
+                // Existing black key material (atlas + gradient + shadow)
+                const bool useOverdoseAtlas = hasOverdoseAtlas && overdoseAtlasSliceHeight > 0;
+
+                if (useOverdoseAtlas)
+                {
+                    const auto sliceIndex = overdoseAtlasSliceIndex(noteInOctave);
+                    UiAssets::drawAssetSliceStretch(g,
+                                                   UiAssetId::PianoKeyAtlas,
+                                                   keyRect,
+                                                   { 0, sliceIndex * overdoseAtlasSliceHeight,
+                                                     overdoseAtlas.getWidth(), overdoseAtlasSliceHeight });
+                }
+                else
+                {
+                    juce::DropShadow ds;
+                    ds.colour = juce::Colours::black.withAlpha(isLightTheme ? 0.28f : 0.25f);
+                    ds.radius = isLightTheme ? 6 : 5;
+                    ds.offset = {0, 1};
+
+                    juce::Path shadowPath;
+                    shadowPath.addRoundedRectangle(keyRect, 2.0f);
+                    ds.drawForPath(g, shadowPath);
+
+                    juce::ColourGradient sideShadow(juce::Colours::black.withAlpha(isLightTheme ? 0.12f : 0.2f), blackKeyW, keyY,
+                                                    juce::Colours::transparentBlack, blackKeyW + 1.25f, keyY, false);
+                    g.setGradientFill(sideShadow);
+                    g.fillRect(static_cast<int>(blackKeyW), static_cast<int>(keyY + 1.0f),
+                               static_cast<int>(1.25f), static_cast<int>(keyH - 1.0f));
+
+                    juce::Colour cTop = isLightTheme ? UIColors::keyBedBlack : juce::Colour(0xFF34495E);
+                    juce::Colour cBottom = cBlackBottom;
+
+                    juce::ColourGradient grad(cTop, 0.0f, keyRect.getY(),
+                                              cBottom, 0.0f, keyRect.getBottom(), false);
+                    g.setGradientFill(grad);
+                    g.fillRoundedRectangle(keyRect, 2.0f);
+
+                    if (isLightTheme)
+                    {
+                        juce::ColourGradient keySource(juce::Colours::white.withAlpha(0.14f),
+                                                       keyRect.getX() + keyRect.getWidth() * 0.18f,
+                                                       keyRect.getY(),
+                                                       juce::Colours::transparentWhite,
+                                                       keyRect.getCentreX(),
+                                                       keyRect.getY() + keyRect.getHeight() * 0.42f,
+                                                       false);
+                        g.setGradientFill(keySource);
+                        g.fillRoundedRectangle(keyRect.reduced(0.5f), 1.8f);
+                    }
+
+                    g.setColour(juce::Colours::white.withAlpha(isLightTheme ? 0.14f : 0.2f));
+                    g.fillRect(keyRect.getX() + 2.0f, keyRect.getY(), keyRect.getWidth() - 4.0f, keyH * 0.15f);
+
+                    if (isOverdose)
+                    {
+                        g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.32f));
+                        g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
+                    }
+                    else
+                    {
+                        g.setColour(juce::Colours::black.withAlpha(isLightTheme ? 0.50f : 0.6f));
+                        g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
+                    }
+                }
+
+                // Note name labels for black keys (drawn on top of the black key body with outline)
+                if (effectiveNoteNameMode == 0)
+                {
+                    g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
+                    int octave = (drawMidi / 12) - 1;
+                    const char* bkName = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
+                    juce::String noteName = juce::String(bkName) + juce::String(octave);
+
+                    const int tx = 0;
+                    const int ty = static_cast<int>(y);
+                    const int tw = w - 4;
+                    const int th = static_cast<int>(h);
+
+                    // Black key: light outline + dark text
+                    g.setColour(juce::Colours::white.withAlpha(0.7f));
+                    for (int ox = -1; ox <= 1; ++ox)
+                        for (int oy = -1; oy <= 1; ++oy)
+                            if (ox != 0 || oy != 0)
+                                g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
+
+                    g.setColour(juce::Colour(0xFF2A2A2A));
+                    g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
+                }
             }
             else
             {
+                // visualRole == WhiteKey on physical black key: white key gradient filling short key contour
+                // Keep short key geometry and shadow, but use white key gradient
                 juce::DropShadow ds;
                 ds.colour = juce::Colours::black.withAlpha(isLightTheme ? 0.28f : 0.25f);
                 ds.radius = isLightTheme ? 6 : 5;
@@ -904,78 +968,49 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                 g.fillRect(static_cast<int>(blackKeyW), static_cast<int>(keyY + 1.0f),
                            static_cast<int>(1.25f), static_cast<int>(keyH - 1.0f));
 
-                juce::Colour cTop = isLightTheme ? UIColors::keyBedBlack : juce::Colour(0xFF34495E);
-                juce::Colour cBottom = cBlackBottom;
-                if (!inScale)
-                {
-                    cTop = cTop.darker(outOfScaleDimAmount);
-                    cBottom = cBottom.darker(outOfScaleDimAmount);
-                }
-
-                juce::ColourGradient grad(cTop, 0.0f, keyRect.getY(),
-                                          cBottom, 0.0f, keyRect.getBottom(), false);
+                juce::ColourGradient grad(cWhite1, 0.0f, keyRect.getY(),
+                                          cWhite2.interpolatedWith(UIColors::keyBedDivider, isLightTheme ? 0.08f : 0.0f),
+                                          0.0f, keyRect.getBottom(), false);
+                if (isLightTheme)
+                    grad.addColour(0.16, cWhite1.interpolatedWith(juce::Colours::white, 0.12f));
                 g.setGradientFill(grad);
                 g.fillRoundedRectangle(keyRect, 2.0f);
 
                 if (isLightTheme)
                 {
-                    juce::ColourGradient keySource(juce::Colours::white.withAlpha(0.14f),
-                                                   keyRect.getX() + keyRect.getWidth() * 0.18f,
-                                                   keyRect.getY(),
-                                                   juce::Colours::transparentWhite,
-                                                   keyRect.getCentreX(),
-                                                   keyRect.getY() + keyRect.getHeight() * 0.42f,
-                                                   false);
-                    g.setGradientFill(keySource);
-                    g.fillRoundedRectangle(keyRect.reduced(0.5f), 1.8f);
+                    g.setColour(juce::Colours::white.withAlpha(0.24f));
+                    g.fillRect(keyRect.getX() + 2.0f, keyRect.getY(), keyRect.getWidth() - 4.0f, keyH * 0.15f);
                 }
 
-                g.setColour(juce::Colours::white.withAlpha(isLightTheme ? 0.14f : 0.2f));
-                g.fillRect(keyRect.getX() + 2.0f, keyRect.getY(), keyRect.getWidth() - 4.0f, keyH * 0.15f);
+                g.setColour(juce::Colours::black.withAlpha(isLightTheme ? 0.50f : 0.6f));
+                g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
 
-                if (isOverdose)
+                // Note name labels for white-key-colored black keys
+                if (effectiveNoteNameMode == 0)
                 {
-                    // 深蓝紫黑键 + 粉色高光边
-                    g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.32f));
-                    g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
+                    g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
+                    int octave = (drawMidi / 12) - 1;
+                    const char* bkName = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
+                    juce::String noteName = juce::String(bkName) + juce::String(octave);
+
+                    const int tx = 0;
+                    const int ty = static_cast<int>(y);
+                    const int tw = w - 4;
+                    const int th = static_cast<int>(h);
+
+                    // White key style: dark outline + light text
+                    g.setColour(juce::Colours::black.withAlpha(0.5f));
+                    for (int ox = -1; ox <= 1; ++ox)
+                        for (int oy = -1; oy <= 1; ++oy)
+                            if (ox != 0 || oy != 0)
+                                g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
+
+                    const juce::Colour noteLabelColour = isLightTheme
+                        ? juce::Colour(0xFF25303A).withMultipliedAlpha(0.90f)
+                        : juce::Colour(0xFFE0E0E0).withMultipliedAlpha(1.0f);
+                    g.setColour(noteLabelColour);
+                    g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
                 }
-                else
-                {
-                    g.setColour(juce::Colours::black.withAlpha(isLightTheme ? 0.50f : 0.6f));
-                    g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
-                }
-            }
-
-            // Scale highlight overlay on in-scale black keys (reduced alpha)
-            if (inScale && ctx.scaleType != kScaleTypeChromatic)
-            {
-                g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.22f)
-                                         : UIColors::scaleHighlight.withMultipliedAlpha(0.5f));
-                g.fillRoundedRectangle(keyRect, 2.0f);
-            }
-
-            // Note name labels for black keys (drawn on top of the black key body with outline)
-            if (effectiveNoteNameMode == 0)
-            {
-                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
-                int octave = (drawMidi / 12) - 1;
-                const char* bkName = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
-                juce::String noteName = juce::String(bkName) + juce::String(octave);
-
-                const int tx = 0;
-                const int ty = static_cast<int>(y);
-                const int tw = w - 4;
-                const int th = static_cast<int>(h);
-
-                // Black key: light outline + dark text
-                g.setColour(juce::Colours::white.withAlpha(0.7f));
-                for (int ox = -1; ox <= 1; ++ox)
-                    for (int oy = -1; oy <= 1; ++oy)
-                        if (ox != 0 || oy != 0)
-                            g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
-
-                g.setColour(juce::Colour(0xFF2A2A2A).withMultipliedAlpha(inScale ? 1.0f : 0.78f));
-                g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
             }
         }
     }

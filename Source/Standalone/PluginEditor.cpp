@@ -585,7 +585,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setBpm(processorRef_.getBpm());
     pianoRoll_.setTimeSignature(processorRef_.getTimeSigNumerator(), processorRef_.getTimeSigDenominator());
     pianoRoll_.setShowWaveform(processorRef_.getShowWaveform());
-    pianoRoll_.setShowLanes(processorRef_.getShowLanes());
+    pianoRoll_.setPitchLaneVisualMode(appPreferences_.getState().shared.pitchLaneVisualMode);
     pianoRoll_.setGridStyle(appPreferences_.getState().shared.gridStyle);
     
     // PianoRoll and ArrangementView read presented position from processor-owned
@@ -1551,6 +1551,8 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     pianoRoll_.setBackgroundBrightness(visualPreferences.backgroundBrightness);
     pianoRoll_.setGridStyle(sharedPreferences.gridStyle);
+    pianoRoll_.setPitchLaneVisualMode(sharedPreferences.pitchLaneVisualMode);
+    menuBar_.setPitchLaneVisualMode(sharedPreferences.pitchLaneVisualMode);
     parameterPanel_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     parameterPanel_.setOpenDyneMode(AudioEditingScheme::usesNotesPrimaryScheme(sharedPreferences.audioEditingScheme));
     parameterPanel_.setActiveTool(static_cast<int>(pianoRoll_.getCurrentTool()));
@@ -2476,9 +2478,14 @@ void OpenTuneAudioProcessorEditor::showWaveformToggled(bool shouldShow)
     pianoRoll_.setShowWaveform(shouldShow);
 }
 
-void OpenTuneAudioProcessorEditor::showLanesToggled(bool shouldShow)
+void OpenTuneAudioProcessorEditor::pitchLaneVisualModeChanged(PitchLaneVisualMode mode)
 {
-    pianoRoll_.setShowLanes(shouldShow);
+    if (appPreferences_.getState().shared.pitchLaneVisualMode != mode) {
+        appPreferences_.setPitchLaneVisualMode(mode);
+    }
+
+    syncSharedAppPreferences();
+    menuBar_.repaint();
 }
 
 void OpenTuneAudioProcessorEditor::noteNameModeChanged(NoteNameMode noteNameMode)

@@ -55,7 +55,7 @@ public:
         virtual void preferencesRequested() = 0;
         virtual void helpRequested() = 0;
         virtual void showWaveformToggled(bool shouldShow) = 0;
-        virtual void showLanesToggled(bool shouldShow) = 0;
+        virtual void pitchLaneVisualModeChanged(PitchLaneVisualMode mode) = 0;
         virtual void noteNameModeChanged(NoteNameMode noteNameMode) = 0;
         virtual void showUnvoicedFramesToggled(bool shouldShow) = 0;
         virtual void themeChanged(ThemeId themeId) = 0;
@@ -86,6 +86,7 @@ public:
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowUnvoicedFrames(bool shouldShow);
     void setTrackColorMode(TrackColorMode mode);
+    void setPitchLaneVisualMode(PitchLaneVisualMode mode);
 
     juce::StringArray getMenuBarNames() override;
     juce::PopupMenu getMenuForIndex(int topLevelMenuIndex, const juce::String& menuName) override;
@@ -102,6 +103,7 @@ private:
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showUnvoicedFrames_ = false;
     TrackColorMode trackColorMode_ = TrackColorMode::Random;
+    PitchLaneVisualMode pitchLaneVisualMode_ = PitchLaneVisualMode::PianoKeys;
 
     enum MenuItemIDs
     {
@@ -119,7 +121,7 @@ private:
         EditRedo,
 
         ShowWaveform = 100,
-        ShowLanes,
+        PianoKeyLanes,
         NoteNameModeShowAll,
         NoteNameModeCOnly,
         NoteNameModeHide,

@@ -84,9 +84,6 @@ struct UIColors
     static inline juce::Colour waveformFill { 0x600C3C4A };
     static inline juce::Colour waveformOutline { 0xFF0C3C4A };
 
-    // Scale Detection
-    static inline juce::Colour scaleHighlight { 0x20FFFFFF };
-
     // Knob Colors
     static inline juce::Colour knobBody { 0xFF1B2026 };
     static inline juce::Colour knobIndicator { 0xFF7FB3D5 };
@@ -197,8 +194,6 @@ struct UIColors
 
         waveformFill = tokens.waveformFill;
         waveformOutline = tokens.waveformOutline;
-
-        scaleHighlight = tokens.scaleHighlight;
 
         knobBody = tokens.knobBody;
         knobIndicator = tokens.knobIndicator;

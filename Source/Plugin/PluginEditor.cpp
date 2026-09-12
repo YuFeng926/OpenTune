@@ -334,6 +334,8 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     pianoRoll_.setBackgroundBrightness(visualPreferences.backgroundBrightness);
     pianoRoll_.setGridStyle(sharedPreferences.gridStyle);
+    pianoRoll_.setPitchLaneVisualMode(sharedPreferences.pitchLaneVisualMode);
+    menuBar_.setPitchLaneVisualMode(sharedPreferences.pitchLaneVisualMode);
     pianoRoll_.setShortcutSettings(sharedPreferences.shortcuts);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
@@ -930,9 +932,14 @@ void OpenTuneAudioProcessorEditor::showWaveformToggled(bool shouldShow)
     pianoRoll_.setShowWaveform(shouldShow);
 }
 
-void OpenTuneAudioProcessorEditor::showLanesToggled(bool shouldShow)
+void OpenTuneAudioProcessorEditor::pitchLaneVisualModeChanged(PitchLaneVisualMode mode)
 {
-    pianoRoll_.setShowLanes(shouldShow);
+    if (appPreferences_.getState().shared.pitchLaneVisualMode != mode) {
+        appPreferences_.setPitchLaneVisualMode(mode);
+    }
+
+    syncSharedAppPreferences();
+    menuBar_.repaint();
 }
 
 void OpenTuneAudioProcessorEditor::noteNameModeChanged(NoteNameMode noteNameMode)

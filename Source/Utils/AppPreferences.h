@@ -66,6 +66,7 @@ struct SharedPreferencesState {
     bool lightPitchCorrectionEnabled = true;  ///< 轻量修音开关（AutoTune cycle resampling，默认开）
     F0ModelType f0ModelType = F0ModelType::FCPE;
     PianoGridStyle gridStyle = PianoGridStyle::PianoLanes;
+    PitchLaneVisualMode pitchLaneVisualMode = PitchLaneVisualMode::PianoKeys;
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
     TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
 };
@@ -127,6 +128,8 @@ public:
 
     void setGridStyle(PianoGridStyle gridStyle);
     PianoGridStyle getGridStyle() const;
+
+    void setPitchLaneVisualMode(PitchLaneVisualMode mode);
 
     void setTimelineDisplayMode(TimelineDisplayMode mode);
     TimelineDisplayMode getTimelineDisplayMode() const;

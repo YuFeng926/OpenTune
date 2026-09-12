@@ -1344,4 +1344,15 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTunePitchParameterTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME PitchParameterContractTests COMMAND OpenTunePitchParameterTests)
+
+    # PitchLaneVisualPolicy tests — pure standard library, no JUCE linkage
+    add_executable(OpenTunePitchLaneVisualPolicyTests
+        Tests/PitchLaneVisualPolicyTests.cpp
+    )
+    target_include_directories(OpenTunePitchLaneVisualPolicyTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(OpenTunePitchLaneVisualPolicyTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME PitchLaneVisualPolicyTests COMMAND OpenTunePitchLaneVisualPolicyTests)
 endif()

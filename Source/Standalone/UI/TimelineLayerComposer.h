@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../../Utils/TimelineDisplayMode.h"
+#include "../../Utils/PianoRollVisualPreferences.h"
 #include <string>
 
 namespace OpenTune {
@@ -20,7 +21,9 @@ struct RenderParams {
     float pixelsPerSemitone = 1.0f;
     float worldTopY = 0.0f;
     int rulerHeight = 0;
-    int laneStyle = 0;
+    PitchLaneVisualMode pitchLaneVisualMode = PitchLaneVisualMode::PianoKeys;
+    int scaleRootNote = 0;
+    int scaleType = 1;
     int gridStyle = 0;  // 0 = PianoLanes, 1 = EqualSpacing (matches PianoGridStyle ordinal)
     int viewportWidth = 0;
     int viewportHeight = 0;
@@ -33,14 +36,6 @@ struct TimelineRulerStyle {
     juce::Colour separatorColour;
     float tickStroke = 0.7f;
 };
-
-inline int encodeLaneStyle(bool showLanes, int scaleRootNote, int scaleType) {
-    int h = 0;
-    h |= (showLanes ? 1 : 0);
-    h |= ((scaleRootNote & 0xFF) << 1);
-    h |= ((scaleType & 0xFF) << 9);
-    return h;
-}
 
 namespace TimelineLayerComposer {
 

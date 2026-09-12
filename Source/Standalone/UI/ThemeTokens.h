@@ -73,8 +73,6 @@ struct ThemeTokens
     juce::Colour waveformFill;
     juce::Colour waveformOutline;
 
-    juce::Colour scaleHighlight;
-
     juce::Colour knobBody;
     juce::Colour knobIndicator;
     juce::Colour displayWellTop;
@@ -324,8 +322,6 @@ private:
             juce::Colour { 0x600C3C4A },
             juce::Colour { 0xFF0C3C4A },
 
-            juce::Colour { 0x305AA8E6 },
-
             juce::Colour { BlueBreeze::Colors::KnobBody },
             juce::Colour { BlueBreeze::Colors::KnobIndicator },
             juce::Colour { BlueBreeze::Colors::DisplayTop },
@@ -426,8 +422,6 @@ private:
 
             juce::Colour { DarkBlueGrey::Colors::WaveformFill },
             juce::Colour { DarkBlueGrey::Colors::WaveformOutline },
-
-            juce::Colour { DarkBlueGrey::Colors::ScaleHighlight },
 
             juce::Colour { DarkBlueGrey::Colors::KnobBody },
             juce::Colour { DarkBlueGrey::Colors::KnobIndicator },
@@ -606,8 +600,6 @@ private:
             juce::Colour { 0x600C3C4A }, // waveformFill
             juce::Colour { 0xFF0C3C4A }, // waveformOutline
 
-            juce::Colour { 0x20FFFFFF }, // scaleHighlight
-
             juce::Colour { Aurora::Colors::KnobGlassBody },
             juce::Colour { Aurora::Colors::KnobIndicator },
             juce::Colour { Aurora::Colors::BgDeep },
@@ -707,8 +699,6 @@ private:
 
             juce::Colour { Overdose::Colors::WaveformFill },  // waveformFill
             juce::Colour { Overdose::Colors::WaveformOutline }, // waveformOutline
-
-            juce::Colour { Overdose::Colors::PinkGlowSoft },  // scaleHighlight
 
             juce::Colour { Overdose::Colors::KnobBody },      // knobBody
             juce::Colour { Overdose::Colors::KnobIndicator }, // knobIndicator

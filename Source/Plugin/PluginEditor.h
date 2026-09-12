@@ -81,7 +81,7 @@ public:
     void preferencesRequested() override;
     void helpRequested() override;
     void showWaveformToggled(bool shouldShow) override;
-    void showLanesToggled(bool shouldShow) override;
+    void pitchLaneVisualModeChanged(PitchLaneVisualMode mode) override;
     void noteNameModeChanged(NoteNameMode noteNameMode) override;
     void showUnvoicedFramesToggled(bool shouldShow) override;
     void themeChanged(ThemeId themeId) override;

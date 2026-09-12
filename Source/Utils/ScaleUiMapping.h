@@ -9,6 +9,7 @@
 
 #include "DetectedKey.h"
 #include "NoteGeneratorTypes.h"
+#include <array>
 #include <optional>
 
 namespace OpenTune {
@@ -48,6 +49,23 @@ inline Scale uiScaleTypeToScale(int scaleType) {
 }
 
 /**
+ * UI scaleType (1..8) → ScaleMode 枚举
+ */
+inline ScaleMode uiScaleTypeToScaleMode(int scaleType) {
+    switch (scaleType) {
+        case 1: return ScaleMode::Major;
+        case 2: return ScaleMode::Minor;
+        case 3: return ScaleMode::Chromatic;
+        case 4: return ScaleMode::HarmonicMinor;
+        case 5: return ScaleMode::Dorian;
+        case 6: return ScaleMode::Mixolydian;
+        case 7: return ScaleMode::PentatonicMajor;
+        case 8: return ScaleMode::PentatonicMinor;
+        default: return ScaleMode::Major;
+    }
+}
+
+/**
  * 从 UI 参数构造 DetectedKey（手动设置入口）
  */
 inline DetectedKey makeDetectedKeyFromUi(int rootNote, int scaleType) {
@@ -68,16 +86,7 @@ inline std::optional<ScaleSnapConfig> makeScaleSnapConfigFromUi(int rootNote, in
         return std::nullopt;
     ScaleSnapConfig snapCfg;
     snapCfg.root = juce::jlimit(0, 11, rootNote);
-    switch (scaleType) {
-        case 1: snapCfg.mode = ScaleMode::Major; break;
-        case 2: snapCfg.mode = ScaleMode::Minor; break;
-        case 4: snapCfg.mode = ScaleMode::HarmonicMinor; break;
-        case 5: snapCfg.mode = ScaleMode::Dorian; break;
-        case 6: snapCfg.mode = ScaleMode::Mixolydian; break;
-        case 7: snapCfg.mode = ScaleMode::PentatonicMajor; break;
-        case 8: snapCfg.mode = ScaleMode::PentatonicMinor; break;
-        default: snapCfg.mode = ScaleMode::Major; break;
-    }
+    snapCfg.mode = uiScaleTypeToScaleMode(scaleType);
     return snapCfg;
 }
 
@@ -87,6 +96,19 @@ inline std::optional<ScaleSnapConfig> makeScaleSnapConfigFromUi(int rootNote, in
  */
 inline std::optional<ScaleSnapConfig> makeScaleSnapConfig(const DetectedKey& key) {
     return makeScaleSnapConfigFromUi(static_cast<int>(key.root), scaleToUiScaleType(key.scale));
+}
+
+/**
+ * 音阶 pitch-class mask：返回 12 元素 bool 数组，true 表示该 pitch class 在调内。
+ * Chromatic (scaleType==3) 返回全 true（所有半音都在调内）。
+ * 中央 lane 与左轴共享此 helper，消除 TimelineLayerComposer / PianoRollRenderer 重复。
+ *
+ * 视觉策略注意：Chromatic 的 mask 全 true，classifyPitchRow 收到 isPitchInScale=true
+ * 后统一返回 WhiteKey（亮）。ScaleAssist 的调内/调外直接映射到 WhiteKey/BlackKey，
+ * 不再拥有独立绘制路径。
+ */
+inline std::array<bool, 12> buildInScalePitchClasses(int scaleType, int rootNote) noexcept {
+    return buildPitchClassMask(uiScaleTypeToScaleMode(scaleType), rootNote);
 }
 
 } // namespace OpenTune

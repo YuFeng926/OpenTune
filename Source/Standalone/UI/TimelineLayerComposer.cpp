@@ -1,8 +1,7 @@
 #include "TimelineLayerComposer.h"
 #include "UIColors.h"
-#include "UiAssets.h"
 #include "ThemeTokens.h"
-#include "../../Utils/NoteGeneratorTypes.h"
+#include "../../Utils/ScaleUiMapping.h"
 #include <cmath>
 #include <algorithm>
 #include <array>
@@ -28,53 +27,6 @@ double TimelineLayerComposer::selectMarkerInterval(double pixelsPerSecond) {
     if (pixelsPerSecond < 8.0) return 10.0;
     if (pixelsPerSecond < 60.0) return 5.0;
     return 1.0;
-}
-
-// ============================================================================
-// 解码 laneStyle
-// ============================================================================
-
-static bool decodeShowLanes(int laneStyle) {
-    return (laneStyle & 0x1) != 0;
-}
-
-static int decodeScaleRootNote(int laneStyle) {
-    return (laneStyle >> 1) & 0xFF;
-}
-
-static int decodeScaleType(int laneStyle) {
-    return (laneStyle >> 9) & 0xFF;
-}
-
-// ============================================================================
-// Scale pitch-class helper
-// ============================================================================
-static std::array<bool, 12> buildInScalePitchClasses(int scaleType, int rootNote) noexcept {
-    std::array<bool, 12> result{};
-    static constexpr int kScaleTypeChromatic = 3;
-    if (scaleType == kScaleTypeChromatic) {
-        result.fill(true);
-        return result;
-    }
-    result.fill(false);
-    const int rootPc = juce::jlimit(0, 11, rootNote % 12);
-
-    ScaleMode mode = ScaleMode::Major;
-    switch (scaleType) {
-        case 1: mode = ScaleMode::Major; break;
-        case 2: mode = ScaleMode::Minor; break;
-        case 4: mode = ScaleMode::HarmonicMinor; break;
-        case 5: mode = ScaleMode::Dorian; break;
-        case 6: mode = ScaleMode::Mixolydian; break;
-        case 7: mode = ScaleMode::PentatonicMajor; break;
-        case 8: mode = ScaleMode::PentatonicMinor; break;
-        default: mode = ScaleMode::Major; break;
-    }
-    int count = 0;
-    const int* intervals = ScaleSnapConfig::semitones(mode, count);
-    for (int i = 0; i < count; ++i)
-        result[static_cast<std::size_t>((rootPc + intervals[i]) % 12)] = true;
-    return result;
 }
 
 // ============================================================================
@@ -305,68 +257,70 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
 void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const RenderParams& params) {
     const auto themeId = static_cast<ThemeId>(params.themeId);
     const float pixelsPerSemitone = params.pixelsPerSemitone;
-    const int pianoKeyWidth = 0;
     const float worldTopY = params.worldTopY;
-    const bool showLanes = decodeShowLanes(params.laneStyle);
-    const bool equalSpacing = (params.gridStyle == 1);
-    const int scaleRootNote = decodeScaleRootNote(params.laneStyle);
-    const int scaleType = decodeScaleType(params.laneStyle);
+    const auto visualMode = params.pitchLaneVisualMode;
+    const bool equalSpacing = (params.gridStyle == static_cast<int>(PianoGridStyle::EqualSpacing));
+    const int scaleRootNote = params.scaleRootNote;
+    const int scaleType = params.scaleType;
 
     const int w = params.viewportWidth;
     const int h = params.viewportHeight;
     const bool isAurora = themeId == ThemeId::Aurora;
-    static constexpr int kScaleTypeChromatic = 3;
     static constexpr float minMidi = 24.0f;
     static constexpr float maxMidi = 108.0f;
 
-    const auto inScalePitchClass = buildInScalePitchClasses(scaleType, scaleRootNote);
+    // PianoKeys 路径不构建 scale mask；ScaleAssist 才构建
+    const bool isScaleAssist = (visualMode == PitchLaneVisualMode::ScaleAssist);
+    const auto inScalePitchClass = isScaleAssist
+        ? buildInScalePitchClasses(scaleType, scaleRootNote)
+        : std::array<bool, 12>{};
+
+    const float yOffset = equalSpacing ? -0.5f * pixelsPerSemitone : 0.0f;
 
     for (int midi = static_cast<int>(minMidi); midi <= static_cast<int>(maxMidi); ++midi) {
-        float y = (maxMidi - static_cast<float>(midi)) * pixelsPerSemitone - worldTopY;
+        float y = (maxMidi - static_cast<float>(midi)) * pixelsPerSemitone - worldTopY + yOffset;
         float laneH = pixelsPerSemitone;
 
         if (y < -laneH || y > h) continue;
 
-        int noteInOctave = midi % 12;
-        bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
-                          noteInOctave == 8 || noteInOctave == 10);
+        const int pitchClass = ((midi % 12) + 12) % 12;
+        const bool inScale = isScaleAssist
+            && inScalePitchClass[static_cast<std::size_t>(pitchClass)];
 
-        // Lane fill (only when showLanes is on; skipped in equal-spacing grid mode)
-        if (showLanes && !equalSpacing) {
-            if (isAurora) {
-                g.setColour(isBlackKey
-                    ? UIColors::glassSurface.withAlpha(0.075f)
-                    : UIColors::pianoRollLane.withAlpha(0.024f));
-                g.fillRect(static_cast<float>(pianoKeyWidth), y,
-                           static_cast<float>(w - pianoKeyWidth), laneH);
-            } else if (isBlackKey) {
-                g.setColour((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                    ? UIColors::pianoRollLane.withAlpha(0.16f)
-                    : UIColors::backgroundDark.withAlpha(0.3f));
-                g.fillRect(static_cast<float>(pianoKeyWidth), y,
-                           static_cast<float>(w - pianoKeyWidth), laneH);
-            }
+        // 角色由 classifyPitchRow 统一决定：
+        // PianoKeys: physical black/white key — ScaleAssist: inScale/outOfScale
+        // 调内→WhiteKey（亮），调外→BlackKey（暗），Chromatic 全True→WhiteKey
+        const auto role = classifyPitchRow(visualMode, midi, inScale);
 
-            // Scale-aware lane highlighting
-            if (scaleType != kScaleTypeChromatic) {
-                const int pitchClass = ((midi % 12) + 12) % 12;
-                if (inScalePitchClass[static_cast<std::size_t>(pitchClass)]) {
-                    const float scaleAlpha = isAurora ? 0.060f
-                        : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.14f : 0.65f);
-                    g.setColour(UIColors::scaleHighlight.withMultipliedAlpha(scaleAlpha));
-                    g.fillRect(static_cast<float>(pianoKeyWidth), y,
-                               static_cast<float>(w - pianoKeyWidth), laneH);
+        switch (role) {
+            case PitchRowVisualRole::BlackKey:
+                // 暗色 lane（PianoKeys: 物理黑键；ScaleAssist: 调外）
+                if (isAurora) {
+                    g.setColour(UIColors::glassSurface.withAlpha(0.075f));
+                } else {
+                    g.setColour((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+                        ? UIColors::pianoRollLane.withAlpha(0.16f)
+                        : UIColors::backgroundDark.withAlpha(0.3f));
                 }
-            }
+                g.fillRect(0.0f, y, static_cast<float>(w), laneH);
+                break;
+
+            case PitchRowVisualRole::WhiteKey:
+                // 亮色 lane（PianoKeys: 物理白键；ScaleAssist: 调内）
+                if (isAurora) {
+                    g.setColour(UIColors::pianoRollLane.withAlpha(0.024f));
+                    g.fillRect(0.0f, y, static_cast<float>(w), laneH);
+                }
+                break;
         }
 
-        // Row separator line (always drawn)
+        // row separators — 始终保留
         const auto rowLineColour = isAurora
             ? UIColors::pianoRollGrid.withAlpha(0.022f)
             : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
                 ? UIColors::pianoRollGrid.withAlpha(0.030f) : UIColors::panelBorder.withAlpha(0.25f));
         g.setColour(rowLineColour);
-        g.drawLine(static_cast<float>(pianoKeyWidth), y, static_cast<float>(w), y,
+        g.drawLine(0.0f, y, static_cast<float>(w), y,
                    (isAurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.55f : 1.0f);
     }
 }

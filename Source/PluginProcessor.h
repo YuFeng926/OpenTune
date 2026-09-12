@@ -515,8 +515,6 @@ private:
 
     // UI state
     bool showWaveform_{true};
-    
-    bool showLanes_{true};
     double zoomLevel_{1.0};
     int trackHeight_{120};
     
@@ -542,8 +540,6 @@ public:
 
     void setShowWaveform(bool shouldShow) { showWaveform_ = shouldShow; }
     bool getShowWaveform() const { return showWaveform_; }
-    void setShowLanes(bool shouldShow) { showLanes_ = shouldShow; }
-    bool getShowLanes() const { return showLanes_; }
 
     /**
      * 重置推理后端（切换 GPU/CPU 时调用，UI 线程）：

@@ -2090,7 +2090,7 @@ void PianoRollComponent::drawRuler(juce::Graphics& g, const ViewportState& view,
     rp.timeSigDenominator = timeSigDenom_;
     rp.themeId = static_cast<int>(UIColors::currentThemeId());
     rp.pixelsPerSemitone = 0.0f; rp.worldTopY = 0;
-    rp.rulerHeight = rulerHeight_; rp.laneStyle = 0;
+    rp.rulerHeight = rulerHeight_;
     rp.viewportWidth = cw; rp.viewportHeight = rulerHeight_;
     rp.viewKind = "pianoroll";
     g.reduceClipRegion(clipArea);
@@ -2122,13 +2122,17 @@ void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewportSt
     lp.timeSigDenominator = timeSigDenom_;
     lp.themeId = static_cast<int>(UIColors::currentThemeId());
     lp.pixelsPerSemitone = view.pixelsPerSemitone; lp.worldTopY = vOrigin;
-    lp.rulerHeight = 0; lp.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
+    lp.rulerHeight = 0;
+    lp.pitchLaneVisualMode = pitchLaneVisualMode_;
+    lp.scaleRootNote = scaleRootNote_;
+    lp.scaleType = scaleType_;
     lp.gridStyle = static_cast<int>(gridStyle_);
     lp.viewportWidth = cw; lp.viewportHeight = ch; lp.viewKind = "pianoroll";
 
     g.reduceClipRegion(clipArea);
 
-    if (showLanes_) {
+    // drawLaneStripRepeats 始终调用（不能关掉整层）
+    {
         juce::Graphics::ScopedSaveState lss(g);
         g.addTransform(juce::AffineTransform::translation(static_cast<float>(pianoKeyWidth_), static_cast<float>(rulerHeight_) - vFrac));
         g.reduceClipRegion(0, 0, cw, ch);
@@ -2166,6 +2170,7 @@ void PianoRollComponent::drawPianoKeyboard(juce::Graphics& g, const ViewportStat
         rctx.maxMidi = maxMidi_;
         rctx.scaleRootNote = scaleRootNote_;
         rctx.scaleType = scaleType_;
+        rctx.pitchLaneVisualMode = pitchLaneVisualMode_;
         rctx.noteNameMode = noteNameMode_;
         rctx.coords = mapper;
         rctx.rasterBounds = clipArea;
@@ -2228,6 +2233,7 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     renderCtx.maxMidi = maxMidi_;
     renderCtx.scaleRootNote = scaleRootNote_;
     renderCtx.scaleType = scaleType_;
+    renderCtx.pitchLaneVisualMode = pitchLaneVisualMode_;
     renderCtx.noteNameMode = noteNameMode_;
     renderCtx.showUnvoicedFrames = showUnvoicedFrames_;
     renderCtx.showOriginalF0 = showOriginalF0_;
@@ -3771,9 +3777,9 @@ void PianoRollComponent::setShowWaveform(bool shouldShow) {
     repaint();
 }
 
-void PianoRollComponent::setShowLanes(bool shouldShow) {
-    if (showLanes_ == shouldShow) return;
-    showLanes_ = shouldShow;
+void PianoRollComponent::setPitchLaneVisualMode(PitchLaneVisualMode mode) {
+    if (pitchLaneVisualMode_ == mode) return;
+    pitchLaneVisualMode_ = mode;
     staticDirty_ = true;
     rasterizeDirtySurfaces();
     repaint();

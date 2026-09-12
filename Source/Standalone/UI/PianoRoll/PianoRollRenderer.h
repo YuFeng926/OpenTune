@@ -99,6 +99,7 @@ public:
         float minMidi = 24.0f;
         float maxMidi = 108.0f;
         std::vector<ContentRenderItem> contents;
+        PitchLaneVisualMode pitchLaneVisualMode = PitchLaneVisualMode::PianoKeys;
         int scaleRootNote = 0;
         int scaleType = 1;
         NoteNameMode noteNameMode = NoteNameMode::COnly;
