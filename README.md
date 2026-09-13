@@ -63,7 +63,7 @@ GPU 加速推理：Windows DirectML / macOS CoreML
 
 - **[OpenVPI 团队 / Diffsinger 社区声码器](https://github.com/openvpi/vocoders)** — 高质量的声码器实现，本项目的核心部分。
 - **[yxlllc / RMVPE](https://github.com/yxlllc/RMVPE)** — RMVPE 权重，显著提升音高提取的准确性与鲁棒性。
-- **[吃土大佬 (CNChTu) / FCPE](https://github.com/CNChTu/FCPE)** — 参考了 FCPE，可能后续会尝试实装。
+- **[吃土大佬 (CNChTu) / FCPE](https://github.com/CNChTu/FCPE)** — FCPE 音高提取模型，当前版本的 F0 提取引擎。
 - **[JUCE 框架](https://github.com/juce-framework/JUCE)** — 跨平台音频框架。
 - **[avaneev / r8brain-free-src](https://github.com/avaneev/r8brain-free-src)** — 高效的重采样算法。
 - **[Celemony / ARA SDK](https://github.com/Celemony/ARA_SDK)** — ARA2 扩展支持。

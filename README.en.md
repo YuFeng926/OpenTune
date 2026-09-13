@@ -63,7 +63,7 @@ For system requirements, third-party dependency preparation, build commands, bui
 
 - **[OpenVPI Team / Diffsinger Community Vocoder](https://github.com/openvpi/vocoders)** — High-quality vocoder implementation, a core component of this project.
 - **[yxlllc / RMVPE](https://github.com/yxlllc/RMVPE)** — RMVPE weights, significantly improving pitch extraction accuracy and robustness.
-- **[吃土大佬 (CNChTu) / FCPE](https://github.com/CNChTu/FCPE)** — Referenced FCPE, may attempt implementation in the future.
+- **[吃土大佬 (CNChTu) / FCPE](https://github.com/CNChTu/FCPE)** — FCPE pitch model, the F0 extraction engine in the current version.
 - **[JUCE Framework](https://github.com/juce-framework/JUCE)** — Cross-platform audio framework.
 - **[avaneev / r8brain-free-src](https://github.com/avaneev/r8brain-free-src)** — Efficient resampling algorithm.
 - **[Celemony / ARA SDK](https://github.com/Celemony/ARA_SDK)** — ARA2 extension support.
