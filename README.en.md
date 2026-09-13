@@ -74,7 +74,7 @@ All projects follow their own open-source license agreements. Thanks to the open
 ## ☕ Support This Project
 
 This project is primarily developed by 风语 @ DAYA STUDIO. We are currently dedicated to exploring the limits of acoustic synthesis models and building cutting-edge audio editing tools.
-If this project has been helpful to you, feel free to buy us a coffee!
+If OpenTune has helped your work, feel free to buy us a coffee!
 
 <p align="center">
   <img src="assets/wechat-pay.png" alt="WeChat Pay" width="200" />
