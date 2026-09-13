@@ -1472,7 +1472,8 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
                                     nullptr,
-                                    static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
+                                    static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()),
+                                    identityChanged);
         return sync;
     }
 
@@ -1483,7 +1484,8 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
                                     nullptr,
-                                    static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
+                                    static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()),
+                                    identityChanged);
         pianoRoll_.setTimelineContentPlacements(sync.placements);
         return sync;
     }
@@ -1515,7 +1517,8 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     pianoRoll_.setEditedContent(sync.activeContentKey,
                                 curve,
                                 syncBuffer,
-                                static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
+                                static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()),
+                                identityChanged);
 
     // Viewport restore or fit on placement switch
     if (identityChanged && sync.activePlacementIdentity.has_value()) {

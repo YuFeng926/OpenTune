@@ -128,7 +128,8 @@ public:
     void setEditedContent(ContentKey contentKey,
                            std::shared_ptr<PitchCurve> curve,
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                           int sampleRate);
+                           int sampleRate,
+                           bool activePlacementChanged = false);
     void requestInitialF0View(ContentKey contentKey);
     /** 是否存在由当前内容或投影变化建立、尚未消费的 F0 初始视图定位请求。 */
     bool hasPendingInitialF0View() const noexcept { return pendingInitialF0ViewContentKey_.isValid(); }

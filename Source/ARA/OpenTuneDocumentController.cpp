@@ -2522,7 +2522,7 @@ void OpenTuneDocumentController::observeHostPlaybackPosition(
     if (positionInfo.hasValue())
         observeHostPlaybackState(positionInfo->getIsPlaying());
 
-    // Update document-shared canonical transport truth from any role's processBlock.
+    // Update document-shared canonical transport truth from the playback renderer.
     const uint64_t epoch = sharedPlayHeadState_.update(positionInfo);
 
     // Publish projection anchor with CAS: multi-writer safe (multiple ARA roles

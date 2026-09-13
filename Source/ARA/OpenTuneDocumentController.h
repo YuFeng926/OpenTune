@@ -166,8 +166,8 @@ public:
     bool requestTogglePlayback(bool fallbackObservedPlaying, double pendingSeekTime = -1.0);
     void observeHostPlaybackState(bool isPlaying) noexcept;
     // Publish host PositionInfo to document-shared PlayHeadState. Called from
-    // processBlock of any ARA role that receives a host PositionInfo. The CAS
-    // projection handles multi-writer contention; canonical atomics always win.
+    // the ARA playback renderer's processBlock. The CAS projection handles
+    // contention with other writers; canonical atomics always win.
     void observeHostPlaybackPosition(
         const juce::Optional<juce::AudioPlayHead::PositionInfo>& positionInfo,
         double blockDurationSeconds) noexcept;
@@ -251,8 +251,8 @@ private:
     const AudioModification* findAudioModificationByContentKey(const ContentKey& key) const;
 
 public:
-    /** Shared PlayHeadState for all ARA roles bound to this document. Any
-     *  processor whose processBlock is called writes here; UI binds to this. */
+    /** Shared PlayHeadState for all ARA roles bound to this document. The
+     *  playback renderer publishes host transport here; UI binds to this. */
     const PlayHeadState& getSharedPlayHeadState() const noexcept { return sharedPlayHeadState_; }
 
     // ARA mutation API — Processor delegates ARA writes here

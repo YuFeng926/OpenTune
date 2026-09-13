@@ -3012,7 +3012,8 @@ void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineConten
 void PianoRollComponent::setEditedContent(ContentKey contentKey,
                                            std::shared_ptr<PitchCurve> curve,
                                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                                           int sampleRate)
+                                           int sampleRate,
+                                           bool activePlacementChanged)
 {
     const double normalizedSampleRate = sampleRate > 0 ? static_cast<double>(sampleRate)
                                                         : static_cast<double>(PianoRollComponent::kAudioSampleRate);
@@ -3020,14 +3021,17 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
     const bool curveChanged = currentCurve_ != curve;
     const bool bufferChanged = audioBuffer_ != buffer || audioBufferSampleRate_ != normalizedSampleRate;
 
-    if (!contentChanged && !curveChanged && !bufferChanged) {
+    if (!contentChanged && !activePlacementChanged && !curveChanged && !bufferChanged) {
         return;
     }
 
-    if (contentChanged) {
-        // 切换编辑目标：清除 pending seek，避免跨 region 复用
+    if (activePlacementChanged) {
+        // Pending seeks belong to the active placement, not just its content.
         pendingSeekTime_ = -1.0;
         pendingSeekEpoch_ = 0;
+    }
+
+    if (contentChanged) {
         // 切换编辑目标：EQ 弹窗由选中组驱动，内容切换即失效
         closeEqPopup();
         if (!contentKey.isValid())
