@@ -429,7 +429,7 @@ private:
     std::shared_ptr<ContentEditCommands> contentCommands_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
     PlacementClipboard clipClipboard_;
-    ReferenceAnalysisService referenceAnalysisService_;
+    std::unique_ptr<ReferenceAnalysisService> referenceAnalysisService_;
 
     // Regular VST3 capture state. ARA-capable builds still create this for
     // unbound insert instances; access is suppressed after the instance binds to ARA.
@@ -504,7 +504,8 @@ private:
     std::unordered_set<ContentKey> pendingTimeToolSeedKeys_; // message-thread only
 
     // 运行时惰性解析进程级 F0 服务，消除冷启动空快照
-    F0ExtractionService f0ExtractionService_{1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }};
+    // 仅在 initializeRuntimeState() 中构造，避免 scanner 在构造期间启动线程
+    std::unique_ptr<F0ExtractionService> f0ExtractionService_;
 
     // Completion gate：F0 commit / Reference 分析 completion / 模型切换 completion
     // 回调（均捕获裸 this/processor）与析构互斥的唯一生命周期闸门。析构最先持锁置
@@ -522,6 +523,15 @@ private:
     juce::String lastExportError_;
 
     bool ensureF0Ready();
+
+    // 由宿主生命周期入口（prepareToPlay / createEditor / setStateInformation /
+    // didBindToARA）调用，绝不从 processBlock 调用；并发由 call_once 协调。
+    // 幂等；抛异常时 once_flag 复位，后续入口可重试。
+    bool initializeRuntimeState() noexcept;
+    // call_once 事务体：局部构造 → attach runtime → noexcept 发布成员。可抛。
+    void initializeRuntimeStateOnce();
+    std::atomic<bool> runtimeStateInitialized_{false};
+    std::once_flag runtimeInitOnce_;
 
     ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
 
@@ -708,7 +718,7 @@ public:
     void setReferenceAnalysisNotificationDispatcherForTests(
         ReferenceAnalysisService::NotificationDispatcher dispatcher)
     {
-        referenceAnalysisService_.setNotificationDispatcher(std::move(dispatcher));
+        referenceAnalysisService_->setNotificationDispatcher(std::move(dispatcher));
     }
 #endif
     ReferenceAlignmentResult executeReferenceAlignmentForPlacement(uint64_t targetPlacementId);

@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <mutex>
 
 #if JucePlugin_Enable_ARA
 #include "ARA/OpenTuneDocumentController.h"
@@ -681,8 +682,33 @@ juce::AudioProcessor::BusesProperties OpenTuneAudioProcessor::makeBuses()
 
 OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     : AudioProcessor(makeBuses()) {
+    // Constructor stays scan-safe: no thread, Timer, file lock, logger, or
+    // process runtime attachment. All of that is deferred to
+    // initializeRuntimeState(), called from prepareToPlay / createEditor /
+    // setStateInformation / didBindToARA.
+    editVersionParam_ = new juce::AudioParameterInt("editVersion", "EditVersion", 0, 100000, 0);
+    addParameter(editVersionParam_);
+
+    // Pure in-memory state is safe to expose before runtime initialization.
+    standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
+}
+
+bool OpenTuneAudioProcessor::initializeRuntimeState() noexcept
+{
+    // call_once 事务体在此调用，抛出时 once_flag 复位，后续入口可重试。
+    // 异常不向宿主传播。runtimeStateInitialized_ 留 false，processBlock 清零重试。
+    try {
+        std::call_once(runtimeInitOnce_, [this]() { initializeRuntimeStateOnce(); });
+    } catch (...) {
+        // AppLogger 可能未就绪，失败路径不强制日志。
+    }
+    return runtimeStateInitialized_.load(std::memory_order_acquire);
+}
+
+void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
+{
     AppLogger::initialize();
-    AppLogger::log("OpenTuneAudioProcessor: ctor version=" + juce::String(OPENTUNE_VERSION)
+    AppLogger::log("OpenTuneAudioProcessor: initializeRuntimeState version=" + juce::String(OPENTUNE_VERSION)
         + " wrapper=" + juce::String(juce::AudioProcessor::getWrapperTypeDescription(wrapperType))
         + " araCompiled="
 #if JucePlugin_Enable_ARA
@@ -692,12 +718,15 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 #endif
         + " processor=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
 
-    editVersionParam_ = new juce::AudioParameterInt("editVersion", "EditVersion", 0, 100000, 0);
-    addParameter(editVersionParam_);
+    // Construct services that used to be value members. Their constructors
+    // start detached worker threads -- must not run during scan-time createInstance.
+    auto f0SvcOwner = std::make_unique<F0ExtractionService>(
+        1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); });
+    auto refSvc = std::make_unique<ReferenceAnalysisService>();
 
-    sourceStore_ = std::make_shared<SourceStore>();
-    contentRenderService_ = std::make_shared<ContentRenderService>();
-    standaloneContentRepository_ = std::make_unique<StandaloneContentRepository>();
+    auto srcStore = std::make_shared<SourceStore>();
+    auto crs = std::make_shared<ContentRenderService>();
+    auto repo = std::make_unique<StandaloneContentRepository>();
     // Bind processor's render callback to CRS via ExecutionLease (ARA 重构路由改制)
     {
         ContentRenderService::ExecutionLease lease;
@@ -750,7 +779,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 contentRenderService_, job, std::move(contentSnap),
                 lightPitchEnabled, std::move(completion));
         };
-        contentRenderService_->attachExecutionLease(std::move(lease));
+        crs->attachExecutionLease(std::move(lease));
     }
     class ProcessorContentCommands final : public ContentEditCommands
     {
@@ -831,13 +860,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     private:
         OpenTuneAudioProcessor& proc_;
     };
-    contentCommands_ = std::make_shared<ProcessorContentCommands>(*this);
-    standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
+    auto commands = std::make_shared<ProcessorContentCommands>(*this);
+    auto resampler = std::make_shared<ResamplingManager>();
 
-    resamplingManager_ = std::make_shared<ResamplingManager>();
-
-    // Capture session: regular VST3 runtime mode. ARA-capable VST3 builds also
-    // need this when the host loads the binary as an unbound insert instance.
+    // Capture session（regular VST3 / ARA 未绑定实例）：先局部构造，attach 成功后发布。
+    std::unique_ptr<Capture::CaptureSession> capture;
     if (wrapperType == juce::AudioProcessor::wrapperType_VST3) {
         Capture::ProcessorBindings bindings;
 
@@ -885,7 +912,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 ContentKey segContentKey = segment->contentKey;
                 auto gate = completionGate_;
 
-                f0ExtractionService_.submit(
+                f0ExtractionService_->submit(
                     F0RequestKey{segContentKey},
                     [audio, sr, segContentKey](const std::shared_ptr<F0RunOwnerState>& runOwnerState) -> F0ExtractionService::Result {
                         F0ExtractionService::Result result;
@@ -1011,18 +1038,54 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             requestFullContentRender(key);
         };
 
-        captureSession_ = std::make_unique<Capture::CaptureSession>(std::move(bindings));
-        startTimerHz(30);
-        AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
-            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
+        capture = std::make_unique<Capture::CaptureSession>(std::move(bindings));
     }
 
-    // 进程级运行时客户端租约（仅计数，不触发释放）
+    // appLogger 在此之前记录：log 须置于 attach/publish 之前，抛出时不留部分成员状态。
+    // AppLogger::log 可能抛出，发布后仅允许 noexcept 操作。
+    if (capture)
+        AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
+
+    // 进程级 runtime attach（仅递增 clientCount）。失败时 guard 回滚以防泄漏。
+    struct RuntimeLeaseGuard {
+        bool attachedF0{false};
+        bool attachedRender{false};
+        ~RuntimeLeaseGuard() noexcept {
+            if (attachedRender) ProcessRenderRuntime::getInstance().detach();
+            if (attachedF0) ProcessF0Runtime::getInstance().detach();
+        }
+        void disarm() noexcept { attachedF0 = false; attachedRender = false; }
+    } attachGuard;
+
     ProcessF0Runtime::getInstance().attach();
+    attachGuard.attachedF0 = true;
     ProcessRenderRuntime::getInstance().attach();
+    attachGuard.attachedRender = true;
+
+    // 完整成功后一次性发布成员（noexcept 移动）。
+    f0ExtractionService_ = std::move(f0SvcOwner);
+    referenceAnalysisService_ = std::move(refSvc);
+    sourceStore_ = std::move(srcStore);
+    contentRenderService_ = std::move(crs);
+    standaloneContentRepository_ = std::move(repo);
+    contentCommands_ = std::move(commands);
+    resamplingManager_ = std::move(resampler);
+    const bool hasCapture = capture != nullptr;
+    if (hasCapture)
+        captureSession_ = std::move(capture);
+
+    if (hasCapture)
+        startTimerHz(30);
+
+    runtimeStateInitialized_.store(true, std::memory_order_release);
+    attachGuard.disarm();
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
+    if (!runtimeStateInitialized_.load(std::memory_order_acquire))
+        return;
+
     AppLogger::log("OpenTuneAudioProcessor: dtor processor="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
 #if JucePlugin_Enable_ARA
@@ -1043,12 +1106,16 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
         std::lock_guard<std::mutex> lk(completionGate_->mutex);
         completionGate_->closed = true;
     }
-    // 2) F0 / Reference shutdown 只关闭 owner、丢弃排队任务、终止本 owner 的
-    //    活跃 F0 Run（SetTerminate 加速返回）；不 join worker —— worker 是
-    //    detached 进程常驻执行器，见 shutdownStarted_ 后自行退出，期间只访问
-    //    进程寿命服务与提交时捕获的纯数据。不等待推理。
-    f0ExtractionService_.shutdown();
-    referenceAnalysisService_.shutdown();
+
+    // 2) 仅当运行时已初始化时才关闭 F0 / Reference owner 服务、解除 CRS 租约、
+    //    释放进程级租约；未初始化（scanner-only 生命周期）时不得构造进程 runtime
+    //    单例 — getInstance() 會启动 control worker。
+    // F0 / Reference shutdown 只关闭 owner、丢弃排队任务、终止本 owner 的
+    // 活跃 F0 Run（SetTerminate 加速返回）；不 join worker —— worker 是
+    // detached 进程常驻执行器，见 shutdownStarted_ 后自行退出，期间只访问
+    // 进程寿命服务与提交时捕获的纯数据。不等待推理。
+    f0ExtractionService_->shutdown();
+    referenceAnalysisService_->shutdown();
 
     // Phase 2: 解除 CRS execution lease，取消 pending render jobs
     if (contentRenderService_) {
@@ -1289,6 +1356,8 @@ void OpenTuneAudioProcessor::changeProgramName(int index, const juce::String& ne
 }
 
 void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
+    if (!initializeRuntimeState())
+        return;
     const RuntimePhase entryPhase = phase_;  // snapshot before any mutation
     const bool firstPrepare = (preparedPlaybackSampleRate_ == 0.0);
     const bool realRateChange = (!firstPrepare && preparedPlaybackSampleRate_ != sampleRate);
@@ -1427,7 +1496,11 @@ const PlayHeadState& OpenTuneAudioProcessor::getPlayHeadState() const noexcept
 
 void OpenTuneAudioProcessor::didBindToARA() noexcept
 {
+    // 先完成 JUCE 基类绑定，再延迟初始化运行时态；初始化失败则直接返回，
+    // 保留后续 ARA 文档控制器逻辑（仅在初始化成功后执行）。
     juce::AudioProcessorARAExtension::didBindToARA();
+    if (!initializeRuntimeState())
+        return;
 
     if (auto* dc = getDocumentController())
     {
@@ -1527,6 +1600,15 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                           juce::MidiBuffer& midiMessages) {
     juce::ignoreUnused(midiMessages);
     juce::ScopedNoDenormals noDenormals;
+
+    // 初始化失败或未完成时，清零输出并绕过所有成员访问：主机仍会调用
+    // processBlock，但 lazily 初始化的成员（contentRenderService_ 等）尚未
+    // 发布，不能触碰它们。acquire load 保证：见 true -> 所有成员发布已对本音频
+    // 线程可见。
+    if (!runtimeStateInitialized_.load(std::memory_order_acquire)) {
+        buffer.clear();
+        return;
+    }
 
     const int totalNumOutputChannels = getTotalNumOutputChannels();
     const int numSamples = buffer.getNumSamples();
@@ -2148,6 +2230,8 @@ void OpenTuneAudioProcessor::recordControlCall(DiagnosticControlCall controlCall
 }
 
 juce::AudioProcessorEditor* OpenTuneAudioProcessor::createEditor() {
+    if (!initializeRuntimeState())
+        return nullptr;
     return createOpenTuneEditor(*this);
 }
 
@@ -2238,6 +2322,9 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     if (data == nullptr || sizeInBytes <= 0) {
         return;
     }
+
+    if (!initializeRuntimeState())
+        return;
 
     // Per ARA2 spec: ARA AudioModification objects are restored via
     // doRestoreObjectsFromStream, NOT via VST3 processor state.
@@ -3660,8 +3747,8 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             break;
     }
 
-    if (f0ExtractionService_.isActive(F0RequestKey{request.contentKey})) {
-        f0ExtractionService_.cancel(F0RequestKey{request.contentKey});
+    if (f0ExtractionService_->isActive(F0RequestKey{request.contentKey})) {
+        f0ExtractionService_->cancel(F0RequestKey{request.contentKey});
     }
 
     auto gate = completionGate_;
@@ -3671,7 +3758,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
     // 绝不访问裸 processor（快照 shared_ptr 与进程级 F0 服务随 worker 存活）。
     const auto capturedSnap = snap;
 
-    const auto submitResult = f0ExtractionService_.submit(
+    const auto submitResult = f0ExtractionService_->submit(
         F0RequestKey{request.contentKey},
         [capturedSnap, capturedRequest](const std::shared_ptr<F0RunOwnerState>& runOwnerState) -> F0ExtractionService::Result {
             F0ExtractionService::Result result;
@@ -4077,7 +4164,7 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
 
     auto gate = completionGate_;
     auto* processor = this;
-    referenceAnalysisService_.submitAnalysis(
+    referenceAnalysisService_->submitAnalysis(
         key, inputFingerprint, producer,
         [analysisSnap, audio, sourceDurationSeconds, analysisRevision](const ReferenceAnalysisService::AnalysisJobKey& jobKey) {
             ReferenceFeatureSet failed;
