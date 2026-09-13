@@ -404,5 +404,18 @@ cmake --build --preset macos-intel-ara-release
 各项目均遵循其自身的开源许可协议。感谢以上项目作者与团队的开放共享精神。
 
 
+## ☕ 支持本项目
+
+本项目由风语 @ DAYA STUDIO 作为主力开发，目前我们正致力于探索声学合成模型的上限和前沿音频编辑工具的开发。
+如果这个项目对你有帮助，欢迎请我喝杯咖啡！
+
+<p align="center">
+  <img src="assets/wechat-pay.png" alt="微信支付" width="200" />
+  <img src="assets/alipay.png" alt="支付宝" width="200" />
+</p>
+
+> 捐赠是自愿的支持，不购买功能优先级，也不影响 Issue 的处理顺序。
+
+
 ## License
 AGPL V3.0

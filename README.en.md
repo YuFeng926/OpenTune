@@ -401,5 +401,18 @@ We welcome PRs, documentation translations, bug reports, and new feature suggest
 All projects follow their own open-source license agreements. Thanks to the open and sharing spirit of these project authors and teams.
 
 
+## ☕ Support This Project
+
+This project is primarily developed by 风语 @ DAYA STUDIO. We are currently dedicated to exploring the limits of acoustic synthesis models and building cutting-edge audio editing tools.
+If this project has been helpful to you, feel free to buy me a coffee!
+
+<p align="center">
+  <img src="assets/wechat-pay.png" alt="WeChat Pay" width="200" />
+  <img src="assets/alipay.png" alt="Alipay" width="200" />
+</p>
+
+> Donations are voluntary support. They do not purchase feature priority and do not affect the handling order of issues.
+
+
 ## License
 AGPL V3.0
