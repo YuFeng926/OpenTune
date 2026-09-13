@@ -17,6 +17,8 @@ OpenTune 是一款基于神经声码器的开源修音工具。与传统 DSP 算
 
 <img width="1672" height="941" alt="OpenTune特性" src="https://github.com/user-attachments/assets/37c38b4a-040e-4ce2-96fc-053e46c35d05" />
 
+**逐个音符 EQ 处理：让你获得其他 DAW 插件无法达到的便捷精细处理**
+
 **Hybrid移调：通过与DSP算法结合，它可在一个八度内实现更自然的移调，在保证小幅度修音拥有第一梯队音质的同时，在大幅度修音时获得业界领先的自然效果。**
 
 共振峰不变：改变音高时尽量不影响音色，一耳朵差距
@@ -27,6 +29,12 @@ AI 重合成：基于深度学习的声码器，而非传统移调
 
 内置自动检测调式：上手即修，不修也准，修了更准
 
+多音阶校正：Chromatic、Major、Minor、Pentatonic、Dorian、Mixolydian、Harmonic Minor
+
+音频格式：WAV、FLAC、OGG、MP3 导入
+
+AI 引擎：FCPE 音高提取 + PC-NSF HifiGAN 声码器（ONNX Runtime 推理）
+
 双格式输出：Standalone 独立运行 + VST3 插件（支持 ARA2 扩展）
 
 GPU 加速推理：Windows DirectML / macOS CoreML
@@ -36,13 +44,6 @@ GPU 加速推理：Windows DirectML / macOS CoreML
 开源免费：永久免费，社区驱动，持续迭代
 
 </div>
-
-## 🚀 项目进展
-- **逐个音符 EQ 处理**：可对每个音符单独施加 EQ，这是强大的音频编辑能力，许多商业软件都无法做到
-- AI 引擎：FCPE 音高提取 + PC-NSF HifiGAN 声码器（ONNX Runtime 推理）
-- 多音阶校正：Chromatic、Major、Minor、Pentatonic、Dorian、Mixolydian、Harmonic Minor
-- 音频格式：WAV、FLAC、OGG、MP3 导入
-
 
 ## 🧠 项目理念
 深度学习技术、大中小模型的发展始终是为了帮助人类，以人为本，为音乐人带来更好的创作体验。

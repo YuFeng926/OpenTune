@@ -17,6 +17,8 @@ OpenTune is an open-source pitch correction tool based on neural vocoders. Unlik
 
 <img width="1672" height="941" alt="OpenTune features" src="https://github.com/user-attachments/assets/37c38b4a-040e-4ce2-96fc-053e46c35d05" />
 
+**Per-note EQ processing: convenient, fine-grained editing that other DAW plugins can't deliver**
+
 **Hybrid pitch shifting: By combining with DSP algorithms, it achieves more natural transposition within one octave — first-tier sound quality for small corrections, and industry-leading natural results for large shifts.**
 
 Formants preserved: Changing pitch barely affects the timbre — a difference you can hear instantly
@@ -27,6 +29,12 @@ Auto-Tune/Melodyne-like workflow: Hand-drawing, note, and anchor tools — every
 
 Built-in automatic key detection: Start correcting right away — accurate even without correction, and even more accurate after
 
+Multi-scale correction: Chromatic, Major, Minor, Pentatonic, Dorian, Mixolydian, Harmonic Minor
+
+Audio formats: WAV, FLAC, OGG, MP3 import
+
+AI engine: FCPE pitch extraction + PC-NSF HifiGAN vocoder (ONNX Runtime inference)
+
 Dual-format output: Standalone executable + VST3 plugin (with ARA2 extension support)
 
 GPU-accelerated inference: Windows DirectML / macOS CoreML
@@ -36,13 +44,6 @@ Multi-language interface: Chinese / English / Japanese / Russian / Spanish
 Open source and free: Permanently free, community-driven, continuously iterating
 
 </div>
-
-## 🚀 Project Progress
-- **Per-note EQ processing**: Apply EQ to each note individually — a powerful audio editing capability that many commercial products can't match
-- AI engine: FCPE pitch extraction + PC-NSF HifiGAN vocoder (ONNX Runtime inference)
-- Multi-scale correction: Chromatic, Major, Minor, Pentatonic, Dorian, Mixolydian, Harmonic Minor
-- Audio formats: WAV, FLAC, OGG, MP3 import
-
 
 ## 🧠 Project Philosophy
 AI exists to help people, with a human-centered approach to provide a better creative experience.
