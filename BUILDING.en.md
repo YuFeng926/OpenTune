@@ -153,10 +153,11 @@ Model files need to be placed in specified locations under the project root dire
 
 | Model | Source Path | Build Location |
 |-------|-------------|----------------|
-| RMVPE (F0 extraction) | `models/rmvpe.onnx` | `<output>/models/rmvpe.onnx` |
+| FCPE (F0 extraction) | `models/fcpe.onnx` | `<output>/models/fcpe.onnx` |
 | PC-NSF HifiGAN (vocoder) | `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx` | `<output>/models/hifigan.onnx` |
+| GAME note generator (optional) | `models/GAME/` | `<output>/models/GAME/` |
 
-> Model files are not included in the Git repository. Please download from the [Releases](https://github.com/YuFeng926/OpenTune/releases) page or contact the maintainer.
+> Model files are not included in the Git repository. Please download from the [Releases](https://github.com/YuFeng926/OpenTune/releases) page or contact the maintainer. The GAME model bundle is optional; when absent, the runtime falls back to the Legacy workflow.
 
 ## Complete Directory Structure Overview
 
@@ -176,7 +177,7 @@ OpenTune/
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
 │   └── microsoft.direct3d.d3d12.1.619.5/ ← D3D12 Agility SDK (Windows)
 ├── models/
-│   └── rmvpe.onnx
+│   └── fcpe.onnx
 ├── pc_nsf_hifigan_44.1k_ONNX/
 │   └── pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx
 ├── Source/

@@ -17,15 +17,15 @@ OpenTune is an open-source pitch correction tool based on neural vocoders. Unlik
 
 <img width="1672" height="941" alt="OpenTune features" src="https://github.com/user-attachments/assets/37c38b4a-040e-4ce2-96fc-053e46c35d05" />
 
-Formant preservation: Changing pitch doesn't affect the voice's tonal color, eliminating "duck voice" or "different singer" distortion
+**Hybrid pitch shifting: By combining with DSP algorithms, it achieves more natural transposition within one octave — first-tier sound quality for small corrections, and industry-leading natural results for large shifts.**
 
-Wide-range pitch shifting: Supports extreme pitch correction and transposition with clear, stable sound quality
+Formants preserved: Changing pitch barely affects the timbre — a difference you can hear instantly
 
 AI resynthesis: Deep learning-based vocoder, not traditional pitch shifting
 
-Auto-Tune-like workflow: Hand-drawing, note, and anchor tools available to help you quickly enter a flow state
+Auto-Tune/Melodyne-like workflow: Hand-drawing, note, and anchor tools — everything you need to get into the flow fast
 
-Built-in Auto-Key style key detection: Accurate detection before correction, even more accurate after correction
+Built-in automatic key detection: Start correcting right away — accurate even without correction, and even more accurate after
 
 Dual-format output: Standalone executable + VST3 plugin (with ARA2 extension support)
 
@@ -38,16 +38,9 @@ Open source and free: Permanently free, community-driven, continuously iterating
 </div>
 
 ## 🖥️ Current Status
-- AI engine: RMVPE pitch extraction + PC-NSF HifiGAN vocoder (ONNX Runtime inference)
+- AI engine: FCPE pitch extraction + PC-NSF HifiGAN vocoder (ONNX Runtime inference)
 - Multi-scale correction: Chromatic, Major, Minor, Pentatonic, Dorian, Mixolydian, Harmonic Minor
 - Audio formats: WAV, FLAC, OGG, MP3 import
-
-
-## 🧪 Beta Version Notice
-This is an early test version, which may have some bugs and performance not yet fully optimized. Feel free to download and try it out, and share your valuable feedback, feature requests, or issues encountered through Issues or Discussion. We will actively improve based on feedback.
-
-Known limitations:
-- VST3 ARA mode requires host support for ARA2 (e.g., Studio One, Logic Pro)
 
 
 ## 🧠 Project Philosophy
@@ -64,10 +57,6 @@ For detailed per-platform installation steps (Windows ZIP, macOS DMG install scr
 
 ## 🔨 Build Instructions
 For system requirements, third-party dependency preparation, build commands, build artifacts, and troubleshooting, see [BUILDING.en.md](BUILDING.en.md).
-
-
-## 🤝 Contributing
-We welcome PRs, documentation translations, bug reports, and new feature suggestions. For the development environment and code conventions (code style, UI isolation, shared processor, etc.), see [BUILDING.en.md](BUILDING.en.md).
 
 
 ## 🙏 Acknowledgments

@@ -35,7 +35,7 @@ OpenTune/
 │   ├── D3D12Core.dll        ← DirectX Agility SDK
 │   └── D3D12SDKLayers.dll
 ├── models/
-│   ├── rmvpe.onnx           ← 音高提取模型
+│   ├── fcpe.onnx            ← 音高提取模型 (FCPE)
 │   └── hifigan.onnx         ← 声码器模型
 └── docs/
     └── UserGuide.html

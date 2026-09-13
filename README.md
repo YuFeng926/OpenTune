@@ -38,16 +38,9 @@ GPU 加速推理：Windows DirectML / macOS CoreML
 </div>
 
 ## 🖥️ 当前状态
-- AI 引擎：RMVPE 音高提取 + PC-NSF HifiGAN 声码器（ONNX Runtime 推理）
+- AI 引擎：FCPE 音高提取 + PC-NSF HifiGAN 声码器（ONNX Runtime 推理）
 - 多音阶校正：Chromatic、Major、Minor、Pentatonic、Dorian、Mixolydian、Harmonic Minor
 - 音频格式：WAV、FLAC、OGG、MP3 导入
-
-
-## 🧪 测试版说明
-这是早期测试版本，可能存在少量 bug。欢迎下载试用，并通过 Issues 或 Discussion 提出宝贵意见、功能需求或使用中遇到的问题。我们会根据反馈积极改进。
-
-已知限制：
-- VST3 ARA 模式需要宿主支持 ARA2（如 Studio One、REAPER）
 
 
 ## 🧠 项目理念
@@ -64,10 +57,6 @@ GPU 加速推理：Windows DirectML / macOS CoreML
 
 ## 🔨 构建说明
 环境要求、三方依赖准备、构建命令、构建产物与常见问题排查，见 [BUILDING.md](BUILDING.md)。
-
-
-## 🤝 参与贡献
-欢迎提交 PR、翻译文档、报告 bug 或提出新功能建议。开发环境与代码约定（代码风格、UI 隔离、Processor 共享等），见 [BUILDING.md](BUILDING.md)。
 
 
 ## 🙏 致谢

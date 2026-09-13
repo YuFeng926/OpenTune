@@ -153,10 +153,11 @@ ThirdParty/microsoft.direct3d.d3d12.1.619.5/
 
 | 模型 | 源路径 | 构建后位置 |
 |------|--------|-----------|
-| RMVPE (F0 提取) | `models/rmvpe.onnx` | `<output>/models/rmvpe.onnx` |
+| FCPE (F0 提取) | `models/fcpe.onnx` | `<output>/models/fcpe.onnx` |
 | PC-NSF HifiGAN (声码器) | `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx` | `<output>/models/hifigan.onnx` |
+| GAME 音符生成（可选） | `models/GAME/` | `<output>/models/GAME/` |
 
-> 模型文件不包含在 Git 仓库中，请从 [Releases](https://github.com/YuFeng926/OpenTune/releases) 页面下载或联系维护者获取。
+> 模型文件不包含在 Git 仓库中，请从 [Releases](https://github.com/YuFeng926/OpenTune/releases) 页面下载或联系维护者获取。GAME 模型包为可选，缺失时运行时回退到 Legacy 流程。
 
 ## 完整目录结构概览
 
@@ -176,7 +177,7 @@ OpenTune/
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
 │   └── microsoft.direct3d.d3d12.1.619.5/ ← D3D12 Agility SDK (Windows)
 ├── models/
-│   └── rmvpe.onnx
+│   └── fcpe.onnx
 ├── pc_nsf_hifigan_44.1k_ONNX/
 │   └── pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx
 ├── Source/
