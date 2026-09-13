@@ -74,7 +74,7 @@ GPU 加速推理：Windows DirectML / macOS CoreML
 ## ☕ 支持本项目
 
 本项目由风语 @ DAYA STUDIO 作为主力开发，目前我们正致力于探索声学合成模型的上限和前沿音频编辑工具的开发。
-如果这个项目对你有帮助，欢迎请我喝杯咖啡！
+如果这个项目对你有帮助，欢迎请我们喝杯咖啡！
 
 <p align="center">
   <img src="assets/wechat-pay.png" alt="微信支付" width="200" />
