@@ -37,7 +37,8 @@ GPU 加速推理：Windows DirectML / macOS CoreML
 
 </div>
 
-## 🖥️ 当前状态
+## 🚀 项目进展
+- **逐个音符 EQ 处理**：可对每个音符单独施加 EQ，这是强大的音频编辑能力，许多商业软件都无法做到
 - AI 引擎：FCPE 音高提取 + PC-NSF HifiGAN 声码器（ONNX Runtime 推理）
 - 多音阶校正：Chromatic、Major、Minor、Pentatonic、Dorian、Mixolydian、Harmonic Minor
 - 音频格式：WAV、FLAC、OGG、MP3 导入

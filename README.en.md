@@ -37,7 +37,8 @@ Open source and free: Permanently free, community-driven, continuously iterating
 
 </div>
 
-## 🖥️ Current Status
+## 🚀 Project Progress
+- **Per-note EQ processing**: Apply EQ to each note individually — a powerful audio editing capability that many commercial products can't match
 - AI engine: FCPE pitch extraction + PC-NSF HifiGAN vocoder (ONNX Runtime inference)
 - Multi-scale correction: Chromatic, Major, Minor, Pentatonic, Dorian, Mixolydian, Harmonic Minor
 - Audio formats: WAV, FLAC, OGG, MP3 import
