@@ -4,7 +4,7 @@
  * 静息处检测工具类
  * 
  * 静息处（Silent Gap）定义：
- * - 电平低于阈值（默认 -40dBFS）
+ * - 电平低于阈值（默认 -45dBFS）
  * - 持续时长不小于 50ms
  * 
  * 用途：
@@ -62,11 +62,11 @@ struct SilentGap {
 class SilentGapDetector {
 public:
     struct DetectionConfig {
-        float strictThreshold_dB = -40.0f;        // 原规则：总电平低于该值直接判静息
-        float relaxedTotalThreshold_dB = -35.0f;  // 放宽规则：总电平上限
+        float strictThreshold_dB = -45.0f;        // 原规则：总电平低于该值直接判静息
+        float relaxedTotalThreshold_dB = -40.0f;  // 放宽规则：总电平上限
         float lowBandThreshold_dB = -40.0f;       // 放宽规则：低频带(<=lowBandUpperHz)上限
         double highPassCutoffHz = 60.0;           // 检测前高通截止频率
-        double lowBandUpperHz = 3000.0;           // 低频带上限频率
+        double lowBandUpperHz = 2000.0;           // 低频带上限频率
         double minGapDurationMs = 50.0;           // 最小静息时长
     };
 
@@ -74,20 +74,20 @@ public:
     // 默认参数定义（用于初始化配置）
     // ============================================================================
     
-    /** 默认静息阈值 -40dBFS（配置初始值） */
-    static constexpr float kDefaultThreshold_dB = -40.0f;
+    /** 默认静息阈值 -45dBFS（配置初始值） */
+    static constexpr float kDefaultThreshold_dB = -45.0f;
     
-    /** 放宽判定：总电平阈值 -35dBFS（配置初始值） */
-    static constexpr float kRelaxedTotalThreshold_dB = -35.0f;
+    /** 放宽判定：总电平阈值 -40dBFS（配置初始值） */
+    static constexpr float kRelaxedTotalThreshold_dB = -40.0f;
 
-    /** 放宽判定：低频带(<=3kHz)平均电平阈值 -40dBFS（配置初始值） */
+    /** 放宽判定：低频带(<=2kHz)平均电平阈值 -40dBFS（配置初始值） */
     static constexpr float kLowBandThreshold_dB = -40.0f;
 
     /** 预处理高通截止频率（Hz，配置初始值） */
     static constexpr double kHighPassCutoffHz = 60.0;
 
     /** 低频带上限频率（Hz，配置初始值） */
-    static constexpr double kLowBandUpperHz = 3000.0;
+    static constexpr double kLowBandUpperHz = 2000.0;
 
     /** 最小静息时长（ms，配置初始值） */
     static constexpr double kMinGapDurationMs = 50.0;
@@ -108,7 +108,7 @@ public:
      * 注意：音频必须是 44.1kHz 采样率（符合内部存储标准）
      * 
      * @param audio 音频缓冲区（44.1kHz）
-     * @param threshold_dB 电平阈值（默认 -40dBFS）
+     * @param threshold_dB 电平阈值（默认 -45dBFS，来自 cfg.strictThreshold_dB）
      * @return 按起始 sample 排序的静息处列表（sample span）
      */
     static std::vector<SilentGap> detectAllGaps(

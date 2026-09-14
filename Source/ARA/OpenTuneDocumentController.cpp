@@ -17,6 +17,7 @@
 #include "../Render/Stage2TimeStretchRebuilder.h"
 #include "../Utils/SourceWindow.h"
 #include "../Utils/AppLogger.h"
+#include "../Utils/ModelPathResolver.h"
 
 #include <algorithm>
 #include <cmath>
@@ -46,13 +47,9 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
     completionGate_ = std::make_shared<ProcessRenderRuntime::CompletionGate>();
     installDocumentRenderExecution();
-
-    // 进程级运行时客户端租约（仅计数，不触发释放）
-    ProcessF0Runtime::getInstance().attach();
-    ProcessRenderRuntime::getInstance().attach();
-
-    AppLogger::log("ARA-DIAG: DocumentController created dc="
+    AppLogger::logNoThrow("ARA-DIAG: DocumentController created dc="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
+
 }
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
@@ -88,10 +85,6 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
             renderer->detachDocumentController(*this);
     }
     playbackRenderers_.clear();
-
-    // 进程级运行时客户端租约释放（仅递减计数，不触发任何释放）
-    ProcessRenderRuntime::getInstance().detach();
-    ProcessF0Runtime::getInstance().detach();
 }
 
 namespace {
@@ -2066,13 +2059,6 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
         return false;
     }
 
-    auto f0Svc = ProcessF0Runtime::getInstance().getF0Service();
-    if (!f0Svc)
-    {
-        markFailedIfCurrentBirth(birthRevision);
-        return false;
-    }
-
     auto crs = contentRenderService_;
     if (!crs)
     {
@@ -2082,13 +2068,28 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
 
     auto submitResult = contentF0ExtractionService_->submit(
         F0RequestKey{key},
-        [f0Svc, data = std::move(channel0Data), sourceSampleRate, birthRevision, leaseToken = asyncLeaseToken_](const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
+        [data = std::move(channel0Data), sourceSampleRate, birthRevision, leaseToken = asyncLeaseToken_](const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
         {
             if (leaseToken && !leaseToken->load(std::memory_order_acquire))
                 return F0ExtractionService::Result{};
 
-            if (f0Svc == nullptr || data.empty())
+            if (data.empty())
                 return F0ExtractionService::Result{};
+
+            // Lazy-initialize ProcessF0Runtime and resolve F0 service inside the worker
+            // thread (same pattern as PluginProcessor capture/requestContentRefresh).
+            auto& f0Runtime = ProcessF0Runtime::getInstance();
+            if (!f0Runtime.isReady())
+                f0Runtime.initialize(ModelPathResolver::getModelsDirectory());
+            auto f0Svc = f0Runtime.getF0Service();
+            if (!f0Svc)
+            {
+                AppLogger::error("ARA-F0: worker lazy-init model Failed — F0 service unavailable (birthRev="
+                    + juce::String(static_cast<juce::int64>(birthRevision)) + ")");
+                F0ExtractionService::Result failed;
+                failed.errorMessage = "ara_no_f0_service";
+                return failed;
+            }
 
             auto extraction = f0Svc->extractF0(data.data(), data.size(),
                                                 static_cast<int>(sourceSampleRate), runOwnerState);
@@ -2161,6 +2162,12 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                     mod->applyOriginalF0State(OriginalF0State::Failed);
                     if (mod->audioModification != nullptr)
                         mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+                    // Log the failure reason (result.errorMessage carries the worker-side failure cause)
+                    AppLogger::error("ARA-F0: extraction failed key="
+                        + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+                        + " mod=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(mod))
+                        + " reason=" + (result.errorMessage.empty() ? juce::String("no_data_or_unvoiced") : juce::String(result.errorMessage)));
                 }
                 return;
             }
@@ -2963,6 +2970,5 @@ bool OpenTuneDocumentController::applyOriginalF0StateToModification(const Conten
 
 const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory()
 {
-    OpenTune::AppLogger::log("ARA-DIAG: createARAFactory called");
     return juce::ARADocumentControllerSpecialisation::createARAFactory<OpenTune::OpenTuneDocumentController>();
 }

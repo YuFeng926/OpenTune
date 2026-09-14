@@ -508,4 +508,11 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     return restoredCount > 0;
 }
 
+bool CapturePersistence::validate(const juce::MemoryBlock& block)
+{
+    ProcessorBindings bindings;
+    CaptureSession temporary(std::move(bindings));
+    return deserialize(temporary, block);
+}
+
 }  // namespace OpenTune::Capture

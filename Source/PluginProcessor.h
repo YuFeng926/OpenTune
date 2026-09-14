@@ -522,16 +522,21 @@ private:
     // 导出错误信息
     juce::String lastExportError_;
 
-    bool ensureF0Ready();
-
-    // 由宿主生命周期入口（prepareToPlay / createEditor / setStateInformation /
-    // didBindToARA）调用，绝不从 processBlock 调用；并发由 call_once 协调。
+    // 由宿主生命周期入口（prepareToPlay / createEditor / didBindToARA）调用，
+    // 绝不从 processBlock 调用；并发由 call_once 协调。
     // 幂等；抛异常时 once_flag 复位，后续入口可重试。
     bool initializeRuntimeState() noexcept;
-    // call_once 事务体：局部构造 → attach runtime → noexcept 发布成员。可抛。
+    // call_once 事务体：局部构造 → noexcept 发布成员。可抛。
     void initializeRuntimeStateOnce();
     std::atomic<bool> runtimeStateInitialized_{false};
     std::once_flag runtimeInitOnce_;
+
+    // 状态恢复核心：解析并应用完整 raw payload。调用方保证 runtime 已初始化
+    // （runtimeStateInitialized_ == true），因此不得触碰 initializeRuntimeState()。
+    // 用于 setStateInformation 的立即恢复路径和 deferred replay 路径。
+    bool restoreStatePayload(const void* data, int sizeInBytes);
+    // 初始化成功后统一 replay 缓存的 deferred state（若有）。
+    void replayDeferredState() noexcept;
 
     ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
 
@@ -841,13 +846,15 @@ private:
     // For OriginalF0 analysis data only — does NOT trigger audio rendering, only updates analysis state.
     bool writeOriginalF0ToOwner(ContentKey key, std::shared_ptr<PitchCurve> curve);
 
-#if JucePlugin_Enable_ARA
-    // Cached project state for pre-bind restore.
-    // When setStateInformation arrives before didBindToARA, we cache the raw
-    // block and replay it into the final shared stores after attach.
-    juce::MemoryBlock pendingAraState_;
-
-#endif
+    // Cached pre-init state payload for deferred restore.
+    // Scanner may perform a state round-trip (getStateInformation ->
+    // setStateInformation) before prepareToPlay / createEditor / didBindToARA
+    // complete runtime init. setStateInformation never triggers
+    // initializeRuntimeState(); instead it caches the complete raw payload here
+    // and replayDeferredState() restores it once init has succeeded.
+    // Message-thread only: setStateInformation and the replay entry points all
+    // run on the message thread, so no locking is required.
+    juce::MemoryBlock pendingState_;
 
 public:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessor)

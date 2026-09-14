@@ -11,6 +11,7 @@
 #include "Utils/AppLogger.h"
 #include "Utils/ChannelLayoutLogger.h"
 #include "Plugin/Capture/CaptureSession.h"
+#include "Plugin/Capture/CapturePersistence.h"
 #include "DSP/ReferenceAutoAlign.h"
 #include "Utils/TimeCoordinate.h"
 #include "Inference/GameNoteGenerator.h"      // GAME NoteGeneratorInput/Note DTO（进程级 GAME 入口）
@@ -685,7 +686,8 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     // Constructor stays scan-safe: no thread, Timer, file lock, logger, or
     // process runtime attachment. All of that is deferred to
     // initializeRuntimeState(), called from prepareToPlay / createEditor /
-    // setStateInformation / didBindToARA.
+    // didBindToARA. setStateInformation must NOT trigger runtime init (scanner
+    // may do a state round-trip) -- it caches the payload instead.
     editVersionParam_ = new juce::AudioParameterInt("editVersion", "EditVersion", 0, 100000, 0);
     addParameter(editVersionParam_);
 
@@ -695,12 +697,19 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 
 bool OpenTuneAudioProcessor::initializeRuntimeState() noexcept
 {
-    // call_once 事务体在此调用，抛出时 once_flag 复位，后续入口可重试。
-    // 异常不向宿主传播。runtimeStateInitialized_ 留 false，processBlock 清零重试。
+    if (runtimeStateInitialized_.load(std::memory_order_acquire))
+        return true;
+
     try {
         std::call_once(runtimeInitOnce_, [this]() { initializeRuntimeStateOnce(); });
-    } catch (...) {
-        // AppLogger 可能未就绪，失败路径不强制日志。
+    }
+    catch (const std::exception& e) {
+        AppLogger::emergencyError("initializeRuntimeState failed (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)) + "): " + juce::String(e.what()));
+    }
+    catch (...) {
+        AppLogger::emergencyError("initializeRuntimeState failed with unknown exception (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)) + ")");
     }
     return runtimeStateInitialized_.load(std::memory_order_acquire);
 }
@@ -1041,27 +1050,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         capture = std::make_unique<Capture::CaptureSession>(std::move(bindings));
     }
 
-    // appLogger 在此之前记录：log 须置于 attach/publish 之前，抛出时不留部分成员状态。
+    // appLogger 在此之前记录：log 须置于 publish 之前，抛出时不留部分成员状态。
     // AppLogger::log 可能抛出，发布后仅允许 noexcept 操作。
     if (capture)
-        AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
-            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
-
-    // 进程级 runtime attach（仅递增 clientCount）。失败时 guard 回滚以防泄漏。
-    struct RuntimeLeaseGuard {
-        bool attachedF0{false};
-        bool attachedRender{false};
-        ~RuntimeLeaseGuard() noexcept {
-            if (attachedRender) ProcessRenderRuntime::getInstance().detach();
-            if (attachedF0) ProcessF0Runtime::getInstance().detach();
-        }
-        void disarm() noexcept { attachedF0 = false; attachedRender = false; }
-    } attachGuard;
-
-    ProcessF0Runtime::getInstance().attach();
-    attachGuard.attachedF0 = true;
-    ProcessRenderRuntime::getInstance().attach();
-    attachGuard.attachedRender = true;
+         AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
+             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
 
     // 完整成功后一次性发布成员（noexcept 移动）。
     f0ExtractionService_ = std::move(f0SvcOwner);
@@ -1079,7 +1072,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         startTimerHz(30);
 
     runtimeStateInitialized_.store(true, std::memory_order_release);
-    attachGuard.disarm();
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
@@ -1107,9 +1099,9 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
         completionGate_->closed = true;
     }
 
-    // 2) 仅当运行时已初始化时才关闭 F0 / Reference owner 服务、解除 CRS 租约、
-    //    释放进程级租约；未初始化（scanner-only 生命周期）时不得构造进程 runtime
-    //    单例 — getInstance() 會启动 control worker。
+    // 2) 仅当运行时已初始化时才关闭 F0 / Reference owner 服务、解除 CRS execution
+    //    lease；未初始化（scanner-only 生命周期）时不得构造进程 runtime 单例 —
+    //    getInstance() 会启动 control worker。
     // F0 / Reference shutdown 只关闭 owner、丢弃排队任务、终止本 owner 的
     // 活跃 F0 Run（SetTerminate 加速返回）；不 join worker —— worker 是
     // detached 进程常驻执行器，见 shutdownStarted_ 后自行退出，期间只访问
@@ -1128,27 +1120,6 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     // Vocoder / F0 / GAME / AppLogger 全部是进程级资源（ProcessRenderRuntime /
     // ProcessF0Runtime 单例与进程寿命 logger）：实例析构不 shutdown、不 reset、
     // 不等待推理，后续实例直接复用。
-
-    // 进程级运行时客户端租约释放（仅递减计数，不触发任何释放）
-    ProcessRenderRuntime::getInstance().detach();
-    ProcessF0Runtime::getInstance().detach();
-}
-
-// ============================================================================
-// 推理引擎初始化与生命周期
-// ============================================================================
-
-bool OpenTuneAudioProcessor::ensureF0Ready()
-{
-    // F0 is process-level (ProcessF0Runtime singleton).
-    if (ProcessF0Runtime::getInstance().isReady())
-        return true;
-    const auto modelsDir = ModelPathResolver::getModelsDirectory();
-    if (appPreferences_ == nullptr)
-        return ProcessF0Runtime::getInstance().initialize(modelsDir);
-
-    const auto initialModel = appPreferences_->getState().shared.f0ModelType;
-    return ProcessF0Runtime::getInstance().initialize(modelsDir, initialModel);
 }
 
 OpenTuneAudioProcessor::AutoRefAvailability
@@ -1359,8 +1330,17 @@ void OpenTuneAudioProcessor::changeProgramName(int index, const juce::String& ne
 }
 
 void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
-    if (!initializeRuntimeState())
+    if (!initializeRuntimeState()) {
+        AppLogger::emergencyError("prepareToPlay: runtime initialization failed (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+            + " sr=" + juce::String(sampleRate, 1)
+            + " block=" + juce::String(samplesPerBlock) + ")");
         return;
+    }
+    // Runtime is now ready: restore any state that arrived before init
+    // (e.g. a scanner state round-trip, or a host save-state restore order
+    // where setStateInformation preceded prepareToPlay).
+    replayDeferredState();
     const RuntimePhase entryPhase = phase_;  // snapshot before any mutation
     const bool firstPrepare = (preparedPlaybackSampleRate_ == 0.0);
     const bool realRateChange = (!firstPrepare && preparedPlaybackSampleRate_ != sampleRate);
@@ -1502,32 +1482,32 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
     // 先完成 JUCE 基类绑定，再延迟初始化运行时态；初始化失败则直接返回，
     // 保留后续 ARA 文档控制器逻辑（仅在初始化成功后执行）。
     juce::AudioProcessorARAExtension::didBindToARA();
-    if (!initializeRuntimeState())
+    if (!initializeRuntimeState()) {
+        AppLogger::emergencyError("didBindToARA: runtime initialization failed (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)) + ")");
         return;
+    }
+
+    // Runtime ready: restore any deferred pre-init state.
+    replayDeferredState();
 
     if (auto* dc = getDocumentController())
     {
-        ensureF0Ready();
+        // F0 不在主线程重初始化；由分析 worker 懒初始化（scheduleAsyncF0Extraction
+        // 内的 ProcessF0Runtime::initialize）。
 
         // The DC installs its own lease on its CRS in its constructor
         // (installDocumentRenderExecution -> processDocumentRenderJob -> ProcessRenderRuntime).
         // The processor does NOT attach an additional lease: doing so would
         // override the DC's lease and break the ARA2 render path.
 
-        AppLogger::log("ARA: didBindToARA - DC owns its CRS lease; processor="
+        AppLogger::logNoThrow("ARA: didBindToARA - DC owns its CRS lease; processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
             + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc))
             + " playbackRenderer=" + juce::String(isPlaybackRenderer() ? "true" : "false")
             + " editorRenderer=" + juce::String(isEditorRenderer() ? "true" : "false")
             + " editorView=" + juce::String(isEditorView() ? "true" : "false")
             + " araBound=true");
-
-        // Replay any pre-bind state that was cached by setStateInformation.
-        if (pendingAraState_.getSize() > 0) {
-            setStateInformation(pendingAraState_.getData(),
-                                static_cast<int>(pendingAraState_.getSize()));
-            pendingAraState_.reset();
-        }
     }
 }
 #endif
@@ -2232,9 +2212,51 @@ void OpenTuneAudioProcessor::recordControlCall(DiagnosticControlCall controlCall
     lastControlTimestamp_.store(juce::Time::currentTimeMillis(), std::memory_order_relaxed);
 }
 
+namespace {
+
+// Minimal error editor shown when runtime initialization fails.
+// hasEditor() == true, so createEditor MUST return a non-null editor.
+// This class is intentionally tiny — no second UI path, no normal-editor logic.
+class OpenTuneInitFailedEditor final : public juce::AudioProcessorEditor
+{
+public:
+    explicit OpenTuneInitFailedEditor(juce::AudioProcessor& p) : juce::AudioProcessorEditor(p)
+    {
+        const juce::File logFile = AppLogger::getCurrentLogFile();
+        const juce::String logPath = logFile != juce::File()
+            ? logFile.getFullPathName()
+            : juce::String("(log file not available)");
+        message_ = "OpenTune runtime initialization failed.\nSee log: " + logPath;
+        setResizable(false, false);
+        setSize(520, 120);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colours::black);
+        g.setColour(juce::Colours::red);
+        g.setFont(14.0f);
+        g.drawText(message_, getLocalBounds().reduced(12),
+                   juce::Justification::centredLeft, true);
+    }
+
+private:
+    juce::String message_;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneInitFailedEditor)
+};
+
+} // namespace
+
 juce::AudioProcessorEditor* OpenTuneAudioProcessor::createEditor() {
-    if (!initializeRuntimeState())
-        return nullptr;
+    if (!initializeRuntimeState()) {
+        AppLogger::emergencyError("createEditor: runtime initialization failed (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+            + "). Returning minimal error editor.");
+        return new OpenTuneInitFailedEditor(*this);
+    }
+    // Runtime ready: restore any deferred pre-init state (scanner round-trip
+    // or save-state delivered before first prepareToPlay).
+    replayDeferredState();
     return createOpenTuneEditor(*this);
 }
 
@@ -2326,9 +2348,35 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
         return;
     }
 
-    if (!initializeRuntimeState())
+    // setStateInformation itself must NOT trigger initializeRuntimeState():
+    // the scanner may perform a state round-trip (getStateInformation ->
+    // setStateInformation), and runtime init starts worker threads that are
+    // forbidden at scan-time.
+    //  - runtime ready  -> restore immediately via the shared restore helper;
+    //    if the restore fails, cache as deferred so replayDeferredState
+    //    retries on the next host entrypoint.
+    //  - runtime pending -> cache the complete raw payload as "deferred" and
+    //    replay it once prepareToPlay / createEditor / didBindToARA finish init.
+    if (runtimeStateInitialized_.load(std::memory_order_acquire)) {
+        if (!restoreStatePayload(data, sizeInBytes))
+            pendingState_ = juce::MemoryBlock(data, static_cast<size_t>(sizeInBytes));
         return;
+    }
 
+    // Runtime not ready -- cache the complete raw payload and defer restore.
+    // No logging here: AppLogger::log lazily initialises a FileLogger with an
+    // independent write thread, which violates the scan-safe "no thread"
+    // contract when the scanner performs a state round-trip before init.
+    // The deferred restore is logged by replayDeferredState() post-init.
+    pendingState_ = juce::MemoryBlock(data, static_cast<size_t>(sizeInBytes));
+}
+
+// --- restoreStatePayload: core restore logic. Caller guarantees runtime
+// is initialized (runtimeStateInitialized_ == true). This helper does NOT
+// touch initializeRuntimeState(). It is the single restore path used by
+// setStateInformation (immediate) and replayDeferredState() (deferred). ---
+bool OpenTuneAudioProcessor::restoreStatePayload(const void* data, int sizeInBytes) {
+    try {
     // Per ARA2 spec: ARA AudioModification objects are restored via
     // doRestoreObjectsFromStream, NOT via VST3 processor state.
     // ARA host owns document archive lifecycle.
@@ -2341,23 +2389,28 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     // Standalone settings-only payload
     if (magic == static_cast<int>(kStandaloneSettingsMagic)) {
         if (version != kStandaloneSettingsVersion) {
-            AppLogger::warn("StateRestore: unsupported standalone settings version "
+            AppLogger::error("StateRestore: unsupported standalone settings version "
                 + juce::String(version) + " (expect " + juce::String(kStandaloneSettingsVersion) + ")");
-            return;
+            return false;
         }
         setBpm(input.readDouble());
         setTimeSignature(input.readInt(), input.readInt());
         zoomLevel_ = input.readDouble();
         trackHeight_ = input.readInt();
-        return;
+        if (input.getNumBytesRemaining() != 0) {
+            AppLogger::error("StateRestore: standalone settings payload not fully consumed, trailing bytes="
+                + juce::String(static_cast<int>(input.getNumBytesRemaining())));
+            return false;
+        }
+        return true;
     }
 
     // Full state payload (VST3)
     // vocal-time-stretch §3.8: state v6 adds TimeGrid section per content.
     // Accept v5 (no TimeGrid), v6 (TimeGrid w/o confidence), v7 (TimeGrid w/ confidence).
     if (magic != static_cast<int>(kProcessorStateMagic) || version != kProcessorStateVersion) {
-        AppLogger::warn("StateRestore: unsupported processor state payload (version=" + juce::String(version) + ")");
-        return;
+        AppLogger::error("StateRestore: unsupported processor state payload (version=" + juce::String(version) + ")");
+        return false;
     }
 
     AppLogger::log("StateRestore: VST3 full-state begin sizeBytes=" + juce::String(sizeInBytes));
@@ -2366,39 +2419,45 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     // this format anymore (BPM/zoom/trackHeight live in OTSS), so there is
     // nothing meaningful to restore -- return without touching stores.
     if (wrapperType == juce::AudioProcessor::wrapperType_Standalone) {
-        return;
+        return true;
     }
 
     // Note: BPM is not in OTST v5 -- host owns transport tempo in plugin mode.
-    zoomLevel_ = input.readDouble();
-    trackHeight_ = input.readInt();
-
-
-    jassert(sourceStore_ != nullptr);
-    sourceStore_->clear();
-
-    standaloneContentRepository_->clear();
-    contentRenderService_->clearAll();
-
-    jassert(standaloneArrangement_ != nullptr);
-    standaloneArrangement_->clear();
+    const double restoredZoomLevel = input.readDouble();
+    const int restoredTrackHeight = input.readInt();
 
     const int restoredActiveTrackId = input.readInt();
     const int trackCount = input.readInt();
-    jassert(standaloneArrangement_ != nullptr);
     if (trackCount != MAX_TRACKS) {
-        return;
+        AppLogger::error("StateRestore: invalid track count=" + juce::String(trackCount));
+        return false;
     }
 
+    // Parse into an isolated arrangement first. The live arrangement and content
+    // stores are not touched until the complete structural payload is valid.
+    auto parsedArrangement = std::make_unique<StandaloneArrangement>();
     for (int trackId = 0; trackId < trackCount; ++trackId) {
         const uint64_t selectedPlacementId = static_cast<uint64_t>(input.readInt64());
-        standaloneArrangement_->setTrackMuted(trackId, input.readBool());
-        standaloneArrangement_->setTrackSolo(trackId, input.readBool());
-        standaloneArrangement_->setTrackVolume(trackId, input.readFloat());
+        const bool muted = input.readBool();
+        const bool solo = input.readBool();
+        const float volume = input.readFloat();
+        if (!parsedArrangement->setTrackMuted(trackId, muted)) {
+            AppLogger::error("StateRestore: setTrackMuted rejected track=" + juce::String(trackId));
+            return false;
+        }
+        if (!parsedArrangement->setTrackSolo(trackId, solo)) {
+            AppLogger::error("StateRestore: setTrackSolo rejected track=" + juce::String(trackId));
+            return false;
+        }
+        if (!parsedArrangement->setTrackVolume(trackId, volume)) {
+            AppLogger::error("StateRestore: setTrackVolume rejected track=" + juce::String(trackId));
+            return false;
+        }
 
         const int placementCount = input.readInt();
         if (placementCount < 0) {
-            return;
+            AppLogger::error("StateRestore: invalid placement count on track=" + juce::String(trackId));
+            return false;
         }
 
         for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
@@ -2417,30 +2476,111 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
             placement.name = input.readString();
 
             if (!placement.contentKey.isValid()) {
+                // Empty placeholder slot (objectId==0): skip, not corruption.
                 continue;
             }
 
-            standaloneArrangement_->insertPlacement(trackId, placement);
+            if (!parsedArrangement->insertPlacement(trackId, placement)) {
+                AppLogger::error("StateRestore: failed to insert placement on track=" + juce::String(trackId)
+                    + " placement=" + juce::String(placementIndex));
+                return false;
+            }
         }
 
-        standaloneArrangement_->selectPlacement(trackId, selectedPlacementId);
+        if (selectedPlacementId != 0
+            && !parsedArrangement->selectPlacement(trackId, selectedPlacementId)) {
+            AppLogger::error("StateRestore: selected placement missing on track=" + juce::String(trackId));
+            return false;
+        }
     }
 
-    standaloneArrangement_->setActiveTrack(restoredActiveTrackId);
+    if (!parsedArrangement->setActiveTrack(restoredActiveTrackId)) {
+        AppLogger::error("StateRestore: invalid active track=" + juce::String(restoredActiveTrackId));
+        return false;
+    }
 
-    // After project state is restored, attempt to load regular VST3 capture payload
-    // from remaining bytes. ARA-bound instances keep their state in the ARA archive.
-    if (auto* captureSession = getCaptureSession()) {
-        const auto remaining = static_cast<int>(input.getNumBytesRemaining());
-        if (remaining > 0) {
-            juce::MemoryBlock captureBlock;
-            captureBlock.setSize(static_cast<size_t>(remaining));
-            input.read(captureBlock.getData(), remaining);
-            const bool ok = captureSession->deserialize(captureBlock);
-            if (ok)
-                AppLogger::log("CaptureSession: state restored ("
-                               + juce::String(captureSession->listSegments().size()) + " segments)");
+    juce::MemoryBlock captureBlock;
+    if (const auto remaining = static_cast<int>(input.getNumBytesRemaining()); remaining > 0) {
+        captureBlock.setSize(static_cast<size_t>(remaining));
+        input.read(captureBlock.getData(), remaining);
+    }
+    // Full arrangement payload is now fully parsed; input must be exhausted.
+    if (input.getNumBytesRemaining() != 0) {
+        AppLogger::error("StateRestore: payload not fully consumed after arrangement parse, trailing bytes="
+            + juce::String(static_cast<int>(input.getNumBytesRemaining())));
+        return false;
+    }
+
+    // Validate the capture archive against a temporary owner before replacing
+    // any live processor state. The real session is restored only after the
+    // structural processor payload has been committed.
+    if (captureBlock.getSize() > 0 && getCaptureSession()
+        && !Capture::CapturePersistence::validate(captureBlock)) {
+        AppLogger::error("StateRestore: CaptureSession payload rejected during validation");
+        return false;
+    }
+
+    jassert(sourceStore_ != nullptr);
+    sourceStore_->clear();
+    standaloneContentRepository_->clear();
+    contentRenderService_->clearAll();
+
+    // Commit the parsed arrangement atomically via unique_ptr move. The audio
+    // thread's shared_ptr<PlaybackSnapshot> from the old arrangement keeps its
+    // data alive until the audio thread releases it; the new arrangement will
+    // publish its own snapshot on first query.
+    standaloneArrangement_ = std::move(parsedArrangement);
+    zoomLevel_ = restoredZoomLevel;
+    trackHeight_ = restoredTrackHeight;
+
+    // Regular VST3 capture persistence is a separate owner transaction.
+    if (captureBlock.getSize() > 0) {
+        if (auto* captureSession = getCaptureSession()) {
+            if (!captureSession->deserialize(captureBlock)) {
+                AppLogger::error("StateRestore: CaptureSession payload rejected");
+                return false;
+            }
+            AppLogger::log("CaptureSession: state restored ("
+                           + juce::String(captureSession->listSegments().size()) + " segments)");
         }
+    }
+
+    return true;
+    }
+    catch (const std::exception& e) {
+        AppLogger::emergencyError("StateRestore: exception (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+            + "): " + juce::String(e.what()));
+        return false;
+    }
+    catch (...) {
+        AppLogger::emergencyError("StateRestore: unknown exception (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)) + ")");
+        return false;
+    }
+}
+
+void OpenTuneAudioProcessor::replayDeferredState() noexcept {
+    if (pendingState_.getSize() == 0)
+        return;
+
+    try {
+        AppLogger::log("StateRestore: replaying deferred setStateInformation sizeBytes="
+                       + juce::String(static_cast<int>(pendingState_.getSize())));
+        if (restoreStatePayload(pendingState_.getData(),
+                                static_cast<int>(pendingState_.getSize())))
+            pendingState_.reset();
+        else
+            AppLogger::error("StateRestore: deferred payload retained after restore failure");
+    }
+    catch (const std::exception& e) {
+        AppLogger::emergencyError("StateRestore: deferred replay exception (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+            + "): " + juce::String(e.what()));
+    }
+    catch (...) {
+        AppLogger::emergencyError("StateRestore: deferred replay unknown exception (processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)) + ")");
     }
 }
 

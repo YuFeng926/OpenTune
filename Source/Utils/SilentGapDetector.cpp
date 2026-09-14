@@ -115,7 +115,7 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
         }
     }
 
-    // 频域判定预处理：先高通 60Hz，再得到 <=3kHz 低频带信号
+    // 频域判定预处理：先高通 60Hz，再得到 <=2kHz 低频带信号
     std::vector<float> highPassed = mono;
     std::vector<float> lowBand = mono;
 
@@ -175,9 +175,9 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
         float totalLevel_dB = linearToDb(rmsHigh);
         float lowBandLevel_dB = linearToDb(rmsLow);
 
-        // 判定逻辑（两级）：
-        // 1) 严格阈值：总电平 <= threshold_dB(默认 -35dBFS) 必然视为静息
-        // 2) 放宽频域规则：总电平 <= -30dBFS 且 <=3kHz 低频带平均电平 < -30dBFS
+        // 判定逻辑（两级）（均为配置驱动）：
+        // 1) 严格阈值：总电平 <= effectiveStrictThreshold（cfg.strictThreshold_dB）视为静息
+        // 2) 放宽频域规则：总电平 <= cfg.relaxedTotalThreshold_dB，且低频带(<= cfg.lowBandUpperHz)平均电平 < cfg.lowBandThreshold_dB
         const bool passStrictThreshold = (totalLevel_dB <= effectiveStrictThreshold);
         const bool passRelaxedFreqRule =
             (totalLevel_dB <= cfg.relaxedTotalThreshold_dB) &&

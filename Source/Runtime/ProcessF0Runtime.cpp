@@ -20,21 +20,6 @@ ProcessF0Runtime& ProcessF0Runtime::getInstance()
     return *instance;
 }
 
-void ProcessF0Runtime::attach()
-{
-    std::lock_guard<std::mutex> lock(initMutex_);
-    ++clientCount_;
-}
-
-void ProcessF0Runtime::detach()
-{
-    // 只递减客户端租约计数：服务是进程寿命的（VST3 模块 pin / Standalone 进程
-    // 寿命），不在此释放 f0Service_/ortEnv_/gameNoteGenerator_。F0 session
-    // 由 extractF0 按需创建，在该调用返回前析构。
-    std::lock_guard<std::mutex> lock(initMutex_);
-    --clientCount_;
-}
-
 std::shared_ptr<Ort::Env> ProcessF0Runtime::getOrtEnv() const
 {
     std::lock_guard<std::mutex> lock(initMutex_);

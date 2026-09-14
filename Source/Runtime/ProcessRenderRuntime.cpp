@@ -400,22 +400,6 @@ ProcessRenderRuntime::ProcessRenderRuntime()
     controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
 }
 
-void ProcessRenderRuntime::attach()
-{
-    std::lock_guard<std::mutex> lock(vocoderMutex_);
-    ++clientCount_;
-}
-
-void ProcessRenderRuntime::detach()
-{
-    // 只递减客户端租约计数：vocoder domain 是进程寿命资源（VST3 模块 pin /
-    // Standalone 进程寿命），最后一个客户端 detach 也不销毁它，后续实例直接
-    // 复用已加载的 domain 与 generation，避免重建 ORT Session。显式重置只
-    // 经由 setVocoderModelWeight() / resetVocoder() / resetInferenceBackend()。
-    std::lock_guard<std::mutex> lock(vocoderMutex_);
-    --clientCount_;
-}
-
 std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight)
 {
     // 权重标识即文件名：vocoder_weights/ 优先（用户放置的可切换权重），

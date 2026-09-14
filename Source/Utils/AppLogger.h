@@ -34,7 +34,16 @@ public:
     static void info(const juce::String& message);
     static void warn(const juce::String& message);
     static void error(const juce::String& message);
-    
+    static void logNoThrow(const juce::String& message) noexcept;
+
+    /**
+     * No-throw emergency error path for use inside catch handlers and
+     * noexcept boundaries (e.g. initializeRuntimeState, processBlock safety).
+     * Best-effort initialize() then writeToLog to the same log file.
+     * All exceptions are swallowed. Never throws.
+     */
+    static void emergencyError(const juce::String& message) noexcept;
+
     static void setLogLevel(LogLevel level);
     static LogLevel getLogLevel();
     

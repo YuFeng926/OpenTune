@@ -33,14 +33,6 @@ public:
 
     static ProcessRenderRuntime& getInstance();
 
-    // 客户端租约：Processor / ARA DocumentController 构造时 attach、析构时 detach。
-    // 运行时是进程寿命的（VST3 构建模块被 pin，Standalone 跟随进程）：detach()
-    // 只递减计数，最后一个客户端也不销毁 vocoder domain，后续实例复用同一
-    // domain 与 generation，避免重建 ORT Session。显式重置只经由
-    // setVocoderModelWeight() / resetVocoder() / resetInferenceBackend()。
-    void attach();
-    void detach();
-
     void processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
                                RenderJob& job,
                                std::shared_ptr<const EditableContentSnapshot> contentSnap,
@@ -130,7 +122,6 @@ private:
     std::condition_variable vocoderStateCv_;
     bool vocoderReconfiguring_{false}; // vocoderMutex_ 保护：control worker 已摘除旧 domain
     bool vocoderInitializing_{false};  // vocoderMutex_ 保护：RenderWorker 正在锁外首次创建
-    int clientCount_{0};      // vocoderMutex_ 保护：客户端租约计数（仅计数，不触发释放）
     uint64_t vocoderGeneration_{0};  // vocoderMutex_ 保护
 
     // Deferred retry list: jobs that failed with generation mismatch or cancelled

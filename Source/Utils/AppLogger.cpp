@@ -120,6 +120,25 @@ void AppLogger::error(const juce::String& message)
     logWithLevel(LogLevel::Error, message);
 }
 
+void AppLogger::logNoThrow(const juce::String& message) noexcept
+{
+    try {
+        AppLogger::initialize();
+        juce::Logger::writeToLog(message);
+    } catch (...) {}
+}
+
+void AppLogger::emergencyError(const juce::String& message) noexcept
+{
+    try {
+        // Best-effort: ensure logger is initialized, then write to the same log file.
+        AppLogger::initialize();
+    } catch (...) {}
+    try {
+        juce::Logger::writeToLog("[EMERGENCY ERROR] " + message);
+    } catch (...) {}
+}
+
 void AppLogger::setLogLevel(LogLevel level)
 {
     const juce::ScopedLock sl(getLoggerLock());

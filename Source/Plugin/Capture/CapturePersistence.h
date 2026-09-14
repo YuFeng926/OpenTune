@@ -46,7 +46,7 @@ class CapturePersistence
 public:
     static juce::MemoryBlock serialize(const CaptureSession& session);
     static bool deserialize(CaptureSession& session, const juce::MemoryBlock& block);
+    static bool validate(const juce::MemoryBlock& block);
 };
 
 }  // namespace OpenTune::Capture
-

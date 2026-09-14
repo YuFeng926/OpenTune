@@ -29,19 +29,13 @@ struct Note;
  * (Source/Utils/Vst3ModulePin.cpp), so Env/service state survives instance
  * teardown and is released only at process exit. The F0 service configures
  * on init and creates/destroys ONNX sessions on demand per extraction call.
- * Client lease: attach() at construction, detach() at destruction; detach()
- * only decrements the counter and never releases f0Service_ / ortEnv_ /
- * the GAME generator.
+ * Actual owners (processors, DCs) resolve the service via getF0Service();
+ * there is no attach/detach lease — the singleton is process-lifetime.
  */
 class ProcessF0Runtime
 {
 public:
     static ProcessF0Runtime& getInstance();
-
-    /// 客户端注册（构造时调用；正常上下文）
-    void attach();
-    /// 客户端注销（析构时调用）；仅递减计数，不释放任何服务
-    void detach();
 
     bool initialize(const std::string& modelsDir);
     bool initialize(const std::string& modelsDir, F0ModelType initialModel);
@@ -75,7 +69,6 @@ private:
     std::shared_ptr<GameNoteGenerator> gameNoteGenerator_;  // initMutex_ 保护
     std::atomic<bool> ready_{false};
     mutable std::mutex initMutex_;
-    int clientCount_{0};  // initMutex_ 保护：客户端租约计数
     mutable std::mutex gameMutex_;  // 进程级 GAME 推理串行互斥
 
     ProcessF0Runtime(const ProcessF0Runtime&) = delete;
