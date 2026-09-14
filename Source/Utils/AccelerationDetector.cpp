@@ -19,6 +19,7 @@
 #include <sstream>
 #include <iomanip>
 #include <onnxruntime_cxx_api.h>
+#include <algorithm>
 
 namespace OpenTune {
 
@@ -28,7 +29,7 @@ AccelerationDetector& AccelerationDetector::getInstance() {
 }
 
 #ifdef _WIN32
-bool AccelerationDetector::enumerateGpuDevices() {
+bool AccelerationDetector::enumerateGpuDevices(std::vector<GpuDeviceInfo>& gpuDevices) {
     IDXGIFactory1* pFactory = nullptr;
     HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&pFactory);
     
@@ -83,7 +84,7 @@ bool AccelerationDetector::enumerateGpuDevices() {
         
         // 检查是否为真正的 GPU（排除软件渲染器和无效设备）
         if (info.vendorId != 0 && !info.name.empty() && info.name != "Microsoft Basic Render Driver") {
-            gpuDevices_.push_back(info);
+            gpuDevices.push_back(info);
             
             // 格式化显存大小
             float vramGB = static_cast<float>(info.dedicatedVideoMemory) / (1024.0f * 1024.0f * 1024.0f);
@@ -97,28 +98,30 @@ bool AccelerationDetector::enumerateGpuDevices() {
     
     pFactory->Release();
     
-    return !gpuDevices_.empty();
+    return !gpuDevices.empty();
 }
 #else
-bool AccelerationDetector::enumerateGpuDevices() {
+bool AccelerationDetector::enumerateGpuDevices(std::vector<GpuDeviceInfo>& gpuDevices) {
+    juce::ignoreUnused(gpuDevices);
     return false;
 }
 #endif
 
-bool AccelerationDetector::detectDirectML() {
+bool AccelerationDetector::detectDirectML(GpuDeviceInfo& selectedGpu, int& adapterIndex) {
 #ifdef _WIN32
-    if (!enumerateGpuDevices()) {
+    std::vector<GpuDeviceInfo> gpuDevices;
+    if (!enumerateGpuDevices(gpuDevices)) {
         AppLogger::warn("[AccelerationDetector] No DirectX 12 compatible GPU found");
         return false;
     }
 
     // 选择最佳 GPU（独显优先，VRAM 降序）— 仅用于日志/UI 和 adapterIndex
-    std::sort(gpuDevices_.begin(), gpuDevices_.end(), [](const GpuDeviceInfo& a, const GpuDeviceInfo& b) {
+    std::sort(gpuDevices.begin(), gpuDevices.end(), [](const GpuDeviceInfo& a, const GpuDeviceInfo& b) {
         if (a.isIntegrated != b.isIntegrated) return !a.isIntegrated;
         return a.dedicatedVideoMemory > b.dedicatedVideoMemory;
     });
-    selectedGpu_ = gpuDevices_[0];
-    dmlAdapterIndex_ = static_cast<int>(selectedGpu_.adapterIndex);
+    selectedGpu = gpuDevices[0];
+    adapterIndex = static_cast<int>(selectedGpu.adapterIndex);
 
     // 用 ORT API 判断 DML EP 是否编译进当前 OpenTuneOnnxRuntime_1_24_4.dll
     Ort::InitApi();
@@ -139,12 +142,10 @@ bool AccelerationDetector::detectDirectML() {
         return false;
     }
 
-    float vramGB = static_cast<float>(selectedGpu_.dedicatedVideoMemory) / (1024.0f * 1024.0f * 1024.0f);
-    AppLogger::info("[AccelerationDetector] DML EP available, selected GPU: " + juce::String(selectedGpu_.name)
-        + " (" + juce::String(vramGB, 1) + " GB VRAM, adapterIndex=" 
-        + juce::String(static_cast<int>(selectedGpu_.adapterIndex)) + ")");
-
-    directMLAvailable_ = true;
+    float vramGB = static_cast<float>(selectedGpu.dedicatedVideoMemory) / (1024.0f * 1024.0f * 1024.0f);
+    AppLogger::info("[AccelerationDetector] DML EP available, selected GPU: " + juce::String(selectedGpu.name)
+                      + " (" + juce::String(vramGB, 1) + " GB VRAM, adapterIndex="
+                      + juce::String(static_cast<int>(selectedGpu.adapterIndex)) + ")");
     return true;
 #else
     return false;
@@ -155,7 +156,6 @@ bool AccelerationDetector::detectCoreML() {
 #if defined(__APPLE__)
     // CoreML 是 macOS 系统框架，在所有 macOS 版本上都可用
     // 实际 EP 兼容性（算子支持等）由 ModelFactory::createSessionOptions 的 try/catch 处理
-    coreMLAvailable_ = true;
     AppLogger::info("[AccelerationDetector] CoreML available (macOS system framework)");
     return true;
 #else
@@ -164,59 +164,96 @@ bool AccelerationDetector::detectCoreML() {
 #endif
 }
 
-void AccelerationDetector::reset() {
-    detected_ = false;
-    selectedBackend_ = AccelBackend::CPU;
-    directMLAvailable_ = false;
-    coreMLAvailable_ = false;
-    dmlAdapterIndex_ = 0;
-    gpuDevices_.clear();
-    selectedGpu_ = GpuDeviceInfo{};
-}
-
 void AccelerationDetector::detect(bool forceCpu) {
-    if (detected_) return;
-    
-    AppLogger::debug("[AccelerationDetector] Detecting acceleration capabilities...");
-    
+    if (!forceCpu && selection_.load(std::memory_order_acquire) != kUndetected)
+        return;
+
+    const auto selection = detectSelection(forceCpu);
+    const auto encoded = encodeSelection(selection);
+
     if (forceCpu) {
-        selectedBackend_ = AccelBackend::CPU;
-        AppLogger::info("[AccelerationDetector] CPU forced by user preference");
-        detected_ = true;
-        AppLogger::info("[AccelerationDetector] Selected backend: " + juce::String(getBackendName()));
+        selection_.store(encoded, std::memory_order_release);
         return;
     }
-    
+
+    uint64_t expected = kUndetected;
+    selection_.compare_exchange_strong(expected, encoded,
+                                       std::memory_order_release,
+                                       std::memory_order_acquire);
+}
+
+void AccelerationDetector::resetAndDetect(bool forceCpu) {
+    const auto selection = detectSelection(forceCpu);
+    selection_.store(encodeSelection(selection), std::memory_order_release);
+}
+
+AccelerationDetector::BackendSelection AccelerationDetector::detectSelection(bool forceCpu) {
+    BackendSelection selection;
+
+    AppLogger::debug("[AccelerationDetector] Detecting acceleration capabilities...");
+
+    if (forceCpu) {
+        AppLogger::info("[AccelerationDetector] CPU forced by user preference");
+        AppLogger::info("[AccelerationDetector] Selected backend: CPU");
+        return selection;
+    }
+
 #if defined(__APPLE__)
     if (detectCoreML()) {
-        selectedBackend_ = AccelBackend::CoreML;
+        selection.backend = AccelBackend::CoreML;
     } else {
-        selectedBackend_ = AccelBackend::CPU;
         AppLogger::info("[AccelerationDetector] No acceleration available, using CPU");
     }
 #elif defined(_WIN32)
-    if (detectDirectML()) {
-        selectedBackend_ = AccelBackend::DirectML;
+    GpuDeviceInfo selectedGpu;
+    if (detectDirectML(selectedGpu, selection.dmlAdapterIndex)) {
+        selection.backend = AccelBackend::DirectML;
     } else {
-        selectedBackend_ = AccelBackend::CPU;
         AppLogger::info("[AccelerationDetector] No GPU acceleration available, using CPU");
     }
 #else
-    selectedBackend_ = AccelBackend::CPU;
     AppLogger::info("[AccelerationDetector] No acceleration available, using CPU");
 #endif
-    
-    detected_ = true;
-    AppLogger::info("[AccelerationDetector] Selected backend: " + juce::String(getBackendName()));
+
+    AppLogger::info("[AccelerationDetector] Selected backend: "
+        + juce::String(backendName(selection.backend)));
+    return selection;
 }
 
-std::string AccelerationDetector::getBackendName() const {
-    switch (selectedBackend_) {
+void AccelerationDetector::overrideBackend(AccelBackend backend) {
+    auto selection = getSelection();
+    selection.backend = backend;
+    if (backend != AccelBackend::DirectML)
+        selection.dmlAdapterIndex = 0;
+    selection_.store(encodeSelection(selection), std::memory_order_release);
+}
+
+AccelerationDetector::BackendSelection AccelerationDetector::getSelection() const noexcept {
+    return decodeSelection(selection_.load(std::memory_order_acquire));
+}
+
+const char* AccelerationDetector::backendName(AccelBackend backend) noexcept {
+    switch (backend) {
         case AccelBackend::CoreML: return "CoreML";
         case AccelBackend::DirectML: return "DirectML";
         case AccelBackend::CPU: return "CPU";
     }
     return "Unknown";
+}
+
+uint64_t AccelerationDetector::encodeSelection(BackendSelection selection) noexcept {
+    return (static_cast<uint64_t>(selection.backend) << 32)
+        | static_cast<uint32_t>(selection.dmlAdapterIndex);
+}
+
+AccelerationDetector::BackendSelection AccelerationDetector::decodeSelection(uint64_t encoded) noexcept {
+    if (encoded == kUndetected)
+        return {};
+
+    BackendSelection selection;
+    selection.backend = static_cast<AccelBackend>((encoded >> 32) & 0xffu);
+    selection.dmlAdapterIndex = static_cast<int>(static_cast<uint32_t>(encoded));
+    return selection;
 }
 
 } // namespace OpenTune

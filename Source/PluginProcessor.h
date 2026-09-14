@@ -555,9 +555,10 @@ public:
      * 重置推理后端（切换 GPU/CPU 时调用，UI 线程）：
      * 暂停 render worker → 向进程寿命 control worker 投递命令（Session 销毁、
      * AccelerationDetector reset/detect、重建全部在其上执行）→ 立即返回。
-     * 完成后经消息线程回调：恢复 render worker。gate 关闭后回调直接丢弃。
+     * 完成后经消息线程回调：先执行 beforeResume，再恢复 render worker。
+     * gate 关闭后回调直接丢弃。
      */
-    void resetInferenceBackend(bool forceCpu);
+    void resetInferenceBackend(bool forceCpu, std::function<void()> beforeResume = {});
 
     /**
      * 切换声码器模型权重（UI 线程）：暂停 render worker → 向进程寿命 control

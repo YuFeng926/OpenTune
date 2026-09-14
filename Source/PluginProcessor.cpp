@@ -1213,7 +1213,7 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
     return availability;
 }
 
-void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
+void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu, std::function<void()> beforeResume)
 {
     AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
         + juce::String(forceCpu ? "true" : "false"));
@@ -1223,19 +1223,22 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
         contentRenderService_->pauseRenderWorker();
 
     // 耗时 reset（Session 销毁、按当前配置重建、AccelerationDetector
-    //    reset/detect）全部在 ProcessRenderRuntime 的进程寿命 control worker 上
+    //    resetAndDetect）全部在 ProcessRenderRuntime 的进程寿命 control worker 上
     //    串行执行；UI 线程只投递命令并立即返回。completion 经
     //    MessageManager::callAsync 回消息线程；gate 已关闭时不访问 processor。
     auto gate = completionGate_;
     auto* processor = this;
-    ProcessRenderRuntime::getInstance().resetInferenceBackend(forceCpu, [processor, gate]() {
+    ProcessRenderRuntime::getInstance().resetInferenceBackend(forceCpu,
+        [processor, gate, beforeResume = std::move(beforeResume)]() mutable {
         std::lock_guard<std::mutex> lk(gate->mutex);
         if (gate->closed)
             return;   // owner 已析构：不访问 processor
+        if (beforeResume)
+            beforeResume();
         if (processor->contentRenderService_)
             processor->contentRenderService_->resumeRenderWorker();
         AppLogger::info("[Processor] Inference backend reset complete");
-    });
+        });
 }
 
 void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& weight)

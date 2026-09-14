@@ -74,7 +74,6 @@ private:
     std::shared_ptr<F0InferenceService> f0Service_;
     std::shared_ptr<GameNoteGenerator> gameNoteGenerator_;  // initMutex_ 保护
     std::atomic<bool> ready_{false};
-    std::atomic<bool> initAttempted_{false};
     mutable std::mutex initMutex_;
     int clientCount_{0};  // initMutex_ 保护：客户端租约计数
     mutable std::mutex gameMutex_;  // 进程级 GAME 推理串行互斥

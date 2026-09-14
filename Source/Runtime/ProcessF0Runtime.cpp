@@ -49,9 +49,8 @@ std::shared_ptr<F0InferenceService> ProcessF0Runtime::getF0Service() const
 
 bool ProcessF0Runtime::initialize(const std::string& modelsDir)
 {
-    if (ready_.load(std::memory_order_acquire)
-        || initAttempted_.load(std::memory_order_acquire))
-        return ready_.load(std::memory_order_acquire);
+    if (ready_.load(std::memory_order_acquire))
+        return true;
 
     AppPreferences preferences;
     return initialize(modelsDir, preferences.getF0ModelType());
@@ -62,15 +61,10 @@ bool ProcessF0Runtime::initialize(const std::string& modelsDir, F0ModelType init
     if (ready_.load(std::memory_order_acquire))
         return true;
 
-    if (initAttempted_.load(std::memory_order_acquire))
-        return ready_.load(std::memory_order_acquire);
-
     std::lock_guard<std::mutex> lock(initMutex_);
 
-    if (initAttempted_.load(std::memory_order_acquire))
-        return ready_.load(std::memory_order_acquire);
-
-    initAttempted_.store(true, std::memory_order_release);
+    if (ready_.load(std::memory_order_acquire))
+        return true;
 
     if (!ModelPathResolver::ensureOnnxRuntimeLoaded())
     {

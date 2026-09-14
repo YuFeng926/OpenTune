@@ -50,7 +50,7 @@ public:
     /**
      * 异步模型切换 / 后端重置 API（UI 线程调用）：
      * 只投递命令到进程寿命 control worker 并立即返回。control worker 串行执行
-     * 耗时 Session 销毁、按当前配置重建、AccelerationDetector reset/detect。
+     * 耗时 Session 销毁、按当前配置重建、AccelerationDetector resetAndDetect。
      * completion 经 MessageManager::callAsync 投递回消息线程；调用方在其
      * completion gate 关闭后直接丢弃（不访问 owner）。
      */

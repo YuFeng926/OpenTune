@@ -394,7 +394,7 @@ ProcessRenderRuntime::ProcessRenderRuntime()
     }
 
     // 进程寿命 control worker：模型切换/后端重置的耗时 Session 销毁、按当前
-    // 配置重建与 AccelerationDetector reset/detect 全部在此串行执行；UI 线程
+    // 配置重建与 AccelerationDetector resetAndDetect 全部在此串行执行；UI 线程
     // 只投递命令并立即返回。单例永不析构，线程随进程退出回收，绝不在实例
     // 卸载路径 join。
     controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
@@ -480,8 +480,7 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
     if (command.type == ControlCommand::Type::ResetInferenceBackend)
     {
         auto& detector = AccelerationDetector::getInstance();
-        detector.reset();
-        detector.detect(command.forceCpu);
+        detector.resetAndDetect(command.forceCpu);
     }
 
     // 严格先销毁旧 Session，再创建新 Session；新旧显存不并存。

@@ -621,11 +621,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Apply the purple theme to the window
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
 
-// Apply persisted rendering priority to detector before first inference service init
-    if (appPreferences_.getState().shared.renderingPriority == RenderingPriority::CpuFirst) {
-        processorRef_.resetInferenceBackend(true);
-    }
-
 // Playhead render via VBlank overlay; main editor heartbeat reduced to 30Hz to ease message thread pressure
     startTimerHz(kHeartbeatHzIdle);
 
@@ -661,10 +656,21 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     syncSharedAppPreferences();
 
-    // Apply persisted F0 model type at startup
-    const auto f0Type = appPreferences_.getState().shared.f0ModelType;
-    if (!processorRef_.setF0ModelType(f0Type))
-        appPreferences_.setF0ModelType(F0ModelType::FCPE);
+    // Backend reset is asynchronous; F0 model setup must follow its completion
+    // while the render worker is still paused.
+    const auto sharedPreferences = appPreferences_.getState().shared;
+    const auto f0Type = sharedPreferences.f0ModelType;
+    auto applyF0Model = [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this), f0Type]() {
+        if (safeThis == nullptr)
+            return;
+        if (!safeThis->processorRef_.setF0ModelType(f0Type))
+            safeThis->appPreferences_.setF0ModelType(F0ModelType::FCPE);
+    };
+
+    if (sharedPreferences.renderingPriority == RenderingPriority::CpuFirst)
+        processorRef_.resetInferenceBackend(true, std::move(applyF0Model));
+    else
+        applyF0Model();
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()

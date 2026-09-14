@@ -49,15 +49,13 @@ VocoderCreationResult VocoderFactory::create(
     Ort::Env& env)
 {
 #ifdef _WIN32
-    auto& gpu = AccelerationDetector::getInstance();
+    const auto backendSelection = AccelerationDetector::getInstance().getSelection();
 
-    if (gpu.getSelectedBackend() == AccelerationDetector::AccelBackend::DirectML) {
-        const auto& gpuInfo = gpu.getSelectedGpu();
-        const int adapterIndex = gpu.getDirectMLDeviceId();
+    if (backendSelection.backend == AccelerationDetector::AccelBackend::DirectML) {
+        const int adapterIndex = backendSelection.dmlAdapterIndex;
 
         AppLogger::info("[VocoderFactory] DML backend selected by GPU detector");
-        AppLogger::info("[VocoderFactory]   GPU: " + juce::String(gpuInfo.name));
-        AppLogger::info("[VocoderFactory]   adapterIndex=" + juce::String(static_cast<int>(gpuInfo.adapterIndex)));
+        AppLogger::info("[VocoderFactory]   adapterIndex=" + juce::String(adapterIndex));
 
         AppLogger::info("[VocoderFactory] Creating DML vocoder...");
 
@@ -86,7 +84,7 @@ VocoderCreationResult VocoderFactory::create(
             AppLogger::error("[VocoderFactory] DML vocoder creation FAILED: "
                 + juce::String(e.what()));
             AppLogger::warn("[VocoderFactory] GPU DML initialization failed, switching to CPU vocoder");
-            gpu.overrideBackend(AccelerationDetector::AccelBackend::CPU);
+            AccelerationDetector::getInstance().overrideBackend(AccelerationDetector::AccelBackend::CPU);
         }
     }
 #endif

@@ -201,16 +201,16 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(
 #endif
 
 #if defined(_WIN32)
+    const auto backendSelection = AccelerationDetector::getInstance().getSelection();
     if (!forceCpu
         && type == F0ModelType::FCPE
-        && AccelerationDetector::getInstance().getSelectedBackend()
-            == AccelerationDetector::AccelBackend::DirectML) {
+        && backendSelection.backend == AccelerationDetector::AccelBackend::DirectML) {
         const auto& api = Ort::GetApi();
         const OrtDmlApi* dmlApi = nullptr;
         OrtStatus* status = api.GetExecutionProviderApi("DML", ORT_API_VERSION,
                                                         reinterpret_cast<const void**>(&dmlApi));
         if (status == nullptr && dmlApi != nullptr) {
-            int adapterIndex = AccelerationDetector::getInstance().getDirectMLDeviceId();
+            const int adapterIndex = backendSelection.dmlAdapterIndex;
             OrtStatus* dmlStatus = dmlApi->SessionOptionsAppendExecutionProvider_DML(
                 sessionOptions, adapterIndex);
             if (dmlStatus == nullptr) {

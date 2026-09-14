@@ -7,14 +7,16 @@
  * Windows: 枚举 GPU + 检查 ORT DML EP 可用性 → DirectML 或 CPU
  * macOS:   CoreML 系统框架 → CoreML 或 CPU
  * 
- * GPU 枚举信息（名称/VRAM/adapterIndex）用于日志和 UI 展示。
+ * GPU 枚举信息（名称/VRAM/adapterIndex）用于检测日志。
  * 实际 DML 可用性由 ORT GetExecutionProviderApi("DML") 判断。
  */
 
 #include <juce_core/juce_core.h>
+#include <atomic>
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <limits>
 
 namespace OpenTune {
 
@@ -47,6 +49,11 @@ public:
         CoreML      // CoreML（macOS，支持ANE/GPU/CPU自动调度）
     };
 
+    struct BackendSelection {
+        AccelBackend backend = AccelBackend::CPU;
+        int dmlAdapterIndex = 0;
+    };
+
     /**
      * 获取单例实例
      */
@@ -59,37 +66,17 @@ public:
      */
     void detect(bool forceCpu = false);
 
-    /**
-     * 重置检测状态，允许重新检测。
-     * 调用者必须确保无并发的 detect()/getSelectedBackend() 调用。
-     */
-    void reset();
+    /** 重置并完成一次新的检测，最后一次性发布后端选择。 */
+    void resetAndDetect(bool forceCpu = false);
 
     /**
      * 由 VocoderFactory 在 DML session 创建失败 fallback CPU 时调用，
      * 确保检测状态与实际后端一致。
      */
-    void overrideBackend(AccelBackend backend) { selectedBackend_ = backend; }
+    void overrideBackend(AccelBackend backend);
 
-    /**
-     * 获取选择的后端
-     */
-    AccelBackend getSelectedBackend() const { return selectedBackend_; }
-
-    /**
-     * 获取后端名称字符串（用于日志）
-     */
-    std::string getBackendName() const;
-
-    /**
-     * 获取 DirectML 使用的 DXGI adapter index
-     */
-    int getDirectMLDeviceId() const { return dmlAdapterIndex_; }
-
-    /**
-     * 获取选中的GPU设备信息
-     */
-    const GpuDeviceInfo& getSelectedGpu() const { return selectedGpu_; }
+    /** 读取同一时刻的后端和 adapter 快照。 */
+    BackendSelection getSelection() const noexcept;
 
 private:
     AccelerationDetector() = default;
@@ -100,21 +87,17 @@ private:
     AccelerationDetector& operator=(const AccelerationDetector&) = delete;
 
     // 检测辅助函数
-    bool detectDirectML();
+    bool detectDirectML(GpuDeviceInfo& selectedGpu, int& adapterIndex);
     bool detectCoreML();
-    bool enumerateGpuDevices();
+    bool enumerateGpuDevices(std::vector<GpuDeviceInfo>& gpuDevices);
 
-    // 缓存的检测结果
-    bool detected_ = false;
-    AccelBackend selectedBackend_ = AccelBackend::CPU;
+    static const char* backendName(AccelBackend backend) noexcept;
+    static uint64_t encodeSelection(BackendSelection selection) noexcept;
+    static BackendSelection decodeSelection(uint64_t encoded) noexcept;
+    BackendSelection detectSelection(bool forceCpu);
 
-    bool directMLAvailable_ = false;
-    bool coreMLAvailable_ = false;
-
-    int dmlAdapterIndex_ = 0;
-
-    std::vector<GpuDeviceInfo> gpuDevices_;
-    GpuDeviceInfo selectedGpu_;
+    static constexpr uint64_t kUndetected = std::numeric_limits<uint64_t>::max();
+    std::atomic<uint64_t> selection_{kUndetected};
 };
 
 } // namespace OpenTune
