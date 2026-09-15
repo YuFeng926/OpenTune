@@ -258,8 +258,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
     const auto themeId = static_cast<ThemeId>(params.themeId);
     const float pixelsPerSemitone = params.pixelsPerSemitone;
     const float worldTopY = params.worldTopY;
-    const auto visualMode = params.pitchLaneVisualMode;
-    const bool isScaleAssist = (visualMode == PitchLaneVisualMode::ScaleAssist);
+    const bool isScaleAssist = params.scaleAssistEnabled;
     const float yOffset = laneBackgroundYOffset(
         static_cast<PianoGridStyle>(params.gridStyle), pixelsPerSemitone);
 
@@ -269,7 +268,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
     static constexpr float minMidi = 24.0f;
     static constexpr float maxMidi = 108.0f;
 
-    // PianoKeys 路径不构建 scale mask；ScaleAssist 才构建
+    // 物理键明暗不构建音阶掩码；音阶明暗才构建
     const auto inScalePitchClass = isScaleAssist
         ? buildInScalePitchClasses(params.scaleType, params.scaleRootNote)
         : std::array<bool, 12>{};
@@ -285,13 +284,13 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
             && inScalePitchClass[static_cast<std::size_t>(pitchClass)];
 
         // 角色由 classifyPitchRow 统一决定：
-        // PianoKeys: physical black/white key — ScaleAssist: inScale/outOfScale
+        // 物理键明暗：物理黑/白键；音阶明暗：调内/调外
         // 调内→WhiteKey（亮），调外→BlackKey（暗），Chromatic 全True→WhiteKey
-        const auto role = classifyPitchRow(visualMode, midi, inScale);
+        const auto role = classifyPitchRow(params.showPianoKeyboard, isScaleAssist, midi, inScale);
 
         switch (role) {
             case PitchRowVisualRole::BlackKey:
-                // 暗色 lane（PianoKeys: 物理黑键；ScaleAssist: 调外）
+                // 暗色 lane（物理键明暗：物理黑键；音阶明暗：调外）
                 if (isAurora) {
                     g.setColour(UIColors::glassSurface.withAlpha(0.075f));
                 } else {
@@ -303,7 +302,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
                 break;
 
             case PitchRowVisualRole::WhiteKey:
-                // 亮色 lane（PianoKeys: 物理白键；ScaleAssist: 调内）
+                // 亮色 lane（物理键明暗：物理白键；音阶明暗：调内）
                 if (isAurora) {
                     g.setColour(UIColors::pianoRollLane.withAlpha(0.024f));
                     g.fillRect(0.0f, y, static_cast<float>(w), laneH);

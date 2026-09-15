@@ -1,4 +1,4 @@
-﻿#include "PianoRollRenderer.h"
+#include "PianoRollRenderer.h"
 #include "../UiAssets.h"
 #include "../UIColors.h"
 #include "../../../Utils/AppLogger.h"
@@ -677,6 +677,51 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     const bool useFlats = ctx.scaleType != kScaleTypeChromatic
         && kUseFlatsByRoot[juce::jlimit(0, 11, ctx.scaleRootNote)];
 
+    const auto drawNoteLabel = [&](int drawMidi, float y, float h, bool isBlackKey) {
+        const int noteInOctave = drawMidi % 12;
+        if (effectiveNoteNameMode != 0
+            && (effectiveNoteNameMode != 1 || noteInOctave != 0))
+            return;
+
+        g.setFont(juce::Font(juce::FontOptions(
+            juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
+        const int octave = (drawMidi / 12) - 1;
+        const char* name = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
+        const juce::String noteName = juce::String(name) + juce::String(octave);
+        const int tx = 0;
+        const int ty = static_cast<int>(y);
+        const int tw = w - 4;
+        const int th = static_cast<int>(h);
+
+        g.setColour(isBlackKey
+            ? juce::Colours::white.withAlpha(0.7f)
+            : juce::Colours::black.withAlpha(0.5f));
+        for (int ox = -1; ox <= 1; ++ox)
+            for (int oy = -1; oy <= 1; ++oy)
+                if (ox != 0 || oy != 0)
+                    g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
+
+        const juce::Colour labelColour = isBlackKey
+            ? juce::Colour(0xFF2A2A2A)
+            : (isLightTheme ? juce::Colour(0xFF25303A).withMultipliedAlpha(0.90f)
+                            : juce::Colour(0xFFE0E0E0));
+        g.setColour(labelColour);
+        g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
+    };
+
+    if (ctx.labelsOnly)
+    {
+        for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
+        {
+            const float y = ctx.coords.midiToY(static_cast<float>(midi));
+            if (y < -50.0f || y > height + 50.0f)
+                continue;
+            const bool isBlackKey = isPhysicalBlackKey(midi);
+            drawNoteLabel(midi, y, ctx.pixelsPerSemitone, isBlackKey);
+        }
+        return;
+    }
+
     g.setColour(isLightTheme ? UIColors::keyBedWhite : UIColors::backgroundDark);
     g.fillRect(0, 0, w, height);
 
@@ -696,9 +741,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 
         if (y < -50.0f || y > height + 50.0f) continue;
 
-        int noteInOctave = drawMidi % 12;
-        const bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
-                                noteInOctave == 8 || noteInOctave == 10);
+        const bool isBlackKey = isPhysicalBlackKey(drawMidi);
 
         float drawH = h + 1.0f;
 
@@ -730,33 +773,12 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             }
 
             // Note name labels (with outline for readability)
-            if (effectiveNoteNameMode == 0 || (effectiveNoteNameMode == 1 && noteInOctave == 0))
-            {
-                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
-                int octave = (drawMidi / 12) - 1;
-                const char* name = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
-                juce::String noteName = juce::String(name) + juce::String(octave);
-
-                const int tx = 0;
-                const int ty = static_cast<int>(y);
-                const int tw = w - 4;
-                const int th = static_cast<int>(h);
-
-                // White key: dark outline + light text
-                g.setColour(juce::Colours::black.withAlpha(0.5f));
-                for (int ox = -1; ox <= 1; ++ox)
-                    for (int oy = -1; oy <= 1; ++oy)
-                        if (ox != 0 || oy != 0)
-                            g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
-
-                const juce::Colour noteLabelColour = isLightTheme
-                    ? juce::Colour(0xFF25303A).withMultipliedAlpha(0.90f)
-                    : juce::Colour(0xFFE0E0E0).withMultipliedAlpha(1.0f);
-                g.setColour(noteLabelColour);
-                g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
-            }
-        } else {
+            drawNoteLabel(drawMidi, y, h, false);
+        }
+        else
+        {
             // Physical black key: extension
+
             juce::Rectangle<float> extensionRect(blackKeyW, y, static_cast<float>(w) - blackKeyW, drawH);
 
             juce::ColourGradient grad(cWhite1,
@@ -797,9 +819,8 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 
         if (y < -50.0f || y > height + 50.0f) continue;
 
-        int noteInOctave = drawMidi % 12;
-        const bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
-                                noteInOctave == 8 || noteInOctave == 10);
+        const int noteInOctave = ((drawMidi % 12) + 12) % 12;
+        const bool isBlackKey = isPhysicalBlackKey(drawMidi);
 
         if (isBlackKey)
         {
@@ -874,28 +895,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             }
 
             // Note name labels for black keys (drawn on top of the black key body with outline)
-            if (effectiveNoteNameMode == 0)
-            {
-                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
-                int octave = (drawMidi / 12) - 1;
-                const char* bkName = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
-                juce::String noteName = juce::String(bkName) + juce::String(octave);
-
-                const int tx = 0;
-                const int ty = static_cast<int>(y);
-                const int tw = w - 4;
-                const int th = static_cast<int>(h);
-
-                // Black key: light outline + dark text
-                g.setColour(juce::Colours::white.withAlpha(0.7f));
-                for (int ox = -1; ox <= 1; ++ox)
-                    for (int oy = -1; oy <= 1; ++oy)
-                        if (ox != 0 || oy != 0)
-                            g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
-
-                g.setColour(juce::Colour(0xFF2A2A2A));
-                g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
-            }
+            drawNoteLabel(drawMidi, y, h, true);
         }
     }
 

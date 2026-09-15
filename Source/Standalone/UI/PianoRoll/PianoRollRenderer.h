@@ -102,6 +102,7 @@ public:
         int scaleRootNote = 0;
         int scaleType = 1;
         NoteNameMode noteNameMode = NoteNameMode::COnly;
+        bool labelsOnly = false;
         bool showUnvoicedFrames = false;
         bool showOriginalF0 = true;
         bool showCorrectedF0 = true;

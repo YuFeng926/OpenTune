@@ -2102,7 +2102,10 @@ void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewportSt
 {
     const int cw = getTimelineContentViewportWidth();
     const int ch = getTimelineContentViewportHeight();
-    const juce::Rectangle<int> timelineDomain(pianoKeyWidth_, rulerHeight_, cw, ch);
+    const bool drawFullLaneWidth = !shouldShowPianoKeys();
+    const int laneX = drawFullLaneWidth ? 0 : pianoKeyWidth_;
+    const int laneW = drawFullLaneWidth ? getTimelineViewportBounds().getWidth() : cw;
+    const juce::Rectangle<int> timelineDomain(laneX, rulerHeight_, laneW, ch);
     const auto clipArea = damage.getIntersection(timelineDomain);
     if (clipArea.isEmpty()) return;
 
@@ -2122,19 +2125,21 @@ void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewportSt
     lp.themeId = static_cast<int>(UIColors::currentThemeId());
     lp.pixelsPerSemitone = view.pixelsPerSemitone; lp.worldTopY = vOrigin;
     lp.rulerHeight = 0;
-    lp.pitchLaneVisualMode = pitchLaneVisualMode_;
+    lp.showPianoKeyboard = showPianoKeyboard_;
+    lp.scaleAssistEnabled = scaleAssistEnabled_;
     lp.scaleRootNote = scaleRootNote_;
     lp.scaleType = scaleType_;
     lp.gridStyle = static_cast<int>(gridStyle_);
-    lp.viewportWidth = cw; lp.viewportHeight = ch; lp.viewKind = "pianoroll";
+    lp.viewportWidth = laneW; lp.viewportHeight = ch; lp.viewKind = "pianoroll";
 
     g.reduceClipRegion(clipArea);
 
     // drawLaneStripRepeats 始终调用（不能关掉整层）
     {
         juce::Graphics::ScopedSaveState lss(g);
-        g.addTransform(juce::AffineTransform::translation(static_cast<float>(pianoKeyWidth_), static_cast<float>(rulerHeight_) - vFrac));
-        g.reduceClipRegion(0, 0, cw, ch);
+        g.addTransform(juce::AffineTransform::translation(static_cast<float>(laneX), static_cast<float>(rulerHeight_) - vFrac));
+
+        g.reduceClipRegion(0, 0, laneW, ch);
         TimelineLayerComposer::drawLaneStripRepeats(g, lp);
     }
     {
@@ -2147,8 +2152,7 @@ void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewportSt
 
 void PianoRollComponent::drawPianoKeyboard(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage)
 {
-    if (!shouldShowPianoKeys()) return;
-
+    const bool labelsOnly = !shouldShowPianoKeys();
     const int ch = getTimelineContentViewportHeight();
     const juce::Rectangle<int> pianoDomain(0, rulerHeight_, pianoKeyWidth_, ch);
     const auto clipArea = damage.getIntersection(pianoDomain);
@@ -2170,7 +2174,9 @@ void PianoRollComponent::drawPianoKeyboard(juce::Graphics& g, const ViewportStat
         rctx.scaleRootNote = scaleRootNote_;
         rctx.scaleType = scaleType_;
         rctx.noteNameMode = noteNameMode_;
+        rctx.labelsOnly = labelsOnly;
         rctx.coords = mapper;
+
         rctx.rasterBounds = clipArea;
         return rctx;
     };
@@ -2409,7 +2415,7 @@ std::vector<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildConte
 
 bool PianoRollComponent::shouldShowPianoKeys() const noexcept
 {
-    return ::OpenTune::shouldShowPianoKeys(pitchLaneVisualMode_, isTimeView());
+    return ::OpenTune::shouldShowPianoKeys(showPianoKeyboard_, isTimeView());
 }
 
 void PianoRollComponent::setInferenceActive(bool active)
@@ -3778,15 +3784,23 @@ void PianoRollComponent::setShowWaveform(bool shouldShow) {
     repaint();
 }
 
-void PianoRollComponent::setPitchLaneVisualMode(PitchLaneVisualMode mode) {
-    if (pitchLaneVisualMode_ == mode) return;
-    pitchLaneVisualMode_ = mode;
+void PianoRollComponent::setShowPianoKeyboard(bool shouldShow) {
+    if (showPianoKeyboard_ == shouldShow) return;
+    showPianoKeyboard_ = shouldShow;
     // 隐藏左侧键盘时立即结束正在试听的按键，避免 noteOff 因键盘不再显示而延迟
     if (!shouldShowPianoKeys() && pressedPianoKey_ >= 0) {
         if (pianoKeyAudition_ != nullptr)
             pianoKeyAudition_->noteOff(pressedPianoKey_);
         pressedPianoKey_ = -1;
     }
+    staticDirty_ = true;
+    rasterizeDirtySurfaces();
+    repaint();
+}
+
+void PianoRollComponent::setScaleAssistEnabled(bool enabled) {
+    if (scaleAssistEnabled_ == enabled) return;
+    scaleAssistEnabled_ = enabled;
     staticDirty_ = true;
     rasterizeDirtySurfaces();
     repaint();

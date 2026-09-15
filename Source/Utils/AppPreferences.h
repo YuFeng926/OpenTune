@@ -66,7 +66,6 @@ struct SharedPreferencesState {
     bool lightPitchCorrectionEnabled = true;  ///< 轻量修音开关（AutoTune cycle resampling，默认开）
     F0ModelType f0ModelType = F0ModelType::FCPE;
     PianoGridStyle gridStyle = PianoGridStyle::PianoLanes;
-    PitchLaneVisualMode pitchLaneVisualMode = PitchLaneVisualMode::PianoKeys;
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
     TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
 };
@@ -101,8 +100,9 @@ public:
     void setLanguage(Language language);
     void setTheme(ThemeId theme);
     void setAudioEditingScheme(AudioEditingScheme::Scheme scheme);
-    void setPianoRollVisualPreferences(const PianoRollVisualPreferences& visualPreferences);
     void setNoteNameMode(NoteNameMode noteNameMode);
+    void setShowPianoKeyboard(bool shouldShow);
+    void setScaleAssistEnabled(bool enabled);
     void setShowUnvoicedFrames(bool shouldShow);
     void setBackgroundBrightness(float brightness);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
@@ -128,8 +128,6 @@ public:
 
     void setGridStyle(PianoGridStyle gridStyle);
     PianoGridStyle getGridStyle() const;
-
-    void setPitchLaneVisualMode(PitchLaneVisualMode mode);
 
     void setTimelineDisplayMode(TimelineDisplayMode mode);
     TimelineDisplayMode getTimelineDisplayMode() const;

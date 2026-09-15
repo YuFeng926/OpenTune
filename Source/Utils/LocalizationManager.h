@@ -192,7 +192,8 @@ constexpr const char* kUndo = "Undo";
 constexpr const char* kRedo = "Redo";
 
 constexpr const char* kShowWaveform = "Show Waveform";
-constexpr const char* kPianoKeyLanes = "Piano Key Lanes";
+constexpr const char* kPianoKeyboard = "Piano Keyboard";
+constexpr const char* kScaleBrightness = "Scale Brightness";
 constexpr const char* kNoteLabels = "Note Labels";
 constexpr const char* kNoteLabelsShowAll = "Show All";
 constexpr const char* kNoteLabelsCOnly = "C Only";
@@ -400,7 +401,8 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kRedo, "Redo", "重做", "やり直す", "Повтор", "Rehacer" },
         
         { Keys::kShowWaveform, "Show Waveform", "显示波形", "波形を表示", "Волновая форма", "Ver forma de onda" },
-        { Keys::kPianoKeyLanes, "Piano Key Lanes", "钢琴键槽", "ピアノキーレーン", "Клавиши пианино", "Teclas de piano" },
+        { Keys::kPianoKeyboard, "Piano Keyboard", "钢琴键盘", "ピアノキーボード", "Клавиатура пианино", "Teclado de piano" },
+        { Keys::kScaleBrightness, "Scale Brightness", "音阶明暗", "明るさ", "Яркость лада", "Brillo de escala" },
         { Keys::kNoteLabels, "Note Labels", "音名标签", "音名ラベル", "Названия нот", "Etiquetas de notas" },
         { Keys::kNoteLabelsShowAll, "Show All", "全部显示", "全表示", "Показывать все", "Mostrar todo" },
         { Keys::kNoteLabelsCOnly, "C Only", "仅 C", "C のみ", "Только C", "Solo C" },

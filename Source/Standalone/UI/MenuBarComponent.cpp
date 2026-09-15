@@ -64,13 +64,17 @@ void MenuBarComponent::setShowUnvoicedFrames(bool shouldShow)
     menuItemsChanged();
 }
 
-void MenuBarComponent::setPitchLaneVisualMode(PitchLaneVisualMode mode)
+void MenuBarComponent::setShowPianoKeyboard(bool shouldShow)
 {
-    if (pitchLaneVisualMode_ == mode) {
-        return;
-    }
+    if (showPianoKeyboard_ == shouldShow) return;
+    showPianoKeyboard_ = shouldShow;
+    menuItemsChanged();
+}
 
-    pitchLaneVisualMode_ = mode;
+void MenuBarComponent::setScaleAssistEnabled(bool enabled)
+{
+    if (scaleAssistEnabled_ == enabled) return;
+    scaleAssistEnabled_ = enabled;
     menuItemsChanged();
 }
 
@@ -131,8 +135,8 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
         case 2:  // View
         {
             menu.addItem(ShowWaveform, LOC(kShowWaveform), true, processor_.getShowWaveform());
-            menu.addItem(PianoKeyLanes, LOC(kPianoKeyLanes), true,
-                         pitchLaneVisualMode_ == PitchLaneVisualMode::PianoKeys);
+            menu.addItem(PianoKeyboard, LOC(kPianoKeyboard), true, showPianoKeyboard_);
+            menu.addItem(ScaleBrightness, LOC(kScaleBrightness), true, scaleAssistEnabled_);
 
             juce::PopupMenu noteLabelMenu;
             noteLabelMenu.addItem(NoteNameModeShowAll, LOC(kNoteLabelsShowAll), true, noteNameMode_ == NoteNameMode::ShowAll);
@@ -237,14 +241,16 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             menuItemsChanged();
             break;
         }
-        case PianoKeyLanes:
+        case PianoKeyboard:
         {
-            // 点击在 PianoKeys/ScaleAssist 间切换
-            const auto newState = (pitchLaneVisualMode_ == PitchLaneVisualMode::PianoKeys)
-                ? PitchLaneVisualMode::ScaleAssist
-                : PitchLaneVisualMode::PianoKeys;
-            listeners_.call([newState](Listener& l) { l.pitchLaneVisualModeChanged(newState); });
-            menuItemsChanged();
+            const bool newState = !showPianoKeyboard_;
+            listeners_.call([newState](Listener& l) { l.showPianoKeyboardToggled(newState); });
+            break;
+        }
+        case ScaleBrightness:
+        {
+            const bool newState = !scaleAssistEnabled_;
+            listeners_.call([newState](Listener& l) { l.scaleAssistToggled(newState); });
             break;
         }
         case NoteNameModeShowAll:

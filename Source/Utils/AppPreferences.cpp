@@ -13,6 +13,8 @@ constexpr const char* kSharedThemeKey = "shared.theme.activeTheme";
 constexpr const char* kSharedAudioEditingSchemeKey = "shared.audioEditing.scheme";
 constexpr const char* kSharedPianoRollNoteNameModeKey = "shared.pianoRoll.noteNameMode";
 constexpr const char* kSharedPianoRollShowUnvoicedFramesKey = "shared.pianoRoll.showUnvoicedFrames";
+constexpr const char* kSharedPianoRollShowPianoKeyboardKey = "shared.pianoRoll.showPianoKeyboard";
+constexpr const char* kSharedPianoRollScaleAssistEnabledKey = "shared.pianoRoll.scaleAssistEnabled";
 constexpr const char* kSharedPianoRollBackgroundBrightnessKey = "shared.pianoRoll.backgroundBrightness";
 constexpr const char* kSharedZoomHorizontalFactorKey = "shared.zoom.horizontalFactor";
 constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor";
@@ -298,6 +300,15 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.pianoRollVisualPreferences.showUnvoicedFrames = properties.getBoolValue(
         kSharedPianoRollShowUnvoicedFramesKey,
         state.shared.pianoRollVisualPreferences.showUnvoicedFrames);
+    const bool hasKeyboardKey = properties.containsKey(kSharedPianoRollShowPianoKeyboardKey);
+    const bool hasScaleAssistKey = properties.containsKey(kSharedPianoRollScaleAssistEnabledKey);
+    const int legacyMode = properties.getIntValue(kSharedPitchLaneVisualModeKey, 1);
+    const bool legacyKeyboard = legacyMode == 1;
+    const bool legacyScaleAssist = legacyMode == 0;
+    state.shared.pianoRollVisualPreferences.showPianoKeyboard = hasKeyboardKey
+        ? properties.getBoolValue(kSharedPianoRollShowPianoKeyboardKey, true) : legacyKeyboard;
+    state.shared.pianoRollVisualPreferences.scaleAssistEnabled = hasScaleAssistKey
+        ? properties.getBoolValue(kSharedPianoRollScaleAssistEnabledKey, false) : legacyScaleAssist;
     state.shared.pianoRollVisualPreferences.backgroundBrightness = static_cast<float>(
         properties.getDoubleValue(kSharedPianoRollBackgroundBrightnessKey,
                                   state.shared.pianoRollVisualPreferences.backgroundBrightness));
@@ -311,9 +322,6 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
         properties.getDoubleValue(kSharedTuningHzKey, state.shared.tuning.tuningHz));
     state.shared.gridStyle = static_cast<PianoGridStyle>(
         properties.getIntValue(kSharedGridStyleKey, static_cast<int>(state.shared.gridStyle)));
-    state.shared.pitchLaneVisualMode = static_cast<PitchLaneVisualMode>(
-        properties.getIntValue(kSharedPitchLaneVisualModeKey,
-                               static_cast<int>(state.shared.pitchLaneVisualMode)));
     state.shared.renderingPriority = renderingPriorityFromToken(
         properties.getValue(kSharedRenderingPriorityKey,
                             toRenderingPriorityToken(state.shared.renderingPriority)));
@@ -373,6 +381,10 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         toNoteNameModeToken(state.shared.pianoRollVisualPreferences.noteNameMode));
     properties.setValue(kSharedPianoRollShowUnvoicedFramesKey,
                         state.shared.pianoRollVisualPreferences.showUnvoicedFrames);
+    properties.setValue(kSharedPianoRollShowPianoKeyboardKey,
+                        state.shared.pianoRollVisualPreferences.showPianoKeyboard);
+    properties.setValue(kSharedPianoRollScaleAssistEnabledKey,
+                        state.shared.pianoRollVisualPreferences.scaleAssistEnabled);
     properties.setValue(kSharedPianoRollBackgroundBrightnessKey,
                         static_cast<double>(state.shared.pianoRollVisualPreferences.backgroundBrightness));
     properties.setValue(kSharedZoomHorizontalFactorKey, static_cast<double>(state.shared.zoomSensitivity.horizontalZoomFactor));
@@ -380,8 +392,6 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
     properties.setValue(kSharedTuningHzKey, static_cast<double>(state.shared.tuning.tuningHz));
     properties.setValue(kSharedGridStyleKey, static_cast<int>(state.shared.gridStyle));
-    properties.setValue(kSharedPitchLaneVisualModeKey,
-                        static_cast<int>(state.shared.pitchLaneVisualMode));
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
     properties.setValue(kSharedVocoderWeightKey,
@@ -445,7 +455,17 @@ void AppPreferences::load()
         return;
     }
 
+    const bool hasLegacyVisualPreference = userSettings->containsKey(kSharedPitchLaneVisualModeKey);
     state_ = loadStateFromProperties(*userSettings);
+    if (hasLegacyVisualPreference) {
+        const bool needsVisualPreferenceMigration =
+            !userSettings->containsKey(kSharedPianoRollShowPianoKeyboardKey)
+            || !userSettings->containsKey(kSharedPianoRollScaleAssistEnabledKey);
+        if (needsVisualPreferenceMigration)
+            writeStateToProperties(*userSettings, state_);
+        userSettings->removeValue(kSharedPitchLaneVisualModeKey);
+        userSettings->saveIfNeeded();
+    }
     TuningConfig::currentTuningHz() = state_.shared.tuning.tuningHz;
 }
 
@@ -481,17 +501,24 @@ void AppPreferences::setAudioEditingScheme(AudioEditingScheme::Scheme scheme)
     saveLocked();
 }
 
-void AppPreferences::setPianoRollVisualPreferences(const PianoRollVisualPreferences& visualPreferences)
-{
-    const std::lock_guard<std::mutex> lock(mutex_);
-    state_.shared.pianoRollVisualPreferences = visualPreferences;
-    saveLocked();
-}
-
 void AppPreferences::setNoteNameMode(NoteNameMode noteNameMode)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.pianoRollVisualPreferences.noteNameMode = noteNameMode;
+    saveLocked();
+}
+
+void AppPreferences::setShowPianoKeyboard(bool shouldShow)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.pianoRollVisualPreferences.showPianoKeyboard = shouldShow;
+    saveLocked();
+}
+
+void AppPreferences::setScaleAssistEnabled(bool enabled)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.pianoRollVisualPreferences.scaleAssistEnabled = enabled;
     saveLocked();
 }
 
@@ -701,13 +728,6 @@ TimelineDisplayMode AppPreferences::getTimelineDisplayMode() const
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     return state_.shared.timelineDisplayMode;
-}
-
-void AppPreferences::setPitchLaneVisualMode(PitchLaneVisualMode mode)
-{
-    const std::lock_guard<std::mutex> lock(mutex_);
-    state_.shared.pitchLaneVisualMode = mode;
-    saveLocked();
 }
 
 } // namespace OpenTune

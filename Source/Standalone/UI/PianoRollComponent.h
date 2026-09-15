@@ -176,7 +176,8 @@ public:
     ToolId getCurrentTool() const { return currentTool_; }
     PianoRollToolHandler* getToolHandler() const { return toolHandler_.get(); }
     void setShowWaveform(bool shouldShow);
-    void setPitchLaneVisualMode(PitchLaneVisualMode mode);
+    void setShowPianoKeyboard(bool shouldShow);
+    void setScaleAssistEnabled(bool enabled);
     void setGridStyle(PianoGridStyle gridStyle);
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowUnvoicedFrames(bool shouldShow);
@@ -562,7 +563,8 @@ private:
 private:
 
     bool showWaveform_ = true;
-    PitchLaneVisualMode pitchLaneVisualMode_ = PitchLaneVisualMode::PianoKeys;
+    bool showPianoKeyboard_ = true;
+    bool scaleAssistEnabled_ = false;
     PianoGridStyle gridStyle_ = PianoGridStyle::PianoLanes;
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showUnvoicedFrames_ = false;

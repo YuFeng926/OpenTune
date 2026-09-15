@@ -21,7 +21,8 @@ struct RenderParams {
     float pixelsPerSemitone = 1.0f;
     float worldTopY = 0.0f;
     int rulerHeight = 0;
-    PitchLaneVisualMode pitchLaneVisualMode = PitchLaneVisualMode::PianoKeys;
+    bool showPianoKeyboard = true;
+    bool scaleAssistEnabled = false;
     int scaleRootNote = 0;
     int scaleType = 1;
     int gridStyle = 0;  // 0 = PianoLanes, 1 = EqualSpacing (matches PianoGridStyle ordinal)

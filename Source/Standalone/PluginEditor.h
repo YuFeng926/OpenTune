@@ -110,7 +110,8 @@ public:
     void preferencesRequested() override;
     void helpRequested() override;
     void showWaveformToggled(bool shouldShow) override;
-    void pitchLaneVisualModeChanged(PitchLaneVisualMode mode) override;
+    void showPianoKeyboardToggled(bool shouldShow) override;
+    void scaleAssistToggled(bool enabled) override;
     void noteNameModeChanged(NoteNameMode noteNameMode) override;
     void showUnvoicedFramesToggled(bool shouldShow) override;
     void themeChanged(ThemeId themeId) override;
