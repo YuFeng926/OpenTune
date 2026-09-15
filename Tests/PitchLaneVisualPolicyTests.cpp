@@ -185,6 +185,38 @@ static void testPhysicalVsVisualRoleSeparation()
           "D Major: C physical and visual roles must differ (WhiteKey vs BlackKey)");
 }
 
+// 7. 背景偏移只依赖 gridStyle，精确 +0.5H，与 PitchLaneVisualMode 无关
+static void testLaneBackgroundYOffsetGridStyleOnly()
+{
+    constexpr float ppS = 25.0f;
+    constexpr float maxMidi = 108.0f;
+    constexpr float midi = 69.0f;
+    const float laneTop = (maxMidi - midi) * ppS;
+    const float standardPitchY = laneTop + ppS * 0.5f;
+
+    // PianoLanes → 0
+    check(laneBackgroundYOffset(PianoGridStyle::PianoLanes, ppS) == 0.0f,
+          "PianoLanes: background offset must be 0");
+    // EqualSpacing → +0.5 * ppS（屏幕 y 向下），使标准音从格中央移到分隔线
+    check(laneBackgroundYOffset(PianoGridStyle::EqualSpacing, ppS) == ppS * 0.5f,
+          "EqualSpacing: background offset must be exactly +0.5 * pixelsPerSemitone");
+    check(laneTop + laneBackgroundYOffset(PianoGridStyle::EqualSpacing, ppS) == standardPitchY,
+          "EqualSpacing: shifted separator must pass through the standard pitch");
+}
+
+// 8. 键盘可见性策略：仅 PianoKeys 模式且非 TimeTool 时显示
+static void testShouldShowPianoKeysVisibility()
+{
+    check(shouldShowPianoKeys(PitchLaneVisualMode::PianoKeys, false) == true,
+          "PianoKeys + non-TimeTool: keyboard must be visible");
+    check(shouldShowPianoKeys(PitchLaneVisualMode::PianoKeys, true) == false,
+          "PianoKeys + TimeTool: keyboard must be hidden");
+    check(shouldShowPianoKeys(PitchLaneVisualMode::ScaleAssist, false) == false,
+          "ScaleAssist: keyboard must be hidden regardless of tool");
+    check(shouldShowPianoKeys(PitchLaneVisualMode::ScaleAssist, true) == false,
+          "ScaleAssist + TimeTool: keyboard must be hidden");
+}
+
 int main()
 {
     testPianoKeysRolesIgnoreInScale();
@@ -193,6 +225,8 @@ int main()
     testOnlyTwoRoles();
     testPianoKeysPhysicalMapping();
     testPhysicalVsVisualRoleSeparation();
+    testLaneBackgroundYOffsetGridStyleOnly();
+    testShouldShowPianoKeysVisibility();
 
     if (gFailures == 0) {
         std::printf("All PitchLaneVisualPolicy tests passed.\n");

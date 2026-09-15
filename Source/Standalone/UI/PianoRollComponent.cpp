@@ -1786,8 +1786,7 @@ void PianoRollComponent::drawPianoKeysPressed(juce::Graphics& g)
     const float vFrac = verticalScrollOffset_ - vOrigin;
     g.addTransform(juce::AffineTransform::translation(0.0f, -vFrac));
 
-    const float noteY = (maxMidi_ - pressedPianoKey_) * pixelsPerSemitone_ - vOrigin
-                        - (gridStyle_ == PianoGridStyle::EqualSpacing ? pixelsPerSemitone_ * 0.5f : 0.0f);
+    const float noteY = (maxMidi_ - pressedPianoKey_) * pixelsPerSemitone_ - vOrigin;
     const float noteH = pixelsPerSemitone_;
     g.setColour(UIColors::noteBlockSelected.withAlpha(0.35f));
     g.fillRect(0.0f, noteY, static_cast<float>(pianoKeyWidth_), noteH);
@@ -2170,7 +2169,6 @@ void PianoRollComponent::drawPianoKeyboard(juce::Graphics& g, const ViewportStat
         rctx.maxMidi = maxMidi_;
         rctx.scaleRootNote = scaleRootNote_;
         rctx.scaleType = scaleType_;
-        rctx.pitchLaneVisualMode = pitchLaneVisualMode_;
         rctx.noteNameMode = noteNameMode_;
         rctx.coords = mapper;
         rctx.rasterBounds = clipArea;
@@ -2233,7 +2231,6 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     renderCtx.maxMidi = maxMidi_;
     renderCtx.scaleRootNote = scaleRootNote_;
     renderCtx.scaleType = scaleType_;
-    renderCtx.pitchLaneVisualMode = pitchLaneVisualMode_;
     renderCtx.noteNameMode = noteNameMode_;
     renderCtx.showUnvoicedFrames = showUnvoicedFrames_;
     renderCtx.showOriginalF0 = showOriginalF0_;
@@ -2412,7 +2409,7 @@ std::vector<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildConte
 
 bool PianoRollComponent::shouldShowPianoKeys() const noexcept
 {
-    return currentTool_ != ToolId::TimeTool;
+    return ::OpenTune::shouldShowPianoKeys(pitchLaneVisualMode_, isTimeView());
 }
 
 void PianoRollComponent::setInferenceActive(bool active)
@@ -3784,6 +3781,12 @@ void PianoRollComponent::setShowWaveform(bool shouldShow) {
 void PianoRollComponent::setPitchLaneVisualMode(PitchLaneVisualMode mode) {
     if (pitchLaneVisualMode_ == mode) return;
     pitchLaneVisualMode_ = mode;
+    // 隐藏左侧键盘时立即结束正在试听的按键，避免 noteOff 因键盘不再显示而延迟
+    if (!shouldShowPianoKeys() && pressedPianoKey_ >= 0) {
+        if (pianoKeyAudition_ != nullptr)
+            pianoKeyAudition_->noteOff(pressedPianoKey_);
+        pressedPianoKey_ = -1;
+    }
     staticDirty_ = true;
     rasterizeDirtySurfaces();
     repaint();
@@ -5298,8 +5301,7 @@ ViewMapper PianoRollComponent::makeViewMapper() const noexcept {
         getTimelineContentViewportHeight(),
         pixelsPerSemitone_,
         verticalScrollOffset_,
-        maxMidi_,
-        gridStyle_
+        maxMidi_
     };
 }
 
@@ -5312,8 +5314,7 @@ ViewMapper PianoRollComponent::makeViewMapperForView(const ViewportState& view) 
         getTimelineContentViewportHeight(),
         view.pixelsPerSemitone,
         view.verticalScrollOffset,
-        maxMidi_,
-        gridStyle_
+        maxMidi_
     };
 }
 

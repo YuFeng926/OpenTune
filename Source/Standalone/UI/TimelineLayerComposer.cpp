@@ -259,9 +259,9 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
     const float pixelsPerSemitone = params.pixelsPerSemitone;
     const float worldTopY = params.worldTopY;
     const auto visualMode = params.pitchLaneVisualMode;
-    const bool equalSpacing = (params.gridStyle == static_cast<int>(PianoGridStyle::EqualSpacing));
-    const int scaleRootNote = params.scaleRootNote;
-    const int scaleType = params.scaleType;
+    const bool isScaleAssist = (visualMode == PitchLaneVisualMode::ScaleAssist);
+    const float yOffset = laneBackgroundYOffset(
+        static_cast<PianoGridStyle>(params.gridStyle), pixelsPerSemitone);
 
     const int w = params.viewportWidth;
     const int h = params.viewportHeight;
@@ -270,12 +270,9 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
     static constexpr float maxMidi = 108.0f;
 
     // PianoKeys 路径不构建 scale mask；ScaleAssist 才构建
-    const bool isScaleAssist = (visualMode == PitchLaneVisualMode::ScaleAssist);
     const auto inScalePitchClass = isScaleAssist
-        ? buildInScalePitchClasses(scaleType, scaleRootNote)
+        ? buildInScalePitchClasses(params.scaleType, params.scaleRootNote)
         : std::array<bool, 12>{};
-
-    const float yOffset = equalSpacing ? -0.5f * pixelsPerSemitone : 0.0f;
 
     for (int midi = static_cast<int>(minMidi); midi <= static_cast<int>(maxMidi); ++midi) {
         float y = (maxMidi - static_cast<float>(midi)) * pixelsPerSemitone - worldTopY + yOffset;

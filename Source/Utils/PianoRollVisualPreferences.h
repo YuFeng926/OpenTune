@@ -52,6 +52,18 @@ inline PitchRowVisualRole classifyPitchRow(PitchLaneVisualMode mode, int midiNot
     return isPitchInScale ? PitchRowVisualRole::WhiteKey : PitchRowVisualRole::BlackKey;
 }
 
+// 背景纵向偏移（屏幕 y 向下为正）：仅由 gridStyle 决定，与 PitchLaneVisualMode 无关。
+// EqualSpacing: +0.5 * pixelsPerSemitone，让标准音高（lane 中央）落在网格线上；
+// PianoLanes: 0，lane 填充与横向分隔线保持原位。
+inline float laneBackgroundYOffset(PianoGridStyle gridStyle, float pixelsPerSemitone) noexcept {
+    return (gridStyle == PianoGridStyle::EqualSpacing) ? (pixelsPerSemitone * 0.5f) : 0.0f;
+}
+
+// 左侧钢琴键盘可见性：仅 PianoKeys 模式且非 TimeTool 时显示。
+inline bool shouldShowPianoKeys(PitchLaneVisualMode mode, bool isTimeView) noexcept {
+    return (mode == PitchLaneVisualMode::PianoKeys) && !isTimeView;
+}
+
 struct PianoRollVisualPreferences {
     NoteNameMode noteNameMode = NoteNameMode::COnly;
     bool showUnvoicedFrames = false;
