@@ -10,7 +10,8 @@
  * - 缩放和滚动
  *
  * 渲染架构：两张保留 Image + 一层透明 Overlay
- * - staticSurface_  ：主题背景、标尺、lane、网格、琴键（由 drawFixedChrome/drawRuler/drawPitchBackground/drawPianoKeyboard 共享）
+ * - staticSurface_  ：主题背景、标尺、lane、网格、琴键
+ * - labelsSurface_  ：键盘隐藏时固定的音名
  * - contentSurface_ ：波形、无声帧、notes、F0、TimeGrid 锚点、ghost（由 drawContent 共享）
  * - overlay_        ：播放头、选中高亮、框选、绘制预览、TimeGrid 把手
  */
@@ -319,6 +320,7 @@ private:
 
     // ── 保留表面状态快照 ──────────────────────────────────────
     juce::Image staticSurface_;
+    juce::Image labelsSurface_;
     juce::Image contentSurface_;
     ViewportState surfaceView_;
     bool staticDirty_ = true;
@@ -335,6 +337,8 @@ private:
     void invalidateTimeAxisStaticSurface();
     void rasterizeDirtySurfaces();
     void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
+    void rasterizeLabels();
+    int getTimelineContentStartX() const noexcept;
     void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
 
     // ── 按坐标域拆分的唯一绘制函数（raster target 与 preview target 共用） ──

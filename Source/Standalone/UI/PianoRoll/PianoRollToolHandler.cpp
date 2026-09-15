@@ -437,7 +437,7 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
     const int rulerHeight = ctx_.contentOriginY;
     constexpr int timelineExtendedHitArea = 20;
     const int timelineBottomExtended = rulerHeight + timelineExtendedHitArea;
-    if (e.y < timelineBottomExtended && e.x > ctx_.getPianoKeyWidth()) {
+    if (e.y < timelineBottomExtended && e.x >= ctx_.getPianoKeyWidth()) {
         double clickedTime = ctx_.getViewMapper().xToTime(e.x);
         if (clickedTime >= 0) {
             ctx_.notifyPlayheadChange(clickedTime);
@@ -817,7 +817,7 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
 
 bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
 {
-    if (e.x <= ctx_.getPianoKeyWidth()) {
+    if (e.x < ctx_.getPianoKeyWidth()) {
         return false;
     }
 
@@ -859,7 +859,7 @@ bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
 bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameIndex) const
 {
     frameIndex = -1;
-    if (e.x <= ctx_.getPianoKeyWidth()) {
+    if (e.x < ctx_.getPianoKeyWidth()) {
         return false;
     }
 
@@ -1200,7 +1200,7 @@ void PianoRollToolHandler::beginAreaSelection(const juce::MouseEvent& e)
     ctx_.getState().noteResize.noteIndex = -1;
     ctx_.getState().noteResize.edge = NoteResizeEdge::None;
 
-    if (e.x > ctx_.getPianoKeyWidth()) {
+    if (e.x >= ctx_.getPianoKeyWidth()) {
         ctx_.getState().selection.isSelectingArea = true;
         ctx_.getState().selection.selectionStartTime = std::max(0.0, *sourceTime);
         ctx_.getState().selection.selectionEndTime = ctx_.getState().selection.selectionStartTime;

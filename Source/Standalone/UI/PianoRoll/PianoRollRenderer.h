@@ -92,6 +92,7 @@ public:
         int width = 0;
         int height = 0;
         int pianoKeyWidth = 60;
+        int contentStartX = 60;
         juce::Rectangle<int> rasterBounds;  // Image-local rect to rasterize; full image bounds when empty
         int rulerHeight = 30;
         double pixelsPerSecond = TimelineViewportCamera::kDefaultPixelsPerSecond;

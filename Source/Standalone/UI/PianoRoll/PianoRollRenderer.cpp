@@ -70,19 +70,19 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
                                             const PianoRollRenderer::ContentRenderItem& item)
 {
     const int startX = ctx.rasterBounds.isEmpty()
-        ? ctx.pianoKeyWidth
-        : std::max(ctx.rasterBounds.getX(), ctx.pianoKeyWidth);
+        ? ctx.contentStartX
+        : std::max(ctx.rasterBounds.getX(), ctx.contentStartX);
     const int endX = ctx.rasterBounds.isEmpty()
         ? ctx.width
         : std::min(ctx.rasterBounds.getRight(), ctx.width);
     return computeTimeWindowFromXBounds(ctx, item, startX, endX);
 }
 
-// Full-viewport window for F0 (always [pianoKeyWidth, ctx.width]).
+// Full-viewport window for F0 (always [contentStartX, ctx.width]).
 VisibleTimeWindow computeFullViewportTimeWindow(const PianoRollRenderer::RenderContext& ctx,
                                                  const PianoRollRenderer::ContentRenderItem& item)
 {
-    return computeTimeWindowFromXBounds(ctx, item, ctx.pianoKeyWidth, ctx.width);
+    return computeTimeWindowFromXBounds(ctx, item, ctx.contentStartX, ctx.width);
 }
 
 struct F0VisualPoint
@@ -471,8 +471,8 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
                     const int x1 = sourceTimeToScreenX(intervalStartTime, ctx, item);
                     const int x2 = sourceTimeToScreenX(intervalEndTime, ctx, item);
 
-                    if (x2 > ctx.pianoKeyWidth && x1 < ctx.width) {
-                        const float drawX = static_cast<float>(std::max(x1, ctx.pianoKeyWidth));
+                    if (x2 > ctx.contentStartX && x1 < ctx.width) {
+                        const float drawX = static_cast<float>(std::max(x1, ctx.contentStartX));
                         const float drawW = static_cast<float>(std::min(x2, ctx.width)) - drawX;
                         if (drawW > 0.5f) {
                             g.fillRect(drawX, static_cast<float>(ctx.rulerHeight),
@@ -498,8 +498,8 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
             const int x1 = sourceTimeToScreenX(intervalStartTime, ctx, item);
             const int x2 = sourceTimeToScreenX(intervalEndTime, ctx, item);
 
-            if (x2 > ctx.pianoKeyWidth && x1 < ctx.width) {
-                const float drawX = static_cast<float>(std::max(x1, ctx.pianoKeyWidth));
+            if (x2 > ctx.contentStartX && x1 < ctx.width) {
+                const float drawX = static_cast<float>(std::max(x1, ctx.contentStartX));
                 const float drawW = static_cast<float>(std::min(x2, ctx.width)) - drawX;
                 if (drawW > 0.5f) {
                     g.fillRect(drawX, static_cast<float>(ctx.rulerHeight),
@@ -1374,7 +1374,7 @@ void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& c
 
         const int x1 = sourceTimeToScreenX(note.startTime, ctx, overlayItem);
         const int x2 = sourceTimeToScreenX(note.endTime, ctx, overlayItem);
-        if (x2 <= ctx.pianoKeyWidth || x1 >= ctx.width)
+        if (x2 <= ctx.contentStartX || x1 >= ctx.width)
             continue;
 
         const float midi = ctx.coords.freqToMidi(adjustedPitch);
@@ -1420,7 +1420,7 @@ void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderConte
     for (const auto& h : item.timeGrid->handles()) {
         const double timelineTime = item.projection.projectContentTimeToTimeline(h.output_seconds);
         const int x = ctx.coords.timeToX(timelineTime);
-        if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
+        if (x < ctx.contentStartX || x >= ctx.width) continue;
 
         const float alpha = h.isEndpoint() ? 0.3f : 0.4f;
         g.setColour(juce::Colours::white.withAlpha(alpha));
@@ -1467,7 +1467,7 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
 
         const double timelineTime = item.projection.projectContentTimeToTimeline(h.output_seconds);
         const int x = ctx.coords.timeToX(timelineTime);
-        if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
+        if (x < ctx.contentStartX || x >= ctx.width) continue;
 
         juce::Colour col = colorForKind(h.kind);
         if (h.isEndpoint()) {
