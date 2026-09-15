@@ -2102,9 +2102,8 @@ void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewportSt
 {
     const int cw = getTimelineContentViewportWidth();
     const int ch = getTimelineContentViewportHeight();
-    const bool drawFullLaneWidth = !shouldShowPianoKeys();
-    const int laneX = drawFullLaneWidth ? 0 : pianoKeyWidth_;
-    const int laneW = drawFullLaneWidth ? getTimelineViewportBounds().getWidth() : cw;
+    const int laneX = pianoKeyWidth_;
+    const int laneW = cw;
     const juce::Rectangle<int> timelineDomain(laneX, rulerHeight_, laneW, ch);
     const auto clipArea = damage.getIntersection(timelineDomain);
     if (clipArea.isEmpty()) return;
