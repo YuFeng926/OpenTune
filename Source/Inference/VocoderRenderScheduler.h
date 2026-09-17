@@ -35,7 +35,8 @@ public:
 
     struct Job {
         std::vector<float> f0;
-        std::vector<float> mel;
+        std::vector<float> uv;  // 1=voiced 显式浊音掩码；空则由 f0>0 推导
+        std::vector<float> conditioning;
         std::function<void(JobResult, const juce::String&, const std::vector<float>&)> onComplete;
     };
 

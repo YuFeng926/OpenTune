@@ -6,6 +6,7 @@
 #include <functional>
 #include "../Utils/Error.h"
 #include "VocoderRenderScheduler.h"
+#include "VocoderInterface.h"
 
 namespace Ort { struct Env; }
 
@@ -17,7 +18,8 @@ public:
 
     struct Job {
         std::vector<float> f0;
-        std::vector<float> mel;
+        std::vector<float> uv;  // 1=voiced 显式浊音掩码；空则由 f0>0 推导
+        std::vector<float> conditioning;
         std::function<void(JobResult, const juce::String&, const std::vector<float>&)> onComplete;
     };
 
@@ -28,7 +30,8 @@ public:
     void shutdown();
     bool submit(Job job);
     int getVocoderHopSize() const;
-    int getMelBins() const;
+    int getConditioningBins() const;
+    VocoderConditioningType getConditioningType() const;
     float getFMax() const;
 
 private:

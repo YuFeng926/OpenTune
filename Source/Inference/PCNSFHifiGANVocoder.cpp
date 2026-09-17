@@ -24,6 +24,11 @@ PCNSFHifiGANVocoder::PCNSFHifiGANVocoder(std::unique_ptr<Ort::Session> session) 
         AppLogger::info("PCNSF input[" + juce::String(static_cast<int>(i)) + "] "
             + juce::String(inputNames_[i]) + " shape=" + shapeText);
     }
+
+    const char* conditioningName = getConditioningType() == VocoderConditioningType::LogLinearSpec
+        ? "log-linear-spec" : "log-mel";
+    AppLogger::info("PCNSFHifiGANVocoder conditioning=" + juce::String(conditioningName)
+        + " bins=" + juce::String(getConditioningBins()));
 }
 
 PCNSFHifiGANVocoder::~PCNSFHifiGANVocoder() = default;

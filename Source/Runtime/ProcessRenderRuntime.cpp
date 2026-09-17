@@ -582,7 +582,8 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
         if (vocoderDomain_ != nullptr)
         {
             out.generation = vocoderGeneration_;
-            out.melBins = vocoderDomain_->getMelBins();
+            out.conditioningBins = vocoderDomain_->getConditioningBins();
+            out.conditioningType = vocoderDomain_->getConditioningType();
             out.fMax = vocoderDomain_->getFMax();
             return true;
         }
@@ -596,7 +597,8 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
             if (vocoderDomain_ != nullptr)
             {
                 out.generation = vocoderGeneration_;
-                out.melBins = vocoderDomain_->getMelBins();
+                out.conditioningBins = vocoderDomain_->getConditioningBins();
+                out.conditioningType = vocoderDomain_->getConditioningType();
                 out.fMax = vocoderDomain_->getFMax();
                 return true;
             }
@@ -628,7 +630,8 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
             vocoderDomain_ = std::move(newDomain);
             ++vocoderGeneration_;
             out.generation = vocoderGeneration_;
-            out.melBins = vocoderDomain_->getMelBins();
+            out.conditioningBins = vocoderDomain_->getConditioningBins();
+            out.conditioningType = vocoderDomain_->getConditioningType();
             out.fMax = vocoderDomain_->getFMax();
             published = true;
         }
@@ -701,6 +704,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     std::vector<float> monoAudio;
     std::vector<float> effectiveF0;
     std::vector<float> vocoderF0;
+    std::vector<float> vocoderUv;
 
     const double relChunkStartSec = job.startSeconds;
     auto coreJob = std::move(job);
@@ -964,9 +968,10 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         }
     }
 
-    // 真实 mel/vocoder 分支前唯一一次锁内获取 domain 配置（generation/melBins/fMax）：
-    // raw 四分支与 light 路径已在上方早退，绝不触发模型加载。melBins/fMax 与提交
-    // 校验的 generation 同属一个 domain，不存在跨域混用。
+    // 真实条件谱/vocoder 分支前唯一一次锁内获取 domain 配置
+    // （generation/conditioningBins/conditioningType/fMax）：raw 四分支与 light
+    // 路径已在上方早退，绝不触发模型加载。配置与提交校验的 generation 同属一个
+    // domain，不存在跨域混用。
     if (!acquireVocoderConfig(vocoderCfg))
     {
         if (isVocoderReconfiguring())
@@ -987,33 +992,39 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         return;
     }
 
-    const int melBins = vocoderCfg.melBins;
+    const int conditioningBins = vocoderCfg.conditioningBins;
     const float fMax = vocoderCfg.fMax;
-    if (melBins <= 0)
+    if (conditioningBins <= 0)
     {
         failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
                   coreJob.targetRevision, coreJob.contentKey);
         return;
     }
 
-    MelSpectrogramConfig melConfig;
-    melConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
-    melConfig.nMels = melBins;
-    melConfig.fMax = fMax;
+    MelSpectrogramConfig conditioningConfig;
+    conditioningConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
+    conditioningConfig.nMels = conditioningBins;
+    conditioningConfig.fMax = fMax;
 
-    auto melResult = computeLogMelSpectrogram(monoAudio.data(),
-                                              static_cast<int>(monoAudio.size()),
-                                              numFrames,
-                                              melConfig);
-    if (!melResult.ok() || melResult.value().empty())
+    const bool linearSpec = vocoderCfg.conditioningType == VocoderConditioningType::LogLinearSpec;
+    auto conditioningResult = linearSpec
+        ? computeLogLinearSpectrogram(monoAudio.data(),
+                                      static_cast<int>(monoAudio.size()),
+                                      numFrames,
+                                      conditioningConfig)
+        : computeLogMelSpectrogram(monoAudio.data(),
+                                   static_cast<int>(monoAudio.size()),
+                                   numFrames,
+                                   conditioningConfig);
+    if (!conditioningResult.ok() || conditioningResult.value().empty())
     {
         failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
                   coreJob.targetRevision, coreJob.contentKey);
         return;
     }
 
-    auto mel = std::move(melResult).value();
-    const int actualFrames = static_cast<int>(mel.size() / melConfig.nMels);
+    auto conditioning = std::move(conditioningResult).value();
+    const int actualFrames = static_cast<int>(conditioning.size() / conditioningConfig.nMels);
 
     // Training applies interp_uv=True to the complete F0 timeline before the
     // vocoder sees it.  Interpolating only this render chunk misses voiced
@@ -1021,9 +1032,14 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const auto& originalF0 = snap->getOriginalF0();
     auto vocoderSourceF0 = materializeEffectiveF0Range(
         *contentSnap, 0, static_cast<int>(originalF0.size()));
+    // UV 必须在 gap-fill 之前采样：fillF0GapsForVocoder 按训练 interp_uv=True
+    // 语义填满所有 unvoiced 帧，填完后无法再区分浊音/清音。线性谱声码器需要
+    // 显式 UV 才能在清音段抑制谐波源。
+    const auto preFillF0 = vocoderSourceF0;
     fillF0GapsForVocoder(vocoderSourceF0);
 
     vocoderF0.assign(static_cast<size_t>(actualFrames), 0.0f);
+    vocoderUv.assign(static_cast<size_t>(actualFrames), 0.0f);
     for (int i = 0; i < actualFrames; ++i)
     {
         const double melTimeSec = trueStartSeconds + i * hopDuration;
@@ -1050,11 +1066,20 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             vocoderF0[static_cast<size_t>(i)] = f0_0;
         else if (f0_1 > 0.0f)
             vocoderF0[static_cast<size_t>(i)] = f0_1;
+
+        const bool voiced0 = globalIdx0 >= 0
+            && globalIdx0 < static_cast<int>(preFillF0.size())
+            && preFillF0[static_cast<size_t>(globalIdx0)] > 0.0f;
+        const bool voiced1 = globalIdx1 >= 0
+            && globalIdx1 < static_cast<int>(preFillF0.size())
+            && preFillF0[static_cast<size_t>(globalIdx1)] > 0.0f;
+        vocoderUv[static_cast<size_t>(i)] = (voiced0 || voiced1) ? 1.0f : 0.0f;
     }
 
     VocoderDomain::Job vocoderJob;
     vocoderJob.f0 = std::move(vocoderF0);
-    vocoderJob.mel = std::move(mel);
+    vocoderJob.uv = std::move(vocoderUv);
+    vocoderJob.conditioning = std::move(conditioning);
 
     auto renderCache = coreJob.renderCache;
     auto targetRevision = coreJob.targetRevision;

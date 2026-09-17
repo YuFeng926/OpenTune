@@ -60,6 +60,11 @@ Result<void> MelSpectrogramProcessor::configure(const MelSpectrogramConfig& cfg)
         return Result<void>::failure(ErrorCode::MelFFTSizeInvalid,
             "FFT size must be power of 2, got: " + std::to_string(cfg.nFft));
 
+    if (cfg.linearMagnitude && cfg.nMels != cfg.nFft / 2 + 1)
+        return Result<void>::failure(ErrorCode::InvalidParameter,
+            "Linear magnitude mode requires nMels == nFft/2+1, got nMels="
+            + std::to_string(cfg.nMels) + ", nFft=" + std::to_string(cfg.nFft));
+
     config_ = cfg;
     configHash_ = newHash;
 
@@ -67,7 +72,8 @@ Result<void> MelSpectrogramProcessor::configure(const MelSpectrogramConfig& cfg)
     if (!fftResult)
         return fftResult;
 
-    initMelFilterbank();
+    if (!config_.linearMagnitude)
+        initMelFilterbank();
 
     initialized_ = true;
     return Result<void>::success();
@@ -190,7 +196,7 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
     for (int i = 0; i < (int) paddedAudio_.size(); ++i)
         paddedAudio_[(size_t) i] = audio[(size_t) reflectIndex(i - padLeft_, numSamples)];
 
-    std::vector<float> melSums((size_t) config_.nMels);
+    std::vector<float> binValues((size_t) config_.nMels);
     std::vector<float> logResults((size_t) config_.nMels);
 
     for (int frame = 0; frame < numFrames; ++frame)
@@ -211,18 +217,23 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
 
         fft_->performFrequencyOnlyForwardTransform(fftBuffer_.data());
 
-        // 应用Mel滤波器组: 点积 → epsilon clamping → 向量化 log
+        // 条件谱: 线性模式直接对 nFft/2+1 个 bin 做 epsilon clamping → log；
+        // Mel 模式应用 Mel 滤波器组后再 clamping → log。
         const auto& simd = SimdAccelerator::getInstance();
-        const int nMels = config_.nMels;
-        for (int m = 0; m < nMels; ++m)
-        {
-            melSums[(size_t) m] = simd.dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
-            melSums[(size_t) m] = std::max(config_.logEps, melSums[(size_t) m]);
+        const int nBins = config_.nMels;
+        if (config_.linearMagnitude) {
+            for (int m = 0; m < nBins; ++m)
+                binValues[(size_t) m] = std::max(config_.logEps, fftBuffer_[(size_t) m]);
+        } else {
+            for (int m = 0; m < nBins; ++m) {
+                binValues[(size_t) m] = simd.dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
+                binValues[(size_t) m] = std::max(config_.logEps, binValues[(size_t) m]);
+            }
         }
 
-        simd.vectorLog(logResults.data(), melSums.data(), static_cast<size_t>(nMels));
+        simd.vectorLog(logResults.data(), binValues.data(), static_cast<size_t>(nBins));
 
-        for (int m = 0; m < nMels; ++m)
+        for (int m = 0; m < nBins; ++m)
         {
             output[(size_t) m * (size_t) numFrames + (size_t) frame] = logResults[(size_t) m];
         }
@@ -270,6 +281,16 @@ MelResult computeLogMelSpectrogram(const float* audio,
         return MelResult::failure(configResult.error());
 
     return processor.compute(audio, numSamples, numFrames);
+}
+
+MelResult computeLogLinearSpectrogram(const float* audio,
+                                      int numSamples,
+                                      int numFrames,
+                                      const MelSpectrogramConfig& cfg)
+{
+    MelSpectrogramConfig linearCfg = cfg;
+    linearCfg.linearMagnitude = true;
+    return computeLogMelSpectrogram(audio, numSamples, numFrames, linearCfg);
 }
 
 } // namespace OpenTune

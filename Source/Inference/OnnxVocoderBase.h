@@ -9,9 +9,9 @@
 namespace OpenTune {
 
 struct VocoderScratchBuffers {
-    std::vector<float> melOwned;
+    std::vector<float> conditioningOwned;
     std::vector<float> uvData;
-    std::vector<float> melTransposed;
+    std::vector<float> conditioningTransposed;
     std::vector<const char*> inputNamesC;
     std::vector<Ort::Value> inputTensors;
     std::vector<std::string> inputNameStorage;
@@ -27,13 +27,15 @@ public:
 
     std::vector<float> synthesize(
         const std::vector<float>& f0,
-        const float* mel,
-        size_t melSize,
+        const std::vector<float>& uv,
+        const float* conditioning,
+        size_t conditioningSize,
         Ort::RunOptions& runOptions) override;
 
     int getHopSize() const override { return 512; }
     int getSampleRate() const override { return 44100; }
-    int getMelBins() const override { return static_cast<int>(melBinsHint_); }
+    int getConditioningBins() const override { return static_cast<int>(conditioningBinsHint_); }
+    VocoderConditioningType getConditioningType() const override { return conditioningType_; }
     float getFMax() const override { return fMax_; }
     void setMelFMax(float fMax) override { fMax_ = fMax; }
 
@@ -42,8 +44,9 @@ protected:
     void prepareInputTensors(
         VocoderScratchBuffers& scratch,
         const std::vector<float>& f0,
-        const float* mel,
-        size_t melSize,
+        const std::vector<float>& uv,
+        const float* conditioning,
+        size_t conditioningSize,
         Ort::MemoryInfo& memoryInfo);
 
     virtual std::vector<float> runSession(
@@ -57,12 +60,13 @@ protected:
     std::vector<std::vector<int64_t>> inputShapes_;
     std::vector<ONNXTensorElementDataType> inputElemTypes_;
 
-    int melIndex_ = -1;
+    int conditioningIndex_ = -1;
     int f0Index_ = -1;
     int uvIndex_ = -1;
-    int64_t melBinsHint_ = 128;
+    int64_t conditioningBinsHint_ = 128;
+    VocoderConditioningType conditioningType_ = VocoderConditioningType::LogMel;
     float fMax_ = 16000.0f;
-    bool melNeedsTranspose_ = false;
+    bool conditioningNeedsTranspose_ = false;
 };
 
 } // namespace OpenTune

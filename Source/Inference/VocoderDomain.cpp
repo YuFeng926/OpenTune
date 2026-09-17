@@ -46,7 +46,8 @@ bool VocoderDomain::submit(Job job) {
 
     VocoderRenderScheduler::Job schedulerJob;
     schedulerJob.f0 = std::move(job.f0);
-    schedulerJob.mel = std::move(job.mel);
+    schedulerJob.uv = std::move(job.uv);
+    schedulerJob.conditioning = std::move(job.conditioning);
     schedulerJob.onComplete = std::move(job.onComplete);
     return scheduler_->submit(std::move(schedulerJob));
 }
@@ -55,8 +56,13 @@ int VocoderDomain::getVocoderHopSize() const {
     return inferenceService_ ? inferenceService_->getVocoderHopSize() : 0;
 }
 
-int VocoderDomain::getMelBins() const {
-    return inferenceService_ ? inferenceService_->getMelBins() : 0;
+int VocoderDomain::getConditioningBins() const {
+    return inferenceService_ ? inferenceService_->getConditioningBins() : 0;
+}
+
+VocoderConditioningType VocoderDomain::getConditioningType() const {
+    return inferenceService_ ? inferenceService_->getConditioningType()
+                             : VocoderConditioningType::LogMel;
 }
 
 float VocoderDomain::getFMax() const {

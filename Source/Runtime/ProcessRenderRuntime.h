@@ -58,9 +58,9 @@ public:
      *
      * submitVocoderJob requires expectedGeneration to match the current domain
      * generation: the caller captures the full configuration
-     * (generation/melBins/fMax) in a single locked snapshot via
-     * acquireVocoderConfig(), so a job is never submitted to a domain rebuilt
-     * since then with stale configuration.
+     * (generation/conditioningBins/conditioningType/fMax) in a single locked
+     * snapshot via acquireVocoderConfig(), so a job is never submitted to a
+     * domain rebuilt since then with stale configuration.
      */
     bool submitVocoderJob(VocoderDomain::Job job, uint64_t expectedGeneration);
     bool isVocoderReady() const noexcept;
@@ -78,12 +78,13 @@ private:
     // 持有 vocoderMutex_，保证 UI 查询与实例 detach 永远只经历短临界区。
     std::unique_ptr<VocoderDomain> createVocoderDomain(const VocoderModelWeight& weight);
 
-    // 一次锁内“确保 domain 并返回 generation/melBins/fMax”：配置与 domain
-    // 同代生成，杜绝跨域混用（旧 generation 配置配新 domain 等）。
+    // 一次锁内“确保 domain 并返回 generation/conditioningBins/fMax”：配置与
+    // domain 同代生成，杜绝跨域混用（旧 generation 配置配新 domain 等）。
     struct VocoderConfig
     {
         uint64_t generation{0};
-        int melBins{0};
+        int conditioningBins{0};
+        VocoderConditioningType conditioningType{VocoderConditioningType::LogMel};
         float fMax{16000.0f};
     };
     bool acquireVocoderConfig(VocoderConfig& out);

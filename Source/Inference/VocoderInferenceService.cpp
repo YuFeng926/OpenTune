@@ -44,8 +44,9 @@ public:
 
     Result<std::vector<float>> synthesize(
         const std::vector<float>& f0,
-        const float* mel,
-        size_t melSize,
+        const std::vector<float>& uv,
+        const float* conditioning,
+        size_t conditioningSize,
         Ort::RunOptions& runOptions)
     {
         if (!initialized_.load(std::memory_order_acquire)) {
@@ -54,7 +55,7 @@ public:
         }
 
         try {
-            auto audio = currentVocoder_->synthesize(f0, mel, melSize, runOptions);
+            auto audio = currentVocoder_->synthesize(f0, uv, conditioning, conditioningSize, runOptions);
             return Result<std::vector<float>>::success(audio);
         } catch (const std::exception& e) {
             return Result<std::vector<float>>::failure(
@@ -66,8 +67,13 @@ public:
         return currentVocoder_ ? currentVocoder_->getHopSize() : 512;
     }
 
-    int getMelBins() const {
-        return currentVocoder_ ? currentVocoder_->getMelBins() : 128;
+    int getConditioningBins() const {
+        return currentVocoder_ ? currentVocoder_->getConditioningBins() : 128;
+    }
+
+    VocoderConditioningType getConditioningType() const {
+        return currentVocoder_ ? currentVocoder_->getConditioningType()
+                               : VocoderConditioningType::LogMel;
     }
 
     float getFMax() const {
@@ -96,19 +102,24 @@ void VocoderInferenceService::shutdown() {
 
 Result<std::vector<float>> VocoderInferenceService::synthesize(
     const std::vector<float>& f0,
-    const float* mel,
-    size_t melSize,
+    const std::vector<float>& uv,
+    const float* conditioning,
+    size_t conditioningSize,
     Ort::RunOptions& runOptions)
 {
-    return pImpl_->synthesize(f0, mel, melSize, runOptions);
+    return pImpl_->synthesize(f0, uv, conditioning, conditioningSize, runOptions);
 }
 
 int VocoderInferenceService::getVocoderHopSize() const {
     return pImpl_->getVocoderHopSize();
 }
 
-int VocoderInferenceService::getMelBins() const {
-    return pImpl_->getMelBins();
+int VocoderInferenceService::getConditioningBins() const {
+    return pImpl_->getConditioningBins();
+}
+
+VocoderConditioningType VocoderInferenceService::getConditioningType() const {
+    return pImpl_->getConditioningType();
 }
 
 float VocoderInferenceService::getFMax() const {

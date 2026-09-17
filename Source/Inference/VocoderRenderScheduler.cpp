@@ -125,7 +125,8 @@ void VocoderRenderScheduler::workerThread() {
                 if (service_) {
                     auto result = service_->synthesize(
                         job.f0,
-                        job.mel.empty() ? nullptr : job.mel.data(), job.mel.size(),
+                        job.uv,
+                        job.conditioning.empty() ? nullptr : job.conditioning.data(), job.conditioning.size(),
                         runOptions_);
                     
                     AppLogger::log("VocoderTrace: run end");

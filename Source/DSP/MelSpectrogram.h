@@ -29,6 +29,9 @@ struct MelSpectrogramConfig
     // The collater overrides the 1e-9 floor from process.py, so the model
     // only ever sees mel >= ln(1e-5) ≈ -11.51.
     float logEps = 1.0e-5f;
+    // true: 跳过 Mel 滤波器组，直接输出自然对数线性幅度谱（log|rFFT|）。
+    // 此时 nMels 必须是 nFft/2+1，与 linear_spec 条件模型的条件维一致。
+    bool linearMagnitude = false;
 
     size_t hash() const noexcept
     {
@@ -45,6 +48,7 @@ struct MelSpectrogramConfig
         combine(static_cast<int>(fMin * 1000));
         combine(static_cast<int>(fMax * 1000));
         combine(static_cast<int>(logEps * 1e9f));
+        combine(static_cast<int>(linearMagnitude));
         return h;
     }
 };
@@ -121,5 +125,15 @@ MelResult computeLogMelSpectrogram(const float* audio,
                                    int numSamples,
                                    int numFrames,
                                    const MelSpectrogramConfig& cfg);
+
+/** @brief 自然对数线性幅度谱（log|rFFT|），用于 linear_spec 条件声码器。
+ *
+ *  与 Mel 路径共享同一套分帧/加窗/reflect padding/FFT，仅跳过 Mel 滤波器组：
+ *  cfg.nMels 必须等于 nFft/2+1，输出即为每个 FFT bin 的 log 幅度。
+ */
+MelResult computeLogLinearSpectrogram(const float* audio,
+                                      int numSamples,
+                                      int numFrames,
+                                      const MelSpectrogramConfig& cfg);
 
 } // namespace OpenTune

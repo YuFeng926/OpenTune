@@ -23,12 +23,14 @@ public:
 
     Result<std::vector<float>> synthesize(
         const std::vector<float>& f0,
-        const float* mel,
-        size_t melSize,
+        const std::vector<float>& uv,
+        const float* conditioning,
+        size_t conditioningSize,
         Ort::RunOptions& runOptions);
 
     int getVocoderHopSize() const;
-    int getMelBins() const;
+    int getConditioningBins() const;
+    VocoderConditioningType getConditioningType() const;
     float getFMax() const;
 
 private:
