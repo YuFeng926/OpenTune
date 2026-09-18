@@ -152,6 +152,14 @@ private:
         CursorStyleCapitaine,
         CursorStyleBreeze,
 
+        // UI Zoom 固定档位（单选，View 菜单唯一入口）
+        UiZoom75 = 180,
+        UiZoom90,
+        UiZoom100,
+        UiZoom110,
+        UiZoom125,
+        UiZoom150,
+
         OpenPreferences = 200,
         OpenHelp
     };

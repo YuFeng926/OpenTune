@@ -134,6 +134,8 @@ private:
     };
 
     void timerCallback() override;
+    // §7.3：心跳对比 Processor uiZoom（唯一真相），不同则重设 transform 与 resize limits。
+    void applyUiZoomIfNeeded();
     void overviewNavigateRequested(double visibleStartSeconds,
                                    double pixelsPerSecond) override;
     void syncSharedAppPreferences();
@@ -163,6 +165,11 @@ private:
     OpenTuneLookAndFeel openTuneLookAndFeel_;
     AuroraLookAndFeel auroraLookAndFeel_;
 
+    // 唯一 content root，承载全部主 UI；editor 本体绝不 transform（§7.3）。
+    juce::Component contentRoot_;
+    // 当前已应用值，int 百分比（默认 100）；唯一真相在 Processor（构造读取、心跳同步，§7.3）。
+    int appliedUiZoomPercent_ = 100;
+
     MenuBarComponent menuBar_;
     TransportBarComponent transportBar_;
     TopBarComponent topBar_;
@@ -171,7 +178,7 @@ private:
     TimelineOverviewComponent overviewStrip_;
     AutoRenderOverlayComponent autoRenderOverlay_;
     RenderBadgeComponent renderBadge_;
-    OpenTuneTooltipWindow tooltipWindow_{ this, 600 };
+    OpenTuneTooltipWindow tooltipWindow_{ &contentRoot_, 600 };
 
     bool suppressScaleChangedCallback_ = false;
     // content detectedKey 的上次观察基线（content→UI 回显专用，与 UI 显示值分离：

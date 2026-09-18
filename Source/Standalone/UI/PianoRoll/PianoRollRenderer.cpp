@@ -642,7 +642,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     const bool isBlueBreeze = UIColors::currentThemeId() == ThemeId::BlueBreeze;
     const bool isOverdose = UIColors::currentThemeId() == ThemeId::Overdose;
     const bool isLightTheme = isBlueBreeze || isOverdose;
-    const auto& overdoseAtlas = UiAssets::get(UiAssetId::PianoKeyAtlas);
+    const auto& overdoseAtlas = UiAssets::get(UiAssetId::PianoKeyAtlas, g);
     const bool hasOverdoseAtlas = isOverdose && overdoseAtlas.isValid() && overdoseAtlas.getHeight() >= 5;
     const int overdoseAtlasSliceHeight = hasOverdoseAtlas ? overdoseAtlas.getHeight() / 5 : 0;
 

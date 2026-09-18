@@ -12,7 +12,7 @@ namespace OpenTune {
 // Background-plane generation parameters (BPM/time sig/display mode/theme only affect grid/lanes)
 struct BackgroundGenerationSignature {
     double pixelsPerSecond = 0.0;
-    int64_t dpiMilli = 1000;
+    float renderScale = 1.0f;   // 有效倍率（peer/host/root transform 真实绘制栈）
     int trackHeight = 0;
     int visibleTrackCount = 2;
     int themeId = 0;
@@ -28,6 +28,7 @@ struct BackgroundGenerationSignature {
 // content revision, and the current placement selection
 struct ForegroundGenerationSignature {
     double pixelsPerSecond = 0.0;
+    float renderScale = 1.0f;   // 与背景平面同一有效倍率；变化时清除前景平面
     int trackHeight = 0;
     uint64_t contentRevision = 0;
     uint64_t selectionRevision = 0;

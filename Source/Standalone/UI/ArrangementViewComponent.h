@@ -210,7 +210,8 @@ private:
     int64_t surfaceOriginPx_ = 0;   // llround(visibleStartSeconds * pps) at last surface render
     double  surfacePps_ = 0.0;      // pps at last surface render; change → full rebuild
     juce::Rectangle<int> lastPlayheadRect_{};  // previous frame playhead presentation rect
-    int64_t lastDpiMilli_ = 1000;
+    // 有效倍率（peer/host/root transform 真实绘制栈）；0 = 尚未从 paint 捕获
+    float renderScale_ = 0.0f;
 
     // Presentation-only bounded ease-out transition for Continuous follow
     // return-to-centre. Not transport truth; not shared; cleared on mode switch.

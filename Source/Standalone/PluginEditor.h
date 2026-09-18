@@ -197,6 +197,10 @@ private:
     bool handleAutoRefExecute();
 
     void timerCallback() override;
+    // §7.3：心跳对比 Processor uiZoom（唯一真相），不同则重设 transform 与 resize limits。
+    void applyUiZoomIfNeeded();
+    // §5.1：挂入默认 StandaloneFilterWindow 且 peer 可用后，按 OpenTune.settings 恢复外层窗口几何（仅一次）。
+    void restoreStandaloneWindowGeometryOnce();
     void showPreferencesDialog();
     void syncSharedAppPreferences();
     void syncTrackColorsToPanel();
@@ -248,6 +252,11 @@ private:
     AuroraLookAndFeel auroraLookAndFeel_;
     juce::MouseCursor techCursor_;
 
+    // 唯一 content root，承载全部主 UI；editor 本体绝不 transform（§7.3）。
+    juce::Component contentRoot_;
+    // 当前已应用值，int 百分比（默认 100）；唯一真相在 Processor（构造读取、心跳同步，§7.3）。
+    int appliedUiZoomPercent_ = 100;
+
     // Main GUI Components
     MenuBarComponent menuBar_;
     TransportBarComponent transportBar_;
@@ -260,7 +269,7 @@ private:
     RippleOverlayComponent rippleOverlay_;
     AutoRenderOverlayComponent autoRenderOverlay_;
     RenderBadgeComponent renderBadge_;
-    OpenTuneTooltipWindow tooltipWindow_{ this, 600 };
+    OpenTuneTooltipWindow tooltipWindow_{ &contentRoot_, 600 };
 
     // Project Session
     ProjectSession projectSession_;
@@ -286,6 +295,9 @@ private:
     // 现代布局：左右面板可折叠（用于“沉浸主画布”模式）
     bool isTrackPanelVisible_ = true;
     bool isParameterPanelVisible_ = true;
+
+    // §5.1：外层窗口几何只在 peer/顶层可用后恢复一次，不在 resized 重入
+    bool standaloneWindowGeometryRestored_ = false;
 
     ThemeId appliedThemeId_ = ThemeId::Aurora;
     Language appliedLanguage_ = Language::Chinese;

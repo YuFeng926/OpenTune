@@ -48,21 +48,16 @@ struct UiAssets
                                                        BinaryData::HONORSansCNMedium_ttfSize);
     }
 
-    static const juce::Image& get(UiAssetId assetId)
+    /** 单一有效倍率：由当前绘制栈（peer/host/root transform）给出的真实物理像素倍率。
+        禁止手算 host×DPI×zoom 或读取 Desktop 全局值。 */
+    static float getEffectiveScaleFactor(const juce::Graphics& g)
     {
-        return get(assetId, getRecommendedScaleFactor());
+        return g.getInternalContext().getPhysicalPixelScaleFactor();
     }
 
-    static const juce::Image& get(UiAssetId assetId, float scaleFactor)
+    static const juce::Image& get(UiAssetId assetId, const juce::Graphics& g)
     {
-        const auto scaleBucket = chooseScaleBucket(scaleFactor);
-        const auto preferredResourceName = buildNamedResourceId(assetId, scaleBucket);
-        const auto fallbackResourceName = buildNamedResourceId(assetId, 1);
-
-        if (hasNamedResource(preferredResourceName))
-            return getCachedImage(preferredResourceName);
-
-        return getCachedImage(fallbackResourceName);
+        return get(assetId, getEffectiveScaleFactor(g));
     }
 
     static void drawAssetStretch(juce::Graphics& g,
@@ -70,7 +65,7 @@ struct UiAssets
                                  juce::Rectangle<float> bounds,
                                  float opacity = 1.0f)
     {
-        const auto& image = get(assetId, getRecommendedScaleFactor());
+        const auto& image = get(assetId, g);
         if (!image.isValid() || bounds.isEmpty())
         {
             jassertfalse;
@@ -89,7 +84,7 @@ struct UiAssets
                                juce::Rectangle<float> bounds,
                                float opacity = 1.0f)
     {
-        const auto& image = get(assetId, getRecommendedScaleFactor());
+        const auto& image = get(assetId, g);
         if (!image.isValid() || bounds.isEmpty())
         {
             jassertfalse;
@@ -119,7 +114,7 @@ struct UiAssets
                                    int frameCount,
                                    float opacity = 1.0f)
     {
-        const auto& filmstrip = get(assetId, getRecommendedScaleFactor());
+        const auto& filmstrip = get(assetId, g);
         if (!filmstrip.isValid() || bounds.isEmpty() || frameCount <= 0)
         {
             jassertfalse;
@@ -150,7 +145,7 @@ struct UiAssets
                                       juce::Rectangle<int> source,
                                       float opacity = 1.0f)
     {
-        const auto& image = get(assetId, getRecommendedScaleFactor());
+        const auto& image = get(assetId, g);
         if (!image.isValid() || bounds.isEmpty())
         {
             jassertfalse;
@@ -168,9 +163,16 @@ struct UiAssets
     }
 
 private:
-    static float getRecommendedScaleFactor()
+    static const juce::Image& get(UiAssetId assetId, float scaleFactor)
     {
-        return juce::jlimit(1.0f, 3.0f, juce::Desktop::getInstance().getGlobalScaleFactor());
+        const auto scaleBucket = chooseScaleBucket(scaleFactor);
+        const auto preferredResourceName = buildNamedResourceId(assetId, scaleBucket);
+        const auto fallbackResourceName = buildNamedResourceId(assetId, 1);
+
+        if (hasNamedResource(preferredResourceName))
+            return getCachedImage(preferredResourceName);
+
+        return getCachedImage(fallbackResourceName);
     }
 
     static int chooseScaleBucket(float scaleFactor)

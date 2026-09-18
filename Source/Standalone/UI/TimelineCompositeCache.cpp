@@ -1,10 +1,12 @@
 #include "TimelineCompositeCache.h"
 
+#include <cmath>
+
 namespace OpenTune {
 
 bool BackgroundGenerationSignature::operator==(const BackgroundGenerationSignature& o) const {
     return pixelsPerSecond == o.pixelsPerSecond
-        && dpiMilli == o.dpiMilli
+        && renderScale == o.renderScale
         && trackHeight == o.trackHeight
         && visibleTrackCount == o.visibleTrackCount
         && themeId == o.themeId
@@ -16,6 +18,7 @@ bool BackgroundGenerationSignature::operator==(const BackgroundGenerationSignatu
 
 bool ForegroundGenerationSignature::operator==(const ForegroundGenerationSignature& o) const {
     return pixelsPerSecond == o.pixelsPerSecond
+        && renderScale == o.renderScale
         && trackHeight == o.trackHeight
         && contentRevision == o.contentRevision
         && selectionRevision == o.selectionRevision;
@@ -56,6 +59,12 @@ void TimelineCompositeCache::prepare(
     }
 
     // Build missing tiles (2D traversal)
+    // 位图物理尺寸 = ceil(逻辑 tile 尺寸 × 有效倍率)；离屏 Graphics 施加同一倍率，
+    // builder 继续用逻辑坐标绘制。
+    const float renderScale = bgSig.renderScale;
+    const int physTileW = static_cast<int>(std::ceil(static_cast<float>(kTileWidthPx) * renderScale));
+    const int physTileH = static_cast<int>(std::ceil(static_cast<float>(kWorldTileHeight) * renderScale));
+
     for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
         for (int vr = firstVertRow; vr <= lastVertRow; ++vr) {
             TileKey key{tt, vr};
@@ -75,17 +84,17 @@ void TimelineCompositeCache::prepare(
             }
 
             if (bgMissing) {
-                entry.background = juce::Image(
-                    juce::Image::ARGB, kTileWidthPx, kWorldTileHeight, true);
+                entry.background = juce::Image(juce::Image::ARGB, physTileW, physTileH, true);
                 juce::Graphics g(entry.background);
+                g.addTransform(juce::AffineTransform::scale(renderScale));
                 juce::Rectangle<int> b(0, 0, kTileWidthPx, kWorldTileHeight);
                 backgroundBuilder(g, b, key);
             }
 
             if (fgMissing) {
-                entry.foreground = juce::Image(
-                    juce::Image::ARGB, kTileWidthPx, kWorldTileHeight, true);
+                entry.foreground = juce::Image(juce::Image::ARGB, physTileW, physTileH, true);
                 juce::Graphics g(entry.foreground);
+                g.addTransform(juce::AffineTransform::scale(renderScale));
                 juce::Rectangle<int> b(0, 0, kTileWidthPx, kWorldTileHeight);
                 foregroundBuilder(g, b, key);
             }

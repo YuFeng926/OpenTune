@@ -107,14 +107,6 @@ public:
     void applyTheme();
     void refreshLocalizedText();  // 刷新本地化文本
 
-    // ── 固定尺寸常量：resized() 绝对坐标排布的验收基准 ──
-    // 旋钮区（Overdose/BlueBreeze knobSize=115）：header(36) + row1(155) + row2(155) + pitchShift(40) = 386
-    // 工具区（OpenDyne 9 按钮 / 5 行）：toolsHeader(32) + 5×60 + 4×10 + pitchGrid间隔(14) + pitchGrid(22) = 408
-    // OpenDyne 内容需求 = 386 + 408 = 794
-    static constexpr int kMinimumContentHeight = 794;
-    // 面板最小高度 = 内容需求 + reduced(shadowMargin+innerPadding) 上下边距 40
-    static constexpr int kMinimumPanelHeight = kMinimumContentHeight + 40;
-
     // Getters
     float getRetuneSpeed() const;
     float getVibratoDepth() const;
@@ -141,18 +133,38 @@ private:
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ToolIconButton)
     };
 
+    class ContentComponent : public juce::Component
+    {
+    public:
+        explicit ContentComponent(ParameterPanel& owner) : owner_(owner) {}
+
+        void paint(juce::Graphics& g) override;
+
+    private:
+        ParameterPanel& owner_;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ContentComponent)
+    };
+
     void setupHeader(juce::Label& label, const juce::String& text);
     void setupLabel(juce::Label& label, const juce::String& text);
     void setupLargeKnob(juce::Slider& slider, double min, double max, double defaultVal, const juce::String& suffix);
+
+    /** 以内容组件本地坐标排布全部控件；返回由实际布局 bottom + 底部内边距得出的内容高度。 */
+    int layoutContent(int width);
     
     void onRetuneSpeedChanged();
     void onVibratoDepthChanged();
     void onVibratoRateChanged();
     void onNoteSplitChanged();
     void onToolClicked(int toolId);
-    void rebuildAuroraSidebarSurface(juce::Rectangle<float> bounds);
+    void rebuildAuroraSidebarSurface(juce::Graphics& g, juce::Rectangle<float> bounds);
 
     juce::ListenerList<Listener> listeners_;
+
+    // ── 滚动结构：面板 chrome 固定 → 单个 Viewport → 单个内容组件 ──
+    juce::Viewport viewport_;
+    ContentComponent contentComponent_;
 
     // Pitch Correction Section
     juce::Label pitchCorrectionHeader_;

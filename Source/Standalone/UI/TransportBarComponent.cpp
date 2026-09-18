@@ -16,6 +16,97 @@ constexpr float kAuroraToolbarChromeIntensity = 0.42f;
 
 constexpr int kValidDenominators[] = { 1, 2, 4, 8, 16, 32, 64 };
 
+constexpr const char* kRootNoteNames[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+constexpr const char* kScaleTypeNames[] = { "Maj.", "Min.", "Chr.", "H.Min.", "Dor.", "Mix.", "Pent.", "m.Pent." };
+
+// 溢出菜单中调式类型条目的起始 ID（根音条目占用 1..12）
+constexpr int kOverflowScaleTypeItemIdBase = 100;
+
+// 三档宽度族：Full 保持既有尺寸；Compact 只收窄、不隐藏；Overflow 复用 Compact 并去掉 Root/Scale。
+struct TierMetrics
+{
+    int buttonWidth;
+    int spacing;
+    int groupGap;
+    int timeWidth;
+    int bpmWidth;
+    int rootWidth;
+    int typeWidth;
+};
+
+constexpr TierMetrics kFullStandaloneMetrics { 50, 3, 5, 156, 110, 50, 180 };
+constexpr TierMetrics kFullVst3Metrics       { 50, 3, 5, 140, 110, 50, 180 };
+constexpr TierMetrics kCompactMetrics        { 40, 2, 4, 120, 100, 40, 140 };
+
+TransportBarComponent::TierLayout buildTierLayout(TransportBarComponent::LayoutProfile profile,
+                                                  TransportBarComponent::LayoutTier tier,
+                                                  const TierMetrics& m,
+                                                  juce::Rectangle<int> bounds)
+{
+    using TierLayout = TransportBarComponent::TierLayout;
+    using LayoutTier = TransportBarComponent::LayoutTier;
+
+    constexpr int margin = 4;
+    constexpr int controlHeight = 40;
+
+    TierLayout out;
+    out.tier = tier;
+
+    const int y = bounds.getCentreY() - controlHeight / 2;
+    int cursor = 0;
+
+    auto place = [&](juce::Rectangle<int>& target, int width)
+    {
+        target = { bounds.getX() + margin + cursor, y, width, controlHeight };
+        cursor += width;
+    };
+    auto skip = [&](int gap) { cursor += gap; };
+
+    const bool vst3 = profile == TransportBarComponent::LayoutProfile::VST3AraSingleClip;
+    const bool overflow = tier == LayoutTier::Overflow;
+
+    place(out.fileButton, m.buttonWidth); skip(m.spacing);
+    place(out.editButton, m.buttonWidth); skip(m.spacing);
+    place(out.viewButton, m.buttonWidth); skip(m.groupGap);
+
+    if (vst3)
+    {
+        place(out.timeDisplay, m.timeWidth); skip(m.spacing);
+        place(out.recordButton, m.buttonWidth);
+        place(out.bpmField, m.bpmWidth); skip(m.spacing);
+    }
+    else
+    {
+        place(out.playButton, m.buttonWidth); skip(m.spacing);
+        place(out.pauseButton, m.buttonWidth); skip(m.spacing);
+        place(out.stopButton, m.buttonWidth); skip(m.spacing);
+        place(out.loopButton, m.buttonWidth); skip(m.groupGap);
+
+        place(out.trackViewButton, m.buttonWidth);
+        place(out.pianoViewButton, m.buttonWidth); skip(m.spacing);
+
+        place(out.timeDisplay, m.timeWidth); skip(m.spacing);
+        place(out.bpmField, m.bpmWidth); skip(m.spacing);
+        place(out.tapButton, m.buttonWidth); skip(margin);
+    }
+
+    if (overflow)
+    {
+        // More 固定最右侧：唯一溢出入口，Root/Scale 只从该菜单到达。
+        skip(m.groupGap);
+        out.moreButton = { bounds.getRight() - margin - m.buttonWidth, y, m.buttonWidth, controlHeight };
+        out.requiredWidth = margin + cursor + m.buttonWidth + margin;
+    }
+    else
+    {
+        place(out.scaleRootSelector, m.rootWidth); skip(margin);
+        place(out.scaleTypeSelector, m.typeWidth);
+        out.requiredWidth = margin + cursor + margin;
+    }
+
+    return out;
+}
+
 } // namespace
 
 DigitalTimeDisplay::DigitalTimeDisplay()
@@ -975,6 +1066,7 @@ TransportBarComponent::TransportBarComponent()
     : fileButton_(LOC(kFile), ToolbarIcons::getFileIcon())
     , editButton_(LOC(kEdit), ToolbarIcons::getEditIcon())
     , viewButton_(LOC(kView), ToolbarIcons::getEyeIcon())
+    , moreButton_(LOC(kScale), ToolbarIcons::getScaleIcon())
     , playButton_(LOC(kPlay), ToolbarIcons::getPlayIcon())
     , pauseButton_(LOC(kPause), ToolbarIcons::getPauseIcon())
     , stopButton_(LOC(kStop), ToolbarIcons::getStopIcon())
@@ -996,6 +1088,11 @@ TransportBarComponent::TransportBarComponent()
     viewButton_.setTooltip(LOC(kTooltipView));
     viewButton_.onClick = [this] { if (onViewMenuRequested) onViewMenuRequested(); };
     addAndMakeVisible(viewButton_);
+
+    // Overflow 档唯一的溢出入口：Root/Scale 收入其菜单
+    moreButton_.setTooltip(LOC(kScale));
+    moreButton_.onClick = [this] { showOverflowMenu(); };
+    addAndMakeVisible(moreButton_);
 
     // Setup Play Button
     playButton_.onClick = [this] { onPlayClicked(); };
@@ -1081,10 +1178,9 @@ TransportBarComponent::TransportBarComponent()
     scaleLabel_.setVisible(false);
 
     // Root note selector
-    const char* notes[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     for (int i = 0; i < 12; ++i)
     {
-        scaleRootSelector_.addItem(notes[i], i + 1);
+        scaleRootSelector_.addItem(kRootNoteNames[i], i + 1);
     }
     scaleRootSelector_.setSelectedId(1, juce::dontSendNotification);
     scaleRootSelector_.onChange = [this] { onScaleChanged(); };
@@ -1098,14 +1194,10 @@ TransportBarComponent::TransportBarComponent()
     addAndMakeVisible(scaleRootSelector_);
 
     // Scale type selector
-    scaleTypeSelector_.addItem("Maj.", 1);
-    scaleTypeSelector_.addItem("Min.", 2);
-    scaleTypeSelector_.addItem("Chr.", 3);
-    scaleTypeSelector_.addItem("H.Min.", 4);
-    scaleTypeSelector_.addItem("Dor.", 5);
-    scaleTypeSelector_.addItem("Mix.", 6);
-    scaleTypeSelector_.addItem("Pent.", 7);
-    scaleTypeSelector_.addItem("m.Pent.", 8);
+    for (int i = 0; i < 8; ++i)
+    {
+        scaleTypeSelector_.addItem(kScaleTypeNames[i], i + 1);
+    }
     scaleTypeSelector_.setSelectedId(1, juce::dontSendNotification);
     scaleTypeSelector_.onChange = [this] { onScaleChanged(); };
     scaleTypeSelector_.setColour(juce::ComboBox::backgroundColourId, UIColors::backgroundLight);
@@ -1138,6 +1230,7 @@ void TransportBarComponent::refreshLocalizedText()
     trackViewButton_.setTooltip(LOC(kTooltipTrackView));
     pianoViewButton_.setTooltip(LOC(kTooltipPianoRollView));
     tapButton_.setTooltip(LOC(kTooltipTapTempo));
+    moreButton_.setTooltip(LOC(kScale));
 
     // 刷新 scaleLabel
     scaleLabel_.setText(LOC(kScale), juce::dontSendNotification);
@@ -1303,108 +1396,90 @@ void TransportBarComponent::mouseDown(const juce::MouseEvent& e)
     juce::Component::mouseDown(e);
 }
 
+TransportBarComponent::TierLayout
+TransportBarComponent::computeTierLayout(LayoutProfile profile, juce::Rectangle<int> bounds)
+{
+    const TierMetrics& fullMetrics = (profile == LayoutProfile::VST3AraSingleClip)
+                                         ? kFullVst3Metrics
+                                         : kFullStandaloneMetrics;
+
+    auto full = buildTierLayout(profile, LayoutTier::Full, fullMetrics, bounds);
+    if (full.requiredWidth <= bounds.getWidth())
+        return full;
+
+    auto compact = buildTierLayout(profile, LayoutTier::Compact, kCompactMetrics, bounds);
+    if (compact.requiredWidth <= bounds.getWidth())
+        return compact;
+
+    return buildTierLayout(profile, LayoutTier::Overflow, kCompactMetrics, bounds);
+}
+
 void TransportBarComponent::resized()
 {
-    auto bounds = getLocalBounds().reduced(4, 4);
+    // 一次性决定档位并应用：可见性与边界来自同一份结果，阈值两侧无裁切、无抖动。
+    const auto layout = computeTierLayout(layoutProfile_, getLocalBounds());
 
-    const int controlHeight = 40;
-    const int buttonWidth = 50;
-    const int spacing = 3;
-    const int groupGap = 5;
-
-    auto row = bounds.withHeight(controlHeight).withY(bounds.getCentreY() - controlHeight / 2);
-
-    if (layoutProfile_ == LayoutProfile::VST3AraSingleClip)
+    auto apply = [](juce::Component& component, juce::Rectangle<int> slot)
     {
-        fileButton_.setBounds(row.removeFromLeft(buttonWidth));
-        row.removeFromLeft(spacing);
-        editButton_.setBounds(row.removeFromLeft(buttonWidth));
-        row.removeFromLeft(spacing);
-        viewButton_.setBounds(row.removeFromLeft(buttonWidth));
-        row.removeFromLeft(groupGap);
+        component.setVisible(!slot.isEmpty());
+        if (!slot.isEmpty())
+            component.setBounds(slot);
+    };
 
-        playButton_.setVisible(false);
-        pauseButton_.setVisible(false);
-        stopButton_.setVisible(false);
-        loopButton_.setVisible(false);
+    apply(fileButton_, layout.fileButton);
+    apply(editButton_, layout.editButton);
+    apply(viewButton_, layout.viewButton);
+    apply(moreButton_, layout.moreButton);
+    apply(playButton_, layout.playButton);
+    apply(pauseButton_, layout.pauseButton);
+    apply(stopButton_, layout.stopButton);
+    apply(loopButton_, layout.loopButton);
+    apply(recordButton_, layout.recordButton);
+    apply(trackViewButton_, layout.trackViewButton);
+    apply(pianoViewButton_, layout.pianoViewButton);
+    apply(timeDisplay_, layout.timeDisplay);
+    apply(bpmField_, layout.bpmField);
+    apply(tapButton_, layout.tapButton);
+    apply(scaleRootSelector_, layout.scaleRootSelector);
+    apply(scaleTypeSelector_, layout.scaleTypeSelector);
 
-        trackViewButton_.setVisible(false);
-        pianoViewButton_.setVisible(false);
+    bpmField_.setReadOnly(layoutProfile_ == LayoutProfile::VST3AraSingleClip);
+}
 
-        bpmField_.setVisible(true);
-        bpmField_.setReadOnly(true);
-        tapButton_.setVisible(false);
+void TransportBarComponent::showOverflowMenu()
+{
+    // Overflow 档唯一溢出入口：仅 Root/Scale，功能与两个选择器一致。
+    juce::PopupMenu menu;
+    juce::PopupMenu rootMenu;
+    juce::PopupMenu scaleMenu;
 
-        // 时间显示：恢复历史宽度 140px
-        const int timeDisplayWidth = 140;
-        timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
-        row.removeFromLeft(spacing);
+    const int selectedRootId = scaleRootSelector_.getSelectedId();
+    for (int i = 0; i < 12; ++i)
+        rootMenu.addItem(i + 1, kRootNoteNames[i], true, selectedRootId == i + 1);
 
-        recordButton_.setVisible(true);
-        recordButton_.setBounds(row.removeFromLeft(buttonWidth));
+    const int selectedScaleId = scaleTypeSelector_.getSelectedId();
+    for (int i = 0; i < 8; ++i)
+        scaleMenu.addItem(kOverflowScaleTypeItemIdBase + i, kScaleTypeNames[i], true, selectedScaleId == i + 1);
 
-        const int bpmWidth = 110;
-        bpmField_.setBounds(row.removeFromLeft(bpmWidth));
-        row.removeFromLeft(spacing);
+    menu.addSubMenu(LOC(kRootNote), rootMenu);
+    menu.addSubMenu(LOC(kScale), scaleMenu);
 
-        const int rootWidth = 50;
-        const int typeWidth = 180;
+    juce::Component::SafePointer<TransportBarComponent> safeThis(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(moreButton_),
+        [safeThis](int result)
+        {
+            if (safeThis == nullptr || result == 0)
+                return;
 
-        scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
-        row.removeFromLeft(4);
-        scaleTypeSelector_.setBounds(row.removeFromLeft(typeWidth));
+            if (result >= 1 && result <= 12)
+                safeThis->scaleRootSelector_.setSelectedId(result, juce::dontSendNotification);
+            else if (result >= kOverflowScaleTypeItemIdBase && result < kOverflowScaleTypeItemIdBase + 8)
+                safeThis->scaleTypeSelector_.setSelectedId(result - kOverflowScaleTypeItemIdBase + 1, juce::dontSendNotification);
+            else
+                return;
 
-        return;
-    }
-
-    playButton_.setVisible(true);
-    pauseButton_.setVisible(true);
-    stopButton_.setVisible(true);
-    loopButton_.setVisible(true);
-    trackViewButton_.setVisible(true);
-    pianoViewButton_.setVisible(true);
-    bpmField_.setVisible(true);
-    bpmField_.setReadOnly(false);
-    tapButton_.setVisible(true);
-    recordButton_.setVisible(false);
-
-    fileButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(spacing);
-    editButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(spacing);
-    viewButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(groupGap);
-
-    playButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(spacing);
-    pauseButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(spacing);
-    stopButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(spacing);
-    loopButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(groupGap);
-
-    trackViewButton_.setBounds(row.removeFromLeft(buttonWidth));
-    pianoViewButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(spacing);
-
-    // 时间显示：恢复历史宽度 156px
-    const int timeDisplayWidth = 156;
-    timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
-    row.removeFromLeft(spacing);
-
-    const int bpmWidth = 110;
-    bpmField_.setBounds(row.removeFromLeft(bpmWidth));
-    row.removeFromLeft(spacing);
-    tapButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(4);
-
-    const int rootWidth = 50;
-    const int typeWidth = 180;
-
-    scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
-    row.removeFromLeft(4);
-    scaleTypeSelector_.setBounds(row.removeFromLeft(typeWidth));
+            safeThis->onScaleChanged();
+        });
 }
 
 void TransportBarComponent::addListener(Listener* listener)

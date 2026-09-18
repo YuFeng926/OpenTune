@@ -570,12 +570,14 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 } // anonymous namespace
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
-constexpr int kProcessorStateVersion = 9; // v9 removes persisted Note selection
-// vocal-time-stretch §3.8: bumped 5 → 6 to add per-content TimeGrid section.
-// v5 projects load with auto-seeded identity TimeGrid (output==source).
-// Processor state v7 adds per-handle confidence. v6 reads default confidence=Default.
+constexpr int kProcessorStateVersion = 10; // v10: timeline zoom double -> uiZoomPercent int32
+constexpr int kProcessorStateLegacyVersion = 9; // released v9 payloads still accepted and migrated
+// Historical layout notes: v5 loads with auto-seeded identity TimeGrid (output==source);
+// vocal-time-stretch §3.8 bumped 5 → 6 for the per-content TimeGrid section; v7 adds
+// per-handle confidence. Restore below accepts only v10 (current) and v9 (migration).
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
-constexpr int kStandaloneSettingsVersion = 2; // v2 adds canonical time signature
+constexpr int kStandaloneSettingsVersion = 3; // v3: timeline zoom double -> uiZoomPercent int32
+constexpr int kStandaloneSettingsLegacyVersion = 2; // released v2 payloads still accepted and migrated
 
 // --- Serialization helpers (full state) ---
 // Compiled unconditionally into the shared OpenTune lib; getStateInformation /
@@ -2281,7 +2283,7 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         output.writeDouble(getBpm());
         output.writeInt(getTimeSigNumerator());
         output.writeInt(getTimeSigDenominator());
-        output.writeDouble(zoomLevel_);
+        output.writeInt(getUiZoomPercent());
         output.writeInt(trackHeight_);
         return;
     }
@@ -2295,7 +2297,7 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
     juce::MemoryOutputStream output(destData, false);
     output.writeInt(static_cast<int>(kProcessorStateMagic));
     output.writeInt(kProcessorStateVersion);
-    output.writeDouble(zoomLevel_);
+    output.writeInt(getUiZoomPercent());
     output.writeInt(trackHeight_);
 
     output.writeInt(standaloneArrangement_->getActiveTrackId());
@@ -2388,27 +2390,41 @@ bool OpenTuneAudioProcessor::restoreStatePayload(const void* data, int sizeInByt
 
     // Standalone settings-only payload
     if (magic == static_cast<int>(kStandaloneSettingsMagic)) {
-        if (version != kStandaloneSettingsVersion) {
+        // Accept current v3 (uiZoomPercent int32) and released v2 (legacy timeline
+        // zoom double, discarded on load; UI zoom semantics are unrelated).
+        if (version != kStandaloneSettingsVersion && version != kStandaloneSettingsLegacyVersion) {
             AppLogger::error("StateRestore: unsupported standalone settings version "
-                + juce::String(version) + " (expect " + juce::String(kStandaloneSettingsVersion) + ")");
+                + juce::String(version) + " (expect " + juce::String(kStandaloneSettingsVersion)
+                + " or " + juce::String(kStandaloneSettingsLegacyVersion) + ")");
             return false;
         }
-        setBpm(input.readDouble());
-        setTimeSignature(input.readInt(), input.readInt());
-        zoomLevel_ = input.readDouble();
-        trackHeight_ = input.readInt();
+        const double restoredBpm = input.readDouble();
+        const int restoredTimeSigNumerator = input.readInt();
+        const int restoredTimeSigDenominator = input.readInt();
+        int restoredUiZoomPercent = 100;
+        if (version == kStandaloneSettingsVersion) {
+            restoredUiZoomPercent = input.readInt();
+        } else {
+            (void) input.readDouble(); // legacy timeline zoom, discarded
+        }
+        const int restoredTrackHeight = input.readInt();
         if (input.getNumBytesRemaining() != 0) {
             AppLogger::error("StateRestore: standalone settings payload not fully consumed, trailing bytes="
                 + juce::String(static_cast<int>(input.getNumBytesRemaining())));
             return false;
         }
+        setBpm(restoredBpm);
+        setTimeSignature(restoredTimeSigNumerator, restoredTimeSigDenominator);
+        setUiZoomPercent(restoredUiZoomPercent);
+        trackHeight_ = restoredTrackHeight;
         return true;
     }
 
-    // Full state payload (VST3)
-    // vocal-time-stretch §3.8: state v6 adds TimeGrid section per content.
-    // Accept v5 (no TimeGrid), v6 (TimeGrid w/o confidence), v7 (TimeGrid w/ confidence).
-    if (magic != static_cast<int>(kProcessorStateMagic) || version != kProcessorStateVersion) {
+    // Full state payload (VST3). Accept current v10 and released v9; both share
+    // the same layout except the zoom slot: v10 stores uiZoomPercent int32, v9
+    // stores the legacy timeline zoom double (discarded on migration).
+    if (magic != static_cast<int>(kProcessorStateMagic)
+        || (version != kProcessorStateVersion && version != kProcessorStateLegacyVersion)) {
         AppLogger::error("StateRestore: unsupported processor state payload (version=" + juce::String(version) + ")");
         return false;
     }
@@ -2423,7 +2439,14 @@ bool OpenTuneAudioProcessor::restoreStatePayload(const void* data, int sizeInByt
     }
 
     // Note: BPM is not in OTST v5 -- host owns transport tempo in plugin mode.
-    const double restoredZoomLevel = input.readDouble();
+    // v10 reads the discrete UI zoom percent; v9 reads and discards the legacy
+    // timeline zoom double, resetting UI zoom to 100%.
+    int restoredUiZoomPercent = 100;
+    if (version == kProcessorStateVersion) {
+        restoredUiZoomPercent = input.readInt();
+    } else {
+        (void) input.readDouble(); // legacy timeline zoom, discarded
+    }
     const int restoredTrackHeight = input.readInt();
 
     const int restoredActiveTrackId = input.readInt();
@@ -2530,7 +2553,7 @@ bool OpenTuneAudioProcessor::restoreStatePayload(const void* data, int sizeInByt
     // data alive until the audio thread releases it; the new arrangement will
     // publish its own snapshot on first query.
     standaloneArrangement_ = std::move(parsedArrangement);
-    zoomLevel_ = restoredZoomLevel;
+    setUiZoomPercent(restoredUiZoomPercent);
     trackHeight_ = restoredTrackHeight;
 
     // Regular VST3 capture persistence is a separate owner transaction.
@@ -3646,8 +3669,18 @@ void OpenTuneAudioProcessor::setTimeSignature(int numerator, int denominator) {
     }
 }
 
-void OpenTuneAudioProcessor::setZoomLevel(double zoom) {
-    zoomLevel_ = zoom;
+void OpenTuneAudioProcessor::setUiZoomPercent(int percent) noexcept {
+    switch (percent) {
+        case 75: case 90: case 100: case 110: case 125: case 150:
+            uiZoomPercent_.store(percent, std::memory_order_relaxed);
+            break;
+        default:
+            break; // reject invalid zoom percent, keep previous value
+    }
+}
+
+int OpenTuneAudioProcessor::getUiZoomPercent() const noexcept {
+    return uiZoomPercent_.load(std::memory_order_relaxed);
 }
 
 SnapSettings OpenTuneAudioProcessor::getSnapSettings() const {

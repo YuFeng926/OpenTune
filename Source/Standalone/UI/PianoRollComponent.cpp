@@ -1628,7 +1628,7 @@ void PianoRollComponent::drawModDriftDragPreview(juce::Graphics& g)
     const bool isModulation = (interactionState_.modDriftTool == ToolId::PitchModulation);
 
     // 鼠标旁 tooltip
-    const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
+    const auto mousePos = getLocalPoint(nullptr, juce::Desktop::getInstance().getMousePosition())
         + juce::Point<int>(0, -rulerHeight_);
     const juce::String text = isModulation
         ? juce::String::formatted("%.0f%%", value * 100.0f)
@@ -1660,7 +1660,7 @@ void PianoRollComponent::drawVolumeDragPreview(juce::Graphics& g)
         return;
 
     // 鼠标旁 tooltip（与 drawModDriftDragPreview 同构）
-    const auto mousePos = juce::Desktop::getInstance().getMousePosition() - getScreenPosition()
+    const auto mousePos = getLocalPoint(nullptr, juce::Desktop::getInstance().getMousePosition())
         + juce::Point<int>(0, -rulerHeight_);
     const juce::String text = juce::String::formatted("%+.1f dB", static_cast<double>(deltaDb));
     juce::Font font(juce::FontOptions(12.0f));
@@ -1927,6 +1927,16 @@ void PianoRollComponent::paint(juce::Graphics& g)
     const int vpH = getTimelineViewportBounds().getHeight();
     if (vpW <= 0 || vpH <= 0) return;
 
+    // 有效倍率真值只在 paint 捕获；变化 → 旧表面失效并按同一倍率重建
+    const float effectiveScale = UiAssets::getEffectiveScaleFactor(g);
+    if (! juce::approximatelyEqual(effectiveScale, renderScale_))
+    {
+        renderScale_ = effectiveScale;
+        staticDirty_ = true;
+        contentDirty_ = true;
+        rasterizeDirtySurfaces();
+    }
+
     if (zoomPreviewActive_) {
         const double t0 = juce::Time::getMillisecondCounterHiRes();
         const auto fullBounds = getLocalBounds();
@@ -1939,13 +1949,16 @@ void PianoRollComponent::paint(juce::Graphics& g)
         recordRenderProbe(RenderProbePoint::ZoomPreviewPaint, juce::Time::getMillisecondCounterHiRes() - t0);
     } else {
         if (staticSurface_.isValid()) {
-            g.drawImageAt(staticSurface_, 0, 0, false);
+            g.drawImage(staticSurface_, 0, 0, getWidth(), getHeight(),
+                        0, 0, staticSurface_.getWidth(), staticSurface_.getHeight(), false);
         }
         if (contentSurface_.isValid()) {
-            g.drawImageAt(contentSurface_, 0, 0, false);
+            g.drawImage(contentSurface_, 0, 0, vpW, vpH,
+                        0, 0, contentSurface_.getWidth(), contentSurface_.getHeight(), false);
         }
         if (!shouldShowPianoKeys() && labelsSurface_.isValid()) {
-            g.drawImageAt(labelsSurface_, 0, 0, false);
+            g.drawImage(labelsSurface_, 0, 0, pianoKeyWidth_, getHeight(),
+                        0, 0, labelsSurface_.getWidth(), labelsSurface_.getHeight(), false);
         }
     }
 
@@ -1970,6 +1983,7 @@ void PianoRollComponent::invalidateTimeAxisStaticSurface()
 void PianoRollComponent::rasterizeDirtySurfaces()
 {
     if (zoomPreviewActive_) return;  // 缩放预览期间保留 dirty，不栅格
+    if (renderScale_ <= 0.0f) return;  // 有效倍率尚未从 paint 捕获
 
     const int vpW = getTimelineViewportBounds().getWidth();
     const int vpH = getTimelineViewportBounds().getHeight();
@@ -1978,14 +1992,20 @@ void PianoRollComponent::rasterizeDirtySurfaces()
     const int fullW = getWidth();
     const int fullH = getHeight();
 
+    // 位图物理尺寸 = ceil(逻辑尺寸 × 有效倍率)
+    const int physFullW = static_cast<int>(std::ceil(static_cast<float>(fullW) * renderScale_));
+    const int physFullH = static_cast<int>(std::ceil(static_cast<float>(fullH) * renderScale_));
+    const int physVpW = static_cast<int>(std::ceil(static_cast<float>(vpW) * renderScale_));
+    const int physVpH = static_cast<int>(std::ceil(static_cast<float>(vpH) * renderScale_));
+
     // staticSurface_ 覆盖完整组件 chrome 区域
-    if (!staticSurface_.isValid() || staticSurface_.getWidth() != fullW || staticSurface_.getHeight() != fullH) {
-        staticSurface_ = juce::Image(juce::Image::ARGB, fullW, fullH, true);
+    if (!staticSurface_.isValid() || staticSurface_.getWidth() != physFullW || staticSurface_.getHeight() != physFullH) {
+        staticSurface_ = juce::Image(juce::Image::ARGB, physFullW, physFullH, true);
         staticDirty_ = true;
     }
     // contentSurface_ 保持时间轴视口区
-    if (!contentSurface_.isValid() || contentSurface_.getWidth() != vpW || contentSurface_.getHeight() != vpH) {
-        contentSurface_ = juce::Image(juce::Image::ARGB, vpW, vpH, true);
+    if (!contentSurface_.isValid() || contentSurface_.getWidth() != physVpW || contentSurface_.getHeight() != physVpH) {
+        contentSurface_ = juce::Image(juce::Image::ARGB, physVpW, physVpH, true);
         contentDirty_ = true;
     }
 
@@ -2199,7 +2219,9 @@ void PianoRollComponent::drawPianoKeyboard(juce::Graphics& g, const ViewportStat
     renderer_->drawPianoKeys(g, ctxForKeys());
 }
 
-void PianoRollComponent::rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect)
+void PianoRollComponent::rasterizeStatic(
+    std::optional<juce::Rectangle<int>> dirtyRect,
+    std::optional<juce::Rectangle<int>> physicalDirtyRect)
 {
     const double t0 = juce::Time::getMillisecondCounterHiRes();
 
@@ -2207,11 +2229,18 @@ void PianoRollComponent::rasterizeStatic(std::optional<juce::Rectangle<int>> dir
     const int imgH = staticSurface_.getHeight();
     if (!staticSurface_.isValid() || imgW <= 0 || imgH <= 0) return;
 
-    const juce::Rectangle<int> rasterBounds = dirtyRect.value_or(staticSurface_.getBounds());
+    // 逻辑损坏区；clear 区域转到物理像素
+    const juce::Rectangle<int> rasterBounds = dirtyRect.value_or(
+        juce::Rectangle<int>(0, 0, getWidth(), getHeight()));
 
-    staticSurface_.clear(rasterBounds);
+    const auto physicalBounds = physicalDirtyRect.value_or(
+        (rasterBounds.toFloat() * renderScale_).getSmallestIntegerContainer());
+    staticSurface_.clear(physicalBounds);
 
     juce::Graphics g(staticSurface_);
+    if (physicalDirtyRect.has_value())
+        g.reduceClipRegion(physicalBounds);
+    g.addTransform(juce::AffineTransform::scale(renderScale_));
 
     drawFixedChrome(g, rasterBounds);
     drawRuler(g, surfaceView_, rasterBounds);
@@ -2229,15 +2258,19 @@ void PianoRollComponent::rasterizeLabels()
     if (shouldShowPianoKeys() || getHeight() <= 0)
         return;
 
+    const int physWidth = static_cast<int>(std::ceil(static_cast<float>(pianoKeyWidth_) * renderScale_));
+    const int physHeight = static_cast<int>(std::ceil(static_cast<float>(getHeight()) * renderScale_));
+
     if (!labelsSurface_.isValid()
-        || labelsSurface_.getWidth() != pianoKeyWidth_
-        || labelsSurface_.getHeight() != getHeight()) {
-        labelsSurface_ = juce::Image(juce::Image::ARGB, pianoKeyWidth_, getHeight(), true);
+        || labelsSurface_.getWidth() != physWidth
+        || labelsSurface_.getHeight() != physHeight) {
+        labelsSurface_ = juce::Image(juce::Image::ARGB, physWidth, physHeight, true);
     }
 
     labelsSurface_.clear(labelsSurface_.getBounds());
     juce::Graphics g(labelsSurface_);
-    drawPianoKeyboard(g, surfaceView_, labelsSurface_.getBounds());
+    g.addTransform(juce::AffineTransform::scale(renderScale_));
+    drawPianoKeyboard(g, surfaceView_, juce::Rectangle<int>(0, 0, pianoKeyWidth_, getHeight()));
 }
 
 void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage)
@@ -2317,7 +2350,9 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     }
 }
 
-void PianoRollComponent::rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect)
+void PianoRollComponent::rasterizeContent(
+    std::optional<juce::Rectangle<int>> dirtyRect,
+    std::optional<juce::Rectangle<int>> physicalDirtyRect)
 {
     const double t0 = juce::Time::getMillisecondCounterHiRes();
 
@@ -2328,12 +2363,17 @@ void PianoRollComponent::rasterizeContent(std::optional<juce::Rectangle<int>> di
     const bool fullRaster = !dirtyRect.has_value();
     const auto rasterBounds = dirtyRect.value_or(juce::Rectangle<int>(0, 0, w, h));
 
+    const auto physicalBounds = physicalDirtyRect.value_or(
+        (rasterBounds.toFloat() * renderScale_).getSmallestIntegerContainer());
     if (fullRaster)
         contentSurface_.clear(contentSurface_.getBounds());
     else
-        contentSurface_.clear(*dirtyRect);
+        contentSurface_.clear(physicalBounds);
 
     juce::Graphics g(contentSurface_);
+    if (physicalDirtyRect.has_value())
+        g.reduceClipRegion(physicalBounds);
+    g.addTransform(juce::AffineTransform::scale(renderScale_));
 
     drawContent(g, surfaceView_, rasterBounds);
 
@@ -2389,40 +2429,66 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
     const int timelineW = viewportW - timelineLeft;
 
     // surfaceView_.camera 描述 retained pixels 的实际来源；
-    // 仅推进 moveImageSection 已执行的整数像素位移；连续语义继续由 camera_ 保持
+    // 仅推进 moveImageSection 已执行的整数位移；连续语义继续由 camera_ 保持。
+    // 位移量按物理像素网格新旧原点之差计算（含分数倍率相位），避免累计漂移。
+    const double oldPhysOrigin = surfaceView_.camera.visibleStartSeconds
+        * surfaceView_.camera.pixelsPerSecond * renderScale_;
+    const double newPhysOrigin = oldPhysOrigin + static_cast<double>(dPixels) * renderScale_;
+    const int physDelta = juce::roundToInt(newPhysOrigin) - juce::roundToInt(oldPhysOrigin);
     surfaceView_.camera.visibleStartSeconds += static_cast<double>(dPixels) / surfaceView_.camera.pixelsPerSecond;
 
-    // 标尺带：完整重栅格（文本像素不能安全平移）
-    const juce::Rectangle<int> rulerRect(timelineLeft, 0, timelineW, rulerHeight_);
-    rasterizeStatic(rulerRect);
+    // 标尺重栅格、内容平移和曝光条带共用同一物理边界。
+    const int physTimelineLeft = static_cast<int>(
+        std::floor(static_cast<float>(timelineLeft) * renderScale_));
+    const int physTimelineRight = static_cast<int>(
+        std::ceil(static_cast<float>(timelineLeft + timelineW) * renderScale_));
+    const int physTimelineW = physTimelineRight - physTimelineLeft;
+    const int physRulerHeight = static_cast<int>(
+        std::floor(static_cast<float>(rulerHeight_) * renderScale_));
+    const int physContentBottom = static_cast<int>(
+        std::ceil(static_cast<float>(viewportH) * renderScale_));
+    const int physContentH = physContentBottom - physRulerHeight;
 
-    // 内容带：staticSurface_ + contentSurface_ 同步平移
-    const int srcX = timelineLeft + (dPixels > 0 ? dPixels : 0);
-    const int dstX = timelineLeft + (dPixels > 0 ? 0 : -dPixels);
-    const int moveW = timelineW - std::abs(dPixels);
-    const int contentH = viewportH - rulerHeight_;
+    // 标尺带：完整重栅格（文本像素不能安全平移）。
+    const juce::Rectangle<int> rulerRect(timelineLeft, 0, timelineW, rulerHeight_);
+    const juce::Rectangle<int> physicalRulerRect(
+        physTimelineLeft, 0, physTimelineW, physRulerHeight);
+    rasterizeStatic(rulerRect, physicalRulerRect);
+
+    // 内容带：staticSurface_ + contentSurface_ 同步平移。
+
+    const int srcX = physTimelineLeft + (physDelta > 0 ? physDelta : 0);
+    const int dstX = physTimelineLeft + (physDelta > 0 ? 0 : -physDelta);
+    const int moveW = physTimelineW - std::abs(physDelta);
 
     if (moveW > 0) {
-        staticSurface_.moveImageSection(dstX, rulerHeight_, srcX, rulerHeight_, moveW, contentH);
-        contentSurface_.moveImageSection(dstX, rulerHeight_, srcX, rulerHeight_, moveW, contentH);
+        staticSurface_.moveImageSection(dstX, physRulerHeight, srcX, physRulerHeight, moveW, physContentH);
+        contentSurface_.moveImageSection(dstX, physRulerHeight, srcX, physRulerHeight, moveW, physContentH);
     }
 
-    // 补绘露出条带
-    int stripX, stripW;
-    if (dPixels > 0) {
-        stripX = timelineLeft + timelineW - dPixels;
-        stripW = dPixels;
+    // 补绘露出条带（以物理像素区域反推回逻辑坐标，与 move/clear 区域一致）
+    int stripXPhys, stripWPhys;
+    if (physDelta > 0) {
+        stripXPhys = physTimelineLeft + physTimelineW - physDelta;
+        stripWPhys = physDelta;
     } else {
-        stripX = timelineLeft;
-        stripW = -dPixels;
+        stripXPhys = physTimelineLeft;
+        stripWPhys = -physDelta;
     }
-    stripX = juce::jmax(timelineLeft, stripX);
-    stripW = juce::jmin(stripW, timelineW);
+    stripXPhys = juce::jmax(physTimelineLeft, stripXPhys);
+    stripWPhys = juce::jmin(stripWPhys, physTimelineW);
 
-    if (stripW > 0) {
-        juce::Rectangle<int> strip(stripX, rulerHeight_, stripW, contentH);
-        rasterizeStatic(strip);
-        rasterizeContent(strip);
+    if (stripWPhys > 0) {
+        const juce::Rectangle<int> physicalStrip(
+            stripXPhys, physRulerHeight, stripWPhys, physContentH);
+        const juce::Rectangle<float> strip(
+            static_cast<float>(stripXPhys) / renderScale_,
+            static_cast<float>(rulerHeight_),
+            static_cast<float>(stripWPhys) / renderScale_,
+            static_cast<float>(viewportH - rulerHeight_));
+        const auto stripLogical = strip.getSmallestIntegerContainer();
+        rasterizeStatic(stripLogical, physicalStrip);
+        rasterizeContent(stripLogical, physicalStrip);
     }
 
     // Normal scroll: only repaint timeAxisRect, not full component
@@ -3385,18 +3451,6 @@ void PianoRollComponent::onHeartbeatTick()
         --zoomDeadlineTicks_;
         if (zoomDeadlineTicks_ == 0) {
             endZoomPreview();
-        }
-    }
-
-    // DPI 变化检测 → 重建静态表面（标尺/琴键/网格 尺寸变化）
-    {
-        const int64_t currentDpiMilli = static_cast<int64_t>(
-            std::llround(getDesktopScaleFactor() * 1000.0));
-        if (currentDpiMilli != lastDpiMilli_) {
-            lastDpiMilli_ = currentDpiMilli;
-            staticDirty_ = true;
-            rasterizeDirtySurfaces();
-            repaint();
         }
     }
 }

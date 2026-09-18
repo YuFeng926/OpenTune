@@ -154,7 +154,17 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             // themeMenu.addItem(ThemeOverdose, LOC(kThemeOverdose), true, UIColors::currentThemeId() == ThemeId::Overdose);  // "升天" 暂时隐藏
             menu.addSeparator();
             menu.addSubMenu(LOC(kTheme), themeMenu);
-            
+
+            juce::PopupMenu uiZoomMenu;
+            const int currentUiZoomPercent = processor_.getUiZoomPercent();
+            uiZoomMenu.addItem(UiZoom75, "75%", true, currentUiZoomPercent == 75);
+            uiZoomMenu.addItem(UiZoom90, "90%", true, currentUiZoomPercent == 90);
+            uiZoomMenu.addItem(UiZoom100, "100%", true, currentUiZoomPercent == 100);
+            uiZoomMenu.addItem(UiZoom110, "110%", true, currentUiZoomPercent == 110);
+            uiZoomMenu.addItem(UiZoom125, "125%", true, currentUiZoomPercent == 125);
+            uiZoomMenu.addItem(UiZoom150, "150%", true, currentUiZoomPercent == 150);
+            menu.addSubMenu(LOC(kUiZoom), uiZoomMenu);
+
             if (profile_ == Profile::Standalone) {
                 const auto currentTrailTheme = mouseTrailTheme_;
                 juce::PopupMenu mouseTrailMenu;
@@ -345,6 +355,31 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             break;
         case TrackColorsCustom:
             listeners_.call([](Listener& l) { l.trackColorModeChanged(TrackColorMode::Custom); });
+            menuItemsChanged();
+            break;
+
+        case UiZoom75:
+            processor_.setUiZoomPercent(75);
+            menuItemsChanged();
+            break;
+        case UiZoom90:
+            processor_.setUiZoomPercent(90);
+            menuItemsChanged();
+            break;
+        case UiZoom100:
+            processor_.setUiZoomPercent(100);
+            menuItemsChanged();
+            break;
+        case UiZoom110:
+            processor_.setUiZoomPercent(110);
+            menuItemsChanged();
+            break;
+        case UiZoom125:
+            processor_.setUiZoomPercent(125);
+            menuItemsChanged();
+            break;
+        case UiZoom150:
+            processor_.setUiZoomPercent(150);
             menuItemsChanged();
             break;
 

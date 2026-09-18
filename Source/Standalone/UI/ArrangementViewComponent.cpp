@@ -628,6 +628,8 @@ void ArrangementViewComponent::surfaceInvalidate()
 
 void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTile, int64_t lastTimeTile)
 {
+    if (renderScale_ <= 0.0f) return;
+
     const auto rect = getContentViewportBounds();
     const int sw = rect.getWidth();
     const int sh = rect.getHeight();
@@ -636,13 +638,20 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
     const double pps = camera_.pixelsPerSecond;
     if (pps <= 0.0) return;
 
-    viewportSurface_ = juce::Image(juce::Image::ARGB, sw, sh, true);
+    // 位图物理尺寸 = ceil(逻辑尺寸 × 有效倍率)；离屏 Graphics 施加同一倍率后继续用逻辑坐标绘制
+    viewportSurface_ = juce::Image(
+        juce::Image::ARGB,
+        static_cast<int>(std::ceil(static_cast<float>(sw) * renderScale_)),
+        static_cast<int>(std::ceil(static_cast<float>(sh) * renderScale_)),
+        true);
     surfaceOriginPx_ = static_cast<int64_t>(std::llround(camera_.visibleStartSeconds * pps));
     surfacePps_ = pps;
 
     juce::Graphics g(viewportSurface_);
+    g.addTransform(juce::AffineTransform::scale(renderScale_));
     if (themeBackdrop_.isValid())
-        g.drawImageAt(themeBackdrop_, -rect.getX(), -rect.getY(), false);
+        g.drawImage(themeBackdrop_, -rect.getX(), -rect.getY(), getWidth(), getHeight(),
+                    0, 0, themeBackdrop_.getWidth(), themeBackdrop_.getHeight(), false);
 
     const int visibleTopY = verticalScrollOffset_;
     const int firstVertRow = visibleTopY / TimelineCompositeCache::kWorldTileHeight;
@@ -654,13 +663,17 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
             TimelineCompositeCache::TileKey key{tt, vr};
             if (const auto* entry = compositeCache_.findTile(key)) {
                 const int destX = static_cast<int>(tt * TimelineCompositeCache::kTileWidthPx - surfaceOriginPx_);
-                const float destY = static_cast<float>(vr * TimelineCompositeCache::kWorldTileHeight - visibleTopY);
+                const int destY = static_cast<int>(vr * TimelineCompositeCache::kWorldTileHeight - visibleTopY);
                 if (entry->background.isValid())
-                    g.drawImageTransformed(entry->background,
-                        juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+                    g.drawImage(entry->background,
+                                destX, destY,
+                                TimelineCompositeCache::kTileWidthPx, TimelineCompositeCache::kWorldTileHeight,
+                                0, 0, entry->background.getWidth(), entry->background.getHeight(), false);
                 if (entry->foreground.isValid())
-                    g.drawImageTransformed(entry->foreground,
-                        juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+                    g.drawImage(entry->foreground,
+                                destX, destY,
+                                TimelineCompositeCache::kTileWidthPx, TimelineCompositeCache::kWorldTileHeight,
+                                0, 0, entry->foreground.getWidth(), entry->foreground.getHeight(), false);
             }
         }
     }
@@ -668,6 +681,8 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
 
 void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, int64_t firstTimeTile, int64_t lastTimeTile)
 {
+    if (renderScale_ <= 0.0f) return;
+
     const auto rect = getContentViewportBounds();
     const int sw = rect.getWidth();
     const int sh = rect.getHeight();
@@ -685,17 +700,36 @@ void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, 
         return;
     }
 
-    if (deltaPx > 0) {
-        viewportSurface_.moveImageSection(0, 0, absDelta, 0, sw - absDelta, sh);
-        viewportSurface_.clear({sw - absDelta, 0, absDelta, sh}, juce::Colours::transparentBlack);
-    } else if (deltaPx < 0) {
-        viewportSurface_.moveImageSection(absDelta, 0, 0, 0, sw - absDelta, sh);
-        viewportSurface_.clear({0, 0, absDelta, sh}, juce::Colours::transparentBlack);
+    // clear/moveImageSection 区域转换到物理像素；保留原有增量滚动算法。
+    // 位移量按物理像素网格新旧原点之差计算（含分数倍率相位），避免累计漂移。
+    const int physW = viewportSurface_.getWidth();
+    const int physH = viewportSurface_.getHeight();
+    const int64_t oldPhysOrigin = static_cast<int64_t>(
+        std::llround(static_cast<double>(surfaceOriginPx_) * renderScale_));
+    const int64_t newPhysOrigin = static_cast<int64_t>(
+        std::llround(static_cast<double>(newOriginPx) * renderScale_));
+    const int physDelta = static_cast<int>(std::llabs(newPhysOrigin - oldPhysOrigin));
+    if (physDelta >= physW) {
+        surfaceRebuildFromReadyTiles(firstTimeTile, lastTimeTile);
+        return;
     }
 
-    const juce::Rectangle<int> exposed = deltaPx > 0
-        ? juce::Rectangle<int>(sw - absDelta, 0, absDelta, sh)
-        : juce::Rectangle<int>(0, 0, absDelta, sh);
+    if (deltaPx > 0) {
+        viewportSurface_.moveImageSection(0, 0, physDelta, 0, physW - physDelta, physH);
+        viewportSurface_.clear({physW - physDelta, 0, physDelta, physH}, juce::Colours::transparentBlack);
+    } else if (deltaPx < 0) {
+        viewportSurface_.moveImageSection(physDelta, 0, 0, 0, physW - physDelta, physH);
+        viewportSurface_.clear({0, 0, physDelta, physH}, juce::Colours::transparentBlack);
+    }
+
+    // 曝光条带以物理像素反推回逻辑坐标，保证 clear/move 与重绘区域一致
+    const juce::Rectangle<float> exposed = deltaPx > 0
+        ? juce::Rectangle<float>(static_cast<float>(physW - physDelta) / renderScale_, 0.0f,
+                                 static_cast<float>(physDelta) / renderScale_,
+                                 static_cast<float>(physH) / renderScale_)
+        : juce::Rectangle<float>(0.0f, 0.0f,
+                                 static_cast<float>(physDelta) / renderScale_,
+                                 static_cast<float>(physH) / renderScale_);
 
     const int visibleTopY = verticalScrollOffset_;
     const int firstVertRow = visibleTopY / TimelineCompositeCache::kWorldTileHeight;
@@ -703,23 +737,30 @@ void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, 
         / TimelineCompositeCache::kWorldTileHeight;
 
     juce::Graphics g(viewportSurface_);
+    g.addTransform(juce::AffineTransform::scale(renderScale_));
     juce::Graphics::ScopedSaveState st(g);
-    g.reduceClipRegion(exposed);
+    g.reduceClipRegion(exposed.getSmallestIntegerContainer());
     if (themeBackdrop_.isValid())
-        g.drawImageAt(themeBackdrop_, -(rect.getX() + exposed.getX()), -rect.getY(), false);
+        g.drawImage(themeBackdrop_, -(rect.getX() + juce::roundToInt(exposed.getX())), -rect.getY(),
+                    getWidth(), getHeight(),
+                    0, 0, themeBackdrop_.getWidth(), themeBackdrop_.getHeight(), false);
 
     for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
         for (int vr = firstVertRow; vr <= lastVertRow; ++vr) {
             TimelineCompositeCache::TileKey key{tt, vr};
             if (const auto* entry = compositeCache_.findTile(key)) {
                 const int destX = static_cast<int>(tt * TimelineCompositeCache::kTileWidthPx - newOriginPx);
-                const float destY = static_cast<float>(vr * TimelineCompositeCache::kWorldTileHeight - visibleTopY);
+                const int destY = static_cast<int>(vr * TimelineCompositeCache::kWorldTileHeight - visibleTopY);
                 if (entry->background.isValid())
-                    g.drawImageTransformed(entry->background,
-                        juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+                    g.drawImage(entry->background,
+                                destX, destY,
+                                TimelineCompositeCache::kTileWidthPx, TimelineCompositeCache::kWorldTileHeight,
+                                0, 0, entry->background.getWidth(), entry->background.getHeight(), false);
                 if (entry->foreground.isValid())
-                    g.drawImageTransformed(entry->foreground,
-                        juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+                    g.drawImage(entry->foreground,
+                                destX, destY,
+                                TimelineCompositeCache::kTileWidthPx, TimelineCompositeCache::kWorldTileHeight,
+                                0, 0, entry->foreground.getWidth(), entry->foreground.getHeight(), false);
             }
         }
     }
@@ -777,13 +818,21 @@ void ArrangementViewComponent::setTimelineDisplayMode(TimelineDisplayMode mode)
 
 void ArrangementViewComponent::rebuildThemeBackdrop()
 {
+    if (renderScale_ <= 0.0f) return;
+
     const auto bounds = getLocalBounds();
     const int w = bounds.getWidth();
     const int h = bounds.getHeight();
     if (w <= 0 || h <= 0) return;
 
-    themeBackdrop_ = juce::Image(juce::Image::ARGB, w, h, true);
+    // 位图物理尺寸 = ceil(逻辑尺寸 × 有效倍率)；离屏 Graphics 施加同一倍率后继续用逻辑坐标绘制
+    themeBackdrop_ = juce::Image(
+        juce::Image::ARGB,
+        static_cast<int>(std::ceil(static_cast<float>(w) * renderScale_)),
+        static_cast<int>(std::ceil(static_cast<float>(h) * renderScale_)),
+        true);
     juce::Graphics g(themeBackdrop_);
+    g.addTransform(juce::AffineTransform::scale(renderScale_));
 
     const auto themeId = UIColors::currentThemeId();
     const auto bf = bounds.toFloat();
@@ -1109,7 +1158,7 @@ BackgroundGenerationSignature ArrangementViewComponent::makeBackgroundSignature(
 {
     BackgroundGenerationSignature sig;
     sig.pixelsPerSecond = camera_.pixelsPerSecond;
-    sig.dpiMilli = static_cast<int64_t>(std::round(getDesktopScaleFactor() * 1000.0));
+    sig.renderScale = renderScale_;
     sig.trackHeight = processor_.getTrackHeight();
     sig.visibleTrackCount = visibleTrackCount_;
     sig.themeId = static_cast<int>(UIColors::currentThemeId());
@@ -1124,6 +1173,7 @@ ForegroundGenerationSignature ArrangementViewComponent::makeForegroundSignature(
 {
     ForegroundGenerationSignature sig;
     sig.pixelsPerSecond = camera_.pixelsPerSecond;
+    sig.renderScale = renderScale_;
     sig.trackHeight = processor_.getTrackHeight();
     sig.contentRevision = contentMetrics_.revision;
     sig.selectionRevision = computeSelectionRevision();
@@ -1221,6 +1271,8 @@ void ArrangementViewComponent::buildCompositeForeground(
 
 void ArrangementViewComponent::prepareCoverageCompositeTiles()
 {
+    if (renderScale_ <= 0.0f) return;
+
     const auto bgSig = makeBackgroundSignature();
     const auto fgSig = makeForegroundSignature();
     const double tileDuration = TimelineCompositeCache::kTileWidthPx / bgSig.pixelsPerSecond;
@@ -1731,8 +1783,20 @@ juce::Rectangle<int> ArrangementViewComponent::playheadDirtyRect() const
 
 void ArrangementViewComponent::paint(juce::Graphics& g)
 {
+    // 有效倍率真值只在 paint 捕获；变化 → 旧缓存失效并按同一倍率重建
+    const float effectiveScale = UiAssets::getEffectiveScaleFactor(g);
+    if (! juce::approximatelyEqual(effectiveScale, renderScale_))
+    {
+        renderScale_ = effectiveScale;
+        surfaceInvalidate();
+        rebuildThemeBackdrop();
+        invalidateStableScene();
+    }
+
     if (themeBackdrop_.isValid())
-        g.drawImageAt(themeBackdrop_, 0, 0, false);
+        g.drawImage(themeBackdrop_,
+                    0, 0, getWidth(), getHeight(),
+                    0, 0, themeBackdrop_.getWidth(), themeBackdrop_.getHeight(), false);
 
     // Ruler + separator
     {
@@ -1773,7 +1837,9 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         const auto axis = getContentViewportBounds();
         g.reduceClipRegion(axis);
         if (viewportSurface_.isValid())
-            g.drawImageAt(viewportSurface_, axis.getX(), axis.getY(), false);
+            g.drawImage(viewportSurface_,
+                        axis.getX(), axis.getY(), axis.getWidth(), axis.getHeight(),
+                        0, 0, viewportSurface_.getWidth(), viewportSurface_.getHeight(), false);
 
         // Import/move overlays
         {
@@ -1808,14 +1874,6 @@ void ArrangementViewComponent::onHeartbeatTick()
         lastObservedPlayHeadPlaying_ = playingNow;
         lastPlayheadRect_ = playheadDirtyRect();
         repaint();
-    }
-
-    const int64_t currentDpiMilli = static_cast<int64_t>(
-        std::llround(getDesktopScaleFactor() * 1000.0));
-    if (currentDpiMilli != lastDpiMilli_) {
-        lastDpiMilli_ = currentDpiMilli;
-        rebuildThemeBackdrop();
-        invalidateStableScene();
     }
 
     // BPM / 拍号 / 显示模式变化 → 仅重建背景 tile 平面

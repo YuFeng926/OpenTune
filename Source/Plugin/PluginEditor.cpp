@@ -26,6 +26,15 @@ namespace OpenTune::PluginUI {
 
 namespace {
 
+// 100% 基线窗口尺寸（§4.4）：min 660×500，max 固定 3000×2000，preferred 1000×900。
+// VST3 外层窗口归宿主，不按 display.userArea 夹紧（§5.2）。
+constexpr int kBaseMinWidth = 660;
+constexpr int kBaseMinHeight = 500;
+constexpr int kMaxWindowWidth = 3000;
+constexpr int kMaxWindowHeight = 2000;
+constexpr int kPreferredWidth = 1000;
+constexpr int kPreferredHeight = 900;
+
 void showHostManagedMessage(juce::Component* parent, const juce::String& title, const juce::String& detail)
 {
     AppLogger::log("VST3Editor: " + title + " requested, delegated to host DAW");
@@ -102,10 +111,19 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , pianoRoll_(processor.getPlayHeadState())
     , overviewStrip_(pianoRoll_.getWaveformMipmapCache())
 {
+    // 构造顺序固定：limits → resizable → preferred size（§4.4）。
+    // uiZoom 唯一真相在 Processor：构造读取一次，之后由心跳同步（§7.3）；
+    // preferred 尺寸不随 uiZoom 换算，min 按 uiZoom 取整、max 固定（§5.2）。
+    appliedUiZoomPercent_ = processorRef_.getUiZoomPercent();
+    const float uiZoomScale = static_cast<float>(appliedUiZoomPercent_) / 100.0f;
+    const int minimumWidth = static_cast<int>(std::ceil(kBaseMinWidth * uiZoomScale));
+    const int minimumHeight = static_cast<int>(std::ceil(kBaseMinHeight * uiZoomScale));
+    setResizeLimits(minimumWidth,
+                    minimumHeight,
+                    kMaxWindowWidth, kMaxWindowHeight);
     setResizable(true, true);
-    // 最小宽度 855 = TransportBar 固定内容 711 + reduced(4,4) 8 + TopBar 边距 136（reduced 12×2 + pad 3×2 + 左右侧栏切换钮各 53）
-    setResizeLimits(855, ParameterPanel::kMinimumPanelHeight + TOP_BAR_HEIGHT + 12, 2000, 1400);
-    setSize(1000, 900);
+    setSize(juce::jmax(kPreferredWidth, minimumWidth),
+            juce::jmax(kPreferredHeight, minimumHeight));
 
     UIColors::applyTheme(appPreferences_.getState().shared.theme);
 
@@ -155,7 +173,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         auto menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(&transportBar_.getFileButton())
-                               .withParentComponent(this),
+                               .withParentComponent(&contentRoot_),
                            [this](int result) {
                                if (result != 0) menuBar_.menuItemSelected(result, 0);
                            });
@@ -166,7 +184,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         auto menu = menuBar_.getMenuForIndex(1, menuNames.size() > 1 ? menuNames[1] : juce::String());
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(&transportBar_.getEditButton())
-                               .withParentComponent(this),
+                               .withParentComponent(&contentRoot_),
                            [this](int result) {
                                if (result != 0) menuBar_.menuItemSelected(result, 1);
                            });
@@ -177,25 +195,27 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         auto menu = menuBar_.getMenuForIndex(2, menuNames.size() > 2 ? menuNames[2] : juce::String());
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(&transportBar_.getViewButton())
-                               .withParentComponent(this),
+                               .withParentComponent(&contentRoot_),
                            [this](int result) {
                                if (result != 0) menuBar_.menuItemSelected(result, 2);
                            });
     };
 
-    addAndMakeVisible(topBar_);
-    addAndMakeVisible(parameterPanel_);
+    // content root 是 editor 的唯一直接子组件，承载全部主 UI（§7.3）。
+    addAndMakeVisible(contentRoot_);
+    contentRoot_.addAndMakeVisible(topBar_);
+    contentRoot_.addAndMakeVisible(parameterPanel_);
     parameterPanel_.addListener(this);
 
-    addAndMakeVisible(pianoRoll_);
+    contentRoot_.addAndMakeVisible(pianoRoll_);
     pianoRoll_.addListener(this);
 
     overviewStrip_.addListener(this);
-    addAndMakeVisible(overviewStrip_);
+    contentRoot_.addAndMakeVisible(overviewStrip_);
 
-    addAndMakeVisible(autoRenderOverlay_);
+    contentRoot_.addAndMakeVisible(autoRenderOverlay_);
     autoRenderOverlay_.setVisible(false);
-    addAndMakeVisible(renderBadge_);
+    contentRoot_.addAndMakeVisible(renderBadge_);
     renderBadge_.setVisible(false);
 
     contentCommands_ = processorRef_.getContentCommands();
@@ -262,7 +282,14 @@ void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
 
 void OpenTuneAudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds();
+    // 外层 editor 绝不 transform；content root 按外窗尺寸/uiZoom 得到逻辑尺寸并整体缩放（§7.3）。
+    const float uiZoomScale = static_cast<float>(appliedUiZoomPercent_) / 100.0f;
+    contentRoot_.setBounds(0, 0,
+                           static_cast<int>(std::ceil(getWidth() / uiZoomScale)),
+                           static_cast<int>(std::ceil(getHeight() / uiZoomScale)));
+    contentRoot_.setTransform(juce::AffineTransform::scale(uiZoomScale));
+
+    auto bounds = contentRoot_.getLocalBounds();
     constexpr int gap = 4;
 
     bounds.reduce(gap, gap);
@@ -353,8 +380,28 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
 // timerCallback
 // =========================================================================
 
+void OpenTuneAudioProcessorEditor::applyUiZoomIfNeeded()
+{
+    const int uiZoomPercent = processorRef_.getUiZoomPercent();
+    if (uiZoomPercent == appliedUiZoomPercent_)
+        return;
+
+    appliedUiZoomPercent_ = uiZoomPercent;
+
+    // 保持当前外层窗口尺寸（宿主所有）；仅当新 min 不满足时由 constrainer 扩大（§7.1/§7.3）。
+    const float uiZoomScale = static_cast<float>(appliedUiZoomPercent_) / 100.0f;
+    setResizeLimits(static_cast<int>(std::ceil(kBaseMinWidth * uiZoomScale)),
+                    static_cast<int>(std::ceil(kBaseMinHeight * uiZoomScale)),
+                    kMaxWindowWidth, kMaxWindowHeight);
+
+    resized();
+    repaint();
+}
+
 void OpenTuneAudioProcessorEditor::timerCallback()
 {
+    applyUiZoomIfNeeded();
+
     syncSharedAppPreferences();
 
     // Non-ARA capture state is driven by the processor's own Timer (tick()).
@@ -831,7 +878,7 @@ void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 
 void OpenTuneAudioProcessorEditor::importAudioRequested()
 {
-    OpenTune::ConfirmDialogContent::showMessage(this,
+    OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
                                                 "Import Audio",
                                                 "Please import audio from your DAW in VST3 mode.");
 }
@@ -839,32 +886,32 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
 void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::ExportType exportType)
 {
     juce::ignoreUnused(exportType);
-    OpenTune::ConfirmDialogContent::showMessage(this,
+    OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
                                                 "Export Audio",
                                                 "Please render/export from your DAW in VST3 mode.");
 }
 
 void OpenTuneAudioProcessorEditor::openProjectRequested()
 {
-    showHostManagedMessage(this, "Open Project",
+    showHostManagedMessage(&contentRoot_, "Open Project",
                            "Project file management is handled in the Standalone version.");
 }
 
 void OpenTuneAudioProcessorEditor::saveProjectRequested()
 {
-    showHostManagedMessage(this, "Save Project",
+    showHostManagedMessage(&contentRoot_, "Save Project",
                            "Project file management is handled in the Standalone version.");
 }
 
 void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
 {
-    showHostManagedMessage(this, "Save Project As...",
+    showHostManagedMessage(&contentRoot_, "Save Project As...",
                            "Project file management is handled in the Standalone version.");
 }
 
 void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File&)
 {
-    showHostManagedMessage(this, "Open Recent Project",
+    showHostManagedMessage(&contentRoot_, "Open Recent Project",
                            "Project file management is handled in the Standalone version.");
 }
 
@@ -902,7 +949,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage.component), audioPage.height });
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
-    dialogContent->setDialogParent(this);
+    dialogContent->setDialogParent(&contentRoot_);
 
     // 根据当前屏幕可用区域计算对话框尺寸，适配不同显示器和分辨率
     const auto usable = getParentMonitorArea();
@@ -913,7 +960,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(dialogContent);
     options.dialogTitle = "Preferences";
-    options.componentToCentreAround = this;
+    options.componentToCentreAround = &contentRoot_;
     options.dialogBackgroundColour = UIColors::backgroundDark;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
@@ -926,7 +973,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 
 void OpenTuneAudioProcessorEditor::helpRequested()
 {
-    showHostManagedMessage(this, "Help",
+    showHostManagedMessage(&contentRoot_, "Help",
                            "Open the host DAW plugin help/manual entry for VST3 usage guidance.");
 }
 
@@ -1164,7 +1211,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     }
 
 #if !JucePlugin_Enable_ARA
-    OpenTune::ConfirmDialogContent::showMessage(this,
+    OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
                                                 "Read Audio",
                                                 "This VST3 instance is not ready for audio capture or ARA reading.");
     return;
@@ -1180,7 +1227,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     {
         AppLogger::log("VST3 recordRequested mode=ara-bound focused region unavailable");
         transportBar_.setRecordButtonEnabled(false);
-        OpenTune::ConfirmDialogContent::showMessage(this,
+        OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
                                                     "Read Audio",
                                                     "The selected item is not ready. Please re-select and try again.");
         return;
@@ -1191,7 +1238,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         targetPlaybackRegion,
         [this, dc, targetPlaybackRegion](int refreshed) {
             if (refreshed < 0) {
-                OpenTune::ConfirmDialogContent::showMessage(this,
+                OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
                                                             "Read Audio",
                                                             "Audio regions could not be processed.");
                 return;
@@ -1271,7 +1318,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     AppLogger::log("AutoTune: vst3 request contentKey.objectId=" + juce::String(static_cast<juce::int64>(activeKey.objectId)));
     if (!activeKey.isValid()) {
         OpenTune::ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             "AUTO",
             "AUTO needs an active ARA audio modification.");
         return;
@@ -1287,7 +1334,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
 
     if (f0State == OriginalF0State::Extracting) {
         OpenTune::ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             "OriginalF0",
             "OriginalF0 is being extracted. Please retry in a moment.");
         return;
@@ -1295,7 +1342,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
 
     if (f0State == OriginalF0State::Failed) {
         OpenTune::ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             "OriginalF0",
             "OriginalF0 extraction failed for this clip. Re-import the audio to regenerate OriginalF0.");
         return;
@@ -1303,7 +1350,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
 
     if (f0State != OriginalF0State::Ready) {
         OpenTune::ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             "OriginalF0",
             "OriginalF0 is not ready for this clip.");
         return;
@@ -1316,7 +1363,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
         // NoChange = 最终修正已达成：静默，不弹窗
         if (result.status != PianoRollComponent::AutoTuneApplyStatus::NoChange) {
             OpenTune::ConfirmDialogContent::showMessage(
-                this,
+                &contentRoot_,
                 "AUTO",
                 result.message());
         }
@@ -1339,7 +1386,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
         currentSettings = processorRef_.getPitchShiftSettings(activeKey);
 
     auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
-    content->setDialogParent(this);
+    content->setDialogParent(&contentRoot_);
 
     auto commands = getContentCommandsShared();
     // 直接使用 content 的确认/重置回调提交 undo；PitchShiftDialogContent 在回调后自行
@@ -1378,7 +1425,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
     options.resizable = false;
-    options.componentToCentreAround = this;
+    options.componentToCentreAround = &contentRoot_;
     pianoRoll_.grabKeyboardFocus();
     options.launchAsync();
 }

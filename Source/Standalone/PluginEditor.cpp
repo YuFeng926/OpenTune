@@ -51,6 +51,15 @@ namespace {
 constexpr int kHeartbeatHzIdle = 30;
 constexpr int kHeartbeatHzInferenceActive = 10;
 
+// 100% 基线窗口尺寸（§4.4）：min 900×500，max 固定 3000×2000，preferred 1200×900。
+// 实际外层窗口尺寸在挂入默认 StandaloneFilterWindow 后按 settings 恢复/约束（§5.1）。
+constexpr int kBaseMinWidth = 900;
+constexpr int kBaseMinHeight = 500;
+constexpr int kMaxWindowWidth = 3000;
+constexpr int kMaxWindowHeight = 2000;
+constexpr int kPreferredWidth = 1200;
+constexpr int kPreferredHeight = 900;
+
 // 主题截图验证钩子：仅当设置 OPENTUNE_THEME 环境变量时覆盖配置主题（截图工具用），
 // 未设置时返回配置值，行为与之前完全一致。
 ThemeId resolveEffectiveTheme(ThemeId configured)
@@ -193,7 +202,7 @@ static juce::Colour pickTrackRandomColor(juce::Colour current)
 } // namespace
 
 #if JUCE_DEBUG
-static bool runDebugSelfTests() {
+static bool runDebugSelfTests(OpenTuneAudioProcessor& processor, juce::AudioProcessorEditor& editor) {
     {
         PitchCurve curve;
         curve.setHopSize(160);
@@ -223,6 +232,270 @@ static bool runDebugSelfTests() {
         if (std::abs(notes[0].endTime - expectedEndSeconds) > 480.0 / 44100.0) {
             return false;
         }
+    }
+
+    {
+        const float zoom = 1.5f;  // 变换坐标自检：非 1.0 倍率覆盖缩放路径
+        juce::Component root;
+        juce::Component child;
+        root.setBounds(0, 0, 1600, 1000);
+        root.setTransform(juce::AffineTransform::scale(zoom));
+        root.addAndMakeVisible(child);
+        child.setBounds(200, 120, 240, 160);
+
+        const auto childPoint = juce::Point<float>(24.0f, 36.0f);
+        const auto rootPoint = root.getLocalPoint(&child, childPoint);
+        if (root.getComponentAt(rootPoint.roundToInt()) != &child)
+            return false;
+
+        const auto globalPoint = child.localPointToGlobal(childPoint);
+        const auto roundTripPoint = child.getLocalPoint(nullptr, globalPoint);
+        if (!juce::approximatelyEqual(roundTripPoint.x, childPoint.x)
+            || !juce::approximatelyEqual(roundTripPoint.y, childPoint.y))
+            return false;
+
+        const auto globalArea = child.localAreaToGlobal(
+            juce::Rectangle<float>(0.0f, 0.0f, 80.0f, 40.0f));
+        const auto roundTripArea = child.getLocalArea(nullptr, globalArea);
+        if (!juce::approximatelyEqual(roundTripArea.getWidth(), 80.0f)
+            || !juce::approximatelyEqual(roundTripArea.getHeight(), 40.0f))
+            return false;
+    }
+
+    {
+        ParameterPanel panel;
+        panel.setSize(240, 320);
+        auto* viewport = dynamic_cast<juce::Viewport*>(panel.getChildComponent(0));
+        if (viewport == nullptr || viewport->getViewedComponent() == nullptr)
+            return false;
+
+        auto* content = viewport->getViewedComponent();
+        if (content->getHeight() <= viewport->getMaximumVisibleHeight()
+            || !viewport->getVerticalScrollBar().isVisible())
+            return false;
+
+        viewport->setViewPositionProportionately(0.0, 1.0);
+        if (viewport->getViewPositionY()
+            != content->getHeight() - viewport->getMaximumVisibleHeight())
+            return false;
+
+        panel.setSize(240, 1200);
+        if (content->getHeight() > viewport->getMaximumVisibleHeight()
+            || viewport->getVerticalScrollBar().isVisible())
+            return false;
+    }
+
+    // --- TransportBar 生产阈值：两个 LayoutProfile 的 Full/Compact/Overflow 边界与槽位不越界 ---
+    {
+        using TransportBar = TransportBarComponent;
+        const auto sameTierLayout = [](const TransportBar::TierLayout& a,
+                                       const TransportBar::TierLayout& b) {
+            return a.tier == b.tier
+                && a.requiredWidth == b.requiredWidth
+                && a.fileButton == b.fileButton
+                && a.editButton == b.editButton
+                && a.viewButton == b.viewButton
+                && a.moreButton == b.moreButton
+                && a.playButton == b.playButton
+                && a.pauseButton == b.pauseButton
+                && a.stopButton == b.stopButton
+                && a.loopButton == b.loopButton
+                && a.recordButton == b.recordButton
+                && a.trackViewButton == b.trackViewButton
+                && a.pianoViewButton == b.pianoViewButton
+                && a.timeDisplay == b.timeDisplay
+                && a.bpmField == b.bpmField
+                && a.tapButton == b.tapButton
+                && a.scaleRootSelector == b.scaleRootSelector
+                && a.scaleTypeSelector == b.scaleTypeSelector;
+        };
+        const auto slotsWithinBounds = [](const TransportBar::TierLayout& layout,
+                                          juce::Rectangle<int> bounds) {
+            const juce::Rectangle<int> slots[] = {
+                layout.fileButton, layout.editButton, layout.viewButton, layout.moreButton,
+                layout.playButton, layout.pauseButton, layout.stopButton, layout.loopButton,
+                layout.recordButton, layout.trackViewButton, layout.pianoViewButton,
+                layout.timeDisplay, layout.bpmField, layout.tapButton,
+                layout.scaleRootSelector, layout.scaleTypeSelector
+            };
+            for (const auto& slot : slots)
+                if (!slot.isEmpty() && !bounds.contains(slot))
+                    return false;
+            return true;
+        };
+
+        const juce::Rectangle<int> fullBounds(0, 0, 4096, 64);
+        for (const auto profile : { TransportBar::LayoutProfile::StandaloneFull,
+                                    TransportBar::LayoutProfile::VST3AraSingleClip }) {
+            const auto full = TransportBar::computeTierLayout(profile, fullBounds);
+            if (full.tier != TransportBar::LayoutTier::Full
+                || !sameTierLayout(full, TransportBar::computeTierLayout(profile, fullBounds))
+                || !slotsWithinBounds(full, fullBounds))
+                return false;
+
+            const juce::Rectangle<int> compactBounds(0, 0, full.requiredWidth - 1, 64);
+            const auto compact = TransportBar::computeTierLayout(profile, compactBounds);
+            if (compact.tier != TransportBar::LayoutTier::Compact
+                || !sameTierLayout(compact, TransportBar::computeTierLayout(profile, compactBounds))
+                || !slotsWithinBounds(compact, compactBounds))
+                return false;
+
+            const juce::Rectangle<int> overflowBounds(0, 0, compact.requiredWidth - 1, 64);
+            const auto overflow = TransportBar::computeTierLayout(profile, overflowBounds);
+            if (overflow.tier != TransportBar::LayoutTier::Overflow
+                || !sameTierLayout(overflow, TransportBar::computeTierLayout(profile, overflowBounds))
+                || !slotsWithinBounds(overflow, overflowBounds))
+                return false;
+        }
+    }
+
+    // --- OTSS v3 roundtrip + v2 migration（走生产 get/setStateInformation） ---
+    {
+        juce::MemoryBlock originalOtss;
+        processor.getStateInformation(originalOtss);
+
+        processor.setStateInformation(originalOtss.getData(), static_cast<int>(originalOtss.getSize()));
+        juce::MemoryBlock otssRoundTrip;
+        processor.getStateInformation(otssRoundTrip);
+        if (otssRoundTrip != originalOtss)
+            return false;
+
+        const double recordedBpm = processor.getBpm();
+        const int recordedNumerator = processor.getTimeSigNumerator();
+        const int recordedDenominator = processor.getTimeSigDenominator();
+        const int recordedTrackHeight = processor.getTrackHeight();
+
+        processor.setUiZoomPercent(150);
+
+        // v2 完整 36 字节：magic 从原 v3 载荷读取（不复制 version）；
+        // bpm/num/den/trackHeight 直接复制原字节；v3 的 int zoom 槽换成任意 legacy double。
+        juce::MemoryBlock v2Payload;
+        {
+            const auto* originalBytes = static_cast<const char*>(originalOtss.getData());
+            juce::MemoryOutputStream output(v2Payload, false);
+            output.write(originalBytes, 4);       // magic
+            output.writeInt(2);                   // legacy v2
+            output.write(originalBytes + 8, 16);  // bpm(double) + num(int) + den(int)
+            output.writeDouble(123.75);           // legacy timeline zoom, discarded on load
+            output.write(originalBytes + 28, 4);  // trackHeight
+        }
+
+        processor.setStateInformation(v2Payload.getData(), static_cast<int>(v2Payload.getSize()));
+        const bool v2MigrationOk = processor.getUiZoomPercent() == 100
+            && processor.getBpm() == recordedBpm
+            && processor.getTimeSigNumerator() == recordedNumerator
+            && processor.getTimeSigDenominator() == recordedDenominator
+            && processor.getTrackHeight() == recordedTrackHeight;
+
+        // 无论迁移断言结果如何：立即恢复原 v3 载荷并确认输出与原字节相等，之后才返回失败。
+        processor.setStateInformation(originalOtss.getData(), static_cast<int>(originalOtss.getSize()));
+        juce::MemoryBlock otssRestored;
+        processor.getStateInformation(otssRestored);
+        if (otssRestored != originalOtss || !v2MigrationOk)
+            return false;
+    }
+
+    // --- OTST v10 roundtrip + v9 migration（临时 VST3 wrapper processor，走生产 get/setStateInformation） ---
+    {
+        const auto originalWrapperType = processor.wrapperType;
+        const auto originalHostWrapperType = juce::PluginHostType::jucePlugInClientCurrentWrapperType;
+
+        juce::PluginHostType::jucePlugInClientCurrentWrapperType = juce::AudioProcessor::wrapperType_VST3;
+        juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_VST3);
+        std::unique_ptr<OpenTuneAudioProcessor> temp = std::make_unique<OpenTuneAudioProcessor>();
+        juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Undefined);
+        juce::PluginHostType::jucePlugInClientCurrentWrapperType = originalHostWrapperType;
+
+        // prepareToPlay 初始化 runtime，使生产 restore 立即执行（不再缓存 deferred）。
+        temp->prepareToPlay(44100.0, 512);
+
+        juce::MemoryBlock originalV10;
+        temp->getStateInformation(originalV10);
+        temp->setStateInformation(originalV10.getData(), static_cast<int>(originalV10.getSize()));
+        juce::MemoryBlock v10RoundTrip;
+        temp->getStateInformation(v10RoundTrip);
+        bool vst3StateOk = (v10RoundTrip == originalV10);
+
+        // v9 完整载荷：magic 从原 v10 头部读取；原 v10 zoom int32 之后（offset 12 起）的
+        // 全部剩余字节原样保留，仅把 zoom 槽换成任意 legacy double（v9 恢复丢弃并回落 100）。
+        juce::MemoryBlock v9Payload;
+        {
+            juce::MemoryInputStream input(originalV10, false);
+            const int magic = input.readInt();
+            const auto* originalBytes = static_cast<const char*>(originalV10.getData());
+            juce::MemoryOutputStream output(v9Payload, false);
+            output.writeInt(magic);
+            output.writeInt(9);
+            output.writeDouble(123.75);
+            output.write(originalBytes + 12, originalV10.getSize() - 12);
+        }
+
+        temp->setStateInformation(v9Payload.getData(), static_cast<int>(v9Payload.getSize()));
+        vst3StateOk = vst3StateOk && (temp->getUiZoomPercent() == 100);
+        juce::MemoryBlock v9Restored;
+        temp->getStateInformation(v9Restored);
+        vst3StateOk = vst3StateOk && (v9Restored == originalV10);
+
+        temp->setUiZoomPercent(150);
+        juce::MemoryBlock unsupportedV11;
+        {
+            juce::MemoryInputStream input(originalV10, false);
+            const int magic = input.readInt();
+            const auto* originalBytes = static_cast<const char*>(originalV10.getData());
+            juce::MemoryOutputStream output(unsupportedV11, false);
+            output.writeInt(magic);
+            output.writeInt(11);
+            output.write(originalBytes + 8, originalV10.getSize() - 8);
+        }
+        temp->setStateInformation(unsupportedV11.getData(), static_cast<int>(unsupportedV11.getSize()));
+        vst3StateOk = vst3StateOk && (temp->getUiZoomPercent() == 150);
+
+        juce::MemoryBlock currentOtss;
+        processor.getStateInformation(currentOtss);
+        juce::MemoryBlock unsupportedOtssV4;
+        {
+            juce::MemoryInputStream input(currentOtss, false);
+            const int magic = input.readInt();
+            const auto* originalBytes = static_cast<const char*>(currentOtss.getData());
+            juce::MemoryOutputStream output(unsupportedOtssV4, false);
+            output.writeInt(magic);
+            output.writeInt(4);
+            output.write(originalBytes + 8, currentOtss.getSize() - 8);
+        }
+        temp->setStateInformation(unsupportedOtssV4.getData(), static_cast<int>(unsupportedOtssV4.getSize()));
+        vst3StateOk = vst3StateOk && (temp->getUiZoomPercent() == 150);
+
+        temp->releaseResources();
+        if (!vst3StateOk || processor.wrapperType != originalWrapperType)
+            return false;
+    }
+
+    // --- 六档 ui zoom 的 min/max limits（与生产相同的 float scale + ceil） ---
+    {
+        const juce::Rectangle<int> originalEditorBounds = editor.getBounds();
+        auto* constrainer = editor.getConstrainer();
+        bool zoomLimitsOk = true;
+        constexpr int kZoomPercents[] = { 75, 90, 100, 110, 125, 150 };
+        for (const int zoomPercent : kZoomPercents) {
+            const float uiZoomScale = static_cast<float>(zoomPercent) / 100.0f;
+            const int expectedMinWidth = static_cast<int>(std::ceil(kBaseMinWidth * uiZoomScale));
+            const int expectedMinHeight = static_cast<int>(std::ceil(kBaseMinHeight * uiZoomScale));
+            editor.setResizeLimits(expectedMinWidth, expectedMinHeight, kMaxWindowWidth, kMaxWindowHeight);
+            zoomLimitsOk = zoomLimitsOk
+                && constrainer->getMinimumWidth() == expectedMinWidth
+                && constrainer->getMinimumHeight() == expectedMinHeight
+                && constrainer->getMaximumWidth() == kMaxWindowWidth
+                && constrainer->getMaximumHeight() == kMaxWindowHeight;
+        }
+
+        // 恢复 processor 当前档 limits 与测试前的 editor bounds。
+        const float currentScale = static_cast<float>(processor.getUiZoomPercent()) / 100.0f;
+        editor.setResizeLimits(static_cast<int>(std::ceil(kBaseMinWidth * currentScale)),
+                               static_cast<int>(std::ceil(kBaseMinHeight * currentScale)),
+                               kMaxWindowWidth, kMaxWindowHeight);
+        editor.setBounds(originalEditorBounds);
+        if (!zoomLimitsOk)
+            return false;
     }
 
     return true;
@@ -330,11 +603,18 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Hide original menu bar as we moved it to TransportBar
     menuBar_.setVisible(false);
 
-    // Set larger default size for the complete UI (increased height for menu bar)
+    // 构造顺序固定：limits → resizable → preferred size（§4.4）。
+    // uiZoom 唯一真相在 Processor：构造读取一次，之后由心跳同步（§7.3）。
+    appliedUiZoomPercent_ = processorRef_.getUiZoomPercent();
+    const float uiZoomScale = static_cast<float>(appliedUiZoomPercent_) / 100.0f;
+    const int minimumWidth = static_cast<int>(std::ceil(kBaseMinWidth * uiZoomScale));
+    const int minimumHeight = static_cast<int>(std::ceil(kBaseMinHeight * uiZoomScale));
+    setResizeLimits(minimumWidth,
+                    minimumHeight,
+                    kMaxWindowWidth, kMaxWindowHeight);
     setResizable(true, true);
-    // 最小宽度 1192 = TransportBar 固定内容 1056（按钮链 1048 + reduced(4,4) 8）+ TopBar 边距 136（reduced 12×2 + pad 3×2 + 左右侧栏切换钮各 53）
-    setResizeLimits(1192, ParameterPanel::kMinimumPanelHeight + TRANSPORT_BAR_HEIGHT + 24 + 12, 3000, 2000);
-    setSize(1200, 900);
+    setSize(juce::jmax(kPreferredWidth, minimumWidth),
+            juce::jmax(kPreferredHeight, minimumHeight));
 
     UIColors::applyTheme(resolveEffectiveTheme(appPreferences_.getState().shared.theme));
 
@@ -370,7 +650,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         auto menuNames = menuBar_.getMenuBarNames();
         juce::PopupMenu menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getFileButton())
-                                                     .withParentComponent(this),
+                                                     .withParentComponent(&contentRoot_),
                            [this](int result) {
                                if (result != 0) menuBar_.menuItemSelected(result, 0);
                            });
@@ -379,7 +659,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         auto menuNames = menuBar_.getMenuBarNames();
         juce::PopupMenu menu = menuBar_.getMenuForIndex(1, menuNames.size() > 1 ? menuNames[1] : juce::String());
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getEditButton())
-                                                     .withParentComponent(this),
+                                                     .withParentComponent(&contentRoot_),
                            [this](int result) {
                                if (result != 0) menuBar_.menuItemSelected(result, 1);
                            });
@@ -388,7 +668,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         auto menuNames = menuBar_.getMenuBarNames();
         juce::PopupMenu menu = menuBar_.getMenuForIndex(2, menuNames.size() > 2 ? menuNames[2] : juce::String());
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getViewButton())
-                                                     .withParentComponent(this),
+                                                     .withParentComponent(&contentRoot_),
                            [this](int result) {
                                if (result != 0) menuBar_.menuItemSelected(result, 2);
                            });
@@ -397,7 +677,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 #if JUCE_DEBUG
     static std::atomic<bool> ran{ false };
     if (!ran.exchange(true)) {
-        const bool ok = runDebugSelfTests();
+        const bool ok = runDebugSelfTests(processorRef_, *this);
         if (!ok) {
             AppLogger::log("Debug self-tests failed");
             jassertfalse;
@@ -422,7 +702,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         applyResolvedScaleForPlacementContent(initTrack, initPlacementIndex);
     }
 
-    addAndMakeVisible(topBar_);
+    // content root 是 editor 的唯一直接子组件，承载全部主 UI（§7.3）。
+    addAndMakeVisible(contentRoot_);
+    contentRoot_.addAndMakeVisible(topBar_);
 
 // Top bar: side panel collapse toggle
     topBar_.onToggleTrackPanel = [this]() {
@@ -458,7 +740,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     syncTrackColorsToPanel();
     trackPanel_.setTrackColorMode(appPreferences_.getTrackColorMode());
     menuBar_.setTrackColorMode(appPreferences_.getTrackColorMode());
-    addAndMakeVisible(trackPanel_);
+    contentRoot_.addAndMakeVisible(trackPanel_);
 
     // Setup Parameter Panel
     parameterPanel_.addListener(this);
@@ -471,10 +753,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     parameterPanel_.setRetuneSpeed(PitchControlConfig::kDefaultRetuneSpeedPercent);
     pianoRoll_.setRetuneSpeed(PitchControlConfig::kDefaultRetuneSpeedNormalized);
 
-    addAndMakeVisible(parameterPanel_);
+    contentRoot_.addAndMakeVisible(parameterPanel_);
 
     arrangementView_.addListener(this);
-    addAndMakeVisible(arrangementView_);
+    contentRoot_.addAndMakeVisible(arrangementView_);
     overviewStrip_.addListener(this);
     // Initial sync: track panel visible track count 鈫?arrangement view
     arrangementView_.setVisibleTrackCount(trackPanel_.getVisibleTrackCount());
@@ -503,8 +785,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // PianoRoll and ArrangementView read presented position from processor-owned
     // PlayHeadState via getPresentedPositionSeconds(); no second forwarding path needed.
     
-    addAndMakeVisible(pianoRoll_);
-    addAndMakeVisible(overviewStrip_);
+    contentRoot_.addAndMakeVisible(pianoRoll_);
+    contentRoot_.addAndMakeVisible(overviewStrip_);
     pianoRoll_.setVisible(!isWorkspaceView_);
     arrangementView_.setVisible(isWorkspaceView_);
     overviewStrip_.setVisible(!isWorkspaceView_);
@@ -512,10 +794,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Each view drives its own camera from presented position; no shared camera echo.
     
     // Add AutoRenderOverlay (initially hidden, covers PianoRoll during AUTO)
-    addAndMakeVisible(autoRenderOverlay_);
+    contentRoot_.addAndMakeVisible(autoRenderOverlay_);
     autoRenderOverlay_.setVisible(false);
 
-    addAndMakeVisible(renderBadge_);
+    contentRoot_.addAndMakeVisible(renderBadge_);
     renderBadge_.setVisible(false);
 
     // Ensure initial focus
@@ -525,7 +807,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         pianoRoll_.grabKeyboardFocus();
 
     // Add Ripple Overlay (Topmost)
-    addAndMakeVisible(rippleOverlay_);
+    contentRoot_.addAndMakeVisible(rippleOverlay_);
     // No need for setAlwaysOnTop on component level, we handle z-order in resized
 
     applyThemeToEditor(resolveEffectiveTheme(appPreferences_.getState().shared.theme));
@@ -587,8 +869,19 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    // 退出保存外层窗口实际 width/height（§5.1）：此刻默认 StandaloneFilterWindow 仍存活，
+    // windowX/windowY 由该窗口析构函数继续写入同一 OpenTune.settings。
     if (auto* holder = juce::StandalonePluginHolder::getInstance())
+    {
+        if (auto* window = dynamic_cast<juce::StandaloneFilterWindow*>(getTopLevelComponent()))
+            if (auto* props = holder->settings.get())
+            {
+                props->setValue("windowWidth", window->getWidth());
+                props->setValue("windowHeight", window->getHeight());
+            }
+
         restoreAsioSampleRateToSystem(holder->deviceManager, "editor exit");
+    }
 
     // Stop timer
 #if JUCE_MAC
@@ -671,7 +964,7 @@ bool OpenTuneAudioProcessorEditor::rejectProjectOperationIfBusy()
         return false;
 
     ConfirmDialogContent::showMessage(
-        this,
+        &contentRoot_,
         juce::String::fromUTF8(u8"\u5DE5\u7A0B\u64CD\u4F5C"),
         juce::String::fromUTF8(u8"\u53E6\u4E00\u4E2A\u5DE5\u7A0B\u64CD\u4F5C\u6B63\u5728\u8FDB\u884C\u4E2D\u3002"));
     return true;
@@ -710,7 +1003,7 @@ void OpenTuneAudioProcessorEditor::saveProject(juce::File targetFile,
                         juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
                         result.error().fullMessage(),
                         { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                    safeThis.getComponent());
+                    &safeThis->contentRoot_);
                 safeThis->projectOperationBusy_ = false;
                 return;
             }
@@ -760,7 +1053,7 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
                         juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
                         preparedResult->error().fullMessage(),
                         { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                    safeThis.getComponent());
+                    &safeThis->contentRoot_);
                 safeThis->projectSession_.clearRecentProjects();
                 safeThis->projectOperationBusy_ = false;
                 return;
@@ -774,7 +1067,7 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
                         juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
                         commitResult.error().fullMessage(),
                         { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                    safeThis.getComponent());
+                    &safeThis->contentRoot_);
                 safeThis->projectOperationBusy_ = false;
                 return;
             }
@@ -858,7 +1151,7 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     if (isImportInProgress_)
     {
         ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             juce::String("Import Audio"),
             juce::String("Audio import is already in progress. Please try again later.")
         );
@@ -879,7 +1172,7 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     {
         const auto wildcard = getImportWildcardFilter().replaceCharacters("*", "");
         ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             juce::String("Import Audio"),
             juce::String("Unsupported file type.\nSupported extensions: ") + wildcard
         );
@@ -889,7 +1182,7 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     if (files.size() > 1)
     {
         ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             juce::String("Import Audio"),
             juce::String("Multiple files detected. Only the first file will be imported.")
         );
@@ -1045,7 +1338,7 @@ void OpenTuneAudioProcessorEditor::applyImportDropTarget(ImportDropTarget target
 
     case ImportDropTarget::Kind::Reject:
         ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             juce::String::fromUTF8(u8"\u5BFC\u5165\u97F3\u9891"),
             target.rejectReason
         );
@@ -1066,7 +1359,14 @@ void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
 
 void OpenTuneAudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds();
+    // 外层 editor 绝不 transform；content root 按外窗尺寸/uiZoom 得到逻辑尺寸并整体缩放（§7.3）。
+    const float uiZoomScale = static_cast<float>(appliedUiZoomPercent_) / 100.0f;
+    contentRoot_.setBounds(0, 0,
+                           static_cast<int>(std::ceil(getWidth() / uiZoomScale)),
+                           static_cast<int>(std::ceil(getHeight() / uiZoomScale)));
+    contentRoot_.setTransform(juce::AffineTransform::scale(uiZoomScale));
+
+    auto bounds = contentRoot_.getLocalBounds();
     rippleOverlay_.setBounds(bounds);
     rippleOverlay_.toFront(false);
 
@@ -1175,8 +1475,72 @@ void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
     showingSingleNoteParams_ = decision.nextShowingSelectionParameters;
 }
 
+void OpenTuneAudioProcessorEditor::restoreStandaloneWindowGeometryOnce()
+{
+    if (standaloneWindowGeometryRestored_)
+        return;
+
+    auto* window = dynamic_cast<juce::StandaloneFilterWindow*>(getTopLevelComponent());
+    if (window == nullptr || window->getPeer() == nullptr)
+        return;  // 尚未挂入默认 StandaloneFilterWindow
+
+    auto* holder = juce::StandalonePluginHolder::getInstance();
+    if (holder == nullptr)
+        return;
+
+    auto* props = holder->settings.get();
+    if (props == nullptr)
+        return;
+
+    standaloneWindowGeometryRestored_ = true;
+
+    // 候选外层 bounds = 当前首选结果（editor 1200×900 + 既有窗口边框）；有保存值时覆盖 x/y/w/h（§5.1）。
+    auto candidate = window->getBounds();
+    if (props->containsKey("windowX") && props->containsKey("windowY"))
+        candidate.setPosition(props->getIntValue("windowX"), props->getIntValue("windowY"));
+    if (props->containsKey("windowWidth") && props->containsKey("windowHeight"))
+        candidate.setSize(props->getIntValue("windowWidth"), props->getIntValue("windowHeight"));
+
+    // 按保存位置所在 display 的 userArea 约束：默认 100% 放得下时不得超工作区；
+    // 所需尺寸低于 min 时由 setBoundsConstrained 经 DecoratorConstrainer 抬回 min（min 优先，允许超工作区）。
+    const auto userArea = juce::Desktop::getInstance().getDisplays().getDisplayForRect(candidate)->userArea;
+    candidate.setSize(juce::jmin(candidate.getWidth(), userArea.getWidth()),
+                      juce::jmin(candidate.getHeight(), userArea.getHeight()));
+    candidate.setPosition(juce::jlimit(userArea.getX(),
+                                       juce::jmax(userArea.getX(), userArea.getRight() - candidate.getWidth()),
+                                       candidate.getX()),
+                          juce::jlimit(userArea.getY(),
+                                       juce::jmax(userArea.getY(), userArea.getBottom() - candidate.getHeight()),
+                                       candidate.getY()));
+
+    // 由 StandaloneFilterWindow 现有 constrainer 同步外层窗口与 editor，不手算窗口边框。
+    window->setBoundsConstrained(candidate);
+}
+
+void OpenTuneAudioProcessorEditor::applyUiZoomIfNeeded()
+{
+    const int uiZoomPercent = processorRef_.getUiZoomPercent();
+    if (uiZoomPercent == appliedUiZoomPercent_)
+        return;
+
+    appliedUiZoomPercent_ = uiZoomPercent;
+
+    // 保持当前外层窗口尺寸；仅当新 min 不满足时由 constrainer 扩大（§7.1/§7.3）。
+    const float uiZoomScale = static_cast<float>(appliedUiZoomPercent_) / 100.0f;
+    setResizeLimits(static_cast<int>(std::ceil(kBaseMinWidth * uiZoomScale)),
+                    static_cast<int>(std::ceil(kBaseMinHeight * uiZoomScale)),
+                    kMaxWindowWidth, kMaxWindowHeight);
+
+    resized();
+    repaint();
+}
+
 void OpenTuneAudioProcessorEditor::timerCallback()
 {
+    applyUiZoomIfNeeded();
+
+    restoreStandaloneWindowGeometryOnce();
+
     syncSharedAppPreferences();
 
     const bool vocoderReady = processorRef_.isVocoderReady();
@@ -1680,7 +2044,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
     if (isImportInProgress_)
     {
         ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             juce::String("Import Audio"),
             juce::String("Audio import is already in progress. Please try again later.")
         );
@@ -1759,7 +2123,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                             if (acceptedFileCount <= 0)
                             {
                                 ConfirmDialogContent::showMessage(
-                                    safeThis,
+                                    &safeThis->contentRoot_,
                                     juce::String("Import Failed"),
                                     juce::String("There are no available tracks after the current track.")
                                 );
@@ -1788,7 +2152,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                             if (acceptedFileCount < filesPtr->size())
                             {
                                 ConfirmDialogContent::showMessage(
-                                    safeThis,
+                                    &safeThis->contentRoot_,
                                     juce::String("Import Count Trimmed"),
                                     juce::String("Only ")
                                         + juce::String(acceptedFileCount)
@@ -1799,7 +2163,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                         { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr }
                     }
                 ),
-                safeThis.getComponent()
+                &safeThis->contentRoot_
             );
         }
     });
@@ -1860,7 +2224,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                 safeThis->releaseImportBatchSlot(pendingImport.batchId);
                 safeThis->processNextImportInQueue();
                 ConfirmDialogContent::showMessage(
-                    safeThis.getComponent(),
+                    &safeThis->contentRoot_,
                     juce::String::fromUTF8(u8"\u5BFC\u5165\u5931\u8D25"),
                     result.errorMessage
                 );
@@ -1899,7 +2263,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                             safeThis->releaseImportBatchSlot(batchId);
                             safeThis->processNextImportInQueue();
                             ConfirmDialogContent::showMessage(
-                                safeThis.getComponent(),
+                                &safeThis->contentRoot_,
                                 juce::String("Import Failed"),
                                 juce::String("Audio import preprocessing failed. Please try again.")
                             );
@@ -1926,7 +2290,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                         safeThis->releaseImportBatchSlot(pendingImport.batchId);
                         safeThis->processNextImportInQueue();
                         ConfirmDialogContent::showMessage(
-                            safeThis.getComponent(),
+                            &safeThis->contentRoot_,
                             juce::String("Import Failed"),
                             juce::String("Audio import commit failed. Please try again.")
                         );
@@ -2058,7 +2422,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
     if (exportInProgress_.load())
     {
         ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             juce::String("Export Audio"),
             juce::String("An export task is already in progress. Please try again later."));
         return;
@@ -2127,7 +2491,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                     if (request.placementIndex < 0)
                     {
                         ConfirmDialogContent::showMessage(
-                            safeThis.getComponent(),
+                            &safeThis->contentRoot_,
                             juce::String("Export Failed"),
                             juce::String("No audio clip is selected. Select a clip on the track first."));
                         return;
@@ -2204,7 +2568,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                         {
                             DBG("Successfully exported " + outRequest.targetName);
                             ConfirmDialogContent::showMessage(
-                                uiSafe.getComponent(),
+                                &uiSafe->contentRoot_,
                                 juce::String::fromUTF8(u8"\u5BFC\u51FA\u5B8C\u6210"),
                                 outRequest.targetName + juce::String::fromUTF8(u8" \u5DF2\u5BFC\u51FA\u5230: ") + outFile.getFullPathName());
                             return;
@@ -2217,7 +2581,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                         }
 
                         ConfirmDialogContent::showMessage(
-                            uiSafe.getComponent(),
+                            &uiSafe->contentRoot_,
                             juce::String::fromUTF8(u8"\u5BFC\u51FA\u5931\u8D25"),
                             failText);
                     });
@@ -2232,7 +2596,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                     juce::String("The target file already exists. Overwrite it?"),
                     { { juce::String::fromUTF8(u8"\u8986\u76D6"), startExport, true },
                       { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
-                safeThis.getComponent());
+                &safeThis->contentRoot_);
             return;
         }
 
@@ -2277,7 +2641,7 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
                     safeThis->launchOpenProjectChooser();
                 }, false },
               { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
-        this);
+        &contentRoot_);
 }
 
 void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
@@ -2325,7 +2689,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
                             safeThis->saveProject(file, true);
                         }, true },
                       { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
-                safeThis.getComponent());
+                &safeThis->contentRoot_);
             return;
         }
 
@@ -2372,7 +2736,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
                  std::make_move_iterator(standalonePages.end()));
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
-    dialogContent->setDialogParent(this);
+    dialogContent->setDialogParent(&contentRoot_);
 
     // 根据当前屏幕可用区域计算对话框尺寸，适配不同显示器和分辨率
     const auto usable = getParentMonitorArea();
@@ -2388,6 +2752,8 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     options.useNativeTitleBar = false;
     options.resizable = true;
     options.useBottomRightCornerResizer = true;
+    // 独立弹窗以 transformed content root 为锚点（与 VST3 版一致，§7.4）。
+    options.componentToCentreAround = &contentRoot_;
     options.launchAsync();
 }
 
@@ -2412,7 +2778,7 @@ void OpenTuneAudioProcessorEditor::helpRequested()
     else
     {
         ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             LOC(kClose),
             juce::String("Help file not found: ") + helpFile.getFullPathName()
         );
@@ -2889,7 +3255,7 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
     opts.dialogTitle = "Track " + juce::String(trackId + 1) + " Color";
     opts.content.setOwned(content);
     opts.dialogBackgroundColour = UIColors::backgroundDark;
-    opts.componentToCentreAround = this;
+    opts.componentToCentreAround = &contentRoot_;
     opts.escapeKeyTriggersCloseButton = true;
     opts.useNativeTitleBar = false;
     opts.launchAsync();
@@ -3099,7 +3465,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     const auto result = pianoRoll_.applyAutoTuneToSelection();
     if (!result.applied()) {
         if (result.status != PianoRollComponent::AutoTuneApplyStatus::NoChange) {
-            ConfirmDialogContent::showMessage(this,
+            ConfirmDialogContent::showMessage(&contentRoot_,
                                               juce::String("AUTO"),
                                               result.message());
         }
@@ -3121,7 +3487,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     const auto currentSettings = processorRef_.getPitchShiftSettings(contentKey);
 
     auto* content = new PitchShiftDialogContent(currentSettings);
-    content->setDialogParent(this);
+    content->setDialogParent(&contentRoot_);
 
     auto commands = processorRef_.getContentCommands();
     content->setOnConfirm([safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
@@ -3156,7 +3522,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
     options.resizable = false;
-    options.componentToCentreAround = this;
+    options.componentToCentreAround = &contentRoot_;
     options.launchAsync();
 }
 
@@ -3213,7 +3579,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
                             safeThis->saveProject(file);
                         }, true },
                       { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
-                safeThis.getComponent());
+                &safeThis->contentRoot_);
             return; // Don't continue in outer callback — the inner callback handles save
         }
 
@@ -3267,7 +3633,7 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                                                 handleSaveAndOpen(saveFile);
                                             }, true },
                                           { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
-                                    safeThis.getComponent());
+                                    &safeThis->contentRoot_);
                                 return;
                             }
                             handleSaveAndOpen(saveFile);
@@ -3281,7 +3647,7 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                      safeThis->openProjectFile(file);
                  }, false },
               { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
-        this);
+        &contentRoot_);
 }
 
 void OpenTuneAudioProcessorEditor::clearRecentProjectsRequested()
@@ -3503,7 +3869,7 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
                 return;
             if (!arrangement->setPlacementReferencePlacement(trackId, targetPlacementId, 0)) {
                 ConfirmDialogContent::showMessage(
-                    this,
+                    &contentRoot_,
                     juce::String::fromUTF8(u8"\u53C2\u8003 Clip"),
                     juce::String::fromUTF8(u8"\u65E0\u6CD5\u6E05\u9664\u5F53\u524D\u53C2\u8003 Clip \u7ED1\u5B9A\u3002"));
                 return;
@@ -3544,7 +3910,7 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
                 if (!arrangement->setPlacementReferencePlacement(
                         trackId, targetPlacementId, candidate.placementId)) {
                     ConfirmDialogContent::showMessage(
-                        this,
+                        &contentRoot_,
                         juce::String::fromUTF8(u8"\u53C2\u8003 Clip"),
                         juce::String::fromUTF8(u8"\u8BE5 Clip \u5DF2\u4E0D\u6EE1\u8DB3\u53C2\u8003\u7ED1\u5B9A\u6761\u4EF6\u3002"));
                     return;
@@ -3568,14 +3934,16 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
 
     if (buttonScreenArea.isEmpty())
     {
-        // Fallback: anchor to the arrangement view's bottom-left corner
-        buttonScreenArea = juce::Rectangle<int>(
-            arrangementView_.getScreenBounds().getBottomLeft(),
-            juce::Point<int>(arrangementView_.getScreenBounds().getX() + 200,
-                             arrangementView_.getScreenBounds().getBottom()));
+        const auto localAnchor = juce::Rectangle<float>(
+            0.0f,
+            static_cast<float>(arrangementView_.getHeight()),
+            200.0f,
+            1.0f);
+        buttonScreenArea = arrangementView_.localAreaToGlobal(localAnchor).toNearestInt();
     }
     menu.showMenuAsync(juce::PopupMenu::Options()
-        .withTargetScreenArea(buttonScreenArea));
+        .withTargetScreenArea(buttonScreenArea)
+        .withParentComponent(&contentRoot_));
 }
 
 bool OpenTuneAudioProcessorEditor::handleAutoRefExecute()
@@ -3597,7 +3965,7 @@ bool OpenTuneAudioProcessorEditor::handleAutoRefExecute()
             ? result.message
             : juce::String::fromUTF8(u8"AUTO Ref alignment failed.");
         ConfirmDialogContent::showMessage(
-            this,
+            &contentRoot_,
             juce::String::fromUTF8(u8"AUTO Ref"),
             message);
         refreshReferenceContext();

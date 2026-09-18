@@ -199,6 +199,7 @@ constexpr const char* kNoteLabelsShowAll = "Show All";
 constexpr const char* kNoteLabelsCOnly = "C Only";
 constexpr const char* kNoteLabelsHide = "Hide";
 constexpr const char* kShowUnvoicedFrames = "Show Unvoiced Frames";
+constexpr const char* kUiZoom = "UI Zoom";
 constexpr const char* kBackgroundBrightness = "Background Brightness";
 constexpr const char* kTrackColors = "Track Colors";
 constexpr const char* kTrackColorsRandom = "Random Colors";
@@ -341,6 +342,7 @@ constexpr const char* kPianoRollView = "Piano Roll View";
 constexpr const char* kTracks = "Tracks";
 constexpr const char* kProps = "Props";
 constexpr const char* kScale = "Scale";
+constexpr const char* kRootNote = "Root";
 
         constexpr const char* kClose = "Close";
         constexpr const char* kHelp = "Help...";
@@ -426,6 +428,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kNoteLabelsCOnly, "C Only", "仅 C", "C のみ", "Только C", "Solo C" },
         { Keys::kNoteLabelsHide, "Hide", "隐藏", "非表示", "Скрыть", "Ocultar" },
         { Keys::kShowUnvoicedFrames, "Show Unvoiced Frames", "显示无声音帧", "無声音フレームを表示", "Показывать глухие кадры", "Mostrar cuadros sordos" },
+        { Keys::kUiZoom, "UI Zoom", "界面缩放", "UIズーム", "Масштаб интерфейса", "Zoom de interfaz" },
         { Keys::kBackgroundBrightness, "Background Brightness", "背景亮度", "背景の明るさ", "Яркость фона", "Brillo de fondo" },
         { Keys::kTrackColors, "Track Colors", "轨道颜色", "トラック色", "Цвет дорожки", "Color pista" },
         { Keys::kTrackColorsRandom, "Random Colors", "随机颜色", "ランダム色", "Случайный цвет", "Color aleatorio" },
@@ -560,6 +563,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTracks, "Tracks", "轨道", "トラック", "Дорожки", "Pistas" },
         { Keys::kProps, "Props", "属性", "プロパティ", "Свойства", "Props" },
         { Keys::kScale, "Scale", "调式", "スケール", "Гамма", "Escala" },
+        { Keys::kRootNote, "Root", "根音", "ルート", "Тоника", "Raíz" },
         
         { Keys::kClose, "Close", "关闭", "閉じる", "Закрыть", "Cerrar" },
         { Keys::kHelp, "Help...", "帮助...", "ヘルプ...", "Справка...", "Ayuda..." },

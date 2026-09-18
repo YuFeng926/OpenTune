@@ -144,6 +144,33 @@ public:
         VST3AraSingleClip
     };
 
+    /** TransportBar 内部三档。用户不可见、不保存：resized() 按实际宽度一次性决定。 */
+    enum class LayoutTier
+    {
+        Full,
+        Compact,
+        Overflow
+    };
+
+    /** 生产布局计算结果：档位、完整链所需宽度（含左右各 4px 边距）与各控件槽位。
+        空矩形表示该控件在当前档位或 LayoutProfile 下不可见。
+        resized() 应用本结果；后续自检调用 computeTierLayout 验证阈值，不复制规则。
+        阈值测试流程：先以大宽度取 Full 档，其 requiredWidth 即 Full 阈值；
+        以 Full 阈值 - 1 调用得到 Compact 档，其 requiredWidth 即 Compact 阈值；再减 1 落到 Overflow。 */
+    struct TierLayout
+    {
+        LayoutTier tier = LayoutTier::Full;
+        int requiredWidth = 0;
+        juce::Rectangle<int> fileButton, editButton, viewButton, moreButton;
+        juce::Rectangle<int> playButton, pauseButton, stopButton, loopButton, recordButton;
+        juce::Rectangle<int> trackViewButton, pianoViewButton;
+        juce::Rectangle<int> timeDisplay, bpmField, tapButton;
+        juce::Rectangle<int> scaleRootSelector, scaleTypeSelector;
+    };
+
+    /** 唯一的档位选择与布局计算规则，resized() 与自检共用。 */
+    static TierLayout computeTierLayout(LayoutProfile profile, juce::Rectangle<int> bounds);
+
     class Listener
     {
     public:
@@ -230,6 +257,7 @@ private:
     void onTrackViewClicked();
     void onPianoViewClicked();
     void onRecordClicked();
+    void showOverflowMenu();
 
     juce::ListenerList<Listener> listeners_;
 
@@ -237,6 +265,7 @@ private:
     UnifiedToolbarButton fileButton_;
     UnifiedToolbarButton editButton_;
     UnifiedToolbarButton viewButton_;
+    UnifiedToolbarButton moreButton_;   // Overflow 档唯一溢出入口（Root/Scale）
 
     // Transport Controls
     UnifiedToolbarButton playButton_;

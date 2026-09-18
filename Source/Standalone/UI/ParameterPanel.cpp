@@ -1,5 +1,6 @@
 #include "ParameterPanel.h"
 #include "ToolbarIcons.h"
+#include "UiAssets.h"
 #include "../../Utils/PitchControlConfig.h"
 #include "../../Utils/LocalizationManager.h"
 #include <cmath>
@@ -433,44 +434,50 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
 // ============================================================================
 
 ParameterPanel::ParameterPanel()
+    : contentComponent_(*this)
 {
+    viewport_.setScrollBarsShown(true, false);
+    viewport_.setScrollBarThickness(UIColors::scrollBarThickness);
+    addAndMakeVisible(viewport_);
+    viewport_.setViewedComponent(&contentComponent_, false);
+
     // ========== Pitch Correction Section ==========
     setupHeader(pitchCorrectionHeader_, LOC(kPitchCorrection));
-    addAndMakeVisible(pitchCorrectionHeader_);
+    contentComponent_.addAndMakeVisible(pitchCorrectionHeader_);
 
     setupLabel(retuneSpeedLabel_, LOC(kRetuneSpeed));
     retuneSpeedLabel_.setJustificationType(juce::Justification::centred);
-    addAndMakeVisible(retuneSpeedLabel_);
+    contentComponent_.addAndMakeVisible(retuneSpeedLabel_);
 
     setupLargeKnob(retuneSpeedSlider_, 0.0, 100.0, PitchControlConfig::kDefaultRetuneSpeedPercent, "%");
     retuneSpeedSlider_.getProperties().set("minimalKnob", true);
     retuneSpeedSlider_.onValueChange = [this] { onRetuneSpeedChanged(); };
-    addAndMakeVisible(retuneSpeedSlider_);
+    contentComponent_.addAndMakeVisible(retuneSpeedSlider_);
     retuneSpeedSlider_.setTooltip(LOC(kTooltipRetuneSpeed));
 
     setupLabel(vibratoDepthLabel_, LOC(kVibratoDepth));
     vibratoDepthLabel_.setJustificationType(juce::Justification::centred);
-    addAndMakeVisible(vibratoDepthLabel_);
+    contentComponent_.addAndMakeVisible(vibratoDepthLabel_);
 
     setupLargeKnob(vibratoDepthSlider_, 0.0, 100.0, PitchControlConfig::kDefaultVibratoDepth, "%");
     vibratoDepthSlider_.getProperties().set("minimalKnob", true);
     vibratoDepthSlider_.onValueChange = [this] { onVibratoDepthChanged(); };
-    addAndMakeVisible(vibratoDepthSlider_);
+    contentComponent_.addAndMakeVisible(vibratoDepthSlider_);
     vibratoDepthSlider_.setTooltip(LOC(kTooltipVibratoDepth));
 
     setupLabel(vibratoRateLabel_, LOC(kVibratoRate));
     vibratoRateLabel_.setJustificationType(juce::Justification::centred);
-    addAndMakeVisible(vibratoRateLabel_);
+    contentComponent_.addAndMakeVisible(vibratoRateLabel_);
 
     setupLargeKnob(vibratoRateSlider_, 3.0, 12.0, PitchControlConfig::kDefaultVibratoRateHz, " Hz");
     vibratoRateSlider_.getProperties().set("minimalKnob", true);
     vibratoRateSlider_.onValueChange = [this] { onVibratoRateChanged(); };
-    addAndMakeVisible(vibratoRateSlider_);
+    contentComponent_.addAndMakeVisible(vibratoRateSlider_);
     vibratoRateSlider_.setTooltip(LOC(kTooltipVibratoRate));
 
     setupLabel(noteSplitLabel_, LOC(kNoteSplit));
     noteSplitLabel_.setJustificationType(juce::Justification::centred);
-    addAndMakeVisible(noteSplitLabel_);
+    contentComponent_.addAndMakeVisible(noteSplitLabel_);
 
     setupLargeKnob(noteSplitSlider_,
                    PitchControlConfig::kMinNoteSplitCents,
@@ -482,12 +489,12 @@ ParameterPanel::ParameterPanel()
     // 拖动期间不逐格提交，释放时才通知一次（滚轮/键盘无拖拽语义，逐次提交，频率低可接受）。
     noteSplitSlider_.setChangeNotificationOnlyOnRelease(true);
     noteSplitSlider_.onValueChange = [this] { onNoteSplitChanged(); };
-    addAndMakeVisible(noteSplitSlider_);
+    contentComponent_.addAndMakeVisible(noteSplitSlider_);
     noteSplitSlider_.setTooltip(LOC(kTooltipNoteSplit));
 
     // ========== Tools Section (Replaces Info Display) ==========
     setupHeader(toolsHeader_, LOC(kTools));
-    addAndMakeVisible(toolsHeader_);
+    contentComponent_.addAndMakeVisible(toolsHeader_);
 
     autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Auto", LOC(kTooltipAutoTune) + "\n6");
     autoTuneToolButton_->setClickingTogglesState(false);
@@ -495,32 +502,32 @@ ParameterPanel::ParameterPanel()
     autoTuneToolButton_->onClick = [this] {
         listeners_.call([](Listener& l) { l.autoTuneRequested(); });
     };
-    addAndMakeVisible(*autoTuneToolButton_);
+    contentComponent_.addAndMakeVisible(*autoTuneToolButton_);
 
     selectToolButton_ = std::make_unique<ToolIconButton>(1, "Select", LOC(kTooltipSelect) + "\n3");
     selectToolButton_->setRadioGroupId(1001);
     selectToolButton_->setToggleState(true, juce::dontSendNotification);
     selectToolButton_->setIcon(ToolbarIcons::getSelectIcon(), true);
     selectToolButton_->onClick = [this] { onToolClicked(1); };
-    addAndMakeVisible(*selectToolButton_);
+    contentComponent_.addAndMakeVisible(*selectToolButton_);
 
     drawNoteToolButton_ = std::make_unique<ToolIconButton>(2, "DrawNote", LOC(kTooltipDrawNote) + "\n2");
     drawNoteToolButton_->setRadioGroupId(1001);
     drawNoteToolButton_->setIcon(ToolbarIcons::getDrawNoteIcon(), false);
     drawNoteToolButton_->onClick = [this] { onToolClicked(2); };
-    addAndMakeVisible(*drawNoteToolButton_);
+    contentComponent_.addAndMakeVisible(*drawNoteToolButton_);
 
     lineAnchorToolButton_ = std::make_unique<ToolIconButton>(3, "LineAnchor", LOC(kTooltipLineAnchor) + "\n4");
     lineAnchorToolButton_->setRadioGroupId(1001);
     lineAnchorToolButton_->setIcon(ToolbarIcons::getLineAnchorIcon(), false);
     lineAnchorToolButton_->onClick = [this] { onToolClicked(3); };
-    addAndMakeVisible(*lineAnchorToolButton_);
+    contentComponent_.addAndMakeVisible(*lineAnchorToolButton_);
 
     handDrawToolButton_ = std::make_unique<ToolIconButton>(4, "HandDraw", LOC(kTooltipHandDraw) + "\n5");
     handDrawToolButton_->setRadioGroupId(1001);
     handDrawToolButton_->setIcon(ToolbarIcons::getHandDrawIcon(), false);
     handDrawToolButton_->onClick = [this] { onToolClicked(4); };
-    addAndMakeVisible(*handDrawToolButton_);
+    contentComponent_.addAndMakeVisible(*handDrawToolButton_);
 
     // Pitch Shift action button
     pitchShiftButton_ = std::make_unique<juce::TextButton>("Pitch Shift...");
@@ -530,7 +537,7 @@ ParameterPanel::ParameterPanel()
     pitchShiftButton_->onClick = [this] {
         listeners_.call(&Listener::pitchShiftRequested);
     };
-    addAndMakeVisible(*pitchShiftButton_);
+    contentComponent_.addAndMakeVisible(*pitchShiftButton_);
 
     // ⚡️ vocal-time-stretch §8.4 — Time tool palette button.
     // toolId=5 matches ToolId::TimeTool; tooltip uses 'T' shortcut to align
@@ -540,38 +547,38 @@ ParameterPanel::ParameterPanel()
     timeToolButton_->setIcon(ToolbarIcons::getTimeToolIcon(), false);
     timeToolButton_->onClick = [this] { onToolClicked(5); };
     // Time 两种模式均仅在 experimental 开启时可见
-    addChildComponent(*timeToolButton_);
+    contentComponent_.addChildComponent(*timeToolButton_);
 
     // ── OpenDyne 工具按钮（OpenDyne 专属，OpenTune 初态隐藏） ──
     pitchToolButton_ = std::make_unique<ToolIconButton>(6, "Pitch", juce::String::fromUTF8(u8"Pitch 音高编辑\nF2"));
     pitchToolButton_->setRadioGroupId(1001);
     pitchToolButton_->setIcon(ToolbarIcons::getPitchToolIcon(), false);
     pitchToolButton_->onClick = [this] { onToolClicked(6); };
-    addChildComponent(*pitchToolButton_);
+    contentComponent_.addChildComponent(*pitchToolButton_);
 
     volumeEnvelopeToolButton_ = std::make_unique<ToolIconButton>(7, "VolumeEnvelope", juce::String::fromUTF8(u8"Volume Envelope 音量包络\nF4"));
     volumeEnvelopeToolButton_->setRadioGroupId(1001);
     volumeEnvelopeToolButton_->setIcon(ToolbarIcons::getVolumeEnvelopeToolIcon(), false);
     volumeEnvelopeToolButton_->onClick = [this] { onToolClicked(7); };
-    addChildComponent(*volumeEnvelopeToolButton_);
+    contentComponent_.addChildComponent(*volumeEnvelopeToolButton_);
 
     scissorsToolButton_ = std::make_unique<ToolIconButton>(8, "Scissors", juce::String::fromUTF8(u8"Scissors 切割音符\nF6"));
     scissorsToolButton_->setRadioGroupId(1001);
     scissorsToolButton_->setIcon(ToolbarIcons::getScissorsToolIcon(), false);
     scissorsToolButton_->onClick = [this] { onToolClicked(8); };
-    addChildComponent(*scissorsToolButton_);
+    contentComponent_.addChildComponent(*scissorsToolButton_);
 
     pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", LOC(kTooltipPitchModulation) + "\nF2x2");
     pitchModulationToolButton_->setRadioGroupId(1001);
     pitchModulationToolButton_->setIcon(ToolbarIcons::getPitchModulationToolIcon(), false);
     pitchModulationToolButton_->onClick = [this] { onToolClicked(9); };
-    addChildComponent(*pitchModulationToolButton_);
+    contentComponent_.addChildComponent(*pitchModulationToolButton_);
 
     pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", LOC(kTooltipPitchDrift) + "\nF2x3");
     pitchDriftToolButton_->setRadioGroupId(1001);
     pitchDriftToolButton_->setIcon(ToolbarIcons::getPitchDriftToolIcon(), false);
     pitchDriftToolButton_->onClick = [this] { onToolClicked(10); };
-    addChildComponent(*pitchDriftToolButton_);
+    contentComponent_.addChildComponent(*pitchDriftToolButton_);
 
     // EQ tool button (visible in both OpenTune and OpenDyne modes)
     eqToolButton_ = std::make_unique<ToolIconButton>(11, "EQ", juce::String::fromUTF8(u8"EQ 频率均衡\nE"));
@@ -579,7 +586,7 @@ ParameterPanel::ParameterPanel()
     eqToolButton_->setIcon(ToolbarIcons::getEqIcon(), false);
     eqToolButton_->setTextIcon("EQ");
     eqToolButton_->onClick = [this] { onToolClicked(11); };
-    addAndMakeVisible(*eqToolButton_);
+    contentComponent_.addAndMakeVisible(*eqToolButton_);
 
     // ── Pitch Grid 模式选择器（OpenDyne 专属，初态隐藏） ──
     pitchGridSelector_.addItem(u8"No Snap", 1);
@@ -598,7 +605,9 @@ ParameterPanel::ParameterPanel()
     pitchGridSelector_.getProperties().set("noArrow", true);
     pitchGridSelector_.getProperties().set("fontHeight", UIColors::navFontHeight);
     pitchGridSelector_.setJustificationType(juce::Justification::centred);
-    addChildComponent(pitchGridSelector_);
+    // 滚轮调参：ComboBox 在 JUCE 中默认关闭，此处显式开启；鼠标在控件上时事件被其消费，Viewport 不滚
+    pitchGridSelector_.setScrollWheelEnabled(true);
+    contentComponent_.addChildComponent(pitchGridSelector_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -609,17 +618,18 @@ ParameterPanel::~ParameterPanel()
     noteSplitSlider_.setLookAndFeel(nullptr);
 }
 
-void ParameterPanel::rebuildAuroraSidebarSurface(juce::Rectangle<float> bounds)
+void ParameterPanel::rebuildAuroraSidebarSurface(juce::Graphics& g, juce::Rectangle<float> bounds)
 {
-    const auto scale = getDesktopScaleFactor();
-    const auto width = juce::roundToInt(bounds.getWidth() * scale);
-    const auto height = juce::roundToInt(bounds.getHeight() * scale);
+    const auto scale = UiAssets::getEffectiveScaleFactor(g);
+    const auto width = static_cast<int>(std::ceil(bounds.getWidth() * scale));
+    const auto height = static_cast<int>(std::ceil(bounds.getHeight() * scale));
 
     if (auroraSidebarSurface_.getWidth() == width
         && auroraSidebarSurface_.getHeight() == height
-        && auroraSidebarSurfaceScale_ == scale)
+        && juce::approximatelyEqual(auroraSidebarSurfaceScale_, scale))
         return;
 
+    // 位图物理像素 = ceil(逻辑尺寸 × 有效倍率)；显示时映射回逻辑 bounds
     auroraSidebarSurface_ = makeAuroraSidebarSurfaceCurve(width, height);
     auroraSidebarSurfaceScale_ = scale;
 }
@@ -637,38 +647,15 @@ void ParameterPanel::paint(juce::Graphics& g)
 
     if (themeId == ThemeId::Overdose)
     {
+        // 面板 chrome 固定；Overdose 标题装饰由内容组件随内容滚动绘制
         UIColors::fillOverdosePanelBackground(g, bounds, style.panelRadius);
-
-        const auto drawSectionHeader = [&](const juce::Label& header)
-        {
-            if (!header.isVisible())
-                return;
-
-            auto headerBounds = header.getBounds().toFloat();
-            if (headerBounds.isEmpty())
-                return;
-
-            // 粉色半透明下划线，比之前更明显
-            const float lineY = headerBounds.getBottom() - 1.5f;
-            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.32f));
-            g.drawLine(headerBounds.getX() + 6.0f, lineY,
-                       headerBounds.getRight() - 6.0f, lineY, 1.0f);
-
-            // 标题文字柔光底层（label 自身 paint 在上层）
-            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.08f));
-            g.drawText(header.getText(), headerBounds.translated(0.0f, -0.5f),
-                       juce::Justification::centred);
-        };
-
-        drawSectionHeader(pitchCorrectionHeader_);
-        drawSectionHeader(toolsHeader_);
         return;
     }
 
     if (themeId == ThemeId::Aurora)
     {
         UIColors::fillAuroraSidebarShell(g, bounds, style.panelRadius);
-        rebuildAuroraSidebarSurface(bounds);
+        rebuildAuroraSidebarSurface(g, bounds);
         {
             juce::Graphics::ScopedSaveState clipState(g);
             juce::Path panelShape;
@@ -693,20 +680,75 @@ void ParameterPanel::paint(juce::Graphics& g)
     UIColors::drawPanelFrame(g, bounds, style.panelRadius);
 }
 
+void ParameterPanel::ContentComponent::paint(juce::Graphics& g)
+{
+    if (UIColors::currentThemeId() != ThemeId::Overdose)
+        return;
+
+    const auto drawSectionHeader = [&](const juce::Label& header)
+    {
+        if (!header.isVisible())
+            return;
+
+        auto headerBounds = header.getBounds().toFloat();
+        if (headerBounds.isEmpty())
+            return;
+
+        // 粉色半透明下划线，比之前更明显
+        const float lineY = headerBounds.getBottom() - 1.5f;
+        g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.32f));
+        g.drawLine(headerBounds.getX() + 6.0f, lineY,
+                   headerBounds.getRight() - 6.0f, lineY, 1.0f);
+
+        // 标题文字柔光底层（label 自身 paint 在上层）
+        g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.08f));
+        g.drawText(header.getText(), headerBounds.translated(0.0f, -0.5f),
+                   juce::Justification::centred);
+    };
+
+    drawSectionHeader(owner_.pitchCorrectionHeader_);
+    drawSectionHeader(owner_.toolsHeader_);
+}
+
 void ParameterPanel::resized()
 {
     auroraSidebarSurface_ = juce::Image();
+
+    // 面板 chrome 固定：阴影边距内是唯一 Viewport
+    const int shadowMargin = 12;
+    viewport_.setBounds(getLocalBounds().reduced(shadowMargin));
+
+    const int viewportWidth = viewport_.getWidth();
+    const int viewportHeight = viewport_.getHeight();
+
+    // 宽度先取 Viewport 全宽；内容高度完全由实际布局 bottom + 底部内边距产生
+    int contentWidth = viewportWidth;
+    int contentHeight = layoutContent(contentWidth);
+
+    // 内容溢出时纵向滚动条按需出现，可用宽度相应缩窄后重排
+    if (contentHeight > viewportHeight)
+    {
+        contentWidth = viewportWidth - UIColors::scrollBarThickness;
+        contentHeight = layoutContent(contentWidth);
+    }
+
+    contentComponent_.setSize(contentWidth, contentHeight);
+}
+
+int ParameterPanel::layoutContent(int width)
+{
     const auto themeId = UIColors::currentThemeId();
     const bool isBlueBreeze = (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose);
 
     // 旋钮尺寸：BlueBreeze 主题使用更大尺寸 (115px)，其他主题使用 92px
     const int knobSize = isBlueBreeze ? 115 : 92;
 
-    // 阴影边距：内容区域在 reduced(12) 范围内布局
-    // 再加上 8px 内边距 = 总共 reduced(20)
-    const int shadowMargin = 12;
+    // 内容组件本地坐标：左右各 8px 内边距（阴影边距已由 Viewport bounds 承担）
     const int innerPadding = 8;
-    auto mainArea = getLocalBounds().reduced(shadowMargin + innerPadding);
+    const int contentLeft = innerPadding;
+    const int contentWidth = width - innerPadding * 2;
+    const int contentCentre = contentLeft + contentWidth / 2;
+    const int colWidth = contentWidth / 2;
 
     const int headerHeight = 24;
     const int labelHeight = 20;
@@ -718,16 +760,11 @@ void ParameterPanel::resized()
     const int pitchShiftButtonHeight = 28;
     const int rowHeight = labelHeight + knobSize + 8;
 
-    const int contentLeft = mainArea.getX();
-    const int contentWidth = mainArea.getWidth();
-    const int contentCentre = mainArea.getCentreX();
-    const int colWidth = contentWidth / 2;
-
     // ══════════════════════════════════════════════════════════════════
     // 绝对坐标 y 游标排布 —— 不消费矩形、不 clamp 尺寸
-    // 控件 setBounds 永远给完整尺寸，高度不足时超出部分被父组件裁切
+    // 控件 setBounds 永远给完整尺寸，高度不足时由 Viewport 滚动显示
     // ══════════════════════════════════════════════════════════════════
-    int y = mainArea.getY();
+    int y = innerPadding;
 
     // ── Pitch Correction 标题 ──
     pitchCorrectionHeader_.setBounds(contentLeft, y, contentWidth, headerHeight);
@@ -791,10 +828,12 @@ void ParameterPanel::resized()
             buttons[static_cast<size_t>(i)]->setBounds(bx, by, toolButtonSize, toolButtonSize);
         }
 
-        // Pitch Grid 选择器：网格最后一行下方 14px
+        // Pitch Grid 选择器：网格最后一行下方 14px，是 OpenDyne 布局的最后一个控件
         const int gridRows = (static_cast<int>(buttons.size()) + 1) / 2;
         const int gridBottom = y + gridRows * toolButtonSize + (gridRows - 1) * toolButtonGap;
         pitchGridSelector_.setBounds(contentLeft + 5, gridBottom + 14, contentWidth - 10, 22);
+
+        return pitchGridSelector_.getBounds().getBottom() + innerPadding;
     }
     else
     {
@@ -816,6 +855,10 @@ void ParameterPanel::resized()
             const int by = y + row * (toolButtonSize + toolButtonGap);
             buttons[i]->setBounds(bx, by, toolButtonSize, toolButtonSize);
         }
+
+        const int gridRows = (static_cast<int>(buttons.size()) + 1) / 2;
+        const int gridBottom = y + gridRows * toolButtonSize + (gridRows - 1) * toolButtonGap;
+        return gridBottom + innerPadding;
     }
 }
 

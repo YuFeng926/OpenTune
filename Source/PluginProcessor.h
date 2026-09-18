@@ -516,7 +516,10 @@ private:
 
     // UI state
     bool showWaveform_{true};
-    double zoomLevel_{1.0};
+    // Discrete UI zoom percentage (75/90/100/110/125/150), per-processor-instance
+    // single source of truth. Written via setUiZoomPercent (relaxed store); Editor
+    // observes via relaxed load. Persisted in OTST v10 / OTSS v3.
+    std::atomic<int> uiZoomPercent_{100};
     int trackHeight_{120};
     
     // 导出错误信息
@@ -815,8 +818,9 @@ public:
         return timeSigDenominator_;
     }
 
-    void setZoomLevel(double zoom);
-    double getZoomLevel() const { return zoomLevel_; }
+    /** Discrete UI zoom percentage; invalid values are rejected (state unchanged). */
+    void setUiZoomPercent(int percent) noexcept;
+    int getUiZoomPercent() const noexcept;
 
     SnapSettings getSnapSettings() const;
     void setSnapSettings(const SnapSettings& snap);

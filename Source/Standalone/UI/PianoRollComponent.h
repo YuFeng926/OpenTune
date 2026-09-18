@@ -325,6 +325,8 @@ private:
     ViewportState surfaceView_;
     bool staticDirty_ = true;
     bool contentDirty_ = true;
+    // 有效倍率（peer/host/root transform 真实绘制栈）；0 = 尚未从 paint 捕获
+    float renderScale_ = 0.0f;
 
     // ── 缩放事务 ──────────────────────────────────────────────
     bool zoomPreviewActive_ = false;
@@ -336,10 +338,12 @@ private:
     // ── 表面管理 ──────────────────────────────────────────────
     void invalidateTimeAxisStaticSurface();
     void rasterizeDirtySurfaces();
-    void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
+    void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt,
+                         std::optional<juce::Rectangle<int>> physicalDirtyRect = std::nullopt);
     void rasterizeLabels();
     int getTimelineContentStartX() const noexcept;
-    void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
+    void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt,
+                          std::optional<juce::Rectangle<int>> physicalDirtyRect = std::nullopt);
 
     // ── 按坐标域拆分的唯一绘制函数（raster target 与 preview target 共用） ──
     void drawFixedChrome(juce::Graphics& g, juce::Rectangle<int> damage);
@@ -652,8 +656,6 @@ private:
     
     PianoKeyAudition* pianoKeyAudition_ = nullptr;
     int pressedPianoKey_ = -1;
-
-    int64_t lastDpiMilli_ = 1000;
 
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
     std::unique_ptr<PianoRollOverlayComponent> overlay_;
