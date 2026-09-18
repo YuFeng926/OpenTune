@@ -13,21 +13,10 @@ namespace OpenTune {
  * 提供半音 [-24, +24] 和音分 [-99, +99] 两个整数步进滑块，
  * 以及 "确认" / "重置" 两个按钮。
  */
-class PitchShiftDialogContent : public juce::Component
+class PitchShiftDialogContent : public juce::Component,
+                                private juce::ComponentListener
 {
 public:
-    // ============================================================================
-    // Listener
-    // ============================================================================
-
-    class Listener
-    {
-    public:
-        virtual ~Listener() = default;
-        virtual void pitchShiftConfirmed(const PitchShiftSettings& settings) { juce::ignoreUnused(settings); }
-        virtual void pitchShiftReset() {}
-    };
-
     // ============================================================================
     // Construction
     // ============================================================================
@@ -80,13 +69,16 @@ public:
         resetButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
         resetButton_.setColour(juce::TextButton::textColourOnId, UIColors::textPrimary);
         resetButton_.onClick = [this] {
+            if (actionTriggered_)
+                return;
+            actionTriggered_ = true;
+
             semitoneSlider_.setValue(0.0, juce::sendNotificationAsync);
             centsSlider_.setValue(0.0, juce::sendNotificationAsync);
             if (onReset_) {
-                onReset_();
+                auto callback = std::move(onReset_);
                 closeParentDialog();
-            } else {
-                listeners_.call([](Listener& l) { l.pitchShiftReset(); });
+                callback();
             }
         };
         addAndMakeVisible(resetButton_);
@@ -97,29 +89,23 @@ public:
         confirmButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
         confirmButton_.setColour(juce::TextButton::textColourOnId, UIColors::textPrimary);
         confirmButton_.onClick = [this] {
+            if (actionTriggered_)
+                return;
+            actionTriggered_ = true;
+
             const auto settings = getSettings();
             if (onConfirm_) {
-                onConfirm_(settings);
+                auto callback = std::move(onConfirm_);
                 closeParentDialog();
-            } else {
-                listeners_.call([&settings](Listener& l) { l.pitchShiftConfirmed(settings); });
+                callback(settings);
             }
         };
         addAndMakeVisible(confirmButton_);
     }
 
-    // ============================================================================
-    // Listener management
-    // ============================================================================
-
-    void addListener(Listener* listener)
+    ~PitchShiftDialogContent() override
     {
-        listeners_.add(listener);
-    }
-
-    void removeListener(Listener* listener)
-    {
-        listeners_.remove(listener);
+        setDialogParent(nullptr);
     }
 
     // ============================================================================
@@ -135,7 +121,7 @@ public:
         return s;
     }
 
-    /** 设置确认回调（替代 Listener 模式，用于 lambda 捕获） */
+    /** 设置确认回调（用于 lambda 捕获） */
     void setOnConfirm(std::function<void(const PitchShiftSettings&)> cb)
     {
         onConfirm_ = std::move(cb);
@@ -145,6 +131,18 @@ public:
     void setOnReset(std::function<void()> cb)
     {
         onReset_ = std::move(cb);
+    }
+
+    /** 注册父编辑器组件；父组件销毁时清空回调并关闭本对话框，避免回调访问已销毁对象 */
+    void setDialogParent(juce::Component* parent)
+    {
+        if (dialogParent_ != nullptr)
+            dialogParent_->removeComponentListener(this);
+
+        dialogParent_ = parent;
+
+        if (dialogParent_ != nullptr)
+            dialogParent_->addComponentListener(this);
     }
 
     // ============================================================================
@@ -189,6 +187,21 @@ public:
         confirmButton_.setBounds(buttonX + buttonWidth + buttonGap, buttonY, buttonWidth, buttonHeight);
     }
 
+    /** 非原生标题栏时移除 DialogWindow 默认标题栏，仅保留主题内容 */
+    void parentHierarchyChanged() override
+    {
+        if (auto* dialogWindow = findParentComponentOfClass<juce::DialogWindow>())
+        {
+            if (! dialogWindow->isUsingNativeTitleBar())
+            {
+                const int contentWidth = getWidth();
+                const int contentHeight = getHeight();
+                dialogWindow->setTitleBarHeight(0);
+                dialogWindow->setContentComponentSize(contentWidth, contentHeight);
+            }
+        }
+    }
+
 private:
     // ============================================================================
     // Members
@@ -200,15 +213,24 @@ private:
     juce::Slider centsSlider_;
     juce::TextButton resetButton_;
     juce::TextButton confirmButton_;
-    juce::ListenerList<Listener> listeners_;
     std::function<void(const PitchShiftSettings&)> onConfirm_;
     std::function<void()> onReset_;
+    juce::Component::SafePointer<juce::Component> dialogParent_;
+    bool actionTriggered_ = false;
+
+    void componentBeingDeleted(juce::Component&) override
+    {
+        setDialogParent(nullptr);
+        onConfirm_ = nullptr;
+        onReset_ = nullptr;
+        closeParentDialog();
+    }
 
     /** 关闭所在 DialogWindow */
     void closeParentDialog()
     {
         if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
-            dw->closeButtonPressed();
+            dw->exitModalState(0);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PitchShiftDialogContent)

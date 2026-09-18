@@ -41,7 +41,8 @@ private:
     int contentHeight_ = 0;
 };
 
-class TabbedPreferencesDialog : public juce::Component
+class TabbedPreferencesDialog : public juce::Component,
+                                private juce::ComponentListener
 {
 public:
     struct PageSpec {
@@ -84,6 +85,19 @@ public:
     ~TabbedPreferencesDialog() override
     {
         setLookAndFeel(nullptr);
+        setDialogParent(nullptr);
+    }
+
+    /** 注册父编辑器组件；父组件销毁时关闭本对话框 */
+    void setDialogParent(juce::Component* parent)
+    {
+        if (dialogParent_ != nullptr)
+            dialogParent_->removeComponentListener(this);
+
+        dialogParent_ = parent;
+
+        if (dialogParent_ != nullptr)
+            dialogParent_->addComponentListener(this);
     }
 
     void paint(juce::Graphics& g) override
@@ -96,6 +110,21 @@ public:
         auto bounds = getLocalBounds().reduced(16);
         tabbedComponent_.setBounds(bounds.removeFromTop(bounds.getHeight() - 40));
         closeButton_.setBounds(bounds.removeFromRight(96).withTrimmedTop(6));
+    }
+
+    /** 非原生标题栏时移除 DialogWindow 默认标题栏，仅保留主题内容 */
+    void parentHierarchyChanged() override
+    {
+        if (auto* dialogWindow = findParentComponentOfClass<juce::DialogWindow>())
+        {
+            if (! dialogWindow->isUsingNativeTitleBar())
+            {
+                const int contentWidth = getWidth();
+                const int contentHeight = getHeight();
+                dialogWindow->setTitleBarHeight(0);
+                dialogWindow->setContentComponentSize(contentWidth, contentHeight);
+            }
+        }
     }
 
 private:
@@ -113,6 +142,14 @@ private:
     juce::TextButton closeButton_;
     OpenTuneLookAndFeel openTuneLookAndFeel_;
     AuroraLookAndFeel auroraLookAndFeel_;
+    juce::Component::SafePointer<juce::Component> dialogParent_;
+
+    void componentBeingDeleted(juce::Component&) override
+    {
+        setDialogParent(nullptr);
+        if (auto* window = findParentComponentOfClass<juce::DialogWindow>())
+            window->exitModalState(0);
+    }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TabbedPreferencesDialog)
 };

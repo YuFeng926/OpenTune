@@ -43,10 +43,6 @@
 #include "Utils/ScaleUiMapping.h"
 #include "Audio/AsyncAudioLoader.h"
 
-namespace juce {
-class AudioDeviceManager;
-}
-
 namespace OpenTune {
 
 class ProjectSession;

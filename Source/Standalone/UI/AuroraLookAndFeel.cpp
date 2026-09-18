@@ -420,21 +420,6 @@ void AuroraLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& l
     }
 }
 
-juce::Font AuroraLookAndFeel::getAlertWindowTitleFont()
-{
-    return UIColors::getUIFont(18.0f);
-}
-
-juce::Font AuroraLookAndFeel::getAlertWindowMessageFont()
-{
-    return UIColors::getUIFont(16.0f);
-}
-
-juce::Font AuroraLookAndFeel::getAlertWindowFont()
-{
-    return UIColors::getUIFont(16.0f);
-}
-
 // ============================================================================
 // Process-level default LookAndFeel
 // ============================================================================
@@ -443,17 +428,6 @@ void AuroraLookAndFeel::installAsDefault()
 {
     auto& instance = getDefaultInstance();
 
-    instance.setColour(juce::AlertWindow::backgroundColourId,
-                       juce::Colour(Aurora::Colors::BgSurface));
-    instance.setColour(juce::AlertWindow::textColourId,
-                       juce::Colour(Aurora::Colors::TextPrimary));
-    instance.setColour(juce::AlertWindow::outlineColourId,
-                       juce::Colour(Aurora::Colors::GlassEdge));
-    instance.setColour(juce::ResizableWindow::backgroundColourId,
-                       juce::Colour(Aurora::Colors::BgDeep));
-    instance.setColour(juce::DocumentWindow::textColourId,
-                       juce::Colour(Aurora::Colors::TextPrimary));
-
     juce::LookAndFeel::setDefaultLookAndFeel(&instance);
 }
 
@@ -461,93 +435,6 @@ AuroraLookAndFeel& AuroraLookAndFeel::getDefaultInstance()
 {
     static AuroraLookAndFeel instance;
     return instance;
-}
-
-// ============================================================================
-// AlertWindow — Aurora dark-glass style
-// ============================================================================
-
-void AuroraLookAndFeel::drawAlertBox(juce::Graphics& g, juce::AlertWindow& alert,
-                                     const juce::Rectangle<int>& textArea,
-                                     juce::TextLayout& textLayout)
-{
-    auto bounds = alert.getLocalBounds().reduced(1);
-    float radius = Aurora::Style::ControlRadius;
-
-    // Background — frosted dark glass
-    {
-        juce::Graphics::ScopedSaveState save(g);
-        g.reduceClipRegion(bounds);
-        UIColors::fillAuroraGlass(g, bounds.toFloat(), radius);
-    }
-
-    // Outline
-    g.setColour(alert.findColour(juce::AlertWindow::outlineColourId));
-    g.drawRoundedRectangle(bounds.toFloat(), radius, 1.5f);
-
-    // Top highlight line
-    g.setColour(juce::Colour(Aurora::Colors::GlassHighlight));
-    g.drawLine(bounds.getX() + radius, bounds.getY() + 1.0f,
-               bounds.getRight() - radius, bounds.getY() + 1.0f, 1.0f);
-
-    // Icon
-    auto iconSpaceUsed = 0;
-    auto iconSize = juce::jmin(130, bounds.getHeight() + 20);
-
-    if (alert.containsAnyExtraComponents() || alert.getNumButtons() > 2)
-        iconSize = juce::jmin(iconSize, textArea.getHeight() + 50);
-
-    juce::Rectangle<int> iconRect(iconSize / -10, iconSize / -10, iconSize, iconSize);
-
-    if (alert.getAlertType() != juce::MessageBoxIconType::NoIcon)
-    {
-        juce::Path icon;
-        juce::juce_wchar character;
-        juce::Colour colour;
-
-        if (alert.getAlertType() == juce::MessageBoxIconType::WarningIcon)
-        {
-            character = '!';
-            icon.addTriangle(
-                static_cast<float>(iconRect.getX()) + static_cast<float>(iconRect.getWidth()) * 0.5f,
-                static_cast<float>(iconRect.getY()),
-                static_cast<float>(iconRect.getRight()),
-                static_cast<float>(iconRect.getBottom()),
-                static_cast<float>(iconRect.getX()),
-                static_cast<float>(iconRect.getBottom()));
-            icon = icon.createPathWithRoundedCorners(5.0f);
-            colour = juce::Colour(Aurora::Colors::Error);
-        }
-        else
-        {
-            character = alert.getAlertType() == juce::MessageBoxIconType::InfoIcon ? 'i' : '?';
-            icon.addEllipse(iconRect.toFloat());
-            colour = juce::Colour(Aurora::Colors::Cyan).withAlpha(0.6f);
-        }
-
-        juce::GlyphArrangement ga;
-        ga.addFittedText(juce::Font(juce::FontOptions(static_cast<float>(iconRect.getHeight()) * 0.9f, juce::Font::bold)),
-                         juce::String::charToString(character),
-                         static_cast<float>(iconRect.getX()),
-                         static_cast<float>(iconRect.getY()),
-                         static_cast<float>(iconRect.getWidth()),
-                         static_cast<float>(iconRect.getHeight()),
-                         juce::Justification::centred, false);
-        ga.createPath(icon);
-        icon.setUsingNonZeroWinding(false);
-        g.setColour(colour);
-        g.fillPath(icon);
-
-        iconSpaceUsed = 80;
-    }
-
-    // Text
-    g.setColour(alert.findColour(juce::AlertWindow::textColourId));
-    textLayout.draw(g, juce::Rectangle<int>(
-        textArea.getX() + iconSpaceUsed,
-        textArea.getY(),
-        textArea.getWidth() - iconSpaceUsed,
-        textArea.getHeight()).toFloat());
 }
 
 // ============================================================================

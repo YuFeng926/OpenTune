@@ -777,21 +777,6 @@ public:
         g.drawFittedText(label.getText(), label.getLocalBounds().reduced(8, 2), label.getJustificationType(), 1);
     }
 
-    juce::Font getAlertWindowTitleFont() override
-    {
-        return juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 18.0f));
-    }
-
-    juce::Font getAlertWindowMessageFont() override
-    {
-        return juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 16.0f));
-    }
-
-    juce::Font getAlertWindowFont() override
-    {
-        return juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 16.0f));
-    }
-
     juce::Font getSliderPopupFont(juce::Slider&) override
     {
         return UIColors::getUIFont(14.0f);
@@ -1263,43 +1248,35 @@ public:
     void fillTextEditorBackground(juce::Graphics& g, int width, int height,
                                   juce::TextEditor& textEditor) override
     {
-        if (dynamic_cast<juce::AlertWindow*> (textEditor.getParentComponent()) != nullptr)
+        const auto& style = UIColors::currentThemeStyle();
+        const auto themeId = UIColors::currentThemeId();
+        auto bg = textEditor.findColour(juce::TextEditor::backgroundColourId);
+
+        if (themeId == ThemeId::DarkBlueGrey)
         {
-            g.setColour(textEditor.findColour(juce::TextEditor::backgroundColourId));
-            g.fillRect(0, 0, width, height);
+            juce::ColourGradient grad(bg.brighter(0.05f), 0.0f, 0.0f, bg.darker(0.06f), 0.0f, static_cast<float>(height), false);
+            g.setGradientFill(grad);
+            g.fillRoundedRectangle(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), style.fieldRadius);
+            g.setColour(UIColors::textPrimary.withAlpha(0.10f));
+            g.drawLine(2.0f, 1.0f, static_cast<float>(width) - 2.0f, 1.0f, style.strokeThin);
         }
         else
         {
-            const auto& style = UIColors::currentThemeStyle();
-            const auto themeId = UIColors::currentThemeId();
-            auto bg = textEditor.findColour(juce::TextEditor::backgroundColourId);
-
-            if (themeId == ThemeId::DarkBlueGrey)
+            const auto field = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+            if (themeId == ThemeId::Overdose)
             {
-                juce::ColourGradient grad(bg.brighter(0.05f), 0.0f, 0.0f, bg.darker(0.06f), 0.0f, static_cast<float>(height), false);
-                g.setGradientFill(grad);
-                g.fillRoundedRectangle(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), style.fieldRadius);
-                g.setColour(UIColors::textPrimary.withAlpha(0.10f));
-                g.drawLine(2.0f, 1.0f, static_cast<float>(width) - 2.0f, 1.0f, style.strokeThin);
+                juce::ignoreUnused(bg);
+                UIColors::fillOverdosePanelBackground(g, field, style.fieldRadius);
+            }
+            else if (themeId == ThemeId::BlueBreeze)
+            {
+                juce::ignoreUnused(bg);
+                drawBlueBreezeSurface(g, field.reduced(0.5f), style.fieldRadius, textEditor.isMouseOver(), false, textEditor.hasKeyboardFocus(true));
             }
             else
             {
-                const auto field = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
-                if (themeId == ThemeId::Overdose)
-                {
-                    juce::ignoreUnused(bg);
-                    UIColors::fillOverdosePanelBackground(g, field, style.fieldRadius);
-                }
-                else if (themeId == ThemeId::BlueBreeze)
-                {
-                    juce::ignoreUnused(bg);
-                    drawBlueBreezeSurface(g, field.reduced(0.5f), style.fieldRadius, textEditor.isMouseOver(), false, textEditor.hasKeyboardFocus(true));
-                }
-                else
-                {
-                    g.setColour(bg);
-                    g.fillRoundedRectangle(field, style.fieldRadius);
-                }
+                g.setColour(bg);
+                g.fillRoundedRectangle(field, style.fieldRadius);
             }
         }
     }
@@ -1307,62 +1284,59 @@ public:
     void drawTextEditorOutline(juce::Graphics& g, int width, int height,
                                juce::TextEditor& textEditor) override
     {
-        if (dynamic_cast<juce::AlertWindow*> (textEditor.getParentComponent()) == nullptr)
+        if (textEditor.isEnabled())
         {
-            if (textEditor.isEnabled())
+            const auto& style = UIColors::currentThemeStyle();
+            const auto themeId = UIColors::currentThemeId();
+
+            if (textEditor.hasKeyboardFocus(true) && !textEditor.isReadOnly())
             {
-                const auto& style = UIColors::currentThemeStyle();
-                const auto themeId = UIColors::currentThemeId();
-                
-                if (textEditor.hasKeyboardFocus(true) && !textEditor.isReadOnly())
+                if (themeId == ThemeId::BlueBreeze)
                 {
-                    if (themeId == ThemeId::BlueBreeze)
-                    {
-                        g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
-                        g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 2.0f);
-                    }
-                    else if (themeId == ThemeId::Overdose)
-                    {
-                        g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f));
-                        g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, style.focusRingThickness);
-                    }
-                    else
-                    {
-                        g.setColour(textEditor.findColour(juce::TextEditor::focusedOutlineColourId));
-                        g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, style.focusRingThickness);
-                    }
+                    g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
+                    g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 2.0f);
+                }
+                else if (themeId == ThemeId::Overdose)
+                {
+                    g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f));
+                    g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, style.focusRingThickness);
                 }
                 else
                 {
-                    auto border = textEditor.findColour(juce::TextEditor::outlineColourId);
+                    g.setColour(textEditor.findColour(juce::TextEditor::focusedOutlineColourId));
+                    g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, style.focusRingThickness);
+                }
+            }
+            else
+            {
+                auto border = textEditor.findColour(juce::TextEditor::outlineColourId);
 
-                    if (themeId == ThemeId::BlueBreeze)
-                    {
-                        if (textEditor.isMouseOver())
-                            border = juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.6f);
-                        else
-                            border = juce::Colour(BlueBreeze::Colors::PanelBorder);
-
-                        g.setColour(border);
-                        g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 1.0f);
-                    }
-                    else if (themeId == ThemeId::Overdose)
-                    {
-                        if (textEditor.isMouseOver())
-                            border = juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.6f);
-                        else
-                            border = juce::Colour(Overdose::Colors::PanelBorder);
-
-                        g.setColour(border);
-                        g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 1.0f);
-                    }
+                if (themeId == ThemeId::BlueBreeze)
+                {
+                    if (textEditor.isMouseOver())
+                        border = juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.6f);
                     else
-                    {
-                        if (themeId == ThemeId::DarkBlueGrey)
-                            border = UIColors::panelBorder.withAlpha(0.72f);
-                        g.setColour(border);
-                        g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, style.strokeThin);
-                    }
+                        border = juce::Colour(BlueBreeze::Colors::PanelBorder);
+
+                    g.setColour(border);
+                    g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 1.0f);
+                }
+                else if (themeId == ThemeId::Overdose)
+                {
+                    if (textEditor.isMouseOver())
+                        border = juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.6f);
+                    else
+                        border = juce::Colour(Overdose::Colors::PanelBorder);
+
+                    g.setColour(border);
+                    g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 1.0f);
+                }
+                else
+                {
+                    if (themeId == ThemeId::DarkBlueGrey)
+                        border = UIColors::panelBorder.withAlpha(0.72f);
+                    g.setColour(border);
+                    g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, style.strokeThin);
                 }
             }
         }

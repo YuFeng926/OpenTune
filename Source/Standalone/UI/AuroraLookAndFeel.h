@@ -64,10 +64,6 @@ public:
     // Mouse Cursor Theme
     juce::MouseCursor getMouseCursorFor(juce::Component& component) override;
 
-    // AlertWindow
-    void drawAlertBox(juce::Graphics& g, juce::AlertWindow& alert,
-                      const juce::Rectangle<int>& textArea, juce::TextLayout& textLayout) override;
-
     // DocumentWindow title bar
     void drawDocumentWindowTitleBar(juce::DocumentWindow& window, juce::Graphics& g,
                                     int w, int h, int titleSpaceX, int titleSpaceW,
@@ -80,13 +76,10 @@ public:
     juce::Font getPopupMenuFont() override;
     juce::Label* createComboBoxTextBox(juce::ComboBox& box) override;
     void positionComboBoxText(juce::ComboBox& box, juce::Label& label) override;
-    juce::Font getAlertWindowTitleFont() override;
-    juce::Font getAlertWindowMessageFont() override;
-    juce::Font getAlertWindowFont() override;
 
-    /// Install this LookAndFeel as JUCE's process-wide default.
-    /// The static instance has process-level lifetime — safe for orphaned
-    /// AlertWindows, DialogWindow title bars, and keyboard CaptureWindows.
+    /// Install this LookAndFeel as JUCE's process-wide default, providing the
+    /// default project theme for standalone DialogWindows and ordinary JUCE
+    /// components. The static instance has process-level lifetime.
     static void installAsDefault();
 
 private:

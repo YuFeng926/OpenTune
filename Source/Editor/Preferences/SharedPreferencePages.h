@@ -6,13 +6,18 @@
 
 namespace OpenTune {
 
+struct RenderingPriorityPage {
+    std::unique_ptr<juce::Component> component;
+    int height = 0;
+};
+
 struct SharedPreferencePages {
     static std::vector<TabbedPreferencesDialog::PageSpec> create(
         AppPreferences& appPreferences,
         std::function<void()> onPreferencesChanged,
         bool isVst3Plugin);
 
-    static std::unique_ptr<juce::Component> createRenderingPriorityComponent(
+    static RenderingPriorityPage createRenderingPriorityComponent(
         AppPreferences& appPreferences,
         std::function<void()> onPreferencesChanged,
         std::function<void(bool forceCpu)> onRenderingPriorityChanged,
@@ -20,9 +25,6 @@ struct SharedPreferencePages {
         std::function<bool(F0ModelType)> onF0ModelChanged,
         std::function<void(bool)> onLightPitchCorrectionChanged,
         bool isVst3Plugin);
-
-    // 读取 createRenderingPriorityComponent 返回组件的 preferredHeight 属性
-    static int getRenderingPriorityPageHeight(const juce::Component& component);
 };
 
 } // namespace OpenTune

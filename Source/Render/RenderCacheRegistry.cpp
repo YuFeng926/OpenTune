@@ -11,13 +11,15 @@ std::shared_ptr<RenderCache> RenderCacheRegistry::getOrCreate(ContentKey key)
             return it->second;
     }
 
+    const std::lock_guard<std::mutex> prepareGuard(prepareMutex_);
     auto cache = std::make_shared<RenderCache>();
     double targetSr = 0.0;
     {
         const juce::ScopedWriteLock writeLock(lock_);
         auto [it, inserted] = caches_.try_emplace(key, cache);
         targetSr = currentTargetRate_;
-        if (!inserted) cache = it->second;
+        if (!inserted)
+            return it->second;
     }
 
     if (targetSr > 0.0 && cache) {
@@ -57,6 +59,7 @@ void RenderCacheRegistry::preparePlaybackSampleRate(double targetSr)
 {
     if (targetSr <= 0.0) return;
 
+    const std::lock_guard<std::mutex> prepareGuard(prepareMutex_);
     std::vector<std::shared_ptr<RenderCache>> snapshot;
     {
         const juce::ScopedWriteLock writeLock(lock_);

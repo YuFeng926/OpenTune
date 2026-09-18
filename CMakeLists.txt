@@ -33,7 +33,7 @@ endif()
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.7.8 LANGUAGES CXX C)
+project(OpenTune VERSION 1.7.9 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -545,8 +545,6 @@ target_sources(OpenTune
         # Preferences UI
         Source/Editor/Preferences/SharedPreferencePages.cpp
         Source/Editor/Preferences/SharedPreferencePages.h
-        Source/Editor/Preferences/StandalonePreferencePages.cpp
-        Source/Editor/Preferences/StandalonePreferencePages.h
         Source/Editor/Preferences/TabbedPreferencesDialog.h
 
         # Core Plugin Files
@@ -666,6 +664,7 @@ target_sources(OpenTune
         Source/Editor/AutoRenderOverlayComponent.h
         Source/Editor/PitchShiftDialogContent.h
         Source/Editor/ConfirmDialogContent.h
+        Source/Editor/ShortcutCaptureDialogContent.h
 
         # Utilities
         Source/Utils/PitchCurve.cpp
@@ -771,6 +770,12 @@ set(OPENTUNE_STANDALONE_UI_SOURCES
     Source/Standalone/EditorFactoryStandalone.cpp
     Source/Standalone/PluginEditor.cpp
     Source/Standalone/PluginEditor.h
+    Source/Standalone/StandaloneAudioDeviceSync.cpp
+    Source/Standalone/StandaloneAudioDeviceSync.h
+    Source/Editor/Preferences/StandalonePreferencePages.cpp
+    Source/Editor/Preferences/StandalonePreferencePages.h
+    Source/Editor/ThemedFileChooserContent.cpp
+    Source/Editor/ThemedFileChooserContent.h
 )
 
 target_sources(OpenTune_Standalone

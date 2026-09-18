@@ -231,6 +231,18 @@ constexpr const char* kCursorStyleCapitaine = "Capitaine";
 constexpr const char* kCursorStyleBreeze = "Breeze";
 
 constexpr const char* kAudio = "Audio";
+constexpr const char* kAudioDeviceType = "Device Type";
+constexpr const char* kAudioOutput = "Output";
+constexpr const char* kAudioSampleRate = "Sample Rate";
+constexpr const char* kAudioBufferSize = "Buffer Size";
+constexpr const char* kAudioBufferFormat = "{0} samples ({1} ms)";
+constexpr const char* kAudioTest = "Test";
+constexpr const char* kAudioNoDevice = "No Device";
+constexpr const char* kAudioActiveOutputChannels = "Active Output Channels";
+constexpr const char* kAudioNoOutputChannels = "No output channels available";
+constexpr const char* kAudioChannel = "Channel {0}";
+constexpr const char* kAudioDeviceError = "Audio device error";
+constexpr const char* kAudioDeviceSwitchFailed = "Failed to switch audio device";
 constexpr const char* kEditing = "Editing";
 constexpr const char* kMouse = "Mouse";
 constexpr const char* kKeyswitch = "Keyswitch";
@@ -259,11 +271,29 @@ constexpr const char* kSetShortcut = "Set Shortcut";
 constexpr const char* kPressNewKeyCombination = "Press the new key combination";
 constexpr const char* kCurrent = "Current";
 constexpr const char* kCancel = "Cancel";
+constexpr const char* kOK = "OK";
 constexpr const char* kShortcutConflict = "Shortcut Conflict";
 constexpr const char* kShortcutConflictMessage = "This shortcut is already assigned to \"{0}\".\n\nDo you want to reassign it?";
 constexpr const char* kYes = "Yes";
 constexpr const char* kNo = "No";
 constexpr const char* kResetAllToDefaults = "Reset All to Defaults";
+
+// Themed file chooser
+constexpr const char* kFileChooserRefresh = "Refresh";
+constexpr const char* kFileChooserOpen = "Open";
+constexpr const char* kFileChooserSave = "Save";
+constexpr const char* kFileChooserFileName = "File name";
+constexpr const char* kFileChooserLoading = "Loading...";
+constexpr const char* kFileChooserNoMatches = "No matching files";
+constexpr const char* kFileChooserEmptyDirectory = "Empty directory";
+constexpr const char* kFileChooserInvalidPath = "Invalid path: {0}";
+constexpr const char* kFileChooserItemCount = "{0} items";
+constexpr const char* kFileChooserSelectionCount = "{0} items · {1} selected";
+
+// Shortcut capture dialog
+constexpr const char* kShortcutCaptureClickHint = "Click here, then press a key";
+constexpr const char* kShortcutCapturePressKey = "Press a key...";
+constexpr const char* kShortcutCaptureCancelHint = "Click Cancel to abort";
 
 constexpr const char* kPlayPause = "Play/Pause";
 constexpr const char* kStop = "Stop";
@@ -440,6 +470,18 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kCursorStyleBreeze, "Breeze", "Breeze", "Breeze", "Breeze", "Breeze" },
         
         { Keys::kAudio, "Audio", "音频", "オーディオ", "Аудио", "Audio" },
+        { Keys::kAudioDeviceType, "Device Type", "设备类型", "デバイスタイプ", "Тип устройства", "Tipo de dispositivo" },
+        { Keys::kAudioOutput, "Output", "输出", "出力", "Выход", "Salida" },
+        { Keys::kAudioSampleRate, "Sample Rate", "采样率", "サンプルレート", "Частота дискретизации", "Frecuencia de muestreo" },
+        { Keys::kAudioBufferSize, "Buffer Size", "缓冲区大小", "バッファサイズ", "Размер буфера", "Tamaño del búfer" },
+        { Keys::kAudioBufferFormat, "{0} samples ({1} ms)", "{0} 采样（{1} 毫秒）", "{0} サンプル（{1} ミリ秒）", "{0} сэмплов ({1} мс)", "{0} muestras ({1} ms)" },
+        { Keys::kAudioTest, "Test", "测试", "テスト", "Тест", "Probar" },
+        { Keys::kAudioNoDevice, "No Device", "无设备", "デバイスなし", "Нет устройства", "Sin dispositivo" },
+        { Keys::kAudioActiveOutputChannels, "Active Output Channels", "活动输出通道", "アクティブ出力チャンネル", "Активные выходные каналы", "Canales de salida activos" },
+        { Keys::kAudioNoOutputChannels, "No output channels available", "无可用输出通道", "利用可能な出力チャンネルがありません", "Нет доступных выходных каналов", "No hay canales de salida disponibles" },
+        { Keys::kAudioChannel, "Channel {0}", "通道 {0}", "チャンネル {0}", "Канал {0}", "Canal {0}" },
+        { Keys::kAudioDeviceError, "Audio device error", "音频设备错误", "オーディオデバイスエラー", "Ошибка аудиоустройства", "Error del dispositivo de audio" },
+        { Keys::kAudioDeviceSwitchFailed, "Failed to switch audio device", "音频设备切换失败", "オーディオデバイスの切り替えに失敗しました", "Не удалось переключить аудиоустройство", "Error al cambiar el dispositivo de audio" },
         { Keys::kEditing, "Editing", "编辑", "編集", "Редактирование", "Edicion" },
         { Keys::kMouse, "Mouse", "鼠标", "マウス", "Мышь", "Ratón" },
         { Keys::kKeyswitch, "Keyswitch", "快捷键", "キースイッチ", "Клавиши", "Atajos" },
@@ -467,12 +509,27 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kPressNewKeyCombination, "Press the new key combination", "按下新的组合键", "新しいキーの組み合わせを押してください", "Нажмите сочетание", "Pulse combinación" },
         { Keys::kCurrent, "Current", "当前", "現在", "Текущий", "Actual" },
         { Keys::kCancel, "Cancel", "取消", "キャンセル", "Отмена", "Cancelar" },
+        { Keys::kOK, "OK", "确定", "OK", "ОК", "Aceptar" },
         { Keys::kShortcutConflict, "Shortcut Conflict", "快捷键冲突", "ショートカットの競合", "Конфликт сочетаний", "Conflicto de atajo" },
         { Keys::kShortcutConflictMessage, "This shortcut is already assigned to \"{0}\".\n\nDo you want to reassign it?", "此快捷键已分配给\"{0}\"。\n\n是否重新分配？", "このショートカットは既に「{0}」に割り当てられています。\n\n再割り当てしますか？", "Это сочетание уже назначено для \"{0}\".\n\nПереназначить?", "Este atajo ya está asignado a \"{0}\".\n\n¿Reasignar?" },
         { Keys::kYes, "Yes", "是", "はい", "Да", "Sí" },
         { Keys::kNo, "No", "否", "いいえ", "Нет", "No" },
         { Keys::kResetAllToDefaults, "Reset All to Defaults", "全部恢复默认", "すべてデフォルトに戻す", "Сбросить все", "Restablecer todo" },
         
+        { Keys::kFileChooserRefresh, "Refresh", "刷新", "更新", "Обновить", "Actualizar" },
+        { Keys::kFileChooserOpen, "Open", "打开", "開く", "Открыть", "Abrir" },
+        { Keys::kFileChooserSave, "Save", "保存", "保存", "Сохранить", "Guardar" },
+        { Keys::kFileChooserFileName, "File name", "文件名", "ファイル名", "Имя файла", "Nombre de archivo" },
+        { Keys::kFileChooserLoading, "Loading...", "正在读取...", "読み込み中...", "Загрузка...", "Cargando..." },
+        { Keys::kFileChooserNoMatches, "No matching files", "没有匹配的文件", "一致するファイルがありません", "Нет подходящих файлов", "No hay archivos coincidentes" },
+        { Keys::kFileChooserEmptyDirectory, "Empty directory", "空目录", "空のフォルダ", "Пустая папка", "Carpeta vacía" },
+        { Keys::kFileChooserInvalidPath, "Invalid path: {0}", "路径无效：{0}", "無効なパス：{0}", "Неверный путь: {0}", "Ruta no válida: {0}" },
+        { Keys::kFileChooserItemCount, "{0} items", "共 {0} 项", "{0} 項目", "Элементов: {0}", "{0} elementos" },
+        { Keys::kFileChooserSelectionCount, "{0} items · {1} selected", "共 {0} 项 · 已选择 {1} 项", "{0} 項目 · {1} 件選択", "Элементов: {0} · выбрано: {1}", "{0} elementos · {1} seleccionados" },
+        { Keys::kShortcutCaptureClickHint, "Click here, then press a key", "点击此处后按下快捷键", "ここをクリックしてキーを押してください", "Нажмите здесь и нажмите клавишу", "Haga clic aquí y pulse una tecla" },
+        { Keys::kShortcutCapturePressKey, "Press a key...", "请按下快捷键...", "キーを押してください...", "Нажмите клавишу...", "Pulse una tecla..." },
+        { Keys::kShortcutCaptureCancelHint, "Click Cancel to abort", "点击取消按钮取消", "キャンセルをクリックして中止", "Нажмите Отмена для отмены", "Pulse Cancelar para abortar" },
+
         { Keys::kPlayPause, "Play/Pause", "播放/暂停", "再生/一時停止", "Старт/Пауза", "Play/Pausa" },
         { Keys::kStop, "Stop", "停止", "停止", "Стоп", "Detener" },
         { Keys::kPlayFromStart, "Play from Start", "从头播放", "最初から再生", "Играть сначала", "Reprod. inicio" },

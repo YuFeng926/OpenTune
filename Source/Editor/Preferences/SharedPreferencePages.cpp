@@ -1,9 +1,7 @@
 #include "SharedPreferencePages.h"
 
-#include <optional>
-
-#include <juce_audio_utils/juce_audio_utils.h>
-
+#include "Editor/ConfirmDialogContent.h"
+#include "Editor/ShortcutCaptureDialogContent.h"
 #include "Standalone/UI/UIColors.h"
 #include "Inference/ModelFactory.h"
 #include "Utils/KeyShortcutConfig.h"
@@ -317,16 +315,18 @@ public:
         };
         addAndMakeVisible(lightPitchCorrectionToggle_);
 
-        // Publish preferred height for parent containers
+        // 供父容器布局使用的确定内容高度
         {
             const int vPad = 4 * 2; // reduced(10, 4) vertical
             const int rows = isVst3Plugin_ ? 4 : 6; // 插件隐藏实验控件
             const int rowH = 34;
             const int gaps = 8 * (rows - 1) + (isVst3Plugin_ ? 0 : 4); // 行间 8px；实验模式下额外 hint 前 4px
             const int hintHeight = isVst3Plugin_ ? 0 : 42;
-            getProperties().set("preferredHeight", vPad + rows * rowH + gaps + hintHeight);
+            contentHeight_ = vPad + rows * rowH + gaps + hintHeight;
         }
     }
+
+    int getContentHeight() const { return contentHeight_; }
 
     void paint(juce::Graphics& g) override
     {
@@ -388,6 +388,7 @@ private:
     std::function<bool(F0ModelType)> onF0ModelChanged_;
     std::function<void(bool)> onLightPitchCorrectionChanged_;
     bool isVst3Plugin_ = false;
+    int contentHeight_ = 0;
     std::vector<VocoderWeightInfo> vocoderWeights_;
     juce::Label renderingPriorityLabel_;
     juce::ComboBox renderingPrioritySelector_;
@@ -710,64 +711,6 @@ class ShortcutSettingsPage final : public juce::Component
 public:
     int getContentHeight() const { return contentHeight_; }
 
-    class CaptureWindow final : public juce::AlertWindow
-    {
-    public:
-        CaptureWindow(KeyShortcutConfig::ShortcutId id,
-                      const KeyShortcutConfig::ShortcutBinding& currentBinding,
-                      juce::Component* associatedComponent)
-            : juce::AlertWindow(LOC(kSetShortcut),
-                                buildMessage(id, currentBinding),
-                                juce::AlertWindow::NoIcon,
-                                associatedComponent)
-        {
-            addButton(LOC(kCancel), 0);
-
-            for (auto* child : getChildren()) {
-                child->setWantsKeyboardFocus(false);
-            }
-
-            setWantsKeyboardFocus(true);
-            grabKeyboardFocus();
-        }
-
-        bool keyPressed(const juce::KeyPress& key) override
-        {
-            KeyShortcutConfig::KeyBinding binding;
-            if (!tryBuildCapturedBinding(key, binding)) {
-                return true;
-            }
-
-            capturedBinding_ = binding;
-            exitModalState(1);
-            return true;
-        }
-
-        std::optional<KeyShortcutConfig::KeyBinding> takeCapturedBinding()
-        {
-            auto captured = capturedBinding_;
-            capturedBinding_.reset();
-            return captured;
-        }
-
-    private:
-        static juce::String buildMessage(KeyShortcutConfig::ShortcutId id,
-                                         const KeyShortcutConfig::ShortcutBinding& currentBinding)
-        {
-            juce::String message = KeyShortcutConfig::getShortcutDisplayName(id);
-            message << "\n" << LOC(kPressNewKeyCombination);
-
-            const auto currentBindingText = currentBinding.getDisplayNames();
-            if (currentBindingText.isNotEmpty()) {
-                message << "\n\n" << LOC(kCurrent) << ": " << currentBindingText;
-            }
-
-            return message;
-        }
-
-        std::optional<KeyShortcutConfig::KeyBinding> capturedBinding_;
-    };
-
     ShortcutSettingsPage(AppPreferences& appPreferences, std::function<void()> onPreferencesChanged)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
@@ -922,30 +865,47 @@ public:
     }
 
 private:
+    static juce::String buildCaptureMessage(KeyShortcutConfig::ShortcutId id,
+                                            const KeyShortcutConfig::ShortcutBinding& currentBinding)
+    {
+        juce::String message = KeyShortcutConfig::getShortcutDisplayName(id);
+        message << "\n" << LOC(kPressNewKeyCombination);
+
+        const auto currentBindingText = currentBinding.getDisplayNames();
+        if (currentBindingText.isNotEmpty()) {
+            message << "\n\n" << LOC(kCurrent) << ": " << currentBindingText;
+        }
+
+        return message;
+    }
+
     void beginCapture(KeyShortcutConfig::ShortcutId id)
     {
         currentEditingId_ = id;
-        captureWindow_ = std::make_unique<CaptureWindow>(id, KeyShortcutConfig::getShortcutBinding(settings_, id), this);
+
+        const auto message = buildCaptureMessage(id, KeyShortcutConfig::getShortcutBinding(settings_, id));
 
         juce::Component::SafePointer<ShortcutSettingsPage> safeThis(this);
-        captureWindow_->enterModalState(true, juce::ModalCallbackFunction::create([safeThis](int result) {
-                                           if (safeThis == nullptr) {
-                                               return;
-                                           }
+        ShortcutCaptureDialogContent::launch(this,
+                                             LOC(kSetShortcut),
+                                             message,
+                                             [safeThis](const juce::KeyPress& key) {
+                                                 if (safeThis == nullptr) {
+                                                     return;
+                                                 }
 
-                                           const auto capturedBinding = safeThis->captureWindow_ != nullptr
-                                               ? safeThis->captureWindow_->takeCapturedBinding()
-                                               : std::optional<KeyShortcutConfig::KeyBinding>{};
-                                           safeThis->captureWindow_.reset();
-
-                                           if (result == 1 && capturedBinding.has_value()) {
-                                               safeThis->handleCapturedBinding(*capturedBinding);
-                                               return;
-                                           }
-
-                                           safeThis->cancelCapture();
-                                       }),
-                                        false);
+                                                 KeyShortcutConfig::KeyBinding binding;
+                                                 if (tryBuildCapturedBinding(key, binding)) {
+                                                     safeThis->handleCapturedBinding(binding);
+                                                 } else {
+                                                     safeThis->cancelCapture();
+                                                 }
+                                             },
+                                             [safeThis] {
+                                                 if (safeThis != nullptr) {
+                                                     safeThis->cancelCapture();
+                                                 }
+                                             });
     }
 
     void handleCapturedBinding(const KeyShortcutConfig::KeyBinding& binding)
@@ -960,27 +920,32 @@ private:
             return;
         }
 
-        auto options = juce::MessageBoxOptions::makeOptionsYesNo(juce::MessageBoxIconType::WarningIcon,
-                                                                 LOC(kShortcutConflict),
-                                                                 Loc::format(LOC_RAW(Loc::Keys::kShortcutConflictMessage),
-                                                                             KeyShortcutConfig::getShortcutDisplayName(conflict)),
-                                                                 LOC(kYes),
-                                                                 LOC(kNo),
-                                                                 this);
         juce::Component::SafePointer<ShortcutSettingsPage> safeThis(this);
-        juce::AlertWindow::showAsync(options, [safeThis, binding, conflict](int result) {
-            if (safeThis == nullptr) {
-                return;
-            }
+        ConfirmDialogContent::launch(
+            new ConfirmDialogContent(
+                LOC(kShortcutConflict),
+                Loc::format(LOC_RAW(Loc::Keys::kShortcutConflictMessage),
+                            KeyShortcutConfig::getShortcutDisplayName(conflict)),
+                { { LOC(kYes), [safeThis, binding, conflict] {
+                        if (safeThis == nullptr) {
+                            return;
+                        }
 
-            if (result == 1) {
-                safeThis->settings_.bindings[static_cast<size_t>(conflict)].removeBinding(binding);
-                safeThis->applyBinding(binding);
-                return;
-            }
-
-            safeThis->cancelCapture();
-        });
+                        safeThis->settings_.bindings[static_cast<size_t>(conflict)].removeBinding(binding);
+                        safeThis->applyBinding(binding);
+                    }, true },
+                  { LOC(kNo), [safeThis] {
+                        if (safeThis != nullptr) {
+                            safeThis->cancelCapture();
+                        }
+                    }, false } },
+                [safeThis] {
+                    // Esc 关闭且未执行任何按钮动作时，同样结束捕获状态
+                    if (safeThis != nullptr) {
+                        safeThis->cancelCapture();
+                    }
+                }),
+            this);
     }
 
     void applyBinding(const KeyShortcutConfig::KeyBinding& binding)
@@ -993,7 +958,6 @@ private:
 
     void cancelCapture()
     {
-        captureWindow_.reset();
         currentEditingId_ = KeyShortcutConfig::ShortcutId::Count;
     }
 
@@ -1034,7 +998,6 @@ private:
     juce::OwnedArray<juce::Label> shortcutLabels_;
     juce::OwnedArray<juce::TextButton> shortcutButtons_;
     juce::TextButton resetAllButton_;
-    std::unique_ptr<CaptureWindow> captureWindow_;
     KeyShortcutConfig::ShortcutId currentEditingId_ = KeyShortcutConfig::ShortcutId::Count;
 };
 
@@ -1067,7 +1030,7 @@ std::vector<TabbedPreferencesDialog::PageSpec> SharedPreferencePages::create(
     return pages;
 }
 
-std::unique_ptr<juce::Component> SharedPreferencePages::createRenderingPriorityComponent(
+RenderingPriorityPage SharedPreferencePages::createRenderingPriorityComponent(
     AppPreferences& appPreferences,
     std::function<void()> onPreferencesChanged,
     std::function<void(bool forceCpu)> onRenderingPriorityChanged,
@@ -1076,19 +1039,15 @@ std::unique_ptr<juce::Component> SharedPreferencePages::createRenderingPriorityC
     std::function<void(bool)> onLightPitchCorrectionChanged,
     bool isVst3Plugin)
 {
-    return std::make_unique<SharedAudioPage>(appPreferences,
-                                               std::move(onPreferencesChanged),
-                                               std::move(onRenderingPriorityChanged),
-                                               std::move(onVocoderModelWeightChanged),
-                                               std::move(onF0ModelChanged),
-                                               std::move(onLightPitchCorrectionChanged),
-                                               isVst3Plugin);
-}
-
-int SharedPreferencePages::getRenderingPriorityPageHeight(
-    const juce::Component& component)
-{
-    return static_cast<int>(component.getProperties().getWithDefault("preferredHeight", 260));
+    auto component = std::make_unique<SharedAudioPage>(appPreferences,
+                                                       std::move(onPreferencesChanged),
+                                                       std::move(onRenderingPriorityChanged),
+                                                       std::move(onVocoderModelWeightChanged),
+                                                       std::move(onF0ModelChanged),
+                                                       std::move(onLightPitchCorrectionChanged),
+                                                       isVst3Plugin);
+    const int height = component->getContentHeight();
+    return { std::move(component), height };
 }
 
 } // namespace OpenTune

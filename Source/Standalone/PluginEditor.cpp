@@ -28,6 +28,8 @@
 #include "Utils/PitchShiftEditAction.h"
 #include "Editor/PitchShiftDialogContent.h"
 #include "Editor/ConfirmDialogContent.h"
+#include "Editor/ThemedFileChooserContent.h"
+#include "StandaloneAudioDeviceSync.h"
 #include "Utils/TimeCoordinate.h"
 #include "Content/StandaloneClipContent.h"
 #include "Utils/KeyShortcutConfig.h"
@@ -42,11 +44,6 @@
 #include <thread>
 #include <future>
 #include <chrono>
-
-#if JUCE_WINDOWS
-#include <mmdeviceapi.h>
-#include <audioclient.h>
-#endif
 
 namespace OpenTune {
 
@@ -65,91 +62,6 @@ ThemeId resolveEffectiveTheme(ThemeId configured)
     if (env == "bluebreeze")   return ThemeId::BlueBreeze;
     if (env == "darkbluegrey") return ThemeId::DarkBlueGrey;
     return configured;
-}
-
-#if JUCE_WINDOWS
-// 读取 Windows 系统默认渲染设备（mmsys.cpl 中的"默认格式"）的共享模式采样率。
-// 通过 WASAPI GetMixFormat 获取：共享引擎实际使用的格式即用户设置的系统默认格式。
-// 返回 0.0 表示读取失败（设备不可用/COM 不可用），调用方应跳过恢复。
-double getSystemDefaultRenderSampleRate()
-{
-    double result = 0.0;
-
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool coInitHere = SUCCEEDED(hr);
-
-    IMMDeviceEnumerator* enumerator = nullptr;
-    if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                   IID_PPV_ARGS(&enumerator))))
-    {
-        IMMDevice* device = nullptr;
-        if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &device)))
-        {
-            IAudioClient* client = nullptr;
-            if (SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                           reinterpret_cast<void**>(&client))))
-            {
-                WAVEFORMATEX* mixFormat = nullptr;
-                if (SUCCEEDED(client->GetMixFormat(&mixFormat)) && mixFormat != nullptr)
-                {
-                    result = static_cast<double>(mixFormat->nSamplesPerSec);
-                    CoTaskMemFree(mixFormat);
-                }
-                client->Release();
-            }
-            device->Release();
-        }
-        enumerator->Release();
-    }
-
-    if (coInitHere)
-        CoUninitialize();
-
-    return result;
-}
-#endif
-
-// ASIO 独占使用后，XMOS 类 USB 设备固件会停留在最后使用的采样率；若与 Windows
-// 系统默认共享格式不一致，退出后系统声音按错误速率播放（SPDIF 直通路径表现为
-// 持续高频失真）。standalone 退出（editor 析构）时把 ASIO 设备采样率切回系统格式，
-// 让固件停在系统格式上。非 ASIO / 采样率一致 / 驱动不支持目标率时无操作。
-void restoreAsioSampleRateBeforeExit()
-{
-#if JUCE_WINDOWS
-    auto* holder = juce::StandalonePluginHolder::getInstance();
-    if (holder == nullptr)
-        return;
-
-    auto& dm = holder->deviceManager;
-    if (dm.getCurrentAudioDeviceType() != "ASIO")
-        return;
-
-    auto* device = dm.getCurrentAudioDevice();
-    if (device == nullptr)
-        return;
-
-    const double systemRate = getSystemDefaultRenderSampleRate();
-    if (systemRate <= 0.0)
-        return;
-
-    const double currentRate = device->getCurrentSampleRate();
-    if (currentRate <= 0.0 || std::abs(systemRate - currentRate) < 1.0)
-        return;
-
-    bool supported = false;
-    for (auto rate : device->getAvailableSampleRates())
-        if (std::abs(rate - systemRate) < 1.0) { supported = true; break; }
-    if (!supported)
-        return;
-
-    auto setup = dm.getAudioDeviceSetup();
-    setup.sampleRate = systemRate;
-    const auto error = dm.setAudioDeviceSetup(setup, true);
-    if (error.isNotEmpty())
-        AppLogger::error("[PluginEditor] ASIO exit: restore sample rate to system format failed: " + error);
-    else
-        AppLogger::log("[PluginEditor] ASIO exit: sample rate restored to " + juce::String(systemRate, 1) + " Hz");
-#endif
 }
 
 ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::Placement& placement,
@@ -676,9 +588,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
-    // ASIO 独占退出前把设备采样率切回 Windows 系统默认共享格式，
-    // 避免 XMOS 类设备固件残留采样率导致系统声音（SPDIF 直通）高频失真。
-    restoreAsioSampleRateBeforeExit();
+    if (auto* holder = juce::StandalonePluginHolder::getInstance())
+        restoreAsioSampleRateToSystem(holder->deviceManager, "editor exit");
 
     // Stop timer
 #if JUCE_MAC
@@ -1778,26 +1689,19 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
     }
 
     const auto wildcardFilter = getImportWildcardFilter();
-    auto chooser = std::make_shared<juce::FileChooser>(
-        juce::String::fromUTF8(u8"\u9009\u62E9\u8981\u5BFC\u5165\u7684\u97F3\u9891\u6587\u4EF6"),
-        juce::File::getSpecialLocation(juce::File::userHomeDirectory),
-        wildcardFilter
-    );
-
-// Support multi-select
-    auto chooserFlags = juce::FileBrowserComponent::openMode 
-                      | juce::FileBrowserComponent::canSelectFiles 
-                      | juce::FileBrowserComponent::canSelectMultipleItems;
 
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
-    chooser->launchAsync(chooserFlags, [safeThis, chooser, this](const juce::FileChooser& fc)
+    ThemedFileChooserContent::openFiles(
+        safeThis.getComponent(),
+        juce::String::fromUTF8(u8"\u9009\u62E9\u8981\u5BFC\u5165\u7684\u97F3\u9891\u6587\u4EF6"),
+        juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+        wildcardFilter,
+        [safeThis](juce::Array<juce::File> selectedFiles)
     {
         if (safeThis == nullptr)
             return;
 
-        const juce::Array<juce::File>& selectedFiles = fc.getResults();
-        
         if (selectedFiles.isEmpty())
         {
             DBG("No files selected");
@@ -1892,7 +1796,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                         { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr }
                     }
                 ),
-                this
+                safeThis.getComponent()
             );
         }
     });
@@ -2172,140 +2076,162 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
             break;
     }
 
-    auto chooser = std::make_shared<juce::FileChooser>(
-        "Export Audio File",
-        juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(defaultFileName),
-        "*.wav");
-
-    auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
-
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
-    chooser->launchAsync(chooserFlags, [safeThis, exportType, chooser](const juce::FileChooser& fc)
+    ThemedFileChooserContent::saveFile(
+        safeThis.getComponent(),
+        "Export Audio File",
+        juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(defaultFileName),
+        "*.wav",
+        [safeThis, exportType](juce::Array<juce::File> files)
     {
         if (safeThis == nullptr)
             return;
 
-        auto file = fc.getResult();
-        if (file == juce::File{})
+        if (files.isEmpty())
             return;
 
-        struct ExportRequest final
+        auto file = files[0];
+        if (!file.hasFileExtension(".wav"))
+            file = file.withFileExtension(".wav");
+
+        // 从构造导出请求到启动导出线程的完整流程；目标文件已存在时先经主题确认再调用
+        auto startExport = [safeThis, exportType, file]()
         {
-            ExportType type{ ExportType::Bus };
-            int trackId{ -1 };
-            int placementIndex{ -1 };
-            juce::String targetName;
-        };
+            if (safeThis == nullptr)
+                return;
 
-        ExportRequest request;
-        request.type = exportType;
-
-        switch (exportType)
-        {
-            case ExportType::SelectedClip:
+            struct ExportRequest final
             {
-                request.trackId = getStandaloneActiveTrack(safeThis->processorRef_);
-                request.placementIndex = getStandaloneSelectedPlacementIndex(safeThis->processorRef_, request.trackId);
+                ExportType type{ ExportType::Bus };
+                int trackId{ -1 };
+                int placementIndex{ -1 };
+                juce::String targetName;
+            };
 
-                if (request.placementIndex < 0)
-                {
-                    ConfirmDialogContent::showMessage(
-                        safeThis.getComponent(),
-                        juce::String("Export Failed"),
-                        juce::String("No audio clip is selected. Select a clip on the track first."));
-                    return;
-                }
+            ExportRequest request;
+            request.type = exportType;
 
-                request.targetName = "Selected Placement (Track "
-                    + juce::String(request.trackId + 1)
-                    + ", Clip " + juce::String(request.placementIndex + 1) + ")";
-                break;
-            }
-
-            case ExportType::Track:
+            switch (exportType)
             {
-                request.trackId = getStandaloneActiveTrack(safeThis->processorRef_);
-                request.targetName = "Track " + juce::String(request.trackId + 1);
-                break;
-            }
-
-            case ExportType::Bus:
-            {
-                request.targetName = "Bus (Master Mix)";
-                break;
-            }
-        }
-
-        auto* processor = &safeThis->processorRef_;
-        const auto outFile = file;
-        const auto outRequest = request;
-        const juce::Component::SafePointer<OpenTuneAudioProcessorEditor> uiSafe = safeThis;
-
-        // Join previous export thread if it exists
-        if (safeThis->exportWorker_.joinable())
-        {
-            safeThis->exportWorker_.join();
-        }
-
-        // Set export in progress flag
-        safeThis->exportInProgress_.store(true);
-
-        // Create new controlled export thread
-        safeThis->exportWorker_ = std::thread([processor, outFile, outRequest, uiSafe]()
-            {
-                bool ok = false;
-                juce::String errorText;
-
-                switch (outRequest.type)
+                case ExportType::SelectedClip:
                 {
-                    case ExportType::SelectedClip:
-                        ok = processor->exportPlacementAudio(outRequest.trackId, outRequest.placementIndex, outFile);
-                        break;
-                    case ExportType::Track:
-                        ok = processor->exportTrackAudio(outRequest.trackId, outFile);
-                        break;
-                    case ExportType::Bus:
-                        ok = processor->exportMasterMixAudio(outFile);
-                        break;
-                }
+                    request.trackId = getStandaloneActiveTrack(safeThis->processorRef_);
+                    request.placementIndex = getStandaloneSelectedPlacementIndex(safeThis->processorRef_, request.trackId);
 
-                if (!ok)
-                {
-                    errorText = processor->getLastExportError();
-                }
-
-                juce::MessageManager::callAsync([ok, outFile, outRequest, errorText, uiSafe]()
-                {
-                    // Check if editor is still alive
-                    if (uiSafe == nullptr)
-                        return;
-
-                    // Clear export in progress flag
-                    uiSafe->exportInProgress_.store(false);
-
-                    if (ok)
+                    if (request.placementIndex < 0)
                     {
-                        DBG("Successfully exported " + outRequest.targetName);
+                        ConfirmDialogContent::showMessage(
+                            safeThis.getComponent(),
+                            juce::String("Export Failed"),
+                            juce::String("No audio clip is selected. Select a clip on the track first."));
+                        return;
+                    }
+
+                    request.targetName = "Selected Placement (Track "
+                        + juce::String(request.trackId + 1)
+                        + ", Clip " + juce::String(request.placementIndex + 1) + ")";
+                    break;
+                }
+
+                case ExportType::Track:
+                {
+                    request.trackId = getStandaloneActiveTrack(safeThis->processorRef_);
+                    request.targetName = "Track " + juce::String(request.trackId + 1);
+                    break;
+                }
+
+                case ExportType::Bus:
+                {
+                    request.targetName = "Bus (Master Mix)";
+                    break;
+                }
+            }
+
+            auto* processor = &safeThis->processorRef_;
+            const auto outFile = file;
+            const auto outRequest = request;
+            const juce::Component::SafePointer<OpenTuneAudioProcessorEditor> uiSafe = safeThis;
+
+            // Join previous export thread if it exists
+            if (safeThis->exportWorker_.joinable())
+            {
+                safeThis->exportWorker_.join();
+            }
+
+            // Set export in progress flag
+            safeThis->exportInProgress_.store(true);
+
+            // Create new controlled export thread
+            safeThis->exportWorker_ = std::thread([processor, outFile, outRequest, uiSafe]()
+                {
+                    bool ok = false;
+                    juce::String errorText;
+
+                    switch (outRequest.type)
+                    {
+                        case ExportType::SelectedClip:
+                            ok = processor->exportPlacementAudio(outRequest.trackId, outRequest.placementIndex, outFile);
+                            break;
+                        case ExportType::Track:
+                            ok = processor->exportTrackAudio(outRequest.trackId, outFile);
+                            break;
+                        case ExportType::Bus:
+                            ok = processor->exportMasterMixAudio(outFile);
+                            break;
+                    }
+
+                    if (!ok)
+                    {
+                        errorText = processor->getLastExportError();
+                    }
+
+                    juce::MessageManager::callAsync([ok, outFile, outRequest, errorText, uiSafe]()
+                    {
+                        // Check if editor is still alive
+                        if (uiSafe == nullptr)
+                            return;
+
+                        // Clear export in progress flag
+                        uiSafe->exportInProgress_.store(false);
+
+                        if (ok)
+                        {
+                            DBG("Successfully exported " + outRequest.targetName);
+                            ConfirmDialogContent::showMessage(
+                                uiSafe.getComponent(),
+                                juce::String::fromUTF8(u8"\u5BFC\u51FA\u5B8C\u6210"),
+                                outRequest.targetName + juce::String::fromUTF8(u8" \u5DF2\u5BFC\u51FA\u5230: ") + outFile.getFullPathName());
+                            return;
+                        }
+
+                        juce::String failText = juce::String::fromUTF8(u8"\u65E0\u6CD5\u5BFC\u51FA\u97F3\u9891\u5230 ") + outFile.getFullPathName();
+                        if (errorText.isNotEmpty())
+                        {
+                            failText += juce::String::fromUTF8(u8"\n\u539F\u56E0: ") + errorText;
+                        }
+
                         ConfirmDialogContent::showMessage(
                             uiSafe.getComponent(),
-                            juce::String::fromUTF8(u8"\u5BFC\u51FA\u5B8C\u6210"),
-                            outRequest.targetName + juce::String::fromUTF8(u8" \u5DF2\u5BFC\u51FA\u5230: ") + outFile.getFullPathName());
-                        return;
-                    }
-
-                    juce::String failText = juce::String::fromUTF8(u8"\u65E0\u6CD5\u5BFC\u51FA\u97F3\u9891\u5230 ") + outFile.getFullPathName();
-                    if (errorText.isNotEmpty())
-                    {
-                        failText += juce::String::fromUTF8(u8"\n\u539F\u56E0: ") + errorText;
-                    }
-
-                    ConfirmDialogContent::showMessage(
-                        uiSafe.getComponent(),
-                        juce::String::fromUTF8(u8"\u5BFC\u51FA\u5931\u8D25"),
-                        failText);
+                            juce::String::fromUTF8(u8"\u5BFC\u51FA\u5931\u8D25"),
+                            failText);
+                    });
                 });
-            });
+        };
+
+        if (file.existsAsFile())
+        {
+            ConfirmDialogContent::launch(
+                new ConfirmDialogContent(
+                    juce::String("Overwrite Existing File?"),
+                    juce::String("The target file already exists. Overwrite it?"),
+                    { { juce::String::fromUTF8(u8"\u8986\u76D6"), startExport, true },
+                      { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
+                safeThis.getComponent());
+            return;
+        }
+
+        startExport();
     });
 }
 
@@ -2351,16 +2277,18 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
 
 void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 {
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B"), juce::File(), "*.otproj");
-    auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
-    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc) {
+    ThemedFileChooserContent::openFile(
+        safeThis.getComponent(),
+        juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B"),
+        juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+        "*.otproj",
+        [safeThis](juce::Array<juce::File> files) {
         if (safeThis == nullptr) return;
-        auto file = fc.getResult();
-        if (file == juce::File{}) return;
+        if (files.isEmpty()) return;
 
-        safeThis->openProjectFile(file);
+        safeThis->openProjectFile(files[0]);
     });
 }
 
@@ -2369,14 +2297,17 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
     if (rejectProjectOperationIfBusy())
         return;
 
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
-    auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
-    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc) {
+    ThemedFileChooserContent::saveFile(
+        safeThis.getComponent(),
+        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"),
+        juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+        "*.otproj",
+        [safeThis](juce::Array<juce::File> files) {
         if (safeThis == nullptr) return;
-        auto file = fc.getResult();
-        if (file == juce::File{}) return;
+        if (files.isEmpty()) return;
+        auto file = files[0];
         if (!file.hasFileExtension(".otproj"))
             file = file.withFileExtension(".otproj");
 
@@ -2437,6 +2368,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
                  std::make_move_iterator(standalonePages.end()));
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
+    dialogContent->setDialogParent(this);
 
     // 根据当前屏幕可用区域计算对话框尺寸，适配不同显示器和分辨率
     const auto usable = getParentMonitorArea();
@@ -2548,8 +2480,8 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
         openTuneLookAndFeel_.setColour(juce::TextButton::textColourOnId, UIColors::textPrimary);
     }
 
-    // Install process-wide default so orphaned AlertWindows / DialogWindow title
-    // bars always use Aurora glass styling regardless of current editor theme.
+    // Install process-wide default so independent DialogWindow title bars and
+    // ordinary JUCE controls use the project theme.
     AuroraLookAndFeel::installAsDefault();
 
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
@@ -2875,11 +2807,15 @@ void OpenTuneAudioProcessorEditor::visibleTrackCountChanged(int newCount)
 void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
 {
     // Wrapper component: holds ColourSelector, applies result when dialog closes via destructor
-    struct ColourPickerContent : public juce::Component
+    struct ColourPickerContent : public juce::Component,
+                                 private juce::ComponentListener
     {
-        ColourPickerContent(OpenTuneAudioProcessorEditor& owner, int tid, juce::Colour current)
+        ColourPickerContent(OpenTuneAudioProcessorEditor* owner, int tid, juce::Colour current)
             : owner_(owner), trackId_(tid)
         {
+            if (owner_ != nullptr)
+                owner_->addComponentListener(this);
+
             selector_ = std::make_unique<juce::ColourSelector>(
                 juce::ColourSelector::showColourAtTop |
                 juce::ColourSelector::showSliders |
@@ -2891,13 +2827,16 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
 
         ~ColourPickerContent() override
         {
-            if (selector_)
+            if (owner_ != nullptr)
+                owner_->removeComponentListener(this);
+
+            if (selector_ && owner_ != nullptr)
             {
                 juce::Colour selected = selector_->getCurrentColour();
-                setStandaloneTrackColour(owner_.processorRef_, trackId_, selected);
-                owner_.trackPanel_.setTrackColour(trackId_, selected);
-                owner_.arrangementView_.requestContentRedraw();
-                owner_.projectSession_.markDirty();
+                setStandaloneTrackColour(owner_->processorRef_, trackId_, selected);
+                owner_->trackPanel_.setTrackColour(trackId_, selected);
+                owner_->arrangementView_.requestContentRedraw();
+                owner_->projectSession_.markDirty();
             }
         }
 
@@ -2907,14 +2846,39 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
                 selector_->setBounds(getLocalBounds());
         }
 
+        /** 非原生标题栏时移除 DialogWindow 默认标题栏，仅保留主题内容 */
+        void parentHierarchyChanged() override
+        {
+            if (auto* dialogWindow = findParentComponentOfClass<juce::DialogWindow>())
+            {
+                if (! dialogWindow->isUsingNativeTitleBar())
+                {
+                    const int contentWidth = getWidth();
+                    const int contentHeight = getHeight();
+                    dialogWindow->setTitleBarHeight(0);
+                    dialogWindow->setContentComponentSize(contentWidth, contentHeight);
+                }
+            }
+        }
+
     private:
-        OpenTuneAudioProcessorEditor& owner_;
+        void componentBeingDeleted(juce::Component&) override
+        {
+            if (owner_ != nullptr)
+                owner_->removeComponentListener(this);
+            owner_ = nullptr;
+
+            if (auto* dialogWindow = findParentComponentOfClass<juce::DialogWindow>())
+                dialogWindow->exitModalState(0);
+        }
+
+        juce::Component::SafePointer<OpenTuneAudioProcessorEditor> owner_;
         int trackId_;
         std::unique_ptr<juce::ColourSelector> selector_;
     };
 
     juce::Colour current = getStandaloneTrackColour(processorRef_, trackId);
-    auto* content = new ColourPickerContent(*this, trackId, current);
+    auto* content = new ColourPickerContent(this, trackId, current);
     content->setSize(380, 300);
 
     juce::DialogWindow::LaunchOptions opts;
@@ -3153,25 +3117,30 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     const auto currentSettings = processorRef_.getPitchShiftSettings(contentKey);
 
     auto* content = new PitchShiftDialogContent(currentSettings);
+    content->setDialogParent(this);
 
     auto commands = processorRef_.getContentCommands();
-    content->setOnConfirm([this, contentKey, currentSettings, commands](const PitchShiftSettings& newSettings) {
+    content->setOnConfirm([safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
+                           contentKey, currentSettings, commands](const PitchShiftSettings& newSettings) {
+        if (safeThis == nullptr) return;
         if (newSettings != currentSettings) {
             auto action = commands->commitPitchShiftEdit(contentKey, newSettings);
             if (action != nullptr) {
-                processorRef_.getUndoManager().addAction(std::move(action));
-                projectSession_.markDirty();
+                safeThis->processorRef_.getUndoManager().addAction(std::move(action));
+                safeThis->projectSession_.markDirty();
             }
         }
     });
 
-    content->setOnReset([this, contentKey, currentSettings, commands]() {
+    content->setOnReset([safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
+                         contentKey, currentSettings, commands]() {
+        if (safeThis == nullptr) return;
         const auto identity = PitchShiftSettings::identity();
         if (identity != currentSettings) {
             auto action = commands->commitPitchShiftEdit(contentKey, identity);
             if (action != nullptr) {
-                processorRef_.getUndoManager().addAction(std::move(action));
-                projectSession_.markDirty();
+                safeThis->processorRef_.getUndoManager().addAction(std::move(action));
+                safeThis->projectSession_.markDirty();
             }
         }
     });
@@ -3217,14 +3186,17 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
     if (rejectProjectOperationIfBusy())
         return;
 
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
-    auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
-    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc) {
+    ThemedFileChooserContent::saveFile(
+        safeThis.getComponent(),
+        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"),
+        juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+        "*.otproj",
+        [safeThis](juce::Array<juce::File> files) {
         if (safeThis == nullptr) return;
-        auto file = fc.getResult();
-        if (file == juce::File{}) return;
+        if (files.isEmpty()) return;
+        auto file = files[0];
         if (!file.hasFileExtension(".otproj"))
             file = file.withFileExtension(".otproj");
 
@@ -3265,12 +3237,15 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         // No project path: async save-as, then open recent file
-                        auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
-                        auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
-                        chooser->launchAsync(chooserFlags, [safeThis, chooser, file](const juce::FileChooser& fc) {
+                        ThemedFileChooserContent::saveFile(
+                            safeThis.getComponent(),
+                            juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"),
+                            juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+                            "*.otproj",
+                            [safeThis, file](juce::Array<juce::File> files) {
                             if (safeThis == nullptr) return;
-                            auto saveFile = fc.getResult();
-                            if (saveFile == juce::File{}) return;
+                            if (files.isEmpty()) return;
+                            auto saveFile = files[0];
                             if (!saveFile.hasFileExtension(".otproj"))
                                 saveFile = saveFile.withFileExtension(".otproj");
 

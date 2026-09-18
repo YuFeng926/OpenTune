@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Editor/ConfirmDialogContent.h"
 #include "Editor/Preferences/SharedPreferencePages.h"
 #include "Editor/Preferences/TabbedPreferencesDialog.h"
 #include "Editor/PitchShiftDialogContent.h"
@@ -25,13 +26,13 @@ namespace OpenTune::PluginUI {
 
 namespace {
 
-void showHostManagedMessage(const juce::String& title, const juce::String& detail)
+void showHostManagedMessage(juce::Component* parent, const juce::String& title, const juce::String& detail)
 {
     AppLogger::log("VST3Editor: " + title + " requested, delegated to host DAW");
-    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                                           title,
-                                           "In VST3 mode this action is managed by your DAW.\n\n"
-                                               + detail);
+    OpenTune::ConfirmDialogContent::showMessage(parent,
+                                                title,
+                                                "In VST3 mode this action is managed by your DAW.\n\n"
+                                                    + detail);
 }
 
 bool nearlyEqualSeconds(double a, double b)
@@ -830,40 +831,40 @@ void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 
 void OpenTuneAudioProcessorEditor::importAudioRequested()
 {
-    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                                           "Import Audio",
-                                           "Please import audio from your DAW in VST3 mode.");
+    OpenTune::ConfirmDialogContent::showMessage(this,
+                                                "Import Audio",
+                                                "Please import audio from your DAW in VST3 mode.");
 }
 
 void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::ExportType exportType)
 {
     juce::ignoreUnused(exportType);
-    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                                           "Export Audio",
-                                           "Please render/export from your DAW in VST3 mode.");
+    OpenTune::ConfirmDialogContent::showMessage(this,
+                                                "Export Audio",
+                                                "Please render/export from your DAW in VST3 mode.");
 }
 
 void OpenTuneAudioProcessorEditor::openProjectRequested()
 {
-    showHostManagedMessage("Open Project",
+    showHostManagedMessage(this, "Open Project",
                            "Project file management is handled in the Standalone version.");
 }
 
 void OpenTuneAudioProcessorEditor::saveProjectRequested()
 {
-    showHostManagedMessage("Save Project",
+    showHostManagedMessage(this, "Save Project",
                            "Project file management is handled in the Standalone version.");
 }
 
 void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
 {
-    showHostManagedMessage("Save Project As...",
+    showHostManagedMessage(this, "Save Project As...",
                            "Project file management is handled in the Standalone version.");
 }
 
 void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File&)
 {
-    showHostManagedMessage("Open Recent Project",
+    showHostManagedMessage(this, "Open Recent Project",
                            "Project file management is handled in the Standalone version.");
 }
 
@@ -898,10 +899,10 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         std::move(onF0ModelChanged),
         std::move(onLightPitchCorrectionChanged),
         true);
-    const int audioPageHeight = SharedPreferencePages::getRenderingPriorityPageHeight(*audioPage);
-    pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage), audioPageHeight });
+    pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage.component), audioPage.height });
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
+    dialogContent->setDialogParent(this);
 
     // 根据当前屏幕可用区域计算对话框尺寸，适配不同显示器和分辨率
     const auto usable = getParentMonitorArea();
@@ -925,7 +926,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 
 void OpenTuneAudioProcessorEditor::helpRequested()
 {
-    showHostManagedMessage("Help",
+    showHostManagedMessage(this, "Help",
                            "Open the host DAW plugin help/manual entry for VST3 usage guidance.");
 }
 
@@ -991,8 +992,8 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
         openTuneLookAndFeel_.setColour(juce::TextButton::textColourOnId, UIColors::textPrimary);
     }
 
-    // Install process-wide default so orphaned AlertWindows / DialogWindow title
-    // bars always use Aurora glass styling regardless of current editor theme.
+    // Install process-wide default so independent DialogWindow title bars and
+    // ordinary JUCE controls use the project theme.
     AuroraLookAndFeel::installAsDefault();
 
     topBar_.applyTheme();
@@ -1163,9 +1164,9 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     }
 
 #if !JucePlugin_Enable_ARA
-    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                           "Read Audio",
-                                           "This VST3 instance is not ready for audio capture or ARA reading.");
+    OpenTune::ConfirmDialogContent::showMessage(this,
+                                                "Read Audio",
+                                                "This VST3 instance is not ready for audio capture or ARA reading.");
     return;
 #else
     auto* dc = processorRef_.getDocumentController();
@@ -1179,9 +1180,9 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     {
         AppLogger::log("VST3 recordRequested mode=ara-bound focused region unavailable");
         transportBar_.setRecordButtonEnabled(false);
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                               "Read Audio",
-                                               "The selected item is not ready. Please re-select and try again.");
+        OpenTune::ConfirmDialogContent::showMessage(this,
+                                                    "Read Audio",
+                                                    "The selected item is not ready. Please re-select and try again.");
         return;
     }
 
@@ -1190,9 +1191,9 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         targetPlaybackRegion,
         [this, dc, targetPlaybackRegion](int refreshed) {
             if (refreshed < 0) {
-                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                       "Read Audio",
-                                                       "Audio regions could not be processed.");
+                OpenTune::ConfirmDialogContent::showMessage(this,
+                                                            "Read Audio",
+                                                            "Audio regions could not be processed.");
                 return;
             }
 
@@ -1269,8 +1270,8 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     const auto activeKey = resolveCurrentContentKey();
     AppLogger::log("AutoTune: vst3 request contentKey.objectId=" + juce::String(static_cast<juce::int64>(activeKey.objectId)));
     if (!activeKey.isValid()) {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon,
+        OpenTune::ConfirmDialogContent::showMessage(
+            this,
             "AUTO",
             "AUTO needs an active ARA audio modification.");
         return;
@@ -1285,24 +1286,24 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
 #endif
 
     if (f0State == OriginalF0State::Extracting) {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::InfoIcon,
+        OpenTune::ConfirmDialogContent::showMessage(
+            this,
             "OriginalF0",
             "OriginalF0 is being extracted. Please retry in a moment.");
         return;
     }
 
     if (f0State == OriginalF0State::Failed) {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon,
+        OpenTune::ConfirmDialogContent::showMessage(
+            this,
             "OriginalF0",
             "OriginalF0 extraction failed for this clip. Re-import the audio to regenerate OriginalF0.");
         return;
     }
 
     if (f0State != OriginalF0State::Ready) {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon,
+        OpenTune::ConfirmDialogContent::showMessage(
+            this,
             "OriginalF0",
             "OriginalF0 is not ready for this clip.");
         return;
@@ -1314,8 +1315,8 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     if (!result.applied()) {
         // NoChange = 最终修正已达成：静默，不弹窗
         if (result.status != PianoRollComponent::AutoTuneApplyStatus::NoChange) {
-            juce::AlertWindow::showMessageBoxAsync(
-                juce::AlertWindow::WarningIcon,
+            OpenTune::ConfirmDialogContent::showMessage(
+                this,
                 "AUTO",
                 result.message());
         }
@@ -1338,73 +1339,37 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
         currentSettings = processorRef_.getPitchShiftSettings(activeKey);
 
     auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
+    content->setDialogParent(this);
 
     auto commands = getContentCommandsShared();
-    // 生命周期绑定 content：作为其子组件托管，DialogWindow 关闭删除 content 时自动析构，
-    // Esc/关闭按钮/确认/重置四条关闭路径均安全释放。
-    struct DialogHelper : public juce::Component, public OpenTune::PitchShiftDialogContent::Listener
-    {
-        OpenTuneAudioProcessorEditor* owner;
-        ContentKey activeContentKey;
-        OpenTune::PitchShiftSettings oldSettings;
-        std::shared_ptr<ContentEditCommands> commands;
-        juce::Component::SafePointer<juce::Component> contentPtr;
-
-        DialogHelper(OpenTuneAudioProcessorEditor* o, ContentKey k,
-                     const OpenTune::PitchShiftSettings& s,
-                     std::shared_ptr<ContentEditCommands> cmds,
-                     juce::Component::SafePointer<juce::Component> c)
-            : owner(o), activeContentKey(k), oldSettings(s), commands(std::move(cmds)), contentPtr(std::move(c))
-        {
-            // 纯托管载体：不显示、不拦截鼠标
-            setVisible(false);
-            setInterceptsMouseClicks(false, false);
-        }
-
-        void pitchShiftConfirmed(const OpenTune::PitchShiftSettings& newSettings) override
-        {
-            if (!owner) return;
-            if (newSettings != oldSettings) {
-                auto action = commands != nullptr
-                    ? commands->commitPitchShiftEdit(activeContentKey, newSettings)
-                    : nullptr;
-                if (action != nullptr) {
-                    owner->processorRef_.getUndoManager().addAction(std::move(action));
-                }
-            }
-            closeDialog();
-        }
-
-        void pitchShiftReset() override
-        {
-            if (!owner) return;
-            const auto identity = OpenTune::PitchShiftSettings::identity();
-            if (identity != oldSettings) {
-                auto action = commands != nullptr
-                    ? commands->commitPitchShiftEdit(activeContentKey, identity)
-                    : nullptr;
-                if (action != nullptr) {
-                    owner->processorRef_.getUndoManager().addAction(std::move(action));
-                }
-            }
-            closeDialog();
-        }
-
-        void closeDialog()
-        {
-            if (contentPtr != nullptr) {
-                if (auto* dw = contentPtr->findParentComponentOfClass<juce::DialogWindow>()) {
-                    dw->exitModalState(0);
-                }
+    // 直接使用 content 的确认/重置回调提交 undo；PitchShiftDialogContent 在回调后自行
+    // closeParentDialog()，不额外创建非拥有的生命周期 helper（避免裸组件泄漏）。
+    content->setOnConfirm([safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
+                           activeKey, currentSettings, commands](const OpenTune::PitchShiftSettings& newSettings) {
+        if (safeThis == nullptr) return;
+        if (newSettings != currentSettings) {
+            auto action = commands != nullptr
+                ? commands->commitPitchShiftEdit(activeKey, newSettings)
+                : nullptr;
+            if (action != nullptr) {
+                safeThis->processorRef_.getUndoManager().addAction(std::move(action));
             }
         }
-    };
+    });
 
-    auto* helper = new DialogHelper{this, activeKey, currentSettings,
-                                    std::move(commands),
-                                    juce::Component::SafePointer<juce::Component>(content)};
-    content->addChildComponent(helper);
-    content->addListener(helper);
+    content->setOnReset([safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
+                         activeKey, currentSettings, commands]() {
+        if (safeThis == nullptr) return;
+        const auto identity = OpenTune::PitchShiftSettings::identity();
+        if (identity != currentSettings) {
+            auto action = commands != nullptr
+                ? commands->commitPitchShiftEdit(activeKey, identity)
+                : nullptr;
+            if (action != nullptr) {
+                safeThis->processorRef_.getUndoManager().addAction(std::move(action));
+            }
+        }
+    });
 
     auto options = juce::DialogWindow::LaunchOptions();
     options.content.setOwned(content);

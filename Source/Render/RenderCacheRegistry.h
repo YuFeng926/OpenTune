@@ -6,6 +6,7 @@
 #include <juce_core/juce_core.h>
 #include <map>
 #include <memory>
+#include <mutex>
 
 namespace OpenTune {
 
@@ -13,7 +14,8 @@ namespace OpenTune {
  * RenderCacheRegistry — RenderCache 生命周期管理。
  *
  * 按 ContentKey 管理 RenderCache 实例的创建、查找、删除。
- * 保存当前 target rate；getOrCreate 的 cache 立即 prepare；切率时 write lock 内更新 rate + 复制列表后锁外重建。
+ * 保存当前 target rate；创建 cache 与全局切率重建串行化，避免旧 rate 的
+ * 锁外重建覆盖更新后的 prepared snapshot。
  */
 class RenderCacheRegistry
 {
@@ -30,11 +32,12 @@ public:
     void invalidate(ContentKey key);
     void clear();
 
-    /** 遍历所有 cache 调用 prepareForPlaybackSampleRate（write lock 内更新 rate + 复制列表，锁外重建）。 */
+    /** 更新目标率并串行重建所有 cache 的 prepared snapshot。 */
     void preparePlaybackSampleRate(double targetSr);
 
 private:
     mutable juce::ReadWriteLock lock_;
+    std::mutex prepareMutex_;
     std::map<ContentKey, std::shared_ptr<RenderCache>> caches_;
     double currentTargetRate_{TimeCoordinate::kRenderSampleRate};
 };
