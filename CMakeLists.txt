@@ -774,8 +774,6 @@ set(OPENTUNE_STANDALONE_UI_SOURCES
     Source/Standalone/StandaloneAudioDeviceSync.h
     Source/Editor/Preferences/StandalonePreferencePages.cpp
     Source/Editor/Preferences/StandalonePreferencePages.h
-    Source/Editor/ThemedFileChooserContent.cpp
-    Source/Editor/ThemedFileChooserContent.h
 )
 
 target_sources(OpenTune_Standalone
