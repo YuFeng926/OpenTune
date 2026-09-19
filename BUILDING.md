@@ -196,7 +196,7 @@ cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --p
 
 # 编译 Release 版本
 cmd /v/on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_VST3"
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_Standalone"
+cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTuneStandalone_Standalone"
 ```
 
 **Windows (Ninja + CMake)**
@@ -213,7 +213,7 @@ cmake --build --preset windows-ara-ninja-release
 如需在 Visual Studio IDE 中开发：
 1. 执行上述 `cmake --preset ...` 命令
 2. 打开 `build-ara-overlay-vs18-clean/OpenTune.sln`
-3. 将 `OpenTune_Standalone` 或 `OpenTune_VST3` 设为启动项目
+3. 将 `OpenTuneStandalone_Standalone` 或 `OpenTune_VST3` 设为启动项目
 4. 选择 Release/x64 配置，编译运行
 
 **macOS (Ninja + CMake)**
@@ -241,7 +241,7 @@ cmake --build --preset macos-intel-ara-release
 
 | 格式 | Windows | macOS |
 |------|---------|-------|
-| Standalone | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/Standalone/OpenTune.exe` | `build/OpenTune_artefacts/Release/Standalone/OpenTune.app` |
+| Standalone | `build-ara-overlay-vs18-clean/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.exe` | `build/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.app` |
 | VST3 ARA2 | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` |
 
 构建完成后，运行时 DLL、模型文件、D3D12 目录会自动复制到产物目录旁，无需手动操作。

@@ -1,5 +1,5 @@
-#if JucePlugin_Build_Standalone
-
+// Standalone-only TU (attached to OpenTuneStandalone_Standalone); a wrong-target
+// attachment fails fast.
 #include "Editor/EditorFactory.h"
 #include "Standalone/PluginEditor.h"
 #include "PluginProcessor.h"
@@ -12,5 +12,3 @@ juce::AudioProcessorEditor* createOpenTuneEditor(OpenTuneAudioProcessor& process
 }
 
 } // namespace OpenTune
-
-#endif // JucePlugin_Build_Standalone

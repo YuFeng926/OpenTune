@@ -13,7 +13,7 @@
 // 本文件只编译进 OpenTune_VST3 target（见 CMakeLists.txt）。Standalone 是
 // 独立进程，进程寿命天然成立，不 pin。
 
-#if defined(_WIN32) && JucePlugin_Build_VST3
+#if defined(_WIN32)
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN 1
@@ -52,4 +52,4 @@ Vst3ModulePin g_vst3ModulePin;
 } // namespace
 } // namespace OpenTune
 
-#endif // _WIN32 && JucePlugin_Build_VST3
+#endif // _WIN32

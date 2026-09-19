@@ -44,9 +44,16 @@ class CaptureSession;
 class CapturePersistence
 {
 public:
+    /// Current archive version. Older versions are rejected (no migration).
+    static constexpr int kArchiveVersion = 12;
+
     static juce::MemoryBlock serialize(const CaptureSession& session);
     static bool deserialize(CaptureSession& session, const juce::MemoryBlock& block);
     static bool validate(const juce::MemoryBlock& block);
+
+    /** Header probe only: returns the CAPz archive version, or 0 when the block
+     *  is not a CAPz archive. Payload contents are not validated. */
+    static int peekArchiveVersion(const juce::MemoryBlock& block);
 };
 
 }  // namespace OpenTune::Capture

@@ -406,27 +406,29 @@ void CaptureSession::tick()
     // 4. Reclaim sweep: destroy segments parked in pendingReclaim_ after grace period.
     const int currentTick = tickCounter_.fetch_add(1, std::memory_order_acq_rel) + 1;
     if (currentTick % kReclaimGraceTicks == 0) {
-        std::vector<std::unique_ptr<CaptureSegment>> toDestroy;
+        std::vector<ReclaimEntry> toDestroy;
         {
             std::lock_guard<std::mutex> lock(mutableMutex_);
             auto it = pendingReclaim_.begin();
             while (it != pendingReclaim_.end()) {
                 if (currentTick - it->queuedTick >= kReclaimGraceTicks) {
-                    toDestroy.push_back(std::move(it->segment));
+                    toDestroy.push_back(std::move(*it));
                     it = pendingReclaim_.erase(it);
                 } else {
                     ++it;
                 }
             }
         }
-        // toDestroy goes out of scope here, releasing the segments.
-        // If retire callback is wired, retire segments removed by compaction.
+        // Retire only entries whose ContentKey is genuinely gone. Replacement
+        // reclaims suppress this when the restored archive reused the same key:
+        // the new CRS cache must outlive the old owner's grace window.
         if (bindings_.retireSegment) {
-            for (auto& seg : toDestroy) {
-                if (seg)
-                    bindings_.retireSegment(seg->contentKey);
+            for (const auto& entry : toDestroy) {
+                if (entry.segment && entry.retireOnDestroy)
+                    bindings_.retireSegment(entry.segment->contentKey);
             }
         }
+        // toDestroy goes out of scope here, releasing the segments.
     }
 
     if (anyChange)
@@ -787,13 +789,14 @@ void CaptureSession::publishSegmentsView()
     std::atomic_store(&publishedSegments_, std::shared_ptr<const SegmentsView>(view));
 }
 
-void CaptureSession::queueForReclaimLocked(std::unique_ptr<CaptureSegment> segment)
+void CaptureSession::queueForReclaimLocked(std::unique_ptr<CaptureSegment> segment, bool retireOnDestroy)
 {
     jassert(segment != nullptr);
 
     ReclaimEntry entry;
     entry.segment = std::move(segment);
     entry.queuedTick = tickCounter_.load(std::memory_order_acquire);
+    entry.retireOnDestroy = retireOnDestroy;
     pendingReclaim_.push_back(std::move(entry));
 }
 

@@ -8,9 +8,8 @@
  * 与 Standalone Editor 共享 PianoRollComponent 和 ParameterPanel，
  * 但不包含多轨 Arrangement 视图。
  *
- * 编译隔离：整个文件由 JucePlugin_Build_VST3 守卫。
+ * 编译隔离：本文件只编译进 OpenTune_VST3 target；错挂 target 直接编译失败。
  */
-#if JucePlugin_Build_VST3
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -217,5 +216,3 @@ private:
 };
 
 } // namespace OpenTune::PluginUI
-
-#endif // JucePlugin_Build_VST3

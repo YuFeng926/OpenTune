@@ -11,6 +11,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_data_structures/juce_data_structures.h>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -21,8 +22,6 @@ namespace {
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
-    constexpr int kCaptureArchiveVersion = 12;  // v12: authoritative hostStartSample/hostSampleCount
-    constexpr int kCaptureArchiveVersionMin = 12;  // only v12 accepted; no old-format migration
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
     {
@@ -130,7 +129,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
 
     // ── 2. Magic + metadata XML + per-segment records ────────────────────
     stream.writeInt(static_cast<int>(kCaptureMagic));
-    stream.writeInt(kCaptureArchiveVersion);
+    stream.writeInt(CapturePersistence::kArchiveVersion);
 
     const juce::String xml = root.toXmlString();
     const auto xmlUtf8 = xml.toRawUTF8();
@@ -229,6 +228,18 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
     return out;
 }
 
+int CapturePersistence::peekArchiveVersion(const juce::MemoryBlock& block)
+{
+    if (block.getSize() < sizeof(uint32_t) * 2)
+        return 0;
+
+    juce::MemoryInputStream stream(block.getData(), block.getSize(), false);
+    const uint32_t magic = static_cast<uint32_t>(stream.readInt());
+    if (magic != kCaptureMagic)
+        return 0;
+    return stream.readInt();
+}
+
 bool CapturePersistence::deserialize(CaptureSession& session, const juce::MemoryBlock& block)
 {
     if (block.getSize() < sizeof(uint32_t) * 2)
@@ -241,7 +252,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         return false;
     }
     const int fileVersion = stream.readInt();
-    if (fileVersion != kCaptureArchiveVersion)
+    if (fileVersion != CapturePersistence::kArchiveVersion)
         return false;
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
@@ -411,9 +422,38 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         return false;
     }
 
+    // Replace semantics: park the current segments for grace-period reclaim
+    // (published views still borrow them), then rebuild the set from the archive.
+    // A key reused by the archive suppresses the retire callback: the restored
+    // segment republishes the same CRS cache, and the stale owner's delayed
+    // retire would otherwise delete it after its grace window.
+    std::vector<ContentKey> restoredKeys;
+    restoredKeys.reserve(persisted.size());
+    for (const auto& p : persisted)
+        restoredKeys.push_back(ContentKey{DomainKind::RegularVST3Capture, p.id, 0});
+
+    {
+        std::lock_guard<std::mutex> lock(session.mutableMutex_);
+        for (auto& entry : session.pendingReclaim_)
+        {
+            if (entry.segment != nullptr
+                && std::find(restoredKeys.begin(), restoredKeys.end(), entry.segment->contentKey) != restoredKeys.end())
+            {
+                entry.retireOnDestroy = false;
+            }
+        }
+
+        for (auto& seg : session.mutableSegments_) {
+            const bool keyReusedByArchive = std::find(restoredKeys.begin(), restoredKeys.end(),
+                                                      seg->contentKey) != restoredKeys.end();
+            session.queueForReclaimLocked(std::move(seg), /*retireOnDestroy=*/!keyReusedByArchive);
+        }
+        session.mutableSegments_.clear();
+        session.activeDisplaySegmentId_ = 0;
+    }
+
     // ── 3. Rebuild segments ──────────────────────────────────────────────
     uint64_t maxIdSeen = 0;
-    int restoredCount = 0;
     std::vector<ContentKey> keysToPublish;
     for (auto& p : persisted) {
         auto seg = std::make_unique<CaptureSegment>();
@@ -469,7 +509,6 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             session.mutableSegments_.push_back(std::move(seg));
         }
         keysToPublish.push_back(restoredKey);
-        ++restoredCount;
     }
 
     {
@@ -505,7 +544,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         }
     }
 
-    return restoredCount > 0;
+    // A structurally complete archive is valid even when it holds no segments.
+    return true;
 }
 
 bool CapturePersistence::validate(const juce::MemoryBlock& block)

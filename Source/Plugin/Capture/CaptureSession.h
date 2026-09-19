@@ -147,7 +147,7 @@ public:
                       double hostSampleRate,
                       bool isPlaying) noexcept;
 
-    /** Periodic message-thread tick (~30 Hz from PluginEditor timer). Promotes Pending -> Processing
+    /** Periodic message-thread tick (~30 Hz from the processor timer). Promotes Pending -> Processing
      *  after capture drain, and Processing -> Edited when CaptureSegmentContent F0 state is Ready.
      *  Failed segments (F0 analysis or render failure) are not promoted by tick. */
     void tick();
@@ -221,8 +221,13 @@ private:
     /** Build a new immutable view from current mutableSegments_ and atomic-store it. */
     void publishSegmentsView();
 
-    /** Park a removed segment until old published views have aged out. mutableMutex_ must be held. */
-    void queueForReclaimLocked(std::unique_ptr<CaptureSegment> segment);
+    /**
+     * Park a removed segment until old published views have aged out. mutableMutex_ must be held.
+     * retireOnDestroy=false suppresses the retire callback for this entry: used by
+     * replace semantics when the restored archive reuses the segment's ContentKey,
+     * so the freshly published cache must not be removed by the stale owner's sweep.
+     */
+    void queueForReclaimLocked(std::unique_ptr<CaptureSegment> segment, bool retireOnDestroy = true);
 
     /** Drain a Pending capture after the audio-thread grace window and submit it for rendering. */
     bool finalizePendingCapture(CaptureSegment& pending);
@@ -255,6 +260,7 @@ private:
     {
         std::unique_ptr<CaptureSegment> segment;
         int queuedTick = 0;
+        bool retireOnDestroy = true;
     };
 
     // Reclaim sweep: segments removed from mutable but still possibly visible to audio thread.

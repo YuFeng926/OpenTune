@@ -1,6 +1,8 @@
 ﻿#include "PluginProcessor.h"
+#if JucePlugin_Build_Standalone
 #include "SourceStore.h"
 #include "StandaloneArrangement.h"
+#endif
 #include "Editor/EditorFactory.h"
 #include "DSP/ResamplingManager.h"
 #include "DSP/MelSpectrogram.h"
@@ -10,9 +12,13 @@
 #include "Utils/ModelPathResolver.h"
 #include "Utils/AppLogger.h"
 #include "Utils/ChannelLayoutLogger.h"
+#if JucePlugin_Build_VST3
 #include "Plugin/Capture/CaptureSession.h"
 #include "Plugin/Capture/CapturePersistence.h"
+#include "Plugin/Vst3ProcessorStateCodec.h"
+#else
 #include "DSP/ReferenceAutoAlign.h"
+#endif
 #include "Utils/TimeCoordinate.h"
 #include "Inference/GameNoteGenerator.h"      // GAME NoteGeneratorInput/Note DTO（进程级 GAME 入口）
 #include "Utils/LegacyNoteGenerator.h"
@@ -92,6 +98,7 @@ ReferenceFeatureSet makeReferenceFeatureSetFromNotes(
     return result;
 }
 
+#if JucePlugin_Build_Standalone
 ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
 {
     ContentPayloadState payload;
@@ -184,6 +191,7 @@ bool standaloneRepositoryReferencesSource(const StandaloneContentRepository& rep
 
     return false;
 }
+#endif // JucePlugin_Build_Standalone
 
 double contentDurationSeconds(const EditableContentSnapshot& snap)
 {
@@ -199,6 +207,7 @@ double contentDurationSeconds(const EditableContentSnapshot& snap)
     return 0.0;
 }
 
+#if JucePlugin_Build_Standalone
 juce::String diagnosticControlCallToString(OpenTuneAudioProcessor::DiagnosticControlCall controlCall)
 {
     switch (controlCall) {
@@ -224,26 +233,6 @@ inline float computePlacementFadeGain(int64_t sampleInPlacement,
         fade *= static_cast<float>(placementLengthSamples - 1 - sampleInPlacement) / static_cast<float>(fadeOutSamples - 1);
     }
     return fade;
-}
-
-bool hasRemainingPlacementForContent(const StandaloneArrangement& arrangement, ContentKey contentKey)
-{
-    if (!contentKey.isValid()) {
-        return false;
-    }
-
-    for (int trackId = 0; trackId < arrangement.getNumTracks(); ++trackId) {
-        const int placementCount = arrangement.getNumPlacements(trackId);
-        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
-            StandaloneArrangement::Placement placement;
-            if (arrangement.getPlacementByIndex(trackId, placementIndex, placement)
-                && placement.contentKey == contentKey) {
-                return true;
-            }
-        }
-    }
-
-    return false;
 }
 
 bool findPlacementByIdGlobal(const StandaloneArrangement& arrangement,
@@ -487,10 +476,12 @@ std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& 
     mergedCurve->replaceCorrectionSegments(mergedSegments);
     return mergedCurve;
 }
+#endif // JucePlugin_Build_Standalone
 
 } // anonymous namespace
 
 
+#if JucePlugin_Build_Standalone
 namespace {
 
 void renderPlacementForExport(OpenTuneAudioProcessor& processor,
@@ -568,21 +559,18 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 }
 
 } // anonymous namespace
+#endif // JucePlugin_Build_Standalone
 
-constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
-constexpr int kProcessorStateVersion = 10; // v10: timeline zoom double -> uiZoomPercent int32
-constexpr int kProcessorStateLegacyVersion = 9; // released v9 payloads still accepted and migrated
-// Historical layout notes: v5 loads with auto-seeded identity TimeGrid (output==source);
-// vocal-time-stretch §3.8 bumped 5 → 6 for the per-content TimeGrid section; v7 adds
-// per-handle confidence. Restore below accepts only v10 (current) and v9 (migration).
+#if JucePlugin_Build_Standalone
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
 constexpr int kStandaloneSettingsVersion = 3; // v3: timeline zoom double -> uiZoomPercent int32
 constexpr int kStandaloneSettingsLegacyVersion = 2; // released v2 payloads still accepted and migrated
+#endif
 
-// --- Serialization helpers (full state) ---
-// Compiled unconditionally into the shared OpenTune lib; getStateInformation /
-// setStateInformation dispatch by runtime wrapperType, so both Standalone and
-// VST3 binaries link the same compiled object and need these symbols available.
+// --- Serialization helpers ---
+// Each SharedCode target is single-format: the Standalone target owns the OTSS
+// settings payload, the VST3 target owns the OTST processor state payload
+// (encoded/decoded by Vst3ProcessorStateCodec).
 
 ReferenceFeatureProducer OpenTuneAudioProcessor::resolveReferenceFeatureProducer() const
 {
@@ -676,11 +664,13 @@ void OpenTuneAudioProcessor::analysisFinished(
 
 juce::AudioProcessor::BusesProperties OpenTuneAudioProcessor::makeBuses()
 {
-    if (juce::PluginHostType::getPluginLoadedAs() == AudioProcessor::wrapperType_Standalone)
-        return BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true);
+#if JucePlugin_Build_Standalone
+    return BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true);
+#else
     return BusesProperties()
         .withInput("Input", juce::AudioChannelSet::stereo(), true)
         .withOutput("Output", juce::AudioChannelSet::stereo(), true);
+#endif
 }
 
 OpenTuneAudioProcessor::OpenTuneAudioProcessor()
@@ -694,7 +684,9 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     addParameter(editVersionParam_);
 
     // Pure in-memory state is safe to expose before runtime initialization.
+#if JucePlugin_Build_Standalone
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
+#endif
 }
 
 bool OpenTuneAudioProcessor::initializeRuntimeState() noexcept
@@ -735,14 +727,18 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); });
     auto refSvc = std::make_unique<ReferenceAnalysisService>();
 
-    auto srcStore = std::make_shared<SourceStore>();
     auto crs = std::make_shared<ContentRenderService>();
+#if JucePlugin_Build_Standalone
+    auto srcStore = std::make_shared<SourceStore>();
     auto repo = std::make_unique<StandaloneContentRepository>();
+#endif
     // Bind processor's render callback to CRS via ExecutionLease (ARA 重构路由改制)
     {
         ContentRenderService::ExecutionLease lease;
         lease.owner = this;
         lease.renderJobCallback = [this](RenderJob& job) {
+#if JucePlugin_Build_Standalone
+            // Stage2 time-stretch rebuild only exists for Standalone content.
             if (job.kind == RenderJob::Kind::Stage2Rebuild) {
                 if (job.contentKey.domainKind != DomainKind::StandaloneClip)
                     return;
@@ -764,6 +760,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 Stage2TimeStretchRebuilder::rebuild(*contentRenderService_, request, std::move(contentSnap));
                 return;
             }
+#endif
 
             if (job.renderCache == nullptr)
                 return;
@@ -771,8 +768,12 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             auto contentSnap = getContentSnapshot(job.contentKey);
             if (!contentSnap) {
                 if (job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
+                {
+#if JucePlugin_Build_VST3
                     if (auto* session = getCaptureSession())
                         session->onRenderFailed(job.contentKey);
+#endif
+                }
                 return;
             }
             ProcessRenderRuntime::CompletionContext completion;
@@ -781,8 +782,12 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 handleStage1ChunkSettled(key);
             };
             completion.chunkFailed = [this](ContentKey key) {
+#if JucePlugin_Build_VST3
                 if (auto* session = getCaptureSession())
                     session->onRenderFailed(key);
+#else
+                juce::ignoreUnused(key);
+#endif
             };
             const bool lightPitchEnabled = appPreferences_ != nullptr
                 && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
@@ -874,9 +879,10 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     auto commands = std::make_shared<ProcessorContentCommands>(*this);
     auto resampler = std::make_shared<ResamplingManager>();
 
+#if JucePlugin_Build_VST3
     // Capture session（regular VST3 / ARA 未绑定实例）：先局部构造，attach 成功后发布。
     std::unique_ptr<Capture::CaptureSession> capture;
-    if (wrapperType == juce::AudioProcessor::wrapperType_VST3) {
+    {
         Capture::ProcessorBindings bindings;
 
         bindings.replaceWithRendered = [this](juce::AudioBuffer<float>& buffer,
@@ -1057,21 +1063,28 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     if (capture)
          AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
              + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
+#endif // JucePlugin_Build_VST3
 
     // 完整成功后一次性发布成员（noexcept 移动）。
     f0ExtractionService_ = std::move(f0SvcOwner);
     referenceAnalysisService_ = std::move(refSvc);
+#if JucePlugin_Build_Standalone
     sourceStore_ = std::move(srcStore);
+#endif
     contentRenderService_ = std::move(crs);
+#if JucePlugin_Build_Standalone
     standaloneContentRepository_ = std::move(repo);
+#endif
     contentCommands_ = std::move(commands);
     resamplingManager_ = std::move(resampler);
+#if JucePlugin_Build_VST3
     const bool hasCapture = capture != nullptr;
     if (hasCapture)
         captureSession_ = std::move(capture);
 
     if (hasCapture)
         startTimerHz(30);
+#endif
 
     runtimeStateInitialized_.store(true, std::memory_order_release);
 }
@@ -1090,7 +1103,9 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     );
 
     // Stop the tick timer first — no more timerCallback after this point.
+#if JucePlugin_Build_VST3
     stopTimer();
+#endif
 
     // 析构最前段生命周期动作（此后再无异步任务访问裸 this）：
     // 1) 关闭 completion gate：与持锁进入的 F0 commit / chunkSettled / 模型切换
@@ -1117,13 +1132,16 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     }
 
     // Phase 4: 内部清理
+#if JucePlugin_Build_Standalone
     cancelPendingUpdate();
+#endif
 
     // Vocoder / F0 / GAME / AppLogger 全部是进程级资源（ProcessRenderRuntime /
     // ProcessF0Runtime 单例与进程寿命 logger）：实例析构不 shutdown、不 reset、
     // 不等待推理，后续实例直接复用。
 }
 
+#if JucePlugin_Build_Standalone
 OpenTuneAudioProcessor::AutoRefAvailability
 OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) const
 {
@@ -1185,6 +1203,7 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
         : juce::String("AUTO(Ref) will analyze the reference clip with standard AUTO.");
     return availability;
 }
+#endif // JucePlugin_Build_Standalone
 
 void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu, std::function<void()> beforeResume)
 {
@@ -1230,6 +1249,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& wei
         if (gate->closed)
             return;   // owner 已析构：不访问 processor
         // 3. 模型切换完成后才清 RenderCache/TimeStretchCache 并恢复 render worker
+#if JucePlugin_Build_Standalone
         if (processor->contentRenderService_ && processor->standaloneContentRepository_) {
             const auto keys = processor->standaloneContentRepository_->getAllClips();
             for (const auto key : keys) {
@@ -1239,6 +1259,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& wei
             }
             processor->contentRenderService_->getTimeStretchCache().clear();
         }
+#endif
 #if JucePlugin_Enable_ARA
         if (auto* dc = processor->getDocumentController())
             dc->invalidateAllModificationCaches();
@@ -1250,6 +1271,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& wei
 
 void OpenTuneAudioProcessor::invalidateAllContentCaches()
 {
+#if JucePlugin_Build_Standalone
     if (contentRenderService_ && standaloneContentRepository_) {
         const auto keys = standaloneContentRepository_->getAllClips();
         for (const auto key : keys) {
@@ -1259,6 +1281,7 @@ void OpenTuneAudioProcessor::invalidateAllContentCaches()
         }
         contentRenderService_->getTimeStretchCache().clear();
     }
+#endif
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
         dc->invalidateAllModificationCaches();
@@ -1408,8 +1431,10 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     outputSpectrumAnalyzer_.prepare(sampleRate);
 
+#if JucePlugin_Build_VST3
     if (auto* captureSession = getCaptureSession())
         captureSession->prepareToPlay(sampleRate, samplesPerBlock, getMainBusNumInputChannels());
+#endif
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
@@ -1435,10 +1460,13 @@ void OpenTuneAudioProcessor::releaseResources() {
     releaseResourcesForARA();
 #endif
 
+#if JucePlugin_Build_VST3
     if (auto* captureSession = getCaptureSession())
         captureSession->releaseResources();
+#endif
 }
 
+#if JucePlugin_Build_VST3
 Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() noexcept
 {
 #if JucePlugin_Enable_ARA
@@ -1456,6 +1484,7 @@ const Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() const
 #endif
     return captureSession_.get();
 }
+#endif // JucePlugin_Build_VST3
 
 #if JucePlugin_Enable_ARA
 OpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() const
@@ -1471,14 +1500,19 @@ OpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() cons
 
 const PlayHeadState& OpenTuneAudioProcessor::getPlayHeadState() const noexcept
 {
-#if JucePlugin_Enable_ARA
     if (isBoundToARA())
         if (auto* dc = getDocumentController())
             return dc->getSharedPlayHeadState();
-#endif
     return playHeadState_;
 }
+#else
+const PlayHeadState& OpenTuneAudioProcessor::getPlayHeadState() const noexcept
+{
+    return playHeadState_;
+}
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void OpenTuneAudioProcessor::didBindToARA() noexcept
 {
     // 先完成 JUCE 基类绑定，再延迟初始化运行时态；初始化失败则直接返回，
@@ -1512,7 +1546,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
             + " araBound=true");
     }
 }
-#endif
+#endif // JucePlugin_Enable_ARA
 
 bool OpenTuneAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
     const auto in = layouts.getMainInputChannelSet();
@@ -1521,10 +1555,11 @@ bool OpenTuneAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
     if (out != juce::AudioChannelSet::stereo())
         return false;
 
-    if (wrapperType == juce::AudioProcessor::wrapperType_Standalone)
-        return in.isDisabled();
-
+#if JucePlugin_Build_Standalone
+    return in.isDisabled();
+#else
     return in == juce::AudioChannelSet::stereo();
+#endif
 }
 
 bool OpenTuneAudioProcessor::supportsDoublePrecisionProcessing() const {
@@ -1598,21 +1633,13 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const int totalNumOutputChannels = getTotalNumOutputChannels();
     const int numSamples = buffer.getNumSamples();
 
+#if JucePlugin_Build_VST3
     // Single host PositionInfo read per block (per ARA2 spec). All branches below
     // consume the same Optional / PositionInfo object; empty Optional is never
     // promoted into canonical state and never replaced with a zero fallback.
-    //
-    // Shared code dispatches by runtime wrapperType: only VST3 (incl. ARA via
-    // VST3) reads the host AudioPlayHead. Standalone keeps hostPosOpt == nullopt
-    // and drives transport truth from processor-owned PlayHeadState setters.
-    // The compile-time JucePlugin_Build_Standalone macro is intentionally NOT
-    // used here because the OpenTune_SharedCode target is compiled with both
-    // JucePlugin_Build_Standalone=1 and JucePlugin_Build_VST3=1 simultaneously;
-    // a compile-time branch would wrongly excise the VST3 host-read path.
     juce::Optional<juce::AudioPlayHead::PositionInfo> hostPosOpt = juce::nullopt;
-    if (wrapperType == juce::AudioProcessor::wrapperType_VST3)
-        if (auto* hostPlayHead = getPlayHead())
-            hostPosOpt = hostPlayHead->getPosition();
+    if (auto* hostPlayHead = getPlayHead())
+        hostPosOpt = hostPlayHead->getPosition();
 
     // 1) Update processor-owned canonical transport truth first (no-op if nullopt).
     //    In ARA mode the shared DC-owned PlayHeadState is the single canonical
@@ -1635,8 +1662,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 #endif
 
     // 2) Publish presentation projection anchor (before any early return).
-    //    VST3/ARA: only when the host supplied timeInSeconds in this block.
-    //    Standalone: publish later, after reading currentPosSeconds/blockDuration.
+    //    Only when the host supplied timeInSeconds in this block.
     //    In ARA mode the DC publishes its own projection; skip processor-local.
 #if JucePlugin_Enable_ARA
     if (!isBoundToARA())
@@ -1654,6 +1680,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 playHeadState_.presentationProjection.publish(*timeSec, nowClock, *timeSec + blockDur, epoch);
         }
     }
+#endif // JucePlugin_Build_VST3
 
     // Zero-data block: PositionInfo was observed and PlayHeadState updated above.
     // Skip ARA / capture / renderer / standalone audio paths entirely — zero-data
@@ -1685,6 +1712,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 #endif
 
+#if JucePlugin_Build_VST3
     // --- Non-ARA VST3 capture path: dry pass-through + capture session ---
     // Host absolute sample (from PositionInfo::getTimeInSamples()) is the sole source
     // of truth for audio positioning. No fallback from timeInSeconds.
@@ -1706,6 +1734,14 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         return;
     }
 
+    // ARA-bound instance whose ARA processor path declined this block: silence the
+    // output and keep the post-ARA audition/spectrum publication.
+    for (int i = 0; i < totalNumOutputChannels; ++i) {
+        buffer.clear(i, 0, numSamples);
+    }
+    pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+    outputSpectrumAnalyzer_.push(buffer);
+#else
     // --- Standalone state machine ---
     // Clear output buffer
     for (int i = 0; i < totalNumOutputChannels; ++i) {
@@ -2122,8 +2158,10 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
         playHeadState_.isPlaying.store(uiIsPlaying, std::memory_order_release);
     }
+#endif // JucePlugin_Build_VST3 / JucePlugin_Build_Standalone
 }
 
+#if JucePlugin_Build_VST3
 OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::getHostTransportSnapshot() const
 {
     HostTransportSnapshot snapshot;
@@ -2162,7 +2200,9 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
     hostTransportTimeSignatureDenominator_.store(snapshot.timeSignatureDenominator, std::memory_order_relaxed);
     return snapshot;
 }
+#endif // JucePlugin_Build_VST3
 
+#if JucePlugin_Build_Standalone
 OpenTuneAudioProcessor::DiagnosticInfo OpenTuneAudioProcessor::getDiagnosticInfo(int trackId, uint64_t placementId) const
 {
     DiagnosticInfo info;
@@ -2213,6 +2253,7 @@ void OpenTuneAudioProcessor::recordControlCall(DiagnosticControlCall controlCall
     lastControlType_.store(static_cast<int>(controlCall), std::memory_order_relaxed);
     lastControlTimestamp_.store(juce::Time::currentTimeMillis(), std::memory_order_relaxed);
 }
+#endif // JucePlugin_Build_Standalone
 
 namespace {
 
@@ -2271,77 +2312,34 @@ bool OpenTuneAudioProcessor::hasEditor() const {
 // ============================================================================
 
 void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
-    // Dispatch by runtime wrapperType -- same compiled object serves both
-    // Standalone and VST3 binaries (shared `OpenTune` lib), so a build-time
-    // guard cannot differentiate. Standalone owns its own project save format
-    // and only needs settings here; VST3 needs full state for host round-trip.
-    if (wrapperType == juce::AudioProcessor::wrapperType_Standalone) {
-        destData.reset();
-        juce::MemoryOutputStream output(destData, false);
-        output.writeInt(static_cast<int>(kStandaloneSettingsMagic));
-        output.writeInt(kStandaloneSettingsVersion);
-        output.writeDouble(getBpm());
-        output.writeInt(getTimeSigNumerator());
-        output.writeInt(getTimeSigDenominator());
-        output.writeInt(getUiZoomPercent());
-        output.writeInt(trackHeight_);
-        return;
-    }
-
+#if JucePlugin_Build_Standalone
+    // Standalone owns its project save format; host state carries settings only.
+    destData.reset();
+    juce::MemoryOutputStream output(destData, false);
+    output.writeInt(static_cast<int>(kStandaloneSettingsMagic));
+    output.writeInt(kStandaloneSettingsVersion);
+    output.writeDouble(getBpm());
+    output.writeInt(getTimeSigNumerator());
+    output.writeInt(getTimeSigDenominator());
+    output.writeInt(getUiZoomPercent());
+    output.writeInt(trackHeight_);
+#else
     // Per ARA2 spec: ARA AudioModification objects are persisted via
     // doStoreObjectsToStream/doRestoreObjectsFromStream, NOT via VST3 processor state.
     // ARA host owns document archive lifecycle.
-    // VST3 state only stores standalone arrangement when ARA is not active.
-
-    destData.reset();
-    juce::MemoryOutputStream output(destData, false);
-    output.writeInt(static_cast<int>(kProcessorStateMagic));
-    output.writeInt(kProcessorStateVersion);
-    output.writeInt(getUiZoomPercent());
-    output.writeInt(trackHeight_);
-
-    output.writeInt(standaloneArrangement_->getActiveTrackId());
-    output.writeInt(MAX_TRACKS);
-    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
-        const uint64_t selectedPlacementId = standaloneArrangement_->getSelectedPlacementId(trackId);
-        output.writeInt64(static_cast<juce::int64>(selectedPlacementId));
-        output.writeBool(standaloneArrangement_->isTrackMuted(trackId));
-        output.writeBool(standaloneArrangement_->isTrackSolo(trackId));
-        output.writeFloat(standaloneArrangement_->getTrackVolume(trackId));
-
-        const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
-        output.writeInt(placementCount);
-        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
-            StandaloneArrangement::Placement placement;
-            if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-                jassertfalse; // Placement index/track mismatch -- data integrity error
-                AppLogger::error("SerializationCorruption: getPlacementByIndex failed for track="
-                                 + juce::String(trackId) + " index=" + juce::String(placementIndex));
-                return; // Don't serialize known-corrupt data
-            }
-
-            output.writeInt64(static_cast<juce::int64>(placement.placementId));
-            output.writeInt(static_cast<int>(placement.contentKey.domainKind));
-            output.writeInt64(static_cast<juce::int64>(placement.contentKey.objectId));
-            output.writeInt64(static_cast<juce::int64>(placement.contentKey.sourceWindowDiscriminator));
-            output.writeInt64(static_cast<juce::int64>(placement.mappingRevision));
-            output.writeDouble(placement.timelineStartSeconds);
-            output.writeDouble(placement.durationSeconds);
-            output.writeFloat(placement.gain);
-            output.writeDouble(placement.fadeInDuration);
-            output.writeDouble(placement.fadeOutDuration);
-            output.writeDouble(placement.clipInSeconds);
-            output.writeString(placement.name);
-        }
-    }
+    // VST3 processor state carries the outer settings plus the regular-VST3 capture
+    // tail; the Standalone arrangement has its own persistence and is not embedded here.
+    Vst3ProcessorOuterState outerState;
+    outerState.uiZoomPercent = getUiZoomPercent();
+    outerState.trackHeight = trackHeight_;
 
     // Append regular VST3 capture data at end of stream. ARA-bound instances keep
     // their edit state in the ARA document/session archive instead.
-    if (const auto* captureSession = getCaptureSession()) {
-        const auto captureBlock = captureSession->serialize();
-        if (captureBlock.getSize() > 0)
-            output.write(captureBlock.getData(), captureBlock.getSize());
-    }
+    if (const auto* captureSession = getCaptureSession())
+        outerState.captureTail = captureSession->serialize();
+
+    destData = Vst3ProcessorStateCodec::encode(outerState);
+#endif
 }
 
 
@@ -2379,187 +2377,97 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
 // setStateInformation (immediate) and replayDeferredState() (deferred). ---
 bool OpenTuneAudioProcessor::restoreStatePayload(const void* data, int sizeInBytes) {
     try {
-    // Per ARA2 spec: ARA AudioModification objects are restored via
-    // doRestoreObjectsFromStream, NOT via VST3 processor state.
-    // ARA host owns document archive lifecycle.
-    // VST3 state only restores standalone arrangement when ARA is not active.
-
+#if JucePlugin_Build_Standalone
+    // Standalone settings-only payload (OTSS). The Standalone project format
+    // owns arrangement/content persistence; host state carries settings only.
     juce::MemoryInputStream input(data, static_cast<size_t>(sizeInBytes), false);
     const int magic = input.readInt();
     const int version = input.readInt();
 
-    // Standalone settings-only payload
-    if (magic == static_cast<int>(kStandaloneSettingsMagic)) {
-        // Accept current v3 (uiZoomPercent int32) and released v2 (legacy timeline
-        // zoom double, discarded on load; UI zoom semantics are unrelated).
-        if (version != kStandaloneSettingsVersion && version != kStandaloneSettingsLegacyVersion) {
-            AppLogger::error("StateRestore: unsupported standalone settings version "
-                + juce::String(version) + " (expect " + juce::String(kStandaloneSettingsVersion)
-                + " or " + juce::String(kStandaloneSettingsLegacyVersion) + ")");
-            return false;
-        }
-        const double restoredBpm = input.readDouble();
-        const int restoredTimeSigNumerator = input.readInt();
-        const int restoredTimeSigDenominator = input.readInt();
-        int restoredUiZoomPercent = 100;
-        if (version == kStandaloneSettingsVersion) {
-            restoredUiZoomPercent = input.readInt();
-        } else {
-            (void) input.readDouble(); // legacy timeline zoom, discarded
-        }
-        const int restoredTrackHeight = input.readInt();
-        if (input.getNumBytesRemaining() != 0) {
-            AppLogger::error("StateRestore: standalone settings payload not fully consumed, trailing bytes="
-                + juce::String(static_cast<int>(input.getNumBytesRemaining())));
-            return false;
-        }
-        setBpm(restoredBpm);
-        setTimeSignature(restoredTimeSigNumerator, restoredTimeSigDenominator);
-        setUiZoomPercent(restoredUiZoomPercent);
-        trackHeight_ = restoredTrackHeight;
-        return true;
-    }
-
-    // Full state payload (VST3). Accept current v10 and released v9; both share
-    // the same layout except the zoom slot: v10 stores uiZoomPercent int32, v9
-    // stores the legacy timeline zoom double (discarded on migration).
-    if (magic != static_cast<int>(kProcessorStateMagic)
-        || (version != kProcessorStateVersion && version != kProcessorStateLegacyVersion)) {
-        AppLogger::error("StateRestore: unsupported processor state payload (version=" + juce::String(version) + ")");
+    if (magic != static_cast<int>(kStandaloneSettingsMagic)) {
+        AppLogger::error("StateRestore: unsupported standalone state payload (version=" + juce::String(version) + ")");
         return false;
     }
 
-    AppLogger::log("StateRestore: VST3 full-state begin sizeBytes=" + juce::String(sizeInBytes));
-
-    // Standalone instance receiving a full-state payload: settings are not in
-    // this format anymore (BPM/zoom/trackHeight live in OTSS), so there is
-    // nothing meaningful to restore -- return without touching stores.
-    if (wrapperType == juce::AudioProcessor::wrapperType_Standalone) {
-        return true;
+    // Accept current v3 (uiZoomPercent int32) and released v2 (legacy timeline
+    // zoom double, discarded on load; UI zoom semantics are unrelated).
+    if (version != kStandaloneSettingsVersion && version != kStandaloneSettingsLegacyVersion) {
+        AppLogger::error("StateRestore: unsupported standalone settings version "
+            + juce::String(version) + " (expect " + juce::String(kStandaloneSettingsVersion)
+            + " or " + juce::String(kStandaloneSettingsLegacyVersion) + ")");
+        return false;
     }
-
-    // Note: BPM is not in OTST v5 -- host owns transport tempo in plugin mode.
-    // v10 reads the discrete UI zoom percent; v9 reads and discards the legacy
-    // timeline zoom double, resetting UI zoom to 100%.
+    const double restoredBpm = input.readDouble();
+    const int restoredTimeSigNumerator = input.readInt();
+    const int restoredTimeSigDenominator = input.readInt();
     int restoredUiZoomPercent = 100;
-    if (version == kProcessorStateVersion) {
+    if (version == kStandaloneSettingsVersion) {
         restoredUiZoomPercent = input.readInt();
     } else {
         (void) input.readDouble(); // legacy timeline zoom, discarded
     }
     const int restoredTrackHeight = input.readInt();
-
-    const int restoredActiveTrackId = input.readInt();
-    const int trackCount = input.readInt();
-    if (trackCount != MAX_TRACKS) {
-        AppLogger::error("StateRestore: invalid track count=" + juce::String(trackCount));
-        return false;
-    }
-
-    // Parse into an isolated arrangement first. The live arrangement and content
-    // stores are not touched until the complete structural payload is valid.
-    auto parsedArrangement = std::make_unique<StandaloneArrangement>();
-    for (int trackId = 0; trackId < trackCount; ++trackId) {
-        const uint64_t selectedPlacementId = static_cast<uint64_t>(input.readInt64());
-        const bool muted = input.readBool();
-        const bool solo = input.readBool();
-        const float volume = input.readFloat();
-        if (!parsedArrangement->setTrackMuted(trackId, muted)) {
-            AppLogger::error("StateRestore: setTrackMuted rejected track=" + juce::String(trackId));
-            return false;
-        }
-        if (!parsedArrangement->setTrackSolo(trackId, solo)) {
-            AppLogger::error("StateRestore: setTrackSolo rejected track=" + juce::String(trackId));
-            return false;
-        }
-        if (!parsedArrangement->setTrackVolume(trackId, volume)) {
-            AppLogger::error("StateRestore: setTrackVolume rejected track=" + juce::String(trackId));
-            return false;
-        }
-
-        const int placementCount = input.readInt();
-        if (placementCount < 0) {
-            AppLogger::error("StateRestore: invalid placement count on track=" + juce::String(trackId));
-            return false;
-        }
-
-        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
-            StandaloneArrangement::Placement placement;
-            placement.placementId = static_cast<uint64_t>(input.readInt64());
-            placement.contentKey.domainKind = static_cast<DomainKind>(input.readInt());
-            placement.contentKey.objectId = static_cast<uint64_t>(input.readInt64());
-            placement.contentKey.sourceWindowDiscriminator = static_cast<uint64_t>(input.readInt64());
-            placement.mappingRevision = static_cast<uint64_t>(input.readInt64());
-            placement.timelineStartSeconds = input.readDouble();
-            placement.durationSeconds = input.readDouble();
-            placement.gain = input.readFloat();
-            placement.fadeInDuration = input.readDouble();
-            placement.fadeOutDuration = input.readDouble();
-            placement.clipInSeconds = input.readDouble();
-            placement.name = input.readString();
-
-            if (!placement.contentKey.isValid()) {
-                // Empty placeholder slot (objectId==0): skip, not corruption.
-                continue;
-            }
-
-            if (!parsedArrangement->insertPlacement(trackId, placement)) {
-                AppLogger::error("StateRestore: failed to insert placement on track=" + juce::String(trackId)
-                    + " placement=" + juce::String(placementIndex));
-                return false;
-            }
-        }
-
-        if (selectedPlacementId != 0
-            && !parsedArrangement->selectPlacement(trackId, selectedPlacementId)) {
-            AppLogger::error("StateRestore: selected placement missing on track=" + juce::String(trackId));
-            return false;
-        }
-    }
-
-    if (!parsedArrangement->setActiveTrack(restoredActiveTrackId)) {
-        AppLogger::error("StateRestore: invalid active track=" + juce::String(restoredActiveTrackId));
-        return false;
-    }
-
-    juce::MemoryBlock captureBlock;
-    if (const auto remaining = static_cast<int>(input.getNumBytesRemaining()); remaining > 0) {
-        captureBlock.setSize(static_cast<size_t>(remaining));
-        input.read(captureBlock.getData(), remaining);
-    }
-    // Full arrangement payload is now fully parsed; input must be exhausted.
     if (input.getNumBytesRemaining() != 0) {
-        AppLogger::error("StateRestore: payload not fully consumed after arrangement parse, trailing bytes="
+        AppLogger::error("StateRestore: standalone settings payload not fully consumed, trailing bytes="
             + juce::String(static_cast<int>(input.getNumBytesRemaining())));
         return false;
     }
+    setBpm(restoredBpm);
+    setTimeSignature(restoredTimeSigNumerator, restoredTimeSigDenominator);
+    setUiZoomPercent(restoredUiZoomPercent);
+    trackHeight_ = restoredTrackHeight;
+    return true;
+#else
+    // Per ARA2 spec: ARA AudioModification objects are restored via
+    // doRestoreObjectsFromStream, NOT via VST3 processor state.
+    // ARA host owns document archive lifecycle.
+    // OTST v11 carries outer UI settings plus the regular-VST3 capture tail; the
+    // Standalone arrangement is not embedded. Released v9/v10 arrangement
+    // sections are skipped by the codec, never restored.
 
-    // Validate the capture archive against a temporary owner before replacing
-    // any live processor state. The real session is restored only after the
-    // structural processor payload has been committed.
-    if (captureBlock.getSize() > 0 && getCaptureSession()
-        && !Capture::CapturePersistence::validate(captureBlock)) {
-        AppLogger::error("StateRestore: CaptureSession payload rejected during validation");
+    // VST3 processor state (OTST): outer settings + optional capture tail. The
+    // codec accepts current v11 and released v10/v9, skipping the legacy
+    // arrangement layout without materialising it.
+    Vst3ProcessorOuterState outerState;
+    if (!Vst3ProcessorStateCodec::decode(data, sizeInBytes, outerState)) {
+        AppLogger::error("StateRestore: unsupported processor state payload sizeBytes="
+                         + juce::String(sizeInBytes));
         return false;
     }
 
-    jassert(sourceStore_ != nullptr);
-    sourceStore_->clear();
-    standaloneContentRepository_->clear();
-    contentRenderService_->clearAll();
+    AppLogger::log("StateRestore: VST3 processor state begin sizeBytes=" + juce::String(sizeInBytes)
+                   + " version=" + juce::String(outerState.sourceVersion));
 
-    // Commit the parsed arrangement atomically via unique_ptr move. The audio
-    // thread's shared_ptr<PlaybackSnapshot> from the old arrangement keeps its
-    // data alive until the audio thread releases it; the new arrangement will
-    // publish its own snapshot on first query.
-    standaloneArrangement_ = std::move(parsedArrangement);
-    setUiZoomPercent(restoredUiZoomPercent);
-    trackHeight_ = restoredTrackHeight;
+    // Capture tail policy: validate current CAPz before committing anything;
+    // released OTST v9/v10 payloads may embed an older CAPz archive, which is
+    // dropped per the explicit no-migration policy (settings still restored).
+    const bool hasCaptureTail = outerState.captureTail.getSize() > 0;
+    bool discardCaptureTail = false;
+    if (hasCaptureTail) {
+        const int captureVersion = Capture::CapturePersistence::peekArchiveVersion(outerState.captureTail);
+        if (captureVersion == Capture::CapturePersistence::kArchiveVersion) {
+            if (!Capture::CapturePersistence::validate(outerState.captureTail)) {
+                AppLogger::error("StateRestore: CaptureSession payload rejected during validation");
+                return false;
+            }
+        } else if (outerState.sourceVersion == Vst3ProcessorStateCodec::kLegacyVersion10
+                   || outerState.sourceVersion == Vst3ProcessorStateCodec::kLegacyVersion9) {
+            AppLogger::error("StateRestore: legacy OTST capture tail discarded (capture version="
+                             + juce::String(captureVersion) + ")");
+            discardCaptureTail = true;
+        } else {
+            AppLogger::error("StateRestore: CaptureSession payload rejected during validation");
+            return false;
+        }
+    }
+
+    setUiZoomPercent(outerState.uiZoomPercent);
+    trackHeight_ = outerState.trackHeight;
 
     // Regular VST3 capture persistence is a separate owner transaction.
-    if (captureBlock.getSize() > 0) {
+    if (hasCaptureTail && !discardCaptureTail) {
         if (auto* captureSession = getCaptureSession()) {
-            if (!captureSession->deserialize(captureBlock)) {
+            if (!captureSession->deserialize(outerState.captureTail)) {
                 AppLogger::error("StateRestore: CaptureSession payload rejected");
                 return false;
             }
@@ -2569,6 +2477,7 @@ bool OpenTuneAudioProcessor::restoreStatePayload(const void* data, int sizeInByt
     }
 
     return true;
+#endif
     }
     catch (const std::exception& e) {
         AppLogger::emergencyError("StateRestore: exception (processor="
@@ -2615,6 +2524,7 @@ void OpenTuneAudioProcessor::setTrackHeight(int height) {
     trackHeight_ = height;
 }
 
+#if JucePlugin_Build_Standalone
 uint64_t OpenTuneAudioProcessor::getPlacementId(int trackId, int placementIndex) const
 {
     return standaloneArrangement_->getPlacementId(trackId, placementIndex);
@@ -2956,13 +2866,17 @@ void OpenTuneAudioProcessor::handleAsyncUpdate()
 {
     runReclaimSweepOnMessageThread();
 }
+#endif // JucePlugin_Build_Standalone
 
+#if JucePlugin_Build_VST3
 void OpenTuneAudioProcessor::timerCallback()
 {
     if (auto* session = getCaptureSession())
         session->tick();
 }
+#endif // JucePlugin_Build_VST3
 
+#if JucePlugin_Build_Standalone
 void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
 {
     cancelPendingUpdate();
@@ -3010,21 +2924,11 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
         }
     }
 }
+#endif // JucePlugin_Build_Standalone
 
 // ============================================================================
 // Content 读写代理接口
 // ============================================================================
-
-bool OpenTuneAudioProcessor::getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const
-{
-    out = SourceStore::SourceSnapshot{};
-    if (sourceId == 0)
-        return false;
-
-    // ARA mode: source metadata is in AudioSource objects, not a separate store
-    // Non-ARA mode: use processor sourceStore_
-    return sourceStore_ != nullptr && sourceStore_->getSnapshot(sourceId, out);
-}
 
 std::shared_ptr<const EditableContentSnapshot> OpenTuneAudioProcessor::getContentSnapshot(ContentKey key) const
 {
@@ -3033,24 +2937,27 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneAudioProcessor::getConten
     }
 
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             return clip ? clip->snapshotContent() : nullptr;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             const auto* dc = getDocumentController();
             return dc ? dc->readContentSnapshot(key) : nullptr;
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return nullptr;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             const auto* session = getCaptureSession();
             const auto* segment = session ? session->findSegmentByContentKey(key) : nullptr;
             return segment && segment->content ? segment->content->snapshotContent() : nullptr;
         }
+#endif
+        default:
+            break;
     }
 
     return nullptr;
@@ -3064,13 +2971,16 @@ const ContentRenderService* OpenTuneAudioProcessor::resolveReadableContentRender
             auto* dc = getDocumentController();
             return dc != nullptr ? dc->getContentRenderService() : nullptr;
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return nullptr;
 #endif
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip:
+#endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture:
+#endif
             return contentRenderService_.get();
+        default:
+            break;
     }
     return nullptr;
 }
@@ -3088,11 +2998,19 @@ RenderCache::ChunkStats OpenTuneAudioProcessor::getReadableContentChunkStats(Con
 ContentRenderService* OpenTuneAudioProcessor::resolveMutableLocalContentRenderService(ContentKey key) const noexcept
 {
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip:
+#endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture:
+#endif
             return contentRenderService_.get();
+#if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification:
             return nullptr;  // ARA CRS is owned by DC, processor must not mutate it
+#endif
+        default:
+            break;
     }
     return nullptr;
 }
@@ -3242,6 +3160,7 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     crs->enqueueRender(std::move(job), snap->notes);
 }
 
+#if JucePlugin_Build_Standalone
 void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(ContentKey key)
 {
     if (key.domainKind != DomainKind::StandaloneClip)
@@ -3262,11 +3181,13 @@ void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(Content
     request.timeGridRevision = snap->timeGridRevision;
     crs->enqueueStage2RebuildWhenCanonicalSettled(request);
 }
+#endif // JucePlugin_Build_Standalone
 
 void OpenTuneAudioProcessor::handleStage1ChunkSettled(ContentKey key)
 {
     refreshCRSMetadata(key);
 
+#if JucePlugin_Build_VST3
     // Only transition to Edited when ALL chunks are canonical settled.
     // Partial completion must not promote the segment prematurely.
     if (auto* session = getCaptureSession()) {
@@ -3274,8 +3195,11 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(ContentKey key)
         if (cache && cache->isCanonicalSettled())
             session->onRenderComplete(key);
     }
+#endif
 
+#if JucePlugin_Build_Standalone
     enqueueStandaloneStage2WhenCanonicalSettled(key);
+#endif
 }
 
 void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
@@ -3301,6 +3225,7 @@ void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
     crs.publishPlaybackSource(key, src);
 }
 
+#if JucePlugin_Build_Standalone
 bool OpenTuneAudioProcessor::ensureSourceById(uint64_t sourceId,
                                               const juce::String& displayName,
                                               std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
@@ -3620,6 +3545,7 @@ void OpenTuneAudioProcessor::pauseAtPosition(double targetSeconds) {
 void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
     playHeadState_.isLooping.store(enabled, std::memory_order_relaxed);
 }
+#endif // JucePlugin_Build_Standalone
 
 void OpenTuneAudioProcessor::copyOutputSpectrum(SpectrumArray& spectrum,
                                                 SpectrumArray& peaks) const noexcept
@@ -3627,6 +3553,7 @@ void OpenTuneAudioProcessor::copyOutputSpectrum(SpectrumArray& spectrum,
     outputSpectrumAnalyzer_.copySnapshot(spectrum, peaks);
 }
 
+#if JucePlugin_Build_Standalone
 void OpenTuneAudioProcessor::setPosition(double seconds) {
     const bool wasPlaying = playHeadState_.isPlaying.load(std::memory_order_acquire);
 
@@ -3668,6 +3595,7 @@ void OpenTuneAudioProcessor::setTimeSignature(int numerator, int denominator) {
         default: break; // reject invalid denominator, keep previous canonical pair
     }
 }
+#endif // JucePlugin_Build_Standalone
 
 void OpenTuneAudioProcessor::setUiZoomPercent(int percent) noexcept {
     switch (percent) {
@@ -3696,8 +3624,9 @@ void OpenTuneAudioProcessor::setSnapSettings(const SnapSettings& snap)
     }
 }
 
+#if JucePlugin_Build_Standalone
 // ============================================================================
-// Two-phase Import Implementation
+// Two-phase Import Implementation (Standalone-only)
 // ============================================================================
 
 bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
@@ -3855,8 +3784,7 @@ uint64_t OpenTuneAudioProcessor::commitPreparedImportAsContent(PreparedImport&& 
     const auto key = ensureSourceAndCreateStandaloneClip(std::move(prepared), sourceId, createdSource);
     return key.objectId;
 }
-
-
+#endif // JucePlugin_Build_Standalone
 
 // ============================================================================
 // requestContentRefresh -- Standalone / regular VST3 F0 refresh.
@@ -3908,18 +3836,24 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
     }
 
     switch (request.contentKey.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(request.contentKey);
             if (clip) clip->applyOriginalF0State(OriginalF0State::Extracting);
             break;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification:
             // Handled by DC path in setContentOriginalF0State
             break;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture:
             setContentOriginalF0State(request.contentKey, OriginalF0State::Extracting);
+            break;
+#endif
+        default:
             break;
     }
 
@@ -4097,9 +4031,10 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 }
 
 // ============================================================================
-// Placement Movement
+// Placement Movement (Standalone-only)
 // ============================================================================
 
+#if JucePlugin_Build_Standalone
 bool OpenTuneAudioProcessor::movePlacementToTrack(int sourceTrackId,
                                                   int targetTrackId,
                                                   uint64_t placementId,
@@ -4108,6 +4043,7 @@ bool OpenTuneAudioProcessor::movePlacementToTrack(int sourceTrackId,
     jassert(standaloneArrangement_ != nullptr);
     return standaloneArrangement_->movePlacementToTrack(sourceTrackId, targetTrackId, placementId, newTimelineStartSeconds);
 }
+#endif // JucePlugin_Build_Standalone
 
 void OpenTuneAudioProcessor::updateContentKeyFromOriginalF0(ContentKey key)
 {
@@ -4392,6 +4328,7 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
     return ReferenceAnalysisPreheatStatus::Queued;
 }
 
+#if JucePlugin_Build_Standalone
 OpenTuneAudioProcessor::ReferenceAlignmentResult
 OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPlacementId)
 {
@@ -4672,11 +4609,13 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     result.affectedEndFrame = commitRange.endFrameExclusive;
     return result;
 }
+#endif // JucePlugin_Build_Standalone
 
 bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes)
 {
     bool ok = false;
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
@@ -4684,6 +4623,7 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
             ok = true;
             break;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
@@ -4691,10 +4631,8 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
             ok = dc->applyNotesToModification(key, normalizeStoredNotes(std::move(notes)));
             break;
         }
-#else
-        case DomainKind::ARAAudioModification:
-            break;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr || !session->applyNotes(key, normalizeStoredNotes(std::move(notes))))
@@ -4702,6 +4640,9 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
             ok = true;
             break;
         }
+#endif
+        default:
+            break;
     }
     if (!ok)
         return false;
@@ -4842,6 +4783,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
 
     bool ok = false;
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return {};
@@ -4850,6 +4792,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
             ok = true;
             break;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
@@ -4860,6 +4803,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
             break;
         }
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr
@@ -4869,6 +4813,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
             ok = true;
             break;
         }
+#endif
         default:
             break;
     }
@@ -4890,6 +4835,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
 
     bool ok = false;
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return {};
@@ -4897,6 +4843,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
             ok = true;
             break;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
@@ -4904,16 +4851,15 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
             ok = dc->applyNotesToModification(key, std::move(normalizedNotes));
             break;
         }
-#else
-        case DomainKind::ARAAudioModification:
-            break;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr) return {};
             ok = session->applyNotes(key, std::move(normalizedNotes));
             break;
         }
+#endif
         default:
             break;
     }
@@ -4935,6 +4881,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitVolumeEnvelope(ContentKey ke
 {
     bool ok = false;
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return {};
@@ -4942,6 +4889,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitVolumeEnvelope(ContentKey ke
             ok = true;
             break;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
@@ -4949,16 +4897,15 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitVolumeEnvelope(ContentKey ke
             ok = dc->applyVolumeEnvelopeToModification(key, std::move(envelope));
             break;
         }
-#else
-        case DomainKind::ARAAudioModification:
-            break;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr) return {};
             ok = session->applyVolumeEnvelope(key, std::move(envelope));
             break;
         }
+#endif
         default:
             break;
     }
@@ -5007,28 +4954,31 @@ bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
                                                       std::shared_ptr<PitchCurve> curve)
 {
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyPitchCurve(std::move(curve));
             return true;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
             return dc->applyPitchCurveToModification(key, std::move(curve));
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return false;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr || !session->applyPitchCurve(key, std::move(curve)))
                 return false;
             return true;
         }
+#endif
+        default:
+            break;
     }
     return false;
 }
@@ -5037,22 +4987,22 @@ bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(ContentKey key,
                                                       std::shared_ptr<PitchCurve> curve)
 {
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyOriginalF0(std::move(curve));
             return true;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
             return dc->applyOriginalF0ToModification(key, std::move(curve));
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return false;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr) return false;
@@ -5061,6 +5011,9 @@ bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(ContentKey key,
             seg->content->applyOriginalF0(std::move(curve));
             return true;
         }
+#endif
+        default:
+            break;
     }
     return false;
 }
@@ -5080,6 +5033,7 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
 {
     bool ok = false;
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
@@ -5087,6 +5041,7 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             ok = true;
             break;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
@@ -5094,10 +5049,8 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             ok = dc->applyTimeGridToModification(key, std::move(grid));
             break;
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return false;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr || !session->applyTimeGrid(key, std::move(grid)))
@@ -5105,11 +5058,15 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             ok = true;
             break;
         }
+#endif
+        default:
+            break;
     }
     if (ok) {
         // TimeGrid 变化必须重建输出增益包络（包络沿 TimeGrid 投影到 output time）。
         // republishPlaybackSource 按 domain 分派并发布最新不可变播放源。
         republishPlaybackSource(key);
+#if JucePlugin_Build_Standalone
         if (key.domainKind == DomainKind::StandaloneClip)
         {
             // TimeGrid affects only the Stage2 time-stretch path. Invalidate the
@@ -5123,6 +5080,7 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
                 crs->getTimeStretchCache().invalidate(key);
             enqueueStandaloneStage2WhenCanonicalSettled(key);
         }
+#endif
     }
     return ok;
 }
@@ -5130,26 +5088,29 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
 bool OpenTuneAudioProcessor::setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey)
 {
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyDetectedKey(detectedKey);
             return true;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
             return dc->applyDetectedKeyToModification(key, detectedKey);
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return false;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             return session != nullptr && session->applyDetectedKey(key, detectedKey);
         }
+#endif
+        default:
+            break;
     }
     return false;
 }
@@ -5158,22 +5119,22 @@ bool OpenTuneAudioProcessor::setContentReferenceFeatures(ContentKey key,
                                                           const ReferenceFeatureSet& features)
 {
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyReferenceFeatures(features);
             return true;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
             return dc->applyReferenceFeaturesToModification(key, features);
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return false;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             auto* seg = session ? session->findSegmentByContentKey(key) : nullptr;
@@ -5181,6 +5142,9 @@ bool OpenTuneAudioProcessor::setContentReferenceFeatures(ContentKey key,
             seg->content->applyReferenceFeatures(features);
             return true;
         }
+#endif
+        default:
+            break;
     }
     return false;
 }
@@ -5188,22 +5152,22 @@ bool OpenTuneAudioProcessor::setContentReferenceFeatures(ContentKey key,
 bool OpenTuneAudioProcessor::setContentOriginalF0State(ContentKey key, OriginalF0State state)
 {
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyOriginalF0State(state);
             return true;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
             return dc->applyOriginalF0StateToModification(key, state);
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return false;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             auto* seg = session ? session->findSegmentByContentKey(key) : nullptr;
@@ -5211,6 +5175,9 @@ bool OpenTuneAudioProcessor::setContentOriginalF0State(ContentKey key, OriginalF
             seg->content->applyOriginalF0State(state);
             return true;
         }
+#endif
+        default:
+            break;
     }
     return false;
 }
@@ -5220,12 +5187,14 @@ bool OpenTuneAudioProcessor::applyContentPitchShiftState(ContentKey key,
 {
     bool ok = false;
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             ok = clip->applyPitchShiftState(state);
             break;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
@@ -5233,10 +5202,8 @@ bool OpenTuneAudioProcessor::applyContentPitchShiftState(ContentKey key,
             ok = dc->applyPitchShiftStateToModification(key, state);
             break;
         }
-#else
-        case DomainKind::ARAAudioModification:
-            return false;
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr || !session->applyPitchShiftState(key, state))
@@ -5244,6 +5211,9 @@ bool OpenTuneAudioProcessor::applyContentPitchShiftState(ContentKey key,
             ok = true;
             break;
         }
+#endif
+        default:
+            break;
     }
     if (ok) {
         onContentFullMutationCompleted(key);
@@ -5426,6 +5396,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
 
     bool ok = false;
     switch (key.domainKind) {
+#if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
@@ -5434,6 +5405,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
             ok = true;
             break;
         }
+#endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
@@ -5444,6 +5416,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
             break;
         }
 #endif
+#if JucePlugin_Build_VST3
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr
@@ -5453,6 +5426,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
             ok = true;
             break;
         }
+#endif
         default:
             break;
     }
@@ -5470,9 +5444,10 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
 }
 
 // ============================================================================
-// Clipboard -- content range copy for paste/duplicate
+// Clipboard -- content range copy for paste/duplicate (Standalone-only)
 // ============================================================================
 
+#if JucePlugin_Build_Standalone
 ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
                                                            double offsetSeconds,
                                                            double durationSeconds,
@@ -5567,6 +5542,7 @@ ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
                                                         std::move(payload));
     return newKey;
 }
+#endif // JucePlugin_Build_Standalone
 
 // ============================================================================
 // Plugin piano roll session memory (message thread only, no locks)

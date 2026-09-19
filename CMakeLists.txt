@@ -361,49 +361,49 @@ endif()
 # ==============================================================================
 # Application Definition - JUCE juce_add_plugin
 # ==============================================================================
-juce_add_plugin(OpenTune
-    # Company Information
+# Standalone and VST3 are independent single-format declarations with one
+# product identity. Each gets its own SharedCode target and format macro set.
+set(OPENTUNE_PLUGIN_COMMON_ARGS
     COMPANY_NAME "DAYA"
     COMPANY_WEBSITE "https://daya.audio"
     COMPANY_EMAIL "support@daya.audio"
-    
-    # Plugin Identification
     PLUGIN_MANUFACTURER_CODE DAYA
     PLUGIN_CODE De77
-    
-    # Product Information
     PRODUCT_NAME "OpenTune"
     BUNDLE_ID "com.daya.opentune"
     VERSION "${PROJECT_VERSION}"
-
-    # Plugin Metadata
     PLUGIN_NAME "OpenTune"
     PLUGIN_DESCRIPTION "AI-powered Auto-Tune Plugin"
     PLUGIN_CATEGORY "Fx|Pitch Shift"
-    
-    # Formats (Standalone + VST3 dual-format build)
-    FORMATS Standalone VST3
-
-    # The VST3 binary always includes the ARA2 extension.
-    IS_ARA_EFFECT TRUE
-    
-    # Plugin Type
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    
-    # Editor Configuration
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-    
-    # Icons
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/AppIcon.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Resources/AppIcon.png"
-    
-    # Build Options
     COPY_PLUGIN_AFTER_BUILD FALSE
+)
 
-    # macOS Info.plist merge
+juce_add_plugin(OpenTune
+    ${OPENTUNE_PLUGIN_COMMON_ARGS}
+    FORMATS VST3
+    IS_ARA_EFFECT TRUE
+    PLIST_TO_MERGE
+    "<plist version=\"1.0\">
+    <dict>
+        <key>LSMinimumSystemVersion</key>
+        <string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string>
+        <key>NSHumanReadableCopyright</key>
+        <string>Copyright © 2024-2026 DAYA. All rights reserved.</string>
+    </dict>
+    </plist>"
+)
+
+juce_add_plugin(OpenTuneStandalone
+    ${OPENTUNE_PLUGIN_COMMON_ARGS}
+    FORMATS Standalone
+    IS_ARA_EFFECT FALSE
     PLIST_TO_MERGE
     "<plist version=\"1.0\">
     <dict>
@@ -418,6 +418,10 @@ juce_add_plugin(OpenTune
     </dict>
     </plist>"
 )
+
+# Both single-format SharedCode targets compile the COMMON source list and share
+# the same include dirs / link libs / definitions / build options.
+set(OPENTUNE_SHARED_CODE_TARGETS OpenTune OpenTuneStandalone)
 
 if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR)
     set_target_properties(OpenTune_vst3_helper PROPERTIES
@@ -533,27 +537,25 @@ juce_add_binary_data(OpenTuneResources
 # ==============================================================================
 # Source Files
 # ==============================================================================
-target_sources(OpenTune
-    PRIVATE
+# Each final wrapper has its own SharedCode target (OpenTune = VST3,
+# OpenTuneStandalone = Standalone). The COMMON list is compiled once per target;
+# no cross-format precompiled core library exists. Format-exclusive sources are
+# attached to exactly one target below.
+set(OPENTUNE_COMMON_SOURCES
         Source/Services/F0ExtractionService.cpp
         Source/Services/F0ExtractionService.h
         Source/Services/ReferenceAnalysisService.cpp
         Source/Services/ReferenceAnalysisService.h
-        Source/Audio/AudioFormatRegistry.cpp
-        Source/Audio/AudioFormatRegistry.h
 
         # Preferences UI
         Source/Editor/Preferences/SharedPreferencePages.cpp
         Source/Editor/Preferences/SharedPreferencePages.h
         Source/Editor/Preferences/TabbedPreferencesDialog.h
 
-        # Core Plugin Files
+        # Core Plugin Files (single implementation trimmed per format by
+        # JucePlugin_Build_Standalone / JucePlugin_Build_VST3 guards)
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
-        Source/SourceStore.cpp
-        Source/SourceStore.h
-        Source/StandaloneArrangement.cpp
-        Source/StandaloneArrangement.h
 
         # Inference Layer
         Source/Inference/RenderCache.cpp
@@ -595,8 +597,6 @@ target_sources(OpenTune
         Source/DSP/MelSpectrogram.h
         Source/DSP/F0KeyDetector.cpp
         Source/DSP/F0KeyDetector.h
-        Source/DSP/ReferenceAutoAlign.cpp
-        Source/DSP/ReferenceAutoAlign.h
         Source/DSP/AutoTunePitchShifter.cpp
         Source/DSP/AutoTunePitchShifter.h
         Source/DSP/AutoTunePeriodDetector.cpp
@@ -644,14 +644,8 @@ target_sources(OpenTune
         Source/Standalone/UI/TransportBarComponent.h
         Source/Standalone/UI/TopBarComponent.cpp
         Source/Standalone/UI/TopBarComponent.h
-        Source/Standalone/UI/TrackPanelComponent.cpp
-        Source/Standalone/UI/TrackPanelComponent.h
-        Source/Standalone/UI/ArrangementViewComponent.cpp
-        Source/Standalone/UI/ArrangementViewComponent.h
         Source/Standalone/UI/TimelineOverviewComponent.cpp
         Source/Standalone/UI/TimelineOverviewComponent.h
-        Source/Standalone/UI/TimelineCompositeCache.cpp
-        Source/Standalone/UI/TimelineCompositeCache.h
 
         Source/Standalone/UI/TimelineViewportCamera.h
         Source/Standalone/UI/TimelineViewportPolicy.cpp
@@ -660,7 +654,6 @@ target_sources(OpenTune
         Source/Standalone/UI/TimelineLayerComposer.h
         Source/Standalone/UI/WaveformMipmap.cpp
         Source/Standalone/UI/WaveformMipmap.h
-        Source/Standalone/UI/RippleOverlayComponent.h
         Source/Editor/AutoRenderOverlayComponent.h
         Source/Editor/PitchShiftDialogContent.h
         Source/Editor/ConfirmDialogContent.h
@@ -690,12 +683,6 @@ target_sources(OpenTune
         Source/Utils/SpectrumDisplayData.h
         Source/Utils/OnnxRuntimeDelayLoadHook.cpp
         Source/Utils/ModelPathResolver.h
-        Source/Utils/ProjectModel.cpp
-        Source/Utils/ProjectModel.h
-        Source/Utils/ProjectPersistence.cpp
-        Source/Utils/ProjectPersistence.h
-        Source/Utils/ProjectSession.cpp
-        Source/Utils/ProjectSession.h
         Source/Utils/CpuBudgetManager.cpp
         Source/Utils/CpuBudgetManager.h
         Source/Utils/AccelerationDetector.cpp
@@ -721,27 +708,18 @@ target_sources(OpenTune
         Source/Utils/TimeGrid.h
         Source/Utils/TimeGridEditAction.cpp
         Source/Utils/TimeGridEditAction.h
-        Source/Utils/PlacementActions.cpp
-        Source/Utils/PlacementActions.h
         Source/Utils/SilentGapDetector.cpp
         Source/Utils/SilentGapDetector.h
         Source/Utils/TimeCoordinate.h
 
-        # Content Layer
+        # Content Layer (shared contracts only; Standalone/Capture domains are
+        # attached to exactly one SharedCode target below)
         Source/Content/ContentKey.h
         Source/Content/DomainContentOwner.h
         Source/Content/AnalysisState.h
         Source/Content/EditableContentState.h
         Source/Content/AudioModificationContentState.h
-        Source/Content/ContentPayloadState.h
-        Source/Content/StandaloneRetiredContentRecord.h
         Source/Content/EditableContentSnapshot.h
-        Source/Content/StandaloneClipContent.h
-        Source/Content/StandaloneClipContent.cpp
-        Source/Content/StandaloneContentRepository.h
-        Source/Content/StandaloneContentRepository.cpp
-        Source/Content/CaptureSegmentContent.h
-        Source/Content/CaptureSegmentContent.cpp
 
         # Render Layer
         Source/Render/PlaybackReadSource.h
@@ -762,11 +740,65 @@ target_sources(OpenTune
         Source/Render/RenderChunkPlanner.cpp
 )
 
+# Standalone-only SharedCode sources (never referenced by the VST3 target).
+set(OPENTUNE_STANDALONE_SOURCES
+        Source/Audio/AudioFormatRegistry.cpp
+        Source/Audio/AudioFormatRegistry.h
+
+        Source/SourceStore.cpp
+        Source/SourceStore.h
+        Source/StandaloneArrangement.cpp
+        Source/StandaloneArrangement.h
+
+        Source/DSP/ReferenceAutoAlign.cpp
+        Source/DSP/ReferenceAutoAlign.h
+
+        Source/Utils/ProjectModel.cpp
+        Source/Utils/ProjectModel.h
+        Source/Utils/ProjectPersistence.cpp
+        Source/Utils/ProjectPersistence.h
+        Source/Utils/ProjectSession.cpp
+        Source/Utils/ProjectSession.h
+        Source/Utils/PlacementActions.cpp
+        Source/Utils/PlacementActions.h
+
+        Source/Content/ContentPayloadState.h
+        Source/Content/StandaloneRetiredContentRecord.h
+        Source/Content/StandaloneClipContent.h
+        Source/Content/StandaloneClipContent.cpp
+        Source/Content/StandaloneContentRepository.h
+        Source/Content/StandaloneContentRepository.cpp
+
+        Source/Standalone/UI/TrackPanelComponent.cpp
+        Source/Standalone/UI/TrackPanelComponent.h
+        Source/Standalone/UI/ArrangementViewComponent.cpp
+        Source/Standalone/UI/ArrangementViewComponent.h
+        Source/Standalone/UI/TimelineCompositeCache.cpp
+        Source/Standalone/UI/TimelineCompositeCache.h
+        Source/Standalone/UI/RippleOverlayComponent.h
+)
+
+# VST3-only SharedCode sources (never referenced by the Standalone target).
+set(OPENTUNE_VST3_SOURCES
+        Source/Plugin/Vst3ProcessorStateCodec.cpp
+        Source/Plugin/Vst3ProcessorStateCodec.h
+        Source/Content/CaptureSegmentContent.h
+        Source/Content/CaptureSegmentContent.cpp
+)
+
+foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+    target_sources(${_opentune_target} PRIVATE ${OPENTUNE_COMMON_SOURCES})
+endforeach()
+target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_STANDALONE_SOURCES})
+target_sources(OpenTune PRIVATE ${OPENTUNE_VST3_SOURCES})
+
 # ==============================================================================
 # Conditional Source Files per Format
 # ==============================================================================
-# Shared Standalone editor sources
-set(OPENTUNE_STANDALONE_UI_SOURCES
+# Standalone application files live on the final wrapper; the SharedCode target
+# only defines createOpenTuneEditor which these TUs implement.
+set(OPENTUNE_STANDALONE_APP_SOURCES
+    Source/Utils/D3D12AgilityBootstrap.cpp
     Source/Standalone/EditorFactoryStandalone.cpp
     Source/Standalone/PluginEditor.cpp
     Source/Standalone/PluginEditor.h
@@ -776,39 +808,24 @@ set(OPENTUNE_STANDALONE_UI_SOURCES
     Source/Editor/Preferences/StandalonePreferencePages.h
 )
 
-target_sources(OpenTune_Standalone
-    PRIVATE
-        Source/Utils/D3D12AgilityBootstrap.cpp
-        ${OPENTUNE_STANDALONE_UI_SOURCES}
+target_sources(OpenTuneStandalone_Standalone PRIVATE ${OPENTUNE_STANDALONE_APP_SOURCES})
+
+set(OPENTUNE_VST3_APP_SOURCES
+    Source/Utils/D3D12AgilityBootstrap.cpp
+    Source/Utils/Vst3ModulePin.cpp
+    Source/Editor/EditorFactoryPlugin.cpp
+    Source/Plugin/PluginEditor.cpp
+    Source/Plugin/PluginEditor.h
 )
 
-target_compile_definitions(OpenTune_Standalone
-    PRIVATE
-        JucePlugin_Build_Standalone=1
-        JucePlugin_Build_VST3=0
-)
-
-target_sources(OpenTune_VST3
-    PRIVATE
-        Source/Utils/D3D12AgilityBootstrap.cpp
-        Source/Utils/Vst3ModulePin.cpp
-        Source/Editor/EditorFactoryPlugin.cpp
-        Source/Plugin/PluginEditor.cpp
-        Source/Plugin/PluginEditor.h
-)
-
-target_compile_definitions(OpenTune_VST3
-    PRIVATE
-        JucePlugin_Build_Standalone=0
-        JucePlugin_Build_VST3=1
-)
+target_sources(OpenTune_VST3 PRIVATE ${OPENTUNE_VST3_APP_SOURCES})
 
 if(MSVC)
-    target_compile_options(OpenTune_Standalone PRIVATE /utf-8 /bigobj)
+    target_compile_options(OpenTuneStandalone_Standalone PRIVATE /utf-8 /bigobj)
     target_compile_options(OpenTune_VST3 PRIVATE /utf-8 /bigobj)
 endif()
 
-# ARA2 document integration is always compiled into the VST3 binary.
+# ARA2 document integration is only compiled into the VST3 SharedCode target.
 target_sources(OpenTune PRIVATE
     Source/ARA/AudioSource.cpp
     Source/ARA/AudioSource.h
@@ -844,7 +861,7 @@ target_sources(OpenTune PRIVATE
 # License: LGPL-2.1. See LICENSES/soundtouch.LGPL-2.1.txt.
 set(SOUNDTOUCH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/soundtouch-2.3.3)
 if(EXISTS ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp)
-    target_sources(OpenTune PRIVATE
+    set(OPENTUNE_SOUNDTOUCH_SOURCES
         ${SOUNDTOUCH_DIR}/source/SoundTouch/AAFilter.cpp
         ${SOUNDTOUCH_DIR}/source/SoundTouch/FIFOSampleBuffer.cpp
         ${SOUNDTOUCH_DIR}/source/SoundTouch/FIRFilter.cpp
@@ -858,10 +875,13 @@ if(EXISTS ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp)
         ${SOUNDTOUCH_DIR}/source/SoundTouch/sse_optimized.cpp
         ${SOUNDTOUCH_DIR}/source/SoundTouch/mmx_optimized.cpp
     )
-    target_compile_definitions(OpenTune PRIVATE SOUNDTOUCH_FLOAT_SAMPLES)
-    if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-        target_compile_definitions(OpenTune PRIVATE SOUNDTOUCH_DISABLE_X86_OPTIMIZATIONS)
-    endif()
+    foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+        target_sources(${_opentune_target} PRIVATE ${OPENTUNE_SOUNDTOUCH_SOURCES})
+        target_compile_definitions(${_opentune_target} PRIVATE SOUNDTOUCH_FLOAT_SAMPLES)
+        if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+            target_compile_definitions(${_opentune_target} PRIVATE SOUNDTOUCH_DISABLE_X86_OPTIMIZATIONS)
+        endif()
+    endforeach()
     if(MSVC)
         # Suppress benign MSVC warnings from vendored SoundTouch code:
         #   C4458 - 'output' parameter shadows FIFOProcessor::output member (SoundTouch.cpp:511)
@@ -892,103 +912,125 @@ endif()
 # ==============================================================================
 # Include Directories
 # ==============================================================================
-target_include_directories(OpenTune
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source
-        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master
-        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/soundtouch-2.3.3/include
-        ${ONNXRUNTIME_INCLUDE_DIR}
-        # JUCE module include paths — required for juce::* namespace resolution
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_basics>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_utils>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_core>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_data_structures>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_dsp>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_events>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_basics>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_extra>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_graphics>
-        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_opengl>
-)
+foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+    target_include_directories(${_opentune_target}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master
+            ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/soundtouch-2.3.3/include
+            ${ONNXRUNTIME_INCLUDE_DIR}
+            # JUCE module include paths — required for juce::* namespace resolution
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_basics>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_utils>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_core>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_data_structures>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_dsp>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_events>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_basics>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_extra>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_graphics>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_opengl>
+    )
+endforeach()
 
 if(WIN32)
-    target_include_directories(OpenTune
-        PRIVATE
-            ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
-            ${D3D12_AGILITY_INCLUDE_DIR}
-            ${D3D12_AGILITY_D3DX12_INCLUDE_DIR}
-            ${D3D12_AGILITY_NATIVE_DIR}
-            ${DIRECTML_INCLUDE_DIR}
-    )
+    foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+        target_include_directories(${_opentune_target}
+            PRIVATE
+                ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
+                ${D3D12_AGILITY_INCLUDE_DIR}
+                ${D3D12_AGILITY_D3DX12_INCLUDE_DIR}
+                ${D3D12_AGILITY_NATIVE_DIR}
+                ${DIRECTML_INCLUDE_DIR}
+        )
+    endforeach()
 endif()
 
 # ==============================================================================
 # JUCE Modules Linking
 # ==============================================================================
-target_link_libraries(OpenTune
-    PRIVATE
-        juce::juce_audio_utils
-        juce::juce_audio_processors
-        juce::juce_dsp
-        juce::juce_opengl
-        juce::juce_graphics
-        juce::juce_gui_basics
-        juce::juce_gui_extra
-        OpenTuneResources
+foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+    target_link_libraries(${_opentune_target}
+        PRIVATE
+            juce::juce_audio_utils
+            juce::juce_audio_processors
+            juce::juce_dsp
+            juce::juce_opengl
+            juce::juce_graphics
+            juce::juce_gui_basics
+            juce::juce_gui_extra
+            OpenTuneResources
 
-    PUBLIC
-        juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
-        juce::juce_recommended_warning_flags
-)
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+            juce::juce_recommended_warning_flags
+    )
+endforeach()
 
 # ==============================================================================
 # ONNX Runtime Linking
 # ==============================================================================
-if(WIN32)
-    target_link_libraries(OpenTune PRIVATE "${OPENTUNE_ORT_IMPORT_LIB}")
-    add_dependencies(OpenTune OpenTuneOnnxRuntimeImportLib)
-elseif(APPLE)
-    target_link_libraries(OpenTune PRIVATE "${ONNXRUNTIME_DYLIB}")
-    target_link_libraries(OpenTune PRIVATE "-framework Accelerate")
-endif()
+foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+    if(WIN32)
+        target_link_libraries(${_opentune_target} PRIVATE "${OPENTUNE_ORT_IMPORT_LIB}")
+        add_dependencies(${_opentune_target} OpenTuneOnnxRuntimeImportLib)
+    elseif(APPLE)
+        target_link_libraries(${_opentune_target} PRIVATE "${ONNXRUNTIME_DYLIB}")
+        target_link_libraries(${_opentune_target} PRIVATE "-framework Accelerate")
+    endif()
+endforeach()
 
 if(WIN32)
-    target_link_libraries(OpenTune
-        PRIVATE
-            "${OPENTUNE_D3D12_SYSTEM_LIB}"
-            "${OPENTUNE_DXGI_SYSTEM_LIB}"
-            version
-    )
+    foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+        target_link_libraries(${_opentune_target}
+            PRIVATE
+                "${OPENTUNE_D3D12_SYSTEM_LIB}"
+                "${OPENTUNE_DXGI_SYSTEM_LIB}"
+                version
+        )
+    endforeach()
 endif()
 
 # ==============================================================================
 # Compile Definitions
 # ==============================================================================
-target_compile_definitions(OpenTune
-    PUBLIC
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
-        JUCE_VST3_CAN_REPLACE_VST2=0
-        JUCE_REPORT_APP_USAGE=0
-        JUCE_STRICT_REFCOUNTEDPOINTER=1
-        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+    target_compile_definitions(${_opentune_target}
+        PUBLIC
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_VST3_CAN_REPLACE_VST2=0
+            JUCE_REPORT_APP_USAGE=0
+            JUCE_STRICT_REFCOUNTEDPOINTER=1
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
 
-    PRIVATE
-        # OpenTune specific
-        OPENTUNE_VERSION="${PROJECT_VERSION}"
-        OPENTUNE_D3D12_AGILITY_SDK_VERSION=${OPENTUNE_D3D12_SDK_VERSION}
-        ORT_API_MANUAL_INIT
-        # Audio format support (import)
-        JUCE_USE_FLAC=1
-        JUCE_USE_OGGVORBIS=1
-        JUCE_USE_MP3AUDIOFORMAT=1
+        PRIVATE
+            # OpenTune specific
+            OPENTUNE_VERSION="${PROJECT_VERSION}"
+            OPENTUNE_D3D12_AGILITY_SDK_VERSION=${OPENTUNE_D3D12_SDK_VERSION}
+            ORT_API_MANUAL_INIT
+            # Both products decode the embedded MP3 piano samples.
+            JUCE_USE_MP3AUDIOFORMAT=1
+    )
+endforeach()
+
+# File import and audio-device backends belong only to the Standalone product.
+target_compile_definitions(OpenTuneStandalone PRIVATE
+    JUCE_USE_FLAC=1
+    JUCE_USE_OGGVORBIS=1
+)
+target_compile_definitions(OpenTune PRIVATE
+    JUCE_USE_FLAC=0
+    JUCE_USE_OGGVORBIS=0
 )
 
 if(WIN32)
-    target_compile_definitions(OpenTune PUBLIC JUCE_ASIO=1 JUCE_WASAPI=1)
-    target_compile_definitions(OpenTune PRIVATE JUCE_USE_WINDOWS_MEDIA_FORMAT=1)
+    target_compile_definitions(OpenTuneStandalone PUBLIC JUCE_ASIO=1 JUCE_WASAPI=1)
+    target_compile_definitions(OpenTuneStandalone PRIVATE JUCE_USE_WINDOWS_MEDIA_FORMAT=1)
+    target_compile_definitions(OpenTune PUBLIC JUCE_ASIO=0 JUCE_WASAPI=0)
+    target_compile_definitions(OpenTune PRIVATE JUCE_USE_WINDOWS_MEDIA_FORMAT=0)
 endif()
 
 # ==============================================================================
@@ -996,18 +1038,20 @@ endif()
 # ==============================================================================
 if(WIN32)
     if(MSVC)
-        target_compile_options(OpenTune PRIVATE /utf-8 /MP /wd4100 /wd4127)
+        foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+            target_compile_options(${_opentune_target} PRIVATE /utf-8 /MP /wd4100 /wd4127)
+        endforeach()
         # AVX2 仅对 SIMD 热点文件开启，避免影响 JUCE 编译单元和老 CPU 兼容性
         set_source_files_properties(
             Source/Utils/SimdAccelerator.cpp
             Source/DSP/MelSpectrogram.cpp
             PROPERTIES COMPILE_FLAGS "/arch:AVX2"
         )
-        # Delay load the renamed ONNX Runtime DLL for Standalone
-        target_link_options(OpenTune_Standalone PRIVATE "/DELAYLOAD:${OPENTUNE_ORT_DLL_NAME}")
-        target_link_libraries(OpenTune_Standalone PRIVATE delayimp)
-        target_compile_options(OpenTune_Standalone PRIVATE /wd4100)
-        add_dependencies(OpenTune_Standalone OpenTuneOnnxRuntimeImportLib)
+        # Delay load the renamed ONNX Runtime DLL for the Standalone application
+        target_link_options(OpenTuneStandalone_Standalone PRIVATE "/DELAYLOAD:${OPENTUNE_ORT_DLL_NAME}")
+        target_link_libraries(OpenTuneStandalone_Standalone PRIVATE delayimp)
+        target_compile_options(OpenTuneStandalone_Standalone PRIVATE /wd4100)
+        add_dependencies(OpenTuneStandalone_Standalone OpenTuneOnnxRuntimeImportLib)
 
         # Delay load the renamed ONNX Runtime DLL for VST3 plugin
         target_link_options(OpenTune_VST3 PRIVATE "/DELAYLOAD:${OPENTUNE_ORT_DLL_NAME}")
@@ -1016,15 +1060,16 @@ if(WIN32)
         add_dependencies(OpenTune_VST3 OpenTuneOnnxRuntimeImportLib)
     endif()
 elseif(APPLE)
-    target_compile_options(OpenTune PRIVATE -Wall -Wno-unused-parameter)
+    foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
+        target_compile_options(${_opentune_target} PRIVATE -Wall -Wno-unused-parameter)
+    endforeach()
 
-    # Info.plist metadata (LSMinimumSystemVersion / LSApplicationCategoryType /
-    # NSHumanReadableCopyright / NSMicrophoneUsageDescription) is injected via
-    # juce_add_plugin's PLIST_TO_MERGE above — no second pass needed here.
+    # Product-specific Info.plist metadata is injected by each juce_add_plugin
+    # declaration above; no second pass is needed here.
 
     # Build distributable bundles with only bundle-relative runtime search paths.
     # BUILD_WITH_INSTALL_RPATH prevents CMake from embedding ONNXRUNTIME_LIB_DIR.
-    set_target_properties(OpenTune_Standalone PROPERTIES
+    set_target_properties(OpenTuneStandalone_Standalone PROPERTIES
         BUILD_WITH_INSTALL_RPATH TRUE
         INSTALL_RPATH "@executable_path/../Frameworks"
     )
@@ -1037,7 +1082,7 @@ elseif(APPLE)
         HEADER_FILE_ONLY TRUE
         MACOSX_PACKAGE_LOCATION "Resources/docs"
     )
-    target_sources(OpenTune_Standalone PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html")
+    target_sources(OpenTuneStandalone_Standalone PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html")
 endif()
 
 # ==============================================================================
@@ -1054,12 +1099,12 @@ if(EXISTS "${GAME_MODEL_DIR}")
     set(STANDALONE_GAME_MODEL_COPY_COMMANDS
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${GAME_MODEL_DIR}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/GAME"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/models/GAME"
     )
     set(STANDALONE_APPLE_GAME_MODEL_COPY_COMMANDS
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${GAME_MODEL_DIR}"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/GAME"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/models/GAME"
     )
     set(VST3_GAME_MODEL_COPY_COMMANDS
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -1077,67 +1122,67 @@ endif()
 
 # --- ONNX Runtime library copying ---
 if(WIN32)
-    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E rm -f
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime.dll"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_shared.dll"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/onnxruntime.dll"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/onnxruntime_providers_shared.dll"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${ONNXRUNTIME_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/${OPENTUNE_ORT_DLL_NAME}"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/${OPENTUNE_ORT_DLL_NAME}"
         COMMENT "Copying ONNX Runtime DLL (renamed) to Standalone..."
     )
 
-    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${DIRECTML_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/DirectML.dll"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/DirectML.dll"
         COMMENT "Copying DirectML runtime DLL to Standalone..."
     )
 
-    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/D3D12"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${D3D12_CORE_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12/D3D12Core.dll"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/D3D12/D3D12Core.dll"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${D3D12_SDK_LAYERS_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12/D3D12SDKLayers.dll"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/D3D12/D3D12SDKLayers.dll"
         COMMENT "Copying DirectX Agility runtime to Standalone..."
     )
 
-    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/models"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${HIFIGAN_MODEL_COMMUNITY}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/hifigan.onnx"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/models/hifigan.onnx"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FCPE_MODEL}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/fcpe.onnx"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/models/fcpe.onnx"
         ${STANDALONE_GAME_MODEL_COPY_COMMANDS}
         COMMENT "Copying AI models to Standalone..."
     )
 
 elseif(APPLE)
-    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Frameworks"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Frameworks"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${ONNXRUNTIME_DYLIB}"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Frameworks/"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Frameworks/"
         COMMENT "Copying ONNX Runtime dylib to app bundle Frameworks..."
     )
 
-    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/models"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${HIFIGAN_MODEL_COMMUNITY}"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/hifigan.onnx"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/models/hifigan.onnx"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FCPE_MODEL}"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/fcpe.onnx"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/models/fcpe.onnx"
         ${STANDALONE_APPLE_GAME_MODEL_COPY_COMMANDS}
         COMMENT "Copying AI models to app bundle Resources..."
     )
@@ -1145,46 +1190,46 @@ endif()
 
 if(APPLE)
     # macOS: docs go in Contents/Resources/docs/ (bundle standard)
-    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/docs"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide.html"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/docs/UserGuide.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_en.html"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide_en.html"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/docs/UserGuide_en.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ja.html"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide_ja.html"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/docs/UserGuide_ja.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ru.html"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide_ru.html"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/docs/UserGuide_ru.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_es.html"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide_es.html"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/docs/UserGuide_es.html"
         COMMENT "Copying UserGuide translations to app bundle Resources..."
     )
 else()
     # Windows: docs go alongside the executable
-    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/docs"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide.html"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/docs/UserGuide.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_en.html"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide_en.html"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/docs/UserGuide_en.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ja.html"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide_ja.html"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/docs/UserGuide_ja.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ru.html"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide_ru.html"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/docs/UserGuide_ru.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_es.html"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide_es.html"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/docs/UserGuide_es.html"
         COMMENT "Copying UserGuide translations to Standalone..."
     )
 endif()
@@ -1320,7 +1365,7 @@ message(STATUS "========================================")
 message(STATUS "")
 
 # ==============================================================================
-# Tests (optional, pure standard library — no JUCE / ONNX Runtime linkage)
+# Tests (optional; the state-codec test links JUCE Core only)
 # ==============================================================================
 option(OPENTUNE_BUILD_TESTS "Build AutoTune tests" OFF)
 if(OPENTUNE_BUILD_TESTS)
@@ -1358,4 +1403,32 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTunePitchLaneVisualPolicyTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME PitchLaneVisualPolicyTests COMMAND OpenTunePitchLaneVisualPolicyTests)
+
+    # VST3 processor outer-state codec (OTST v11 / legacy v10/v9 skip) tests.
+    # Links juce_core for MemoryBlock / stream I/O.
+    add_executable(OpenTuneVst3StateCodecTests
+        Tests/Vst3ProcessorStateCodecTests.cpp
+        Source/Plugin/Vst3ProcessorStateCodec.cpp
+    )
+    target_include_directories(OpenTuneVst3StateCodecTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneVst3StateCodecTests PRIVATE juce::juce_core)
+    if(MSVC)
+        target_compile_options(OpenTuneVst3StateCodecTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME Vst3ProcessorStateCodecTests COMMAND OpenTuneVst3StateCodecTests)
+
+    # Regression: a structurally valid CAPz archive may contain zero segments.
+    add_executable(OpenTuneCapturePersistenceTests
+        Tests/CapturePersistenceTests.cpp
+    )
+    target_link_libraries(OpenTuneCapturePersistenceTests PRIVATE
+        OpenTune
+        juce::juce_audio_basics
+        juce::juce_core
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneCapturePersistenceTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME CapturePersistenceTests COMMAND OpenTuneCapturePersistenceTests)
 endif()

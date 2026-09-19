@@ -3,14 +3,15 @@
 /**
  * OpenTune 核心音频处理器
  * 
- * OpenTuneAudioProcessor 是 JUCE runtime 外壳，负责：
- * - 组合 SourceStore、content owner、StandaloneArrangement 与 VST3 ARA session
- * - 实时音频播放和混音（processBlock）
- * - AI 推理调度（通过独立的 F0InferenceService 与 VocoderRenderScheduler）
- * - 项目状态序列化/反序列化
+ * OpenTuneAudioProcessor 是 JUCE runtime 外壳，每个最终 wrapper 各编译一份
+ * （Standalone / VST3 单格式 SharedCode）：
+ * - VST3 变体组合 VST3 ARA session 与 regular VST3 capture
+ * - Standalone 变体组合 SourceStore、content owner 与 StandaloneArrangement
+ * - 公共部分：实时音频播放/混音、AI 推理调度、项目状态序列化
  * 
  * 线程安全说明：
- * - source truth 由 SourceStore 管理，editable truth 由 content owner 管理
+ * - editable truth 由 content owner 管理（Standalone 由 StandaloneContentRepository，
+ *   VST3 由 ARA Session / CaptureSession 管理）
  * - Standalone placement/mix truth 由 StandaloneArrangement 管理
  * - 音频线程只读取 immutable playback snapshot 与 clip core 读取源
  */
@@ -24,8 +25,12 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+#if JucePlugin_Build_Standalone
 #include "SourceStore.h"
 #include "StandaloneArrangement.h"
+#include "Utils/PlacementClipboard.h"
+#include "Content/StandaloneContentRepository.h"
+#endif
 #include "DSP/ResamplingManager.h"
 #include "DSP/OutputSpectrumAnalyzer.h"
 #include "Utils/SpectrumDisplayData.h"
@@ -44,14 +49,12 @@
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
 #include "Utils/AppPreferences.h"
-#include "Utils/PlacementClipboard.h"
 #include "Utils/PlayHeadState.h"
 #include "Utils/TrackConstants.h"
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/PlaybackAudioReader.h"
 #include "Content/ContentKey.h"
 #include "Content/ContentEditCommands.h"
-#include "Content/StandaloneContentRepository.h"
 #include "Render/ContentRenderService.h"
 #include "Runtime/ProcessF0Runtime.h"
 #include "Runtime/ProcessRenderRuntime.h"
@@ -143,9 +146,11 @@ struct PluginPianoRollSessionState
 
 struct PluginProcessorTransportTestAccessor;  // forward decl for test access to transport fields
 
+#if JucePlugin_Build_VST3
 namespace Capture {
     class CaptureSession;  // forward decl; full type in Source/Plugin/Capture/CaptureSession.h
 }
+#endif
 
 /**
  * OpenTuneAudioProcessor - 核心音频处理器类
@@ -153,14 +158,18 @@ namespace Capture {
  * 继承自 juce::AudioProcessor，实现 JUCE 音频插件接口。
  * 管理多轨道、Clip、音高曲线、渲染缓存等核心数据。
  */
-class OpenTuneAudioProcessor : public juce::AudioProcessor,
-                               public juce::AsyncUpdater,
-                               public juce::Timer
+class OpenTuneAudioProcessor : public juce::AudioProcessor
+#if JucePlugin_Build_Standalone
+                             , public juce::AsyncUpdater
+#else
+                             , public juce::Timer
+#endif
 #if JucePlugin_Enable_ARA
                            , public juce::AudioProcessorARAExtension
 #endif
 {
 public:
+#if JucePlugin_Build_VST3
     struct HostTransportSnapshot {
         double bpm{120.0};
         double ppqPosition{0.0};
@@ -168,7 +177,9 @@ public:
         int timeSignatureNumerator{4};
         int timeSignatureDenominator{4};
     };
+#endif
 
+#if JucePlugin_Build_Standalone
     struct ReferenceAlignmentResult {
         enum class Status : uint8_t {
             Succeeded = 0,
@@ -208,6 +219,7 @@ public:
         bool hasReferenceBinding() const noexcept { return referencePlacementId != 0; }
         bool canRunAutoRef() const noexcept { return status == Status::Ready; }
     };
+#endif
 
     enum class ReferenceAnalysisPreheatStatus : uint8_t {
         AlreadyReady = 0,
@@ -252,8 +264,14 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+#if JucePlugin_Build_Standalone
+    // Standalone arrangement reclaim sweep completes on the message thread.
     void handleAsyncUpdate() override;
+#endif
+#if JucePlugin_Build_VST3
+    // Regular VST3 capture session tick.
     void timerCallback() override;
+#endif
 
     double getSampleRate() const { return currentSampleRate_.load(std::memory_order_relaxed); }
     
@@ -263,8 +281,9 @@ public:
 
     // ============================================================================
     // Import API (Two-phase: prepare in worker thread, commit in main thread)
+    // Standalone-only: VST3 content enters through CaptureSession / ARA.
     // ============================================================================
-    
+#if JucePlugin_Build_Standalone
     /**
      * PreparedImport - 导入预处理结果（在后台线程完成）
      */
@@ -297,22 +316,6 @@ public:
         }
     };
 
-    struct ContentRefreshRequest {
-        ContentKey contentKey;
-        bool preserveCorrectionsOutsideChangedRange{false};
-        double changedStartSeconds{0.0};
-        double changedEndSeconds{0.0};
-        // OpenDyne standalone import: when true, requestContentRefresh also runs
-        // a one-shot whole-content note generation once F0 extraction completes.
-        // 仅生成音符（不写修正曲线、不吸附），不请求 render。
-        bool generateNotesWholeContentOnReady{false};
-        NoteGeneratorParams noteGenerationParams;
-        // 音符生成成功后的回调（message-thread，导入派生事务的 dirty 推进）。
-        std::function<void()> onNotesGenerated;
-    };
-
-    bool requestContentRefresh(const ContentRefreshRequest& request);
-
     bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
                        double inSampleRate,
                        const juce::String& displayName,
@@ -339,15 +342,32 @@ public:
     // Clipboard for arrangement clip copy/paste
     PlacementClipboard& getClipClipboard() { return clipClipboard_; }
 
+    // Deep copy content audio data for paste/duplicate operations.
+    // Creates a new content from a range of an existing one.
     ContentKey cloneContent(ContentKey sourceContentKey,
                             const juce::String& newName = {});
 
-    // Deep copy content audio data for paste/duplicate operations.
-    // Creates a new content from a range of an existing one.
     ContentKey copyContentRange(ContentKey sourceContentKey,
                                 double offsetSeconds,
                                 double durationSeconds,
                                 const juce::String& newName = {});
+#endif // JucePlugin_Build_Standalone
+
+    struct ContentRefreshRequest {
+        ContentKey contentKey;
+        bool preserveCorrectionsOutsideChangedRange{false};
+        double changedStartSeconds{0.0};
+        double changedEndSeconds{0.0};
+        // OpenDyne standalone import: when true, requestContentRefresh also runs
+        // a one-shot whole-content note generation once F0 extraction completes.
+        // 仅生成音符（不写修正曲线、不吸附），不请求 render。
+        bool generateNotesWholeContentOnReady{false};
+        NoteGeneratorParams noteGenerationParams;
+        // 音符生成成功后的回调（message-thread，导入派生事务的 dirty 推进）。
+        std::function<void()> onNotesGenerated;
+    };
+
+    bool requestContentRefresh(const ContentRefreshRequest& request);
 
 private:
     static BusesProperties makeBuses();
@@ -362,13 +382,16 @@ private:
     juce::AudioBuffer<float> clipReadScratch_;
 
     juce::AudioParameterInt* editVersionParam_{nullptr};
+#if JucePlugin_Build_Standalone
     std::atomic<juce::int64> lastControlTimestamp_{0};
     std::atomic<int> lastControlType_{static_cast<int>(DiagnosticControlCall::None)};
+#endif
 
 public:
     // ========================================================================
     // Playback Read API Types (Unified read path for Standalone/VST3)
 
+#if JucePlugin_Build_Standalone
     enum class DiagnosticControlCall : uint8_t {
         None = 0,
         Play,
@@ -376,6 +399,7 @@ public:
         Stop,
         Seek
     };
+#endif
 
     // Control-thread → audio-thread transport command. Control thread writes
     // the latest command + target cursor; audio thread consumes at block start.
@@ -395,6 +419,7 @@ public:
         Playing
     };
 
+#if JucePlugin_Build_Standalone
     struct DiagnosticInfo {
         int editVersion{0};
         ContentKey contentKey;
@@ -406,6 +431,13 @@ public:
         RenderCache::ChunkStats chunkStats;
     };
 
+    /**
+     * 统一播放读取 API — 参见 Utils/PlaybackAudioReader.h 自由函数。
+     */
+    DiagnosticInfo getDiagnosticInfo(int trackId = 0, uint64_t placementId = 0) const;
+    void recordControlCall(DiagnosticControlCall controlCall);
+#endif
+
     struct AnalysisAudioProvider {
         const float* samples = nullptr;
         int numSamples = 0;
@@ -416,38 +448,41 @@ public:
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
     };
 
-    /**
-     * 统一播放读取 API — 参见 Utils/PlaybackAudioReader.h 自由函数。
-     */
-    DiagnosticInfo getDiagnosticInfo(int trackId = 0, uint64_t placementId = 0) const;
-    void recordControlCall(DiagnosticControlCall controlCall);
-
 private:
+#if JucePlugin_Build_Standalone
     std::shared_ptr<SourceStore> sourceStore_;
+#endif
     std::shared_ptr<ContentRenderService> contentRenderService_;
+#if JucePlugin_Build_Standalone
     std::unique_ptr<StandaloneContentRepository> standaloneContentRepository_;
+#endif
     std::shared_ptr<ContentEditCommands> contentCommands_;
+#if JucePlugin_Build_Standalone
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
     PlacementClipboard clipClipboard_;
+#endif
     std::unique_ptr<ReferenceAnalysisService> referenceAnalysisService_;
 
+#if JucePlugin_Build_VST3
     // Regular VST3 capture state. ARA-capable builds still create this for
     // unbound insert instances; access is suppressed after the instance binds to ARA.
     // nullptr in Standalone instances and in VST3 instances bound to ARA.
     std::unique_ptr<Capture::CaptureSession> captureSession_;
+#endif
 
 
 
     // Transport control (Standalone-only helpers; canonical truth is playHeadState_)
     std::atomic<double> playStartPosition_{0.0};  // 播放起始位置（按下 Play 时的绝对秒位置）
 
+#if JucePlugin_Build_Standalone
     // Standalone canonical BPM and time signature. These are the only owner-truth
     // for Standalone transport metadata. VST3/ARA reads host snapshot via
-    // getHostTransportSnapshot(); the host atomics are write-once per processBlock
-    // by updateHostTransportSnapshot() and never touched by any setter.
+    // getHostTransportSnapshot().
     double bpm_{120.0};
     int    timeSigNumerator_{4};
     int    timeSigDenominator_{4};
+#endif
 
     // Processor-owned canonical transport truth. Updated only from this
     // processor's processBlock(); ARA/UI read it via getPlayHeadState().
@@ -489,14 +524,18 @@ private:
     // Audio-thread runtime phase (Standalone only).
     RuntimePhase phase_{RuntimePhase::Stopped};
 
+#if JucePlugin_Build_VST3
     // Independent host metadata snapshot (no loop fields; loop truth lives in
     // playHeadState_). BPM/PPQ/recording/time-signature presentation only.
+    // Write-once per processBlock by updateHostTransportSnapshot(); never touched
+    // by any setter.
     std::atomic<double> hostTransportBpm_{120.0};
     std::atomic<double> hostTransportPpqPosition_{0.0};
     std::atomic<bool> hostTransportIsRecording_{false};
     std::atomic<int> hostTransportTimeSignatureNumerator_{4};
     std::atomic<int> hostTransportTimeSignatureDenominator_{4};
     HostTransportSnapshot updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo);
+#endif
 
     std::shared_ptr<ResamplingManager> resamplingManager_;
 
@@ -518,12 +557,14 @@ private:
     bool showWaveform_{true};
     // Discrete UI zoom percentage (75/90/100/110/125/150), per-processor-instance
     // single source of truth. Written via setUiZoomPercent (relaxed store); Editor
-    // observes via relaxed load. Persisted in OTST v10 / OTSS v3.
+    // observes via relaxed load. Persisted in OTST v11 / OTSS v3.
     std::atomic<int> uiZoomPercent_{100};
     int trackHeight_{120};
     
+#if JucePlugin_Build_Standalone
     // 导出错误信息
     juce::String lastExportError_;
+#endif
 
     // 由宿主生命周期入口（prepareToPlay / createEditor / didBindToARA）调用，
     // 绝不从 processBlock 调用；并发由 call_once 协调。
@@ -541,7 +582,9 @@ private:
     // 初始化成功后统一 replay 缓存的 deferred state（若有）。
     void replayDeferredState() noexcept;
 
+#if JucePlugin_Build_Standalone
     ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
+#endif
 
     ContentRenderService* resolveMutableLocalContentRenderService(ContentKey key) const noexcept;
     const ContentRenderService* resolveReadableContentRenderService(ContentKey key) const noexcept;
@@ -584,30 +627,38 @@ public:
     bool isInferenceReady() const { return ProcessF0Runtime::getInstance().isReady(); }
 
     bool isVocoderReady() const { return ProcessRenderRuntime::getInstance().isVocoderReady(); }
+#if JucePlugin_Build_Standalone
     SourceStore* getSourceStore() noexcept { return sourceStore_.get(); }
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
+#endif
     ContentRenderService* getContentRenderService() noexcept { return contentRenderService_.get(); }
     const ContentRenderService* getContentRenderService() const noexcept { return contentRenderService_.get(); }
     RenderCache::ChunkStats getReadableContentChunkStats(ContentKey key) const noexcept;
 
+#if JucePlugin_Build_VST3
     /** Returns the regular VST3 capture session, or nullptr outside regular VST3 mode. */
     Capture::CaptureSession* getCaptureSession() noexcept;
     const Capture::CaptureSession* getCaptureSession() const noexcept;
+#endif
+#if JucePlugin_Build_Standalone
     StandaloneArrangement* getStandaloneArrangement() noexcept { return standaloneArrangement_.get(); }
     const StandaloneArrangement* getStandaloneArrangement() const noexcept { return standaloneArrangement_.get(); }
     StandaloneContentRepository* getStandaloneContentRepository() noexcept { return standaloneContentRepository_.get(); }
     const StandaloneContentRepository* getStandaloneContentRepository() const noexcept { return standaloneContentRepository_.get(); }
+#endif
 
 #if JucePlugin_Enable_ARA
     OpenTuneDocumentController* getDocumentController() const;
     void didBindToARA() noexcept override;
 #endif
 
-    // Content and placement access
+#if JucePlugin_Build_Standalone
+    // Content and placement access (Standalone arrangement truth)
     uint64_t getPlacementId(int trackId, int placementIndex) const;
     int findPlacementIndexById(int trackId, uint64_t placementId) const;
     bool getPlacementByIndex(int trackId, int placementIndex, StandaloneArrangement::Placement& out) const;
     bool getPlacementById(int trackId, uint64_t placementId, StandaloneArrangement::Placement& out) const;
+#endif
     PitchShiftSettings getPitchShiftSettings(ContentKey key) const;
     ReferenceFeatureSet getReferenceFeatures(ContentKey key) const;
 
@@ -622,7 +673,9 @@ public:
 
     // ⚡️ vocal-time-stretch §3.6 — TimeGrid accessors per content
     bool ensureTimeToolAnchorSeed(ContentKey key);
+#if JucePlugin_Build_Standalone
     AutoRefAvailability queryAutoRefAvailability(uint64_t targetPlacementId) const;
+#endif
 
     /** 设置当前实验性参考对齐模式。由 UI 首选项变更驱动。 */
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode)
@@ -631,7 +684,9 @@ public:
     }
 
 private:
+#if JucePlugin_Build_Standalone
     void enqueueStandaloneStage2WhenCanonicalSettled(ContentKey key);
+#endif
     ReferenceFeatureProducer resolveReferenceFeatureProducer() const;
     // 纯数据 StandardAuto 特征生产（static：不访问 processor 状态，analysisRevision
     // 由提交方在消息线程固定，worker 只读提交时捕获的不可变 snapshot）。
@@ -730,6 +785,9 @@ public:
         referenceAnalysisService_->setNotificationDispatcher(std::move(dispatcher));
     }
 #endif
+    ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(ContentKey key);
+
+#if JucePlugin_Build_Standalone
     ReferenceAlignmentResult executeReferenceAlignmentForPlacement(uint64_t targetPlacementId);
 
     std::optional<SplitOutcome> splitPlacementAtSeconds(int trackId, int placementIndex, double splitSeconds);
@@ -737,11 +795,6 @@ public:
     std::optional<DeleteOutcome> deletePlacement(int trackId, int placementIndex);
     void runReclaimSweepOnMessageThread();   // public for test synchronous invocation
     void scheduleReclaimSweep();
-
-    // ── Internal: these APIs exist to serve remaining PluginProcessor.cpp callers
-    // ── (import, split, merge, clone, state save/load). Not for new code.
-    bool getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const;
-    ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(ContentKey key);
 
     bool exportPlacementAudio(int trackId, int placementIndex, const juce::File& file);
     // 导出整个轨道的音频（时长以最晚Clip结束为准）
@@ -751,18 +804,21 @@ public:
     
     // 导出错误信息
     juce::String getLastExportError() const { return lastExportError_; }
+#endif
 
     // Rendering & Buffering
 
-    // Transport control API — thin accessors over processor-owned PlayHeadState.
-    // VST3/ARA uses getPlayHeadState() const reference for UI. Writes only via
-    // Standalone setter methods (play/pause/stop/setPosition/setLoopEnabled).
+    // Standalone transport control API — thin accessors over processor-owned
+    // PlayHeadState. VST3/ARA uses getPlayHeadState() const reference for UI.
+    // Writes only via Standalone setter methods (play/pause/stop/setPosition/setLoopEnabled).
+#if JucePlugin_Build_Standalone
     void play();
     void pause();
     void stop();
     void pauseAtPosition(double targetSeconds);
     void setPosition(double seconds);
     void setLoopEnabled(bool enabled);
+#endif
     bool isPlaying() const noexcept { return getPlayHeadState().isPlaying.load(std::memory_order_relaxed); }
 
     /// 从 OutputSpectrumAnalyzer 复制最新 684 个对数频段：spectrum = 主频谱线，peaks = 峰值线（UI 线程调用）。
@@ -770,7 +826,9 @@ public:
                             SpectrumArray& peaks) const noexcept;
     bool isLoopEnabled() const noexcept { return getPlayHeadState().isLooping.load(std::memory_order_relaxed); }
     double getPosition() const { return getPlayHeadState().getPresentedPositionSeconds(); }
+#if JucePlugin_Build_VST3
     HostTransportSnapshot getHostTransportSnapshot() const;
+#endif
 
     /** Canonical transport truth; UI binds a const non-owning reference.
      *  In ARA mode, returns the document-level shared state so all roles
@@ -781,42 +839,28 @@ public:
 
     double getPlayStartPosition() const { return playStartPosition_.load(); }
 
+#if JucePlugin_Build_Standalone
     // Standalone canonical BPM setter. Validates 1..999 range and writes only
-    // the processor-owned canonical bpm_; never touches host transport atomics.
+    // the processor-owned canonical bpm_.
     void setBpm(double bpm);
 
     // Standalone canonical time signature setter. Validates numerator 1..64
     // and denominator in {1,2,4,8,16,32,64}; writes processor-owned canonical
-    // state only. Never touches host transport atomics.
+    // state only.
     void setTimeSignature(int numerator, int denominator);
+#endif
 
-    // Shared code dispatches by runtime wrapperType, NOT by the
-    // JucePlugin_Build_Standalone macro: the OpenTune_SharedCode target is
-    // compiled with both JucePlugin_Build_Standalone=1 and
-    // JucePlugin_Build_VST3=1 simultaneously, so a compile-time branch would
-    // wrongly excise the VST3 host-snapshot read path. Only the VST3 runtime
-    // wrapper reads host transport; Standalone uses the processor-owned local
-    // canonical BPM and time signature.
-    double getBpm() const
-    {
-        if (wrapperType == juce::AudioProcessor::wrapperType_VST3)
-            return getHostTransportSnapshot().bpm;
-        return bpm_;
-    }
-
-    int getTimeSigNumerator() const
-    {
-        if (wrapperType == juce::AudioProcessor::wrapperType_VST3)
-            return getHostTransportSnapshot().timeSignatureNumerator;
-        return timeSigNumerator_;
-    }
-
-    int getTimeSigDenominator() const
-    {
-        if (wrapperType == juce::AudioProcessor::wrapperType_VST3)
-            return getHostTransportSnapshot().timeSignatureDenominator;
-        return timeSigDenominator_;
-    }
+    // Each SharedCode target is single-format: the host-snapshot read path only
+    // exists in the VST3 variant; Standalone reads its own canonical state.
+#if JucePlugin_Build_VST3
+    double getBpm() const { return getHostTransportSnapshot().bpm; }
+    int getTimeSigNumerator() const { return getHostTransportSnapshot().timeSignatureNumerator; }
+    int getTimeSigDenominator() const { return getHostTransportSnapshot().timeSignatureDenominator; }
+#else
+    double getBpm() const { return bpm_; }
+    int getTimeSigNumerator() const { return timeSigNumerator_; }
+    int getTimeSigDenominator() const { return timeSigDenominator_; }
+#endif
 
     /** Discrete UI zoom percentage; invalid values are rejected (state unchanged). */
     void setUiZoomPercent(int percent) noexcept;

@@ -1,5 +1,4 @@
-#if !JucePlugin_Build_Standalone
-
+// VST3-only TU (attached to OpenTune_VST3); a wrong-target attachment fails fast.
 #include "EditorFactory.h"
 #include "Plugin/PluginEditor.h"
 #include "PluginProcessor.h"
@@ -12,5 +11,3 @@ juce::AudioProcessorEditor* createOpenTuneEditor(OpenTuneAudioProcessor& process
 }
 
 } // namespace OpenTune
-
-#endif // !JucePlugin_Build_Standalone

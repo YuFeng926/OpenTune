@@ -196,7 +196,7 @@ cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --p
 
 # Compile Release version
 cmd /v/on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_VST3"
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTune_Standalone"
+cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build --preset windows-ara-release --target OpenTuneStandalone_Standalone"
 ```
 
 **Windows (Ninja + CMake)**
@@ -212,7 +212,7 @@ The same ARA2 VST3 binary will naturally fall back to the Capture workflow in st
 For development in Visual Studio IDE:
 1. Run the `cmake --preset ...` command above
 2. Open `build-ara-overlay-vs18-clean/OpenTune.sln`
-3. Set `OpenTune_Standalone` or `OpenTune_VST3` as the startup project
+3. Set `OpenTuneStandalone_Standalone` or `OpenTune_VST3` as the startup project
 4. Select Release/x64 configuration, compile and run
 
 **macOS (Ninja + CMake)**
@@ -240,7 +240,7 @@ Packaging commands:
 
 | Format | Windows | macOS |
 |--------|---------|-------|
-| Standalone | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/Standalone/OpenTune.exe` | `build/OpenTune_artefacts/Release/Standalone/OpenTune.app` |
+| Standalone | `build-ara-overlay-vs18-clean/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.exe` | `build/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.app` |
 | VST3 ARA2 | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` |
 
 After build completion, runtime DLLs, model files, and D3D12 directory will be automatically copied to the artifact directory, requiring no manual operation.

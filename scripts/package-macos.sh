@@ -97,7 +97,8 @@ case "${ARCH}" in
         ;;
 esac
 
-ARTIFACTS="${BUILD_DIR}/OpenTune_artefacts/Release"
+STANDALONE_ARTIFACTS="${BUILD_DIR}/OpenTuneStandalone_artefacts/Release"
+VST3_ARTIFACTS="${BUILD_DIR}/OpenTune_artefacts/Release"
 DMG_NAME="${APP_NAME}-${VERSION}-macOS-${DMG_ARCH_LABEL}"
 
 # ── 工具检查 ──────────────────────────────────────────────────────────────────
@@ -124,8 +125,8 @@ if [ "$SKIP_BUILD" = false ]; then
 fi
 
 # ── 验证产物 ──────────────────────────────────────────────────────────────────
-APP_BUNDLE="${ARTIFACTS}/Standalone/${APP_NAME}.app"
-VST3_BUNDLE="${ARTIFACTS}/VST3/${APP_NAME}.vst3"
+APP_BUNDLE="${STANDALONE_ARTIFACTS}/Standalone/${APP_NAME}.app"
+VST3_BUNDLE="${VST3_ARTIFACTS}/VST3/${APP_NAME}.vst3"
 
 if [ ! -d "${APP_BUNDLE}" ]; then
     echo "❌ Standalone 产物不存在: ${APP_BUNDLE}"
