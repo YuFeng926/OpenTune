@@ -9,6 +9,7 @@
 #include "Editor/PitchShiftDialogContent.h"
 #include "Plugin/Capture/CaptureSession.h"
 #include "Utils/AppLogger.h"
+#include "Utils/EditorUiSync.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/ParameterPanelSync.h"
 #include "Utils/PitchShiftEditAction.h"
@@ -108,7 +109,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , languageBinding_(languageState_)
     , menuBar_(processor, MenuBarComponent::Profile::Plugin)
     , topBar_(menuBar_, transportBar_)
-    , pianoRoll_(processor.getPlayHeadState())
+    , pianoRoll_(processor.getPlayHeadState(), processor.getUndoManager(),
+                 [this](SpectrumArray& spectrum, SpectrumArray& peaks) {
+                     processorRef_.copyOutputSpectrum(spectrum, peaks);
+                 })
     , overviewStrip_(pianoRoll_.getWaveformMipmapCache())
 {
     // 构造顺序固定：limits → resizable → preferred size（§4.4）。
@@ -219,7 +223,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     renderBadge_.setVisible(false);
 
     contentCommands_ = processorRef_.getContentCommands();
-    pianoRoll_.setProcessor(&processorRef_);
     pianoRoll_.setContentCommands(contentCommands_);
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
         return processorRef_.getContentSnapshot(key);
@@ -382,16 +385,18 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
 
 void OpenTuneAudioProcessorEditor::applyUiZoomIfNeeded()
 {
-    const int uiZoomPercent = processorRef_.getUiZoomPercent();
-    if (uiZoomPercent == appliedUiZoomPercent_)
+    const auto zoomDecision = resolveEditorUiZoomDecision(processorRef_.getUiZoomPercent(),
+                                                          appliedUiZoomPercent_,
+                                                          kBaseMinWidth,
+                                                          kBaseMinHeight);
+    if (!zoomDecision.changed)
         return;
 
-    appliedUiZoomPercent_ = uiZoomPercent;
+    appliedUiZoomPercent_ = zoomDecision.appliedPercent;
 
     // 保持当前外层窗口尺寸（宿主所有）；仅当新 min 不满足时由 constrainer 扩大（§7.1/§7.3）。
-    const float uiZoomScale = static_cast<float>(appliedUiZoomPercent_) / 100.0f;
-    setResizeLimits(static_cast<int>(std::ceil(kBaseMinWidth * uiZoomScale)),
-                    static_cast<int>(std::ceil(kBaseMinHeight * uiZoomScale)),
+    setResizeLimits(zoomDecision.minWidth,
+                    zoomDecision.minHeight,
                     kMaxWindowWidth, kMaxWindowHeight);
 
     resized();
@@ -523,24 +528,25 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // Revision 检测（只在有效 content 且未切换时执行）
     if (activeKey.isValid() && !contentJustSwitched) {
         auto snap = processorRef_.getContentSnapshot(activeKey);
-        const uint64_t currentNotesRevision = snap ? snap->notesRevision : 0;
-        const uint64_t currentTimeGridRevision = snap ? snap->timeGridRevision : 0;
-        const uint64_t currentPitchRevision = snap ? snap->pitchRevision : 0;
+        const auto revisionPulse = resolveContentRevisionPulse(snap ? snap->notesRevision : 0,
+                                                               snap ? snap->timeGridRevision : 0,
+                                                               snap ? snap->pitchRevision : 0,
+                                                               lastPianoRollNotesRevision_,
+                                                               lastPianoRollTimeGridRevision_,
+                                                               lastPianoRollPitchRevision_);
 
-        if (currentNotesRevision != lastPianoRollNotesRevision_) {
+        if (revisionPulse.notesChanged)
             pianoRoll_.onNotesRevisionChanged();
-            lastPianoRollNotesRevision_ = currentNotesRevision;
-        }
 
-        if (currentTimeGridRevision != lastPianoRollTimeGridRevision_) {
+        if (revisionPulse.timeGridChanged)
             pianoRoll_.onTimeGridRevisionChanged();
-            lastPianoRollTimeGridRevision_ = currentTimeGridRevision;
-        }
 
-        if (currentPitchRevision != lastPianoRollPitchRevision_) {
+        if (revisionPulse.pitchChanged)
             pianoRoll_.onPitchRevisionChanged();
-            lastPianoRollPitchRevision_ = currentPitchRevision;
-        }
+
+        lastPianoRollNotesRevision_ = revisionPulse.nextNotesRevision;
+        lastPianoRollTimeGridRevision_ = revisionPulse.nextTimeGridRevision;
+        lastPianoRollPitchRevision_ = revisionPulse.nextPitchRevision;
     }
 
     // Pitch shift indicator: single source of truth is active content snapshot
@@ -1462,16 +1468,6 @@ void OpenTuneAudioProcessorEditor::overviewNavigateRequested(double visibleStart
 OpenTuneAudioProcessorEditor::PianoRollContentSync
 OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
 {
-    if (!contentCommands_) {
-        contentCommands_ = processorRef_.getContentCommands();
-        pianoRoll_.addListener(this);
-        pianoRoll_.setProcessor(&processorRef_);
-        pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
-            return processorRef_.getContentSnapshot(key);
-        });
-        pianoRoll_.setContentCommands(contentCommands_);
-    }
-
     const auto sync = resolveCurrentContentSync();
     const bool identityChanged = sync.activePlacementIdentity.has_value() != presentedPlacementIdentity_.has_value()
         || (sync.activePlacementIdentity.has_value() && !(*sync.activePlacementIdentity == *presentedPlacementIdentity_));

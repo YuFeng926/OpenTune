@@ -85,6 +85,10 @@ public:
     // 不吸附、不请求 render。不创建 undo、不 mark dirty。
     virtual bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) = 0;
 
+    // TimeGrid anchor seed entry (async preheat + seed). UI calls this command
+    // only; the processor keeps its analysisFinished/F0 callback chain unchanged.
+    virtual bool ensureTimeToolAnchorSeed(ContentKey key) = 0;
+
     // 一次替换整个 AutomationLane，推进
     // outputGain/content revision，调用 republishPlaybackSource()；
     // 不 enqueue render、不失效 RenderCache。

@@ -56,7 +56,6 @@
 #include "Content/ContentKey.h"
 #include "Content/ContentEditCommands.h"
 #include "Render/ContentRenderService.h"
-#include "Runtime/ProcessF0Runtime.h"
 #include "Runtime/ProcessRenderRuntime.h"
 #include <functional>
 
@@ -326,13 +325,6 @@ public:
     CommittedPlacement commitPreparedImportAsPlacement(PreparedImport&& prepared,
                                                        const ImportPlacement& placement,
                                                        uint64_t sourceId = 0);
-    uint64_t commitPreparedImportAsContent(PreparedImport&& prepared,
-                                                    uint64_t sourceId = 0);
-
-    bool ensureSourceById(uint64_t sourceId,
-                          const juce::String& displayName,
-                          std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-                          double sampleRate);
 
     bool movePlacementToTrack(int sourceTrackId,
                               int targetTrackId,
@@ -623,8 +615,6 @@ public:
 
     /** 清除缓存并重新渲染所有 clip（UI 线程调用）。 */
     void invalidateAllContentCaches();
-
-    bool isInferenceReady() const { return ProcessF0Runtime::getInstance().isReady(); }
 
     bool isVocoderReady() const { return ProcessRenderRuntime::getInstance().isVocoderReady(); }
 #if JucePlugin_Build_Standalone

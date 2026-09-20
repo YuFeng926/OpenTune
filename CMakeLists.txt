@@ -624,6 +624,7 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Standalone/UI/PianoRoll/PianoRollOverlayComponent.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.h
+        Source/Standalone/UI/PianoRoll/PianoRollTimeMap.h
 
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h
@@ -670,6 +671,7 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Utils/PianoKeyAudition.h
         Source/Utils/AppLogger.cpp
         Source/Utils/AppLogger.h
+        Source/Utils/EditorUiSync.h
         Source/Utils/ChannelLayoutLogger.cpp
         Source/Utils/ChannelLayoutLogger.h
         Source/Utils/AppPreferences.cpp
@@ -720,6 +722,7 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Content/EditableContentState.h
         Source/Content/AudioModificationContentState.h
         Source/Content/EditableContentSnapshot.h
+        Source/Content/ContentPatchGeometry.h
 
         # Render Layer
         Source/Render/PlaybackReadSource.h
@@ -742,6 +745,9 @@ set(OPENTUNE_COMMON_SOURCES
 
 # Standalone-only SharedCode sources (never referenced by the VST3 target).
 set(OPENTUNE_STANDALONE_SOURCES
+        Source/Plugin/StandaloneProcessorStateCodec.cpp
+        Source/Plugin/StandaloneProcessorStateCodec.h
+
         Source/Audio/AudioFormatRegistry.cpp
         Source/Audio/AudioFormatRegistry.h
 
@@ -1417,6 +1423,19 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneVst3StateCodecTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME Vst3ProcessorStateCodecTests COMMAND OpenTuneVst3StateCodecTests)
+
+    # Standalone processor settings codec (OTSS v3 / legacy v2) tests.
+    add_executable(OpenTuneStandaloneStateCodecTests
+        Tests/StandaloneProcessorStateCodecTests.cpp
+        Source/Plugin/StandaloneProcessorStateCodec.cpp
+    )
+    target_include_directories(OpenTuneStandaloneStateCodecTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneStandaloneStateCodecTests PRIVATE juce::juce_core)
+    if(MSVC)
+        target_compile_options(OpenTuneStandaloneStateCodecTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME StandaloneProcessorStateCodecTests COMMAND OpenTuneStandaloneStateCodecTests)
 
     # Regression: a structurally valid CAPz archive may contain zero segments.
     add_executable(OpenTuneCapturePersistenceTests

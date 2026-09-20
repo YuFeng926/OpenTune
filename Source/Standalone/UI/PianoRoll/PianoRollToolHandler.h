@@ -353,7 +353,6 @@ private:
     // 所有编辑入口只接受 source-domain double。
     // invalid projection 意味着没有 edit target，返回 nullopt。
     std::optional<double> pixelXToSourceTime(int pixelX) const;
-    double sourceTimeToTimelineTime(double sourceSeconds) const;
     int sourceTimeToScreenX(double sourceSeconds) const;
     SourceEditRange sourceEditRange(double minDurationSeconds = 0.0) const;
 

@@ -1,4 +1,5 @@
 #include "PianoRollToolHandler.h"
+#include "PianoRollTimeMap.h"
 #include "../../../Utils/AudioEditingScheme.h"
 #include "../../../Utils/AppLogger.h"
 #include "../../../Utils/KeyShortcutConfig.h"
@@ -286,29 +287,23 @@ std::optional<double> PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
     if (!grid)
         return std::nullopt;
 
-    const double timelineSeconds = ctx_.getViewMapper().xToTime(pixelX);
-    const double outputSeconds = projection.projectTimelineTimeToContent(timelineSeconds);
-    return grid->tauInverse(outputSeconds);
+    const PianoRollTimeMap map(projection, *grid, ctx_.getViewMapper());
+    return map.xToSource(pixelX);
 }
 
-double PianoRollToolHandler::sourceTimeToTimelineTime(double sourceSeconds) const
+int PianoRollToolHandler::sourceTimeToScreenX(double sourceSeconds) const
 {
-    // Pipeline: source 鈫?tauForward 鈫?output(content) 鈫?timeline.
+    // Pipeline: source 鈫?tauForward 鈫?output(content) 鈫?timeline 鈫?screen X.
     // projection valid 是调用方契约（入口已检查）。
     const auto projection = ctx_.getContentProjection();
     jassert(projection.isValid());
 
     const auto grid = ctx_.getActiveContentTimeGrid();
     if (!grid)
-        return 0.0;
+        return ctx_.getViewMapper().timeToX(0.0);
 
-    const double outputSeconds = grid->tauForward(sourceSeconds);
-    return projection.projectContentTimeToTimeline(outputSeconds);
-}
-
-int PianoRollToolHandler::sourceTimeToScreenX(double sourceSeconds) const
-{
-    return ctx_.getViewMapper().timeToX(sourceTimeToTimelineTime(sourceSeconds));
+    const PianoRollTimeMap map(projection, *grid, ctx_.getViewMapper());
+    return map.sourceToX(sourceSeconds);
 }
 
 SourceEditRange PianoRollToolHandler::sourceEditRange(double minDurationSeconds) const

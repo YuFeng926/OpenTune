@@ -1,5 +1,7 @@
 ﻿#include "PianoRollComponent.h"
-#include "../../PluginProcessor.h"
+#include "../../Content/EditableContentSnapshot.h"
+#include "../../Utils/AppPreferences.h"
+#include "../../Utils/PlayHeadState.h"
 #include "../../Utils/LocalizationManager.h"
 #include "../Utils/AppLogger.h"
 #include "../../Utils/PianoRollEditAction.h"
@@ -22,6 +24,7 @@
 #include "Utils/PianoKeyAudition.h"
 #include "TimelineViewportPolicy.h"
 #include "TimelineLayerComposer.h"
+#include "PianoRoll/PianoRollTimeMap.h"
 namespace OpenTune {
 
 namespace {
@@ -133,8 +136,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.commitVolumeEnvelope = [this](AutomationLane before, AutomationLane after) -> ContentCommitSnapshot {
         if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return nullptr;
         const auto committedSnap = contentCommands_->commitVolumeEnvelope(editedContentKey_, after);
-        if (committedSnap != nullptr && processor_ != nullptr) {
-            processor_->getUndoManager().addAction(std::make_unique<VolumeEnvelopeEditAction>(
+        if (committedSnap != nullptr) {
+            undoManager_.addAction(std::make_unique<VolumeEnvelopeEditAction>(
                 contentCommands_, editedContentKey_, juce::String::fromUTF8(u8"音量包络"),
                 std::move(before), std::move(after)));
         }
@@ -154,8 +157,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         contentCommands_->republishPlaybackSource(editedContentKey_);
     };
     toolCtx.pushUndoAction = [this](std::unique_ptr<UndoAction> action) {
-        if (processor_ != nullptr && action != nullptr)
-            processor_->getUndoManager().addAction(std::move(action));
+        if (action != nullptr)
+            undoManager_.addAction(std::move(action));
     };
     // Pitch 工具与 AUTO 同源的 scale snap：唯一映射入口 ScaleUiMapping
     toolCtx.getActiveScaleSnap = [this]() -> std::optional<ScaleSnapConfig> {
@@ -277,7 +280,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.commitTimeGrid = [this](std::shared_ptr<const TimeGridSnapshot> newSnap,
                                      std::shared_ptr<const TimeGridSnapshot> oldSnap,
                                      juce::String description) -> bool {
-        if (processor_ == nullptr || !editedContentKey_.isValid()) return false;
+        if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return false;
         if (newSnap == nullptr || oldSnap == nullptr) return false;
 
         auto action = std::make_unique<TimeGridEditAction>(
@@ -288,7 +291,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             newSnap);
         const bool published = contentCommands_->setTimeGrid(editedContentKey_, newSnap);
         if (!published) return false;
-        processor_->getUndoManager().addAction(std::move(action));
+        undoManager_.addAction(std::move(action));
 
         {
             auto snap = readEditedSnapshot();
@@ -661,8 +664,12 @@ void PianoRollComponent::initializeToolHandler() {
     toolHandler_ = std::make_unique<PianoRollToolHandler>(buildToolHandlerContext());
 }
 
-PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState)
+PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState,
+                                       UndoManager& undoManager,
+                                       SpectrumReader spectrumReader)
     : playHeadState_(playHeadState),
+      undoManager_(undoManager),
+      spectrumReader_(std::move(spectrumReader)),
       eqCursor_(CursorThemeManager::getInstance().resolveCursor(
           juce::MouseCursor(ToolbarIcons::createEqIconImage(), 12, 12))) {
     initializeUIComponents();
@@ -680,12 +687,6 @@ PianoRollComponent::~PianoRollComponent() {
 
 
 
-void PianoRollComponent::setProcessor(OpenTuneAudioProcessor* processor)
-{
-    processor_ = processor;
-    refreshEditedContentNotes();
-}
-
 void PianoRollComponent::setContentCommands(std::shared_ptr<ContentEditCommands> commands)
 {
     contentCommands_ = std::move(commands);
@@ -696,7 +697,7 @@ void PianoRollComponent::refreshEditedContentNotes()
 {
     cachedNotes_.clear();
 
-    if (processor_ != nullptr && editedContentKey_.isValid()) {
+    if (editedContentKey_.isValid()) {
         if (auto snap = readEditedSnapshot()) {
             cachedNotes_ = snap->notes;
         }
@@ -745,7 +746,7 @@ bool PianoRollComponent::commitNoteDraft()
         return true;
     }
 
-    if (processor_ == nullptr || !editedContentKey_.isValid()) {
+    if (contentCommands_ == nullptr || !editedContentKey_.isValid()) {
         return false;
     }
 
@@ -834,8 +835,7 @@ bool PianoRollComponent::commitNoteDraft()
         std::move(beforePatch),
         std::move(patch));
 
-    if (processor_ != nullptr)
-        processor_->getUndoManager().addAction(std::move(action));
+    undoManager_.addAction(std::move(action));
 
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
@@ -886,13 +886,7 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
     eqPopup_->onClose = [this]() { closeEqPopup(); };
     eqPopup_->onReadSpectrum = [this](SpectrumArray& spectrum,
                                       SpectrumArray& peaks) {
-        if (processor_ != nullptr)
-            processor_->copyOutputSpectrum(spectrum, peaks);
-        else
-        {
-            spectrum.fill(0.0f);
-            peaks.fill(0.0f);
-        }
+        spectrumReader_(spectrum, peaks);
     };
     eqPopup_->onRemoveConfirmationSuppressed = [this](bool suppress) {
         if (appPreferences_ != nullptr)
@@ -945,7 +939,7 @@ juce::Rectangle<int> PianoRollComponent::placeEqPopupBounds(const juce::Rectangl
 
 void PianoRollComponent::applyEqSettingsToSelection(const EqSettings& settings)
 {
-    if (!editedContentKey_.isValid() || processor_ == nullptr)
+    if (!editedContentKey_.isValid() || contentCommands_ == nullptr)
         return;
     const auto& selected = eqEditTargetIndices_;
     if (selected.empty())
@@ -965,7 +959,7 @@ void PianoRollComponent::applyEqSettingsToSelection(const EqSettings& settings)
 
 void PianoRollComponent::removeEqFromSelection()
 {
-    if (!editedContentKey_.isValid() || processor_ == nullptr)
+    if (!editedContentKey_.isValid() || contentCommands_ == nullptr)
         return;
     const auto& selected = eqEditTargetIndices_;
     if (selected.empty())
@@ -999,7 +993,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
                                                                const std::vector<PitchCorrectionSegment>& segments,
                                                                F0FrameRange affectedRange)
 {
-    if (processor_ == nullptr || !editedContentKey_.isValid() || snapshot.pitchCurve == nullptr) {
+    if (contentCommands_ == nullptr || !editedContentKey_.isValid() || snapshot.pitchCurve == nullptr) {
         return {};
     }
 
@@ -1094,7 +1088,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
         std::move(afterSegments),
         ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive});
 
-    processor_->getUndoManager().addAction(std::move(action));
+    undoManager_.addAction(std::move(action));
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
     lastKnownNotesRevision_ = committedSnap->notesRevision;
@@ -1122,7 +1116,7 @@ void PianoRollComponent::captureBeforeUndoSnapshot()
 
 void PianoRollComponent::recordUndoAction(const juce::String& description, F0FrameRange affectedRange)
 {
-    if (processor_ == nullptr || !editedContentKey_.isValid() || !undoSnapshotCaptured_)
+    if (contentCommands_ == nullptr || !editedContentKey_.isValid() || !undoSnapshotCaptured_)
         return;
 
     AppLogger::log("AutoTune: recordUndoAction entry beforeNotes=" + juce::String(static_cast<int>(beforeUndoNotes_.size()))
@@ -1192,7 +1186,7 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
         ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive});
 
     AppLogger::log("AutoTune: recordUndoAction before addAction");
-    processor_->getUndoManager().addAction(std::move(action));
+    undoManager_.addAction(std::move(action));
     AppLogger::log("AutoTune: recordUndoAction after addAction");
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
@@ -1501,12 +1495,16 @@ void PianoRollComponent::drawPlayheadNoteHighlight(juce::Graphics& g)
     ctx.contents = buildContentRenderItems();
 
     for (const auto& item : ctx.contents) {
-        if (!item.active || !item.displayNotes) continue;
+        if (!item.active || item.displayNotes == nullptr) continue;
+        // playheadTimeForPaint_ 是 timeline；Note start/end 是 source。
+        // 必须按 item 自己的 projection + timeGrid 逆映射后再比较。
+        const PianoRollTimeMap map(item.projection, *item.timeGrid, ctx.coords);
+        const double sourcePlayhead = map.timelineToSource(playheadTimeForPaint_);
         std::vector<int> hitIndices;
         const auto* notes = item.displayNotes;
         for (int i = 0; i < static_cast<int>(notes->size()); ++i) {
             const auto& n = (*notes)[i];
-            if (playheadTimeForPaint_ >= n.startTime && playheadTimeForPaint_ < n.endTime)
+            if (sourcePlayhead >= n.startTime && sourcePlayhead < n.endTime)
                 hitIndices.push_back(i);
         }
         if (!hitIndices.empty())
@@ -2982,8 +2980,8 @@ double PianoRollComponent::sourceTimeToTimelineTime(double sourceSeconds) const
     const auto snap = readEditedSnapshot();
     if (!snap || !snap->timeGrid)
         return 0.0;
-    const double outputSeconds = snap->timeGrid->tauForward(sourceSeconds);
-    return projection.projectContentTimeToTimeline(outputSeconds);
+    const PianoRollTimeMap map(projection, *snap->timeGrid, makeViewMapper());
+    return map.sourceToTimeline(sourceSeconds);
 }
 
 int PianoRollComponent::sourceTimeToX(double sourceSeconds) const
@@ -3001,9 +2999,8 @@ double PianoRollComponent::xToSourceTime(int x) const
     if (!snap || !snap->timeGrid)
         return 0.0;
 
-    const double timeline = makeViewMapper().xToTime(x);
-    const double output   = projection.projectTimelineTimeToContent(timeline);
-    return snap->timeGrid->tauInverse(output);
+    const PianoRollTimeMap map(projection, *snap->timeGrid, makeViewMapper());
+    return map.xToSource(x);
 }
 
 SourceEditRange PianoRollComponent::sourceEditRange() const
@@ -3369,6 +3366,7 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
     const double visibleEndSeconds = TimelineViewportPolicy::visibleEndSeconds(resolvedCamera,
                                                                                  contentWidth);
     const auto mapper = makeViewMapper();
+    const PianoRollTimeMap timeMap(projection, *snapshot->timeGrid, mapper);
     float highestMidi = -std::numeric_limits<float>::infinity();
     float lowestMidi = std::numeric_limits<float>::infinity();
     for (const auto& note : getCommittedNotes()) {
@@ -3376,10 +3374,8 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
         if (!(std::isfinite(adjustedPitch) && adjustedPitch > 0.0f))
             continue;
 
-        const double noteTimelineStart = projection.projectContentTimeToTimeline(
-            snapshot->timeGrid->tauForward(note.startTime));
-        const double noteTimelineEnd = projection.projectContentTimeToTimeline(
-            snapshot->timeGrid->tauForward(note.endTime));
+        const double noteTimelineStart = timeMap.sourceToTimeline(note.startTime);
+        const double noteTimelineEnd = timeMap.sourceToTimeline(note.endTime);
         if (!std::isfinite(noteTimelineStart) || !std::isfinite(noteTimelineEnd)
             || noteTimelineEnd <= resolvedCamera.visibleStartSeconds
             || noteTimelineStart >= visibleEndSeconds) {
@@ -3467,12 +3463,24 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
     bool playStateChanged = (playingNow != lastObservedPlayHeadPlaying_);
 
+    // ── Playhead hit bookkeeping ──
+    // 命中判定在 source 域完成，但每个 render item 有各自的 projection + timeGrid，
+    // 因此命中结果必须携带来源 item 的映射，damage bounds 才能用同一映射还原。
+    struct HitNote {
+        ContentKey contentKey;
+        int noteIndex = 0;
+        Note note;
+        ContentTimelineProjection projection;
+        std::shared_ptr<const TimeGridSnapshot> timeGrid;
+    };
+
     // ── Helper: note highlight visual bounds using an arbitrary camera ──
     // Mirrors getNoteBounds' geometry but accepts a camera parameter so old/new
     // projection can differ.  For OpenDyne blobs the vertical extent covers the
     // worst-case blob envelope (kBlobHalfKeys × maxGain = 3.75 × pps).
-    auto noteHighlightBounds = [this](const Note& n,
+    auto noteHighlightBounds = [this](const HitNote& hit,
                                       const TimelineViewportCamera& cam) -> juce::Rectangle<int> {
+        const Note& n = hit.note;
         const float adjustedPitch = n.getAdjustedPitch();
         if (adjustedPitch <= 0.0f)
             return {};
@@ -3483,9 +3491,10 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
 
         const ViewportState view{ cam, pixelsPerSemitone_, verticalScrollOffset_ };
         const auto mapper = makeViewMapperForView(view);
+        const PianoRollTimeMap map(hit.projection, *hit.timeGrid, mapper);
 
-        const int x1 = mapper.timeToX(sourceTimeToTimelineTime(n.startTime));
-        const int x2 = mapper.timeToX(sourceTimeToTimelineTime(n.endTime));
+        const int x1 = map.sourceToX(n.startTime);
+        const int x2 = map.sourceToX(n.endTime);
         const int width = std::max(1, x2 - x1);
         const float midi = mapper.freqToMidi(adjustedPitch);
         const float cy = mapper.midiToY(midi);
@@ -3511,26 +3520,23 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
                    .getIntersection(getTimelineViewportBounds());
     };
 
-    struct HitNotes {
-        std::vector<int> indices;
-        std::vector<Note> notes;
-    };
-
     // ── Helper: collect hit notes (same display items and condition as drawPlayheadNoteHighlight) ──
-    // Condition: playing && time > 0 && note.startTime ≤ time < note.endTime
-    auto collectHitNotes = [this](double time, bool playing) -> HitNotes {
-        if (!playing || time <= 0.0)
+    // timelineTime 先按每个 item 自己的映射逆到 source，再比较 note.startTime/endTime。
+    // Condition: playing && time > 0 && note.startTime ≤ sourceTime < note.endTime
+    auto collectHitNotes = [this](double timelineTime, bool playing) -> std::vector<HitNote> {
+        if (!playing || timelineTime <= 0.0)
             return {};
-        HitNotes hits;
+        std::vector<HitNote> hits;
         for (const auto& item : buildContentRenderItems()) {
             if (!item.active || item.displayNotes == nullptr)
                 continue;
 
+            const PianoRollTimeMap map(item.projection, *item.timeGrid, makeViewMapper());
+            const double sourceTime = map.timelineToSource(timelineTime);
             const auto& notes = *item.displayNotes;
             for (int i = 0; i < static_cast<int>(notes.size()); ++i) {
-                if (time >= notes[i].startTime && time < notes[i].endTime) {
-                    hits.indices.push_back(i);
-                    hits.notes.push_back(notes[static_cast<size_t>(i)]);
+                if (sourceTime >= notes[i].startTime && sourceTime < notes[i].endTime) {
+                    hits.push_back({ item.contentKey, i, notes[i], item.projection, item.timeGrid });
                 }
             }
         }
@@ -3614,11 +3620,20 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         damage = oldPH.bounds.getUnion(newPH.bounds);
 
     // Highlight repaint: note hit set changed — NOT gated by stableCont
-    if (oldHits.indices != newHits.indices) {
-        for (const auto& note : oldHits.notes)
-            damage = damage.getUnion(noteHighlightBounds(note, oldCamera));
-        for (const auto& note : newHits.notes)
-            damage = damage.getUnion(noteHighlightBounds(note, camera_));
+    auto sameHitSet = [](const std::vector<HitNote>& a, const std::vector<HitNote>& b) {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].contentKey != b[i].contentKey || a[i].noteIndex != b[i].noteIndex)
+                return false;
+        }
+        return true;
+    };
+    if (!sameHitSet(oldHits, newHits)) {
+        for (const auto& hit : oldHits)
+            damage = damage.getUnion(noteHighlightBounds(hit, oldCamera));
+        for (const auto& hit : newHits)
+            damage = damage.getUnion(noteHighlightBounds(hit, camera_));
     }
 
     if (!damage.isEmpty())
@@ -3722,7 +3737,7 @@ void PianoRollComponent::ensureOpenDyneNotesIfNeeded()
     // OpenDyne 语义：模式呈现需要音符可见。切入 OpenDyne 或加载/切换内容时，
     // 若内容已有 OriginalF0 数据但尚未初始化音符拓扑，则生成音符（复用导入同一路径：
     // 初始状态不量化，保持 originalPitch，SNAP 负责吸附；不重新提取 F0）。
-    if (!isOpenDyne() || !editedContentKey_.isValid() || processor_ == nullptr)
+    if (!isOpenDyne() || !editedContentKey_.isValid() || contentCommands_ == nullptr)
         return;
     auto snap = readEditedSnapshot();
     if (snap == nullptr || snap->noteTopologyInitialized)
@@ -3732,7 +3747,7 @@ void PianoRollComponent::ensureOpenDyneNotesIfNeeded()
     const auto curveSnap = snap->pitchCurve->getSnapshot();
     if (curveSnap == nullptr || curveSnap->getOriginalF0().empty())
         return;  // F0 未就绪（提取中或失败）
-    if (processor_->generateNotesOnlyByContentKey(editedContentKey_, getCurrentAutoTuneParams()))
+    if (contentCommands_->generateNotesOnly(editedContentKey_, getCurrentAutoTuneParams()))
         listeners_.call([](Listener& listener) { listener.contentEdited(); });
     // 提交置位 noteTopologyInitialized 并推进 notesRevision → onNotesRevisionChanged 自动刷新缓存并重绘
 }
@@ -3745,10 +3760,11 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
 
     if (tool == ToolId::TimeTool
         && currentTool_ != ToolId::TimeTool
-        && processor_ != nullptr
+        && contentCommands_ != nullptr
         && editedContentKey_.isValid()) {
-        // This is a processor-specific operation, not content
-        processor_->ensureTimeToolAnchorSeed(editedContentKey_);
+        // TimeGrid anchor seed is a content command; the processor's async
+        // preheat/F0 callback chain keeps driving the actual seeding.
+        contentCommands_->ensureTimeToolAnchorSeed(editedContentKey_);
     }
 
     const bool toolChanged = currentTool_ != tool;
@@ -4368,10 +4384,9 @@ void PianoRollComponent::fitToNote(const Note& note) {
     if (const auto* placement = findEditedPlacement()) {
         if (auto snap = readSnapshotFor(placement->contentKey)) {
             if (snap->timeGrid) {
-                timelineStart = placement->projection.projectContentTimeToTimeline(
-                    snap->timeGrid->tauForward(minSource));
-                timelineEnd = placement->projection.projectContentTimeToTimeline(
-                    snap->timeGrid->tauForward(maxSource));
+                const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
+                timelineStart = map.sourceToTimeline(minSource);
+                timelineEnd = map.sourceToTimeline(maxSource);
             }
         }
     }
@@ -4441,10 +4456,9 @@ void PianoRollComponent::fitToAllNotes() {
     if (const auto* placement = findEditedPlacement()) {
         if (auto snap = readSnapshotFor(placement->contentKey)) {
             if (snap->timeGrid) {
-                timelineStart = placement->projection.projectContentTimeToTimeline(
-                    snap->timeGrid->tauForward(minSource));
-                timelineEnd = placement->projection.projectContentTimeToTimeline(
-                    snap->timeGrid->tauForward(maxSource));
+                const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
+                timelineStart = map.sourceToTimeline(minSource);
+                timelineEnd = map.sourceToTimeline(maxSource);
             }
         }
     }
@@ -4524,10 +4538,9 @@ void PianoRollComponent::fitToSelectedNotes()
     if (const auto* placement = findEditedPlacement()) {
         if (auto snap = readSnapshotFor(placement->contentKey)) {
             if (snap->timeGrid) {
-                timelineStart = placement->projection.projectContentTimeToTimeline(
-                    snap->timeGrid->tauForward(minSource));
-                timelineEnd = placement->projection.projectContentTimeToTimeline(
-                    snap->timeGrid->tauForward(maxSource));
+                const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
+                timelineStart = map.sourceToTimeline(minSource);
+                timelineEnd = map.sourceToTimeline(maxSource);
             }
         }
     }
@@ -4652,15 +4665,14 @@ void PianoRollComponent::copySelectedNotes()
 void PianoRollComponent::pasteNotes()
 {
     if (notesClipboard_.empty()) return;
-    if (processor_ == nullptr || !editedContentKey_.isValid()) return;
+    if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return;
 
     const auto& notes = getCommittedNotes();
     const auto& sel = interactionState_.noteSelection;
 
-    // 粘贴位置：播放头时间经唯一逆投影转为 source seconds
+    // 粘贴位置：播放头时间经 PianoRollTimeMap 逆投影转为 source seconds
     //   presented timeline seconds
-    //   → projection.projectTimelineTimeToContent()
-    //   → timeGrid.tauInverse()
+    //   → PianoRollTimeMap::timelineToSource()
     //   → source seconds
     double pasteStartTime = 0.0;
     const double playheadTime = playHeadState_.getPresentedPositionSeconds();
@@ -4668,8 +4680,8 @@ void PianoRollComponent::pasteNotes()
         const auto projection = activeContentProjection();
         const auto snap = readEditedSnapshot();
         if (projection.isValid() && snap && snap->timeGrid) {
-            const double output = projection.projectTimelineTimeToContent(playheadTime);
-            pasteStartTime = snap->timeGrid->tauInverse(output);
+            const PianoRollTimeMap map(projection, *snap->timeGrid, makeViewMapper());
+            pasteStartTime = map.timelineToSource(playheadTime);
         }
     } else if (!sel.empty() && !notes.empty()) {
         double maxEnd = 0.0;
@@ -4726,7 +4738,7 @@ void PianoRollComponent::pasteNotes()
         std::move(beforePatch),
         std::move(afterPatch));
 
-    processor_->getUndoManager().addAction(std::move(action));
+    undoManager_.addAction(std::move(action));
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
     lastKnownNotesRevision_ = committedSnap->notesRevision;
@@ -5057,8 +5069,8 @@ juce::String PianoRollComponent::AutoTuneApplyResult::message() const
             return juce::String();   // 最终修正已达成：静默，不弹窗
         case AutoTuneApplyStatus::NoCurve:
             return juce::String("AUTO needs an active pitch curve. Run audio analysis first.");
-        case AutoTuneApplyStatus::NoProcessor:
-            return juce::String("AUTO cannot run because the processor is not attached.");
+        case AutoTuneApplyStatus::NoContentCommands:
+            return juce::String("AUTO cannot run because content edit commands are not attached.");
         case AutoTuneApplyStatus::NoContent:
             return juce::String("AUTO needs an active editable clip.");
         case AutoTuneApplyStatus::MissingContentSnapshot:
@@ -5086,8 +5098,8 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::NoCurve };
     }
 
-    if (!processor_) {
-        return { AutoTuneApplyStatus::NoProcessor };
+    if (contentCommands_ == nullptr) {
+        return { AutoTuneApplyStatus::NoContentCommands };
     }
 
     if (!editedContentKey_.isValid()) {

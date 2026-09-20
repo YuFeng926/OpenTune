@@ -22,6 +22,7 @@
 #include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
 #include "Utils/AppLogger.h"
+#include "Utils/EditorUiSync.h"
 #include "Utils/ParameterPanelSync.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PitchShiftSettings.h"
@@ -513,7 +514,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , menuBar_(p, MenuBarComponent::Profile::Standalone)
     , topBar_(menuBar_, transportBar_)
     , arrangementView_(p)
-    , pianoRoll_(p.getPlayHeadState())
+    , pianoRoll_(p.getPlayHeadState(), p.getUndoManager(),
+                 [this](SpectrumArray& spectrum, SpectrumArray& peaks) {
+                     processorRef_.copyOutputSpectrum(spectrum, peaks);
+                 })
     , overviewStrip_(pianoRoll_.getWaveformMipmapCache())
     , projectSession_(p, appPreferences_)
 {
@@ -688,7 +692,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // Setup Piano Roll (main editor area)
     pianoRoll_.addListener(this);
-    pianoRoll_.setProcessor(&processorRef_);
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
         return processorRef_.getContentSnapshot(key);
     });
@@ -1444,16 +1447,18 @@ void OpenTuneAudioProcessorEditor::restoreStandaloneWindowGeometryOnce()
 
 void OpenTuneAudioProcessorEditor::applyUiZoomIfNeeded()
 {
-    const int uiZoomPercent = processorRef_.getUiZoomPercent();
-    if (uiZoomPercent == appliedUiZoomPercent_)
+    const auto zoomDecision = resolveEditorUiZoomDecision(processorRef_.getUiZoomPercent(),
+                                                          appliedUiZoomPercent_,
+                                                          kBaseMinWidth,
+                                                          kBaseMinHeight);
+    if (!zoomDecision.changed)
         return;
 
-    appliedUiZoomPercent_ = uiZoomPercent;
+    appliedUiZoomPercent_ = zoomDecision.appliedPercent;
 
     // 保持当前外层窗口尺寸；仅当新 min 不满足时由 constrainer 扩大（§7.1/§7.3）。
-    const float uiZoomScale = static_cast<float>(appliedUiZoomPercent_) / 100.0f;
-    setResizeLimits(static_cast<int>(std::ceil(kBaseMinWidth * uiZoomScale)),
-                    static_cast<int>(std::ceil(kBaseMinHeight * uiZoomScale)),
+    setResizeLimits(zoomDecision.minWidth,
+                    zoomDecision.minHeight,
                     kMaxWindowWidth, kMaxWindowHeight);
 
     resized();
@@ -1557,14 +1562,20 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             lastPianoRollCurve_ = curve;
             lastPianoRollBuffer_ = contentBuffer;
         }
-        if (currentNotesRevision != lastPianoRollNotesRevision_) {
+        const auto revisionPulse = resolveContentRevisionPulse(currentNotesRevision,
+                                                               currentTimeGridRevision,
+                                                               currentPitchRevision,
+                                                               lastPianoRollNotesRevision_,
+                                                               lastPianoRollTimeGridRevision_,
+                                                               lastPianoRollPitchRevision_);
+        if (revisionPulse.notesChanged) {
             // Same content, fresh notes – typically GAME's async commit.
             pianoRoll_.onNotesRevisionChanged();
         }
-        if (currentTimeGridRevision != lastPianoRollTimeGridRevision_) {
+        if (revisionPulse.timeGridChanged) {
             pianoRoll_.onTimeGridRevisionChanged();
         }
-        if (currentPitchRevision != lastPianoRollPitchRevision_) {
+        if (revisionPulse.pitchChanged) {
             pianoRoll_.onPitchRevisionChanged();
         }
         if (activeTrack >= 0 && activePlacementIndex >= 0) {
@@ -1589,9 +1600,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             }
         }
 
-        lastPianoRollNotesRevision_ = currentNotesRevision;
-        lastPianoRollTimeGridRevision_ = currentTimeGridRevision;
-        lastPianoRollPitchRevision_ = currentPitchRevision;
+        lastPianoRollNotesRevision_ = revisionPulse.nextNotesRevision;
+        lastPianoRollTimeGridRevision_ = revisionPulse.nextTimeGridRevision;
+        lastPianoRollPitchRevision_ = revisionPulse.nextPitchRevision;
     }
 
 // Playhead position: each component reads presented position from PlayHeadState projection

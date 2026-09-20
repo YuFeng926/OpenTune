@@ -9,6 +9,7 @@
 #include "DSP/F0KeyDetector.h"
 #include "Services/F0ExtractionService.h"
 #include "Services/ImportedClipF0Extraction.h"
+#include "Runtime/ProcessF0Runtime.h"
 #include "Utils/ModelPathResolver.h"
 #include "Utils/AppLogger.h"
 #include "Utils/ChannelLayoutLogger.h"
@@ -18,6 +19,7 @@
 #include "Plugin/Vst3ProcessorStateCodec.h"
 #else
 #include "DSP/ReferenceAutoAlign.h"
+#include "Plugin/StandaloneProcessorStateCodec.h"
 #endif
 #include "Utils/TimeCoordinate.h"
 #include "Inference/GameNoteGenerator.h"      // GAME NoteGeneratorInput/Note DTO（进程级 GAME 入口）
@@ -40,6 +42,7 @@
 #include "ARA/OpenTuneDocumentController.h"
 #endif
 #include "Content/ContentEditCommands.h"
+#include "Content/ContentPatchGeometry.h"
 
 namespace OpenTune {
 
@@ -561,16 +564,11 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 } // anonymous namespace
 #endif // JucePlugin_Build_Standalone
 
-#if JucePlugin_Build_Standalone
-constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
-constexpr int kStandaloneSettingsVersion = 3; // v3: timeline zoom double -> uiZoomPercent int32
-constexpr int kStandaloneSettingsLegacyVersion = 2; // released v2 payloads still accepted and migrated
-#endif
-
 // --- Serialization helpers ---
 // Each SharedCode target is single-format: the Standalone target owns the OTSS
-// settings payload, the VST3 target owns the OTST processor state payload
-// (encoded/decoded by Vst3ProcessorStateCodec).
+// settings payload (encoded/decoded by StandaloneProcessorStateCodec), the VST3
+// target owns the OTST processor state payload (encoded/decoded by
+// Vst3ProcessorStateCodec).
 
 ReferenceFeatureProducer OpenTuneAudioProcessor::resolveReferenceFeatureProducer() const
 {
@@ -831,6 +829,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) override
         {
             return proc_.generateNotesOnlyByContentKey(key, params);
+        }
+
+        bool ensureTimeToolAnchorSeed(ContentKey key) override
+        {
+            return proc_.ensureTimeToolAnchorSeed(key);
         }
 
         bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes) override
@@ -2314,15 +2317,13 @@ bool OpenTuneAudioProcessor::hasEditor() const {
 void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
 #if JucePlugin_Build_Standalone
     // Standalone owns its project save format; host state carries settings only.
-    destData.reset();
-    juce::MemoryOutputStream output(destData, false);
-    output.writeInt(static_cast<int>(kStandaloneSettingsMagic));
-    output.writeInt(kStandaloneSettingsVersion);
-    output.writeDouble(getBpm());
-    output.writeInt(getTimeSigNumerator());
-    output.writeInt(getTimeSigDenominator());
-    output.writeInt(getUiZoomPercent());
-    output.writeInt(trackHeight_);
+    StandaloneProcessorSettings settings;
+    settings.bpm = getBpm();
+    settings.timeSigNumerator = getTimeSigNumerator();
+    settings.timeSigDenominator = getTimeSigDenominator();
+    settings.uiZoomPercent = getUiZoomPercent();
+    settings.trackHeight = trackHeight_;
+    destData = StandaloneProcessorStateCodec::encode(settings);
 #else
     // Per ARA2 spec: ARA AudioModification objects are persisted via
     // doStoreObjectsToStream/doRestoreObjectsFromStream, NOT via VST3 processor state.
@@ -2380,42 +2381,16 @@ bool OpenTuneAudioProcessor::restoreStatePayload(const void* data, int sizeInByt
 #if JucePlugin_Build_Standalone
     // Standalone settings-only payload (OTSS). The Standalone project format
     // owns arrangement/content persistence; host state carries settings only.
-    juce::MemoryInputStream input(data, static_cast<size_t>(sizeInBytes), false);
-    const int magic = input.readInt();
-    const int version = input.readInt();
-
-    if (magic != static_cast<int>(kStandaloneSettingsMagic)) {
-        AppLogger::error("StateRestore: unsupported standalone state payload (version=" + juce::String(version) + ")");
+    StandaloneProcessorSettings restoredSettings;
+    juce::String decodeError;
+    if (!StandaloneProcessorStateCodec::decode(data, sizeInBytes, restoredSettings, decodeError)) {
+        AppLogger::error("StateRestore: " + decodeError);
         return false;
     }
-
-    // Accept current v3 (uiZoomPercent int32) and released v2 (legacy timeline
-    // zoom double, discarded on load; UI zoom semantics are unrelated).
-    if (version != kStandaloneSettingsVersion && version != kStandaloneSettingsLegacyVersion) {
-        AppLogger::error("StateRestore: unsupported standalone settings version "
-            + juce::String(version) + " (expect " + juce::String(kStandaloneSettingsVersion)
-            + " or " + juce::String(kStandaloneSettingsLegacyVersion) + ")");
-        return false;
-    }
-    const double restoredBpm = input.readDouble();
-    const int restoredTimeSigNumerator = input.readInt();
-    const int restoredTimeSigDenominator = input.readInt();
-    int restoredUiZoomPercent = 100;
-    if (version == kStandaloneSettingsVersion) {
-        restoredUiZoomPercent = input.readInt();
-    } else {
-        (void) input.readDouble(); // legacy timeline zoom, discarded
-    }
-    const int restoredTrackHeight = input.readInt();
-    if (input.getNumBytesRemaining() != 0) {
-        AppLogger::error("StateRestore: standalone settings payload not fully consumed, trailing bytes="
-            + juce::String(static_cast<int>(input.getNumBytesRemaining())));
-        return false;
-    }
-    setBpm(restoredBpm);
-    setTimeSignature(restoredTimeSigNumerator, restoredTimeSigDenominator);
-    setUiZoomPercent(restoredUiZoomPercent);
-    trackHeight_ = restoredTrackHeight;
+    setBpm(restoredSettings.bpm);
+    setTimeSignature(restoredSettings.timeSigNumerator, restoredSettings.timeSigDenominator);
+    setUiZoomPercent(restoredSettings.uiZoomPercent);
+    trackHeight_ = restoredSettings.trackHeight;
     return true;
 #else
     // Per ARA2 spec: ARA AudioModification objects are restored via
@@ -3226,34 +3201,6 @@ void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
 }
 
 #if JucePlugin_Build_Standalone
-bool OpenTuneAudioProcessor::ensureSourceById(uint64_t sourceId,
-                                              const juce::String& displayName,
-                                              std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-                                              double sampleRate)
-{
-    if (sourceId == 0 || audioBuffer == nullptr) {
-        return false;
-    }
-    jassert(sourceStore_ != nullptr);
-
-    if (audioBuffer->getNumChannels() <= 0 || audioBuffer->getNumSamples() <= 0) {
-        return false;
-    }
-
-    if (sourceStore_->containsSource(sourceId)) {
-        return true;
-    }
-
-    SourceStore::CreateSourceRequest request;
-    request.displayName = displayName;
-    request.audioBuffer = std::move(audioBuffer);
-    request.sampleRate = sampleRate > 0.0 ? sampleRate : TimeCoordinate::kRenderSampleRate;
-    return sourceStore_->createSource(std::move(request), sourceId) == sourceId;
-}
-
-
-
-
 // WAV文件写入辅助函数
 static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
                                        const juce::File& file,
@@ -3776,13 +3723,6 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
     standaloneArrangement_->selectPlacement(placement.trackId, importedPlacement.placementId);
 
     return { sourceId, clipKey, importedPlacement.placementId };
-}
-
-uint64_t OpenTuneAudioProcessor::commitPreparedImportAsContent(PreparedImport&& prepared, uint64_t sourceId)
-{
-    bool createdSource = false;
-    const auto key = ensureSourceAndCreateStandaloneClip(std::move(prepared), sourceId, createdSource);
-    return key.objectId;
 }
 #endif // JucePlugin_Build_Standalone
 
@@ -4527,42 +4467,9 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         correctionRange.endFrameExclusive
     };
 
-    auto filterNotes = [&](const std::vector<Note>& notes) {
-        const double secondsPerFrame = static_cast<double>(hopSize) / pitchSampleRate;
-        const double rangeStartSeconds = static_cast<double>(commitRange.startFrame) * secondsPerFrame;
-        const double rangeEndSeconds = static_cast<double>(commitRange.endFrameExclusive) * secondsPerFrame;
-        std::vector<Note> filtered;
-        for (const auto& note : notes) {
-            if (note.endTime > rangeStartSeconds && note.startTime < rangeEndSeconds)
-                filtered.push_back(note);
-        }
-        return filtered;
-    };
-
-    auto filterSegments = [&](const std::vector<PitchCorrectionSegment>& segments) {
-        std::vector<PitchCorrectionSegment> filtered;
-        for (const auto& segment : segments) {
-            const int clipStart = std::max(segment.startFrame, commitRange.startFrame);
-            const int clipEnd = std::min(segment.endFrame, commitRange.endFrameExclusive);
-            if (clipEnd <= clipStart)
-                continue;
-
-            const int sourceOffset = clipStart - segment.startFrame;
-            const int clippedLength = clipEnd - clipStart;
-            if (sourceOffset < 0
-                || sourceOffset + clippedLength > static_cast<int>(segment.f0Data.size())) {
-                continue;
-            }
-
-            PitchCorrectionSegment clipped = segment;
-            clipped.startFrame = clipStart;
-            clipped.endFrame = clipEnd;
-            clipped.f0Data.assign(segment.f0Data.begin() + sourceOffset,
-                                  segment.f0Data.begin() + sourceOffset + clippedLength);
-            filtered.push_back(std::move(clipped));
-        }
-        return filtered;
-    };
+    const double secondsPerFrame = static_cast<double>(hopSize) / pitchSampleRate;
+    const double rangeStartSeconds = static_cast<double>(commitRange.startFrame) * secondsPerFrame;
+    const double rangeEndSeconds = static_cast<double>(commitRange.endFrameExclusive) * secondsPerFrame;
 
     auto derivedCurve = oldCurve->clone();
     derivedCurve->applyCorrectionToRange(
@@ -4574,9 +4481,15 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         PitchControlConfig::kDefaultVibratoDepth,
         PitchControlConfig::kDefaultVibratoRateHz);
 
-    const auto segmentsInRange = filterSegments(derivedCurve->copyCorrectionSegments());
-    auto beforeNotesScoped = filterNotes(oldNotes);
-    auto beforeSegmentsScoped = filterSegments(oldSegments);
+    const auto segmentsInRange = clipSegmentsToFrameRange(
+        derivedCurve->copyCorrectionSegments(),
+        commitRange.startFrame,
+        commitRange.endFrameExclusive);
+    auto beforeNotesScoped = filterNotesToRange(oldNotes, rangeStartSeconds, rangeEndSeconds);
+    auto beforeSegmentsScoped = clipSegmentsToFrameRange(
+        oldSegments,
+        commitRange.startFrame,
+        commitRange.endFrameExclusive);
 
     const auto commitSnap = commitContentNotesAndSegments(
         targetPlacement.contentKey,
@@ -4597,9 +4510,11 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         targetPlacement.contentKey,
         "AUTO (Ref)",
         std::move(beforeNotesScoped),
-        filterNotes(commitSnap->notes),
+        filterNotesToRange(commitSnap->notes, rangeStartSeconds, rangeEndSeconds),
         std::move(beforeSegmentsScoped),
-        filterSegments(commitSnap->pitchCurve->copyCorrectionSegments()),
+        clipSegmentsToFrameRange(commitSnap->pitchCurve->copyCorrectionSegments(),
+                                 commitRange.startFrame,
+                                 commitRange.endFrameExclusive),
         commitRange));
 
     result.status = ReferenceAlignmentResult::Status::Succeeded;
@@ -4662,120 +4577,26 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return {};
 
-    // Range-scoped notes merge (same logic as commitContentNoteTopologyPatch)
+    // Range-scoped notes merge (mergeNotesRange semantics, same as
+    // commitContentNoteTopologyPatch; the helper filters incoming notes by range)
     const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
                                  / snap->pitchCurve->getSampleRate();
     const double rangeStartSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
     const double rangeEndSec   = static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame;
 
-    // Filter incoming notes to range (self-protecting sink)
-    {
-        std::vector<Note> filtered;
-        for (const auto& note : notesInRange) {
-            if (note.endTime > rangeStartSec && note.startTime < rangeEndSec)
-                filtered.push_back(note);
-        }
-        notesInRange = std::move(filtered);
-    }
-
-    // Filter and clip incoming segments to range (self-protecting sink)
-    {
-        std::vector<PitchCorrectionSegment> filtered;
-        for (const auto& seg : segments) {
-            if (seg.endFrame <= affectedRange.startFrame || seg.startFrame >= affectedRange.endFrameExclusive)
-                continue;  // Outside range
-            
-            // Clip to range boundaries
-            const int clipStart = std::max(seg.startFrame, affectedRange.startFrame);
-            const int clipEnd = std::min(seg.endFrame, affectedRange.endFrameExclusive);
-            if (clipEnd <= clipStart)
-                continue;  // Empty after clip
-            
-            PitchCorrectionSegment clipped = seg;
-            const int startOffset = clipStart - seg.startFrame;
-            const int clipLen = clipEnd - clipStart;
-            if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
-                clipped.startFrame = clipStart;
-                clipped.endFrame = clipEnd;
-                clipped.f0Data.assign(seg.f0Data.begin() + startOffset, seg.f0Data.begin() + startOffset + clipLen);
-                filtered.push_back(std::move(clipped));
-            }
-        }
-        segments = std::move(filtered);
-    }
-
-    std::vector<Note> mergedNotes;
-    mergedNotes.reserve(snap->notes.size() + notesInRange.size());
-
-    // keptBefore: notes entirely before the range
-    for (const auto& note : snap->notes) {
-        if (note.endTime <= rangeStartSec)
-            mergedNotes.push_back(note);
-    }
-
-    // afterNotesInRange: notes overlapping the range
-    mergedNotes.insert(mergedNotes.end(),
-                       notesInRange.begin(),
-                       notesInRange.end());
-
-    // keptAfter: notes entirely after the range
-    for (const auto& note : snap->notes) {
-        if (note.startTime >= rangeEndSec)
-            mergedNotes.push_back(note);
-    }
-
-    auto normalizedNotes = normalizeStoredNotes(std::move(mergedNotes));
+    auto normalizedNotes = mergeNotesRange(
+        snap->notes,
+        NoteRangeSeconds{ rangeStartSec, rangeEndSec },
+        filterNotesToRange(notesInRange, rangeStartSec, rangeEndSec));
 
     // Range-scoped segments merge with split-preserve for boundary-crossing segments.
-    // When a segment crosses the affected range boundary, we preserve the outside parts.
+    // When a segment crosses the affected range boundary, the outside parts are kept.
     // Example: old segment [0,100], edit range [40,60] → keep [0,40] and [60,100], replace [40,60].
-    auto oldSegments = snap->pitchCurve->getSnapshot()->getCorrectionSegments();
-    std::vector<PitchCorrectionSegment> mergedSegments;
-    mergedSegments.reserve(oldSegments.size() + segments.size());
-
-    const int rangeStart = affectedRange.startFrame;
-    const int rangeEnd = affectedRange.endFrameExclusive;
-
-    for (const auto& seg : oldSegments) {
-        // Segment entirely outside range → keep as-is
-        if (seg.endFrame <= rangeStart || seg.startFrame >= rangeEnd) {
-            mergedSegments.push_back(seg);
-            continue;
-        }
-
-        // Segment crosses range boundary → split and preserve outside parts
-        // Left part: segment starts before range
-        if (seg.startFrame < rangeStart) {
-            PitchCorrectionSegment left = seg;
-            left.endFrame = rangeStart;
-            const int leftLen = left.endFrame - left.startFrame;
-            if (leftLen > 0 && leftLen <= static_cast<int>(seg.f0Data.size())) {
-                left.f0Data.assign(seg.f0Data.begin(), seg.f0Data.begin() + leftLen);
-                mergedSegments.push_back(std::move(left));
-            }
-        }
-
-        // Right part: segment ends after range
-        if (seg.endFrame > rangeEnd) {
-            PitchCorrectionSegment right = seg;
-            right.startFrame = rangeEnd;
-            const int offset = right.startFrame - seg.startFrame;
-            const int rightLen = right.endFrame - right.startFrame;
-            if (offset >= 0 && rightLen > 0 && offset + rightLen <= static_cast<int>(seg.f0Data.size())) {
-                right.f0Data.assign(seg.f0Data.begin() + offset, seg.f0Data.begin() + offset + rightLen);
-                mergedSegments.push_back(std::move(right));
-            }
-        }
-    }
-
-    // Insert new range-scoped segments (callers already filtered to range-overlapping only)
-    mergedSegments.insert(mergedSegments.end(), segments.begin(), segments.end());
-
-    // Sort by startFrame to maintain segment order
-    std::sort(mergedSegments.begin(), mergedSegments.end(),
-              [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b) {
-                  return a.startFrame < b.startFrame;
-              });
+    auto mergedSegments = replaceSegmentsInFrameRange(
+        snap->pitchCurve->getSnapshot()->getCorrectionSegments(),
+        clipSegmentsToFrameRange(segments, affectedRange.startFrame, affectedRange.endFrameExclusive),
+        affectedRange.startFrame,
+        affectedRange.endFrameExclusive);
 
     auto newCurve = snap->pitchCurve->clone();
     newCurve->replaceCorrectionSegments(mergedSegments);

@@ -1,4 +1,5 @@
 #include "PianoRollRenderer.h"
+#include "PianoRollTimeMap.h"
 #include "../UiAssets.h"
 #include "../UIColors.h"
 #include "../../../Utils/AppLogger.h"
@@ -53,15 +54,13 @@ static VisibleTimeWindow computeTimeWindowFromXBounds(
     if (window.visibleEndTime <= window.visibleStartTime)
         return {};
 
-    window.visibleContentStartTime = item.projection.projectTimelineTimeToContent(window.visibleStartTime);
-    window.visibleContentEndTime = item.projection.projectTimelineTimeToContent(window.visibleEndTime);
-
     // vocal-time-stretch §8.5 — projectTimelineTimeToContent returns OUTPUT time
     // inside the content, but Notes / PitchCurve / F0 timeline / WaveformMipmap
     // are all indexed by SOURCE time. Convert to source time via tauInverse.
     jassert(item.timeGrid);
-    window.visibleContentStartTime = item.timeGrid->tauInverse(window.visibleContentStartTime);
-    window.visibleContentEndTime   = item.timeGrid->tauInverse(window.visibleContentEndTime);
+    const PianoRollTimeMap map(item.projection, *item.timeGrid, ctx.coords);
+    window.visibleContentStartTime = map.timelineToSource(window.visibleStartTime);
+    window.visibleContentEndTime = map.timelineToSource(window.visibleEndTime);
     return window;
 }
 
@@ -185,9 +184,8 @@ inline int sourceTimeToScreenX(double sourceTime,
                                 const PianoRollRenderer::ContentRenderItem& item)
 {
     jassert(item.timeGrid);
-    const double outputTime = item.timeGrid->tauForward(sourceTime);
-    const double timelineTime = item.projection.projectContentTimeToTimeline(outputTime);
-    return ctx.coords.timeToX(timelineTime);
+    const PianoRollTimeMap map(item.projection, *item.timeGrid, ctx.coords);
+    return map.sourceToX(sourceTime);
 }
 
 // OpenDyne waveform blob：按 Note 的 F0Timeline 帧范围索引持久 originalEnergy，构建闭合波形 Path。
@@ -557,15 +555,14 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     // Invert the output -> source mapping (tau_inverse) so the screen X axis
     // (output time) reads from the SOURCE peaks at the tau-inverted time.
     jassert(item.timeGrid);
+    const PianoRollTimeMap map(item.projection, *item.timeGrid, ctx.coords);
 
     for (int x = drawStartX; x < drawEndX; ++x)
     {
-        double matTime = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x));
-        matTime = item.timeGrid->tauInverse(matTime);
+        const double matTime = map.xToSource(x);
 
         // Aggregate all peaks covered by this pixel's time span
-        double matTimeNext = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x + 1));
-        matTimeNext = item.timeGrid->tauInverse(matTimeNext);
+        const double matTimeNext = map.xToSource(x + 1);
 
         int64_t idxStart = static_cast<int64_t>(matTime / timePerPeak);
         int64_t idxEnd = static_cast<int64_t>(matTimeNext / timePerPeak);

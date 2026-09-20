@@ -50,11 +50,11 @@
 #include "TimelineViewportPolicy.h"
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
+#include "../../Utils/SpectrumDisplayData.h"
 #include "../../Content/ContentEditCommands.h"
 #include "../../Utils/TimelineDisplayMode.h"
 namespace OpenTune {
 
-class OpenTuneAudioProcessor;
 class PianoKeyAudition;
 class AppPreferences;
 struct PlayHeadState;
@@ -119,7 +119,12 @@ public:
 
     using TimelineContentPlacement = OpenTune::TimelineContentPlacement;
 
-    PianoRollComponent(const PlayHeadState& playHeadState);
+    /** Non-owning spectrum read callback injected by the Editor. */
+    using SpectrumReader = std::function<void(SpectrumArray&, SpectrumArray&)>;
+
+    PianoRollComponent(const PlayHeadState& playHeadState,
+                       UndoManager& undoManager,
+                       SpectrumReader spectrumReader);
     ~PianoRollComponent() override;
 
     void paint(juce::Graphics& g) override;
@@ -138,8 +143,6 @@ public:
     void onNotesRevisionChanged();
     void onPitchRevisionChanged();
     void setPianoKeyAudition(PianoKeyAudition* audition) { pianoKeyAudition_ = audition; }
-
-    void setProcessor(OpenTuneAudioProcessor* processor);
 
     /** 注入 AppPreferences 指针（两个 Editor 构造/同步时直接注入，无中转层）。
      *  仅用于 EQ popup 的「以后不再提示」偏好读写。 */
@@ -272,7 +275,7 @@ public:
         Applied,
         NoChange,   // 新增：最终修正已达成（无音符 / 无音阶配置 / 全部音符已吸附且修正曲线无空洞覆盖）
         NoCurve,
-        NoProcessor,
+        NoContentCommands,
         NoContent,
         MissingContentSnapshot,
         OriginalF0NotReady,
@@ -522,6 +525,8 @@ private:
     ScrollMode scrollMode_ = ScrollMode::Page;
 
     const PlayHeadState& playHeadState_;
+    UndoManager& undoManager_;
+    SpectrumReader spectrumReader_;
     bool lastObservedPlayHeadPlaying_{false};
 
     bool userScrollHold_{false};
@@ -601,7 +606,6 @@ private:
     bool inferenceActive_ = false;
     int waveformBuildTickCounter_ = 0;
 
-    OpenTuneAudioProcessor* processor_ = nullptr;
     AppPreferences* appPreferences_ = nullptr;
 
     ReadContentSnapshotFn readContentSnapshot_;
