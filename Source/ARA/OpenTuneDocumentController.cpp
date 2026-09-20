@@ -34,6 +34,29 @@ constexpr int kContentPayloadArchiveVersion = 7; // v7: EqFilter.paletteSlot (v6
 constexpr int kContentPayloadArchiveVersionMin = 3;
 constexpr int kMaxContentPayloadRecords = 4096;
 
+// clone hook 深拷贝项目 content：值字段正常复制，可变 PitchCurve 不共享实例，
+// TimeGridSnapshot/分析标量按现有 const 快照语义共享。
+AudioModificationContentState cloneModificationContent(const AudioModificationContentState& source)
+{
+    AudioModificationContentState copy = source;
+    const bool hasCompletedOriginalF0 =
+        source.analysis.originalF0State == OriginalF0State::Ready
+        && source.analysis.pitchCurve != nullptr
+        && source.analysis.pitchCurve->hasOriginalF0Data();
+
+    if (!hasCompletedOriginalF0)
+    {
+        // 不复制没有对应异步任务的中间分析状态；可编辑内容仍完整保留。
+        copy.analysis = {};
+    }
+    else
+    {
+        copy.analysis.pitchCurve = copy.analysis.pitchCurve->clone();
+    }
+
+    return copy;
+}
+
 } // namespace
 
 OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugInEntry* entry,
@@ -1073,14 +1096,10 @@ void OpenTuneDocumentController::didUpdateMusicalContextProperties(juce::ARAMusi
 
 void OpenTuneDocumentController::didUpdateRegionSequenceProperties(juce::ARARegionSequence* regionSequence)
 {
-    // RegionSequence 属性（颜色）变化会改变其所属 PlaybackRegion 的
-    // getEffectiveColor 结果：刷新属于该 sequence 的所有缓存 PlaybackRegion 的
-    // 颜色投影。仅更新模型，不触发音频 renderer 重建。
-    for (auto& region : playbackRegions_)
-    {
-        if (region.playbackRegion->getRegionSequence() == regionSequence)
-            region.updateDisplayColourFrom(region.playbackRegion);
-    }
+    // RegionSequence 属性（颜色）变化：projection 每次从 SDK 对象实时读取
+    // getEffectiveColor，无需 wrapper 缓存同步；这里只刷新 renderer plan。
+    juce::ignoreUnused(regionSequence);
+    refreshRegisteredRenderers(publishModelChange());
 }
 
 void OpenTuneDocumentController::willBeginEditing(juce::ARADocument* document)
@@ -1097,6 +1116,8 @@ void OpenTuneDocumentController::didEndEditing(juce::ARADocument* document)
 
 void OpenTuneDocumentController::didUpdateAudioModificationProperties(juce::ARAAudioModification* audioModification)
 {
+    // 唯一 identity binding 点：doCreateAudioModification hook 只按 host pointer
+    // 注册 DTO，persistentID 在其返回后由 SDK updateProperties 写入。
     auto& modification = ensureAudioModification(audioModification);
     modification.updateIdentity(audioModification);
     bindAudioModificationIdentity(modification);
@@ -1116,13 +1137,13 @@ void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModi
     // 清理 CRS derived artifacts
     removeCRSArtifactsForModification(*mod);
 
-    // 删除关联的 PlaybackRegions
-    const auto persistentId = mod->persistentId;
+    // 删除关联的 PlaybackRegions。Per ARA2 spec, host 必须先销毁 region 再销毁
+    // modification，此处可直接通过 host pointer 判断归属。
     playbackRegions_.erase(std::remove_if(playbackRegions_.begin(), playbackRegions_.end(),
-                                          [&persistentId](const PlaybackRegion& region)
+                                          [audioModification](const PlaybackRegion& region)
                                           {
-                                              return persistentId.isNotEmpty()
-                                                  && region.audioModificationPersistentId == persistentId;
+                                              return region.playbackRegion != nullptr
+                                                  && region.playbackRegion->getAudioModification() == audioModification;
                                           }),
                            playbackRegions_.end());
     reconcileEditorSelectionPlaybackRegions();
@@ -1141,8 +1162,7 @@ void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModi
 
 void OpenTuneDocumentController::didUpdatePlaybackRegionProperties(juce::ARAPlaybackRegion* playbackRegion)
 {
-    auto& region = ensurePlaybackRegion(playbackRegion);
-    region.updateFrom(playbackRegion);
+    ensurePlaybackRegion(playbackRegion);
     refreshRegisteredRenderers(publishModelChange());
 }
 
@@ -1154,14 +1174,12 @@ void OpenTuneDocumentController::willDestroyPlaybackRegion(juce::ARAPlaybackRegi
 }
 
 void OpenTuneDocumentController::didAddPlaybackRegionToAudioModification(
-    juce::ARAAudioModification* audioModification,
+    juce::ARAAudioModification* /*audioModification*/,
     juce::ARAPlaybackRegion* playbackRegion)
 {
-    auto& modification = ensureAudioModification(audioModification);
-    auto& region = ensurePlaybackRegion(playbackRegion);
-    region.updateFrom(playbackRegion);
-    if (region.audioModificationPersistentId.isEmpty())
-        region.audioModificationPersistentId = modification.persistentId;
+    // 归属 relationship 由 SDK object 持有，不再写 wrapper 缓存字段；
+    // 只保留 host pointer 生命周期索引。
+    ensurePlaybackRegion(playbackRegion);
     refreshRegisteredRenderers(publishModelChange());
 }
 
@@ -1439,6 +1457,36 @@ bool OpenTuneDocumentController::doStoreObjectsToStream(juce::ARAOutputStream& o
     return ok;
 }
 
+juce::ARAAudioModification* OpenTuneDocumentController::doCreateAudioModification(
+    juce::ARAAudioSource* audioSource,
+    ARA::ARAAudioModificationHostRef hostRef,
+    const juce::ARAAudioModification* optionalModificationToClone)
+{
+    auto* modification = new juce::ARAAudioModification(audioSource, hostRef, optionalModificationToClone);
+
+    // SDK 在本 hook 返回后才 updateProperties（写入新 persistentID）并调用
+    // didUpdateAudioModificationProperties。此处只按 host pointer 注册 DTO：
+    // identity binding 由 didUpdate 唯一负责，clone 内容不得依赖 persistent ID。
+    AudioModification dto;
+    dto.audioModification = modification;
+
+    if (optionalModificationToClone != nullptr)
+    {
+        auto* sourceDto = findAudioModification(
+            const_cast<juce::ARAAudioModification*>(optionalModificationToClone));
+        if (sourceDto != nullptr && sourceDto->hasContentState())
+        {
+            // 深拷贝项目 content，不读 PCM、不启动 F0、不通知 host。
+            dto.content = cloneModificationContent(*sourceDto->content);
+            dto.birthState = AudioModificationBirthState::WaitingForSource;
+            dto.originalF0InputStamp = sourceDto->originalF0InputStamp;
+        }
+    }
+
+    audioModifications_.push_back(std::move(dto));
+    return modification;
+}
+
 juce::ARAPlaybackRenderer* OpenTuneDocumentController::doCreatePlaybackRenderer()
 {
     auto* renderer = new OpenTunePlaybackRenderer(getDocumentController(), this);
@@ -1639,7 +1687,7 @@ PlaybackRegion& OpenTuneDocumentController::ensurePlaybackRegion(juce::ARAPlayba
         return *existing;
 
     PlaybackRegion region;
-    region.updateFrom(playbackRegion);
+    region.playbackRegion = playbackRegion;
     playbackRegions_.push_back(std::move(region));
     return playbackRegions_.back();
 }
@@ -1648,20 +1696,41 @@ OpenTuneDocumentController::PlaybackRegionProjection
 OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) const
 {
     PlaybackRegionProjection projection;
-    projection.playbackRegion = placement.playbackRegion;
-    projection.audioModificationPersistentId = placement.audioModificationPersistentId;
-    projection.placementRevision = placement.placementRevision;
-    projection.startInPlaybackTime = placement.startInPlaybackTime;
-    projection.startInModificationTime = placement.startInModificationTime;
-    projection.durationInPlaybackTime = placement.durationInPlaybackTime;
-    projection.durationInModificationTime = placement.durationInModificationTime;
-    projection.timestretchEnabled = placement.timestretchEnabled;
-    projection.timestretchReflectingTempo = placement.timestretchReflectingTempo;
-    projection.contentBasedFadeAtHead = placement.contentBasedFadeAtHead;
-    projection.contentBasedFadeAtTail = placement.contentBasedFadeAtTail;
-    projection.displayColour = placement.displayColour;
 
-    const auto* modification = findAudioModification(placement.audioModificationPersistentId);
+    auto* playbackRegion = placement.playbackRegion;
+    if (playbackRegion == nullptr)
+        return projection;
+
+    projection.playbackRegion = playbackRegion;
+
+    // 唯一读取点：DC 消息线程 projection/render plan 构建路径。
+    // 音频线程/RenderWorker 只消费 projection 快照，不访问 SDK object。
+    const auto* hostModification = playbackRegion->getAudioModification();
+    const auto modificationPersistentId = hostModification != nullptr
+        ? juce::String(hostModification->getPersistentID())
+        : juce::String();
+    projection.audioModificationPersistentId = modificationPersistentId;
+    projection.startInPlaybackTime = playbackRegion->getStartInPlaybackTime();
+    projection.startInModificationTime = playbackRegion->getStartInAudioModificationTime();
+    projection.durationInPlaybackTime = playbackRegion->getDurationInPlaybackTime();
+    projection.durationInModificationTime = playbackRegion->getDurationInAudioModificationTime();
+    projection.timestretchEnabled = playbackRegion->isTimestretchEnabled();
+    projection.timestretchReflectingTempo = playbackRegion->isTimeStretchReflectingTempo();
+    projection.contentBasedFadeAtHead = playbackRegion->hasContentBasedFadeAtHead();
+    projection.contentBasedFadeAtTail = playbackRegion->hasContentBasedFadeAtTail();
+
+    // ARA 标准有效颜色：getEffectiveColor 回退链仅为 region 自身 color →
+    // RegionSequence color（ARA_Library/PlugIn/ARAPlug.cpp:588-594），无 musical
+    // context 一级。空值表示无颜色。ARAColor 为 0.0f~1.0f 的 RGB float，不透明
+    // 投影为 alpha=1.0f 的 juce::Colour。
+    if (const ARA::ARAColor* color = playbackRegion->getEffectiveColor())
+        projection.displayColour = juce::Colour::fromFloatRGBA(color->r, color->g, color->b, 1.0f);
+    else
+        projection.displayColour = std::nullopt;
+
+    const auto* modification = modificationPersistentId.isNotEmpty()
+        ? findAudioModification(modificationPersistentId)
+        : nullptr;
     if (modification == nullptr)
         return projection;
 
@@ -1779,12 +1848,16 @@ void OpenTuneDocumentController::readRestoredAudio(const AudioSource* enabledSou
             && content.sourceWindow.sourcePersistentId != enabledSource->getIdentity().persistentId)
             continue;
 
-        // 仅对有有效 PlaybackRegion 的 modification 触发读取
+        // 仅对有有效 PlaybackRegion 的 modification 触发读取（归属实时读 SDK object）
         bool hasPlaybackRegion = false;
         for (const auto& region : playbackRegions_)
         {
-            if (region.audioModificationPersistentId == mod.persistentId
-                && region.hasValidPlacement())
+            if (!region.hasValidPlacement())
+                continue;
+
+            const auto* hostModification = region.playbackRegion->getAudioModification();
+            if (hostModification != nullptr
+                && juce::String(hostModification->getPersistentID()) == mod.persistentId)
             {
                 hasPlaybackRegion = true;
                 break;

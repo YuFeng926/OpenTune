@@ -35,7 +35,6 @@ public:
         juce::String audioModificationPersistentId;
         SourceWindow contentWindow;
         uint64_t contentRevision{0};
-        uint64_t placementRevision{0};
         std::optional<juce::Colour> displayColour;
         double startInPlaybackTime{0.0};
         double startInModificationTime{0.0};
@@ -183,6 +182,10 @@ protected:
     bool doStoreObjectsToStream(juce::ARAOutputStream& output,
                                 const juce::ARAStoreObjectsFilter* filter) override;
 
+    juce::ARAAudioModification* doCreateAudioModification(
+        juce::ARAAudioSource* audioSource,
+        ARA::ARAAudioModificationHostRef hostRef,
+        const juce::ARAAudioModification* optionalModificationToClone) override;
     juce::ARAPlaybackRenderer* doCreatePlaybackRenderer() override;
     juce::ARAEditorView* doCreateEditorView() override;
 
