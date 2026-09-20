@@ -2318,7 +2318,7 @@ double OpenTuneAudioProcessorEditor::computeTrackAppendStartSeconds(int trackId)
 
         auto* clip = processorRef_.getStandaloneContentRepository()
             ? processorRef_.getStandaloneContentRepository()->findClip(placement.contentKey) : nullptr;
-        const auto buffer = clip ? clip->payload().audioBuffer : nullptr;
+        const auto buffer = clip ? clip->content().audioBuffer : nullptr;
         if (buffer == nullptr) {
             continue;
         }

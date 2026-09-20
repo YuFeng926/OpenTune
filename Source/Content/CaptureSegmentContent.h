@@ -1,7 +1,6 @@
 #pragma once
 #include "DomainContentOwner.h"
-#include "EditableContentState.h"
-#include "../Utils/PitchCurve.h"
+#include "ContentState.h"
 #include <memory>
 #include <vector>
 
@@ -22,8 +21,8 @@ public:
     void reviveContent(ContentKey key) override;
     void releaseRetiredContent(ContentKey key) override;
 
-    EditableContentState& editable() { return editable_; }
-    const EditableContentState& editable() const { return editable_; }
+    ContentState& content() { return content_; }
+    const ContentState& content() const { return content_; }
 
     // Apply methods for Capture segment content
     void applyAudioBuffer(const juce::AudioBuffer<float>& buffer, double sampleRate);
@@ -37,18 +36,15 @@ public:
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot);
     bool applyPitchShiftState(const PitchShiftEditState& state);
     void applyReferenceFeatures(const ReferenceFeatureSet& features);
-    std::shared_ptr<PitchCurve> pitchCurve() const { return pitchCurve_; }
 
     struct CaptureRetiredRecord {
         ContentKey key;
-        EditableContentState editable;
-        uint64_t contentRevision;
+        ContentState content;
     };
 
 private:
     uint64_t id_;
-    EditableContentState editable_;
-    std::shared_ptr<PitchCurve> pitchCurve_;
+    ContentState content_;
     std::vector<CaptureRetiredRecord> captureRetired_;
 };
 

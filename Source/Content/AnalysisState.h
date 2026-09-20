@@ -30,6 +30,25 @@ struct AnalysisState
     AnalysisLifecycle f0Lifecycle{AnalysisLifecycle::Idle};
     AnalysisLifecycle pitchLifecycle{AnalysisLifecycle::Idle};
     uint64_t analysisRevision{0};
+
+    bool setOriginalF0State(OriginalF0State state) noexcept
+    {
+        AnalysisLifecycle lifecycle = AnalysisLifecycle::Idle;
+        switch (state)
+        {
+            case OriginalF0State::NotRequested: lifecycle = AnalysisLifecycle::Idle; break;
+            case OriginalF0State::Extracting: lifecycle = AnalysisLifecycle::InProgress; break;
+            case OriginalF0State::Ready: lifecycle = AnalysisLifecycle::Ready; break;
+            case OriginalF0State::Failed: lifecycle = AnalysisLifecycle::Failed; break;
+        }
+
+        if (originalF0State == state && f0Lifecycle == lifecycle)
+            return false;
+
+        originalF0State = state;
+        f0Lifecycle = lifecycle;
+        return true;
+    }
 };
 
 } // namespace OpenTune

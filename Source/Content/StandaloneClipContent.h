@@ -1,6 +1,6 @@
 #pragma once
 #include "DomainContentOwner.h"
-#include "ContentPayloadState.h"
+#include "ContentState.h"
 #include "StandaloneRetiredContentRecord.h"
 #include <memory>
 #include <vector>
@@ -10,7 +10,13 @@ namespace OpenTune {
 
 using StandaloneClipId = uint64_t;
 
-/// Standalone clip 域内容所有者。持有完整 ContentPayloadState。
+enum class ContentLifecycle
+{
+    Ready,
+    Retired
+};
+
+/// Standalone clip 域内容所有者。持有完整 ContentState。
 /// 不拥有 RenderCache/TimeStretchCache/Stretcher/Worker/PlaybackSourcePublisher。
 class StandaloneClipContent : public DomainContentOwner
 {
@@ -27,10 +33,10 @@ public:
     void reviveContent(ContentKey key) override;
     void releaseRetiredContent(ContentKey key) override;
 
-    /// 是否已退休
+    /// 是否已退休。
     bool isRetired() const;
 
-    /// 是否有活跃内容（lifecycle != Retired && content_ 非空）
+    /// 是否有活跃内容。
     bool hasActiveContent() const;
 
     // ── Apply commands（由 PluginProcessor coordinator 调用）─
@@ -46,19 +52,16 @@ public:
     void applyOriginalF0State(OriginalF0State state);
     void applyAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, double sampleRate);
 
-    // ── Payload accessors ──────────────────────────────────
-    ContentPayloadState& payload() { return content_; }
-    const ContentPayloadState& payload() const { return content_; }
-
-    // ── Retired content management ─────────────────────────
-    std::vector<StandaloneRetiredContentRecord>& retiredRecords() { return retired_; }
-    const std::vector<StandaloneRetiredContentRecord>& retiredRecords() const { return retired_; }
+    // ── Content accessors ───────────────────────────────────
+    ContentState& content() { return content_; }
+    const ContentState& content() const { return content_; }
 
 private:
     void bumpContentRevision();
 
     StandaloneClipId clipId_;
-    ContentPayloadState content_;
+    ContentState content_;
+    ContentLifecycle lifecycle_{ContentLifecycle::Ready};
     std::vector<StandaloneRetiredContentRecord> retired_;
 };
 

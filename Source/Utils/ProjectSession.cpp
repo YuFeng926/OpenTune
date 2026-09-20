@@ -133,23 +133,23 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         auto* clip = contentRepo->findClip(key);
         if (!clip) { continue; }
 
-        const auto& payload = clip->payload();
+        const auto& content = clip->content();
 
         ProjectContentEntry entry;
         entry.contentKey = key;
-        entry.sourceId = payload.sourceWindow.sourceId;
+        entry.sourceId = content.sourceWindow.sourceId;
         entry.retired = false;
-        entry.renderRevision = payload.contentRevision;
+        entry.renderRevision = content.contentRevision;
         entry.lineageParentContentKey = ContentKey{}; // Invalid key for no parent
-        entry.sourceWindow = payload.sourceWindow;
-        entry.detectedKey = payload.detectedKey;
-        entry.notes = payload.notes;
-        entry.noteTopologyInitialized = payload.noteTopologyInitialized;
-        entry.volumeEnvelope = payload.volumeEnvelope;
+        entry.sourceWindow = content.sourceWindow;
+        entry.detectedKey = content.analysis.detectedKey;
+        entry.notes = content.notes;
+        entry.noteTopologyInitialized = content.noteTopologyInitialized;
+        entry.volumeEnvelope = content.volumeEnvelope;
 
         // Extract corrected segments from pitch curve
-        if (payload.pitchCurve) {
-            auto pcSnap = payload.pitchCurve->getSnapshot();
+        if (content.analysis.pitchCurve) {
+            auto pcSnap = content.analysis.pitchCurve->getSnapshot();
             const auto& segments = pcSnap->getCorrectionSegments();
             for (const auto& seg : segments) {
                 ProjectContentEntry::SegmentEntry segEntry;
@@ -167,9 +167,9 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         }
 
         // TimeGrid
-        if (payload.timeGrid) {
-            entry.timeGrid.revision = payload.timeGridRevision;
-            for (const auto& handle : payload.timeGrid->handles()) {
+        if (content.timeGrid) {
+            entry.timeGrid.revision = content.timeGridRevision;
+            for (const auto& handle : content.timeGrid->handles()) {
                 ProjectContentEntry::TimeGridEntry::HandleEntry he;
                 he.id = handle.id;
                 he.kind = static_cast<uint8_t>(handle.kind);
@@ -181,14 +181,14 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         }
 
         // Original F0 state
-        entry.originalF0State = static_cast<uint8_t>(payload.originalF0State);
+        entry.originalF0State = static_cast<uint8_t>(content.analysis.originalF0State);
 
         // Pitch shift settings
-        entry.pitchShiftSettings.semitone = payload.pitchShiftSettings.semitone;
-        entry.pitchShiftSettings.cents = payload.pitchShiftSettings.cents;
+        entry.pitchShiftSettings.semitone = content.pitchShiftSettings.semitone;
+        entry.pitchShiftSettings.cents = content.pitchShiftSettings.cents;
 
         // Silent gaps
-        for (const auto& gap : payload.silentGaps) {
+        for (const auto& gap : content.analysis.silentGaps) {
             ProjectContentEntry::SilentGapEntry gapEntry;
             gapEntry.startSample = gap.startSample;
             gapEntry.endSampleExclusive = gap.endSampleExclusive;
@@ -197,14 +197,14 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         }
 
         // Reference features
-        entry.referenceFeatures.analysisRevision = payload.referenceFeatures.analysisRevision;
-        entry.referenceFeatures.status = static_cast<uint8_t>(payload.referenceFeatures.status);
-        entry.referenceFeatures.producer = static_cast<uint8_t>(payload.referenceFeatures.producer);
-        entry.referenceFeatures.inputFingerprint = payload.referenceFeatures.inputFingerprint;
-        entry.referenceFeatures.sourceDurationSeconds = payload.referenceFeatures.sourceDurationSeconds;
-        entry.referenceFeatures.errorMessage = payload.referenceFeatures.errorMessage;
-        entry.referenceFeatures.pitchNotes = payload.referenceFeatures.pitch.notes;
-        for (const auto& anchor : payload.referenceFeatures.timing.anchors) {
+        entry.referenceFeatures.analysisRevision = content.analysis.referenceFeatures.analysisRevision;
+        entry.referenceFeatures.status = static_cast<uint8_t>(content.analysis.referenceFeatures.status);
+        entry.referenceFeatures.producer = static_cast<uint8_t>(content.analysis.referenceFeatures.producer);
+        entry.referenceFeatures.inputFingerprint = content.analysis.referenceFeatures.inputFingerprint;
+        entry.referenceFeatures.sourceDurationSeconds = content.analysis.referenceFeatures.sourceDurationSeconds;
+        entry.referenceFeatures.errorMessage = content.analysis.referenceFeatures.errorMessage;
+        entry.referenceFeatures.pitchNotes = content.analysis.referenceFeatures.pitch.notes;
+        for (const auto& anchor : content.analysis.referenceFeatures.timing.anchors) {
             ProjectContentEntry::ReferenceFeatureEntry::TimingAnchorEntry anchorEntry;
             anchorEntry.anchorId = anchor.anchorId;
             anchorEntry.sourceSeconds = anchor.sourceSeconds;
@@ -486,14 +486,14 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         if (!clip) { continue; }
 
         // 应用音频数据
-        clip->payload().sourceWindow = contentEntry.sourceWindow;
+        clip->content().sourceWindow = contentEntry.sourceWindow;
         clip->applyAudioBuffer(windowedBuffer, sourceSampleRate);
 
         // 应用 notes
         clip->applyNotes(contentEntry.notes);
 
         // 恢复 note topology 状态（applyNotes 按新契约会置 true，空 notes 工程必须恢复持久值）
-        clip->payload().noteTopologyInitialized = contentEntry.noteTopologyInitialized;
+        clip->content().noteTopologyInitialized = contentEntry.noteTopologyInitialized;
 
         // 恢复 envelope（revision 不落盘，恢复端由 owner 推进新 revision）
         clip->applyVolumeEnvelope(contentEntry.volumeEnvelope);
@@ -541,17 +541,17 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         PitchShiftSettings pitchShift;
         pitchShift.semitone = contentEntry.pitchShiftSettings.semitone;
         pitchShift.cents = contentEntry.pitchShiftSettings.cents;
-        clip->payload().pitchShiftSettings = pitchShift;
+        clip->content().pitchShiftSettings = pitchShift;
 
-        // 恢复 Silent gaps（直接写入payload，因为silentGaps 是分析结果）
-        auto& payloadRef = clip->payload();
-        payloadRef.silentGaps.clear();
+        // 恢复 Silent gaps（直接写入 content，因为 silentGaps 是分析结果）
+        auto& contentRef = clip->content();
+        contentRef.analysis.silentGaps.clear();
         for (const auto& gapEntry : contentEntry.silentGaps) {
             SilentGap gap;
             gap.startSample = gapEntry.startSample;
             gap.endSampleExclusive = gapEntry.endSampleExclusive;
             gap.minLevel_dB = gapEntry.minLevel_dB;
-            payloadRef.silentGaps.push_back(gap);
+            contentRef.analysis.silentGaps.push_back(gap);
         }
 
         // 恢复 Reference features

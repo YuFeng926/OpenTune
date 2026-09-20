@@ -1,4 +1,5 @@
 #include "AudioModification.h"
+#include "../Content/ContentSnapshotProjection.h"
 #include <algorithm>
 #include <cmath>
 #include <optional>
@@ -12,20 +13,6 @@ void AudioModification::updateIdentity(juce::ARAAudioModification* modification)
     persistentId = modification != nullptr
         ? juce::String(modification->getPersistentID())
         : juce::String();
-}
-
-std::optional<AudioModificationContentState> AudioModificationContentState::makeBorn(const SourceWindow& window)
-{
-    const auto grid = TimeGridSnapshot::makeIdentity(window.durationSeconds());
-    if (!grid)
-        return std::nullopt;
-
-    AudioModificationContentState state;
-    state.sourceWindow = window;
-    state.editable.timeGrid = grid;
-    state.editable.timeGridRevision = 1;
-    state.contentRevision = 0;
-    return state;
 }
 
 bool AudioModification::attachSource(const AudioSource& source)
@@ -46,11 +33,15 @@ bool AudioModification::attachSource(const AudioSource& source)
         source.getShape().durationSeconds()
     };
 
-    const auto bornOpt = AudioModificationContentState::makeBorn(newWindow);
-    if (!bornOpt)
+    const auto grid = TimeGridSnapshot::makeIdentity(newWindow.durationSeconds());
+    if (grid == nullptr)
         return false;
 
-    content.emplace(std::move(*bornOpt));
+    ContentState state;
+    state.sourceWindow = newWindow;
+    state.timeGrid = std::move(grid);
+    state.timeGridRevision = 1;
+    content.emplace(std::move(state));
     birthState = AudioModificationBirthState::WaitingForSource;
     cachedSourceShape_ = source.getShape();
     return true;
@@ -83,7 +74,7 @@ bool AudioModification::isRenderable() const noexcept
         return false;
     if (!content->sourceWindow.isValid())
         return false;
-    if (!content->editable.timeGrid)
+    if (!content->timeGrid)
         return false;
     return true;
 }
@@ -98,65 +89,39 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
     if (!content.has_value())
         return nullptr;
 
-    auto snap = std::make_shared<EditableContentSnapshot>();
-    snap->sourceWindow = content->sourceWindow;
+    auto snap = std::make_shared<EditableContentSnapshot>(makeContentSnapshot(*content));
 
     // ARA2: 从缓存的 AudioSource shape 提供只读元数据
     snap->sourceSampleRate = cachedSourceShape_.sourceSampleRate;
     snap->sourceChannelCount = cachedSourceShape_.numChannels;
     snap->sourceSampleCount = cachedSourceShape_.numSamples;
-
-    // 保持 audioSampleRate 与 audioBuffer 绑定（ARA 下为 nullptr/0.0）
-    snap->audioBuffer = nullptr;  // ARA 不拥有 PCM
-    snap->audioSampleRate = 0.0;  // 与 audioBuffer 一致
-
-    // modification-scoped state
-    snap->notes = content->editable.notes;
-    snap->pitchCurve = content->analysis.pitchCurve;
-    snap->timeGrid = content->editable.timeGrid;
-    snap->pitchShiftSettings = content->editable.pitchShiftSettings;
-    snap->originalF0State = content->analysis.originalF0State;
-    snap->detectedKey = content->analysis.detectedKey;
-    snap->silentGaps = content->analysis.silentGaps;
-    snap->referenceFeatures = content->analysis.referenceFeatures;
-    snap->volumeEnvelope = content->editable.volumeEnvelope;
-    snap->notesRevision = content->editable.notesRevision;
-    snap->noteTopologyInitialized = content->editable.noteTopologyInitialized;
-    snap->pitchRevision = content->editable.pitchRevision;
-    snap->timeGridRevision = content->editable.timeGridRevision;
-    snap->pitchShiftRevision = content->editable.pitchShiftRevision;
-    snap->outputGainRevision = content->editable.outputGainRevision;
-    snap->contentRevision = content->contentRevision;
     return snap;
 }
 
 void AudioModification::applyNotes(const std::vector<Note>& notes)
 {
-    content->editable.notes = notes;
-    for (auto& note : content->editable.notes)
-        note.outputGainDb = content->editable.volumeEnvelope.evalAt(note.startTime);
-    content->editable.noteTopologyInitialized = true;
-    ++content->editable.notesRevision;
-    ++content->editable.contentRevision;
+    content->notes = notes;
+    for (auto& note : content->notes)
+        note.outputGainDb = content->volumeEnvelope.evalAt(note.startTime);
+    content->noteTopologyInitialized = true;
+    ++content->notesRevision;
     ++content->contentRevision;
 }
 
 void AudioModification::applyVolumeEnvelope(const AutomationLane& envelope)
 {
-    content->editable.volumeEnvelope = envelope;
-    for (auto& note : content->editable.notes)
-        note.outputGainDb = content->editable.volumeEnvelope.evalAt(note.startTime);
-    ++content->editable.notesRevision;
-    ++content->editable.outputGainRevision;
-    ++content->editable.contentRevision;
+    content->volumeEnvelope = envelope;
+    for (auto& note : content->notes)
+        note.outputGainDb = content->volumeEnvelope.evalAt(note.startTime);
+    ++content->notesRevision;
+    ++content->outputGainRevision;
     ++content->contentRevision;
 }
 
 void AudioModification::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
 {
     content->analysis.pitchCurve = std::move(curve);
-    ++content->editable.pitchRevision;
-    ++content->editable.contentRevision;
+    ++content->pitchRevision;
     ++content->contentRevision;
 }
 
@@ -178,9 +143,8 @@ bool AudioModification::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> gr
     if (std::abs(gridDuration - sourceDuration) > 1e-6)
         return false;
 
-    content->editable.timeGrid = std::move(grid);
-    ++content->editable.timeGridRevision;
-    ++content->editable.contentRevision;
+    content->timeGrid = std::move(grid);
+    ++content->timeGridRevision;
     ++content->contentRevision;
 
     return true;
@@ -191,13 +155,12 @@ bool AudioModification::applyPitchShiftState(const PitchShiftEditState& state)
     if (!content.has_value() || content->analysis.pitchCurve == nullptr)
         return false;
 
-    content->editable.notes = state.notes;
+    content->notes = state.notes;
     content->analysis.pitchCurve->replaceCorrectionSegments(state.segments);
-    content->editable.pitchShiftSettings = state.settings;
-    ++content->editable.notesRevision;
-    ++content->editable.pitchRevision;
-    ++content->editable.pitchShiftRevision;
-    ++content->editable.contentRevision;
+    content->pitchShiftSettings = state.settings;
+    ++content->notesRevision;
+    ++content->pitchRevision;
+    ++content->pitchShiftRevision;
     ++content->contentRevision;
     return true;
 }
@@ -210,15 +173,12 @@ void AudioModification::applyDetectedKey(const DetectedKey& key)
 
 void AudioModification::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 {
+    // 一次性提交：curve + Ready 状态 + 单次 analysis/content revision。
+    // 不调用 applyOriginalF0State，避免同一次提交双 bump。
     content->analysis.pitchCurve = std::move(curve);
-    content->analysis.f0Lifecycle = AnalysisLifecycle::Ready;
-    // Set state directly without calling applyOriginalF0State to avoid double
-    // contentRevision bump: applyOriginalF0State conditionally increments, but
-    // the explicit increment below always fires, guaranteeing exactly one bump.
-    if (content->analysis.originalF0State != OriginalF0State::Ready)
-        content->analysis.originalF0State = OriginalF0State::Ready;
+    content->analysis.setOriginalF0State(OriginalF0State::Ready);
     ++content->analysis.analysisRevision;
-    ++content->editable.pitchRevision;
+    ++content->pitchRevision;
     ++content->contentRevision;
 }
 
@@ -236,9 +196,8 @@ void AudioModification::applyReferenceFeatures(const ReferenceFeatureSet& featur
 
 void AudioModification::applyOriginalF0State(OriginalF0State state)
 {
-    if (content->analysis.originalF0State == state)
+    if (!content->analysis.setOriginalF0State(state))
         return;
-    content->analysis.originalF0State = state;
     ++content->contentRevision;
 }
 

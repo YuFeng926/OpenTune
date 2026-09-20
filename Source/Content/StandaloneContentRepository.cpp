@@ -97,8 +97,7 @@ bool StandaloneContentRepository::isRetired(ContentKey key) const
     if (!clip)
         return false;
 
-    const auto& state = clip->payload();
-    return state.lifecycle == ContentLifecycle::Retired;
+    return clip->isRetired();
 }
 
 std::vector<ContentKey> StandaloneContentRepository::getRetiredClips() const
@@ -106,7 +105,7 @@ std::vector<ContentKey> StandaloneContentRepository::getRetiredClips() const
     juce::ScopedReadLock rl(lock_);
     std::vector<ContentKey> result;
     for (const auto& [id, clip] : clips_) {
-        if (clip && clip->payload().lifecycle == ContentLifecycle::Retired) {
+        if (clip && clip->isRetired()) {
             result.push_back(clip->contentKey());
         }
     }

@@ -1,14 +1,10 @@
 #pragma once
+#include "AnalysisState.h"
 #include "../Utils/SourceWindow.h"
-#include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
 #include "../Utils/Note.h"
 #include "../Utils/AutomationLane.h"
-#include "../Utils/SilentGapDetector.h"
-#include "../Utils/ContentAnalysisState.h"   // OriginalF0State
-#include "../Utils/DetectedKey.h"              // DetectedKey
-#include "../DSP/ReferenceFeatures.h"          // ReferenceFeatureSet
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
 #include <vector>
@@ -16,27 +12,17 @@
 
 namespace OpenTune {
 
-enum class ContentLifecycle
-{
-    Empty,
-    Ready,
-    Retired
-};
-
-/// Standalone 域完整 payload — 所有数据由一个 ContentPayloadState 表达。
-/// 不含 render cache、worker、stretcher、playback publisher 所有权。
-struct ContentPayloadState
+/// 内容域统一状态 — Standalone / Capture / ARA 三个 owner 共用同一结构。
+/// 不含 render cache、worker、stretcher、playback publisher 所有权，
+/// 也不含域生命周期（ARA birth state、Capture retired/session、Standalone retired records）。
+struct ContentState
 {
     SourceWindow sourceWindow;
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
     double sampleRate{44100.0};
 
     // ── Analysis state ──────────────────────────────────────
-    std::shared_ptr<PitchCurve> pitchCurve;
-    OriginalF0State originalF0State{OriginalF0State::NotRequested};
-    DetectedKey detectedKey;
-    std::vector<SilentGap> silentGaps;
-    ReferenceFeatureSet referenceFeatures;
+    AnalysisState analysis;
 
     // ── Editable state ──────────────────────────────────────
     std::vector<Note> notes;
@@ -53,8 +39,6 @@ struct ContentPayloadState
     uint64_t outputGainRevision{0};
     uint64_t contentRevision{0};
     uint64_t audioRevision{0};
-
-    ContentLifecycle lifecycle{ContentLifecycle::Ready};
 };
 
 } // namespace OpenTune

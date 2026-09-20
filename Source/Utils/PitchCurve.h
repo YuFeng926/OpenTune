@@ -181,6 +181,12 @@ public:
     }
     bool hasCorrectionLayer() const { return getSnapshot()->hasCorrectionLayer(); }
     bool hasOriginalF0Data() const { return getSnapshot()->hasOriginalF0Data(); }
+    bool hasUsableOriginalF0() const {
+        const auto snapshot = getSnapshot();
+        return !snapshot->getOriginalF0().empty()
+            && snapshot->getHopSize() > 0
+            && snapshot->getSampleRate() > 0.0;
+    }
 
     void setOriginalF0(const std::vector<float>& f0) {
         auto oldSnapshot = getSnapshot();

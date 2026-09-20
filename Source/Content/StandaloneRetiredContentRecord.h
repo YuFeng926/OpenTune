@@ -1,6 +1,6 @@
 #pragma once
 #include "ContentKey.h"
-#include "ContentPayloadState.h"
+#include "ContentState.h"
 
 namespace OpenTune {
 
@@ -9,7 +9,7 @@ namespace OpenTune {
 struct StandaloneRetiredContentRecord
 {
     ContentKey key;
-    ContentPayloadState content;
+    ContentState content;
 };
 
 } // namespace OpenTune

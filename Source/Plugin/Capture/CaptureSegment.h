@@ -109,11 +109,12 @@ struct CaptureSegment
      *  the audio thread never needs to allocate or silently lose a discontinuity. */
     std::vector<CapturedSpan> spans;
 
-    /** Message-thread only: 上次 tick 观察到的 F0 状态。tick() 仅在跃迁
-     *  （非 Ready → Ready，含首次观察即 Ready）时提交一次 requestFullRender，
+    /** Message-thread only: 上次 tick 观察到的 F0 可用状态。tick() 仅在跃迁
+     *  （无可用 F0 → 可用 F0，含首次观察即可用）时提交一次 requestFullRender，
+     *  render gate 以 owner 实际可用曲线数据为准，观察基线归一化为 Ready。
      *  避免渲染窗口内（渲染耗时 > 33ms，大于 30Hz tick 间隔）重复提交取消并重启
      *  Running chunk。与插件 UI 侧 lastObservedOriginalF0States_ 同为
-     *  状态记录+跃迁检测模式；初始 NotRequested 保证首次观察即 Ready 不丢失。 */
+     *  状态记录+跃迁检测模式；初始 NotRequested 保证首次观察即可用不丢失。 */
     OriginalF0State lastObservedF0State = OriginalF0State::NotRequested;
 
     /** Diagnostic: peak absolute sample value seen during capture. Audio thread writes,

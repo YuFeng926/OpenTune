@@ -1,5 +1,5 @@
 #include "StandaloneClipContent.h"
-#include "EditableContentSnapshot.h"
+#include "ContentSnapshotProjection.h"
 #include <algorithm>
 #include <utility>
 
@@ -8,7 +8,6 @@ namespace OpenTune {
 StandaloneClipContent::StandaloneClipContent(StandaloneClipId clipId)
     : clipId_(clipId)
 {
-    content_.lifecycle = ContentLifecycle::Ready;
 }
 
 ContentKey StandaloneClipContent::contentKey() const
@@ -21,28 +20,7 @@ ContentKey StandaloneClipContent::contentKey() const
 
 std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotContent() const
 {
-    auto snap = std::make_shared<EditableContentSnapshot>();
-    snap->sourceWindow = content_.sourceWindow;
-    snap->audioBuffer = content_.audioBuffer;
-    snap->audioSampleRate = content_.sampleRate;
-    snap->audioRevision = content_.audioRevision;
-    snap->notes = content_.notes;
-    snap->pitchCurve = content_.pitchCurve;
-    snap->timeGrid = content_.timeGrid;
-    snap->pitchShiftSettings = content_.pitchShiftSettings;
-    snap->originalF0State = content_.originalF0State;
-    snap->detectedKey = content_.detectedKey;
-    snap->silentGaps = content_.silentGaps;
-    snap->referenceFeatures = content_.referenceFeatures;
-    snap->volumeEnvelope = content_.volumeEnvelope;
-    snap->notesRevision = content_.notesRevision;
-    snap->noteTopologyInitialized = content_.noteTopologyInitialized;
-    snap->pitchRevision = content_.pitchRevision;
-    snap->timeGridRevision = content_.timeGridRevision;
-    snap->pitchShiftRevision = content_.pitchShiftRevision;
-    snap->outputGainRevision = content_.outputGainRevision;
-    snap->contentRevision = content_.contentRevision;
-    return snap;
+    return std::make_shared<const EditableContentSnapshot>(makeContentSnapshot(content_));
 }
 
 // ── Lifecycle ───────────────────────────────────────────────
@@ -55,11 +33,10 @@ void StandaloneClipContent::retireContent(ContentKey key)
     StandaloneRetiredContentRecord record;
     record.key = key;
     record.content = std::move(content_);
-    record.content.lifecycle = ContentLifecycle::Retired;
+    lifecycle_ = ContentLifecycle::Retired;
 
     // 重置当前 content 为空状态
-    content_ = ContentPayloadState{};
-    content_.lifecycle = ContentLifecycle::Retired;
+    content_ = ContentState{};
 
     retired_.push_back(std::move(record));
 }
@@ -72,7 +49,7 @@ void StandaloneClipContent::reviveContent(ContentKey key)
     for (auto it = retired_.begin(); it != retired_.end(); ++it) {
         if (it->key == key) {
             content_ = std::move(it->content);
-            content_.lifecycle = ContentLifecycle::Ready;
+            lifecycle_ = ContentLifecycle::Ready;
             bumpContentRevision();
             retired_.erase(it);
             return;
@@ -93,13 +70,12 @@ void StandaloneClipContent::releaseRetiredContent(ContentKey key)
 
 bool StandaloneClipContent::isRetired() const
 {
-    return content_.lifecycle == ContentLifecycle::Retired;
+    return lifecycle_ == ContentLifecycle::Retired;
 }
 
 bool StandaloneClipContent::hasActiveContent() const
 {
-    return content_.lifecycle != ContentLifecycle::Retired
-        && content_.lifecycle != ContentLifecycle::Empty;
+    return lifecycle_ != ContentLifecycle::Retired;
 }
 
 // ── Apply commands ──────────────────────────────────────────
@@ -126,14 +102,18 @@ void StandaloneClipContent::applyVolumeEnvelope(AutomationLane envelope)
 
 void StandaloneClipContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
 {
-    content_.pitchCurve = std::move(curve);
+    content_.analysis.pitchCurve = std::move(curve);
     ++content_.pitchRevision;
     bumpContentRevision();
 }
 
 void StandaloneClipContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 {
-    content_.pitchCurve = std::move(curve);
+    // 一次性提交：curve + Ready 状态 + 单次 analysis/content revision。
+    // 不调用 applyOriginalF0State，避免同一次提交双 bump。
+    content_.analysis.pitchCurve = std::move(curve);
+    content_.analysis.setOriginalF0State(OriginalF0State::Ready);
+    ++content_.analysis.analysisRevision;
     ++content_.pitchRevision;
     bumpContentRevision();
 }
@@ -146,11 +126,11 @@ void StandaloneClipContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot
 
 bool StandaloneClipContent::applyPitchShiftState(const PitchShiftEditState& state)
 {
-    if (content_.pitchCurve == nullptr)
+    if (content_.analysis.pitchCurve == nullptr)
         return false;
 
     content_.notes = state.notes;
-    content_.pitchCurve->replaceCorrectionSegments(state.segments);
+    content_.analysis.pitchCurve->replaceCorrectionSegments(state.segments);
     content_.pitchShiftSettings = state.settings;
     ++content_.notesRevision;
     ++content_.pitchRevision;
@@ -161,18 +141,20 @@ bool StandaloneClipContent::applyPitchShiftState(const PitchShiftEditState& stat
 
 void StandaloneClipContent::applyDetectedKey(const DetectedKey& key)
 {
-    content_.detectedKey = key;
+    content_.analysis.detectedKey = key;
     bumpContentRevision();
 }
 
 void StandaloneClipContent::applyReferenceFeatures(const ReferenceFeatureSet& features)
 {
-    content_.referenceFeatures = features;
+    content_.analysis.referenceFeatures = features;
 }
 
 void StandaloneClipContent::applyOriginalF0State(OriginalF0State state)
 {
-    content_.originalF0State = state;
+    // 幂等 setter：状态未变则不推进 revision，与 Capture/ARA owner 语义一致。
+    if (!content_.analysis.setOriginalF0State(state))
+        return;
     bumpContentRevision();
 }
 

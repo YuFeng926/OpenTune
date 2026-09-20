@@ -43,6 +43,7 @@
 #endif
 #include "Content/ContentEditCommands.h"
 #include "Content/ContentPatchGeometry.h"
+#include "Content/ContentSnapshotProjection.h"
 
 namespace OpenTune {
 
@@ -102,36 +103,9 @@ ReferenceFeatureSet makeReferenceFeatureSetFromNotes(
 }
 
 #if JucePlugin_Build_Standalone
-ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
-{
-    ContentPayloadState payload;
-    payload.sourceWindow = snap.sourceWindow;
-    payload.audioBuffer = snap.audioBuffer;
-    payload.sampleRate = snap.audioSampleRate > 0.0 ? snap.audioSampleRate : TimeCoordinate::kRenderSampleRate;
-    payload.pitchCurve = snap.pitchCurve;
-    payload.originalF0State = snap.originalF0State;
-    payload.detectedKey = snap.detectedKey;
-    payload.silentGaps = snap.silentGaps;
-    payload.referenceFeatures = snap.referenceFeatures;
-    payload.notes = snap.notes;
-    payload.volumeEnvelope = snap.volumeEnvelope;
-    payload.timeGrid = snap.timeGrid;
-    payload.pitchShiftSettings = snap.pitchShiftSettings;
-    payload.notesRevision = snap.notesRevision;
-    payload.noteTopologyInitialized = snap.noteTopologyInitialized;
-    payload.pitchRevision = snap.pitchRevision;
-    payload.timeGridRevision = snap.timeGridRevision;
-    payload.pitchShiftRevision = snap.pitchShiftRevision;
-    payload.outputGainRevision = snap.outputGainRevision;
-    payload.contentRevision = snap.contentRevision;
-    payload.audioRevision = snap.audioRevision;
-    payload.lifecycle = ContentLifecycle::Ready;
-    return payload;
-}
-
 void publishStandalonePlaybackSource(ContentRenderService& crs,
                                      ContentKey key,
-                                     const ContentPayloadState& payload)
+                                     const ContentState& payload)
 {
     PlaybackReadSource readSource;
     readSource.contentKey = key;
@@ -153,7 +127,7 @@ void publishStandalonePlaybackSource(ContentRenderService& crs,
 
 ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
                                      ContentRenderService& crs,
-                                     ContentPayloadState payload,
+                                     ContentState payload,
                                      uint64_t forcedId = 0)
 {
     const ContentKey key = repository.createClip(forcedId);
@@ -161,8 +135,6 @@ ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
     if (clip == nullptr) {
         return {};
     }
-
-    payload.lifecycle = ContentLifecycle::Ready;
 
     if (payload.timeGrid == nullptr) {
         const double durationSeconds = payload.sourceWindow.isValid()
@@ -173,8 +145,8 @@ ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
         ++payload.timeGridRevision;
     }
 
-    clip->payload() = std::move(payload);
-    publishStandalonePlaybackSource(crs, key, clip->payload());
+    clip->content() = std::move(payload);
+    publishStandalonePlaybackSource(crs, key, clip->content());
     return key;
 }
 
@@ -187,7 +159,7 @@ bool standaloneRepositoryReferencesSource(const StandaloneContentRepository& rep
 
     for (const auto key : repository.getAllClips()) {
         const auto* clip = repository.findClip(key);
-        if (clip != nullptr && clip->payload().sourceWindow.sourceId == sourceId) {
+        if (clip != nullptr && clip->content().sourceWindow.sourceId == sourceId) {
             return true;
         }
     }
@@ -2561,7 +2533,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         return std::nullopt;
     }
 
-    ContentPayloadState leadingPayload = payloadFromSnapshot(*originalSnapshot);
+    ContentState leadingPayload = contentStateFromSnapshot(*originalSnapshot);
     leadingPayload.sourceWindow = SourceWindow{
         originalSnapshot->sourceWindow.sourceId,
         juce::String(),
@@ -2569,12 +2541,12 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         originalSnapshot->sourceWindow.sourceStartSeconds + splitOffsetSeconds
     };
     leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, splitSample);
-    leadingPayload.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve, 0.0, splitOffsetSeconds);
+    leadingPayload.analysis.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve, 0.0, splitOffsetSeconds);
     leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitOffsetSeconds);
-    leadingPayload.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
+    leadingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
     leadingPayload.timeGrid = nullptr;
 
-    ContentPayloadState trailingPayload = payloadFromSnapshot(*originalSnapshot);
+    ContentState trailingPayload = contentStateFromSnapshot(*originalSnapshot);
     trailingPayload.sourceWindow = SourceWindow{
         originalSnapshot->sourceWindow.sourceId,
         juce::String(),
@@ -2582,13 +2554,13 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         originalSnapshot->sourceWindow.sourceEndSeconds
     };
     trailingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, splitSample, totalSamples);
-    trailingPayload.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve,
+    trailingPayload.analysis.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve,
                                                              splitOffsetSeconds,
                                                              originalPlacement.durationSeconds);
     trailingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes,
                                                    splitOffsetSeconds,
                                                    originalPlacement.durationSeconds);
-    trailingPayload.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, splitSample, totalSamples);
+    trailingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, splitSample, totalSamples);
     trailingPayload.timeGrid = nullptr;
 
     const ContentKey leadingKey = createStandaloneClipOwner(*standaloneContentRepository_,
@@ -2743,7 +2715,7 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     }
     mergedNotes = normalizeStoredNotes(mergedNotes);
 
-    ContentPayloadState mergedPayload;
+    ContentState mergedPayload;
     mergedPayload.sourceWindow = SourceWindow{
         leadingSnapshot->sourceWindow.sourceId,
         juce::String(),
@@ -2752,13 +2724,13 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     };
     mergedPayload.audioBuffer = mergedBuffer;
     mergedPayload.sampleRate = leadingSnapshot->audioSampleRate > 0.0 ? leadingSnapshot->audioSampleRate : TimeCoordinate::kRenderSampleRate;
-    mergedPayload.pitchCurve = mergedPitchCurve;
-    mergedPayload.originalF0State = leadingSnapshot->originalF0State;
-    mergedPayload.detectedKey = leadingSnapshot->detectedKey;
+    mergedPayload.analysis.pitchCurve = mergedPitchCurve;
+    mergedPayload.analysis.setOriginalF0State(leadingSnapshot->originalF0State);
+    mergedPayload.analysis.detectedKey = leadingSnapshot->detectedKey;
     mergedPayload.notes = std::move(mergedNotes);
     mergedPayload.noteTopologyInitialized = leadingSnapshot->noteTopologyInitialized
         || trailingSnapshot->noteTopologyInitialized;
-    mergedPayload.silentGaps = mergeSilentGaps(leadingSnapshot->silentGaps, trailingSnapshot->silentGaps, leadingSamples);
+    mergedPayload.analysis.silentGaps = mergeSilentGaps(leadingSnapshot->silentGaps, trailingSnapshot->silentGaps, leadingSamples);
     mergedPayload.pitchShiftSettings = leadingSnapshot->pitchShiftSettings;
 
     const ContentKey mergedKey = createStandaloneClipOwner(*standaloneContentRepository_,
@@ -2869,7 +2841,7 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
 
         uint64_t sourceId = 0;
         if (auto* clip = standaloneContentRepository_->findClip(key)) {
-            sourceId = clip->payload().sourceWindow.sourceId;
+            sourceId = clip->content().sourceWindow.sourceId;
         }
 
         if (contentRenderService_ != nullptr) {
@@ -3675,12 +3647,12 @@ ContentKey OpenTuneAudioProcessor::ensureSourceAndCreateStandaloneClip(PreparedI
         sw = SourceWindow{sourceId, juce::String(), 0.0, durationSeconds};
     }
 
-    ContentPayloadState payload;
+    ContentState payload;
     payload.sourceWindow = sw;
     payload.audioBuffer = storedAudioBuffer;
     payload.sampleRate = TimeCoordinate::kRenderSampleRate;
-    payload.originalF0State = OriginalF0State::NotRequested;
-    payload.silentGaps = std::move(prepared.silentGaps);
+    payload.analysis.setOriginalF0State(OriginalF0State::NotRequested);
+    payload.analysis.silentGaps = std::move(prepared.silentGaps);
 
     const ContentKey key = createStandaloneClipOwner(*standaloneContentRepository_,
                                                      *contentRenderService_,
@@ -5292,7 +5264,7 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
         return ContentKey{};
     }
 
-    ContentPayloadState payload;
+    ContentState payload;
     payload.sourceWindow = SourceWindow{
         sourceSnap->sourceWindow.sourceId,
         juce::String(),
@@ -5303,16 +5275,16 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
                                            offsetSamples,
                                            offsetSamples + durSamples);
     payload.sampleRate = sampleRate;
-    payload.pitchCurve = slicePitchCurveToLocalRange(sourceSnap->pitchCurve,
+    payload.analysis.pitchCurve = slicePitchCurveToLocalRange(sourceSnap->pitchCurve,
                                                      offsetSeconds,
                                                      offsetSeconds + durationSeconds);
-    payload.originalF0State = sourceSnap->originalF0State;
-    payload.detectedKey = sourceSnap->detectedKey;
+    payload.analysis.setOriginalF0State(sourceSnap->originalF0State);
+    payload.analysis.detectedKey = sourceSnap->detectedKey;
     payload.notes = sliceNotesToLocalRange(sourceSnap->notes,
                                            offsetSeconds,
                                            offsetSeconds + durationSeconds);
     payload.noteTopologyInitialized = sourceSnap->noteTopologyInitialized;
-    payload.silentGaps = sliceSilentGaps(sourceSnap->silentGaps,
+    payload.analysis.silentGaps = sliceSilentGaps(sourceSnap->silentGaps,
                                          offsetSamples,
                                          offsetSamples + durSamples);
     payload.pitchShiftSettings = sourceSnap->pitchShiftSettings;
@@ -5354,9 +5326,9 @@ ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
         return ContentKey{};
     }
 
-    ContentPayloadState payload = payloadFromSnapshot(*sourceSnap);
+    ContentState payload = contentStateFromSnapshot(*sourceSnap);
     payload.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(*sourceSnap->audioBuffer);
-    payload.pitchCurve = sourceSnap->pitchCurve != nullptr ? sourceSnap->pitchCurve->clone() : nullptr;
+    payload.analysis.pitchCurve = sourceSnap->pitchCurve != nullptr ? sourceSnap->pitchCurve->clone() : nullptr;
 
     const ContentKey newKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                         *contentRenderService_,

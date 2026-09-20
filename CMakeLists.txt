@@ -719,8 +719,9 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Content/ContentKey.h
         Source/Content/DomainContentOwner.h
         Source/Content/AnalysisState.h
-        Source/Content/EditableContentState.h
-        Source/Content/AudioModificationContentState.h
+        Source/Content/ContentState.h
+        Source/Content/ContentSnapshotProjection.h
+        Source/Content/ContentSnapshotProjection.cpp
         Source/Content/EditableContentSnapshot.h
         Source/Content/ContentPatchGeometry.h
 
@@ -768,7 +769,6 @@ set(OPENTUNE_STANDALONE_SOURCES
         Source/Utils/PlacementActions.cpp
         Source/Utils/PlacementActions.h
 
-        Source/Content/ContentPayloadState.h
         Source/Content/StandaloneRetiredContentRecord.h
         Source/Content/StandaloneClipContent.h
         Source/Content/StandaloneClipContent.cpp
@@ -1450,4 +1450,18 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneCapturePersistenceTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME CapturePersistenceTests COMMAND OpenTuneCapturePersistenceTests)
+
+    add_executable(OpenTuneContentSnapshotProjectionTests
+        Tests/ContentSnapshotProjectionTests.cpp
+        Source/Content/StandaloneClipContent.cpp
+    )
+    target_link_libraries(OpenTuneContentSnapshotProjectionTests PRIVATE
+        OpenTune
+        juce::juce_audio_basics
+        juce::juce_core
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneContentSnapshotProjectionTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME ContentSnapshotProjectionTests COMMAND OpenTuneContentSnapshotProjectionTests)
 endif()

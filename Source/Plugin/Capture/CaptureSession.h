@@ -148,8 +148,9 @@ public:
                       bool isPlaying) noexcept;
 
     /** Periodic message-thread tick (~30 Hz from the processor timer). Promotes Pending -> Processing
-     *  after capture drain, and Processing -> Edited when CaptureSegmentContent F0 state is Ready.
-     *  Failed segments (F0 analysis or render failure) are not promoted by tick. */
+     *  after capture drain, and Processing -> Edited when CaptureSegmentContent owns usable
+     *  OriginalF0 data (curve + Ready). Failed segments (F0 analysis or render failure) are not
+     *  promoted by tick. */
     void tick();
 
     // ─── Notification injection (message thread) ───────────────────────────

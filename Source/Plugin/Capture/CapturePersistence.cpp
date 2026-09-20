@@ -121,7 +121,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
             segNode.setProperty("captureSampleRate", seg->captureSampleRate, nullptr);
             segNode.setProperty("captureChannels", seg->captureChannels, nullptr);
             segNode.setProperty("noteTopologyInitialized",
-                                seg->content->editable().noteTopologyInitialized ? 1 : 0, nullptr);
+                                seg->content->content().noteTopologyInitialized ? 1 : 0, nullptr);
             root.appendChild(segNode, nullptr);
             ++persistedCount;
         }
@@ -475,22 +475,28 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             seg->content->applyAudioBuffer(*p.audio, p.captureSampleRate);
         }
         seg->content->applyDetectedKey(p.detectedKey);
+        const bool hasPitchCurve = p.pitchCurve != nullptr;
         if (p.pitchCurve) {
-            const auto pitchSnapshot = p.pitchCurve->getSnapshot();
+            auto pitchCurve = std::move(p.pitchCurve);
+            const auto pitchSnapshot = pitchCurve->getSnapshot();
             PitchShiftEditState pitchShiftState;
             pitchShiftState.settings = p.pitchShiftSettings;
             pitchShiftState.notes = std::move(p.notes);
             pitchShiftState.segments = pitchSnapshot->getCorrectionSegments();
-            seg->content->applyPitchCurve(std::move(p.pitchCurve));
+            if (p.originalF0State == OriginalF0State::Ready)
+                seg->content->applyOriginalF0(std::move(pitchCurve));
+            else
+                seg->content->applyPitchCurve(std::move(pitchCurve));
             seg->content->applyPitchShiftState(pitchShiftState);
         }
-        seg->content->applyOriginalF0State(p.originalF0State);
+        if (p.originalF0State != OriginalF0State::Ready || !hasPitchCurve)
+            seg->content->applyOriginalF0State(p.originalF0State);
 
         // Envelope revision 不落盘，恢复端由 owner 推进新 revision。
         seg->content->applyVolumeEnvelope(std::move(p.volumeEnvelope));
 
         // 持久化的拓扑初始化标志最终覆盖恢复路径中写 notes 但未置位该标志的中间步骤（applyPitchShiftState）。
-        seg->content->editable().noteTopologyInitialized = p.noteTopologyInitialized;
+        seg->content->content().noteTopologyInitialized = p.noteTopologyInitialized;
 
         const bool ready = p.originalF0State == OriginalF0State::Ready;
         // Preserve Failed state: do not promote to Edited even if F0 is Ready.

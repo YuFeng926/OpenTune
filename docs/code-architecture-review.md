@@ -6,7 +6,7 @@
 
 审查范围：2026-05-01 至基线提交；并复核 2026-09-20 工作区实施改动（PianoRoll/Editor/ARA）、CMake、测试与可追溯的 Git 历史。Content state 历史追踪覆盖 `6fa421f` 至当前基线。
 
-工作方式：先静态审查，再按本报告方案实施最小重构与死代码清理；本轮 ARA 实施改动与审查文档已提交，下一阶段 ContentState 方案尚未实施
+工作方式：先静态审查，再按本报告方案实施最小重构与死代码清理；本轮 ARA 实施改动与 ContentState 三阶段重构已完成，当前工作区实现改动尚未提交
 
 ## 文档索引
 
@@ -21,13 +21,13 @@
 
 项目的概念分层已经形成：宿主/Standalone 入口、Content owner、不可变 snapshot、Render service、进程级推理 runtime、实时播放快照都能在代码中找到对应实现。问题不在于“没有架构”，而在于架构边界没有成为编译边界和唯一真相，导致同一语义在多个域、多个格式和多个缓存路径中重复表达。
 
-当前最重要的总体架构根因有三个；构建格式分流不再列为当前根因。本轮实施后，总体根因 1 为“部分改善”，总体根因 2 基本未处理；ARA 专项根因见 §5.5：
+当前最重要的总体架构根因有三个；构建格式分流不再列为当前根因。本轮实施后，总体根因 1 为“部分改善”，总体根因 2 已完成 owner/schema、snapshot 和 F0 revision 收口；ARA 专项剩余风险见 §5.5：
 
 1. **部分改善**：`PianoRollComponent` 和两个 Editor 壳层与 Processor 的交叉协调已经明显收口。PianoRoll 已不再直接依赖 Processor，时间映射和 Editor 纯同步决策已单点化；但 `PluginProcessor` 仍是格式分发、内容 owner、渲染、传输和推理的总编排点，仍是主要协调热点。
-2. **本轮基本未处理**：Content state 在 6/7-6/15 的 ownership migration 中按域分叉，当前由 `ContentPayloadState`（Standalone）、扩容后的 `EditableContentState`（Capture）、`AnalysisState + ARAEditableContentState`（ARA）和跨域 `EditableContentSnapshot` 共同表达同一份 clip 语义。三个 owner 加上 ARA DC 渲染路径共有四处手写 snapshot 投影，字段与 revision 的语义已经出现漂移。这是下一阶段独立的 state/snapshot 真相收口问题，不应与 ARA wrapper 或 DC/RenderWorker 并发问题混为一项。
+2. **本轮已完成主要收口**：Content state 已统一为 `ContentState`，分析字段保留在 `AnalysisState` 分组；Standalone、Capture、ARA 共用一个 owner schema，跨域只保留 `EditableContentSnapshot`。共同字段投影集中到 `makeContentSnapshot()`，反向重建集中到 `contentStateFromSnapshot()`，ARA source shape 仍由 `AudioModification` 适配层补充。F0 成功提交已统一为一次 curve/Ready/analysis revision/content revision 提交。DC 模型容器被 RenderWorker 直接读取的竞争仍是独立风险，不与本次 state 收口混为一项。
 3. 绝对时间原则在 RT 读取和缓存边界上大体正确，但若干消费点跳过了域映射或重复做秒到样本/帧的量化。当前最高风险仍是 ARA 非恒等 `TimeGrid` 的 playback 到 prepared output 读取链；PianoRoll 播放头命中音符的 timeline/source 错配已在本轮修复，仍需宿主回归确认。
 
-一句话判断：本轮已收口 PianoRoll/Editor 的部分交叉协调和时间链，但没有假装解决 Processor 总编排与多套 Content state 真相。下一阶段应先把一套内容字段和 revision 合同变成唯一 owner schema，再用一个投影构造 `EditableContentSnapshot`；之后才处理 Processor 剩余的 domain/render/transport/inference 编排。不要继续增加 helper、兼容层或缓存层。
+一句话判断：本轮已收口 PianoRoll/Editor 的部分交叉协调、时间链和 Content state/snapshot/F0 revision 真相。Processor 总编排、DC/RenderWorker 并发和 ARA 非恒等 TimeGrid playback 风险仍独立存在；不要继续增加 helper、兼容层或缓存层。
 
 ARA 专项结论应按职责和生命周期判断：Processor 的 `processBlock`、Standalone 传输状态机、宿主 transport 观察仍属于 Processor；ARA 内容、CRS、F0 服务和宿主通知仍属于 `OpenTuneDocumentController`。`AudioSource` wrapper、`AudioModification.content`、CRS immutable snapshot 和 `PlaybackRegion` 的 host pointer 索引都是合法适配边界。真正需要收口的是 host-owned placement 属性的本地镜像、AudioModification clone 生命周期，以及 DC 模型容器被后台 render 线程直接读取的问题。
 
@@ -56,7 +56,7 @@ ARA 专项结论应按职责和生命周期判断：Processor 的 `processBlock`
 - **待验证风险**：需要运行时测试、宿主行为或训练侧资料才能最终定性。
 - **产品决策项**：代码上看起来是并行路径，但是否删除取决于产品承诺，不应擅自清理。
 
-原始审查阶段没有编译或运行宿主；此前实施记录包含双 target 编译和 6 个可选测试，但尚未连接 DAW/ARA host 做运行时视觉回归。本次只更新文档，未重新编译或执行测试。
+原始审查阶段没有连接 DAW/ARA host；本轮 ContentState 实施已完成 VST3/Standalone 主 target 构建和 7 个 opt-in 测试，但仍未完成 DAW/ARA host 运行时视觉回归。
 
 ## 3. 当前代码分布
 
@@ -109,9 +109,9 @@ juce_add_plugin(OpenTune)                 # VST3 + ARA
 | `Source/PluginProcessor.*` | JUCE AudioProcessor 外壳、状态、传输、三种内容域路由 | `OpenTuneAudioProcessor` | 巨石协调器，5401 行 `.cpp`、901 行 `.h`；本轮只抽出纯 patch/codec |
 | `Source/SourceStore.*` | Standalone/工程源音频 identity、缓冲区和 retire 生命周期 | `SourceStore` | 与 domain content 的 source/window 语义并存 |
 | `Source/StandaloneArrangement.*` | 多轨 placement、选择、轨道混音参数、RT playback snapshot | `StandaloneArrangement` | 结构清楚，但仍由 Processor 大量代理调用 |
-| `Source/Content/` | ContentKey、owner、编辑状态、snapshot、Standalone/Capture owner | `DomainContentOwner`、`EditableContentSnapshot` | 多套状态模型重叠，owner snapshot 手写复制 |
+| `Source/Content/` | ContentKey、统一 owner state、snapshot、Standalone/Capture owner | `DomainContentOwner`、`ContentState`、`EditableContentSnapshot` | owner schema 与共同 snapshot 投影已收口 |
 | `Source/ARA/` | AudioSource、AudioModification、PlaybackRegion、DocumentController、ARA renderer | `OpenTuneDocumentController` | DC 是 document-scoped ARA owner；wrapper 只做必要适配，placement 由 SDK 对象投影，仍有 snapshot owner 与线程隔离待收口 |
-| `Source/Plugin/Capture/` | 非 ARA VST3 capture、ring buffer、segment persistence | `CaptureSession` | 与 Standalone content 共用 snapshot，但状态模型不同 |
+| `Source/Plugin/Capture/` | 非 ARA VST3 capture、ring buffer、segment persistence | `CaptureSession` | 与 Standalone content 共用 owner schema 和 snapshot |
 | `Source/Render/` | RenderJob、RenderWorker、CRS、Stage2、playback publisher | `ContentRenderService` | 具备单队列意图，依赖 Inference 形成环 |
 | `Source/Runtime/` | 进程寿命的 F0/render runtime、control worker | `ProcessF0Runtime`、`ProcessRenderRuntime` | 生命周期安全较强，线程/锁层次复杂 |
 | `Source/Inference/` | FCPE、GAME、vocoder、RenderCache、TimeStretchCache | `F0InferenceService`、`VocoderDomain` | 模型域与渲染域边界仍有交叉 |
@@ -119,7 +119,7 @@ juce_add_plugin(OpenTune)                 # VST3 + ARA
 | `Source/Standalone/UI/` | PianoRoll、Arrangement、主题、Transport、Preferences 组件 | `PianoRollComponent`、`ArrangementViewComponent` | Arrangement 已隔离；PianoRoll/共享 UI 仍在两个公共 target 编译，但 PianoRoll 已与 Processor 解耦 |
 | `Source/Editor/` | 跨格式 editor factory、共享/Standalone preference 页、对话框 | `SharedPreferencePages` | 共享偏好页直接依赖 Standalone Theme/UI |
 | `Source/Utils/` | 数据模型、编辑 action、项目持久化、偏好、映射和工具函数 | `Note`、`PitchCurve`、`TimeGrid` 等 | 已不是叶子层，存在反向依赖环 |
-| `Tests/` | 6 个 opt-in 测试 | CMake optional targets | 新增 VST3/Standalone codec 与 Capture persistence；仍缺时间域与 snapshot 契约 |
+| `Tests/` | 7 个 opt-in 测试 | CMake optional targets | 新增 VST3/Standalone codec、Capture persistence 与 Content snapshot/F0 revision；仍缺时间域契约 |
 | `tools/` | 离线 ONNX/F0/mel 验证脚本 | 不参与构建 | 构建与运行时之外的验证工具 |
 
 ### 3.3 依赖方向问题
@@ -144,7 +144,7 @@ Editor / UI
 - `Utils/PitchCurve.h` 依赖 `Inference/ChunkRenderStrategy.h`。
 - `Utils/PlaybackAudioReader.h` 依赖 `Render/ContentRenderService.h`、`Inference/TimeStretchCache.h` 和 `Inference/RenderCache.h`。
 - `Utils/PlacementActions.h` 直接 include `PluginProcessor.h`；`Utils/ProjectSession.cpp` 也直接 include `PluginProcessor.h`，形成“工具层反向依赖顶层协调器”。
-- `Content/EditableContentState.h` 依赖 `DSP/ReferenceFeatures.h`，而 `DSP/ReferenceAutoAlign.h` 又依赖 `Content/ContentKey.h`。
+- `Content/AnalysisState.h` 依赖 `DSP/ReferenceFeatures.h`，而 `DSP/ReferenceAutoAlign.h` 又依赖 `Content/ContentKey.h`。
 - `Inference/GameNoteGenerator.cpp` 依赖 `Render/RenderChunkPlanner.h`，而 `Render/ContentRenderService.h` 依赖 Inference。
 - `Editor/Preferences/SharedPreferencePages.cpp` 直接依赖 `Standalone/UI/UIColors.h` 和 `Inference/ModelFactory.h`。
 
@@ -221,7 +221,7 @@ ARA 的边界必须按生命周期区分：SDK model object 的操作、ARA muta
 - **组件边界**：`9dc381f` 抽取 TileCanvas，`55f7585` 次日删除；说明抽象发生在渲染合同尚未稳定时。
 - **Stage2/移调**：RubberBand、SoundTouch、hybrid、cycle shifter 在短时间内反复替换，随后周期检测又连续修补。
 - **F0 模型**：RMVPE → DML 尝试 → 整提交回退 → FCPE runtime switch → 默认 FCPE → 删除 RMVPE。当前逻辑主路径已是 FCPE，但命名和单值接口仍有残留。
-- **测试资产**：`TestMain.cpp` 和架构/视觉测试多次建立后删除。`ae82cf2`、`a5f5a92`、`439095d` 删除了大量已通过测试；当前工作区已有 6 个 opt-in 测试，本轮删除的生产孤儿 API 已同步清理，仍需避免按“本次已通过”批量删除测试。
+- **测试资产**：`TestMain.cpp` 和架构/视觉测试多次建立后删除。`ae82cf2`、`a5f5a92`、`439095d` 删除了大量已通过测试；当前工作区已有 7 个 opt-in 测试，本轮删除的生产孤儿 API 已同步清理，仍需避免按“本次已通过”批量删除测试。
 
 ### 5.3 热点与返工信号
 
@@ -243,18 +243,18 @@ ARA 的边界必须按生命周期区分：SDK model object 的操作、ARA muta
 | --- | --- | --- |
 | Standalone/VST3 构建边界 | **已解决** | 两个单格式 SharedCode target；ARA/Capture 与 Standalone 专属源已分挂；公共源双编译是预期行为 |
 | Standalone/VST3 状态 codec | **已改善** | VST3 与 Standalone codec 均已从 Processor 的二进制字段解释中抽出；runtime/deferred restore 和 Capture session 提交仍由 Processor 编排 |
-| Capture/Standalone persistence 测试 | **已改善** | 6 个测试全部通过；新增 Standalone OTSS v3/v2、trailing bytes 与非法版本测试 |
+| Capture/Standalone persistence 测试 | **已改善** | 7 个测试全部通过；新增 Standalone OTSS v3/v2、trailing bytes、非法版本以及 Content snapshot/F0 revision 测试 |
 | `PluginProcessor` 协调职责 | **部分改善** | `ContentPatchGeometry` 和 Standalone codec 已抽出；DomainKind 分发、mutation 后 render、transport、推理与 UI session state 仍由 Processor 编排 |
 | `PianoRollComponent` 协调职责 | **部分改善** | `PianoRollTimeMap` 已统一映射，播放头 timeline/source 错配已修复，PianoRoll 已移除 Processor 直接依赖；组件仍保留 UI state、camera、interaction 和 retained rendering |
 | 两个 Editor 同构同步 | **部分改善** | `EditorUiZoomDecision`、`ContentRevisionPulse` 已抽为纯决策，格式特有绑定和 heartbeat 仍留在各自 Editor |
 | ARA placement wrapper | **已修正** | `PlaybackRegion` 不再镜像 start/duration、TimeStretch、fade、颜色或 modification ID；wrapper 只保留 host pointer，`makeProjection()` 在 DC 消息线程直接读取 SDK 当前值 |
 | ARA AudioModification clone | **已修正** | `doCreateAudioModification()` 显式复制项目 content；PitchCurve 深拷贝、TimeGrid 共享不可变快照；persistent ID/ContentKey 仍由后续 `didUpdateAudioModificationProperties()` 单点绑定 |
 | ARA content/CRS owner | **边界确认** | `AudioModification.content` 属于 DC 的 document-scoped 项目内容，AudioSource wrapper 承担 reader lease/source generation，CRS snapshot 为跨线程必要边界；这些不是应删除的“平行模型” |
-| Content state / snapshot 真相 | **未处理，下一阶段独立项** | 6/7-6/15 的 ownership migration 形成 Standalone/Capture/ARA 三套 owner state；当前四处手写 snapshot 和 `payloadFromSnapshot()` 仍是字段/revision 漂移源 |
+| Content state / snapshot 真相 | **已收口** | Standalone/Capture/ARA 共用 `ContentState`；共同字段由 `makeContentSnapshot()` 投影，反向重建由 `contentStateFromSnapshot()` 完成；F0 成功提交已统一为一次 revision 提交 |
 | ARA DC 与 RenderWorker 隔离 | **未处理，独立风险** | RenderWorker 仍可能直接遍历 DC 的 `audioModifications_`/content；本轮不通过加锁、registry 或兼容路径修复，后续应单独收口 immutable snapshot 交接 |
 | 本轮确认的孤儿 API/迁移路径 | **已清理** | 删除 `commitPreparedImportAsContent`、`ensureSourceById`、`isInferenceReady`、ToolHandler 旧映射函数和不可达 Editor 注入块 |
 
-实施后原先的编译分流根因仍保持已解决，且 Standalone codec 不再进入 VST3 target。ARA placement 镜像与 AudioModification clone 缺陷已修正，但尚无专属 ARA 单测或 DAW 宿主回归。剩余高价值风险是 ARA 非恒等 TimeGrid 的宿主级回归、DC 模型与 RenderWorker 的线程隔离、PianoRoll 多 placement 的视觉回归、Content snapshot parity 和 deferred restore 的更深集成覆盖；它们是后续验证/边界收口问题，不应倒推删除合法的 ARA adapter、DC owner 或 CRS snapshot。
+实施后原先的编译分流根因仍保持已解决，且 Standalone codec 不再进入 VST3 target。ARA placement 镜像与 AudioModification clone 缺陷已修正，但尚无专属 ARA 单测或 DAW 宿主回归。Content snapshot parity 和 owner F0 revision 已有 7 个本地测试覆盖；剩余高价值风险是 ARA 非恒等 TimeGrid 的宿主级回归、DC 模型与 RenderWorker 的线程隔离、PianoRoll 多 placement 的视觉回归以及 deferred restore 的更深集成覆盖；它们是后续验证/边界收口问题，不应倒推删除合法的 ARA adapter、DC owner 或 CRS snapshot。
 
 ### 5.5 ARA 迁移演变与根因收窄
 
@@ -307,7 +307,7 @@ Content state 的问题不是某个 owner 写错了一个字段，而是一次�
 1. **owner state schema 没有唯一来源**。PCM 是否存在、分析字段、编辑字段和各 revision 被三种 owner state 以不同布局表达；ARA 的“无 PCM”是合法差异，但不要求另一套字段命名和搬运规则。
 2. **snapshot 是唯一跨域读合同，却没有唯一构造入口**。`StandaloneClipContent::snapshotContent()`、`CaptureSegmentContent::snapshotContent()`、`AudioModification::snapshotContent()` 以及 `snapshotAudioModification()` 各自复制字段，`payloadFromSnapshot()` 又反向复制一次。
 
-这解释了当前漂移：Standalone 的 TimeGrid 不推进 `contentRevision`，Capture/ARA 会推进；ARA 同时存在 `editable.contentRevision` 和外层 `contentRevision`；`applyOriginalF0()`、`applyDetectedKey()`、`applyReferenceFeatures()` 的判等和 revision 规则也不一致。这些不是三个域的产品差异，而是共同 schema 缺失后的实现差异。
+这些历史分叉解释了原先的漂移：Standalone 的 TimeGrid 不推进 `contentRevision`，Capture/ARA 会推进；ARA 曾同时存在 `editable.contentRevision` 和外层 `contentRevision`；`applyOriginalF0()`、`applyDetectedKey()`、`applyReferenceFeatures()` 的判等和 revision 规则也不一致。这些不是三个域的产品差异，而是共同 schema 缺失后的实现差异；本轮已删除旧 state 和重复 ARA revision，并统一 F0 成功提交，TimeGrid/DetectedKey/reference features 的既有语义暂未扩大重构。
 
 ### 5.7 Content state 的最小重构方案
 
@@ -329,9 +329,9 @@ owner 的 `apply*` 可以保留现有名字，但只做域编排加一行 state 
 
 执行顺序：
 
-1. **类型收敛**：以现有 `ContentPayloadState` 为基形，加入 `AnalysisState analysis`，删除 `EditableContentState`、`ARAEditableContentState`、`AudioModificationContentState`；Capture 将 `pitchCurve_` 并入 state；ARA 的 `makeBorn()` 逻辑移入 `attachSource()`，Standalone 的 retire/revive 状态留在 owner/retired record。保留 `AnalysisState` 作为分析字段分组，不改 archive/OTSS 字段布局，不改 ContentKey、owner 生命周期和 CRS。
-2. **投影收敛**：实现上述两个纯数据入口，删除四处手写 snapshot 和 `payloadFromSnapshot()`；先用 parity 测试锁定字段集合，特别检查 Capture 的 `sourceWindow` 和 ARA 渲染 snapshot 的 envelope/revision 字段。
-3. **行为收敛**：单独提交 revision 规则变化，逐一核对 RenderJob、RenderCache、Stage2、Editor pulse、持久化 restore 的消费者；TimeGrid 是否推进总 revision、DetectedKey 判等和 ARA 内层 revision 删除都在这一提交明确落地。
+1. **类型收敛（已完成）**：以现有 `ContentPayloadState` 为基形迁移为 `ContentState`，加入 `AnalysisState analysis`，删除 `EditableContentState`、`ARAEditableContentState`、`AudioModificationContentState`；Capture 将 `pitchCurve_` 并入 state；ARA 的 `makeBorn()` 逻辑移入 `attachSource()`，Standalone 的 retire/revive 状态留在 owner/retired record。archive/OTSS 字段布局、ContentKey、owner 生命周期和 CRS 保持不变。
+2. **投影收敛（已完成）**：实现 `makeContentSnapshot()` 与 `contentStateFromSnapshot()`，删除手写共同字段投影和 `payloadFromSnapshot()`；parity 测试覆盖 sourceWindow、分析字段、envelope/revision，ARA source shape 由 `AudioModification` 投影后补充。
+3. **行为收敛（部分完成）**：三个 owner 的 `applyOriginalF0()` 已统一为一次 curve/Ready/analysis revision/content revision 提交，Capture render gate 使用真实 F0 数据。TimeGrid 是否推进总 revision、DetectedKey 判等保持原语义，未在本轮扩大为独立重构；ARA 内层 revision 已删除。
 
 不要在这一阶段删除 `DomainContentOwner`、把三域 switch 换成通用 Router、引入 COW/锁/CloneManager，或改动 ARA/Standalone/Capture 持久化容器。它们都扩大了变更面，不能解决 state schema 和投影入口不唯一的根因。
 
@@ -347,7 +347,7 @@ owner 的 `apply*` 可以保留现有名字，但只做域编排加一行 state 
 | --- | --- | --- | --- |
 | P1 | `Source/ARA/OpenTuneDocumentController.h/.cpp` | `readNotes`、`readNotesRevision`、`readTimeGrid`、`readTimeGridRevision`、`readContentRevision`、`readContentDuration`、`hasContent` | 只读访问 API 集群无生产调用；很可能是删除旧测试后未同步清理 |
 | P1 | `Source/ARA/OpenTuneDocumentController.h/.cpp` | `requestSetCycleRange` | 当前全仓无调用者；保留的是对 ARA playback controller 的转发定义，测试删除后生产 API 孤儿 |
-| P2 | `Source/PluginProcessor.h:782` | `setReferenceAnalysisNotificationDispatcherForTests` | `OPENTUNE_TEST_BUILD` 测试钩子在当前 6 个测试中无引用 |
+| P2 | `Source/PluginProcessor.h:782` | `setReferenceAnalysisNotificationDispatcherForTests` | `OPENTUNE_TEST_BUILD` 测试钩子在当前 7 个测试中无引用 |
 | P2 | `Source/Standalone/UI/PianoRollComponent.h:196,217,219,246,247,400,497` | 多个访问器和 `getFrameRangeForTimeSpan` | 当前只剩定义/声明；对应调用曾在旧日志、旧选择 lambda 或 Oracle 清理提交中删除 |
 | P2 | `Source/Standalone/UI/ArrangementViewComponent.h:123,132` | `fitToContent`、`hasUserManuallyZoomed` | 当前无调用，字段被直接使用 |
 | P2 | `Source/Standalone/UI/ParameterPanel.h:90,104,121` | `isOpenDyneMode`、`setNoteSplit`、`ToolIconButton::getToolId` | `1b7b799` 已声明删除 dead note split API，但 setter 残留 |
@@ -378,14 +378,14 @@ owner 的 `apply*` 可以保留现有名字，但只做域编排加一行 state 
 
 ### 7.1 Content state 与 snapshot 重复
 
-当前存在以下字段的多份表达；实际投影点是四处，不是三处：
+历史上曾存在以下字段的多份表达；当前 owner schema 和共同字段投影已收口：
 
-- `notes`、`timeGrid`、`pitchShiftSettings`、各类 revision：`EditableContentState`、`ContentPayloadState`、`ARAEditableContentState`。
-- `pitchCurve`、`originalF0State`、`detectedKey`、`silentGaps`、`referenceFeatures`：`AnalysisState`、`ContentPayloadState`、`EditableContentSnapshot`。
-- `StandaloneClipContent::snapshotContent()`、`CaptureSegmentContent::snapshotContent()`、`AudioModification::snapshotContent()` 分别手写字段复制；ARA 渲染主管道另有 `OpenTuneDocumentController::snapshotAudioModification()`。
-- `PluginProcessor.cpp:105-130` 的 `payloadFromSnapshot()` 又把 snapshot 反向复制成 Standalone payload。
+- `notes`、`timeGrid`、`pitchShiftSettings`、各类 revision：历史上的 `EditableContentState`、`ContentPayloadState`、`ARAEditableContentState`，现统一位于 `ContentState`。
+- `pitchCurve`、`originalF0State`、`detectedKey`、`silentGaps`、`referenceFeatures`：现由 `ContentState.analysis` 持有，并由 `makeContentSnapshot()` 投影到 `EditableContentSnapshot`。
+- `StandaloneClipContent::snapshotContent()`、`CaptureSegmentContent::snapshotContent()`、`AudioModification::snapshotContent()` 和 ARA DC 渲染路径现复用共同投影；ARA source shape 仍由 `AudioModification` 适配层补充。
+- split/clone 等反向重建路径直接使用 `contentStateFromSnapshot()`，旧 `payloadFromSnapshot()` 已删除。
 
-已有具体漂移证据：Capture snapshot 不设置 `sourceWindow`；ARA 渲染 snapshot（`snapshotAudioModification()`）缺少 `volumeEnvelope`、`outputGainRevision` 以及 source shape 字段；ARA `AudioModification::snapshotContent()` 与 DC 渲染 snapshot 的字段集合也不相同。当前音量仍由 `PlaybackReadSource` 发布路径承载，因而未必立即表现为声音错误，但该缺字段会对未来消费者静默产生默认值。
+历史具体漂移证据包括：Capture snapshot 不设置 `sourceWindow`；ARA 渲染 snapshot（`snapshotAudioModification()`）缺少 `volumeEnvelope`、`outputGainRevision` 以及 source shape 字段；ARA `AudioModification::snapshotContent()` 与 DC 渲染 snapshot 的字段集合也不相同。本轮共同字段已集中投影，ARA source shape 由适配层补充；Capture 不伪造不存在的 source lineage，只有 owner state 已明确提供时才投影 `sourceWindow`。
 
 这不是所有字段都应该合并成一个大结构。第一性原理是：
 
@@ -394,9 +394,9 @@ owner 的 `apply*` 可以保留现有名字，但只做域编排加一行 state 
 3. snapshot 构造必须是集中、可审计的投影，而不是各 owner/渲染入口各自复制字段。
 4. render/cache/worker/lifecycle 不应混入编辑状态。
 
-当前 `ContentPayloadState`、`EditableContentState` 与 ARA 的 `AudioModificationContentState` 是历史分叉，不是三个产品概念。ARA 不拥有 PCM 是字段值/访问边界差异，不要求另一套 state schema：统一 owner state 中 `audioBuffer` 恒为 null，PCM 仍只来自 AudioSource。应以现有 `ContentPayloadState` 为基形收敛成唯一 `ContentState`，把分析字段收进 `AnalysisState`，把 `pitchCurve` 从 Capture owner 成员归回 state，并只保留一层 `contentRevision`。`ContentLifecycle`、ARA birth/clone、Capture session 和 Standalone retire/revive 仍留在各自 owner 编排，不塞进跨域状态合同。
+`ContentPayloadState`、`EditableContentState` 与 ARA 的 `AudioModificationContentState` 是已删除的历史分叉，不是三个产品概念。ARA 不拥有 PCM 是字段值/访问边界差异，不要求另一套 state schema：统一 owner state 中 `audioBuffer` 恒为 null，PCM 仍只来自 AudioSource。当前唯一 owner state 是 `ContentState`，分析字段收进 `AnalysisState`，Capture 的 pitch curve 归回 state，并只保留一层 `contentRevision`。`ContentLifecycle`、ARA birth/clone、Capture session 和 Standalone retire/revive 仍留在各自 owner 编排，不塞进跨域状态合同。
 
-`EditableContentSnapshot` 不删除、不改成可变 state：它是跨线程唯一只读读合同，继续保留 `hasUsableOriginalF0()` 和 `forEachEffectiveF0Span()`。统一 state 只解决 owner truth；集中 `makeContentSnapshot(const ContentState&)` 解决投影 truth，ARA 只在投影后补 cached AudioSource shape。`payloadFromSnapshot()` 与该构造函数并排放在 Content 层，作为唯一反向投影，供 split/clone 复用。
+`EditableContentSnapshot` 不删除、不改成可变 state：它是跨线程唯一只读读合同，继续保留 `hasUsableOriginalF0()` 和 `forEachEffectiveF0Span()`。统一 state 解决 owner truth；集中 `makeContentSnapshot(const ContentState&)` 解决投影 truth，ARA 只在投影后补 cached AudioSource shape。`contentStateFromSnapshot()` 是唯一反向投影，供 split/clone 复用。
 
 ### 7.2 时间映射已收口
 
@@ -561,7 +561,7 @@ playback absolute seconds
 
 ### 9.5 常量、容差和可变参照系
 
-- `TimeCoordinate::kRenderSampleRate` 声明为唯一来源，但仍有多处裸 `44100`：`StandaloneArrangement.cpp:465`、`SoundTouchStretcher.cpp:24`、`PianoKeyAudition.h:38`、`PlaybackReadSource.h:22`、`OpenTuneDocumentController.h:45`、`OpenTunePlaybackRenderer.h:119`、`CaptureSession.h:239`、`ContentPayloadState.h:32`、`MelSpectrogram.h:21` 等。
+- `TimeCoordinate::kRenderSampleRate` 声明为唯一来源，但仍有多处裸 `44100`：`StandaloneArrangement.cpp:465`、`SoundTouchStretcher.cpp:24`、`PianoKeyAudition.h:38`、`PlaybackReadSource.h:22`、`OpenTuneDocumentController.h:45`、`OpenTunePlaybackRenderer.h:119`、`CaptureSession.h:239`、`ContentState.h:30`、`MelSpectrogram.h:21` 等。
 - `DmlVocoder.cpp:180` 的 `numFrames * 512` 应与 `RenderChunkPlanner` 的 hop 常量建立同一来源。
 - `nearlyEqualSeconds` 在 `PluginProcessor.cpp:411` 和 `Plugin/PluginEditor.cpp:47` 重复定义；pending seek 又在 `PianoRollComponent.cpp:3576-3577` 使用 double 精确相等。应使用一个命名容差 helper；这不是反算时间，只是确认宿主已观察请求。
 - PPQ 数据轴 `PluginProcessor.h:166,495`、`.cpp:2131-2159` 以及 `PlayHeadState.h:176-177,229-230` 被写入但无读取方，是死数据轴。项目当前播放真相是绝对秒/playing/loop boolean，PPQ 不应作为未来功能的预留搬运。
@@ -573,7 +573,7 @@ playback absolute seconds
 
 当前测试层有三个结构性问题：
 
-1. 测试默认关闭。当前已有 6 个 opt-in 测试，包含 VST3/Standalone state codec 与 Capture persistence；ARA ownership、PlaybackRegion placement 直读、AudioModification clone、Content snapshot、ContentState revision、render invalidation、TimeGrid 非恒等 ARA playback、transport epoch 仍没有持续的当前测试目标。ARA placement/clone 已完成代码级修复，但未有专属自动化测试锚点；ContentState 收敛尚未实施。
+1. 测试默认关闭。当前已有 7 个 opt-in 测试，包含 VST3/Standalone state codec、Capture persistence、Content snapshot 和 owner F0 revision；ARA ownership、PlaybackRegion placement 直读、AudioModification clone、render invalidation、TimeGrid 非恒等 ARA playback、transport epoch 仍没有持续的当前测试目标。ARA placement/clone 已完成代码级修复，但未有专属自动化测试锚点。
 2. `CMakeLists.txt:1387` 的注释声称字段漂移会编译失败，但 `Tests/PitchParameterContractTests.cpp` 使用自定义 stub，不 include 真实 `Source/Utils/Note.h` 或 `PitchControlConfig.h`，因此无法提供该保证。
 3. 历史上“通过即删除”测试导致生产死 API 和架构回归无锚点。测试删除本身不是问题，删除测试后必须同步删除其唯一服务 API，或把不变量迁移到永久、最小的纯函数测试。
 
@@ -659,7 +659,7 @@ Editor 负责一次性接线；PianoRoll 不再知道 Processor。不要新建 `
 3. 已删除 `commitPreparedImportAsContent`、`ensureSourceById`、`isInferenceReady` 及本轮确认的旧 UI/映射残留，不保留别名。
 4. 保持 `PluginPianoRollSessionState` 的 processor-lifetime owner：VST3 Editor 关闭重开仍需恢复镜头。仅为缩短文件而搬到 Editor 会改变生命周期，不能做。
 
-验证结果：双 target 编译通过；6 个测试通过，其中新增 Standalone state 当前版本往返、旧版本读取、trailing bytes 和非法版本测试。所有计算沿用当前绝对时间与 frame range 输入，没有新增反算或取整。
+验证结果：双 target 编译通过；7 个测试通过，其中新增 Standalone state 当前版本往返、旧版本读取、trailing bytes、非法版本以及 Content snapshot/F0 revision 测试。所有计算沿用当前绝对时间与 frame range 输入，没有新增反算或取整。
 
 ### 12.4 切片四：Editor 只共享纯同步决策（已实施）
 
@@ -685,7 +685,7 @@ clone hook 不读取 PCM、不启动 F0、不通知宿主，也不创建 CloneMa
 
 ### 12.6 执行顺序与完成定义
 
-已完成执行顺序：`PianoRollTimeMap` → `PianoRoll 去 Processor 依赖` → `ContentPatchGeometry / Standalone codec / 孤儿 API` → `Editor 纯同步决策` → `ARA placement 与 clone 生命周期边界`。下一阶段顺序为：`ContentState 类型收敛` → `单一 snapshot 投影` → `revision 行为收敛`。ContentState 三步尚未实施，不应写入当前完成项。
+已完成执行顺序：`PianoRollTimeMap` → `PianoRoll 去 Processor 依赖` → `ContentPatchGeometry / Standalone codec / 孤儿 API` → `Editor 纯同步决策` → `ARA placement 与 clone 生命周期边界` → `ContentState 类型收敛` → `单一 snapshot 投影` → `F0/revision 行为收敛`。TimeGrid/DetectedKey 规则和 DC/RenderWorker 并发仍是独立后续项。
 
 完成定义：
 
@@ -694,7 +694,7 @@ clone hook 不读取 PCM、不启动 F0、不通知宿主，也不创建 CloneMa
 - Processor 不再承载 Standalone 二进制字段解释和内容 patch 几何，但保留格式边界与 render 编排：已完成。
 - Editor 不共享有状态协调器，只共享可直接单测的决策函数：已完成。
 - ARA wrapper 只保留必要适配，host placement 与 clone 生命周期遵守 SDK/DC 合同：已完成；专属自动化测试和 DAW 宿主回归仍待补。
-- Content state 只有一套 owner schema、一个 snapshot 投影入口和一套 revision 合同：尚未实施；当前仍有三套 owner state、四处 snapshot 投影和 `payloadFromSnapshot()`。
+- Content state 只有一套 owner schema、一个 snapshot 投影入口和一套 F0/revision 合同：已完成；旧状态类型、重复共同字段投影和 `payloadFromSnapshot()` 已删除。
 - 没有新增锁、worker、缓存、nullable fallback 或第二套状态；RT 路径未改动：已完成。
 
 ## 13. 不建议的处理方式
@@ -708,12 +708,12 @@ clone hook 不读取 PCM、不启动 F0、不通知宿主，也不创建 CloneMa
 
 ## 14. 审查限制与复核入口
 
-本报告基于静态源码、引用搜索、CMake 文本和 Git 历史；此前实施记录包含 Windows VS/Ninja 双 target 构建与 6 个 CTest，并对 ARA 源文件完成编译检查，但没有连接 DAW/ARA host、没有运行 GPU/ONNX 推理、没有验证训练仓库的 FCPE/mel 对齐。本次只更新文档，未重新编译或执行测试。因此：
+本报告基于静态源码、引用搜索、CMake 文本和 Git 历史；本轮使用 VS/CMake/Ninja 完成 VST3/Standalone 主 target 构建，并运行 7 个 opt-in 测试；仍没有连接 DAW/ARA host、运行 GPU/ONNX 推理或验证训练仓库的 FCPE/mel 对齐。因此：
 
 - “孤儿 API”是静态引用意义上的高置信度结论，删除前仍应确认没有外部插件 SDK/脚本 ABI 使用。
 - ARA 非恒等 TimeGrid、F0 半 hop、mel/F0 配对属于需要运行时/数据回归确认的高价值风险，不应仅凭视觉结果判断。
 - ARA placement projection 与 clone hook 已完成静态/编译验证，但 clone 内容独立性、host placement 更新传播和“不额外通知宿主”仍缺少专属自动化及 DAW 回归。
-- Content state 历史、四处投影和 revision 漂移已由静态源码与 Git 历史确认；统一 `ContentState` 尚未实施，方案中的 revision 行为变化需要单独提交和测试，不能由本次文档更新视为已验证。
+- Content state 历史、投影漂移和 F0 revision 漂移已由静态源码与 Git 历史确认；统一 `ContentState`、单一投影入口和 F0 一次提交已实现并通过本地构建/测试，但 TimeGrid/DetectedKey 规则、ARA 专属回归和宿主行为仍需继续验证。
 - 主题隐藏、coulin9 权重、`ref-branch` 是否删除属于产品/发布决策，不是纯代码审查结论。
 
 ## 15. 文件与提交索引
@@ -732,7 +732,7 @@ clone hook 不读取 PCM、不启动 F0、不通知宿主，也不创建 CloneMa
 - `Source/ARA/OpenTuneDocumentController.h/.cpp`
 - `Source/ARA/OpenTunePlaybackRenderer.h/.cpp`
 - `Source/Content/*`
-- `Source/Content/ContentPayloadState.h`、`EditableContentState.h`、`ARAEditableContentState.h`、`AudioModificationContentState.h`、`EditableContentSnapshot.h`
+- `Source/Content/ContentState.h`、`AnalysisState.h`、`ContentSnapshotProjection.h/.cpp`、`EditableContentSnapshot.h`
 - `Source/Render/*`、`Source/Runtime/*`、`Source/Inference/*`
 - `Source/Utils/TimeCoordinate.h`、`TimeGrid.*`、`ContentTimelineProjection.h`、`F0Timeline.h`
 - `Tests/StandaloneProcessorStateCodecTests.cpp`
@@ -754,4 +754,4 @@ clone hook 不读取 PCM、不启动 F0、不通知宿主，也不创建 CloneMa
 
 ### 文档存放说明
 
-当前仓库 `.gitignore:22` 忽略整个 `docs/`。本文件已按用户要求写入工作区，但不会出现在普通 `git status` 或未加 `-f` 的 Git diff 中；这属于既有仓库规则，本次只更新该文档，没有修改 `.gitignore`、业务代码或暂存文件。
+当前仓库 `.gitignore:22` 忽略整个 `docs/`。本文件已按用户要求写入版本控制，但不会出现在普通 `git status` 或未加 `-f` 的 Git diff 中；这属于既有仓库规则，本轮未修改 `.gitignore`，业务代码和测试改动仍需单独提交。

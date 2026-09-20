@@ -2,7 +2,7 @@
 #include "AudioSource.h"
 #include "../Utils/SourceWindow.h"
 #include "../Content/ContentKey.h"
-#include "../Content/AudioModificationContentState.h"
+#include "../Content/ContentState.h"
 #include "../Content/EditableContentSnapshot.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <cmath>
@@ -56,7 +56,7 @@ struct AudioModification
     uint64_t birthRevision{0};
     AudioModificationBirthState birthState{AudioModificationBirthState::Empty};
     // 内容所有权
-    std::optional<AudioModificationContentState> content;
+    std::optional<ContentState> content;
     std::optional<OriginalF0InputStamp> originalF0InputStamp;
 
     // 身份更新

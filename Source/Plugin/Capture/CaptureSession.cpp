@@ -374,10 +374,15 @@ void CaptureSession::tick()
                     continue;
                 }
 
-                const OriginalF0State f0State = seg.content->editable().originalF0State;
+                const auto& analysis = seg.content->content().analysis;
+                const OriginalF0State f0State = analysis.originalF0State;
+                // F0 render gate 以 owner 实际数据为准（等价 hasUsableOriginalF0），
+                // 不以 originalF0State 枚举单独放行。
+                const bool hasUsableOriginalF0 = analysis.pitchCurve != nullptr
+                    && analysis.pitchCurve->hasUsableOriginalF0();
 
-                if (f0State == OriginalF0State::Ready) {
-                    // F0 Ready 跃迁（含首次观察即 Ready）：提交一次全量渲染，
+                if (hasUsableOriginalF0) {
+                    // F0 可用跃迁（含首次观察即可用）：提交一次全量渲染，
                     // 等待 onRenderComplete 回调。状态记录+跃迁检测（与插件 UI 侧
                     // lastObservedOriginalF0States_ 同一模式）：tick 每轮只观察比对，
                     // requestFullRender 仅出现在跃迁路径，无"每 tick 触发"残留。
@@ -387,10 +392,8 @@ void CaptureSession::tick()
                         keysToRender.push_back(seg.contentKey);
                     anyChange = true;
                 }
-                // 记录本次观察状态（NotRequested/Extracting/Ready），作为跃迁检测基线。
-                // Failed segments transition lifecycle to Failed via commitSegmentF0Result
-                // and won't reach here (not Processing).
-                seg.lastObservedF0State = f0State;
+                // 记录本次观察基线：render gate 以可用 F0 数据为准，可用即归一化为 Ready。
+                seg.lastObservedF0State = hasUsableOriginalF0 ? OriginalF0State::Ready : f0State;
 
                 ++it;
             }
@@ -500,10 +503,20 @@ bool CaptureSession::commitSegmentF0Result(
     if (seg == nullptr || !seg->content)
         return false;
 
-    if (pitchCurve)
-        seg->content->applyPitchCurve(std::move(pitchCurve));
+    if (state == OriginalF0State::Ready && pitchCurve)
+    {
+        // 成功提交：applyOriginalF0 一次性写入 curve + Ready + analysisRevision，
+        // 不再随后 applyOriginalF0State(Ready)，避免双 contentRevision bump。
+        seg->content->applyOriginalF0(std::move(pitchCurve));
+    }
+    else
+    {
+        // 失败或无曲线：保持原状态机语义，普通曲线替换不伪造 F0 Ready。
+        if (pitchCurve)
+            seg->content->applyPitchCurve(std::move(pitchCurve));
 
-    seg->content->applyOriginalF0State(state);
+        seg->content->applyOriginalF0State(state);
+    }
 
     // F0 analysis failure: mark segment as Failed. Content is preserved (not
     // deleted) and the segment does not block the next capture.
@@ -645,10 +658,10 @@ size_t CaptureSession::getTotalCapturedBytes() const noexcept
     auto view = std::atomic_load(&publishedSegments_);
     for (auto* seg : view->snapshot) {
         if (seg->content) {
-            const auto& editable = seg->content->editable();
-            if (editable.audioBuffer) {
-                total += static_cast<size_t>(editable.audioBuffer->getNumChannels())
-                       * static_cast<size_t>(editable.audioBuffer->getNumSamples())
+            const auto& content = seg->content->content();
+            if (content.audioBuffer) {
+                total += static_cast<size_t>(content.audioBuffer->getNumChannels())
+                       * static_cast<size_t>(content.audioBuffer->getNumSamples())
                        * sizeof(float);
             }
         }

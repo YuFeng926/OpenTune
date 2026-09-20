@@ -18,6 +18,7 @@
 #include "../Utils/SourceWindow.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/ModelPathResolver.h"
+#include "../Content/ContentSnapshotProjection.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,9 +37,9 @@ constexpr int kMaxContentPayloadRecords = 4096;
 
 // clone hook 深拷贝项目 content：值字段正常复制，可变 PitchCurve 不共享实例，
 // TimeGridSnapshot/分析标量按现有 const 快照语义共享。
-AudioModificationContentState cloneModificationContent(const AudioModificationContentState& source)
+ContentState cloneModificationContent(const ContentState& source)
 {
-    AudioModificationContentState copy = source;
+    ContentState copy = source;
     const bool hasCompletedOriginalF0 =
         source.analysis.originalF0State == OriginalF0State::Ready
         && source.analysis.pitchCurve != nullptr
@@ -125,14 +126,14 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     el.addChildElement(sw);
 
     auto* editable = new juce::XmlElement("EditableContent");
-    editable->setAttribute("notesRevision", juce::String(static_cast<juce::int64>(mod.content->editable.notesRevision)));
-    editable->setAttribute("pitchRevision", juce::String(static_cast<juce::int64>(mod.content->editable.pitchRevision)));
-    editable->setAttribute("timeGridRevision", juce::String(static_cast<juce::int64>(mod.content->editable.timeGridRevision)));
-    editable->setAttribute("pitchShiftRevision", juce::String(static_cast<juce::int64>(mod.content->editable.pitchShiftRevision)));
-    editable->setAttribute("contentRevision", juce::String(static_cast<juce::int64>(mod.content->editable.contentRevision)));
-    editable->setAttribute("noteTopologyInitialized", mod.content->editable.noteTopologyInitialized ? 1 : 0);
+    editable->setAttribute("notesRevision", juce::String(static_cast<juce::int64>(mod.content->notesRevision)));
+    editable->setAttribute("pitchRevision", juce::String(static_cast<juce::int64>(mod.content->pitchRevision)));
+    editable->setAttribute("timeGridRevision", juce::String(static_cast<juce::int64>(mod.content->timeGridRevision)));
+    editable->setAttribute("pitchShiftRevision", juce::String(static_cast<juce::int64>(mod.content->pitchShiftRevision)));
+    editable->setAttribute("contentRevision", juce::String(static_cast<juce::int64>(mod.content->contentRevision)));
+    editable->setAttribute("noteTopologyInitialized", mod.content->noteTopologyInitialized ? 1 : 0);
 
-    for (const auto& note : mod.content->editable.notes)
+    for (const auto& note : mod.content->notes)
     {
         auto* n = new juce::XmlElement("Note");
         n->setAttribute("start", note.startTime);
@@ -170,8 +171,8 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
 
     // Volume Envelope（AutomationLane，revision 不落盘）
     auto* env = new juce::XmlElement("VolumeEnvelope");
-    env->setAttribute("pointCount", static_cast<int>(mod.content->editable.volumeEnvelope.points().size()));
-    for (const auto& point : mod.content->editable.volumeEnvelope.points())
+    env->setAttribute("pointCount", static_cast<int>(mod.content->volumeEnvelope.points().size()));
+    for (const auto& point : mod.content->volumeEnvelope.points())
     {
         auto* p = new juce::XmlElement("Point");
         p->setAttribute("time", point.timeSeconds);
@@ -200,14 +201,14 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     }
 
     auto* ps = new juce::XmlElement("PitchShiftSettings");
-    ps->setAttribute("semitone", mod.content->editable.pitchShiftSettings.semitone);
-    ps->setAttribute("cents", mod.content->editable.pitchShiftSettings.cents);
+    ps->setAttribute("semitone", mod.content->pitchShiftSettings.semitone);
+    ps->setAttribute("cents", mod.content->pitchShiftSettings.cents);
     editable->addChildElement(ps);
 
     // TimeGrid: owner invariant 保证完整 content 的 timeGrid 非空，无条件写出
     {
         auto* tg = new juce::XmlElement("TimeGrid");
-        for (const auto& h : mod.content->editable.timeGrid->handles())
+        for (const auto& h : mod.content->timeGrid->handles())
         {
             auto* he = new juce::XmlElement("Handle");
             he->setAttribute("id", juce::String(static_cast<juce::int64>(h.id)));
@@ -317,14 +318,14 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     el.addChildElement(analysis);
 }
 
-// Parse XML to new AudioModificationContentState with complete replacement semantics.
+// Parse XML to new ContentState with complete replacement semantics.
 // Missing optional children naturally result in default/empty state.
 // Per ARA2 spec: Maps archived source persistentID to current source persistentID via filter.
-std::optional<AudioModificationContentState> restoreAudioModificationContent(const juce::XmlElement& el,
+std::optional<ContentState> restoreAudioModificationContent(const juce::XmlElement& el,
                                                                                const juce::ARARestoreObjectsFilter* filter,
                                                                                int archiveVersion)
 {
-    AudioModificationContentState content;
+    ContentState content;
     std::vector<PitchCorrectionSegment> restoredCorrectionSegments;
     content.contentRevision = static_cast<uint64_t>(
         el.getStringAttribute("contentRevision").getLargeIntValue());
@@ -389,11 +390,15 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
         return std::nullopt;
 
     {
-        content.editable.notesRevision = static_cast<uint64_t>(editable->getStringAttribute("notesRevision").getLargeIntValue());
-        content.editable.pitchRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchRevision").getLargeIntValue());
-        content.editable.timeGridRevision = static_cast<uint64_t>(editable->getStringAttribute("timeGridRevision").getLargeIntValue());
-        content.editable.pitchShiftRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchShiftRevision").getLargeIntValue());
-        content.editable.contentRevision = static_cast<uint64_t>(editable->getStringAttribute("contentRevision").getLargeIntValue());
+        content.notesRevision = static_cast<uint64_t>(editable->getStringAttribute("notesRevision").getLargeIntValue());
+        content.pitchRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchRevision").getLargeIntValue());
+        content.timeGridRevision = static_cast<uint64_t>(editable->getStringAttribute("timeGridRevision").getLargeIntValue());
+        content.pitchShiftRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchShiftRevision").getLargeIntValue());
+        // 仅兼容旧归档的 editable.contentRevision；新归档两处值恒等。
+        // 读取后并入统一 contentRevision，根元素值（含分析类更新）保持权威。
+        content.contentRevision = juce::jmax(
+            content.contentRevision,
+            static_cast<uint64_t>(editable->getStringAttribute("contentRevision").getLargeIntValue()));
 
         // notes parsing with finite checks
         for (auto* n : editable->getChildWithTagNameIterator("Note"))
@@ -531,12 +536,12 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 }
             }
             
-            content.editable.notes.push_back(note);
+            content.notes.push_back(note);
         }
 
         // 旧归档无该字段时，以是否有音符为准，避免覆盖已有音符
-        content.editable.noteTopologyInitialized =
-            editable->getIntAttribute("noteTopologyInitialized", content.editable.notes.empty() ? 0 : 1) != 0;
+        content.noteTopologyInitialized =
+            editable->getIntAttribute("noteTopologyInitialized", content.notes.empty() ? 0 : 1) != 0;
 
         if (auto* env = editable->getChildByName("VolumeEnvelope")) {
             std::vector<AutomationPoint> points;
@@ -549,9 +554,9 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                     return std::nullopt;
                 points.push_back(point);
             }
-            content.editable.volumeEnvelope = AutomationLane::fromSnapshot(points);
+            content.volumeEnvelope = AutomationLane::fromSnapshot(points);
         } else {
-            const auto noteGainLane = AutomationLane::fromLegacyNoteGains(content.editable.notes);
+            const auto noteGainLane = AutomationLane::fromLegacyNoteGains(content.notes);
             if (auto* legacyEnvelope = editable->getChildByName("SibilantGainEnvelope")) {
                 std::vector<AutomationPoint> points;
                 for (auto* p : legacyEnvelope->getChildWithTagNameIterator("Point")) {
@@ -563,14 +568,14 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                         return std::nullopt;
                     points.push_back(point);
                 }
-                content.editable.volumeEnvelope = AutomationLane::sum(
+                content.volumeEnvelope = AutomationLane::sum(
                     noteGainLane, AutomationLane::fromLegacyStepPoints(points));
             } else {
-                content.editable.volumeEnvelope = noteGainLane;
+                content.volumeEnvelope = noteGainLane;
             }
         }
-        for (auto& note : content.editable.notes)
-            note.outputGainDb = content.editable.volumeEnvelope.evalAt(note.startTime);
+        for (auto& note : content.notes)
+            note.outputGainDb = content.volumeEnvelope.evalAt(note.startTime);
 
         for (auto* s : editable->getChildWithTagNameIterator("PitchCorrectionSegment"))
         {
@@ -618,8 +623,8 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             if (semitone < -24 || semitone > 24 || cents < -99 || cents > 99)
                 return std::nullopt;
 
-            content.editable.pitchShiftSettings.semitone = semitone;
-            content.editable.pitchShiftSettings.cents = cents;
+            content.pitchShiftSettings.semitone = semitone;
+            content.pitchShiftSettings.cents = cents;
         }
     }
 
@@ -655,14 +660,14 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
         }
 
         auto timeGrid = TimeGridSnapshot::makeFromHandles(
-            std::move(handles), content.editable.timeGridRevision);
+            std::move(handles), content.timeGridRevision);
         if (timeGrid == nullptr)
             return std::nullopt;
 
-        content.editable.timeGrid = std::move(timeGrid);
+        content.timeGrid = std::move(timeGrid);
 
         // 完整性校验：TimeGrid 总时长与 sourceWindow 时长误差 <= 1e-6
-        const double timeGridTotal = content.editable.timeGrid->totalDurationSeconds();
+        const double timeGridTotal = content.timeGrid->totalDurationSeconds();
         const double sourceWindowDuration = content.sourceWindow.durationSeconds();
         if (std::abs(timeGridTotal - sourceWindowDuration) > 1e-6)
             return std::nullopt;
@@ -1331,8 +1336,8 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
     if (bindingCount < 0 || bindingCount > kMaxContentPayloadRecords)
         return false;
 
-    // pending 元素直接存 {AudioModification* target, AudioModificationContentState state}
-    std::vector<std::pair<AudioModification*, AudioModificationContentState>> pending;
+    // pending 元素直接存 {AudioModification* target, ContentState state}
+    std::vector<std::pair<AudioModification*, ContentState>> pending;
     pending.reserve(bindingCount);
 
     for (int i = 0; i < bindingCount; ++i)
@@ -1816,13 +1821,13 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     readSource.audioBuffer = std::move(audioBuffer);
     readSource.audioSampleRate = TimeCoordinate::kRenderSampleRate;
     readSource.timeStretchCache = &contentRenderService_->getTimeStretchCache();
-    readSource.pitchRevision = content.editable.pitchRevision;
-    readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
-    readSource.timeGridRevision = content.editable.timeGridRevision;
-    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(content.editable.volumeEnvelope);
-    readSource.timeGrid = content.editable.timeGrid->isIdentity()
+    readSource.pitchRevision = content.pitchRevision;
+    readSource.pitchShiftRevision = content.pitchShiftRevision;
+    readSource.timeGridRevision = content.timeGridRevision;
+    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(content.volumeEnvelope);
+    readSource.timeGrid = content.timeGrid->isIdentity()
         ? nullptr
-        : content.editable.timeGrid;
+        : content.timeGrid;
 
     contentRenderService_->publishPlaybackSource(key, readSource);
     return true;
@@ -2405,27 +2410,8 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
     if (mod == nullptr || !mod->hasContentState())
         return nullptr;
 
-    const auto& content = *mod->content;
-
-    auto snap = std::make_shared<EditableContentSnapshot>();
-    snap->audioBuffer = nullptr;
-    snap->audioSampleRate = 0.0;
-    snap->sourceWindow = content.sourceWindow;
-    snap->notes = content.editable.notes;
-    snap->pitchCurve = content.analysis.pitchCurve;
-    snap->timeGrid = content.editable.timeGrid;
-    snap->pitchShiftSettings = content.editable.pitchShiftSettings;
-    snap->silentGaps = content.analysis.silentGaps;
-    snap->detectedKey = content.analysis.detectedKey;
-    snap->referenceFeatures = content.analysis.referenceFeatures;
-    snap->originalF0State = content.analysis.originalF0State;
-    snap->pitchRevision = content.editable.pitchRevision;
-    snap->pitchShiftRevision = content.editable.pitchShiftRevision;
-    snap->timeGridRevision = content.editable.timeGridRevision;
-    snap->contentRevision = content.contentRevision;
-    snap->notesRevision = content.editable.notesRevision;
-    snap->noteTopologyInitialized = content.editable.noteTopologyInitialized;
-    return snap;
+    // AudioModification adds the cached AudioSource shape to the common projection.
+    return mod->snapshotContent();
 }
 
 void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
@@ -2443,12 +2429,12 @@ void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
     PlaybackReadSource readSource;
     if (contentRenderService_ && contentRenderService_->getPlaybackReadSource(key, readSource))
     {
-        readSource.pitchRevision = content.editable.pitchRevision;
-        readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
-        readSource.timeGridRevision = content.editable.timeGridRevision;
-        readSource.timeGrid = content.editable.timeGrid->isIdentity()
+        readSource.pitchRevision = content.pitchRevision;
+        readSource.pitchShiftRevision = content.pitchShiftRevision;
+        readSource.timeGridRevision = content.timeGridRevision;
+        readSource.timeGrid = content.timeGrid->isIdentity()
             ? nullptr
-            : content.editable.timeGrid;
+            : content.timeGrid;
         contentRenderService_->publishPlaybackSource(key, std::move(readSource));
     }
 }
@@ -2807,35 +2793,35 @@ std::vector<Note> OpenTuneDocumentController::readNotes(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return {};
-    return mod->content->editable.notes;
+    return mod->content->notes;
 }
 
 uint64_t OpenTuneDocumentController::readNotesRevision(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return 0;
-    return mod->content->editable.notesRevision;
+    return mod->content->notesRevision;
 }
 
 std::shared_ptr<const TimeGridSnapshot> OpenTuneDocumentController::readTimeGrid(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return nullptr;
-    return mod->content->editable.timeGrid;
+    return mod->content->timeGrid;
 }
 
 uint64_t OpenTuneDocumentController::readTimeGridRevision(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return 0;
-    return mod->content->editable.timeGridRevision;
+    return mod->content->timeGridRevision;
 }
 
 PitchShiftSettings OpenTuneDocumentController::readPitchShift(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return {};
-    return mod->content->editable.pitchShiftSettings;
+    return mod->content->pitchShiftSettings;
 }
 
 uint64_t OpenTuneDocumentController::readContentRevision(ContentKey key) const
@@ -2913,13 +2899,13 @@ void OpenTuneDocumentController::republishPlaybackSourceForModification(ContentK
 
     const auto& content = *mod->content;
     readSource.renderCache = contentRenderService_->getOrCreateRenderCache(key);
-    readSource.pitchRevision = content.editable.pitchRevision;
-    readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
-    readSource.timeGridRevision = content.editable.timeGridRevision;
-    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(content.editable.volumeEnvelope);
-    readSource.timeGrid = content.editable.timeGrid->isIdentity()
+    readSource.pitchRevision = content.pitchRevision;
+    readSource.pitchShiftRevision = content.pitchShiftRevision;
+    readSource.timeGridRevision = content.timeGridRevision;
+    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(content.volumeEnvelope);
+    readSource.timeGrid = content.timeGrid->isIdentity()
         ? nullptr
-        : content.editable.timeGrid;
+        : content.timeGrid;
 
     contentRenderService_->publishPlaybackSource(key, std::move(readSource));
 }
