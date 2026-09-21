@@ -15,14 +15,9 @@ EditableContentSnapshot makeContentSnapshot(const ContentState& state)
         ? state.analysis.pitchCurve->getSnapshot()
         : nullptr;
     snap.timeGrid = state.timeGrid;
-    if (snap.timeGrid == nullptr)
-    {
-        double durationSeconds = state.sourceWindow.durationSeconds();
-        if (durationSeconds <= 0.0 && state.audioBuffer != nullptr && state.sampleRate > 0.0)
-            durationSeconds = static_cast<double>(state.audioBuffer->getNumSamples()) / state.sampleRate;
-        if (durationSeconds > 0.0)
-            snap.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
-    }
+    // owner 不变量：ContentState::timeGrid 恒为非空 identity/非恒等 snapshot，
+    // identity 不用 nullptr 表达，in-class bootstrap 保证默认/空状态亦非空。
+    jassert(snap.timeGrid != nullptr);
     snap.pitchShiftSettings = state.pitchShiftSettings;
     snap.originalF0State = state.analysis.originalF0State;
     snap.detectedKey = state.analysis.detectedKey;
@@ -55,18 +50,10 @@ ContentState contentStateFromSnapshot(const EditableContentSnapshot& snapshot)
     state.timeGridRevision = snapshot.timeGridRevision;
     state.pitchShiftRevision = snapshot.pitchShiftRevision;
     state.outputGainRevision = snapshot.outputGainRevision;
-    state.contentRevision = snapshot.contentRevision;
+    // contentRevision 不随投影复制：反向投影构造的是新 ContentState（新内容身份），
+    // 运行时 revision 从默认 1 开始，这不是运行时 revision restore。
     state.audioRevision = snapshot.audioRevision;
-    if (snapshot.pitchCurve != nullptr)
-    {
-        auto pitchCurve = std::make_shared<PitchCurve>();
-        pitchCurve->setHopSize(snapshot.pitchCurve->getHopSize());
-        pitchCurve->setSampleRate(snapshot.pitchCurve->getSampleRate());
-        pitchCurve->setOriginalF0(snapshot.pitchCurve->getOriginalF0());
-        pitchCurve->setOriginalEnergy(snapshot.pitchCurve->getOriginalEnergy());
-        pitchCurve->replaceCorrectionSegments(snapshot.pitchCurve->getCorrectionSegments());
-        state.analysis.pitchCurve = std::move(pitchCurve);
-    }
+    state.analysis.pitchCurve = PitchCurve::fromSnapshot(snapshot.pitchCurve);
     state.analysis.setOriginalF0State(snapshot.originalF0State);
     state.analysis.detectedKey = snapshot.detectedKey;
     state.analysis.silentGaps = snapshot.silentGaps;

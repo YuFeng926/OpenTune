@@ -187,6 +187,12 @@ std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeFromHandles(std::v
         new TimeGridSnapshot(std::move(handles)));
 }
 
+std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::bootstrapIdentity()
+{
+    static const std::shared_ptr<const TimeGridSnapshot> bootstrap = makeIdentity(/*totalDurationSeconds=*/0.001);
+    return bootstrap;
+}
+
 double TimeGridSnapshot::totalDurationSeconds() const noexcept
 {
     if (handles_.size() < 2) return 0.0;
@@ -247,7 +253,7 @@ bool TimeGridSnapshot::isIdentity() const noexcept
 // ─── TimeGrid (slot wrapper) ──────────────────────────────────────────────
 
 TimeGrid::TimeGrid()
-    : snapshot_(TimeGridSnapshot::makeIdentity(/*totalDurationSeconds=*/0.001))
+    : snapshot_(TimeGridSnapshot::bootstrapIdentity())
 {
     // Bootstrap with a tiny identity grid; caller is expected to setSnapshot()
     // with a real content duration.

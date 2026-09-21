@@ -998,7 +998,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     }
 
     // Capture range-scoped before data directly from the single snapshot (no full re-read).
-    const auto curveSnapshot = snapshot.pitchCurve->getSnapshot();
+    const auto curveSnapshot = snapshot.pitchCurve;
     if (curveSnapshot == nullptr) {
         return {};
     }
@@ -1067,12 +1067,12 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
 
     if (committedSnap->pitchCurve) {
-        applyEditedContentCurve(committedSnap->pitchCurve);
+        applyEditedContentCurve(PitchCurve::fromSnapshot(committedSnap->pitchCurve));
     }
 
     // Capture range-scoped after data from committed snapshot
     auto afterNotes = extractNotesInRange(committedSnap->notes, rangeStartSec, rangeEndSec);
-    const auto committedPitchSnapshot = committedSnap->pitchCurve->getSnapshot();
+    const auto committedPitchSnapshot = committedSnap->pitchCurve;
     auto afterSegments = extractSegmentsInRange(
         committedPitchSnapshot->getCorrectionSegments(),
         affectedRange.startFrame,
@@ -2649,7 +2649,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
 
         auto committedCurve = readEditedSnapshot();
         if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
-            setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
+            setEditedContent(editedContentKey_, PitchCurve::fromSnapshot(committedCurve->pitchCurve), audioBuffer_, static_cast<int>(audioBufferSampleRate_));
         }
 
         const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
@@ -2978,7 +2978,7 @@ double PianoRollComponent::sourceTimeToTimelineTime(double sourceSeconds) const
     if (!projection.isValid())
         return 0.0;
     const auto snap = readEditedSnapshot();
-    if (!snap || !snap->timeGrid)
+    if (!snap)
         return 0.0;
     const PianoRollTimeMap map(projection, *snap->timeGrid, makeViewMapper());
     return map.sourceToTimeline(sourceSeconds);
@@ -2996,7 +2996,7 @@ double PianoRollComponent::xToSourceTime(int x) const
         return 0.0;
 
     const auto snap = readEditedSnapshot();
-    if (!snap || !snap->timeGrid)
+    if (!snap)
         return 0.0;
 
     const PianoRollTimeMap map(projection, *snap->timeGrid, makeViewMapper());
@@ -3006,7 +3006,7 @@ double PianoRollComponent::xToSourceTime(int x) const
 SourceEditRange PianoRollComponent::sourceEditRange() const
 {
     const auto snap = readEditedSnapshot();
-    if (!snap || !snap->timeGrid)
+    if (!snap)
         return { 0.0, 0.0, 0.0 };
     return SourceEditRange::fromTimeGrid(*snap->timeGrid, 0.0);
 }
@@ -3300,8 +3300,7 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
 
     const auto curveSnapshot = currentCurve_->getSnapshot();
     const auto projection = activeContentProjection();
-    if (snapshot->timeGrid == nullptr
-        || snapshot->timeGrid->empty()
+    if (snapshot->timeGrid->empty()
         || !projection.isValid()
         || curveSnapshot->getHopSize() <= 0
         || !std::isfinite(curveSnapshot->getSampleRate())
@@ -3744,7 +3743,7 @@ void PianoRollComponent::ensureOpenDyneNotesIfNeeded()
         return;  // 内容已经历过至少一次音符拓扑提交（导入生成 / 用户绘制 / 粘贴 / 合法空结果）
     if (snap->pitchCurve == nullptr)
         return;
-    const auto curveSnap = snap->pitchCurve->getSnapshot();
+    const auto curveSnap = snap->pitchCurve;
     if (curveSnap == nullptr || curveSnap->getOriginalF0().empty())
         return;  // F0 未就绪（提取中或失败）
     if (contentCommands_->generateNotesOnly(editedContentKey_, getCurrentAutoTuneParams()))
@@ -4383,11 +4382,9 @@ void PianoRollComponent::fitToNote(const Note& note) {
     double timelineEnd = maxSource;
     if (const auto* placement = findEditedPlacement()) {
         if (auto snap = readSnapshotFor(placement->contentKey)) {
-            if (snap->timeGrid) {
-                const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
-                timelineStart = map.sourceToTimeline(minSource);
-                timelineEnd = map.sourceToTimeline(maxSource);
-            }
+            const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
+            timelineStart = map.sourceToTimeline(minSource);
+            timelineEnd = map.sourceToTimeline(maxSource);
         }
     }
     const double duration = std::max(1.0e-6, timelineEnd - timelineStart);
@@ -4455,11 +4452,9 @@ void PianoRollComponent::fitToAllNotes() {
     double timelineEnd = maxSource;
     if (const auto* placement = findEditedPlacement()) {
         if (auto snap = readSnapshotFor(placement->contentKey)) {
-            if (snap->timeGrid) {
-                const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
-                timelineStart = map.sourceToTimeline(minSource);
-                timelineEnd = map.sourceToTimeline(maxSource);
-            }
+            const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
+            timelineStart = map.sourceToTimeline(minSource);
+            timelineEnd = map.sourceToTimeline(maxSource);
         }
     }
     const double duration = std::max(1.0e-6, timelineEnd - timelineStart);
@@ -4537,11 +4532,9 @@ void PianoRollComponent::fitToSelectedNotes()
     double timelineEnd = maxSource;
     if (const auto* placement = findEditedPlacement()) {
         if (auto snap = readSnapshotFor(placement->contentKey)) {
-            if (snap->timeGrid) {
-                const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
-                timelineStart = map.sourceToTimeline(minSource);
-                timelineEnd = map.sourceToTimeline(maxSource);
-            }
+            const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
+            timelineStart = map.sourceToTimeline(minSource);
+            timelineEnd = map.sourceToTimeline(maxSource);
         }
     }
     const double duration = std::max(1.0e-6, timelineEnd - timelineStart);
@@ -4679,7 +4672,7 @@ void PianoRollComponent::pasteNotes()
     if (playheadTime > 0.0) {
         const auto projection = activeContentProjection();
         const auto snap = readEditedSnapshot();
-        if (projection.isValid() && snap && snap->timeGrid) {
+        if (projection.isValid() && snap) {
             const PianoRollTimeMap map(projection, *snap->timeGrid, makeViewMapper());
             pasteStartTime = map.timelineToSource(playheadTime);
         }
@@ -4850,7 +4843,7 @@ std::optional<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildCon
     const TimelineContentPlacement& placement) const
 {
     auto snap = readSnapshotFor(placement.contentKey);
-    if (!snap || !snap->timeGrid)
+    if (!snap)
         return std::nullopt;
 
     PianoRollRenderer::ContentRenderItem item;
@@ -4860,7 +4853,7 @@ std::optional<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildCon
     item.active = placement.contentKey == editedContentKey_;
     item.displayColour = placement.displayColour;
 
-    std::shared_ptr<PitchCurve> curve;
+    std::shared_ptr<const PitchCurveSnapshot> curve;
     if (item.active) {
         // 拖拽预览：active item 直接消费 noteDrag.previewSnapshot（已含 clone 后
         // 经 applyCorrectionToRange 烘焙的 pitchCurve 与 working notes），
@@ -4886,7 +4879,7 @@ std::optional<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildCon
     }
 
     if (curve != nullptr) {
-        item.pitchSnapshot = curve->getSnapshot();
+        item.pitchSnapshot = curve;
         if (item.pitchSnapshot != nullptr && item.pitchSnapshot->size() > 0)
             item.f0Timeline = { item.pitchSnapshot->getHopSize(),
                                 item.pitchSnapshot->getSampleRate(),
@@ -4923,8 +4916,7 @@ void PianoRollComponent::visibilityChanged()
 
 void PianoRollComponent::setReferenceOverlay(std::optional<PianoRollRenderer::ReferenceOverlay> overlay)
 {
-    if (overlay && overlay->enabled
-        && (!overlay->sourceProjection.isValid() || overlay->timeGrid == nullptr))
+    if (overlay && overlay->enabled && !overlay->sourceProjection.isValid())
         overlay.reset();
     referenceOverlay_ = std::move(overlay);
     contentDirty_ = true;
@@ -5120,8 +5112,8 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::MissingCurveSnapshot };
     }
 
-    // 单一快照读取：前置检查全部从 snap->pitchCurve->getSnapshot() 派生
-    const auto curveSnap = snap->pitchCurve->getSnapshot();
+    // 单一快照读取：前置检查全部从 snap->pitchCurve 派生
+    const auto curveSnap = snap->pitchCurve;
     if (curveSnap == nullptr) {
         return { AutoTuneApplyStatus::MissingCurveSnapshot };
     }
@@ -5189,7 +5181,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
 
     auto committedCurve = readEditedSnapshot();
     if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
-        setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
+        setEditedContent(editedContentKey_, PitchCurve::fromSnapshot(committedCurve->pitchCurve), audioBuffer_, static_cast<int>(audioBufferSampleRate_));
     }
 
     const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(
@@ -5212,7 +5204,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
 
     // 单一快照来源：notes/curve 全部从 contentSnapshot 派生
     auto notes = contentSnapshot->notes;
-    const auto curveSnap = contentSnapshot->pitchCurve->getSnapshot();
+    const auto curveSnap = contentSnapshot->pitchCurve;
 
     // 吸附目标 = 选中音符子集；未选中任何音符时才全量吸附
     const bool selectionActive = !interactionState_.noteSelection.empty();
@@ -5278,7 +5270,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
 
     // 一次性保存全局参数（音符自身参数优先，PitchCurve.cpp:335-346）
     const auto params = getCurrentAutoTuneParams();
-    auto clonedCurve = contentSnapshot->pitchCurve->clone();
+    auto clonedCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
     clonedCurve->applyCorrectionToRange(
         targetNotes, editRange.startFrame, editRange.endFrameExclusive,
         static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),

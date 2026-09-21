@@ -94,6 +94,13 @@ public:
     static std::shared_ptr<const TimeGridSnapshot> makeIdentity(double totalDurationSeconds);
 
     /**
+     * 进程级 bootstrap identity snapshot (0.001s)，与 TimeGrid wrapper 默认构造同一语义。
+     * 默认/空 ContentState 以此为初始 timeGrid；真实 source/audio 到达时由 owner 用真实
+     * source duration 覆盖。identity 永远用非空 identity grid 表达，不用 nullptr。
+     */
+    static std::shared_ptr<const TimeGridSnapshot> bootstrapIdentity();
+
+    /**
      * 构造一个 snapshot 从 handles 列表(必须已经按 source_seconds 升序、含 ClipStart/End)。
      * 失败返回 nullptr,日志记录失败原因。
      */

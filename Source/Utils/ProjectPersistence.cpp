@@ -373,7 +373,6 @@ juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry
     tree.setProperty("contentDiscriminator", static_cast<int64_t>(mat.contentKey.sourceWindowDiscriminator), nullptr);
     tree.setProperty("sourceId", static_cast<int64_t>(mat.sourceId), nullptr);
     tree.setProperty("retired", mat.retired ? 1 : 0, nullptr);
-    tree.setProperty("renderRevision", static_cast<int64_t>(mat.renderRevision), nullptr);
     tree.setProperty("lineageParentDomain", static_cast<int>(mat.lineageParentContentKey.domainKind), nullptr);
     tree.setProperty("lineageParentObjectId", static_cast<int64_t>(mat.lineageParentContentKey.objectId), nullptr);
     tree.setProperty("lineageParentDiscriminator", static_cast<int64_t>(mat.lineageParentContentKey.sourceWindowDiscriminator), nullptr);
@@ -438,7 +437,6 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
     m.contentKey.sourceWindowDiscriminator = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("contentDiscriminator", 0)));
     m.sourceId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("sourceId", 0)));
     m.retired = static_cast<int>(tree.getProperty("retired", 0)) != 0;
-    m.renderRevision = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("renderRevision", 0)));
     m.lineageParentContentKey.domainKind = static_cast<DomainKind>(static_cast<int>(tree.getProperty("lineageParentDomain", 0)));
     m.lineageParentContentKey.objectId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("lineageParentObjectId", 0)));
     m.lineageParentContentKey.sourceWindowDiscriminator = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("lineageParentDiscriminator", 0)));

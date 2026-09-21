@@ -145,16 +145,18 @@ void ContentRenderService::enqueueRender(RenderJob job)
     // A new Stage1 batch supersedes every derived Stage2 result once, not per chunk.
     // Only invalidate when state actually changed — a no-op reconcile must not destroy
     // existing TimeStretchCache entries.
-    const auto reconcileResult = job.renderCache->reconcileFullPlanAndRequest(
-        fullPlan,
-        job.startSample,
-        job.endSampleExclusive,
-        job.contentSnapshot->contentRevision);
+    // reconcile 与 queue sync 在 RenderWorker 同一临界区内完成：worker 不可能
+    // 在两者之间 claim 旧 queued job 并拿到 reconcile 后的新 targetRevision。
+    renderWorker_.reconcileAndSyncStage1Queue(job, [&]() {
+        const auto reconcileResult = job.renderCache->reconcileFullPlanAndRequest(
+            fullPlan,
+            job.startSample,
+            job.endSampleExclusive,
+            job.contentSnapshot->contentRevision);
 
-    if (reconcileResult.stateChanged)
-        timeStretchCache_.invalidate(job.contentKey);
-
-    renderWorker_.syncStage1Queue(job);
+        if (reconcileResult.stateChanged)
+            timeStretchCache_.invalidate(job.contentKey);
+    });
 }
 
 void ContentRenderService::requeueRenderChunk(const RenderJob& job)

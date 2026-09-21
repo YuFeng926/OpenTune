@@ -59,53 +59,62 @@ void RenderWorker::detachExecutionLease(void* owner)
 // 渲染队列
 // ============================================================
 
-void RenderWorker::syncStage1Queue(const RenderJob& templateJob)
+void RenderWorker::reconcileAndSyncStage1Queue(const RenderJob& templateJob,
+                                               const std::function<void()>& reconcile)
+{
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        // 与 worker loop 的 claim 共用同一临界区：reconcile 产生的 revision
+        // 不可能被旧 queued job 在新 snapshot 同步前 claim。
+        reconcile();
+        syncStage1QueueLocked(templateJob);
+    }
+    cv_.notify_all();
+}
+
+void RenderWorker::syncStage1QueueLocked(const RenderJob& templateJob)
 {
     jassert(templateJob.kind == RenderJob::Kind::Stage1Render);
     jassert(templateJob.renderCache != nullptr);
 
     const auto* cache = templateJob.renderCache.get();
 
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        const auto pendingChunkStarts = templateJob.renderCache->getPendingChunkStarts();
-        const std::set<int64_t> desired(pendingChunkStarts.begin(), pendingChunkStarts.end());
+    const auto pendingChunkStarts = templateJob.renderCache->getPendingChunkStarts();
+    const std::set<int64_t> desired(pendingChunkStarts.begin(), pendingChunkStarts.end());
 
-        queue_.erase(std::remove_if(queue_.begin(), queue_.end(),
-            [cache, &desired](const RenderJob& queued) {
+    queue_.erase(std::remove_if(queue_.begin(), queue_.end(),
+        [cache, &desired](const RenderJob& queued) {
+            return queued.kind == RenderJob::Kind::Stage1Render
+                && queued.renderCache.get() == cache
+                && desired.count(queued.queuedChunkStartSample) == 0;
+        }), queue_.end());
+
+    for (const auto startSample : pendingChunkStarts)
+    {
+        const bool alreadyQueued = std::any_of(queue_.begin(), queue_.end(),
+            [cache, startSample](const RenderJob& queued) {
                 return queued.kind == RenderJob::Kind::Stage1Render
                     && queued.renderCache.get() == cache
-                    && desired.count(queued.queuedChunkStartSample) == 0;
-            }), queue_.end());
-
-        for (const auto startSample : pendingChunkStarts)
+                    && queued.queuedChunkStartSample == startSample;
+            });
+        if (alreadyQueued)
         {
-            const bool alreadyQueued = std::any_of(queue_.begin(), queue_.end(),
+            auto queuedIt = std::find_if(queue_.begin(), queue_.end(),
                 [cache, startSample](const RenderJob& queued) {
                     return queued.kind == RenderJob::Kind::Stage1Render
                         && queued.renderCache.get() == cache
                         && queued.queuedChunkStartSample == startSample;
                 });
-            if (alreadyQueued)
-            {
-                auto queuedIt = std::find_if(queue_.begin(), queue_.end(),
-                    [cache, startSample](const RenderJob& queued) {
-                        return queued.kind == RenderJob::Kind::Stage1Render
-                            && queued.renderCache.get() == cache
-                            && queued.queuedChunkStartSample == startSample;
-                    });
-                queuedIt->contentSnapshot = templateJob.contentSnapshot;
-                queuedIt->audioBuffer = templateJob.audioBuffer;
-                queuedIt->audioSampleRate = templateJob.audioSampleRate;
-                continue;
-            }
-
-            RenderJob queued = templateJob;
-            queued.queuedChunkStartSample = startSample;
-            enqueueLocked(std::move(queued));
+            queuedIt->contentSnapshot = templateJob.contentSnapshot;
+            queuedIt->audioBuffer = templateJob.audioBuffer;
+            queuedIt->audioSampleRate = templateJob.audioSampleRate;
+            continue;
         }
+
+        RenderJob queued = templateJob;
+        queued.queuedChunkStartSample = startSample;
+        enqueueLocked(std::move(queued));
     }
-    cv_.notify_all();
 }
 
 void RenderWorker::discardStage1Queue(RenderCache* cache)

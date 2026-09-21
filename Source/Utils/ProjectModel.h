@@ -85,7 +85,6 @@ struct ProjectContentEntry {
     ContentKey contentKey;
     uint64_t sourceId{0};
     bool retired{false};
-    uint64_t renderRevision{0};
     ContentKey lineageParentContentKey;
 
     // Source window (provenance)

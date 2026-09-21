@@ -799,8 +799,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                                                                    TimeCoordinate::kRenderSampleRate);
     const double hopDuration = static_cast<double>(boundaries.hopSize) / RenderCache::kSampleRate;
 
-    auto snap = pitchCurve->getSnapshot();
-    if (!snap->hasOriginalF0Data())
+    if (!pitchCurve->hasOriginalF0Data())
     {
         if (!intersectsActiveEqNote)
         {
@@ -814,8 +813,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         return;
     }
 
-    const int f0HopSize = snap->getHopSize();
-    const double f0SampleRate = snap->getSampleRate();
+    const int f0HopSize = pitchCurve->getHopSize();
+    const double f0SampleRate = pitchCurve->getSampleRate();
     if (f0HopSize <= 0 || f0SampleRate <= 0.0)
     {
         failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
@@ -833,7 +832,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     // 合成）且该 chunk 帧范围内无任何 correction segment 时，才 Blank 回退原始
     // 音频缓存播放。非恒等全局移调即使无 correction 也必须进入 vocoder 全量渲染，
     // 否则移调不生效。带 active EQ 的 Note 不得走 Blank：改为发布原始音频并应用 EQ。
-    if (contentSnap->pitchShiftSettings.isIdentity() && !snap->hasCorrectionInRange(f0StartFrame, f0EndFrame))
+    if (contentSnap->pitchShiftSettings.isIdentity() && !pitchCurve->hasCorrectionInRange(f0StartFrame, f0EndFrame))
     {
         if (!intersectsActiveEqNote)
         {
@@ -875,7 +874,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
 
     if (lightPitchEnabled && contentSnap->pitchShiftSettings.isIdentity())
     {
-        const auto& originalF0Full = snap->getOriginalF0();
+        const auto& originalF0Full = pitchCurve->getOriginalF0();
         const int originalF0Size = static_cast<int>(originalF0Full.size());
         if (f0StartFrame >= 0 && f0StartFrame < originalF0Size)
         {
@@ -1040,7 +1039,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     // Training applies interp_uv=True to the complete F0 timeline before the
     // vocoder sees it.  Interpolating only this render chunk misses voiced
     // frames on the other side of an all-unvoiced chunk.
-    const auto& originalF0 = snap->getOriginalF0();
+    const auto& originalF0 = pitchCurve->getOriginalF0();
     auto vocoderSourceF0 = materializeEffectiveF0Range(
         *contentSnap, 0, static_cast<int>(originalF0.size()));
     // UV 必须在 gap-fill 之前采样：fillF0GapsForVocoder 按训练 interp_uv=True

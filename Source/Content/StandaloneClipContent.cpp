@@ -164,8 +164,12 @@ void StandaloneClipContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBu
     content_.audioBuffer = std::move(buffer);
     content_.sampleRate = sampleRate;
     ++content_.audioRevision;
-    content_.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
-    ++content_.timeGridRevision;
+    // 非正/非有限 duration 生成 identity 失败时保留已有 bootstrap identity，不写 nullptr。
+    if (auto realGrid = TimeGridSnapshot::makeIdentity(durationSeconds))
+    {
+        content_.timeGrid = std::move(realGrid);
+        ++content_.timeGridRevision;
+    }
     bumpContentRevision();
 }
 

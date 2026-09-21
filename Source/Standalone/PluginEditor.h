@@ -306,7 +306,7 @@ private:
     ContentKey lastPianoRollContentKey_;
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
     int lastPianoRollSampleRate_ = 0;
-    std::shared_ptr<PitchCurve> lastPianoRollCurve_;
+    std::shared_ptr<const PitchCurveSnapshot> lastPianoRollCurve_;
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
     // Notes-revision tracking so the timer can pull fresh notes when an
     // async note generator (GAME) commits to the active content

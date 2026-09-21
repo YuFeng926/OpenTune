@@ -41,19 +41,18 @@ namespace {
         return values;
     }
 
-    void writePitchCurve(juce::MemoryOutputStream& stream, const std::shared_ptr<PitchCurve>& curve)
+    void writePitchCurve(juce::MemoryOutputStream& stream, const std::shared_ptr<const PitchCurveSnapshot>& snapshot)
     {
-        stream.writeInt(curve ? 1 : 0);
-        if (!curve)
+        stream.writeInt(snapshot ? 1 : 0);
+        if (!snapshot)
             return;
 
-        const auto snap = curve->getSnapshot();
-        stream.writeInt(snap->getHopSize());
-        stream.writeDouble(snap->getSampleRate());
-        writeFloatVector(stream, snap->getOriginalF0());
-        writeFloatVector(stream, snap->getOriginalEnergy());
+        stream.writeInt(snapshot->getHopSize());
+        stream.writeDouble(snapshot->getSampleRate());
+        writeFloatVector(stream, snapshot->getOriginalF0());
+        writeFloatVector(stream, snapshot->getOriginalEnergy());
 
-        const auto& segments = snap->getCorrectionSegments();
+        const auto& segments = snapshot->getCorrectionSegments();
         stream.writeInt(static_cast<int>(segments.size()));
         for (const auto& segment : segments) {
             stream.writeInt(segment.startFrame);

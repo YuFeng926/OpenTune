@@ -30,7 +30,7 @@ namespace {
         const double modificationTime = region.startInModificationTime + modificationOffset;
         const double sourceLocalSeconds = modificationTime - region.contentWindow.sourceStartSeconds;
 
-        if (source.contentSnapshot == nullptr || source.contentSnapshot->timeGrid == nullptr)
+        if (source.contentSnapshot == nullptr)
             return 0.0;
 
         return juce::jlimit(0.0,

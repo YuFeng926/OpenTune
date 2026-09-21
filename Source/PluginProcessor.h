@@ -708,8 +708,6 @@ public:
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
         double audioSampleRate);
 
-    void refreshCRSMetadata(ContentKey key);
-
     // ── ContentKey-based mutation and snapshot APIs (Phase 4.3) ─────────────────
     std::shared_ptr<const EditableContentSnapshot> getContentSnapshot(ContentKey key) const;
 

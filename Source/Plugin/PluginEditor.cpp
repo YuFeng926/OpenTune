@@ -1480,6 +1480,10 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         presentedPlacementIdentity_.reset();
         // 同一 ContentKey 经空状态重新进入时强制首显
         lastResolvedScaleContentKey_ = ContentKey{};
+        lastPianoRollContentKey_ = ContentKey{};
+        lastPianoRollCurve_.reset();
+        lastPianoRollBuffer_.reset();
+        lastPianoRollSampleRate_ = 0;
         pianoRoll_.setTimelineContentPlacements({});
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
@@ -1493,6 +1497,10 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         presentedPlacementIdentity_.reset();
         // 同一 ContentKey 经空状态重新进入时强制首显
         lastResolvedScaleContentKey_ = ContentKey{};
+        lastPianoRollContentKey_ = ContentKey{};
+        lastPianoRollCurve_.reset();
+        lastPianoRollBuffer_.reset();
+        lastPianoRollSampleRate_ = 0;
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
                                     nullptr,
@@ -1503,13 +1511,13 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     }
 
     std::shared_ptr<const juce::AudioBuffer<float>> syncBuffer;
-    std::shared_ptr<PitchCurve> curve;
+    std::shared_ptr<const PitchCurveSnapshot> curveSnapshot;
     DetectedKey detectedKey;
 #if JucePlugin_Enable_ARA
     if (sync.activeContentKey.domainKind == DomainKind::ARAAudioModification) {
         if (const auto* dc = processorRef_.getDocumentController()) {
             syncBuffer = dc->readAudioBuffer(sync.activeContentKey);
-            curve = dc->readPitchCurve(sync.activeContentKey);
+            curveSnapshot = dc->readPitchCurve(sync.activeContentKey);
             detectedKey = dc->readDetectedKey(sync.activeContentKey);
         }
     } else
@@ -1517,20 +1525,34 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     {
         auto snap = processorRef_.getContentSnapshot(sync.activeContentKey);
         syncBuffer = snap ? snap->audioBuffer : nullptr;
-        curve = snap ? snap->pitchCurve : nullptr;
+        curveSnapshot = snap ? snap->pitchCurve : nullptr;
         detectedKey = snap ? snap->detectedKey : DetectedKey{};
     }
+
+    const int syncSampleRate = static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate());
 
     // ARA snapshots intentionally do not carry PCM; the waveform source lives
     // in CRS and is registered by setEditedContent(). Install explicit
     // placements first so setEditedContent() cannot derive an empty placement
     // set and prune that freshly registered ARA waveform source.
     pianoRoll_.setTimelineContentPlacements(sync.placements);
-    pianoRoll_.setEditedContent(sync.activeContentKey,
-                                curve,
-                                syncBuffer,
-                                static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()),
-                                identityChanged);
+
+    // 稳态 tick 不重建可变曲线：仅 identity/snapshot/buffer/sample rate 变化时提交。
+    if (identityChanged
+        || sync.activeContentKey != lastPianoRollContentKey_
+        || curveSnapshot != lastPianoRollCurve_
+        || syncBuffer != lastPianoRollBuffer_
+        || syncSampleRate != lastPianoRollSampleRate_) {
+        pianoRoll_.setEditedContent(sync.activeContentKey,
+                                    PitchCurve::fromSnapshot(curveSnapshot),
+                                    syncBuffer,
+                                    syncSampleRate,
+                                    identityChanged);
+        lastPianoRollContentKey_ = sync.activeContentKey;
+        lastPianoRollCurve_ = curveSnapshot;
+        lastPianoRollBuffer_ = syncBuffer;
+        lastPianoRollSampleRate_ = syncSampleRate;
+    }
 
     // Viewport restore or fit on placement switch
     if (identityChanged && sync.activePlacementIdentity.has_value()) {

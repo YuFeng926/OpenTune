@@ -205,6 +205,12 @@ private:
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollTimeGridRevision_{0};
     uint64_t lastPianoRollPitchRevision_{0};
+    // 30Hz 心跳的 edited content 缓存：仅 content identity、snapshot 指针、buffer
+    // 或 sample rate 变化时才重建可变曲线并调用 setEditedContent，稳态 tick 不产生新曲线。
+    ContentKey lastPianoRollContentKey_{};
+    std::shared_ptr<const PitchCurveSnapshot> lastPianoRollCurve_;
+    std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
+    int lastPianoRollSampleRate_{0};
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
 
     static constexpr int TOP_BAR_HEIGHT = 88;

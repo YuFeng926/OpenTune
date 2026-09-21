@@ -27,6 +27,13 @@ std::shared_ptr<OpenTune::PitchCurve> makeUsableOriginalF0Curve()
 
 bool testCommonFieldsRoundTrip()
 {
+    // 新 owner/content 的运行时 revision 从 1 开始。
+    if (OpenTune::ContentState{}.contentRevision != 1
+        || OpenTune::EditableContentSnapshot{}.contentRevision != 1
+        || !OpenTune::EditableContentSnapshot{}.timeGrid
+        || !OpenTune::EditableContentSnapshot{}.timeGrid->isIdentity())
+        return false;
+
     OpenTune::ContentState source;
     source.sourceWindow = OpenTune::SourceWindow{17, {}, 0.25, 1.5};
     source.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 4);
@@ -49,6 +56,10 @@ bool testCommonFieldsRoundTrip()
     source.outputGainRevision = 6;
     source.contentRevision = 7;
     source.audioRevision = 8;
+
+    // 默认/空 ContentState 必须携带非空 identity grid（identity 不用 nullptr 表达）。
+    if (!source.timeGrid || !source.timeGrid->isIdentity())
+        return false;
 
     const auto snapshot = OpenTune::makeContentSnapshot(source);
     const auto restored = OpenTune::contentStateFromSnapshot(snapshot);
@@ -75,6 +86,8 @@ bool testCommonFieldsRoundTrip()
         && snapshot.outputGainRevision == 6
         && snapshot.contentRevision == 7
         && snapshot.audioRevision == 8
+        && snapshot.timeGrid == source.timeGrid
+        && restored.timeGrid == snapshot.timeGrid
         && restored.sourceWindow.sourceId == source.sourceWindow.sourceId
         && restored.audioBuffer == source.audioBuffer
         && nearlyEqual(restored.sampleRate, 48000.0)
@@ -83,7 +96,79 @@ bool testCommonFieldsRoundTrip()
         && restored.analysis.silentGaps.size() == source.analysis.silentGaps.size()
         && restored.notes.size() == source.notes.size()
         && restored.volumeEnvelope.points().size() == source.volumeEnvelope.points().size()
-        && restored.contentRevision == source.contentRevision;
+        // 反向投影构造新 ContentState（新内容身份），不继承 snapshot 的运行时 revision。
+        && restored.contentRevision == 1;
+}
+
+// contentStateFromSnapshot 是"new ContentState projection"：即使 snapshot 是
+// revision=7 的运行时身份，新 state 也从默认 1 开始，而可编辑字段照常投影。
+bool testContentStateProjectionStartsNewRuntimeRevision()
+{
+    OpenTune::EditableContentSnapshot snapshot;
+    snapshot.contentRevision = 7;
+    snapshot.notesRevision = 3;
+    snapshot.notes.push_back({});
+    snapshot.timeGrid = OpenTune::TimeGridSnapshot::bootstrapIdentity();
+
+    const auto state = OpenTune::contentStateFromSnapshot(snapshot);
+
+    return state.contentRevision == 1
+        && state.notesRevision == 3
+        && state.notes.size() == 1
+        && state.timeGrid == snapshot.timeGrid;
+}
+
+// Capture retire 重置 active content 为默认 bootstrap（revision 1、timeGrid 非空），
+// revive 恢复记录并推进一次 contentRevision。
+bool testCaptureRetireReviveKeepsTimeGridAndAdvancesRevision()
+{
+    OpenTune::CaptureSegmentContent segment(7);
+    if (segment.content().contentRevision != 1)
+        return false;
+
+    juce::AudioBuffer<float> buffer(1, 64);
+    buffer.clear();
+    segment.applyAudioBuffer(buffer, 48000.0);
+
+    const uint64_t revisionBeforeRetire = segment.content().contentRevision;
+    if (revisionBeforeRetire == 0 || !segment.content().timeGrid)
+        return false;
+
+    segment.retireContent(segment.contentKey());
+
+    if (!segment.content().timeGrid || !segment.content().timeGrid->isIdentity())
+        return false;
+    if (segment.content().contentRevision != 1)
+        return false;
+
+    segment.reviveContent(segment.contentKey());
+
+    return segment.content().timeGrid != nullptr
+        && segment.content().contentRevision == revisionBeforeRetire + 1;
+}
+
+// zero-sample（duration 非正）音频不得把 timeGrid 写成 nullptr；
+// bootstrap identity 保留且 timeGridRevision 不推进，真实 audio/content bump 保留。
+bool testZeroSampleAudioKeepsBootstrapTimeGrid()
+{
+    juce::AudioBuffer<float> empty(2, 0);
+
+    OpenTune::CaptureSegmentContent capture(5);
+    capture.applyAudioBuffer(empty, 48000.0);
+    if (!capture.content().timeGrid || !capture.content().timeGrid->isIdentity())
+        return false;
+    if (capture.content().timeGridRevision != 0)
+        return false;
+    if (capture.content().audioRevision != 1 || capture.content().contentRevision != 2)
+        return false;
+
+    OpenTune::StandaloneClipContent clip(9);
+    clip.applyAudioBuffer(std::make_shared<const juce::AudioBuffer<float>>(2, 0), 48000.0);
+    return clip.content().timeGrid != nullptr
+        && clip.content().timeGrid->isIdentity()
+        && clip.content().timeGridRevision == 0
+        && clip.content().audioRevision == 1
+        && clip.content().contentRevision == 2;
 }
 
 // Owner F0 成功提交必须一次性收口：state=Ready、analysisRevision/contentRevision
@@ -204,6 +289,24 @@ int main()
     if (!testCommonFieldsRoundTrip())
     {
         std::fputs("FAIL: ContentState snapshot round-trip\n", stderr);
+        return 1;
+    }
+
+    if (!testContentStateProjectionStartsNewRuntimeRevision())
+    {
+        std::fputs("FAIL: contentStateFromSnapshot new-ContentState projection revision\n", stderr);
+        return 1;
+    }
+
+    if (!testCaptureRetireReviveKeepsTimeGridAndAdvancesRevision())
+    {
+        std::fputs("FAIL: Capture retire/revive TimeGrid and revision contract\n", stderr);
+        return 1;
+    }
+
+    if (!testZeroSampleAudioKeepsBootstrapTimeGrid())
+    {
+        std::fputs("FAIL: zero-sample audio bootstrap TimeGrid contract\n", stderr);
         return 1;
     }
 

@@ -156,8 +156,6 @@ static void paintHistoricalClipWaveform(juce::Graphics& g,
     const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
     const double timelineEndSeconds = clip.timelineStartSeconds + clip.durationSeconds;
     const auto& timeGrid = clip.timeGrid;
-    if (timeGrid == nullptr)
-        return;
 
     juce::Path wavePath;
 
@@ -471,7 +469,7 @@ std::vector<ArrangementClipPaintInput> collectVisibleArrangementClips(const Stan
                 continue;
 
             auto snapshot = processor.getContentSnapshot(placement.contentKey);
-            if (snapshot == nullptr || snapshot->timeGrid == nullptr)
+            if (snapshot == nullptr)
                 continue;
 
             clips.push_back({

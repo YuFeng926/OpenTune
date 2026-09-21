@@ -37,10 +37,12 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
 
     const auto& snapshot = *request.contentSnapshot;
 
+    // 同 revision 的合法 republish 会换 snapshot 指针，指针相等不是新鲜度判据。
+    // 只比较 CRS 已发布 snapshot 的 revision；getPlaybackReadSource 成功即遵守
+    // makePlaybackReadSource 合同（contentSnapshot/timeGrid 非空），不再重复设防。
     const auto isCurrentPublishedRequest = [&]() {
         PlaybackReadSource published;
         return crs.getPlaybackReadSource(contentKey, published)
-            && published.contentSnapshot == request.contentSnapshot
             && published.contentSnapshot->contentRevision == snapshot.contentRevision
             && published.contentSnapshot->timeGridRevision == snapshot.timeGridRevision;
     };

@@ -47,7 +47,7 @@ struct CanonicalReadRequest {
 /**
  * AutomationLane 增益应用：output seconds 经 snapshot->timeGrid->tauInverse
  * 映射到 source seconds 后逐样本 evalAt。无分配、无锁；包络为空 = 单位增益。
- * snapshot->timeGrid 由调用方保证非空。
+ * snapshot->timeGrid 由发布合同保证非空（identity 用非空 identity grid 表达）。
  */
 inline void applyAutomationGain(juce::AudioBuffer<float>& destination,
                                 int destinationStartSample,
@@ -76,7 +76,9 @@ inline void applyAutomationGain(juce::AudioBuffer<float>& destination,
  * 实时播放读取 — 纯 direct copy，无插值。
  *
  * 全部 editable 数据（timeGrid/volumeEnvelope/contentRevision）来自
- * request.source.contentSnapshot；调用方保证 snapshot 与其 timeGrid 非空。
+ * request.source.contentSnapshot；contentSnapshot 与 snapshot->timeGrid 由发布
+ * 合同保证非空（identity 用非空 identity grid 表达，不用 nullptr 语义）。
+ * 无 source snapshot 时返回 0。
  *
  * 合同：readStartSample 是 output/prepared sample 位置。
  * 1. 非恒等 timeGrid：只尝试 TimeStretchCache prepared 切片；cache miss 或

@@ -11,6 +11,7 @@ namespace OpenTune {
 EditableContentSnapshot makeContentSnapshot(const ContentState& state);
 
 /// EditableContentSnapshot → ContentState 纯反向投影，只复制两者的共同字段。
+/// 产物是新 ContentState：运行时 contentRevision 从默认 1 开始，不继承 snapshot 值。
 ContentState contentStateFromSnapshot(const EditableContentSnapshot& snapshot);
 
 } // namespace OpenTune

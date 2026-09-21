@@ -51,9 +51,11 @@ public:
      */
     void detachExecutionLease(void* owner);
 
-    // Synchronize the physical Stage1 queue with the cache's pending chunk set.
-    // One queued item is allowed for each (RenderCache, chunk start) identity.
-    void syncStage1Queue(const RenderJob& templateJob);
+    // Reconcile 缓存计划与物理 Stage1 队列的同步必须在同一队列锁临界区内完成：
+    // worker loop 也在同一 mutex 下 claim，避免出现「旧 queued job + reconcile
+    // 后新 targetRevision」的跨 revision 组合。reconcile 回调在锁内执行。
+    void reconcileAndSyncStage1Queue(const RenderJob& templateJob,
+                                     const std::function<void()>& reconcile);
     void discardStage1Queue(RenderCache* cache);
     void discardAllStage1Queue();
     void enqueue(RenderJob job);
@@ -78,6 +80,10 @@ public:
 private:
     void loop();
     void enqueueLocked(RenderJob job);
+
+    // 物理 Stage1 队列与 cache pending chunk 集合同步。仅可在 mutex_ 持有时调用。
+    // 每个 (RenderCache, chunk start) 身份只允许一个排队项。
+    void syncStage1QueueLocked(const RenderJob& templateJob);
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;

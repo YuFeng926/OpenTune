@@ -26,7 +26,9 @@ struct ContentState
 
     // ── Editable state ──────────────────────────────────────
     std::vector<Note> notes;
-    std::shared_ptr<const TimeGridSnapshot> timeGrid;
+    // 始终为非空 identity 或非恒等 snapshot；identity 不用 nullptr 表达。
+    // 默认/空状态为 bootstrap identity，真实 source/audio 到达时由 owner 覆盖。
+    std::shared_ptr<const TimeGridSnapshot> timeGrid{TimeGridSnapshot::bootstrapIdentity()};
     PitchShiftSettings pitchShiftSettings;
     AutomationLane volumeEnvelope;
 
@@ -37,7 +39,8 @@ struct ContentState
     uint64_t timeGridRevision{0};
     uint64_t pitchShiftRevision{0};
     uint64_t outputGainRevision{0};
-    uint64_t contentRevision{0};
+    // 运行时 cache identity：新 owner/content 从 1 开始，0 只表示"读取不到内容"。
+    uint64_t contentRevision{1};
     uint64_t audioRevision{0};
 };
 

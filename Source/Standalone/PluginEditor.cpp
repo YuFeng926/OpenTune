@@ -82,7 +82,7 @@ ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::P
     auto snap = processor.getContentSnapshot(placement.contentKey);
     const double sourceStartSeconds = placement.clipInSeconds;
     const double sourceEndSeconds = sourceStartSeconds + placement.durationSeconds;
-    if (snap != nullptr && snap->timeGrid != nullptr) {
+    if (snap != nullptr) {
         projection.contentStartSeconds = snap->timeGrid->tauForward(sourceStartSeconds);
         projection.contentDurationSeconds = snap->timeGrid->tauForward(sourceEndSeconds)
             - projection.contentStartSeconds;
@@ -1556,7 +1556,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             || curve != lastPianoRollCurve_
             || contentBuffer != lastPianoRollBuffer_;
         if (contentChanged) {
-            pianoRoll_.setEditedContent(activeKey, curve, contentBuffer, sr);
+            pianoRoll_.setEditedContent(activeKey, PitchCurve::fromSnapshot(curve), contentBuffer, sr);
             lastPianoRollContentKey_ = activeKey;
             lastPianoRollSampleRate_ = sr;
             lastPianoRollCurve_ = curve;
@@ -1847,7 +1847,7 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
     auto curve = snap ? snap->pitchCurve : nullptr;
     const bool contentChanged = contentKey != lastPianoRollContentKey_;
 
-    pianoRoll_.setEditedContent(contentKey, curve, contentBuffer, sr);
+    pianoRoll_.setEditedContent(contentKey, PitchCurve::fromSnapshot(curve), contentBuffer, sr);
     pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, trackId));
 
     lastPianoRollContentKey_ = contentKey;
@@ -2248,7 +2248,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     auto importBuf = importSnap ? importSnap->audioBuffer : nullptr;
                     auto importCurve = importSnap ? importSnap->pitchCurve : nullptr;
                     safeThis->pianoRoll_.setEditedContent(committedPlacement.contentKey,
-                                                          importCurve,
+                                                          PitchCurve::fromSnapshot(importCurve),
                                                           importBuf,
                                                           static_cast<int>(safeThis->processorRef_.getSampleRate()));
                     safeThis->lastPianoRollContentKey_ = committedPlacement.contentKey;
@@ -3737,7 +3737,6 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
             ? refSnapshot->referenceFeatures
             : ReferenceFeatureSet{};
         if (refSnapshot != nullptr
-            && refSnapshot->timeGrid != nullptr
             && refFeatures.isReady()
             && (refFeatures.producer == ReferenceFeatureProducer::StandardAuto
                 || refFeatures.producer == ReferenceFeatureProducer::Game))

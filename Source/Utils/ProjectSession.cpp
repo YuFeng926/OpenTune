@@ -139,7 +139,6 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         entry.contentKey = key;
         entry.sourceId = content.sourceWindow.sourceId;
         entry.retired = false;
-        entry.renderRevision = content.contentRevision;
         entry.lineageParentContentKey = ContentKey{}; // Invalid key for no parent
         entry.sourceWindow = content.sourceWindow;
         entry.detectedKey = content.analysis.detectedKey;
@@ -166,17 +165,15 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             }
         }
 
-        // TimeGrid
-        if (content.timeGrid) {
-            for (const auto& handle : content.timeGrid->handles()) {
-                ProjectContentEntry::TimeGridEntry::HandleEntry he;
-                he.id = handle.id;
-                he.kind = static_cast<uint8_t>(handle.kind);
-                he.sourceSeconds = handle.source_seconds;
-                he.outputSeconds = handle.output_seconds;
-                he.confidence = static_cast<uint8_t>(handle.confidence);
-                entry.timeGrid.handles.push_back(he);
-            }
+        // TimeGrid: owner invariant 保证 timeGrid 恒非空，无条件写出
+        for (const auto& handle : content.timeGrid->handles()) {
+            ProjectContentEntry::TimeGridEntry::HandleEntry he;
+            he.id = handle.id;
+            he.kind = static_cast<uint8_t>(handle.kind);
+            he.sourceSeconds = handle.source_seconds;
+            he.outputSeconds = handle.output_seconds;
+            he.confidence = static_cast<uint8_t>(handle.confidence);
+            entry.timeGrid.handles.push_back(he);
         }
 
         // Original F0 state

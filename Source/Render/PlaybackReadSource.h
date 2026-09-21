@@ -108,8 +108,7 @@ inline PlaybackReadSource makePlaybackReadSource(
     std::shared_ptr<RenderCache> renderCache,
     TimeStretchCache& timeStretchCache)
 {
-    jassert(contentSnapshot != nullptr);
-    jassert(contentSnapshot == nullptr || contentSnapshot->timeGrid != nullptr);
+    jassert(contentSnapshot != nullptr && contentSnapshot->timeGrid != nullptr);
 
     PlaybackReadSource source;
     source.contentKey = key;

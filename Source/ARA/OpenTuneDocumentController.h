@@ -67,7 +67,6 @@ public:
     const ContentRenderService* getContentRenderService() const noexcept;
     std::shared_ptr<ContentRenderService> getContentRenderServiceShared() const noexcept;
     // ARA mutation/render API — processor 通过这些 API 请求 ARA 渲染
-    void refreshModificationCRSMetadata(ContentKey key);
     void requestModificationRender(ContentKey key, double startSeconds, double endSeconds);
     void requestFullModificationRender(ContentKey key);
     void invalidateAllModificationCaches();
@@ -79,8 +78,8 @@ public:
     /** 从 CRS 读取音频 buffer */
     std::shared_ptr<const juce::AudioBuffer<float>> readAudioBuffer(ContentKey key) const;
 
-    /** 从 AudioModification.content.analysis 读取 pitch curve */
-    std::shared_ptr<PitchCurve> readPitchCurve(ContentKey key) const;
+    /** 从 AudioModification.content.analysis 读取不可变 pitch curve 快照 */
+    std::shared_ptr<const PitchCurveSnapshot> readPitchCurve(ContentKey key) const;
 
     /** 读取 OriginalF0 状态 */
     OriginalF0State readOriginalF0State(ContentKey key) const;

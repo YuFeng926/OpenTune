@@ -72,11 +72,7 @@ bool AudioModification::isRenderable() const noexcept
         return false;
     if (birthState != AudioModificationBirthState::Ready)
         return false;
-    if (!content->sourceWindow.isValid())
-        return false;
-    if (!content->timeGrid)
-        return false;
-    return true;
+    return content->sourceWindow.isValid();
 }
 
 ContentKey AudioModification::contentKey() const noexcept

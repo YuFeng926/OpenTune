@@ -35,11 +35,13 @@ constexpr int kContentPayloadArchiveVersion = 7; // v7: EqFilter.paletteSlot (v6
 constexpr int kContentPayloadArchiveVersionMin = 3;
 constexpr int kMaxContentPayloadRecords = 4096;
 
-// clone hook 深拷贝项目 content：值字段正常复制，可变 PitchCurve 不共享实例，
+// clone hook 深拷贝项目 content：经 snapshot 投影复制值字段和可编辑真相，
+// 可变 PitchCurve 由 contentStateFromSnapshot 重建独立实例（不共享），
 // TimeGridSnapshot/分析标量按现有 const 快照语义共享。
+// 产物是新 ContentState：contentRevision 从默认 1 开始，不继承源运行时 revision。
 ContentState cloneModificationContent(const ContentState& source)
 {
-    ContentState copy = source;
+    ContentState copy = contentStateFromSnapshot(makeContentSnapshot(source));
     const bool hasCompletedOriginalF0 =
         source.analysis.originalF0State == OriginalF0State::Ready
         && source.analysis.pitchCurve != nullptr
@@ -49,10 +51,6 @@ ContentState cloneModificationContent(const ContentState& source)
     {
         // 不复制没有对应异步任务的中间分析状态；可编辑内容仍完整保留。
         copy.analysis = {};
-    }
-    else
-    {
-        copy.analysis.pitchCurve = copy.analysis.pitchCurve->clone();
     }
 
     return copy;
@@ -114,7 +112,6 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
 namespace {
 void serializeAudioModificationContent(const AudioModification& mod, juce::XmlElement& el)
 {
-    el.setAttribute("contentRevision", juce::String(static_cast<juce::int64>(mod.content->contentRevision)));
     el.setAttribute("birthRevision", juce::String(static_cast<juce::int64>(mod.birthRevision)));
 
     auto* sw = new juce::XmlElement("SourceWindow");
@@ -130,7 +127,6 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     editable->setAttribute("pitchRevision", juce::String(static_cast<juce::int64>(mod.content->pitchRevision)));
     editable->setAttribute("timeGridRevision", juce::String(static_cast<juce::int64>(mod.content->timeGridRevision)));
     editable->setAttribute("pitchShiftRevision", juce::String(static_cast<juce::int64>(mod.content->pitchShiftRevision)));
-    editable->setAttribute("contentRevision", juce::String(static_cast<juce::int64>(mod.content->contentRevision)));
     editable->setAttribute("noteTopologyInitialized", mod.content->noteTopologyInitialized ? 1 : 0);
 
     for (const auto& note : mod.content->notes)
@@ -327,10 +323,6 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
 {
     ContentState content;
     std::vector<PitchCorrectionSegment> restoredCorrectionSegments;
-    content.contentRevision = static_cast<uint64_t>(
-        el.getStringAttribute("contentRevision").getLargeIntValue());
-    if (content.contentRevision == 0)
-        content.contentRevision = 1;
 
     // source window 必须存在
     if (auto* sw = el.getChildByName("SourceWindow"))
@@ -396,13 +388,6 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
         content.pitchRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchRevision").getLargeIntValue());
         content.timeGridRevision = static_cast<uint64_t>(editable->getStringAttribute("timeGridRevision").getLargeIntValue());
         content.pitchShiftRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchShiftRevision").getLargeIntValue());
-        // 仅兼容旧归档的 editable.contentRevision；新归档两处值恒等。
-        // 读取后并入统一 contentRevision，根元素值（含分析类更新）保持权威。
-        content.contentRevision = juce::jmax(
-            content.contentRevision,
-            static_cast<uint64_t>(editable->getStringAttribute("contentRevision").getLargeIntValue()));
-        if (content.contentRevision == 0)
-            content.contentRevision = 1;
 
         // notes parsing with finite checks
         for (auto* n : editable->getChildWithTagNameIterator("Note"))
@@ -1398,9 +1383,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         // 先清理 CRS 派生碎片
         removeCRSArtifactsForModification(*targetMod);
 
-        // 原子替换 content
-        if (state.contentRevision == 0)
-            state.contentRevision = 1;
+        // 原子替换 content（新恢复的 ContentState 携带默认运行时 revision 1）
         targetMod->content = std::move(state);
         targetMod->birthState = AudioModificationBirthState::WaitingForSource;
         ++targetMod->birthRevision;
@@ -2397,15 +2380,6 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
     return mod->snapshotContent();
 }
 
-void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
-{
-    auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState())
-        return;
-
-    contentRenderService_->republishPlaybackSource(key, mod->snapshotContent());
-}
-
 void OpenTuneDocumentController::requestModificationRender(ContentKey key, double startSeconds, double endSeconds)
 {
     if (contentRenderService_ == nullptr)
@@ -2738,11 +2712,13 @@ std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::read
     return nullptr;
 }
 
-std::shared_ptr<PitchCurve> OpenTuneDocumentController::readPitchCurve(ContentKey key) const
+std::shared_ptr<const PitchCurveSnapshot> OpenTuneDocumentController::readPitchCurve(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return nullptr;
-    return mod->content->analysis.pitchCurve;
+    return mod->content->analysis.pitchCurve != nullptr
+        ? mod->content->analysis.pitchCurve->getSnapshot()
+        : nullptr;
 }
 
 OriginalF0State OpenTuneDocumentController::readOriginalF0State(ContentKey key) const

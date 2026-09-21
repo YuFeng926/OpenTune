@@ -31,7 +31,9 @@ struct EditableContentSnapshot
 
     std::vector<Note> notes;
     std::shared_ptr<const PitchCurveSnapshot> pitchCurve;
-    std::shared_ptr<const TimeGridSnapshot> timeGrid;
+    // Snapshot identity follows ContentState: an empty/new snapshot still has
+    // a non-null identity grid rather than using nullptr as a sentinel.
+    std::shared_ptr<const TimeGridSnapshot> timeGrid{TimeGridSnapshot::bootstrapIdentity()};
     PitchShiftSettings pitchShiftSettings;
 
     OriginalF0State originalF0State{OriginalF0State::NotRequested};
@@ -46,7 +48,8 @@ struct EditableContentSnapshot
     uint64_t timeGridRevision{0};
     uint64_t pitchShiftRevision{0};
     uint64_t outputGainRevision{0};
-    uint64_t contentRevision{0};
+    // 与 ContentState 对齐：手工构造的可发布 snapshot 也是新内容身份，从 1 开始。
+    uint64_t contentRevision{1};
 
     /** Authoritative F0 availability check. All Stage1 render decisions should
      *  gate on this, never on originalF0State enum alone. */

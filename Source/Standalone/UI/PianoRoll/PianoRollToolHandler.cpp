@@ -206,7 +206,7 @@ std::shared_ptr<const EditableContentSnapshot> buildNoteBasedCorrectionState(
                                         ctx.getRetuneSpeed(),
                                         ctx.getVibratoDepth(),
                                         ctx.getVibratoRate());
-    snap->pitchCurve = std::move(clonedCurve);
+    snap->pitchCurve = clonedCurve->getSnapshot();
     return snap;
 }
 
@@ -225,7 +225,7 @@ bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
                                                                           f0tl.endFrameExclusive());
 
     // Extract segments overlapping the affected range (range-scoped, not full)
-    auto allSegments = snap->pitchCurve->getSnapshot()->getCorrectionSegments();
+    auto allSegments = snap->pitchCurve->getCorrectionSegments();
     std::vector<PitchCorrectionSegment> segmentsInRange;
     for (const auto& seg : allSegments) {
         if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)

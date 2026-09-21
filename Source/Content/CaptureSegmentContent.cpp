@@ -31,6 +31,9 @@ void CaptureSegmentContent::retireContent(ContentKey key)
     record.key = key;
     record.content = std::move(content_);
     captureRetired_.push_back(std::move(record));
+
+    // 与 Standalone retire 对齐：active content 重置为默认 bootstrap identity/revision 1。
+    content_ = ContentState{};
 }
 
 void CaptureSegmentContent::reviveContent(ContentKey key)
@@ -39,6 +42,8 @@ void CaptureSegmentContent::reviveContent(ContentKey key)
     for (auto it = captureRetired_.begin(); it != captureRetired_.end(); ++it) {
         if (it->key == key) {
             content_ = std::move(it->content);
+            // 与 Standalone revive 对齐：恢复后推进一次 contentRevision。
+            ++content_.contentRevision;
             captureRetired_.erase(it);
             return;
         }
@@ -64,8 +69,12 @@ void CaptureSegmentContent::applyAudioBuffer(const juce::AudioBuffer<float>& buf
     content_.sampleRate = sampleRate;
     ++content_.audioRevision;
 
-    content_.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
-    ++content_.timeGridRevision;
+    // 非正/非有限 duration 生成 identity 失败时保留已有 bootstrap identity，不写 nullptr。
+    if (auto realGrid = TimeGridSnapshot::makeIdentity(durationSeconds))
+    {
+        content_.timeGrid = std::move(realGrid);
+        ++content_.timeGridRevision;
+    }
 
     ++content_.contentRevision;
 }
