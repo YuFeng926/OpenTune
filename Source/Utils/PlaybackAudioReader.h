@@ -211,9 +211,9 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
  * 不使用 TimeStretchCache（Stage2 必须读 Stage1 原始 PCM，不能读自己的输出），
  * 不要求 snapshot timeGrid 参与。无插值、无 target rate 参数、无 prepared fallback。
  */
-inline int readCanonicalAudio(const CanonicalReadRequest& request,
-                              juce::AudioBuffer<float>& destination,
-                              int destinationStartSample)
+inline int readSourceAudioWithStage1Overlay(const CanonicalReadRequest& request,
+                                            juce::AudioBuffer<float>& destination,
+                                            int destinationStartSample)
 {
     if (request.numSamples <= 0 || !request.source.hasAudio()) {
         return 0;
@@ -276,6 +276,14 @@ inline int readCanonicalAudio(const CanonicalReadRequest& request,
     return availableSamples;
 }
 
+/** Stage2 source-domain canonical read entry point. */
+inline int readCanonicalAudio(const CanonicalReadRequest& request,
+                              juce::AudioBuffer<float>& destination,
+                              int destinationStartSample)
+{
+    return readSourceAudioWithStage1Overlay(request, destination, destinationStartSample);
+}
+
 /**
  * Offline output playback at the canonical export rate.
  *
@@ -298,7 +306,7 @@ inline int readExportPlaybackAudio(const PlaybackReadRequest& request,
     if (snapshot->timeGrid->isIdentity()) {
         const CanonicalReadRequest canonicalRequest{
             request.source, request.readStartSample, request.numSamples};
-        wrote = readCanonicalAudio(canonicalRequest, destination, destinationStartSample);
+        wrote = readSourceAudioWithStage1Overlay(canonicalRequest, destination, destinationStartSample);
     } else if (request.source.timeStretchCache != nullptr) {
         wrote = request.source.timeStretchCache->sliceCanonicalForOutputRange(
             request.source.contentKey,
