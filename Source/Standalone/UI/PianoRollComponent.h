@@ -132,7 +132,7 @@ public:
     void onHeartbeatTick();
 
     void setEditedContent(ContentKey contentKey,
-                           std::shared_ptr<PitchCurve> curve,
+                           std::shared_ptr<const PitchCurveSnapshot> curve,
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                            int sampleRate,
                            bool activePlacementChanged = false);
@@ -475,7 +475,7 @@ private:
     void ensureOpenDyneNotesIfNeeded();
     PianoRollToolHandler::Context buildToolHandlerContext();
     void initializeToolHandler();
-    void applyEditedContentCurve(std::shared_ptr<PitchCurve> curve);
+    void applyEditedContentCurve(std::shared_ptr<const PitchCurveSnapshot> curve);
     void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
     std::optional<PianoRollRenderer::ContentRenderItem> buildContentRenderItem(
         const TimelineContentPlacement& placement) const;
@@ -507,10 +507,9 @@ private:
     float getTotalHeight() const;
 
     F0Timeline currentF0Timeline() const noexcept {
-        if (currentCurve_ == nullptr) return {};
-        auto snap = currentCurve_->getSnapshot();
-        if (snap == nullptr || snap->size() == 0) return {};
-        return { snap->getHopSize(), snap->getSampleRate(), static_cast<int>(snap->size()) };
+        if (currentCurve_ == nullptr || currentCurve_->size() == 0) return {};
+        return { currentCurve_->getHopSize(), currentCurve_->getSampleRate(),
+                 static_cast<int>(currentCurve_->size()) };
     }
 
     const TimelineContentPlacement* findEditedPlacement() const noexcept;
@@ -643,7 +642,7 @@ private:
 
     std::vector<Note> getEditedContentNotesCopy() const;
 
-    std::shared_ptr<PitchCurve> currentCurve_;
+    std::shared_ptr<const PitchCurveSnapshot> currentCurve_;
     
     std::unique_ptr<PianoRollRenderer> renderer_;
     std::unique_ptr<PianoRollToolHandler> toolHandler_;

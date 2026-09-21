@@ -725,9 +725,6 @@ public:
     // 无渲染发布入口：按 content domain 调现有装配函数，只读最新 snapshot、
     // 发布携带该 snapshot（AutomationLane/TimeGrid/revision）的不可变播放源。
     void republishPlaybackSource(ContentKey key);
-    bool setContentPitchCurve(ContentKey key,
-                              std::shared_ptr<PitchCurve> curve,
-                              ContentEditRangeFrames affectedRange);
     bool setContentTimeGrid(ContentKey key,
                             std::shared_ptr<const TimeGridSnapshot> grid);
     bool setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey);

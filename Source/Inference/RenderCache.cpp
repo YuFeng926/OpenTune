@@ -412,13 +412,20 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
                 newChunk = oldIt->second;
                 ++oldIt;
 
+                const bool alreadySettled = (newChunk.status == Chunk::Status::Idle
+                        && newChunk.publishedRevision > 0
+                        && newChunk.publishedRevision == newChunk.desiredRevision)
+                    || newChunk.status == Chunk::Status::Blank;
+
+                // A local edit advances the content identity for the whole
+                // published snapshot. Unaffected settled chunks remain valid
+                // audio, so carry the new identity without re-rendering them.
+                if (!intersectsRequest && alreadySettled)
+                    newChunk.lastRequestedContentRevision = contentRevision;
+
                 if (intersectsRequest)
                 {
                     const bool contentUnchanged = contentRevision == newChunk.lastRequestedContentRevision;
-                    const bool alreadySettled = (newChunk.status == Chunk::Status::Idle
-                            && newChunk.publishedRevision > 0
-                            && newChunk.publishedRevision == newChunk.desiredRevision)
-                        || newChunk.status == Chunk::Status::Blank;
 
                     // Same geometry + same contentRevision → no-op for
                     // Pending, Running, Blank, and successful Idle.

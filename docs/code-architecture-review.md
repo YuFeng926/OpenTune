@@ -120,7 +120,7 @@ ARA SDK 对象和宿主 placement 只在 DC 消息线程访问。`PlaybackRegion
 AudioModification clone 分为四步：
 
 1. SDK 调用 clone hook，创建新 SDK modification 并按新 host pointer 注册 DTO。
-2. clone hook 复制可持久化 content；已完成的 F0 深拷贝 PitchCurve，不复制未完成的异步分析状态。
+2. clone hook 通过 `makeContentSnapshot()` / `contentStateFromSnapshot()` 复制可持久化 content；已完成的 F0 重建为独立可变 `PitchCurve`，不复制未完成的异步分析状态。
 3. hook 返回，不读取 PCM、不启动分析、不通知宿主。
 4. SDK 写入新 persistent ID 后回调 property update；DC 在此绑定 ContentKey、attach source、刷新 projection/CRS 并通知宿主。
 
@@ -141,17 +141,16 @@ PianoRoll 的 source、output、timeline、pixel 映射集中在 `PianoRollTimeM
 
 ### 2.5 持久化和测试
 
-Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容字段都恢复到对应 owner 的 `ContentState`。旧归档中的 ARA 双 revision 字段只作为迁移输入，不生成第二套运行时账本。
+Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容字段都恢复到对应 owner 的 `ContentState`。运行时 revision 不从归档恢复，不生成第二套账本。
 
 当前启用测试默认关闭；打开 `OPENTUNE_BUILD_TESTS` 后有 7 个测试目标，覆盖状态 codec、Capture persistence、Content snapshot 和 F0 revision。最近一次 VS/CMake/Ninja 构建中，VST3/Standalone target 和 7/7 CTest 均通过。
 
 ## 3. 剩余问题
 
-### P0：正确性和线程边界
+### P0：宿主行为和回归覆盖
 
 1. **ARA 非恒等 TimeGrid playback 链仍缺宿主回归。** 需要确认 playback seconds 到 source/content、再到 output seconds 和 prepared sample 的完整映射。恒等 TimeGrid 不能覆盖这个问题。
-2. **ARA DC 与 RenderWorker 的交接仍有竞争风险。** 当前 render 路径可能通过 `findAudioModificationByContentKey()` 和 `snapshotAudioModification()` 直接读取 DC 的 modification 容器和 content。应交接 immutable snapshot/revision，不应靠加锁或兼容路径掩盖边界。
-3. **ARA placement、clone 和多 placement PianoRoll 仍缺 DAW/ARA 宿主回归。** 代码已完成静态和编译验证，但 host placement 更新、clone 独立性、通知时序和视觉行为尚未由宿主确认。
+2. **ARA placement、clone 和多 placement PianoRoll 仍缺 DAW/ARA 宿主回归。** 渲染 worker 只消费 job 携带的 immutable snapshot/audio，host placement 更新、clone 独立性、通知时序和视觉行为尚未由宿主确认。
 
 ### P1：时间域和状态合同
 
@@ -159,7 +158,7 @@ Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容�
 2. **split 仍同时使用 sample 锚和 seconds 锚。** 音频、silent gaps 与 notes、pitch curve 分别使用两类锚，需保证它们由同一个切点派生。
 3. **F0 frame 与模型窗中心的合同未锁定。** FCPE padding、F0Timeline 和 mel/F0 插值可能存在半 hop 偏移，需要训练侧定义和回归样本确认。
 4. **部分 mutation revision 规则仍未完全统一。** TimeGrid、DetectedKey、Reference features 保留历史语义，后续修改必须分别确认是否推进总 revision，不能继续隐式扩展。
-5. **identity TimeGrid 有两种表示。** owner snapshot 使用非空 identity object，PlaybackReadSource 又用 `nullptr` 表示 identity sentinel。该映射目前合法但容易诱发空指针守卫和误判，需要收敛语义。
+5. **局部 Stage1 重渲染的跨 chunk revision 合同需要回归。** 受影响 chunk 重渲染时，已结算且未受影响的 chunk 只继承新的 `contentRevision`，不重复渲染；播放 overlay 必须覆盖完整内容且不回退为干声。
 
 ### P2：维护成本
 
@@ -167,7 +166,7 @@ Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容�
 2. F0、Reference、Render/Vocoder 分别拥有 detached worker、去重、shutdown 和 completion 机制。业务不能强行合并，但关闭、generation 和 completion gate 应建立共同测试合同。
 3. 三种持久化容器仍各自解释 EQ/Note migration；格式边界应保留，纯数据迁移规则可以共享。
 4. Beat 计算、MIDI/Hz 与 lane-center 转换、cents math 等仍有重复或同名 API，后续应在纯数学边界单点化，不能把 UI 坐标规则混入音高真相。
-5. 测试仍默认关闭，缺少时间域、ARA renderer/model contract、split geometry、pending seek 和宿主级回归测试。
+5. 测试仍默认关闭，缺少时间域、ARA renderer/model contract、split geometry、局部渲染 revision、pending seek 和宿主级回归测试。
 
 ### 不属于当前架构问题的事项
 

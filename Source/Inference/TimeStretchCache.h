@@ -64,6 +64,15 @@ public:
                             int numSamples,
                             int targetSampleRate) const;
 
+    /** Read the canonical Stage2 output for offline output-rate playback. */
+    int sliceCanonicalForOutputRange(ContentKey key,
+                                     uint64_t contentRevision,
+                                     uint64_t timeGridRevision,
+                                     int64_t readStartSample,
+                                     juce::AudioBuffer<float>& destination,
+                                     int destinationStartSample,
+                                     int numSamples) const;
+
     /** 将所有已 publish 的 canonical entry 重采样到目标率（writer mutex 内完成）。 */
     void prepareForPlaybackSampleRate(double targetSr);
 

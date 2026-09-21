@@ -153,8 +153,7 @@ void StandaloneClipContent::applyReferenceFeatures(const ReferenceFeatureSet& fe
 void StandaloneClipContent::applyOriginalF0State(OriginalF0State state)
 {
     // 幂等 setter：状态未变则不推进 revision，与 Capture/ARA owner 语义一致。
-    if (!content_.analysis.setOriginalF0State(state))
-        return;
+    content_.analysis.setOriginalF0State(state);
 }
 
 void StandaloneClipContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, double sampleRate)

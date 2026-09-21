@@ -164,13 +164,10 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.getActiveScaleSnap = [this]() -> std::optional<ScaleSnapConfig> {
         return makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
     };
-    toolCtx.getPitchCurve = [this]() { return currentCurve_; };
     toolCtx.getEditableContentSnapshot = [this]() { return readEditedSnapshot(); };
     toolCtx.getOriginalF0 = [this]() -> std::vector<float> {
         if (!currentCurve_) return {};
-        auto snap = currentCurve_->getSnapshot();
-        if (!snap) return {};
-        return snap->getOriginalF0();
+        return currentCurve_->getOriginalF0();
     };
     toolCtx.getF0Timeline = [this]() -> F0Timeline {
         return currentF0Timeline();
@@ -1067,7 +1064,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
 
     if (committedSnap->pitchCurve) {
-        applyEditedContentCurve(PitchCurve::fromSnapshot(committedSnap->pitchCurve));
+        applyEditedContentCurve(committedSnap->pitchCurve);
     }
 
     // Capture range-scoped after data from committed snapshot
@@ -1102,9 +1099,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
 std::vector<PitchCorrectionSegment> PianoRollComponent::getCurrentSegments() const
 {
     if (!currentCurve_) return {};
-    auto snap = currentCurve_->getSnapshot();
-    if (!snap) return {};
-    return snap->getCorrectionSegments();
+    return currentCurve_->getCorrectionSegments();
 }
 
 void PianoRollComponent::captureBeforeUndoSnapshot()
@@ -1397,13 +1392,13 @@ bool PianoRollComponent::applyManualCorrectionPatch(const std::vector<PianoRollT
         return false;
     }
 
-    auto editedCurve = currentCurve_->clone();
+    auto scratchCurve = PitchCurve::fromSnapshot(currentCurve_);
     for (const auto& op : ops) {
         if (op.endFrameExclusive <= op.startFrame) {
             continue;
         }
 
-        editedCurve->setManualCorrectionRange(
+        scratchCurve->setManualCorrectionRange(
             op.startFrame,
             op.endFrameExclusive,
             op.f0Data,
@@ -1414,7 +1409,8 @@ bool PianoRollComponent::applyManualCorrectionPatch(const std::vector<PianoRollT
     // dirtyStartFrame/dirtyEndFrame 是所有 manual ops 的 dirty 帧并集（含端点）。
     const F0FrameRange affectedRange{dirtyStartFrame,
                                       dirtyEndFrame >= dirtyStartFrame ? dirtyEndFrame + 1 : dirtyStartFrame};
-    if (!commitEditedContentPitchCorrectionSegments(editedCurve->copyCorrectionSegments(), affectedRange)) {
+    if (!commitEditedContentPitchCorrectionSegments(
+            scratchCurve->getSnapshot()->getCorrectionSegments(), affectedRange)) {
         return false;
     }
 
@@ -1797,8 +1793,7 @@ void PianoRollComponent::drawPianoKeysPressed(juce::Graphics& g)
 void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
     if (!interactionState_.drawing.isDrawingF0 || currentTool_ != ToolId::HandDraw || interactionState_.drawing.handDrawBuffer.empty() || !currentCurve_) return;
 
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& originalF0 = snapshot->getOriginalF0();
+    const auto& originalF0 = currentCurve_->getOriginalF0();
     if (originalF0.empty() || interactionState_.drawing.handDrawBuffer.size() != originalF0.size()) return;
 
     const auto f0tl = currentF0Timeline();
@@ -2649,7 +2644,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
 
         auto committedCurve = readEditedSnapshot();
         if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
-            setEditedContent(editedContentKey_, PitchCurve::fromSnapshot(committedCurve->pitchCurve), audioBuffer_, static_cast<int>(audioBufferSampleRate_));
+            setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
         }
 
         const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
@@ -2713,12 +2708,12 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
         if (dirtyEndTime > dirtyStartTime) {
             const auto editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
             if (!editRange.isEmpty()) {
-                auto clonedCurve = currentCurve_->clone();
-                clonedCurve->applyCorrectionToRange(
+                auto scratchCurve = PitchCurve::fromSnapshot(currentCurve_);
+                scratchCurve->applyCorrectionToRange(
                     notes, editRange.startFrame, editRange.endFrameExclusive,
                     static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
                     currentRetuneSpeed_, currentVibratoDepth_, currentVibratoRate_);
-                auto snap = clonedCurve->getSnapshot();
+                auto snap = scratchCurve->getSnapshot();
 
                 const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
                     editRange.startFrame, editRange.endFrameExclusive, f0tl.endFrameExclusive());
@@ -2760,14 +2755,14 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
             case AudioEditingScheme::ParameterId::VibratoDepth: effectiveVibratoDepth = value; break;
             case AudioEditingScheme::ParameterId::VibratoRate: effectiveVibratoRate = value; break;
         }
-        auto editedCurve = currentCurve_->clone();
+        auto scratchCurve = PitchCurve::fromSnapshot(currentCurve_);
         bool anyBaked = false;
         for (const auto& [startFrame, endFrameExclusive] : frameSel.ranges) {
             if (endFrameExclusive <= startFrame) continue;
             if (!currentCurve_->hasCorrectionInRange(startFrame, endFrameExclusive)) continue;
-            editedCurve->applyCorrectionToRange(notes, startFrame, endFrameExclusive,
-                                                static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-                                                effectiveRetuneSpeed, effectiveVibratoDepth, effectiveVibratoRate);
+            scratchCurve->applyCorrectionToRange(notes, startFrame, endFrameExclusive,
+                                                 static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
+                                                 effectiveRetuneSpeed, effectiveVibratoDepth, effectiveVibratoRate);
             anyBaked = true;
         }
         if (!anyBaked) {
@@ -2775,7 +2770,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
             return result;
         }
 
-        const auto snap = editedCurve->getSnapshot();
+        const auto snap = scratchCurve->getSnapshot();
         auto allSegments = snap->getCorrectionSegments();
         int unionStart = frameSel.ranges.front().first;
         int unionEnd = frameSel.ranges.front().second;
@@ -2825,8 +2820,7 @@ int PianoRollComponent::findLineAnchorSegmentNear(int x, int y) const
 {
     if (currentCurve_ == nullptr) return -1;
 
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& allSegments = snapshot->getCorrectionSegments();
+    const auto& allSegments = currentCurve_->getCorrectionSegments();
 
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) return -1;
@@ -2929,7 +2923,7 @@ void PianoRollComponent::resized() {
     repaint();
 }
 
-void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<PitchCurve> curve)
+void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<const PitchCurveSnapshot> curve)
 {
     currentCurve_ = std::move(curve);
 }
@@ -3111,7 +3105,7 @@ void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineConten
 }
 
 void PianoRollComponent::setEditedContent(ContentKey contentKey,
-                                           std::shared_ptr<PitchCurve> curve,
+                                           std::shared_ptr<const PitchCurveSnapshot> curve,
                                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                                            int sampleRate,
                                            bool activePlacementChanged)
@@ -3298,7 +3292,7 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
     if (currentCurve_ == nullptr)
         return false;
 
-    const auto curveSnapshot = currentCurve_->getSnapshot();
+    const auto curveSnapshot = currentCurve_;
     const auto projection = activeContentProjection();
     if (snapshot->timeGrid->empty()
         || !projection.isValid()
@@ -5020,8 +5014,7 @@ float PianoRollComponent::calculateEffectivePIP(Note& note) {
     if (contentSnap != nullptr)
         pitchRatio = static_cast<float>(contentSnap->pitchShiftSettings.getPitchRatio());
 
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& originalF0 = snapshot->getOriginalF0();
+    const auto& originalF0 = currentCurve_->getOriginalF0();
 
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) return -1.0f;
@@ -5181,7 +5174,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
 
     auto committedCurve = readEditedSnapshot();
     if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
-        setEditedContent(editedContentKey_, PitchCurve::fromSnapshot(committedCurve->pitchCurve), audioBuffer_, static_cast<int>(audioBufferSampleRate_));
+        setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
     }
 
     const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(

@@ -53,10 +53,6 @@ public:
         std::vector<PitchCorrectionSegment> segments,
         ContentEditRangeFrames affectedRange) = 0;
 
-    virtual bool setPitchCurve(ContentKey key,
-                               std::shared_ptr<PitchCurve> curve,
-                               ContentEditRangeFrames affectedRange) = 0;
-
     virtual bool setTimeGrid(ContentKey key,
                              std::shared_ptr<const TimeGridSnapshot> grid) = 0;
 

@@ -1544,7 +1544,7 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         || syncBuffer != lastPianoRollBuffer_
         || syncSampleRate != lastPianoRollSampleRate_) {
         pianoRoll_.setEditedContent(sync.activeContentKey,
-                                    PitchCurve::fromSnapshot(curveSnapshot),
+                                    curveSnapshot,
                                     syncBuffer,
                                     syncSampleRate,
                                     identityChanged);

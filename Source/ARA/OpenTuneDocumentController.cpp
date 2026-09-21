@@ -2382,36 +2382,50 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
 
 void OpenTuneDocumentController::requestModificationRender(ContentKey key, double startSeconds, double endSeconds)
 {
-    if (contentRenderService_ == nullptr)
+    PlaybackReadSource readSource;
+    if (contentRenderService_ == nullptr
+        || !contentRenderService_->getPlaybackReadSource(key, readSource)
+        || readSource.audioBuffer == nullptr
+        || readSource.audioSampleRate <= 0.0)
+        return;
+
+    const int64_t totalSamples = readSource.audioBuffer->getNumSamples();
+    const int64_t startSample = juce::jlimit<int64_t>(
+        0, totalSamples, TimeCoordinate::secondsToSamplesFloor(startSeconds, readSource.audioSampleRate));
+    const int64_t endSample = juce::jlimit<int64_t>(
+        0, totalSamples, TimeCoordinate::secondsToSamplesCeil(endSeconds, readSource.audioSampleRate));
+    requestModificationRenderSamples(key, startSample, endSample);
+}
+
+void OpenTuneDocumentController::requestModificationRenderSamples(
+    ContentKey key, int64_t startSample, int64_t endSampleExclusive)
+{
+    if (contentRenderService_ == nullptr || endSampleExclusive <= startSample)
         return;
 
     PlaybackReadSource readSource;
-    if (!contentRenderService_->getPlaybackReadSource(key, readSource))
+    if (!contentRenderService_->getPlaybackReadSource(key, readSource)
+        || readSource.audioBuffer == nullptr
+        || readSource.audioSampleRate <= 0.0)
         return;
 
-    if (readSource.audioBuffer == nullptr || readSource.audioSampleRate <= 0.0)
+    const int64_t totalSamples = readSource.audioBuffer->getNumSamples();
+    startSample = juce::jlimit<int64_t>(0, totalSamples, startSample);
+    endSampleExclusive = juce::jlimit<int64_t>(0, totalSamples, endSampleExclusive);
+    if (endSampleExclusive <= startSample)
         return;
 
     auto snap = snapshotAudioModification(key);
-    if (!snap)
+    if (!snap || !contentRenderService_->republishPlaybackSource(key, snap)
+        || !snap->hasUsableOriginalF0())
         return;
-
-    if (!contentRenderService_->republishPlaybackSource(key, snap))
-        return;
-
-    // F0 可用性判定：用真实数据而非枚举标志
-    if (!snap->hasUsableOriginalF0())
-        return;
-
-    const int startSample = static_cast<int>(startSeconds * readSource.audioSampleRate);
-    const int endSample = static_cast<int>(endSeconds * readSource.audioSampleRate);
 
     RenderJob job;
     job.contentKey = key;
     job.audioBuffer = readSource.audioBuffer;
     job.audioSampleRate = readSource.audioSampleRate;
     job.startSample = startSample;
-    job.endSampleExclusive = endSample;
+    job.endSampleExclusive = endSampleExclusive;
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
     job.contentSnapshot = snap;
 
@@ -2430,10 +2444,7 @@ void OpenTuneDocumentController::requestFullModificationRender(ContentKey key)
     if (readSource.audioBuffer == nullptr || readSource.audioSampleRate <= 0.0)
         return;
 
-    const int totalSamples = readSource.audioBuffer->getNumSamples();
-    const double totalSeconds = static_cast<double>(totalSamples) / readSource.audioSampleRate;
-
-    requestModificationRender(key, 0.0, totalSeconds);
+    requestModificationRenderSamples(key, 0, readSource.audioBuffer->getNumSamples());
 }
 
 void OpenTuneDocumentController::invalidateAllModificationCaches()

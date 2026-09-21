@@ -188,35 +188,33 @@ void resetDraftNotesToBaseline(PianoRollToolHandler::Context& ctx)
 std::shared_ptr<const EditableContentSnapshot> buildNoteBasedCorrectionState(
     PianoRollToolHandler::Context& ctx,
     const std::vector<Note>& notes,
-    const std::shared_ptr<PitchCurve>& pitchCurve,
     F0FrameRange editRange)
 {
     const auto contentSnapshot = ctx.getEditableContentSnapshot();
-    if (contentSnapshot == nullptr || pitchCurve == nullptr)
+    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr)
         return nullptr;
 
     auto snap = std::make_shared<EditableContentSnapshot>(*contentSnapshot);
     snap->notes = notes;
 
-    auto clonedCurve = pitchCurve->clone();
-    clonedCurve->applyCorrectionToRange(notes,
-                                        editRange.startFrame,
-                                        editRange.endFrameExclusive,
-                                        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-                                        ctx.getRetuneSpeed(),
-                                        ctx.getVibratoDepth(),
-                                        ctx.getVibratoRate());
-    snap->pitchCurve = clonedCurve->getSnapshot();
+    auto scratchCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
+    scratchCurve->applyCorrectionToRange(notes,
+                                         editRange.startFrame,
+                                         editRange.endFrameExclusive,
+                                         static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
+                                         ctx.getRetuneSpeed(),
+                                         ctx.getVibratoDepth(),
+                                         ctx.getVibratoRate());
+    snap->pitchCurve = scratchCurve->getSnapshot();
     return snap;
 }
 
 bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
                                const std::vector<Note>& notes,
-                               const std::shared_ptr<PitchCurve>& pitchCurve,
                                F0FrameRange editRange)
 {
     const auto f0tl = ctx.getF0Timeline();
-    const auto snap = buildNoteBasedCorrectionState(ctx, notes, pitchCurve, editRange);
+    const auto snap = buildNoteBasedCorrectionState(ctx, notes, editRange);
     if (snap == nullptr)
         return false;
 
@@ -719,9 +717,11 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::SelectAll, key)) {
         const auto& notes = committedNotes(ctx_);
-        auto curve = ctx_.getPitchCurve();
+        const auto contentSnapshot = ctx_.getEditableContentSnapshot();
         bool hasNotes = !notes.empty();
-        bool hasCurve = curve && !curve->isEmpty();
+        bool hasCurve = contentSnapshot != nullptr
+            && contentSnapshot->pitchCurve != nullptr
+            && !contentSnapshot->pitchCurve->isEmpty();
         
         if (!hasNotes && !hasCurve) {
             return true;
@@ -863,18 +863,15 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
         return false;
     }
 
-    auto curve = ctx_.getPitchCurve();
-    if (curve == nullptr) {
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr) {
         return false;
     }
 
-    auto snapshot = curve->getSnapshot();
-    if (snapshot->isEmpty()) {
+    const auto& curveSnapshot = *contentSnapshot->pitchCurve;
+    if (curveSnapshot.isEmpty()) {
         return false;
     }
-    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
-    if (contentSnapshot == nullptr)
-        return false;
 
     const auto sourceTime = pixelXToSourceTime(e.x);
     if (!sourceTime)
@@ -884,11 +881,11 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
         return false;
     }
 
-    const int frameCount = static_cast<int>(snapshot->size());
+    const int frameCount = static_cast<int>(curveSnapshot.size());
     const int centerFrame = juce::jlimit(0, frameCount - 1, f0tl.frameAtOrBefore(*sourceTime));
     const int startFrame = std::max(0, centerFrame - 2);
     const int endFrameExclusive = std::min(frameCount, centerFrame + 3);
-    const auto& originalF0 = snapshot->getOriginalF0();
+    const auto& originalF0 = curveSnapshot.getOriginalF0();
 
     constexpr float kHitTolerancePx = 7.0f;
     float bestDistanceSquared = kHitTolerancePx * kHitTolerancePx;
@@ -992,13 +989,13 @@ void PianoRollToolHandler::handleDeleteKey()
     int globalDirtyStartFrame = INT_MAX;
     int globalDirtyEndFrame = INT_MIN;
 
-    auto curve = ctx_.getPitchCurve();
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
     const auto f0tl = ctx_.getF0Timeline();
 
     // 每个选中音符独立计算清除范围：不连续选中时，中间未选中音符的修正必须保留
     // 本地累积需要清除的修正范围，不立即提交，最后一次性与音符原子提交
     std::vector<F0FrameRange> correctionClearRanges;
-    if (curve) {
+    if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr) {
         for (int noteIndex : selectedIndices) {
             const auto& note = notes[static_cast<size_t>(noteIndex)];
             const auto noteRange = f0tl.rangeForTimes(note.startTime, note.endTime);
@@ -1033,12 +1030,12 @@ void PianoRollToolHandler::handleDeleteKey()
 
     // 同步计算清除修正 + 删除音符，一次性原子提交
     bool committed = false;
-    if (curve && !correctionClearRanges.empty()) {
-        auto clonedCurve = curve->clone();
+    if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !correctionClearRanges.empty()) {
+        auto scratchCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
         for (const auto& range : correctionClearRanges) {
-            clonedCurve->clearCorrectionRange(range.startFrame, range.endFrameExclusive);
+            scratchCurve->clearCorrectionRange(range.startFrame, range.endFrameExclusive);
         }
-        auto snap = clonedCurve->getSnapshot();
+        auto snap = scratchCurve->getSnapshot();
         // delete 路径：affectedRange = globalDirty*Frame 的覆盖范围（含端点）。
         // F0FrameRange 的 endFrameExclusive 语义。
         const F0FrameRange affectedRange{globalDirtyStartFrame, globalDirtyEndFrame + 1};
@@ -1212,8 +1209,8 @@ void PianoRollToolHandler::beginAreaSelection(const juce::MouseEvent& e)
 void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
 // 手绘曲线工具处理：将鼠标位置转换为F0值，在帧间进行对数插值，记录脏区
 {
-    auto pitchCurve = ctx_.getPitchCurve();
-    if (!pitchCurve) {
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr) {
         return;
     }
 
@@ -1620,9 +1617,9 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                 dirtyEndTime = std::max(dirtyEndTime, std::max(oldNeighbor.endTime, newNeighbor.endTime));
             }
         }
-        auto pitchCurve = ctx_.getPitchCurve();
+        const auto contentSnapshot = ctx_.getEditableContentSnapshot();
         F0FrameRange editRange;
-        if (pitchCurve) {
+        if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr) {
             editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
         }
 
@@ -1630,8 +1627,8 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
         ctx_.setUndoDescription(juce::String::fromUTF8(u8"调整音符长度"));
 
         // 同步计算修正并一次性提交音符和F0
-        if (pitchCurve && !editRange.isEmpty()) {
-            commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
+        if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !editRange.isEmpty()) {
+            commitNoteBasedCorrection(ctx_, notes, editRange);
             suppressFinalNoteDraftCommit = true;
         } else {
             ctx_.commitNoteDraft();
@@ -1737,12 +1734,7 @@ void PianoRollToolHandler::updateNoteBasedCorrectionPreview(const std::vector<No
     if (editRange.isEmpty())
         return;
 
-    auto pitchCurve = ctx_.getPitchCurve();
-    if (pitchCurve == nullptr)
-        return;
-
-    state.noteDrag.previewSnapshot =
-        buildNoteBasedCorrectionState(ctx_, notes, pitchCurve, editRange);
+    state.noteDrag.previewSnapshot = buildNoteBasedCorrectionState(ctx_, notes, editRange);
 }
 
 void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
@@ -1895,7 +1887,7 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
 
         auto baselineNotes = std::vector<Note>(draftBaselineNotes(ctx_));
         auto notes = std::vector<Note>(displayNotes(ctx_));
-        auto pitchCurve = ctx_.getPitchCurve();
+        const auto contentSnapshot = ctx_.getEditableContentSnapshot();
 
         // 唯一 editRange：由实际变化的音符派生（noteDragEditRange），与预览一致
         const F0FrameRange editRange = noteDragEditRange(notes);
@@ -1906,12 +1898,12 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
         state.noteDrag.previewSnapshot.reset();
 
         bool committed = false;
-        if (!editRange.isEmpty() && pitchCurve != nullptr) {
+        if (!editRange.isEmpty() && contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr) {
             ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
                 ? juce::String::fromUTF8(u8"调制深度")
                 : juce::String::fromUTF8(u8"漂移修正"));
             // applyCorrectionToRange + commitNotesAndSegments 唯一提交链
-            committed = commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
+            committed = commitNoteBasedCorrection(ctx_, notes, editRange);
         }
 
         // 终止事务：draft 清理必须先于未提交 invalidation，使 rasterize 消费
@@ -1965,13 +1957,13 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
 
     bool committed = false;
     if (!editRange.isEmpty()) {
-        auto pitchCurve = ctx_.getPitchCurve();
+        const auto contentSnapshot = ctx_.getEditableContentSnapshot();
         ctx_.getNoteDraft().workingNotes = notes;
         ctx_.setUndoDescription(juce::String::fromUTF8(u8"移动音符"));
 
         // 音高编辑失败（无 PitchCurve）不允许 note-only 提交。
-        if (pitchCurve != nullptr) {
-            committed = commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
+        if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr) {
+            committed = commitNoteBasedCorrection(ctx_, notes, editRange);
         }
     }
 
@@ -2076,11 +2068,11 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
             ? juce::String::fromUTF8(u8"调制深度")
             : juce::String::fromUTF8(u8"漂移修正"));
 
-        auto pitchCurve = ctx_.getPitchCurve();
+        const auto contentSnapshot = ctx_.getEditableContentSnapshot();
         const auto f0tl = ctx_.getF0Timeline();
         const F0FrameRange noteRange = f0tl.rangeForTimes(note.startTime, note.endTime);
-        if (pitchCurve != nullptr && !noteRange.isEmpty()) {
-            commitNoteBasedCorrection(ctx_, work, pitchCurve, noteRange);
+        if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !noteRange.isEmpty()) {
+            commitNoteBasedCorrection(ctx_, work, noteRange);
         } else {
             ctx_.clearNoteDraft();
         }
@@ -2121,11 +2113,11 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
     draft.workingNotes = work;
     ctx_.setUndoDescription(juce::String::fromUTF8(u8"音高吸附"));
 
-    auto pitchCurve = ctx_.getPitchCurve();
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
     const auto f0tl = ctx_.getF0Timeline();
     const F0FrameRange noteRange = f0tl.rangeForTimes(original.startTime, original.endTime);
-    if (pitchCurve != nullptr && !noteRange.isEmpty()) {
-        commitNoteBasedCorrection(ctx_, work, pitchCurve, noteRange);
+    if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !noteRange.isEmpty()) {
+        commitNoteBasedCorrection(ctx_, work, noteRange);
     } else {
         ctx_.clearNoteDraft();   // 音高编辑失败不退化提交
     }
@@ -2590,9 +2582,10 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
         return;
     }
     
-    auto pitchCurve = ctx_.getPitchCurve();
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
     auto& handDrawBuffer = ctx_.getState().drawing.handDrawBuffer;
-    if (pitchCurve && ctx_.getDirtyStartTime() >= 0.0 && ctx_.getDirtyEndTime() >= 0.0 && !handDrawBuffer.empty()) {
+    if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr
+        && ctx_.getDirtyStartTime() >= 0.0 && ctx_.getDirtyEndTime() >= 0.0 && !handDrawBuffer.empty()) {
         const auto& originalF0 = ctx_.getOriginalF0();
         if (originalF0.empty()) {
             ctx_.getState().drawing.isDrawingF0 = false;
@@ -2757,13 +2750,13 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
     ctx_.setUndoDescription(juce::String::fromUTF8(u8"绘制音符"));
 
     // 同步计算修正并一次性提交音符和F0段，避免产生两个Undo Action
-    auto pitchCurve = ctx_.getPitchCurve();
-    if (pitchCurve) {
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr) {
         const auto f0tl = ctx_.getF0Timeline();
         const F0FrameRange noteRange = f0tl.rangeForTimes(startTime, endTime);
 
         if (!noteRange.isEmpty()) {
-            commitNoteBasedCorrection(ctx_, notes, pitchCurve, noteRange);
+            commitNoteBasedCorrection(ctx_, notes, noteRange);
         } else {
             ctx_.commitNoteDraft();
         }
@@ -2826,8 +2819,8 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     clickFreq = std::max(20.0f, clickFreq);
     const auto scheme = ctx_.getAudioEditingScheme();
 
-    auto pitchCurve = ctx_.getPitchCurve();
-    if (!pitchCurve) return;
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr) return;
     const auto& originalF0 = ctx_.getOriginalF0();
     if (originalF0.empty()) return;
     const auto f0tl = ctx_.getF0Timeline();
@@ -3066,13 +3059,10 @@ FrameSelection PianoRollToolHandler::buildFrameSelectionForNotes(const std::vect
 bool PianoRollToolHandler::findF0ContiguousStretch(int frame, int& outStart, int& outEndExclusive) const
 {
     auto contentSnapshot = ctx_.getEditableContentSnapshot();
-    if (!contentSnapshot) return false;
-    auto curve = ctx_.getPitchCurve();
-    if (!curve) return false;
-    auto snapshot = curve->getSnapshot();
-    if (!snapshot || snapshot->isEmpty()) return false;
+    if (!contentSnapshot || contentSnapshot->pitchCurve == nullptr || contentSnapshot->pitchCurve->isEmpty())
+        return false;
 
-    const int n = static_cast<int>(snapshot->size());
+    const int n = static_cast<int>(contentSnapshot->pitchCurve->size());
     if (frame < 0 || frame >= n) return false;
 
     // 一次遍历构建有效帧掩码，再向两侧扩展

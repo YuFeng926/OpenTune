@@ -453,28 +453,6 @@ std::shared_ptr<PitchCurve> mergePitchCurves(
 #if JucePlugin_Build_Standalone
 namespace {
 
-class ScopedExportPlaybackRate
-{
-public:
-    ScopedExportPlaybackRate(ContentRenderService& service, double exportRate)
-        : service_(service)
-        , previousRate_(service.getPlaybackSampleRate())
-    {
-        service_.preparePlaybackSampleRate(exportRate);
-    }
-
-    ~ScopedExportPlaybackRate()
-    {
-        // previousRate_ 来自 getPlaybackSampleRate()：初值 kRenderSampleRate(44100)，
-        // setPlaybackSampleRate 拒绝 <=0，恒 >0，无需守卫。
-        service_.preparePlaybackSampleRate(previousRate_);
-    }
-
-private:
-    ContentRenderService& service_;
-    double previousRate_;
-};
-
 void renderPlacementForExport(OpenTuneAudioProcessor& processor,
                               const StandaloneArrangement::PlaybackPlacement& placement,
                               float trackGain,
@@ -509,7 +487,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     readRequest.targetSampleRate = kExportSr;
     readRequest.numSamples = samplesToRender;
 
-    const int renderedSamples = ::OpenTune::readPlaybackAudio(readRequest, placementBuffer, 0);
+    const int renderedSamples = ::OpenTune::readExportPlaybackAudio(readRequest, placementBuffer, 0);
     if (renderedSamples <= 0) {
         return;
     }
@@ -930,12 +908,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                                      ContentEditRangeFrames affectedRange) override
         {
             return proc_.commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
-        }
-
-        bool setPitchCurve(ContentKey key, std::shared_ptr<PitchCurve> curve,
-                           ContentEditRangeFrames affectedRange) override
-        {
-            return proc_.setContentPitchCurve(key, std::move(curve), affectedRange);
         }
 
         bool setTimeGrid(ContentKey key,
@@ -3300,7 +3272,6 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
         return false;
     }
 
-    ScopedExportPlaybackRate exportRate(*contentRenderService_, kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -3354,7 +3325,6 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         return false;
     }
 
-    ScopedExportPlaybackRate exportRate(*contentRenderService_, kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -3417,7 +3387,6 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
         return false;
     }
 
-    ScopedExportPlaybackRate exportRate(*contentRenderService_, kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -4867,16 +4836,6 @@ bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(ContentKey key,
     return false;
 }
 
-bool OpenTuneAudioProcessor::setContentPitchCurve(ContentKey key,
-                                                   std::shared_ptr<PitchCurve> curve,
-                                                   ContentEditRangeFrames affectedRange)
-{
-    if (!writePitchCurveToOwner(key, std::move(curve)))
-        return false;
-    onContentLocalMutationCompleted(key, affectedRange);
-    return true;
-}
-
 bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
                                                   std::shared_ptr<const TimeGridSnapshot> grid)
 {
@@ -5389,9 +5348,6 @@ ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
 
     ContentState payload = contentStateFromSnapshot(*sourceSnap);
     payload.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(*sourceSnap->audioBuffer);
-    payload.analysis.pitchCurve = sourceSnap->pitchCurve != nullptr
-        ? PitchCurve::fromSnapshot(sourceSnap->pitchCurve)
-        : nullptr;
 
     const ContentKey newKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                         *contentRenderService_,

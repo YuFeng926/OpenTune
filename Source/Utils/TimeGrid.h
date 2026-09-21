@@ -24,7 +24,6 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
-#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -94,7 +93,7 @@ public:
     static std::shared_ptr<const TimeGridSnapshot> makeIdentity(double totalDurationSeconds);
 
     /**
-     * 进程级 bootstrap identity snapshot (0.001s)，与 TimeGrid wrapper 默认构造同一语义。
+     * 进程级 bootstrap identity snapshot (0.001s)，供默认/空内容初始化使用。
      * 默认/空 ContentState 以此为初始 timeGrid；真实 source/audio 到达时由 owner 用真实
      * source duration 覆盖。identity 永远用非空 identity grid 表达，不用 nullptr。
      */
@@ -141,22 +140,6 @@ private:
         : handles_(std::move(h)) {}
 
     std::vector<TimeHandle> handles_;
-};
-
-/**
- * TimeGrid — 持有当前 snapshot 的薄包装器.
- *
- * 支持原子 publish/load. 与 PitchCurve 相同模式.
- */
-class TimeGrid {
-public:
-    TimeGrid();
-    explicit TimeGrid(std::shared_ptr<const TimeGridSnapshot> initial);
-
-    std::shared_ptr<const TimeGridSnapshot> getSnapshot() const noexcept;
-
-private:
-    std::shared_ptr<const TimeGridSnapshot> snapshot_;
 };
 
 } // namespace OpenTune

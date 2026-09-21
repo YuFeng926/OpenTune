@@ -188,6 +188,10 @@ protected:
     juce::ARAEditorView* doCreateEditorView() override;
 
 private:
+    void requestModificationRenderSamples(ContentKey key,
+                                          int64_t startSample,
+                                          int64_t endSampleExclusive);
+
     std::vector<AudioSource> audioSources_;
     std::vector<AudioModification> audioModifications_;
     std::vector<PlaybackRegion> playbackRegions_;

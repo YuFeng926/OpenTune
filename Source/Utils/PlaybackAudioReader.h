@@ -82,7 +82,8 @@ inline void applyAutomationGain(juce::AudioBuffer<float>& destination,
  *
  * 合同：readStartSample 是 output/prepared sample 位置。
  * 1. 非恒等 timeGrid：只尝试 TimeStretchCache prepared 切片；cache miss 或
- *    版本不匹配立即返回 0，绝不读 preparedDry。
+ *    版本不匹配立即返回 0，绝不读 preparedDry。导出在 canonical 44.1kHz
+ *    目标率下走独立的 canonical Stage2 output 切片。
  * 2. 恒等 timeGrid：从 preparedDry 直接 copy（已在 prepare 阶段重采样），
  *    再按 snapshot->contentRevision 从 RenderCache prepared chunks overlay。
  * 3. 汇合到 applyAutomationGain() 收尾。
@@ -211,8 +212,8 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
  * 不要求 snapshot timeGrid 参与。无插值、无 target rate 参数、无 prepared fallback。
  */
 inline int readCanonicalAudio(const CanonicalReadRequest& request,
-                               juce::AudioBuffer<float>& destination,
-                               int destinationStartSample)
+                              juce::AudioBuffer<float>& destination,
+                              int destinationStartSample)
 {
     if (request.numSamples <= 0 || !request.source.hasAudio()) {
         return 0;
@@ -273,6 +274,48 @@ inline int readCanonicalAudio(const CanonicalReadRequest& request,
     }
 
     return availableSamples;
+}
+
+/**
+ * Offline output playback at the canonical export rate.
+ *
+ * This path never changes the realtime prepared-rate state. Identity content
+ * reads source PCM plus the canonical Stage1 overlay; non-identity content
+ * reads the canonical Stage2 output.
+ */
+inline int readExportPlaybackAudio(const PlaybackReadRequest& request,
+                                   juce::AudioBuffer<float>& destination,
+                                   int destinationStartSample)
+{
+    const auto& snapshot = request.source.contentSnapshot;
+    if (request.targetSampleRate <= 0.0
+        || std::abs(request.targetSampleRate - TimeCoordinate::kRenderSampleRate) >= 1.0
+        || request.numSamples <= 0
+        || snapshot == nullptr)
+        return 0;
+
+    int wrote = 0;
+    if (snapshot->timeGrid->isIdentity()) {
+        const CanonicalReadRequest canonicalRequest{
+            request.source, request.readStartSample, request.numSamples};
+        wrote = readCanonicalAudio(canonicalRequest, destination, destinationStartSample);
+    } else if (request.source.timeStretchCache != nullptr) {
+        wrote = request.source.timeStretchCache->sliceCanonicalForOutputRange(
+            request.source.contentKey,
+            snapshot->contentRevision,
+            snapshot->timeGridRevision,
+            request.readStartSample,
+            destination,
+            destinationStartSample,
+            request.numSamples);
+    }
+
+    if (wrote > 0)
+        applyAutomationGain(destination, destinationStartSample, wrote,
+                            *snapshot,
+                            request.readStartSample,
+                            request.targetSampleRate);
+    return wrote;
 }
 
 } // namespace OpenTune

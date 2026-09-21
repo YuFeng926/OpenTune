@@ -189,8 +189,7 @@ void AudioModification::applyReferenceFeatures(const ReferenceFeatureSet& featur
 
 void AudioModification::applyOriginalF0State(OriginalF0State state)
 {
-    if (!content->analysis.setOriginalF0State(state))
-        return;
+    content->analysis.setOriginalF0State(state);
 }
 
 } // namespace OpenTune

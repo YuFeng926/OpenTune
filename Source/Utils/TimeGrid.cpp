@@ -250,22 +250,4 @@ bool TimeGridSnapshot::isIdentity() const noexcept
     return true;
 }
 
-// ─── TimeGrid (slot wrapper) ──────────────────────────────────────────────
-
-TimeGrid::TimeGrid()
-    : snapshot_(TimeGridSnapshot::bootstrapIdentity())
-{
-    // Bootstrap with a tiny identity grid; caller is expected to setSnapshot()
-    // with a real content duration.
-}
-
-TimeGrid::TimeGrid(std::shared_ptr<const TimeGridSnapshot> initial)
-    : snapshot_(std::move(initial))
-{}
-
-std::shared_ptr<const TimeGridSnapshot> TimeGrid::getSnapshot() const noexcept
-{
-    return std::atomic_load(&snapshot_);
-}
-
 } // namespace OpenTune

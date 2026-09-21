@@ -245,6 +245,59 @@ int TimeStretchCache::sliceForOutputRange(ContentKey key,
     return availableSamples;
 }
 
+int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
+                                                    uint64_t contentRevision,
+                                                    uint64_t timeGridRevision,
+                                                    int64_t readStartSample,
+                                                    juce::AudioBuffer<float>& destination,
+                                                    int destinationStartSample,
+                                                    int numSamples) const
+{
+    if (numSamples <= 0 || destinationStartSample < 0)
+        return 0;
+
+    const int destinationChannels = destination.getNumChannels();
+    const int destinationSamples = destination.getNumSamples();
+    if (destinationChannels <= 0 || destinationSamples <= 0
+        || destinationStartSample >= destinationSamples)
+        return 0;
+
+    const int writableSamples = std::min(numSamples, destinationSamples - destinationStartSample);
+    if (writableSamples <= 0)
+        return 0;
+
+    auto snap = std::atomic_load(&readerMap_);
+    if (!snap)
+        return 0;
+    const auto it = snap->find(key);
+    if (it == snap->end() || !it->second || !it->second->published)
+        return 0;
+
+    const auto& entry = *it->second;
+    if (entry.contentRevision != contentRevision
+        || entry.timeGridRevision != timeGridRevision
+        || !entry.canonicalAudio || entry.canonicalAudio->empty())
+        return 0;
+
+    const int64_t start = readStartSample;
+    if (start < 0 || start >= static_cast<int64_t>(entry.canonicalAudio->size()))
+        return 0;
+
+    const int availableSamples = juce::jmin(
+        writableSamples,
+        static_cast<int>(static_cast<int64_t>(entry.canonicalAudio->size()) - start));
+    if (availableSamples <= 0)
+        return 0;
+
+    for (int i = 0; i < availableSamples; ++i) {
+        const float value = (*entry.canonicalAudio)[static_cast<size_t>(start + i)];
+        for (int channel = 0; channel < destinationChannels; ++channel)
+            destination.setSample(channel, destinationStartSample + i, value);
+    }
+
+    return availableSamples;
+}
+
 void TimeStretchCache::invalidate(ContentKey key)
 {
     std::lock_guard<std::mutex> lg(mutex_);

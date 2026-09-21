@@ -123,7 +123,6 @@ public:
         // 把 undo action 推入组件 UndoManager。
         std::function<void(std::unique_ptr<UndoAction>)> pushUndoAction;
 
-        std::function<std::shared_ptr<PitchCurve>()> getPitchCurve;
         std::function<std::shared_ptr<const EditableContentSnapshot>()> getEditableContentSnapshot;
 
         std::function<int()> getPianoKeyWidth;
