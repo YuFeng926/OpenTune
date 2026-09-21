@@ -409,8 +409,11 @@ public:
         std::atomic_store(&snapshot_, newSnapshot);
     }
 
-    std::shared_ptr<PitchCurve> clone() const {
-        auto snapshot = getSnapshot();
+    static std::shared_ptr<PitchCurve> fromSnapshot(
+        const std::shared_ptr<const PitchCurveSnapshot>& snapshot) {
+        if (snapshot == nullptr)
+            return nullptr;
+
         auto copiedCurve = std::make_shared<PitchCurve>();
         copiedCurve->setHopSize(snapshot->getHopSize());
         copiedCurve->setSampleRate(snapshot->getSampleRate());
@@ -424,6 +427,10 @@ public:
         }
         copiedCurve->replaceCorrectionSegments(segments);
         return copiedCurve;
+    }
+
+    std::shared_ptr<PitchCurve> clone() const {
+        return fromSnapshot(getSnapshot());
     }
 
 private:

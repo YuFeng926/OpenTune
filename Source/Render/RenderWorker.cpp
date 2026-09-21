@@ -87,7 +87,18 @@ void RenderWorker::syncStage1Queue(const RenderJob& templateJob)
                         && queued.queuedChunkStartSample == startSample;
                 });
             if (alreadyQueued)
+            {
+                auto queuedIt = std::find_if(queue_.begin(), queue_.end(),
+                    [cache, startSample](const RenderJob& queued) {
+                        return queued.kind == RenderJob::Kind::Stage1Render
+                            && queued.renderCache.get() == cache
+                            && queued.queuedChunkStartSample == startSample;
+                    });
+                queuedIt->contentSnapshot = templateJob.contentSnapshot;
+                queuedIt->audioBuffer = templateJob.audioBuffer;
+                queuedIt->audioSampleRate = templateJob.audioSampleRate;
                 continue;
+            }
 
             RenderJob queued = templateJob;
             queued.queuedChunkStartSample = startSample;

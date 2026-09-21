@@ -43,6 +43,9 @@ public:
     ContentRenderService& operator=(const ContentRenderService&) = delete;
 
     void publishPlaybackSource(ContentKey key, PlaybackReadSource source);
+    bool republishPlaybackSource(
+        ContentKey key,
+        std::shared_ptr<const EditableContentSnapshot> contentSnapshot);
     bool getPlaybackReadSource(ContentKey key, PlaybackReadSource& out) const;
     void removePlaybackSource(ContentKey key);
 
@@ -71,6 +74,7 @@ public:
 
     void clearAll();
     void preparePlaybackSampleRate(double targetSr);
+    double getPlaybackSampleRate() const;
 
 private:
     PlaybackSourcePublisher playbackSources_;

@@ -293,7 +293,8 @@ std::vector<Note> sliceNotesToLocalRange(const std::vector<Note>& notes,
     return normalizeStoredNotes(slicedNotes);
 }
 
-std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(const std::shared_ptr<PitchCurve>& pitchCurve,
+std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(
+    const std::shared_ptr<const PitchCurveSnapshot>& pitchCurve,
                                                         double startSeconds,
                                                         double endSeconds)
 {
@@ -301,9 +302,9 @@ std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(const std::shared_ptr<Pi
         return nullptr;
     }
 
-    const auto snapshot = pitchCurve->getSnapshot();
-    const int hopSize = snapshot->getHopSize();
-    const double sampleRate = snapshot->getSampleRate();
+    const auto& snapshot = *pitchCurve;
+    const int hopSize = snapshot.getHopSize();
+    const double sampleRate = snapshot.getSampleRate();
     if (hopSize <= 0 || sampleRate <= 0.0) {
         return nullptr;
     }
@@ -384,8 +385,9 @@ std::vector<SilentGap> mergeSilentGaps(const std::vector<SilentGap>& leadingGaps
     return mergedGaps;
 }
 
-std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& leadingCurve,
-                                             const std::shared_ptr<PitchCurve>& trailingCurve,
+std::shared_ptr<PitchCurve> mergePitchCurves(
+                                             const std::shared_ptr<const PitchCurveSnapshot>& leadingCurve,
+                                             const std::shared_ptr<const PitchCurveSnapshot>& trailingCurve,
                                              OriginalF0State leadingState,
                                              OriginalF0State trailingState)
 {
@@ -397,13 +399,11 @@ std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& 
         return (leadingCurve == nullptr && trailingCurve == nullptr) ? std::shared_ptr<PitchCurve>{} : nullptr;
     }
 
-    const auto leadingSnapshot = leadingCurve->getSnapshot();
-    const auto trailingSnapshot = trailingCurve->getSnapshot();
-    if (leadingSnapshot == nullptr
-        || trailingSnapshot == nullptr
-        || leadingSnapshot->getHopSize() <= 0
-        || leadingSnapshot->getHopSize() != trailingSnapshot->getHopSize()
-        || std::abs(leadingSnapshot->getSampleRate() - trailingSnapshot->getSampleRate()) > 1.0e-6) {
+    const auto& leadingSnapshot = *leadingCurve;
+    const auto& trailingSnapshot = *trailingCurve;
+    if (leadingSnapshot.getHopSize() <= 0
+        || leadingSnapshot.getHopSize() != trailingSnapshot.getHopSize()
+        || std::abs(leadingSnapshot.getSampleRate() - trailingSnapshot.getSampleRate()) > 1.0e-6) {
         return nullptr;
     }
 
@@ -427,7 +427,7 @@ std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& 
                                     trailingOriginalEnergy.begin() + static_cast<std::ptrdiff_t>(trailingOriginalF0.size()));
     }
 
-    std::vector<PitchCorrectionSegment> mergedSegments = leadingCurve->copyCorrectionSegments();
+    std::vector<PitchCorrectionSegment> mergedSegments = leadingSnapshot.getCorrectionSegments();
     const int leadingFrameCount = static_cast<int>(leadingSnapshot->getOriginalF0().size());
     for (auto segment : trailingSnapshot->getCorrectionSegments()) {
         segment.startFrame += leadingFrameCount;
@@ -450,6 +450,27 @@ std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& 
 
 #if JucePlugin_Build_Standalone
 namespace {
+
+class ScopedExportPlaybackRate
+{
+public:
+    ScopedExportPlaybackRate(ContentRenderService& service, double exportRate)
+        : service_(service)
+        , previousRate_(service.getPlaybackSampleRate())
+    {
+        service_.preparePlaybackSampleRate(exportRate);
+    }
+
+    ~ScopedExportPlaybackRate()
+    {
+        if (previousRate_ > 0.0)
+            service_.preparePlaybackSampleRate(previousRate_);
+    }
+
+private:
+    ContentRenderService& service_;
+    double previousRate_;
+};
 
 void renderPlacementForExport(OpenTuneAudioProcessor& processor,
                               const StandaloneArrangement::PlaybackPlacement& placement,
@@ -560,7 +581,7 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildStandardAutoReferenceFeatureSet
         return failed;
     }
 
-    const auto pitchSnapshot = snapshot.pitchCurve->getSnapshot();
+    const auto pitchSnapshot = snapshot.pitchCurve;
     const auto& originalF0 = pitchSnapshot->getOriginalF0();
     const auto& originalEnergy = pitchSnapshot->getOriginalEnergy();
     const int hopSize = pitchSnapshot->getHopSize();
@@ -737,6 +758,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                                              std::shared_ptr<const EditableContentSnapshot> snapshot,
                                              std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
                                              double audioSampleRate) {
+ #if JucePlugin_Build_VST3
                 juce::MessageManager::callAsync(
                     [this, completionGate, key,
                      snapshot = std::move(snapshot),
@@ -749,6 +771,12 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                         handleStage1ChunkSettled(key, std::move(snapshot),
                                                  std::move(audioBuffer), audioSampleRate);
                     });
+            };
+ #else
+                juce::ignoreUnused(completionGate);
+                handleStage1ChunkSettled(key, std::move(snapshot),
+                                         std::move(audioBuffer), audioSampleRate);
+ #endif
             };
             completion.chunkFailed = [this, completionGate](ContentKey key) {
 #if JucePlugin_Build_VST3
@@ -3030,7 +3058,6 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey k
         auto* dc = getDocumentController();
         if (dc != nullptr)
         {
-            dc->refreshModificationCRSMetadata(key);
             dc->requestModificationRender(key, startSeconds, endSeconds);
         }
         return;
@@ -3038,7 +3065,6 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey k
 #endif
 
     // Non-ARA path: processor-local CRS
-    refreshCRSMetadata(key);
     requestRenderForLocalMutationRange(key, startSeconds, endSeconds);
 }
 
@@ -3050,7 +3076,6 @@ void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key)
         auto* dc = getDocumentController();
         if (dc != nullptr)
         {
-            dc->refreshModificationCRSMetadata(key);
             dc->requestFullModificationRender(key);
         }
         return;
@@ -3058,7 +3083,6 @@ void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key)
 #endif
 
     // Non-ARA path
-    refreshCRSMetadata(key);
     requestFullContentRender(key);
 }
 
@@ -3077,7 +3101,6 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
 {
     auto snap = getContentSnapshot(key);
     if (!snap) return;
-    if (!snap->hasUsableOriginalF0()) return;
 
     auto* crs = resolveMutableLocalContentRenderService(key);
     if (crs == nullptr) return;
@@ -3089,9 +3112,10 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     auto audioBuffer = readSource.audioBuffer;
     if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
 
-    // 无渲染装配：renderCache 与最新 snapshot（TimeGrid/AutomationLane/revision）
-    // 一起原子发布。
-    republishPlaybackSource(key);
+    if (!crs->republishPlaybackSource(key, snap))
+        return;
+
+    if (!snap->hasUsableOriginalF0()) return;
 
     const int64_t totalSamples = audioBuffer->getNumSamples();
     const int64_t startSample = juce::jlimit<int64_t>(
@@ -3108,7 +3132,6 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     job.audioSampleRate = crsSampleRate;
     job.startSample = startSample;
     job.endSampleExclusive = endSample;
-    job.contentRevision = snap->contentRevision;
     job.contentSnapshot = snap;
 
     crs->enqueueRender(std::move(job));
@@ -3169,16 +3192,7 @@ void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
     auto* resolvedCrs = resolveMutableLocalContentRenderService(key);
     if (resolvedCrs == nullptr) return;
 
-    auto& crs = *resolvedCrs;
-    PlaybackReadSource current;
-    if (!crs.getPlaybackReadSource(key, current))
-        return;
-
-    auto src = makePlaybackReadSource(
-        key, std::move(snap), current.audioBuffer, current.audioSampleRate,
-        crs.getOrCreateRenderCache(key), crs.getTimeStretchCache());
-
-    crs.publishPlaybackSource(key, std::move(src));
+    resolvedCrs->republishPlaybackSource(key, std::move(snap));
 }
 
 #if JucePlugin_Build_Standalone
@@ -3237,7 +3251,7 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
         return false;
     }
 
-    contentRenderService_->preparePlaybackSampleRate(kExportSampleRateHz);
+    ScopedExportPlaybackRate exportRate(*contentRenderService_, kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -3291,7 +3305,7 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         return false;
     }
 
-    contentRenderService_->preparePlaybackSampleRate(kExportSampleRateHz);
+    ScopedExportPlaybackRate exportRate(*contentRenderService_, kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -3354,7 +3368,7 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
         return false;
     }
 
-    contentRenderService_->preparePlaybackSampleRate(kExportSampleRateHz);
+    ScopedExportPlaybackRate exportRate(*contentRenderService_, kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -3741,7 +3755,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
         }
 
         if (snap->pitchCurve != nullptr) {
-            const auto pSnapshot = snap->pitchCurve->getSnapshot();
+            const auto pSnapshot = snap->pitchCurve;
             const double frameRate = pSnapshot->getSampleRate()
                 / static_cast<double>(juce::jmax(1, pSnapshot->getHopSize()));
             if (frameRate > 0.0) {
@@ -3749,7 +3763,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                     static_cast<int>(std::floor(request.changedStartSeconds * frameRate)));
                 const int endFrame = juce::jmax(startFrame,
                     static_cast<int>(std::ceil(request.changedEndSeconds * frameRate)));
-                auto clearedCurve = snap->pitchCurve->clone();
+                auto clearedCurve = PitchCurve::fromSnapshot(snap->pitchCurve);
                 clearedCurve->clearCorrectionRange(startFrame, endFrame);
                 if (!writePitchCurveToOwner(request.contentKey, std::move(clearedCurve))) {
                     return false;
@@ -3976,7 +3990,7 @@ void OpenTuneAudioProcessor::updateContentKeyFromOriginalF0(ContentKey key)
 
     if (snap->detectedKey.origin == Origin::Manual) return;
 
-    const auto curveSnapshot = snap->pitchCurve->getSnapshot();
+    const auto curveSnapshot = snap->pitchCurve;
     const auto& originalF0 = curveSnapshot->getOriginalF0();
     if (originalF0.empty()) return;
 
@@ -4149,7 +4163,7 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
         }
 
         if (snap->pitchCurve == nullptr
-            || snap->pitchCurve->getSnapshot()->getOriginalF0().empty()) {
+            || snap->pitchCurve->getOriginalF0().empty()) {
             return ReferenceAnalysisPreheatStatus::AnalysisFailed;
         }
     }
@@ -4576,12 +4590,12 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
     // When a segment crosses the affected range boundary, the outside parts are kept.
     // Example: old segment [0,100], edit range [40,60] → keep [0,40] and [60,100], replace [40,60].
     auto mergedSegments = replaceSegmentsInFrameRange(
-        snap->pitchCurve->getSnapshot()->getCorrectionSegments(),
+        snap->pitchCurve->getCorrectionSegments(),
         clipSegmentsToFrameRange(segments, affectedRange.startFrame, affectedRange.endFrameExclusive),
         affectedRange.startFrame,
         affectedRange.endFrameExclusive);
 
-    auto newCurve = snap->pitchCurve->clone();
+    auto newCurve = PitchCurve::fromSnapshot(snap->pitchCurve);
     newCurve->replaceCorrectionSegments(mergedSegments);
     if (!newCurve) return {};
 
@@ -4736,15 +4750,7 @@ void OpenTuneAudioProcessor::republishPlaybackSource(ContentKey key)
     if (!snap) return;
     auto* crs = resolveMutableLocalContentRenderService(key);
     if (crs == nullptr) return;
-
-    PlaybackReadSource current;
-    if (!crs->getPlaybackReadSource(key, current)) return;
-    if (current.audioBuffer == nullptr || current.audioBuffer->getNumSamples() <= 0) return;
-
-    auto readSource = makePlaybackReadSource(
-        key, std::move(snap), current.audioBuffer, current.audioSampleRate,
-        crs->getOrCreateRenderCache(key), crs->getTimeStretchCache());
-    crs->publishPlaybackSource(key, std::move(readSource));
+    crs->republishPlaybackSource(key, std::move(snap));
 }
 
 bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
@@ -4860,9 +4866,8 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             break;
     }
     if (ok) {
-        // TimeGrid 变化必须重建输出增益包络（包络沿 TimeGrid 投影到 output time）。
-        // republishPlaybackSource 按 domain 分派并发布最新不可变播放源。
-        republishPlaybackSource(key);
+        auto snapshot = getContentSnapshot(key);
+        auto* crs = resolveMutableLocalContentRenderService(key);
 #if JucePlugin_Build_Standalone
         if (key.domainKind == DomainKind::StandaloneClip)
         {
@@ -4873,21 +4878,27 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             // settled here, handleStage1ChunkSettled will enqueue Stage2 when it
             // completes. Stage2 reads canonical Stage1 and the TimeGrid revision
             // is independent from contentRevision.
-            if (auto* crs = resolveMutableLocalContentRenderService(key))
+            if (crs != nullptr && snapshot != nullptr)
             {
+                if (!crs->republishPlaybackSource(key, snapshot))
+                    return ok;
                 crs->getTimeStretchCache().invalidate(key);
                 PlaybackReadSource source;
                 if (crs->getPlaybackReadSource(key, source))
                 {
                     enqueueStandaloneStage2WhenCanonicalSettled(
                         key,
-                        getContentSnapshot(key),
+                        std::move(snapshot),
                         source.audioBuffer,
                         source.audioSampleRate);
                 }
             }
         }
 #endif
+        if (key.domainKind != DomainKind::StandaloneClip
+            && crs != nullptr
+            && snapshot != nullptr)
+            crs->republishPlaybackSource(key, std::move(snapshot));
     }
     return ok;
 }
@@ -5043,7 +5054,7 @@ std::unique_ptr<PitchShiftEditAction> OpenTuneAudioProcessor::commitPitchShiftEd
     PitchShiftEditState before;
     before.settings = oldSettings;
     before.notes = snap->notes;
-    before.segments = snap->pitchCurve->copyCorrectionSegments();
+    before.segments = snap->pitchCurve->getCorrectionSegments();
 
     PitchShiftEditState after = before;
     after.settings = newSettings;
@@ -5095,7 +5106,7 @@ bool OpenTuneAudioProcessor::generateNotesOnlyByContentKey(
     // 单一快照：读取一次，curveSnapshot 贯穿生成、秒域范围、拓扑提交
     auto snap = getContentSnapshot(key);
     if (snap == nullptr || snap->pitchCurve == nullptr) return false;
-    const auto curveSnapshot = snap->pitchCurve->getSnapshot();
+    const auto curveSnapshot = snap->pitchCurve;
 
     auto generatedNotes = generateNotesFromOriginalF0(curveSnapshot, 0,
         curveSnapshot ? static_cast<int>(curveSnapshot->getOriginalF0().size()) : 0, params);
@@ -5140,7 +5151,7 @@ bool OpenTuneAudioProcessor::autoTuneContentRangeByContentKey(
     auto snap = getContentSnapshot(key);
     if (snap == nullptr || snap->pitchCurve == nullptr) return false;
 
-    const auto curveSnapshot = snap->pitchCurve->getSnapshot();
+    const auto curveSnapshot = snap->pitchCurve;
 
     auto generatedNotes = generateNotesFromOriginalF0(
         curveSnapshot, startFrame, endFrameExclusive, params);
@@ -5192,7 +5203,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     std::sort(mergedNotes.begin(), mergedNotes.end(),
         [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
 
-    auto derivedCurve = snap->pitchCurve->clone();
+    auto derivedCurve = PitchCurve::fromSnapshot(snap->pitchCurve);
     derivedCurve->applyCorrectionToRange(mergedNotes,
                                          startFrame,
                                          endFrameExclusive,
@@ -5243,7 +5254,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     // render range 必须覆盖 applyCorrectionToRange 的 calculationRange（两侧各
     // expand getCorrectedF0BoundaryContextFrames 帧），否则边界处 chunk 保留旧
     // 音频，与新 correction segment 产生不连续 → click。
-    const int maxFrame = static_cast<int>(snap->pitchCurve->getSnapshot()->getOriginalF0().size());
+    const int maxFrame = static_cast<int>(snap->pitchCurve->getOriginalF0().size());
     const auto expandedRange = PitchCurve::expandNoteBasedCorrectionRange(
         startFrame, endFrameExclusive, maxFrame);
     onContentLocalMutationCompleted(key, ContentEditRangeFrames{ expandedRange.startFrame, expandedRange.endFrameExclusive });
@@ -5341,7 +5352,9 @@ ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
 
     ContentState payload = contentStateFromSnapshot(*sourceSnap);
     payload.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(*sourceSnap->audioBuffer);
-    payload.analysis.pitchCurve = sourceSnap->pitchCurve != nullptr ? sourceSnap->pitchCurve->clone() : nullptr;
+    payload.analysis.pitchCurve = sourceSnap->pitchCurve != nullptr
+        ? PitchCurve::fromSnapshot(sourceSnap->pitchCurve)
+        : nullptr;
 
     const ContentKey newKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                         *contentRenderService_,

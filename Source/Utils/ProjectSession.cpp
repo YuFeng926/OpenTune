@@ -671,8 +671,6 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
                 }
             }
 
-            processorRef_.refreshCRSMetadata(key);
-
             if (uniqueKeys.insert(key).second)
             {
                 OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;

@@ -37,9 +37,19 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
 
     const auto& snapshot = *request.contentSnapshot;
 
-    // identity TimeGrid = 无时间拉伸：失效旧 Stage2 输出，无需重建。
+    const auto isCurrentPublishedRequest = [&]() {
+        PlaybackReadSource published;
+        return crs.getPlaybackReadSource(contentKey, published)
+            && published.contentSnapshot == request.contentSnapshot
+            && published.contentSnapshot->contentRevision == snapshot.contentRevision
+            && published.contentSnapshot->timeGridRevision == snapshot.timeGridRevision;
+    };
+
+    if (!isCurrentPublishedRequest())
+        return false;
+
+    // identity TimeGrid 不需要 Stage2；mutation 已在发布新 snapshot 时失效旧输出。
     if (snapshot.timeGrid->isIdentity()) {
-        crs.getTimeStretchCache().invalidate(contentKey);
         return true;
     }
 
@@ -115,6 +125,9 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
 
     const uint64_t contentRev = snapshot.contentRevision;
     const uint64_t timeGridRev = snapshot.timeGridRevision;
+
+    if (!isCurrentPublishedRequest())
+        return false;
 
     crs.getTimeStretchCache().store(contentKey,
                                     std::move(output),

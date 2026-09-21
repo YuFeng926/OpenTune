@@ -87,6 +87,12 @@ void PlaybackSourcePublisher::setPlaybackSampleRate(double sr)
     recomputeActivePreparedBytes();
 }
 
+double PlaybackSourcePublisher::getPlaybackSampleRate() const
+{
+    std::lock_guard<std::mutex> lg(writerMutex_);
+    return playbackSampleRate_;
+}
+
 void PlaybackSourcePublisher::publish(ContentKey key, PlaybackReadSource source)
 {
     source.contentKey = key;

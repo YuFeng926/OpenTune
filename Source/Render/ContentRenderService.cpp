@@ -26,7 +26,6 @@ bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(Stage2Reques
     job.contentSnapshot = std::move(request.contentSnapshot);
     job.audioBuffer = std::move(request.audioBuffer);
     job.audioSampleRate = request.audioSampleRate;
-    job.contentRevision = job.contentSnapshot->contentRevision;
     renderWorker_.enqueue(std::move(job));
     return true;
 }
@@ -34,6 +33,31 @@ bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(Stage2Reques
 void ContentRenderService::publishPlaybackSource(ContentKey key, PlaybackReadSource source)
 {
     playbackSources_.publish(key, source);
+}
+
+bool ContentRenderService::republishPlaybackSource(
+    ContentKey key,
+    std::shared_ptr<const EditableContentSnapshot> contentSnapshot)
+{
+    if (!contentSnapshot)
+        return false;
+
+    PlaybackReadSource current;
+    if (!getPlaybackReadSource(key, current)
+        || !current.audioBuffer
+        || current.audioSampleRate <= 0.0)
+        return false;
+
+    publishPlaybackSource(
+        key,
+        makePlaybackReadSource(
+            key,
+            std::move(contentSnapshot),
+            current.audioBuffer,
+            current.audioSampleRate,
+            getOrCreateRenderCache(key),
+            getTimeStretchCache()));
+    return true;
 }
 
 bool ContentRenderService::getPlaybackReadSource(ContentKey key, PlaybackReadSource& out) const
@@ -122,7 +146,10 @@ void ContentRenderService::enqueueRender(RenderJob job)
     // Only invalidate when state actually changed — a no-op reconcile must not destroy
     // existing TimeStretchCache entries.
     const auto reconcileResult = job.renderCache->reconcileFullPlanAndRequest(
-        fullPlan, job.startSample, job.endSampleExclusive, job.contentRevision);
+        fullPlan,
+        job.startSample,
+        job.endSampleExclusive,
+        job.contentSnapshot->contentRevision);
 
     if (reconcileResult.stateChanged)
         timeStretchCache_.invalidate(job.contentKey);
@@ -198,6 +225,11 @@ void ContentRenderService::preparePlaybackSampleRate(double targetSr)
     playbackSources_.setPlaybackSampleRate(targetSr);
     renderCaches_.preparePlaybackSampleRate(targetSr);
     timeStretchCache_.prepareForPlaybackSampleRate(targetSr);
+}
+
+double ContentRenderService::getPlaybackSampleRate() const
+{
+    return playbackSources_.getPlaybackSampleRate();
 }
 
 } // namespace OpenTune

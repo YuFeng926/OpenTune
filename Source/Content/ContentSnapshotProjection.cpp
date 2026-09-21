@@ -11,7 +11,9 @@ EditableContentSnapshot makeContentSnapshot(const ContentState& state)
     snap.audioSampleRate = state.audioBuffer != nullptr ? state.sampleRate : 0.0;
     snap.audioRevision = state.audioRevision;
     snap.notes = state.notes;
-    snap.pitchCurve = state.analysis.pitchCurve;
+    snap.pitchCurve = state.analysis.pitchCurve != nullptr
+        ? state.analysis.pitchCurve->getSnapshot()
+        : nullptr;
     snap.timeGrid = state.timeGrid;
     if (snap.timeGrid == nullptr)
     {
@@ -55,7 +57,16 @@ ContentState contentStateFromSnapshot(const EditableContentSnapshot& snapshot)
     state.outputGainRevision = snapshot.outputGainRevision;
     state.contentRevision = snapshot.contentRevision;
     state.audioRevision = snapshot.audioRevision;
-    state.analysis.pitchCurve = snapshot.pitchCurve;
+    if (snapshot.pitchCurve != nullptr)
+    {
+        auto pitchCurve = std::make_shared<PitchCurve>();
+        pitchCurve->setHopSize(snapshot.pitchCurve->getHopSize());
+        pitchCurve->setSampleRate(snapshot.pitchCurve->getSampleRate());
+        pitchCurve->setOriginalF0(snapshot.pitchCurve->getOriginalF0());
+        pitchCurve->setOriginalEnergy(snapshot.pitchCurve->getOriginalEnergy());
+        pitchCurve->replaceCorrectionSegments(snapshot.pitchCurve->getCorrectionSegments());
+        state.analysis.pitchCurve = std::move(pitchCurve);
+    }
     state.analysis.setOriginalF0State(snapshot.originalF0State);
     state.analysis.detectedKey = snapshot.detectedKey;
     state.analysis.silentGaps = snapshot.silentGaps;

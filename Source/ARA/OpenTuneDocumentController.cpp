@@ -1749,7 +1749,6 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
         return projection;
 
     projection.contentWindow = modification->content->sourceWindow;
-    projection.contentRevision = modification->content->contentRevision;
     projection.contentDurationSeconds = modification->content->sourceWindow.durationSeconds();
     // playbackSourceReady 仅用于 renderer 严格 gate（isPlaybackRenderable）；
     // UI projection 不再以它阻断，WaitingForSource 也能产出有效 contentKey/content snapshot。
@@ -2404,17 +2403,7 @@ void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
     if (mod == nullptr || !mod->hasContentState())
         return;
 
-    // 刷新 CRS 的 PlaybackReadSource editable 真相（不重新发布 audio buffer）：
-    // snapshot 承载 timeGrid/volumeEnvelope/revision，渲染路径不再从 owner 回查。
-    PlaybackReadSource current;
-    if (contentRenderService_ && contentRenderService_->getPlaybackReadSource(key, current))
-    {
-        auto readSource = makePlaybackReadSource(
-            key, mod->snapshotContent(), current.audioBuffer, current.audioSampleRate,
-            contentRenderService_->getOrCreateRenderCache(key),
-            contentRenderService_->getTimeStretchCache());
-        contentRenderService_->publishPlaybackSource(key, std::move(readSource));
-    }
+    contentRenderService_->republishPlaybackSource(key, mod->snapshotContent());
 }
 
 void OpenTuneDocumentController::requestModificationRender(ContentKey key, double startSeconds, double endSeconds)
@@ -2429,10 +2418,14 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     if (readSource.audioBuffer == nullptr || readSource.audioSampleRate <= 0.0)
         return;
 
-    // F0 可用性判定：用真实数据而非枚举标志
     auto snap = snapshotAudioModification(key);
     if (!snap)
         return;
+
+    if (!contentRenderService_->republishPlaybackSource(key, snap))
+        return;
+
+    // F0 可用性判定：用真实数据而非枚举标志
     if (!snap->hasUsableOriginalF0())
         return;
 
@@ -2446,7 +2439,6 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     job.startSample = startSample;
     job.endSampleExclusive = endSample;
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
-    job.contentRevision = snap->contentRevision;
     job.contentSnapshot = snap;
 
     contentRenderService_->enqueueRender(std::move(job));
@@ -2869,18 +2861,7 @@ void OpenTuneDocumentController::republishPlaybackSourceForModification(ContentK
     if (contentRenderService_ == nullptr)
         return;
 
-    PlaybackReadSource readSource;
-    if (!contentRenderService_->getPlaybackReadSource(key, readSource))
-        return;
-    if (readSource.audioBuffer == nullptr || readSource.audioBuffer->getNumSamples() <= 0)
-        return;
-
-    readSource = makePlaybackReadSource(
-        key, mod->snapshotContent(), readSource.audioBuffer, readSource.audioSampleRate,
-        contentRenderService_->getOrCreateRenderCache(key),
-        contentRenderService_->getTimeStretchCache());
-
-    contentRenderService_->publishPlaybackSource(key, std::move(readSource));
+    contentRenderService_->republishPlaybackSource(key, mod->snapshotContent());
 }
 
 bool OpenTuneDocumentController::applyPitchCurveToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve)
@@ -2923,14 +2904,17 @@ bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& k
     if (mod->audioModification != nullptr)
         mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
 
+    auto snapshot = mod->snapshotContent();
+    const bool published = contentRenderService_->republishPlaybackSource(key, snapshot);
+
     // TimeGrid 变更 → 失效 Stage2 并在 Stage1 settled 后重建；
     // identity TimeGrid 无需 Stage2（无时间拉伸）。
     contentRenderService_->getTimeStretchCache().invalidate(key);
-    if (!isIdentity)
+    if (published && !isIdentity)
     {
         ContentRenderService::Stage2Request request;
         request.contentKey = key;
-        request.contentSnapshot = snapshotAudioModification(key);
+        request.contentSnapshot = snapshot;
         PlaybackReadSource readSource;
         if (contentRenderService_->getPlaybackReadSource(key, readSource))
         {

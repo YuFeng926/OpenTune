@@ -34,7 +34,6 @@ public:
         juce::ARAPlaybackRegion* playbackRegion{nullptr};
         juce::String audioModificationPersistentId;
         SourceWindow contentWindow;
-        uint64_t contentRevision{0};
         std::optional<juce::Colour> displayColour;
         double startInPlaybackTime{0.0};
         double startInModificationTime{0.0};

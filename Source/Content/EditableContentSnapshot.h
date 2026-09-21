@@ -30,7 +30,7 @@ struct EditableContentSnapshot
     int64_t sourceSampleCount{0};
 
     std::vector<Note> notes;
-    std::shared_ptr<PitchCurve> pitchCurve;
+    std::shared_ptr<const PitchCurveSnapshot> pitchCurve;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;
 
@@ -54,12 +54,9 @@ struct EditableContentSnapshot
     {
         if (!pitchCurve)
             return false;
-        const auto snap = pitchCurve->getSnapshot();
-        if (!snap)
-            return false;
-        return !snap->getOriginalF0().empty()
-            && snap->getHopSize() > 0
-            && snap->getSampleRate() > 0.0;
+        return !pitchCurve->getOriginalF0().empty()
+            && pitchCurve->getHopSize() > 0
+            && pitchCurve->getSampleRate() > 0.0;
     }
 
     template <typename Sink>
@@ -68,11 +65,11 @@ struct EditableContentSnapshot
         if (pitchCurve == nullptr)
             return;
 
-        const auto curveSnapshot = pitchCurve->getSnapshot();
-        const auto& originalF0 = curveSnapshot->getOriginalF0();
+        const auto& curveSnapshot = *pitchCurve;
+        const auto& originalF0 = curveSnapshot.getOriginalF0();
         const float gapGain = static_cast<float>(pitchShiftSettings.getPitchRatio());
 
-        curveSnapshot->forEachCorrectionF0Span(
+        curveSnapshot.forEachCorrectionF0Span(
             startFrame,
             endFrame,
             [&](int spanStartFrame, const float* values, int count)

@@ -245,61 +245,6 @@ int TimeStretchCache::sliceForOutputRange(ContentKey key,
     return availableSamples;
 }
 
-// ============================================================================
-// sliceCanonicalForOutputRange — 非实时 canonical 切片（仅供 Stage2/export）
-// 版本 key = contentRevision + timeGridRevision
-// ============================================================================
-
-int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
-                                                     uint64_t contentRevision,
-                                                     uint64_t timeGridRevision,
-                                                     int64_t readStartSample,
-                                                     juce::AudioBuffer<float>& destination,
-                                                     int destinationStartSample,
-                                                     int numSamples) const
-{
-    if (numSamples <= 0) return 0;
-    if (destinationStartSample < 0) return 0;
-    const int destinationChannels = destination.getNumChannels();
-    const int destinationSamples  = destination.getNumSamples();
-    if (destinationChannels <= 0 || destinationSamples <= 0) return 0;
-    if (destinationStartSample >= destinationSamples) return 0;
-
-    const int writableSamples = std::min(numSamples, destinationSamples - destinationStartSample);
-    if (writableSamples <= 0) return 0;
-
-    auto snap = std::atomic_load(&readerMap_);
-    if (!snap) return 0;
-    auto it = snap->find(key);
-    if (it == snap->end() || !it->second || !it->second->published) return 0;
-
-    const auto& e = *it->second;
-    if (!e.canonicalAudio || e.canonicalAudio->empty()) return 0;
-
-    if (e.contentRevision != contentRevision
-        || e.timeGridRevision != timeGridRevision)
-        return 0;
-
-    const std::vector<float>* srcAudio = e.canonicalAudio.get();
-
-    const int64_t start = readStartSample;
-    if (start < 0 || start >= static_cast<int64_t>(srcAudio->size())) return 0;
-
-    const int availableSamples = juce::jmin(
-        writableSamples,
-        static_cast<int>(static_cast<int64_t>(srcAudio->size()) - start));
-    if (availableSamples <= 0) return 0;
-
-    for (int i = 0; i < availableSamples; ++i) {
-        const float v = (*srcAudio)[static_cast<size_t>(start + i)];
-        for (int ch = 0; ch < destinationChannels; ++ch) {
-            destination.setSample(ch, destinationStartSample + i, v);
-        }
-    }
-
-    return availableSamples;
-}
-
 void TimeStretchCache::invalidate(ContentKey key)
 {
     std::lock_guard<std::mutex> lg(mutex_);
