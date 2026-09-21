@@ -1454,7 +1454,11 @@ if(OPENTUNE_BUILD_TESTS)
     add_executable(OpenTuneContentSnapshotProjectionTests
         Tests/ContentSnapshotProjectionTests.cpp
         Source/Content/StandaloneClipContent.cpp
+        Source/Content/ContentSnapshotProjection.cpp
+        Source/Utils/TimeGrid.cpp
     )
+    target_include_directories(OpenTuneContentSnapshotProjectionTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     target_link_libraries(OpenTuneContentSnapshotProjectionTests PRIVATE
         OpenTune
         juce::juce_audio_basics

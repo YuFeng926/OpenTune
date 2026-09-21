@@ -173,11 +173,10 @@ std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeIdentity(double to
     clipEnd.kind = HandleKind::ClipEnd;
     handles.push_back(clipEnd);
 
-    return makeFromHandles(std::move(handles), /*revision=*/1);
+    return makeFromHandles(std::move(handles));
 }
 
-std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeFromHandles(std::vector<TimeHandle> handles,
-                                                                          uint64_t revision)
+std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeFromHandles(std::vector<TimeHandle> handles)
 {
     juce::String err;
     if (!validate(handles, err)) {
@@ -185,7 +184,7 @@ std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeFromHandles(std::v
         return nullptr;
     }
     return std::shared_ptr<const TimeGridSnapshot>(
-        new TimeGridSnapshot(std::move(handles), revision));
+        new TimeGridSnapshot(std::move(handles)));
 }
 
 double TimeGridSnapshot::totalDurationSeconds() const noexcept

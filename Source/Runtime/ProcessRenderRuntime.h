@@ -27,7 +27,10 @@ public:
     struct CompletionContext
     {
         std::shared_ptr<CompletionGate> gate;
-        std::function<void(ContentKey)> chunkSettled;
+        std::function<void(ContentKey,
+                           std::shared_ptr<const EditableContentSnapshot>,
+                           std::shared_ptr<const juce::AudioBuffer<float>>,
+                           double)> chunkSettled;
         std::function<void(ContentKey)> chunkFailed;
     };
 
@@ -35,7 +38,6 @@ public:
 
     void processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
                                RenderJob& job,
-                               std::shared_ptr<const EditableContentSnapshot> contentSnap,
                                bool lightPitchEnabled,
                                CompletionContext completion);
 

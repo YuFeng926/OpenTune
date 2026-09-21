@@ -675,7 +675,11 @@ public:
 
 private:
 #if JucePlugin_Build_Standalone
-    void enqueueStandaloneStage2WhenCanonicalSettled(ContentKey key);
+    void enqueueStandaloneStage2WhenCanonicalSettled(
+        ContentKey key,
+        std::shared_ptr<const EditableContentSnapshot> snapshot,
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+        double audioSampleRate);
 #endif
     ReferenceFeatureProducer resolveReferenceFeatureProducer() const;
     // 纯数据 StandardAuto 特征生产（static：不访问 processor 状态，analysisRevision
@@ -698,7 +702,11 @@ public:
 
     void requestFullContentRender(ContentKey key);
 
-    void handleStage1ChunkSettled(ContentKey key);
+    void handleStage1ChunkSettled(
+        ContentKey key,
+        std::shared_ptr<const EditableContentSnapshot> snapshot,
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+        double audioSampleRate);
 
     void refreshCRSMetadata(ContentKey key);
 
@@ -717,7 +725,7 @@ public:
     // outputGain/content revision，只走 republishPlaybackSource()（零 render enqueue）。
     ContentCommitSnapshot commitVolumeEnvelope(ContentKey key, AutomationLane envelope);
     // 无渲染发布入口：按 content domain 调现有装配函数，只读最新 snapshot、
-    // 发布包含最新 AutomationLane 与 TimeGrid 的不可变播放源。
+    // 发布携带该 snapshot（AutomationLane/TimeGrid/revision）的不可变播放源。
     void republishPlaybackSource(ContentKey key);
     bool setContentPitchCurve(ContentKey key,
                               std::shared_ptr<PitchCurve> curve,

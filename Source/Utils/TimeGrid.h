@@ -97,8 +97,7 @@ public:
      * 构造一个 snapshot 从 handles 列表(必须已经按 source_seconds 升序、含 ClipStart/End)。
      * 失败返回 nullptr,日志记录失败原因。
      */
-    static std::shared_ptr<const TimeGridSnapshot> makeFromHandles(std::vector<TimeHandle> handles,
-                                                                   uint64_t revision = 1);
+    static std::shared_ptr<const TimeGridSnapshot> makeFromHandles(std::vector<TimeHandle> handles);
 
     /**
      * 验证不变量。
@@ -107,7 +106,6 @@ public:
     static bool validate(const std::vector<TimeHandle>& handles, juce::String& outError);
 
     const std::vector<TimeHandle>& handles() const noexcept { return handles_; }
-    uint64_t revision() const noexcept { return revision_; }
     bool empty() const noexcept { return handles_.size() < 2; }
 
     /**
@@ -132,11 +130,10 @@ public:
     bool isIdentity() const noexcept;
 
 private:
-    explicit TimeGridSnapshot(std::vector<TimeHandle> h, uint64_t rev)
-        : handles_(std::move(h)), revision_(rev) {}
+    explicit TimeGridSnapshot(std::vector<TimeHandle> h)
+        : handles_(std::move(h)) {}
 
     std::vector<TimeHandle> handles_;
-    uint64_t                revision_{0};
 };
 
 /**

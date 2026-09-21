@@ -191,13 +191,32 @@ bool preparePublishedAudioFromSynthesis(const FrozenRenderBoundaries& boundaries
 }
 
 void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completion,
-                        ContentKey key)
+                        const RenderJob& job)
 {
     if (!completion.chunkSettled)
         return;
     std::lock_guard<std::mutex> lk(completion.gate->mutex);
     if (!completion.gate->closed)
-        completion.chunkSettled(key); // 持锁调用：owner 析构必须先拿同一把锁置 closed，互斥保证无 UAF
+        completion.chunkSettled(job.contentKey,
+                                job.contentSnapshot,
+                                job.audioBuffer,
+                                job.audioSampleRate);
+}
+
+void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completion,
+                        ContentKey key,
+                        std::shared_ptr<const EditableContentSnapshot> contentSnapshot,
+                        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+                        double audioSampleRate)
+{
+    if (!completion.chunkSettled)
+        return;
+    std::lock_guard<std::mutex> lk(completion.gate->mutex);
+    if (!completion.gate->closed)
+        completion.chunkSettled(key,
+                                std::move(contentSnapshot),
+                                std::move(audioBuffer),
+                                audioSampleRate);
 }
 
 void notifyChunkFailed(const ProcessRenderRuntime::CompletionContext& completion,
@@ -676,28 +695,17 @@ void ProcessRenderRuntime::deferOrRequeue(
 
 void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
                                                   RenderJob& job,
-                                                  std::shared_ptr<const EditableContentSnapshot> contentSnap,
                                                   bool lightPitchEnabled,
                                                   CompletionContext completion)
 {
-    if (crs == nullptr || job.renderCache == nullptr || !contentSnap)
+    if (crs == nullptr || job.renderCache == nullptr || !job.contentSnapshot || !job.audioBuffer)
     {
         failChunk(completion, job.renderCache.get(), job.startSample,
                   job.targetRevision, job.contentKey);
         return;
     }
 
-    PlaybackReadSource readSource;
-    if (!crs->getPlaybackReadSource(job.contentKey, readSource) || !readSource.hasAudio())
-    {
-        failChunk(completion, job.renderCache.get(), job.startSample,
-                  job.targetRevision, job.contentKey);
-        return;
-    }
-    // 执行读取点成对刷新：canonical 音频与其样本率永远来自同一份最新
-    // PlaybackReadSource 快照，绝不跨快照混用。
-    job.audioBuffer = readSource.audioBuffer;
-    job.audioSampleRate = readSource.audioSampleRate;
+    const auto contentSnap = job.contentSnapshot;
 
     auto pitchCurve = contentSnap->pitchCurve;
 
@@ -762,7 +770,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
                       coreJob.targetRevision, coreJob.contentKey);
         } else if (result == RenderCache::ChunkRenderResult::Published)
-            notifyChunkSettled(completion, coreJob.contentKey);
+            notifyChunkSettled(completion, coreJob);
     };
 
     if (!clipFound || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen)
@@ -797,7 +805,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         if (!intersectsActiveEqNote)
         {
             coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision);
-            notifyChunkSettled(completion, coreJob.contentKey);
+            notifyChunkSettled(completion, coreJob);
         }
         else
         {
@@ -830,7 +838,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         if (!intersectsActiveEqNote)
         {
             coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision);
-            notifyChunkSettled(completion, coreJob.contentKey);
+            notifyChunkSettled(completion, coreJob);
         }
         else
         {
@@ -856,7 +864,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         if (!intersectsActiveEqNote)
         {
             coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision);
-            notifyChunkSettled(completion, coreJob.contentKey);
+            notifyChunkSettled(completion, coreJob);
         }
         else
         {
@@ -957,7 +965,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 }
                 else if (result == RenderCache::ChunkRenderResult::Published)
                 {
-                    notifyChunkSettled(completion, coreJob.contentKey);
+                    notifyChunkSettled(completion, coreJob);
                 }
 
                 AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk objId="
@@ -980,6 +988,9 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.kind = RenderJob::Kind::Stage1Render;
             requeueJob.contentKey = coreJob.contentKey;
             requeueJob.renderCache = coreJob.renderCache;
+            requeueJob.contentSnapshot = contentSnap;
+            requeueJob.audioBuffer = coreJob.audioBuffer;
+            requeueJob.audioSampleRate = coreJob.audioSampleRate;
             requeueJob.startSeconds = relChunkStartSec;
             requeueJob.startSample = coreJob.startSample;
             requeueJob.targetRevision = coreJob.targetRevision;
@@ -1083,6 +1094,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
 
     auto renderCache = coreJob.renderCache;
     auto targetRevision = coreJob.targetRevision;
+    auto requeueAudioBuffer = coreJob.audioBuffer;
+    const double requeueAudioSampleRate = coreJob.audioSampleRate;
     const ContentKey captureContentKey = coreJob.contentKey;
     const uint64_t chunkObjId = captureContentKey.objectId;
     const double jobStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
@@ -1091,6 +1104,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const FrozenRenderBoundaries frozenBoundaries = boundaries;
 
     vocoderJob.onComplete = [this, crs, renderCache, targetRevision,
+                             requeueAudioBuffer, requeueAudioSampleRate,
                              captureContentKey, chunkObjId, jobStartSeconds,
                              jobStartSample, frozenBoundaries, contentSnap,
                              completion](
@@ -1134,7 +1148,11 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 return;
             }
 
-            notifyChunkSettled(completion, captureContentKey);
+            notifyChunkSettled(completion,
+                               captureContentKey,
+                               contentSnap,
+                               requeueAudioBuffer,
+                               requeueAudioSampleRate);
         }
         else if (result == VocoderRenderScheduler::JobResult::Cancelled)
         {
@@ -1143,6 +1161,9 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.kind = RenderJob::Kind::Stage1Render;
             requeueJob.contentKey = captureContentKey;
             requeueJob.renderCache = renderCache;
+            requeueJob.contentSnapshot = contentSnap;
+            requeueJob.audioBuffer = requeueAudioBuffer;
+            requeueJob.audioSampleRate = requeueAudioSampleRate;
             requeueJob.startSeconds = jobStartSeconds;
             requeueJob.startSample = jobStartSample;
             requeueJob.targetRevision = targetRevision;

@@ -13,6 +13,14 @@ EditableContentSnapshot makeContentSnapshot(const ContentState& state)
     snap.notes = state.notes;
     snap.pitchCurve = state.analysis.pitchCurve;
     snap.timeGrid = state.timeGrid;
+    if (snap.timeGrid == nullptr)
+    {
+        double durationSeconds = state.sourceWindow.durationSeconds();
+        if (durationSeconds <= 0.0 && state.audioBuffer != nullptr && state.sampleRate > 0.0)
+            durationSeconds = static_cast<double>(state.audioBuffer->getNumSamples()) / state.sampleRate;
+        if (durationSeconds > 0.0)
+            snap.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
+    }
     snap.pitchShiftSettings = state.pitchShiftSettings;
     snap.originalF0State = state.analysis.originalF0State;
     snap.detectedKey = state.analysis.detectedKey;

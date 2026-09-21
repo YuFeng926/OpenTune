@@ -11,7 +11,9 @@ ContentRenderService::~ContentRenderService() = default;
 
 bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(Stage2Request request)
 {
-    if (!request.contentKey.isValid())
+    if (!request.contentKey.isValid()
+        || request.contentSnapshot == nullptr
+        || request.audioBuffer == nullptr)
         return false;
 
     auto renderCache = getRenderCache(request.contentKey);
@@ -21,9 +23,10 @@ bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(Stage2Reques
     RenderJob job;
     job.kind = RenderJob::Kind::Stage2Rebuild;
     job.contentKey = request.contentKey;
-    job.pitchRevision = request.pitchRevision;
-    job.pitchShiftRevision = request.pitchShiftRevision;
-    job.timeGridRevision = request.timeGridRevision;
+    job.contentSnapshot = std::move(request.contentSnapshot);
+    job.audioBuffer = std::move(request.audioBuffer);
+    job.audioSampleRate = request.audioSampleRate;
+    job.contentRevision = job.contentSnapshot->contentRevision;
     renderWorker_.enqueue(std::move(job));
     return true;
 }
@@ -70,10 +73,11 @@ void ContentRenderService::detachExecutionLease(void* owner)
     renderWorker_.detachExecutionLease(owner);
 }
 
-void ContentRenderService::enqueueRender(RenderJob job, const std::vector<Note>& notes)
+void ContentRenderService::enqueueRender(RenderJob job)
 {
     if (job.kind != RenderJob::Kind::Stage1Render
         || job.renderCache == nullptr
+        || job.contentSnapshot == nullptr
         || job.audioBuffer == nullptr
         || job.endSampleExclusive <= job.startSample)
         return;
@@ -83,7 +87,7 @@ void ContentRenderService::enqueueRender(RenderJob job, const std::vector<Note>&
     // 表达 Note 覆盖范围，无新取整策略。Stage1 输入已固定 44.1kHz（CRS 播放源
     // canonical），Note 边界统一按 RenderCache::kSampleRate 换算，无第二采样率轴。
     std::vector<RenderChunkPlanner::ProtectedRange> protectedRanges;
-    for (const auto& note : notes)
+    for (const auto& note : job.contentSnapshot->notes)
     {
         if (!note.eq.has_value() || !note.eq->active)
             continue;
@@ -96,11 +100,12 @@ void ContentRenderService::enqueueRender(RenderJob job, const std::vector<Note>&
         protectedRanges.push_back({protectedStart, protectedEnd});
     }
 
-    // 完整计划：请求 [0, contentSampleCount) 得到全内容 chunk 几何（升序无重叠）
+    // 完整计划：请求 [0, contentSampleCount) 得到全内容 chunk 几何（升序无重叠）。
+    // silentGaps 与 notes 同源，直接用 snapshot 真相。
     const int64_t contentSampleCount = job.audioBuffer->getNumSamples();
     const auto chunkRanges = RenderChunkPlanner::selectChunksIntersectingRange(
         contentSampleCount,
-        job.silentGaps,
+        job.contentSnapshot->silentGaps,
         protectedRanges,
         0,
         contentSampleCount,
@@ -130,7 +135,7 @@ void ContentRenderService::requeueRenderChunk(const RenderJob& job)
     jassert(job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr);
 
     // 只回退状态机：成功回退后仅投递一个带身份的 pending chunk，worker 下轮
-    // 重拉 span/revision，owner 回调抓当前 snapshot。不重算几何、不 bump desired。
+    // 重拉 span/revision（snapshot 随 job 携带），不重算几何、不 bump desired。
     const bool requeued = job.renderCache->requeueRunningChunk(
         job.startSample, job.targetRevision);
     if (!requeued)

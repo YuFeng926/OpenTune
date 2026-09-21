@@ -3329,9 +3329,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
         newHandles[static_cast<size_t>(draggedIdx)].output_seconds = clampedOutput;
     }
 
-    auto newSnap = TimeGridSnapshot::makeFromHandles(
-        std::move(newHandles),
-        /*revision=*/tt.dragOriginalSnapshot->revision() + 1);
+    auto newSnap = TimeGridSnapshot::makeFromHandles(std::move(newHandles));
     if (newSnap == nullptr) {
         AppLogger::warn("[TimeTool] makeFromHandles failed during drag (validation)");
         return;
@@ -3443,8 +3441,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
     newHandle.kind = HandleKind::UserAdded;
     newHandles.insert(newHandles.begin() + insertIdx, newHandle);
 
-    auto newSnap = TimeGridSnapshot::makeFromHandles(
-        std::move(newHandles), /*revision=*/snap->revision() + 1);
+    auto newSnap = TimeGridSnapshot::makeFromHandles(std::move(newHandles));
     if (newSnap == nullptr) {
         AppLogger::warn("[TimeTool] insert: makeFromHandles validation failed");
         return;
@@ -3496,8 +3493,7 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
     std::vector<TimeHandle> newHandles(handles.begin(), handles.end());
     newHandles.erase(newHandles.begin() + targetIdx);
 
-    auto newSnap = TimeGridSnapshot::makeFromHandles(
-        std::move(newHandles), /*revision=*/snap->revision() + 1);
+    auto newSnap = TimeGridSnapshot::makeFromHandles(std::move(newHandles));
     if (newSnap == nullptr) {
         AppLogger::warn("[TimeTool] delete: makeFromHandles validation failed");
         return false;

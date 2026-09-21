@@ -752,7 +752,6 @@ std::vector<ProjectContentEntry::SegmentEntry> ProjectPersistence::segmentsFromV
 juce::ValueTree ProjectPersistence::timeGridToValueTree(const ProjectContentEntry::TimeGridEntry& tg)
 {
     juce::ValueTree tree("TimeGrid");
-    tree.setProperty("revision", static_cast<int64_t>(tg.revision), nullptr);
     for (const auto& handle : tg.handles) {
         juce::ValueTree ht("Handle");
         ht.setProperty("id", static_cast<int64_t>(handle.id), nullptr);
@@ -769,7 +768,6 @@ ProjectContentEntry::TimeGridEntry ProjectPersistence::timeGridFromValueTree(con
 {
     ProjectContentEntry::TimeGridEntry tg;
     if (!tree.isValid()) { return tg; }
-    tg.revision = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("revision", 0)));
     for (int i = 0; i < tree.getNumChildren(); ++i) {
         auto child = tree.getChild(i);
         if (!child.hasType("Handle")) { continue; }

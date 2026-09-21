@@ -234,7 +234,11 @@ private:
 
     // Stage1 → Stage2 异步完成回调 gate，跟随 DC 析构关闭。
     std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate_;
-    void handleStage1ChunkSettled(ContentKey key);
+    void handleStage1ChunkSettled(
+        ContentKey key,
+        std::shared_ptr<const EditableContentSnapshot> snapshot,
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+        double audioSampleRate);
 
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
     AudioSource* findAudioSource(const juce::String& persistentId);

@@ -27,9 +27,10 @@ public:
     struct Stage2Request
     {
         ContentKey contentKey;
-        uint64_t pitchRevision{0};
-        uint64_t pitchShiftRevision{0};
-        uint64_t timeGridRevision{0};
+        // 重建输入随请求固定：worker 只消费这里的 snapshot/audio，不回查 owner。
+        std::shared_ptr<const EditableContentSnapshot> contentSnapshot;
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+        double audioSampleRate{0.0};
     };
 
     /** Canonical Stage1 完整物化后，把一次 Stage2 重建放入现有 RenderWorker 队列。 */
@@ -51,8 +52,8 @@ public:
 
     void attachExecutionLease(ExecutionLease lease);
     void detachExecutionLease(void* owner);
-    // notes 仅在本调用栈内读取（提取 active-EQ Note 保护范围），不复制、不存储。
-    void enqueueRender(RenderJob job, const std::vector<Note>& notes);
+    // notes/silentGaps 从 job.contentSnapshot 读取，不复制、不额外传参。
+    void enqueueRender(RenderJob job);
     // stale-generation 回退：只回退 RenderCache 状态机（Running→Pending）并投递
     // 一个带 chunk 身份的队列项，不重算几何/快照、不 bump desired。
     void requeueRenderChunk(const RenderJob& job);

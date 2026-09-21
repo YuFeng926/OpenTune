@@ -1,6 +1,8 @@
 #include "../Source/Content/ContentSnapshotProjection.h"
 #include "../Source/Content/CaptureSegmentContent.h"
 #include "../Source/Content/StandaloneClipContent.h"
+#include "../Source/Utils/PlaybackAudioReader.h"
+#include "../Source/Render/PlaybackReadSource.h"
 
 #include <cmath>
 #include <cstdio>
@@ -149,6 +151,52 @@ bool testCaptureSegmentOriginalF0CommitAdvancesRevisionsOnce()
     return segment.content().contentRevision == contentBefore + 1;
 }
 
+bool testIdentityTimeGridIsAlwaysPublishedAndNonIdentityMissIsSilent()
+{
+    auto identity = OpenTune::TimeGridSnapshot::makeIdentity(1.0);
+    if (!identity)
+        return false;
+
+    OpenTune::ContentState state;
+    state.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 8);
+    state.sampleRate = 44100.0;
+    state.timeGrid = identity;
+    state.contentRevision = 1;
+
+    auto snapshot = std::make_shared<const OpenTune::EditableContentSnapshot>(
+        OpenTune::makeContentSnapshot(state));
+    if (!snapshot->timeGrid || !snapshot->timeGrid->isIdentity())
+        return false;
+
+    OpenTune::PlaybackReadSource source;
+    source.contentSnapshot = snapshot;
+    source.audioBuffer = snapshot->audioBuffer;
+    source.audioSampleRate = snapshot->audioSampleRate;
+    source.preparedDry.buffer = snapshot->audioBuffer;
+    source.preparedDry.sampleRate = 44100.0;
+    source.preparedDry.canonicalBuffer = snapshot->audioBuffer;
+
+    juce::AudioBuffer<float> destination(1, 4);
+    OpenTune::PlaybackReadRequest request(source, 0, 44100.0, 4);
+    if (OpenTune::readPlaybackAudio(request, destination, 0) != 4)
+        return false;
+
+    std::vector<OpenTune::TimeHandle> handles = snapshot->timeGrid->handles();
+    handles.insert(handles.begin() + 1, OpenTune::TimeHandle{
+        99, 0.5, 0.75, OpenTune::HandleKind::UserAdded, OpenTune::Confidence::Default});
+    auto warped = OpenTune::TimeGridSnapshot::makeFromHandles(std::move(handles));
+    if (!warped || warped->isIdentity())
+        return false;
+
+    state.timeGrid = warped;
+    snapshot = std::make_shared<const OpenTune::EditableContentSnapshot>(
+        OpenTune::makeContentSnapshot(state));
+    source.contentSnapshot = snapshot;
+    request.source = source;
+    destination.clear();
+    return OpenTune::readPlaybackAudio(request, destination, 0) == 0;
+}
+
 } // namespace
 
 int main()
@@ -168,6 +216,12 @@ int main()
     if (!testCaptureSegmentOriginalF0CommitAdvancesRevisionsOnce())
     {
         std::fputs("FAIL: CaptureSegmentContent OriginalF0 commit revisions\n", stderr);
+        return 1;
+    }
+
+    if (!testIdentityTimeGridIsAlwaysPublishedAndNonIdentityMissIsSilent())
+    {
+        std::fputs("FAIL: Playback TimeGrid identity/cache miss contract\n", stderr);
         return 1;
     }
 

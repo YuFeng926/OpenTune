@@ -42,6 +42,7 @@ struct ArrangementClipPaintInput {
     double timelineStartSeconds = 0.0;
     double durationSeconds = 0.0;
     double pixelsPerSecond = 1.0;
+    std::shared_ptr<const TimeGridSnapshot> timeGrid;
 };
 
 juce::Rectangle<int> referenceButtonBoundsForClip(juce::Rectangle<int> placementBounds) noexcept
@@ -154,7 +155,9 @@ static void paintHistoricalClipWaveform(juce::Graphics& g,
     const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
     const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
     const double timelineEndSeconds = clip.timelineStartSeconds + clip.durationSeconds;
-    const double sourceEndSeconds = clip.clipInSeconds + clip.durationSeconds;
+    const auto& timeGrid = clip.timeGrid;
+    if (timeGrid == nullptr)
+        return;
 
     juce::Path wavePath;
 
@@ -164,8 +167,10 @@ static void paintHistoricalClipWaveform(juce::Graphics& g,
         if (timelineTime < clip.timelineStartSeconds || timelineTime >= timelineEndSeconds)
             continue;
 
-        const double contentTime = clip.clipInSeconds + (timelineTime - clip.timelineStartSeconds);
-        if (contentTime < clip.clipInSeconds || contentTime >= sourceEndSeconds)
+        const double outputTime = timeGrid->tauForward(clip.clipInSeconds)
+            + (timelineTime - clip.timelineStartSeconds);
+        const double contentTime = timeGrid->tauInverse(outputTime);
+        if (contentTime < clip.clipInSeconds)
             continue;
 
         const int64_t peakIndex = static_cast<int64_t>(contentTime / timePerPeak);
@@ -174,7 +179,9 @@ static void paintHistoricalClipWaveform(juce::Graphics& g,
 
         const double timelineTimeNext = clip.timelineStartSeconds
             + (static_cast<double>(x + 1) - static_cast<double>(clip.fullBounds.getX())) / clip.pixelsPerSecond;
-        const double contentTimeNext = clip.clipInSeconds + (timelineTimeNext - clip.timelineStartSeconds);
+        const double outputTimeNext = timeGrid->tauForward(clip.clipInSeconds)
+            + (timelineTimeNext - clip.timelineStartSeconds);
+        const double contentTimeNext = timeGrid->tauInverse(outputTimeNext);
         int64_t idxStart = peakIndex;
         int64_t idxEnd = static_cast<int64_t>(contentTimeNext / timePerPeak);
         if (idxEnd <= idxStart)
@@ -415,6 +422,7 @@ static void paintHistoricalArrangementClips(juce::Graphics& g,
 
 template <typename IsSelected>
 std::vector<ArrangementClipPaintInput> collectVisibleArrangementClips(const StandaloneArrangement& arrangement,
+                                                       const OpenTuneAudioProcessor& processor,
                                                        double tileStart,
                                                        double tileEnd,
                                                        const ArrangementVerticalWindow& verticalWindow,
@@ -462,6 +470,10 @@ std::vector<ArrangementClipPaintInput> collectVisibleArrangementClips(const Stan
             if (paintClip.isEmpty())
                 continue;
 
+            auto snapshot = processor.getContentSnapshot(placement.contentKey);
+            if (snapshot == nullptr || snapshot->timeGrid == nullptr)
+                continue;
+
             clips.push_back({
                 fullBounds,
                 paintClip,
@@ -477,7 +489,8 @@ std::vector<ArrangementClipPaintInput> collectVisibleArrangementClips(const Stan
                 placement.clipInSeconds,
                 placement.timelineStartSeconds,
                 placement.durationSeconds,
-                pixelsPerSecond
+                pixelsPerSecond,
+                snapshot->timeGrid
             });
         }
     }
@@ -1257,7 +1270,7 @@ void ArrangementViewComponent::buildCompositeForeground(
     // Content layer: clips + waveform
     const ArrangementVerticalWindow vwin{trackHeight, worldTopY, tileBounds.getHeight()};
     auto& arrangement = *processor_.getStandaloneArrangement();
-    auto clips = collectVisibleArrangementClips(arrangement, tileStartSec, tileEndSec, vwin, camera_.pixelsPerSecond,
+    auto clips = collectVisibleArrangementClips(arrangement, processor_, tileStartSec, tileEndSec, vwin, camera_.pixelsPerSecond,
         tileBounds.getWidth(), [this](int trackId, uint64_t placementId) {
             return isPlacementSelected(trackId, placementId);
         });

@@ -32,8 +32,7 @@ public:
     struct Entry {
         // Canonical (44.1kHz) Stage 2 output — immutable after publish
         std::shared_ptr<const std::vector<float>> canonicalAudio;
-        uint64_t pitchRevision = 0;
-        uint64_t pitchShiftRevision = 0;
+        uint64_t contentRevision = 0;
         uint64_t timeGridRevision = 0;
         double sampleRate = 44100.0;
         bool published = false;
@@ -49,8 +48,7 @@ public:
 
     void store(ContentKey key,
                std::vector<float> audio,
-               uint64_t pitchRevision,
-               uint64_t pitchShiftRevision,
+               uint64_t contentRevision,
                uint64_t timeGridRevision,
                double sampleRate,
                uint32_t buildGeneration);
@@ -58,8 +56,7 @@ public:
     uint32_t beginBuild(ContentKey key);
 
     int sliceForOutputRange(ContentKey key,
-                            uint64_t pitchRevision,
-                            uint64_t pitchShiftRevision,
+                            uint64_t contentRevision,
                             uint64_t timeGridRevision,
                             int64_t readStartSample,
                             juce::AudioBuffer<float>& destination,
@@ -68,8 +65,7 @@ public:
                             int targetSampleRate) const;
 
     int sliceCanonicalForOutputRange(ContentKey key,
-                                      uint64_t pitchRevision,
-                                      uint64_t pitchShiftRevision,
+                                      uint64_t contentRevision,
                                       uint64_t timeGridRevision,
                                       int64_t readStartSample,
                                       juce::AudioBuffer<float>& destination,

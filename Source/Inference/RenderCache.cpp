@@ -52,7 +52,7 @@ void RenderCache::publishLocked() {
         pc.startSample = chunk.startSample;
         pc.endSampleExclusive = chunk.endSampleExclusive;
         pc.audio = chunk.audio;
-        pc.publishedRevision = chunk.publishedRevision;
+        pc.contentRevision = chunk.lastRequestedContentRevision;
         snapshot->chunks.push_back(pc);
     }
     auto oldSnapshot = std::atomic_load(&publishedSnapshot_);
@@ -111,14 +111,14 @@ void RenderCache::rebuildPrepared()
             pc.startSample = prepStart;
             pc.endSampleExclusive = prepEnd;
 
-            // 增量复用：canonical 内容未变（同 span、同 revision）时直接共享旧
-            // prepared PCM，跳过 r8brain 重采样。条件从严：任何不匹配都重采样，
+            // 增量复用：canonical 内容未变（同 span、同 contentRevision）时直接共享
+            // 旧 prepared PCM，跳过 r8brain 重采样。条件从严：任何不匹配都重采样，
             // 宁可重做不可复用过期音频。
             auto prevIt = previous.find(prepStart);
             if (!aliasCanonical
                 && prevIt != previous.end()
                 && prevIt->second->endSampleExclusive == prepEnd
-                && prevIt->second->sourceRevision == chunk.publishedRevision)
+                && prevIt->second->sourceRevision == chunk.contentRevision)
             {
                 pc.audio = prevIt->second->audio;
                 pc.sourceRevision = prevIt->second->sourceRevision;
@@ -128,7 +128,7 @@ void RenderCache::rebuildPrepared()
 
             if (aliasCanonical) {
                 pc.audio = chunk.audio;
-                pc.sourceRevision = chunk.publishedRevision;
+                pc.sourceRevision = chunk.contentRevision;
             } else {
                 const int outputLength = static_cast<int>(prepEnd - prepStart);
                 if (outputLength <= 0) continue;
@@ -141,7 +141,7 @@ void RenderCache::rebuildPrepared()
                     outputLength);
 
                 pc.audio = std::make_shared<const std::vector<float>>(std::move(resampled));
-                pc.sourceRevision = chunk.publishedRevision;
+                pc.sourceRevision = chunk.contentRevision;
             }
 
             prepSnap->chunks.push_back(std::move(pc));
@@ -195,13 +195,15 @@ void RenderCache::prepareForPlaybackSampleRate(double targetSr) {
 
 // ============================================================================
 // overlayPreparedAudio — 音频线程直接从 prepared snapshot replace（非叠加）
+// 只复制 sourceRevision == expectedContentRevision 的 chunk。
 // ============================================================================
 
 void RenderCache::overlayPreparedAudio(juce::AudioBuffer<float>& destination,
                                        int destStartSample,
                                        int numSamples,
                                        int64_t readStartSample,
-                                       int targetSampleRate) const {
+                                       int targetSampleRate,
+                                       uint64_t expectedContentRevision) const {
     if (targetSampleRate <= 0 || numSamples <= 0) return;
 
     const int destinationChannels = destination.getNumChannels();
@@ -231,6 +233,7 @@ void RenderCache::overlayPreparedAudio(juce::AudioBuffer<float>& destination,
         const auto& chunk = *it;
         if (chunk.endSampleExclusive <= requestStart) continue;
         if (chunk.startSample >= requestEnd) break;
+        if (chunk.sourceRevision != expectedContentRevision) continue;
         if (!chunk.audio || chunk.audio->empty()) continue;
 
         const int64_t overlapStart = std::max(requestStart, chunk.startSample);

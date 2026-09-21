@@ -3,6 +3,7 @@
 
 #include "CaptureSegment.h"
 #include "../../Content/ContentKey.h"
+#include "../../Content/EditableContentSnapshot.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
@@ -65,6 +66,7 @@ using RefreshSegmentFn = std::function<void(ContentKey segmentContentKey)>;
 
 /** Publish PlaybackReadSource to ContentRenderService with segment.id as ContentKey. */
 using PublishPlaybackSourceFn = std::function<void(const ContentKey& key,
+                                                     std::shared_ptr<const EditableContentSnapshot> snapshot,
                                                      std::shared_ptr<const juce::AudioBuffer<float>> audio,
                                                      double sampleRate)>;
 

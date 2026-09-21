@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Content/ContentKey.h"
+#include "../Content/EditableContentSnapshot.h"
 #include "../Inference/RenderCache.h"
 #include "../Utils/SilentGapDetector.h"
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -20,6 +21,9 @@ struct RenderJob
     Kind kind{Kind::Stage1Render};
     ContentKey contentKey;
 
+    // 渲染输入的不可变 owner 快照：notes/timeGrid/volumeEnvelope/revision 的唯一来源。
+    std::shared_ptr<const EditableContentSnapshot> contentSnapshot;
+
     std::shared_ptr<RenderCache> renderCache;
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
     double audioSampleRate{0.0};
@@ -36,9 +40,6 @@ struct RenderJob
     uint64_t targetRevision{0};
 
     uint64_t contentRevision{0};      // 来自 EditableContentSnapshot，用于 reconcile 去重
-    uint64_t pitchRevision{0};
-    uint64_t pitchShiftRevision{0};
-    uint64_t timeGridRevision{0};
 };
 
 } // namespace OpenTune

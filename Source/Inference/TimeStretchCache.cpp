@@ -30,8 +30,7 @@ uint32_t TimeStretchCache::beginBuild(ContentKey key)
 
 void TimeStretchCache::store(ContentKey key,
                               std::vector<float> audio,
-                              uint64_t pitchRevision,
-                              uint64_t pitchShiftRevision,
+                              uint64_t contentRevision,
                               uint64_t timeGridRevision,
                               double sampleRate,
                               uint32_t buildGeneration)
@@ -47,8 +46,7 @@ void TimeStretchCache::store(ContentKey key,
 
     auto entry = std::make_shared<Entry>();
     entry->canonicalAudio = std::make_shared<const std::vector<float>>(std::move(audio));
-    entry->pitchRevision = pitchRevision;
-    entry->pitchShiftRevision = pitchShiftRevision;
+    entry->contentRevision = contentRevision;
     entry->timeGridRevision = timeGridRevision;
     entry->sampleRate = sampleRate;
     entry->published = true;
@@ -133,8 +131,7 @@ void TimeStretchCache::prepareForPlaybackSampleRate(double targetSr)
 
         auto newEntry = std::make_shared<Entry>();
         newEntry->canonicalAudio = entry->canonicalAudio;
-        newEntry->pitchRevision = entry->pitchRevision;
-        newEntry->pitchShiftRevision = entry->pitchShiftRevision;
+        newEntry->contentRevision = entry->contentRevision;
         newEntry->timeGridRevision = entry->timeGridRevision;
         newEntry->sampleRate = entry->sampleRate;
         newEntry->published = true;
@@ -192,11 +189,11 @@ void TimeStretchCache::prepareForPlaybackSampleRate(double targetSr)
 
 // ============================================================================
 // sliceForOutputRange — 音频线程只读 prepared audio（无 canonical fallback）
+// 版本 key = contentRevision + timeGridRevision
 // ============================================================================
 
 int TimeStretchCache::sliceForOutputRange(ContentKey key,
-                                           uint64_t pitchRevision,
-                                           uint64_t pitchShiftRevision,
+                                           uint64_t contentRevision,
                                            uint64_t timeGridRevision,
                                            int64_t readStartSample,
                                            juce::AudioBuffer<float>& destination,
@@ -222,8 +219,7 @@ int TimeStretchCache::sliceForOutputRange(ContentKey key,
     const auto& e = *it->second;
     if (!e.preparedAudio || e.preparedAudio->empty()) return 0;
 
-    if (e.pitchRevision != pitchRevision
-        || e.pitchShiftRevision != pitchShiftRevision
+    if (e.contentRevision != contentRevision
         || e.timeGridRevision != timeGridRevision)
         return 0;
 
@@ -251,11 +247,11 @@ int TimeStretchCache::sliceForOutputRange(ContentKey key,
 
 // ============================================================================
 // sliceCanonicalForOutputRange — 非实时 canonical 切片（仅供 Stage2/export）
+// 版本 key = contentRevision + timeGridRevision
 // ============================================================================
 
 int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
-                                                     uint64_t pitchRevision,
-                                                     uint64_t pitchShiftRevision,
+                                                     uint64_t contentRevision,
                                                      uint64_t timeGridRevision,
                                                      int64_t readStartSample,
                                                      juce::AudioBuffer<float>& destination,
@@ -280,8 +276,7 @@ int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
     const auto& e = *it->second;
     if (!e.canonicalAudio || e.canonicalAudio->empty()) return 0;
 
-    if (e.pitchRevision != pitchRevision
-        || e.pitchShiftRevision != pitchShiftRevision
+    if (e.contentRevision != contentRevision
         || e.timeGridRevision != timeGridRevision)
         return 0;
 

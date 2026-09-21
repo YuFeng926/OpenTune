@@ -97,7 +97,6 @@ void StandaloneClipContent::applyVolumeEnvelope(AutomationLane envelope)
         note.outputGainDb = content_.volumeEnvelope.evalAt(note.startTime);
     ++content_.notesRevision;
     ++content_.outputGainRevision;
-    bumpContentRevision();
 }
 
 void StandaloneClipContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
@@ -120,6 +119,8 @@ void StandaloneClipContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 
 void StandaloneClipContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot)
 {
+    if (snapshot == nullptr)
+        return;
     content_.timeGrid = std::move(snapshot);
     ++content_.timeGridRevision;
 }
@@ -142,7 +143,6 @@ bool StandaloneClipContent::applyPitchShiftState(const PitchShiftEditState& stat
 void StandaloneClipContent::applyDetectedKey(const DetectedKey& key)
 {
     content_.analysis.detectedKey = key;
-    bumpContentRevision();
 }
 
 void StandaloneClipContent::applyReferenceFeatures(const ReferenceFeatureSet& features)
@@ -155,7 +155,6 @@ void StandaloneClipContent::applyOriginalF0State(OriginalF0State state)
     // 幂等 setter：状态未变则不推进 revision，与 Capture/ARA owner 语义一致。
     if (!content_.analysis.setOriginalF0State(state))
         return;
-    bumpContentRevision();
 }
 
 void StandaloneClipContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, double sampleRate)

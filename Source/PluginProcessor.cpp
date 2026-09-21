@@ -107,21 +107,10 @@ void publishStandalonePlaybackSource(ContentRenderService& crs,
                                      ContentKey key,
                                      const ContentState& payload)
 {
-    PlaybackReadSource readSource;
-    readSource.contentKey = key;
-    readSource.audioBuffer = payload.audioBuffer;
-    readSource.audioSampleRate = payload.sampleRate;
-    readSource.renderCache = crs.getOrCreateRenderCache(key);
-    readSource.timeStretchCache = &crs.getTimeStretchCache();
-    readSource.pitchRevision = payload.pitchRevision;
-    readSource.timeGridRevision = payload.timeGridRevision;
-    readSource.pitchShiftRevision = payload.pitchShiftRevision;
-    readSource.timeGrid = payload.timeGrid != nullptr && !payload.timeGrid->isIdentity()
-        ? payload.timeGrid
-        : nullptr;
-    if (payload.audioBuffer && payload.audioBuffer->getNumSamples() > 0) {
-        readSource.volumeEnvelope = std::make_shared<const AutomationLane>(payload.volumeEnvelope);
-    }
+    auto snapshot = std::make_shared<const EditableContentSnapshot>(makeContentSnapshot(payload));
+    auto readSource = makePlaybackReadSource(
+        key, std::move(snapshot), payload.audioBuffer, payload.sampleRate,
+        crs.getOrCreateRenderCache(key), crs.getTimeStretchCache());
     crs.publishPlaybackSource(key, std::move(readSource));
 }
 
@@ -144,6 +133,9 @@ ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
         payload.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
         ++payload.timeGridRevision;
     }
+
+    if (payload.contentRevision == 0)
+        payload.contentRevision = 1;
 
     clip->content() = std::move(payload);
     publishStandalonePlaybackSource(crs, key, clip->content());
@@ -470,7 +462,9 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
 
     if (!placement.contentKey.isValid() || placement.durationSeconds <= 0.0 || placementStartInOutput >= totalLen
-        || !source.hasAudio()) {
+        || !source.hasAudio()
+        || source.contentSnapshot == nullptr
+        || source.contentSnapshot->timeGrid == nullptr) {
         return;
     }
 
@@ -485,21 +479,19 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     juce::AudioBuffer<float> placementBuffer(out.getNumChannels(), samplesToRender);
     placementBuffer.clear();
 
-    ::OpenTune::CanonicalReadRequest readRequest;
+    ::OpenTune::PlaybackReadRequest readRequest;
     readRequest.source = source;
-    readRequest.readStartSample = TimeCoordinate::secondsToSamples(placement.clipInSeconds, kExportSr);
+    readRequest.readStartSample = TimeCoordinate::secondsToSamples(
+        source.contentSnapshot->timeGrid->tauForward(placement.clipInSeconds), kExportSr);
+    readRequest.targetSampleRate = kExportSr;
     readRequest.numSamples = samplesToRender;
 
-    const int renderedSamples = ::OpenTune::readCanonicalAudio(readRequest, placementBuffer, 0);
+    const int renderedSamples = ::OpenTune::readPlaybackAudio(readRequest, placementBuffer, 0);
     if (renderedSamples <= 0) {
         return;
     }
 
     const float baseGain = trackGain * placement.gain;
-    // 最终输出增益：export 与实时播放同一包络。
-    // 直接用 AutomationLane::evalAt 逐样本求值，消除预计算数组依赖。
-    constexpr float kDbToLinear = 0.11512925465f; // ln(10) / 20
-    const bool hasEnvelope = source.volumeEnvelope != nullptr && !source.volumeEnvelope->empty();
     const int64_t fadeInSamples = placement.fadeInDuration > 0.0
         ? TimeCoordinate::secondsToSamples(placement.fadeInDuration, kExportSr)
         : 0;
@@ -516,15 +508,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
                                                     requestedPlacementSamples,
                                                     fadeInSamples,
                                                     fadeOutSamples);
-        const double outputSeconds =
-            static_cast<double>(readRequest.readStartSample + sampleIndex) / kExportSr;
-        const double sourceSeconds = source.timeGrid != nullptr
-            ? source.timeGrid->tauInverse(outputSeconds)
-            : outputSeconds;
-        const float envGain = hasEnvelope
-            ? std::exp(source.volumeEnvelope->evalAt(sourceSeconds) * kDbToLinear)
-            : 1.0f;
-        const float finalGain = envGain * baseGain * fade;
+        const float finalGain = baseGain * fade;
         for (int ch = 0; ch < out.getNumChannels(); ++ch) {
             const float* src = placementBuffer.getReadPointer(ch);
             float* dst = out.getWritePointer(ch);
@@ -713,21 +697,12 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 if (job.contentKey.domainKind != DomainKind::StandaloneClip)
                     return;
 
-                auto contentSnap = getContentSnapshot(job.contentKey);
-                if (contentSnap == nullptr
-                    || contentSnap->timeGrid == nullptr
-                    || contentSnap->timeGrid->isIdentity()
-                    || contentSnap->pitchRevision != job.pitchRevision
-                    || contentSnap->pitchShiftRevision != job.pitchShiftRevision
-                    || contentSnap->timeGridRevision != job.timeGridRevision)
-                    return;
-
                 Stage2TimeStretchRebuilder::Request request;
                 request.contentKey = job.contentKey;
-                request.pitchRevision = job.pitchRevision;
-                request.pitchShiftRevision = job.pitchShiftRevision;
-                request.timeGridRevision = job.timeGridRevision;
-                Stage2TimeStretchRebuilder::rebuild(*contentRenderService_, request, std::move(contentSnap));
+                request.contentSnapshot = job.contentSnapshot;
+                request.audioBuffer = job.audioBuffer;
+                request.audioSampleRate = job.audioSampleRate;
+                Stage2TimeStretchRebuilder::rebuild(*contentRenderService_, request);
                 return;
             }
 #endif
@@ -735,26 +710,57 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             if (job.renderCache == nullptr)
                 return;
 
-            auto contentSnap = getContentSnapshot(job.contentKey);
+            auto contentSnap = job.contentSnapshot;
             if (!contentSnap) {
                 if (job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
                 {
 #if JucePlugin_Build_VST3
-                    if (auto* session = getCaptureSession())
-                        session->onRenderFailed(job.contentKey);
+                    auto gate = completionGate_;
+                    const auto failedKey = job.contentKey;
+                    juce::MessageManager::callAsync(
+                        [this, gate, failedKey]()
+                        {
+                            std::lock_guard<std::mutex> lock(gate->mutex);
+                            if (gate->closed)
+                                return;
+                            if (auto* session = getCaptureSession())
+                                session->onRenderFailed(failedKey);
+                        });
 #endif
                 }
                 return;
             }
             ProcessRenderRuntime::CompletionContext completion;
             completion.gate = completionGate_;
-            completion.chunkSettled = [this](ContentKey key) {
-                handleStage1ChunkSettled(key);
+            const auto completionGate = completionGate_;
+            completion.chunkSettled = [this, completionGate](ContentKey key,
+                                             std::shared_ptr<const EditableContentSnapshot> snapshot,
+                                             std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+                                             double audioSampleRate) {
+                juce::MessageManager::callAsync(
+                    [this, completionGate, key,
+                     snapshot = std::move(snapshot),
+                     audioBuffer = std::move(audioBuffer),
+                     audioSampleRate]() mutable
+                    {
+                        std::lock_guard<std::mutex> lock(completionGate->mutex);
+                        if (completionGate->closed)
+                            return;
+                        handleStage1ChunkSettled(key, std::move(snapshot),
+                                                 std::move(audioBuffer), audioSampleRate);
+                    });
             };
-            completion.chunkFailed = [this](ContentKey key) {
+            completion.chunkFailed = [this, completionGate](ContentKey key) {
 #if JucePlugin_Build_VST3
-                if (auto* session = getCaptureSession())
-                    session->onRenderFailed(key);
+                juce::MessageManager::callAsync(
+                    [this, completionGate, key]()
+                    {
+                        std::lock_guard<std::mutex> lock(completionGate->mutex);
+                        if (completionGate->closed)
+                            return;
+                        if (auto* session = getCaptureSession())
+                            session->onRenderFailed(key);
+                    });
 #else
                 juce::ignoreUnused(key);
 #endif
@@ -762,7 +768,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             const bool lightPitchEnabled = appPreferences_ != nullptr
                 && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
             ProcessRenderRuntime::getInstance().processChunkRenderJob(
-                contentRenderService_, job, std::move(contentSnap),
+                contentRenderService_, job,
                 lightPitchEnabled, std::move(completion));
         };
         crs->attachExecutionLease(std::move(lease));
@@ -979,10 +985,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         // 时长守恒方式与 prepareImport/ARA 完全一致
         // （secondsToSamples(samplesToSeconds(originalLen, sampleRate), targetRate)）。
         bindings.publishPlaybackSource = [this](const ContentKey& key,
+                                                 std::shared_ptr<const EditableContentSnapshot> snapshot,
                                                  std::shared_ptr<const juce::AudioBuffer<float>> audio,
                                                  double sampleRate) {
             jassert(contentRenderService_ != nullptr);
-            if (audio == nullptr || !key.isValid())
+            if (audio == nullptr || snapshot == nullptr || !key.isValid())
                 return;
 
             const double targetRate = TimeCoordinate::kRenderSampleRate;
@@ -1007,22 +1014,10 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 canonicalAudio = std::move(derived);
             }
 
-            auto renderCache = contentRenderService_->getOrCreateRenderCache(key);
-            PlaybackReadSource readSource;
-            readSource.contentKey = key;
-            readSource.renderCache = renderCache;
-            readSource.audioBuffer = std::move(canonicalAudio);
-            readSource.audioSampleRate = targetRate;
-            readSource.timeStretchCache = &contentRenderService_->getTimeStretchCache();
-            readSource.pitchRevision = 0;
-            readSource.pitchShiftRevision = 0;
-            readSource.timeGridRevision = 0;
-            if (const auto snap = getContentSnapshot(key)) {
-                readSource.volumeEnvelope = std::make_shared<const AutomationLane>(snap->volumeEnvelope);
-                readSource.timeGrid = snap->timeGrid != nullptr && !snap->timeGrid->isIdentity()
-                    ? snap->timeGrid
-                    : nullptr;
-            }
+            auto readSource = makePlaybackReadSource(
+                key, std::move(snapshot), std::move(canonicalAudio), targetRate,
+                contentRenderService_->getOrCreateRenderCache(key),
+                contentRenderService_->getTimeStretchCache());
             contentRenderService_->publishPlaybackSource(key, readSource);
         };
 
@@ -1995,8 +1990,13 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 continue;
             }
 
-            const int64_t clipInSampleOffset = TimeCoordinate::secondsToSamples(placement.clipInSeconds, deviceSampleRate);
-            const int64_t readStartSample = overlapStartSample - placementStartSample + clipInSampleOffset;
+            const double outputStartSeconds = readSource.contentSnapshot != nullptr
+                && readSource.contentSnapshot->timeGrid != nullptr
+                ? readSource.contentSnapshot->timeGrid->tauForward(placement.clipInSeconds)
+                : placement.clipInSeconds;
+            const int64_t outputStartSample = TimeCoordinate::secondsToSamples(
+                outputStartSeconds, deviceSampleRate);
+            const int64_t readStartSample = overlapStartSample - placementStartSample + outputStartSample;
             const int offsetInBlock = static_cast<int>(overlapStartSample - blockStartSample);
             const int samplesToCopy = static_cast<int>(samplesToCopy64);
 
@@ -2017,7 +2017,8 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 const float* src = clipReadScratch_.getReadPointer(ch);
                 float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
 
-                double timeInPlacement = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate) - placement.clipInSeconds;
+                double timeInPlacement = TimeCoordinate::samplesToSeconds(
+                    overlapStartSample - placementStartSample, deviceSampleRate);
                 const double dt = 1.0 / deviceSampleRate;
                 for (int s = 0; s < availableReadSamples; ++s) {
                     float gain = placementGain;
@@ -2523,11 +2524,16 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     }
 
     const auto originalSnapshot = getContentSnapshot(originalPlacement.contentKey);
-    if (!originalSnapshot || originalSnapshot->audioBuffer == nullptr) {
+    if (!originalSnapshot || originalSnapshot->audioBuffer == nullptr
+        || originalSnapshot->timeGrid == nullptr) {
         return std::nullopt;
     }
 
-    const int64_t splitSample = TimeCoordinate::secondsToSamples(splitOffsetSeconds, TimeCoordinate::kRenderSampleRate);
+    const double splitOutputSeconds = originalSnapshot->timeGrid->tauForward(
+        originalPlacement.clipInSeconds) + splitOffsetSeconds;
+    const double splitSourceSeconds = originalSnapshot->timeGrid->tauInverse(splitOutputSeconds);
+    const int64_t splitSample = TimeCoordinate::secondsToSamples(
+        splitSourceSeconds, TimeCoordinate::kRenderSampleRate);
     const int64_t totalSamples = originalSnapshot->audioBuffer->getNumSamples();
     if (splitSample <= 0 || splitSample >= totalSamples) {
         return std::nullopt;
@@ -2538,11 +2544,11 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         originalSnapshot->sourceWindow.sourceId,
         juce::String(),
         originalSnapshot->sourceWindow.sourceStartSeconds,
-        originalSnapshot->sourceWindow.sourceStartSeconds + splitOffsetSeconds
+        originalSnapshot->sourceWindow.sourceStartSeconds + splitSourceSeconds
     };
     leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, splitSample);
-    leadingPayload.analysis.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve, 0.0, splitOffsetSeconds);
-    leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitOffsetSeconds);
+    leadingPayload.analysis.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve, 0.0, splitSourceSeconds);
+    leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitSourceSeconds);
     leadingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
     leadingPayload.timeGrid = nullptr;
 
@@ -2550,16 +2556,16 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     trailingPayload.sourceWindow = SourceWindow{
         originalSnapshot->sourceWindow.sourceId,
         juce::String(),
-        originalSnapshot->sourceWindow.sourceStartSeconds + splitOffsetSeconds,
+        originalSnapshot->sourceWindow.sourceStartSeconds + splitSourceSeconds,
         originalSnapshot->sourceWindow.sourceEndSeconds
     };
     trailingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, splitSample, totalSamples);
     trailingPayload.analysis.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve,
-                                                             splitOffsetSeconds,
-                                                             originalPlacement.durationSeconds);
+                                                             splitSourceSeconds,
+                                                              originalSnapshot->sourceWindow.durationSeconds());
     trailingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes,
-                                                   splitOffsetSeconds,
-                                                   originalPlacement.durationSeconds);
+                                                   splitSourceSeconds,
+                                                   originalSnapshot->sourceWindow.durationSeconds());
     trailingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, splitSample, totalSamples);
     trailingPayload.timeGrid = nullptr;
 
@@ -2588,7 +2594,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     trailingPlacement.timelineStartSeconds = splitSeconds;
     trailingPlacement.durationSeconds = originalPlacement.durationSeconds - splitOffsetSeconds;
     trailingPlacement.fadeInDuration = 0.0;
-    trailingPlacement.clipInSeconds = originalPlacement.clipInSeconds + splitOffsetSeconds;
+    trailingPlacement.clipInSeconds = 0.0;
     ++trailingPlacement.mappingRevision;
 
     if (!standaloneArrangement_->insertPlacement(trackId, placementIndex, leadingPlacement)) {
@@ -3083,7 +3089,8 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     auto audioBuffer = readSource.audioBuffer;
     if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
 
-    // 无渲染装配：renderCache、AutomationLane 与 TimeGrid 随最新 snapshot 原子发布。
+    // 无渲染装配：renderCache 与最新 snapshot（TimeGrid/AutomationLane/revision）
+    // 一起原子发布。
     republishPlaybackSource(key);
 
     const int64_t totalSamples = audioBuffer->getNumSamples();
@@ -3098,23 +3105,26 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     job.contentKey = key;
     job.renderCache = crs->getOrCreateRenderCache(key);
     job.audioBuffer = audioBuffer;
-    job.silentGaps = snap->silentGaps;
     job.audioSampleRate = crsSampleRate;
     job.startSample = startSample;
     job.endSampleExclusive = endSample;
     job.contentRevision = snap->contentRevision;
+    job.contentSnapshot = snap;
 
-    crs->enqueueRender(std::move(job), snap->notes);
+    crs->enqueueRender(std::move(job));
 }
 
 #if JucePlugin_Build_Standalone
-void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(ContentKey key)
+void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(
+    ContentKey key,
+    std::shared_ptr<const EditableContentSnapshot> snapshot,
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+    double audioSampleRate)
 {
     if (key.domainKind != DomainKind::StandaloneClip)
         return;
 
-    auto snap = getContentSnapshot(key);
-    if (snap == nullptr || snap->timeGrid == nullptr || snap->timeGrid->isIdentity())
+    if (snapshot == nullptr || audioBuffer == nullptr || snapshot->timeGrid->isIdentity())
         return;
 
     auto* crs = resolveMutableLocalContentRenderService(key);
@@ -3123,17 +3133,19 @@ void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(Content
 
     ContentRenderService::Stage2Request request;
     request.contentKey = key;
-    request.pitchRevision = snap->pitchRevision;
-    request.pitchShiftRevision = snap->pitchShiftRevision;
-    request.timeGridRevision = snap->timeGridRevision;
-    crs->enqueueStage2RebuildWhenCanonicalSettled(request);
+    request.contentSnapshot = std::move(snapshot);
+    request.audioBuffer = std::move(audioBuffer);
+    request.audioSampleRate = audioSampleRate;
+    crs->enqueueStage2RebuildWhenCanonicalSettled(std::move(request));
 }
 #endif // JucePlugin_Build_Standalone
 
-void OpenTuneAudioProcessor::handleStage1ChunkSettled(ContentKey key)
+void OpenTuneAudioProcessor::handleStage1ChunkSettled(
+    ContentKey key,
+    std::shared_ptr<const EditableContentSnapshot> snapshot,
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+    double audioSampleRate)
 {
-    refreshCRSMetadata(key);
-
 #if JucePlugin_Build_VST3
     // Only transition to Edited when ALL chunks are canonical settled.
     // Partial completion must not promote the segment prematurely.
@@ -3145,7 +3157,8 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(ContentKey key)
 #endif
 
 #if JucePlugin_Build_Standalone
-    enqueueStandaloneStage2WhenCanonicalSettled(key);
+    enqueueStandaloneStage2WhenCanonicalSettled(key, std::move(snapshot),
+                                                std::move(audioBuffer), audioSampleRate);
 #endif
 }
 
@@ -3156,20 +3169,16 @@ void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
     auto* resolvedCrs = resolveMutableLocalContentRenderService(key);
     if (resolvedCrs == nullptr) return;
 
-    PlaybackReadSource src;
     auto& crs = *resolvedCrs;
-    if (!crs.getPlaybackReadSource(key, src))
+    PlaybackReadSource current;
+    if (!crs.getPlaybackReadSource(key, current))
         return;
 
-    src.renderCache        = crs.getOrCreateRenderCache(key);
-    src.pitchRevision      = snap->pitchRevision;
-    src.timeGridRevision   = snap->timeGridRevision;
-    src.pitchShiftRevision = snap->pitchShiftRevision;
-    src.timeGrid = snap->timeGrid != nullptr && !snap->timeGrid->isIdentity()
-        ? snap->timeGrid
-        : nullptr;
+    auto src = makePlaybackReadSource(
+        key, std::move(snap), current.audioBuffer, current.audioSampleRate,
+        crs.getOrCreateRenderCache(key), crs.getTimeStretchCache());
 
-    crs.publishPlaybackSource(key, src);
+    crs.publishPlaybackSource(key, std::move(src));
 }
 
 #if JucePlugin_Build_Standalone
@@ -3228,6 +3237,7 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
         return false;
     }
 
+    contentRenderService_->preparePlaybackSampleRate(kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -3281,6 +3291,7 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         return false;
     }
 
+    contentRenderService_->preparePlaybackSampleRate(kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -3343,6 +3354,7 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
         return false;
     }
 
+    contentRenderService_->preparePlaybackSampleRate(kExportSampleRateHz);
     // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
@@ -4095,8 +4107,7 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
                durationSeconds,
                HandleKind::ClipEnd);
 
-    auto seededGrid = TimeGridSnapshot::makeFromHandles(std::move(handles),
-                                                        existingGrid != nullptr ? existingGrid->revision() + 1 : 1);
+    auto seededGrid = TimeGridSnapshot::makeFromHandles(std::move(handles));
     if (seededGrid == nullptr) {
         return false;
     }
@@ -4726,20 +4737,13 @@ void OpenTuneAudioProcessor::republishPlaybackSource(ContentKey key)
     auto* crs = resolveMutableLocalContentRenderService(key);
     if (crs == nullptr) return;
 
-    PlaybackReadSource readSource;
-    if (!crs->getPlaybackReadSource(key, readSource)) return;
-    if (readSource.audioBuffer == nullptr || readSource.audioBuffer->getNumSamples() <= 0) return;
+    PlaybackReadSource current;
+    if (!crs->getPlaybackReadSource(key, current)) return;
+    if (current.audioBuffer == nullptr || current.audioBuffer->getNumSamples() <= 0) return;
 
-    readSource.renderCache = crs->getOrCreateRenderCache(key);
-    // 与 ARA 版 republishPlaybackSourceForModification 对齐：刷新全部元数据，
-    // 使 republish 完整承接 refreshCRSMetadata 的职责。
-    readSource.pitchRevision      = snap->pitchRevision;
-    readSource.timeGridRevision   = snap->timeGridRevision;
-    readSource.pitchShiftRevision = snap->pitchShiftRevision;
-    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(snap->volumeEnvelope);
-    readSource.timeGrid = snap->timeGrid != nullptr && !snap->timeGrid->isIdentity()
-        ? snap->timeGrid
-        : nullptr;
+    auto readSource = makePlaybackReadSource(
+        key, std::move(snap), current.audioBuffer, current.audioSampleRate,
+        crs->getOrCreateRenderCache(key), crs->getTimeStretchCache());
     crs->publishPlaybackSource(key, std::move(readSource));
 }
 
@@ -4870,8 +4874,18 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             // completes. Stage2 reads canonical Stage1 and the TimeGrid revision
             // is independent from contentRevision.
             if (auto* crs = resolveMutableLocalContentRenderService(key))
+            {
                 crs->getTimeStretchCache().invalidate(key);
-            enqueueStandaloneStage2WhenCanonicalSettled(key);
+                PlaybackReadSource source;
+                if (crs->getPlaybackReadSource(key, source))
+                {
+                    enqueueStandaloneStage2WhenCanonicalSettled(
+                        key,
+                        getContentSnapshot(key),
+                        source.audioBuffer,
+                        source.audioSampleRate);
+                }
+            }
         }
 #endif
     }
@@ -5302,8 +5316,7 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
             }
         }
         if (!newHandles.empty()) {
-            payload.timeGrid = TimeGridSnapshot::makeFromHandles(std::move(newHandles),
-                                                                 sourceSnap->timeGrid->revision());
+            payload.timeGrid = TimeGridSnapshot::makeFromHandles(std::move(newHandles));
         }
     }
 

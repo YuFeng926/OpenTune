@@ -127,11 +127,14 @@ public:
     void prepareForPlaybackSampleRate(double targetSr);
 
     // 音频线程直接 copy prepared overlay（无插值）。只能读取已 prepared 的目标率数据。
+    // 只复制 sourceRevision == expectedContentRevision 的 chunk：版本不匹配的
+    // prepared 数据不得覆盖当前 dry。
     void overlayPreparedAudio(juce::AudioBuffer<float>& destination,
                               int destStartSample,
                               int numSamples,
                               int64_t readStartSample,
-                              int targetSampleRate) const;
+                              int targetSampleRate,
+                              uint64_t expectedContentRevision) const;
 
     // 非实时 canonical overlay（仅供 Stage2/export 等 44.1kHz 读取）。
     void overlayCanonicalAudio(juce::AudioBuffer<float>& destination,
@@ -146,7 +149,7 @@ private:
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         std::shared_ptr<const std::vector<float>> audio;
-        uint64_t publishedRevision{0};  // 生成该 chunk 音频的渲染版本
+        uint64_t contentRevision{0};    // 生成该 chunk 音频时的 snapshot contentRevision（唯一复用/覆盖版本键）
     };
 
     struct PublishedRenderSnapshot {
@@ -160,7 +163,7 @@ private:
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         std::shared_ptr<const std::vector<float>> audio;
-        uint64_t sourceRevision{0};  // canonical publishedRevision 该 prepared 结果所基于的内容版本
+        uint64_t sourceRevision{0};  // 该 prepared 结果所基于的 canonical contentRevision
     };
 
     struct PublishedPreparedSnapshot {

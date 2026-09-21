@@ -168,7 +168,6 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
 
         // TimeGrid
         if (content.timeGrid) {
-            entry.timeGrid.revision = content.timeGridRevision;
             for (const auto& handle : content.timeGrid->handles()) {
                 ProjectContentEntry::TimeGridEntry::HandleEntry he;
                 he.id = handle.id;
@@ -524,8 +523,7 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
                 th.confidence = static_cast<Confidence>(static_cast<uint8_t>(he.confidence));
                 handles.push_back(th);
             }
-            auto tgSnapshot = TimeGridSnapshot::makeFromHandles(
-                std::move(handles), contentEntry.timeGrid.revision);
+            auto tgSnapshot = TimeGridSnapshot::makeFromHandles(std::move(handles));
             clip->applyTimeGrid(tgSnapshot);
         }
 
@@ -666,20 +664,9 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
                 if (snap->audioBuffer && snap->audioBuffer->getNumSamples() > 0)
                 {
                     auto* crs = processorRef_.getContentRenderService();
-                    PlaybackReadSource readSource;
-                    readSource.contentKey = key;
-                    readSource.audioBuffer = snap->audioBuffer;
-                    readSource.audioSampleRate = snap->audioSampleRate;
-                    readSource.renderCache = crs->getOrCreateRenderCache(key);
-                    readSource.timeStretchCache = &crs->getTimeStretchCache();
-                    readSource.pitchRevision = snap->pitchRevision;
-                    readSource.timeGridRevision = snap->timeGridRevision;
-                    readSource.pitchShiftRevision = snap->pitchShiftRevision;
-                    readSource.volumeEnvelope = std::make_shared<const AutomationLane>(snap->volumeEnvelope);
-                    readSource.timeGrid = snap->timeGrid != nullptr && !snap->timeGrid->isIdentity()
-                        ? snap->timeGrid
-                        : nullptr;
-
+                    auto readSource = makePlaybackReadSource(
+                        key, snap, snap->audioBuffer, snap->audioSampleRate,
+                        crs->getOrCreateRenderCache(key), crs->getTimeStretchCache());
                     crs->publishPlaybackSource(key, std::move(readSource));
                 }
             }

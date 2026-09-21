@@ -907,7 +907,8 @@ bool CaptureSession::finalizePendingCapture(CaptureSegment& pending)
             pending.content->applyOriginalF0State(OriginalF0State::Extracting);
 
             const auto snap = pending.content->snapshotContent();
-            bindings_.publishPlaybackSource(pending.contentKey, snap->audioBuffer, snap->audioSampleRate);
+            bindings_.publishPlaybackSource(pending.contentKey, snap,
+                                             snap->audioBuffer, snap->audioSampleRate);
             pending.state.store(SegmentState::Processing, std::memory_order_release);
 
             if (bindings_.refreshSegment)
@@ -937,7 +938,8 @@ bool CaptureSession::finalizePendingCapture(CaptureSegment& pending)
             newSeg->state.store(SegmentState::Processing, std::memory_order_release);
 
             const auto snap = newSeg->content->snapshotContent();
-            bindings_.publishPlaybackSource(newSeg->contentKey, snap->audioBuffer, snap->audioSampleRate);
+            bindings_.publishPlaybackSource(newSeg->contentKey, snap,
+                                             snap->audioBuffer, snap->audioSampleRate);
             const ContentKey newKey = newSeg->contentKey;
 
             {

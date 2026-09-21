@@ -13,7 +13,7 @@ namespace OpenTune {
 /**
  * PlaybackReadRequest — 实时读取请求，使用目标采样率下的绝对样本位置。
  *
- * readStartSample 是在 targetSampleRate 空间中的绝对样本偏移。
+ * readStartSample 是 output/prepared sample 空间中的绝对样本偏移。
  * 调用方负责保证 readStartSample + numSamples 不越界。
  * 只从 prepared data 读取，无 canonical fallback。
  */
@@ -29,7 +29,7 @@ struct PlaybackReadRequest {
 };
 
 /**
- * CanonicalReadRequest — 离线 canonical 读取请求（Stage2/export）。
+ * CanonicalReadRequest — 离线 canonical 读取请求（Stage2 source-domain Stage1 读取）。
  *
  * readStartSample 在 canonical 44.1kHz 样本空间中的绝对偏移。
  * 无 target rate 参数，始终读取 44.1kHz truth。
@@ -45,28 +45,27 @@ struct CanonicalReadRequest {
 };
 
 /**
- * AutomationLane 增益应用：output-time 经 TimeGrid 映射到 source-time 后逐样本 evalAt。
- * 无分配、无锁；包络为空 = 单位增益。
+ * AutomationLane 增益应用：output seconds 经 snapshot->timeGrid->tauInverse
+ * 映射到 source seconds 后逐样本 evalAt。无分配、无锁；包络为空 = 单位增益。
+ * snapshot->timeGrid 由调用方保证非空。
  */
 inline void applyAutomationGain(juce::AudioBuffer<float>& destination,
                                 int destinationStartSample,
                                 int numSamples,
-                                const std::shared_ptr<const AutomationLane>& envelope,
-                                const std::shared_ptr<const TimeGridSnapshot>& timeGrid,
+                                const EditableContentSnapshot& snapshot,
                                 int64_t readStartSample,
                                 double targetSampleRate)
 {
-    if (envelope == nullptr || envelope->empty())
+    const auto& envelope = snapshot.volumeEnvelope;
+    if (envelope.empty())
         return;
 
     constexpr float kDbToLinear = 0.11512925465f; // ln(10) / 20
     const int channels = destination.getNumChannels();
     for (int s = 0; s < numSamples; ++s) {
         const double outputSeconds = static_cast<double>(readStartSample + s) / targetSampleRate;
-        const double sourceSeconds = timeGrid != nullptr
-            ? timeGrid->tauInverse(outputSeconds)
-            : outputSeconds;
-        const float gainLinear = std::exp(envelope->evalAt(sourceSeconds) * kDbToLinear);
+        const double sourceSeconds = snapshot.timeGrid->tauInverse(outputSeconds);
+        const float gainLinear = std::exp(envelope.evalAt(sourceSeconds) * kDbToLinear);
         for (int channel = 0; channel < channels; ++channel) {
             destination.getWritePointer(channel, destinationStartSample + s)[0] *= gainLinear;
         }
@@ -76,10 +75,15 @@ inline void applyAutomationGain(juce::AudioBuffer<float>& destination,
 /**
  * 实时播放读取 — 纯 direct copy，无插值。
  *
- * 1. TimeStretchCache fast-path：从 prepared 缓存直接整数切片。
- * 2. 否则从 preparedDry buffer 直接 copy（已在 prepare 阶段由 r8brain 重采样）。
- * 3. 然后从 RenderCache prepared chunks overlay（同样直接 copy）。
- * 4. 两路径汇合到同一 applyAutomationGain() 收尾。
+ * 全部 editable 数据（timeGrid/volumeEnvelope/contentRevision）来自
+ * request.source.contentSnapshot；调用方保证 snapshot 与其 timeGrid 非空。
+ *
+ * 合同：readStartSample 是 output/prepared sample 位置。
+ * 1. 非恒等 timeGrid：只尝试 TimeStretchCache prepared 切片；cache miss 或
+ *    版本不匹配立即返回 0，绝不读 preparedDry。
+ * 2. 恒等 timeGrid：从 preparedDry 直接 copy（已在 prepare 阶段重采样），
+ *    再按 snapshot->contentRevision 从 RenderCache prepared chunks overlay。
+ * 3. 汇合到 applyAutomationGain() 收尾。
  *
  * 无 canonical fallback。prepared 数据不存在时返回 0。
  *
@@ -90,9 +94,11 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
                              juce::AudioBuffer<float>& destination,
                              int destinationStartSample)
 {
+    const auto& snapshot = request.source.contentSnapshot;
     if (request.numSamples <= 0
         || request.targetSampleRate <= 0.0
-        || !request.source.hasAudio()) {
+        || !request.source.hasAudio()
+        || snapshot == nullptr) {
         return 0;
     }
 
@@ -111,34 +117,34 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
     }
 
     // ============================================================
-    // TimeStretchCache fast-path — 直接从 prepared 缓存整数切片
+    // 非恒等 timeGrid — 只走 TimeStretchCache prepared 切片；
+    // miss/版本不匹配立即返回，不读 preparedDry。
     // ============================================================
-    const uint64_t objectId = request.source.contentKey.objectId;
-    if (request.source.timeGrid != nullptr
-        && request.source.timeStretchCache != nullptr
-        && objectId != 0) {
+    if (!snapshot->timeGrid->isIdentity()) {
+        if (request.source.timeStretchCache == nullptr)
+            return 0;
+
         const int wrote = request.source.timeStretchCache->sliceForOutputRange(
             request.source.contentKey,
-            request.source.pitchRevision,
-            request.source.pitchShiftRevision,
-            request.source.timeGridRevision,
+            snapshot->contentRevision,
+            snapshot->timeGridRevision,
             request.readStartSample,
             destination,
             destinationStartSample,
             writableSamples,
             static_cast<int>(request.targetSampleRate));
-        if (wrote > 0) {
-            applyAutomationGain(destination, destinationStartSample, wrote,
-                                request.source.volumeEnvelope,
-                                request.source.timeGrid,
-                                request.readStartSample,
-                                request.targetSampleRate);
-            return wrote;
-        }
+        if (wrote <= 0)
+            return 0;
+
+        applyAutomationGain(destination, destinationStartSample, wrote,
+                            *snapshot,
+                            request.readStartSample,
+                            request.targetSampleRate);
+        return wrote;
     }
 
     // ============================================================
-    // 从 preparedDry 直接 copy（已在 prepare 阶段重采样）
+    // 恒等 timeGrid — 从 preparedDry 直接 copy（已在 prepare 阶段重采样）
     // ============================================================
     const auto& prepared = request.source.preparedDry;
     if (!prepared.buffer
@@ -171,22 +177,22 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
     }
 
     // ============================================================
-    // RenderCache prepared overlay — 直接 copy
+    // RenderCache prepared overlay — 只复制匹配 contentRevision 的 chunk
     // ============================================================
     if (request.source.renderCache != nullptr) {
         request.source.renderCache->overlayPreparedAudio(destination,
                                                           destinationStartSample,
                                                           availableSamples,
                                                           request.readStartSample,
-                                                          static_cast<int>(request.targetSampleRate));
+                                                          static_cast<int>(request.targetSampleRate),
+                                                          snapshot->contentRevision);
     }
 
     // ============================================================
     // 统一最终增益收尾
     // ============================================================
     applyAutomationGain(destination, destinationStartSample, availableSamples,
-                        request.source.volumeEnvelope,
-                        request.source.timeGrid,
+                        *snapshot,
                         request.readStartSample,
                         request.targetSampleRate);
 
@@ -194,11 +200,13 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
 }
 
 /**
- * 离线 canonical 读取 — 始终读取 44.1kHz truth（Stage2/export）。
+ * 离线 canonical 读取 — 只作为 Stage2 source-domain Stage1 canonical 读取。
  *
- * 1. 非 identity TimeStretch → 从 TimeStretchCache canonical 切片。
- * 2. 否则 canonical dry direct copy + RenderCache::overlayCanonicalAudio。
- * 无插值、无 target rate 参数、无 prepared fallback。
+ * 1. 从 source audioBuffer 直接 copy（canonical 44.1kHz truth）。
+ * 2. RenderCache::overlayCanonicalAudio 叠加 Stage1 渲染结果。
+ *
+ * 不使用 TimeStretchCache（Stage2 必须读 Stage1 原始 PCM，不能读自己的输出），
+ * 不要求 snapshot timeGrid 参与。无插值、无 target rate 参数、无 prepared fallback。
  */
 inline int readCanonicalAudio(const CanonicalReadRequest& request,
                                juce::AudioBuffer<float>& destination,
@@ -220,27 +228,6 @@ inline int readCanonicalAudio(const CanonicalReadRequest& request,
     const int writableSamples = juce::jmin(request.numSamples, destinationSamples - destinationStartSample);
     if (writableSamples <= 0) {
         return 0;
-    }
-
-    // ============================================================
-    // TimeStretchCache canonical path
-    // ============================================================
-    const uint64_t objectId = request.source.contentKey.objectId;
-    if (request.source.timeGrid != nullptr
-        && request.source.timeStretchCache != nullptr
-        && objectId != 0) {
-        const int wrote = request.source.timeStretchCache->sliceCanonicalForOutputRange(
-            request.source.contentKey,
-            request.source.pitchRevision,
-            request.source.pitchShiftRevision,
-            request.source.timeGridRevision,
-            request.readStartSample,
-            destination,
-            destinationStartSample,
-            writableSamples);
-        if (wrote > 0) {
-            return wrote;
-        }
     }
 
     // ============================================================

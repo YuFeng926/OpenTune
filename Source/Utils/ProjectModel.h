@@ -116,7 +116,6 @@ struct ProjectContentEntry {
 
     // TimeGrid (v7 vocal-time-stretch)
     struct TimeGridEntry {
-        uint64_t revision{0};
         struct HandleEntry {
             uint64_t id{0};
             uint8_t kind{0};             // HandleKind 枚举值

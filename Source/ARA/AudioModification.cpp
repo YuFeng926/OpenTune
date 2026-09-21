@@ -115,7 +115,6 @@ void AudioModification::applyVolumeEnvelope(const AutomationLane& envelope)
         note.outputGainDb = content->volumeEnvelope.evalAt(note.startTime);
     ++content->notesRevision;
     ++content->outputGainRevision;
-    ++content->contentRevision;
 }
 
 void AudioModification::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
@@ -145,7 +144,6 @@ bool AudioModification::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> gr
 
     content->timeGrid = std::move(grid);
     ++content->timeGridRevision;
-    ++content->contentRevision;
 
     return true;
 }
@@ -168,7 +166,6 @@ bool AudioModification::applyPitchShiftState(const PitchShiftEditState& state)
 void AudioModification::applyDetectedKey(const DetectedKey& key)
 {
     content->analysis.detectedKey = key;
-    ++content->contentRevision;
 }
 
 void AudioModification::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
@@ -198,7 +195,6 @@ void AudioModification::applyOriginalF0State(OriginalF0State state)
 {
     if (!content->analysis.setOriginalF0State(state))
         return;
-    ++content->contentRevision;
 }
 
 } // namespace OpenTune

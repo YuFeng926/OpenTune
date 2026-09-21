@@ -533,6 +533,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             if (snap->audioBuffer) {
                 session.bindings_.publishPlaybackSource(
                     seg->contentKey,
+                    snap,
                     snap->audioBuffer,
                     snap->audioSampleRate);
             }

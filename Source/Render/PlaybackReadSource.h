@@ -1,13 +1,11 @@
 #pragma once
 
 #include "../Content/ContentKey.h"
+#include "../Content/EditableContentSnapshot.h"
 #include "../Inference/RenderCache.h"
 #include "../Inference/TimeStretchCache.h"
-#include "../Utils/AutomationLane.h"
-#include "../Utils/TimeGrid.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
-#include <cstdint>
 #include <utility>
 
 namespace OpenTune {
@@ -34,6 +32,7 @@ struct PlaybackPreparedDry
  *
  * audioBuffer/audioSampleRate represent 44.1kHz (or owner canonical rate) content truth.
  * preparedDry represents the active playback sample rate dry buffer.
+ * contentSnapshot carries the only editable truth (notes/timeGrid/envelope/revisions).
  *
  * lifecycle:
  * lifetimeToken is declared FIRST → destroyed LAST. It anchors the publisher map
@@ -49,6 +48,12 @@ struct PlaybackReadSource
 
     ContentKey contentKey;
 
+    // 唯一 editable 数据真相：notes / timeGrid / volumeEnvelope / contentRevision
+    // 等全部从 snapshot 读取。调用方保证发布时 contentSnapshot 非空且
+    // contentSnapshot->timeGrid 非空（identity 用非空 identity grid 表达，
+    // 不用 nullptr 语义）。
+    std::shared_ptr<const EditableContentSnapshot> contentSnapshot;
+
     std::shared_ptr<RenderCache> renderCache;
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
     double audioSampleRate{0.0};
@@ -56,14 +61,6 @@ struct PlaybackReadSource
 
     // Immutable prepared dry at active playback rate
     PlaybackPreparedDry preparedDry;
-
-    // 唯一音量真相与 output-time -> source-time 映射。
-    std::shared_ptr<const AutomationLane> volumeEnvelope;
-    std::shared_ptr<const TimeGridSnapshot> timeGrid;
-
-    uint64_t pitchRevision{0};
-    uint64_t timeGridRevision{0};
-    uint64_t pitchShiftRevision{0};
 
     PlaybackReadSource() = default;
     PlaybackReadSource(const PlaybackReadSource&) = default;
@@ -83,16 +80,12 @@ struct PlaybackReadSource
         using std::swap;
         swap(a.lifetimeToken, b.lifetimeToken);
         swap(a.contentKey, b.contentKey);
+        swap(a.contentSnapshot, b.contentSnapshot);
         swap(a.renderCache, b.renderCache);
         swap(a.audioBuffer, b.audioBuffer);
         swap(a.audioSampleRate, b.audioSampleRate);
         swap(a.timeStretchCache, b.timeStretchCache);
         swap(a.preparedDry, b.preparedDry);
-        swap(a.volumeEnvelope, b.volumeEnvelope);
-        swap(a.timeGrid, b.timeGrid);
-        swap(a.pitchRevision, b.pitchRevision);
-        swap(a.timeGridRevision, b.timeGridRevision);
-        swap(a.pitchShiftRevision, b.pitchShiftRevision);
     }
 
     bool hasAudio() const noexcept
@@ -101,5 +94,31 @@ struct PlaybackReadSource
     }
 
 };
+
+/**
+ * Build the one playback projection shared by Standalone, Capture, ARA and
+ * project restore. The snapshot is the only editable input; all other fields
+ * are CRS-owned derived handles.
+ */
+inline PlaybackReadSource makePlaybackReadSource(
+    ContentKey key,
+    std::shared_ptr<const EditableContentSnapshot> contentSnapshot,
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+    double audioSampleRate,
+    std::shared_ptr<RenderCache> renderCache,
+    TimeStretchCache& timeStretchCache)
+{
+    jassert(contentSnapshot != nullptr);
+    jassert(contentSnapshot == nullptr || contentSnapshot->timeGrid != nullptr);
+
+    PlaybackReadSource source;
+    source.contentKey = key;
+    source.contentSnapshot = std::move(contentSnapshot);
+    source.renderCache = std::move(renderCache);
+    source.audioBuffer = std::move(audioBuffer);
+    source.audioSampleRate = audioSampleRate;
+    source.timeStretchCache = &timeStretchCache;
+    return source;
+}
 
 } // namespace OpenTune

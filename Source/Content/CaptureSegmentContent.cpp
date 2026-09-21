@@ -74,7 +74,6 @@ void CaptureSegmentContent::applyOriginalF0State(OriginalF0State state)
 {
     if (!content_.analysis.setOriginalF0State(state))
         return;
-    ++content_.contentRevision;
 }
 
 void CaptureSegmentContent::applyDetectedKey(const DetectedKey& key)
@@ -85,7 +84,6 @@ void CaptureSegmentContent::applyDetectedKey(const DetectedKey& key)
         && std::abs(content_.analysis.detectedKey.confidence - key.confidence) <= 1.0e-6f)
         return;
     content_.analysis.detectedKey = key;
-    ++content_.contentRevision;
 }
 
 void CaptureSegmentContent::applyNotes(std::vector<Note> notes)
@@ -105,7 +103,6 @@ void CaptureSegmentContent::applyVolumeEnvelope(AutomationLane envelope)
         note.outputGainDb = content_.volumeEnvelope.evalAt(note.startTime);
     ++content_.notesRevision;
     ++content_.outputGainRevision;
-    ++content_.contentRevision;
 }
 
 void CaptureSegmentContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
@@ -128,9 +125,10 @@ void CaptureSegmentContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 
 void CaptureSegmentContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot)
 {
+    if (snapshot == nullptr)
+        return;
     content_.timeGrid = std::move(snapshot);
     ++content_.timeGridRevision;
-    ++content_.contentRevision;
 }
 
 bool CaptureSegmentContent::applyPitchShiftState(const PitchShiftEditState& state)

@@ -7,7 +7,6 @@
 #include "../Inference/TimeStretchCache.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/PlaybackAudioReader.h"
-#include "../Utils/TimeCoordinate.h"
 
 #include <algorithm>
 #include <vector>
@@ -15,63 +14,49 @@
 namespace OpenTune {
 
 /**
- * Pure Stage2 rebuild — extracted from OpenTuneAudioProcessor::runStage2RebuildForContentKey.
- *
- * Reads Stage1 PlaybackReadSource via CanonicalReadRequest/readCanonicalAudio,
- * applies TimeGrid-based time stretch via SoundTouch, writes result into CRS TimeStretchCache.
+ * Stage2 rebuild — consumes only the immutable snapshot/audio carried by the
+ * request. Stage1 canonical PCM is read through a temporary PlaybackReadSource
+ * that holds audio + RenderCache only (no owner lookup, no timeGrid /
+ * timeStretchCache: readCanonicalAudio never uses them).
  */
 bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
-                                          const Request& request,
-                                          std::shared_ptr<const EditableContentSnapshot> ownerSnap)
+                                          const Request& request)
 {
     const auto contentKey = request.contentKey;
     if (!contentKey.isValid()) return false;
 
-    if (!ownerSnap) {
-        AppLogger::warn("Stage2: no owner snapshot for contentKey domain="
-                        + juce::String(static_cast<int>(contentKey.domainKind))
-                        + " objectId=" + juce::String(static_cast<juce::int64>(contentKey.objectId)));
-        return false;
-    }
-
-    PlaybackReadSource stage1Source;
-    if (!crs.getPlaybackReadSource(contentKey, stage1Source)) {
-        AppLogger::warn("Stage2: no CRS playback source for contentKey objectId="
+    if (!request.contentSnapshot
+        || !request.audioBuffer
+        || request.audioBuffer->getNumChannels() <= 0
+        || request.audioBuffer->getNumSamples() <= 0
+        || request.audioSampleRate <= 0.0) {
+        AppLogger::warn("Stage2: invalid request inputs for contentKey objectId="
                         + juce::String(static_cast<juce::int64>(contentKey.objectId)));
         return false;
     }
 
-    if (stage1Source.audioBuffer == nullptr
-        || stage1Source.audioBuffer->getNumChannels() <= 0
-        || stage1Source.audioBuffer->getNumSamples() <= 0) {
-        AppLogger::warn("Stage2: playback source has no valid audio buffer for objectId="
-                        + juce::String(static_cast<juce::int64>(contentKey.objectId)));
-        return false;
-    }
+    const auto& snapshot = *request.contentSnapshot;
 
-    if (request.pitchRevision != ownerSnap->pitchRevision
-        || request.pitchShiftRevision != ownerSnap->pitchShiftRevision
-        || request.timeGridRevision != ownerSnap->timeGridRevision) {
-        return false;
-    }
-
-    if (ownerSnap->timeGrid == nullptr || ownerSnap->timeGrid->isIdentity()) {
+    // identity TimeGrid = 无时间拉伸：失效旧 Stage2 输出，无需重建。
+    if (snapshot.timeGrid->isIdentity()) {
         crs.getTimeStretchCache().invalidate(contentKey);
         return true;
     }
 
-    constexpr double sampleRate = TimeCoordinate::kRenderSampleRate;
+    const double sampleRate = request.audioSampleRate;
     SoundTouchStretcher* stretcher = crs.getStretcher(contentKey, sampleRate, 1);
     if (stretcher == nullptr) return false;
 
-    auto schedule = stretcher->buildTempoScheduleFromTimeGrid(*ownerSnap->timeGrid);
+    auto schedule = stretcher->buildTempoScheduleFromTimeGrid(*snapshot.timeGrid);
     stretcher->beginRebuild(schedule);
 
-    // Stage2 must read Stage1 raw PCM, never its own cached TimeStretch output.
-    stage1Source.timeStretchCache = nullptr;
-    stage1Source.timeGrid.reset();
+    PlaybackReadSource stage1Source;
+    stage1Source.contentKey = contentKey;
+    stage1Source.audioBuffer = request.audioBuffer;
+    stage1Source.audioSampleRate = sampleRate;
+    stage1Source.renderCache = crs.getRenderCache(contentKey);
 
-    const int totalSamples = stage1Source.audioBuffer->getNumSamples();
+    const int totalSamples = request.audioBuffer->getNumSamples();
     constexpr int kBlock = 4096;
 
     juce::AudioBuffer<float> readBuf(1, kBlock);
@@ -128,20 +113,19 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
         output.resize(expectedSamples, 0.0f);
     }
 
-    const uint64_t pitchRev = request.pitchRevision;
-    const uint64_t pitchShiftRev = request.pitchShiftRevision;
-    const uint64_t timeGridRev = request.timeGridRevision;
+    const uint64_t contentRev = snapshot.contentRevision;
+    const uint64_t timeGridRev = snapshot.timeGridRevision;
 
     crs.getTimeStretchCache().store(contentKey,
                                     std::move(output),
-                                    pitchRev,
-                                    pitchShiftRev,
+                                    contentRev,
                                     timeGridRev,
                                     sampleRate,
                                     buildGen);
 
     AppLogger::log("Stage2Worker: rebuilt objectId="
                    + juce::String(static_cast<juce::int64>(contentKey.objectId))
+                   + " contentRev=" + juce::String(static_cast<juce::int64>(contentRev))
                    + " timeGridRev=" + juce::String(static_cast<juce::int64>(timeGridRev))
                    + " stage1InputSamples=" + juce::String(totalSamples)
                    + " stage2OutputSamples=" + juce::String(static_cast<int>(stretcher->expectedOutputSamples()))

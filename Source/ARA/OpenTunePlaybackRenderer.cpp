@@ -17,8 +17,9 @@ bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
 }
 
 namespace {
-    double mapPlaybackTimeToContentTime(const OpenTunePlaybackRenderer::PlaybackRegionRenderItem& region,
-                                                double playbackTimeSeconds) noexcept
+    double mapPlaybackTimeToOutputTime(const OpenTunePlaybackRenderer::PlaybackRegionRenderItem& region,
+                                       const PlaybackReadSource& source,
+                                       double playbackTimeSeconds) noexcept
     {
         if (region.durationInPlaybackTime <= 0.0 || region.durationInModificationTime <= 0.0)
             return 0.0;
@@ -27,11 +28,14 @@ namespace {
         const double modificationOffset = playbackOffset
             * (region.durationInModificationTime / region.durationInPlaybackTime);
         const double modificationTime = region.startInModificationTime + modificationOffset;
-        const double contentOffset = modificationTime - region.contentWindow.sourceStartSeconds;
+        const double sourceLocalSeconds = modificationTime - region.contentWindow.sourceStartSeconds;
+
+        if (source.contentSnapshot == nullptr || source.contentSnapshot->timeGrid == nullptr)
+            return 0.0;
 
         return juce::jlimit(0.0,
                             juce::jmax(0.0, region.contentDurationSeconds),
-                            contentOffset);
+                            source.contentSnapshot->timeGrid->tauForward(sourceLocalSeconds));
     }
 
     void mixScratchInto(juce::AudioBuffer<float>& destination,
@@ -279,7 +283,7 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
                 if (!crs->getPlaybackReadSource(region.contentKey, readSource))
                     continue;
 
-                const double readStartSeconds = mapPlaybackTimeToContentTime(region,
+                const double readStartSeconds = mapPlaybackTimeToOutputTime(region, readSource,
                                                                              overlap->overlapStartSeconds);
                 const int64_t readStartSample = TimeCoordinate::secondsToSamples(readStartSeconds, hostSampleRate_);
                 const ::OpenTune::PlaybackReadRequest request(readSource,
