@@ -96,7 +96,6 @@ void StandaloneClipContent::applyVolumeEnvelope(AutomationLane envelope)
     for (auto& note : content_.notes)
         note.outputGainDb = content_.volumeEnvelope.evalAt(note.startTime);
     ++content_.notesRevision;
-    ++content_.outputGainRevision;
 }
 
 void StandaloneClipContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
@@ -135,7 +134,6 @@ bool StandaloneClipContent::applyPitchShiftState(const PitchShiftEditState& stat
     content_.pitchShiftSettings = state.settings;
     ++content_.notesRevision;
     ++content_.pitchRevision;
-    ++content_.pitchShiftRevision;
     bumpContentRevision();
     return true;
 }

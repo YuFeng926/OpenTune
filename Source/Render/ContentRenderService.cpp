@@ -1,6 +1,7 @@
 #include "ContentRenderService.h"
 
 #include "RenderChunkPlanner.h"
+#include "Stage2TimeStretchRebuilder.h"
 #include "../Inference/SoundTouchStretcher.h"
 #include "../Utils/TimeCoordinate.h"
 
@@ -9,23 +10,25 @@ namespace OpenTune {
 ContentRenderService::ContentRenderService() = default;
 ContentRenderService::~ContentRenderService() = default;
 
-bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(Stage2Request request)
+bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(
+    ContentKey contentKey,
+    std::shared_ptr<const EditableContentSnapshot> contentSnapshot,
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+    double audioSampleRate)
 {
-    if (!request.contentKey.isValid()
-        || request.contentSnapshot == nullptr
-        || request.audioBuffer == nullptr)
+    if (!contentKey.isValid() || contentSnapshot == nullptr || audioBuffer == nullptr)
         return false;
 
-    auto renderCache = getRenderCache(request.contentKey);
+    auto renderCache = getRenderCache(contentKey);
     if (renderCache == nullptr || !renderCache->isCanonicalSettled())
         return false;
 
     RenderJob job;
     job.kind = RenderJob::Kind::Stage2Rebuild;
-    job.contentKey = request.contentKey;
-    job.contentSnapshot = std::move(request.contentSnapshot);
-    job.audioBuffer = std::move(request.audioBuffer);
-    job.audioSampleRate = request.audioSampleRate;
+    job.contentKey = contentKey;
+    job.contentSnapshot = std::move(contentSnapshot);
+    job.audioBuffer = std::move(audioBuffer);
+    job.audioSampleRate = audioSampleRate;
     renderWorker_.enqueue(std::move(job));
     return true;
 }
@@ -227,11 +230,6 @@ void ContentRenderService::preparePlaybackSampleRate(double targetSr)
     playbackSources_.setPlaybackSampleRate(targetSr);
     renderCaches_.preparePlaybackSampleRate(targetSr);
     timeStretchCache_.prepareForPlaybackSampleRate(targetSr);
-}
-
-double ContentRenderService::getPlaybackSampleRate() const
-{
-    return playbackSources_.getPlaybackSampleRate();
 }
 
 } // namespace OpenTune

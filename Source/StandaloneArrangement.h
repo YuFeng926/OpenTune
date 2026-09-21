@@ -36,7 +36,6 @@ public:
     struct Placement {
         uint64_t placementId{0};
         ContentKey contentKey;                  // 域内容标识（StandaloneClip 路径），替代 contentId
-        uint64_t mappingRevision{0};
         double timelineStartSeconds{0.0};
         double durationSeconds{0.0};
         float gain{1.0f};

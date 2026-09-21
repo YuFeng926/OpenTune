@@ -231,7 +231,6 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             ProjectPlacementEntry pEntry;
             pEntry.placementId = placement.placementId;
             pEntry.contentKey = placement.contentKey;
-            pEntry.mappingRevision = placement.mappingRevision;
             pEntry.timelineStartSeconds = placement.timelineStartSeconds;
             pEntry.timelineDurationSeconds = placement.durationSeconds;
             pEntry.clipGain = placement.gain;
@@ -590,7 +589,6 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
             StandaloneArrangement::Placement placement;
             placement.placementId = pEntry.placementId;
             placement.contentKey = pEntry.contentKey;
-            placement.mappingRevision = pEntry.mappingRevision;
             placement.timelineStartSeconds = pEntry.timelineStartSeconds;
             placement.durationSeconds = pEntry.timelineDurationSeconds;
             placement.gain = pEntry.clipGain;

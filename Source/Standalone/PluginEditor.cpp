@@ -81,11 +81,9 @@ ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::P
     projection.timelineDurationSeconds = placement.durationSeconds;
     auto snap = processor.getContentSnapshot(placement.contentKey);
     const double sourceStartSeconds = placement.clipInSeconds;
-    const double sourceEndSeconds = sourceStartSeconds + placement.durationSeconds;
     if (snap != nullptr) {
         projection.contentStartSeconds = snap->timeGrid->tauForward(sourceStartSeconds);
-        projection.contentDurationSeconds = snap->timeGrid->tauForward(sourceEndSeconds)
-            - projection.contentStartSeconds;
+        projection.contentDurationSeconds = placement.durationSeconds;
     } else {
         projection.contentStartSeconds = sourceStartSeconds;
         projection.contentDurationSeconds = placement.durationSeconds;

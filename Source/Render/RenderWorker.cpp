@@ -267,7 +267,6 @@ void RenderWorker::loop()
                         if (job.renderCache->claimPendingJob(
                                 job.queuedChunkStartSample, pendingJob))
                         {
-                            job.startSeconds = pendingJob.startSeconds;
                             job.startSample = pendingJob.startSample;
                             job.endSampleExclusive = pendingJob.endSampleExclusive;
                             job.targetRevision = pendingJob.targetRevision;

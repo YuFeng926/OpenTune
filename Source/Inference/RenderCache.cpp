@@ -418,9 +418,11 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
                     || newChunk.status == Chunk::Status::Blank;
 
                 // A local edit advances the content identity for the whole
-                // published snapshot. Unaffected settled chunks remain valid
-                // audio, so carry the new identity without re-rendering them.
-                if (!intersectsRequest && alreadySettled)
+                // published snapshot. Unaffected chunks remain valid audio,
+                // including chunks that are still pending/running, because
+                // their edit range is disjoint. Keep their eventual publish
+                // label aligned with the snapshot carried by the queued job.
+                if (!intersectsRequest)
                     newChunk.lastRequestedContentRevision = contentRevision;
 
                 if (intersectsRequest)
@@ -555,7 +557,6 @@ bool RenderCache::claimPendingJob(int64_t startSample, PendingJob& outJob) {
     chunk.status = Chunk::Status::Running;
     chunk.runningRevision = chunk.desiredRevision;
 
-    outJob.startSeconds = chunk.startSeconds;
     outJob.startSample = chunk.startSample;
     outJob.endSampleExclusive = chunk.endSampleExclusive;
     outJob.targetRevision = chunk.desiredRevision;

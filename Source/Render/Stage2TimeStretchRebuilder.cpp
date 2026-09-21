@@ -15,9 +15,8 @@ namespace OpenTune {
 
 /**
  * Stage2 rebuild — consumes only the immutable snapshot/audio carried by the
- * request. Stage1 canonical PCM is read through a temporary PlaybackReadSource
- * that holds audio + RenderCache only (no owner lookup, no timeGrid /
- * timeStretchCache: readCanonicalAudio never uses them).
+ * request. Stage1 canonical PCM is read through a source-domain request that
+ * carries only the audio and RenderCache needed by readCanonicalAudio.
  */
 bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
                                           const Request& request)
@@ -43,8 +42,11 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
     const auto isCurrentPublishedRequest = [&]() {
         PlaybackReadSource published;
         return crs.getPlaybackReadSource(contentKey, published)
+            && published.contentSnapshot != nullptr
             && published.contentSnapshot->contentRevision == snapshot.contentRevision
-            && published.contentSnapshot->timeGridRevision == snapshot.timeGridRevision;
+            && published.contentSnapshot->timeGridRevision == snapshot.timeGridRevision
+            && published.contentSnapshot->audioRevision == snapshot.audioRevision
+            && published.audioBuffer == request.audioBuffer;
     };
 
     if (!isCurrentPublishedRequest())
@@ -62,11 +64,7 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
     auto schedule = stretcher->buildTempoScheduleFromTimeGrid(*snapshot.timeGrid);
     stretcher->beginRebuild(schedule);
 
-    PlaybackReadSource stage1Source;
-    stage1Source.contentKey = contentKey;
-    stage1Source.audioBuffer = request.audioBuffer;
-    stage1Source.audioSampleRate = sampleRate;
-    stage1Source.renderCache = crs.getRenderCache(contentKey);
+    const auto stage1RenderCache = crs.getRenderCache(contentKey);
 
     const int totalSamples = request.audioBuffer->getNumSamples();
     constexpr int kBlock = 4096;
@@ -96,9 +94,10 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
         const int n = std::min(kBlock, totalSamples - offset);
         readBuf.clear(0, 0, n);
 
-        ::OpenTune::CanonicalReadRequest req(stage1Source,
-                                 static_cast<int64_t>(offset),
-                                 n);
+        ::OpenTune::CanonicalReadRequest req(request.audioBuffer,
+                                              stage1RenderCache,
+                                              static_cast<int64_t>(offset),
+                                              n);
 
         const int wrote = readCanonicalAudio(req, readBuf, 0);
 

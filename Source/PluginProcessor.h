@@ -674,13 +674,11 @@ public:
     }
 
 private:
-#if JucePlugin_Build_Standalone
-    void enqueueStandaloneStage2WhenCanonicalSettled(
+    void enqueueStage2WhenCanonicalSettled(
         ContentKey key,
         std::shared_ptr<const EditableContentSnapshot> snapshot,
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
         double audioSampleRate);
-#endif
     ReferenceFeatureProducer resolveReferenceFeatureProducer() const;
     // 纯数据 StandardAuto 特征生产（static：不访问 processor 状态，analysisRevision
     // 由提交方在消息线程固定，worker 只读提交时捕获的不可变 snapshot）。

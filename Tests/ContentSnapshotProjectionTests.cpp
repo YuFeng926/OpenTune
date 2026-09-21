@@ -1,6 +1,7 @@
 #include "../Source/Content/ContentSnapshotProjection.h"
 #include "../Source/Content/CaptureSegmentContent.h"
 #include "../Source/Content/StandaloneClipContent.h"
+#include "../Source/Inference/TimeStretchCache.h"
 #include "../Source/Utils/PlaybackAudioReader.h"
 #include "../Source/Render/PlaybackReadSource.h"
 
@@ -52,8 +53,6 @@ bool testCommonFieldsRoundTrip()
     source.noteTopologyInitialized = true;
     source.pitchRevision = 3;
     source.timeGridRevision = 4;
-    source.pitchShiftRevision = 5;
-    source.outputGainRevision = 6;
     source.contentRevision = 7;
     source.audioRevision = 8;
 
@@ -82,8 +81,6 @@ bool testCommonFieldsRoundTrip()
         && snapshot.noteTopologyInitialized
         && snapshot.pitchRevision == 3
         && snapshot.timeGridRevision == 4
-        && snapshot.pitchShiftRevision == 5
-        && snapshot.outputGainRevision == 6
         && snapshot.contentRevision == 7
         && snapshot.audioRevision == 8
         && snapshot.timeGrid == source.timeGrid
@@ -186,8 +183,6 @@ bool testStandaloneOriginalF0CommitAdvancesRevisionsOnce()
     const auto snapshot = clip.snapshotContent();
     if (snapshot->originalF0State != OpenTune::OriginalF0State::Ready)
         return false;
-    if (clip.content().analysis.f0Lifecycle != OpenTune::AnalysisLifecycle::Ready)
-        return false;
     if (!snapshot->hasUsableOriginalF0())
         return false;
     if (clip.content().analysis.analysisRevision != analysisBefore + 1)
@@ -219,8 +214,6 @@ bool testCaptureSegmentOriginalF0CommitAdvancesRevisionsOnce()
         || !nearlyEqual(snapshot->sourceWindow.sourceEndSeconds, 2.0))
         return false;
     if (snapshot->originalF0State != OpenTune::OriginalF0State::Ready)
-        return false;
-    if (segment.content().analysis.f0Lifecycle != OpenTune::AnalysisLifecycle::Ready)
         return false;
     if (!snapshot->hasUsableOriginalF0())
         return false;
@@ -282,6 +275,39 @@ bool testIdentityTimeGridIsAlwaysPublishedAndNonIdentityMissIsSilent()
     return OpenTune::readPlaybackAudio(request, destination, 0) == 0;
 }
 
+// TimeStretchCache 的双版本键：(contentRevision, timeGridRevision) 必须同时匹配；
+// 任一为旧值都必须 miss（返回 0），不得用旧内容/旧时间网格的切片。
+bool testTimeStretchCacheDualRevisionKey()
+{
+    OpenTune::TimeStretchCache cache;
+    const OpenTune::ContentKey key{OpenTune::DomainKind::StandaloneClip, 42, 0};
+
+    const uint32_t buildGeneration = cache.beginBuild(key);
+    cache.store(key, {0.25f, -0.5f, 0.75f, -1.0f}, 5, 7, 44100.0, buildGeneration);
+
+    juce::AudioBuffer<float> destination(1, 4);
+    destination.clear();
+
+    // 同 key、同 contentRevision/timeGridRevision：命中并返回全部样本。
+    if (cache.sliceForOutputRange(key, 5, 7, 0, destination, 0, 4, 44100) != 4)
+        return false;
+    if (!nearlyEqual(destination.getSample(0, 0), 0.25f)
+        || !nearlyEqual(destination.getSample(0, 3), -1.0f))
+        return false;
+
+    // 旧 contentRevision（timeGridRevision 相同）：miss。
+    destination.clear();
+    if (cache.sliceForOutputRange(key, 4, 7, 0, destination, 0, 4, 44100) != 0)
+        return false;
+
+    // 旧 timeGridRevision（contentRevision 相同）：miss。
+    destination.clear();
+    if (cache.sliceForOutputRange(key, 5, 6, 0, destination, 0, 4, 44100) != 0)
+        return false;
+
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -325,6 +351,12 @@ int main()
     if (!testIdentityTimeGridIsAlwaysPublishedAndNonIdentityMissIsSilent())
     {
         std::fputs("FAIL: Playback TimeGrid identity/cache miss contract\n", stderr);
+        return 1;
+    }
+
+    if (!testTimeStretchCacheDualRevisionKey())
+    {
+        std::fputs("FAIL: TimeStretchCache dual-revision key contract\n", stderr);
         return 1;
     }
 

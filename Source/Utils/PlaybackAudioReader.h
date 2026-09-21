@@ -35,13 +35,20 @@ struct PlaybackReadRequest {
  * 无 target rate 参数，始终读取 44.1kHz truth。
  */
 struct CanonicalReadRequest {
-    PlaybackReadSource source;
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+    std::shared_ptr<RenderCache> renderCache;
     int64_t readStartSample{0};
     int numSamples{0};
 
     CanonicalReadRequest() = default;
-    CanonicalReadRequest(PlaybackReadSource src, int64_t startSample, int samples)
-        : source(src), readStartSample(startSample), numSamples(samples) {}
+    CanonicalReadRequest(std::shared_ptr<const juce::AudioBuffer<float>> buffer,
+                         std::shared_ptr<RenderCache> cache,
+                         int64_t startSample,
+                         int samples)
+        : audioBuffer(std::move(buffer))
+        , renderCache(std::move(cache))
+        , readStartSample(startSample)
+        , numSamples(samples) {}
 };
 
 /**
@@ -215,7 +222,9 @@ inline int readSourceAudioWithStage1Overlay(const CanonicalReadRequest& request,
                                             juce::AudioBuffer<float>& destination,
                                             int destinationStartSample)
 {
-    if (request.numSamples <= 0 || !request.source.hasAudio()) {
+    if (request.numSamples <= 0
+        || request.audioBuffer == nullptr
+        || request.audioBuffer->getNumSamples() <= 0) {
         return 0;
     }
 
@@ -236,7 +245,7 @@ inline int readSourceAudioWithStage1Overlay(const CanonicalReadRequest& request,
     // ============================================================
     // Dry canonical direct copy
     // ============================================================
-    const auto* srcBuf = request.source.audioBuffer.get();
+    const auto* srcBuf = request.audioBuffer.get();
     if (!srcBuf || srcBuf->getNumSamples() <= 0) {
         return 0;
     }
@@ -266,11 +275,11 @@ inline int readSourceAudioWithStage1Overlay(const CanonicalReadRequest& request,
     // ============================================================
     // RenderCache canonical overlay
     // ============================================================
-    if (request.source.renderCache != nullptr) {
-        request.source.renderCache->overlayCanonicalAudio(destination,
-                                                           destinationStartSample,
-                                                           availableSamples,
-                                                           request.readStartSample);
+    if (request.renderCache != nullptr) {
+        request.renderCache->overlayCanonicalAudio(destination,
+                                                    destinationStartSample,
+                                                    availableSamples,
+                                                    request.readStartSample);
     }
 
     return availableSamples;
@@ -305,7 +314,10 @@ inline int readExportPlaybackAudio(const PlaybackReadRequest& request,
     int wrote = 0;
     if (snapshot->timeGrid->isIdentity()) {
         const CanonicalReadRequest canonicalRequest{
-            request.source, request.readStartSample, request.numSamples};
+            request.source.audioBuffer,
+            request.source.renderCache,
+            request.readStartSample,
+            request.numSamples};
         wrote = readSourceAudioWithStage1Overlay(canonicalRequest, destination, destinationStartSample);
     } else if (request.source.timeStretchCache != nullptr) {
         wrote = request.source.timeStretchCache->sliceCanonicalForOutputRange(

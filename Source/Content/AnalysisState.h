@@ -10,15 +10,6 @@
 
 namespace OpenTune {
 
-enum class AnalysisLifecycle : uint8_t
-{
-    Idle,
-    Requested,
-    InProgress,
-    Ready,
-    Failed
-};
-
 // 分析字段属于内容根，但不是编辑命令真相
 struct AnalysisState
 {
@@ -27,26 +18,14 @@ struct AnalysisState
     DetectedKey detectedKey;
     std::vector<SilentGap> silentGaps;
     ReferenceFeatureSet referenceFeatures;
-    AnalysisLifecycle f0Lifecycle{AnalysisLifecycle::Idle};
-    AnalysisLifecycle pitchLifecycle{AnalysisLifecycle::Idle};
     uint64_t analysisRevision{0};
 
     bool setOriginalF0State(OriginalF0State state) noexcept
     {
-        AnalysisLifecycle lifecycle = AnalysisLifecycle::Idle;
-        switch (state)
-        {
-            case OriginalF0State::NotRequested: lifecycle = AnalysisLifecycle::Idle; break;
-            case OriginalF0State::Extracting: lifecycle = AnalysisLifecycle::InProgress; break;
-            case OriginalF0State::Ready: lifecycle = AnalysisLifecycle::Ready; break;
-            case OriginalF0State::Failed: lifecycle = AnalysisLifecycle::Failed; break;
-        }
-
-        if (originalF0State == state && f0Lifecycle == lifecycle)
+        if (originalF0State == state)
             return false;
 
         originalF0State = state;
-        f0Lifecycle = lifecycle;
         return true;
     }
 };

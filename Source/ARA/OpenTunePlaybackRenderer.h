@@ -97,7 +97,6 @@ public:
     void detachDocumentController(OpenTuneDocumentController& owner);
 
     void refreshRenderPlanFromDocument();
-    void setContentRenderService(std::shared_ptr<ContentRenderService> crs);
     
     void prepareToPlay(double sampleRate,
                        int maximumSamplesPerBlock,

@@ -186,7 +186,6 @@ struct ProjectReferenceBinding {
 struct ProjectPlacementEntry {
     uint64_t placementId{0};
     ContentKey contentKey;
-    uint64_t mappingRevision{0};
     double timelineStartSeconds{0.0};
     double timelineDurationSeconds{0.0};
     float clipGain{1.0f};

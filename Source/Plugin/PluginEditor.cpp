@@ -86,7 +86,8 @@ ContentTimelineProjection makePianoRollLocalProjection(
     ContentTimelineProjection projection;
     projection.timelineStartSeconds = region.startInPlaybackTime;
     projection.timelineDurationSeconds = region.durationInPlaybackTime;
-    projection.contentStartSeconds = region.startInModificationTime;
+    projection.contentStartSeconds = region.startInModificationTime
+        - region.contentWindow.sourceStartSeconds;
     projection.contentDurationSeconds = region.durationInModificationTime;
     return projection;
 }

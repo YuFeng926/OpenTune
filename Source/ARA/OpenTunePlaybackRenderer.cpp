@@ -130,11 +130,6 @@ void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
                                          : std::vector<juce::ARAPlaybackRegion*>{});
 }
 
-void OpenTunePlaybackRenderer::setContentRenderService(std::shared_ptr<ContentRenderService> crs)
-{
-    std::atomic_store_explicit(&contentRenderServiceSnapshot_, crs, std::memory_order_release);
-}
-
 std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRenderer::buildRenderPlan(
     std::vector<juce::ARAPlaybackRegion*> playbackRegions) const
 {

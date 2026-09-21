@@ -828,7 +828,6 @@ juce::ValueTree ProjectPersistence::placementsToValueTree(const std::vector<Proj
         pt.setProperty("contentDomain", static_cast<int>(p.contentKey.domainKind), nullptr);
         pt.setProperty("contentObjectId", static_cast<int64_t>(p.contentKey.objectId), nullptr);
         pt.setProperty("contentDiscriminator", static_cast<int64_t>(p.contentKey.sourceWindowDiscriminator), nullptr);
-        pt.setProperty("mappingRevision", static_cast<int64_t>(p.mappingRevision), nullptr);
         pt.setProperty("timelineStartSeconds", p.timelineStartSeconds, nullptr);
         pt.setProperty("timelineDurationSeconds", p.timelineDurationSeconds, nullptr);
         pt.setProperty("clipGain", p.clipGain, nullptr);
@@ -853,7 +852,6 @@ std::vector<ProjectPlacementEntry> ProjectPersistence::placementsFromValueTree(c
         p.contentKey.domainKind = static_cast<DomainKind>(static_cast<int>(child.getProperty("contentDomain", 0)));
         p.contentKey.objectId = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("contentObjectId", 0)));
         p.contentKey.sourceWindowDiscriminator = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("contentDiscriminator", 0)));
-        p.mappingRevision = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("mappingRevision", 0)));
         p.timelineStartSeconds = child.getProperty("timelineStartSeconds", 0.0);
         p.timelineDurationSeconds = child.getProperty("timelineDurationSeconds", 0.0);
         p.clipGain = static_cast<float>(child.getProperty("clipGain", 1.0));

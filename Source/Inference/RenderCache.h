@@ -59,7 +59,6 @@ public:
                                                 uint64_t contentRevision);
 
     struct PendingJob {
-        double startSeconds{0.0};
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         uint64_t targetRevision{0};

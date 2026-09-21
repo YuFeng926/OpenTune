@@ -714,7 +714,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     std::vector<float> vocoderF0;
     std::vector<float> vocoderUv;
 
-    const double relChunkStartSec = job.startSeconds;
+    const double relChunkStartSec = TimeCoordinate::samplesToSeconds(
+        job.startSample, RenderCache::kSampleRate);
     auto coreJob = std::move(job);
     FrozenRenderBoundaries boundaries;
     int numFrames = 0;
@@ -990,7 +991,6 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.contentSnapshot = contentSnap;
             requeueJob.audioBuffer = coreJob.audioBuffer;
             requeueJob.audioSampleRate = coreJob.audioSampleRate;
-            requeueJob.startSeconds = relChunkStartSec;
             requeueJob.startSample = coreJob.startSample;
             requeueJob.targetRevision = coreJob.targetRevision;
             deferOrRequeue(crs, std::move(requeueJob));
@@ -1097,14 +1097,12 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const double requeueAudioSampleRate = coreJob.audioSampleRate;
     const ContentKey captureContentKey = coreJob.contentKey;
     const uint64_t chunkObjId = captureContentKey.objectId;
-    const double jobStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
-                                                                    TimeCoordinate::kRenderSampleRate);
     const int64_t jobStartSample = boundaries.trueStartSample;
     const FrozenRenderBoundaries frozenBoundaries = boundaries;
 
     vocoderJob.onComplete = [this, crs, renderCache, targetRevision,
                              requeueAudioBuffer, requeueAudioSampleRate,
-                             captureContentKey, chunkObjId, jobStartSeconds,
+                             captureContentKey, chunkObjId,
                              jobStartSample, frozenBoundaries, contentSnap,
                              completion](
                                  VocoderRenderScheduler::JobResult result,
@@ -1163,7 +1161,6 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.contentSnapshot = contentSnap;
             requeueJob.audioBuffer = requeueAudioBuffer;
             requeueJob.audioSampleRate = requeueAudioSampleRate;
-            requeueJob.startSeconds = jobStartSeconds;
             requeueJob.startSample = jobStartSample;
             requeueJob.targetRevision = targetRevision;
             deferOrRequeue(crs, std::move(requeueJob));

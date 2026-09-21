@@ -110,7 +110,6 @@ void AudioModification::applyVolumeEnvelope(const AutomationLane& envelope)
     for (auto& note : content->notes)
         note.outputGainDb = content->volumeEnvelope.evalAt(note.startTime);
     ++content->notesRevision;
-    ++content->outputGainRevision;
 }
 
 void AudioModification::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
@@ -154,7 +153,6 @@ bool AudioModification::applyPitchShiftState(const PitchShiftEditState& state)
     content->pitchShiftSettings = state.settings;
     ++content->notesRevision;
     ++content->pitchRevision;
-    ++content->pitchShiftRevision;
     ++content->contentRevision;
     return true;
 }

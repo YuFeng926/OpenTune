@@ -27,7 +27,6 @@ struct RenderJob
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
     double audioSampleRate{0.0};
 
-    double startSeconds{0.0};
     int64_t startSample{0};
     int64_t endSampleExclusive{0};
 

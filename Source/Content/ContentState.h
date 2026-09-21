@@ -37,8 +37,6 @@ struct ContentState
     bool noteTopologyInitialized{false};  // 内容是否经历过至少一次音符拓扑提交（含合法空结果）
     uint64_t pitchRevision{0};
     uint64_t timeGridRevision{0};
-    uint64_t pitchShiftRevision{0};
-    uint64_t outputGainRevision{0};
     // 运行时 cache identity：新 owner/content 从 1 开始，0 只表示"读取不到内容"。
     uint64_t contentRevision{1};
     uint64_t audioRevision{0};

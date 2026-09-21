@@ -28,8 +28,6 @@ EditableContentSnapshot makeContentSnapshot(const ContentState& state)
     snap.noteTopologyInitialized = state.noteTopologyInitialized;
     snap.pitchRevision = state.pitchRevision;
     snap.timeGridRevision = state.timeGridRevision;
-    snap.pitchShiftRevision = state.pitchShiftRevision;
-    snap.outputGainRevision = state.outputGainRevision;
     snap.contentRevision = state.contentRevision;
     return snap;
 }
@@ -48,8 +46,6 @@ ContentState contentStateFromSnapshot(const EditableContentSnapshot& snapshot)
     state.noteTopologyInitialized = snapshot.noteTopologyInitialized;
     state.pitchRevision = snapshot.pitchRevision;
     state.timeGridRevision = snapshot.timeGridRevision;
-    state.pitchShiftRevision = snapshot.pitchShiftRevision;
-    state.outputGainRevision = snapshot.outputGainRevision;
     // contentRevision 不随投影复制：反向投影构造的是新 ContentState（新内容身份），
     // 运行时 revision 从默认 1 开始，这不是运行时 revision restore。
     state.audioRevision = snapshot.audioRevision;

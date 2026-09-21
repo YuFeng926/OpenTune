@@ -2394,12 +2394,19 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         if (!arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) return;
 
         if (currentDragOp_ == DragOperation::TrimLeft) {
-            double newClipIn = trimStartClipInSeconds_ + snappedDelta;
-            if (newClipIn < 0.0) newClipIn = 0.0;
             double newDuration = trimStartDurationSeconds_ - snappedDelta;
             constexpr double minDur = 0.01;
-            if (newDuration < minDur) { newDuration = minDur; newClipIn = trimStartClipInSeconds_ + trimStartDurationSeconds_ - minDur; }
-            if (newClipIn < 0.0) newClipIn = 0.0;
+            if (newDuration < minDur)
+                newDuration = minDur;
+
+            const auto contentSnapshot = processor_.getContentSnapshot(placement.contentKey);
+            if (contentSnapshot == nullptr || contentSnapshot->timeGrid == nullptr)
+                return;
+
+            const double outputStart = contentSnapshot->timeGrid->tauForward(trimStartClipInSeconds_);
+            const double outputCut = outputStart + (trimStartDurationSeconds_ - newDuration);
+            const double newClipIn = contentSnapshot->timeGrid->tauInverse(outputCut);
+
             // Shift timelineStart to keep right edge static
             double newStart = dragStartPlacementSeconds_ + snappedDelta;
             if (newStart < 0.0) newStart = 0.0;
@@ -2712,7 +2719,6 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 StandaloneArrangement::Placement newPlacement;
                 newPlacement.placementId = 0; // will be assigned by insertPlacement
                 newPlacement.contentKey = newContentKey;
-                newPlacement.mappingRevision = 1;
                 newPlacement.timelineStartSeconds = pasteTime;
                 newPlacement.durationSeconds = entry.durationSeconds;
                 newPlacement.gain = entry.gain;
@@ -2752,7 +2758,6 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                         StandaloneArrangement::Placement dup = placement;
                         dup.placementId = 0;
                         dup.contentKey = newContentKey;
-                        dup.mappingRevision = 1;
 
                         const int count = arr->getNumPlacements(selectedTrack_);
                         if (!arr->insertPlacement(selectedTrack_, count, dup)) {

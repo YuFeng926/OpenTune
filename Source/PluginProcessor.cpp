@@ -753,10 +753,9 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         ContentRenderService::ExecutionLease lease;
         lease.owner = this;
         lease.renderJobCallback = [this](RenderJob& job) {
-#if JucePlugin_Build_Standalone
-            // Stage2 time-stretch rebuild only exists for Standalone content.
             if (job.kind == RenderJob::Kind::Stage2Rebuild) {
-                if (job.contentKey.domainKind != DomainKind::StandaloneClip)
+                if (job.contentKey.domainKind == DomainKind::ARAAudioModification
+                    || !job.contentSnapshot || !job.audioBuffer)
                     return;
 
                 Stage2TimeStretchRebuilder::Request request;
@@ -767,7 +766,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 Stage2TimeStretchRebuilder::rebuild(*contentRenderService_, request);
                 return;
             }
-#endif
 
             if (job.renderCache == nullptr)
                 return;
@@ -1739,6 +1737,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         if (processBlockForARA(buffer, isRealtime(), araPositionInfo))
         {
             pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+            outputSpectrumAnalyzer_.push(buffer);
             return;
         }
     }
@@ -1763,6 +1762,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
         captureSession->processBlock(buffer, hostAbsoluteSample, getSampleRate(), isPlaying);
         pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+        outputSpectrumAnalyzer_.push(buffer);
         return;
     }
 
@@ -2645,7 +2645,6 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     leadingPlacement.contentKey = leadingKey;
     leadingPlacement.durationSeconds = splitOffsetSeconds;
     leadingPlacement.fadeOutDuration = 0.0;
-    ++leadingPlacement.mappingRevision;
 
     StandaloneArrangement::Placement trailingPlacement = originalPlacement;
     trailingPlacement.placementId = 0;
@@ -2654,7 +2653,6 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     trailingPlacement.durationSeconds = originalPlacement.durationSeconds - splitOffsetSeconds;
     trailingPlacement.fadeInDuration = 0.0;
     trailingPlacement.clipInSeconds = 0.0;
-    ++trailingPlacement.mappingRevision;
 
     if (!standaloneArrangement_->insertPlacement(trackId, placementIndex, leadingPlacement)) {
         standaloneContentRepository_->releaseClip(leadingKey);
@@ -2811,7 +2809,6 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     mergedPlacement.durationSeconds = leadingPlacement.durationSeconds + trailingPlacement.durationSeconds;
     mergedPlacement.fadeOutDuration = trailingPlacement.fadeOutDuration;
     mergedPlacement.clipInSeconds = leadingPlacement.clipInSeconds;
-    ++mergedPlacement.mappingRevision;
 
     const int mergedInsertIndex = targetPlacementIndex >= 0 ? targetPlacementIndex : 0;
     if (!standaloneArrangement_->insertPlacement(trackId, mergedInsertIndex, mergedPlacement)) {
@@ -3168,14 +3165,13 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     crs->enqueueRender(std::move(job));
 }
 
-#if JucePlugin_Build_Standalone
-void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(
+void OpenTuneAudioProcessor::enqueueStage2WhenCanonicalSettled(
     ContentKey key,
     std::shared_ptr<const EditableContentSnapshot> snapshot,
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
     double audioSampleRate)
 {
-    if (key.domainKind != DomainKind::StandaloneClip)
+    if (key.domainKind == DomainKind::ARAAudioModification)
         return;
 
     if (snapshot == nullptr || audioBuffer == nullptr || snapshot->timeGrid->isIdentity())
@@ -3185,14 +3181,9 @@ void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(
     if (crs == nullptr)
         return;
 
-    ContentRenderService::Stage2Request request;
-    request.contentKey = key;
-    request.contentSnapshot = std::move(snapshot);
-    request.audioBuffer = std::move(audioBuffer);
-    request.audioSampleRate = audioSampleRate;
-    crs->enqueueStage2RebuildWhenCanonicalSettled(std::move(request));
+    crs->enqueueStage2RebuildWhenCanonicalSettled(
+        key, std::move(snapshot), std::move(audioBuffer), audioSampleRate);
 }
-#endif // JucePlugin_Build_Standalone
 
 void OpenTuneAudioProcessor::handleStage1ChunkSettled(
     ContentKey key,
@@ -3210,10 +3201,19 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(
     }
 #endif
 
-#if JucePlugin_Build_Standalone
-    enqueueStandaloneStage2WhenCanonicalSettled(key, std::move(snapshot),
-                                                std::move(audioBuffer), audioSampleRate);
-#endif
+    if (contentRenderService_ != nullptr
+        && key.domainKind != DomainKind::ARAAudioModification)
+    {
+        PlaybackReadSource published;
+        if (contentRenderService_->getPlaybackReadSource(key, published))
+        {
+            enqueueStage2WhenCanonicalSettled(
+                key,
+                published.contentSnapshot,
+                published.audioBuffer,
+                published.audioSampleRate);
+        }
+    }
 }
 
 #if JucePlugin_Build_Standalone
@@ -3725,7 +3725,6 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
 
     StandaloneArrangement::Placement importedPlacement;
     importedPlacement.contentKey = clipKey;
-    importedPlacement.mappingRevision = 0;
     importedPlacement.timelineStartSeconds = placement.timelineStartSeconds;
     importedPlacement.durationSeconds = contentDuration;
     importedPlacement.gain = 1.0f;
@@ -4873,36 +4872,28 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
     if (ok) {
         auto snapshot = getContentSnapshot(key);
         auto* crs = resolveMutableLocalContentRenderService(key);
-#if JucePlugin_Build_Standalone
-        if (key.domainKind == DomainKind::StandaloneClip)
-        {
-            // TimeGrid affects only the Stage2 time-stretch path. Invalidate the
-            // derived TimeStretchCache once, and gate the Stage2 request through
-            // the canonical-settled entry point (Stage1 must be complete before
-            // Stage2 reads its canonical output). If initial Stage1 is not yet
-            // settled here, handleStage1ChunkSettled will enqueue Stage2 when it
-            // completes. Stage2 reads canonical Stage1 and the TimeGrid revision
-            // is independent from contentRevision.
-            if (crs != nullptr && snapshot != nullptr)
-            {
-                if (!crs->republishPlaybackSource(key, snapshot))
-                    return ok;
-                crs->getTimeStretchCache().invalidate(key);
-                PlaybackReadSource source;
-                if (crs->getPlaybackReadSource(key, source))
-                {
-                    enqueueStandaloneStage2WhenCanonicalSettled(
-                        key,
-                        std::move(snapshot),
-                        source.audioBuffer,
-                        source.audioSampleRate);
-                }
-            }
-        }
-#endif
-        if (key.domainKind != DomainKind::StandaloneClip
+        if (key.domainKind != DomainKind::ARAAudioModification
             && crs != nullptr
             && snapshot != nullptr)
+        {
+            // TimeGrid affects only Stage2. Requeue a full Stage1 plan so any
+            // pending jobs carry the new snapshot, then let the canonical-settled
+            // callback enqueue Stage2 if the plan is still running.
+            if (!crs->republishPlaybackSource(key, snapshot))
+                return ok;
+            crs->getTimeStretchCache().invalidate(key);
+            requestFullContentRender(key);
+
+            PlaybackReadSource source;
+            if (crs->getPlaybackReadSource(key, source))
+            {
+                enqueueStage2WhenCanonicalSettled(
+                    key, source.contentSnapshot, source.audioBuffer, source.audioSampleRate);
+            }
+        }
+        else if (key.domainKind == DomainKind::ARAAudioModification
+                 && crs != nullptr
+                 && snapshot != nullptr)
             crs->republishPlaybackSource(key, std::move(snapshot));
     }
     return ok;

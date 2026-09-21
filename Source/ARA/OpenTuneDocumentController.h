@@ -87,29 +87,8 @@ public:
     /** 读取调性检测结果 */
     DetectedKey readDetectedKey(ContentKey key) const;
 
-    /** 读取音符 */
-    std::vector<Note> readNotes(ContentKey key) const;
-
-    /** 读取音符版本号 */
-    uint64_t readNotesRevision(ContentKey key) const;
-
-    /** 读取时间网格 */
-    std::shared_ptr<const TimeGridSnapshot> readTimeGrid(ContentKey key) const;
-
-    /** 读取时间网格版本号 */
-    uint64_t readTimeGridRevision(ContentKey key) const;
-
     /** 读取音高移调设置 */
     PitchShiftSettings readPitchShift(ContentKey key) const;
-
-    /** 读取内容版本号 */
-    uint64_t readContentRevision(ContentKey key) const;
-
-    /** 读取材质化时长 */
-    double readContentDuration(ContentKey key) const;
-
-    /** 是否有内容 */
-    bool hasContent(ContentKey key) const;
 
     /** Phase 4: 返回 EditableContentSnapshot — 唯一的跨域 snapshot 类型 */
     std::shared_ptr<const EditableContentSnapshot> readContentSnapshot(ContentKey key) const;
@@ -172,7 +151,6 @@ public:
     // Per ARA2 spec, host may ignore/delay/quantize; loop truth is observed
     // via companion PositionInfo in processBlock, never written here.
     bool requestEnableCycle(bool enabled);
-    bool requestSetCycleRange(double startTime, double duration);
 
 protected:
     bool doRestoreObjectsFromStream(juce::ARAInputStream& input,

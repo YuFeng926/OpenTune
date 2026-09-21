@@ -24,17 +24,12 @@ class ContentRenderService
 public:
     using ExecutionLease = RenderExecutionLease;
 
-    struct Stage2Request
-    {
-        ContentKey contentKey;
-        // 重建输入随请求固定：worker 只消费这里的 snapshot/audio，不回查 owner。
-        std::shared_ptr<const EditableContentSnapshot> contentSnapshot;
-        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-        double audioSampleRate{0.0};
-    };
-
     /** Canonical Stage1 完整物化后，把一次 Stage2 重建放入现有 RenderWorker 队列。 */
-    bool enqueueStage2RebuildWhenCanonicalSettled(Stage2Request request);
+    bool enqueueStage2RebuildWhenCanonicalSettled(
+        ContentKey contentKey,
+        std::shared_ptr<const EditableContentSnapshot> contentSnapshot,
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+        double audioSampleRate);
 
     ContentRenderService();
     ~ContentRenderService();
@@ -74,7 +69,6 @@ public:
 
     void clearAll();
     void preparePlaybackSampleRate(double targetSr);
-    double getPlaybackSampleRate() const;
 
 private:
     PlaybackSourcePublisher playbackSources_;

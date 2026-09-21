@@ -21,7 +21,6 @@ public:
     PlaybackSourcePublisher& operator=(const PlaybackSourcePublisher&) = delete;
 
     void setPlaybackSampleRate(double sr);
-    double getPlaybackSampleRate() const;
 
     void publish(ContentKey key, PlaybackReadSource source);
 

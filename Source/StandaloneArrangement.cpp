@@ -431,7 +431,6 @@ bool StandaloneArrangement::movePlacementToTrack(int sourceTrackId,
 
     Placement movedPlacement = sourceTrack.placements[static_cast<size_t>(sourceIndex)];
     movedPlacement.timelineStartSeconds = std::max(0.0, newTimelineStartSeconds);
-    ++movedPlacement.mappingRevision;
 
     sourceTrack.placements.erase(sourceTrack.placements.begin() + sourceIndex);
     refreshSelectedPlacementUnlocked(sourceTrackId,
@@ -468,7 +467,6 @@ bool StandaloneArrangement::setPlacementTimelineStartSeconds(int trackId,
     }
 
     placement.timelineStartSeconds = clampedTimelineStartSeconds;
-    ++placement.mappingRevision;
     publishPlaybackSnapshotLocked();
     return true;
 }
@@ -511,7 +509,6 @@ bool StandaloneArrangement::setPlacementTrim(int trackId, uint64_t placementId, 
         if (placement.fadeOutDuration > maxFade) placement.fadeOutDuration = maxFade;
     }
 
-    ++placement.mappingRevision;
     publishPlaybackSnapshotLocked();
     return true;
 }
@@ -535,7 +532,6 @@ bool StandaloneArrangement::setPlacementFade(int trackId, uint64_t placementId, 
 
     placement.fadeInDuration = fadeInDuration;
     placement.fadeOutDuration = fadeOutDuration;
-    ++placement.mappingRevision;
     publishPlaybackSnapshotLocked();
     return true;
 }
@@ -583,7 +579,6 @@ bool StandaloneArrangement::setPlacementTrimAndTimelineStart(int trackId,
 
     placement.timelineStartSeconds = clampedTimelineStartSeconds;
 
-    ++placement.mappingRevision;
     publishPlaybackSnapshotLocked();
     return true;
 }

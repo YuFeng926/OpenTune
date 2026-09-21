@@ -126,7 +126,6 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     editable->setAttribute("notesRevision", juce::String(static_cast<juce::int64>(mod.content->notesRevision)));
     editable->setAttribute("pitchRevision", juce::String(static_cast<juce::int64>(mod.content->pitchRevision)));
     editable->setAttribute("timeGridRevision", juce::String(static_cast<juce::int64>(mod.content->timeGridRevision)));
-    editable->setAttribute("pitchShiftRevision", juce::String(static_cast<juce::int64>(mod.content->pitchShiftRevision)));
     editable->setAttribute("noteTopologyInitialized", mod.content->noteTopologyInitialized ? 1 : 0);
 
     for (const auto& note : mod.content->notes)
@@ -220,8 +219,6 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     el.addChildElement(editable);
 
     auto* analysis = new juce::XmlElement("AnalysisState");
-    analysis->setAttribute("f0Lifecycle", static_cast<int>(mod.content->analysis.f0Lifecycle));
-    analysis->setAttribute("pitchLifecycle", static_cast<int>(mod.content->analysis.pitchLifecycle));
     analysis->setAttribute("analysisRevision", juce::String(static_cast<juce::int64>(mod.content->analysis.analysisRevision)));
     analysis->setAttribute("originalF0State", static_cast<int>(mod.content->analysis.originalF0State));
     
@@ -387,7 +384,6 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
         content.notesRevision = static_cast<uint64_t>(editable->getStringAttribute("notesRevision").getLargeIntValue());
         content.pitchRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchRevision").getLargeIntValue());
         content.timeGridRevision = static_cast<uint64_t>(editable->getStringAttribute("timeGridRevision").getLargeIntValue());
-        content.pitchShiftRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchShiftRevision").getLargeIntValue());
 
         // notes parsing with finite checks
         for (auto* n : editable->getChildWithTagNameIterator("Note"))
@@ -668,21 +664,12 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
     // AnalysisState: 可选，absence 保持默认
     if (auto* analysis = el.getChildByName("AnalysisState"))
     {
-        // 枚举值有效性检查
-        const int f0Lifecycle = analysis->getIntAttribute("f0Lifecycle");
-        const int pitchLifecycle = analysis->getIntAttribute("pitchLifecycle");
         const int originalF0State = analysis->getIntAttribute("originalF0State");
 
         // 有效性范围检查
-        if (f0Lifecycle < static_cast<int>(AnalysisLifecycle::Idle) || f0Lifecycle > static_cast<int>(AnalysisLifecycle::Failed))
-            return std::nullopt;
-        if (pitchLifecycle < static_cast<int>(AnalysisLifecycle::Idle) || pitchLifecycle > static_cast<int>(AnalysisLifecycle::Failed))
-            return std::nullopt;
         if (originalF0State < static_cast<int>(OriginalF0State::NotRequested) || originalF0State > static_cast<int>(OriginalF0State::Failed))
             return std::nullopt;
 
-        content.analysis.f0Lifecycle = static_cast<AnalysisLifecycle>(f0Lifecycle);
-        content.analysis.pitchLifecycle = static_cast<AnalysisLifecycle>(pitchLifecycle);
         content.analysis.analysisRevision = static_cast<uint64_t>(analysis->getStringAttribute("analysisRevision").getLargeIntValue());
         content.analysis.originalF0State = static_cast<OriginalF0State>(originalF0State);
 
@@ -2356,18 +2343,21 @@ void OpenTuneDocumentController::handleStage1ChunkSettled(
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
     double audioSampleRate)
 {
-    if (snapshot == nullptr || audioBuffer == nullptr || snapshot->timeGrid->isIdentity())
-        return;
-
     if (contentRenderService_ == nullptr)
         return;
 
-    ContentRenderService::Stage2Request request;
-    request.contentKey = key;
-    request.contentSnapshot = std::move(snapshot);
-    request.audioBuffer = std::move(audioBuffer);
-    request.audioSampleRate = audioSampleRate;
-    contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(std::move(request));
+    PlaybackReadSource published;
+    if (!contentRenderService_->getPlaybackReadSource(key, published)
+        || published.contentSnapshot == nullptr
+        || published.audioBuffer == nullptr
+        || published.contentSnapshot->timeGrid->isIdentity())
+        return;
+
+    contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(
+        key,
+        published.contentSnapshot,
+        published.audioBuffer,
+        published.audioSampleRate);
 }
 
 std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
@@ -2697,20 +2687,6 @@ bool OpenTuneDocumentController::requestEnableCycle(bool enabled)
     return true;
 }
 
-bool OpenTuneDocumentController::requestSetCycleRange(double startTime, double duration)
-{
-    auto* dc = getDocumentController();
-    if (dc == nullptr)
-        return false;
-
-    auto* playbackController = dc->getHostPlaybackController();
-    if (playbackController == nullptr)
-        return false;
-
-    playbackController->requestSetCycleRange(startTime, duration);
-    return true;
-}
-
 // -----------------------------------------------------------------------
 // 编辑器只读内容访问器实现
 // -----------------------------------------------------------------------
@@ -2746,59 +2722,11 @@ DetectedKey OpenTuneDocumentController::readDetectedKey(ContentKey key) const
     return mod->content->analysis.detectedKey;
 }
 
-std::vector<Note> OpenTuneDocumentController::readNotes(ContentKey key) const
-{
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState()) return {};
-    return mod->content->notes;
-}
-
-uint64_t OpenTuneDocumentController::readNotesRevision(ContentKey key) const
-{
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState()) return 0;
-    return mod->content->notesRevision;
-}
-
-std::shared_ptr<const TimeGridSnapshot> OpenTuneDocumentController::readTimeGrid(ContentKey key) const
-{
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState()) return nullptr;
-    return mod->content->timeGrid;
-}
-
-uint64_t OpenTuneDocumentController::readTimeGridRevision(ContentKey key) const
-{
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState()) return 0;
-    return mod->content->timeGridRevision;
-}
-
 PitchShiftSettings OpenTuneDocumentController::readPitchShift(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return {};
     return mod->content->pitchShiftSettings;
-}
-
-uint64_t OpenTuneDocumentController::readContentRevision(ContentKey key) const
-{
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState()) return 0;
-    return mod->content->contentRevision;
-}
-
-double OpenTuneDocumentController::readContentDuration(ContentKey key) const
-{
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState()) return 0.0;
-    return mod->content->sourceWindow.durationSeconds();
-}
-
-bool OpenTuneDocumentController::hasContent(ContentKey key) const
-{
-    const auto* mod = findAudioModificationByContentKey(key);
-    return mod != nullptr && mod->hasContentState();
 }
 
 std::shared_ptr<const EditableContentSnapshot>
@@ -2899,16 +2827,16 @@ bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& k
     contentRenderService_->getTimeStretchCache().invalidate(key);
     if (published && !isIdentity)
     {
-        ContentRenderService::Stage2Request request;
-        request.contentKey = key;
-        request.contentSnapshot = snapshot;
+        requestFullModificationRender(key);
         PlaybackReadSource readSource;
         if (contentRenderService_->getPlaybackReadSource(key, readSource))
         {
-            request.audioBuffer = readSource.audioBuffer;
-            request.audioSampleRate = readSource.audioSampleRate;
+            contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(
+                key,
+                readSource.contentSnapshot,
+                readSource.audioBuffer,
+                readSource.audioSampleRate);
         }
-        contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(std::move(request));
     }
 
     refreshRegisteredRenderers(publishModelChange());

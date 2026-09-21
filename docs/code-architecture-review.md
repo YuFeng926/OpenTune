@@ -145,20 +145,32 @@ Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容�
 
 当前启用测试默认关闭；打开 `OPENTUNE_BUILD_TESTS` 后有 7 个测试目标，覆盖状态 codec、Capture persistence、Content snapshot 和 F0 revision。最近一次 VS/CMake/Ninja 构建中，VST3/Standalone target 和 7/7 CTest 均通过。
 
-## 3. 剩余问题
+## 3. 已完成的边界收敛
 
-### P0：宿主行为和回归覆盖
+本轮审计后，以下曾经存在的实现缺口已修正：
 
-1. **ARA 非恒等 TimeGrid playback 链仍缺宿主回归。** 需要确认 playback seconds 到 source/content、再到 output seconds 和 prepared sample 的完整映射。恒等 TimeGrid 不能覆盖这个问题。
-2. **ARA placement、clone 和多 placement PianoRoll 仍缺 DAW/ARA 宿主回归。** 渲染 worker 只消费 job 携带的 immutable snapshot/audio，host placement 更新、clone 独立性、通知时序和视觉行为尚未由宿主确认。
+1. `Stage2TimeStretchRebuilder` 不再构造缺少 snapshot 的临时 `PlaybackReadSource`；canonical Stage1 读取只接收 job 固定的 source PCM 和 `RenderCache`。
+2. Stage2 提交前同时校验已发布 snapshot 的 `contentRevision`、`timeGridRevision`、`audioRevision` 和 audio buffer identity；`TimeStretchCache` 仍以 `(contentRevision, timeGridRevision)` 为唯一版本键。
+3. 局部 Stage1 编辑会为未受影响的 pending/running chunk 继承新的 `contentRevision`，避免 prepared overlay 跳过该 chunk 后回退到 dry。
+4. Standalone、Capture 和 ARA 的非恒等 TimeGrid 都经过 canonical-settled gate 进入 Stage2；TimeGrid 变更会刷新 Stage1 job 的 snapshot、失效旧 Stage2 cache，并使用最新发布 projection 重建。
+5. ARA 和 Capture 的 `processBlock` 在最终输出后发布频谱；Standalone placement 的 PianoRoll projection、ARA 非零 source window projection 和 TrimLeft output/source 映射已按各自坐标合同修正。
+6. 删除了未消费的 ARA content accessor、cycle-range wrapper、播放采样率 getter 和 renderer CRS setter。worker 不再携带冗余的 `startSeconds`，只使用 sample range。
+7. 删除未消费的 `mappingRevision`、`pitchShiftRevision`、`outputGainRevision` 和双账本 analysis lifecycle；VST3 旧状态的字节布局 skip 常量仍保留，仅用于读取已发布的历史布局。
+
+## 4. 剩余问题
+
+### P1：宿主行为和回归覆盖
+
+1. **ARA 非恒等 TimeGrid playback 链仍缺宿主回归。** 需要确认 playback seconds 到 modification/source-local、再到 output seconds 和 prepared sample 的完整映射。恒等 TimeGrid 不能覆盖这个问题。
+2. **ARA placement、clone 和多 placement PianoRoll 仍缺 DAW/ARA 宿主回归。** worker 已只消费 job 携带的 immutable snapshot/audio，但 host placement 更新、clone 独立性、通知时序和视觉行为尚未由宿主确认。
+3. **Capture 非恒等 TimeGrid 需要真实宿主回归。** 代码路径已接入 Stage2，但录制、编辑、播放和宿主 block 边界的时序仍没有 VST3 宿主测试。
 
 ### P1：时间域和状态合同
 
-1. **秒到 sample/frame 的量化规则分散。** split、placement fade、ARA render range、TimeGrid 和 RenderCache 使用了不同的 trunc/round/floor/ceil 组合，可能产生边界偏差。需要逐项确定 point 与 interval 的取整合同，不能凭经验改绝对时间公式。
-2. **split 仍同时使用 sample 锚和 seconds 锚。** 音频、silent gaps 与 notes、pitch curve 分别使用两类锚，需保证它们由同一个切点派生。
-3. **F0 frame 与模型窗中心的合同未锁定。** FCPE padding、F0Timeline 和 mel/F0 插值可能存在半 hop 偏移，需要训练侧定义和回归样本确认。
-4. **部分 mutation revision 规则仍未完全统一。** TimeGrid、DetectedKey、Reference features 保留历史语义，后续修改必须分别确认是否推进总 revision，不能继续隐式扩展。
-5. **局部 Stage1 重渲染的跨 chunk revision 合同需要回归。** 受影响 chunk 重渲染时，已结算且未受影响的 chunk 只继承新的 `contentRevision`，不重复渲染；播放 overlay 必须覆盖完整内容且不回退为干声。
+1. **秒到 sample/frame 的量化规则分散。** split、placement fade、ARA render range、TimeGrid 和 RenderCache 使用了不同的 trunc/round/floor/ceil 组合，需逐项确定 point 与 interval 的取整合同，不能凭经验改绝对时间公式。
+2. **split 仍同时使用 sample 锚和 seconds 锚。** 音频、silent gaps、notes 与 pitch curve 必须继续由同一个绝对切点派生，并补充边界回归。
+3. **F0 frame 与模型窗中心的合同未锁定。** FCPE padding、F0Timeline 和 mel/F0 插值需要训练侧定义和回归样本确认。
+4. **ARA 非零 source window、旧 cache 拒绝、局部渲染 revision 和导出一致性已有纯逻辑合同测试，但仍缺宿主级测试。** 当前启用测试目标为 7 个，CTest 全部通过。
 
 ### P2：维护成本
 
@@ -166,7 +178,7 @@ Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容�
 2. F0、Reference、Render/Vocoder 分别拥有 detached worker、去重、shutdown 和 completion 机制。业务不能强行合并，但关闭、generation 和 completion gate 应建立共同测试合同。
 3. 三种持久化容器仍各自解释 EQ/Note migration；格式边界应保留，纯数据迁移规则可以共享。
 4. Beat 计算、MIDI/Hz 与 lane-center 转换、cents math 等仍有重复或同名 API，后续应在纯数学边界单点化，不能把 UI 坐标规则混入音高真相。
-5. 测试仍默认关闭，缺少时间域、ARA renderer/model contract、split geometry、局部渲染 revision、pending seek 和宿主级回归测试。
+5. 测试默认仍为关闭选项；本次验证显式打开 `OPENTUNE_BUILD_TESTS` 后，VST3/Standalone target 和 7/7 CTest 均通过。
 
 ### 不属于当前架构问题的事项
 
