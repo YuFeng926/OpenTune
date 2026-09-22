@@ -19,10 +19,8 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <vector>
-#include <optional>
 #include <cstdint>
 #include <cmath>
-#include <limits>
 #include "TimeCoordinate.h"
 
 namespace OpenTune {
@@ -44,11 +42,6 @@ struct SilentGap {
     bool isValid() const { return endSampleExclusive > startSample; }
 
     int64_t midpointSample() const { return startSample + sampleCount() / 2; }
-
-    bool containsSample(int64_t sample) const
-    {
-        return sample >= startSample && sample < endSampleExclusive;
-    }
 };
 
 /**
@@ -70,31 +63,6 @@ public:
         double minGapDurationMs = 50.0;           // 最小静息时长
     };
 
-    // ============================================================================
-    // 默认参数定义（用于初始化配置）
-    // ============================================================================
-    
-    /** 默认静息阈值 -45dBFS（配置初始值） */
-    static constexpr float kDefaultThreshold_dB = -45.0f;
-    
-    /** 放宽判定：总电平阈值 -40dBFS（配置初始值） */
-    static constexpr float kRelaxedTotalThreshold_dB = -40.0f;
-
-    /** 放宽判定：低频带(<=2kHz)平均电平阈值 -40dBFS（配置初始值） */
-    static constexpr float kLowBandThreshold_dB = -40.0f;
-
-    /** 预处理高通截止频率（Hz，配置初始值） */
-    static constexpr double kHighPassCutoffHz = 60.0;
-
-    /** 低频带上限频率（Hz，配置初始值） */
-    static constexpr double kLowBandUpperHz = 2000.0;
-
-    /** 最小静息时长（ms，配置初始值） */
-    static constexpr double kMinGapDurationMs = 50.0;
-
-    /** 获取当前检测配置（线程安全） */
-    static DetectionConfig getConfig();
-    
     /** 固定采样率 44.1kHz（内部音频存储标准） */
     static constexpr double kInternalSampleRate = TimeCoordinate::kRenderSampleRate;
     
@@ -105,29 +73,18 @@ public:
     /**
      * 检测音频中的所有静息处（返回 sample span）
      * 
+     * 判定规则（配置驱动）：
+     * - 严格阈值：窗口总电平 <= cfg.strictThreshold_dB
+     * - 放宽频域规则：窗口总电平 <= cfg.relaxedTotalThreshold_dB
+     *   且低频带(<= cfg.lowBandUpperHz)电平 < cfg.lowBandThreshold_dB
+     * 
      * 注意：音频必须是 44.1kHz 采样率（符合内部存储标准）
      * 
      * @param audio 音频缓冲区（44.1kHz）
-     * @param threshold_dB 电平阈值（默认 -45dBFS，来自 cfg.strictThreshold_dB）
      * @return 按起始 sample 排序的静息处列表（sample span）
      */
-    static std::vector<SilentGap> detectAllGaps(
-        const juce::AudioBuffer<float>& audio,
-        float threshold_dB = std::numeric_limits<float>::quiet_NaN());
-    
-    /**
-     * 使用自适应阈值检测静息处（返回 sample span）
-     * 使用频域约束进行检测
-     * 
-     * 注意：音频必须是 44.1kHz 采样率（符合内部存储标准）
-     * 
-     * @param audio 音频缓冲区（44.1kHz）
-     * @param maxSearchDistanceSec 保留参数（当前未使用）
-     * @return 静息处列表（sample span）
-     */
     static std::vector<SilentGap> detectAllGapsAdaptive(
-        const juce::AudioBuffer<float>& audio,
-        double maxSearchDistanceSec = -1.0);  // -1 表示使用默认值
+        const juce::AudioBuffer<float>& audio);
     
     // ============================================================================
     // 辅助函数
@@ -149,16 +106,6 @@ public:
         if (linear <= 0.0f) return -100.0f;
         return 20.0f * std::log10(linear);
     }
-
-private:
-    // 私有辅助方法
-    
-    /**
-     * 计算音频块的 RMS 电平（dB）
-     */
-    static float calculateRmsDb(const float* data, int64_t numSamples);
-    
-
 };
 
 } // namespace OpenTune

@@ -32,8 +32,9 @@ inline std::vector<float> computeFrameEnergy(
 
         const int centerSample = juce::jlimit(
             0, numSamples - 1,
-            static_cast<int>(std::round(static_cast<double>(i)
-                * f0SecondsPerFrame * static_cast<double>(sourceSampleRate))));
+            static_cast<int>(TimeCoordinate::secondsToSamplesNearest(
+                static_cast<double>(i) * f0SecondsPerFrame,
+                static_cast<double>(sourceSampleRate))));
         const int startSample = juce::jmax(0, centerSample - halfRmsWindowSamples);
         const int endSampleExclusive = juce::jmin(numSamples, centerSample + halfRmsWindowSamples);
         if (endSampleExclusive <= startSample)

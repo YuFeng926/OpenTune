@@ -2,6 +2,7 @@
 #include "../Utils/AppLogger.h"
 #include "../Utils/PitchUtils.h"
 #include "../Utils/SilentGapDetector.h"
+#include "../Utils/TimeCoordinate.h"
 #include "../Utils/TuningConfig.h"
 #include "../Render/RenderChunkPlanner.h"
 
@@ -148,7 +149,8 @@ std::vector<Note> GameNoteGenerator::generate(const NoteGeneratorInput& input)
     const auto silentGaps = SilentGapDetector::detectAllGapsAdaptive(buf);
 
     // hopSize for boundary placement: align cuts to GAME's frame grid.
-    const int hopSize = static_cast<int>(std::round(input.sampleRate * timestep_));
+    const int hopSize = static_cast<int>(TimeCoordinate::secondsToSamplesNearest(
+        timestep_, input.sampleRate));
 
     const auto boundaries = RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(
         static_cast<int64_t>(input.audio.size()), silentGaps, hopSize);
@@ -245,7 +247,8 @@ std::vector<Note> GameNoteGenerator::runSingleChunk(const float* audio,
         // Simple linear resample. Quality is fine for inference (model is
         // robust to mild aliasing; we are not generating audio).
         const double ratio = static_cast<double>(nativeSampleRate_) / sampleRate;
-        const int64_t outLen = static_cast<int64_t>(std::round(static_cast<double>(numSamples) * ratio));
+        const int64_t outLen = TimeCoordinate::sampleRateProject(
+            numSamples, sampleRate, static_cast<double>(nativeSampleRate_));
         nativeAudio.resize(static_cast<size_t>(outLen));
         for (int64_t i = 0; i < outLen; ++i) {
             const double srcF = static_cast<double>(i) / ratio;

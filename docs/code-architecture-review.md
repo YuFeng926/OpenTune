@@ -28,10 +28,10 @@ VST3 和 Standalone 使用各自的 SharedCode target。公共源码分别编译
 | --- | --- |
 | `PluginProcessor` | JUCE 生命周期、音频处理、格式装配、transport、内容域分发和 mutation 后的 render 调度 |
 | `ContentState` | Standalone、Capture、ARA 共用的 owner 数据状态；包含 source window、PCM 引用、分析状态、编辑状态和 revision |
-| Content owner | 持有 `ContentState`，执行域内 mutation、生命周期和持久化适配 |
+| Content owner | 持有 `ContentState`，执行域内 mutation 和生命周期；持久化由域外 adapter 读写其 content |
 | `EditableContentSnapshot` | 跨线程和跨模块的只读内容合同 |
 | `ContentSnapshotProjection` | 集中完成 `ContentState` 与 snapshot 的双向纯数据投影 |
-| `ContentRenderService` / `RenderWorker` | 按 `ContentKey` 管理 render job、RenderCache、TimeStretchCache 和 playback source |
+| `ContentRenderService` / `RenderWorker` | 按 `ContentKey` 管理 render job、RenderCache 和 playback source；Standalone/Capture 的非恒等 TimeGrid 由 Stage2 使用 `TimeStretchCache` |
 | `ProcessF0Runtime` / `ProcessRenderRuntime` | 进程级 F0 和 render 执行资源 |
 | `OpenTuneDocumentController` | ARA document-scoped content、宿主通知、ARA mutation、CRS 和 ARA F0 生命周期 |
 | Editor / PianoRoll | UI 状态、交互、视图投影和格式特有接线；PianoRoll 不直接依赖 Processor |
@@ -43,13 +43,13 @@ VST3 和 Standalone 使用各自的 SharedCode target。公共源码分别编译
 `ContentState` 是三个 content owner 的唯一 owner schema：
 
 - `sourceWindow`、`audioBuffer`、`sampleRate`、`audioRevision`
-- `AnalysisState analysis`：pitch curve、Original F0、DetectedKey、silent gaps、reference features 和分析状态
+- `AnalysisState analysis`：pitch curve、Original F0、DetectedKey、silent gaps、reference features、`analysisRevision` 和分析状态
 - notes、TimeGrid、pitch shift、volume envelope、note topology
 - 分项 revision 和单一 `contentRevision`
 
-ARA 的 `audioBuffer` 保持为空，PCM 由 `AudioSource` 提供。Standalone 的 retire/revive 状态属于 Standalone owner，不放进共享 `ContentState`。Render cache、worker、stretcher 和 playback publisher 也不属于 `ContentState`。
+ARA 的 `audioBuffer` 保持为空，PCM 由 `AudioSource` 提供。Standalone 与 Capture 的 retire/revive 状态属于各自 owner，不放进共享 `ContentState`。Render cache、worker、stretcher 和 playback publisher 也不属于 `ContentState`。
 
-owner snapshot 统一通过 `makeContentSnapshot()` 生成；split、clone 等需要重建 owner state 的路径使用 `contentStateFromSnapshot()`。ARA 只在共同投影后补充缓存的 AudioSource shape 元数据。
+owner snapshot 统一通过 `makeContentSnapshot()` 生成；split、clone 等需要重建 owner state 的路径使用 `contentStateFromSnapshot()`。空 `timeGrid` 在投影时使用 `TimeGridSnapshot::bootstrapIdentity()`。ARA 只在共同投影后补充缓存的 AudioSource shape 元数据。
 
 ### 1.4 线程与所有权
 
@@ -87,7 +87,7 @@ F0 / Reference worker
   -> playback snapshot / 音频读取
 ```
 
-Arrangement 只保存 placement、track 和 timeline 几何。placement 通过 `ContentKey` 找到 content snapshot，不复制内容字段。
+Arrangement 只保存 placement 的几何与混音/引用参数、track 状态和 timeline 几何。placement 通过 `ContentKey` 找到 content snapshot，不复制内容字段。
 
 ### 2.2 Regular VST3 Capture
 
@@ -102,7 +102,7 @@ Arrangement 只保存 placement、track 和 timeline 几何。placement 通过 `
   -> PlaybackReadSource
 ```
 
-F0 成功提交使用一次性 `applyOriginalF0()`：同时写入 curve、Ready、`analysisRevision`、`pitchRevision` 和 `contentRevision`。render gate 使用 `PitchCurve::hasUsableOriginalF0()`，不单独相信状态枚举。Capture persistence restore 对 Ready 且有曲线的数据复用同一提交路径。
+F0 成功提交使用一次性 `applyOriginalF0()`：同时写入 curve、Ready、`analysisRevision`、`pitchRevision` 和 `contentRevision`。render gate 以 `hasUsableOriginalF0()` 为准，不单独相信状态枚举；Capture 直接检查 `PitchCurve`，其他 render 路径检查 snapshot helper。Capture persistence restore 对 Ready 且有曲线的数据复用同一提交路径。
 
 ### 2.3 ARA2
 
@@ -115,7 +115,9 @@ ARA host
   -> OpenTunePlaybackRenderer
 ```
 
-ARA SDK 对象和宿主 placement 只在 DC 消息线程访问。`PlaybackRegion` 只保存 host pointer；projection 只保存宿主 placement 属性和 `ContentKey`，不复制 `SourceWindow` 或其他 content state。渲染和编辑视图需要 source window 时，从对应 CRS `PlaybackReadSource.contentSnapshot` 读取。
+ARA SDK 对象和宿主 placement 只在 DC 消息线程访问。`PlaybackRegion` 只保存 host pointer；projection 只保存宿主 placement 属性和 `ContentKey`，不复制 `SourceWindow` 或其他 content state。可渲染 placement 要求 playback duration 与 modification duration 相等。渲染和编辑视图需要 source window 时，从对应 CRS `PlaybackReadSource.contentSnapshot` 读取。
+
+ARA 只接受 identity TimeGrid。`applyTimeGrid()` 对非恒等 TimeGrid 直接返回失败；归档恢复遇到非恒等 TimeGrid 时返回 `nullopt`，不替换为 identity。
 
 AudioModification clone 分为四步：
 
@@ -135,30 +137,34 @@ AudioModification clone 分为四步：
 - F0 frame：由 hop size 和 F0 sample rate 定义的帧索引
 - pixel：UI 显示坐标
 
-绝对时间是上游事实来源。不同时间域比较前必须经过显式映射；UI pixel 不得反推新的绝对时间；音频线程只消费已准备好的整数 sample range。
+绝对时间是上游事实来源。不同时间域比较前必须经过显式映射；sample/frame/hop 只作为离散访问、上下文覆盖或模型输入坐标，不得反向修改绝对时间、内容边界或持久化数据。UI pixel 不得反推新的绝对时间；音频线程只消费已准备好的整数 sample range。
+
+`TimeCoordinate` 中，`secondsToSamples` 是 point 的向零截断，`secondsToSamplesNearest` 用于模型/窗口中心的最近 sample，`secondsToSamplesFloor` 与 `secondsToSamplesCeil` 成对表示 interval 覆盖，`sampleRateProject` 用于跨采样率的离散边界投影。投影结果不回写秒域真相。
 
 PianoRoll 的 source、output、timeline、pixel 映射集中在 `PianoRollTimeMap`。播放头命中音符时，先按 placement 和 TimeGrid 将 timeline 映射到 source，再与 Note 时间比较。
 
 ### 2.5 持久化和测试
 
-Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容字段都恢复到对应 owner 的 `ContentState`。运行时 revision 不从归档恢复，不生成第二套账本。
+Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容字段都恢复到对应 owner 的 `ContentState`。`contentRevision` 和 `audioRevision` 不从归档恢复，新内容身份从 1 开始；ARA 另外保存并恢复 `notesRevision`、`pitchRevision`、`timeGridRevision` 及分析相关 revision，Standalone 也恢复 `referenceFeatures.analysisRevision`。不额外生成运行时 revision 账本。跨采样率 buffer 长度由源 sample 数和源/目标采样率一次投影得到；不得从投影后的 buffer 长度反算源内容秒数。
 
-当前启用测试默认关闭；打开 `OPENTUNE_BUILD_TESTS` 后有 7 个测试目标，覆盖状态 codec、Capture persistence、Content snapshot 和 F0 revision。最近一次 VS/CMake/Ninja 构建中，VST3/Standalone target 和 7/7 CTest 均通过。
+当前启用测试默认关闭；打开 `OPENTUNE_BUILD_TESTS` 后有 7 个测试目标：`AutoTunePitchShifterTests`、`PitchParameterContractTests`、`PitchLaneVisualPolicyTests`、`Vst3ProcessorStateCodecTests`、`StandaloneProcessorStateCodecTests`、`CapturePersistenceTests` 和 `ContentSnapshotProjectionTests`。最近一次 VS/CMake/Ninja 构建中，VST3/Standalone target 和 7/7 CTest 均通过。
 
 ## 3. 已完成的边界收敛
 
-本轮审计后，以下曾经存在的实现缺口已修正：
+当前代码已具备以下边界：
 
 1. `Stage2TimeStretchRebuilder` 不再构造缺少 snapshot 的临时 `PlaybackReadSource`；canonical Stage1 读取只接收 job 固定的 source PCM 和 `RenderCache`。
 2. Stage2 提交前同时校验已发布 snapshot 的 `contentRevision`、`timeGridRevision`、`audioRevision` 和 audio buffer identity；`TimeStretchCache` 仍以 `(contentRevision, timeGridRevision)` 为唯一版本键。
 3. 局部 Stage1 编辑会为未受影响的 pending/running chunk 继承新的 `contentRevision`，避免 prepared overlay 跳过该 chunk 后回退到 dry。
-4. Standalone、Capture 的非恒等 TimeGrid 经过 canonical-settled gate 进入 Stage2；ARA 固定 identity TimeGrid，不进入 Stage2。
-5. ARA 和 Capture 的 `processBlock` 在最终输出后发布频谱；Standalone placement 的 PianoRoll projection、ARA 非零 source window projection 和 TrimLeft output/source 映射已按各自坐标合同修正。
+4. Standalone、Capture 的非恒等 TimeGrid 经过 canonical-settled gate 进入 Stage2；ARA 只接受 identity TimeGrid，对非恒等 TimeGrid 显式拒绝，且不进入 Stage2。
+5. `PluginProcessor` 的 ARA/Capture 分支在最终输出后发布频谱；Standalone placement 的 PianoRoll projection、ARA 非零 source window projection 和 TrimLeft output/source 映射已按各自坐标合同修正。
 6. 删除了未消费的 ARA content accessor、cycle-range wrapper、播放采样率 getter 和 renderer CRS setter。worker 不再携带冗余的 `startSeconds`，只使用 sample range。
 7. 删除未消费的 `mappingRevision`、`pitchShiftRevision`、`outputGainRevision` 和双账本 analysis lifecycle；VST3 旧状态的字节布局 skip 常量仍保留，仅用于读取已发布的历史布局。
 8. `PianoRollComponent` 和 `PianoRollToolHandler` 的 scratch curve mutation 直接返回新的 `shared_ptr<const PitchCurveSnapshot>`；业务层不再通过旧 `getSnapshot()` 或 `clone()` 回读编辑结果。
 9. Standalone、Capture 的 Stage1 completion 直接携带当次 snapshot/audio 进入 Stage2 settle gate；ARA 不建立 Stage2 completion chain。
 10. `PlaybackRegionProjection` 只保留宿主 placement 属性和 `ContentKey`；ARA renderer 从发布的 `PlaybackReadSource.contentSnapshot` 取得 `SourceWindow` 和 TimeGrid。
+11. `ContentSnapshotProjection` 对空 `timeGrid` 使用 bootstrap identity，snapshot 与 `ContentState` 的投影不再要求调用方预先填充 identity grid。
+12. 采样率投影、TimeGrid spacing、F0 区间投影和 placement fade 已分别收敛到命名明确的离散坐标或绝对 seconds 路径；这些派生坐标不回写内容时间。
 
 ## 4. 剩余问题
 
@@ -169,15 +175,16 @@ Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容�
 
 ### P1：时间域和状态合同
 
-1. **秒到 sample/frame 的量化规则分散。** split、placement fade、ARA render range、TimeGrid 和 RenderCache 使用了不同的 trunc/round/floor/ceil 组合，需逐项确定 point 与 interval 的取整合同，不能凭经验改绝对时间公式。
+1. **离散投影与绝对时间的边界合同仍需宿主和数据回归。** placement fade、RenderCache 跨率长度、TimeGrid spacing、F0 区间投影已分别使用明确的 seconds/point/interval 语义；剩余问题集中在 split、ARA source window 的 fractional sample 对齐和模型输入边界，不能凭经验改绝对时间公式。
 2. **split 仍同时使用 sample 锚和 seconds 锚。** 音频、silent gaps、notes 与 pitch curve 必须继续由同一个绝对切点派生，并补充边界回归。
 3. **F0 frame 与模型窗中心的合同未锁定。** FCPE padding、F0Timeline 和 mel/F0 插值需要训练侧定义和回归样本确认。
-4. **ARA 非零 source window、旧 cache 拒绝、局部渲染 revision 和导出一致性已有纯逻辑合同测试，但仍缺宿主级测试。** 当前启用测试目标为 7 个，CTest 全部通过。
+4. **旧 cache 拒绝和非恒等 TimeGrid 的 cache miss 已有纯逻辑测试。** ARA 非零 source window、局部渲染 revision、导出一致性以及 placement fractional sample 边界目前只有代码合同，尚无对应专门测试；相关 ARA/Capture 行为仍缺宿主级验证。当前启用测试目标为 7 个，CTest 全部通过。
+5. **split 的 PitchCurve 仍缺少绝对 frame origin 合同。** 音频和 silent gaps 已按 canonical sample 切分，notes 保持 seconds；但非 F0 frame 边界切分时，当前 PitchCurve 没有保存绝对 frame origin，不能仅靠重复 floor/ceil 同时保证两段 F0 无重叠、无丢失且 frame 时间精确对应。需要先确定 frame origin 或重采样合同，再修改 split 持久化结构。
 
 ### P2：维护成本
 
 1. `PluginProcessor` 仍承载较多 domain、render、transport 和 inference 编排，继续拆分前应先确定新的 owner 和不变量，不能只按文件大小抽 helper。
-2. F0、Reference、Render/Vocoder 分别拥有 detached worker、去重、shutdown 和 completion 机制。业务不能强行合并，但关闭、generation 和 completion gate 应建立共同测试合同。
+2. F0/Reference 使用 detached worker，RenderWorker 使用可 join 的常驻线程，Vocoder control worker 依附进程寿命单例；各自拥有去重、shutdown 和 completion 机制。业务不能强行合并，但关闭、generation 和 completion gate 应建立共同测试合同。
 3. 三种持久化容器仍各自解释 EQ/Note migration；格式边界应保留，纯数据迁移规则可以共享。
 4. Beat 计算、MIDI/Hz 与 lane-center 转换、cents math 等仍有重复或同名 API，后续应在纯数学边界单点化，不能把 UI 坐标规则混入音高真相。
 5. 测试默认仍为关闭选项；本次验证显式打开 `OPENTUNE_BUILD_TESTS` 后，VST3/Standalone target 和 7/7 CTest 均通过。

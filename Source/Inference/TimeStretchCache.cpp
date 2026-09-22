@@ -1,6 +1,7 @@
 #include "TimeStretchCache.h"
 #include "RenderCache.h"
 #include "../DSP/ResamplingManager.h"
+#include "../Utils/TimeCoordinate.h"
 
 #include <algorithm>
 #include <cmath>
@@ -58,8 +59,8 @@ void TimeStretchCache::store(ContentKey key,
             entry->preparedAudio = entry->canonicalAudio;
             entry->preparedSampleRate = targetSr;
         } else {
-            const int outputLength = static_cast<int>(
-                std::round(static_cast<double>(entry->canonicalAudio->size()) * targetSr / sampleRate));
+            const int outputLength = static_cast<int>(TimeCoordinate::sampleRateProject(
+                static_cast<int64_t>(entry->canonicalAudio->size()), sampleRate, targetSr));
             if (outputLength > 0) {
                 std::vector<float> resampled = preparedResampler_.resampleExactLength(
                     entry->canonicalAudio->data(),
@@ -140,8 +141,8 @@ void TimeStretchCache::prepareForPlaybackSampleRate(double targetSr)
             newEntry->preparedAudio = entry->canonicalAudio;
             newEntry->preparedSampleRate = targetSr;
         } else {
-            const int outputLength = static_cast<int>(
-                std::round(static_cast<double>(entry->canonicalAudio->size()) * targetSr / entry->sampleRate));
+            const int outputLength = static_cast<int>(TimeCoordinate::sampleRateProject(
+                static_cast<int64_t>(entry->canonicalAudio->size()), entry->sampleRate, targetSr));
             if (outputLength > 0) {
                 std::vector<float> resampled = preparedResampler_.resampleExactLength(
                     entry->canonicalAudio->data(),

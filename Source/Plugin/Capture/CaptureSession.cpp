@@ -7,6 +7,7 @@
 #include "../../Utils/AppLogger.h"
 #include "../../Utils/ChannelLayoutLogger.h"
 #include "../../Utils/PitchCurve.h"
+#include "../../Utils/TimeCoordinate.h"
 
 #include <algorithm>
 
@@ -120,7 +121,7 @@ bool CaptureSession::armNewCapture()
         seg->creationOrder = id;
         seg->captureSampleRate = currentSampleRate_;
         seg->captureChannels = ch;
-        seg->maxSamples = static_cast<int>(std::ceil(kMaxSegmentSeconds * currentSampleRate_));
+        seg->maxSamples = static_cast<int>(TimeCoordinate::secondsToSamplesCeil(kMaxSegmentSeconds, currentSampleRate_));
         seg->fifo.reserve(seg->captureChannels, seg->maxSamples);
         // Pre-allocate against the full PCM budget. A host may submit blocks
         // smaller than its advertised maximum, so maxBlockSize cannot bound the
@@ -745,8 +746,8 @@ uint64_t CaptureSession::testInjectEditedSegment(double T_start,
         seg->captureChannels = pcm ? pcm->getNumChannels() : 2;
         seg->T_start.store(T_start, std::memory_order_release);
         seg->anchored.store(true, std::memory_order_release);
-        seg->hostStartSample.store(static_cast<int64_t>(T_start * currentSampleRate_), std::memory_order_release);
-        seg->hostSampleCount.store(static_cast<int64_t>(durationSeconds * currentSampleRate_), std::memory_order_release);
+        seg->hostStartSample.store(TimeCoordinate::secondsToSamples(T_start, currentSampleRate_), std::memory_order_release);
+        seg->hostSampleCount.store(TimeCoordinate::secondsToSamples(durationSeconds, currentSampleRate_), std::memory_order_release);
         seg->durationSeconds = durationSeconds;
         seg->content = std::make_unique<CaptureSegmentContent>(id);
         if (pcm)
@@ -778,8 +779,8 @@ uint64_t CaptureSession::testInjectProcessingSegment(double T_start,
         seg->captureChannels = pcm ? pcm->getNumChannels() : 1;
         seg->T_start.store(T_start, std::memory_order_release);
         seg->anchored.store(true, std::memory_order_release);
-        seg->hostStartSample.store(static_cast<int64_t>(T_start * sampleRate), std::memory_order_release);
-        seg->hostSampleCount.store(static_cast<int64_t>(durationSeconds * sampleRate), std::memory_order_release);
+        seg->hostStartSample.store(TimeCoordinate::secondsToSamples(T_start, sampleRate), std::memory_order_release);
+        seg->hostSampleCount.store(TimeCoordinate::secondsToSamples(durationSeconds, sampleRate), std::memory_order_release);
         seg->durationSeconds = durationSeconds;
         seg->content = std::make_unique<CaptureSegmentContent>(id);
         if (pcm)

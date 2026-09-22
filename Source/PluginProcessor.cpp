@@ -22,6 +22,7 @@
 #include "Plugin/StandaloneProcessorStateCodec.h"
 #endif
 #include "Utils/TimeCoordinate.h"
+#include "Utils/PlacementFade.h"
 #include "Inference/GameNoteGenerator.h"      // GAME NoteGeneratorInput/Note DTO（进程级 GAME 入口）
 #include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
@@ -176,6 +177,40 @@ double contentDurationSeconds(const EditableContentSnapshot& snap)
     return 0.0;
 }
 
+std::optional<F0FrameRange> f0FrameRangeForSeconds(
+    int hopSize,
+    double sampleRate,
+    int frameCount,
+    double startSeconds,
+    double endSeconds)
+{
+    if (endSeconds <= startSeconds
+        || hopSize <= 0
+        || sampleRate <= 0.0
+        || frameCount <= 0) {
+        return std::nullopt;
+    }
+
+    const F0Timeline timeline(hopSize, sampleRate, frameCount);
+    const double timelineEndSeconds = timeline.timeAtFrame(frameCount);
+    if (endSeconds <= 0.0 || startSeconds >= timelineEndSeconds)
+        return std::nullopt;
+
+    return timeline.rangeForTimes(startSeconds, endSeconds);
+}
+
+std::optional<F0FrameRange> f0FrameRangeForSeconds(
+    const PitchCurveSnapshot& snapshot,
+    double startSeconds,
+    double endSeconds)
+{
+    return f0FrameRangeForSeconds(snapshot.getHopSize(),
+                                  snapshot.getSampleRate(),
+                                  static_cast<int>(snapshot.getOriginalF0().size()),
+                                  startSeconds,
+                                  endSeconds);
+}
+
 #if JucePlugin_Build_Standalone
 juce::String diagnosticControlCallToString(OpenTuneAudioProcessor::DiagnosticControlCall controlCall)
 {
@@ -188,20 +223,6 @@ juce::String diagnosticControlCallToString(OpenTuneAudioProcessor::DiagnosticCon
     }
 
     return "none";
-}
-
-inline float computePlacementFadeGain(int64_t sampleInPlacement,
-                                      int64_t placementLengthSamples,
-                                      int64_t fadeInSamples,
-                                      int64_t fadeOutSamples) {
-    float fade = 1.0f;
-    if (fadeInSamples > 1 && sampleInPlacement < fadeInSamples) {
-        fade *= static_cast<float>(sampleInPlacement) / static_cast<float>(fadeInSamples - 1);
-    }
-    if (fadeOutSamples > 1 && (placementLengthSamples - 1 - sampleInPlacement) < fadeOutSamples) {
-        fade *= static_cast<float>(placementLengthSamples - 1 - sampleInPlacement) / static_cast<float>(fadeOutSamples - 1);
-    }
-    return fade;
 }
 
 bool findPlacementByIdGlobal(const StandaloneArrangement& arrangement,
@@ -311,17 +332,13 @@ std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(
         return nullptr;
     }
 
-    const double frameRate = sampleRate / static_cast<double>(hopSize);
-    if (frameRate <= 0.0) {
+    const auto frameRange = f0FrameRangeForSeconds(snapshot, startSeconds, endSeconds);
+    if (!frameRange.has_value()) {
         return nullptr;
     }
 
-    const int startFrame = juce::jlimit(0,
-                                        static_cast<int>(snapshot.getOriginalF0().size()),
-                                        static_cast<int>(std::floor(startSeconds * frameRate)));
-    const int endFrame = juce::jlimit(startFrame,
-                                      static_cast<int>(snapshot.getOriginalF0().size()),
-                                      static_cast<int>(std::ceil(endSeconds * frameRate)));
+    const int startFrame = frameRange->startFrame;
+    const int endFrame = frameRange->endFrameExclusive;
     if (endFrame <= startFrame) {
         return nullptr;
     }
@@ -457,6 +474,8 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
                               const StandaloneArrangement::PlaybackPlacement& placement,
                               float trackGain,
                               int64_t placementStartInOutput,
+                              int64_t placementSampleCount,
+                              double outputOriginSeconds,
                               juce::AudioBuffer<float>& out,
                               int64_t totalLen,
                               const PlaybackReadSource& source)
@@ -469,8 +488,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
         return;
     }
 
-    const int64_t requestedPlacementSamples = juce::jmax<int64_t>(1,
-        TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSr));
+    const int64_t requestedPlacementSamples = juce::jmax<int64_t>(1, placementSampleCount);
     const int64_t remainingOutputSamples = totalLen - placementStartInOutput;
     const int samplesToRender = static_cast<int>(juce::jmin<int64_t>(requestedPlacementSamples, remainingOutputSamples));
     if (samplesToRender <= 0) {
@@ -493,22 +511,18 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     }
 
     const float baseGain = trackGain * placement.gain;
-    const int64_t fadeInSamples = placement.fadeInDuration > 0.0
-        ? TimeCoordinate::secondsToSamples(placement.fadeInDuration, kExportSr)
-        : 0;
-    const int64_t fadeOutSamples = placement.fadeOutDuration > 0.0
-        ? TimeCoordinate::secondsToSamples(placement.fadeOutDuration, kExportSr)
-        : 0;
-
     for (int sampleIndex = 0; sampleIndex < renderedSamples; ++sampleIndex) {
         const int64_t dstIndex = placementStartInOutput + sampleIndex;
         if (dstIndex < 0 || dstIndex >= totalLen)
             continue;
 
-        const float fade = computePlacementFadeGain(sampleIndex,
-                                                    requestedPlacementSamples,
-                                                    fadeInSamples,
-                                                    fadeOutSamples);
+        const float fade = placementFadeGain(
+            outputOriginSeconds
+                + static_cast<double>(dstIndex) / kExportSr
+                - placement.timelineStartSeconds,
+            placement.durationSeconds,
+            placement.fadeInDuration,
+            placement.fadeOutDuration);
         const float finalGain = baseGain * fade;
         for (int ch = 0; ch < out.getNumChannels(); ++ch) {
             const float* src = placementBuffer.getReadPointer(ch);
@@ -1055,7 +1069,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         // （不回写 owner），此处派生 CRS canonical 播放源，统一固定 44.1kHz。
         // 44.1k 输入直接共享原 audio buffer；非同率经既有 upsampleForHost 重采样，
         // 时长守恒方式与 prepareImport/ARA 完全一致
-        // （secondsToSamples(samplesToSeconds(originalLen, sampleRate), targetRate)）。
+        // （sampleRateProject(originalLen, sampleRate, targetRate)）。
         bindings.publishPlaybackSource = [this](const ContentKey& key,
                                                  std::shared_ptr<const EditableContentSnapshot> snapshot,
                                                  std::shared_ptr<const juce::AudioBuffer<float>> audio,
@@ -1071,8 +1085,8 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 const int originalLen = canonicalAudio->getNumSamples();
                 const int newLen = juce::jmax(
                     1,
-                    static_cast<int>(TimeCoordinate::secondsToSamples(
-                        TimeCoordinate::samplesToSeconds(originalLen, sampleRate), targetRate)));
+                    static_cast<int>(TimeCoordinate::sampleRateProject(
+                        originalLen, sampleRate, targetRate)));
                 auto derived = std::make_shared<juce::AudioBuffer<float>>(numChannels, newLen);
                 for (int ch = 0; ch < numChannels; ++ch) {
                     auto resampledData = resamplingManager_->upsampleForHost(
@@ -2061,15 +2075,12 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 continue;
             }
 
-            const int64_t placementDurationSamples = TimeCoordinate::secondsToSamples(placement.durationSeconds,
-                                                                                      deviceSampleRate);
-            if (placementDurationSamples <= 0) {
+            const int64_t placementStartSample = TimeCoordinate::secondsToSamplesFloor(
+                placement.timelineStartSeconds, deviceSampleRate);
+            const int64_t placementEndSample = TimeCoordinate::secondsToSamplesCeil(
+                placement.timelineStartSeconds + placement.durationSeconds, deviceSampleRate);
+            if (placementEndSample <= placementStartSample)
                 continue;
-            }
-
-            const int64_t placementStartSample = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds,
-                                                                                  deviceSampleRate);
-            const int64_t placementEndSample = placementStartSample + placementDurationSamples;
 
             if (placementEndSample <= blockStartSample || placementStartSample >= blockEndSample) {
                 continue;
@@ -2082,11 +2093,16 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 continue;
             }
 
+            const double overlapAbsoluteSeconds = TimeCoordinate::samplesToSeconds(
+                overlapStartSample, deviceSampleRate);
+            double timeInPlacement = juce::jlimit(
+                0.0,
+                placement.durationSeconds,
+                overlapAbsoluteSeconds - placement.timelineStartSeconds);
             const double outputStartSeconds =
                 readSource.contentSnapshot->timeGrid->tauForward(placement.clipInSeconds);
-            const int64_t outputStartSample = TimeCoordinate::secondsToSamples(
-                outputStartSeconds, deviceSampleRate);
-            const int64_t readStartSample = overlapStartSample - placementStartSample + outputStartSample;
+            const int64_t readStartSample = TimeCoordinate::secondsToSamples(
+                outputStartSeconds + timeInPlacement, deviceSampleRate);
             const int offsetInBlock = static_cast<int>(overlapStartSample - blockStartSample);
             const int samplesToCopy = static_cast<int>(samplesToCopy64);
 
@@ -2107,18 +2123,14 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 const float* src = clipReadScratch_.getReadPointer(ch);
                 float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
 
-                double timeInPlacement = TimeCoordinate::samplesToSeconds(
-                    overlapStartSample - placementStartSample, deviceSampleRate);
                 const double dt = 1.0 / deviceSampleRate;
                 for (int s = 0; s < availableReadSamples; ++s) {
                     float gain = placementGain;
 
-                    if (fadeInSeconds > 0.0 && timeInPlacement < fadeInSeconds) {
-                        gain *= static_cast<float>(timeInPlacement / fadeInSeconds);
-                    }
-                    if (fadeOutSeconds > 0.0 && timeInPlacement >= placement.durationSeconds - fadeOutSeconds) {
-                        gain *= static_cast<float>((placement.durationSeconds - timeInPlacement) / fadeOutSeconds);
-                    }
+                    gain *= placementFadeGain(timeInPlacement,
+                                              placement.durationSeconds,
+                                              fadeInSeconds,
+                                              fadeOutSeconds);
 
                     dst[s] += src[s] * gain;
                     timeInPlacement += dt;
@@ -3319,7 +3331,8 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
         return false;
     }
 
-    const int64_t placementLen = TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSampleRateHz);
+    const int64_t placementLen = TimeCoordinate::secondsToSamplesCeil(
+        placement.durationSeconds, kExportSampleRateHz);
     if (placementLen <= 0) {
         lastExportError_ = "片段音频长度为零";
         return false;
@@ -3340,6 +3353,8 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
                              },
                              standaloneArrangement_->getTrackVolume(trackId),
                              0,
+                             placementLen,
+                             placement.timelineStartSeconds,
                              out,
                              placementLen,
                              source);
@@ -3377,8 +3392,8 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.hasAudio()) {
             continue;
         }
-        const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
-        const int64_t placementEnd = placementStart + TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSr);
+        const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
+            placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
         totalLen = std::max(totalLen, placementEnd);
     }
     if (totalLen <= 0) {
@@ -3399,7 +3414,10 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
             continue;
         }
-        const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
+        const int64_t placementStart = TimeCoordinate::secondsToSamplesFloor(
+            placement.timelineStartSeconds, kExportSr);
+        const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
+            placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
         renderPlacementForExport(*this,
                                  StandaloneArrangement::PlaybackPlacement{
                                      placement.contentKey,
@@ -3410,8 +3428,8 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
                                      placement.fadeInDuration,
                                      placement.fadeOutDuration
                                  },
-                                 trackVolume, placementStart, out, totalLen,
-                                 source);
+                                 trackVolume, placementStart, placementEnd - placementStart,
+                                 0.0, out, totalLen, source);
     }
 
     return writeAudioBufferToWavFile(out, file, &lastExportError_);
@@ -3437,8 +3455,8 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
             if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.hasAudio()) {
                 continue;
             }
-            const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
-            const int64_t placementEnd = placementStart + TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSr);
+            const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
+                placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
             totalLen = std::max(totalLen, placementEnd);
         }
     }
@@ -3463,8 +3481,14 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
             if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
                 continue;
             }
-            const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
-            renderPlacementForExport(*this, placement, track.volume, placementStart, mix, totalLen, source);
+            const int64_t placementStart = TimeCoordinate::secondsToSamplesFloor(
+                placement.timelineStartSeconds, kExportSr);
+            const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
+                placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
+            renderPlacementForExport(*this, placement, track.volume, placementStart,
+                                     placementEnd - placementStart,
+                                     0.0,
+                                     mix, totalLen, source);
         }
     }
 
@@ -3670,16 +3694,22 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
 
     out.displayName = displayName;
     out.sourceFilePath = sourceFilePath;
+    out.sourceWindow = SourceWindow{
+        0,
+        juce::String(),
+        0.0,
+        TimeCoordinate::samplesToSeconds(inBuffer.getNumSamples(), inSampleRate)
+    };
 
     // 导入后的 content 在 shared runtime 内统一落到固定 44.1kHz（content-local 存储采样率）
     const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
     if (std::abs(inSampleRate - targetSampleRate) > 1.0) {
         const int numChannels = inBuffer.getNumChannels();
         const int originalLen = inBuffer.getNumSamples();
-        const double sourceDurationSeconds = TimeCoordinate::samplesToSeconds(originalLen, inSampleRate);
         const int newLen = juce::jmax(
             1,
-            static_cast<int>(TimeCoordinate::secondsToSamples(sourceDurationSeconds, targetSampleRate)));
+            static_cast<int>(TimeCoordinate::sampleRateProject(
+                originalLen, inSampleRate, targetSampleRate)));
         
         out.storedAudioBuffer.setSize(numChannels, newLen);
         
@@ -3723,11 +3753,8 @@ ContentKey OpenTuneAudioProcessor::ensureSourceAndCreateStandaloneClip(PreparedI
     }
 
     SourceWindow sw = prepared.sourceWindow;
-    if (sw.sourceId == 0) {
-        const double durationSeconds = TimeCoordinate::samplesToSeconds(
-            storedAudioBuffer->getNumSamples(), TimeCoordinate::kRenderSampleRate);
-        sw = SourceWindow{sourceId, juce::String(), 0.0, durationSeconds};
-    }
+    sw.sourceId = sourceId;
+    sw.sourcePersistentId.clear();
 
     ContentState payload;
     payload.sourceWindow = sw;
@@ -3811,15 +3838,11 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
         if (snap->pitchCurve != nullptr) {
             const auto pSnapshot = snap->pitchCurve;
-            const double frameRate = pSnapshot->getSampleRate()
-                / static_cast<double>(juce::jmax(1, pSnapshot->getHopSize()));
-            if (frameRate > 0.0) {
-                const int startFrame = juce::jmax(0,
-                    static_cast<int>(std::floor(request.changedStartSeconds * frameRate)));
-                const int endFrame = juce::jmax(startFrame,
-                    static_cast<int>(std::ceil(request.changedEndSeconds * frameRate)));
+            if (const auto frameRange = f0FrameRangeForSeconds(
+                    *pSnapshot, request.changedStartSeconds, request.changedEndSeconds)) {
                 auto clearedCurve = PitchCurve::fromSnapshot(snap->pitchCurve);
-                clearedCurve->clearCorrectionRange(startFrame, endFrame);
+                clearedCurve->clearCorrectionRange(frameRange->startFrame,
+                                                    frameRange->endFrameExclusive);
                 if (!writePitchCurveToOwner(request.contentKey, std::move(clearedCurve))) {
                     return false;
                 }
@@ -3931,15 +3954,16 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                     auto previousSnapshot = previousSnap->pitchCurve;
                     auto segments = previousSnapshot->getCorrectionSegments();
                     if (!segments.empty()) {
-                        const double frameRate = static_cast<double>(result.f0SampleRate)
-                            / static_cast<double>(juce::jmax(1, result.hopSize));
                         const int maxFrame = static_cast<int>(result.f0.size());
 
-                        if (frameRate > 0.0 && capturedRequest.changedEndSeconds > capturedRequest.changedStartSeconds) {
-                            const int changedStartFrame = juce::jmax(0,
-                                static_cast<int>(std::floor(capturedRequest.changedStartSeconds * frameRate)));
-                            const int changedEndFrame = juce::jmax(changedStartFrame,
-                                static_cast<int>(std::ceil(capturedRequest.changedEndSeconds * frameRate)));
+                        if (const auto changedRange = f0FrameRangeForSeconds(
+                                result.hopSize,
+                                static_cast<double>(result.f0SampleRate),
+                                maxFrame,
+                                capturedRequest.changedStartSeconds,
+                                capturedRequest.changedEndSeconds)) {
+                            const int changedStartFrame = changedRange->startFrame;
+                            const int changedEndFrame = changedRange->endFrameExclusive;
 
                             segments.erase(std::remove_if(segments.begin(),
                                                           segments.end(),
@@ -4495,18 +4519,19 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         return result;
     }
 
-    const double frameRate = pitchSampleRate / static_cast<double>(hopSize);
-    const int affectedStartFrame = juce::jlimit(
-        0, frameCount,
-        static_cast<int>(std::floor(patch.affectedSourceStartSeconds * frameRate)));
-    const int affectedEndFrame = juce::jlimit(
-        0, frameCount,
-        static_cast<int>(std::ceil(patch.affectedSourceEndSeconds * frameRate)));
-    if (affectedEndFrame <= affectedStartFrame) {
+    const auto affectedFrameRange = f0FrameRangeForSeconds(
+        hopSize,
+        pitchSampleRate,
+        frameCount,
+        patch.affectedSourceStartSeconds,
+        patch.affectedSourceEndSeconds);
+    if (!affectedFrameRange.has_value() || affectedFrameRange->isEmpty()) {
         result.status = ReferenceAlignmentResult::Status::NoOverlap;
         result.message = "AUTO Ref overlap maps to an empty F0 range";
         return result;
     }
+    const int affectedStartFrame = affectedFrameRange->startFrame;
+    const int affectedEndFrame = affectedFrameRange->endFrameExclusive;
 
     const auto& normalizedNotes = patch.notesAfter;
     const auto correctionRange = PitchCurve::expandNoteBasedCorrectionRange(

@@ -75,11 +75,8 @@ class TimeGridSnapshot {
 public:
     TimeGridSnapshot() = default;
 
-    static constexpr double kSourceSpacingFrameRate = 100.0;
     static constexpr double kMinOutputSpacingSeconds = 0.030;
-    static constexpr int kMinSourceSpacingFrames = 15;
-    static constexpr double kMinSourceSpacingSeconds =
-        static_cast<double>(kMinSourceSpacingFrames) / kSourceSpacingFrameRate;
+    static constexpr double kMinSourceSpacingSeconds = 0.150;
 
     static bool hasMinimumSourceSpacing(double previousSourceSeconds,
                                         double currentSourceSeconds) noexcept;

@@ -1,5 +1,6 @@
 #include "PlaybackSourcePublisher.h"
 #include "../Inference/RenderCache.h"
+#include "../Utils/TimeCoordinate.h"
 #include <algorithm>
 #include <set>
 
@@ -194,8 +195,8 @@ void PlaybackSourcePublisher::prepareSourceDry(PlaybackReadSource& src, double t
 
     const int srcLen = src.audioBuffer->getNumSamples();
     const int srcChs = src.audioBuffer->getNumChannels();
-    const int outputLength = static_cast<int>(
-        std::round(static_cast<double>(srcLen) * targetSr / src.audioSampleRate));
+    const int outputLength = static_cast<int>(TimeCoordinate::sampleRateProject(
+        static_cast<int64_t>(srcLen), src.audioSampleRate, targetSr));
     if (outputLength <= 0) return;
 
     auto preparedBuf = std::make_shared<juce::AudioBuffer<float>>(srcChs, outputLength);

@@ -3,6 +3,7 @@
 #include <SoundTouch.h>
 
 #include "../Utils/AppLogger.h"
+#include "../Utils/TimeCoordinate.h"
 
 #include <algorithm>
 #include <cmath>
@@ -124,8 +125,8 @@ void SoundTouchStretcher::beginRebuild(const TempoSchedule& schedule)
 
     activeSchedule_ = schedule;
     totalPushedSamples_ = 0;
-    expectedOutputSamples_ = static_cast<size_t>(
-        std::llround(schedule.totalOutputSeconds * sampleRate_));
+    expectedOutputSamples_ = static_cast<size_t>(TimeCoordinate::secondsToSamplesNearest(
+        schedule.totalOutputSeconds, sampleRate_));
 
     phase_ = Phase::Pushing;
 }
@@ -162,7 +163,7 @@ void SoundTouchStretcher::push(const float* input, size_t numSamples, bool isLas
             const double segEndSrcSec = activeSchedule_.anchors[segIdx + 1].sourceSeconds;
             const size_t framesUntilSegEnd =
                 static_cast<size_t>(std::max<double>(0.0,
-                    std::ceil((segEndSrcSec - tSrcSec) * sampleRate_)));
+                    static_cast<double>(TimeCoordinate::secondsToSamplesCeil(segEndSrcSec - tSrcSec, sampleRate_))));
             size_t pushCount = std::min(numSamples - consumed,
                                          std::max<size_t>(framesUntilSegEnd, 1));
 

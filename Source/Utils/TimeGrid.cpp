@@ -9,6 +9,7 @@ namespace OpenTune {
 namespace {
 
 constexpr double kTotalDurationEpsilon = 1e-6;
+constexpr double kSourceSpacingComparisonEpsilon = 1e-12;
 
 uint64_t makeStableId() noexcept
 {
@@ -25,9 +26,8 @@ bool TimeGridSnapshot::hasMinimumSourceSpacing(double previousSourceSeconds,
         return false;
     }
 
-    const int previousFrame = static_cast<int>(std::round(previousSourceSeconds * kSourceSpacingFrameRate));
-    const int currentFrame = static_cast<int>(std::round(currentSourceSeconds * kSourceSpacingFrameRate));
-    return currentFrame - previousFrame >= kMinSourceSpacingFrames;
+    return currentSourceSeconds - previousSourceSeconds
+        >= kMinSourceSpacingSeconds - kSourceSpacingComparisonEpsilon;
 }
 
 bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::String& outError)

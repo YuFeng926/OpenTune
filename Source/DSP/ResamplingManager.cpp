@@ -11,7 +11,6 @@
 
 #include "CDSPResampler.h"
 #include "Utils/TimeCoordinate.h"
-#include <cmath>
 #include <algorithm>
 #include <limits>
 
@@ -53,8 +52,8 @@ std::vector<float> ResamplingManager::resample(
         static_cast<int>(inputLength)
     );
 
-    const double durationSeconds = TimeCoordinate::samplesToSeconds(static_cast<int64_t>(inputLength), static_cast<double>(inputSR));
-    const int64_t outputLength64 = TimeCoordinate::secondsToSamples(durationSeconds, static_cast<double>(targetSR));
+    const int64_t outputLength64 = TimeCoordinate::sampleRateProject(
+        static_cast<int64_t>(inputLength), static_cast<double>(inputSR), static_cast<double>(targetSR));
     int outputLength = static_cast<int>(std::min<int64_t>(outputLength64, static_cast<int64_t>(std::numeric_limits<int>::max())));
     
     if (outputLength <= 0) outputLength = 1;

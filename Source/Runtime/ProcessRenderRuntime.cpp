@@ -824,8 +824,31 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     }
 
     const double f0FrameRate = f0SampleRate / static_cast<double>(f0HopSize);
-    const int f0StartFrame = static_cast<int>(std::floor(trueStartSeconds * f0FrameRate));
-    const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
+    const F0Timeline f0Timeline(f0HopSize,
+                                f0SampleRate,
+                                static_cast<int>(pitchCurve->getOriginalF0().size()));
+    const double f0TimelineEndSeconds = f0Timeline.timeAtFrame(
+        static_cast<int>(pitchCurve->getOriginalF0().size()));
+    if (trueEndSeconds <= 0.0 || trueStartSeconds >= f0TimelineEndSeconds)
+    {
+        if (!intersectsActiveEqNote)
+        {
+            coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision);
+            notifyChunkSettled(completion, coreJob);
+        }
+        else
+        {
+            publishRawWithEq();
+        }
+        return;
+    }
+    const auto contentF0Range = f0Timeline.rangeForTimes(trueStartSeconds, trueEndSeconds);
+    const int f0StartFrame = contentF0Range.startFrame;
+    // One extra frame is operational interpolation context. It is not part of
+    // the chunk's absolute content range or published output length.
+    const int f0EndFrame = std::min(
+        static_cast<int>(pitchCurve->getOriginalF0().size()),
+        contentF0Range.endFrameExclusive + 1);
     const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
     const double firstSampleFramePhase = trueStartSeconds * f0FrameRate - static_cast<double>(f0StartFrame);
 

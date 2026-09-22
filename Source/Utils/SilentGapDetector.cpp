@@ -1,95 +1,17 @@
 #include "SilentGapDetector.h"
 #include "TimeCoordinate.h"
-#include "SimdAccelerator.h"
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
 #include <cmath>
-#include <numeric>
-#include <mutex>
 
 namespace OpenTune {
-
-namespace {
-
-SilentGapDetector::DetectionConfig makeDefaultConfig()
-{
-    SilentGapDetector::DetectionConfig cfg;
-    cfg.strictThreshold_dB = SilentGapDetector::kDefaultThreshold_dB;
-    cfg.relaxedTotalThreshold_dB = SilentGapDetector::kRelaxedTotalThreshold_dB;
-    cfg.lowBandThreshold_dB = SilentGapDetector::kLowBandThreshold_dB;
-    cfg.highPassCutoffHz = SilentGapDetector::kHighPassCutoffHz;
-    cfg.lowBandUpperHz = SilentGapDetector::kLowBandUpperHz;
-    cfg.minGapDurationMs = SilentGapDetector::kMinGapDurationMs;
-    return cfg;
-}
-
-SilentGapDetector::DetectionConfig sanitizeConfig(SilentGapDetector::DetectionConfig cfg)
-{
-    // 合法范围保护：稳定优先
-    cfg.strictThreshold_dB = juce::jlimit(-120.0f, 0.0f, cfg.strictThreshold_dB);
-    cfg.relaxedTotalThreshold_dB = juce::jlimit(-120.0f, 0.0f, cfg.relaxedTotalThreshold_dB);
-    cfg.lowBandThreshold_dB = juce::jlimit(-120.0f, 0.0f, cfg.lowBandThreshold_dB);
-    cfg.highPassCutoffHz = juce::jlimit(1.0, 500.0, cfg.highPassCutoffHz);
-    cfg.lowBandUpperHz = juce::jlimit(200.0, 20000.0, cfg.lowBandUpperHz);
-    cfg.minGapDurationMs = juce::jlimit(1.0, 200.0, cfg.minGapDurationMs);
-
-    // 保证“放宽阈值”不比“严格阈值”更严格
-    if (cfg.relaxedTotalThreshold_dB < cfg.strictThreshold_dB) {
-        cfg.relaxedTotalThreshold_dB = cfg.strictThreshold_dB;
-    }
-
-    // 保证低频带上限高于高通截止
-    if (cfg.lowBandUpperHz <= cfg.highPassCutoffHz) {
-        cfg.lowBandUpperHz = std::min(20000.0, cfg.highPassCutoffHz + 100.0);
-    }
-
-    return cfg;
-}
-
-std::mutex& configMutex()
-{
-    static std::mutex m;
-    return m;
-}
-
-SilentGapDetector::DetectionConfig& globalConfig()
-{
-    static SilentGapDetector::DetectionConfig cfg = makeDefaultConfig();
-    return cfg;
-}
-
-} // namespace
-
-SilentGapDetector::DetectionConfig SilentGapDetector::getConfig()
-{
-    std::lock_guard<std::mutex> lock(configMutex());
-    return globalConfig();
-}
-
-// ============================================================================
-// 私有辅助方法
-// ============================================================================
-
-float SilentGapDetector::calculateRmsDb(const float* data, int64_t numSamples)
-{
-    // 计算 RMS 电平（dB）
-    if (numSamples <= 0 || data == nullptr) return -100.0f;
-
-    const float sumSquares = SimdAccelerator::getInstance().dotProduct(data, data, static_cast<size_t>(numSamples));
-
-    float rms = std::sqrt(sumSquares / static_cast<float>(numSamples));
-    return linearToDb(rms);
-}
-
-
 
 // ============================================================================
 // 静息处检测
 // ============================================================================
 
-std::vector<SilentGap> SilentGapDetector::detectAllGaps(
-    const juce::AudioBuffer<float>& audio,
-    float threshold_dB)
+std::vector<SilentGap> SilentGapDetector::detectAllGapsAdaptive(
+    const juce::AudioBuffer<float>& audio)
 {
     std::vector<SilentGap> result;
     
@@ -97,13 +19,12 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
     const int numChannels = audio.getNumChannels();
     if (numSamples <= 0 || numChannels <= 0) return result;
     
-    const auto cfg = getConfig();
-    const float effectiveStrictThreshold = std::isfinite(threshold_dB) ? threshold_dB : cfg.strictThreshold_dB;
+    const DetectionConfig cfg{};
     const double sampleRate = kInternalSampleRate;
-    const int64_t minGapSamples = static_cast<int64_t>(getMinGapDurationSec(cfg.minGapDurationMs) * sampleRate);
+    const int64_t minGapSamples = TimeCoordinate::secondsToSamples(getMinGapDurationSec(cfg.minGapDurationMs), sampleRate);
     
     // 分析窗口大小：约 2ms，用于平滑电平检测
-    const int64_t windowSize = std::max<int64_t>(1, static_cast<int64_t>(sampleRate * 0.002));
+    const int64_t windowSize = std::max<int64_t>(1, TimeCoordinate::secondsToSamples(0.002, sampleRate));
 
     // 混合到单声道（支持多声道输入）
     std::vector<float> mono(static_cast<size_t>(numSamples), 0.0f);
@@ -176,9 +97,9 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
         float lowBandLevel_dB = linearToDb(rmsLow);
 
         // 判定逻辑（两级）（均为配置驱动）：
-        // 1) 严格阈值：总电平 <= effectiveStrictThreshold（cfg.strictThreshold_dB）视为静息
+        // 1) 严格阈值：总电平 <= cfg.strictThreshold_dB 视为静息
         // 2) 放宽频域规则：总电平 <= cfg.relaxedTotalThreshold_dB，且低频带(<= cfg.lowBandUpperHz)平均电平 < cfg.lowBandThreshold_dB
-        const bool passStrictThreshold = (totalLevel_dB <= effectiveStrictThreshold);
+        const bool passStrictThreshold = (totalLevel_dB <= cfg.strictThreshold_dB);
         const bool passRelaxedFreqRule =
             (totalLevel_dB <= cfg.relaxedTotalThreshold_dB) &&
             (lowBandLevel_dB < cfg.lowBandThreshold_dB);
@@ -225,13 +146,6 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
     }
     
     return result;
-}
-
-std::vector<SilentGap> SilentGapDetector::detectAllGapsAdaptive(
-    const juce::AudioBuffer<float>& audio,
-    double /*maxSearchDistanceSec*/)
-{
-    return detectAllGaps(audio);
 }
 
 } // namespace OpenTune

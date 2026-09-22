@@ -1885,10 +1885,10 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     const int numChannels = source->getShape().numChannels;
 
     // 2. Read ARA source window
-    const int64_t sourceStartSample = static_cast<int64_t>(
-        std::round(sourceWindow.sourceStartSeconds * sourceSampleRate));
-    const int64_t sourceEndSample = static_cast<int64_t>(
-        std::round(sourceWindow.sourceEndSeconds * sourceSampleRate));
+    const int64_t sourceStartSample = TimeCoordinate::secondsToSamplesNearest(
+        sourceWindow.sourceStartSeconds, sourceSampleRate);
+    const int64_t sourceEndSample = TimeCoordinate::secondsToSamplesNearest(
+        sourceWindow.sourceEndSeconds, sourceSampleRate);
     const int64_t windowSamples = std::max<int64_t>(0,
         std::min<int64_t>(sourceEndSample, numSamples)
         - std::max<int64_t>(0, sourceStartSample));
