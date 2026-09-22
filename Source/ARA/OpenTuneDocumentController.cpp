@@ -2005,7 +2005,10 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     modification.birthState = AudioModificationBirthState::Ready;
     // 有效 F0 表示 archive/runtime 恢复，不产生新模型变更；无有效 F0 表示用户 Read，保持通知
     if (modification.audioModification != nullptr)
-        modification.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), !alreadyHasF0);
+        modification.audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::samplesAreAffected()
+                + juce::ARAContentUpdateScopes::tuningIsAffected(),
+            !alreadyHasF0);
 
     // 有效 F0（archive 恢复）自动触发完整 Stage1 渲染，无需用户手动编辑即可出声；
     // 用户手动 Read（无有效 F0）不提前 Stage1，F0 提取完成后由既有链继续。
@@ -2059,7 +2062,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             {
                 m->applyOriginalF0State(OriginalF0State::Failed);
                 if (m->audioModification != nullptr)
-                    m->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+                    m->audioModification->notifyContentChanged(
+                        juce::ARAContentUpdateScopes::tuningIsAffected(), true);
             }
         }
     };
@@ -2153,7 +2157,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                         && mod->audioModification != nullptr)
                     {
                         mod->applyOriginalF0State(OriginalF0State::Failed);
-                        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+                        mod->audioModification->notifyContentChanged(
+                            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
                     }
                 }
                 return;
@@ -2183,7 +2188,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
 
                     mod->applyOriginalF0State(OriginalF0State::Failed);
                     if (mod->audioModification != nullptr)
-                        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+                        mod->audioModification->notifyContentChanged(
+                            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
 
                     // Log the failure reason (result.errorMessage carries the worker-side failure cause)
                     AppLogger::error("ARA-F0: extraction failed key="
@@ -2236,7 +2242,11 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 mod->originalF0InputStamp = stamp;
 
                 if (mod->audioModification != nullptr)
-                    mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+                    mod->audioModification->notifyContentChanged(
+                        juce::ARAContentUpdateScopes::samplesAreAffected()
+                            + juce::ARAContentUpdateScopes::tuningIsAffected()
+                            + juce::ARAContentUpdateScopes::harmoniesAreAffected(),
+                        true);
 
                 // F0 commit → form "committed data → request current version render" transaction
                 requestFullModificationRender(key);
@@ -2253,7 +2263,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             {
                 mod->applyOriginalF0State(OriginalF0State::Failed);
                 if (mod->audioModification != nullptr)
-                    mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+                    mod->audioModification->notifyContentChanged(
+                        juce::ARAContentUpdateScopes::tuningIsAffected(), true);
             }
         }
         return false;
@@ -2736,7 +2747,10 @@ bool OpenTuneDocumentController::applyNotesToModification(const ContentKey& key,
     
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::samplesAreAffected()
+                + juce::ARAContentUpdateScopes::notesAreAffected(),
+            true);
     
     refreshRegisteredRenderers(publishModelChange());
     return true;
@@ -2751,7 +2765,8 @@ bool OpenTuneDocumentController::applyVolumeEnvelopeToModification(const Content
 
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::samplesAreAffected(), true);
 
     refreshRegisteredRenderers(publishModelChange());
     return true;
@@ -2776,7 +2791,10 @@ bool OpenTuneDocumentController::applyPitchCurveToModification(const ContentKey&
     
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::samplesAreAffected()
+                + juce::ARAContentUpdateScopes::tuningIsAffected(),
+            true);
     
     refreshRegisteredRenderers(publishModelChange());
     return true;
@@ -2790,7 +2808,8 @@ bool OpenTuneDocumentController::applyOriginalF0ToModification(const ContentKey&
 
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
 
     // OriginalF0 只更新分析数据，不触发音频渲染，所以不调用 refreshRegisteredRenderers
     return true;
@@ -2806,7 +2825,12 @@ bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& k
 
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            isIdentity
+                ? juce::ARAContentUpdateScopes::timelineIsAffected()
+                : juce::ARAContentUpdateScopes::timelineIsAffected()
+                    + juce::ARAContentUpdateScopes::samplesAreAffected(),
+            true);
 
     auto snapshot = mod->snapshotContent();
 
@@ -2835,7 +2859,11 @@ bool OpenTuneDocumentController::applyPitchShiftStateToModification(const Conten
     
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::samplesAreAffected()
+                + juce::ARAContentUpdateScopes::notesAreAffected()
+                + juce::ARAContentUpdateScopes::tuningIsAffected(),
+            true);
     
     refreshRegisteredRenderers(publishModelChange());
     return true;
@@ -2849,7 +2877,8 @@ bool OpenTuneDocumentController::applyDetectedKeyToModification(const ContentKey
     
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::harmoniesAreAffected(), true);
     
     refreshRegisteredRenderers(publishModelChange());
     return true;
@@ -2863,7 +2892,10 @@ bool OpenTuneDocumentController::applyReferenceFeaturesToModification(const Cont
     
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::notesAreAffected()
+                + juce::ARAContentUpdateScopes::timelineIsAffected(),
+            true);
     
     refreshRegisteredRenderers(publishModelChange());
     return true;
@@ -2877,7 +2909,8 @@ bool OpenTuneDocumentController::applyOriginalF0StateToModification(const Conten
     
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
     
     refreshRegisteredRenderers(publishModelChange());
     return true;
