@@ -17,7 +17,6 @@ enum class AudioModificationBirthState
 {
     Empty,
     WaitingForSource,
-    Rendering,
     Ready,
     Failed
 };

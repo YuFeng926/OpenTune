@@ -59,7 +59,6 @@ public:
         std::vector<float> f0;
         std::vector<float> energy;
         std::vector<SilentGap> silentGaps;
-        const char* modelName{"Unknown"};
         std::string errorMessage;
 
         double audioDurationSeconds{0.0};

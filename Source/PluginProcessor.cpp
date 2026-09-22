@@ -1016,7 +1016,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                         result.energy = computeFrameEnergy(
                             src, numSamples, static_cast<int>(sr),
                             result.f0, result.f0SampleRate, result.hopSize);
-                         result.modelName = f0Svc->getCurrentF0Model() == F0ModelType::FCPE ? "FCPE" : "FCPE";
                         result.success = true;
                         return result;
                     },
@@ -1099,13 +1098,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         };
 
         capture = std::make_unique<Capture::CaptureSession>(std::move(bindings));
-    }
 
-    // appLogger 在此之前记录：log 须置于 publish 之前，抛出时不留部分成员状态。
-    // AppLogger::log 可能抛出，发布后仅允许 noexcept 操作。
-    if (capture)
-         AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
-             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
+        // Log before publishing members so a throwing logger cannot leave partial state.
+        AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
+    }
 #endif // JucePlugin_Build_VST3
 
     // 完整成功后一次性发布成员（noexcept 移动）。
@@ -1121,12 +1118,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     contentCommands_ = std::move(commands);
     resamplingManager_ = std::move(resampler);
 #if JucePlugin_Build_VST3
-    const bool hasCapture = capture != nullptr;
-    if (hasCapture)
+    if (capture)
+    {
         captureSession_ = std::move(capture);
-
-    if (hasCapture)
         startTimerHz(30);
+    }
 #endif
 
     runtimeStateInitialized_.store(true, std::memory_order_release);
