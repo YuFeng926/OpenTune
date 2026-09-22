@@ -43,7 +43,7 @@ VST3 和 Standalone 使用各自的 SharedCode target。公共源码分别编译
 `ContentState` 是三个 content owner 的唯一 owner schema：
 
 - `sourceWindow`、`audioBuffer`、`sampleRate`、`audioRevision`
-- `AnalysisState analysis`：pitch curve、Original F0、DetectedKey、silent gaps、reference features 和分析生命周期
+- `AnalysisState analysis`：pitch curve、Original F0、DetectedKey、silent gaps、reference features 和分析状态
 - notes、TimeGrid、pitch shift、volume envelope、note topology
 - 分项 revision 和单一 `contentRevision`
 
@@ -102,7 +102,7 @@ Arrangement 只保存 placement、track 和 timeline 几何。placement 通过 `
   -> PlaybackReadSource
 ```
 
-F0 成功提交使用一次性 `applyOriginalF0()`：同时写入 curve、Ready、`f0Lifecycle`、`analysisRevision`、`pitchRevision` 和 `contentRevision`。render gate 使用 `PitchCurve::hasUsableOriginalF0()`，不单独相信状态枚举。Capture persistence restore 对 Ready 且有曲线的数据复用同一提交路径。
+F0 成功提交使用一次性 `applyOriginalF0()`：同时写入 curve、Ready、`analysisRevision`、`pitchRevision` 和 `contentRevision`。render gate 使用 `PitchCurve::hasUsableOriginalF0()`，不单独相信状态枚举。Capture persistence restore 对 Ready 且有曲线的数据复用同一提交路径。
 
 ### 2.3 ARA2
 
@@ -115,7 +115,7 @@ ARA host
   -> OpenTunePlaybackRenderer
 ```
 
-ARA SDK 对象和宿主 placement 只在 DC 消息线程访问。`PlaybackRegion` 保存必要的 host pointer；projection 构建时直接读取 SDK 当前 placement，不在 wrapper 中保存 placement 副本。
+ARA SDK 对象和宿主 placement 只在 DC 消息线程访问。`PlaybackRegion` 只保存 host pointer；projection 只保存宿主 placement 属性和 `ContentKey`，不复制 `SourceWindow` 或其他 content state。渲染和编辑视图需要 source window 时，从对应 CRS `PlaybackReadSource.contentSnapshot` 读取。
 
 AudioModification clone 分为四步：
 
@@ -156,14 +156,17 @@ Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容�
 5. ARA 和 Capture 的 `processBlock` 在最终输出后发布频谱；Standalone placement 的 PianoRoll projection、ARA 非零 source window projection 和 TrimLeft output/source 映射已按各自坐标合同修正。
 6. 删除了未消费的 ARA content accessor、cycle-range wrapper、播放采样率 getter 和 renderer CRS setter。worker 不再携带冗余的 `startSeconds`，只使用 sample range。
 7. 删除未消费的 `mappingRevision`、`pitchShiftRevision`、`outputGainRevision` 和双账本 analysis lifecycle；VST3 旧状态的字节布局 skip 常量仍保留，仅用于读取已发布的历史布局。
+8. `PianoRollComponent` 和 `PianoRollToolHandler` 的 scratch curve mutation 直接返回新的 `shared_ptr<const PitchCurveSnapshot>`；业务层不再通过旧 `getSnapshot()` 或 `clone()` 回读编辑结果。
+9. Stage1 completion 直接携带当次 snapshot/audio 进入 Stage2 settle gate；Stage2 提交前只校验 CRS 当前发布 revision 和 audio identity，不再从 CRS 替换回调输入，也不再存在 TimeGrid 变更的即时重复 Stage2 路径。
+10. `PlaybackRegionProjection` 只保留宿主 placement 属性和 `ContentKey`；ARA renderer 从发布的 `PlaybackReadSource.contentSnapshot` 取得 `SourceWindow` 和 TimeGrid。
 
 ## 4. 剩余问题
 
 ### P1：宿主行为和回归覆盖
 
-1. **ARA 非恒等 TimeGrid playback 链仍缺宿主回归。** 需要确认 playback seconds 到 modification/source-local、再到 output seconds 和 prepared sample 的完整映射。恒等 TimeGrid 不能覆盖这个问题。
-2. **ARA placement、clone 和多 placement PianoRoll 仍缺 DAW/ARA 宿主回归。** worker 已只消费 job 携带的 immutable snapshot/audio，但 host placement 更新、clone 独立性、通知时序和视觉行为尚未由宿主确认。
-3. **Capture 非恒等 TimeGrid 需要真实宿主回归。** 代码路径已接入 Stage2，但录制、编辑、播放和宿主 block 边界的时序仍没有 VST3 宿主测试。
+1. **ARA 非恒等 TimeGrid playback 链仍缺宿主回归。** 纯逻辑链已固定为 playback seconds → modification/source-local → TimeGrid output → prepared sample，但仍需真实宿主确认。
+2. **ARA placement、clone 和多 placement PianoRoll 仍缺 DAW/ARA 宿主回归。** projection 不再携带 content state；仍需宿主确认 placement 更新、clone 独立性、通知时序和视觉行为。
+3. **Capture 非恒等 TimeGrid 需要真实宿主回归。** 代码路径已接入单一 Stage2 settle gate，但录制、编辑、播放和宿主 block 边界的时序仍没有 VST3 宿主测试。
 
 ### P1：时间域和状态合同
 

@@ -2400,7 +2400,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
                 newDuration = minDur;
 
             const auto contentSnapshot = processor_.getContentSnapshot(placement.contentKey);
-            if (contentSnapshot == nullptr || contentSnapshot->timeGrid == nullptr)
+            if (contentSnapshot == nullptr)
                 return;
 
             const double outputStart = contentSnapshot->timeGrid->tauForward(trimStartClipInSeconds_);

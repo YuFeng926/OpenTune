@@ -28,14 +28,12 @@ namespace {
         const double modificationOffset = playbackOffset
             * (region.durationInModificationTime / region.durationInPlaybackTime);
         const double modificationTime = region.startInModificationTime + modificationOffset;
-        const double sourceLocalSeconds = modificationTime - region.contentWindow.sourceStartSeconds;
-
-        if (source.contentSnapshot == nullptr)
-            return 0.0;
+        const auto& snapshot = *source.contentSnapshot;
+        const double sourceLocalSeconds = modificationTime - snapshot.sourceWindow.sourceStartSeconds;
 
         return juce::jlimit(0.0,
-                            juce::jmax(0.0, region.contentDurationSeconds),
-                            source.contentSnapshot->timeGrid->tauForward(sourceLocalSeconds));
+                            juce::jmax(0.0, snapshot.sourceWindow.durationSeconds()),
+                            snapshot.timeGrid->tauForward(sourceLocalSeconds));
     }
 
     void mixScratchInto(juce::AudioBuffer<float>& destination,
@@ -146,15 +144,18 @@ std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRend
         if (!projection.isPlaybackRenderable())
             continue;
 
+        const auto* contentRenderService = documentController_->getContentRenderService();
+        PlaybackReadSource readSource;
+        if (contentRenderService == nullptr
+            || !contentRenderService->getPlaybackReadSource(projection.contentKey, readSource))
+            continue;
+
         PlaybackRegionRenderItem item;
-        item.playbackRegion = projection.playbackRegion;
-        item.contentWindow = projection.contentWindow;
         item.contentKey = projection.contentKey;
         item.startInPlaybackTime = projection.startInPlaybackTime;
         item.startInModificationTime = projection.startInModificationTime;
         item.durationInPlaybackTime = projection.durationInPlaybackTime;
         item.durationInModificationTime = projection.durationInModificationTime;
-        item.contentDurationSeconds = projection.contentDurationSeconds;
         nextPlan->items.push_back(item);
     }
 

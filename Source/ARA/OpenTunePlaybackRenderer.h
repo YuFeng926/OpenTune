@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../Utils/SourceWindow.h"
 #include "../Utils/TimeCoordinate.h"
 #include "../Content/ContentKey.h"
 #include <juce_core/juce_core.h>
@@ -72,14 +71,11 @@ public:
 
     struct PlaybackRegionRenderItem
     {
-        juce::ARAPlaybackRegion* playbackRegion{nullptr};
-        SourceWindow contentWindow;
         ContentKey contentKey;
         double startInPlaybackTime{0.0};
         double startInModificationTime{0.0};
         double durationInPlaybackTime{0.0};
         double durationInModificationTime{0.0};
-        double contentDurationSeconds{0.0};
 
         double endInPlaybackTime() const noexcept { return startInPlaybackTime + durationInPlaybackTime; }
     };

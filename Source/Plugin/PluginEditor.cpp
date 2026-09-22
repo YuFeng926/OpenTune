@@ -81,13 +81,18 @@ ContentKey chooseActiveCaptureContentKey(Capture::CaptureSession& session,
 
 #if JucePlugin_Enable_ARA
 ContentTimelineProjection makePianoRollLocalProjection(
+    const OpenTuneAudioProcessor& processor,
     const OpenTuneDocumentController::PlaybackRegionProjection& region)
 {
+    const auto snapshot = processor.getContentSnapshot(region.contentKey);
+    if (snapshot == nullptr)
+        return {};
+
     ContentTimelineProjection projection;
     projection.timelineStartSeconds = region.startInPlaybackTime;
     projection.timelineDurationSeconds = region.durationInPlaybackTime;
     projection.contentStartSeconds = region.startInModificationTime
-        - region.contentWindow.sourceStartSeconds;
+        - snapshot->sourceWindow.sourceStartSeconds;
     projection.contentDurationSeconds = region.durationInModificationTime;
     return projection;
 }
@@ -723,7 +728,7 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
         for (const auto& region : allRegions) {
             if (!region.contentKey.isValid())
                 continue;
-            const auto projection = makePianoRollLocalProjection(region);
+            const auto projection = makePianoRollLocalProjection(processorRef_, region);
             if (!projection.isValid())
                 continue;
             allPlacements.push_back(makePlacement(region.contentKey, projection,
@@ -738,7 +743,7 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
         std::optional<PianoRollPlacementIdentity> activeIdentity;
 
         if (focusedRegion.has_value() && focusedRegion->contentKey.isValid()) {
-            const auto focusedProj = makePianoRollLocalProjection(*focusedRegion);
+            const auto focusedProj = makePianoRollLocalProjection(processorRef_, *focusedRegion);
             if (focusedProj.isValid()) {
                 PianoRollPlacementIdentity focusedIdentity{
                     focusedRegion->contentKey, focusedProj};

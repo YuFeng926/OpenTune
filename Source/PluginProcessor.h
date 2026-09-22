@@ -693,7 +693,8 @@ public:
     // 帧域入口只负责按 pitchCurve hop 换算后调用它。
     void onContentLocalMutationCompletedSeconds(ContentKey key,
                                                double startSeconds,
-                                               double endSeconds);
+                                               double endSeconds,
+                                               std::shared_ptr<const EditableContentSnapshot> snapshot);
     void onContentLocalMutationCompleted(ContentKey key,
                                          ContentEditRangeFrames affectedRange);
     void onContentFullMutationCompleted(ContentKey key);
@@ -876,7 +877,11 @@ private:
     // Hard-cut render mutation request primitive. This is the only path
     // that builds RenderJob and enqueues into ContentRenderService; every other
     // mutation entry point funnels through the two sinks above.
-    void requestRenderForLocalMutationRange(ContentKey key, double startSeconds, double endSeconds);
+    void requestRenderForLocalMutationRange(
+        ContentKey key,
+        double startSeconds,
+        double endSeconds,
+        std::shared_ptr<const EditableContentSnapshot> snapshot);
 
     // Owner-truth-only write helpers. These update the underlying content stores without triggering
     // immediate render. They are designed for write-back mutation paths (Correction/Final F0) and are

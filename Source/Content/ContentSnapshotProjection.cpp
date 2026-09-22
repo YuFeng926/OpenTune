@@ -14,10 +14,9 @@ EditableContentSnapshot makeContentSnapshot(const ContentState& state)
     snap.pitchCurve = state.analysis.pitchCurve != nullptr
         ? state.analysis.pitchCurve->getSnapshot()
         : nullptr;
-    snap.timeGrid = state.timeGrid;
-    // owner 不变量：ContentState::timeGrid 恒为非空 identity/非恒等 snapshot，
-    // identity 不用 nullptr 表达，in-class bootstrap 保证默认/空状态亦非空。
-    jassert(snap.timeGrid != nullptr);
+    snap.timeGrid = state.timeGrid != nullptr
+        ? state.timeGrid
+        : TimeGridSnapshot::bootstrapIdentity();
     snap.pitchShiftSettings = state.pitchShiftSettings;
     snap.originalF0State = state.analysis.originalF0State;
     snap.detectedKey = state.analysis.detectedKey;
@@ -39,7 +38,9 @@ ContentState contentStateFromSnapshot(const EditableContentSnapshot& snapshot)
     state.audioBuffer = snapshot.audioBuffer;
     state.sampleRate = snapshot.audioSampleRate;
     state.notes = snapshot.notes;
-    state.timeGrid = snapshot.timeGrid;
+    state.timeGrid = snapshot.timeGrid != nullptr
+        ? snapshot.timeGrid
+        : TimeGridSnapshot::bootstrapIdentity();
     state.pitchShiftSettings = snapshot.pitchShiftSettings;
     state.volumeEnvelope = snapshot.volumeEnvelope;
     state.notesRevision = snapshot.notesRevision;

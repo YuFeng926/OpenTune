@@ -876,9 +876,7 @@ std::shared_ptr<ContentRenderService> OpenTuneDocumentController::getContentRend
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable() const noexcept
 {
-    return playbackSourceReady
-        && contentKey.isValid()
-        && contentDurationSeconds > 0.0
+    return contentKey.isValid()
         && durationInPlaybackTime > 0.0
         && durationInModificationTime > 0.0;
 }
@@ -1689,15 +1687,10 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
     const auto modificationPersistentId = hostModification != nullptr
         ? juce::String(hostModification->getPersistentID())
         : juce::String();
-    projection.audioModificationPersistentId = modificationPersistentId;
     projection.startInPlaybackTime = playbackRegion->getStartInPlaybackTime();
     projection.startInModificationTime = playbackRegion->getStartInAudioModificationTime();
     projection.durationInPlaybackTime = playbackRegion->getDurationInPlaybackTime();
     projection.durationInModificationTime = playbackRegion->getDurationInAudioModificationTime();
-    projection.timestretchEnabled = playbackRegion->isTimestretchEnabled();
-    projection.timestretchReflectingTempo = playbackRegion->isTimeStretchReflectingTempo();
-    projection.contentBasedFadeAtHead = playbackRegion->hasContentBasedFadeAtHead();
-    projection.contentBasedFadeAtTail = playbackRegion->hasContentBasedFadeAtTail();
 
     // ARA 标准有效颜色：getEffectiveColor 回退链仅为 region 自身 color →
     // RegionSequence color（ARA_Library/PlugIn/ARAPlug.cpp:588-594），无 musical
@@ -1715,22 +1708,6 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
         return projection;
 
     projection.contentKey = modification->contentKey();
-    if (!modification->hasContentState())
-        return projection;
-
-    projection.contentWindow = modification->content->sourceWindow;
-    projection.contentDurationSeconds = modification->content->sourceWindow.durationSeconds();
-    // playbackSourceReady 仅用于 renderer 严格 gate（isPlaybackRenderable）；
-    // UI projection 不再以它阻断，WaitingForSource 也能产出有效 contentKey/content snapshot。
-    projection.playbackSourceReady = modification->isRenderable();
-
-    const auto* source = findAudioSource(modification->content->sourceWindow.sourcePersistentId);
-    if (source != nullptr)
-    {
-        projection.sampleRate = source->getShape().sourceSampleRate;
-        projection.numChannels = source->getShape().numChannels;
-    }
-
     return projection;
 }
 
@@ -2346,18 +2323,16 @@ void OpenTuneDocumentController::handleStage1ChunkSettled(
     if (contentRenderService_ == nullptr)
         return;
 
-    PlaybackReadSource published;
-    if (!contentRenderService_->getPlaybackReadSource(key, published)
-        || published.contentSnapshot == nullptr
-        || published.audioBuffer == nullptr
-        || published.contentSnapshot->timeGrid->isIdentity())
+    if (snapshot == nullptr
+        || audioBuffer == nullptr
+        || snapshot->timeGrid->isIdentity())
         return;
 
     contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(
         key,
-        published.contentSnapshot,
-        published.audioBuffer,
-        published.audioSampleRate);
+        std::move(snapshot),
+        std::move(audioBuffer),
+        audioSampleRate);
 }
 
 std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
@@ -2370,7 +2345,11 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
     return mod->snapshotContent();
 }
 
-void OpenTuneDocumentController::requestModificationRender(ContentKey key, double startSeconds, double endSeconds)
+void OpenTuneDocumentController::requestModificationRender(
+    ContentKey key,
+    double startSeconds,
+    double endSeconds,
+    std::shared_ptr<const EditableContentSnapshot> snapshot)
 {
     PlaybackReadSource readSource;
     if (contentRenderService_ == nullptr
@@ -2384,11 +2363,14 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
         0, totalSamples, TimeCoordinate::secondsToSamplesFloor(startSeconds, readSource.audioSampleRate));
     const int64_t endSample = juce::jlimit<int64_t>(
         0, totalSamples, TimeCoordinate::secondsToSamplesCeil(endSeconds, readSource.audioSampleRate));
-    requestModificationRenderSamples(key, startSample, endSample);
+    requestModificationRenderSamples(key, startSample, endSample, std::move(snapshot));
 }
 
 void OpenTuneDocumentController::requestModificationRenderSamples(
-    ContentKey key, int64_t startSample, int64_t endSampleExclusive)
+    ContentKey key,
+    int64_t startSample,
+    int64_t endSampleExclusive,
+    std::shared_ptr<const EditableContentSnapshot> snapshot)
 {
     if (contentRenderService_ == nullptr || endSampleExclusive <= startSample)
         return;
@@ -2405,9 +2387,8 @@ void OpenTuneDocumentController::requestModificationRenderSamples(
     if (endSampleExclusive <= startSample)
         return;
 
-    auto snap = snapshotAudioModification(key);
-    if (!snap || !contentRenderService_->republishPlaybackSource(key, snap)
-        || !snap->hasUsableOriginalF0())
+    if (!snapshot || !contentRenderService_->republishPlaybackSource(key, snapshot)
+        || !snapshot->hasUsableOriginalF0())
         return;
 
     RenderJob job;
@@ -2417,14 +2398,21 @@ void OpenTuneDocumentController::requestModificationRenderSamples(
     job.startSample = startSample;
     job.endSampleExclusive = endSampleExclusive;
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
-    job.contentSnapshot = snap;
+    job.contentSnapshot = std::move(snapshot);
 
     contentRenderService_->enqueueRender(std::move(job));
 }
 
-void OpenTuneDocumentController::requestFullModificationRender(ContentKey key)
+void OpenTuneDocumentController::requestFullModificationRender(
+    ContentKey key,
+    std::shared_ptr<const EditableContentSnapshot> snapshot)
 {
     if (contentRenderService_ == nullptr)
+        return;
+
+    if (!snapshot)
+        snapshot = snapshotAudioModification(key);
+    if (!snapshot)
         return;
 
     PlaybackReadSource readSource;
@@ -2434,7 +2422,8 @@ void OpenTuneDocumentController::requestFullModificationRender(ContentKey key)
     if (readSource.audioBuffer == nullptr || readSource.audioSampleRate <= 0.0)
         return;
 
-    requestModificationRenderSamples(key, 0, readSource.audioBuffer->getNumSamples());
+    requestModificationRenderSamples(
+        key, 0, readSource.audioBuffer->getNumSamples(), std::move(snapshot));
 }
 
 void OpenTuneDocumentController::invalidateAllModificationCaches()
@@ -2820,23 +2809,17 @@ bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& k
         mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
 
     auto snapshot = mod->snapshotContent();
-    const bool published = contentRenderService_->republishPlaybackSource(key, snapshot);
 
     // TimeGrid 变更 → 失效 Stage2 并在 Stage1 settled 后重建；
     // identity TimeGrid 无需 Stage2（无时间拉伸）。
-    contentRenderService_->getTimeStretchCache().invalidate(key);
-    if (published && !isIdentity)
+    if (isIdentity)
     {
-        requestFullModificationRender(key);
-        PlaybackReadSource readSource;
-        if (contentRenderService_->getPlaybackReadSource(key, readSource))
-        {
-            contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(
-                key,
-                readSource.contentSnapshot,
-                readSource.audioBuffer,
-                readSource.audioSampleRate);
-        }
+        contentRenderService_->republishPlaybackSource(key, snapshot);
+    }
+    else
+    {
+        contentRenderService_->getTimeStretchCache().invalidate(key);
+        requestFullModificationRender(key, std::move(snapshot));
     }
 
     refreshRegisteredRenderers(publishModelChange());

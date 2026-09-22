@@ -78,7 +78,7 @@ struct NoteDragState
     bool isDraggingNotes = false;
 
     // 拖拽预览：buildNoteBasedCorrectionState 构建的临时 EditableContentSnapshot
-    // （clone 后经 applyCorrectionToRange 烘焙的 pitchCurve + working notes）。
+    // （scratch 后经 applyCorrectionToRange 烘焙的 pitchCurve + working notes）。
     // 非拖拽期间为 nullptr，active render item 回退已提交 snapshot。
     std::shared_ptr<const EditableContentSnapshot> previewSnapshot;
 

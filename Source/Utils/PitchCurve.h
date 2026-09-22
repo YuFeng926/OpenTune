@@ -280,7 +280,7 @@ public:
         std::atomic_store(&snapshot_, newSnapshot);
     }
 
-    void applyCorrectionToRange(
+    std::shared_ptr<const PitchCurveSnapshot> applyCorrectionToRange(
         const std::vector<Note>& notes,
         int startFrame,
         int endFrame,
@@ -293,11 +293,14 @@ public:
     static constexpr int getCorrectedF0BoundaryContextFrames() noexcept { return 8; }
     static F0FrameRange expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept;
 
-    void setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                   PitchCorrectionSegment::Source source,
-                                   const PitchCorrectionSegment::ParameterSnapshot& snapshot = {});
+    std::shared_ptr<const PitchCurveSnapshot> setManualCorrectionRange(
+        int startFrame,
+        int endFrame,
+        const std::vector<float>& f0Data,
+        PitchCorrectionSegment::Source source,
+        const PitchCorrectionSegment::ParameterSnapshot& snapshot = {});
 
-    void clearCorrectionRange(int startFrame, int endFrame);
+    std::shared_ptr<const PitchCurveSnapshot> clearCorrectionRange(int startFrame, int endFrame);
 
     void clearAllCorrections() {
         auto oldSnapshot = getSnapshot();
@@ -427,10 +430,6 @@ public:
         }
         copiedCurve->replaceCorrectionSegments(segments);
         return copiedCurve;
-    }
-
-    std::shared_ptr<PitchCurve> clone() const {
-        return fromSnapshot(getSnapshot());
     }
 
 private:

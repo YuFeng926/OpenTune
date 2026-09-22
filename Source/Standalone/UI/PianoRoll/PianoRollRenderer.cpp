@@ -1760,7 +1760,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
     // Draw corrected F0 (thicker).
     // 拖拽预览 item 已携带临时 snapshot（noteDrag.previewSnapshot）：其 pitchCurve
-    // 是 clone + applyCorrectionToRange 的烘焙结果，OpenTune 的 shouldDrawCorrected
+    // 是 scratch + applyCorrectionToRange 的烘焙结果，OpenTune 的 shouldDrawCorrected
     // 由该临时 curve 的 correction layer 自然成立，无需任何覆盖注入。
     // OpenDyne（notesPrimaryScheme）：显示有效F0（修正段+回退OriginalF0）；
     // OpenTune：仅 correction segment 覆盖的区域（绘制的音符范围）派生CorrectedF0，

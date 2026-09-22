@@ -182,7 +182,7 @@ void resetDraftNotesToBaseline(PianoRollToolHandler::Context& ctx)
 // buildNoteBasedCorrectionState — note-based correction 唯一状态构建器
 //
 // 实时预览（updateNoteBasedCorrectionPreview）与提交（commitNoteBasedCorrection）
-// 共用：复制当前 EditableContentSnapshot，替换 notes 与 clone 后经权威
+// 共用：复制当前 EditableContentSnapshot，替换 notes 与 scratch curve 后经权威
 // applyCorrectionToRange（含全局 pitch-shift 比例）烘焙的 pitchCurve。
 // ============================================================================
 std::shared_ptr<const EditableContentSnapshot> buildNoteBasedCorrectionState(
@@ -198,14 +198,14 @@ std::shared_ptr<const EditableContentSnapshot> buildNoteBasedCorrectionState(
     snap->notes = notes;
 
     auto scratchCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
-    scratchCurve->applyCorrectionToRange(notes,
-                                         editRange.startFrame,
-                                         editRange.endFrameExclusive,
-                                         static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-                                         ctx.getRetuneSpeed(),
-                                         ctx.getVibratoDepth(),
-                                         ctx.getVibratoRate());
-    snap->pitchCurve = scratchCurve->getSnapshot();
+    snap->pitchCurve = scratchCurve->applyCorrectionToRange(
+        notes,
+        editRange.startFrame,
+        editRange.endFrameExclusive,
+        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
+        ctx.getRetuneSpeed(),
+        ctx.getVibratoDepth(),
+        ctx.getVibratoRate());
     return snap;
 }
 
@@ -1032,10 +1032,10 @@ void PianoRollToolHandler::handleDeleteKey()
     bool committed = false;
     if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !correctionClearRanges.empty()) {
         auto scratchCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
+        auto snap = contentSnapshot->pitchCurve;
         for (const auto& range : correctionClearRanges) {
-            scratchCurve->clearCorrectionRange(range.startFrame, range.endFrameExclusive);
+            snap = scratchCurve->clearCorrectionRange(range.startFrame, range.endFrameExclusive);
         }
-        auto snap = scratchCurve->getSnapshot();
         // delete 路径：affectedRange = globalDirty*Frame 的覆盖范围（含端点）。
         // F0FrameRange 的 endFrameExclusive 语义。
         const F0FrameRange affectedRange{globalDirtyStartFrame, globalDirtyEndFrame + 1};

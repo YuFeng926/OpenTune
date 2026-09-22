@@ -181,7 +181,7 @@ F0FrameRange PitchCurve::expandNoteBasedCorrectionRange(int startFrame, int endF
 
 
 
-void PitchCurve::applyCorrectionToRange(
+std::shared_ptr<const PitchCurveSnapshot> PitchCurve::applyCorrectionToRange(
     const std::vector<Note>& notes,
     int startFrame,
     int endFrame,
@@ -195,23 +195,23 @@ void PitchCurve::applyCorrectionToRange(
     const auto& originalF0 = oldSnapshot->getOriginalF0();
     
     if (originalF0.empty() || startFrame >= endFrame) {
-        return;
+        return oldSnapshot;
     }
 
     const int maxFrame = static_cast<int>(originalF0.size());
-    if (startFrame >= maxFrame) return;
+    if (startFrame >= maxFrame) return oldSnapshot;
     if (endFrame > maxFrame) endFrame = maxFrame;
     if (startFrame < 0) startFrame = 0;
 
     const int hopSize = oldSnapshot->getHopSize();
     const double sampleRate = oldSnapshot->getSampleRate();
     if (hopSize <= 0 || sampleRate <= 0.0) {
-        return;
+        return oldSnapshot;
     }
 
     const auto calculationRange = expandNoteBasedCorrectionRange(startFrame, endFrame, maxFrame);
     if (calculationRange.isEmpty()) {
-        return;
+        return oldSnapshot;
     }
     const int calculationStartFrame = calculationRange.startFrame;
     const int calculationEndFrame = calculationRange.endFrameExclusive;
@@ -297,7 +297,7 @@ void PitchCurve::applyCorrectionToRange(
     }
 
     if (relevantNoteIndices.empty()) {
-        return;
+        return oldSnapshot;
     }
     std::sort(relevantNoteIndices.begin(), relevantNoteIndices.end(),
         [&notes](size_t left, size_t right) {
@@ -635,13 +635,17 @@ void PitchCurve::applyCorrectionToRange(
         newGen
     );
     std::atomic_store(&snapshot_, newSnapshot);
+    return newSnapshot;
 }
 
-void PitchCurve::setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                          PitchCorrectionSegment::Source source,
-                                          const PitchCorrectionSegment::ParameterSnapshot& snapshot) {
+std::shared_ptr<const PitchCurveSnapshot> PitchCurve::setManualCorrectionRange(
+    int startFrame,
+    int endFrame,
+    const std::vector<float>& f0Data,
+    PitchCorrectionSegment::Source source,
+    const PitchCorrectionSegment::ParameterSnapshot& snapshot) {
     if (startFrame >= endFrame || f0Data.empty()) {
-        return;
+        return getSnapshot();
     }
 
     auto oldSnapshot = getSnapshot();
@@ -663,11 +667,12 @@ void PitchCurve::setManualCorrectionRange(int startFrame, int endFrame, const st
         newGen
     );
     std::atomic_store(&snapshot_, newSnapshot);
+    return newSnapshot;
 }
 
-void PitchCurve::clearCorrectionRange(int startFrame, int endFrame) {
+std::shared_ptr<const PitchCurveSnapshot> PitchCurve::clearCorrectionRange(int startFrame, int endFrame) {
     if (startFrame >= endFrame) {
-        return;
+        return getSnapshot();
     }
 
     auto oldSnapshot = getSnapshot();
@@ -684,6 +689,7 @@ void PitchCurve::clearCorrectionRange(int startFrame, int endFrame) {
         newGen
     );
     std::atomic_store(&snapshot_, newSnapshot);
+    return newSnapshot;
 }
 
 } // namespace OpenTune

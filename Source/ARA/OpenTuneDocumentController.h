@@ -32,25 +32,13 @@ public:
     struct PlaybackRegionProjection
     {
         juce::ARAPlaybackRegion* playbackRegion{nullptr};
-        juce::String audioModificationPersistentId;
-        SourceWindow contentWindow;
         std::optional<juce::Colour> displayColour;
         double startInPlaybackTime{0.0};
         double startInModificationTime{0.0};
         double durationInPlaybackTime{0.0};
         double durationInModificationTime{0.0};
-        double contentDurationSeconds{0.0};
-        double sampleRate{44100.0};
-        int numChannels{0};
-        bool timestretchEnabled{false};
-        bool timestretchReflectingTempo{false};
-        bool contentBasedFadeAtHead{false};
-        bool contentBasedFadeAtTail{false};
 
         ContentKey contentKey;
-        // renderer-only gate: true only when AudioModification::isRenderable()
-        // (CRS playback source已建立)。UI projection 不再以它阻断。
-        bool playbackSourceReady{false};
 
         double endInPlaybackTime() const noexcept { return startInPlaybackTime + durationInPlaybackTime; }
         bool isPlaybackRenderable() const noexcept;
@@ -67,8 +55,14 @@ public:
     const ContentRenderService* getContentRenderService() const noexcept;
     std::shared_ptr<ContentRenderService> getContentRenderServiceShared() const noexcept;
     // ARA mutation/render API — processor 通过这些 API 请求 ARA 渲染
-    void requestModificationRender(ContentKey key, double startSeconds, double endSeconds);
-    void requestFullModificationRender(ContentKey key);
+    void requestModificationRender(
+        ContentKey key,
+        double startSeconds,
+        double endSeconds,
+        std::shared_ptr<const EditableContentSnapshot> snapshot);
+    void requestFullModificationRender(
+        ContentKey key,
+        std::shared_ptr<const EditableContentSnapshot> snapshot = nullptr);
     void invalidateAllModificationCaches();
     // ============================================================
     // 编辑器只读内容访问器（通过 ContentKey 路由到 AudioModification + CRS）
@@ -168,7 +162,8 @@ protected:
 private:
     void requestModificationRenderSamples(ContentKey key,
                                           int64_t startSample,
-                                          int64_t endSampleExclusive);
+                                          int64_t endSampleExclusive,
+                                          std::shared_ptr<const EditableContentSnapshot> snapshot);
 
     std::vector<AudioSource> audioSources_;
     std::vector<AudioModification> audioModifications_;

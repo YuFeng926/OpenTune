@@ -3073,12 +3073,14 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
     onContentLocalMutationCompletedSeconds(
         key,
         static_cast<double>(affectedRange.startFrame) * secondsPerFrame,
-        static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame);
+        static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame,
+        std::move(snap));
 }
 
 void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey key,
                                                                      double startSeconds,
-                                                                     double endSeconds)
+                                                                     double endSeconds,
+                                                                     std::shared_ptr<const EditableContentSnapshot> snapshot)
 {
 #if JucePlugin_Enable_ARA
     if (key.domainKind == DomainKind::ARAAudioModification)
@@ -3086,32 +3088,42 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey k
         auto* dc = getDocumentController();
         if (dc != nullptr)
         {
-            dc->requestModificationRender(key, startSeconds, endSeconds);
+            dc->requestModificationRender(
+                key, startSeconds, endSeconds, std::move(snapshot));
         }
         return;
     }
 #endif
 
     // Non-ARA path: processor-local CRS
-    requestRenderForLocalMutationRange(key, startSeconds, endSeconds);
+    requestRenderForLocalMutationRange(key,
+                                       startSeconds,
+                                       endSeconds,
+                                       std::move(snapshot));
 }
 
 void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key)
 {
+    auto snapshot = getContentSnapshot(key);
+    if (!snapshot)
+        return;
+
 #if JucePlugin_Enable_ARA
     if (key.domainKind == DomainKind::ARAAudioModification)
     {
         auto* dc = getDocumentController();
         if (dc != nullptr)
         {
-            dc->requestFullModificationRender(key);
+            dc->requestFullModificationRender(key, std::move(snapshot));
         }
         return;
     }
 #endif
 
     // Non-ARA path
-    requestFullContentRender(key);
+    const double durationSeconds = contentDurationSeconds(*snapshot);
+    if (durationSeconds > 0.0)
+        requestRenderForLocalMutationRange(key, 0.0, durationSeconds, std::move(snapshot));
 }
 
 void OpenTuneAudioProcessor::requestFullContentRender(ContentKey key)
@@ -3120,14 +3132,14 @@ void OpenTuneAudioProcessor::requestFullContentRender(ContentKey key)
     if (!snap) return;
     const double durationSeconds = contentDurationSeconds(*snap);
     if (durationSeconds <= 0.0) return;
-    requestRenderForLocalMutationRange(key, 0.0, durationSeconds);
+    requestRenderForLocalMutationRange(key, 0.0, durationSeconds, std::move(snap));
 }
 
 void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
-                                                                double startSeconds,
-                                                                double endSeconds)
+                                                                 double startSeconds,
+                                                                 double endSeconds,
+                                                                 std::shared_ptr<const EditableContentSnapshot> snap)
 {
-    auto snap = getContentSnapshot(key);
     if (!snap) return;
 
     auto* crs = resolveMutableLocalContentRenderService(key);
@@ -3204,15 +3216,11 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(
     if (contentRenderService_ != nullptr
         && key.domainKind != DomainKind::ARAAudioModification)
     {
-        PlaybackReadSource published;
-        if (contentRenderService_->getPlaybackReadSource(key, published))
-        {
-            enqueueStage2WhenCanonicalSettled(
-                key,
-                published.contentSnapshot,
-                published.audioBuffer,
-                published.audioSampleRate);
-        }
+        enqueueStage2WhenCanonicalSettled(
+            key,
+            std::move(snapshot),
+            std::move(audioBuffer),
+            audioSampleRate);
     }
 }
 
@@ -4700,9 +4708,12 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
         // 根因修复：拓扑 patch 提交后按 patch.affectedRange（秒域）调度局部重渲染，
         // Undo/Redo 经同一 command（PianoRollNotePatchAction）自动重渲染。
         // onContentLocalMutationCompletedSeconds 内部刷新/发布 playback source 并调度 Stage1。
-        onContentLocalMutationCompletedSeconds(
-            key, patch.affectedRange.startSeconds, patch.affectedRange.endSeconds);
         auto committedSnap = getContentSnapshot(key);
+        onContentLocalMutationCompletedSeconds(
+            key,
+            patch.affectedRange.startSeconds,
+            patch.affectedRange.endSeconds,
+            committedSnap);
         jassert(committedSnap != nullptr);
         return committedSnap;
     }
@@ -4883,13 +4894,6 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
                 return ok;
             crs->getTimeStretchCache().invalidate(key);
             requestFullContentRender(key);
-
-            PlaybackReadSource source;
-            if (crs->getPlaybackReadSource(key, source))
-            {
-                enqueueStage2WhenCanonicalSettled(
-                    key, source.contentSnapshot, source.audioBuffer, source.audioSampleRate);
-            }
         }
         else if (key.domainKind == DomainKind::ARAAudioModification
                  && crs != nullptr
