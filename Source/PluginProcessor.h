@@ -444,6 +444,9 @@ private:
 #if JucePlugin_Build_Standalone
     std::shared_ptr<SourceStore> sourceStore_;
 #endif
+    // Processor-local render path: owned only by instances not bound to ARA
+    // (regular VST3 / Standalone). ARA-bound instances keep this null and render
+    // through the DC's CRS.
     std::shared_ptr<ContentRenderService> contentRenderService_;
 #if JucePlugin_Build_Standalone
     std::unique_ptr<StandaloneContentRepository> standaloneContentRepository_;
@@ -456,8 +459,8 @@ private:
     std::unique_ptr<ReferenceAnalysisService> referenceAnalysisService_;
 
 #if JucePlugin_Build_VST3
-    // Regular VST3 capture state. ARA-capable builds still create this for
-    // unbound insert instances; access is suppressed after the instance binds to ARA.
+    // Regular VST3 capture state. ARA-capable builds create this only for unbound
+    // insert instances; didBindToARA tears down any instance created before binding.
     // nullptr in Standalone instances and in VST3 instances bound to ARA.
     std::unique_ptr<Capture::CaptureSession> captureSession_;
 #endif

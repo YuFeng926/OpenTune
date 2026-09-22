@@ -743,13 +743,24 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); });
     auto refSvc = std::make_unique<ReferenceAnalysisService>();
 
-    auto crs = std::make_shared<ContentRenderService>();
+    // 资源所有权：ARA 绑定实例的渲染全部走 DC 自己的 CRS（DC 构造时安装自己的
+    // ExecutionLease），processor 不得再持有 local CRS / CaptureSession，避免出现
+    // 第二个不可达的渲染所有者。未绑定的普通 VST3 / Standalone 实例行为不变。
+#if JucePlugin_Enable_ARA
+    const bool araBound = isBoundToARA();
+#else
+    const bool araBound = false;
+#endif
+
+    std::shared_ptr<ContentRenderService> crs;
 #if JucePlugin_Build_Standalone
     auto srcStore = std::make_shared<SourceStore>();
     auto repo = std::make_unique<StandaloneContentRepository>();
 #endif
     // Bind processor's render callback to CRS via ExecutionLease (ARA 重构路由改制)
+    if (!araBound)
     {
+        crs = std::make_shared<ContentRenderService>();
         ContentRenderService::ExecutionLease lease;
         lease.owner = this;
         lease.renderJobCallback = [this](RenderJob& job) {
@@ -921,8 +932,10 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     auto resampler = std::make_shared<ResamplingManager>();
 
 #if JucePlugin_Build_VST3
-    // Capture session（regular VST3 / ARA 未绑定实例）：先局部构造，attach 成功后发布。
+    // Capture session（仅 regular VST3 / ARA 未绑定实例）：先局部构造，attach 成功后发布。
+    // ARA 绑定实例的采集由 DC 的 ARA 对象模型承担，不创建 CaptureSession，也不启动 tick timer。
     std::unique_ptr<Capture::CaptureSession> capture;
+    if (!araBound)
     {
         Capture::ProcessorBindings bindings;
 
@@ -1557,6 +1570,26 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
     // Runtime ready: restore any deferred pre-init state.
     replayDeferredState();
 
+    // 绑定后渲染由 DC 的 CRS 承担（initializeRuntimeStateOnce 只给未绑定实例创建
+    // processor-local 路径）。若 runtime 在绑定前已初始化（prepareToPlay /
+    // createEditor 先到），这里一次性拆掉旧 regular 路径；若初始化时就已绑定，
+    // 以下成员全为空，清理为 no-op。放在 replay 之后，保持既有 restore 顺序。
+#if JucePlugin_Build_VST3
+    stopTimer();
+#endif
+    if (contentRenderService_) {
+        // detach 必须先于 clearAll：先摘掉 processor lease，render worker 才不会
+        // 在清理中途进入 processor 回调。
+        contentRenderService_->detachExecutionLease(this);
+        // clearAll 覆盖 playback source / stage1 队列 / render cache / stretcher /
+        // time-stretch cache。
+        contentRenderService_->clearAll();
+    }
+#if JucePlugin_Build_VST3
+    captureSession_.reset();
+#endif
+    contentRenderService_.reset();
+
     if (auto* dc = getDocumentController())
     {
         // F0 不在主线程重初始化；由分析 worker 懒初始化（scheduleAsyncF0Extraction
@@ -1565,7 +1598,8 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         // The DC installs its own lease on its CRS in its constructor
         // (installDocumentRenderExecution -> processDocumentRenderJob -> ProcessRenderRuntime).
         // The processor does NOT attach an additional lease: doing so would
-        // override the DC's lease and break the ARA2 render path.
+        // override the DC's lease and break the ARA2 render path. With a local
+        // CRS torn down above, the processor owns no render state at all when bound.
 
         AppLogger::logNoThrow("ARA: didBindToARA - DC owns its CRS lease; processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
