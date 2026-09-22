@@ -14,7 +14,6 @@
 #include "../Utils/SilentGapDetector.h"
 #include "../Utils/PitchCurve.h"
 #include "../Inference/RenderCache.h"
-#include "../Render/Stage2TimeStretchRebuilder.h"
 #include "../Utils/SourceWindow.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/ModelPathResolver.h"
@@ -67,7 +66,6 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
         1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
 {
     asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
-    completionGate_ = std::make_shared<ProcessRenderRuntime::CompletionGate>();
     installDocumentRenderExecution();
     AppLogger::logNoThrow("ARA-DIAG: DocumentController created dc="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
@@ -79,13 +77,6 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     // 撤销服务租约，防止异步 F0 completion 写回已析构的 DC
     if (asyncLeaseToken_)
         asyncLeaseToken_->store(false, std::memory_order_release);
-
-    // 关闭 Stage1→Stage2 completion gate：持锁置 closed，与 worker 的
-    // notifyChunkSettled（持同一把锁调用回调）互斥，杜绝回调访问已析构的 this。
-    {
-        std::lock_guard<std::mutex> lk(completionGate_->mutex);
-        completionGate_->closed = true;
-    }
 
     // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
     // F0 Run（SetTerminate 加速返回）。不 join worker —— worker 是 detached
@@ -613,7 +604,7 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
         }
     }
 
-    // TimeGrid: 必须存在且通过 TimeGridSnapshot 工厂验证，不能 null/identity
+    // TimeGrid: 必须存在且通过 TimeGridSnapshot 工厂验证
     if (auto* tg = editable->getChildByName("TimeGrid"))
     {
         std::vector<TimeHandle> handles;
@@ -646,6 +637,10 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
 
         auto timeGrid = TimeGridSnapshot::makeFromHandles(std::move(handles));
         if (timeGrid == nullptr)
+            return std::nullopt;
+
+        // Non-identity archive TimeGrid is rejected rather than silently replaced.
+        if (!timeGrid->isIdentity())
             return std::nullopt;
 
         content.timeGrid = std::move(timeGrid);
@@ -878,7 +873,8 @@ bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable(
 {
     return contentKey.isValid()
         && durationInPlaybackTime > 0.0
-        && durationInModificationTime > 0.0;
+        && durationInModificationTime > 0.0
+        && durationInPlaybackTime == durationInModificationTime;
 }
 
 std::vector<OpenTuneDocumentController::PlaybackRegionProjection>
@@ -2029,8 +2025,6 @@ void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioMo
 
     contentRenderService_->removePlaybackSource(key);
     contentRenderService_->removeRenderCache(key);
-    contentRenderService_->removeStretcher(key);
-    contentRenderService_->getTimeStretchCache().invalidate(key);
 }
 
 // Removed rebuildCRSForSource per architecture: sample access enable is permission,
@@ -2201,9 +2195,7 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
 
                 if (mod->audioModification != nullptr)
                     mod->audioModification->notifyContentChanged(
-                        juce::ARAContentUpdateScopes::samplesAreAffected()
-                            + juce::ARAContentUpdateScopes::tuningIsAffected()
-                            + juce::ARAContentUpdateScopes::harmoniesAreAffected(),
+                        juce::ARAContentUpdateScopes::tuningIsAffected(),
                         true);
 
                 // F0 commit → form "committed data → request current version render" transaction
@@ -2238,18 +2230,6 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
 
 void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
 {
-    // Stage2: TimeGrid 时间拉伸重建（只消费 job 携带的 snapshot/audio）
-    if (job.kind == RenderJob::Kind::Stage2Rebuild)
-    {
-        Stage2TimeStretchRebuilder::Request request;
-        request.contentKey = job.contentKey;
-        request.contentSnapshot = job.contentSnapshot;
-        request.audioBuffer = job.audioBuffer;
-        request.audioSampleRate = job.audioSampleRate;
-        Stage2TimeStretchRebuilder::rebuild(*contentRenderService_, request);
-        return;
-    }
-
     if (job.renderCache == nullptr)
         return;
 
@@ -2259,39 +2239,9 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
         return;
     }
 
-    ProcessRenderRuntime::CompletionContext completion;
-    completion.gate = completionGate_;
-    completion.chunkSettled = [this](ContentKey key,
-                                     std::shared_ptr<const EditableContentSnapshot> snapshot,
-                                     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-                                     double audioSampleRate) {
-        handleStage1ChunkSettled(key, std::move(snapshot),
-                                 std::move(audioBuffer), audioSampleRate);
-    };
     ProcessRenderRuntime::getInstance().processChunkRenderJob(
         contentRenderService_, job,
-        false, std::move(completion));
-}
-
-void OpenTuneDocumentController::handleStage1ChunkSettled(
-    ContentKey key,
-    std::shared_ptr<const EditableContentSnapshot> snapshot,
-    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-    double audioSampleRate)
-{
-    if (contentRenderService_ == nullptr)
-        return;
-
-    if (snapshot == nullptr
-        || audioBuffer == nullptr
-        || snapshot->timeGrid->isIdentity())
-        return;
-
-    contentRenderService_->enqueueStage2RebuildWhenCanonicalSettled(
-        key,
-        std::move(snapshot),
-        std::move(audioBuffer),
-        audioSampleRate);
+        false, {});
 }
 
 std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
@@ -2400,8 +2350,6 @@ void OpenTuneDocumentController::invalidateAllModificationCaches()
         if (auto cache = contentRenderService_->getRenderCache(key))
             cache->clear();
     }
-    contentRenderService_->getTimeStretchCache().clear();
-
     for (const auto& mod : audioModifications_)
     {
         if (!mod.isRenderable())
@@ -2766,35 +2714,18 @@ bool OpenTuneDocumentController::applyOriginalF0ToModification(const ContentKey&
 bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& key, std::shared_ptr<const TimeGridSnapshot> grid)
 {
     auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState() || grid == nullptr) return false;
-    const bool isIdentity = grid->isIdentity();
+    if (mod == nullptr || !mod->hasContentState() || grid == nullptr || !grid->isIdentity()) return false;
     if (!mod->applyTimeGrid(std::move(grid)))
         return false;
 
-    // Notify ARA host of content change for cache/save state invalidation
+    auto snapshot = mod->snapshotContent();
+    contentRenderService_->republishPlaybackSource(key, snapshot);
+    refreshRegisteredRenderers(publishModelChange());
+
     if (mod->audioModification != nullptr)
         mod->audioModification->notifyContentChanged(
-            isIdentity
-                ? juce::ARAContentUpdateScopes::timelineIsAffected()
-                : juce::ARAContentUpdateScopes::timelineIsAffected()
-                    + juce::ARAContentUpdateScopes::samplesAreAffected(),
-            true);
+            juce::ARAContentUpdateScopes::timelineIsAffected(), true);
 
-    auto snapshot = mod->snapshotContent();
-
-    // TimeGrid 变更 → 失效 Stage2 并在 Stage1 settled 后重建；
-    // identity TimeGrid 无需 Stage2（无时间拉伸）。
-    if (isIdentity)
-    {
-        contentRenderService_->republishPlaybackSource(key, snapshot);
-    }
-    else
-    {
-        contentRenderService_->getTimeStretchCache().invalidate(key);
-        requestFullModificationRender(key, std::move(snapshot));
-    }
-
-    refreshRegisteredRenderers(publishModelChange());
     return true;
 }
 

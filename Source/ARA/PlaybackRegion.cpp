@@ -12,7 +12,9 @@ bool PlaybackRegion::hasValidPlacement() const noexcept
         return false;
 
     return playbackRegion->getDurationInPlaybackTime() > 0.0
-        && playbackRegion->getDurationInAudioModificationTime() > 0.0;
+        && playbackRegion->getDurationInAudioModificationTime() > 0.0
+        && playbackRegion->getDurationInPlaybackTime()
+            == playbackRegion->getDurationInAudioModificationTime();
 }
 
 } // namespace OpenTune

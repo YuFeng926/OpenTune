@@ -134,6 +134,9 @@ bool AudioModification::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> gr
     const double gridDuration = grid->totalDurationSeconds();
     const double sourceDuration = sourceWindow.durationSeconds();
 
+    if (!grid->isIdentity())
+        return false;
+
     if (std::abs(gridDuration - sourceDuration) > 1e-6)
         return false;
 

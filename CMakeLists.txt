@@ -389,6 +389,7 @@ juce_add_plugin(OpenTune
     ${OPENTUNE_PLUGIN_COMMON_ARGS}
     FORMATS VST3
     IS_ARA_EFFECT TRUE
+    ARA_TRANSFORMATION_FLAGS kARAPlaybackTransformationNoChanges
     PLIST_TO_MERGE
     "<plist version=\"1.0\">
     <dict>

@@ -7,48 +7,15 @@
 
 namespace OpenTune {
 
-bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
-                                   bool rendererIsPlaying) noexcept
-{
-    if (realtime != juce::AudioProcessor::Realtime::yes)
-        return true;
-
-    return rendererIsPlaying;
-}
-
 namespace {
-    double mapPlaybackTimeToOutputTime(const OpenTunePlaybackRenderer::PlaybackRegionRenderItem& region,
-                                       const PlaybackReadSource& source,
-                                       double playbackTimeSeconds) noexcept
+    double mapPlaybackTimeToSourceLocalTime(const OpenTunePlaybackRenderer::PlaybackRegionRenderItem& region,
+                                            const PlaybackReadSource& source,
+                                            double playbackTimeSeconds) noexcept
     {
-        if (region.durationInPlaybackTime <= 0.0 || region.durationInModificationTime <= 0.0)
-            return 0.0;
-
-        const double playbackOffset = playbackTimeSeconds - region.startInPlaybackTime;
-        const double modificationOffset = playbackOffset
-            * (region.durationInModificationTime / region.durationInPlaybackTime);
-        const double modificationTime = region.startInModificationTime + modificationOffset;
         const auto& snapshot = *source.contentSnapshot;
-        const double sourceLocalSeconds = modificationTime - snapshot.sourceWindow.sourceStartSeconds;
-
-        return juce::jlimit(0.0,
-                            juce::jmax(0.0, snapshot.sourceWindow.durationSeconds()),
-                            snapshot.timeGrid->tauForward(sourceLocalSeconds));
-    }
-
-    void mixScratchInto(juce::AudioBuffer<float>& destination,
-                        const juce::AudioBuffer<float>& source,
-                        int destinationStartSample,
-                        int samplesToMix) noexcept
-    {
-        const int channels = juce::jmin(destination.getNumChannels(), source.getNumChannels());
-        for (int ch = 0; ch < channels; ++ch)
-        {
-            auto* dest = destination.getWritePointer(ch, destinationStartSample);
-            const auto* src = source.getReadPointer(ch);
-            for (int sample = 0; sample < samplesToMix; ++sample)
-                dest[sample] += src[sample];
-        }
+        return region.startInModificationTime
+            + (playbackTimeSeconds - region.startInPlaybackTime)
+            - snapshot.sourceWindow.sourceStartSeconds;
     }
 
     juce::ARAPlaybackRegion* toJucePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
@@ -155,7 +122,6 @@ std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRend
         item.startInPlaybackTime = projection.startInPlaybackTime;
         item.startInModificationTime = projection.startInModificationTime;
         item.durationInPlaybackTime = projection.durationInPlaybackTime;
-        item.durationInModificationTime = projection.durationInModificationTime;
         nextPlan->items.push_back(item);
     }
 
@@ -179,181 +145,75 @@ void OpenTunePlaybackRenderer::prepareToPlay(double sampleRate,
     numChannels_ = numChannels;
     maximumSamplesPerBlock_ = maximumSamplesPerBlock;
     playbackScratch_.setSize(juce::jmax(1, numChannels_),
-                             juce::jmax(1, maximumSamplesPerBlock_),
-                             false,
-                             true,
-                             true);
-    renderBuffer_.setSize(juce::jmax(1, numChannels_),
-                          juce::jmax(1, maximumSamplesPerBlock_),
-                          false,
-                          true,
-                          true);
-
-    // Crossfade window between passthrough and rendered content: 10 ms.
-    crossfadeTotal_ = juce::jlimit(128, 2048, static_cast<int>(sampleRate * 0.01));
-    crossfadeRemaining_ = 0;
-    outputMode_ = RenderOutputMode::Passthrough;
+                              juce::jmax(1, maximumSamplesPerBlock_),
+                              false,
+                              true,
+                              true);
 
     // 设备率切换 → 准备所有 CRS caches（各 cache 使用自有 resampler）
-    if (contentRenderServiceSnapshot_) {
-        contentRenderServiceSnapshot_->preparePlaybackSampleRate(sampleRate);
-    }
+    if (auto crs = std::atomic_load_explicit(&contentRenderServiceSnapshot_, std::memory_order_acquire))
+        crs->preparePlaybackSampleRate(sampleRate);
 }
 
 void OpenTunePlaybackRenderer::releaseResources()
 {
     playbackScratch_.setSize(0, 0);
-    renderBuffer_.setSize(0, 0);
 }
 
 bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
-                                             juce::AudioProcessor::Realtime realtime,
+                                             juce::AudioProcessor::Realtime /*realtime*/,
                                              const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
     const int numSamples = buffer.getNumSamples();
+    buffer.clear();
 
-    // Use CRS snapshot instead of chasing documentController_ pointer
-    // to avoid TOCTOU race with DocumentController destruction.
     auto crs = std::atomic_load_explicit(&contentRenderServiceSnapshot_, std::memory_order_acquire);
     const auto plan = currentPlan_.load(std::memory_order_acquire);
     const auto positionTime = positionInfo.getTimeInSeconds();
 
-    bool hasRenderContent = crs != nullptr
-        && plan != nullptr && !plan->items.empty() && positionTime.hasValue();
-
-    // ARA: renderer only owns audio within PlaybackRegion time ranges.
-    // When the playhead is outside all items, fall back to passthrough so
-    // the host input is not replaced with silence.
-    if (hasRenderContent)
-    {
-        const double blockStart = *positionTime;
-        const double blockEnd = blockStart
-            + static_cast<double>(numSamples) / hostSampleRate_;
-        hasRenderContent = false;
-        for (const auto& r : plan->items)
-        {
-            if (blockEnd > r.startInPlaybackTime && blockStart < r.endInPlaybackTime())
-            {
-                hasRenderContent = true;
-                break;
-            }
-        }
-    }
-
-    const bool wantRender = hasRenderContent
-        && shouldRenderAraPlaybackBlock(realtime, positionInfo.getIsPlaying());
-
-    // Mode transition → start a crossfade window so the switch between
-    // passthrough (host input) and rendered content stays click-free.
-    if (wantRender != (outputMode_ == RenderOutputMode::Rendering))
-    {
-        outputMode_ = wantRender ? RenderOutputMode::Rendering : RenderOutputMode::Passthrough;
-        crossfadeRemaining_ = crossfadeTotal_;
-    }
-
-    const bool inTransition = crossfadeRemaining_ > 0;
-
-    // Pure passthrough: leave the host input untouched.
-    if (outputMode_ == RenderOutputMode::Passthrough && !inTransition)
+    if (crs == nullptr || plan == nullptr || plan->items.empty() || !positionTime.hasValue())
         return true;
 
-    // Render the block into renderBuffer_ (needed for Rendering mode and for
-    // both crossfade directions).
-    if (outputMode_ == RenderOutputMode::Rendering || inTransition)
+    const double blockStartSeconds = *positionTime;
+    for (const auto& region : plan->items)
     {
-        renderBuffer_.clear();
-        if (crs != nullptr && plan != nullptr && positionTime.hasValue())
-        {
-            const double blockStartSeconds = *positionTime;
-            for (const auto& region : plan->items)
-            {
-                const auto overlap = computeRegionBlockRenderSpan(blockStartSeconds,
-                                                                   numSamples,
-                                                                   hostSampleRate_,
-                                                                   region.startInPlaybackTime,
-                                                                   region.endInPlaybackTime());
-                if (!overlap.has_value())
-                    continue;
+        const auto overlap = computeRegionBlockRenderSpan(blockStartSeconds,
+                                                           numSamples,
+                                                           hostSampleRate_,
+                                                           region.startInPlaybackTime,
+                                                           region.endInPlaybackTime());
+        if (!overlap.has_value())
+            continue;
 
-                PlaybackReadSource readSource;
-                if (!crs->getPlaybackReadSource(region.contentKey, readSource))
-                    continue;
+        PlaybackReadSource readSource;
+        if (!crs->getPlaybackReadSource(region.contentKey, readSource))
+            continue;
 
-                const double readStartSeconds = mapPlaybackTimeToOutputTime(region, readSource,
-                                                                             overlap->overlapStartSeconds);
-                const int64_t readStartSample = TimeCoordinate::secondsToSamples(readStartSeconds, hostSampleRate_);
-                const ::OpenTune::PlaybackReadRequest request(readSource,
-                                                              readStartSample,
-                                                              hostSampleRate_,
-                                                              overlap->samplesToCopy);
+        const double readStartSeconds = mapPlaybackTimeToSourceLocalTime(
+            region, readSource, overlap->overlapStartSeconds);
+        const int64_t readStartSample = TimeCoordinate::secondsToSamples(
+            readStartSeconds, hostSampleRate_);
+        const PlaybackReadRequest request(readSource,
+                                          readStartSample,
+                                          hostSampleRate_,
+                                          overlap->samplesToCopy);
 
-                playbackScratch_.clear();
-                const int copied = readPlaybackAudio(request, playbackScratch_, 0);
-                if (copied <= 0)
-                    continue;
+        playbackScratch_.clear();
+        const int copied = readPlaybackAudio(request, playbackScratch_, 0);
+        const int samplesToCopy = juce::jmin(copied, overlap->samplesToCopy);
+        if (samplesToCopy <= 0)
+            continue;
 
-                const int samplesToMix = juce::jmin(copied, overlap->samplesToCopy);
-                mixScratchInto(renderBuffer_, playbackScratch_, overlap->destinationStartSample, samplesToMix);
-            }
-        }
+        const int channels = juce::jmin(buffer.getNumChannels(), playbackScratch_.getNumChannels());
+        for (int channel = 0; channel < channels; ++channel)
+            buffer.addFrom(channel,
+                           overlap->destinationStartSample,
+                           playbackScratch_,
+                           channel,
+                           0,
+                           samplesToCopy);
     }
 
-    if (inTransition)
-    {
-        // 淡出方向需要渲染信号参与交叉。宿主停止后若不再提供有效时间
-        // （timeInSeconds 缺失），渲染内容不可得——此时宿主输入通常已为
-        // 静音，直接直通输入，不做无效淡化。
-        if (outputMode_ == RenderOutputMode::Passthrough && !positionTime.hasValue())
-        {
-            crossfadeRemaining_ = 0;
-            return true;
-        }
-
-        // Crossfade: output = input * (1 - renderWeight) + render * renderWeight.
-        // 淡入 renderWeight 从 0→1（纯输入→纯渲染），淡出从 1→0（纯渲染→纯输入）；
-        // 窗口最后一帧强制到达终点值，两端均无端点残留。
-        const int fadeSamples = juce::jmin(crossfadeRemaining_, numSamples);
-        const int elapsedBase = crossfadeTotal_ - crossfadeRemaining_;
-        const bool fadingIntoRender = (outputMode_ == RenderOutputMode::Rendering);
-        const int channels = juce::jmin(buffer.getNumChannels(), renderBuffer_.getNumChannels());
-        for (int ch = 0; ch < channels; ++ch)
-        {
-            auto* out = buffer.getWritePointer(ch);
-            const auto* in = buffer.getReadPointer(ch);
-            const auto* render = renderBuffer_.getReadPointer(ch);
-            for (int s = 0; s < fadeSamples; ++s)
-            {
-                const int windowFrame = elapsedBase + s;
-                float weight = static_cast<float>(windowFrame) / static_cast<float>(crossfadeTotal_);
-                if (windowFrame + 1 == crossfadeTotal_)
-                    weight = 1.0f;
-                const float renderWeight = fadingIntoRender ? weight : (1.0f - weight);
-                out[s] = in[s] * (1.0f - renderWeight) + render[s] * renderWeight;
-            }
-        }
-        crossfadeRemaining_ -= fadeSamples;
-
-        // Remainder of the block after the crossfade window ends.
-        if (fadeSamples < numSamples)
-        {
-            if (outputMode_ == RenderOutputMode::Rendering)
-            {
-                for (int ch = 0; ch < channels; ++ch)
-                {
-                    auto* out = buffer.getWritePointer(ch, fadeSamples);
-                    const auto* render = renderBuffer_.getReadPointer(ch, fadeSamples);
-                    juce::FloatVectorOperations::copy(out, render, numSamples - fadeSamples);
-                }
-            }
-            // Passthrough: remainder keeps the host input untouched.
-        }
-        return true;
-    }
-
-    // Rendering, no transition: replace the host input with the rendered
-    // content (ARA 2 playback renderer semantics, ARAInterface.h:3512-3518).
-    buffer.clear();
-    mixScratchInto(buffer, renderBuffer_, 0, numSamples);
     return true;
 }
 

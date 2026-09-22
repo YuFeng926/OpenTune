@@ -13,7 +13,6 @@
 #include "AudioModification.h"
 #include "AudioSource.h"
 #include "../Render/ContentRenderService.h"
-#include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
 #include "../Content/ContentKey.h"
 #include "../Utils/PlayHeadState.h"
@@ -207,14 +206,6 @@ private:
     // UI (PluginEditor) reads via getSharedPlayHeadState().
     PlayHeadState sharedPlayHeadState_;
 
-    // Stage1 → Stage2 异步完成回调 gate，跟随 DC 析构关闭。
-    std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate_;
-    void handleStage1ChunkSettled(
-        ContentKey key,
-        std::shared_ptr<const EditableContentSnapshot> snapshot,
-        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-        double audioSampleRate);
-
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
     AudioSource* findAudioSource(const juce::String& persistentId);
     const AudioSource* findAudioSource(const juce::String& persistentId) const;
@@ -242,7 +233,7 @@ public:
     // Volume envelope 编辑不触发神经渲染。
     bool applyVolumeEnvelopeToModification(const ContentKey& key, AutomationLane envelope);
     // 无渲染 republish：从最新 owner snapshot 原子发布播放源。
-    // 不 enqueue render、不失效 RenderCache、不重建 TimeStretchCache。
+    // 不 enqueue render、不失效 RenderCache。
     void republishPlaybackSourceForModification(ContentKey key);
     bool applyPitchCurveToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
     bool applyOriginalF0ToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
