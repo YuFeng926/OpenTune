@@ -165,6 +165,7 @@ Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容�
 10. `PlaybackRegionProjection` 只保留宿主 placement 属性和 `ContentKey`；ARA renderer 从发布的 `PlaybackReadSource.contentSnapshot` 取得 `SourceWindow` 和 TimeGrid。
 11. `ContentSnapshotProjection` 对空 `timeGrid` 使用 bootstrap identity，snapshot 与 `ContentState` 的投影不再要求调用方预先填充 identity grid。
 12. 采样率投影、TimeGrid spacing、F0 区间投影和 placement fade 已分别收敛到命名明确的离散坐标或绝对 seconds 路径；这些派生坐标不回写内容时间。
+13. split 收敛为单一 F0 帧边界锚：父 source window 必须已 sample-aligned，切点取 `F0Timeline::nearestFrameBoundary` 的帧时间并校验其落在音频 sample 网格上，两段按半开帧区间 `[0, b)` / `[b, N)` 切分；非 identity TimeGrid 内容显式拒绝 split。`volumeEnvelope` 与 notes/silent gaps 使用同一 local 秒区间切片；merge 与 `copyContentRange` 复用 `AutomationLane` 的切片/拼接，不再静默丢弃音量包络。
 
 ## 4. 剩余问题
 
@@ -175,11 +176,9 @@ Standalone、Capture、ARA 保留各自的 archive/container 格式，但内容�
 
 ### P1：时间域和状态合同
 
-1. **离散投影与绝对时间的边界合同仍需宿主和数据回归。** placement fade、RenderCache 跨率长度、TimeGrid spacing、F0 区间投影已分别使用明确的 seconds/point/interval 语义；剩余问题集中在 split、ARA source window 的 fractional sample 对齐和模型输入边界，不能凭经验改绝对时间公式。
-2. **split 仍同时使用 sample 锚和 seconds 锚。** 音频、silent gaps、notes 与 pitch curve 必须继续由同一个绝对切点派生，并补充边界回归。
-3. **F0 frame 与模型窗中心的合同未锁定。** FCPE padding、F0Timeline 和 mel/F0 插值需要训练侧定义和回归样本确认。
-4. **旧 cache 拒绝和非恒等 TimeGrid 的 cache miss 已有纯逻辑测试。** ARA 非零 source window、局部渲染 revision、导出一致性以及 placement fractional sample 边界目前只有代码合同，尚无对应专门测试；相关 ARA/Capture 行为仍缺宿主级验证。当前启用测试目标为 7 个，CTest 全部通过。
-5. **split 的 PitchCurve 仍缺少绝对 frame origin 合同。** 音频和 silent gaps 已按 canonical sample 切分，notes 保持 seconds；但非 F0 frame 边界切分时，当前 PitchCurve 没有保存绝对 frame origin，不能仅靠重复 floor/ceil 同时保证两段 F0 无重叠、无丢失且 frame 时间精确对应。需要先确定 frame origin 或重采样合同，再修改 split 持久化结构。
+1. **离散投影与绝对时间的边界合同仍需宿主和数据回归。** placement fade、RenderCache 跨率长度、TimeGrid spacing、F0 区间投影已分别使用明确的 seconds/point/interval 语义；剩余问题集中在 ARA source window 的 fractional sample 对齐和模型输入边界，不能凭经验改绝对时间公式。
+2. **F0 frame 与模型窗中心的合同未锁定。** FCPE padding、F0Timeline 和 mel/F0 插值需要训练侧定义和回归样本确认。
+3. **旧 cache 拒绝、非恒等 TimeGrid 的 cache miss、F0Timeline/SourceWindow 采样网格与 split 边界数学、AutomationLane slice/merge 已有纯逻辑测试。** ARA 非零 source window、局部渲染 revision、导出一致性、placement fractional sample 边界以及 `splitPlacementAtSeconds` 端到端集成目前只有代码合同；相关 ARA/Capture 行为仍缺宿主级验证。当前启用测试目标为 7 个，CTest 全部通过。
 
 ### P2：维护成本
 

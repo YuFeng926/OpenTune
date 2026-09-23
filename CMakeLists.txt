@@ -1391,10 +1391,12 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME AutoTunePitchShifterTests COMMAND OpenTuneAutoTuneTests)
 
-    # 纯结构体契约测试（JUCE-free）：字段与真实 Note/PitchControlConfig 漂移时编译失败
+    # 真实 include 生产 Note/PitchControlConfig/PitchUtils/AudioEditingScheme 的契约测试（纯标准库）：字段/常量漂移即编译失败
     add_executable(OpenTunePitchParameterTests
         Tests/PitchParameterContractTests.cpp
     )
+    target_include_directories(OpenTunePitchParameterTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     if(MSVC)
         target_compile_options(OpenTunePitchParameterTests PRIVATE /utf-8 /EHsc)
     endif()

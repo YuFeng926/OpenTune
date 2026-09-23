@@ -56,6 +56,20 @@ public:
     // Migration helper: exact sum of two piecewise-linear lanes.
     static AutomationLane sum(const AutomationLane& a, const AutomationLane& b);
 
+    // Split：取父 lane local 秒区间 [startSeconds, endSeconds] 并整体平移为 child local 秒
+    // （start→0）。两端以父 lane 插值值锚定，保证子区间 evalAt 与父一致。
+    // 空 lane 或 endSeconds <= startSeconds 返回空（单位增益）。
+    static AutomationLane sliceToLocalRange(const AutomationLane& envelope,
+                                            double startSeconds,
+                                            double endSeconds);
+
+    // Merge：把 trailing 的 local 秒整体平移 leadingDurationSeconds 接到 leading 之后。
+    // 单值 lane 不能表达接缝跳变：接缝锚点取 trailing.evalAt(0)（空 trailing = 0 dB 单位增益），
+    // leading 中位于接缝及之后的点由该分区语义丢弃（trailing 拥有接缝之后）。split→merge 往返逐点无损。
+    static AutomationLane mergeContiguous(const AutomationLane& leading,
+                                          const AutomationLane& trailing,
+                                          double leadingDurationSeconds);
+
     // Clear all points.
     void clear() { points_.clear(); }
 

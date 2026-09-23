@@ -670,6 +670,92 @@ bool testPlacementFadeUsesAbsoluteSeconds()
         && nearlyEqual(OpenTune::placementFadeGain(1.0, duration, fadeIn, fadeOut), 0.0);
 }
 
+// AutomationLane slice/merge 纯逻辑契约。容差 1e-3：fromSnapshot 归一化含 1e-4 简化阈值，
+// 逐点 evalAt 对比不要求位精确。
+bool laneEvalNear(const OpenTune::AutomationLane& lane, double t, float expected)
+{
+    return std::abs(lane.evalAt(t) - expected) <= 1.0e-3;
+}
+
+// slice：取父 lane [start, end] 并平移为 child local 秒，两端以父插值值锚定；
+// 逐点 evalAt 与父一致；空 lane 与 end<=start 返回空。
+bool testAutomationLaneSliceToLocalRange()
+{
+    const auto parent = OpenTune::AutomationLane::fromSnapshot(
+        std::vector<OpenTune::AutomationPoint>{{0.0, 0.0f}, {1.0, 4.0f}, {2.0, 0.0f}});
+
+    const auto sliced = OpenTune::AutomationLane::sliceToLocalRange(parent, 0.5, 1.5);
+
+    // 端点锚定：{0, evalAt(0.5)=2}、内部点平移 {0.5, 4}、{1, evalAt(1.5)=2}。
+    if (sliced.points().size() != 3)
+        return false;
+    if (!nearlyEqual(sliced.points().front().timeSeconds, 0.0)
+        || !nearlyEqual(sliced.points().front().gainDb, 2.0f)
+        || !nearlyEqual(sliced.points()[1].timeSeconds, 0.5)
+        || !nearlyEqual(sliced.points()[1].gainDb, 4.0f)
+        || !nearlyEqual(sliced.points().back().timeSeconds, 1.0)
+        || !nearlyEqual(sliced.points().back().gainDb, 2.0f))
+        return false;
+
+    // 子区间 evalAt 与父区间一致（local t ↔ 父 t+0.5）。
+    for (const double t : {0.0, 0.25, 0.5, 0.75, 1.0}) {
+        if (!laneEvalNear(sliced, t, parent.evalAt(t + 0.5)))
+            return false;
+    }
+
+    // 空 lane 与 end<=start 返回空（单位增益）。
+    const OpenTune::AutomationLane emptyLane;
+    if (!OpenTune::AutomationLane::sliceToLocalRange(emptyLane, 0.0, 1.0).empty())
+        return false;
+    return OpenTune::AutomationLane::sliceToLocalRange(parent, 1.0, 1.0).empty();
+}
+
+// merge：split→merge 往返逐点无损。
+bool testAutomationLaneMergeContiguousRoundTrip()
+{
+    const auto parent = OpenTune::AutomationLane::fromSnapshot(
+        std::vector<OpenTune::AutomationPoint>{
+            {0.0, 0.0f}, {1.0, 3.0f}, {2.0, 1.0f}, {3.0, 0.0f}});
+    const double b = 1.7;
+
+    const auto merged = OpenTune::AutomationLane::mergeContiguous(
+        OpenTune::AutomationLane::sliceToLocalRange(parent, 0.0, b),
+        OpenTune::AutomationLane::sliceToLocalRange(parent, b, 3.0),
+        b);
+
+    for (const double t : {0.0, 0.4, 1.0, 1.7, 2.2, 2.9, 3.0}) {
+        if (!laneEvalNear(merged, t, parent.evalAt(t)))
+            return false;
+    }
+    return true;
+}
+
+// merge 接缝语义与空侧：空 trailing = 0 dB 单位增益；空 leading 时接缝锚定 trailing.evalAt(0)。
+bool testAutomationLaneMergeSeamAndEmptySides()
+{
+    const auto parent = OpenTune::AutomationLane::fromSnapshot(
+        std::vector<OpenTune::AutomationPoint>{
+            {0.0, 0.0f}, {1.0, 3.0f}, {2.0, 1.0f}, {3.0, 0.0f}});
+    const OpenTune::AutomationLane emptyLane;
+
+    // 双空：单点 0 dB 被归一化为空 lane。
+    if (!OpenTune::AutomationLane::mergeContiguous(emptyLane, emptyLane, 2.0).empty())
+        return false;
+
+    // 空 trailing：接缝之后为 0 dB（单位增益）。
+    const auto leadingOnly = OpenTune::AutomationLane::mergeContiguous(parent, emptyLane, 2.0);
+    if (!laneEvalNear(leadingOnly, 2.5, 0.0f))
+        return false;
+
+    // 空 leading：接缝处与之后均为 trailing.evalAt(0) = -6 dB。
+    const auto trailing = OpenTune::AutomationLane::fromSnapshot(
+        std::vector<OpenTune::AutomationPoint>{{0.5, -6.0f}});
+    const auto trailingOnly = OpenTune::AutomationLane::mergeContiguous(emptyLane, trailing, 2.0);
+    return laneEvalNear(trailingOnly, 2.0, -6.0f)
+        && laneEvalNear(trailingOnly, 2.5, -6.0f)
+        && laneEvalNear(trailingOnly, 3.0, -6.0f);
+}
+
 } // namespace
 
 int main()
@@ -797,6 +883,24 @@ int main()
     if (!testPlacementFadeUsesAbsoluteSeconds())
     {
         std::fputs("FAIL: placement fade absolute-seconds contract\n", stderr);
+        return 1;
+    }
+
+    if (!testAutomationLaneSliceToLocalRange())
+    {
+        std::fputs("FAIL: AutomationLane sliceToLocalRange contract\n", stderr);
+        return 1;
+    }
+
+    if (!testAutomationLaneMergeContiguousRoundTrip())
+    {
+        std::fputs("FAIL: AutomationLane mergeContiguous split->merge round-trip\n", stderr);
+        return 1;
+    }
+
+    if (!testAutomationLaneMergeSeamAndEmptySides())
+    {
+        std::fputs("FAIL: AutomationLane mergeContiguous seam and empty sides\n", stderr);
         return 1;
     }
 

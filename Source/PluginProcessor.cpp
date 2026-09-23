@@ -316,28 +316,6 @@ std::vector<Note> sliceNotesToLocalRange(const std::vector<Note>& notes,
     return normalizeStoredNotes(slicedNotes);
 }
 
-// 音量包络是 content-local 源秒上的分段线性 lane：截取 [startSeconds, endSeconds]
-// 并整体平移到 child local 0。两端以父 lane 的插值值锚定，保证子区间 evalAt 与父一致。
-AutomationLane sliceVolumeEnvelopeToLocalRange(const AutomationLane& envelope,
-                                               double startSeconds,
-                                               double endSeconds)
-{
-    if (envelope.empty() || endSeconds <= startSeconds) {
-        return {};
-    }
-
-    std::vector<AutomationPoint> points;
-    points.reserve(envelope.points().size() + 2);
-    points.push_back({0.0, envelope.evalAt(startSeconds)});
-    for (const auto& point : envelope.points()) {
-        if (point.timeSeconds > startSeconds && point.timeSeconds < endSeconds) {
-            points.push_back({point.timeSeconds - startSeconds, point.gainDb});
-        }
-    }
-    points.push_back({endSeconds - startSeconds, envelope.evalAt(endSeconds)});
-    return AutomationLane::fromSnapshot(points);
-}
-
 // frame index 版：调用方已持有精确 frame 区间时使用，避免 seconds 反算取整
 // 造成边界帧同时落入相邻两个半开区间。
 std::shared_ptr<PitchCurve> slicePitchCurveToFrameRange(
@@ -2738,7 +2716,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, splitSample);
     leadingPayload.analysis.pitchCurve = slicePitchCurveToFrameRange(originalSnapshot->pitchCurve, 0, frameBoundary);
     leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitSourceSeconds);
-    leadingPayload.volumeEnvelope = sliceVolumeEnvelopeToLocalRange(
+    leadingPayload.volumeEnvelope = AutomationLane::sliceToLocalRange(
         originalSnapshot->volumeEnvelope, 0.0, splitSourceSeconds);
     leadingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
     // 派生特征绑定父 content/父绝对窗口，无可靠 slice：清空使其失效并可重新分析。
@@ -2754,7 +2732,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     trailingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes,
                                                    splitSourceSeconds,
                                                    parentDurationSeconds);
-    trailingPayload.volumeEnvelope = sliceVolumeEnvelopeToLocalRange(
+    trailingPayload.volumeEnvelope = AutomationLane::sliceToLocalRange(
         originalSnapshot->volumeEnvelope, splitSourceSeconds, parentDurationSeconds);
     trailingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, splitSample, totalSamples);
     trailingPayload.analysis.referenceFeatures.reset();
@@ -2937,6 +2915,8 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
         || trailingSnapshot->noteTopologyInitialized;
     mergedPayload.analysis.silentGaps = mergeSilentGaps(leadingSnapshot->silentGaps, trailingSnapshot->silentGaps, leadingSamples);
     mergedPayload.pitchShiftSettings = leadingSnapshot->pitchShiftSettings;
+    mergedPayload.volumeEnvelope = AutomationLane::mergeContiguous(
+        leadingSnapshot->volumeEnvelope, trailingSnapshot->volumeEnvelope, leadingDurationSeconds);
 
     const ContentKey mergedKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                            *contentRenderService_,
@@ -5488,6 +5468,8 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
     payload.noteTopologyInitialized = sourceSnap->noteTopologyInitialized;
     payload.analysis.silentGaps = sliceSilentGaps(sourceSnap->silentGaps, offsetSamples, endOffsetSamples);
     payload.pitchShiftSettings = sourceSnap->pitchShiftSettings;
+    payload.volumeEnvelope = AutomationLane::sliceToLocalRange(
+        sourceSnap->volumeEnvelope, localStartSeconds, localEndSeconds);
 
     // 截断失败时保留 bootstrap identity，由 createStandaloneClipOwner
     // 用真实 slice duration 覆盖。

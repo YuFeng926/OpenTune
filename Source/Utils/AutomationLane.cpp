@@ -140,4 +140,42 @@ AutomationLane AutomationLane::sum(const AutomationLane& a, const AutomationLane
     return fromSnapshot(points);
 }
 
+AutomationLane AutomationLane::sliceToLocalRange(const AutomationLane& envelope,
+                                                 double startSeconds,
+                                                 double endSeconds)
+{
+    if (envelope.empty() || endSeconds <= startSeconds) {
+        return {};
+    }
+
+    std::vector<AutomationPoint> points;
+    points.reserve(envelope.points().size() + 2);
+    points.push_back({0.0, envelope.evalAt(startSeconds)});
+    for (const auto& point : envelope.points()) {
+        if (point.timeSeconds > startSeconds && point.timeSeconds < endSeconds) {
+            points.push_back({point.timeSeconds - startSeconds, point.gainDb});
+        }
+    }
+    points.push_back({endSeconds - startSeconds, envelope.evalAt(endSeconds)});
+    return fromSnapshot(points);
+}
+
+AutomationLane AutomationLane::mergeContiguous(const AutomationLane& leading,
+                                               const AutomationLane& trailing,
+                                               double leadingDurationSeconds)
+{
+    const float seamGainDb = trailing.evalAt(0.0);
+
+    std::vector<AutomationPoint> points;
+    points.reserve(leading.points().size() + trailing.points().size() + 1);
+    for (const auto& point : leading.points()) {
+        if (point.timeSeconds < leadingDurationSeconds)
+            points.push_back(point);
+    }
+    points.push_back({leadingDurationSeconds, seamGainDb});
+    for (const auto& point : trailing.points())
+        points.push_back({point.timeSeconds + leadingDurationSeconds, point.gainDb});
+    return fromSnapshot(points);
+}
+
 } // namespace OpenTune
