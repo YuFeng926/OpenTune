@@ -66,12 +66,12 @@ float LegacyNoteGenerator::representativePitch(
     return voiced[voiced.size() / 2];
 }
 
-float LegacyNoteGenerator::quantisePitch(float hz)
+float LegacyNoteGenerator::quantisePitch(float hz, float tuningHz)
 {
     if (hz <= 0.0f) return 0.0f;
 
-    const float midi = PitchUtils::freqToMidi(hz);
-    return PitchUtils::midiToFreq(std::round(midi));
+    const float midi = PitchUtils::freqToMidi(hz, tuningHz);
+    return PitchUtils::midiToFreq(std::round(midi), tuningHz);
 }
 
 void ScaleSnapConfig::applyToNotes(std::vector<Note>& notes) const
@@ -93,7 +93,8 @@ void LegacyNoteGenerator::commitNote(
     float                      hopSizeTime,
     double                     endTime,
     double                     minNoteDuration,
-    double                     tailExtendDuration)
+    double                     tailExtendDuration,
+    float                      tuningHz)
 {
     if (pitches.empty()) return;
 
@@ -107,7 +108,7 @@ void LegacyNoteGenerator::commitNote(
 
         if (rep > 0.0f) {
             current.originalPitch = rep;
-            current.pitch         = quantisePitch(rep);
+            current.pitch         = quantisePitch(rep, tuningHz);
             out.push_back(current);
         }
     }
@@ -134,6 +135,8 @@ std::vector<Note> LegacyNoteGenerator::generate(
     startFrame        = std::max(0, startFrame);
     endFrameExclusive = std::min(endFrameExclusive, f0Count);
     if (startFrame >= endFrameExclusive) return out;
+
+    const float tuningHz = TuningConfig::currentTuningHz();  // 一次生成固定同一 tuning
 
     const double hopSecs = static_cast<double>(hopSize) / f0SampleRate;
 
@@ -195,7 +198,7 @@ std::vector<Note> LegacyNoteGenerator::generate(
                 {
                     commitNote(out, current, pitches, energyBuf,
                                static_cast<float>(hopSecs), frameToTime(i),
-                               minNoteDuration, tailExtendDuration);
+                               minNoteDuration, tailExtendDuration, tuningHz);
 
                     current             = Note{};
                     current.startTime   = frameToTime(i);
@@ -221,7 +224,7 @@ std::vector<Note> LegacyNoteGenerator::generate(
                 if (trailingUnvoiced > gapBridgeFrames) {
                     commitNote(out, current, pitches, energyBuf,
                                static_cast<float>(hopSecs), frameToTime(lastVoicedFrame + 1),
-                               minNoteDuration, tailExtendDuration);
+                               minNoteDuration, tailExtendDuration, tuningHz);
                     inNote           = false;
                     trailingUnvoiced = 0;
                     lastVoicedFrame  = -1;
@@ -235,7 +238,7 @@ std::vector<Note> LegacyNoteGenerator::generate(
     if (inNote && !pitches.empty() && lastVoicedFrame >= 0) {
         commitNote(out, current, pitches, energyBuf,
                    static_cast<float>(hopSecs), frameToTime(lastVoicedFrame + 1),
-                   minNoteDuration, tailExtendDuration);
+                   minNoteDuration, tailExtendDuration, tuningHz);
     }
 
     std::sort(out.begin(), out.end(),

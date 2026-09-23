@@ -37,7 +37,7 @@ private:
         int          count,
         float        hopSizeTime);
 
-    static float quantisePitch(float hz);
+    static float quantisePitch(float hz, float tuningHz);
 
     static void commitNote(
         std::vector<Note>&         out,
@@ -47,7 +47,8 @@ private:
         float                      hopSizeTime,
         double                     endTime,
         double                     minNoteDuration,
-        double                     tailExtendDuration);
+        double                     tailExtendDuration,
+        float                      tuningHz);
 };
 
 } // namespace OpenTune

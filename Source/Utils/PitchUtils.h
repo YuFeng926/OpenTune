@@ -28,17 +28,25 @@ inline float mixRetune(float shiftedF0, float targetF0, float retuneSpeed) {
 /**
  * 将频率 (Hz) 转换为 MIDI 编号 (float)。
  */
-inline float freqToMidi(float freq) {
+inline float freqToMidi(float freq, float tuningHz) {
     if (freq <= 0.0f) return 0.0f;
-    return 69.0f + 12.0f * std::log2(freq / TuningConfig::currentTuningHz());
+    return 69.0f + 12.0f * std::log2(freq / tuningHz);
+}
+
+inline float freqToMidi(float freq) {
+    return freqToMidi(freq, TuningConfig::currentTuningHz());
 }
 
 /**
  * 将 MIDI 编号转换为频率 (Hz)。
  */
-inline float midiToFreq(float midi) {
+inline float midiToFreq(float midi, float tuningHz) {
     if (midi <= 0.0f) return 0.0f;
-    return TuningConfig::currentTuningHz() * std::pow(2.0f, (midi - 69.0f) / 12.0f);
+    return tuningHz * std::pow(2.0f, (midi - 69.0f) / 12.0f);
+}
+
+inline float midiToFreq(float midi) {
+    return midiToFreq(midi, TuningConfig::currentTuningHz());
 }
 
 } // namespace PitchUtils

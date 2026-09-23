@@ -466,7 +466,7 @@ void AppPreferences::load()
         userSettings->removeValue(kSharedPitchLaneVisualModeKey);
         userSettings->saveIfNeeded();
     }
-    TuningConfig::currentTuningHz() = state_.shared.tuning.tuningHz;
+    TuningConfig::setCurrentTuningHz(state_.shared.tuning.tuningHz);
 }
 
 void AppPreferences::save()
@@ -547,7 +547,7 @@ void AppPreferences::setTuning(const TuningConfig::TuningSettings& tuning)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.tuning = tuning;
-    TuningConfig::currentTuningHz() = tuning.tuningHz;
+    TuningConfig::setCurrentTuningHz(tuning.tuningHz);
     saveLocked();
 }
 

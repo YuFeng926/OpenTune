@@ -120,11 +120,14 @@ std::vector<Note> GameNoteGenerator::generate(const NoteGeneratorInput& input)
 
     const double durationSec = static_cast<double>(input.audio.size()) / input.sampleRate;
 
+    const float tuningHz = TuningConfig::currentTuningHz();  // 一次分析固定同一 tuning，向下传参
+
     // Short-clip fast path: no chunking, single inference.
     if (durationSec <= maxChunkSeconds_) {
         return runSingleChunk(input.audio.data(),
                               static_cast<int64_t>(input.audio.size()),
-                              input.sampleRate);
+                              input.sampleRate,
+                              tuningHz);
     }
 
     // Long-clip path: reuse the existing silence-aware boundary builder.
@@ -140,7 +143,8 @@ std::vector<Note> GameNoteGenerator::generate(const NoteGeneratorInput& input)
                         + " Hz). Skipping silence-aware chunking; running as one chunk.");
         return runSingleChunk(input.audio.data(),
                               static_cast<int64_t>(input.audio.size()),
-                              input.sampleRate);
+                              input.sampleRate,
+                              tuningHz);
     }
 
     juce::AudioBuffer<float> buf(1, static_cast<int>(input.audio.size()));
@@ -159,7 +163,8 @@ std::vector<Note> GameNoteGenerator::generate(const NoteGeneratorInput& input)
         // No useful boundaries — fall back to single chunk.
         return runSingleChunk(input.audio.data(),
                               static_cast<int64_t>(input.audio.size()),
-                              input.sampleRate);
+                              input.sampleRate,
+                              tuningHz);
     }
 
     std::vector<std::vector<Note>> perChunk;
@@ -177,10 +182,11 @@ std::vector<Note> GameNoteGenerator::generate(const NoteGeneratorInput& input)
         chunkStartSeconds.push_back(chunkStartSec);
         perChunk.push_back(runSingleChunk(input.audio.data() + startSample,
                                           chunkLen,
-                                          input.sampleRate));
+                                          input.sampleRate,
+                                          tuningHz));
     }
 
-    return mergeChunkNotes(perChunk, chunkStartSeconds);
+    return mergeChunkNotes(perChunk, chunkStartSeconds, tuningHz);
 }
 
 // ============================================================================
@@ -216,13 +222,13 @@ inline Ort::Value makeBoolTensor(Ort::MemoryInfo& mem,
 // The Python code accumulates `cursor += d` for ALL maskN-valid durations
 // regardless of presence, only emitting a Note when presence[i] is true.
 void appendNote(std::vector<Note>& out, double start, double end,
-                int midiInt, float continuousMidi)
+                int midiInt, float continuousMidi, float tuningHz)
 {
     Note n;
     n.startTime     = start;
     n.endTime       = end;
-    n.pitch         = PitchUtils::midiToFreq(static_cast<float>(midiInt));
-    n.originalPitch = TuningConfig::currentTuningHz() * std::pow(2.0f, (continuousMidi - 69.0f) / 12.0f);
+    n.pitch         = PitchUtils::midiToFreq(static_cast<float>(midiInt), tuningHz);
+    n.originalPitch = tuningHz * std::pow(2.0f, (continuousMidi - 69.0f) / 12.0f);
     n.isVoiced      = true;
     out.push_back(n);
 }
@@ -231,7 +237,8 @@ void appendNote(std::vector<Note>& out, double start, double end,
 
 std::vector<Note> GameNoteGenerator::runSingleChunk(const float* audio,
                                                     int64_t      numSamples,
-                                                    double       sampleRate)
+                                                    double       sampleRate,
+                                                    float        tuningHz)
 {
     if (audio == nullptr || numSamples <= 0) return {};
 
@@ -536,7 +543,7 @@ std::vector<Note> GameNoteGenerator::runSingleChunk(const float* audio,
             if (presenceData[i]) {
                 const float continuousMidi = scoresData[i];
                 const int   midiInt        = static_cast<int>(std::round(continuousMidi));
-                appendNote(outNotes, start, end, midiInt, continuousMidi);
+                appendNote(outNotes, start, end, midiInt, continuousMidi, tuningHz);
             }
             cursor = end;
         }
@@ -558,6 +565,7 @@ std::vector<Note> GameNoteGenerator::runSingleChunk(const float* audio,
 
 std::vector<Note> mergeChunkNotes(const std::vector<std::vector<Note>>& perChunk,
                                   const std::vector<double>&            chunkStartSeconds,
+                                  float                                 tuningHz,
                                   double                                seamToleranceSec)
 {
     std::vector<Note> merged;
@@ -589,14 +597,14 @@ std::vector<Note> mergeChunkNotes(const std::vector<std::vector<Note>>& perChunk
 
         for (const auto& n : perChunk[c]) {
             const double absStart = n.startTime + offset;
-            const int    midiCandidate = static_cast<int>(std::round(PitchUtils::freqToMidi(n.getAdjustedPitch())));
+            const int    midiCandidate = static_cast<int>(std::round(PitchUtils::freqToMidi(n.getAdjustedPitch(), tuningHz)));
 
             bool drop = false;
             // Walk merged in reverse to find tail notes inside the seam window.
             for (auto it = merged.rbegin(); it != merged.rend(); ++it) {
                 if (seamSec - it->endTime > seamToleranceSec) break; // before the window
                 if (std::abs(absStart - seamSec) > seamToleranceSec) break; // candidate not at seam
-                if (static_cast<int>(std::round(PitchUtils::freqToMidi(it->getAdjustedPitch()))) == midiCandidate) {
+                if (static_cast<int>(std::round(PitchUtils::freqToMidi(it->getAdjustedPitch(), tuningHz))) == midiCandidate) {
                     drop = true;
                     break;
                 }

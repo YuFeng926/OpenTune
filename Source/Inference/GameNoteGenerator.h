@@ -76,7 +76,8 @@ private:
     /// chunk's first sample.
     std::vector<Note> runSingleChunk(const float* audio,
                                      int64_t      numSamples,
-                                     double       sampleRate);
+                                     double       sampleRate,
+                                     float        tuningHz);
 
     void loadConfig(const std::string& configPath);
 
@@ -113,8 +114,10 @@ private:
 /// note in chunk i+1 whose `start` is within `seamToleranceSec` of the seam
 /// from chunk i AND has the same MIDI as a chunk-i tail note (the chunk-i
 /// version wins because its onset is more reliable). Default tolerance 50 ms.
+/// seam 去重比较使用调用方传入的 tuningHz（一次分析固定值）。
 std::vector<Note> mergeChunkNotes(const std::vector<std::vector<Note>>& perChunk,
                                   const std::vector<double>&            chunkStartSeconds,
+                                  float                                 tuningHz,
                                   double                                seamToleranceSec = 0.05);
 
 } // namespace OpenTune
