@@ -307,16 +307,12 @@ static std::shared_ptr<const juce::AudioBuffer<float>> rebuildStandaloneClipAudi
     }
 
     const int64_t totalSamples = sourceBuffer->getNumSamples();
-    const int64_t startSample = juce::jlimit<int64_t>(
-        0,
-        totalSamples,
-        TimeCoordinate::secondsToSamplesFloor(sourceWindow.sourceStartSeconds, sourceSampleRate));
-    const int64_t endSample = juce::jlimit<int64_t>(
-        startSample,
-        totalSamples,
-        TimeCoordinate::secondsToSamplesCeil(sourceWindow.sourceEndSeconds, sourceSampleRate));
+    const int64_t startSample = TimeCoordinate::secondsToSamplesNearest(
+        sourceWindow.sourceStartSeconds, sourceSampleRate);
+    const int64_t endSample = TimeCoordinate::secondsToSamplesNearest(
+        sourceWindow.sourceEndSeconds, sourceSampleRate);
 
-    if (endSample <= startSample)
+    if (startSample < 0 || endSample > totalSamples || endSample <= startSample)
         return nullptr;
 
     if (startSample == 0 && endSample == totalSamples)
@@ -460,10 +456,19 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         }
         sourceSampleRate = sourceSnapshot.sampleRate;
 
+        // 旧工程秒值在 sourceRate 已知处对齐到 source sample 网格并回写 seconds；
+        // slice 与 clip content 共用同一对齐结果。
+        const auto alignedWindow = alignSourceWindowToSampleGrid(contentEntry.sourceWindow, sourceSampleRate);
+        if (!alignedWindow.has_value()) {
+            AppLogger::log("ProjectSession: Invalid source window for clip "
+                + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
+            continue;
+        }
+
         // 创建 clip，强制使用原 ID
         auto windowedBuffer = rebuildStandaloneClipAudioFromSourceWindow(
             sourceBuf,
-            contentEntry.sourceWindow,
+            *alignedWindow,
             sourceSampleRate);
         if (windowedBuffer == nullptr) {
             AppLogger::log("ProjectSession: Invalid source window for clip "
@@ -481,7 +486,7 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         if (!clip) { continue; }
 
         // 应用音频数据
-        clip->content().sourceWindow = contentEntry.sourceWindow;
+        clip->content().sourceWindow = *alignedWindow;
         clip->applyAudioBuffer(windowedBuffer, sourceSampleRate);
 
         // 应用 notes
@@ -520,7 +525,35 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
                 handles.push_back(th);
             }
             auto tgSnapshot = TimeGridSnapshot::makeFromHandles(std::move(handles));
-            clip->applyTimeGrid(tgSnapshot);
+            if (tgSnapshot == nullptr) {
+                AppLogger::log("ProjectSession: Invalid time grid for clip "
+                    + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId))
+                    + ", keeping audio-derived identity");
+            } else if (tgSnapshot->isIdentity()) {
+                // identity grid 必须与对齐后的 sourceWindow 同 duration；
+                // 重建使 grid duration 与 content sourceWindow duration 一致。
+                auto alignedGrid = TimeGridSnapshot::makeIdentity(alignedWindow->durationSeconds());
+                if (alignedGrid == nullptr) {
+                    AppLogger::log("ProjectSession: Failed to rebuild identity time grid for clip "
+                        + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)));
+                } else {
+                    clip->applyTimeGrid(std::move(alignedGrid));
+                }
+            } else if (std::abs(tgSnapshot->totalDurationSeconds() - alignedWindow->durationSeconds()) > 1e-6) {
+                // 非 identity grid 的 time-warp 事实必须与对齐后窗口时长一致
+                // （复用 createStandaloneClipOwner 的 duration epsilon 合同）。
+                // 不一致时拒绝 applyTimeGrid，保留 applyAudioBuffer 已建立的
+                // audio-derived identity，避免 content 同时携带两个时长事实。
+                AppLogger::log("ProjectSession: Time grid duration mismatch for clip "
+                    + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId))
+                    + " (grid=" + juce::String(tgSnapshot->totalDurationSeconds(), 9)
+                    + ", window=" + juce::String(alignedWindow->durationSeconds(), 9)
+                    + "), keeping audio-derived identity");
+            } else {
+                // 非 identity grid 是内容自身的 time-warp 事实，按既有策略原样恢复，
+                // 不用 sourceWindow duration 改写。
+                clip->applyTimeGrid(std::move(tgSnapshot));
+            }
         }
 
         // 恢复 Original F0 state — Ready 和 Extracting 都归一化为 NotRequested，

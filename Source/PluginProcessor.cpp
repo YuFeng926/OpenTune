@@ -316,12 +316,36 @@ std::vector<Note> sliceNotesToLocalRange(const std::vector<Note>& notes,
     return normalizeStoredNotes(slicedNotes);
 }
 
-std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(
-    const std::shared_ptr<const PitchCurveSnapshot>& pitchCurve,
-                                                        double startSeconds,
-                                                        double endSeconds)
+// 音量包络是 content-local 源秒上的分段线性 lane：截取 [startSeconds, endSeconds]
+// 并整体平移到 child local 0。两端以父 lane 的插值值锚定，保证子区间 evalAt 与父一致。
+AutomationLane sliceVolumeEnvelopeToLocalRange(const AutomationLane& envelope,
+                                               double startSeconds,
+                                               double endSeconds)
 {
-    if (pitchCurve == nullptr || endSeconds <= startSeconds) {
+    if (envelope.empty() || endSeconds <= startSeconds) {
+        return {};
+    }
+
+    std::vector<AutomationPoint> points;
+    points.reserve(envelope.points().size() + 2);
+    points.push_back({0.0, envelope.evalAt(startSeconds)});
+    for (const auto& point : envelope.points()) {
+        if (point.timeSeconds > startSeconds && point.timeSeconds < endSeconds) {
+            points.push_back({point.timeSeconds - startSeconds, point.gainDb});
+        }
+    }
+    points.push_back({endSeconds - startSeconds, envelope.evalAt(endSeconds)});
+    return AutomationLane::fromSnapshot(points);
+}
+
+// frame index 版：调用方已持有精确 frame 区间时使用，避免 seconds 反算取整
+// 造成边界帧同时落入相邻两个半开区间。
+std::shared_ptr<PitchCurve> slicePitchCurveToFrameRange(
+    const std::shared_ptr<const PitchCurveSnapshot>& pitchCurve,
+    int startFrame,
+    int endFrameExclusive)
+{
+    if (pitchCurve == nullptr || endFrameExclusive <= startFrame) {
         return nullptr;
     }
 
@@ -332,14 +356,8 @@ std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(
         return nullptr;
     }
 
-    const auto frameRange = f0FrameRangeForSeconds(snapshot, startSeconds, endSeconds);
-    if (!frameRange.has_value()) {
-        return nullptr;
-    }
-
-    const int startFrame = frameRange->startFrame;
-    const int endFrame = frameRange->endFrameExclusive;
-    if (endFrame <= startFrame) {
+    const auto& originalF0 = snapshot.getOriginalF0();
+    if (startFrame < 0 || endFrameExclusive > static_cast<int>(originalF0.size())) {
         return nullptr;
     }
 
@@ -347,18 +365,17 @@ std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(
     slicedCurve->setHopSize(hopSize);
     slicedCurve->setSampleRate(sampleRate);
 
-    const auto& originalF0 = snapshot.getOriginalF0();
-    slicedCurve->setOriginalF0(std::vector<float>(originalF0.begin() + startFrame, originalF0.begin() + endFrame));
+    slicedCurve->setOriginalF0(std::vector<float>(originalF0.begin() + startFrame, originalF0.begin() + endFrameExclusive));
 
     const auto& originalEnergy = snapshot.getOriginalEnergy();
-    if (originalEnergy.size() >= static_cast<size_t>(endFrame)) {
-        slicedCurve->setOriginalEnergy(std::vector<float>(originalEnergy.begin() + startFrame, originalEnergy.begin() + endFrame));
+    if (originalEnergy.size() >= static_cast<size_t>(endFrameExclusive)) {
+        slicedCurve->setOriginalEnergy(std::vector<float>(originalEnergy.begin() + startFrame, originalEnergy.begin() + endFrameExclusive));
     }
 
     std::vector<PitchCorrectionSegment> slicedSegments;
     for (const auto& segment : snapshot.getCorrectionSegments()) {
         const int overlapStart = std::max(segment.startFrame, startFrame);
-        const int overlapEnd = std::min(segment.endFrame, endFrame);
+        const int overlapEnd = std::min(segment.endFrame, endFrameExclusive);
         if (overlapEnd <= overlapStart) {
             continue;
         }
@@ -376,17 +393,30 @@ std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(
     return slicedCurve;
 }
 
+// seconds 版：按端点秒数求覆盖 frame range 后委托 frame index 版。
+std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(
+    const std::shared_ptr<const PitchCurveSnapshot>& pitchCurve,
+                                                        double startSeconds,
+                                                        double endSeconds)
+{
+    if (pitchCurve == nullptr || endSeconds <= startSeconds) {
+        return nullptr;
+    }
+
+    const auto frameRange = f0FrameRangeForSeconds(*pitchCurve, startSeconds, endSeconds);
+    if (!frameRange.has_value()) {
+        return nullptr;
+    }
+
+    return slicePitchCurveToFrameRange(pitchCurve, frameRange->startFrame, frameRange->endFrameExclusive);
+}
+
 bool detectedKeysMatch(const DetectedKey& lhs, const DetectedKey& rhs)
 {
     return lhs.root == rhs.root
         && lhs.scale == rhs.scale
         && lhs.origin == rhs.origin
         && std::abs(lhs.confidence - rhs.confidence) <= 1.0e-6f;
-}
-
-bool nearlyEqualSeconds(double lhs, double rhs)
-{
-    return std::abs(lhs - rhs) <= (1.0 / TimeCoordinate::kRenderSampleRate);
 }
 
 std::vector<SilentGap> mergeSilentGaps(const std::vector<SilentGap>& leadingGaps,
@@ -2617,10 +2647,10 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         return std::nullopt;
     }
 
-    const double splitOffsetSeconds = splitSeconds - originalPlacement.timelineStartSeconds;
+    const double requestedOffsetSeconds = splitSeconds - originalPlacement.timelineStartSeconds;
     constexpr double minDurationSeconds = 0.1;
-    if (splitOffsetSeconds <= minDurationSeconds
-        || splitOffsetSeconds >= originalPlacement.durationSeconds - minDurationSeconds) {
+    if (requestedOffsetSeconds <= minDurationSeconds
+        || requestedOffsetSeconds >= originalPlacement.durationSeconds - minDurationSeconds) {
         AppLogger::log("Split rejected: split point out of valid placement range");
         return std::nullopt;
     }
@@ -2630,45 +2660,105 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         return std::nullopt;
     }
 
-    const double splitOutputSeconds = originalSnapshot->timeGrid->tauForward(
-        originalPlacement.clipInSeconds) + splitOffsetSeconds;
-    const double splitSourceSeconds = originalSnapshot->timeGrid->tauInverse(splitOutputSeconds);
-    const int64_t splitSample = TimeCoordinate::secondsToSamples(
-        splitSourceSeconds, TimeCoordinate::kRenderSampleRate);
+    // 绝对时间合同：非 identity grid 的 split 结果会被 owner bootstrap 覆盖成
+    // identity，造成时间映射错误；在取得 snapshot 后直接拒绝，不执行旧路径。
+    if (!originalSnapshot->timeGrid->isIdentity()) {
+        AppLogger::log("Split rejected: content has non-identity time grid");
+        return std::nullopt;
+    }
+
+    if (!originalSnapshot->hasUsableOriginalF0()) {
+        AppLogger::log("Split rejected: content has no usable original F0");
+        return std::nullopt;
+    }
+
+    const double audioSampleRate = originalSnapshot->audioSampleRate;
+    if (!std::isfinite(audioSampleRate) || audioSampleRate <= 0.0) {
+        AppLogger::log("Split rejected: content audio sample rate unavailable");
+        return std::nullopt;
+    }
+
+    const auto& f0Curve = *originalSnapshot->pitchCurve;
+    const int f0FrameCount = static_cast<int>(f0Curve.getOriginalF0().size());
+    const F0Timeline f0Timeline(f0Curve.getHopSize(), f0Curve.getSampleRate(), f0FrameCount);
+
+    // identity grid：content-local source 秒 == output 秒。
+    const double requestedSourceSeconds = originalPlacement.clipInSeconds + requestedOffsetSeconds;
+    const int frameBoundary = f0Timeline.nearestFrameBoundary(requestedSourceSeconds);
+    if (frameBoundary <= 0 || frameBoundary >= f0FrameCount) {
+        AppLogger::log("Split rejected: nearest F0 frame boundary has no frames on both sides");
+        return std::nullopt;
+    }
+
+    // F0-local frame time 是唯一分割边界；音频侧只把它投影成离散 sample 访问坐标。
+    const double splitSourceSeconds = f0Timeline.timeAtFrame(frameBoundary);
+    const int64_t splitSample = TimeCoordinate::secondsToSamplesNearest(splitSourceSeconds, audioSampleRate);
+    // timeAtFrame 是 double 乘法，理论对齐的帧也可能有 ulp 级舍入；容差只吸收浮点噪声，
+    // 任何真实样本非对齐的帧都会被拒绝，绝不把 sample 量化回写到 F0/notes/timeline。
+    constexpr double sampleGridToleranceSeconds = 1.0e-9;
+    if (std::abs(TimeCoordinate::samplesToSeconds(splitSample, audioSampleRate) - splitSourceSeconds)
+        > sampleGridToleranceSeconds) {
+        AppLogger::log("Split rejected: F0 frame boundary does not land on the audio sample grid");
+        return std::nullopt;
+    }
+
     const int64_t totalSamples = originalSnapshot->audioBuffer->getNumSamples();
     if (splitSample <= 0 || splitSample >= totalSamples) {
         return std::nullopt;
     }
 
+    const double splitOffsetSeconds = splitSourceSeconds - originalPlacement.clipInSeconds;
+    if (splitOffsetSeconds <= minDurationSeconds
+        || splitOffsetSeconds >= originalPlacement.durationSeconds - minDurationSeconds) {
+        AppLogger::log("Split rejected: snapped split point out of valid placement range");
+        return std::nullopt;
+    }
+    const double snappedSplitSeconds = originalPlacement.timelineStartSeconds + splitOffsetSeconds;
+
+    // 两个子窗口共享同一 source-absolute boundary：由父窗口起始 sample + splitSample 合成；
+    // 父窗口两端保持原对齐值不动。前提：父窗口本身已在该 sample 网格上。
+    const auto alignedParentWindow = alignSourceWindowToSampleGrid(
+        originalSnapshot->sourceWindow, audioSampleRate);
+    if (!alignedParentWindow.has_value()
+        || alignedParentWindow->sourceStartSeconds != originalSnapshot->sourceWindow.sourceStartSeconds
+        || alignedParentWindow->sourceEndSeconds != originalSnapshot->sourceWindow.sourceEndSeconds) {
+        AppLogger::log("Split rejected: parent source window is not sample-aligned");
+        return std::nullopt;
+    }
+
+    const int64_t parentStartSample = TimeCoordinate::secondsToSamplesNearest(
+        alignedParentWindow->sourceStartSeconds, audioSampleRate);
+    const double boundarySourceSeconds = TimeCoordinate::samplesToSeconds(
+        parentStartSample + splitSample, audioSampleRate);
+    const double parentDurationSeconds = originalSnapshot->sourceWindow.durationSeconds();
+
     ContentState leadingPayload = contentStateFromSnapshot(*originalSnapshot);
-    leadingPayload.sourceWindow = SourceWindow{
-        originalSnapshot->sourceWindow.sourceId,
-        juce::String(),
-        originalSnapshot->sourceWindow.sourceStartSeconds,
-        originalSnapshot->sourceWindow.sourceStartSeconds + splitSourceSeconds
-    };
+    leadingPayload.sourceWindow = originalSnapshot->sourceWindow;
+    leadingPayload.sourceWindow.sourceEndSeconds = boundarySourceSeconds;
     leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, splitSample);
-    leadingPayload.analysis.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve, 0.0, splitSourceSeconds);
+    leadingPayload.analysis.pitchCurve = slicePitchCurveToFrameRange(originalSnapshot->pitchCurve, 0, frameBoundary);
     leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitSourceSeconds);
+    leadingPayload.volumeEnvelope = sliceVolumeEnvelopeToLocalRange(
+        originalSnapshot->volumeEnvelope, 0.0, splitSourceSeconds);
     leadingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
-    // timeGrid 沿用原 grid：时长与 slice 不匹配，owner bootstrap 会覆盖为 slice identity。
+    // 派生特征绑定父 content/父绝对窗口，无可靠 slice：清空使其失效并可重新分析。
+    leadingPayload.analysis.referenceFeatures.reset();
+    // timeGrid 沿用原 identity grid：时长与 slice 不匹配，owner bootstrap 会覆盖为 slice identity。
 
     ContentState trailingPayload = contentStateFromSnapshot(*originalSnapshot);
-    trailingPayload.sourceWindow = SourceWindow{
-        originalSnapshot->sourceWindow.sourceId,
-        juce::String(),
-        originalSnapshot->sourceWindow.sourceStartSeconds + splitSourceSeconds,
-        originalSnapshot->sourceWindow.sourceEndSeconds
-    };
+    trailingPayload.sourceWindow = originalSnapshot->sourceWindow;
+    trailingPayload.sourceWindow.sourceStartSeconds = boundarySourceSeconds;
     trailingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, splitSample, totalSamples);
-    trailingPayload.analysis.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve,
-                                                             splitSourceSeconds,
-                                                              originalSnapshot->sourceWindow.durationSeconds());
+    trailingPayload.analysis.pitchCurve = slicePitchCurveToFrameRange(
+        originalSnapshot->pitchCurve, frameBoundary, f0FrameCount);
     trailingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes,
                                                    splitSourceSeconds,
-                                                   originalSnapshot->sourceWindow.durationSeconds());
+                                                   parentDurationSeconds);
+    trailingPayload.volumeEnvelope = sliceVolumeEnvelopeToLocalRange(
+        originalSnapshot->volumeEnvelope, splitSourceSeconds, parentDurationSeconds);
     trailingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, splitSample, totalSamples);
-    // timeGrid 沿用原 grid：时长与 slice 不匹配，owner bootstrap 会覆盖为 slice identity。
+    trailingPayload.analysis.referenceFeatures.reset();
+    // timeGrid 沿用原 identity grid：时长与 slice 不匹配，owner bootstrap 会覆盖为 slice identity。
 
     const ContentKey leadingKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                             *contentRenderService_,
@@ -2691,7 +2781,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     StandaloneArrangement::Placement trailingPlacement = originalPlacement;
     trailingPlacement.placementId = 0;
     trailingPlacement.contentKey = trailingKey;
-    trailingPlacement.timelineStartSeconds = splitSeconds;
+    trailingPlacement.timelineStartSeconds = snappedSplitSeconds;
     trailingPlacement.durationSeconds = originalPlacement.durationSeconds - splitOffsetSeconds;
     trailingPlacement.fadeInDuration = 0.0;
     trailingPlacement.clipInSeconds = 0.0;
@@ -2768,8 +2858,20 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
         return std::nullopt;
     }
 
-    if (!nearlyEqualSeconds(leadingSnapshot->sourceWindow.sourceEndSeconds,
-                            trailingSnapshot->sourceWindow.sourceStartSeconds)) {
+    const double leadingAudioSampleRate = leadingSnapshot->audioSampleRate;
+    const double trailingAudioSampleRate = trailingSnapshot->audioSampleRate;
+    if (!std::isfinite(leadingAudioSampleRate) || leadingAudioSampleRate <= 0.0
+        || leadingAudioSampleRate != trailingAudioSampleRate) {
+        AppLogger::log("Merge rejected: content audio sample rates are unavailable or diverged");
+        return std::nullopt;
+    }
+
+    // 两个窗口已 sample-aligned；连续性用各自 sample rate 投影到 nearest sample
+    // index 后精确比较，不用整样本秒容差接受真实 gap/overlap。
+    if (TimeCoordinate::secondsToSamplesNearest(leadingSnapshot->sourceWindow.sourceEndSeconds,
+                                                leadingAudioSampleRate)
+        != TimeCoordinate::secondsToSamplesNearest(trailingSnapshot->sourceWindow.sourceStartSeconds,
+                                                    trailingAudioSampleRate)) {
         AppLogger::log("Merge rejected: clips do not describe one contiguous source provenance window");
         return std::nullopt;
     }
@@ -2821,12 +2923,10 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     mergedNotes = normalizeStoredNotes(mergedNotes);
 
     ContentState mergedPayload;
-    mergedPayload.sourceWindow = SourceWindow{
-        leadingSnapshot->sourceWindow.sourceId,
-        juce::String(),
-        leadingSnapshot->sourceWindow.sourceStartSeconds,
-        trailingSnapshot->sourceWindow.sourceEndSeconds
-    };
+    // 合并窗口端点直接取 leading start / trailing end（已 sample-aligned），
+    // 并保留 leading 的 source identity（sourceId/sourcePersistentId）。
+    mergedPayload.sourceWindow = leadingSnapshot->sourceWindow;
+    mergedPayload.sourceWindow.sourceEndSeconds = trailingSnapshot->sourceWindow.sourceEndSeconds;
     mergedPayload.audioBuffer = mergedBuffer;
     mergedPayload.sampleRate = leadingSnapshot->audioSampleRate > 0.0 ? leadingSnapshot->audioSampleRate : TimeCoordinate::kRenderSampleRate;
     mergedPayload.analysis.pitchCurve = mergedPitchCurve;
@@ -3692,25 +3792,31 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
     // Storage layout exactly matches the declaration (1 = mono, 2 = stereo).
     ChannelLayoutLog::logEntry(entrySourceTag, declaredChannels, declaredChannels, displayName);
 
+    const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
+    const bool needsResample = std::abs(inSampleRate - targetSampleRate) > 1.0;
+    // 存储统一为 canonical 44.1kHz：窗口 span 直接取最终 stored buffer 的
+    // canonical sample 数，保证 window duration 与 stored audio 一致。
+    const int64_t storedSampleCount = needsResample
+        ? juce::jmax<int64_t>(1, TimeCoordinate::sampleRateProject(
+              inBuffer.getNumSamples(), inSampleRate, targetSampleRate))
+        : static_cast<int64_t>(inBuffer.getNumSamples());
+
     out.displayName = displayName;
     out.sourceFilePath = sourceFilePath;
+    // 端点由最终 stored buffer 的 canonical sample 数直接生成，本身就在
+    // source sample 网格上，无需再经对齐 round-trip。
     out.sourceWindow = SourceWindow{
         0,
         juce::String(),
         0.0,
-        TimeCoordinate::samplesToSeconds(inBuffer.getNumSamples(), inSampleRate)
+        TimeCoordinate::samplesToSeconds(storedSampleCount, targetSampleRate)
     };
 
-    // 导入后的 content 在 shared runtime 内统一落到固定 44.1kHz（content-local 存储采样率）
-    const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
-    if (std::abs(inSampleRate - targetSampleRate) > 1.0) {
+    if (needsResample) {
         const int numChannels = inBuffer.getNumChannels();
         const int originalLen = inBuffer.getNumSamples();
-        const int newLen = juce::jmax(
-            1,
-            static_cast<int>(TimeCoordinate::sampleRateProject(
-                originalLen, inSampleRate, targetSampleRate)));
-        
+        const int newLen = static_cast<int>(storedSampleCount);
+
         out.storedAudioBuffer.setSize(numChannels, newLen);
         
         for (int ch = 0; ch < numChannels; ++ch) {
@@ -5338,42 +5444,56 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
 
     const int64_t totalSamples = sourceSnap->audioBuffer->getNumSamples();
     const double sampleRate = sourceSnap->audioSampleRate > 0.0 ? sourceSnap->audioSampleRate : TimeCoordinate::kRenderSampleRate;
-    const int64_t offsetSamples = TimeCoordinate::secondsToSamples(offsetSeconds, sampleRate);
-    const int64_t durSamples = TimeCoordinate::secondsToSamples(durationSeconds, sampleRate);
-    if (offsetSamples < 0 || durSamples <= 0 || offsetSamples + durSamples > totalSamples) {
+    // offsetSeconds/durationSeconds 是父 content-local 时间；映射到 source-absolute
+    // 坐标只依赖父窗口起点：start = parent.sourceStart + offset，
+    // end = start + duration。父 sourceEndSeconds 不参与派生。
+    SourceWindow requestedWindow = sourceSnap->sourceWindow;
+    requestedWindow.sourceStartSeconds += offsetSeconds;
+    requestedWindow.sourceEndSeconds = requestedWindow.sourceStartSeconds + durationSeconds;
+    const auto alignedWindow = alignSourceWindowToSampleGrid(requestedWindow, sampleRate);
+    if (!alignedWindow.has_value())
+        return ContentKey{};
+
+    // slice offset 与 local 区间出自同一个 aligned absolute window；local 0 是父
+    // buffer sample 0（父窗口已采样对齐）。
+    const int64_t parentStartSample = TimeCoordinate::secondsToSamplesNearest(
+        sourceSnap->sourceWindow.sourceStartSeconds, sampleRate);
+    const int64_t offsetSamples = TimeCoordinate::secondsToSamplesNearest(
+        alignedWindow->sourceStartSeconds, sampleRate) - parentStartSample;
+    const int64_t endOffsetSamples = TimeCoordinate::secondsToSamplesNearest(
+        alignedWindow->sourceEndSeconds, sampleRate) - parentStartSample;
+    if (offsetSamples < 0 || endOffsetSamples <= offsetSamples || endOffsetSamples > totalSamples) {
         return ContentKey{};
     }
 
+    // local seconds 是绝对时间合同：由 aligned absolute window 与父窗口起点之差派生。
+    // offsetSamples/endOffsetSamples 只用于 audio/silentGaps 的离散访问，
+    // 不从样本反算 local seconds。
+    const double localStartSeconds =
+        alignedWindow->sourceStartSeconds - sourceSnap->sourceWindow.sourceStartSeconds;
+    const double localEndSeconds =
+        alignedWindow->sourceEndSeconds - sourceSnap->sourceWindow.sourceStartSeconds;
     ContentState payload;
-    payload.sourceWindow = SourceWindow{
-        sourceSnap->sourceWindow.sourceId,
-        juce::String(),
-        sourceSnap->sourceWindow.sourceStartSeconds + offsetSeconds,
-        sourceSnap->sourceWindow.sourceStartSeconds + offsetSeconds + durationSeconds
-    };
+    payload.sourceWindow = *alignedWindow;
     payload.audioBuffer = sliceAudioBuffer(sourceSnap->audioBuffer,
                                            offsetSamples,
-                                           offsetSamples + durSamples);
+                                           endOffsetSamples);
     payload.sampleRate = sampleRate;
     payload.analysis.pitchCurve = slicePitchCurveToLocalRange(sourceSnap->pitchCurve,
-                                                     offsetSeconds,
-                                                     offsetSeconds + durationSeconds);
+                                                     localStartSeconds,
+                                                     localEndSeconds);
     payload.analysis.setOriginalF0State(sourceSnap->originalF0State);
     payload.analysis.detectedKey = sourceSnap->detectedKey;
-    payload.notes = sliceNotesToLocalRange(sourceSnap->notes,
-                                           offsetSeconds,
-                                           offsetSeconds + durationSeconds);
+    payload.notes = sliceNotesToLocalRange(sourceSnap->notes, localStartSeconds, localEndSeconds);
     payload.noteTopologyInitialized = sourceSnap->noteTopologyInitialized;
-    payload.analysis.silentGaps = sliceSilentGaps(sourceSnap->silentGaps,
-                                         offsetSamples,
-                                         offsetSamples + durSamples);
+    payload.analysis.silentGaps = sliceSilentGaps(sourceSnap->silentGaps, offsetSamples, endOffsetSamples);
     payload.pitchShiftSettings = sourceSnap->pitchShiftSettings;
 
     // 截断失败时保留 bootstrap identity，由 createStandaloneClipOwner
     // 用真实 slice duration 覆盖。
     if (auto rangeGrid = buildCopiedRangeTimeGrid(*sourceSnap->timeGrid,
-                                                  offsetSeconds,
-                                                  durationSeconds)) {
+                                                  localStartSeconds,
+                                                  localEndSeconds - localStartSeconds)) {
         payload.timeGrid = std::move(rangeGrid);
     }
 

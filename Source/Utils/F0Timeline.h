@@ -30,6 +30,18 @@ public:
         return static_cast<double>(frame) * secondsPerFrame_;
     }
 
+    // Nearest frame boundary for split/interval partitioning; ties go to the later frame.
+    int nearestFrameBoundary(double seconds) const noexcept {
+        assert(!isEmpty());
+        if (seconds <= 0.0)
+            return 0;
+        if (seconds >= timeAtFrame(endFrameExclusive_))
+            return endFrameExclusive_;
+        return clamp(static_cast<int>(std::round(seconds / secondsPerFrame_)),
+                     0,
+                     endFrameExclusive_);
+    }
+
     int frameAtOrBefore(double seconds) const noexcept {
         assert(!isEmpty());
         return clamp(static_cast<int>(std::floor(seconds / secondsPerFrame_)), 0, endFrameExclusive_ - 1);

@@ -26,6 +26,8 @@ bool AudioModification::attachSource(const AudioSource& source)
         return true;
     }
 
+    // 端点 0.0 / numSamples / sourceSampleRate 本身落在 source sample 网格上，
+    // 无需再经 helper 对齐。
     const SourceWindow newWindow{
         0,
         source.getIdentity().persistentId,

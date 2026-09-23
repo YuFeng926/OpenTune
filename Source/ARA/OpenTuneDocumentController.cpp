@@ -1338,6 +1338,37 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
             || newContent->sourceWindow.sourceEndSeconds > sourceDuration + 1.0e-6)
             return false;
 
+        // 原始归档秒范围已按 duration 容差校验；对齐后在 source sample 网格上
+        // 用 sample index 验证窗口边界，sample span 不继承 archive 秒容差。
+        const double sourceSampleRate = source->getShape().sourceSampleRate;
+        const auto alignedWindow = alignSourceWindowToSampleGrid(
+            newContent->sourceWindow, sourceSampleRate);
+        if (!alignedWindow.has_value())
+            return false;
+
+        const int64_t alignedStartSample = TimeCoordinate::secondsToSamplesNearest(
+            alignedWindow->sourceStartSeconds, sourceSampleRate);
+        const int64_t alignedEndSample = TimeCoordinate::secondsToSamplesNearest(
+            alignedWindow->sourceEndSeconds, sourceSampleRate);
+        if (alignedStartSample < 0
+            || alignedStartSample >= alignedEndSample
+            || alignedEndSample > source->getShape().numSamples)
+            return false;
+        newContent->sourceWindow = *alignedWindow;
+
+        // identity TimeGrid 的 endpoint duration 必须与对齐后的窗口一致；
+        // 非 identity archive grid 在 restore 解析处已被拒绝，不做隐式改写。
+        if (newContent->timeGrid->isIdentity())
+        {
+            auto alignedHandles = newContent->timeGrid->handles();
+            alignedHandles.back().source_seconds = alignedWindow->durationSeconds();
+            alignedHandles.back().output_seconds = alignedWindow->durationSeconds();
+            auto alignedTimeGrid = TimeGridSnapshot::makeFromHandles(std::move(alignedHandles));
+            if (alignedTimeGrid == nullptr)
+                return false;
+            newContent->timeGrid = std::move(alignedTimeGrid);
+        }
+
         const auto* targetSource = findAudioSource(targetMod->audioModification->getAudioSource());
         if (targetSource == nullptr || targetSource->getIdentity().persistentId != newContent->sourceWindow.sourcePersistentId)
             return false;
@@ -1881,17 +1912,17 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     const auto sourceWindow = content.sourceWindow;
 
     const double sourceSampleRate = source->getShape().sourceSampleRate;
-    const int64_t numSamples = source->getShape().numSamples;
     const int numChannels = source->getShape().numChannels;
 
-    // 2. Read ARA source window
+    // 2. Read ARA source window.
+    //    content.sourceWindow 在 attachSource / archive restore 处已对齐到 source
+    //    sample 网格，seconds 是语义真相；nearest 只恢复读取用的 sample 坐标。
+    //    windowSamples 与该 span 同源，读取/重采样长度/F0 均由此派生。
     const int64_t sourceStartSample = TimeCoordinate::secondsToSamplesNearest(
         sourceWindow.sourceStartSeconds, sourceSampleRate);
     const int64_t sourceEndSample = TimeCoordinate::secondsToSamplesNearest(
         sourceWindow.sourceEndSeconds, sourceSampleRate);
-    const int64_t windowSamples = std::max<int64_t>(0,
-        std::min<int64_t>(sourceEndSample, numSamples)
-        - std::max<int64_t>(0, sourceStartSample));
+    const int64_t windowSamples = sourceEndSample - sourceStartSample;
 
     if (windowSamples <= 0)
     {
@@ -1947,10 +1978,9 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
     if (std::abs(sourceSampleRate - targetSampleRate) > 1.0)
     {
-        const int storedLen = juce::jmax(1,
-            static_cast<int>(TimeCoordinate::secondsToSamples(
-                TimeCoordinate::samplesToSeconds(playableAccum.getNumSamples(), sourceSampleRate),
-                targetSampleRate)));
+        // 目标离散 buffer 长度由唯一读取 span 投影到目标采样率。
+        const int storedLen = juce::jmax(1, static_cast<int>(TimeCoordinate::sampleRateProject(
+            windowSamples, sourceSampleRate, targetSampleRate)));
 
         storedBuffer.setSize(numChannels, storedLen);
 

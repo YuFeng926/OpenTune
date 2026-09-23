@@ -12,6 +12,7 @@
 #include "../Source/Render/PlaybackReadSource.h"
 #include "../Source/Utils/TimeCoordinate.h"
 #include "../Source/Utils/F0Timeline.h"
+#include "../Source/Utils/SourceWindow.h"
 #include "../Source/Utils/PlacementFade.h"
 #include "../Source/ARA/OpenTunePlaybackRenderer.h"
 
@@ -427,6 +428,129 @@ bool testF0TimelineClampAndHalfOpenRange()
     return clamped.startFrame == 0 && clamped.endFrameExclusive == 10;
 }
 
+bool testF0TimelineNearestSplitBoundary()
+{
+    OpenTune::F0Timeline timeline(160, 16000.0, 100);
+    if (timeline.nearestFrameBoundary(-1.0) != 0
+        || timeline.nearestFrameBoundary(100.0) != 100)
+        return false;
+
+    if (timeline.nearestFrameBoundary(timeline.timeAtFrame(17)) != 17
+        || timeline.nearestFrameBoundary(0.005) != 1     // 半帧 tie 归后一帧
+        || timeline.nearestFrameBoundary(0.015) != 2
+        || timeline.nearestFrameBoundary(0.024999) != 2
+        || timeline.nearestFrameBoundary(0.025) != 3     // tie 归后一帧
+        || timeline.nearestFrameBoundary(0.025001) != 3)
+        return false;
+
+    // frame time 由 double 乘法得到，与 sample 网格的 round-trip 只断言数值等价。
+    for (int boundary = 1; boundary < timeline.endFrameExclusive(); ++boundary) {
+        const double seconds = timeline.timeAtFrame(boundary);
+        const int64_t sample = OpenTune::TimeCoordinate::secondsToSamplesNearest(
+            seconds, OpenTune::TimeCoordinate::kRenderSampleRate);
+        if (!nearlyEqual(OpenTune::TimeCoordinate::samplesToSeconds(
+                sample, OpenTune::TimeCoordinate::kRenderSampleRate), seconds))
+            return false;
+    }
+
+    // split 的 F0 分区按 frame index 半开：[0, boundary) + [boundary, N)；
+    // nearest 在真实 hop/rate 的 frame time 上稳定，两个区间无缝无重叠。
+    OpenTune::F0Timeline realistic(160, 16000.0, 1000);
+    for (int frame = 1; frame < realistic.endFrameExclusive(); ++frame) {
+        const int boundary = realistic.nearestFrameBoundary(realistic.timeAtFrame(frame));
+        if (boundary != frame)
+            return false;
+
+        const auto leading = realistic.rangeForFrames(0, boundary);
+        const auto trailing = realistic.rangeForFrames(boundary, realistic.endFrameExclusive());
+        if (leading.startFrame != 0
+            || leading.endFrameExclusive != boundary
+            || trailing.startFrame != boundary
+            || trailing.endFrameExclusive != realistic.endFrameExclusive())
+            return false;
+
+        if ((leading.endFrameExclusive - leading.startFrame)
+                + (trailing.endFrameExclusive - trailing.startFrame)
+            != realistic.endFrameExclusive())
+            return false;
+    }
+
+    OpenTune::F0Timeline singleFrame(160, 16000.0, 1);
+    return singleFrame.nearestFrameBoundary(0.004) == 0
+        && singleFrame.nearestFrameBoundary(0.006) == 1;
+}
+
+bool testSourceWindowNearestSampleAlignment()
+{
+    namespace TC = OpenTune::TimeCoordinate;
+    constexpr double sampleRate = 44100.0;
+
+    const OpenTune::SourceWindow unaligned{17, {}, 0.0011, 0.0015};
+    const auto aligned = OpenTune::alignSourceWindowToSampleGrid(unaligned, sampleRate);
+    if (!aligned.has_value()
+        || aligned->sourceId != unaligned.sourceId
+        || TC::secondsToSamplesNearest(aligned->sourceStartSeconds, sampleRate) != 49
+        || TC::secondsToSamplesNearest(aligned->sourceEndSeconds, sampleRate) != 66
+        || aligned->sourceStartSeconds != TC::samplesToSeconds(49, sampleRate)
+        || aligned->sourceEndSeconds != TC::samplesToSeconds(66, sampleRate))
+        return false;
+
+    // 导入前窗口：identity 未绑定（id/persistentId 都为空）也要按几何对齐。
+    const auto idlessImportWindow = OpenTune::alignSourceWindowToSampleGrid(
+        OpenTune::SourceWindow{0, {}, 0.0, 0.0011}, sampleRate);
+    if (!idlessImportWindow.has_value()
+        || idlessImportWindow->sourceEndSeconds != TC::samplesToSeconds(49, sampleRate))
+        return false;
+
+    // helper 只规范端点，identity 原样保留。
+    const auto persistentOnlyWindow = OpenTune::alignSourceWindowToSampleGrid(
+        OpenTune::SourceWindow{0, "persistent-1", 0.0, 0.0011}, sampleRate);
+    if (!persistentOnlyWindow.has_value()
+        || persistentOnlyWindow->sourceId != 0
+        || persistentOnlyWindow->sourcePersistentId != "persistent-1")
+        return false;
+
+    const double sharedBoundary = 0.0015;
+    const auto leading = OpenTune::alignSourceWindowToSampleGrid(
+        OpenTune::SourceWindow{17, {}, 0.0005, sharedBoundary}, sampleRate);
+    const auto trailing = OpenTune::alignSourceWindowToSampleGrid(
+        OpenTune::SourceWindow{17, {}, sharedBoundary, 0.003}, sampleRate);
+    if (!leading.has_value() || !trailing.has_value()
+        || leading->sourceEndSeconds != trailing->sourceStartSeconds
+        || TC::secondsToSamplesNearest(leading->sourceEndSeconds, sampleRate) != 66)
+        return false;
+
+    // 已对齐窗口再次对齐必须位等价：split 用它判断父窗口是否已在 sample 网格上；
+    // merge 连续性也以两侧 nearest sample index 是否相等为准。
+    const OpenTune::SourceWindow alignedOnce{17, {}, TC::samplesToSeconds(10, sampleRate),
+                                             TC::samplesToSeconds(20, sampleRate)};
+    const auto realigned = OpenTune::alignSourceWindowToSampleGrid(alignedOnce, sampleRate);
+    if (!realigned.has_value()
+        || realigned->sourceStartSeconds != alignedOnce.sourceStartSeconds
+        || realigned->sourceEndSeconds != alignedOnce.sourceEndSeconds
+        || TC::secondsToSamplesNearest(realigned->sourceStartSeconds, sampleRate)
+            != TC::secondsToSamplesNearest(alignedOnce.sourceStartSeconds, sampleRate)
+        || TC::secondsToSamplesNearest(realigned->sourceEndSeconds, sampleRate)
+            != TC::secondsToSamplesNearest(alignedOnce.sourceEndSeconds, sampleRate))
+        return false;
+
+    // 半样本 tie 在 2 的幂次采样率下二进制精确：nearest 取远离 0 一侧（后一 sample）。
+    const auto tieWindow = OpenTune::alignSourceWindowToSampleGrid(
+        OpenTune::SourceWindow{17, {}, 0.5 / 8192.0, 1.5 / 8192.0}, 8192.0);
+    if (!tieWindow.has_value()
+        || tieWindow->sourceStartSeconds != TC::samplesToSeconds(1, 8192.0)
+        || tieWindow->sourceEndSeconds != TC::samplesToSeconds(2, 8192.0))
+        return false;
+
+    // 退化窗口：两端投影到同一 sample、end <= start、非法采样率都按几何拒绝。
+    return !OpenTune::alignSourceWindowToSampleGrid(
+               OpenTune::SourceWindow{0, {}, 0.0011, 0.00111}, sampleRate).has_value()
+        && !OpenTune::alignSourceWindowToSampleGrid(
+               OpenTune::SourceWindow{0, {}, 0.002, 0.002}, sampleRate).has_value()
+        && !OpenTune::alignSourceWindowToSampleGrid(
+               OpenTune::SourceWindow{0, {}, 0.0, 0.001}, 0.0).has_value();
+}
+
 // computeRegionBlockRenderSpan: 部分重叠时 destination 起点 floor、终点 ceil。
 bool testComputeRegionBlockRenderSpanPartialOverlap()
 {
@@ -625,6 +749,18 @@ int main()
     if (!testF0TimelineClampAndHalfOpenRange())
     {
         std::fputs("FAIL: F0Timeline clamp and half-open range\n", stderr);
+        return 1;
+    }
+
+    if (!testF0TimelineNearestSplitBoundary())
+    {
+        std::fputs("FAIL: F0Timeline nearest split boundary\n", stderr);
+        return 1;
+    }
+
+    if (!testSourceWindowNearestSampleAlignment())
+    {
+        std::fputs("FAIL: SourceWindow nearest sample alignment\n", stderr);
         return 1;
     }
 
