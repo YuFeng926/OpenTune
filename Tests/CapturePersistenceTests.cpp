@@ -37,7 +37,7 @@ bool testEmptyArchive()
 bool testReplaceRetireSemantics()
 {
     CaptureSession archiveSource({});
-    archiveSource.testInjectEditedSegment(0.0, 1.0, 5, makeAudio(256));
+    archiveSource.testInjectEditedSegment(0.0, 1.0, 5, makeAudio(256), 44100.0);
     const auto archive = archiveSource.serialize();
 
     std::vector<ContentKey> retired;
@@ -47,7 +47,7 @@ bool testReplaceRetireSemantics()
 
     // Segment 7 covers segment 5, parking key 5 before restore. The archive
     // then reuses key 5 and replaces key 7.
-    restored.testInjectEditedSegment(0.0, 1.0, 5, makeAudio(256));
+    restored.testInjectEditedSegment(0.0, 1.0, 5, makeAudio(256), 44100.0);
     restored.testInjectProcessingSegment(0.0, 2.0, 7, makeAudio(512), 44100.0);
     restored.onRenderComplete(ContentKey{DomainKind::RegularVST3Capture, 7, 0});
 

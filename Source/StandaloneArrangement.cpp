@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "Utils/AppLogger.h"
+#include "Utils/TimeCoordinate.h"
 
 namespace OpenTune {
 
@@ -461,7 +462,7 @@ bool StandaloneArrangement::setPlacementTimelineStartSeconds(int trackId,
 
     auto& placement = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)];
     const double clampedTimelineStartSeconds = std::max(0.0, timelineStartSeconds);
-    constexpr double epsilonSeconds = 1.0 / 44100.0;
+    constexpr double epsilonSeconds = 1.0 / TimeCoordinate::kRenderSampleRate;
     if (std::abs(placement.timelineStartSeconds - clampedTimelineStartSeconds) <= epsilonSeconds) {
         return true;
     }

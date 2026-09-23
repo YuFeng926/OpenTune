@@ -1102,11 +1102,6 @@ float ParameterPanel::getVibratoRate() const
     return static_cast<float>(vibratoRateSlider_.getValue());
 }
 
-void ParameterPanel::setNoteSplit(float value)
-{
-    noteSplitSlider_.setValue(value, juce::dontSendNotification);
-}
-
 void ParameterPanel::onRetuneSpeedChanged()
 {
     listeners_.call([this](Listener& l) { l.retuneSpeedChanged(static_cast<float>(retuneSpeedSlider_.getValue())); });

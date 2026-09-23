@@ -5,6 +5,7 @@
 #include "../../../Utils/KeyShortcutConfig.h"
 #include "../../../Utils/ScissorsUndoAction.h"
 #include "../../../Utils/PitchUtils.h"
+#include "../../../Utils/TimeCoordinate.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -2251,7 +2252,7 @@ void PianoRollToolHandler::updateScissorsPreview(const juce::MouseEvent& e)
             // 分离线容差：鼠标在音符边界 ±kScissorsSeparatorTolerancePx 像素内
             // 不显示竖虚线，提示用户"此处可双击合并"。
             const auto tPlus = pixelXToSourceTime(e.x + kScissorsSeparatorTolerancePx);
-            const double tolerance = tPlus ? std::abs(*tPlus - *sourceTime) : 1.0 / 44100.0;
+            const double tolerance = tPlus ? std::abs(*tPlus - *sourceTime) : 1.0 / TimeCoordinate::kRenderSampleRate;
             for (const auto& note : committedNotes(ctx_)) {
                 // 音符内部且远离两端边界 → 显示切割线
                 if (note.startTime + tolerance < *sourceTime
@@ -2314,7 +2315,7 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
     // 与 updateScissorsPreview 的竖虚线消失范围一致——此处无竖虚线 = 不切割。
     {
         const auto tPlus = pixelXToSourceTime(e.x + kScissorsSeparatorTolerancePx);
-        const double tol = tPlus ? std::abs(*tPlus - splitTime) : 1.0 / 44100.0;
+        const double tol = tPlus ? std::abs(*tPlus - splitTime) : 1.0 / TimeCoordinate::kRenderSampleRate;
         for (const auto& note : beforeNotes) {
             if (std::abs(note.endTime - splitTime) < tol
                 || std::abs(note.startTime - splitTime) < tol) {
@@ -2486,7 +2487,7 @@ bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
     // 与 updateScissorsPreview 的视觉反馈容差一致。
     const double splitTime = *sourceTime;
     const auto tPlus = pixelXToSourceTime(e.x + kScissorsSeparatorTolerancePx);
-    const double tolerance = tPlus ? std::abs(*tPlus - splitTime) : 1.0 / 44100.0;
+    const double tolerance = tPlus ? std::abs(*tPlus - splitTime) : 1.0 / TimeCoordinate::kRenderSampleRate;
 
     // 分离线 = left.endTime ≈ splitTime 且相邻 right.startTime ≈ splitTime。
     // 按序配对（left 取其后第一个未消费的 right），分离线两侧多个音符

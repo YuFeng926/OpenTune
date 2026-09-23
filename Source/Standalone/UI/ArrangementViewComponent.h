@@ -120,7 +120,6 @@ public:
     void setVerticalScrollOffset(int offset);
     void setVisibleTrackCount(int count);
     void setInferenceActive(bool active) { inferenceActive_ = active; }
-    void fitToContent();
     void setExperimentalReferenceControlsEnabled(bool enabled);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
@@ -129,7 +128,6 @@ public:
 
     // 缩放状态管理
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
-    bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
 
     void addListener(Listener* listener);
     void removeListener(Listener* listener);

@@ -45,11 +45,6 @@ void showHostManagedMessage(juce::Component* parent, const juce::String& title, 
                                                     + detail);
 }
 
-bool nearlyEqualSeconds(double a, double b)
-{
-    return std::abs(a - b) <= (1.0 / TimeCoordinate::kRenderSampleRate);
-}
-
 ContentTimelineProjection makeCaptureSegmentProjection(const Capture::SegmentInfo& segment)
 {
     ContentTimelineProjection projection;
@@ -566,10 +561,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         parameterPanel_.setPitchShiftIndicator(currentPitchShift.semitone, currentPitchShift.cents);
     }
 
-    // RMVPE overlay：读取音频后的 F0 提取 + note 生成期间显示"正在处理音频"遮罩
-    if (rmvpeOverlayLatched_) {
+    // Original F0 overlay：读取音频后的 F0 提取 + note 生成期间显示"正在处理音频"遮罩
+    if (originalF0OverlayLatched_) {
         bool allDone = true;
-        for (const auto& key : rmvpeOverlayTargetContentKeys_) {
+        for (const auto& key : originalF0OverlayTargetContentKeys_) {
             auto snap = processorRef_.getContentSnapshot(key);
             if (snap == nullptr)
                 continue;  // content 已被移除，视为完成
@@ -582,8 +577,8 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             }
         }
         if (allDone) {
-            rmvpeOverlayLatched_ = false;
-            rmvpeOverlayTargetContentKeys_.clear();
+            originalF0OverlayLatched_ = false;
+            originalF0OverlayTargetContentKeys_.clear();
         }
     }
 
@@ -607,7 +602,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         shouldShowBadge = true;
     }
 
-    if (rmvpeOverlayLatched_) {
+    if (originalF0OverlayLatched_) {
         autoRenderOverlay_.setMessageText(juce::String::fromUTF8(u8"\u6B63\u5728\u5904\u7406\u97F3\u9891"));
         shouldShowOverlay = true;
     }
@@ -1266,14 +1261,14 @@ void OpenTuneAudioProcessorEditor::recordRequested()
             syncContentProjectionToPianoRoll();
 
             // 遮罩只覆盖本次读取的 focused modification。
-            rmvpeOverlayTargetContentKeys_.clear();
+            originalF0OverlayTargetContentKeys_.clear();
             const auto targetProjections = dc->getPlaybackRegionProjectionsFor(
                 std::vector<juce::ARAPlaybackRegion*>{targetPlaybackRegion});
             if (targetProjections.empty() || !targetProjections.front().contentKey.isValid())
                 return;
 
             const auto targetKey = targetProjections.front().contentKey;
-            rmvpeOverlayTargetContentKeys_.push_back(targetKey);
+            originalF0OverlayTargetContentKeys_.push_back(targetKey);
             // F0 状态机基线重置：防止 F0 完成早于首次 timer 观察导致跳变丢失
             lastObservedOriginalF0States_[targetKey] = OriginalF0State::NotRequested;
             // 捕获 OpenDyne 一次性音符生成意图，F0 Ready 跳变时消费
@@ -1281,7 +1276,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
                 pendingNoteGenerationOnReady_[targetKey] = pianoRoll_.getCurrentAutoTuneParams();
             else
                 pendingNoteGenerationOnReady_.erase(targetKey);
-            rmvpeOverlayLatched_ = true;
+            originalF0OverlayLatched_ = true;
         });
 #endif
 }

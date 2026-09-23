@@ -20,7 +20,7 @@ namespace OpenTune {
 struct PlaybackReadRequest {
     PlaybackReadSource source;
     int64_t readStartSample{0};
-    double targetSampleRate{44100.0};
+    double targetSampleRate{0.0};
     int numSamples{0};
 
     PlaybackReadRequest() = default;

@@ -47,7 +47,7 @@ struct ProjectHeader {
 
 struct ProjectSettings {
     double bpm{120.0};
-    double sampleRate{44100.0};
+    double sampleRate{0.0};
     int timeSignatureNumerator{4};
     int timeSignatureDenominator{4};
     int selectedTrackId{0};

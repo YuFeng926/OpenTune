@@ -192,8 +192,8 @@ private:
 
     bool showingSingleNoteParams_{false};
     // 读取音频后 latch：F0 提取 + note 生成全部完成前保持"正在处理音频"遮罩
-    bool rmvpeOverlayLatched_ = false;
-    std::vector<ContentKey> rmvpeOverlayTargetContentKeys_;
+    bool originalF0OverlayLatched_ = false;
+    std::vector<ContentKey> originalF0OverlayTargetContentKeys_;
     // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator (GAME) commits late.
     // Tracks last-seen ContentKey for revision baseline only (not session last-active).

@@ -952,40 +952,6 @@ void ArrangementViewComponent::setVisibleTrackCount(int count)
     invalidateStableScene();
 }
 
-void ArrangementViewComponent::fitToContent()
-{
-    // 如果用户已手动调整过缩放，不自动覆盖
-    if (userHasManuallyZoomed_) {
-        return;
-    }
-
-    double maxEndTime = 0.0;
-    for (int t = 0; t < OpenTuneAudioProcessor::MAX_TRACKS; ++t) {
-        const int placementCount = getStandalonePlacementCount(processor_, t);
-        for (int i = 0; i < placementCount; ++i) {
-            StandaloneArrangement::Placement placement;
-            if (!getStandalonePlacementByIndex(processor_, t, i, placement)) {
-                continue;
-            }
-            maxEndTime = juce::jmax(maxEndTime, placement.timelineEndSeconds());
-        }
-    }
-
-    const int viewportWidth = getVisibleViewportWidth();
-    if (maxEndTime <= 0.0 || viewportWidth <= 0) {
-        return;
-    }
-
-    const int drawableWidth = juce::jmax(1, viewportWidth - 12);
-
-    const auto req = makeViewportRequest(
-        TimelineViewportRequest::Kind::Manual,
-        0.0,
-        0.0,
-        static_cast<double>(drawableWidth) / maxEndTime);
-    commitViewportRequest(req);
-}
-
 void ArrangementViewComponent::setExperimentalReferenceControlsEnabled(bool enabled)
 {
     if (experimentalReferenceControlsEnabled_ == enabled) {

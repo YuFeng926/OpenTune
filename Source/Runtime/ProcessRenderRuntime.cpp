@@ -25,9 +25,6 @@ namespace OpenTune {
 
 namespace {
 
-// 临时关闭静息处边界淡化
-constexpr int kSilentGapBoundaryFadeSamples = 0;
-
 // ==============================================================================
 // Effective F0 Materialization
 // ==============================================================================
@@ -346,26 +343,6 @@ RenderCache::ChunkRenderResult publishChunkWithPerNoteEq(
             const float dry = audio[audioOffset + static_cast<size_t>(i)];
             const float wet = filtered[static_cast<size_t>(i)];
             audio[audioOffset + static_cast<size_t>(i)] = dry + (wet - dry) * wetMix;
-        }
-    }
-
-    // 静息处边界淡化（诊断阶段临时关闭）：chunk 起点 fade-in，终点 fade-out。
-    const int totalSamples = static_cast<int>(audio.size());
-    const int fadeSamples = std::min(kSilentGapBoundaryFadeSamples, totalSamples / 2);
-    if (fadeSamples > 1)
-    {
-        // Fade-in at chunk start
-        for (int i = 0; i < fadeSamples; ++i)
-        {
-            const float weight = static_cast<float>(i) / static_cast<float>(fadeSamples - 1);
-            audio[static_cast<size_t>(i)] *= weight;
-        }
-        // Fade-out at chunk end
-        for (int i = 0; i < fadeSamples; ++i)
-        {
-            const int pos = totalSamples - 1 - i;
-            const float weight = static_cast<float>(i) / static_cast<float>(fadeSamples - 1);
-            audio[static_cast<size_t>(pos)] *= weight;
         }
     }
 

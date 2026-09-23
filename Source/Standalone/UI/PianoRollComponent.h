@@ -91,7 +91,6 @@ public:
     };
 
     void visibilityChanged() override;
-    static constexpr int kAudioSampleRate = 44100;
 
     class Listener
     {
@@ -196,7 +195,6 @@ public:
         scrollMode_ = mode;
         overlay_->repaint();
     }
-    ScrollMode getScrollMode() const { return scrollMode_; }
     void setScale(int rootNote, int scaleType);
     void setAudioEditingScheme(AudioEditingScheme::Scheme scheme) { applyAudioEditingScheme(scheme); }
     bool isOpenDyne() const noexcept { return AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_); }
@@ -217,9 +215,6 @@ public:
     }
 
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
-    bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
-
-    bool isShowingOriginalF0() const { return showOriginalF0_; }
 
     void setRetuneSpeed(float speed) { currentRetuneSpeed_ = speed; }
     float getCurrentRetuneSpeed() const { return currentRetuneSpeed_; }
@@ -399,8 +394,6 @@ private:
                                     bool triggerRenderEvent);
 
     enum class VibratoParam { Depth, Rate };
-
-    bool getFrameRangeForTimeSpan(double startTime, double endTime, int& startFrame, int& endFrameExclusive) const;
 
     juce::ScrollBar verticalScrollBar_{ true };
     SmallButton scrollModeToggleButton_;
@@ -597,7 +590,7 @@ private:
     TimelineDisplayMode displayMode_ = TimelineDisplayMode::Time;
 
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer_;
-    double audioBufferSampleRate_ = static_cast<double>(kAudioSampleRate);
+    double audioBufferSampleRate_ = 0.0;
 
     std::vector<TimelineContentPlacement> timelineContentPlacements_;
     ContentTimelineProjection pendingSingleContentProjection_;

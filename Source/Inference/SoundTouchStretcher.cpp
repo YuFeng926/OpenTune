@@ -21,8 +21,8 @@ constexpr int kSettingUseQuickSeek  = 0;
 constexpr int kSettingSeekWindowMs  = 25;
 constexpr int kSettingOverlapMs     = 8;
 
-// Sample-positional tolerance for "is at segment boundary" checks (1 sample @44.1k = 23µs).
-constexpr double kBoundaryEpsilonSeconds = 1.0 / 44100.0;
+// Sample-positional tolerance for "is at segment boundary" checks (1 render sample).
+constexpr double kBoundaryEpsilonSeconds = 1.0 / TimeCoordinate::kRenderSampleRate;
 
 } // namespace
 

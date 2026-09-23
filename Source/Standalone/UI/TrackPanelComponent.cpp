@@ -801,14 +801,6 @@ void TrackPanelComponent::setTrackLevel(int trackId, float levelDB)
     }
 }
 
-void TrackPanelComponent::setTrackClipping(int trackId, bool isClipping)
-{
-    if (trackId >= 0 && trackId < MAX_TRACKS)
-    {
-        tracks_[trackId].levelMeter.setClipping(isClipping);
-    }
-}
-
 void TrackPanelComponent::setInferenceActive(bool active)
 {
     for (auto& track : tracks_)

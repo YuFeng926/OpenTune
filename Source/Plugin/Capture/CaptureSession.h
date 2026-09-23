@@ -204,7 +204,8 @@ public:
     uint64_t testInjectEditedSegment(double T_start,
                                      double durationSeconds,
                                      uint64_t segmentId,
-                                     std::shared_ptr<juce::AudioBuffer<float>> pcm);
+                                     std::shared_ptr<juce::AudioBuffer<float>> pcm,
+                                     double sampleRate);
 
     /** Test only: inject a Processing segment with owner audio for lifecycle tests. */
     uint64_t testInjectProcessingSegment(double T_start,
@@ -244,7 +245,7 @@ private:
     ProcessorBindings bindings_;
 
     // Configured at prepareToPlay
-    double currentSampleRate_ = 44100.0;
+    double currentSampleRate_ = 0.0;
     int currentMaxBlockSize_ = 0;
 
     // Mutable owners (message thread).

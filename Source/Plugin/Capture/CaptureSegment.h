@@ -70,7 +70,7 @@ struct CaptureSegment
     uint64_t creationOrder = 0;
 
     /** sampleRate at the time this segment was armed (used for fifo sizing + later resampling). */
-    double captureSampleRate = 44100.0;
+    double captureSampleRate = 0.0;
 
     /** Number of channels captured. Snapshotted from CaptureSession::captureChannels_
      *  at arm time and immutable for the segment's lifetime. Always 1 or 2 — see

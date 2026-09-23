@@ -102,7 +102,7 @@ protected:
     void willRemovePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept override;
     
 private:
-    double hostSampleRate_ = 44100.0;
+    double hostSampleRate_ = 0.0;
     int numChannels_ = 2;
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;

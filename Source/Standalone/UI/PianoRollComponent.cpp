@@ -2937,8 +2937,7 @@ void PianoRollComponent::applyEditedContentAudioBuffer(std::shared_ptr<const juc
                                                        int sampleRate)
 {
     audioBuffer_ = std::move(buffer);
-    audioBufferSampleRate_ = sampleRate > 0 ? static_cast<double>(sampleRate)
-                                            : static_cast<double>(PianoRollComponent::kAudioSampleRate);
+    audioBufferSampleRate_ = static_cast<double>(sampleRate);
 
     if (editedContentKey_.isValid() && audioBuffer_ != nullptr && audioBuffer_->getNumSamples() > 0) {
         waveformMipmapCache_.setAudioSource(editedContentKey_, audioBuffer_);
@@ -3115,8 +3114,7 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
                                            int sampleRate,
                                            bool activePlacementChanged)
 {
-    const double normalizedSampleRate = sampleRate > 0 ? static_cast<double>(sampleRate)
-                                                        : static_cast<double>(PianoRollComponent::kAudioSampleRate);
+    const double normalizedSampleRate = static_cast<double>(sampleRate);
     const bool contentChanged = editedContentKey_ != contentKey;
     const bool curveChanged = currentCurve_ != curve;
     const bool bufferChanged = audioBuffer_ != buffer || audioBufferSampleRate_ != normalizedSampleRate;

@@ -171,7 +171,6 @@ public:
 #if JucePlugin_Build_VST3
     struct HostTransportSnapshot {
         double bpm{120.0};
-        double ppqPosition{0.0};
         bool isRecording{false};
         int timeSignatureNumerator{4};
         int timeSignatureDenominator{4};
@@ -364,7 +363,7 @@ public:
 private:
     static BusesProperties makeBuses();
 
-    std::atomic<double> currentSampleRate_{44100.0};
+    std::atomic<double> currentSampleRate_{0.0};
     int currentBlockSize_ = 512;
 
     friend struct PluginProcessorTransportTestAccessor;
@@ -521,11 +520,10 @@ private:
 
 #if JucePlugin_Build_VST3
     // Independent host metadata snapshot (no loop fields; loop truth lives in
-    // playHeadState_). BPM/PPQ/recording/time-signature presentation only.
+    // playHeadState_). BPM/recording/time-signature presentation only.
     // Write-once per processBlock by updateHostTransportSnapshot(); never touched
     // by any setter.
     std::atomic<double> hostTransportBpm_{120.0};
-    std::atomic<double> hostTransportPpqPosition_{0.0};
     std::atomic<bool> hostTransportIsRecording_{false};
     std::atomic<int> hostTransportTimeSignatureNumerator_{4};
     std::atomic<int> hostTransportTimeSignatureDenominator_{4};
@@ -773,13 +771,6 @@ public:
     bool generateNotesOnlyByContentKey(ContentKey key, const NoteGeneratorParams& params);
 public:
 
-#if defined(OPENTUNE_TEST_BUILD)
-    void setReferenceAnalysisNotificationDispatcherForTests(
-        ReferenceAnalysisService::NotificationDispatcher dispatcher)
-    {
-        referenceAnalysisService_->setNotificationDispatcher(std::move(dispatcher));
-    }
-#endif
     ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(ContentKey key);
 
 #if JucePlugin_Build_Standalone

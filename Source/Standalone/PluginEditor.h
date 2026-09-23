@@ -336,9 +336,9 @@ private:
     bool suppressScaleChangedCallback_ = false;
     std::array<float, OpenTuneAudioProcessor::MAX_TRACKS> lastTrackVolumes_;
     
-    // RMVPE OriginalF0 阻塞事务锁：提取开始后 latch，直到"提取成功且当前钢琴卷帘可见"才释放
-    bool rmvpeOverlayLatched_ = false;
-    ContentKey rmvpeOverlayTargetContentKey_;
+    // Original F0 阻塞事务锁：提取开始后 latch，直到"提取成功且当前钢琴卷帘可见"才释放
+    bool originalF0OverlayLatched_ = false;
+    ContentKey originalF0OverlayTargetContentKey_;
 
 
     juce::ThreadPool projectWorkerPool_{1};

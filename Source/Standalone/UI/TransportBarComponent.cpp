@@ -726,12 +726,6 @@ void UnifiedToolbarButton::setAccentColour(juce::Colour c)
     repaint();
 }
 
-void UnifiedToolbarButton::clearAccentColour()
-{
-    hasAccent_ = false;
-    repaint();
-}
-
 void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
@@ -1556,11 +1550,6 @@ void TransportBarComponent::setWorkspaceView(bool workspaceView)
     // Update both buttons based on the state
     trackViewButton_.setToggleState(workspaceView_, juce::dontSendNotification);
     pianoViewButton_.setToggleState(!workspaceView_, juce::dontSendNotification);
-}
-
-bool TransportBarComponent::isWorkspaceView() const
-{
-    return workspaceView_;
 }
 
 void TransportBarComponent::setBpm(double bpm)

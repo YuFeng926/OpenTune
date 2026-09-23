@@ -87,7 +87,6 @@ public:
 
     /** OpenDyne（NotesPrimary）模式：切换工具在上 / Pitch Shift 在底部布局。 */
     void setOpenDyneMode(bool enabled);
-    bool isOpenDyneMode() const noexcept { return openDyneMode_; }
 
     /** Pitch Grid 全局开关回调：切换 No Snap / Chromatic / Key Scale 吸附模式。 */
     std::function<void(PitchGridMode)> onPitchGridModeChanged;
@@ -101,7 +100,6 @@ public:
     void setRetuneSpeed(float speed);
     void setVibratoDepth(float value);
     void setVibratoRate(float value);
-    void setNoteSplit(float value);
     void setPitchShiftIndicator(int semitone, int cents);
 
     void applyTheme();
@@ -118,7 +116,6 @@ private:
     public:
         ToolIconButton(int toolId, const juce::String& name, const juce::String& tooltip);
         void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
-        int getToolId() const { return toolId_; }
         void setIcon(const juce::Path& path, bool fill) { iconPath_ = path; fillIcon_ = fill; }
         void setTextIcon(const juce::String& iconText) { textIcon_ = iconText; repaint(); }
         void setSubTextIcon(const juce::String& subText) { subTextIcon_ = subText; repaint(); }

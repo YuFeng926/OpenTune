@@ -17,7 +17,7 @@ namespace OpenTune {
 
 struct NoteGeneratorInput {
     std::vector<float> audio;
-    double             sampleRate = 44100.0;
+    double             sampleRate = 0.0;
 };
 
 class INoteGenerator {

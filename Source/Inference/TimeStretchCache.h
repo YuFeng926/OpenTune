@@ -34,7 +34,7 @@ public:
         std::shared_ptr<const std::vector<float>> canonicalAudio;
         uint64_t contentRevision = 0;
         uint64_t timeGridRevision = 0;
-        double sampleRate = 44100.0;
+        double sampleRate = TimeCoordinate::kRenderSampleRate;
         bool published = false;
 
         // Prepared at target playback rate — immutable after publish.

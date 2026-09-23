@@ -41,7 +41,6 @@ public:
     void setSolidIcon(bool solid);
     // 设置强调色：按钮背景渐变和描边使用此颜色（而非主题默认色）
     void setAccentColour(juce::Colour c);
-    void clearAccentColour();
 
     void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
 
@@ -201,7 +200,6 @@ public:
     void applyTheme();
     void setEmbeddedInTopBar(bool embedded);
     void setLayoutProfile(LayoutProfile profile);
-    LayoutProfile getLayoutProfile() const { return layoutProfile_; }
 
     void addListener(Listener* l);
     void removeListener(Listener* l);
@@ -234,7 +232,6 @@ public:
     void setPositionSeconds(double seconds);
 
     void setWorkspaceView(bool workspaceView);
-    bool isWorkspaceView() const;
     void setRenderStatusText(const juce::String& text);
 
     void setTimelineDisplayMode(TimelineDisplayMode mode);

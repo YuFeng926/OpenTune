@@ -19,7 +19,7 @@ struct ContentState
 {
     SourceWindow sourceWindow;
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-    double sampleRate{44100.0};
+    double sampleRate{0.0};
 
     // ── Analysis state ──────────────────────────────────────
     AnalysisState analysis;

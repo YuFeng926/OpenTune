@@ -327,31 +327,6 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
         }
     };
 
-    // 带悬停效果的透明标签
-    class TransparentLabel : public juce::Label
-    {
-    public:
-        TransparentLabel()
-        {
-            setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
-            setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
-        }
-
-        void mouseEnter(const juce::MouseEvent& e) override
-        {
-            setColour(juce::Label::outlineColourId, UIColors::accent.withAlpha(0.5f));
-            repaint();
-            juce::Label::mouseEnter(e);
-        }
-
-        void mouseExit(const juce::MouseEvent& e) override
-        {
-            setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
-            repaint();
-            juce::Label::mouseExit(e);
-        }
-    };
-
 // 添加轨道按钮 - 带触觉反馈的+号按钮
 class AddTrackButton : public juce::Component, private juce::Timer
 {
@@ -548,7 +523,6 @@ public:
     void removeListener(Listener* listener);
 
     void setActiveTrack(int trackId);
-    int getActiveTrack() const { return activeTrackId_; }
 
     void setTrackMuted(int trackId, bool muted);
     bool isTrackMuted(int trackId) const;
@@ -560,7 +534,6 @@ public:
     float getTrackVolume(int trackId) const;
 
     void setTrackLevel(int trackId, float levelDB);
-    void setTrackClipping(int trackId, bool isClipping);
     void setInferenceActive(bool active);
 
     // 可见轨道数量控制
@@ -574,9 +547,7 @@ public:
     
     // 垂直滚动偏移 - 与ArrangementView同步（Y轴滚动同步）
     void setVerticalScrollOffset(int offset);
-    int getVerticalScrollOffset() const { return verticalScrollOffset_; }
-    
-    
+
     // 轨道颜色控制
     void setTrackColour(int trackId, juce::Colour colour);
     void setTrackColorMode(TrackColorMode mode);

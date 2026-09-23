@@ -228,7 +228,7 @@ static bool runDebugSelfTests(OpenTuneAudioProcessor& processor, juce::AudioProc
         const double baseEndSeconds = static_cast<double>(f0.size()) * hopSecs;
         const double tailExtendSeconds = (std::ceil(params.policy.tailExtendMs / 1000.0 / hopSecs)) * hopSecs;
         const double expectedEndSeconds = baseEndSeconds + tailExtendSeconds;
-        if (std::abs(notes[0].endTime - expectedEndSeconds) > 480.0 / 44100.0) {
+        if (std::abs(notes[0].endTime - expectedEndSeconds) > 480.0 / TimeCoordinate::kRenderSampleRate) {
             return false;
         }
     }
@@ -1608,9 +1608,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
 
-    // RMVPE overlay：与 vocoder 无关，独立于渲染状态
-    if (rmvpeOverlayLatched_ && !isWorkspaceView_) {
-        const ContentKey targetContentKey = rmvpeOverlayTargetContentKey_;
+    // Original F0 overlay：与 vocoder 无关，独立于渲染状态
+    if (originalF0OverlayLatched_ && !isWorkspaceView_) {
+        const ContentKey targetContentKey = originalF0OverlayTargetContentKey_;
 
         bool shouldUnlatch = false;
         if (!targetContentKey.isValid()) {
@@ -1625,20 +1625,19 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
 
         if (shouldUnlatch) {
-            rmvpeOverlayLatched_ = false;
-            rmvpeOverlayTargetContentKey_ = ContentKey{};
+            originalF0OverlayLatched_ = false;
+            originalF0OverlayTargetContentKey_ = ContentKey{};
         }
     }
 
     bool shouldShowOverlay = false;
 
-    if (rmvpeOverlayLatched_ && !isWorkspaceView_) {
+    if (originalF0OverlayLatched_ && !isWorkspaceView_) {
         autoRenderOverlay_.setMessageText(juce::String::fromUTF8(u8"\u6B63\u5728\u5904\u7406\u97F3\u9891"));
         shouldShowOverlay = true;
     }
 
-    // Reference-note analysis shares the RMVPE overlay.
-    // shares the same overlay system as RMVPE extraction.
+    // Reference-note analysis 与 Original F0 提取共用同一 overlay 系统。
     if (!shouldShowOverlay && !isWorkspaceView_) {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
         const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
@@ -2269,8 +2268,8 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                         AppLogger::log("ClipDerivedRefresh: standalone request rejected contentKey.objectId="
                             + juce::String(static_cast<juce::int64>(committedPlacement.contentKey.objectId)));
                     } else {
-                        safeThis->rmvpeOverlayLatched_ = true;
-                        safeThis->rmvpeOverlayTargetContentKey_ = committedPlacement.contentKey;
+                        safeThis->originalF0OverlayLatched_ = true;
+                        safeThis->originalF0OverlayTargetContentKey_ = committedPlacement.contentKey;
                     }
 
                     safeThis->arrangementView_.resetUserZoomFlag();

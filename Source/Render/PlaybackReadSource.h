@@ -17,7 +17,7 @@ namespace OpenTune {
  */
 struct PlaybackPreparedDry
 {
-    double sampleRate{44100.0};
+    double sampleRate{0.0};
     std::shared_ptr<const juce::AudioBuffer<float>> buffer;
     std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer;  // identity of source audioBuffer for republish reuse
 };

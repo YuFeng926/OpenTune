@@ -53,7 +53,7 @@ namespace OpenTune {
 // ============================================================================
 namespace {
 
-constexpr double kExportSampleRateHz = 44100.0;
+constexpr double kExportSampleRateHz = TimeCoordinate::kRenderSampleRate;
 constexpr int kExportNumChannels = 1;
 constexpr int kExportMasterNumChannels = 2;
 constexpr int kExportBitsPerSample = static_cast<int>(sizeof(float) * 8);
@@ -2252,7 +2252,6 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::getHostTra
 {
     HostTransportSnapshot snapshot;
     snapshot.bpm = hostTransportBpm_.load(std::memory_order_relaxed);
-    snapshot.ppqPosition = hostTransportPpqPosition_.load(std::memory_order_relaxed);
     snapshot.isRecording = hostTransportIsRecording_.load(std::memory_order_relaxed);
     snapshot.timeSignatureNumerator = hostTransportTimeSignatureNumerator_.load(std::memory_order_relaxed);
     snapshot.timeSignatureDenominator = hostTransportTimeSignatureDenominator_.load(std::memory_order_relaxed);
@@ -2270,17 +2269,12 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
         snapshot.bpm = *bpm;
     }
 
-    if (const auto ppq = positionInfo.getPpqPosition()) {
-        snapshot.ppqPosition = *ppq;
-    }
-
     if (const auto timeSignature = positionInfo.getTimeSignature()) {
         snapshot.timeSignatureNumerator = timeSignature->numerator;
         snapshot.timeSignatureDenominator = timeSignature->denominator;
     }
 
     hostTransportBpm_.store(snapshot.bpm, std::memory_order_relaxed);
-    hostTransportPpqPosition_.store(snapshot.ppqPosition, std::memory_order_relaxed);
     hostTransportIsRecording_.store(snapshot.isRecording, std::memory_order_relaxed);
     hostTransportTimeSignatureNumerator_.store(snapshot.timeSignatureNumerator, std::memory_order_relaxed);
     hostTransportTimeSignatureDenominator_.store(snapshot.timeSignatureDenominator, std::memory_order_relaxed);

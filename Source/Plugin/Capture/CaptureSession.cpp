@@ -56,7 +56,7 @@ CaptureSession::~CaptureSession() = default;
 
 void CaptureSession::prepareToPlay(double sampleRate, int maxBlockSize, int hostInputChannels)
 {
-    currentSampleRate_ = sampleRate > 0.0 ? sampleRate : 44100.0;
+    currentSampleRate_ = sampleRate;
     currentMaxBlockSize_ = juce::jmax(0, maxBlockSize);
 
     // Clamp the declared host bus channel count to {1, 2}. This is the SOLE source
@@ -733,7 +733,8 @@ bool CaptureSession::deserialize(const juce::MemoryBlock& block)
 uint64_t CaptureSession::testInjectEditedSegment(double T_start,
                                                   double durationSeconds,
                                                   uint64_t segmentId,
-                                                  std::shared_ptr<juce::AudioBuffer<float>> pcm)
+                                                  std::shared_ptr<juce::AudioBuffer<float>> pcm,
+                                                  double sampleRate)
 {
     uint64_t id = 0;
     {
@@ -742,16 +743,16 @@ uint64_t CaptureSession::testInjectEditedSegment(double T_start,
         id = segmentId > 0 ? segmentId : nextId();
         seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, id, 0};
         seg->creationOrder = id;
-        seg->captureSampleRate = currentSampleRate_;
+        seg->captureSampleRate = sampleRate;
         seg->captureChannels = pcm ? pcm->getNumChannels() : 2;
         seg->T_start.store(T_start, std::memory_order_release);
         seg->anchored.store(true, std::memory_order_release);
-        seg->hostStartSample.store(TimeCoordinate::secondsToSamples(T_start, currentSampleRate_), std::memory_order_release);
-        seg->hostSampleCount.store(TimeCoordinate::secondsToSamples(durationSeconds, currentSampleRate_), std::memory_order_release);
+        seg->hostStartSample.store(TimeCoordinate::secondsToSamples(T_start, sampleRate), std::memory_order_release);
+        seg->hostSampleCount.store(TimeCoordinate::secondsToSamples(durationSeconds, sampleRate), std::memory_order_release);
         seg->durationSeconds = durationSeconds;
         seg->content = std::make_unique<CaptureSegmentContent>(id);
         if (pcm)
-            seg->content->applyAudioBuffer(*pcm, currentSampleRate_);
+            seg->content->applyAudioBuffer(*pcm, sampleRate);
         seg->state.store(SegmentState::Edited, std::memory_order_release);
         activeDisplaySegmentId_ = id;
         mutableSegments_.push_back(std::move(seg));
