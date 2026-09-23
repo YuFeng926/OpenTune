@@ -1134,7 +1134,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
         if (noteSelection.isSelected(clickedNoteIndex)) {
             // OpenDyne Main/Select 与普通模式一致：允许对选中音符进行 pitch 拖拽。
-            beginNotePitchDrag(notes);
+            beginNotePitchDrag(notes, clickedNoteIndex);
         } else {
             // Note was not selected - start selection area or clear
             if (!isCtrlDown) {
@@ -1670,14 +1670,14 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 // OpenDyne（NotesPrimary）工具
 //
 // 唯一 pitch-drag 内部流程：OpenTune Select 与 OpenDyne Pitch Tool 共用。
-// OpenTune（CorrectedF0Primary）固定 Chromatic 半音吸附，不读活动调式；
-// OpenDyne 由 Pitch Grid 三态决定（KeyScale 走 quantizeMidiToActiveScale）。
+// OpenTune 的整体移动吸附由偏好决定；OpenDyne 由 Pitch Grid 三态决定。
 // ============================================================================
 
-void PianoRollToolHandler::beginNotePitchDrag(const std::vector<Note>& notes)
+void PianoRollToolHandler::beginNotePitchDrag(const std::vector<Note>& notes, int anchorNoteIndex)
 {
     auto& state = ctx_.getState();
     state.noteDrag.draggedNoteIndices = collectSelectedNoteIndices(notes);
+    state.noteDrag.anchorNoteIndex = anchorNoteIndex;
     state.noteDrag.previewSnapshot.reset();
 }
 
@@ -1826,33 +1826,51 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
         deltaSemitones = 12.0f * std::log2(currentF0 / startF0);
     }
 
+    const bool openDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
     // Alt 拖拽期间临时解除吸附（保留连续 cents），OpenTune/OpenDyne 统一。
     const bool altBypass = e.mods.isAltDown();
-
+    const bool snapWholeMoveToStandardPitch = !openDyne
+        && !altBypass
+        && ctx_.shouldSnapWholeNoteMoveToStandardPitch
+        && ctx_.shouldSnapWholeNoteMoveToStandardPitch();
     auto& notes = workingDraftNotes(ctx_);
     resetDraftNotesToBaseline(ctx_);
+    float wholeMoveDeltaSemitones = deltaSemitones;
+    if (snapWholeMoveToStandardPitch) {
+        const auto& baselineNotes = draftBaselineNotes(ctx_);
+        const auto& anchor = baselineNotes[static_cast<size_t>(state.noteDrag.anchorNoteIndex)];
+        const float anchorMidi = PitchUtils::freqToMidi(anchor.pitch) + anchor.pitchOffset;
+        wholeMoveDeltaSemitones = std::round(anchorMidi + deltaSemitones) - anchorMidi;
+    }
+
     for (int noteIndex : state.noteDrag.draggedNoteIndices) {
         auto& note = notes[static_cast<size_t>(noteIndex)];
         const float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
         // 连续基准 MIDI（不提前取整）：SNAP 目标全程保持连续语义
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
-        const float targetMidi = baseMidi + initialOffset + deltaSemitones;
-        // Pitch Grid 三态决定吸附方式；Alt 拖拽临时解除吸附（保留连续 cents）
+        const float targetMidi = baseMidi + initialOffset + wholeMoveDeltaSemitones;
+        // OpenTune 的标准音模式统一吸附整组位移；其余情况沿用 Pitch Grid 三态。
         float snappedMidi = targetMidi;
-        if (!altBypass) {
-            switch (pitchGridMode_) {
-                case PitchGridMode::NoSnap:
-                    // 自由模式：不吸附，保留连续 cents
-                    break;
-                case PitchGridMode::Chromatic:
-                    snappedMidi = std::round(targetMidi);  // 吸附到最近半音
-                    break;
-                case PitchGridMode::KeyScale: {
-                    // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
-                    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-                    const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-                    snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
-                    break;
+        if (!altBypass && !snapWholeMoveToStandardPitch) {
+            if (!openDyne) {
+                const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+                const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+                snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
+            } else {
+                switch (pitchGridMode_) {
+                    case PitchGridMode::NoSnap:
+                        // 自由模式：不吸附，保留连续 cents
+                        break;
+                    case PitchGridMode::Chromatic:
+                        snappedMidi = std::round(targetMidi);  // 吸附到最近半音
+                        break;
+                    case PitchGridMode::KeyScale: {
+                        // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
+                        const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+                        const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
+                        snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
+                        break;
+                    }
                 }
             }
         }
@@ -2017,12 +2035,12 @@ void PianoRollToolHandler::handlePitchToolMouseDown(const juce::MouseEvent& e)
     // PitchModulation / PitchDrift：记录拖拽起点，初始化选中音符索引
     if (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift) {
         dragStartPos_ = e.position.toInt();
-        beginNotePitchDrag(notes);
+        beginNotePitchDrag(notes, clickedNoteIndex);
         return;
     }
 
     // Pitch Tool (F2×1)：启动 pitch drag
-    beginNotePitchDrag(notes);
+    beginNotePitchDrag(notes, clickedNoteIndex);
 }
 
 void PianoRollToolHandler::handlePitchToolMouseUp(const juce::MouseEvent& e)

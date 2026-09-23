@@ -164,6 +164,10 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.getActiveScaleSnap = [this]() -> std::optional<ScaleSnapConfig> {
         return makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
     };
+    toolCtx.shouldSnapWholeNoteMoveToStandardPitch = [this]() {
+        return appPreferences_ != nullptr
+            && appPreferences_->getWholeNoteMoveSnapMode() == WholeNoteMoveSnapMode::StandardPitch;
+    };
     toolCtx.getEditableContentSnapshot = [this]() { return readEditedSnapshot(); };
     toolCtx.getOriginalF0 = [this]() -> std::vector<float> {
         if (!currentCurve_) return {};

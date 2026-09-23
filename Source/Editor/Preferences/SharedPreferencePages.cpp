@@ -406,7 +406,7 @@ private:
 class SharedEditingPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 340; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 34 + 10 + 28 + 20
+    static constexpr int kContentHeight = 384; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 34 + 10 + 34 + 10 + 28 + 20
 
     SharedEditingPage(AppPreferences& appPreferences,
                       std::function<void()> onPreferencesChanged,
@@ -516,6 +516,24 @@ public:
         };
         initialiseComboBox(gridStyleSelector_);
         addAndMakeVisible(gridStyleSelector_);
+
+        // Whole-note move snap mode selector
+        initialiseLabel(wholeNoteMoveSnapLabel_, LOC(kWholeNoteMoveSnap));
+        addAndMakeVisible(wholeNoteMoveSnapLabel_);
+        const auto currentSnapMode = appPreferences_.getState().shared.wholeNoteMoveSnapMode;
+        wholeNoteMoveSnapSelector_.addItem(LOC(kWholeNoteMoveSnapScale), 1);
+        wholeNoteMoveSnapSelector_.addItem(LOC(kWholeNoteMoveSnapStandardPitch), 2);
+        wholeNoteMoveSnapSelector_.setSelectedId(currentSnapMode == WholeNoteMoveSnapMode::StandardPitch ? 2 : 1,
+                                                 juce::dontSendNotification);
+        wholeNoteMoveSnapSelector_.onChange = [this] {
+            const auto mode = wholeNoteMoveSnapSelector_.getSelectedId() == 2
+                ? WholeNoteMoveSnapMode::StandardPitch
+                : WholeNoteMoveSnapMode::Scale;
+            appPreferences_.setWholeNoteMoveSnapMode(mode);
+            notifyChanged();
+        };
+        initialiseComboBox(wholeNoteMoveSnapSelector_);
+        addAndMakeVisible(wholeNoteMoveSnapSelector_);
     }
 
     void paint(juce::Graphics& g) override
@@ -559,6 +577,11 @@ public:
         gridStyleSelector_.setBounds(row);
 
         bounds.removeFromTop(10);
+        row = bounds.removeFromTop(rowHeight);
+        wholeNoteMoveSnapLabel_.setBounds(row.removeFromLeft(labelWidth));
+        wholeNoteMoveSnapSelector_.setBounds(row);
+
+        bounds.removeFromTop(10);
         auto resetRow = bounds.removeFromTop(28);
         resetButton_.setBounds(resetRow.removeFromLeft(150));
     }
@@ -594,6 +617,8 @@ private:
     juce::TextButton resetButton_;
     juce::Label gridStyleLabel_;
     juce::ComboBox gridStyleSelector_;
+    juce::Label wholeNoteMoveSnapLabel_;
+    juce::ComboBox wholeNoteMoveSnapSelector_;
 };
 
 class SharedVisualPage final : public juce::Component

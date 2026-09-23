@@ -75,6 +75,7 @@ struct NoteSelectionState
 struct NoteDragState
 {
     std::vector<int> draggedNoteIndices;
+    int anchorNoteIndex = -1;
     bool isDraggingNotes = false;
 
     // 拖拽预览：buildNoteBasedCorrectionState 构建的临时 EditableContentSnapshot

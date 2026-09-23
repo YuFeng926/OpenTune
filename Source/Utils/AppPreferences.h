@@ -38,6 +38,12 @@ enum class TrackColorMode {
     Custom = 1    ///< User picks custom colors per track
 };
 
+/// Snap mode for whole-note (整体) pitch moves: follow global scale (default) or nearest standard pitch
+enum class WholeNoteMoveSnapMode {
+    Scale = 0,          ///< 跟随全局调式（默认，保持现有行为）
+    StandardPitch = 1   ///< 最近标准音（整体等距）
+};
+
 /// Snap-to-grid settings for arrangement clip editing.
 struct SnapSettings {
     enum class Mode { Off = 0, Beat, Bar, Second, Count };
@@ -68,6 +74,7 @@ struct SharedPreferencesState {
     PianoGridStyle gridStyle = PianoGridStyle::PianoLanes;
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
     TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
+    WholeNoteMoveSnapMode wholeNoteMoveSnapMode = WholeNoteMoveSnapMode::Scale;
 };
 
 struct StandalonePreferencesState {
@@ -131,6 +138,9 @@ public:
 
     void setTimelineDisplayMode(TimelineDisplayMode mode);
     TimelineDisplayMode getTimelineDisplayMode() const;
+
+    void setWholeNoteMoveSnapMode(WholeNoteMoveSnapMode mode);
+    WholeNoteMoveSnapMode getWholeNoteMoveSnapMode() const;
 
     std::vector<juce::String> getRecentProjects() const;
     void pushRecentProject(const juce::String& projectPath);

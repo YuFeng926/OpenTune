@@ -120,6 +120,7 @@ public:
         std::function<void()> republishPlaybackSource;
         // Pitch Tool 拖拽吸附配置；nullopt = 无配置（默认 Chromatic，即 round 半音）。
         std::function<std::optional<ScaleSnapConfig>()> getActiveScaleSnap;
+        std::function<bool()> shouldSnapWholeNoteMoveToStandardPitch;
         // 把 undo action 推入组件 UndoManager。
         std::function<void(std::unique_ptr<UndoAction>)> pushUndoAction;
 
@@ -247,7 +248,7 @@ private:
 
     // === OpenDyne（NotesPrimary）工具 ===
     // 唯一 pitch-drag 内部流程：OpenTune Select 与 OpenDyne Pitch 共用。
-    void beginNotePitchDrag(const std::vector<Note>& notes);
+    void beginNotePitchDrag(const std::vector<Note>& notes, int anchorNoteIndex);
     void dragNotePitch(const juce::MouseEvent& e);
     bool endNotePitchDrag(const juce::MouseEvent& e);
     // 唯一拖拽 editRange：只聚合实际变化的音符（普通 Pitch 比 pitchOffset、

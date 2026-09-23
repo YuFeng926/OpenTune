@@ -34,6 +34,7 @@ constexpr const char* kSharedF0ModelTypeKey = "shared.f0.modelType";
 constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMode";
 constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
 constexpr const char* kSharedGridStyleKey = "shared.pianoRoll.gridStyle";
+constexpr const char* kSharedWholeNoteMoveSnapModeKey = "shared.pianoRoll.wholeNoteMoveSnapMode";
 constexpr const char* kSharedPitchLaneVisualModeKey = "shared.pianoRoll.pitchLaneVisualMode";
 constexpr const char* kSharedEqSuppressRemoveConfirmationKey = "shared.eq.suppressRemoveConfirmation";
 
@@ -322,6 +323,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
         properties.getDoubleValue(kSharedTuningHzKey, state.shared.tuning.tuningHz));
     state.shared.gridStyle = static_cast<PianoGridStyle>(
         properties.getIntValue(kSharedGridStyleKey, static_cast<int>(state.shared.gridStyle)));
+    state.shared.wholeNoteMoveSnapMode = static_cast<WholeNoteMoveSnapMode>(
+        properties.getIntValue(kSharedWholeNoteMoveSnapModeKey,
+                               static_cast<int>(state.shared.wholeNoteMoveSnapMode)));
     state.shared.renderingPriority = renderingPriorityFromToken(
         properties.getValue(kSharedRenderingPriorityKey,
                             toRenderingPriorityToken(state.shared.renderingPriority)));
@@ -392,6 +396,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
     properties.setValue(kSharedTuningHzKey, static_cast<double>(state.shared.tuning.tuningHz));
     properties.setValue(kSharedGridStyleKey, static_cast<int>(state.shared.gridStyle));
+    properties.setValue(kSharedWholeNoteMoveSnapModeKey, static_cast<int>(state.shared.wholeNoteMoveSnapMode));
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
     properties.setValue(kSharedVocoderWeightKey,
@@ -728,6 +733,19 @@ TimelineDisplayMode AppPreferences::getTimelineDisplayMode() const
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     return state_.shared.timelineDisplayMode;
+}
+
+void AppPreferences::setWholeNoteMoveSnapMode(WholeNoteMoveSnapMode mode)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.wholeNoteMoveSnapMode = mode;
+    saveLocked();
+}
+
+WholeNoteMoveSnapMode AppPreferences::getWholeNoteMoveSnapMode() const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return state_.shared.wholeNoteMoveSnapMode;
 }
 
 } // namespace OpenTune

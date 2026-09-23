@@ -144,7 +144,7 @@ public:
     void setPianoKeyAudition(PianoKeyAudition* audition) { pianoKeyAudition_ = audition; }
 
     /** 注入 AppPreferences 指针（两个 Editor 构造/同步时直接注入，无中转层）。
-     *  仅用于 EQ popup 的「以后不再提示」偏好读写。 */
+     *  用于 EQ popup 和音符整体移动吸附偏好。 */
     void setAppPreferences(AppPreferences* prefs) noexcept { appPreferences_ = prefs; }
 
     using ReadContentSnapshotFn = std::function<std::shared_ptr<const EditableContentSnapshot>(ContentKey)>;
