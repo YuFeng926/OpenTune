@@ -91,8 +91,13 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
     const int hopSize = f0Service.getF0HopSize();
     const int f0SampleRate = f0Service.getF0SampleRate();
 
-    out.expectedInferenceFrameCount = static_cast<int>(std::ceil(out.audioDurationSeconds
-        * static_cast<double>(f0SampleRate) / static_cast<double>(juce::jmax(1, hopSize))));
+    // 诊断期望帧数与 FCPE 推理共用同一离散长度规则：
+    // 重采样输出长度 = sampleRateProject(N, fromSR, toSR)（ResamplingManager 同一规则），
+    // 期望帧数 = 重采样样本数 / hop + 1（torchfcpe N // hop + 1）。
+    const int64_t resampledSampleCount = TimeCoordinate::sampleRateProject(
+        static_cast<int64_t>(numSamples), internalSampleRate, static_cast<double>(f0SampleRate));
+    out.expectedInferenceFrameCount = static_cast<int>(
+        resampledSampleCount / juce::jmax(1, hopSize) + 1);
 
     auto extraction = f0Service.extractF0(src, static_cast<size_t>(numSamples),
                                           static_cast<int>(internalSampleRate), runOwnerState);

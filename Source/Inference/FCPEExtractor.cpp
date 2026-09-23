@@ -362,7 +362,22 @@ std::vector<float> FCPEExtractor::extractF0(
 
     if (progressCallback) progressCallback(0.5f);
 
-    int numFrames = static_cast<int>(mel.size());
+    // ---- 帧数规整：对齐官方 torchfcpe Wav2MelModule 的输出长度契约 ----
+    // 官方 Mel 模块同为 center=False，规整发生在 Wav2MelModule：目标行数为
+    // N // hop + 1（N 为 16k 样本数），不足复制末行、超出截断。
+    // 本地 Mel 行数即 STFT 原始行数（通常少 1 行），按同一规则规整后再建 ONNX 输入。
+    const int targetFrames = static_cast<int>(
+        static_cast<int64_t>(audio16k.size()) / HOP + 1);
+    if (static_cast<int>(mel.size()) < targetFrames)
+    {
+        const auto lastRow = mel.back(); // 拷贝末行，避免 resize 重分配后引用悬垂
+        mel.resize(targetFrames, lastRow);
+    }
+    else if (static_cast<int>(mel.size()) > targetFrames)
+    {
+        mel.resize(targetFrames);
+    }
+    const int numFrames = static_cast<int>(mel.size());
     std::vector<float> melFlat(static_cast<size_t>(numFrames) * N_MELS);
     for (int t = 0; t < numFrames; ++t)
         for (int m = 0; m < N_MELS; ++m)
