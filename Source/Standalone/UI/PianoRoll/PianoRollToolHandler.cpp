@@ -1843,36 +1843,24 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
         wholeMoveDeltaSemitones = std::round(anchorMidi + deltaSemitones) - anchorMidi;
     }
 
+    // 循环不变量：拖拽期间活动调式不变，量化配置只取一次
+    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+
     for (int noteIndex : state.noteDrag.draggedNoteIndices) {
         auto& note = notes[static_cast<size_t>(noteIndex)];
         const float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
         // 连续基准 MIDI（不提前取整）：SNAP 目标全程保持连续语义
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
         const float targetMidi = baseMidi + initialOffset + wholeMoveDeltaSemitones;
-        // OpenTune 的标准音模式统一吸附整组位移；其余情况沿用 Pitch Grid 三态。
+        // OpenTune 恒量化到活动调式；OpenDyne 按 Pitch Grid 三态，KeyScale 与 OpenTune 同源量化。
         float snappedMidi = targetMidi;
         if (!altBypass && !snapWholeMoveToStandardPitch) {
-            if (!openDyne) {
-                const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-                const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-                snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
-            } else {
-                switch (pitchGridMode_) {
-                    case PitchGridMode::NoSnap:
-                        // 自由模式：不吸附，保留连续 cents
-                        break;
-                    case PitchGridMode::Chromatic:
-                        snappedMidi = std::round(targetMidi);  // 吸附到最近半音
-                        break;
-                    case PitchGridMode::KeyScale: {
-                        // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
-                        const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-                        const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-                        snappedMidi = snap.quantizeMidiToActiveScale(targetMidi);
-                        break;
-                    }
-                }
+            if (!openDyne || pitchGridMode_ == PitchGridMode::KeyScale) {
+                snappedMidi = scaleSnap.value_or(ScaleSnapConfig{}).quantizeMidiToActiveScale(targetMidi);
+            } else if (pitchGridMode_ == PitchGridMode::Chromatic) {
+                snappedMidi = std::round(targetMidi);  // 吸附到最近半音
             }
+            // NoSnap：自由模式，保留连续 cents
         }
         // pitchOffset = snappedMidi - baseMidi ⇒ getAdjustedPitch() 精确等于目标 MIDI 频率；
         // 仅实际变化才写 pitchOffset/dirty，否则保留 baseline

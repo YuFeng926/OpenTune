@@ -38,10 +38,10 @@ enum class TrackColorMode {
     Custom = 1    ///< User picks custom colors per track
 };
 
-/// Snap mode for whole-note (整体) pitch moves: follow global scale (default) or nearest standard pitch
+/// Snap mode for selected-note group pitch moves: follow the active scale (default) or snap to semitones.
 enum class WholeNoteMoveSnapMode {
-    Scale = 0,          ///< 跟随全局调式（默认，保持现有行为）
-    StandardPitch = 1   ///< 最近标准音（整体等距）
+    Scale = 0,          ///< 跟随全局调式（默认）
+    StandardPitch = 1   ///< 半音吸附
 };
 
 /// Snap-to-grid settings for arrangement clip editing.

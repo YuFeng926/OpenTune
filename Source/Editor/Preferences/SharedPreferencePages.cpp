@@ -430,6 +430,7 @@ public:
                 ? AudioEditingScheme::Scheme::NotesPrimary
                 : AudioEditingScheme::Scheme::CorrectedF0Primary;
             appPreferences_.setAudioEditingScheme(scheme);
+            wholeNoteMoveSnapSelector_.setEnabled(scheme != AudioEditingScheme::Scheme::NotesPrimary);
             notifyChanged();
         };
         initialiseComboBox(schemeSelector_);
@@ -534,6 +535,7 @@ public:
         };
         initialiseComboBox(wholeNoteMoveSnapSelector_);
         addAndMakeVisible(wholeNoteMoveSnapSelector_);
+        wholeNoteMoveSnapSelector_.setEnabled(state.shared.audioEditingScheme != AudioEditingScheme::Scheme::NotesPrimary);
     }
 
     void paint(juce::Graphics& g) override

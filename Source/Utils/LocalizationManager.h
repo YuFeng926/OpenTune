@@ -255,9 +255,9 @@ constexpr const char* kSchemeOpenDyne = "OpenDyne";
 constexpr const char* kGridStyle = "Grid Style";
 constexpr const char* kGridStylePianoLanes = "Piano Lanes";
 constexpr const char* kGridStyleEqualSpacing = "Equal Spacing";
-constexpr const char* kWholeNoteMoveSnap = "Whole Note Move Snap";
+constexpr const char* kWholeNoteMoveSnap = "Move Snap";
 constexpr const char* kWholeNoteMoveSnapScale = "Follow Global Scale";
-constexpr const char* kWholeNoteMoveSnapStandardPitch = "Nearest Standard Pitch (Whole-Note Equal Steps)";
+constexpr const char* kWholeNoteMoveSnapStandardPitch = "Snap to Semitones";
 
 constexpr const char* kHorizontalZoomSensitivity = "Horizontal Zoom Sensitivity";
 constexpr const char* kVerticalZoomSensitivity = "Vertical Zoom Sensitivity";
@@ -487,9 +487,9 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kGridStyle, "Grid Style", "网格样式", "グリッドスタイル", "Стиль сетки", "Estilo de cuadricula" },
         { Keys::kGridStylePianoLanes, "Piano Lanes", "钢琴键槽", "ピアノレーン", "Клавиши пианино", "Teclas de piano" },
         { Keys::kGridStyleEqualSpacing, "Equal Spacing", "等距", "等間隔", "Равный интервал", "Espaciado igual" },
-        { Keys::kWholeNoteMoveSnap, "Whole Note Move Snap", "整体移动吸附", "全体移動スナップ", "Привязка сдвига нот", "Ajuste de desplazamiento de notas" },
+        { Keys::kWholeNoteMoveSnap, "Move Snap", "移动吸附", "移動スナップ", "Привязка при сдвиге", "Ajuste al mover" },
         { Keys::kWholeNoteMoveSnapScale, "Follow Global Scale", "跟随全局调式", "グローバルスケールに従う", "Следовать глобальной гамме", "Seguir escala global" },
-        { Keys::kWholeNoteMoveSnapStandardPitch, "Nearest Standard Pitch (Whole-Note Equal Steps)", "最近标准音（整体等距）", "最近標準音（全体等間隔）", "Ближайший стандартный тон (равные шаги)", "Tono estándar más cercano (pasos iguales)" },
+        { Keys::kWholeNoteMoveSnapStandardPitch, "Snap to Semitones", "半音吸附", "半音スナップ", "По полутонам", "Por semitonos" },
         
         { Keys::kHorizontalZoomSensitivity, "Horizontal Zoom Sensitivity", "水平缩放灵敏度", "水平ズーム感度", "Чувств. гориз. zoom", "Sensibilidad zoom horizontal" },
         { Keys::kVerticalZoomSensitivity, "Vertical Zoom Sensitivity", "垂直缩放灵敏度", "垂直ズーム感度", "Чувств. верт. zoom", "Sensibilidad zoom vertical" },
