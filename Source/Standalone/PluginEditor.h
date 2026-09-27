@@ -242,7 +242,7 @@ private:
     void startOpenProject(const juce::File& file);
 
     OpenTuneAudioProcessor& processorRef_;
-    AppPreferences appPreferences_;
+    AppPreferences& appPreferences_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;
     LocalizationManager::ScopedLanguageBinding languageBinding_;
     KeyShortcutConfig::KeyShortcutSettings shortcutSettings_ = KeyShortcutConfig::KeyShortcutSettings::getDefault();

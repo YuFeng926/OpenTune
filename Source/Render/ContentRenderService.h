@@ -61,7 +61,8 @@ public:
     void resumeRenderWorker();
     void drainRenderWorker();
 
-    SoundTouchStretcher* getStretcher(ContentKey key, double sampleRate, int channels);
+    std::shared_ptr<SoundTouchStretcher> getStretcher(
+        ContentKey key, double sampleRate, int channels);
     void removeStretcher(ContentKey key);
 
     TimeStretchCache& getTimeStretchCache() noexcept { return timeStretchCache_; }
@@ -73,9 +74,9 @@ public:
 private:
     PlaybackSourcePublisher playbackSources_;
     RenderCacheRegistry renderCaches_;
-    RenderWorker renderWorker_;
     StretcherPool stretchers_;
     TimeStretchCache timeStretchCache_;
+    RenderWorker renderWorker_;
 };
 
 } // namespace OpenTune

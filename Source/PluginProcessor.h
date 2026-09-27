@@ -443,6 +443,9 @@ private:
 #if JucePlugin_Build_Standalone
     std::shared_ptr<SourceStore> sourceStore_;
 #endif
+    // Runtime-owned preferences. It is constructed with the other runtime
+    // services so scanner-only processor construction remains side-effect free.
+    std::unique_ptr<AppPreferences> appPreferences_;
     // Processor-local render path: owned only by instances not bound to ARA
     // (regular VST3 / Standalone). ARA-bound instances keep this null and render
     // through the DC's CRS.
@@ -855,8 +858,9 @@ public:
     SnapSettings getSnapSettings() const;
     void setSnapSettings(const SnapSettings& snap);
 
-    /** Wire AppPreferences pointer so getSnapSettings() returns live data. */
-    void setAppPreferences(AppPreferences* prefs) { appPreferences_ = prefs; }
+    /** Valid after runtime initialization; the processor owns this object. */
+    AppPreferences& getAppPreferences() noexcept { return *appPreferences_; }
+    const AppPreferences& getAppPreferences() const noexcept { return *appPreferences_; }
 
     UndoManager& getUndoManager() { return undoManager_; }
     PianoKeyAudition& getPianoKeyAudition() { return pianoKeyAudition_; }
@@ -865,8 +869,6 @@ private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
     OutputSpectrumAnalyzer outputSpectrumAnalyzer_;
-
-    AppPreferences* appPreferences_{nullptr};
 
     // Hard-cut render mutation request primitive. This is the only path
     // that builds RenderJob and enqueues into ContentRenderService; every other

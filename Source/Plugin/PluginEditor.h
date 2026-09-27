@@ -155,7 +155,7 @@ private:
     ContentEditCommands& getContentCommands() const { return *contentCommands_; }
     std::shared_ptr<ContentEditCommands> getContentCommandsShared() const { return contentCommands_; }
 
-    AppPreferences appPreferences_;
+    AppPreferences& appPreferences_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;
     LocalizationManager::ScopedLanguageBinding languageBinding_;
     ThemeId appliedThemeId_ = ThemeId::Aurora;

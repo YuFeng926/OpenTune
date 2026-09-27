@@ -105,6 +105,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , AudioProcessorEditorARAExtension(&processor)
 #endif
     , processorRef_(processor)
+    , appPreferences_(processor.getAppPreferences())
     , languageState_(std::make_shared<LocalizationManager::LanguageState>(
           LocalizationManager::LanguageState{ appPreferences_.getState().shared.language }))
     , languageBinding_(languageState_)

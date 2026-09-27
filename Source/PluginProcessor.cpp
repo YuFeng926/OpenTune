@@ -767,6 +767,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     auto f0SvcOwner = std::make_unique<F0ExtractionService>(
         1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); });
     auto refSvc = std::make_unique<ReferenceAnalysisService>();
+    auto appPreferences = std::make_unique<AppPreferences>();
 
     // 资源所有权：ARA 绑定实例的渲染全部走 DC 自己的 CRS（DC 构造时安装自己的
     // ExecutionLease），processor 不得再持有 local CRS / CaptureSession，避免出现
@@ -868,8 +869,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 juce::ignoreUnused(key);
 #endif
             };
-            const bool lightPitchEnabled = appPreferences_ != nullptr
-                && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
+            const bool lightPitchEnabled = appPreferences_->getState().shared.lightPitchCorrectionEnabled;
             ProcessRenderRuntime::getInstance().processChunkRenderJob(
                 contentRenderService_, job,
                 lightPitchEnabled, std::move(completion));
@@ -1134,6 +1134,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     // 完整成功后一次性发布成员（noexcept 移动）。
     f0ExtractionService_ = std::move(f0SvcOwner);
     referenceAnalysisService_ = std::move(refSvc);
+    appPreferences_ = std::move(appPreferences);
 #if JucePlugin_Build_Standalone
     sourceStore_ = std::move(srcStore);
 #endif

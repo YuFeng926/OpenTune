@@ -16,7 +16,12 @@ bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
     double audioSampleRate)
 {
-    if (!contentKey.isValid() || contentSnapshot == nullptr || audioBuffer == nullptr)
+    if (!contentKey.isValid()
+        || contentSnapshot == nullptr
+        || contentSnapshot->timeGrid == nullptr
+        || contentSnapshot->timeGrid->empty()
+        || audioBuffer == nullptr
+        || audioSampleRate <= 0.0)
         return false;
 
     auto renderCache = getRenderCache(contentKey);
@@ -208,7 +213,8 @@ void ContentRenderService::drainRenderWorker()
     renderWorker_.drain();
 }
 
-SoundTouchStretcher* ContentRenderService::getStretcher(ContentKey key, double sampleRate, int channels)
+std::shared_ptr<SoundTouchStretcher> ContentRenderService::getStretcher(
+    ContentKey key, double sampleRate, int channels)
 {
     return stretchers_.getOrCreate(key, sampleRate, channels);
 }

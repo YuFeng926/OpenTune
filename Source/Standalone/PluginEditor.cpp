@@ -506,6 +506,7 @@ void OpenTuneAudioProcessorEditor::setInferenceActive(bool active)
 OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& p)
     : AudioProcessorEditor(&p)
     , processorRef_(p)
+    , appPreferences_(p.getAppPreferences())
     , languageState_(std::make_shared<LocalizationManager::LanguageState>(
           LocalizationManager::LanguageState{ appPreferences_.getState().shared.language }))
     , languageBinding_(languageState_)
@@ -519,8 +520,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , overviewStrip_(pianoRoll_.getWaveformMipmapCache())
     , projectSession_(p, appPreferences_)
 {
-    // Wire AppPreferences to processor for getSnapSettings()
-    processorRef_.setAppPreferences(&appPreferences_);
     // EQ popup「以后不再提示」偏好直接注入（无中转层）
     pianoRoll_.setAppPreferences(&appPreferences_);
 

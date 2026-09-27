@@ -5,7 +5,8 @@ namespace OpenTune {
 
 StretcherPool::~StretcherPool() = default;
 
-SoundTouchStretcher* StretcherPool::getOrCreate(ContentKey key, double sampleRate, int channels)
+std::shared_ptr<SoundTouchStretcher> StretcherPool::getOrCreate(
+    ContentKey key, double sampleRate, int channels)
 {
     if (!key.isValid() || sampleRate <= 0.0 || channels <= 0)
         return nullptr;
@@ -19,7 +20,7 @@ SoundTouchStretcher* StretcherPool::getOrCreate(ContentKey key, double sampleRat
             && it->second.sampleRate == sampleRate
             && it->second.channels == channels)
         {
-            return it->second.stretcher.get();
+            return it->second.stretcher;
         }
     }
 
@@ -32,9 +33,9 @@ SoundTouchStretcher* StretcherPool::getOrCreate(ContentKey key, double sampleRat
         Entry entry;
         entry.sampleRate = sampleRate;
         entry.channels = channels;
-        entry.stretcher = std::make_unique<SoundTouchStretcher>(sampleRate, channels);
+        entry.stretcher = std::make_shared<SoundTouchStretcher>(sampleRate, channels);
         it = entries_.emplace(key, std::move(entry)).first;
-        return it->second.stretcher.get();
+        return it->second.stretcher;
     }
 
     auto& entry = it->second;
@@ -48,9 +49,9 @@ SoundTouchStretcher* StretcherPool::getOrCreate(ContentKey key, double sampleRat
     }
 
     if (!entry.stretcher)
-        entry.stretcher = std::make_unique<SoundTouchStretcher>(sampleRate, channels);
+        entry.stretcher = std::make_shared<SoundTouchStretcher>(sampleRate, channels);
 
-    return entry.stretcher.get();
+    return entry.stretcher;
 }
 
 void StretcherPool::remove(ContentKey key)

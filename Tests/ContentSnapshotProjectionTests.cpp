@@ -10,6 +10,8 @@
 #include "../Source/Inference/TimeStretchCache.h"
 #include "../Source/Utils/PlaybackAudioReader.h"
 #include "../Source/Render/PlaybackReadSource.h"
+#include "../Source/Render/StretcherPool.h"
+#include "../Source/Inference/SoundTouchStretcher.h"
 #include "../Source/Utils/TimeCoordinate.h"
 #include "../Source/Utils/F0Timeline.h"
 #include "../Source/Utils/SourceWindow.h"
@@ -175,6 +177,19 @@ bool testNullTimeGridIsNormalizedAtPublicationBoundaries()
         && source.contentSnapshot->timeGrid->isIdentity()
         && nearlyEqual(source.contentSnapshot->timeGrid->totalDurationSeconds(), 1.0)
         && source.contentSnapshot->audioBuffer == sourceAudio;
+}
+
+bool testStretcherHandleSurvivesPoolRemoval()
+{
+    OpenTune::StretcherPool pool;
+    const OpenTune::ContentKey key{OpenTune::DomainKind::StandaloneClip, 77, 0};
+    auto oldHandle = pool.getOrCreate(key, 44100.0, 1);
+    if (oldHandle == nullptr)
+        return false;
+
+    pool.remove(key);
+    auto newHandle = pool.getOrCreate(key, 44100.0, 1);
+    return newHandle != nullptr && newHandle != oldHandle;
 }
 
 // Capture retire 重置 active content 为默认 bootstrap（revision 1、timeGrid 非空），
@@ -826,6 +841,12 @@ int main()
     if (!testNullTimeGridIsNormalizedAtPublicationBoundaries())
     {
         std::fputs("FAIL: null TimeGrid publication boundary normalization\n", stderr);
+        return 1;
+    }
+
+    if (!testStretcherHandleSurvivesPoolRemoval())
+    {
+        std::fputs("FAIL: stretcher handle lifetime across pool removal\n", stderr);
         return 1;
     }
 

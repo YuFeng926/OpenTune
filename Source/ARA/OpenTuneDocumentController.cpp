@@ -65,7 +65,6 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(
         1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
 {
-    asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
     installDocumentRenderExecution();
     AppLogger::logNoThrow("ARA-DIAG: DocumentController created dc="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
@@ -74,9 +73,12 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
 {
-    // 撤销服务租约，防止异步 F0 completion 写回已析构的 DC
-    if (asyncLeaseToken_)
-        asyncLeaseToken_->store(false, std::memory_order_release);
+    // 先关闭 F0 completion 生命周期闸门：已进入的 completion 持锁完成后，
+    // 后续 completion 只会看到 closed，不再访问即将析构的 DC。
+    {
+        std::lock_guard<std::mutex> lock(completionGate_->mutex);
+        completionGate_->closed = true;
+    }
 
     // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
     // F0 Run（SetTerminate 加速返回）。不 join worker —— worker 是 detached
@@ -2108,11 +2110,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
 
     auto submitResult = contentF0ExtractionService_->submit(
         F0RequestKey{key},
-        [data = std::move(channel0Data), sourceSampleRate, birthRevision, leaseToken = asyncLeaseToken_](const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
+        [data = std::move(channel0Data), sourceSampleRate, birthRevision](const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
         {
-            if (leaseToken && !leaseToken->load(std::memory_order_acquire))
-                return F0ExtractionService::Result{};
-
             if (data.empty())
                 return F0ExtractionService::Result{};
 
@@ -2156,9 +2155,11 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             result.energy = std::move(energy);
             return result;
         },
-        [this, key, birthRevision, hostModification, stamp, leaseToken = asyncLeaseToken_](F0ExtractionService::Result&& result)
+        [this, key, birthRevision, hostModification, stamp,
+         completionGate = completionGate_](F0ExtractionService::Result&& result)
         {
-            if (leaseToken && !leaseToken->load(std::memory_order_acquire))
+            std::lock_guard<std::mutex> lock(completionGate->mutex);
+            if (completionGate->closed)
                 return;
 
             // Accept a completion only when both the submitted and current source stamps match.

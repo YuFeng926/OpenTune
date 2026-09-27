@@ -28,9 +28,11 @@ public:
      * ContentKey に対応する stretcher を取得する。
      * 存在しない場合、または sampleRate/channels が一致しない場合は再作成する。
      *
-     * @return non-owning ポインタ。エントリが見つからない / 作成できない場合は nullptr。
+     * @return 使用期間中の所有権を持つ shared_ptr。エントリが見つからない /
+     *         作成できない場合は nullptr。
      */
-    SoundTouchStretcher* getOrCreate(ContentKey key, double sampleRate, int channels);
+    std::shared_ptr<SoundTouchStretcher> getOrCreate(
+        ContentKey key, double sampleRate, int channels);
 
     /**
      * ContentKey に対応する stretcher エントリを削除する。
@@ -47,7 +49,7 @@ private:
     {
         double sampleRate{0.0};
         int channels{0};
-        std::unique_ptr<SoundTouchStretcher> stretcher;
+        std::shared_ptr<SoundTouchStretcher> stretcher;
     };
 
     juce::ReadWriteLock lock_;

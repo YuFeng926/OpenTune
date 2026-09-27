@@ -58,7 +58,7 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
     }
 
     const double sampleRate = request.audioSampleRate;
-    SoundTouchStretcher* stretcher = crs.getStretcher(contentKey, sampleRate, 1);
+    auto stretcher = crs.getStretcher(contentKey, sampleRate, 1);
     if (stretcher == nullptr) return false;
 
     auto schedule = stretcher->buildTempoScheduleFromTimeGrid(*snapshot.timeGrid);
