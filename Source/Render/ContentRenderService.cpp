@@ -35,6 +35,11 @@ bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(
 
 void ContentRenderService::publishPlaybackSource(ContentKey key, PlaybackReadSource source)
 {
+    if (!key.isValid()
+        || source.contentSnapshot == nullptr
+        || source.contentSnapshot->timeGrid == nullptr
+        || source.contentSnapshot->timeGrid->empty())
+        return;
     playbackSources_.publish(key, source);
 }
 

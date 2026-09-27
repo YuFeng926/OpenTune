@@ -60,6 +60,8 @@ bool testCommonFieldsRoundTrip()
     source.pitchShiftSettings = OpenTune::PitchShiftSettings{3, 25};
     source.volumeEnvelope = OpenTune::AutomationLane::fromSnapshot(
         std::vector<OpenTune::AutomationPoint>{{0.0, -1.0f}, {1.0, -3.0f}});
+    source.timeGrid = OpenTune::TimeGridSnapshot::makeIdentity(
+        source.sourceWindow.durationSeconds());
     source.notesRevision = 2;
     source.noteTopologyInitialized = true;
     source.pitchRevision = 3;
@@ -124,6 +126,55 @@ bool testContentStateProjectionStartsNewRuntimeRevision()
         && state.notesRevision == 3
         && state.notes.size() == 1
         && state.timeGrid == snapshot.timeGrid;
+}
+
+bool testNullTimeGridIsNormalizedAtPublicationBoundaries()
+{
+    OpenTune::ContentState state;
+    state.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 44100);
+    state.sampleRate = 44100.0;
+    state.timeGrid.reset();
+    const auto projected = OpenTune::makeContentSnapshot(state);
+    if (!projected.timeGrid || !projected.timeGrid->isIdentity()
+        || !nearlyEqual(projected.timeGrid->totalDurationSeconds(), 1.0))
+        return false;
+
+    state.sourceWindow = OpenTune::SourceWindow{7, {}, 2.0, 3.5};
+    state.audioBuffer.reset();
+    state.sampleRate = 0.0;
+    state.timeGrid.reset();
+    const auto windowProjected = OpenTune::makeContentSnapshot(state);
+    if (!windowProjected.timeGrid || !windowProjected.timeGrid->isIdentity()
+        || !nearlyEqual(windowProjected.timeGrid->totalDurationSeconds(), 1.5))
+        return false;
+
+    OpenTune::EditableContentSnapshot snapshot;
+    const auto sourceAudio = std::make_shared<const juce::AudioBuffer<float>>(1, 44100);
+    snapshot.audioBuffer = sourceAudio;
+    snapshot.audioSampleRate = 44100.0;
+    snapshot.timeGrid.reset();
+    const auto restored = OpenTune::contentStateFromSnapshot(snapshot);
+    if (!restored.timeGrid || !restored.timeGrid->isIdentity()
+        || !nearlyEqual(restored.timeGrid->totalDurationSeconds(), 1.0))
+        return false;
+
+    snapshot.timeGrid = std::make_shared<const OpenTune::TimeGridSnapshot>();
+    snapshot.audioBuffer = sourceAudio;
+
+    OpenTune::TimeStretchCache timeStretchCache;
+    const auto source = OpenTune::makePlaybackReadSource(
+        OpenTune::ContentKey{OpenTune::DomainKind::StandaloneClip, 1, 0},
+        std::make_shared<const OpenTune::EditableContentSnapshot>(snapshot),
+        sourceAudio,
+        44100.0,
+        std::make_shared<OpenTune::RenderCache>(),
+        timeStretchCache);
+
+    return source.contentSnapshot != nullptr
+        && source.contentSnapshot->timeGrid != nullptr
+        && source.contentSnapshot->timeGrid->isIdentity()
+        && nearlyEqual(source.contentSnapshot->timeGrid->totalDurationSeconds(), 1.0)
+        && source.contentSnapshot->audioBuffer == sourceAudio;
 }
 
 // Capture retire 重置 active content 为默认 bootstrap（revision 1、timeGrid 非空），
@@ -247,7 +298,7 @@ bool testIdentityTimeGridIsAlwaysPublishedAndNonIdentityMissIsSilent()
         return false;
 
     OpenTune::ContentState state;
-    state.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 8);
+    state.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 44100);
     state.sampleRate = 44100.0;
     state.timeGrid = identity;
     state.contentRevision = 1;
@@ -769,6 +820,12 @@ int main()
     if (!testContentStateProjectionStartsNewRuntimeRevision())
     {
         std::fputs("FAIL: contentStateFromSnapshot new-ContentState projection revision\n", stderr);
+        return 1;
+    }
+
+    if (!testNullTimeGridIsNormalizedAtPublicationBoundaries())
+    {
+        std::fputs("FAIL: null TimeGrid publication boundary normalization\n", stderr);
         return 1;
     }
 

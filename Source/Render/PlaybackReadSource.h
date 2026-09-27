@@ -5,6 +5,7 @@
 #include "../Inference/RenderCache.h"
 #include "../Inference/TimeStretchCache.h"
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <cmath>
 #include <memory>
 #include <utility>
 
@@ -108,7 +109,31 @@ inline PlaybackReadSource makePlaybackReadSource(
     std::shared_ptr<RenderCache> renderCache,
     TimeStretchCache& timeStretchCache)
 {
-    jassert(contentSnapshot != nullptr && contentSnapshot->timeGrid != nullptr);
+    if (contentSnapshot == nullptr)
+        return {};
+
+    // Snapshot construction normally supplies this invariant. Normalize here as
+    // the single playback publication boundary for legacy/incomplete owners.
+    const double contentDuration = contentSnapshot->sourceWindow.isValid()
+        ? contentSnapshot->sourceWindow.durationSeconds()
+        : (audioBuffer != nullptr && audioSampleRate > 0.0
+            ? static_cast<double>(audioBuffer->getNumSamples()) / audioSampleRate
+            : 0.0);
+    const bool invalidTimeGrid = contentSnapshot->timeGrid == nullptr
+        || contentSnapshot->timeGrid->empty();
+    const bool mismatchedDuration = contentSnapshot->timeGrid != nullptr
+        && !contentSnapshot->timeGrid->empty()
+        && contentDuration > 0.0
+        && std::abs(contentSnapshot->timeGrid->totalDurationSeconds() - contentDuration) > 1.0e-6;
+    if (invalidTimeGrid || mismatchedDuration) {
+        auto normalized = std::make_shared<EditableContentSnapshot>(*contentSnapshot);
+        normalized->timeGrid = contentDuration > 0.0
+            ? TimeGridSnapshot::makeIdentity(contentDuration)
+            : TimeGridSnapshot::bootstrapIdentity();
+        if (normalized->timeGrid == nullptr)
+            normalized->timeGrid = TimeGridSnapshot::bootstrapIdentity();
+        contentSnapshot = std::move(normalized);
+    }
 
     PlaybackReadSource source;
     source.contentKey = key;

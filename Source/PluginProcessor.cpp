@@ -128,6 +128,9 @@ ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
 
     // owner bootstrap：真实 source/audio duration 已知时，bootstrap identity 或
     // 时长不匹配的 grid（如 split 后沿用原 grid）统一覆盖为真实 duration 的 identity。
+    if (payload.timeGrid == nullptr || payload.timeGrid->empty())
+        payload.timeGrid = TimeGridSnapshot::bootstrapIdentity();
+
     const double contentDuration = payload.sourceWindow.isValid()
         ? payload.sourceWindow.durationSeconds()
         : static_cast<double>(payload.audioBuffer != nullptr ? payload.audioBuffer->getNumSamples() : 0) / payload.sampleRate;
@@ -830,7 +833,13 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                                              std::shared_ptr<const EditableContentSnapshot> snapshot,
                                              std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
                                              double audioSampleRate) {
- #if JucePlugin_Build_VST3
+#if JucePlugin_Build_Standalone
+                // Stage2 must enter the worker queue before the worker reports
+                // this render callback complete; export drain() cannot wait for
+                // a MessageManager callback while running on that thread.
+                enqueueStage2WhenCanonicalSettled(
+                    key, snapshot, audioBuffer, audioSampleRate);
+#endif
                 juce::MessageManager::callAsync(
                     [this, completionGate, key,
                      snapshot = std::move(snapshot),
@@ -843,11 +852,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                         handleStage1ChunkSettled(key, std::move(snapshot),
                                                  std::move(audioBuffer), audioSampleRate);
                     });
- #else
-                juce::ignoreUnused(completionGate);
-                handleStage1ChunkSettled(key, std::move(snapshot),
-                                         std::move(audioBuffer), audioSampleRate);
- #endif
             };
             completion.chunkFailed = [this, completionGate](ContentKey key) {
 #if JucePlugin_Build_VST3
@@ -3302,7 +3306,11 @@ void OpenTuneAudioProcessor::enqueueStage2WhenCanonicalSettled(
     if (key.domainKind == DomainKind::ARAAudioModification)
         return;
 
-    if (snapshot == nullptr || audioBuffer == nullptr || snapshot->timeGrid->isIdentity())
+    if (snapshot == nullptr
+        || audioBuffer == nullptr
+        || snapshot->timeGrid == nullptr
+        || snapshot->timeGrid->empty()
+        || snapshot->timeGrid->isIdentity())
         return;
 
     auto* crs = resolveMutableLocalContentRenderService(key);
@@ -3329,6 +3337,7 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(
     }
 #endif
 
+#if !JucePlugin_Build_Standalone
     if (contentRenderService_ != nullptr
         && key.domainKind != DomainKind::ARAAudioModification)
     {
@@ -3338,6 +3347,7 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(
             std::move(audioBuffer),
             audioSampleRate);
     }
+#endif
 }
 
 #if JucePlugin_Build_Standalone
@@ -5022,13 +5032,16 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             && crs != nullptr
             && snapshot != nullptr)
         {
-            // TimeGrid affects only Stage2. Requeue a full Stage1 plan so any
-            // pending jobs carry the new snapshot, then let the canonical-settled
-            // callback enqueue Stage2 if the plan is still running.
+            // TimeGrid affects only Stage2. Reuse settled Stage1 when available;
+            // a pending Stage1 completion will enqueue Stage2 after it settles.
             if (!crs->republishPlaybackSource(key, snapshot))
                 return ok;
             crs->getTimeStretchCache().invalidate(key);
-            requestFullContentRender(key);
+            PlaybackReadSource source;
+            if (crs->getPlaybackReadSource(key, source))
+                enqueueStage2WhenCanonicalSettled(
+                    key, std::move(snapshot),
+                    source.audioBuffer, source.audioSampleRate);
         }
         else if (key.domainKind == DomainKind::ARAAudioModification
                  && crs != nullptr
