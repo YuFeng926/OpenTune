@@ -376,6 +376,8 @@ private:
 #if JucePlugin_Build_Standalone
     std::atomic<juce::int64> lastControlTimestamp_{0};
     std::atomic<int> lastControlType_{static_cast<int>(DiagnosticControlCall::None)};
+    std::atomic<uint64_t> renderFailureGeneration_{0};
+    std::atomic<uint64_t> f0FailureGeneration_{0};
 #endif
 
 public:
@@ -628,6 +630,17 @@ public:
     ContentRenderService* getContentRenderService() noexcept { return contentRenderService_.get(); }
     const ContentRenderService* getContentRenderService() const noexcept { return contentRenderService_.get(); }
     RenderCache::ChunkStats getReadableContentChunkStats(ContentKey key) const noexcept;
+#if JucePlugin_Build_Standalone
+    uint64_t getRenderFailureGeneration() const noexcept
+    {
+        return renderFailureGeneration_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t getF0FailureGeneration() const noexcept
+    {
+        return f0FailureGeneration_.load(std::memory_order_relaxed);
+    }
+#endif
 
 #if JucePlugin_Build_VST3
     /** Returns the regular VST3 capture session, or nullptr outside regular VST3 mode. */

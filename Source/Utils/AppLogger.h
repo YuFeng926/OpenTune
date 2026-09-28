@@ -48,6 +48,8 @@ public:
     static LogLevel getLogLevel();
     
     static juce::File getCurrentLogFile();
+    static juce::String makeDiagnosticText(const juce::String& stage,
+                                           const juce::String& summary);
 
 private:
     static void logWithLevel(LogLevel level, const juce::String& message);

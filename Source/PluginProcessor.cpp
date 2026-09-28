@@ -824,6 +824,9 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                                 session->onRenderFailed(failedKey);
                         });
 #endif
+#if JucePlugin_Build_Standalone
+                    renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
+#endif
                 }
                 return;
             }
@@ -866,6 +869,18 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                             session->onRenderFailed(key);
                     });
 #else
+                // Deferred retries may outlive this processor. Defer the
+                // owner access until after notifyChunkFailed releases the
+                // completion gate, then re-check the gate on the message
+                // thread before touching the atomic.
+                juce::MessageManager::callAsync(
+                    [this, completionGate]()
+                    {
+                        std::lock_guard<std::mutex> lock(completionGate->mutex);
+                        if (completionGate->closed)
+                            return;
+                        renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
+                    });
                 juce::ignoreUnused(key);
 #endif
             };
@@ -5124,6 +5139,8 @@ bool OpenTuneAudioProcessor::setContentOriginalF0State(ContentKey key, OriginalF
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyOriginalF0State(state);
+            if (state == OriginalF0State::Failed)
+                f0FailureGeneration_.fetch_add(1, std::memory_order_relaxed);
             return true;
         }
 #endif

@@ -133,10 +133,13 @@ private:
     struct DeferredRetry {
         std::weak_ptr<ContentRenderService> crs;
         RenderJob job;
+        CompletionContext completion;
     };
     std::vector<DeferredRetry> deferredRetries_; // vocoderMutex_ protected
 
-    void deferOrRequeue(std::shared_ptr<ContentRenderService> crs, RenderJob job);
+    void deferOrRequeue(std::shared_ptr<ContentRenderService> crs,
+                        RenderJob job,
+                        CompletionContext completion);
 
     ProcessRenderRuntime(const ProcessRenderRuntime&) = delete;
     ProcessRenderRuntime& operator=(const ProcessRenderRuntime&) = delete;

@@ -491,15 +491,17 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
 
     for (auto& retry : readyRetries)
     {
-        auto crsShared = retry.crs.lock();
-        if (!crsShared)
-            continue;
-
         if (domainAvailable)
-            crsShared->requeueRenderChunk(retry.job);
-        else
-            retry.job.renderCache->completeChunkRenderFailure(
-                retry.job.startSample, retry.job.targetRevision);
+        {
+            if (auto crsShared = retry.crs.lock())
+                crsShared->requeueRenderChunk(retry.job);
+            continue;
+        }
+
+        if (retry.job.renderCache != nullptr
+            && retry.job.renderCache->completeChunkRenderFailure(
+                retry.job.startSample, retry.job.targetRevision))
+            notifyChunkFailed(retry.completion, retry.job.contentKey);
     }
 }
 
@@ -657,14 +659,16 @@ bool ProcessRenderRuntime::isVocoderReconfiguring() const noexcept
 }
 
 void ProcessRenderRuntime::deferOrRequeue(
-    std::shared_ptr<ContentRenderService> crs, RenderJob job)
+    std::shared_ptr<ContentRenderService> crs,
+    RenderJob job,
+    CompletionContext completion)
 {
     bool shouldDefer = false;
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
         shouldDefer = vocoderReconfiguring_;
         if (shouldDefer)
-            deferredRetries_.push_back({crs, std::move(job)});
+            deferredRetries_.push_back({crs, std::move(job), std::move(completion)});
     }
     if (!shouldDefer)
         crs->requeueRenderChunk(std::move(job));
@@ -993,7 +997,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.audioSampleRate = coreJob.audioSampleRate;
             requeueJob.startSample = coreJob.startSample;
             requeueJob.targetRevision = coreJob.targetRevision;
-            deferOrRequeue(crs, std::move(requeueJob));
+            deferOrRequeue(crs, std::move(requeueJob), completion);
             return;
         }
         AppLogger::log("RenderWorker: acquireVocoderConfig FAILED");
@@ -1163,7 +1167,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.audioSampleRate = requeueAudioSampleRate;
             requeueJob.startSample = jobStartSample;
             requeueJob.targetRevision = targetRevision;
-            deferOrRequeue(crs, std::move(requeueJob));
+            deferOrRequeue(crs, std::move(requeueJob), completion);
         }
         else
         {
@@ -1180,7 +1184,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     if (!submitVocoderJob(std::move(vocoderJob), vocoderCfg.generation))
     {
         // stale generation or reconfiguring: deferOrRequeue handles both paths
-        deferOrRequeue(crs, std::move(coreJob));
+        deferOrRequeue(crs, std::move(coreJob), completion);
         crs->completeAsyncRenderJob();
         return;
     }

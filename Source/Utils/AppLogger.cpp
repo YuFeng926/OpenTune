@@ -157,4 +157,47 @@ juce::File AppLogger::getCurrentLogFile()
     return getLogFileInstance();
 }
 
+juce::String AppLogger::makeDiagnosticText(const juce::String& stage,
+                                           const juce::String& summary)
+{
+    const juce::File logFile = getCurrentLogFile();
+    const juce::String logPath = logFile != juce::File()
+        ? logFile.getFullPathName()
+        : juce::String("(log file not available)");
+
+    juce::String diagnostic = "Stage: " + stage
+        + "\nSummary: " + summary
+        + "\nLog file: " + logPath;
+    if (logFile.existsAsFile() && logFile.hasReadAccess())
+    {
+        constexpr int kMaxLogBytes = 256 * 1024;
+        juce::FileInputStream input(logFile);
+        if (input.openedOk())
+        {
+            const auto totalLength = input.getTotalLength();
+            if (totalLength >= 0)
+            {
+                const auto start = totalLength > kMaxLogBytes
+                    ? totalLength - kMaxLogBytes
+                    : 0;
+                const int bytesToRead = static_cast<int>(totalLength - start);
+                juce::MemoryBlock contents;
+                if (input.setPosition(start)
+                    && input.readIntoMemoryBlock(contents, bytesToRead) == bytesToRead)
+                {
+                    diagnostic += "\n\nCurrent log contents:";
+                    if (start > 0)
+                        diagnostic += "\n(仅保留最后 256 KiB)";
+                    diagnostic += "\n";
+                    if (contents.getSize() > 0)
+                        diagnostic += juce::String::fromUTF8(
+                            static_cast<const char*>(contents.getData()),
+                            static_cast<int>(contents.getSize()));
+                }
+            }
+        }
+    }
+    return diagnostic;
+}
+
 } // namespace OpenTune

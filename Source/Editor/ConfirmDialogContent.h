@@ -137,6 +137,22 @@ public:
         launch(content, parent);
     }
 
+    /** 诊断提示：显示摘要，按需将调用方准备好的诊断文本复制到系统剪贴板。 */
+    static void showDiagnostic(juce::Component* parent,
+                               const juce::String& title,
+                               const juce::String& summary,
+                               const juce::String& diagnosticText)
+    {
+        auto* content = new ConfirmDialogContent(title, summary,
+            {
+                { LOC(kCopy), [diagnosticText] {
+                    juce::SystemClipboard::copyTextToClipboard(diagnosticText);
+                } },
+                { LOC(kOK), nullptr, true }
+            });
+        launch(content, parent);
+    }
+
     // ============================================================================
     // Component overrides
     // ============================================================================

@@ -497,6 +497,16 @@ void OpenTuneAudioProcessorEditor::timerCallback()
                 pendingNoteGenerationOnReady_.erase(intentIt);
             }
         }
+        if (currentState == OriginalF0State::Failed
+            && (previous == lastObservedOriginalF0States_.end()
+                || previous->second != OriginalF0State::Failed)) {
+            const auto summary = juce::String::fromUTF8(u8"OriginalF0 未就绪。");
+            OpenTune::ConfirmDialogContent::showDiagnostic(
+                &contentRoot_,
+                "OriginalF0",
+                summary,
+                AppLogger::makeDiagnosticText("OriginalF0/FCPE", summary));
+        }
         lastObservedOriginalF0States_[contentKey] = currentState;
     };
 
