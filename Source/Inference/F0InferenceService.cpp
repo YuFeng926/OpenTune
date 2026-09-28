@@ -3,7 +3,6 @@
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/AppLogger.h"
 #include <onnxruntime_cxx_api.h>
-#include <shared_mutex>
 #include <algorithm>
 #include <condition_variable>
 
@@ -18,7 +17,7 @@ public:
     // initialize() 只保存配置并做文件存在性检查，不创建 ONNX session。
     // session 在 extractF0() 内按需创建、调用返回前析构。
     bool initialize(const std::string& modelDir, F0ModelType initialModel) {
-        std::unique_lock<std::shared_mutex> lock(extractorMutex_);
+        std::unique_lock<std::mutex> lock(extractorMutex_);
 
         if (initialized_.load(std::memory_order_acquire))
             return true;
@@ -112,7 +111,7 @@ public:
 
         ExtractionConfig config;
         {
-            std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+            std::lock_guard<std::mutex> lock(extractorMutex_);
             if (!initialized_.load(std::memory_order_acquire)) {
                 return Result<std::vector<float>>::failure(
                     ErrorCode::NotInitialized, "F0InferenceService not configured");
@@ -142,7 +141,7 @@ public:
 
                 // 缓存 hop/sample rate 供 getter 在 session 释放后使用
                 {
-                    std::unique_lock<std::shared_mutex> elock(extractorMutex_);
+                    std::unique_lock<std::mutex> elock(extractorMutex_);
                     f0HopSize_ = extractor->getHopSize();
                     f0SampleRate_ = extractor->getTargetSampleRate();
                 }
@@ -185,7 +184,7 @@ public:
     // 正在进行的 extractF0() 调用继续使用已快照的旧配置，
     // 下一次调用使用新模型；不同时存在新旧 session。
     bool setF0Model(F0ModelType type) {
-        std::unique_lock<std::shared_mutex> lock(extractorMutex_);
+        std::unique_lock<std::mutex> lock(extractorMutex_);
 
         if (type == currentModelType_)
             return true;
@@ -202,56 +201,56 @@ public:
     }
 
     F0ModelType getCurrentF0Model() const {
-        std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+        std::lock_guard<std::mutex> lock(extractorMutex_);
         return currentModelType_;
     }
 
     std::vector<F0ModelInfo> getAvailableF0Models() const {
         std::string modelDir;
         {
-            std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+            std::lock_guard<std::mutex> lock(extractorMutex_);
             modelDir = modelDir_;
         }
         return ModelFactory::getAvailableF0Models(modelDir);
     }
 
     void setConfidenceThreshold(float threshold) {
-        std::unique_lock<std::shared_mutex> lock(extractorMutex_);
+        std::unique_lock<std::mutex> lock(extractorMutex_);
         confidenceThreshold_ = threshold;
     }
 
     void setF0Min(float minFreq) {
-        std::unique_lock<std::shared_mutex> lock(extractorMutex_);
+        std::unique_lock<std::mutex> lock(extractorMutex_);
         f0Min_ = minFreq;
     }
 
     void setF0Max(float maxFreq) {
-        std::unique_lock<std::shared_mutex> lock(extractorMutex_);
+        std::unique_lock<std::mutex> lock(extractorMutex_);
         f0Max_ = maxFreq;
     }
 
     float getConfidenceThreshold() const {
-        std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+        std::lock_guard<std::mutex> lock(extractorMutex_);
         return confidenceThreshold_;
     }
 
     float getF0Min() const {
-        std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+        std::lock_guard<std::mutex> lock(extractorMutex_);
         return f0Min_;
     }
 
     float getF0Max() const {
-        std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+        std::lock_guard<std::mutex> lock(extractorMutex_);
         return f0Max_;
     }
 
     int getF0HopSize() const {
-        std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+        std::lock_guard<std::mutex> lock(extractorMutex_);
         return f0HopSize_;
     }
 
     int getF0SampleRate() const {
-        std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+        std::lock_guard<std::mutex> lock(extractorMutex_);
         return f0SampleRate_;
     }
 
@@ -272,7 +271,7 @@ private:
     std::shared_ptr<ResamplingManager> resamplingManager_;
     F0ModelType currentModelType_{F0ModelType::FCPE};
     std::string modelDir_;
-    mutable std::shared_mutex extractorMutex_;   // guards config fields (no session)
+    mutable std::mutex extractorMutex_;   // guards config fields (no session)
     std::atomic<bool> initialized_{false};
     // FCPE 默认值；session 释放后 getter 仍返回正确值。
     // set 参数后下一次 extractF0 创建的新 session 应继承。
