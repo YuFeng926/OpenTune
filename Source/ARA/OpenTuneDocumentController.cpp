@@ -73,12 +73,9 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
 {
-    // 先关闭 F0 completion 生命周期闸门：已进入的 completion 持锁完成后，
-    // 后续 completion 只会看到 closed，不再访问即将析构的 DC。
-    {
-        std::lock_guard<std::mutex> lock(completionGate_->mutex);
-        completionGate_->closed = true;
-    }
+    // DC/ARA model ownership、F0 completion 和 DC destruction 均在消息线程串行执行。
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    completionGate_->closed = true;
 
     // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
     // F0 Run（SetTerminate 加速返回）。不 join worker —— worker 是 detached
@@ -2070,6 +2067,9 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     juce::ARAAudioModification* hostModification,
     OriginalF0InputStamp stamp)
 {
+    // ARA model access and F0 completion admission belong to the DC message-thread owner.
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+
     // Pre-check failures: mark matching content Failed so Extracting is not permanent
     auto markFailedIfCurrentBirth = [&](uint64_t birth) {
         if (auto* m = findAudioModificationByContentKey(key))
@@ -2158,7 +2158,9 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
         [this, key, birthRevision, hostModification, stamp,
          completionGate = completionGate_](F0ExtractionService::Result&& result)
         {
-            std::lock_guard<std::mutex> lock(completionGate->mutex);
+            // F0 completion is delivered to the same message-thread owner as the DC/ARA model;
+            // DC destruction and this completion cannot concurrently access the model.
+            jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
             if (completionGate->closed)
                 return;
 
@@ -2187,22 +2189,26 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             {
                 if (auto* mod = findCurrentModification())
                 {
+                    auto* hostModificationToNotify = mod->audioModification;
                     mod->applyOriginalF0State(OriginalF0State::Failed);
-                    if (mod->audioModification != nullptr)
-                        mod->audioModification->notifyContentChanged(
-                            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
 
                     // Log the failure reason (result.errorMessage carries the worker-side failure cause)
                     AppLogger::error("ARA-F0: extraction failed key="
                         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
                         + " mod=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(mod))
                         + " reason=" + (result.errorMessage.empty() ? juce::String("no_data_or_unvoiced") : juce::String(result.errorMessage)));
+
+                    if (hostModificationToNotify != nullptr)
+                        hostModificationToNotify->notifyContentChanged(
+                            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
                 }
                 return;
             }
 
             if (auto* mod = findCurrentModification())
             {
+                auto* hostModificationToNotify = mod->audioModification;
+
                 // Rebuild pitchCurve from Result
                 auto pitchCurve = std::make_shared<PitchCurve>();
                 pitchCurve->setOriginalF0(result.f0);
@@ -2224,13 +2230,13 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 // 保存 stamp，确保后续 Read 可命中 same-input no-op
                 mod->originalF0InputStamp = stamp;
 
-                if (mod->audioModification != nullptr)
-                    mod->audioModification->notifyContentChanged(
-                        juce::ARAContentUpdateScopes::tuningIsAffected(),
-                        true);
-
                 // F0 commit → form "committed data → request current version render" transaction
                 requestFullModificationRender(key);
+
+                if (hostModificationToNotify != nullptr)
+                    hostModificationToNotify->notifyContentChanged(
+                        juce::ARAContentUpdateScopes::tuningIsAffected(),
+                        true);
             }
         });
 

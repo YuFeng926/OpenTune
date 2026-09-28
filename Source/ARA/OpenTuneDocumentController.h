@@ -13,7 +13,6 @@
 #include "AudioModification.h"
 #include "AudioSource.h"
 #include "../Render/ContentRenderService.h"
-#include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
 #include "../Content/ContentKey.h"
 #include "../Utils/PlayHeadState.h"
@@ -199,10 +198,13 @@ private:
     std::atomic<std::uint64_t> playbackCommandState_{0};
     void markPlaybackRequest(bool shouldPlay) noexcept;
 
-    // F0 completion 生命周期闸门：关闭后，已排队 completion 不再访问 DC；
-    // 已进入的 completion 持锁完成全部 owner 访问后，析构才可继续。
-    std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate_{
-        std::make_shared<ProcessRenderRuntime::CompletionGate>()};
+    // DC/ARA model ownership、F0 completion 和 DC destruction 均遵守消息线程契约。
+    // gate 只由消息线程访问；排队 completion 持有 shared_ptr，先检查 closed 再访问 DC。
+    struct CompletionGate
+    {
+        bool closed{false};
+    };
+    std::shared_ptr<CompletionGate> completionGate_{std::make_shared<CompletionGate>()};
 
     // Document-level shared PlayHeadState: all ARA roles within this document
     // share one canonical transport truth. Any processor's processBlock writes;
