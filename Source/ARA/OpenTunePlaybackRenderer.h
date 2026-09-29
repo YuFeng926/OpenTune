@@ -19,6 +19,14 @@ struct RenderBlockSpan
     double overlapStartSeconds{0.0};
 };
 
+// JUCE ARA playback semantics: realtime calls render only while the host is
+// playing; offline/non-realtime calls may still render while stopped.
+inline bool shouldRenderPlaybackBlock(juce::AudioProcessor::Realtime realtime,
+                                      bool isPlaying) noexcept
+{
+    return realtime != juce::AudioProcessor::Realtime::yes || isPlaying;
+}
+
 inline std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockStartSeconds,
                                                                     int blockSamples,
                                                                     double hostSampleRate,
@@ -48,6 +56,37 @@ inline std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockS
     span.destinationStartSample = destinationStartSample;
     span.samplesToCopy = destinationEndSample - destinationStartSample;
     span.overlapStartSeconds = overlapStartSeconds;
+    return span.samplesToCopy > 0 ? std::optional<RenderBlockSpan>(span) : std::nullopt;
+}
+
+inline std::optional<RenderBlockSpan> computeRegionBlockRenderSpanFromSamplePosition(
+    int64_t blockStartSample,
+    int blockSamples,
+    double hostSampleRate,
+    double playbackStartSeconds,
+    double playbackEndSeconds) noexcept
+{
+    if (blockSamples <= 0 || hostSampleRate <= 0.0)
+        return std::nullopt;
+
+    // Convert region boundaries once into the host sample domain. The block
+    // anchor is already in that domain, so no sample -> seconds -> sample
+    // round-trip is needed for the overlap or destination bounds.
+    const int64_t playbackStartSample = TimeCoordinate::secondsToSamplesFloor(
+        playbackStartSeconds, hostSampleRate);
+    const int64_t playbackEndSample = TimeCoordinate::secondsToSamplesCeil(
+        playbackEndSeconds, hostSampleRate);
+    const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(blockSamples);
+    const int64_t overlapStartSample = juce::jmax(blockStartSample, playbackStartSample);
+    const int64_t overlapEndSample = juce::jmin(blockEndSample, playbackEndSample);
+    if (!(overlapEndSample > overlapStartSample))
+        return std::nullopt;
+
+    RenderBlockSpan span;
+    span.destinationStartSample = static_cast<int>(overlapStartSample - blockStartSample);
+    span.samplesToCopy = static_cast<int>(overlapEndSample - overlapStartSample);
+    span.overlapStartSeconds = TimeCoordinate::samplesToSeconds(overlapStartSample,
+                                                                hostSampleRate);
     return span.samplesToCopy > 0 ? std::optional<RenderBlockSpan>(span) : std::nullopt;
 }
 

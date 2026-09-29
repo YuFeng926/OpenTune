@@ -670,6 +670,46 @@ bool testComputeRegionBlockRenderSpanFullAndNoOverlap()
     return !OpenTune::computeRegionBlockRenderSpan(1.0, 512, 48000.0, 0.5, 1.0).has_value();
 }
 
+// ARA block 起点使用绝对 sample position，再按 host sample rate 转为 overlap 秒坐标。
+bool testComputeRegionBlockRenderSpanFromSamplePosition()
+{
+    const auto span = OpenTune::computeRegionBlockRenderSpanFromSamplePosition(
+        /*blockStartSample=*/48000,
+        /*blockSamples=*/512,
+        /*hostSampleRate=*/48000.0,
+        /*playbackStartSeconds=*/0.9995,
+        /*playbackEndSeconds=*/1.0005);
+    if (!span)
+        return false;
+
+    // 48000 samples @ 48kHz = 1.0s; only the first 24 samples overlap.
+    if (span->destinationStartSample != 0
+        || span->samplesToCopy != 24
+        || !nearlyEqual(span->overlapStartSeconds, 1.0))
+        return false;
+
+    // Region boundaries are projected to host samples before the overlap is
+    // calculated; the returned start is therefore anchored to sample 48000.
+    const auto sampleAnchored = OpenTune::computeRegionBlockRenderSpanFromSamplePosition(
+        /*blockStartSample=*/48000,
+        /*blockSamples=*/512,
+        /*hostSampleRate=*/48000.0,
+        /*playbackStartSeconds=*/1.0 + (0.25 / 48000.0),
+        /*playbackEndSeconds=*/1.0 + (23.5 / 48000.0));
+    return sampleAnchored.has_value()
+        && sampleAnchored->destinationStartSample == 0
+        && sampleAnchored->samplesToCopy == 24
+        && nearlyEqual(sampleAnchored->overlapStartSeconds, 1.0);
+}
+
+bool testARAPlaybackRendererRealtimeStopGate()
+{
+    using Realtime = juce::AudioProcessor::Realtime;
+    return !OpenTune::shouldRenderPlaybackBlock(Realtime::yes, false)
+        && OpenTune::shouldRenderPlaybackBlock(Realtime::yes, true)
+        && OpenTune::shouldRenderPlaybackBlock(Realtime::no, false);
+}
+
 // TimeGrid makeFromHandles: 总时长守恒、tauForward/tauInverse 锚点位精确、越界 clamp。
 bool testTimeGridMakeFromHandlesDurationAndAnchors()
 {
@@ -937,6 +977,18 @@ int main()
     if (!testComputeRegionBlockRenderSpanFullAndNoOverlap())
     {
         std::fputs("FAIL: computeRegionBlockRenderSpan full/no overlap\n", stderr);
+        return 1;
+    }
+
+    if (!testComputeRegionBlockRenderSpanFromSamplePosition())
+    {
+        std::fputs("FAIL: computeRegionBlockRenderSpan sample-position mapping\n", stderr);
+        return 1;
+    }
+
+    if (!testARAPlaybackRendererRealtimeStopGate())
+    {
+        std::fputs("FAIL: ARA playback renderer realtime stop gate\n", stderr);
         return 1;
     }
 

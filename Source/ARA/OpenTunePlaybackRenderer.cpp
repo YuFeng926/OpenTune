@@ -161,27 +161,30 @@ void OpenTunePlaybackRenderer::releaseResources()
 }
 
 bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
-                                             juce::AudioProcessor::Realtime /*realtime*/,
+                                             juce::AudioProcessor::Realtime realtime,
                                              const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
     const int numSamples = buffer.getNumSamples();
     buffer.clear();
 
-    auto crs = std::atomic_load_explicit(&contentRenderServiceSnapshot_, std::memory_order_acquire);
-    const auto plan = currentPlan_.load(std::memory_order_acquire);
-    const auto positionTime = positionInfo.getTimeInSeconds();
-
-    if (crs == nullptr || plan == nullptr || plan->items.empty() || !positionTime.hasValue())
+    if (!shouldRenderPlaybackBlock(realtime, positionInfo.getIsPlaying()))
         return true;
 
-    const double blockStartSeconds = *positionTime;
+    auto crs = std::atomic_load_explicit(&contentRenderServiceSnapshot_, std::memory_order_acquire);
+    const auto plan = currentPlan_.load(std::memory_order_acquire);
+    const auto timeInSamples = positionInfo.getTimeInSamples();
+
+    if (crs == nullptr || plan == nullptr || plan->items.empty() || !timeInSamples.hasValue())
+        return true;
+
     for (const auto& region : plan->items)
     {
-        const auto overlap = computeRegionBlockRenderSpan(blockStartSeconds,
-                                                           numSamples,
-                                                           hostSampleRate_,
-                                                           region.startInPlaybackTime,
-                                                           region.endInPlaybackTime());
+        const auto overlap = computeRegionBlockRenderSpanFromSamplePosition(
+            *timeInSamples,
+            numSamples,
+            hostSampleRate_,
+            region.startInPlaybackTime,
+            region.endInPlaybackTime());
         if (!overlap.has_value())
             continue;
 
