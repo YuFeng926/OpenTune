@@ -22,14 +22,12 @@ gratefully acknowledge the work of their authors.
 - **Project**: https://github.com/avaneev/r8brain-free-src
 - **Use**: Polyphase 24-bit sample rate conversion
 
-### Rubber Band Library 4.0.0
-- **License**: GNU GPL v2 or later (see LICENSES/rubberband.GPL-2.0.txt)
-- **Project**: https://breakfastquay.com/rubberband/
-- **Author**: Chris Cannam, Particular Programs Ltd.
-- **Use**: ⚡️ vocal-time-stretch v7 — high-quality time-stretching engine
-  driving Stage 2 of the two-stage render pipeline. Configured with
-  Offline mode + R3 (`OptionEngineFiner`) + transient preservation +
-  formant preservation for vocal-friendly retiming.
+### SoundTouch 2.3.3
+- **License**: GNU LGPL v2.1 (see LICENSES/soundtouch.LGPL-2.1.txt)
+- **Project**: https://www.surina.net/soundtouch/
+- **Author**: Olli Parviainen
+- **Use**: WSOLA time-stretching engine driving Stage 2 of the two-stage
+  render pipeline (vocal-friendly retiming).
 
 ## AI Models
 

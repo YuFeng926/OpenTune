@@ -47,7 +47,11 @@ JUCE-master/
 AGENTS.md
 CLAUDE.md
 MACOS_PORT.md
+# Installer / packaging / release chain (local only)
 Installer/
+scripts/build-ninja.ps1
+scripts/package-windows.ps1
+scripts/validate-windows-release.ps1
 ThirdParty/
 
 Resources/PianoSamples/

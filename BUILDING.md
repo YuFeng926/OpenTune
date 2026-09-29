@@ -85,6 +85,8 @@ ThirdParty/
 - **CPU 包** (`onnxruntime-win-x64-1.24.4`)：提供 C++ API 头文件（`onnxruntime_cxx_api.h`）。
 - **DML 包** (`onnxruntime-dml-1.24.4`)：提供编译了 DirectML Execution Provider 的原始 `onnxruntime.dll` 和 `dml_provider_factory.h`。CMake 根据项目内 `.def` 生成 `OpenTuneOnnxRuntime_1_24_4.lib`，并把源 DLL 改名部署为 `OpenTuneOnnxRuntime_1_24_4.dll`。
 
+**运行时解析顺序（Windows）**：应用优先加载自身目录中的 `OpenTuneOnnxRuntime_<版本>.dll`（Standalone 为 exe 同目录，VST3 为 bundle 的 `Contents\x86_64-win`），`Program Files\OpenTune` 共享安装只作兜底——避免旧安装静默遮蔽随包分发的那一份。文件名中的 ORT 版本号即 ABI 契约：升级 ONNX Runtime 必须同步修改 `OPENTUNE_ORT_DLL_NAME` 与安装器 `[Files]` 中的源文件名（两处不一致时 ISCC 会直接编译失败，不会静默打错包）；旧版本文件由安装器 `[InstallDelete]` 的 `OpenTuneOnnxRuntime_*.dll` 通配符清理，`scripts/validate-windows-release.ps1` 从 CMakeLists 读取期望名并断言产物中恰好一份。模型由安装器统一装到 `%ProgramData%\OpenTune\Models`，独立版与 VST3 共用一份（便携 ZIP 仍随包放在 exe 同目录）。
+
 **macOS (Intel, x86_64)**：
 
 macOS Intel 使用仓库中现有的 universal2 包（实际按 x86_64 构建），CoreML EP 已内置。该运行库最低支持 macOS 13.4：
@@ -206,6 +208,19 @@ cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --b
 cmake --preset windows-ara-ninja
 cmake --build --preset windows-ara-ninja-release
 ```
+
+Release 构建完成后，发布前必须校验 Standalone 产物。`scripts/build-ninja.ps1`
+在 Release 构建结束时会自动执行同一校验；也可以单独执行：
+
+```powershell
+.\scripts\validate-windows-release.ps1
+```
+
+校验会确认 `OpenTune.exe` 为当前 `CMakeLists.txt` 中的版本，并确认
+ONNX Runtime、DirectML、D3D12 和 FCPE/HifiGAN 模型都位于同一套 Release 产物中。
+校验通过后使用 `scripts/package-windows.ps1` 编译 Inno Setup 安装包；该脚本会在
+调用 Inno Setup 前再次执行校验，避免直接把旧的 `build-ara-ninja` 产物打进新版安装包。
+安装器完成后还会验证安装目录中的文件和 exe 版本；验证失败会中止安装流程。
 
 同一个 ARA2 VST3 二进制在未绑定 ARA 的普通 VST3 宿主中会自然回退到 Capture 流程，
 不再单独生成 non-ARA 插件。

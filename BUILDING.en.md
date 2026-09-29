@@ -85,6 +85,8 @@ ThirdParty/
 - **CPU package** (`onnxruntime-win-x64-1.24.4`): Provides C++ API headers (`onnxruntime_cxx_api.h`).
 - **DML package** (`onnxruntime-dml-1.24.4`): Provides the original `onnxruntime.dll` with compiled DirectML Execution Provider and `dml_provider_factory.h`. CMake generates `OpenTuneOnnxRuntime_1_24_4.lib` based on the project's `.def` file and renames the source DLL to `OpenTuneOnnxRuntime_1_24_4.dll` for deployment.
 
+**Runtime resolution order (Windows)**: the app loads `OpenTuneOnnxRuntime_<version>.dll` from its own directory first (next to the Standalone executable, or in the VST3 bundle's `Contents\x86_64-win`); the shared `Program Files\OpenTune` install is only a fallback, so a stale installation can never shadow the copy shipped with the binary. The ORT version in the file name is an ABI contract: bumping ONNX Runtime requires updating `OPENTUNE_ORT_DLL_NAME` and the source file name in the installer's `[Files]` section (if they diverge, ISCC fails the compile instead of packaging the wrong file); stale files are cleaned by the installer's `OpenTuneOnnxRuntime_*.dll` wildcard in `[InstallDelete]`, and `scripts/validate-windows-release.ps1` reads the expected name from CMakeLists and asserts that exactly one copy exists. The installer places models in `%ProgramData%\OpenTune\Models`, shared by the Standalone and the VST3 (the portable ZIP still ships them next to the executable).
+
 **macOS (Intel, x86_64)**:
 
 macOS Intel uses the existing universal2 package from the repository (built as x86_64), with CoreML EP built in. This runtime requires macOS 13.4 or later:
@@ -206,6 +208,22 @@ cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --b
 cmake --preset windows-ara-ninja
 cmake --build --preset windows-ara-ninja-release
 ```
+
+Before packaging a Release build, validate the Standalone artifact. The
+`scripts/build-ninja.ps1` script runs the same validation automatically after
+a Release build; it can also be run directly:
+
+```powershell
+.\scripts\validate-windows-release.ps1
+```
+
+The validation checks that `OpenTune.exe` matches the version in
+`CMakeLists.txt` and that the ONNX Runtime, DirectML, D3D12, FCPE, and HifiGAN
+files are present in the same Release artifact. Build the Inno Setup installer
+only through `scripts/package-windows.ps1`; it runs the validation again before
+calling Inno Setup, preventing stale `build-ara-ninja` files from being packed
+into a new installer. The installer also validates the installed files and
+executable version after installation and aborts on failure.
 
 The same ARA2 VST3 binary will naturally fall back to the Capture workflow in standard VST3 hosts without ARA binding, and no separate non-ARA plugin is generated.
 

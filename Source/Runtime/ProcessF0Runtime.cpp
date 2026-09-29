@@ -51,11 +51,15 @@ bool ProcessF0Runtime::initialize(const std::string& modelsDir, F0ModelType init
     if (ready_.load(std::memory_order_acquire))
         return true;
 
-    if (!ModelPathResolver::ensureOnnxRuntimeLoaded())
+    std::string onnxLoadReport;
+    if (!ModelPathResolver::ensureOnnxRuntimeLoaded(&onnxLoadReport))
     {
-        AppLogger::log("ProcessF0Runtime: ensureOnnxRuntimeLoaded failed");
+        AppLogger::log("ProcessF0Runtime: ensureOnnxRuntimeLoaded failed: "
+            + juce::String(onnxLoadReport));
         return false;
     }
+    AppLogger::log("ProcessF0Runtime: onnxRuntime=" + juce::String(onnxLoadReport)
+        + " modelsDir=" + juce::String(modelsDir));
 
     AccelerationDetector::getInstance().detect();
 

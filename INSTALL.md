@@ -40,3 +40,7 @@ OpenTune/
 └── docs/
     └── UserGuide.html
 ```
+
+> 上表为 ZIP 便携版布局（模型与 exe 同目录）。用安装器安装时，模型统一放在
+> `%ProgramData%\OpenTune\Models`，由独立版与 VST3/ARA 共用一份；其余文件结构相同。
+> 自定义安装目录不影响模型解析（按"自带目录优先、共享目录兜底"顺序查找）。

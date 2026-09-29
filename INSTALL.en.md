@@ -40,3 +40,9 @@ OpenTune/
 └── docs/
     └── UserGuide.html
 ```
+
+> The layout above is the ZIP portable distribution (models next to the executable).
+> When installed with the installer, models live in `%ProgramData%\OpenTune\Models`
+> and are shared by the Standalone and the VST3/ARA plugin; everything else is the
+> same. A custom install directory does not affect model resolution (the resolver
+> looks in the module directory first and falls back to the shared locations).

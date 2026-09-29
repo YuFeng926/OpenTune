@@ -87,25 +87,23 @@ static HMODULE loadOnnxRuntimeFromCandidates()
 {
     const std::wstring programW6432 = getEnvVar(L"ProgramW6432");
     const std::wstring programFiles = !programW6432.empty() ? programW6432 : getEnvVar(L"ProgramFiles");
-    const std::wstring programData = getEnvVar(L"ProgramData");
     const std::wstring moduleDir = getModuleDirectory();
 
     std::vector<std::wstring> candidates;
 
     // 唯一 DLL 名 OpenTuneOnnxRuntime_1_24_4.dll：带版本后缀避免与宿主/DAW 自带的
     // 同名裸 DLL 撞名，插件场景下不会误载宿主的裸名 DLL。
+    // 顺序必须与 ModelPathResolver::ensureOnnxRuntimeLoaded 一致：模块目录优先，
+    // 系统共享安装路径只作兜底（ProgramData 从不部署运行时 DLL，不设候选）。
     // 优先搜索模块所在目录（Standalone应用最常见的部署方式）
     // 这是最常用的情况：DLL与exe在同一目录
     if (!moduleDir.empty()) {
         candidates.push_back(joinPath(moduleDir, L"OpenTuneOnnxRuntime_1_24_4.dll"));
     }
 
-    // 然后搜索系统安装路径（用于共享安装场景）
+    // 然后搜索系统共享安装路径（兜底）
     if (!programFiles.empty()) {
         candidates.push_back(joinPath(joinPath(programFiles, L"OpenTune"), L"OpenTuneOnnxRuntime_1_24_4.dll"));
-    }
-    if (!programData.empty()) {
-        candidates.push_back(joinPath(joinPath(programData, L"OpenTune"), L"OpenTuneOnnxRuntime_1_24_4.dll"));
     }
 
     for (const auto& p : candidates) {
