@@ -210,8 +210,11 @@ cmake --build --preset windows-ara-ninja-release
 ```
 
 Before packaging a Release build, validate the Standalone artifact. The
-`scripts/build-ninja.ps1` script runs the same validation automatically after
-a Release build; it can also be run directly:
+validation and packaging scripts are maintained locally and are not
+distributed with the repository (`scripts/build-ninja.ps1`,
+`scripts/validate-windows-release.ps1`, `scripts/package-windows.ps1`,
+`Installer/`). The `scripts/build-ninja.ps1` script runs the same validation
+automatically after a Release build; it can also be run directly:
 
 ```powershell
 .\scripts\validate-windows-release.ps1

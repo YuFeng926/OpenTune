@@ -209,8 +209,10 @@ cmake --preset windows-ara-ninja
 cmake --build --preset windows-ara-ninja-release
 ```
 
-Release 构建完成后，发布前必须校验 Standalone 产物。`scripts/build-ninja.ps1`
-在 Release 构建结束时会自动执行同一校验；也可以单独执行：
+Release 构建完成后，发布前必须校验 Standalone 产物。校验与打包脚本为本地维护，
+不随仓库分发（`scripts/build-ninja.ps1`、`scripts/validate-windows-release.ps1`、
+`scripts/package-windows.ps1`、`Installer/`），需从本机获取。
+`scripts/build-ninja.ps1` 在 Release 构建结束时会自动执行同一校验；也可以单独执行：
 
 ```powershell
 .\scripts\validate-windows-release.ps1
