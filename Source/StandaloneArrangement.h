@@ -141,7 +141,15 @@ public:
     bool insertPlacement(int trackId, Placement& placement);
     bool insertPlacement(int trackId, int insertIndex, Placement& placement);
     bool deletePlacementById(int trackId, uint64_t placementId, Placement* deletedOut = nullptr, int* deletedIndexOut = nullptr);
-    bool movePlacementToTrack(int sourceTrackId, int targetTrackId, uint64_t placementId, double newTimelineStartSeconds);
+    struct PlacementMove {
+        int sourceTrackId = -1;
+        int targetTrackId = -1;
+        uint64_t placementId = 0;
+        double newTimelineStartSeconds = 0.0;
+    };
+
+    enum class PlacementMoveResult { Applied, Unchanged, Rejected };
+    PlacementMoveResult applyPlacementMoves(const std::vector<PlacementMove>& moves);
     bool setPlacementTimelineStartSeconds(int trackId, uint64_t placementId, double timelineStartSeconds);
     bool setPlacementGain(int trackId, uint64_t placementId, float gain);
     bool setPlacementTrim(int trackId, uint64_t placementId, double clipInSeconds, double durationSeconds);

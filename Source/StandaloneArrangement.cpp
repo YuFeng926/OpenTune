@@ -406,44 +406,84 @@ bool StandaloneArrangement::deletePlacementById(int trackId,
     return true;
 }
 
-bool StandaloneArrangement::movePlacementToTrack(int sourceTrackId,
-                                                 int targetTrackId,
-                                                 uint64_t placementId,
-                                                 double newTimelineStartSeconds)
+StandaloneArrangement::PlacementMoveResult StandaloneArrangement::applyPlacementMoves(
+    const std::vector<StandaloneArrangement::PlacementMove>& moves)
 {
-    if (!isValidTrackId(sourceTrackId)
-        || !isValidTrackId(targetTrackId)
-        || sourceTrackId == targetTrackId
-        || placementId == 0) {
-        return false;
-    }
+    if (moves.empty())
+        return PlacementMoveResult::Unchanged;
 
     const juce::ScopedWriteLock lock(stateLock_);
-    auto& sourceTrack = tracks_[static_cast<size_t>(sourceTrackId)];
-    auto& targetTrack = tracks_[static_cast<size_t>(targetTrackId)];
-    const int sourceIndex = findPlacementIndexUnlocked(sourceTrackId, placementId);
-    if (sourceIndex < 0) {
-        return false;
+    for (size_t i = 0; i < moves.size(); ++i) {
+        const auto& move = moves[i];
+        if (!isValidTrackId(move.sourceTrackId)
+            || !isValidTrackId(move.targetTrackId)
+            || move.placementId == 0
+            || findPlacementIndexUnlocked(move.sourceTrackId, move.placementId) < 0) {
+            return PlacementMoveResult::Rejected;
+        }
+        const int sourceIndex = findPlacementIndexUnlocked(move.sourceTrackId, move.placementId);
+        if (tracks_[static_cast<size_t>(move.sourceTrackId)]
+                .placements[static_cast<size_t>(sourceIndex)].isRetired) {
+            return PlacementMoveResult::Rejected;
+        }
+        for (size_t j = 0; j < i; ++j) {
+            if (moves[j].placementId == move.placementId)
+                return PlacementMoveResult::Rejected;
+        }
     }
 
-    const int currentSelectedIndex = sourceTrack.selectedPlacementId == 0
-        ? -1
-        : findPlacementIndexUnlocked(sourceTrackId, sourceTrack.selectedPlacementId);
+    bool changed = false;
+    for (const auto& move : moves) {
+        const auto& placement = tracks_[static_cast<size_t>(move.sourceTrackId)]
+            .placements[static_cast<size_t>(findPlacementIndexUnlocked(move.sourceTrackId, move.placementId))];
+        if (move.sourceTrackId != move.targetTrackId
+            || placement.timelineStartSeconds != std::max(0.0, move.newTimelineStartSeconds)) {
+            changed = true;
+            break;
+        }
+    }
+    if (!changed)
+        return PlacementMoveResult::Unchanged;
 
-    Placement movedPlacement = sourceTrack.placements[static_cast<size_t>(sourceIndex)];
-    movedPlacement.timelineStartSeconds = std::max(0.0, newTimelineStartSeconds);
+    std::vector<Placement> movedPlacements;
+    movedPlacements.reserve(moves.size());
+    for (const auto& move : moves) {
+        const int sourceIndex = findPlacementIndexUnlocked(move.sourceTrackId, move.placementId);
+        movedPlacements.push_back(tracks_[static_cast<size_t>(move.sourceTrackId)]
+                                      .placements[static_cast<size_t>(sourceIndex)]);
+    }
 
-    sourceTrack.placements.erase(sourceTrack.placements.begin() + sourceIndex);
-    refreshSelectedPlacementUnlocked(sourceTrackId,
-                                     selectIndexAfterErase(currentSelectedIndex,
-                                                           sourceIndex,
-                                                           static_cast<int>(sourceTrack.placements.size())));
+    for (const auto& move : moves) {
+        if (move.sourceTrackId == move.targetTrackId)
+            continue;
+        auto& sourceTrack = tracks_[static_cast<size_t>(move.sourceTrackId)];
+        const int sourceIndex = findPlacementIndexUnlocked(move.sourceTrackId, move.placementId);
+        const int currentSelectedIndex = sourceTrack.selectedPlacementId == 0
+            ? -1
+            : findPlacementIndexUnlocked(move.sourceTrackId, sourceTrack.selectedPlacementId);
+        sourceTrack.placements.erase(sourceTrack.placements.begin() + sourceIndex);
+        refreshSelectedPlacementUnlocked(move.sourceTrackId,
+                                         selectIndexAfterErase(currentSelectedIndex,
+                                                               sourceIndex,
+                                                               static_cast<int>(sourceTrack.placements.size())));
+    }
 
-    targetTrack.placements.push_back(std::move(movedPlacement));
-    targetTrack.selectedPlacementId = placementId;
-    activeTrackId_ = targetTrackId;
+    for (size_t i = 0; i < moves.size(); ++i) {
+        const auto& move = moves[i];
+        auto& placement = movedPlacements[i];
+        placement.timelineStartSeconds = std::max(0.0, move.newTimelineStartSeconds);
+        if (move.sourceTrackId == move.targetTrackId) {
+            const int index = findPlacementIndexUnlocked(move.sourceTrackId, move.placementId);
+            tracks_[static_cast<size_t>(move.sourceTrackId)].placements[static_cast<size_t>(index)] = std::move(placement);
+        } else {
+            auto& targetTrack = tracks_[static_cast<size_t>(move.targetTrackId)];
+            targetTrack.placements.push_back(std::move(placement));
+            targetTrack.selectedPlacementId = move.placementId;
+            activeTrackId_ = move.targetTrackId;
+        }
+    }
     publishPlaybackSnapshotLocked();
-    return true;
+    return PlacementMoveResult::Applied;
 }
 
 bool StandaloneArrangement::setPlacementTimelineStartSeconds(int trackId,

@@ -152,37 +152,23 @@ void MultiMovePlacementAction::applySelection(const PlacementKey& key)
 void MultiMovePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    for (const auto& entry : entries_) {
-        if (entry.sourceTrackId == entry.targetTrackId) {
-            arrangement->setPlacementTimelineStartSeconds(entry.targetTrackId,
-                                                          entry.placementId,
-                                                          entry.oldStartSeconds);
-        } else {
-            processor_.movePlacementToTrack(entry.targetTrackId,
-                                            entry.sourceTrackId,
-                                            entry.placementId,
-                                            entry.oldStartSeconds);
-        }
-    }
-    applySelection(primaryBefore_);
+    std::vector<StandaloneArrangement::PlacementMove> moves;
+    moves.reserve(entries_.size());
+    for (const auto& entry : entries_)
+        moves.push_back({entry.targetTrackId, entry.sourceTrackId, entry.placementId, entry.oldStartSeconds});
+    if (arrangement->applyPlacementMoves(moves) != StandaloneArrangement::PlacementMoveResult::Rejected)
+        applySelection(primaryBefore_);
 }
 
 void MultiMovePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    for (const auto& entry : entries_) {
-        if (entry.sourceTrackId == entry.targetTrackId) {
-            arrangement->setPlacementTimelineStartSeconds(entry.targetTrackId,
-                                                          entry.placementId,
-                                                          entry.newStartSeconds);
-        } else {
-            processor_.movePlacementToTrack(entry.sourceTrackId,
-                                            entry.targetTrackId,
-                                            entry.placementId,
-                                            entry.newStartSeconds);
-        }
-    }
-    applySelection(primaryAfter_);
+    std::vector<StandaloneArrangement::PlacementMove> moves;
+    moves.reserve(entries_.size());
+    for (const auto& entry : entries_)
+        moves.push_back({entry.sourceTrackId, entry.targetTrackId, entry.placementId, entry.newStartSeconds});
+    if (arrangement->applyPlacementMoves(moves) != StandaloneArrangement::PlacementMoveResult::Rejected)
+        applySelection(primaryAfter_);
 }
 
 // ============================================================================

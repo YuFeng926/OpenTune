@@ -4153,21 +4153,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
     return true;
 }
 
-// ============================================================================
-// Placement Movement (Standalone-only)
-// ============================================================================
-
-#if JucePlugin_Build_Standalone
-bool OpenTuneAudioProcessor::movePlacementToTrack(int sourceTrackId,
-                                                  int targetTrackId,
-                                                  uint64_t placementId,
-                                                  double newTimelineStartSeconds)
-{
-    jassert(standaloneArrangement_ != nullptr);
-    return standaloneArrangement_->movePlacementToTrack(sourceTrackId, targetTrackId, placementId, newTimelineStartSeconds);
-}
-#endif // JucePlugin_Build_Standalone
-
 void OpenTuneAudioProcessor::updateContentKeyFromOriginalF0(ContentKey key)
 {
     auto snap = getContentSnapshot(key);

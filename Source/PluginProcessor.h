@@ -325,11 +325,6 @@ public:
                                                        const ImportPlacement& placement,
                                                        uint64_t sourceId = 0);
 
-    bool movePlacementToTrack(int sourceTrackId,
-                              int targetTrackId,
-                              uint64_t placementId,
-                              double newTimelineStartSeconds);
-
     // Clipboard for arrangement clip copy/paste
     PlacementClipboard& getClipClipboard() { return clipClipboard_; }
 

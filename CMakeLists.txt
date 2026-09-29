@@ -1471,4 +1471,19 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneContentSnapshotProjectionTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME ContentSnapshotProjectionTests COMMAND OpenTuneContentSnapshotProjectionTests)
+
+    add_executable(OpenTuneStandaloneArrangementMoveTests
+        Tests/StandaloneArrangementMoveTests.cpp
+    )
+    target_include_directories(OpenTuneStandaloneArrangementMoveTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneStandaloneArrangementMoveTests PRIVATE
+        OpenTuneStandalone
+        juce::juce_audio_basics
+        juce::juce_core
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneStandaloneArrangementMoveTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME StandaloneArrangementMoveTests COMMAND OpenTuneStandaloneArrangementMoveTests)
 endif()

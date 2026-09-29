@@ -77,15 +77,6 @@ inline ContentKey getStandaloneContentKey(OpenTuneAudioProcessor& processor,
         : ContentKey{};
 }
 
-inline bool moveStandalonePlacement(OpenTuneAudioProcessor& processor,
-                                    int sourceTrackId,
-                                    int targetTrackId,
-                                    uint64_t placementId,
-                                    double newStartSeconds)
-{
-    return processor.movePlacementToTrack(sourceTrackId, targetTrackId, placementId, newStartSeconds);
-}
-
 inline bool getStandalonePlacementStartSeconds(OpenTuneAudioProcessor& processor,
                                                int trackId,
                                                uint64_t placementId,

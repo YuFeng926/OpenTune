@@ -343,7 +343,7 @@ private:
                                                  int trackDelta) const;
 
     std::vector<MoveDragStartState> resolveMoveDragParticipants(const HitTestResult& hit) const;
-    void beginMoveDrag(const HitTestResult& hit, juce::Point<int> mousePos);
+    bool beginMoveDrag(const HitTestResult& hit, juce::Point<int> mousePos);
     void finishMoveDrag(const juce::MouseEvent& e);
 
     bool isDraggingPlacement_{false};

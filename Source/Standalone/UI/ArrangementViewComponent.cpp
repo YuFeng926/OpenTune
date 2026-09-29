@@ -501,19 +501,6 @@ uint64_t hashCombine(uint64_t seed, uint64_t value) noexcept
     return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
 }
 
-bool setStandalonePlacementStartSeconds(OpenTuneAudioProcessor& processor,
-                                        int trackId,
-                                        uint64_t placementId,
-                                        double startSeconds)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr
-        && trackId >= 0
-        && trackId < OpenTuneAudioProcessor::MAX_TRACKS
-        && placementId != 0
-        && arrangement->setPlacementTimelineStartSeconds(trackId, placementId, startSeconds);
-}
-
 bool setStandalonePlacementGain(OpenTuneAudioProcessor& processor,
                                 int trackId,
                                 uint64_t placementId,
@@ -1468,15 +1455,17 @@ std::vector<ArrangementViewComponent::MoveDragStartState>
 ArrangementViewComponent::resolveMoveDragParticipants(const HitTestResult& hit) const
 {
     const uint64_t hitPlacementId = processor_.getPlacementId(hit.trackId, hit.placementIndex);
-    jassert(hitPlacementId != 0);
+    if (hitPlacementId == 0)
+        return {};
 
     std::vector<MoveDragStartState> states;
 
-    const auto addState = [&](int trackId, uint64_t placementId)
+    const auto addState = [&](int trackId, uint64_t placementId) -> bool
     {
         StandaloneArrangement::Placement placement;
-        [[maybe_unused]] const bool found = getStandalonePlacementById(processor_, trackId, placementId, placement);
-        jassert(found);
+        const bool found = getStandalonePlacementById(processor_, trackId, placementId, placement);
+        if (!found)
+            return false;
 
         states.push_back({
             trackId,
@@ -1485,32 +1474,39 @@ ArrangementViewComponent::resolveMoveDragParticipants(const HitTestResult& hit) 
             placement.durationSeconds,
             placement.name
         });
+        return true;
     };
 
     if (isPlacementSelected(hit.trackId, hitPlacementId))
     {
         for (const auto& key : selectedPlacements_)
-            addState(key.trackId, key.placementId);
+            if (!addState(key.trackId, key.placementId))
+                return {};
     }
     else
     {
-        addState(hit.trackId, hitPlacementId);
+        if (!addState(hit.trackId, hitPlacementId))
+            return {};
     }
 
     return states;
 }
 
-void ArrangementViewComponent::beginMoveDrag(const HitTestResult& hit, juce::Point<int> mousePos)
+bool ArrangementViewComponent::beginMoveDrag(const HitTestResult& hit, juce::Point<int> mousePos)
 {
     moveDragStartStates_.clear();
 
     const uint64_t hitPlacementId = processor_.getPlacementId(hit.trackId, hit.placementIndex);
-    jassert(hitPlacementId != 0);
+    if (hitPlacementId == 0)
+        return false;
     moveDragPrimaryStart_ = {hit.trackId, hitPlacementId};
 
     moveDragStartStates_ = resolveMoveDragParticipants(hit);
+    if (moveDragStartStates_.empty())
+        return false;
     dragStartPos_ = mousePos;
     dragCurrentPos_ = mousePos;
+    return true;
 }
 
 auto ArrangementViewComponent::resolveMoveDragTarget(
@@ -1538,16 +1534,14 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
     const int trackDelta = trackIdForViewportY(e.y) - moveDragPrimaryStart_.trackId;
 
     std::vector<MultiMovePlacementAction::Entry> undoEntries;
+    std::vector<StandaloneArrangement::PlacementMove> moves;
     std::set<PlacementSelectionKey> movedSelection;
     PlacementSelectionKey primaryAfterMove{-1, 0};
 
     for (const auto& state : moveDragStartStates_) {
         const auto target = resolveMoveDragTarget(state, deltaSeconds, trackDelta);
 
-        if (target.trackId == state.trackId)
-            setStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, target.startSeconds);
-        else
-            moveStandalonePlacement(processor_, state.trackId, target.trackId, state.placementId, target.startSeconds);
+        moves.push_back({state.trackId, target.trackId, state.placementId, target.startSeconds});
 
         undoEntries.push_back({state.trackId, target.trackId, state.placementId, state.startSeconds, target.startSeconds});
         movedSelection.insert({target.trackId, state.placementId});
@@ -1558,6 +1552,10 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
         }
     }
 
+    auto* arrangement = processor_.getStandaloneArrangement();
+    if (arrangement->applyPlacementMoves(moves) != StandaloneArrangement::PlacementMoveResult::Applied)
+        return;
+
     const PlacementKey primaryBefore{moveDragPrimaryStart_.trackId, moveDragPrimaryStart_.placementId};
     const PlacementKey primaryAfter{primaryAfterMove.trackId, primaryAfterMove.placementId};
     processor_.getUndoManager().addAction(
@@ -1567,16 +1565,16 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
     selectedPlacements_ = std::move(movedSelection);
     jassert(primaryAfterMove.trackId >= 0 && primaryAfterMove.placementId != 0);
     commitPlacementSelection(primaryAfterMove);
+    listeners_.call([this](Listener& l) {
+        l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+    });
 
     moveDragStartStates_.clear();
     currentDragOp_ = DragOperation::None;
     isDraggingPlacement_ = false;
 
-            listeners_.call([this](Listener& l) {
-                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
-            });
-            invalidateStableScene();
-        }
+    invalidateStableScene();
+}
 
 void ArrangementViewComponent::drawImportDropPreview(juce::Graphics& g)
 {
@@ -2302,7 +2300,11 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 
     if (currentDragOp_ == DragOperation::Move)
     {
-        beginMoveDrag(hit, e.getPosition());
+        if (!beginMoveDrag(hit, e.getPosition()))
+        {
+            currentDragOp_ = DragOperation::None;
+            isDraggingPlacement_ = false;
+        }
         return;
     }
 
