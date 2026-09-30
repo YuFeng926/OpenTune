@@ -1375,6 +1375,8 @@ message(STATUS "")
 # Tests (optional; the state-codec test links JUCE Core only)
 # ==============================================================================
 option(OPENTUNE_BUILD_TESTS "Build AutoTune tests" OFF)
+option(OPENTUNE_ENABLE_APPROVED_BACKPRESSURE_TEST
+       "Register the backpressure test only with an approved blocking-synthesize injector" OFF)
 if(OPENTUNE_BUILD_TESTS)
     enable_testing()
     add_executable(OpenTuneAutoTuneTests
@@ -1486,4 +1488,96 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneStandaloneArrangementMoveTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME StandaloneArrangementMoveTests COMMAND OpenTuneStandaloneArrangementMoveTests)
+
+    # Render/ARA contract tests use the production objects and their real worker
+    # threads.  They intentionally link the application target instead of
+    # providing test doubles for the render backends.
+    foreach(render_contract IN ITEMS
+            RenderRuntimeLifecycleTests
+            RenderRuntimeBackpressureTests
+            RenderRuntimeStressTests
+            ARALifecycleContractTests
+            RenderRuntimePerformanceTests)
+        add_executable(${render_contract} Tests/${render_contract}.cpp)
+        target_include_directories(${render_contract} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${ONNXRUNTIME_INCLUDE_DIR}
+            ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
+            ${ARA_SDK_PATH})
+        target_link_libraries(${render_contract} PRIVATE
+            OpenTune
+            juce::juce_audio_basics
+            juce::juce_core
+            juce::juce_events)
+        if(MSVC)
+            target_compile_options(${render_contract} PRIVATE /utf-8 /EHsc)
+        endif()
+        if((NOT render_contract STREQUAL "RenderRuntimeBackpressureTests"
+             OR (OPENTUNE_ENABLE_APPROVED_BACKPRESSURE_TEST
+                 AND EXISTS "${HIFIGAN_MODEL_COMMUNITY}"))
+           AND NOT render_contract STREQUAL "RenderRuntimePerformanceTests")
+            add_test(NAME ${render_contract} COMMAND ${render_contract})
+            set_tests_properties(${render_contract} PROPERTIES
+                TIMEOUT 30
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                ENVIRONMENT "OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
+        else()
+            message(STATUS "Not registering RenderRuntimeBackpressureTests: approved blocking-synthesize injector is unavailable")
+        endif()
+        if(WIN32)
+            add_custom_command(TARGET ${render_contract} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_DLL}"
+                    "$<TARGET_FILE_DIR:${render_contract}>/${OPENTUNE_ORT_DLL_NAME}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DIRECTML_DLL}"
+                    "$<TARGET_FILE_DIR:${render_contract}>/DirectML.dll"
+                COMMENT "Copying inference runtime DLLs to ${render_contract}...")
+        endif()
+    endforeach()
+
+    # Performance is only a test when the user-provided baseline/threshold
+    # contract exists.  A placeholder executable must not be reported as a
+    # performance regression or silently pass without approved parameters.
+    set(OPENTUNE_PERFORMANCE_BASELINE_FILE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/performance-baseline.json"
+        CACHE FILEPATH "Approved performance baseline and thresholds")
+    if(NOT EXISTS "${OPENTUNE_PERFORMANCE_BASELINE_FILE}")
+        message(STATUS "Not registering RenderRuntimePerformanceTests: approved baseline is unavailable")
+    else()
+        add_test(NAME RenderRuntimePerformanceTests COMMAND RenderRuntimePerformanceTests)
+        set_tests_properties(RenderRuntimePerformanceTests PROPERTIES
+            TIMEOUT 30
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+
+    set(OPENTUNE_HIFIGAN_TEST_MODEL "${HIFIGAN_MODEL_COMMUNITY}")
+    target_compile_definitions(RenderRuntimeBackpressureTests PRIVATE
+        OPENTUNE_HIFIGAN_MODEL_PATH="${OPENTUNE_HIFIGAN_TEST_MODEL}")
+
+    # Linking the production SharedCode into the runtime lifecycle tests pulls
+    # the JUCE ARA model object implementations.  Keep the SDK plug-in side
+    # dispatch test-only, just as for the dedicated ARA host harness.
+    foreach(_runtime_contract IN ITEMS RenderRuntimeLifecycleTests RenderRuntimeStressTests)
+        target_sources(${_runtime_contract} PRIVATE
+            "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
+            "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
+            "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
+            "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelArrangement.cpp")
+    endforeach()
+
+    # Real SDK host/plugin-dispatch lifecycle harness.  This is deliberately a
+    # test-only link; the shipping targets do not enable JUCE_PLUGINHOST_ARA or
+    # JUCE_PLUGINHOST_VST3.
+    target_sources(ARALifecycleContractTests PRIVATE
+        "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAHostDispatch.cpp"
+        "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
+        "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
+        "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
+        "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelArrangement.cpp"
+    )
+    target_include_directories(ARALifecycleContractTests PRIVATE
+        "${ARA_SDK_PATH}/ARA_Library"
+        "${ARA_SDK_PATH}/ARA_API"
+    )
 endif()

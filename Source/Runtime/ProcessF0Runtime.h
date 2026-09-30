@@ -3,10 +3,15 @@
 #include <memory>
 #include <string>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include "../Inference/IF0Extractor.h"
+#include "../Inference/INoteGenerator.h"
 
 namespace Ort { struct Env; }
 
@@ -56,6 +61,13 @@ public:
      */
     std::vector<Note> generateNotes(const NoteGeneratorInput& input);
 
+    bool submitNotes(NoteGeneratorInput input,
+                     std::function<void(std::vector<Note>)> completion);
+
+    // Stops and joins the process-level GAME worker.  Must be called by the
+    // process owner after its F0 owners have stopped submitting work.
+    void shutdown() noexcept;
+
 private:
     ProcessF0Runtime() = default;
     ~ProcessF0Runtime() = default;
@@ -70,6 +82,19 @@ private:
     std::atomic<bool> ready_{false};
     mutable std::mutex initMutex_;
     mutable std::mutex gameMutex_;  // 进程级 GAME 推理串行互斥
+
+    struct GameJob {
+        NoteGeneratorInput input;
+        std::function<void(std::vector<Note>)> completion;
+    };
+    std::mutex gameQueueMutex_;
+    std::mutex gameLifecycleMutex_;
+    std::condition_variable gameQueueCv_;
+    std::deque<GameJob> gameQueue_;
+    std::thread gameWorker_;
+    bool gameStopping_{false}; // gameQueueMutex_ protected
+
+    void gameWorkerLoop();
 
     ProcessF0Runtime(const ProcessF0Runtime&) = delete;
     ProcessF0Runtime& operator=(const ProcessF0Runtime&) = delete;

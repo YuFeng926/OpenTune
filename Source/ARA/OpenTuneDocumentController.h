@@ -1,14 +1,18 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_events/juce_events.h>
 
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <map>
 #include <optional>
+#include <list>
 #include <vector>
+#include <deque>
 #include <functional>
+#include <mutex>
 
 #include "AudioModification.h"
 #include "AudioSource.h"
@@ -25,7 +29,8 @@ class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class ResamplingManager;
 struct RenderJob;
-class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
+class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation,
+                                   private juce::Timer
 {
 public:
     struct PlaybackRegionProjection
@@ -165,7 +170,7 @@ private:
                                           std::shared_ptr<const EditableContentSnapshot> snapshot);
 
     std::vector<AudioSource> audioSources_;
-    std::vector<AudioModification> audioModifications_;
+    std::list<AudioModification> audioModifications_;
     std::vector<PlaybackRegion> playbackRegions_;
     std::vector<juce::ARAPlaybackRegion*> editorSelectionPlaybackRegions_;
     std::vector<OpenTunePlaybackRenderer*> playbackRenderers_;
@@ -200,11 +205,23 @@ private:
 
     // DC/ARA model ownership、F0 completion 和 DC destruction 均遵守消息线程契约。
     // gate 只由消息线程访问；排队 completion 持有 shared_ptr，先检查 closed 再访问 DC。
+    struct F0CompletionRecord
+    {
+        F0ExtractionService::Result result;
+        ContentKey key;
+        uint64_t wrapperGeneration{0};
+        juce::String persistentId;
+        uint64_t birthRevision{0};
+        OriginalF0InputStamp stamp;
+    };
     struct CompletionGate
     {
+        std::mutex mutex;
         bool closed{false};
+        std::deque<F0CompletionRecord> pending;
     };
     std::shared_ptr<CompletionGate> completionGate_{std::make_shared<CompletionGate>()};
+    uint64_t nextWrapperGeneration_{1};
 
     // Document-level shared PlayHeadState: all ARA roles within this document
     // share one canonical transport truth. Any processor's processBlock writes;
@@ -266,12 +283,16 @@ private:
     bool scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate,
-                                   juce::ARAAudioModification* hostModification,
+                                   uint64_t wrapperGeneration,
+                                   juce::String persistentId,
                                    OriginalF0InputStamp stamp);
+    void timerCallback() override;
+    void commitF0Completion(F0CompletionRecord record);
     static OriginalF0InputStamp makeF0InputStamp(const AudioSource& source, const AudioModification& modification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void installDocumentRenderExecution();
-    void processDocumentRenderJob(RenderJob& job);
+    static void processDocumentRenderJob(std::shared_ptr<ContentRenderService> contentRenderService,
+                                         RenderJob& job);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)

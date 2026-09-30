@@ -1,18 +1,26 @@
 #include "RenderWorker.h"
 #include "../Runtime/ProcessRenderRuntime.h"
+#include "../Utils/AppLogger.h"
 #include <algorithm>
+#include <iterator>
 #include <set>
 
 namespace OpenTune {
 
 RenderWorker::RenderWorker()
 {
+    asyncControl_ = std::make_shared<AsyncState::Control>();
+    asyncControl_->workerCv = &cv_;
     thread_ = std::thread([this] { loop(); });
 }
 
 RenderWorker::~RenderWorker()
 {
     stop();
+    {
+        std::lock_guard<std::mutex> lk(asyncControl_->mutex);
+        asyncControl_->workerCv = nullptr;
+    }
 }
 
 void RenderWorker::stop()
@@ -20,7 +28,25 @@ void RenderWorker::stop()
     if (!thread_.joinable())
         return;
 
+    if (thread_.get_id() == std::this_thread::get_id())
+    {
+        jassertfalse;
+        return;
+    }
+
     stopping_.store(true);
+    {
+        std::lock_guard<std::mutex> lk(asyncControl_->mutex);
+        asyncControl_->closed = true;
+    }
+    std::deque<RenderJob> discarded;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        discarded = std::move(queue_);
+    }
+    for (const auto& job : discarded)
+        if (job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr)
+            job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
     cv_.notify_all();
     thread_.join();
 }
@@ -36,23 +62,42 @@ void RenderWorker::attachExecutionLease(RenderExecutionLease lease)
         std::lock_guard<std::mutex> lk(mutex_);
         lease_ = std::move(lease);
     }
+    {
+        std::lock_guard<std::mutex> lk(asyncControl_->mutex);
+        asyncControl_->closed = false;
+    }
     resume();
 }
 
 void RenderWorker::detachExecutionLease(void* owner)
 {
+    std::deque<RenderJob> discardedJobs;
     {
         std::lock_guard<std::mutex> lk(mutex_);
         if (lease_.owner != owner)
             return;
-        // 立即清 lease：worker 之后取出的 job leaseCopy 无效 → 只递减 inFlight_ 不执行回调
         lease_ = RenderExecutionLease{};
-        queue_.clear(); // 丢弃排队 job（无 lease 可执行）
+        discardedJobs = std::move(queue_);
+    }
+    {
+        std::lock_guard<std::mutex> lk(asyncControl_->mutex);
+        asyncControl_->closed = true;
     }
     cv_.notify_all();
-    // 等待正在执行的 renderJobCallback 完成（其回调访问 owner，owner 仍在析构中存活）
+    for (const auto& job : discardedJobs)
+    {
+        if (job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr)
+            job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
+    }
+
+    {
+        std::unique_lock<std::mutex> lk(mutex_);
+        cv_.wait(lk, [this] { return inFlight_ == 0; });
+    }
     std::unique_lock<std::mutex> lk(mutex_);
-    cv_.wait(lk, [this] { return inFlight_ == 0; });
+    cv_.wait(lk, [this] {
+        return inFlight_ == 0 && asyncControl_->count.load(std::memory_order_acquire) == 0;
+    });
 }
 
 // ============================================================
@@ -79,8 +124,10 @@ void RenderWorker::syncStage1QueueLocked(const RenderJob& templateJob)
 
     const auto* cache = templateJob.renderCache.get();
 
-    const auto pendingChunkStarts = templateJob.renderCache->getPendingChunkStarts();
-    const std::set<int64_t> desired(pendingChunkStarts.begin(), pendingChunkStarts.end());
+    const auto pendingJobs = templateJob.renderCache->getPendingJobs();
+    std::set<int64_t> desired;
+    for (const auto& pending : pendingJobs)
+        desired.insert(pending.startSample);
 
     queue_.erase(std::remove_if(queue_.begin(), queue_.end(),
         [cache, &desired](const RenderJob& queued) {
@@ -89,13 +136,17 @@ void RenderWorker::syncStage1QueueLocked(const RenderJob& templateJob)
                 && desired.count(queued.queuedChunkStartSample) == 0;
         }), queue_.end());
 
-    for (const auto startSample : pendingChunkStarts)
+    for (const auto& pending : pendingJobs)
     {
+        const auto startSample = pending.startSample;
         const bool alreadyQueued = std::any_of(queue_.begin(), queue_.end(),
-            [cache, startSample](const RenderJob& queued) {
+            [cache, &pending](const RenderJob& queued) {
                 return queued.kind == RenderJob::Kind::Stage1Render
                     && queued.renderCache.get() == cache
-                    && queued.queuedChunkStartSample == startSample;
+                    && queued.queuedChunkStartSample == pending.startSample
+                    && queued.startSample == pending.startSample
+                    && queued.endSampleExclusive == pending.endSampleExclusive
+                    && queued.targetRevision == pending.targetRevision;
             });
         if (alreadyQueued)
         {
@@ -112,6 +163,9 @@ void RenderWorker::syncStage1QueueLocked(const RenderJob& templateJob)
         }
 
         RenderJob queued = templateJob;
+        queued.startSample = pending.startSample;
+        queued.endSampleExclusive = pending.endSampleExclusive;
+        queued.targetRevision = pending.targetRevision;
         queued.queuedChunkStartSample = startSample;
         enqueueLocked(std::move(queued));
     }
@@ -119,22 +173,40 @@ void RenderWorker::syncStage1QueueLocked(const RenderJob& templateJob)
 
 void RenderWorker::discardStage1Queue(RenderCache* cache)
 {
-    std::lock_guard<std::mutex> lk(mutex_);
-    queue_.erase(std::remove_if(queue_.begin(), queue_.end(),
-        [cache](const RenderJob& queued) {
-            return queued.kind == RenderJob::Kind::Stage1Render
-                && queued.renderCache.get() == cache;
-        }), queue_.end());
+    std::deque<RenderJob> discarded;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        auto it = std::stable_partition(queue_.begin(), queue_.end(),
+            [cache](const RenderJob& queued) {
+                return !(queued.kind == RenderJob::Kind::Stage1Render
+                    && queued.renderCache.get() == cache);
+            });
+        discarded.insert(discarded.end(), std::make_move_iterator(it),
+                         std::make_move_iterator(queue_.end()));
+        queue_.erase(it, queue_.end());
+    }
+    for (const auto& job : discarded)
+        if (job.renderCache != nullptr)
+            job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
     cv_.notify_all();
 }
 
 void RenderWorker::discardAllStage1Queue()
 {
-    std::lock_guard<std::mutex> lk(mutex_);
-    queue_.erase(std::remove_if(queue_.begin(), queue_.end(),
-        [](const RenderJob& queued) {
-            return queued.kind == RenderJob::Kind::Stage1Render;
-        }), queue_.end());
+    std::deque<RenderJob> discarded;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        auto it = std::stable_partition(queue_.begin(), queue_.end(),
+            [](const RenderJob& queued) {
+                return queued.kind != RenderJob::Kind::Stage1Render;
+            });
+        discarded.insert(discarded.end(), std::make_move_iterator(it),
+                         std::make_move_iterator(queue_.end()));
+        queue_.erase(it, queue_.end());
+    }
+    for (const auto& job : discarded)
+        if (job.renderCache != nullptr)
+            job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
     cv_.notify_all();
 }
 
@@ -182,20 +254,43 @@ void RenderWorker::enqueueLocked(RenderJob job)
     queue_.insert(insertIt, std::move(job));
 }
 
-void RenderWorker::beginAsyncJob()
+std::shared_ptr<RenderWorker::AsyncState> RenderWorker::beginAsyncJob()
 {
-    std::lock_guard<std::mutex> lk(mutex_);
-    ++asyncInFlight_;
+    auto state = std::make_shared<AsyncState>();
+    state->control = asyncControl_;
+    std::lock_guard<std::mutex> lk(state->control->mutex);
+    if (state->control->closed)
+        return {};
+    state->control->count.fetch_add(1, std::memory_order_acq_rel);
+    return state;
 }
 
-void RenderWorker::completeAsyncJob()
+void RenderWorker::completeAsyncJob(const std::shared_ptr<AsyncState>& state) noexcept
 {
+    if (state == nullptr)
+        return;
+    if (state->control == nullptr)
+        return;
+    std::condition_variable* workerCv = nullptr;
     {
-        std::lock_guard<std::mutex> lk(mutex_);
-        jassert(asyncInFlight_ > 0);
-        --asyncInFlight_;
+        std::lock_guard<std::mutex> lk(state->control->mutex);
+        auto count = state->control->count.load(std::memory_order_acquire);
+        if (count <= 0)
+            return;
+        state->control->count.store(count - 1, std::memory_order_release);
+        workerCv = state->control->workerCv;
     }
-    cv_.notify_one();
+    state->control->cv.notify_all();
+    if (workerCv != nullptr)
+        workerCv->notify_all();
+}
+
+bool RenderWorker::isAsyncJobClosed(const std::shared_ptr<AsyncState>& state) noexcept
+{
+    if (state == nullptr || state->control == nullptr)
+        return true;
+    std::lock_guard<std::mutex> lk(state->control->mutex);
+    return state->control->closed;
 }
 
 // ============================================================
@@ -228,7 +323,18 @@ void RenderWorker::drain()
     // 导出路径依赖此语义（导出前确保最新完整数据已落盘）。
     // enqueue/worker 循环/completeAsyncJob 在状态变化后 notify，谓词等待无忙等。
     std::unique_lock<std::mutex> lk(mutex_);
-    cv_.wait(lk, [this] { return queue_.empty() && inFlight_ == 0 && asyncInFlight_ == 0; });
+    cv_.wait(lk, [this] {
+        return queue_.empty() && inFlight_ == 0
+            && asyncControl_->count.load(std::memory_order_acquire) == 0;
+    });
+}
+
+void RenderWorker::waitAsyncIdle()
+{
+    std::unique_lock<std::mutex> lk(asyncControl_->mutex);
+    asyncControl_->cv.wait(lk, [this] {
+        return asyncControl_->count.load(std::memory_order_acquire) == 0;
+    });
 }
 
 // ============================================================
@@ -246,13 +352,18 @@ void RenderWorker::loop()
         {
             std::unique_lock<std::mutex> lk(mutex_);
             cv_.wait(lk, [this] {
-                return stopping_.load() || (!paused_ && asyncInFlight_ == 0 && !queue_.empty());
+                return stopping_.load()
+                    || (!paused_
+                        && asyncControl_->count.load(std::memory_order_acquire) == 0
+                        && !queue_.empty());
             });
 
             if (stopping_.load())
                 break;
 
-            if (!paused_ && asyncInFlight_ == 0 && !queue_.empty())
+            if (!paused_
+                && asyncControl_->count.load(std::memory_order_acquire) == 0
+                && !queue_.empty())
             {
                 job = std::move(queue_.front());
                 queue_.pop_front();
@@ -263,13 +374,12 @@ void RenderWorker::loop()
                 {
                     if (job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr)
                     {
-                        RenderCache::PendingJob pendingJob;
-                        if (job.renderCache->claimPendingJob(
-                                job.queuedChunkStartSample, pendingJob))
+                        RenderCache::PendingJob expectedJob;
+                        expectedJob.startSample = job.startSample;
+                        expectedJob.endSampleExclusive = job.endSampleExclusive;
+                        expectedJob.targetRevision = job.targetRevision;
+                        if (job.renderCache->claimPendingJob(expectedJob))
                         {
-                            job.startSample = pendingJob.startSample;
-                            job.endSampleExclusive = pendingJob.endSampleExclusive;
-                            job.targetRevision = pendingJob.targetRevision;
                             hasJob = true;
                         }
                     }
@@ -281,16 +391,38 @@ void RenderWorker::loop()
             }
         }
 
+        struct InFlightGuard final
+        {
+            RenderWorker& worker;
+            ~InFlightGuard() noexcept
+            {
+                {
+                    std::lock_guard<std::mutex> lk(worker.mutex_);
+                    --worker.inFlight_;
+                }
+                worker.cv_.notify_all();
+            }
+        } guard{*this};
+
         if (hasJob)
         {
-            leaseCopy.renderJobCallback(job);
+            try
+            {
+                leaseCopy.renderJobCallback(job);
+            }
+            catch (const std::exception& e)
+            {
+                AppLogger::error("[RenderWorker] render callback threw: " + juce::String(e.what()));
+                if (job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr)
+                    job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
+            }
+            catch (...)
+            {
+                AppLogger::error("[RenderWorker] render callback threw unknown exception");
+                if (job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr)
+                    job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
+            }
         }
-
-        {
-            std::lock_guard<std::mutex> lk(mutex_);
-            --inFlight_;
-        }
-        cv_.notify_all(); // 唤醒 drain()/detachExecutionLease() 等 inFlight_ 归零的等待者
     }
 }
 

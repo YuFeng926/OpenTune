@@ -192,12 +192,24 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
 {
     if (!completion.chunkSettled)
         return;
-    std::lock_guard<std::mutex> lk(completion.gate->mutex);
-    if (!completion.gate->closed)
-        completion.chunkSettled(job.contentKey,
-                                job.contentSnapshot,
-                                job.audioBuffer,
-                                job.audioSampleRate);
+    const auto gate = completion.gate;
+    auto callback = completion.chunkSettled;
+    const auto key = job.contentKey;
+    auto snapshot = job.contentSnapshot;
+    auto audioBuffer = job.audioBuffer;
+    const auto sampleRate = job.audioSampleRate;
+    const bool posted = juce::MessageManager::callAsync(
+        [gate, callback = std::move(callback), key,
+         snapshot = std::move(snapshot), audioBuffer = std::move(audioBuffer), sampleRate]() mutable {
+            {
+                std::lock_guard<std::mutex> lk(gate->mutex);
+                if (gate->closed)
+                    return;
+            }
+            callback(key, std::move(snapshot), std::move(audioBuffer), sampleRate);
+        });
+    if (!posted)
+        AppLogger::error("[ProcessRenderRuntime] settled completion dispatcher rejected; hard lifecycle failure");
 }
 
 void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completion,
@@ -208,12 +220,20 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
 {
     if (!completion.chunkSettled)
         return;
-    std::lock_guard<std::mutex> lk(completion.gate->mutex);
-    if (!completion.gate->closed)
-        completion.chunkSettled(key,
-                                std::move(contentSnapshot),
-                                std::move(audioBuffer),
-                                audioSampleRate);
+    const auto gate = completion.gate;
+    auto callback = completion.chunkSettled;
+    const bool posted = juce::MessageManager::callAsync(
+        [gate, callback = std::move(callback), key,
+         contentSnapshot = std::move(contentSnapshot), audioBuffer = std::move(audioBuffer), audioSampleRate]() mutable {
+            {
+                std::lock_guard<std::mutex> lk(gate->mutex);
+                if (gate->closed)
+                    return;
+            }
+            callback(key, std::move(contentSnapshot), std::move(audioBuffer), audioSampleRate);
+        });
+    if (!posted)
+        AppLogger::error("[ProcessRenderRuntime] settled completion dispatcher rejected; hard lifecycle failure");
 }
 
 void notifyChunkFailed(const ProcessRenderRuntime::CompletionContext& completion,
@@ -221,9 +241,19 @@ void notifyChunkFailed(const ProcessRenderRuntime::CompletionContext& completion
 {
     if (!completion.chunkFailed)
         return;
-    std::lock_guard<std::mutex> lk(completion.gate->mutex);
-    if (!completion.gate->closed)
-        completion.chunkFailed(key);
+    const auto gate = completion.gate;
+    auto callback = completion.chunkFailed;
+    const bool posted = juce::MessageManager::callAsync(
+        [gate, callback = std::move(callback), key]() mutable {
+            {
+                std::lock_guard<std::mutex> lk(gate->mutex);
+                if (gate->closed)
+                    return;
+            }
+            callback(key);
+        });
+    if (!posted)
+        AppLogger::error("[ProcessRenderRuntime] failed completion dispatcher rejected; hard lifecycle failure");
 }
 
 void failChunk(const ProcessRenderRuntime::CompletionContext& completion,
@@ -355,18 +385,51 @@ RenderCache::ChunkRenderResult publishChunkWithPerNoteEq(
 
 ProcessRenderRuntime& ProcessRenderRuntime::getInstance()
 {
-    // 进程寿命 heap singleton：不注册静态析构（DLL detach 持 loader lock，
-    // 不得在静态析构中 join 工作线程）。VST3 构建中模块已被 pin
-    // （Vst3ModulePin.cpp），domain 与 control worker 存活到进程退出；
-    // vocoderDomain_ 只经 setVocoderModelWeight() / resetVocoder() /
-    // resetInferenceBackend() 在 control worker 上显式重建。
-    static auto* instance = new ProcessRenderRuntime;
+    static ProcessRenderRuntime* instance = new ProcessRenderRuntime();
     return *instance;
+}
+
+void ProcessRenderRuntime::retainOwner()
+{
+    std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
+    if (ownerCount_.load(std::memory_order_acquire) == 0
+        && shuttingDown_.load(std::memory_order_acquire))
+    {
+        // A new host instance may appear after the previous last instance was
+        // destroyed.  Complete the already-requested one-shot shutdown before
+        // reopening the process runtime; this prevents a new owner from
+        // inheriting a joined worker and a permanently closed command queue.
+        workerExitCv_.wait(lifecycleLock, [this]() {
+            return workerExitDispatchAttempted_.load(std::memory_order_acquire);
+        });
+        lifecycleLock.unlock();
+        if (!workerExitDispatchPosted_.load(std::memory_order_acquire))
+            finishShutdown();
+        lifecycleLock.lock();
+
+        {
+            std::lock_guard<std::mutex> controlLock(controlMutex_);
+            ensureVocoderQueued_ = false;
+            activeTransaction_.reset();
+            controlQueue_.clear();
+        }
+        workerExitDispatchAttempted_.store(false, std::memory_order_release);
+        workerExitDispatchPosted_.store(false, std::memory_order_release);
+        shuttingDown_.store(false, std::memory_order_release);
+        controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
+    }
+    ownerCount_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ProcessRenderRuntime::releaseOwner() noexcept
+{
+    if (ownerCount_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        shutdown();
 }
 
 ProcessRenderRuntime::ProcessRenderRuntime()
 {
-    // 启动前从持久化配置读取 vocoder 模型权重，确保首次 lazy 加载使用用户
+    // 启动前从持久化配置读取 vocoder 模型权重，确保首次 EnsureVocoder 使用用户
     // 实际选择的权重（而非硬编码默认值）。
     const auto prefs = AppPreferences().getState().shared.vocoderModelWeight;
     const auto modelsDir = ModelPathResolver::getModelsDirectory();
@@ -389,11 +452,117 @@ ProcessRenderRuntime::ProcessRenderRuntime()
         }
     }
 
-    // 进程寿命 control worker：模型切换/后端重置的耗时 Session 销毁、按当前
-    // 配置重建与 AccelerationDetector resetAndDetect 全部在此串行执行；UI 线程
-    // 只投递命令并立即返回。单例永不析构，线程随进程退出回收，绝不在实例
-    // 卸载路径 join。
     controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
+}
+
+ProcessRenderRuntime::~ProcessRenderRuntime()
+{
+}
+
+void ProcessRenderRuntime::shutdown()
+{
+    std::unique_lock<std::mutex> shutdownLock(shutdownMutex_);
+    if (shuttingDown_.exchange(true))
+    {
+        return;
+    }
+
+    std::shared_ptr<ControlTransaction> activeTransaction;
+    {
+        std::lock_guard<std::mutex> lock(controlMutex_);
+        ControlCommand stop;
+        stop.type = ControlCommand::Type::Stop;
+        controlQueue_.push_back(std::move(stop));
+        activeTransaction = activeTransaction_;
+    }
+    // A command already taken by the worker may be waiting for a
+    // message-thread ack.  Request its close; the control worker performs the
+    // one pause/resume and CRS release itself after it has stopped using the
+    // transaction.  shutdown() must not race that shared_ptr or resume CRS
+    // while the worker is still inside the command.
+    if (activeTransaction)
+    {
+        activeTransaction->closeRequested.store(true, std::memory_order_release);
+        activeTransaction->cv.notify_all();
+    }
+    controlCv_.notify_all();
+
+    // The worker posts finishShutdown() only after it has consumed Stop and
+    // released the Domain.  A message-thread caller must not wait here: the
+    // posted completion is the join handoff.  A non-message caller can wait
+    // for the worker's dispatcher attempt and synchronously join only when
+    // the dispatcher itself is unavailable.
+    auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
+    const bool onMessageThread = messageManager != nullptr
+        && messageManager->isThisTheMessageThread();
+    if (!onMessageThread)
+    {
+        workerExitCv_.wait(shutdownLock, [this]() {
+            return workerExitDispatchAttempted_.load(std::memory_order_acquire);
+        });
+        if (!workerExitDispatchPosted_.load(std::memory_order_acquire))
+        {
+            AppLogger::error("[ProcessRenderRuntime] worker-exit dispatcher rejected; synchronously joining");
+            shutdownLock.unlock();
+            finishShutdown();
+        }
+    }
+}
+
+void ProcessRenderRuntime::finishControlTransaction(
+    const std::shared_ptr<ControlTransaction>& transaction,
+    const char* reason) noexcept
+{
+    if (!claimControlTransaction(transaction))
+        return;
+    completeClaimedControlTransaction(transaction, reason);
+}
+
+void ProcessRenderRuntime::completeClaimedControlTransaction(
+    const std::shared_ptr<ControlTransaction>& transaction,
+    const char* reason) noexcept
+{
+    if (!transaction)
+        return;
+    if (transaction->crs)
+        transaction->crs->resumeRenderWorker();
+    transaction->crs.reset();
+    transaction->acked.store(true, std::memory_order_release);
+    AppLogger::info("[ProcessRenderRuntime] control transaction ack: " + juce::String(reason));
+    transaction->cv.notify_all();
+}
+
+bool ProcessRenderRuntime::claimControlTransaction(
+    const std::shared_ptr<ControlTransaction>& transaction) noexcept
+{
+    return transaction != nullptr
+        && !transaction->finishing.exchange(true, std::memory_order_acq_rel);
+}
+
+void ProcessRenderRuntime::finishShutdown()
+{
+    std::lock_guard<std::mutex> lifecycleLock(shutdownMutex_);
+    if (controlWorker_.joinable()
+        && controlWorker_.get_id() == std::this_thread::get_id())
+    {
+        AppLogger::error("[ProcessRenderRuntime] control worker self-join rejected; hard failure");
+        return;
+    }
+    if (controlWorker_.joinable())
+        controlWorker_.join();
+    std::vector<DeferredRetry> deferred;
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        deferred = std::move(deferredRetries_);
+        vocoderReconfiguring_ = false;
+    }
+    jassert(deferred.empty());
+
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        jassert(vocoderDomain_ == nullptr);
+    }
+
 }
 
 std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight)
@@ -431,7 +600,7 @@ std::unique_ptr<VocoderDomain> ProcessRenderRuntime::createVocoderDomain(const V
     return domain;
 }
 
-void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
+ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
 {
     std::unique_ptr<VocoderDomain> retiredDomain;
     VocoderModelWeight targetWeight;
@@ -439,9 +608,16 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
     {
         std::unique_lock<std::mutex> lock(vocoderMutex_);
 
+        if (shuttingDown_.load(std::memory_order_acquire))
+            return ControlResult::Failed;
+
         if (command.type == ControlCommand::Type::SetVocoderWeight
             && currentVocoderModelWeight_ == command.weight)
-            return;
+            return ControlResult::Unchanged;
+
+        if (command.type == ControlCommand::Type::EnsureVocoder
+            && vocoderDomain_ != nullptr)
+            return ControlResult::Unchanged;
 
         if (command.type == ControlCommand::Type::SetVocoderWeight)
             currentVocoderModelWeight_ = command.weight;
@@ -451,11 +627,26 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
         retiredDomain = std::move(vocoderDomain_); // O(1)：锁内只摘除所有权
         ++vocoderGeneration_;                      // 立即拒绝全部旧配置快照
 
-        vocoderStateCv_.wait(lock, [this] { return !vocoderInitializing_; });
     }
 
     // 唯一可能无界的路径：只阻塞进程寿命 control worker，不持任何 runtime 锁。
+    {
+        std::unique_lock<std::mutex> lock(vocoderMutex_);
+        domainSubmitCv_.wait(lock, [this] { return domainSubmitInFlight_ == 0; });
+    }
     retiredDomain.reset();
+
+    if (shuttingDown_.load(std::memory_order_acquire))
+    {
+        std::vector<DeferredRetry> failedRetries;
+        {
+            std::lock_guard<std::mutex> lock(vocoderMutex_);
+            vocoderReconfiguring_ = false;
+            failedRetries = std::move(deferredRetries_);
+        }
+        failDeferredRetries(std::move(failedRetries));
+        return ControlResult::Failed;
+    }
 
     if (command.type == ControlCommand::Type::ResetInferenceBackend)
     {
@@ -469,7 +660,8 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
     std::vector<DeferredRetry> readyRetries;
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
-        if (currentVocoderModelWeight_ == targetWeight)
+        if (!shuttingDown_.load(std::memory_order_acquire)
+            && currentVocoderModelWeight_ == targetWeight)
         {
             vocoderDomain_ = std::move(newDomain);
             if (vocoderDomain_ != nullptr)
@@ -478,15 +670,14 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
         vocoderReconfiguring_ = false;
         readyRetries = std::move(deferredRetries_);
     }
-    vocoderStateCv_.notify_all();
-
     // Flush deferred retries outside vocoderMutex_: new domain is already
     // published (or creation failed and vocoderDomain_ remains null).
     // Directly check domain presence — never call acquireVocoderConfig here
     // which would trigger recursive domain creation.
     const bool domainAvailable = [&]() {
         std::lock_guard<std::mutex> lk(vocoderMutex_);
-        return vocoderDomain_ != nullptr;
+        return !shuttingDown_.load(std::memory_order_acquire)
+            && vocoderDomain_ != nullptr;
     }();
 
     for (auto& retry : readyRetries)
@@ -494,8 +685,10 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
         if (domainAvailable)
         {
             if (auto crsShared = retry.crs.lock())
+            {
                 crsShared->requeueRenderChunk(retry.job);
-            continue;
+                continue;
+            }
         }
 
         if (retry.job.renderCache != nullptr
@@ -503,13 +696,56 @@ void ProcessRenderRuntime::reconfigureVocoder(const ControlCommand& command)
                 retry.job.startSample, retry.job.targetRevision))
             notifyChunkFailed(retry.completion, retry.job.contentKey);
     }
+    return domainAvailable ? ControlResult::Changed : ControlResult::Failed;
 }
 
 void ProcessRenderRuntime::postControlCommand(ControlCommand command)
 {
+    bool rejected = false;
     {
         std::lock_guard<std::mutex> lock(controlMutex_);
-        controlQueue_.push_back(std::move(command));
+        if (shuttingDown_.load())
+        {
+            AppLogger::error("[ProcessRenderRuntime] rejected control command during shutdown; Failed");
+            rejected = true;
+        }
+        else
+        {
+            if (command.type == ControlCommand::Type::EnsureVocoder)
+            {
+                if (ensureVocoderQueued_)
+                    return;
+                ensureVocoderQueued_ = true;
+            }
+            controlQueue_.push_back(std::move(command));
+        }
+    }
+
+    if (rejected)
+    {
+        auto transaction = std::move(command.transaction);
+        auto completion = std::move(command.completion);
+        auto finish = [transaction](const char* reason) mutable noexcept {
+            finishControlTransaction(transaction, reason);
+        };
+        const bool posted = juce::MessageManager::callAsync(
+            [completion = std::move(completion), finish, transaction]() mutable {
+                if (!claimControlTransaction(transaction))
+                    return;
+                try
+                {
+                    if (completion)
+                        completion(ControlResult::Failed);
+                }
+                catch (...)
+                {
+                    AppLogger::error("[ProcessRenderRuntime] rejected control completion threw");
+                }
+                completeClaimedControlTransaction(transaction, "shutdown rejection");
+            });
+        if (!posted)
+            finish("shutdown rejection dispatcher failure");
+        return;
     }
     controlCv_.notify_one();
 }
@@ -524,59 +760,202 @@ void ProcessRenderRuntime::controlWorkerLoop()
             controlCv_.wait(lock, [this]() { return !controlQueue_.empty(); });
             command = std::move(controlQueue_.front());
             controlQueue_.pop_front();
+            if (command.type == ControlCommand::Type::EnsureVocoder)
+                ensureVocoderQueued_ = false;
+            activeTransaction_ = command.transaction;
         }
 
-        reconfigureVocoder(command);
+        if (command.type == ControlCommand::Type::Stop)
+        {
+            std::vector<DeferredRetry> deferred;
+            std::unique_ptr<VocoderDomain> domain;
+            {
+                std::lock_guard<std::mutex> lock(vocoderMutex_);
+                deferred = std::move(deferredRetries_);
+                domain = std::move(vocoderDomain_);
+                vocoderReconfiguring_ = false;
+            }
 
-        if (command.completion)
-            juce::MessageManager::callAsync(std::move(command.completion));
+            // Stop uses the same submit-drain contract as reconfiguration.
+            // The raw domain pointer in submitVocoderJob is only valid while
+            // its in-flight counter is held.
+            {
+                std::unique_lock<std::mutex> lock(vocoderMutex_);
+                domainSubmitCv_.wait(lock, [this]() {
+                    return domainSubmitInFlight_ == 0;
+                });
+            }
+            for (auto& retry : deferred)
+            {
+                if (retry.job.renderCache != nullptr
+                    && retry.job.renderCache->completeChunkRenderFailure(
+                        retry.job.startSample, retry.job.targetRevision))
+                    notifyChunkFailed(retry.completion, retry.job.contentKey);
+            }
+            domain.reset();
+
+            // GAME inference is process-scoped and not cancellable.  Join its
+            // worker here, before publishing worker-exit, so the message
+            // thread only joins an already fully quiescent control worker.
+            ProcessF0Runtime::getInstance().shutdown();
+
+            const bool posted = juce::MessageManager::callAsync(
+                [this]() { finishShutdown(); });
+            workerExitDispatchPosted_.store(posted, std::memory_order_release);
+            workerExitDispatchAttempted_.store(true, std::memory_order_release);
+            workerExitCv_.notify_all();
+            if (!posted)
+                AppLogger::error("[ProcessRenderRuntime] worker-exit dispatcher rejected; hard lifecycle failure");
+            return;
+        }
+
+        ControlResult result = ControlResult::Failed;
+        try
+        {
+            if (command.transaction && command.transaction->crs)
+                command.transaction->crs->pauseRenderWorker();
+            result = reconfigureVocoder(command);
+        }
+        catch (const std::exception& e)
+        {
+            AppLogger::error("[ProcessRenderRuntime] control command failed: "
+                + juce::String(e.what()));
+            result = ControlResult::Failed;
+        }
+        catch (...)
+        {
+            AppLogger::error("[ProcessRenderRuntime] control command failed: unknown exception");
+            result = ControlResult::Failed;
+        }
+
+        if (command.type == ControlCommand::Type::EnsureVocoder)
+        {
+            std::lock_guard<std::mutex> lock(controlMutex_);
+            ensureVocoderQueued_ = false;
+        }
+
+        auto transaction = std::move(command.transaction);
+        auto completion = std::move(command.completion);
+        if (!transaction && !completion)
+            continue;
+        auto waitTransaction = transaction;
+        const bool posted = juce::MessageManager::callAsync(
+            [completion = std::move(completion), result, transaction]() mutable {
+                if (transaction && !claimControlTransaction(transaction))
+                    return;
+                try
+                {
+                    if (completion)
+                        completion(result);
+                }
+                catch (const std::exception& e)
+                {
+                    AppLogger::error("[ProcessRenderRuntime] control completion threw: "
+                        + juce::String(e.what()));
+                }
+                catch (...)
+                {
+                    AppLogger::error("[ProcessRenderRuntime] control completion threw unknown exception");
+                }
+                completeClaimedControlTransaction(transaction, "message completion");
+            });
+        if (!posted)
+        {
+            AppLogger::error("[ProcessRenderRuntime] control completion dispatcher rejected; Failed close fallback");
+            if (claimControlTransaction(transaction))
+                completeClaimedControlTransaction(transaction, "dispatcher rejected / Failed");
+        }
+        else if (waitTransaction)
+        {
+            std::unique_lock<std::mutex> lock(waitTransaction->mutex);
+            waitTransaction->cv.wait(lock, [this, &waitTransaction] {
+                return waitTransaction->acked.load(std::memory_order_acquire)
+                    || waitTransaction->closeRequested.load(std::memory_order_acquire);
+            });
+            const bool needsCloseFallback = !waitTransaction->acked.load(std::memory_order_acquire);
+            lock.unlock();
+            if (needsCloseFallback)
+                finishControlTransaction(waitTransaction, "shutdown close fallback");
+        }
+        {
+            std::lock_guard<std::mutex> lock(controlMutex_);
+            if (activeTransaction_ == waitTransaction)
+                activeTransaction_.reset();
+        }
     }
 }
 
-void ProcessRenderRuntime::setVocoderModelWeight(const VocoderModelWeight& weight, std::function<void()> completion)
+void ProcessRenderRuntime::setVocoderModelWeight(const VocoderModelWeight& weight,
+                                                 std::shared_ptr<ContentRenderService> crs,
+                                                 std::function<void(ControlResult)> completion)
 {
     // UI 线程只投递命令并立即返回；Session 销毁与重建由 control worker 串行执行。
     ControlCommand command;
     command.type = ControlCommand::Type::SetVocoderWeight;
     command.weight = weight;
+    command.transaction = std::make_shared<ControlTransaction>();
+    command.transaction->crs = std::move(crs);
     command.completion = std::move(completion);
     postControlCommand(std::move(command));
 }
 
-void ProcessRenderRuntime::resetVocoder(std::function<void()> completion)
+void ProcessRenderRuntime::resetVocoder(std::shared_ptr<ContentRenderService> crs,
+                                        std::function<void(ControlResult)> completion)
 {
     ControlCommand command;
     command.type = ControlCommand::Type::ResetVocoder;
+    command.transaction = std::make_shared<ControlTransaction>();
+    command.transaction->crs = std::move(crs);
     command.completion = std::move(completion);
     postControlCommand(std::move(command));
 }
 
-void ProcessRenderRuntime::resetInferenceBackend(bool forceCpu, std::function<void()> completion)
+void ProcessRenderRuntime::resetInferenceBackend(bool forceCpu,
+                                                 std::shared_ptr<ContentRenderService> crs,
+                                                 std::function<void(ControlResult)> completion)
 {
     ControlCommand command;
     command.type = ControlCommand::Type::ResetInferenceBackend;
     command.forceCpu = forceCpu;
+    command.transaction = std::make_shared<ControlTransaction>();
+    command.transaction->crs = std::move(crs);
     command.completion = std::move(completion);
     postControlCommand(std::move(command));
 }
 
 bool ProcessRenderRuntime::submitVocoderJob(VocoderDomain::Job job, uint64_t expectedGeneration)
 {
-    std::lock_guard<std::mutex> lock(vocoderMutex_);
-    if (vocoderDomain_ == nullptr)
-        return false;
-    if (vocoderGeneration_ != expectedGeneration)
-        return false;   // domain 已重建：job 配置过期，拒绝提交
-    return vocoderDomain_->submit(std::move(job));
+    VocoderDomain* domain = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        if (vocoderDomain_ == nullptr || vocoderGeneration_ != expectedGeneration)
+            return false;
+        ++domainSubmitInFlight_;
+        domain = vocoderDomain_.get();
+    }
+
+    bool submitted = false;
+    try
+    {
+        submitted = domain->submit(std::move(job));
+    }
+    catch (...)
+    {
+        submitted = false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        --domainSubmitInFlight_;
+    }
+    domainSubmitCv_.notify_all();
+    return submitted;
 }
 
 bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
 {
-    VocoderModelWeight targetWeight;
-    uint64_t creationGeneration = 0;
-
     {
-        std::unique_lock<std::mutex> lock(vocoderMutex_);
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
         if (vocoderDomain_ != nullptr)
         {
             out.generation = vocoderGeneration_;
@@ -586,64 +965,25 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
             return true;
         }
 
-        if (vocoderInitializing_)
-        {
-            vocoderStateCv_.wait(lock, [this] {
-                return !vocoderInitializing_ || vocoderReconfiguring_;
-            });
-
-            if (vocoderDomain_ != nullptr)
-            {
-                out.generation = vocoderGeneration_;
-                out.conditioningBins = vocoderDomain_->getConditioningBins();
-                out.conditioningType = vocoderDomain_->getConditioningType();
-                out.fMax = vocoderDomain_->getFMax();
-                return true;
-            }
-        }
-
         if (vocoderReconfiguring_)
             return false;
-
-        vocoderInitializing_ = true;
-        targetWeight = currentVocoderModelWeight_;
-        creationGeneration = vocoderGeneration_;
     }
 
-    // 首次模型加载在 RenderWorker 上锁外执行；UI 查询仍可取得短锁并立即返回。
-    auto newDomain = createVocoderDomain(targetWeight);
+    ControlCommand command;
+    command.type = ControlCommand::Type::EnsureVocoder;
+    postControlCommand(std::move(command));
+    return false;
+}
 
-    bool mayPublish = false;
-    bool published = false;
+void ProcessRenderRuntime::failDeferredRetries(std::vector<DeferredRetry> retries)
+{
+    for (auto& retry : retries)
     {
-        std::lock_guard<std::mutex> lock(vocoderMutex_);
-        mayPublish = !vocoderReconfiguring_
-            && vocoderInitializing_
-            && vocoderGeneration_ == creationGeneration
-            && currentVocoderModelWeight_ == targetWeight
-            && vocoderDomain_ == nullptr;
-
-        if (mayPublish && newDomain != nullptr)
-        {
-            vocoderDomain_ = std::move(newDomain);
-            ++vocoderGeneration_;
-            out.generation = vocoderGeneration_;
-            out.conditioningBins = vocoderDomain_->getConditioningBins();
-            out.conditioningType = vocoderDomain_->getConditioningType();
-            out.fMax = vocoderDomain_->getFMax();
-            published = true;
-        }
+        if (retry.job.renderCache != nullptr
+            && retry.job.renderCache->completeChunkRenderFailure(
+                retry.job.startSample, retry.job.targetRevision))
+            notifyChunkFailed(retry.completion, retry.job.contentKey);
     }
-
-    // 发布失败的新 domain 也必须在锁外销毁。保持 initializing=true 直到其清理
-    // 完成，防止 control worker 在旧初始化对象仍存在时创建第二个 Session。
-    newDomain.reset();
-    {
-        std::lock_guard<std::mutex> lock(vocoderMutex_);
-        vocoderInitializing_ = false;
-    }
-    vocoderStateCv_.notify_all();
-    return published;
 }
 
 bool ProcessRenderRuntime::isVocoderReady() const noexcept
@@ -664,13 +1004,28 @@ void ProcessRenderRuntime::deferOrRequeue(
     CompletionContext completion)
 {
     bool shouldDefer = false;
+    bool shuttingDown = false;
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
-        shouldDefer = vocoderReconfiguring_;
+        shuttingDown = shuttingDown_.load(std::memory_order_acquire);
+        shouldDefer = !shuttingDown && (vocoderReconfiguring_ || vocoderDomain_ == nullptr);
         if (shouldDefer)
             deferredRetries_.push_back({crs, std::move(job), std::move(completion)});
     }
-    if (!shouldDefer)
+    if (shuttingDown)
+    {
+        if (job.renderCache != nullptr
+            && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
+            notifyChunkFailed(completion, job.contentKey);
+        return;
+    }
+    if (shouldDefer)
+    {
+        ControlCommand command;
+        command.type = ControlCommand::Type::EnsureVocoder;
+        postControlCommand(std::move(command));
+    }
+    else
         crs->requeueRenderChunk(std::move(job));
 }
 
@@ -679,10 +1034,28 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                                                   bool lightPitchEnabled,
                                                   CompletionContext completion)
 {
+    const auto failureCache = job.renderCache;
+    const auto failureStartSample = job.startSample;
+    const auto failureRevision = job.targetRevision;
+    const auto failureContentKey = job.contentKey;
+    const auto failFrozen = [&]() {
+        failChunk(completion, failureCache.get(), failureStartSample,
+                  failureRevision, failureContentKey);
+    };
+
+    if (shuttingDown_.load(std::memory_order_acquire))
+    {
+        failFrozen();
+        return;
+    }
+
+    std::shared_ptr<RenderWorker::AsyncState> asyncCounter;
+    bool asyncSubmitted = false;
+    try
+    {
     if (crs == nullptr || job.renderCache == nullptr || !job.contentSnapshot || !job.audioBuffer)
     {
-        failChunk(completion, job.renderCache.get(), job.startSample,
-                  job.targetRevision, job.contentKey);
+        failFrozen();
         return;
     }
 
@@ -785,8 +1158,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     {
         if (!intersectsActiveEqNote)
         {
-            coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision);
-            notifyChunkSettled(completion, coreJob);
+            if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
+                notifyChunkSettled(completion, coreJob);
         }
         else
         {
@@ -814,8 +1187,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     {
         if (!intersectsActiveEqNote)
         {
-            coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision);
-            notifyChunkSettled(completion, coreJob);
+            if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
+                notifyChunkSettled(completion, coreJob);
         }
         else
         {
@@ -841,8 +1214,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     {
         if (!intersectsActiveEqNote)
         {
-            coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision);
-            notifyChunkSettled(completion, coreJob);
+            if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
+                notifyChunkSettled(completion, coreJob);
         }
         else
         {
@@ -867,8 +1240,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     {
         if (!intersectsActiveEqNote)
         {
-            coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision);
-            notifyChunkSettled(completion, coreJob);
+            if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
+                notifyChunkSettled(completion, coreJob);
         }
         else
         {
@@ -986,23 +1359,18 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     // domain，不存在跨域混用。
     if (!acquireVocoderConfig(vocoderCfg))
     {
-        if (isVocoderReconfiguring())
-        {
-            RenderJob requeueJob;
-            requeueJob.kind = RenderJob::Kind::Stage1Render;
-            requeueJob.contentKey = coreJob.contentKey;
-            requeueJob.renderCache = coreJob.renderCache;
-            requeueJob.contentSnapshot = contentSnap;
-            requeueJob.audioBuffer = coreJob.audioBuffer;
-            requeueJob.audioSampleRate = coreJob.audioSampleRate;
-            requeueJob.startSample = coreJob.startSample;
-            requeueJob.targetRevision = coreJob.targetRevision;
-            deferOrRequeue(crs, std::move(requeueJob), completion);
-            return;
-        }
-        AppLogger::log("RenderWorker: acquireVocoderConfig FAILED");
-        failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
-                  coreJob.targetRevision, coreJob.contentKey);
+        RenderJob requeueJob;
+        requeueJob.kind = RenderJob::Kind::Stage1Render;
+        requeueJob.contentKey = coreJob.contentKey;
+        requeueJob.renderCache = coreJob.renderCache;
+        requeueJob.contentSnapshot = contentSnap;
+        requeueJob.audioBuffer = coreJob.audioBuffer;
+        requeueJob.audioSampleRate = coreJob.audioSampleRate;
+        requeueJob.startSample = coreJob.startSample;
+        requeueJob.endSampleExclusive = coreJob.endSampleExclusive;
+        requeueJob.queuedChunkStartSample = coreJob.startSample;
+        requeueJob.targetRevision = coreJob.targetRevision;
+        deferOrRequeue(crs, std::move(requeueJob), completion);
         return;
     }
 
@@ -1104,7 +1472,14 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const int64_t jobStartSample = boundaries.trueStartSample;
     const FrozenRenderBoundaries frozenBoundaries = boundaries;
 
-    vocoderJob.onComplete = [this, crs, renderCache, targetRevision,
+    asyncCounter = crs->beginAsyncRenderJob();
+    if (asyncCounter == nullptr)
+    {
+        failFrozen();
+        return;
+    }
+    vocoderJob.onComplete = [this, weakCrs = std::weak_ptr<ContentRenderService>(crs),
+                              asyncCounter, renderCache, targetRevision,
                              requeueAudioBuffer, requeueAudioSampleRate,
                              captureContentKey, chunkObjId,
                              jobStartSample, frozenBoundaries, contentSnap,
@@ -1115,11 +1490,18 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     {
         struct AsyncRenderCompletion final
         {
-            ContentRenderService& service;
-            ~AsyncRenderCompletion() { service.completeAsyncRenderJob(); }
-        } asyncCompletion{*crs};
+            std::shared_ptr<RenderWorker::AsyncState> state;
+            ~AsyncRenderCompletion() noexcept { RenderWorker::completeAsyncJob(state); }
+        } asyncCompletion{asyncCounter};
 
         const auto& boundaries = frozenBoundaries;
+
+        if (RenderWorker::isAsyncJobClosed(asyncCounter))
+        {
+            failChunk(completion, renderCache.get(), jobStartSample,
+                      targetRevision, captureContentKey);
+            return;
+        }
 
         if (result == VocoderRenderScheduler::JobResult::Succeeded)
         {
@@ -1166,8 +1548,19 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             requeueJob.audioBuffer = requeueAudioBuffer;
             requeueJob.audioSampleRate = requeueAudioSampleRate;
             requeueJob.startSample = jobStartSample;
+            requeueJob.endSampleExclusive = frozenBoundaries.trueEndSample;
+            requeueJob.queuedChunkStartSample = jobStartSample;
             requeueJob.targetRevision = targetRevision;
-            deferOrRequeue(crs, std::move(requeueJob), completion);
+            if (RenderWorker::isAsyncJobClosed(asyncCounter))
+            {
+                failChunk(completion, renderCache.get(), jobStartSample,
+                          targetRevision, captureContentKey);
+            }
+            else if (auto crs = weakCrs.lock())
+                deferOrRequeue(std::move(crs), std::move(requeueJob), completion);
+            else
+                failChunk(completion, renderCache.get(), jobStartSample,
+                          targetRevision, captureContentKey);
         }
         else
         {
@@ -1180,13 +1573,20 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         }
     };
 
-    crs->beginAsyncRenderJob();
     if (!submitVocoderJob(std::move(vocoderJob), vocoderCfg.generation))
     {
         // stale generation or reconfiguring: deferOrRequeue handles both paths
         deferOrRequeue(crs, std::move(coreJob), completion);
-        crs->completeAsyncRenderJob();
+        RenderWorker::completeAsyncJob(asyncCounter);
         return;
+    }
+    asyncSubmitted = true;
+    }
+    catch (...)
+    {
+        if (asyncCounter != nullptr && !asyncSubmitted)
+            RenderWorker::completeAsyncJob(asyncCounter);
+        failFrozen();
     }
 }
 

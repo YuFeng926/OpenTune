@@ -850,9 +850,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                      audioBuffer = std::move(audioBuffer),
                      audioSampleRate]() mutable
                     {
-                        std::lock_guard<std::mutex> lock(completionGate->mutex);
-                        if (completionGate->closed)
-                            return;
+                        {
+                            std::lock_guard<std::mutex> lock(completionGate->mutex);
+                            if (completionGate->closed)
+                                return;
+                        }
                         handleStage1ChunkSettled(key, std::move(snapshot),
                                                  std::move(audioBuffer), audioSampleRate);
                     });
@@ -862,9 +864,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 juce::MessageManager::callAsync(
                     [this, completionGate, key]()
                     {
-                        std::lock_guard<std::mutex> lock(completionGate->mutex);
-                        if (completionGate->closed)
-                            return;
+                        {
+                            std::lock_guard<std::mutex> lock(completionGate->mutex);
+                            if (completionGate->closed)
+                                return;
+                        }
                         if (auto* session = getCaptureSession())
                             session->onRenderFailed(key);
                     });
@@ -876,9 +880,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 juce::MessageManager::callAsync(
                     [this, completionGate]()
                     {
-                        std::lock_guard<std::mutex> lock(completionGate->mutex);
-                        if (completionGate->closed)
-                            return;
+                        {
+                            std::lock_guard<std::mutex> lock(completionGate->mutex);
+                            if (completionGate->closed)
+                                return;
+                        }
                         renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
                     });
                 juce::ignoreUnused(key);
@@ -1061,10 +1067,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                         return result;
                     },
                     [this, gate, segContentKey](F0ExtractionService::Result&& result) {
-                        // 持锁访问 owner：与析构置 closed 互斥。closed 后不再访问 this。
-                        std::lock_guard<std::mutex> lk(gate->mutex);
-                        if (gate->closed)
-                            return;
+                        {
+                            std::lock_guard<std::mutex> lk(gate->mutex);
+                            if (gate->closed)
+                                return;
+                        }
                         if (auto* session = getCaptureSession()) {
                             if (!result.success) {
                                 session->commitSegmentF0Result(
@@ -1087,8 +1094,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                             if (pendingTimeToolSeedKeys_.count(segContentKey) != 0)
                                 ensureTimeToolAnchorSeed(segContentKey);
                         }
-                    }
-                );
+                    });
             }
         };
 
@@ -1167,6 +1173,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     }
 #endif
 
+    ProcessRenderRuntime::getInstance().retainOwner();
     runtimeStateInitialized_.store(true, std::memory_order_release);
 }
 
@@ -1200,10 +1207,8 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     // 2) 仅当运行时已初始化时才关闭 F0 / Reference owner 服务、解除 CRS execution
     //    lease；未初始化（scanner-only 生命周期）时不得构造进程 runtime 单例 —
     //    getInstance() 会启动 control worker。
-    // F0 / Reference shutdown 只关闭 owner、丢弃排队任务、终止本 owner 的
-    // 活跃 F0 Run（SetTerminate 加速返回）；不 join worker —— worker 是
-    // detached 进程常驻执行器，见 shutdownStarted_ 后自行退出，期间只访问
-    // 进程寿命服务与提交时捕获的纯数据。不等待推理。
+    // F0 / Reference shutdown 关闭 owner、丢弃排队任务、终止可取消的 F0 Run，
+    // 并 join 各自 worker；不可取消的 Reference 分析在此处完成收敛。
     f0ExtractionService_->shutdown();
     referenceAnalysisService_->shutdown();
 
@@ -1216,6 +1221,8 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 #if JucePlugin_Build_Standalone
     cancelPendingUpdate();
 #endif
+
+    ProcessRenderRuntime::getInstance().releaseOwner();
 
     // Vocoder / F0 / GAME / AppLogger 全部是进程级资源（ProcessRenderRuntime /
     // ProcessF0Runtime 单例与进程寿命 logger）：实例析构不 shutdown、不 reset、
@@ -1291,44 +1298,43 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu, std::function<
     AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
         + juce::String(forceCpu ? "true" : "false"));
     
-    // 暂停 render worker（本 owner 的 CRS）
-    if (contentRenderService_)
-        contentRenderService_->pauseRenderWorker();
-
     // 耗时 reset（Session 销毁、按当前配置重建、AccelerationDetector
-    //    resetAndDetect）全部在 ProcessRenderRuntime 的进程寿命 control worker 上
-    //    串行执行；UI 线程只投递命令并立即返回。completion 经
-    //    MessageManager::callAsync 回消息线程；gate 已关闭时不访问 processor。
+    // resetAndDetect）由 ProcessRenderRuntime 的 control worker 串行执行。
     auto gate = completionGate_;
     auto* processor = this;
-    ProcessRenderRuntime::getInstance().resetInferenceBackend(forceCpu,
-        [processor, gate, beforeResume = std::move(beforeResume)]() mutable {
-        std::lock_guard<std::mutex> lk(gate->mutex);
-        if (gate->closed)
-            return;   // owner 已析构：不访问 processor
-        if (beforeResume)
-            beforeResume();
-        if (processor->contentRenderService_)
-            processor->contentRenderService_->resumeRenderWorker();
-        AppLogger::info("[Processor] Inference backend reset complete");
+    ProcessRenderRuntime::getInstance().resetInferenceBackend(forceCpu, contentRenderService_,
+        [processor, gate, beforeResume = std::move(beforeResume)](ProcessRenderRuntime::ControlResult result) mutable {
+            {
+                std::lock_guard<std::mutex> lk(gate->mutex);
+                if (gate->closed)
+                    return;
+            }
+            if (result == ProcessRenderRuntime::ControlResult::Failed)
+            {
+                AppLogger::error("[Processor] inference backend control failed");
+                return;
+            }
+            if (beforeResume)
+                beforeResume();
+            AppLogger::info("[Processor] Inference backend reset complete");
         });
 }
 
 void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& weight)
 {
-    // 1. 暂停 render worker（本 owner 的 CRS）
-    if (contentRenderService_)
-        contentRenderService_->pauseRenderWorker();
-
-    // 2. 模型切换（严格先销毁旧 Domain/Session，再按当前配置重建）在进程寿命
-    //    control worker 上串行执行；UI 线程只投递命令并立即返回。completion 经
-    //    MessageManager::callAsync 回消息线程；gate 已关闭时不访问 processor。
     auto gate = completionGate_;
     auto* processor = this;
-    ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight, [processor, gate]() {
-        std::lock_guard<std::mutex> lk(gate->mutex);
-        if (gate->closed)
-            return;   // owner 已析构：不访问 processor
+    ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight, contentRenderService_, [processor, gate](ProcessRenderRuntime::ControlResult result) {
+        {
+            std::lock_guard<std::mutex> lk(gate->mutex);
+            if (gate->closed)
+                return;
+        }
+        if (result == ProcessRenderRuntime::ControlResult::Failed)
+        {
+            AppLogger::error("[Processor] vocoder model control failed");
+            return;
+        }
         // 3. 模型切换完成后才清 RenderCache/TimeStretchCache 并恢复 render worker
 #if JucePlugin_Build_Standalone
         if (processor->contentRenderService_ && processor->standaloneContentRepository_) {
@@ -1345,8 +1351,6 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& wei
         if (auto* dc = processor->getDocumentController())
             dc->invalidateAllModificationCaches();
 #endif
-        if (processor->contentRenderService_)
-            processor->contentRenderService_->resumeRenderWorker();
     });
 }
 
@@ -4023,10 +4027,15 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             return result;
         },
         [processor, gate, capturedRequest](F0ExtractionService::Result&& result) {
-            // 持锁访问 processor：与析构置 closed 互斥。closed 后不再访问 owner。
-            std::lock_guard<std::mutex> lk(gate->mutex);
-            if (gate->closed)
-                return;
+            // Both the normal commit and the dispatcher-failure mailbox invoke
+            // this callback on the message thread.  Do not add a second
+            // dispatcher hop after the mailbox has already recovered the
+            // failed post.
+            {
+                std::lock_guard<std::mutex> lk(gate->mutex);
+                if (gate->closed)
+                    return;
+            }
 
             auto currentSnap = processor->getContentSnapshot(capturedRequest.contentKey);
             if (!currentSnap
@@ -4141,6 +4150,15 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
             // F0 就绪后请求完整渲染：此前因无 F0 而 Blank 的 chunk 需重新渲染
             processor->requestFullContentRender(capturedRequest.contentKey);
+        },
+        [processor, gate, capturedRequest](F0ExtractionService::Result&&) {
+            {
+                std::lock_guard<std::mutex> lk(gate->mutex);
+                if (gate->closed)
+                    return;
+            }
+            processor->setContentOriginalF0State(
+                capturedRequest.contentKey, OriginalF0State::Failed);
         });
 
     if (submitResult != F0ExtractionService::SubmitResult::Accepted) {
@@ -4380,33 +4398,24 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
 
     auto gate = completionGate_;
     auto* processor = this;
-    referenceAnalysisService_->submitAnalysis(
-        key, inputFingerprint, producer,
-        [analysisSnap, audio, sourceDurationSeconds, analysisRevision](const ReferenceAnalysisService::AnalysisJobKey& jobKey) {
+    auto completion = [processor, gate](const ReferenceAnalysisService::AnalysisJobKey& jobKey,
+                                        const ReferenceFeatureSet& result) {
+        // ReferenceAnalysisService posts this completion to the message thread.
+        // Only the admission check is locked; owner lifetime is then serialized
+        // by the message-thread contract rather than by a long-held gate lock.
+        {
+            std::lock_guard<std::mutex> lk(gate->mutex);
+            if (gate->closed)
+                return;
+        }
+        processor->analysisFinished(jobKey.contentKey, result);
+    };
+
+    auto analysis = [analysisSnap, analysisRevision](const ReferenceAnalysisService::AnalysisJobKey& jobKey) {
             ReferenceFeatureSet failed;
             failed.producer = jobKey.producer;
             failed.inputFingerprint = jobKey.inputFingerprint;
             failed.analysisRevision = analysisRevision;
-
-            if (jobKey.producer == ReferenceFeatureProducer::Game) {
-                // 进程级共享 GAME generator：ProcessF0Runtime::generateNotes。
-                if (!audio.valid || audio.numSamples <= 0) {
-                    failed.status = ReferenceFeatureStatus::Failed;
-                    failed.errorMessage = "AUTO Ref GAME analysis requires content audio";
-                    return failed;
-                }
-                NoteGeneratorInput input;
-                input.sampleRate = audio.sampleRate;
-                input.audio.assign(audio.samples, audio.samples + audio.numSamples);
-                const auto gameNotes = ProcessF0Runtime::getInstance().generateNotes(input);
-                return makeReferenceFeatureSetFromNotes(
-                    ReferenceFeatureProducer::Game,
-                    jobKey.inputFingerprint,
-                    analysisRevision,
-                    sourceDurationSeconds,
-                    gameNotes,
-                    "AUTO Ref GAME analysis found no notes or timing anchors");
-            }
 
             // StandardAuto：提交时捕获的纯数据快照。
             if (!analysisSnap) {
@@ -4420,15 +4429,50 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
                 return failed;
             }
             return buildStandardAutoReferenceFeatureSet(*analysisSnap, analysisRevision);
-        },
-        [processor, gate](const ReferenceAnalysisService::AnalysisJobKey& jobKey,
-                          const ReferenceFeatureSet& result) {
-            // 消息线程执行；与析构置 closed 互斥。closed 后不再访问 owner。
-            std::lock_guard<std::mutex> lk(gate->mutex);
-            if (gate->closed)
-                return;
-            processor->analysisFinished(jobKey.contentKey, result);
-        });
+        };
+
+    if (producer == ReferenceFeatureProducer::Game) {
+        referenceAnalysisService_->submitAsyncAnalysis(
+            key, inputFingerprint, producer,
+            [audio, sourceDurationSeconds, analysisRevision](
+                const ReferenceAnalysisService::AnalysisJobKey& jobKey,
+                std::function<void(ReferenceFeatureSet)> done) {
+                if (!audio.valid || audio.numSamples <= 0) {
+                    ReferenceFeatureSet failed;
+                    failed.status = ReferenceFeatureStatus::Failed;
+                    failed.producer = jobKey.producer;
+                    failed.inputFingerprint = jobKey.inputFingerprint;
+                    failed.analysisRevision = analysisRevision;
+                    done(std::move(failed));
+                    return;
+                }
+                NoteGeneratorInput input;
+                input.sampleRate = audio.sampleRate;
+                input.audio.assign(audio.samples, audio.samples + audio.numSamples);
+                auto gameCompletion =
+                    [jobKey, sourceDurationSeconds, analysisRevision, done = std::move(done)]
+                    (std::vector<Note> notes) mutable {
+                        done(makeReferenceFeatureSetFromNotes(
+                            ReferenceFeatureProducer::Game,
+                            jobKey.inputFingerprint,
+                            analysisRevision,
+                            sourceDurationSeconds,
+                            notes,
+                            "AUTO Ref GAME analysis found no notes or timing anchors"));
+                    };
+                if (!ProcessF0Runtime::getInstance().submitNotes(
+                        std::move(input), gameCompletion))
+                {
+                    // The pure-data completion remains callable on this
+                    // worker and produces the normal Failed feature result;
+                    // it does not touch the processor.
+                    gameCompletion({});
+                }
+            }, completion);
+    } else {
+        referenceAnalysisService_->submitAnalysis(key, inputFingerprint, producer,
+                                                  std::move(analysis), std::move(completion));
+    }
     return ReferenceAnalysisPreheatStatus::Queued;
 }
 

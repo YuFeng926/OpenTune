@@ -533,22 +533,24 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
     return result;
 }
 
-bool RenderCache::claimPendingJob(int64_t startSample, PendingJob& outJob) {
+bool RenderCache::claimPendingJob(const RenderCache::PendingJob& expectedJob) {
     const juce::SpinLock::ScopedLockType guard(lock_);
-    auto pendingIt = pendingChunks_.find(startSample);
+    auto pendingIt = pendingChunks_.find(expectedJob.startSample);
     if (pendingIt == pendingChunks_.end()) {
         return false;
     }
 
-    auto it = chunks_.find(startSample);
+    auto it = chunks_.find(expectedJob.startSample);
     if (it == chunks_.end()) {
         pendingChunks_.erase(pendingIt);
         return false;
     }
 
     auto& chunk = it->second;
-    if (chunk.startSample != startSample || chunk.status != Chunk::Status::Pending) {
-        pendingChunks_.erase(pendingIt);
+    if (chunk.startSample != expectedJob.startSample
+        || chunk.endSampleExclusive != expectedJob.endSampleExclusive
+        || chunk.desiredRevision != expectedJob.targetRevision
+        || chunk.status != Chunk::Status::Pending) {
         return false;
     }
 
@@ -557,11 +559,7 @@ bool RenderCache::claimPendingJob(int64_t startSample, PendingJob& outJob) {
     chunk.status = Chunk::Status::Running;
     chunk.runningRevision = chunk.desiredRevision;
 
-    outJob.startSample = chunk.startSample;
-    outJob.endSampleExclusive = chunk.endSampleExclusive;
-    outJob.targetRevision = chunk.desiredRevision;
-
-    AppLogger::log("RenderCache::claimPendingJob start=" + juce::String(projectRenderSeconds(startSample), 3)
+    AppLogger::log("RenderCache::claimPendingJob start=" + juce::String(projectRenderSeconds(expectedJob.startSample), 3)
         + " startSample=" + juce::String(chunk.startSample)
         + " endSampleExclusive=" + juce::String(chunk.endSampleExclusive)
         + " revision=" + juce::String(static_cast<juce::int64>(chunk.desiredRevision)));
@@ -569,10 +567,18 @@ bool RenderCache::claimPendingJob(int64_t startSample, PendingJob& outJob) {
     return true;
 }
 
-std::vector<int64_t> RenderCache::getPendingChunkStarts() const
+std::vector<RenderCache::PendingJob> RenderCache::getPendingJobs() const
 {
     const juce::SpinLock::ScopedLockType guard(lock_);
-    return {pendingChunks_.begin(), pendingChunks_.end()};
+    std::vector<PendingJob> jobs;
+    jobs.reserve(pendingChunks_.size());
+    for (const auto startSample : pendingChunks_) {
+        const auto it = chunks_.find(startSample);
+        if (it != chunks_.end() && it->second.status == Chunk::Status::Pending)
+            jobs.push_back({it->second.startSample, it->second.endSampleExclusive,
+                            it->second.desiredRevision});
+    }
+    return jobs;
 }
 
 RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t startSample,
@@ -668,7 +674,11 @@ bool RenderCache::completeChunkRenderFailure(int64_t startSample, uint64_t revis
 
         auto& chunk = it->second;
 
-        if (chunk.runningRevision != revision) {
+        const bool runningMatch = chunk.status == Chunk::Status::Running
+            && chunk.runningRevision == revision;
+        const bool pendingMatch = chunk.status == Chunk::Status::Pending
+            && chunk.desiredRevision == revision;
+        if (!runningMatch && !pendingMatch) {
             AppLogger::log("RenderCache::completeChunkRenderFailure STALE runningRevision="
                 + juce::String(static_cast<juce::int64>(chunk.runningRevision))
                 + " != completionRev=" + juce::String(static_cast<juce::int64>(revision))
@@ -685,6 +695,7 @@ bool RenderCache::completeChunkRenderFailure(int64_t startSample, uint64_t revis
         chunk.publishedRevision = 0;
         chunk.status = Chunk::Status::Failed;
         chunk.runningRevision = 0;
+        pendingChunks_.erase(startSample);
         // Do NOT publish on failure: the old snapshot (or empty) remains visible
         // to the audio thread. Failure keeps this chunk unsettled.
 
@@ -796,27 +807,27 @@ bool RenderCache::isCanonicalSettled() const
     return isCanonicalSettledLocked_();
 }
 
-void RenderCache::markChunkAsBlank(int64_t startSample, uint64_t revision) {
+bool RenderCache::markChunkAsBlank(int64_t startSample, uint64_t revision) {
     const double startSeconds = projectRenderSeconds(startSample);
     int64_t endSample = 0;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
         auto it = chunks_.find(startSample);
         if (it == chunks_.end()) {
-            return;
+            return false;
         }
 
         auto& chunk = it->second;
 
         if (chunk.status != Chunk::Status::Running) {
-            return;
+            return false;
         }
 
         if (chunk.runningRevision != revision) {
             AppLogger::log("RenderCache::markChunkAsBlank STALE runningRevision="
                 + juce::String(static_cast<juce::int64>(chunk.runningRevision))
                 + " != revision=" + juce::String(static_cast<juce::int64>(revision)));
-            return;
+            return false;
         }
 
         chunk.status = Chunk::Status::Blank;
@@ -846,6 +857,7 @@ void RenderCache::markChunkAsBlank(int64_t startSample, uint64_t revision) {
     AppLogger::log("RenderCache::markChunkAsBlank start=" + juce::String(startSeconds, 3)
         + " endSampleExclusive=" + juce::String(endSample)
         + " revision=" + juce::String(static_cast<juce::int64>(revision)));
+    return true;
 }
 
 } // namespace OpenTune

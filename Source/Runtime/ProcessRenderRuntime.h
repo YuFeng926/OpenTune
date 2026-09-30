@@ -5,6 +5,8 @@
 #include "../Render/ContentRenderService.h"
 #include "../Utils/VocoderModelWeight.h"
 #include <condition_variable>
+#include <atomic>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -18,6 +20,8 @@ namespace OpenTune {
 class ProcessRenderRuntime
 {
 public:
+    enum class ControlResult : uint8_t { Changed, Unchanged, Failed };
+
     struct CompletionGate
     {
         std::mutex mutex;
@@ -34,7 +38,20 @@ public:
         std::function<void(ContentKey)> chunkFailed;
     };
 
+    struct ControlTransaction
+    {
+        std::shared_ptr<ContentRenderService> crs;
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::atomic<bool> finishing{false};
+        std::atomic<bool> closeRequested{false};
+        std::atomic<bool> acked{false};
+    };
+
     static ProcessRenderRuntime& getInstance();
+    void retainOwner();
+    void releaseOwner() noexcept;
+    void shutdown();
 
     void processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
                                RenderJob& job,
@@ -48,9 +65,14 @@ public:
      * completion 经 MessageManager::callAsync 投递回消息线程；调用方在其
      * completion gate 关闭后直接丢弃（不访问 owner）。
      */
-    void setVocoderModelWeight(const VocoderModelWeight& weight, std::function<void()> completion);
-    void resetVocoder(std::function<void()> completion);
-    void resetInferenceBackend(bool forceCpu, std::function<void()> completion);
+    void setVocoderModelWeight(const VocoderModelWeight& weight,
+                               std::shared_ptr<ContentRenderService> crs,
+                               std::function<void(ControlResult)> completion);
+    void resetVocoder(std::shared_ptr<ContentRenderService> crs,
+                      std::function<void(ControlResult)> completion);
+    void resetInferenceBackend(bool forceCpu,
+                               std::shared_ptr<ContentRenderService> crs,
+                               std::function<void(ControlResult)> completion);
 
     /**
      * Vocoder submission / query entry points. All accesses to the underlying
@@ -69,10 +91,8 @@ public:
     bool isVocoderReconfiguring() const noexcept;
 
 private:
-    // 进程寿命 heap 单例（getInstance 显式 new、永不析构）：control worker
-    // 与命令队列随进程存活，绝不在实例卸载路径 join 或销毁。
     ProcessRenderRuntime();
-    ~ProcessRenderRuntime() = default;
+    ~ProcessRenderRuntime();
 
     static std::string modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight);
 
@@ -96,35 +116,52 @@ private:
     {
         enum class Type : uint8_t
         {
+            EnsureVocoder,
             SetVocoderWeight,
             ResetVocoder,
-            ResetInferenceBackend
+            ResetInferenceBackend,
+            Stop
         };
 
         Type type{Type::ResetVocoder};
         VocoderModelWeight weight{kDefaultVocoderWeight};
         bool forceCpu{false};
-        std::function<void()> completion;
+        std::shared_ptr<ControlTransaction> transaction;
+        std::function<void(ControlResult)> completion;
     };
 
     // control worker 唯一重配入口：短锁内摘除旧 domain 并推进 generation，
     // 锁外销毁旧 Session，随后锁外创建新 Session，最后短锁发布。
-    void reconfigureVocoder(const ControlCommand& command);
+    ControlResult reconfigureVocoder(const ControlCommand& command);
 
     void controlWorkerLoop();
     void postControlCommand(ControlCommand command);
+    void finishShutdown();
+    static bool claimControlTransaction(const std::shared_ptr<ControlTransaction>& transaction) noexcept;
+    static void completeClaimedControlTransaction(const std::shared_ptr<ControlTransaction>& transaction,
+                                                  const char* reason) noexcept;
+    static void finishControlTransaction(const std::shared_ptr<ControlTransaction>& transaction,
+                                         const char* reason) noexcept;
 
     std::thread controlWorker_;
     std::mutex controlMutex_;
     std::condition_variable controlCv_;
+    std::condition_variable workerExitCv_;
     std::deque<ControlCommand> controlQueue_;
+    std::mutex shutdownMutex_;
+    bool ensureVocoderQueued_{false}; // controlMutex_ protected
+    std::atomic<bool> shuttingDown_{false};
+    std::atomic<bool> workerExitDispatchAttempted_{false};
+    std::atomic<bool> workerExitDispatchPosted_{false};
+    std::atomic<int> ownerCount_{0};
+    std::shared_ptr<ControlTransaction> activeTransaction_;
 
     std::unique_ptr<VocoderDomain> vocoderDomain_;
     VocoderModelWeight currentVocoderModelWeight_{kDefaultVocoderWeight};
     mutable std::mutex vocoderMutex_;
-    std::condition_variable vocoderStateCv_;
+    std::condition_variable domainSubmitCv_;
+    int domainSubmitInFlight_{0}; // vocoderMutex_ protected
     bool vocoderReconfiguring_{false}; // vocoderMutex_ 保护：control worker 已摘除旧 domain
-    bool vocoderInitializing_{false};  // vocoderMutex_ 保护：RenderWorker 正在锁外首次创建
     uint64_t vocoderGeneration_{0};  // vocoderMutex_ 保护
 
     // Deferred retry list: jobs that failed with generation mismatch or cancelled
@@ -135,6 +172,8 @@ private:
         RenderJob job;
         CompletionContext completion;
     };
+
+    void failDeferredRetries(std::vector<DeferredRetry> retries);
     std::vector<DeferredRetry> deferredRetries_; // vocoderMutex_ protected
 
     void deferOrRequeue(std::shared_ptr<ContentRenderService> crs,

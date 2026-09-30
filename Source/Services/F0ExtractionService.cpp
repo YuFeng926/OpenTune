@@ -13,14 +13,11 @@ F0ExtractionService::F0ExtractionService(int workerCount, size_t maxQueueSize,
 {
     state_->maxQueueSize_ = maxQueueSize;
     state_->runOwnerState_ = std::make_shared<F0RunOwnerState>();
+    state_->dispatcherFailureMailbox_ = std::make_shared<SharedState::DispatcherFailureMailbox>();
 
     const int count = (workerCount <= 0) ? 1 : workerCount;
     for (int i = 0; i < count; ++i) {
-        // detached 进程常驻执行器：捕获 shared state 而非 service this。
-        // owner 析构后 worker 见 shutdownStarted_ 自行退出；共享 state 由
-        // worker 自身持有，保证其生命周期覆盖最后一次使用。
-        std::thread worker([state = state_]() { workerLoop(state); });
-        worker.detach();
+        workers_.emplace_back([state = state_]() { workerLoop(state); });
     }
 }
 
@@ -31,33 +28,93 @@ F0ExtractionService::~F0ExtractionService()
 
 void F0ExtractionService::shutdown()
 {
+    std::lock_guard<std::mutex> shutdownLock(shutdownMutex_);
+    state_->dispatcherFailureMailbox_->cancelAndClear();
+    for (const auto& worker : workers_) {
+        if (worker.joinable() && worker.get_id() == std::this_thread::get_id()) {
+            AppLogger::error("[F0ExtractionService] shutdown called from worker thread");
+            jassertfalse;
+            std::terminate();
+        }
+    }
+
+    bool initiated = false;
+    std::deque<Task> discardedTasks;
+    std::unordered_map<F0RequestKey, std::unique_ptr<ActiveEntry>> discardedEntries;
     {
         // 幂等：单一临界区内置 shutdownStarted_、关闭 owner state、丢弃排队任务、
         // 清空 active 表；与 submit/commit/worker 状态读取线性化，无"检查后关闭"窗口。
         std::lock_guard<std::mutex> lock(state_->entriesMutex_);
-        if (state_->shutdownStarted_)
-            return;
-        state_->shutdownStarted_ = true;
-
-        state_->runOwnerState_->closed.store(true, std::memory_order_release);
-
-        state_->queue_.clear();
-        state_->activeEntries_.clear();
+        if (!state_->shutdownStarted_) {
+            initiated = true;
+            state_->shutdownStarted_ = true;
+            state_->runOwnerState_->closed.store(true, std::memory_order_release);
+            discardedTasks = std::move(state_->queue_);
+            discardedEntries = std::move(state_->activeEntries_);
+        }
     }
 
     // 唤醒全部 worker：谓词 shutdownStarted_ 为真，立即退出等待。
     state_->queueCv_.notify_all();
 
     // 锁外：终止属于本 owner 的 pending/active Run（若正在 DML 推理），
-    // 使已 dequeue 的 execute 快速返回。不 join worker —— worker 见
+    // 使已 dequeue 的 execute 快速返回；worker 由下方 join 收敛。
     // shutdownStarted_ 自行退出；推理归属进程寿命的 F0InferenceService。
-    if (f0ServiceResolver_) {
+    if (initiated && f0ServiceResolver_) {
         if (auto svc = f0ServiceResolver_())
             svc->terminateActiveRun(state_->runOwnerState_);
     }
+
+    for (auto& worker : workers_) {
+        if (!worker.joinable())
+            continue;
+        worker.join();
+    }
+    state_->dispatcherFailureMailbox_->cancelAndClear();
 }
 
-F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit)
+void F0ExtractionService::SharedState::DispatcherFailureMailbox::enqueue(
+    F0ExtractionService::CommitFn callback,
+    std::shared_ptr<F0ExtractionService::Result> result)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_.push_back(DispatcherFailure{std::move(callback), std::move(result)});
+    }
+    triggerAsyncUpdate();
+}
+
+void F0ExtractionService::SharedState::DispatcherFailureMailbox::cancelAndClear()
+{
+    cancelPendingUpdate();
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.clear();
+}
+
+void F0ExtractionService::SharedState::DispatcherFailureMailbox::handleAsyncUpdate()
+{
+    std::deque<DispatcherFailure> failures;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        failures.swap(queue_);
+    }
+
+    for (auto& failure : failures) {
+        try {
+            failure.callback(std::move(*failure.result));
+        }
+        catch (const std::exception& e) {
+            AppLogger::error("[F0ExtractionService] dispatcher-failure completion threw: "
+                + juce::String(e.what()));
+        }
+        catch (...) {
+            AppLogger::error("[F0ExtractionService] dispatcher-failure completion threw: unknown exception");
+        }
+    }
+}
+
+F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit,
+                                                              CommitFn dispatcherFailure)
 {
     if (!requestKey.contentKey.isValid() || !execute || !commit) {
         return SubmitResult::InvalidTask;
@@ -84,7 +141,8 @@ F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey reque
         entry->token = token;
         state_->activeEntries_[requestKey] = std::move(entry);
 
-        state_->queue_.push_back(Task{ requestKey, token, std::move(execute), std::move(commit) });
+        state_->queue_.push_back(Task{ requestKey, token, std::move(execute), std::move(commit),
+                                       std::move(dispatcherFailure) });
     }
 
     // 解锁后唤醒单个 worker。
@@ -140,28 +198,50 @@ void F0ExtractionService::workerLoop(std::shared_ptr<SharedState> state)
             result.requestKey = task.requestKey;
         }
 
-        // commit 判定阶段：独立临界区检查 shutdown/token 并 erase，离开作用域自动解锁。
+        // commit 判定与投递授权在同一临界区内线性化：shutdown 后 worker 不再投递。
+        CommitFn commit;
+        CommitFn dispatcherFailure;
+        std::unique_ptr<ActiveEntry> releasedEntry;
+        std::unordered_map<F0RequestKey, std::unique_ptr<ActiveEntry>>::node_type releasedNode;
         bool shouldCommit = false;
         {
             std::lock_guard<std::mutex> lock(state->entriesMutex_);
-            // 关闭已启动：不再投递 commit（owner 可能已析构；active 表已被 shutdown 清空）。
             if (!state->shutdownStarted_) {
                 auto it2 = state->activeEntries_.find(task.requestKey);
                 if (it2 != state->activeEntries_.end() && it2->second->token == task.token) {
+                    releasedNode = state->activeEntries_.extract(it2);
+                    releasedEntry = std::move(releasedNode.mapped());
+                    commit = std::move(task.commit);
+                    dispatcherFailure = std::move(task.dispatcherFailure);
                     shouldCommit = true;
-                    state->activeEntries_.erase(it2);
                 }
             }
         }
-
-        if (!shouldCommit) {
-            continue;
+        if (shouldCommit) {
+            auto resultForDispatch = std::make_shared<Result>(std::move(result));
+            const bool posted = juce::MessageManager::callAsync([commit = std::move(commit), resultForDispatch]() mutable {
+                try
+                {
+                    commit(std::move(*resultForDispatch));
+                }
+                catch (const std::exception& e)
+                {
+                    AppLogger::error("[F0ExtractionService] completion threw: "
+                        + juce::String(e.what()));
+                }
+                catch (...)
+                {
+                    AppLogger::error("[F0ExtractionService] completion threw: unknown exception");
+                }
+            });
+            if (!posted) {
+                if (dispatcherFailure)
+                    state->dispatcherFailureMailbox_->enqueue(
+                        std::move(dispatcherFailure), std::move(resultForDispatch));
+                else
+                    AppLogger::error("[F0ExtractionService] completion dispatcher rejected; hard lifecycle failure");
+            }
         }
-
-        // 锁外投递 commit：经消息线程执行，调用方以 completion gate 决定是否访问 owner。
-        juce::MessageManager::callAsync([commit = std::move(task.commit), result = std::move(result)]() mutable {
-            commit(std::move(result));
-        });
     }
 }
 

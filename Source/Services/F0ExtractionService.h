@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_events/juce_events.h>
 
 #include "../Utils/SilentGapDetector.h"
 #include "../Content/ContentKey.h"
@@ -80,19 +81,18 @@ public:
 
     F0ExtractionService(int workerCount, size_t maxQueueSize,
                         std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver);
-    // 实例析构只关闭 owner（shutdown()）：不 join worker。worker 是 detached
-    // 进程常驻执行器，捕获 shared state 而非 service this；owner 销毁后自行结束，
-    // 期间只访问进程寿命的 F0InferenceService 与纯数据 execute，绝不访问已析构
-    // 的 service。
+    // worker 由 service 持有并在 shutdown() 中收敛、唤醒、join；worker 捕获
+    // shared state 而非 service this，绝不访问已析构的 service。
     ~F0ExtractionService();
 
     /// 显式幂等关闭：停止接受新提交、丢弃排队 job、清空 active 表（shutdown 后
     /// isActive() 恒为 false）、关闭 ownerState 并终止本 owner 的活跃 F0 Run
-    /// （SetTerminate 使已 dequeue 的 execute 快速返回）。不 join worker：worker
-    /// 见 shutdownStarted_ 后自行退出。关闭开始后完成的任务不再投递 commit。
+    /// （SetTerminate 使已 dequeue 的 execute 快速返回），唤醒并 join 所有 worker。
+    /// 关闭开始后完成的任务不再投递 commit。
     void shutdown();
 
-    SubmitResult submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit);
+    SubmitResult submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit,
+                        CommitFn dispatcherFailure = {});
 
     bool isActive(F0RequestKey requestKey) const;
     void cancel(F0RequestKey requestKey);
@@ -103,6 +103,7 @@ private:
         uint64_t token{0};
         ExecuteFn execute;
         CommitFn commit;
+        CommitFn dispatcherFailure;
     };
 
     struct ActiveEntry {
@@ -113,6 +114,25 @@ private:
     // 而非 service this；owner 销毁后 state 由 worker 自身持有直到其退出，因此
     // worker 永不触碰已析构的 service。
     struct SharedState {
+        using Commit = F0ExtractionService::CommitFn;
+        using ResultType = F0ExtractionService::Result;
+
+        struct DispatcherFailure {
+            Commit callback;
+            std::shared_ptr<ResultType> result;
+        };
+
+        class DispatcherFailureMailbox final : public juce::AsyncUpdater {
+        public:
+            void enqueue(Commit callback, std::shared_ptr<ResultType> result);
+            void cancelAndClear();
+            void handleAsyncUpdate() override;
+
+        private:
+            std::mutex mutex_;
+            std::deque<DispatcherFailure> queue_;
+        };
+
         std::deque<Task> queue_;                        // entriesMutex_ 下访问；容量合同 maxQueueSize_
         size_t maxQueueSize_{0};                        // 真实容量合同，entriesMutex_ 下校验
         std::condition_variable queueCv_;               // 队列非空/shutdown 唤醒，与 entriesMutex_ 配合 wait
@@ -125,9 +145,12 @@ private:
         // shutdown 以同一 state 调 terminateActiveRun。shared_ptr 保证 state 在最后一次
         // 使用结束后才释放。
         std::shared_ptr<F0RunOwnerState> runOwnerState_;
+        std::shared_ptr<DispatcherFailureMailbox> dispatcherFailureMailbox_;
     };
 
     std::shared_ptr<SharedState> state_;
+    std::mutex shutdownMutex_;
+    std::vector<std::thread> workers_;
     // 运行时惰性解析 F0InferenceService（进程级单例），消除冷启动空快照：
     // 首个 owner 构造时 F0 服务可能尚未初始化，直接缓存 shared_ptr 会得到空值。
     std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver_;

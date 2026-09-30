@@ -64,8 +64,8 @@ public:
         uint64_t targetRevision{0};
     };
     // 仅领取指定 startSample 的 pending chunk，并原子地转为 Running。
-    bool claimPendingJob(int64_t startSample, PendingJob& outJob);
-    std::vector<int64_t> getPendingChunkStarts() const;
+    bool claimPendingJob(const PendingJob& expectedJob);
+    std::vector<PendingJob> getPendingJobs() const;
 
     enum class ChunkRenderResult : uint8_t {
         Published,
@@ -87,7 +87,7 @@ public:
      */
     bool requeueRunningChunk(int64_t startSample, uint64_t runningRevision);
 
-    void markChunkAsBlank(int64_t startSample, uint64_t revision);
+    bool markChunkAsBlank(int64_t startSample, uint64_t revision);
 
     struct ChunkStats {
         int idle{0};

@@ -188,14 +188,14 @@ void ContentRenderService::requeueRenderChunk(const RenderJob& job)
     renderWorker_.enqueue(std::move(subJob));
 }
 
-void ContentRenderService::beginAsyncRenderJob()
+std::shared_ptr<RenderWorker::AsyncState> ContentRenderService::beginAsyncRenderJob()
 {
-    renderWorker_.beginAsyncJob();
+    return renderWorker_.beginAsyncJob();
 }
 
-void ContentRenderService::completeAsyncRenderJob()
+void ContentRenderService::completeAsyncRenderJob(const std::shared_ptr<RenderWorker::AsyncState>& state) noexcept
 {
-    renderWorker_.completeAsyncJob();
+    RenderWorker::completeAsyncJob(state);
 }
 
 void ContentRenderService::pauseRenderWorker()

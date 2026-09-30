@@ -133,4 +133,96 @@ std::vector<Note> ProcessF0Runtime::generateNotes(const NoteGeneratorInput& inpu
     return generator->generate(input);
 }
 
+bool ProcessF0Runtime::submitNotes(NoteGeneratorInput input,
+                                   std::function<void(std::vector<Note>)> completion)
+{
+    std::lock_guard<std::mutex> lifecycleLock(gameLifecycleMutex_);
+    std::lock_guard<std::mutex> lock(gameQueueMutex_);
+    if (gameStopping_)
+        gameStopping_ = false;
+    bool appended = false;
+    try
+    {
+        gameQueue_.push_back({std::move(input), std::move(completion)});
+        appended = true;
+        if (!gameWorker_.joinable())
+            gameWorker_ = std::thread([this] { gameWorkerLoop(); });
+    }
+    catch (const std::exception& e)
+    {
+        if (appended)
+            gameQueue_.pop_back();
+        AppLogger::error(juce::String("[ProcessF0Runtime] GAME submission failed: ") + e.what());
+        return false;
+    }
+    catch (...)
+    {
+        if (appended)
+            gameQueue_.pop_back();
+        AppLogger::error("[ProcessF0Runtime] GAME submission failed: unknown exception");
+        return false;
+    }
+    gameQueueCv_.notify_one();
+    return true;
+}
+
+void ProcessF0Runtime::gameWorkerLoop()
+{
+    for (;;) {
+        GameJob job;
+        {
+            std::unique_lock<std::mutex> lock(gameQueueMutex_);
+            gameQueueCv_.wait(lock, [this] {
+                return gameStopping_ || !gameQueue_.empty();
+            });
+            if (gameStopping_ && gameQueue_.empty())
+                return;
+            job = std::move(gameQueue_.front());
+            gameQueue_.pop_front();
+        }
+        std::vector<Note> notes;
+        try
+        {
+            notes = generateNotes(job.input);
+        }
+        catch (const std::exception& e)
+        {
+            AppLogger::error(juce::String("[ProcessF0Runtime] GAME worker failed: ") + e.what());
+        }
+        catch (...)
+        {
+            AppLogger::error("[ProcessF0Runtime] GAME worker failed: unknown exception");
+        }
+
+        try
+        {
+            if (job.completion)
+                job.completion(std::move(notes));
+        }
+        catch (const std::exception& e)
+        {
+            AppLogger::error(juce::String("[ProcessF0Runtime] GAME completion failed: ") + e.what());
+        }
+        catch (...)
+        {
+            AppLogger::error("[ProcessF0Runtime] GAME completion failed: unknown exception");
+        }
+    }
+}
+
+void ProcessF0Runtime::shutdown() noexcept
+{
+    std::lock_guard<std::mutex> lifecycleLock(gameLifecycleMutex_);
+    std::thread worker;
+    {
+        std::lock_guard<std::mutex> lock(gameQueueMutex_);
+        gameStopping_ = true;
+        gameQueue_.clear();
+        worker = std::move(gameWorker_);
+    }
+    gameQueueCv_.notify_all();
+    if (worker.joinable())
+        worker.join();
+}
+
 } // namespace OpenTune

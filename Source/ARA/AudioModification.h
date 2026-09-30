@@ -49,6 +49,7 @@ struct AudioModification
 {
     juce::ARAAudioModification* audioModification{nullptr};
     juce::String persistentId;
+    uint64_t wrapperGeneration{0};
     // Per ARA2 spec: AudioSource identity binding is part of content.sourceWindow,
     // not wrapper-level field. Single source of truth for ARA source association.
     ContentKey contentIdentity;

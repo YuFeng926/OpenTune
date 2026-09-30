@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -36,6 +37,20 @@ struct RenderExecutionLease
 class RenderWorker
 {
 public:
+    struct AsyncState
+    {
+        struct Control
+        {
+            std::mutex mutex;
+            std::atomic<int> count{0};
+            bool closed{false};
+            std::condition_variable cv;
+            std::condition_variable* workerCv{nullptr};
+        };
+
+        std::shared_ptr<Control> control;
+    };
+
     RenderWorker();
     ~RenderWorker();
 
@@ -45,9 +60,9 @@ public:
     void attachExecutionLease(RenderExecutionLease lease);
     /**
      * detachExecutionLease — 终止执行租约（析构路径专用）。
-     * 立即清空 lease 与排队 job，并等待正在执行的 renderJobCallback 完成。
-     * 不等待 asyncInFlight_：vocoder 推理不可取消，其完成不依赖本 worker 存活
-     * （onComplete 经 shared_ptr 持有 ContentRenderService，必然回调）。
+     * 立即清空 lease 与排队 job，并等待正在执行的 renderJobCallback 和
+     * owner-free async completion 全部归还。这样 CRS/Domain 析构不会与仍在
+     * 使用其 session 的 vocoder completion 并行。
      */
     void detachExecutionLease(void* owner);
 
@@ -59,8 +74,9 @@ public:
     void discardStage1Queue(RenderCache* cache);
     void discardAllStage1Queue();
     void enqueue(RenderJob job);
-    void beginAsyncJob();
-    void completeAsyncJob();
+    std::shared_ptr<AsyncState> beginAsyncJob();
+    static void completeAsyncJob(const std::shared_ptr<AsyncState>& state) noexcept;
+    static bool isAsyncJobClosed(const std::shared_ptr<AsyncState>& state) noexcept;
 
     /**
      * pause() 暂停取新同步 job 并等待正在执行的 render callback 完成
@@ -69,12 +85,13 @@ public:
      * setVocoderModelWeight 的 SetTerminate + join 终止，onComplete 回调归还计数。
      * drain() 完整合同：等待 queue_ 空且 inFlight_ == 0 && asyncInFlight_ == 0。
      * 导出路径在读取渲染结果前必须调用，保证最新完整数据已落盘。
-     * 析构路径不得使用 drain()/pause() 编排：vocoder 推理不可取消，
-     * 其完成不依赖本 worker 存活，析构只调 detachExecutionLease。
+     * 析构路径不得使用 drain()/pause() 编排：只通过
+     * detachExecutionLease() 统一收敛同步和异步 lease。
      */
     void pause();
     void resume();
     void drain();
+    void waitAsyncIdle();
     void stop();
 
 private:
@@ -95,7 +112,7 @@ private:
     std::atomic<bool> stopping_{false};
     bool paused_{false};
     int inFlight_{0};
-    int asyncInFlight_{0};
+    std::shared_ptr<AsyncState::Control> asyncControl_;
 };
 
 } // namespace OpenTune

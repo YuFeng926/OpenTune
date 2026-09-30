@@ -66,28 +66,41 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
         1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
 {
     installDocumentRenderExecution();
+    startTimerHz(30);
     AppLogger::logNoThrow("ARA-DIAG: DocumentController created dc="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
+
+    // The document controller owns a render execution lease independently of
+    // any processor instance.  Keep the process runtime alive until this ARA
+    // owner has detached its CRS and playback renderers.
+    ProcessRenderRuntime::getInstance().retainOwner();
 
 }
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
 {
     // DC/ARA model ownership、F0 completion 和 DC destruction 均在消息线程串行执行。
-    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    completionGate_->closed = true;
+    auto* messageManager = juce::MessageManager::getInstance();
+    if (messageManager == nullptr || !messageManager->isThisTheMessageThread())
+    {
+        AppLogger::error("ARA-DIAG: DocumentController destroyed off message thread; ownership contract violated");
+        std::terminate();
+    }
+    stopTimer();
+    {
+        std::lock_guard<std::mutex> lock(completionGate_->mutex);
+        completionGate_->closed = true;
+        completionGate_->pending.clear();
+    }
 
     // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
-    // F0 Run（SetTerminate 加速返回）。不 join worker —— worker 是 detached
-    // 进程常驻执行器，见 shutdownStarted_ 后自行退出，期间只访问进程级 F0
-    // 服务与提交时捕获的纯数据，绝不访问已析构的 DC/service。
+    // F0 Run（SetTerminate 加速返回），并 join 所有 worker。
     contentF0ExtractionService_.reset();
 
-    // 停止渲染服务：detach execution lease（终止操作：清 lease + 丢弃排队 job
-    // + 等待执行中的回调完成）。不等待 asyncInFlight_：vocoder 推理不可取消，
-    // 其 onComplete 经 shared_ptr 持有 ContentRenderService，必然回调。
+    // 停止渲染服务：detach execution lease（清 lease、失败收敛排队 job，
+    // 等待同步回调和异步 completion 全部归还）。
     if (contentRenderService_)
-        contentRenderService_->detachExecutionLease(this);
+        contentRenderService_->detachExecutionLease(contentRenderService_.get());
 
     // Owner-driven detach: before clearing playbackRenderers_, walk the list
     // and call detachDocumentController(*this) on each renderer.
@@ -97,6 +110,8 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
             renderer->detachDocumentController(*this);
     }
     playbackRenderers_.clear();
+
+    ProcessRenderRuntime::getInstance().releaseOwner();
 }
 
 namespace {
@@ -1115,12 +1130,10 @@ void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModi
     // 直接按 Host 指针 erase，不先把匹配字段置空
     // persistent-id→ContentKey 映射保持稳定（araPersistentIdsByObjectId_ 不动）
     // 新 Host modification 仍创建新 wrapper
-    audioModifications_.erase(std::remove_if(audioModifications_.begin(), audioModifications_.end(),
-                                             [audioModification](const AudioModification& m)
-                                             {
-                                                 return m.audioModification == audioModification;
-                                             }),
-                              audioModifications_.end());
+    audioModifications_.remove_if([audioModification](const AudioModification& m)
+                                  {
+                                      return m.audioModification == audioModification;
+                                  });
 
     refreshRegisteredRenderers(publishModelChange());
 }
@@ -1465,6 +1478,7 @@ juce::ARAAudioModification* OpenTuneDocumentController::doCreateAudioModificatio
     // identity binding 由 didUpdate 唯一负责，clone 内容不得依赖 persistent ID。
     AudioModification dto;
     dto.audioModification = modification;
+    dto.wrapperGeneration = nextWrapperGeneration_++;
 
     if (optionalModificationToClone != nullptr)
     {
@@ -1648,6 +1662,7 @@ AudioModification& OpenTuneDocumentController::ensureAudioModification(juce::ARA
 
     // 2. Host 新 modification 必须直接创建新 wrapper，不再 rebind 已销毁的 wrapper
     AudioModification modification;
+    modification.wrapperGeneration = nextWrapperGeneration_++;
     modification.updateIdentity(audioModification);
     bindAudioModificationIdentity(modification);
     if (audioModification != nullptr)
@@ -2034,8 +2049,8 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     // 9. Schedule async F0 extraction via CRS (skip if F0 already available)
     if (!alreadyHasF0)
     {
-        auto* hostModification = modification.audioModification;
-        scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate, hostModification, currentStamp);
+        scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate,
+                                  modification.wrapperGeneration, modification.persistentId, currentStamp);
     }
 
     return true;
@@ -2064,7 +2079,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     ContentKey key,
     std::vector<float> channel0Data,
     double sourceSampleRate,
-    juce::ARAAudioModification* hostModification,
+    uint64_t wrapperGeneration,
+    juce::String persistentId,
     OriginalF0InputStamp stamp)
 {
     // ARA model access and F0 completion admission belong to the DC message-thread owner.
@@ -2075,7 +2091,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
         if (auto* m = findAudioModificationByContentKey(key))
         {
             if (m->birthRevision == birth
-                && (hostModification == nullptr || m->audioModification == hostModification))
+                && m->wrapperGeneration == wrapperGeneration
+                && m->persistentId == persistentId)
             {
                 m->applyOriginalF0State(OriginalF0State::Failed);
                 if (m->audioModification != nullptr)
@@ -2091,12 +2108,6 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
         birthRevision = mod->birthRevision;
 
     if (!contentF0ExtractionService_)
-    {
-        markFailedIfCurrentBirth(birthRevision);
-        return false;
-    }
-
-    if (hostModification == nullptr)
     {
         markFailedIfCurrentBirth(birthRevision);
         return false;
@@ -2155,90 +2166,27 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             result.energy = std::move(energy);
             return result;
         },
-        [this, key, birthRevision, hostModification, stamp,
-         completionGate = completionGate_](F0ExtractionService::Result&& result)
+        [completionGate = completionGate_, key, wrapperGeneration, persistentId, birthRevision, stamp]
+        (F0ExtractionService::Result&& result)
         {
-            // F0 completion is delivered to the same message-thread owner as the DC/ARA model;
-            // DC destruction and this completion cannot concurrently access the model.
             jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+            std::lock_guard<std::mutex> lock(completionGate->mutex);
             if (completionGate->closed)
                 return;
+            completionGate->pending.push_back({std::move(result), key, wrapperGeneration,
+                                               persistentId, birthRevision, stamp});
+        },
 
-            // Accept a completion only when both the submitted and current source stamps match.
-            auto findCurrentModification = [this, key, birthRevision, hostModification, stamp]() -> AudioModification*
-            {
-                auto* mod = findAudioModificationByContentKey(key);
-                if (mod == nullptr
-                    || !mod->hasContentState()
-                    || mod->birthRevision != birthRevision
-                    || hostModification == nullptr
-                    || mod->audioModification != hostModification
-                    || !mod->originalF0InputStamp.has_value()
-                    || mod->originalF0InputStamp.value() != stamp)
-                    return nullptr;
-
-                auto* currentSource = findAudioSource(mod->content->sourceWindow.sourcePersistentId);
-                if (currentSource == nullptr
-                    || makeF0InputStamp(*currentSource, *mod) != stamp)
-                    return nullptr;
-
-                return mod;
-            };
-
-            if (!result.success || result.f0.empty())
-            {
-                if (auto* mod = findCurrentModification())
-                {
-                    auto* hostModificationToNotify = mod->audioModification;
-                    mod->applyOriginalF0State(OriginalF0State::Failed);
-
-                    // Log the failure reason (result.errorMessage carries the worker-side failure cause)
-                    AppLogger::error("ARA-F0: extraction failed key="
-                        + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
-                        + " mod=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(mod))
-                        + " reason=" + (result.errorMessage.empty() ? juce::String("no_data_or_unvoiced") : juce::String(result.errorMessage)));
-
-                    if (hostModificationToNotify != nullptr)
-                        hostModificationToNotify->notifyContentChanged(
-                            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
-                }
-                return;
-            }
-
-            if (auto* mod = findCurrentModification())
-            {
-                auto* hostModificationToNotify = mod->audioModification;
-
-                // Rebuild pitchCurve from Result
-                auto pitchCurve = std::make_shared<PitchCurve>();
-                pitchCurve->setOriginalF0(result.f0);
-                pitchCurve->setSampleRate(static_cast<double>(result.f0SampleRate));
-                pitchCurve->setHopSize(result.hopSize);
-                if (!result.energy.empty())
-                    pitchCurve->setOriginalEnergy(result.energy);
-
-                // 调式检测（F0 提交成功链）：origin==Manual 的内容永不覆盖；
-                // 检测在 std::move 前读 result 数据，pitchCurve 移动后由 applyOriginalF0 存入 content
-                if (mod->content->analysis.detectedKey.origin != Origin::Manual) {
-                    F0KeyDetector detector;
-                    const auto detectedKey = detector.detect(result.f0, result.energy);
-                    if (detectedKey.origin != Origin::Unset)
-                        mod->applyDetectedKey(detectedKey);
-                }
-
-                mod->applyOriginalF0(std::move(pitchCurve));
-                // 保存 stamp，确保后续 Read 可命中 same-input no-op
-                mod->originalF0InputStamp = stamp;
-
-                // F0 commit → form "committed data → request current version render" transaction
-                requestFullModificationRender(key);
-
-                if (hostModificationToNotify != nullptr)
-                    hostModificationToNotify->notifyContentChanged(
-                        juce::ARAContentUpdateScopes::tuningIsAffected(),
-                        true);
-            }
-        });
+        [completionGate = completionGate_, key, wrapperGeneration, persistentId, birthRevision, stamp]
+         (F0ExtractionService::Result&& result)
+         {
+             // Dispatcher failure runs on the worker; only enqueue pure data here.
+             std::lock_guard<std::mutex> lock(completionGate->mutex);
+             if (completionGate->closed)
+                 return;
+             completionGate->pending.push_back({std::move(result), key, wrapperGeneration,
+                                                persistentId, birthRevision, stamp});
+         });
 
     // Non-Accepted: set Failed if current modification still matches this submission
     if (submitResult != F0ExtractionService::SubmitResult::Accepted)
@@ -2250,34 +2198,112 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     return true;
 }
 
+void OpenTuneDocumentController::timerCallback()
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    std::deque<F0CompletionRecord> records;
+    {
+        std::lock_guard<std::mutex> lock(completionGate_->mutex);
+        if (completionGate_->closed)
+            return;
+        records.swap(completionGate_->pending);
+    }
+    for (auto& record : records)
+        commitF0Completion(std::move(record));
+}
+
+void OpenTuneDocumentController::commitF0Completion(F0CompletionRecord record)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    auto* mod = findAudioModificationByContentKey(record.key);
+    if (mod == nullptr
+        || mod->wrapperGeneration != record.wrapperGeneration
+        || mod->birthRevision != record.birthRevision
+        || !mod->hasContentState()
+        || mod->persistentId != record.persistentId
+        || !mod->originalF0InputStamp.has_value()
+        || mod->originalF0InputStamp.value() != record.stamp)
+        return;
+
+    auto* currentSource = findAudioSource(mod->content->sourceWindow.sourcePersistentId);
+    if (currentSource == nullptr
+        || makeF0InputStamp(*currentSource, *mod) != record.stamp)
+        return;
+
+    auto* hostModificationToNotify = mod->audioModification;
+    if (!record.result.success || record.result.f0.empty())
+    {
+        mod->applyOriginalF0State(OriginalF0State::Failed);
+        AppLogger::error("ARA-F0: extraction failed reason="
+            + (record.result.errorMessage.empty()
+                ? juce::String("no_data_or_unvoiced")
+                : juce::String(record.result.errorMessage)));
+        if (hostModificationToNotify != nullptr)
+            hostModificationToNotify->notifyContentChanged(
+                juce::ARAContentUpdateScopes::tuningIsAffected(), true);
+        return;
+    }
+
+    auto pitchCurve = std::make_shared<PitchCurve>();
+    pitchCurve->setOriginalF0(record.result.f0);
+    pitchCurve->setSampleRate(static_cast<double>(record.result.f0SampleRate));
+    pitchCurve->setHopSize(record.result.hopSize);
+    if (!record.result.energy.empty())
+        pitchCurve->setOriginalEnergy(record.result.energy);
+
+    if (mod->content->analysis.detectedKey.origin != Origin::Manual)
+    {
+        F0KeyDetector detector;
+        const auto detectedKey = detector.detect(record.result.f0, record.result.energy);
+        if (detectedKey.origin != Origin::Unset)
+            mod->applyDetectedKey(detectedKey);
+    }
+
+    mod->applyOriginalF0(std::move(pitchCurve));
+    mod->originalF0InputStamp = record.stamp;
+    requestFullModificationRender(record.key);
+
+    if (hostModificationToNotify != nullptr)
+        hostModificationToNotify->notifyContentChanged(
+            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
+}
+
 // Per architecture: DC owns CRS and installs render execution lease.
 // The lease is detached in destructor to prevent dangling callback.
 
 void OpenTuneDocumentController::installDocumentRenderExecution()
 {
     ContentRenderService::ExecutionLease lease;
-    lease.owner = this;
-    lease.renderJobCallback = [this](RenderJob& job)
+    lease.owner = contentRenderService_.get();
+    const std::weak_ptr<ContentRenderService> weakContentRenderService = contentRenderService_;
+    lease.renderJobCallback = [weakContentRenderService](RenderJob& job)
     {
-        processDocumentRenderJob(job);
+        if (auto contentRenderService = weakContentRenderService.lock())
+            OpenTuneDocumentController::processDocumentRenderJob(std::move(contentRenderService), job);
     };
 
     contentRenderService_->attachExecutionLease(std::move(lease));
 }
 
-void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
+void OpenTuneDocumentController::processDocumentRenderJob(
+    std::shared_ptr<ContentRenderService> contentRenderService,
+    RenderJob& job)
 {
     if (job.renderCache == nullptr)
+    {
+        AppLogger::error("ARA-DIAG: render job dropped without cache");
         return;
+    }
 
     if (!job.contentSnapshot)
     {
+        AppLogger::error("ARA-DIAG: render job failed without content snapshot");
         job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
         return;
     }
 
     ProcessRenderRuntime::getInstance().processChunkRenderJob(
-        contentRenderService_, job,
+        std::move(contentRenderService), job,
         false, {});
 }
 
