@@ -71,6 +71,7 @@ inline std::wstring commandLine(int argc, char** argv, const std::wstring& execu
         result.push_back(L' ');
         appendQuoted(result, wideArg(argv[index]));
     }
+    result += L" --opentune-lifecycle-child";
     return result;
 }
 
@@ -84,14 +85,9 @@ inline void watchdogFailure(const char* testName)
 template <typename ChildMain>
 int run(int argc, char** argv, const char* testName, ChildMain childMain)
 {
-    const auto* childMarker = _wgetenv(L"OPENTUNE_LIFECYCLE_CHILD");
-    if (childMarker != nullptr && std::wstring(childMarker) == L"1")
-        return childMain(argc, argv);
-
-    if (!SetEnvironmentVariableW(L"OPENTUNE_LIFECYCLE_CHILD", L"1")) {
-        detail::watchdogFailure(testName);
-        return 1;
-    }
+    for (int index = 1; index < argc; ++index)
+        if (std::string(argv[index]) == "--opentune-lifecycle-child")
+            return childMain(argc, argv);
 
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);

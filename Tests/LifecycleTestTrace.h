@@ -5,16 +5,15 @@
 #endif
 
 #include <atomic>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <initializer_list>
 #include <utility>
+#include <mutex>
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -29,6 +28,7 @@ inline void trace(const char* testName,
 {
     static std::atomic<uint64_t> sequence{0};
     static std::atomic<bool> firstEvent{true};
+    static std::mutex fileMutex;
     const auto root = std::filesystem::path(std::getenv("OPENTUNE_LIFECYCLE_TRACE_DIR")
         ? std::getenv("OPENTUNE_LIFECYCLE_TRACE_DIR")
         : "lifecycle-traces");
@@ -43,6 +43,7 @@ inline void trace(const char* testName,
     std::ostringstream threadId;
     threadId << std::this_thread::get_id();
     const auto path = root / (std::string(testName) + "-" + std::to_string(pid) + ".jsonl");
+    std::lock_guard<std::mutex> lock(fileMutex);
     const auto first = firstEvent.exchange(false, std::memory_order_acq_rel);
     std::ofstream output(path, first ? std::ios::trunc : std::ios::app);
     std::ostringstream line;

@@ -1046,6 +1046,10 @@ void ProcessRenderRuntime::deferOrRequeue(
     RenderJob job,
     CompletionContext completion)
 {
+    const auto failureCache = job.renderCache;
+    const auto failureContentKey = job.contentKey;
+    const auto failureStartSample = job.startSample;
+    const auto failureRevision = job.targetRevision;
     bool shouldDefer = false;
     bool deferredCapacityRejected = false;
     bool shuttingDown = false;
@@ -1077,8 +1081,20 @@ void ProcessRenderRuntime::deferOrRequeue(
             DeferredRetry failed;
             {
                 std::lock_guard<std::mutex> lock(vocoderMutex_);
-                failed = std::move(deferredRetries_.back());
-                deferredRetries_.pop_back();
+                const auto failedRetry = std::find_if(
+                    deferredRetries_.begin(), deferredRetries_.end(),
+                    [failureCache, failureContentKey, failureStartSample, failureRevision](
+                        const DeferredRetry& retry) {
+                        return retry.job.renderCache == failureCache
+                            && retry.job.contentKey == failureContentKey
+                            && retry.job.startSample == failureStartSample
+                            && retry.job.targetRevision == failureRevision;
+                    });
+                if (failedRetry != deferredRetries_.end())
+                {
+                    failed = std::move(*failedRetry);
+                    deferredRetries_.erase(failedRetry);
+                }
             }
             if (failed.job.renderCache != nullptr
                 && failed.job.renderCache->completeChunkRenderFailure(
