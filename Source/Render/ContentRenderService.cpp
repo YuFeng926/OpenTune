@@ -215,6 +215,21 @@ void ContentRenderService::drainRenderWorker()
     renderWorker_.drain();
 }
 
+std::size_t ContentRenderService::renderQueueDepth() const noexcept
+{
+    return renderWorker_.queueDepth();
+}
+
+int ContentRenderService::renderInFlight() const noexcept
+{
+    return renderWorker_.inFlight();
+}
+
+int ContentRenderService::renderAsyncInFlight() const noexcept
+{
+    return renderWorker_.asyncInFlight();
+}
+
 std::shared_ptr<SoundTouchStretcher> ContentRenderService::getStretcher(
     ContentKey key, double sampleRate, int channels)
 {

@@ -61,6 +61,10 @@ public:
     void resumeRenderWorker();
     void drainRenderWorker();
 
+    std::size_t renderQueueDepth() const noexcept;
+    int renderInFlight() const noexcept;
+    int renderAsyncInFlight() const noexcept;
+
     std::shared_ptr<SoundTouchStretcher> getStretcher(
         ContentKey key, double sampleRate, int channels);
     void removeStretcher(ContentKey key);

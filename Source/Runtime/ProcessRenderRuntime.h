@@ -95,6 +95,7 @@ public:
     std::size_t deferredRetryCount() const noexcept;
     bool hasActiveTransaction() const noexcept;
     int domainSubmitInFlight() const noexcept;
+    uint64_t vocoderGeneration() const noexcept;
     int ownerCount() const noexcept;
     bool isControlWorkerJoinable() const noexcept;
 

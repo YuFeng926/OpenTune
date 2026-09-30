@@ -1030,6 +1030,12 @@ int ProcessRenderRuntime::domainSubmitInFlight() const noexcept
     return domainSubmitInFlight_;
 }
 
+uint64_t ProcessRenderRuntime::vocoderGeneration() const noexcept
+{
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    return vocoderGeneration_;
+}
+
 int ProcessRenderRuntime::ownerCount() const noexcept
 {
     return ownerCount_.load(std::memory_order_acquire);

@@ -88,6 +88,11 @@ int runChild(int argc, char** argv)
         {"controlQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.controlQueueDepth()))},
         {"deferredRetryCount", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.deferredRetryCount()))},
         {"activeTransaction", runtime.hasActiveTransaction() ? "true" : "false"},
+        {"domainSubmitInFlight", OpenTuneTest::jsonNumber(runtime.domainSubmitInFlight())},
+        {"domainGeneration", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.vocoderGeneration()))},
+        {"renderQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(service->renderQueueDepth()))},
+        {"renderInFlight", OpenTuneTest::jsonNumber(service->renderInFlight())},
+        {"renderAsyncInFlight", OpenTuneTest::jsonNumber(service->renderAsyncInFlight())},
         {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
     });
 
