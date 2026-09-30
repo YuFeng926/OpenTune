@@ -3,11 +3,13 @@
 #include "RenderJob.h"
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace OpenTune {
 
@@ -73,7 +75,7 @@ public:
                                      const std::function<void()>& reconcile);
     void discardStage1Queue(RenderCache* cache);
     void discardAllStage1Queue();
-    void enqueue(RenderJob job);
+    bool enqueue(RenderJob job);
     std::shared_ptr<AsyncState> beginAsyncJob();
     static void completeAsyncJob(const std::shared_ptr<AsyncState>& state) noexcept;
     static bool isAsyncJobClosed(const std::shared_ptr<AsyncState>& state) noexcept;
@@ -94,13 +96,20 @@ public:
     void waitAsyncIdle();
     void stop();
 
+    std::size_t queueDepth() const noexcept;
+    int inFlight() const noexcept;
+    int asyncInFlight() const noexcept;
+    bool isPaused() const noexcept;
+    bool isJoinable() const noexcept;
+
 private:
     void loop();
-    void enqueueLocked(RenderJob job);
+    bool enqueueLocked(RenderJob job);
 
     // 物理 Stage1 队列与 cache pending chunk 集合同步。仅可在 mutex_ 持有时调用。
     // 每个 (RenderCache, chunk start) 身份只允许一个排队项。
-    void syncStage1QueueLocked(const RenderJob& templateJob);
+    void syncStage1QueueLocked(const RenderJob& templateJob,
+                               std::vector<RenderCache::PendingJob>& capacityFailures);
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;

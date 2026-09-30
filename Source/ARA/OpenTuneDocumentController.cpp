@@ -63,7 +63,7 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     , contentRenderService_(std::make_shared<ContentRenderService>())
     , resamplingManager_(std::make_shared<ResamplingManager>())
     , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(
-        1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
+        1, 100, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
 {
     installDocumentRenderExecution();
     startTimerHz(30);

@@ -140,6 +140,8 @@ bool ProcessF0Runtime::submitNotes(NoteGeneratorInput input,
     std::lock_guard<std::mutex> lock(gameQueueMutex_);
     if (gameStopping_)
         gameStopping_ = false;
+    if (gameQueue_.size() >= 100)
+        return false;
     bool appended = false;
     try
     {

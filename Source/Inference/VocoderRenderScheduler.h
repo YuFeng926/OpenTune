@@ -3,6 +3,7 @@
 #include <juce_core/juce_core.h>
 #include <onnxruntime_cxx_api.h>
 #include <atomic>
+#include <cstddef>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -61,7 +62,12 @@ public:
      */
     bool submit(Job job);
 
-    static constexpr int kMaxQueueDepth = 50;
+    std::size_t jobQueueDepth() const noexcept;
+    std::size_t completionQueueDepth() const noexcept;
+    bool isAcceptingJobs() const noexcept;
+    bool isWorkerJoinable() const noexcept;
+
+    static constexpr int kMaxQueueDepth = 100;
 
 private:
 

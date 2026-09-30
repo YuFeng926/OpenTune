@@ -6,6 +6,7 @@
 #include "../Utils/VocoderModelWeight.h"
 #include <condition_variable>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -90,6 +91,13 @@ public:
     bool isVocoderReady() const noexcept;
     bool isVocoderReconfiguring() const noexcept;
 
+    std::size_t controlQueueDepth() const noexcept;
+    std::size_t deferredRetryCount() const noexcept;
+    bool hasActiveTransaction() const noexcept;
+    int domainSubmitInFlight() const noexcept;
+    int ownerCount() const noexcept;
+    bool isControlWorkerJoinable() const noexcept;
+
 private:
     ProcessRenderRuntime();
     ~ProcessRenderRuntime();
@@ -135,7 +143,7 @@ private:
     ControlResult reconfigureVocoder(const ControlCommand& command);
 
     void controlWorkerLoop();
-    void postControlCommand(ControlCommand command);
+    bool postControlCommand(ControlCommand command);
     void finishShutdown();
     static bool claimControlTransaction(const std::shared_ptr<ControlTransaction>& transaction) noexcept;
     static void completeClaimedControlTransaction(const std::shared_ptr<ControlTransaction>& transaction,
@@ -144,11 +152,11 @@ private:
                                          const char* reason) noexcept;
 
     std::thread controlWorker_;
-    std::mutex controlMutex_;
+    mutable std::mutex controlMutex_;
     std::condition_variable controlCv_;
     std::condition_variable workerExitCv_;
     std::deque<ControlCommand> controlQueue_;
-    std::mutex shutdownMutex_;
+    mutable std::mutex shutdownMutex_;
     bool ensureVocoderQueued_{false}; // controlMutex_ protected
     std::atomic<bool> shuttingDown_{false};
     std::atomic<bool> workerExitDispatchAttempted_{false};
@@ -175,6 +183,8 @@ private:
 
     void failDeferredRetries(std::vector<DeferredRetry> retries);
     std::vector<DeferredRetry> deferredRetries_; // vocoderMutex_ protected
+    static constexpr std::size_t kMaxControlQueueDepth = 100;
+    static constexpr std::size_t kMaxDeferredRetryDepth = 100;
 
     void deferOrRequeue(std::shared_ptr<ContentRenderService> crs,
                         RenderJob job,

@@ -1,8 +1,10 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
 #include <ARA_Library/Dispatch/ARAHostDispatch.h>
+#include <atomic>
 #include <cstdio>
 #include "LifecycleTestTrace.h"
+#include "LifecycleWatchdog.h"
 
 extern const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory();
 
@@ -47,9 +49,13 @@ bool check (bool value, const char* name)
 }
 }
 
-int main()
+int runChild(int argc, char** argv)
 {
-    OpenTuneTest::trace("ARALifecycleContractTests", "process_begin");
+    juce::ignoreUnused(argc, argv);
+    OpenTuneTest::trace("ARALifecycleContractTests", "process_begin", {
+        {"watchdogMs", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs)},
+        {"queueLimit", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleQueueApprovalLimit)}
+    });
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     const auto* factory = createARAFactory();
     if (! check (factory != nullptr, "sdk_link_contract_unavailable"))
@@ -135,6 +141,18 @@ int main()
                  "audio_model_rebuild_failed"))
         return 1;
 
+    std::atomic<bool> dispatcherRan{false};
+    if (! check (juce::MessageManager::callAsync ([&dispatcherRan]
+        {
+            dispatcherRan.store(true, std::memory_order_release);
+            juce::MessageManager::getInstance()->stopDispatchLoop();
+        }), "message_dispatch_post_failed"))
+        return 1;
+    juce::MessageManager::getInstance()->runDispatchLoop();
+    if (! check (dispatcherRan.load(std::memory_order_acquire), "message_dispatch_not_run"))
+        return 1;
+    OpenTuneTest::trace("ARALifecycleContractTests", "message_dispatch_complete");
+
     documentController.destroyAudioModification (rebuiltModification);
     documentController.destroyAudioSource (rebuiltSource);
     documentController.destroyDocumentController();
@@ -144,4 +162,9 @@ int main()
     std::fprintf (stdout, "{\"event\":\"ara_lifecycle_contract\",\"result\":\"success\",\"completionGate\":\"pumped\",\"wrapperGeneration\":\"recreated\"}\n");
     OpenTuneTest::trace("ARALifecycleContractTests", "process_end");
     return 0;
+}
+
+int main(int argc, char** argv)
+{
+    return OpenTuneTest::run(argc, argv, "ARALifecycleContractTests", runChild);
 }

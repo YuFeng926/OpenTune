@@ -765,7 +765,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     // Construct services that used to be value members. Their constructors
     // start detached worker threads -- must not run during scan-time createInstance.
     auto f0SvcOwner = std::make_unique<F0ExtractionService>(
-        1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); });
+        1, 100, [] { return ProcessF0Runtime::getInstance().getF0Service(); });
     auto refSvc = std::make_unique<ReferenceAnalysisService>();
     auto appPreferences = std::make_unique<AppPreferences>();
 

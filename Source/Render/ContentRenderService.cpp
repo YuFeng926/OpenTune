@@ -34,8 +34,7 @@ bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(
     job.contentSnapshot = std::move(contentSnapshot);
     job.audioBuffer = std::move(audioBuffer);
     job.audioSampleRate = audioSampleRate;
-    renderWorker_.enqueue(std::move(job));
-    return true;
+    return renderWorker_.enqueue(std::move(job));
 }
 
 void ContentRenderService::publishPlaybackSource(ContentKey key, PlaybackReadSource source)
@@ -172,7 +171,7 @@ void ContentRenderService::enqueueRender(RenderJob job)
     });
 }
 
-void ContentRenderService::requeueRenderChunk(const RenderJob& job)
+bool ContentRenderService::requeueRenderChunk(const RenderJob& job)
 {
     jassert(job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr);
 
@@ -181,11 +180,14 @@ void ContentRenderService::requeueRenderChunk(const RenderJob& job)
     const bool requeued = job.renderCache->requeueRunningChunk(
         job.startSample, job.targetRevision);
     if (!requeued)
-        return;
+        return false;
 
     RenderJob subJob = job;
     subJob.queuedChunkStartSample = job.startSample;
-    renderWorker_.enqueue(std::move(subJob));
+    if (renderWorker_.enqueue(std::move(subJob)))
+        return true;
+    job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
+    return false;
 }
 
 std::shared_ptr<RenderWorker::AsyncState> ContentRenderService::beginAsyncRenderJob()

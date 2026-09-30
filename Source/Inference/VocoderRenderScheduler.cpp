@@ -86,34 +86,38 @@ void VocoderRenderScheduler::shutdown() {
 }
 
 bool VocoderRenderScheduler::submit(Job job) {
-    std::function<void()> overflowCompletion;
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
         if (!acceptingJobs_.load())
             return false;
 
         if (static_cast<int>(jobQueue_.size()) >= kMaxQueueDepth) {
-            auto discarded = std::move(jobQueue_.front());
-            jobQueue_.pop_front();
-            if (discarded.onComplete)
-                overflowCompletion = [callback = std::move(discarded.onComplete)] {
-                    try { callback(JobResult::Cancelled, "Queue overflow: job discarded", {}); }
-                    catch (const std::exception& e) {
-                        AppLogger::error("[VocoderRenderScheduler] overflow completion threw: " + juce::String(e.what()));
-                    }
-                    catch (...) {
-                        AppLogger::error("[VocoderRenderScheduler] overflow completion threw unknown exception");
-                    }
-                };
+            return false;
         }
         jobQueue_.push_back(std::move(job));
     }
 
-    if (overflowCompletion)
-        overflowCompletion();
-
     queueCV_.notify_one();
     return true;
+}
+
+std::size_t VocoderRenderScheduler::jobQueueDepth() const noexcept {
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    return jobQueue_.size();
+}
+
+std::size_t VocoderRenderScheduler::completionQueueDepth() const noexcept {
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    return completionQueue_.size();
+}
+
+bool VocoderRenderScheduler::isAcceptingJobs() const noexcept {
+    return acceptingJobs_.load(std::memory_order_acquire);
+}
+
+bool VocoderRenderScheduler::isWorkerJoinable() const noexcept {
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    return worker_ != nullptr && worker_->joinable();
 }
 
 void VocoderRenderScheduler::workerThread() {

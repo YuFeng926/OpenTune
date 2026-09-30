@@ -107,17 +107,23 @@ void RenderWorker::detachExecutionLease(void* owner)
 void RenderWorker::reconcileAndSyncStage1Queue(const RenderJob& templateJob,
                                                const std::function<void()>& reconcile)
 {
+    std::vector<RenderCache::PendingJob> capacityFailures;
     {
         std::lock_guard<std::mutex> lk(mutex_);
         // 与 worker loop 的 claim 共用同一临界区：reconcile 产生的 revision
         // 不可能被旧 queued job 在新 snapshot 同步前 claim。
         reconcile();
-        syncStage1QueueLocked(templateJob);
+        syncStage1QueueLocked(templateJob, capacityFailures);
     }
+    for (const auto& failure : capacityFailures)
+        templateJob.renderCache->completeChunkRenderFailure(
+            failure.startSample, failure.targetRevision);
     cv_.notify_all();
 }
 
-void RenderWorker::syncStage1QueueLocked(const RenderJob& templateJob)
+void RenderWorker::syncStage1QueueLocked(
+    const RenderJob& templateJob,
+    std::vector<RenderCache::PendingJob>& capacityFailures)
 {
     jassert(templateJob.kind == RenderJob::Kind::Stage1Render);
     jassert(templateJob.renderCache != nullptr);
@@ -167,7 +173,8 @@ void RenderWorker::syncStage1QueueLocked(const RenderJob& templateJob)
         queued.endSampleExclusive = pending.endSampleExclusive;
         queued.targetRevision = pending.targetRevision;
         queued.queuedChunkStartSample = startSample;
-        enqueueLocked(std::move(queued));
+        if (!enqueueLocked(std::move(queued)))
+            capacityFailures.push_back(pending);
     }
 }
 
@@ -210,7 +217,7 @@ void RenderWorker::discardAllStage1Queue()
     cv_.notify_all();
 }
 
-void RenderWorker::enqueue(RenderJob job)
+bool RenderWorker::enqueue(RenderJob job)
 {
     {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -218,7 +225,7 @@ void RenderWorker::enqueue(RenderJob job)
         {
             jassert(job.renderCache != nullptr && job.queuedChunkStartSample >= 0);
             if (job.renderCache == nullptr || job.queuedChunkStartSample < 0)
-                return;
+                return false;
 
             const auto* cache = job.renderCache.get();
             const bool alreadyQueued = std::any_of(queue_.begin(), queue_.end(),
@@ -228,20 +235,25 @@ void RenderWorker::enqueue(RenderJob job)
                         && queued.queuedChunkStartSample == job.queuedChunkStartSample;
                 });
             if (alreadyQueued)
-                return;
+                return true;
         }
 
-        enqueueLocked(std::move(job));
+        if (!enqueueLocked(std::move(job)))
+            return false;
     }
     cv_.notify_one();
+    return true;
 }
 
-void RenderWorker::enqueueLocked(RenderJob job)
+bool RenderWorker::enqueueLocked(RenderJob job)
 {
+    static constexpr std::size_t kMaxQueueDepth = 100;
+    if (queue_.size() >= kMaxQueueDepth)
+        return false;
     if (job.kind != RenderJob::Kind::Stage1Render)
     {
         queue_.push_back(std::move(job));
-        return;
+        return true;
     }
 
     const auto* cache = job.renderCache.get();
@@ -252,6 +264,7 @@ void RenderWorker::enqueueLocked(RenderJob job)
                 && queued.queuedChunkStartSample > job.queuedChunkStartSample;
         });
     queue_.insert(insertIt, std::move(job));
+    return true;
 }
 
 std::shared_ptr<RenderWorker::AsyncState> RenderWorker::beginAsyncJob()
@@ -335,6 +348,35 @@ void RenderWorker::waitAsyncIdle()
     asyncControl_->cv.wait(lk, [this] {
         return asyncControl_->count.load(std::memory_order_acquire) == 0;
     });
+}
+
+std::size_t RenderWorker::queueDepth() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    return queue_.size();
+}
+
+int RenderWorker::inFlight() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    return inFlight_;
+}
+
+int RenderWorker::asyncInFlight() const noexcept
+{
+    return asyncControl_->count.load(std::memory_order_acquire);
+}
+
+bool RenderWorker::isPaused() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    return paused_;
+}
+
+bool RenderWorker::isJoinable() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    return thread_.joinable();
 }
 
 // ============================================================

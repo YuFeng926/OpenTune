@@ -54,7 +54,7 @@ public:
     void enqueueRender(RenderJob job);
     // stale-generation 回退：只回退 RenderCache 状态机（Running→Pending）并投递
     // 一个带 chunk 身份的队列项，不重算几何/快照、不 bump desired。
-    void requeueRenderChunk(const RenderJob& job);
+    bool requeueRenderChunk(const RenderJob& job);
     std::shared_ptr<RenderWorker::AsyncState> beginAsyncRenderJob();
     static void completeAsyncRenderJob(const std::shared_ptr<RenderWorker::AsyncState>& state) noexcept;
     void pauseRenderWorker();

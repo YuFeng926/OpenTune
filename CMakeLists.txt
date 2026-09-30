@@ -1518,10 +1518,10 @@ if(OPENTUNE_BUILD_TESTS)
            AND NOT render_contract STREQUAL "RenderRuntimePerformanceTests")
             add_test(NAME ${render_contract} COMMAND ${render_contract})
             set_tests_properties(${render_contract} PROPERTIES
-                TIMEOUT 30
+                TIMEOUT 4
                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                 ENVIRONMENT "OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
-        else()
+        elseif(render_contract STREQUAL "RenderRuntimeBackpressureTests")
             message(STATUS "Not registering RenderRuntimeBackpressureTests: approved blocking-synthesize injector is unavailable")
         endif()
         if(WIN32)
@@ -1547,7 +1547,7 @@ if(OPENTUNE_BUILD_TESTS)
     else()
         add_test(NAME RenderRuntimePerformanceTests COMMAND RenderRuntimePerformanceTests)
         set_tests_properties(RenderRuntimePerformanceTests PROPERTIES
-            TIMEOUT 30
+            TIMEOUT 4
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
 

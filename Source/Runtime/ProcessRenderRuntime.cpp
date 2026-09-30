@@ -686,8 +686,8 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(con
         {
             if (auto crsShared = retry.crs.lock())
             {
-                crsShared->requeueRenderChunk(retry.job);
-                continue;
+                if (crsShared->requeueRenderChunk(retry.job))
+                    continue;
             }
         }
 
@@ -699,7 +699,7 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(con
     return domainAvailable ? ControlResult::Changed : ControlResult::Failed;
 }
 
-void ProcessRenderRuntime::postControlCommand(ControlCommand command)
+bool ProcessRenderRuntime::postControlCommand(ControlCommand command)
 {
     bool rejected = false;
     {
@@ -711,13 +711,20 @@ void ProcessRenderRuntime::postControlCommand(ControlCommand command)
         }
         else
         {
-            if (command.type == ControlCommand::Type::EnsureVocoder)
+            if (command.type != ControlCommand::Type::Stop
+                && controlQueue_.size() >= ProcessRenderRuntime::kMaxControlQueueDepth)
+            {
+                AppLogger::error("[ProcessRenderRuntime] control queue full; Failed");
+                rejected = true;
+            }
+            else if (command.type == ControlCommand::Type::EnsureVocoder)
             {
                 if (ensureVocoderQueued_)
-                    return;
+                    return true;
                 ensureVocoderQueued_ = true;
             }
-            controlQueue_.push_back(std::move(command));
+            if (!rejected)
+                controlQueue_.push_back(std::move(command));
         }
     }
 
@@ -745,9 +752,10 @@ void ProcessRenderRuntime::postControlCommand(ControlCommand command)
             });
         if (!posted)
             finish("shutdown rejection dispatcher failure");
-        return;
+        return false;
     }
     controlCv_.notify_one();
+    return true;
 }
 
 void ProcessRenderRuntime::controlWorkerLoop()
@@ -998,19 +1006,60 @@ bool ProcessRenderRuntime::isVocoderReconfiguring() const noexcept
     return vocoderReconfiguring_;
 }
 
+std::size_t ProcessRenderRuntime::controlQueueDepth() const noexcept
+{
+    std::lock_guard<std::mutex> lock(controlMutex_);
+    return controlQueue_.size();
+}
+
+std::size_t ProcessRenderRuntime::deferredRetryCount() const noexcept
+{
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    return deferredRetries_.size();
+}
+
+bool ProcessRenderRuntime::hasActiveTransaction() const noexcept
+{
+    std::lock_guard<std::mutex> lock(controlMutex_);
+    return activeTransaction_ != nullptr;
+}
+
+int ProcessRenderRuntime::domainSubmitInFlight() const noexcept
+{
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    return domainSubmitInFlight_;
+}
+
+int ProcessRenderRuntime::ownerCount() const noexcept
+{
+    return ownerCount_.load(std::memory_order_acquire);
+}
+
+bool ProcessRenderRuntime::isControlWorkerJoinable() const noexcept
+{
+    std::lock_guard<std::mutex> lock(shutdownMutex_);
+    return controlWorker_.joinable();
+}
+
 void ProcessRenderRuntime::deferOrRequeue(
     std::shared_ptr<ContentRenderService> crs,
     RenderJob job,
     CompletionContext completion)
 {
     bool shouldDefer = false;
+    bool deferredCapacityRejected = false;
     bool shuttingDown = false;
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
         shuttingDown = shuttingDown_.load(std::memory_order_acquire);
         shouldDefer = !shuttingDown && (vocoderReconfiguring_ || vocoderDomain_ == nullptr);
-        if (shouldDefer)
+        if (shouldDefer && deferredRetries_.size() < ProcessRenderRuntime::kMaxDeferredRetryDepth)
             deferredRetries_.push_back({crs, std::move(job), std::move(completion)});
+        else if (shouldDefer)
+        {
+            shouldDefer = false;
+            deferredCapacityRejected = true;
+        }
     }
     if (shuttingDown)
     {
@@ -1023,10 +1072,30 @@ void ProcessRenderRuntime::deferOrRequeue(
     {
         ControlCommand command;
         command.type = ControlCommand::Type::EnsureVocoder;
-        postControlCommand(std::move(command));
+        if (!postControlCommand(std::move(command)))
+        {
+            DeferredRetry failed;
+            {
+                std::lock_guard<std::mutex> lock(vocoderMutex_);
+                failed = std::move(deferredRetries_.back());
+                deferredRetries_.pop_back();
+            }
+            if (failed.job.renderCache != nullptr
+                && failed.job.renderCache->completeChunkRenderFailure(
+                    failed.job.startSample, failed.job.targetRevision))
+                notifyChunkFailed(failed.completion, failed.job.contentKey);
+        }
     }
-    else
-        crs->requeueRenderChunk(std::move(job));
+    else if (deferredCapacityRejected)
+    {
+        if (job.renderCache != nullptr
+            && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
+            notifyChunkFailed(completion, job.contentKey);
+    }
+    else if (!crs->requeueRenderChunk(job)
+        && job.renderCache != nullptr
+        && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
+        notifyChunkFailed(completion, job.contentKey);
 }
 
 void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
