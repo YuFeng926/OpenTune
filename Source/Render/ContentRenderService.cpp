@@ -184,10 +184,7 @@ bool ContentRenderService::requeueRenderChunk(const RenderJob& job)
 
     RenderJob subJob = job;
     subJob.queuedChunkStartSample = job.startSample;
-    if (renderWorker_.enqueue(std::move(subJob)))
-        return true;
-    job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
-    return false;
+    return renderWorker_.enqueue(std::move(subJob));
 }
 
 std::shared_ptr<RenderWorker::AsyncState> ContentRenderService::beginAsyncRenderJob()
