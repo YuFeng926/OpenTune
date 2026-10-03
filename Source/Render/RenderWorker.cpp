@@ -299,8 +299,7 @@ bool RenderWorker::requeueStage1Chunk(const RenderJob& job)
 
 bool RenderWorker::enqueueLocked(RenderJob job, bool requeueRunningChunk)
 {
-    static constexpr std::size_t kMaxQueueDepth = 100;
-    if (!lease_.isValid() || queue_.size() >= kMaxQueueDepth)
+    if (!lease_.isValid() || queue_.size() >= RenderWorker::kMaxQueueDepth)
         return false;
     if (requeueRunningChunk
         && !job.renderCache->requeueRunningChunk(job.startSample, job.targetRevision))

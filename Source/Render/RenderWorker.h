@@ -39,6 +39,8 @@ struct RenderExecutionLease
 class RenderWorker
 {
 public:
+    static constexpr std::size_t kMaxQueueDepth = 1000;
+
     struct AsyncState
     {
         struct Control

@@ -276,6 +276,61 @@ bool runRenderWorkerRequeueContract()
                                "enqueue_after_detach_not_failed");
 }
 
+bool runRenderWorkerStage1QueueCapacityContract()
+{
+    OpenTune::RenderWorker worker;
+    int owner = 0;
+    worker.attachExecutionLease({&owner, [](OpenTune::RenderJob& job) {
+        const auto sampleCount = static_cast<size_t>(job.endSampleExclusive - job.startSample);
+        job.renderCache->completeChunkRenderWithAudio(
+            job.startSample,
+            job.endSampleExclusive,
+            std::vector<float>(sampleCount, 1.0f),
+            job.targetRevision);
+    }});
+    worker.pause();
+
+    constexpr std::size_t kQueuedJobs = 101;
+    std::vector<std::shared_ptr<OpenTune::RenderCache>> caches;
+    caches.reserve(kQueuedJobs);
+
+    bool passed = OpenTune::RenderWorker::kMaxQueueDepth == 1000;
+    for (std::size_t i = 0; i < kQueuedJobs && passed; ++i)
+    {
+        auto cache = std::make_shared<OpenTune::RenderCache>();
+        cache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        const auto pending = cache->getPendingJobs();
+        if (!checkRenderContract(pending.size() == 1,
+                                 "stage1_capacity_pending_setup_failed"))
+            return false;
+
+        OpenTune::RenderJob job;
+        job.kind = OpenTune::RenderJob::Kind::Stage1Render;
+        job.renderCache = cache;
+        job.startSample = pending.front().startSample;
+        job.endSampleExclusive = pending.front().endSampleExclusive;
+        job.queuedChunkStartSample = pending.front().startSample;
+        job.targetRevision = pending.front().targetRevision;
+        passed = worker.enqueue(std::move(job));
+        caches.push_back(std::move(cache));
+    }
+
+    passed = passed && worker.queueDepth() == kQueuedJobs;
+    for (const auto& cache : caches)
+    {
+        const auto stats = cache->getChunkStats();
+        passed = passed && stats.pending == 1 && stats.failed == 0;
+    }
+
+    worker.resume();
+    worker.drain();
+    for (const auto& cache : caches)
+        passed = passed && cache->isCanonicalSettled();
+
+    worker.detachExecutionLease(&owner);
+    return checkRenderContract(passed, "stage1_queue_capacity_regressed");
+}
+
 int runChild(int argc, char** argv)
 {
     juce::ignoreUnused(argc, argv);
@@ -302,6 +357,8 @@ int runChild(int argc, char** argv)
     if (!runVocoderErrorContract())
         return 1;
     if (!runRenderWorkerRequeueContract())
+        return 1;
+    if (!runRenderWorkerStage1QueueCapacityContract())
         return 1;
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "render_cache_capacity_passed", {
         {"renderCacheBytes", OpenTuneTest::jsonNumber(static_cast<long long>(
