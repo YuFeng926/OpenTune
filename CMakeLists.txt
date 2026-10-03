@@ -1415,6 +1415,25 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME PitchLaneVisualPolicyTests COMMAND OpenTunePitchLaneVisualPolicyTests)
 
+    add_executable(OpenTuneMelSpectrogramTests
+        Tests/MelSpectrogramTests.cpp
+    )
+    target_include_directories(OpenTuneMelSpectrogramTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${ARA_SDK_PATH})
+    target_link_libraries(OpenTuneMelSpectrogramTests PRIVATE
+        OpenTune)
+    target_sources(OpenTuneMelSpectrogramTests PRIVATE
+        "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
+        "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
+        "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
+        "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelArrangement.cpp")
+    if(MSVC)
+        target_compile_options(OpenTuneMelSpectrogramTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME MelSpectrogramTests COMMAND OpenTuneMelSpectrogramTests)
+
     # VST3 processor outer-state codec (OTST v11 / legacy v10/v9 skip) tests.
     # Links juce_core for MemoryBlock / stream I/O.
     add_executable(OpenTuneVst3StateCodecTests

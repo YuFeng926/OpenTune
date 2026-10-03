@@ -1096,6 +1096,8 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
             out.conditioningBins = vocoderDomain_->getConditioningBins();
             out.conditioningType = vocoderDomain_->getConditioningType();
             out.fMax = vocoderDomain_->getFMax();
+            out.melFilterbank = vocoderDomain_->getMelFilterbankSpec();
+            out.melLogEps = vocoderDomain_->getMelLogEps();
             return true;
         }
 
@@ -1623,6 +1625,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     conditioningConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
     conditioningConfig.nMels = conditioningBins;
     conditioningConfig.fMax = fMax;
+    conditioningConfig.melFilterbank = vocoderCfg.melFilterbank;
+    conditioningConfig.logEps = vocoderCfg.melLogEps;
 
     const bool linearSpec = vocoderCfg.conditioningType == VocoderConditioningType::LogLinearSpec;
     auto conditioningResult = linearSpec

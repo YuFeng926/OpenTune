@@ -69,4 +69,12 @@ float VocoderDomain::getFMax() const {
     return inferenceService_ ? inferenceService_->getFMax() : 16000.0f;
 }
 
+MelFilterbankSpec VocoderDomain::getMelFilterbankSpec() const {
+    return inferenceService_ ? inferenceService_->getMelFilterbankSpec() : MelFilterbankSpec{};
+}
+
+float VocoderDomain::getMelLogEps() const {
+    return inferenceService_ ? inferenceService_->getMelLogEps() : 1.0e-5f;
+}
+
 } // namespace OpenTune

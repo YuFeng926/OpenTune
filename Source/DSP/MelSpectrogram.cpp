@@ -73,7 +73,15 @@ Result<void> MelSpectrogramProcessor::configure(const MelSpectrogramConfig& cfg)
         return fftResult;
 
     if (!config_.linearMagnitude)
-        initMelFilterbank();
+    {
+        auto melResult = initMelFilterbank();
+        if (!melResult)
+        {
+            initialized_ = false;
+            melFilterbank_.clear();
+            return melResult;
+        }
+    }
 
     initialized_ = true;
     return Result<void>::success();
@@ -102,7 +110,7 @@ Result<void> MelSpectrogramProcessor::initFftAndWindow()
     return Result<void>::success();
 }
 
-void MelSpectrogramProcessor::initMelFilterbank()
+Result<void> MelSpectrogramProcessor::initMelFilterbank()
 {
     // librosa.filters.mel(htk=False, norm='slaney') reference algorithm:
     //   1. Mel-spaced anchor frequencies in Hz (n_mels + 2 points), Slaney scale
@@ -112,19 +120,112 @@ void MelSpectrogramProcessor::initMelFilterbank()
     // frequencies where mel spacing is dense.
 
     const int nFftBins = config_.nFft / 2 + 1;
+    const float effectiveFmax = std::min(config_.fMax, 0.5f * (float) config_.sampleRate);
+    if (config_.fMin < 0.0f || config_.fMin >= effectiveFmax)
+        return Result<void>::failure(ErrorCode::InvalidParameter, "Invalid mel frequency range");
+
+    std::vector<float> centers;
+    if (!config_.melFilterbank.isCustom())
+    {
+        const float melMin = hzToMel(config_.fMin);
+        const float melMax = hzToMel(effectiveFmax);
+        centers.reserve((size_t) config_.nMels);
+        for (int i = 1; i <= config_.nMels; ++i)
+        {
+            const float mel = melMin + (melMax - melMin)
+                * ((float) i / (float) (config_.nMels + 1));
+            centers.push_back(melToHz(mel));
+        }
+    }
+    else
+    {
+        const auto& spec = config_.melFilterbank;
+        if (spec.baseNumBins <= 0)
+            return Result<void>::failure(ErrorCode::InvalidParameter,
+                "Custom mel filterbank requires a positive base_num_bins");
+        if (spec.regions.empty())
+            return Result<void>::failure(ErrorCode::InvalidParameter,
+                "Custom mel filterbank requires at least one frequency region");
+
+        const float baseMelMin = hzToMel(config_.fMin);
+        const float baseMelMax = hzToMel(effectiveFmax);
+        std::vector<float> baseCenters;
+        baseCenters.reserve((size_t) spec.baseNumBins);
+        for (int i = 1; i <= spec.baseNumBins; ++i)
+        {
+            const float mel = baseMelMin + (baseMelMax - baseMelMin)
+                * ((float) i / (float) (spec.baseNumBins + 1));
+            baseCenters.push_back(melToHz(mel));
+        }
+
+        std::vector<bool> selected(baseCenters.size(), false);
+        centers.reserve((size_t) spec.baseNumBins);
+        float previousHigh = config_.fMin;
+        int replacementCount = 0;
+        for (const auto& region : spec.regions)
+        {
+            if (region.lowHz < config_.fMin
+                || region.highHz <= region.lowHz
+                || region.highHz > effectiveFmax
+                || region.count <= 0
+                || region.lowHz < previousHigh)
+            {
+                return Result<void>::failure(ErrorCode::InvalidParameter,
+                    "Invalid custom mel filterbank frequency region");
+            }
+            previousHigh = region.highHz;
+            replacementCount += region.count;
+
+            for (size_t i = 0; i < baseCenters.size(); ++i)
+            {
+                if (baseCenters[i] >= region.lowHz && baseCenters[i] < region.highHz)
+                    selected[i] = true;
+            }
+
+            const float lowMel = hzToMel(region.lowHz);
+            const float highMel = hzToMel(region.highHz);
+            for (int i = 0; i < region.count; ++i)
+            {
+                const float mel = lowMel + (highMel - lowMel)
+                    * ((float) i / (float) region.count);
+                centers.push_back(melToHz(mel));
+            }
+        }
+
+        for (size_t i = 0; i < baseCenters.size(); ++i)
+        {
+            if (!selected[i])
+                centers.push_back(baseCenters[i]);
+        }
+        std::sort(centers.begin(), centers.end());
+
+        const int selectedCount = static_cast<int>(
+            std::count(selected.begin(), selected.end(), true));
+        const int expectedBins = spec.baseNumBins - selectedCount + replacementCount;
+        if (expectedBins != config_.nMels
+            || static_cast<int>(centers.size()) != config_.nMels)
+        {
+            return Result<void>::failure(ErrorCode::InvalidParameter,
+                "Custom mel filterbank bin count does not match the model");
+        }
+    }
+
+    std::vector<float> melF;
+    melF.reserve(centers.size() + 2);
+    melF.push_back(config_.fMin);
+    melF.insert(melF.end(), centers.begin(), centers.end());
+    melF.push_back(effectiveFmax);
+    for (size_t i = 1; i < melF.size(); ++i)
+    {
+        if (!(melF[i] > melF[i - 1]))
+        {
+            return Result<void>::failure(ErrorCode::InvalidParameter,
+                "Custom mel filterbank knots must be strictly increasing");
+        }
+    }
+
     melFilterbank_.clear();
     melFilterbank_.resize((size_t) config_.nMels, std::vector<float>((size_t) nFftBins, 0.0f));
-
-    const float melMin = hzToMel(config_.fMin);
-    const float melMax = hzToMel(std::min(config_.fMax, 0.5f * (float) config_.sampleRate));
-
-    // mel_f: n_mels + 2 mel-spaced anchor frequencies in Hz
-    std::vector<float> melF((size_t) config_.nMels + 2);
-    for (int i = 0; i < (int) melF.size(); ++i)
-    {
-        const float mel = melMin + (melMax - melMin) * ((float) i / (float) (config_.nMels + 1));
-        melF[(size_t) i] = melToHz(mel);
-    }
 
     // FFT bin frequencies (matches np.fft.rfftfreq(n_fft, d=1/sr))
     std::vector<float> fftFreqs((size_t) nFftBins);
@@ -157,7 +258,18 @@ void MelSpectrogramProcessor::initMelFilterbank()
             if (w > 0.0f)
                 melFilterbank_[(size_t) m][(size_t) k] = w * enorm;
         }
+
+        bool hasWeight = false;
+        for (const auto weight : melFilterbank_[(size_t) m])
+            hasWeight = hasWeight || weight > 0.0f;
+        if (!hasWeight)
+        {
+            return Result<void>::failure(ErrorCode::InvalidParameter,
+                "Mel filterbank contains an empty filter");
+        }
     }
+
+    return Result<void>::success();
 }
 
 void MelSpectrogramProcessor::resizeBuffers(int numSamples)

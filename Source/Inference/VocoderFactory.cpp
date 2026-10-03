@@ -5,40 +5,183 @@
 #endif
 #include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
+#include <cctype>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace OpenTune {
 
 namespace {
 
-// 权重旁 <同名>.yaml sidecar：读取 mel_fmax。fmax 不在 ONNX schema 内
-// （见 VocoderInterface 注释），训练时 mel 滤波器组参数只能随权重走配置文件。
-std::optional<float> loadSidecarMelFMax(const std::string& modelPath)
+struct SidecarConfig
+{
+    std::optional<float> melFMax;
+    std::optional<float> melClipVal;
+    std::optional<MelFilterbankSpec> melFilterbank;
+};
+
+std::string trimAscii(std::string value)
+{
+    const auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
+    while (!value.empty() && isSpace(static_cast<unsigned char>(value.front())))
+        value.erase(value.begin());
+    while (!value.empty() && isSpace(static_cast<unsigned char>(value.back())))
+        value.pop_back();
+    return value;
+}
+
+float parseYamlFloat(const std::string& value, const char* field)
+{
+    try {
+        size_t consumed = 0;
+        const float result = std::stof(trimAscii(value), &consumed);
+        if (consumed != trimAscii(value).size() || !(result > 0.0f))
+            throw std::runtime_error("not a positive number");
+        return result;
+    } catch (const std::exception&) {
+        throw std::runtime_error(std::string("Invalid sidecar field ") + field);
+    }
+}
+
+int parseYamlInt(const std::string& value, const char* field)
+{
+    try {
+        size_t consumed = 0;
+        const auto text = trimAscii(value);
+        const int result = std::stoi(text, &consumed);
+        if (consumed != text.size() || result <= 0)
+            throw std::runtime_error("not a positive integer");
+        return result;
+    } catch (const std::exception&) {
+        throw std::runtime_error(std::string("Invalid sidecar field ") + field);
+    }
+}
+
+SidecarConfig loadSidecarConfig(const std::string& modelPath)
 {
     const juce::File yamlFile = juce::File(modelPath).withFileExtension("yaml");
     if (!yamlFile.existsAsFile())
-        return std::nullopt;
+        return {};
 
     const auto lines = juce::StringArray::fromLines(yamlFile.loadFileAsString());
-    for (const auto& line : lines) {
-        const auto trimmed = line.trim();
-        if (!trimmed.startsWith("mel_fmax"))
+    SidecarConfig result;
+    MelFilterbankSpec filterbank;
+    std::vector<float> currentRegion;
+    bool inFilterbank = false;
+    bool inRegions = false;
+    bool filterbankSeen = false;
+    bool filterbankTypeSeen = false;
+
+    const auto finishRegion = [&]() {
+        if (currentRegion.empty())
+            return;
+        if (currentRegion.size() != 3)
+            throw std::runtime_error("Invalid high_frequency_bin_counts region in sidecar");
+        filterbank.regions.push_back({
+            currentRegion[0], currentRegion[1], static_cast<int>(currentRegion[2])
+        });
+        currentRegion.clear();
+    };
+
+    for (const auto& line : lines)
+    {
+        const auto raw = line.toStdString();
+        const auto trimmed = trimAscii(raw);
+        if (trimmed.empty() || trimmed.front() == '#')
             continue;
-        const float value = trimmed.fromFirstOccurrenceOf(":", false, false).trim().getFloatValue();
-        if (value > 0.0f)
-            return value;
+
+        const bool topLevel = !raw.empty()
+            && !std::isspace(static_cast<unsigned char>(raw.front()));
+        if (inFilterbank && topLevel)
+        {
+            finishRegion();
+            inFilterbank = false;
+            inRegions = false;
+        }
+
+        if (!inFilterbank)
+        {
+            if (topLevel && trimmed.rfind("mel_fmax:", 0) == 0)
+                result.melFMax = parseYamlFloat(trimmed.substr(9), "mel_fmax");
+            else if (topLevel && trimmed.rfind("mel_clip_val:", 0) == 0)
+                result.melClipVal = parseYamlFloat(trimmed.substr(13), "mel_clip_val");
+            else if (topLevel && trimmed == "mel_filterbank:")
+            {
+                inFilterbank = true;
+                inRegions = false;
+                filterbankSeen = true;
+            }
+            continue;
+        }
+
+        if (trimmed.rfind("type:", 0) == 0)
+        {
+            const auto type = trimAscii(trimmed.substr(5));
+            if (type != "custom_high_frequency")
+                throw std::runtime_error("Unsupported mel_filterbank.type in sidecar: " + type);
+            filterbank.type = MelFilterbankSpec::Type::CustomHighFrequency;
+            filterbankTypeSeen = true;
+        }
+        else if (trimmed.rfind("base_num_bins:", 0) == 0)
+        {
+            filterbank.baseNumBins = parseYamlInt(trimmed.substr(14), "base_num_bins");
+        }
+        else if (trimmed == "high_frequency_bin_counts:")
+        {
+            inRegions = true;
+        }
+        else if (inRegions && trimmed.rfind("- -", 0) == 0)
+        {
+            finishRegion();
+            currentRegion.push_back(parseYamlFloat(trimmed.substr(3), "high_frequency_bin_counts.low"));
+        }
+        else if (inRegions && trimmed.front() == '-')
+        {
+            if (currentRegion.size() >= 3)
+                throw std::runtime_error("Too many values in high_frequency_bin_counts region");
+            if (currentRegion.size() == 2)
+                currentRegion.push_back(static_cast<float>(parseYamlInt(
+                    trimmed.substr(1), "high_frequency_bin_counts.count")));
+            else
+                currentRegion.push_back(parseYamlFloat(
+                    trimmed.substr(1), "high_frequency_bin_counts"));
+        }
     }
-    return std::nullopt;
+
+    if (inFilterbank)
+        finishRegion();
+    if (filterbankSeen)
+    {
+        if (!filterbankTypeSeen || !filterbank.isCustom()
+            || filterbank.baseNumBins <= 0 || filterbank.regions.empty())
+        {
+            throw std::runtime_error("Incomplete custom mel_filterbank sidecar configuration");
+        }
+        result.melFilterbank = std::move(filterbank);
+    }
+    return result;
 }
 
 void applySidecarConfig(const std::string& modelPath, VocoderInterface& vocoder)
 {
-    const auto fMax = loadSidecarMelFMax(modelPath);
-    if (fMax.has_value()) {
-        vocoder.setMelFMax(*fMax);
-        AppLogger::info("[VocoderFactory] Sidecar mel_fmax=" + juce::String(*fMax)
+    const auto config = loadSidecarConfig(modelPath);
+    if (config.melFMax.has_value()) {
+        vocoder.setMelFMax(*config.melFMax);
+        AppLogger::info("[VocoderFactory] Sidecar mel_fmax=" + juce::String(*config.melFMax)
             + " (" + juce::File(modelPath).getFileName() + ".yaml)");
+    }
+    if (config.melClipVal.has_value())
+        vocoder.setMelLogEps(*config.melClipVal);
+    if (config.melFilterbank.has_value())
+    {
+        vocoder.setMelFilterbankSpec(*config.melFilterbank);
+        AppLogger::info("[VocoderFactory] Sidecar custom high-frequency mel filterbank enabled"
+            " (base=" + juce::String(config.melFilterbank->baseNumBins)
+            + ", regions=" + juce::String(static_cast<int>(config.melFilterbank->regions.size())) + ")");
     }
 }
 

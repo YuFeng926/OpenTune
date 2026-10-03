@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstddef>
 #include <cstdint>
+#include "../DSP/MelSpectrogram.h"
 
 namespace Ort { struct RunOptions; }
 
@@ -51,6 +52,16 @@ public:
     // Sidecar override: apply fmax from the weight's companion yaml
     // (VocoderFactory calls this before the Nyquist validation).
     virtual void setMelFMax(float fMax) = 0;
+
+    // Sidecar override for route-specific mel filterbanks.  Legacy vocoders
+    // keep the standard filterbank when this remains the default value.
+    virtual MelFilterbankSpec getMelFilterbankSpec() const { return {}; }
+    virtual void setMelFilterbankSpec(const MelFilterbankSpec&) {}
+
+    // The high-mel training route stores a natural-log floor in its sidecar.
+    // Keep the historical 1e-5 default for models without that metadata.
+    virtual float getMelLogEps() const { return 1.0e-5f; }
+    virtual void setMelLogEps(float) {}
 };
 
 } // namespace OpenTune

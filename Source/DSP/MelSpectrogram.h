@@ -13,6 +13,28 @@ namespace dsp {
 
 namespace OpenTune {
 
+struct MelFilterbankRegion
+{
+    float lowHz = 0.0f;
+    float highHz = 0.0f;
+    int count = 0;
+};
+
+struct MelFilterbankSpec
+{
+    enum class Type : unsigned char
+    {
+        Legacy,
+        CustomHighFrequency,
+    };
+
+    Type type = Type::Legacy;
+    int baseNumBins = 0;
+    std::vector<MelFilterbankRegion> regions;
+
+    bool isCustom() const noexcept { return type == Type::CustomHighFrequency; }
+};
+
 /**
  * MelSpectrogramConfig - Mel频谱计算配置
  */
@@ -25,13 +47,13 @@ struct MelSpectrogramConfig
     int nMels = 128;
     float fMin = 40.0f;
     float fMax = 16000.0f;
-    // Match training collater clamp: torch.clamp(audio_mel, min=np.log(1e-5)).
-    // The collater overrides the 1e-9 floor from process.py, so the model
-    // only ever sees mel >= ln(1e-5) ≈ -11.51.
+    // Natural-log magnitude floor.  Legacy models keep 1e-5; a route-specific
+    // sidecar may override this (highgan1 uses 1e-9).
     float logEps = 1.0e-5f;
     // true: 跳过 Mel 滤波器组，直接输出自然对数线性幅度谱（log|rFFT|）。
     // 此时 nMels 必须是 nFft/2+1，与 linear_spec 条件模型的条件维一致。
     bool linearMagnitude = false;
+    MelFilterbankSpec melFilterbank;
 
     size_t hash() const noexcept
     {
@@ -49,6 +71,14 @@ struct MelSpectrogramConfig
         combine(static_cast<int>(fMax * 1000));
         combine(static_cast<int>(logEps * 1e9f));
         combine(static_cast<int>(linearMagnitude));
+        combine(static_cast<int>(melFilterbank.type));
+        combine(melFilterbank.baseNumBins);
+        for (const auto& region : melFilterbank.regions)
+        {
+            combine(static_cast<int>(region.lowHz * 1000.0f));
+            combine(static_cast<int>(region.highHz * 1000.0f));
+            combine(region.count);
+        }
         return h;
     }
 };
@@ -88,7 +118,7 @@ private:
     /**
      * 初始化Mel滤波器组
      */
-    void initMelFilterbank();
+    Result<void> initMelFilterbank();
 
     /**
      * 调整工作缓冲区大小

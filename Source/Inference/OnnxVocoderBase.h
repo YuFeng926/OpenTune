@@ -38,6 +38,10 @@ public:
     VocoderConditioningType getConditioningType() const override { return conditioningType_; }
     float getFMax() const override { return fMax_; }
     void setMelFMax(float fMax) override { fMax_ = fMax; }
+    MelFilterbankSpec getMelFilterbankSpec() const override { return melFilterbankSpec_; }
+    void setMelFilterbankSpec(const MelFilterbankSpec& spec) override { melFilterbankSpec_ = spec; }
+    float getMelLogEps() const override { return melLogEps_; }
+    void setMelLogEps(float value) override { melLogEps_ = value; }
 
 protected:
     void detectInputOutputNames();
@@ -66,6 +70,8 @@ protected:
     int64_t conditioningBinsHint_ = 128;
     VocoderConditioningType conditioningType_ = VocoderConditioningType::LogMel;
     float fMax_ = 16000.0f;
+    MelFilterbankSpec melFilterbankSpec_;
+    float melLogEps_ = 1.0e-5f;
     bool conditioningNeedsTranspose_ = false;
 };
 

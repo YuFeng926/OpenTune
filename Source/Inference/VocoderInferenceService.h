@@ -34,6 +34,8 @@ public:
     int getConditioningBins() const;
     VocoderConditioningType getConditioningType() const;
     float getFMax() const;
+    MelFilterbankSpec getMelFilterbankSpec() const;
+    float getMelLogEps() const;
 
 private:
     class Impl;

@@ -90,6 +90,14 @@ public:
         return currentVocoder_ ? currentVocoder_->getFMax() : 16000.0f;
     }
 
+    MelFilterbankSpec getMelFilterbankSpec() const {
+        return currentVocoder_ ? currentVocoder_->getMelFilterbankSpec() : MelFilterbankSpec{};
+    }
+
+    float getMelLogEps() const {
+        return currentVocoder_ ? currentVocoder_->getMelLogEps() : 1.0e-5f;
+    }
+
 private:
     std::shared_ptr<Ort::Env> env_;
     std::unique_ptr<VocoderInterface> currentVocoder_;
@@ -134,6 +142,14 @@ VocoderConditioningType VocoderInferenceService::getConditioningType() const {
 
 float VocoderInferenceService::getFMax() const {
     return pImpl_->getFMax();
+}
+
+MelFilterbankSpec VocoderInferenceService::getMelFilterbankSpec() const {
+    return pImpl_->getMelFilterbankSpec();
+}
+
+float VocoderInferenceService::getMelLogEps() const {
+    return pImpl_->getMelLogEps();
 }
 
 } // namespace OpenTune

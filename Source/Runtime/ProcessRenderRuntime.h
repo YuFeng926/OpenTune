@@ -192,6 +192,8 @@ private:
         int conditioningBins{0};
         VocoderConditioningType conditioningType{VocoderConditioningType::LogMel};
         float fMax{16000.0f};
+        MelFilterbankSpec melFilterbank;
+        float melLogEps{1.0e-5f};
     };
     bool acquireVocoderConfig(VocoderConfig& out);
 
