@@ -372,6 +372,8 @@ private:
     std::atomic<juce::int64> lastControlTimestamp_{0};
     std::atomic<int> lastControlType_{static_cast<int>(DiagnosticControlCall::None)};
     std::atomic<uint64_t> renderFailureGeneration_{0};
+    ContentKey lastRenderFailureContentKey_;
+    juce::String lastRenderFailureReason_;
     std::atomic<uint64_t> f0FailureGeneration_{0};
 #endif
 
@@ -629,6 +631,11 @@ public:
     uint64_t getRenderFailureGeneration() const noexcept
     {
         return renderFailureGeneration_.load(std::memory_order_relaxed);
+    }
+
+    juce::String getLastRenderFailureReason(ContentKey key) const
+    {
+        return lastRenderFailureContentKey_ == key ? lastRenderFailureReason_ : juce::String{};
     }
 
     uint64_t getF0FailureGeneration() const noexcept

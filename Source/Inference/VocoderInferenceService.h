@@ -28,6 +28,8 @@ public:
         size_t conditioningSize,
         Ort::RunOptions& runOptions);
 
+    static Error mapInferenceException(const std::string& message);
+
     int getVocoderHopSize() const;
     int getConditioningBins() const;
     VocoderConditioningType getConditioningType() const;

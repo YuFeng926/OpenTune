@@ -5,10 +5,20 @@
 
 namespace OpenTune {
 
+Error VocoderInferenceService::mapInferenceException(const std::string& message)
+{
+    // ORT reports RunOptions::SetTerminate() with this status message.
+    constexpr char terminationMessage[] = "Exiting due to terminate flag being set to true.";
+    const auto code = message.find(terminationMessage) != std::string::npos
+        ? ErrorCode::OperationCancelled
+        : ErrorCode::ModelInferenceFailed;
+    return Error{code, message};
+}
+
 class VocoderInferenceService::Impl {
 public:
     Impl(std::shared_ptr<Ort::Env> env) : env_(std::move(env)) {}
-    ~Impl() { shutdown(); }
+    ~Impl() = default;
 
     bool initialize(const std::string& modelPath) {
         try {
@@ -59,7 +69,7 @@ public:
             return Result<std::vector<float>>::success(audio);
         } catch (const std::exception& e) {
             return Result<std::vector<float>>::failure(
-                ErrorCode::ModelInferenceFailed, std::string(e.what()));
+                VocoderInferenceService::mapInferenceException(e.what()));
         }
     }
 

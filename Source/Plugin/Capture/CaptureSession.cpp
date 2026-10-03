@@ -468,7 +468,7 @@ void CaptureSession::onRenderComplete(ContentKey segmentContentKey)
     publishSegmentsView();
 }
 
-void CaptureSession::onRenderFailed(ContentKey segmentContentKey)
+void CaptureSession::onRenderFailed(ContentKey segmentContentKey, const juce::String& reason)
 {
     {
         std::lock_guard<std::mutex> lock(mutableMutex_);
@@ -483,7 +483,8 @@ void CaptureSession::onRenderFailed(ContentKey segmentContentKey)
     }
 
     AppLogger::warn("CaptureSession: segment render failed -> Failed id="
-        + juce::String(static_cast<juce::int64>(segmentContentKey.objectId)));
+        + juce::String(static_cast<juce::int64>(segmentContentKey.objectId))
+        + " reason=" + reason);
     publishSegmentsView();
 }
 

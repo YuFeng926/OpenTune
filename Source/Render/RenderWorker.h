@@ -76,6 +76,12 @@ public:
     void discardStage1Queue(RenderCache* cache);
     void discardAllStage1Queue();
     bool enqueue(RenderJob job);
+    // Atomically checks the execution lease, returns the chunk to Pending and
+    // inserts its frozen job while holding the worker queue mutex.  Owner
+    // detach uses the same mutex, so detach and deferred requeue cannot leave
+    // a Pending chunk behind an empty lease. On rejection the caller owns
+    // failure settlement and notification.
+    bool requeueStage1Chunk(const RenderJob& job);
     std::shared_ptr<AsyncState> beginAsyncJob();
     static void completeAsyncJob(const std::shared_ptr<AsyncState>& state) noexcept;
     static bool isAsyncJobClosed(const std::shared_ptr<AsyncState>& state) noexcept;
@@ -104,12 +110,12 @@ public:
 
 private:
     void loop();
-    bool enqueueLocked(RenderJob job);
+    bool enqueueLocked(RenderJob job, bool requeueRunningChunk = false);
 
     // 物理 Stage1 队列与 cache pending chunk 集合同步。仅可在 mutex_ 持有时调用。
     // 每个 (RenderCache, chunk start) 身份只允许一个排队项。
     void syncStage1QueueLocked(const RenderJob& templateJob,
-                               std::vector<RenderCache::PendingJob>& capacityFailures);
+                               std::vector<RenderCache::PendingJob>& rejectedJobs);
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;

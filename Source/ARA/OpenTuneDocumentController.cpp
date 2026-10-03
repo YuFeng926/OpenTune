@@ -65,15 +65,11 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(
         1, 100, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
 {
+    ProcessRenderRuntime::getInstance().retainOwner();
     installDocumentRenderExecution();
     startTimerHz(30);
     AppLogger::logNoThrow("ARA-DIAG: DocumentController created dc="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
-
-    // The document controller owns a render execution lease independently of
-    // any processor instance.  Keep the process runtime alive until this ARA
-    // owner has detached its CRS and playback renderers.
-    ProcessRenderRuntime::getInstance().retainOwner();
 
 }
 
@@ -92,6 +88,7 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
         completionGate_->closed = true;
         completionGate_->pending.clear();
     }
+    renderCompletionGate_->closeAndWait();
 
     // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
     // F0 Run（SetTerminate 加速返回），并 join 所有 worker。
@@ -101,6 +98,8 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     // 等待同步回调和异步 completion 全部归还）。
     if (contentRenderService_)
         contentRenderService_->detachExecutionLease(contentRenderService_.get());
+    ProcessRenderRuntime::getInstance().detachDeferredJobs(
+        contentRenderService_.get(), renderCompletionGate_);
 
     // Owner-driven detach: before clearing playbackRenderers_, walk the list
     // and call detachDocumentController(*this) on each renderer.
@@ -2276,10 +2275,12 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
     ContentRenderService::ExecutionLease lease;
     lease.owner = contentRenderService_.get();
     const std::weak_ptr<ContentRenderService> weakContentRenderService = contentRenderService_;
-    lease.renderJobCallback = [weakContentRenderService](RenderJob& job)
+    const auto renderGate = renderCompletionGate_;
+    lease.renderJobCallback = [weakContentRenderService, renderGate](RenderJob& job)
     {
         if (auto contentRenderService = weakContentRenderService.lock())
-            OpenTuneDocumentController::processDocumentRenderJob(std::move(contentRenderService), job);
+            OpenTuneDocumentController::processDocumentRenderJob(
+                std::move(contentRenderService), job, renderGate);
     };
 
     contentRenderService_->attachExecutionLease(std::move(lease));
@@ -2287,7 +2288,8 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
 
 void OpenTuneDocumentController::processDocumentRenderJob(
     std::shared_ptr<ContentRenderService> contentRenderService,
-    RenderJob& job)
+    RenderJob& job,
+    std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate)
 {
     if (job.renderCache == nullptr)
     {
@@ -2302,9 +2304,11 @@ void OpenTuneDocumentController::processDocumentRenderJob(
         return;
     }
 
+    ProcessRenderRuntime::CompletionContext completion;
+    completion.gate = std::move(completionGate);
     ProcessRenderRuntime::getInstance().processChunkRenderJob(
         std::move(contentRenderService), job,
-        false, {});
+        false, std::move(completion));
 }
 
 std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const

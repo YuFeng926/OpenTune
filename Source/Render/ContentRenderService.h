@@ -60,6 +60,7 @@ public:
     void pauseRenderWorker();
     void resumeRenderWorker();
     void drainRenderWorker();
+    void waitAsyncRenderJobs();
 
     std::size_t renderQueueDepth() const noexcept;
     int renderInFlight() const noexcept;

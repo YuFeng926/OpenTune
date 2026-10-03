@@ -13,10 +13,109 @@ double projectRenderSeconds(int64_t sample) {
     return TimeCoordinate::samplesToSeconds(sample, RenderCache::kSampleRate);
 }
 
+bool reserveRenderCacheBytes(size_t bytes) noexcept
+{
+    // This counter covers only canonical/prepared PCM.  Other caches use the
+    // legacy aggregate counter but do not consume this budget.
+    auto& current = RenderCache::renderCacheCurrentBytes();
+    const size_t limit = RenderCache::renderCachePcmLimitBytes().load(std::memory_order_acquire);
+    size_t observed = current.load(std::memory_order_relaxed);
+    for (;;) {
+        if (bytes > limit || observed > limit - bytes)
+            return false;
+        if (current.compare_exchange_weak(observed, observed + bytes,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_relaxed))
+            return true;
+    }
+}
+
+void releaseRenderCacheBytes(size_t bytes) noexcept
+{
+    RenderCache::renderCacheCurrentBytes().fetch_sub(bytes, std::memory_order_acq_rel);
+}
+
+void recordRenderCachePeak(size_t current) noexcept
+{
+    auto& peak = RenderCache::renderCachePeakBytes();
+    size_t observed = peak.load(std::memory_order_relaxed);
+    while (current > observed
+           && !peak.compare_exchange_weak(observed, current,
+                                          std::memory_order_relaxed,
+                                          std::memory_order_relaxed)) {}
+}
+
+std::shared_ptr<const std::vector<float>> makeTrackedPcm(
+    std::vector<float>&& audio, size_t preReservedBytes = 0)
+{
+    if (audio.empty()) {
+        if (preReservedBytes > 0)
+            releaseRenderCacheBytes(preReservedBytes);
+        return {};
+    }
+
+    // The allocation owner, rather than each snapshot, owns the accounting.
+    // Canonical/prepared aliases therefore consume the budget only once, while
+    // retired snapshots keep the allocation charged until their last reference.
+    const size_t requestedBytes = audio.capacity() * sizeof(float);
+    size_t reservedBytes = preReservedBytes;
+    if (reservedBytes == 0) {
+        if (!reserveRenderCacheBytes(requestedBytes))
+            return {};
+        reservedBytes = requestedBytes;
+    } else if (requestedBytes > reservedBytes) {
+        const size_t extraBytes = requestedBytes - reservedBytes;
+        if (!reserveRenderCacheBytes(extraBytes)) {
+            releaseRenderCacheBytes(reservedBytes);
+            return {};
+        }
+        reservedBytes += extraBytes;
+    } else if (requestedBytes < reservedBytes) {
+        releaseRenderCacheBytes(reservedBytes - requestedBytes);
+        reservedBytes = requestedBytes;
+    }
+
+    try {
+        auto* raw = new std::vector<float>(std::move(audio));
+        const size_t actualBytes = raw->capacity() * sizeof(float);
+
+        if (actualBytes > requestedBytes) {
+            const size_t extraBytes = actualBytes - requestedBytes;
+            if (!reserveRenderCacheBytes(extraBytes)) {
+                delete raw;
+                releaseRenderCacheBytes(reservedBytes);
+                return {};
+            }
+            reservedBytes += extraBytes;
+        } else if (actualBytes < requestedBytes) {
+            releaseRenderCacheBytes(requestedBytes - actualBytes);
+            reservedBytes = actualBytes;
+        }
+
+        recordRenderCachePeak(RenderCache::renderCacheCurrentBytes().load(std::memory_order_relaxed));
+
+        try {
+            return std::shared_ptr<const std::vector<float>>(
+                raw, [actualBytes](const std::vector<float>* value) {
+                    delete value;
+                    releaseRenderCacheBytes(actualBytes);
+                });
+        } catch (...) {
+            delete raw;
+            releaseRenderCacheBytes(actualBytes);
+            reservedBytes = 0;
+            throw;
+        }
+    } catch (...) {
+        releaseRenderCacheBytes(reservedBytes);
+        throw;
+    }
+}
+
 } // namespace
 
-std::atomic<size_t>& RenderCache::globalCacheLimitBytes() {
-    static std::atomic<size_t> value{kDefaultGlobalCacheLimitBytes};
+std::atomic<size_t>& RenderCache::renderCachePcmLimitBytes() {
+    static std::atomic<size_t> value{kDefaultRenderCachePcmLimitBytes};
     return value;
 }
 
@@ -30,6 +129,16 @@ std::atomic<size_t>& RenderCache::globalCachePeakBytes() {
     return value;
 }
 
+std::atomic<size_t>& RenderCache::renderCacheCurrentBytes() {
+    static std::atomic<size_t> value{0};
+    return value;
+}
+
+std::atomic<size_t>& RenderCache::renderCachePeakBytes() {
+    static std::atomic<size_t> value{0};
+    return value;
+}
+
 RenderCache::RenderCache() {
     std::shared_ptr<const PublishedRenderSnapshot> emptySnapshot = std::make_shared<PublishedRenderSnapshot>();
     std::atomic_store(&publishedSnapshot_, emptySnapshot);
@@ -39,8 +148,9 @@ RenderCache::~RenderCache() {
     clear();
 }
 
-void RenderCache::publishLocked() {
-    pruneRetiredSnapshotsLocked();
+void RenderCache::publishLocked(
+    std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases) {
+    pruneRetiredSnapshotsLocked(releases);
 
     auto snapshot = std::make_shared<PublishedRenderSnapshot>();
     snapshot->chunks.reserve(chunks_.size());
@@ -60,13 +170,20 @@ void RenderCache::publishLocked() {
     if (oldSnapshot != nullptr) {
         retiredSnapshots_.push_back(std::move(oldSnapshot));
     }
-    pruneRetiredSnapshotsLocked();
+    pruneRetiredSnapshotsLocked(releases);
 }
 
-void RenderCache::pruneRetiredSnapshotsLocked() const {
+void RenderCache::pruneRetiredSnapshotsLocked(
+    std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases) const {
     auto end = std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
-        [](const std::shared_ptr<const PublishedRenderSnapshot>& snapshot) {
-            return snapshot == nullptr || snapshot.use_count() == 1;
+        [&releases](std::shared_ptr<const PublishedRenderSnapshot>& snapshot) {
+            if (snapshot == nullptr)
+                return true;
+            if (snapshot.use_count() == 1) {
+                releases.push_back(std::move(snapshot));
+                return true;
+            }
+            return false;
         });
     retiredSnapshots_.erase(end, retiredSnapshots_.end());
 }
@@ -75,11 +192,13 @@ void RenderCache::pruneRetiredSnapshotsLocked() const {
 // rebuildPrepared — non-audio thread, serialized by preparedBuildMutex_
 // ============================================================================
 
-void RenderCache::rebuildPrepared()
+bool RenderCache::rebuildPrepared(double requestedSampleRate)
 {
+    std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> releases;
     std::lock_guard<std::mutex> lg(preparedBuildMutex_);
 
-    double targetSr = preparedSampleRate_;
+    const double targetSr = requestedSampleRate > 0.0
+        ? requestedSampleRate : preparedSampleRate_;
     auto canonicalSnap = std::atomic_load(&publishedSnapshot_);
     auto oldPrep = std::atomic_load(&preparedSnapshot_);
 
@@ -133,41 +252,32 @@ void RenderCache::rebuildPrepared()
                 const int outputLength = static_cast<int>(prepEnd - prepStart);
                 if (outputLength <= 0) continue;
 
-                std::vector<float> resampled = preparedResampler_.resampleExactLength(
-                    chunk.audio->data(),
-                    chunk.audio->size(),
-                    static_cast<int>(kSampleRate),
-                    static_cast<int>(targetSr),
-                    outputLength);
+                const size_t reservedBytes = static_cast<size_t>(outputLength) * sizeof(float);
+                if (!reserveRenderCacheBytes(reservedBytes))
+                    return false;
 
-                pc.audio = std::make_shared<const std::vector<float>>(std::move(resampled));
+                std::vector<float> resampled;
+                try {
+                    resampled = preparedResampler_.resampleExactLength(
+                        chunk.audio->data(),
+                        chunk.audio->size(),
+                        static_cast<int>(kSampleRate),
+                        static_cast<int>(targetSr),
+                        outputLength);
+                } catch (...) {
+                    releaseRenderCacheBytes(reservedBytes);
+                    throw;
+                }
+
+                pc.audio = makeTrackedPcm(std::move(resampled), reservedBytes);
+                if (!pc.audio)
+                    return false;
                 pc.sourceRevision = chunk.contentRevision;
             }
 
             prepSnap->chunks.push_back(std::move(pc));
         }
     }
-
-    // Compute prepared memory for non-alias (r8brain) chunks.
-    // 44.1kHz alias chunks share canonical data already tracked by global canonical bytes.
-    size_t newPreparedBytes = 0;
-    if (targetSr > 0.0 && std::abs(targetSr - kSampleRate) >= 1.0) {
-        for (const auto& chunk : prepSnap->chunks) {
-            if (chunk.audio) {
-                newPreparedBytes += chunk.audio->size() * sizeof(float);
-            }
-        }
-    }
-
-    // Atomically replace old prepared bytes with new in global counters.
-    const size_t oldPrepared = preparedMemoryUsage_;
-    if (oldPrepared > 0) {
-        globalCacheCurrentBytes().fetch_sub(oldPrepared, std::memory_order_relaxed);
-    }
-    size_t newCurrent = globalCacheCurrentBytes().fetch_add(newPreparedBytes, std::memory_order_relaxed) + newPreparedBytes;
-    size_t peak = globalCachePeakBytes().load(std::memory_order_relaxed);
-    while (newCurrent > peak && !globalCachePeakBytes().compare_exchange_weak(peak, newCurrent, std::memory_order_relaxed)) {}
-    preparedMemoryUsage_ = newPreparedBytes;
 
     auto oldSnap = std::atomic_exchange(&preparedSnapshot_,
         std::shared_ptr<const PublishedPreparedSnapshot>(std::move(prepSnap)));
@@ -176,21 +286,78 @@ void RenderCache::rebuildPrepared()
     // Prune retired prepared snapshots
     retiredPreparedSnapshots_.erase(
         std::remove_if(retiredPreparedSnapshots_.begin(), retiredPreparedSnapshots_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
+            [&releases](std::shared_ptr<const PublishedPreparedSnapshot>& p) {
+                if (p.use_count() <= 1) {
+                    releases.push_back(std::move(p));
+                    return true;
+                }
+                return false;
+            }),
         retiredPreparedSnapshots_.end());
+
+    if (requestedSampleRate > 0.0)
+        preparedSampleRate_ = targetSr;
+    return true;
 }
 
 // ============================================================================
 // prepareForPlaybackSampleRate — 设置目标率并触发非音频线程 rebuild
 // ============================================================================
 
-void RenderCache::prepareForPlaybackSampleRate(double targetSr) {
-    if (targetSr <= 0.0) return;
-    {
-        std::lock_guard<std::mutex> lg(preparedBuildMutex_);
-        preparedSampleRate_ = targetSr;
+bool RenderCache::prepareForPlaybackSampleRate(double targetSr) {
+    if (targetSr <= 0.0) return false;
+    return rebuildPrepared(targetSr);
+}
+
+RenderCache::PreparedSnapshotRollback RenderCache::capturePreparedSnapshot() const
+{
+    std::lock_guard<std::mutex> lg(preparedBuildMutex_);
+    const auto current = std::atomic_load(&preparedSnapshot_);
+    return {std::shared_ptr<const void>(current),
+            current != nullptr ? current->sampleRate : preparedSampleRate_, true};
+}
+
+bool RenderCache::restorePreparedSnapshot(PreparedSnapshotRollback&& rollback)
+{
+    if (!rollback.valid)
+        return false;
+
+    std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> releases;
+    std::lock_guard<std::mutex> lg(preparedBuildMutex_);
+    std::shared_ptr<const PublishedPreparedSnapshot> restored;
+    if (rollback.snapshot != nullptr) {
+        restored = std::shared_ptr<const PublishedPreparedSnapshot>(
+            rollback.snapshot,
+            static_cast<const PublishedPreparedSnapshot*>(rollback.snapshot.get()));
     }
-    rebuildPrepared();
+    auto old = std::atomic_exchange(&preparedSnapshot_, restored);
+    if (old)
+        retiredPreparedSnapshots_.push_back(std::move(old));
+    preparedSampleRate_ = rollback.sampleRate;
+
+    if (restored != nullptr) {
+        const auto retiredIt = std::find_if(
+            retiredPreparedSnapshots_.begin(), retiredPreparedSnapshots_.end(),
+            [&restored](const auto& snapshot) {
+                return snapshot.get() == restored.get();
+            });
+        if (retiredIt != retiredPreparedSnapshots_.end())
+            retiredPreparedSnapshots_.erase(retiredIt);
+    }
+
+    retiredPreparedSnapshots_.erase(
+        std::remove_if(retiredPreparedSnapshots_.begin(), retiredPreparedSnapshots_.end(),
+            [&releases](std::shared_ptr<const PublishedPreparedSnapshot>& snapshot) {
+                if (snapshot.use_count() <= 1) {
+                    releases.push_back(std::move(snapshot));
+                    return true;
+                }
+                return false;
+            }),
+        retiredPreparedSnapshots_.end());
+    rollback.snapshot.reset();
+    rollback.valid = false;
+    return true;
 }
 
 // ============================================================================
@@ -315,32 +482,31 @@ void RenderCache::overlayCanonicalAudio(juce::AudioBuffer<float>& destination,
 }
 
 void RenderCache::clear() {
+    std::map<int64_t, Chunk> chunksToRelease;
+    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
-        for (const auto& [key, chunk] : chunks_) {
-            juce::ignoreUnused(key);
-            const size_t chunkBytes = (chunk.audio ? chunk.audio->size() : 0) * sizeof(float);
-            globalCacheCurrentBytes().fetch_sub(chunkBytes, std::memory_order_relaxed);
-        }
-        chunks_.clear();
+        chunksToRelease = std::move(chunks_);
         pendingChunks_.clear();
-        publishLocked();
+        publishLocked(snapshotReleases);
     }
 
+    std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> preparedReleases;
     {
         std::lock_guard<std::mutex> lg(preparedBuildMutex_);
-
-        if (preparedMemoryUsage_ > 0) {
-            globalCacheCurrentBytes().fetch_sub(preparedMemoryUsage_, std::memory_order_relaxed);
-            preparedMemoryUsage_ = 0;
-        }
 
         auto oldSnap = std::atomic_exchange(&preparedSnapshot_,
             std::shared_ptr<const PublishedPreparedSnapshot>());
         if (oldSnap) retiredPreparedSnapshots_.push_back(std::move(oldSnap));
         retiredPreparedSnapshots_.erase(
             std::remove_if(retiredPreparedSnapshots_.begin(), retiredPreparedSnapshots_.end(),
-                [](const auto& p) { return p.use_count() <= 1; }),
+                [&preparedReleases](std::shared_ptr<const PublishedPreparedSnapshot>& p) {
+                    if (p.use_count() <= 1) {
+                        preparedReleases.push_back(std::move(p));
+                        return true;
+                    }
+                    return false;
+                }),
             retiredPreparedSnapshots_.end());
     }
 }
@@ -362,20 +528,17 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
     ReconcileResult result;
     bool geometryChanged = false;
     std::size_t pendingChunkCount = 0;
+    std::map<int64_t, Chunk> oldChunksToRelease;
+    std::vector<std::shared_ptr<const std::vector<float>>> audioReleases;
 
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
 
         std::map<int64_t, Chunk> newChunks;
         std::set<int64_t> newPendingChunks;
+        oldChunksToRelease = std::move(chunks_);
 
-        const auto reclaimChunkBytes = [](const Chunk& chunk) {
-            const size_t bytes = (chunk.audio ? chunk.audio->size() : 0) * sizeof(float);
-            if (bytes > 0)
-                globalCacheCurrentBytes().fetch_sub(bytes, std::memory_order_relaxed);
-        };
-
-        auto oldIt = chunks_.begin();
+        auto oldIt = oldChunksToRelease.begin();
 
         for (std::size_t i = 0; i < fullPlan.size(); ++i)
         {
@@ -385,22 +548,19 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
                 jassert(planned.startSample >= fullPlan[i - 1].endSampleExclusive);
 
             const int64_t startSample = planned.startSample;
-            const double startSeconds = projectRenderSeconds(startSample);
             const int64_t endSampleExclusive = planned.endSampleExclusive;
 
-            while (oldIt != chunks_.end() && oldIt->first < startSample)
+            while (oldIt != oldChunksToRelease.end() && oldIt->first < startSample)
             {
-                reclaimChunkBytes(oldIt->second);
                 geometryChanged = true;
                 ++oldIt;
             }
 
             Chunk newChunk;
-            newChunk.startSeconds = startSeconds;
             newChunk.startSample = planned.startSample;
             newChunk.endSampleExclusive = endSampleExclusive;
 
-            const bool sameSpan = oldIt != chunks_.end()
+            const bool sameSpan = oldIt != oldChunksToRelease.end()
                 && oldIt->first == startSample
                 && oldIt->second.endSampleExclusive == endSampleExclusive;
 
@@ -451,7 +611,7 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
                         newChunk.status = Chunk::Status::Pending;
                         newChunk.runningRevision = 0;
                         newChunk.publishedRevision = 0;
-                        newChunk.audio = nullptr;
+                        audioReleases.push_back(std::move(newChunk.audio));
                         newPendingChunks.insert(planned.startSample);
                         result.stateChanged = true;
                     }
@@ -481,9 +641,8 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
             {
                 geometryChanged = true;
 
-                if (oldIt != chunks_.end() && oldIt->first == startSample)
+                if (oldIt != oldChunksToRelease.end() && oldIt->first == startSample)
                 {
-                    reclaimChunkBytes(oldIt->second);
                     newChunk.desiredRevision = oldIt->second.desiredRevision + 1;
                     ++oldIt;
                 }
@@ -504,9 +663,8 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
             newChunks.emplace(startSample, std::move(newChunk));
         }
 
-        for (; oldIt != chunks_.end(); ++oldIt)
+        for (; oldIt != oldChunksToRelease.end(); ++oldIt)
         {
-            reclaimChunkBytes(oldIt->second);
             geometryChanged = true;
             result.stateChanged = true;
         }
@@ -604,56 +762,88 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
     }
 
     const double startSeconds = projectRenderSeconds(startSample);
-    auto immutableAudio = std::make_shared<const std::vector<float>>(std::move(audio));
 
+    std::shared_ptr<const std::vector<float>> oldAudio;
+    {
+        const juce::SpinLock::ScopedLockType guard(lock_);
+        const auto it = chunks_.find(startSample);
+        if (it == chunks_.end()
+            || it->second.startSample != startSample
+            || it->second.endSampleExclusive != endSampleExclusive
+            || it->second.runningRevision != revision)
+            return ChunkRenderResult::Stale;
+    }
+
+    auto immutableAudio = makeTrackedPcm(std::move(audio));
+    if (!immutableAudio)
+        return ChunkRenderResult::MemoryLimitExceeded;
+
+    bool staleAfterAllocation = false;
+    Chunk::Status previousStatus = Chunk::Status::Running;
+    uint64_t previousRunningRevision = revision;
+    uint64_t previousPublishedRevision = 0;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
         auto it = chunks_.find(startSample);
         if (it == chunks_.end())
-            return ChunkRenderResult::Stale;
+            staleAfterAllocation = true;
+        else
+        {
+            auto& chunk = it->second;
 
-        auto& chunk = it->second;
-
-        // 身份检查：span 不符视为过期完成（chunk 已被重新规划）
-        if (chunk.startSample != startSample || chunk.endSampleExclusive != endSampleExclusive)
-            return ChunkRenderResult::Stale;
-
-        if (chunk.runningRevision != revision)
-            return ChunkRenderResult::Stale;
-
-        const size_t oldBytes = (chunk.audio ? chunk.audio->size() : 0) * sizeof(float);
-        if (oldBytes > 0) {
-            globalCacheCurrentBytes().fetch_sub(oldBytes, std::memory_order_relaxed);
+            // 身份检查：span 不符视为过期完成（chunk 已被重新规划）
+            if (chunk.startSample != startSample || chunk.endSampleExclusive != endSampleExclusive
+                || chunk.runningRevision != revision)
+                staleAfterAllocation = true;
+            else
+            {
+                previousStatus = chunk.status;
+                previousRunningRevision = chunk.runningRevision;
+                previousPublishedRevision = chunk.publishedRevision;
+                oldAudio = std::move(chunk.audio);
+                chunk.audio = std::move(immutableAudio);
+                chunk.publishedRevision = revision;
+                chunk.status = Chunk::Status::Idle;
+                chunk.runningRevision = 0;
+            }
         }
 
-        chunk.audio = immutableAudio;
-        chunk.publishedRevision = revision;
-        chunk.status = Chunk::Status::Idle;
-        chunk.runningRevision = 0;
-
-        const size_t chunkBytes = chunk.audio->size() * sizeof(float);
-
-        const size_t newCurrent = globalCacheCurrentBytes().fetch_add(chunkBytes, std::memory_order_relaxed) + chunkBytes;
-
-        size_t peak = globalCachePeakBytes().load(std::memory_order_relaxed);
-        while (newCurrent > peak && !globalCachePeakBytes().compare_exchange_weak(peak, newCurrent, std::memory_order_relaxed)) {}
-
-        // Diagnostic: memory stats only. No inter-chunk eviction — the RenderCache
-        // contract requires complete canonical PCM resident for all chunks.
-        (void)globalCacheLimitBytes().load(std::memory_order_relaxed);
     } // SpinLock released
+
+    if (staleAfterAllocation)
+        return ChunkRenderResult::Stale;
 
     // Only publish and rebuild prepared when ALL chunks are canonical settled.
     // Partial chunk completion must not update the audio-thread-visible snapshot.
     bool shouldPublish = false;
+    std::shared_ptr<const PublishedRenderSnapshot> previousSnapshot;
+    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
     {
         const juce::SpinLock::ScopedLockType guard2(lock_);
         shouldPublish = isCanonicalSettledLocked_();
-        if (shouldPublish)
-            publishLocked();
+        if (shouldPublish) {
+            previousSnapshot = std::atomic_load(&publishedSnapshot_);
+            publishLocked(snapshotReleases);
+        }
     }
-    if (shouldPublish)
-        rebuildPrepared();
+    if (shouldPublish && !rebuildPrepared()) {
+        std::shared_ptr<const std::vector<float>> failedAudio;
+        {
+            const juce::SpinLock::ScopedLockType guard3(lock_);
+            auto it = chunks_.find(startSample);
+            if (it != chunks_.end()
+                && it->second.status == Chunk::Status::Idle
+                && it->second.publishedRevision == revision) {
+                failedAudio = std::move(it->second.audio);
+                it->second.audio = std::move(oldAudio);
+                it->second.status = previousStatus;
+                it->second.runningRevision = previousRunningRevision;
+                it->second.publishedRevision = previousPublishedRevision;
+                std::atomic_store(&publishedSnapshot_, previousSnapshot);
+            }
+        }
+        return ChunkRenderResult::MemoryLimitExceeded;
+    }
 
     AppLogger::log("RenderCache::completeChunkRenderWithAudio "
         + juce::String(shouldPublish ? "PUBLISHED" : "SETTLED")
@@ -664,6 +854,7 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
 
 bool RenderCache::completeChunkRenderFailure(int64_t startSample, uint64_t revision) {
     const double startSeconds = projectRenderSeconds(startSample);
+    std::shared_ptr<const std::vector<float>> oldAudio;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
         auto it = chunks_.find(startSample);
@@ -686,12 +877,7 @@ bool RenderCache::completeChunkRenderFailure(int64_t startSample, uint64_t revis
             return false;
         }
 
-        if (chunk.audio != nullptr && !chunk.audio->empty())
-        {
-            const size_t bytes = chunk.audio->size() * sizeof(float);
-            globalCacheCurrentBytes().fetch_sub(bytes, std::memory_order_relaxed);
-            chunk.audio.reset();
-        }
+        oldAudio = std::move(chunk.audio);
         chunk.publishedRevision = 0;
         chunk.status = Chunk::Status::Failed;
         chunk.runningRevision = 0;
@@ -734,16 +920,19 @@ bool RenderCache::requeueRunningChunk(int64_t startSample, uint64_t runningRevis
 
 RenderCache::ChunkStats RenderCache::getChunkStats() const {
     ChunkStats stats;
-    const juce::SpinLock::ScopedLockType guard(lock_);
-    pruneRetiredSnapshotsLocked();
-    for (const auto& [key, chunk] : chunks_) {
-        juce::ignoreUnused(key);
-        switch (chunk.status) {
-            case Chunk::Status::Idle: ++stats.idle; break;
-            case Chunk::Status::Pending: ++stats.pending; break;
-            case Chunk::Status::Running: ++stats.running; break;
-            case Chunk::Status::Blank: ++stats.blank; break;
-            case Chunk::Status::Failed: ++stats.failed; break;
+    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
+    {
+        const juce::SpinLock::ScopedLockType guard(lock_);
+        pruneRetiredSnapshotsLocked(snapshotReleases);
+        for (const auto& [key, chunk] : chunks_) {
+            juce::ignoreUnused(key);
+            switch (chunk.status) {
+                case Chunk::Status::Idle: ++stats.idle; break;
+                case Chunk::Status::Pending: ++stats.pending; break;
+                case Chunk::Status::Running: ++stats.running; break;
+                case Chunk::Status::Blank: ++stats.blank; break;
+                case Chunk::Status::Failed: ++stats.failed; break;
+            }
         }
     }
     return stats;
@@ -751,22 +940,25 @@ RenderCache::ChunkStats RenderCache::getChunkStats() const {
 
 RenderCache::StateSnapshot RenderCache::getStateSnapshot() const {
     StateSnapshot snapshot;
-    const juce::SpinLock::ScopedLockType guard(lock_);
-    pruneRetiredSnapshotsLocked();
-    for (const auto& [key, chunk] : chunks_) {
-        juce::ignoreUnused(key);
+    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
+    {
+        const juce::SpinLock::ScopedLockType guard(lock_);
+        pruneRetiredSnapshotsLocked(snapshotReleases);
+        for (const auto& [key, chunk] : chunks_) {
+            juce::ignoreUnused(key);
 
-        snapshot.hasPublishedAudio = snapshot.hasPublishedAudio
-            || (chunk.publishedRevision > 0 && chunk.audio != nullptr && !chunk.audio->empty());
-        snapshot.hasNonBlankChunks = snapshot.hasNonBlankChunks
-            || chunk.status != Chunk::Status::Blank;
+            snapshot.hasPublishedAudio = snapshot.hasPublishedAudio
+                || (chunk.publishedRevision > 0 && chunk.audio != nullptr && !chunk.audio->empty());
+            snapshot.hasNonBlankChunks = snapshot.hasNonBlankChunks
+                || chunk.status != Chunk::Status::Blank;
 
-        switch (chunk.status) {
-            case Chunk::Status::Idle: ++snapshot.chunkStats.idle; break;
-            case Chunk::Status::Pending: ++snapshot.chunkStats.pending; break;
-            case Chunk::Status::Running: ++snapshot.chunkStats.running; break;
-            case Chunk::Status::Blank: ++snapshot.chunkStats.blank; break;
-            case Chunk::Status::Failed: ++snapshot.chunkStats.failed; break;
+            switch (chunk.status) {
+                case Chunk::Status::Idle: ++snapshot.chunkStats.idle; break;
+                case Chunk::Status::Pending: ++snapshot.chunkStats.pending; break;
+                case Chunk::Status::Running: ++snapshot.chunkStats.running; break;
+                case Chunk::Status::Blank: ++snapshot.chunkStats.blank; break;
+                case Chunk::Status::Failed: ++snapshot.chunkStats.failed; break;
+            }
         }
     }
     return snapshot;
@@ -810,6 +1002,7 @@ bool RenderCache::isCanonicalSettled() const
 bool RenderCache::markChunkAsBlank(int64_t startSample, uint64_t revision) {
     const double startSeconds = projectRenderSeconds(startSample);
     int64_t endSample = 0;
+    std::shared_ptr<const std::vector<float>> oldAudio;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
         auto it = chunks_.find(startSample);
@@ -833,11 +1026,7 @@ bool RenderCache::markChunkAsBlank(int64_t startSample, uint64_t revision) {
         chunk.status = Chunk::Status::Blank;
         chunk.runningRevision = 0;
 
-        if (chunk.audio != nullptr && !chunk.audio->empty()) {
-            const size_t evictBytes = (chunk.audio ? chunk.audio->size() : 0) * sizeof(float);
-            globalCacheCurrentBytes().fetch_sub(evictBytes, std::memory_order_relaxed);
-            chunk.audio.reset();
-        }
+        oldAudio = std::move(chunk.audio);
         chunk.publishedRevision = 0;
         endSample = chunk.endSampleExclusive;
     } // SpinLock released
@@ -845,14 +1034,28 @@ bool RenderCache::markChunkAsBlank(int64_t startSample, uint64_t revision) {
     // Only publish and rebuild prepared when ALL chunks are canonical settled.
     // Partial chunk completion must not update the audio-thread-visible snapshot.
     bool shouldPublish = false;
+    std::shared_ptr<const PublishedRenderSnapshot> previousSnapshot;
+    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
     {
         const juce::SpinLock::ScopedLockType guard2(lock_);
         shouldPublish = isCanonicalSettledLocked_();
-        if (shouldPublish)
-            publishLocked();
+        if (shouldPublish) {
+            previousSnapshot = std::atomic_load(&publishedSnapshot_);
+            publishLocked(snapshotReleases);
+        }
     }
-    if (shouldPublish)
-        rebuildPrepared();
+    if (shouldPublish && !rebuildPrepared()) {
+        const juce::SpinLock::ScopedLockType guard3(lock_);
+        auto it = chunks_.find(startSample);
+        if (it != chunks_.end() && it->second.status == Chunk::Status::Blank) {
+            it->second.status = Chunk::Status::Running;
+            it->second.runningRevision = revision;
+            it->second.publishedRevision = 0;
+            it->second.audio = std::move(oldAudio);
+            std::atomic_store(&publishedSnapshot_, previousSnapshot);
+        }
+        return false;
+    }
 
     AppLogger::log("RenderCache::markChunkAsBlank start=" + juce::String(startSeconds, 3)
         + " endSampleExclusive=" + juce::String(endSample)

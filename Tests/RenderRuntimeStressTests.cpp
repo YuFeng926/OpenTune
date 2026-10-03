@@ -39,7 +39,7 @@ int runChild(int argc, char** argv)
             return;
         OpenTune::ProcessRenderRuntime::CompletionContext completion;
         completion.gate = completionGate;
-        completion.chunkFailed = [&failed](OpenTune::ContentKey) {
+        completion.chunkFailed = [&failed](OpenTune::ContentKey, const juce::String&) {
             failed.fetch_add(1, std::memory_order_relaxed);
             OpenTuneTest::trace("RenderRuntimeStressTests", "message_completion_failed");
         };

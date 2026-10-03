@@ -175,16 +175,10 @@ bool ContentRenderService::requeueRenderChunk(const RenderJob& job)
 {
     jassert(job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr);
 
-    // 只回退状态机：成功回退后仅投递一个带身份的 pending chunk，worker 下轮
-    // 重拉 span/revision（snapshot 随 job 携带），不重算几何、不 bump desired。
-    const bool requeued = job.renderCache->requeueRunningChunk(
-        job.startSample, job.targetRevision);
-    if (!requeued)
-        return false;
-
-    RenderJob subJob = job;
-    subJob.queuedChunkStartSample = job.startSample;
-    return renderWorker_.enqueue(std::move(subJob));
+    // Cache state transition and physical insertion share RenderWorker's
+    // queue mutex with owner detach.  A detached lease therefore rejects the
+    // requeue before it can turn Running into an orphaned Pending chunk.
+    return renderWorker_.requeueStage1Chunk(job);
 }
 
 std::shared_ptr<RenderWorker::AsyncState> ContentRenderService::beginAsyncRenderJob()
@@ -210,6 +204,11 @@ void ContentRenderService::resumeRenderWorker()
 void ContentRenderService::drainRenderWorker()
 {
     renderWorker_.drain();
+}
+
+void ContentRenderService::waitAsyncRenderJobs()
+{
+    renderWorker_.waitAsyncIdle();
 }
 
 std::size_t ContentRenderService::renderQueueDepth() const noexcept
@@ -252,8 +251,9 @@ void ContentRenderService::preparePlaybackSampleRate(double targetSr)
     if (targetSr <= 0.0)
         return;
 
+    if (!renderCaches_.preparePlaybackSampleRate(targetSr))
+        return;
     playbackSources_.setPlaybackSampleRate(targetSr);
-    renderCaches_.preparePlaybackSampleRate(targetSr);
     timeStretchCache_.prepareForPlaybackSampleRate(targetSr);
 }
 

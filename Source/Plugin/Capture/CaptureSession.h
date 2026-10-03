@@ -161,7 +161,7 @@ public:
      *  Transitions segment from Processing to Edited state. */
     void onRenderComplete(ContentKey segmentContentKey);
     /** Called by the render pipeline when the current chunk fails. */
-    void onRenderFailed(ContentKey segmentContentKey);
+    void onRenderFailed(ContentKey segmentContentKey, const juce::String& reason);
 
     /** Commit F0 extraction result to segment content. When state is Failed,
      *  transitions segment lifecycle to Failed (content preserved, not deleted). */

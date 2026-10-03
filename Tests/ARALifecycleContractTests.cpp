@@ -3,6 +3,9 @@
 #include <ARA_Library/Dispatch/ARAHostDispatch.h>
 #include <atomic>
 #include <cstdio>
+#include <string>
+#include <type_traits>
+#include <vector>
 #include "LifecycleTestTrace.h"
 #include "LifecycleWatchdog.h"
 
@@ -118,6 +121,24 @@ int runChild(int argc, char** argv)
     if (! check (modification != nullptr, "audio_modification_create_failed"))
         return 1;
 
+    const auto stableModification = modification;
+    std::vector<std::string> extraModificationIds;
+    std::vector<std::remove_const_t<decltype(modification)>> extraModifications;
+    extraModificationIds.reserve(32);
+    extraModifications.reserve(32);
+    for (int index = 0; index < 32; ++index)
+    {
+        extraModificationIds.push_back("modification-extra-" + std::to_string(index));
+        auto extraProperties = modificationProperties;
+        extraProperties.persistentID = extraModificationIds.back().c_str();
+        const auto extra = documentController.createAudioModification(source, nullptr, &extraProperties);
+        if (! check (extra != nullptr, "extra_audio_modification_create_failed"))
+            return 1;
+        extraModifications.push_back(extra);
+    }
+    if (! check (modification == stableModification, "audio_modification_address_changed_while_alive"))
+        return 1;
+
     ARA::ARAPlaybackRegionProperties regionProperties {};
     regionProperties.structSize = sizeof (regionProperties);
     regionProperties.regionSequenceRef = regionSequence;
@@ -131,6 +152,15 @@ int runChild(int argc, char** argv)
 
     documentController.destroyPlaybackRegion (region);
     documentController.destroyAudioModification (modification);
+    for (auto* extra : extraModifications)
+        documentController.destroyAudioModification (extra);
+
+    const auto rebuiltStableModification = documentController.createAudioModification(
+        source, nullptr, &modificationProperties);
+    if (! check (rebuiltStableModification != nullptr,
+                 "audio_modification_rebuild_failed"))
+        return 1;
+    documentController.destroyAudioModification (rebuiltStableModification);
     documentController.destroyAudioSource (source);
     documentController.destroyRegionSequence (regionSequence);
     documentController.destroyMusicalContext (musicalContext);

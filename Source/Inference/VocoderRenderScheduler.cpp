@@ -10,6 +10,26 @@ VocoderRenderScheduler::~VocoderRenderScheduler() {
     shutdown();
 }
 
+bool VocoderRenderScheduler::isJobPayloadWithinLimit(
+    std::size_t f0Capacity, std::size_t uvCapacity, std::size_t conditioningCapacity) noexcept {
+    constexpr auto maxFloats = kMaxJobPayloadBytes / sizeof(float);
+    if (f0Capacity > maxFloats)
+        return false;
+    const auto remainingAfterF0 = maxFloats - f0Capacity;
+    if (uvCapacity > remainingAfterF0)
+        return false;
+    return conditioningCapacity <= remainingAfterF0 - uvCapacity;
+}
+
+VocoderRenderScheduler::InferenceFailure VocoderRenderScheduler::classifyInferenceError(
+    const Error& error)
+{
+    return {
+        error.code == ErrorCode::OperationCancelled ? JobResult::Cancelled : JobResult::Failed,
+        error.fullMessage()
+    };
+}
+
 bool VocoderRenderScheduler::initialize(VocoderInferenceService* service) {
     if (!service) {
         AppLogger::error("[VocoderRenderScheduler] Service is null");
@@ -45,7 +65,7 @@ void VocoderRenderScheduler::shutdown() {
     if (worker_ && worker_->joinable()) {
         if (worker_->get_id() == std::this_thread::get_id()) {
             AppLogger::error("[VocoderRenderScheduler] self-join rejected; hard failure");
-            return;
+            std::terminate();
         }
         worker_->join();
     }
@@ -67,11 +87,6 @@ void VocoderRenderScheduler::shutdown() {
                     }
                 });
         }
-        while (!completionQueue_.empty())
-        {
-            completions.push_back(std::move(completionQueue_.front()));
-            completionQueue_.pop_front();
-        }
     }
     for (auto& completion : completions)
     {
@@ -86,6 +101,9 @@ void VocoderRenderScheduler::shutdown() {
 }
 
 bool VocoderRenderScheduler::submit(Job job) {
+    if (!isJobPayloadWithinLimit(job.f0.capacity(), job.uv.capacity(), job.conditioning.capacity()))
+        return false;
+
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
         if (!acceptingJobs_.load())
@@ -101,25 +119,6 @@ bool VocoderRenderScheduler::submit(Job job) {
     return true;
 }
 
-std::size_t VocoderRenderScheduler::jobQueueDepth() const noexcept {
-    std::lock_guard<std::mutex> lock(queueMutex_);
-    return jobQueue_.size();
-}
-
-std::size_t VocoderRenderScheduler::completionQueueDepth() const noexcept {
-    std::lock_guard<std::mutex> lock(queueMutex_);
-    return completionQueue_.size();
-}
-
-bool VocoderRenderScheduler::isAcceptingJobs() const noexcept {
-    return acceptingJobs_.load(std::memory_order_acquire);
-}
-
-bool VocoderRenderScheduler::isWorkerJoinable() const noexcept {
-    std::lock_guard<std::mutex> lock(queueMutex_);
-    return worker_ != nullptr && worker_->joinable();
-}
-
 void VocoderRenderScheduler::workerThread() {
     while (true) {
         Job job;
@@ -129,26 +128,11 @@ void VocoderRenderScheduler::workerThread() {
             std::unique_lock<std::mutex> lock(queueMutex_);
             queueCV_.wait(lock, [this] { 
                 return !jobQueue_.empty()
-                    || !completionQueue_.empty()
                     || !acceptingJobs_.load(std::memory_order_acquire);
             });
             
             shutdownRequested = !acceptingJobs_.load(std::memory_order_acquire);
             
-            if (!completionQueue_.empty()) {
-                auto completion = std::move(completionQueue_.front());
-                completionQueue_.pop_front();
-                lock.unlock();
-                try { completion(); }
-                catch (const std::exception& e) {
-                    AppLogger::error("[VocoderRenderScheduler] queued completion threw: " + juce::String(e.what()));
-                }
-                catch (...) {
-                    AppLogger::error("[VocoderRenderScheduler] queued completion threw unknown exception");
-                }
-                continue;
-            }
-
             if (!jobQueue_.empty()) {
                 job = std::move(jobQueue_.front());
                 jobQueue_.pop_front();
@@ -171,15 +155,20 @@ void VocoderRenderScheduler::workerThread() {
                             job.conditioning.empty() ? nullptr : job.conditioning.data(), job.conditioning.size(),
                             runOptions_);
                         AppLogger::log("VocoderTrace: run end");
-                        if (result.ok()
-                            && acceptingJobs_.load(std::memory_order_acquire)) {
-                            resultType = JobResult::Succeeded;
-                            resultError.clear();
-                            resultAudio = result.value();
+                        const bool accepting = acceptingJobs_.load(std::memory_order_acquire);
+                        if (result.ok()) {
+                            if (accepting) {
+                                resultType = JobResult::Succeeded;
+                                resultError.clear();
+                                resultAudio = result.value();
+                            } else {
+                                resultType = JobResult::Cancelled;
+                                resultError = "Scheduler shutdown discarded completed inference";
+                            }
                         } else {
-                            resultType = acceptingJobs_.load(std::memory_order_acquire)
-                                ? JobResult::Failed : JobResult::Cancelled;
-                            resultError = juce::String(result.error().fullMessage());
+                            auto failure = classifyInferenceError(result.error());
+                            resultType = failure.result;
+                            resultError = std::move(failure.reason);
                         }
                     } else {
                         resultType = JobResult::Failed;

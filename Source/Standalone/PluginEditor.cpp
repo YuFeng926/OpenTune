@@ -1625,7 +1625,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (renderFailureGenerationChanged) {
         if (!renderFailureDialogLatched_
             || renderFailureDialogContentKey_ != statusSnapshot.contentKey) {
-            const auto summary = juce::String::fromUTF8(u8"渲染失败，可能回退干声。");
+            const auto reason = processorRef_.getLastRenderFailureReason(statusSnapshot.contentKey);
+            auto summary = juce::String::fromUTF8(u8"渲染失败，可能回退干声。");
+            if (reason.isNotEmpty())
+                summary += juce::String::fromUTF8(u8"原因：") + reason;
             ConfirmDialogContent::showDiagnostic(
                 &contentRoot_,
                 "Render Failure",

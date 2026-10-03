@@ -26,12 +26,15 @@ RenderWorker::~RenderWorker()
 void RenderWorker::stop()
 {
     if (!thread_.joinable())
+    {
+        waitAsyncIdle();
         return;
+    }
 
     if (thread_.get_id() == std::this_thread::get_id())
     {
-        jassertfalse;
-        return;
+        AppLogger::error("[RenderWorker] self-join rejected; hard failure");
+        std::terminate();
     }
 
     stopping_.store(true);
@@ -49,6 +52,7 @@ void RenderWorker::stop()
             job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
     cv_.notify_all();
     thread_.join();
+    waitAsyncIdle();
 }
 
 // ============================================================
@@ -90,10 +94,6 @@ void RenderWorker::detachExecutionLease(void* owner)
             job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
     }
 
-    {
-        std::unique_lock<std::mutex> lk(mutex_);
-        cv_.wait(lk, [this] { return inFlight_ == 0; });
-    }
     std::unique_lock<std::mutex> lk(mutex_);
     cv_.wait(lk, [this] {
         return inFlight_ == 0 && asyncControl_->count.load(std::memory_order_acquire) == 0;
@@ -107,15 +107,15 @@ void RenderWorker::detachExecutionLease(void* owner)
 void RenderWorker::reconcileAndSyncStage1Queue(const RenderJob& templateJob,
                                                const std::function<void()>& reconcile)
 {
-    std::vector<RenderCache::PendingJob> capacityFailures;
+    std::vector<RenderCache::PendingJob> rejectedJobs;
     {
         std::lock_guard<std::mutex> lk(mutex_);
         // 与 worker loop 的 claim 共用同一临界区：reconcile 产生的 revision
         // 不可能被旧 queued job 在新 snapshot 同步前 claim。
         reconcile();
-        syncStage1QueueLocked(templateJob, capacityFailures);
+        syncStage1QueueLocked(templateJob, rejectedJobs);
     }
-    for (const auto& failure : capacityFailures)
+    for (const auto& failure : rejectedJobs)
         templateJob.renderCache->completeChunkRenderFailure(
             failure.startSample, failure.targetRevision);
     cv_.notify_all();
@@ -123,7 +123,7 @@ void RenderWorker::reconcileAndSyncStage1Queue(const RenderJob& templateJob,
 
 void RenderWorker::syncStage1QueueLocked(
     const RenderJob& templateJob,
-    std::vector<RenderCache::PendingJob>& capacityFailures)
+    std::vector<RenderCache::PendingJob>& rejectedJobs)
 {
     jassert(templateJob.kind == RenderJob::Kind::Stage1Render);
     jassert(templateJob.renderCache != nullptr);
@@ -174,7 +174,7 @@ void RenderWorker::syncStage1QueueLocked(
         queued.targetRevision = pending.targetRevision;
         queued.queuedChunkStartSample = startSample;
         if (!enqueueLocked(std::move(queued)))
-            capacityFailures.push_back(pending);
+            rejectedJobs.push_back(pending);
     }
 }
 
@@ -219,36 +219,91 @@ void RenderWorker::discardAllStage1Queue()
 
 bool RenderWorker::enqueue(RenderJob job)
 {
+    std::shared_ptr<RenderCache> failureCache;
+    int64_t failureStartSample = 0;
+    uint64_t failureRevision = 0;
+    bool accepted = false;
     {
         std::lock_guard<std::mutex> lk(mutex_);
         if (job.kind == RenderJob::Kind::Stage1Render)
         {
             jassert(job.renderCache != nullptr && job.queuedChunkStartSample >= 0);
             if (job.renderCache == nullptr || job.queuedChunkStartSample < 0)
-                return false;
-
-            const auto* cache = job.renderCache.get();
-            const bool alreadyQueued = std::any_of(queue_.begin(), queue_.end(),
-                [cache, &job](const RenderJob& queued) {
-                    return queued.kind == RenderJob::Kind::Stage1Render
-                        && queued.renderCache.get() == cache
-                        && queued.queuedChunkStartSample == job.queuedChunkStartSample;
-                });
-            if (alreadyQueued)
-                return true;
+            {
+                failureCache = job.renderCache;
+                failureStartSample = job.startSample;
+                failureRevision = job.targetRevision;
+            }
+            else
+            {
+                if (!lease_.isValid())
+                {
+                    failureCache = job.renderCache;
+                    failureStartSample = job.startSample;
+                    failureRevision = job.targetRevision;
+                }
+                else
+                {
+                    const auto* cache = job.renderCache.get();
+                    const bool alreadyQueued = std::any_of(queue_.begin(), queue_.end(),
+                        [cache, &job](const RenderJob& queued) {
+                            return queued.kind == RenderJob::Kind::Stage1Render
+                                && queued.renderCache.get() == cache
+                                && queued.queuedChunkStartSample == job.queuedChunkStartSample;
+                        });
+                    if (alreadyQueued)
+                        return true;
+                }
+            }
         }
 
-        if (!enqueueLocked(std::move(job)))
-            return false;
+        if (failureCache == nullptr)
+        {
+            if (job.kind == RenderJob::Kind::Stage1Render)
+            {
+                failureCache = job.renderCache;
+                failureStartSample = job.startSample;
+                failureRevision = job.targetRevision;
+            }
+            accepted = enqueueLocked(std::move(job));
+            if (accepted)
+                failureCache.reset();
+        }
     }
+    if (failureCache != nullptr)
+        failureCache->completeChunkRenderFailure(failureStartSample, failureRevision);
+    if (!accepted)
+        return false;
     cv_.notify_one();
     return true;
 }
 
-bool RenderWorker::enqueueLocked(RenderJob job)
+bool RenderWorker::requeueStage1Chunk(const RenderJob& job)
+{
+    if (job.kind != RenderJob::Kind::Stage1Render
+        || job.renderCache == nullptr
+        || job.queuedChunkStartSample < 0)
+        return false;
+
+    bool enqueued = false;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        RenderJob queued = job;
+        queued.queuedChunkStartSample = job.startSample;
+        enqueued = enqueueLocked(std::move(queued), true);
+    }
+    if (enqueued)
+        cv_.notify_one();
+    return enqueued;
+}
+
+bool RenderWorker::enqueueLocked(RenderJob job, bool requeueRunningChunk)
 {
     static constexpr std::size_t kMaxQueueDepth = 100;
-    if (queue_.size() >= kMaxQueueDepth)
+    if (!lease_.isValid() || queue_.size() >= kMaxQueueDepth)
+        return false;
+    if (requeueRunningChunk
+        && !job.renderCache->requeueRunningChunk(job.startSample, job.targetRevision))
         return false;
     if (job.kind != RenderJob::Kind::Stage1Render)
     {
@@ -293,9 +348,9 @@ void RenderWorker::completeAsyncJob(const std::shared_ptr<AsyncState>& state) no
         state->control->count.store(count - 1, std::memory_order_release);
         workerCv = state->control->workerCv;
     }
-    state->control->cv.notify_all();
     if (workerCv != nullptr)
         workerCv->notify_all();
+    state->control->cv.notify_all();
 }
 
 bool RenderWorker::isAsyncJobClosed(const std::shared_ptr<AsyncState>& state) noexcept

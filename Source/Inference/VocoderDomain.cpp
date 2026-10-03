@@ -31,10 +31,10 @@ bool VocoderDomain::initialize(const std::string& modelPath) {
 }
 
 void VocoderDomain::shutdown() {
-    if (scheduler_) {
-        scheduler_->shutdown();
-        scheduler_.reset();
-    }
+    // Scheduler owns its worker join in its destructor.  Resetting it is the
+    // single shutdown path; calling shutdown() first would run the same
+    // idempotent protocol twice.
+    scheduler_.reset();
     if (inferenceService_) {
         inferenceService_->shutdown();
     }

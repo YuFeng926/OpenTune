@@ -14,6 +14,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace OpenTune {
@@ -22,11 +23,75 @@ class ProcessRenderRuntime
 {
 public:
     enum class ControlResult : uint8_t { Changed, Unchanged, Failed };
+    enum class VocoderSubmitResult : uint8_t {
+        Submitted,
+        PayloadTooLarge,
+        Retryable
+    };
 
     struct CompletionGate
     {
         std::mutex mutex;
+        std::condition_variable cv;
         bool closed{false};
+        int activeCallbacks{0};
+        std::unordered_map<std::thread::id, int> activeCallbackThreads;
+
+        bool tryEnter() noexcept
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (closed)
+                return false;
+            ++activeCallbacks;
+            ++activeCallbackThreads[std::this_thread::get_id()];
+            return true;
+        }
+
+        void leave() noexcept
+        {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                --activeCallbacks;
+                const auto threadIt = activeCallbackThreads.find(std::this_thread::get_id());
+                if (threadIt != activeCallbackThreads.end()) {
+                    if (--threadIt->second == 0)
+                        activeCallbackThreads.erase(threadIt);
+                }
+            }
+            cv.notify_all();
+        }
+
+        void closeAndWait() noexcept
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            closed = true;
+            if (activeCallbackThreads.count(std::this_thread::get_id()) != 0)
+                std::terminate();
+            cv.wait(lock, [this] { return activeCallbacks == 0; });
+        }
+
+    };
+
+    struct CompletionCallbackLease
+    {
+        explicit CompletionCallbackLease(CompletionGate& gate) noexcept
+            : gate_(gate), entered_(gate_.tryEnter()) {}
+
+        CompletionCallbackLease(const CompletionCallbackLease&) = delete;
+        CompletionCallbackLease& operator=(const CompletionCallbackLease&) = delete;
+        CompletionCallbackLease(CompletionCallbackLease&&) = delete;
+        CompletionCallbackLease& operator=(CompletionCallbackLease&&) = delete;
+
+        ~CompletionCallbackLease()
+        {
+            if (entered_)
+                gate_.leave();
+        }
+
+        explicit operator bool() const noexcept { return entered_; }
+
+        CompletionGate& gate_;
+        bool entered_{false};
     };
 
     struct CompletionContext
@@ -36,7 +101,7 @@ public:
                            std::shared_ptr<const EditableContentSnapshot>,
                            std::shared_ptr<const juce::AudioBuffer<float>>,
                            double)> chunkSettled;
-        std::function<void(ContentKey)> chunkFailed;
+        std::function<void(ContentKey, const juce::String&)> chunkFailed;
     };
 
     struct ControlTransaction
@@ -47,12 +112,12 @@ public:
         std::atomic<bool> finishing{false};
         std::atomic<bool> closeRequested{false};
         std::atomic<bool> acked{false};
+        std::atomic<bool> paused{false};
     };
 
     static ProcessRenderRuntime& getInstance();
     void retainOwner();
     void releaseOwner() noexcept;
-    void shutdown();
 
     void processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
                                RenderJob& job,
@@ -74,6 +139,8 @@ public:
     void resetInferenceBackend(bool forceCpu,
                                std::shared_ptr<ContentRenderService> crs,
                                std::function<void(ControlResult)> completion);
+    void detachDeferredJobs(void* owner,
+                            const std::shared_ptr<CompletionGate>& gate);
 
     /**
      * Vocoder submission / query entry points. All accesses to the underlying
@@ -87,7 +154,7 @@ public:
      * snapshot via acquireVocoderConfig(), so a job is never submitted to a
      * domain rebuilt since then with stale configuration.
      */
-    bool submitVocoderJob(VocoderDomain::Job job, uint64_t expectedGeneration);
+    VocoderSubmitResult submitVocoderJob(VocoderDomain::Job job, uint64_t expectedGeneration);
     bool isVocoderReady() const noexcept;
     bool isVocoderReconfiguring() const noexcept;
 
@@ -101,7 +168,7 @@ public:
 
 private:
     ProcessRenderRuntime();
-    ~ProcessRenderRuntime();
+    ~ProcessRenderRuntime() = default;
 
     static std::string modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight);
 
@@ -145,7 +212,8 @@ private:
 
     void controlWorkerLoop();
     bool postControlCommand(ControlCommand command);
-    void finishShutdown();
+    void finishShutdown(uint64_t generation);
+    void shutdownLocked(std::unique_lock<std::mutex>& shutdownLock);
     static bool claimControlTransaction(const std::shared_ptr<ControlTransaction>& transaction) noexcept;
     static void completeClaimedControlTransaction(const std::shared_ptr<ControlTransaction>& transaction,
                                                   const char* reason) noexcept;
@@ -159,10 +227,11 @@ private:
     std::deque<ControlCommand> controlQueue_;
     mutable std::mutex shutdownMutex_;
     bool ensureVocoderQueued_{false}; // controlMutex_ protected
-    std::atomic<bool> shuttingDown_{false};
+    std::atomic<bool> shuttingDown_{false}; // shutdownMutex_ serializes transitions
+    std::atomic<uint64_t> shutdownGeneration_{0};
     std::atomic<bool> workerExitDispatchAttempted_{false};
     std::atomic<bool> workerExitDispatchPosted_{false};
-    std::atomic<int> ownerCount_{0};
+    int ownerCount_{0}; // shutdownMutex_ protected
     std::shared_ptr<ControlTransaction> activeTransaction_;
 
     std::unique_ptr<VocoderDomain> vocoderDomain_;
@@ -180,6 +249,8 @@ private:
         std::weak_ptr<ContentRenderService> crs;
         RenderJob job;
         CompletionContext completion;
+        void* ownerIdentity{nullptr};
+        juce::String reason;
     };
 
     void failDeferredRetries(std::vector<DeferredRetry> retries);
@@ -189,7 +260,8 @@ private:
 
     void deferOrRequeue(std::shared_ptr<ContentRenderService> crs,
                         RenderJob job,
-                        CompletionContext completion);
+                        CompletionContext completion,
+                        juce::String reason = {});
 
     ProcessRenderRuntime(const ProcessRenderRuntime&) = delete;
     ProcessRenderRuntime& operator=(const ProcessRenderRuntime&) = delete;

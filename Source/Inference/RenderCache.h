@@ -18,11 +18,10 @@ namespace OpenTune {
 
 class RenderCache {
 public:
-    static constexpr size_t kDefaultGlobalCacheLimitBytes = static_cast<size_t>(256) * 1024 * 1024;
+    static constexpr size_t kDefaultRenderCachePcmLimitBytes = static_cast<size_t>(256) * 1024 * 1024;
     static constexpr double kSampleRate = TimeCoordinate::kRenderSampleRate;
 
     struct Chunk {
-        double startSeconds{0.0};
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         std::shared_ptr<const std::vector<float>> audio;
@@ -70,7 +69,8 @@ public:
     enum class ChunkRenderResult : uint8_t {
         Published,
         Stale,
-        InvalidInput
+        InvalidInput,
+        MemoryLimitExceeded
     };
 
     ChunkRenderResult completeChunkRenderWithAudio(int64_t startSample,
@@ -123,7 +123,16 @@ public:
     // 准备方法：将 canonical chunk 重采样到目标播放采样率（使用自有 ResamplingManager）。
     // 调用方（ContentRenderService::preparePlaybackSampleRate）在设备/导出切换时调用。
     // ============================================================
-    void prepareForPlaybackSampleRate(double targetSr);
+    bool prepareForPlaybackSampleRate(double targetSr);
+    struct PreparedSnapshotRollback
+    {
+        std::shared_ptr<const void> snapshot;
+        double sampleRate{0.0};
+        bool valid{false};
+    };
+    PreparedSnapshotRollback capturePreparedSnapshot() const;
+    // Restore an exact prepared snapshot without rebuilding or allocating.
+    bool restorePreparedSnapshot(PreparedSnapshotRollback&& rollback);
 
     // 音频线程直接 copy prepared overlay（无插值）。只能读取已 prepared 的目标率数据。
     // 只复制 sourceRevision == expectedContentRevision 的 chunk：版本不匹配的
@@ -179,7 +188,6 @@ private:
 
     // Prepared rebuild state: serialized by preparedBuildMutex_ (non-audio thread).
     double preparedSampleRate_{0.0};
-    size_t preparedMemoryUsage_{0};
     ResamplingManager preparedResampler_;
 
     // Writer mutex serializes prepared rebuild + target rate update.
@@ -189,16 +197,19 @@ private:
     mutable std::vector<std::shared_ptr<const PublishedRenderSnapshot>> retiredSnapshots_;
     mutable std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> retiredPreparedSnapshots_;
 
-    void publishLocked();
-    void rebuildPrepared();
-    void pruneRetiredSnapshotsLocked() const;
+    void publishLocked(std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases);
+    bool rebuildPrepared(double requestedSampleRate = -1.0);
+    void pruneRetiredSnapshotsLocked(
+        std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases) const;
     // Settled check callable only when lock_ is already held (avoids recursive lock).
     bool isCanonicalSettledLocked_() const;
 
 public:
-    static std::atomic<size_t>& globalCacheLimitBytes();
+    static std::atomic<size_t>& renderCachePcmLimitBytes();
     static std::atomic<size_t>& globalCacheCurrentBytes();
     static std::atomic<size_t>& globalCachePeakBytes();
+    static std::atomic<size_t>& renderCacheCurrentBytes();
+    static std::atomic<size_t>& renderCachePeakBytes();
 };
 
 } // namespace OpenTune

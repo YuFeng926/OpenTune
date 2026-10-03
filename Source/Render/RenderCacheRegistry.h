@@ -29,11 +29,10 @@ public:
     std::shared_ptr<RenderCache> getOrCreate(ContentKey key);
     std::shared_ptr<RenderCache> get(ContentKey key) const;
     void remove(ContentKey key);
-    void invalidate(ContentKey key);
     void clear();
 
     /** 更新目标率并串行重建所有 cache 的 prepared snapshot。 */
-    void preparePlaybackSampleRate(double targetSr);
+    bool preparePlaybackSampleRate(double targetSr);
 
 private:
     mutable juce::ReadWriteLock lock_;

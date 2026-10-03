@@ -188,28 +188,18 @@ bool preparePublishedAudioFromSynthesis(const FrozenRenderBoundaries& boundaries
 }
 
 void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completion,
+                        ContentKey key,
+                        std::shared_ptr<const EditableContentSnapshot> contentSnapshot,
+                        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+                        double audioSampleRate);
+
+void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completion,
                         const RenderJob& job)
 {
     if (!completion.chunkSettled)
         return;
-    const auto gate = completion.gate;
-    auto callback = completion.chunkSettled;
-    const auto key = job.contentKey;
-    auto snapshot = job.contentSnapshot;
-    auto audioBuffer = job.audioBuffer;
-    const auto sampleRate = job.audioSampleRate;
-    const bool posted = juce::MessageManager::callAsync(
-        [gate, callback = std::move(callback), key,
-         snapshot = std::move(snapshot), audioBuffer = std::move(audioBuffer), sampleRate]() mutable {
-            {
-                std::lock_guard<std::mutex> lk(gate->mutex);
-                if (gate->closed)
-                    return;
-            }
-            callback(key, std::move(snapshot), std::move(audioBuffer), sampleRate);
-        });
-    if (!posted)
-        AppLogger::error("[ProcessRenderRuntime] settled completion dispatcher rejected; hard lifecycle failure");
+    notifyChunkSettled(completion, job.contentKey, job.contentSnapshot,
+                       job.audioBuffer, job.audioSampleRate);
 }
 
 void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completion,
@@ -225,11 +215,9 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
     const bool posted = juce::MessageManager::callAsync(
         [gate, callback = std::move(callback), key,
          contentSnapshot = std::move(contentSnapshot), audioBuffer = std::move(audioBuffer), audioSampleRate]() mutable {
-            {
-                std::lock_guard<std::mutex> lk(gate->mutex);
-                if (gate->closed)
-                    return;
-            }
+            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+            if (!callbackLease)
+                return;
             callback(key, std::move(contentSnapshot), std::move(audioBuffer), audioSampleRate);
         });
     if (!posted)
@@ -237,20 +225,20 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
 }
 
 void notifyChunkFailed(const ProcessRenderRuntime::CompletionContext& completion,
-                       ContentKey key)
+                       ContentKey key,
+                       const juce::String& reason = {})
 {
     if (!completion.chunkFailed)
         return;
     const auto gate = completion.gate;
     auto callback = completion.chunkFailed;
+    const auto failureReason = reason.isNotEmpty() ? reason : juce::String("Render failed");
     const bool posted = juce::MessageManager::callAsync(
-        [gate, callback = std::move(callback), key]() mutable {
-            {
-                std::lock_guard<std::mutex> lk(gate->mutex);
-                if (gate->closed)
-                    return;
-            }
-            callback(key);
+        [gate, callback = std::move(callback), key, failureReason]() mutable {
+            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+            if (!callbackLease)
+                return;
+            callback(key, failureReason);
         });
     if (!posted)
         AppLogger::error("[ProcessRenderRuntime] failed completion dispatcher rejected; hard lifecycle failure");
@@ -260,10 +248,11 @@ void failChunk(const ProcessRenderRuntime::CompletionContext& completion,
                RenderCache* cache,
                int64_t startSample,
                uint64_t revision,
-               ContentKey key)
+               ContentKey key,
+               const juce::String& reason = {})
 {
     if (cache != nullptr && cache->completeChunkRenderFailure(startSample, revision))
-        notifyChunkFailed(completion, key);
+        notifyChunkFailed(completion, key, reason);
 }
 
 // ==============================================================================
@@ -392,8 +381,7 @@ ProcessRenderRuntime& ProcessRenderRuntime::getInstance()
 void ProcessRenderRuntime::retainOwner()
 {
     std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
-    if (ownerCount_.load(std::memory_order_acquire) == 0
-        && shuttingDown_.load(std::memory_order_acquire))
+    if (ownerCount_ == 0 && shuttingDown_.load(std::memory_order_acquire))
     {
         // A new host instance may appear after the previous last instance was
         // destroyed.  Complete the already-requested one-shot shutdown before
@@ -402,9 +390,9 @@ void ProcessRenderRuntime::retainOwner()
         workerExitCv_.wait(lifecycleLock, [this]() {
             return workerExitDispatchAttempted_.load(std::memory_order_acquire);
         });
+        const auto generation = shutdownGeneration_.load(std::memory_order_acquire);
         lifecycleLock.unlock();
-        if (!workerExitDispatchPosted_.load(std::memory_order_acquire))
-            finishShutdown();
+        finishShutdown(generation);
         lifecycleLock.lock();
 
         {
@@ -416,15 +404,18 @@ void ProcessRenderRuntime::retainOwner()
         workerExitDispatchAttempted_.store(false, std::memory_order_release);
         workerExitDispatchPosted_.store(false, std::memory_order_release);
         shuttingDown_.store(false, std::memory_order_release);
+        shutdownGeneration_.fetch_add(1, std::memory_order_acq_rel);
         controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
     }
-    ownerCount_.fetch_add(1, std::memory_order_relaxed);
+    ++ownerCount_;
 }
 
 void ProcessRenderRuntime::releaseOwner() noexcept
 {
-    if (ownerCount_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        shutdown();
+    std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
+    --ownerCount_;
+    if (ownerCount_ == 0)
+        shutdownLocked(lifecycleLock);
 }
 
 ProcessRenderRuntime::ProcessRenderRuntime()
@@ -455,25 +446,32 @@ ProcessRenderRuntime::ProcessRenderRuntime()
     controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
 }
 
-ProcessRenderRuntime::~ProcessRenderRuntime()
+void ProcessRenderRuntime::shutdownLocked(std::unique_lock<std::mutex>& shutdownLock)
 {
-}
-
-void ProcessRenderRuntime::shutdown()
-{
-    std::unique_lock<std::mutex> shutdownLock(shutdownMutex_);
-    if (shuttingDown_.exchange(true))
-    {
+    if (shuttingDown_.load(std::memory_order_acquire))
         return;
-    }
+    shuttingDown_.store(true, std::memory_order_release);
+    const auto generation = shutdownGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
 
     std::shared_ptr<ControlTransaction> activeTransaction;
+    std::vector<std::shared_ptr<ControlTransaction>> queuedTransactions;
     {
         std::lock_guard<std::mutex> lock(controlMutex_);
         ControlCommand stop;
         stop.type = ControlCommand::Type::Stop;
+        for (auto& command : controlQueue_)
+        {
+            if (command.transaction)
+                queuedTransactions.push_back(std::move(command.transaction));
+        }
+        controlQueue_.clear();
         controlQueue_.push_back(std::move(stop));
         activeTransaction = activeTransaction_;
+    }
+    for (const auto& transaction : queuedTransactions)
+    {
+        transaction->closeRequested.store(true, std::memory_order_release);
+        finishControlTransaction(transaction, "shutdown queued transaction");
     }
     // A command already taken by the worker may be waiting for a
     // message-thread ack.  Request its close; the control worker performs the
@@ -504,7 +502,7 @@ void ProcessRenderRuntime::shutdown()
         {
             AppLogger::error("[ProcessRenderRuntime] worker-exit dispatcher rejected; synchronously joining");
             shutdownLock.unlock();
-            finishShutdown();
+            finishShutdown(generation);
         }
     }
 }
@@ -524,7 +522,8 @@ void ProcessRenderRuntime::completeClaimedControlTransaction(
 {
     if (!transaction)
         return;
-    if (transaction->crs)
+    if (transaction->crs
+        && transaction->paused.exchange(false, std::memory_order_acq_rel))
         transaction->crs->resumeRenderWorker();
     transaction->crs.reset();
     transaction->acked.store(true, std::memory_order_release);
@@ -539,14 +538,16 @@ bool ProcessRenderRuntime::claimControlTransaction(
         && !transaction->finishing.exchange(true, std::memory_order_acq_rel);
 }
 
-void ProcessRenderRuntime::finishShutdown()
+void ProcessRenderRuntime::finishShutdown(uint64_t generation)
 {
     std::lock_guard<std::mutex> lifecycleLock(shutdownMutex_);
+    if (generation != shutdownGeneration_.load(std::memory_order_acquire))
+        return;
     if (controlWorker_.joinable()
         && controlWorker_.get_id() == std::this_thread::get_id())
     {
         AppLogger::error("[ProcessRenderRuntime] control worker self-join rejected; hard failure");
-        return;
+        std::terminate();
     }
     if (controlWorker_.joinable())
         controlWorker_.join();
@@ -556,13 +557,25 @@ void ProcessRenderRuntime::finishShutdown()
         deferred = std::move(deferredRetries_);
         vocoderReconfiguring_ = false;
     }
-    jassert(deferred.empty());
-
+    if (!deferred.empty())
     {
-        std::lock_guard<std::mutex> lock(vocoderMutex_);
-        jassert(vocoderDomain_ == nullptr);
+        AppLogger::error("[ProcessRenderRuntime] shutdown left deferred retries");
+        std::terminate();
     }
 
+    bool controlStateClear = false;
+    {
+        std::lock_guard<std::mutex> lock(controlMutex_);
+        controlStateClear = controlQueue_.empty() && activeTransaction_ == nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        if (vocoderDomain_ != nullptr || domainSubmitInFlight_ != 0 || !controlStateClear)
+        {
+            AppLogger::error("[ProcessRenderRuntime] shutdown resource state did not converge");
+            std::terminate();
+        }
+    }
 }
 
 std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight)
@@ -674,27 +687,49 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(con
     // published (or creation failed and vocoderDomain_ remains null).
     // Directly check domain presence — never call acquireVocoderConfig here
     // which would trigger recursive domain creation.
-    const bool domainAvailable = [&]() {
-        std::lock_guard<std::mutex> lk(vocoderMutex_);
-        return !shuttingDown_.load(std::memory_order_acquire)
+    bool domainAvailable = false;
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        domainAvailable = !shuttingDown_.load(std::memory_order_acquire)
             && vocoderDomain_ != nullptr;
-    }();
-
+    }
     for (auto& retry : readyRetries)
     {
-        if (domainAvailable)
+        std::unique_lock<std::mutex> gateLock;
+        if (retry.completion.gate != nullptr)
+            gateLock = std::unique_lock<std::mutex>(retry.completion.gate->mutex);
+
+        // Serialize the decision with owner close using gate -> runtime state.
+        // The gate is released before requeue itself, while the runtime state
+        // lock is retained through ContentRenderService/RenderWorker enqueue.
+        // Owner close must acquire the same state lock after closing the gate,
+        // so it cannot remove this item before that enqueue is complete.
+        std::unique_lock<std::mutex> stateLock(vocoderMutex_);
+        const bool gateClosed = retry.completion.gate != nullptr
+            && retry.completion.gate->closed;
+        domainAvailable = !shuttingDown_.load(std::memory_order_acquire)
+            && vocoderDomain_ != nullptr;
+        if (domainAvailable && !gateClosed)
         {
+            bool requeued = false;
+            if (gateLock.owns_lock())
+                gateLock.unlock();
             if (auto crsShared = retry.crs.lock())
+                requeued = crsShared->requeueRenderChunk(retry.job);
+            if (requeued)
             {
-                if (crsShared->requeueRenderChunk(retry.job))
-                    continue;
+                stateLock.unlock();
+                continue;
             }
         }
+        if (gateLock.owns_lock())
+            gateLock.unlock();
+        stateLock.unlock();
 
         if (retry.job.renderCache != nullptr
             && retry.job.renderCache->completeChunkRenderFailure(
                 retry.job.startSample, retry.job.targetRevision))
-            notifyChunkFailed(retry.completion, retry.job.contentKey);
+            notifyChunkFailed(retry.completion, retry.job.contentKey, retry.reason);
     }
     return domainAvailable ? ControlResult::Changed : ControlResult::Failed;
 }
@@ -704,7 +739,7 @@ bool ProcessRenderRuntime::postControlCommand(ControlCommand command)
     bool rejected = false;
     {
         std::lock_guard<std::mutex> lock(controlMutex_);
-        if (shuttingDown_.load())
+        if (shuttingDown_.load(std::memory_order_acquire))
         {
             AppLogger::error("[ProcessRenderRuntime] rejected control command during shutdown; Failed");
             rejected = true;
@@ -798,7 +833,7 @@ void ProcessRenderRuntime::controlWorkerLoop()
                 if (retry.job.renderCache != nullptr
                     && retry.job.renderCache->completeChunkRenderFailure(
                         retry.job.startSample, retry.job.targetRevision))
-                    notifyChunkFailed(retry.completion, retry.job.contentKey);
+                    notifyChunkFailed(retry.completion, retry.job.contentKey, retry.reason);
             }
             domain.reset();
 
@@ -807,8 +842,9 @@ void ProcessRenderRuntime::controlWorkerLoop()
             // thread only joins an already fully quiescent control worker.
             ProcessF0Runtime::getInstance().shutdown();
 
+            const auto generation = shutdownGeneration_.load(std::memory_order_acquire);
             const bool posted = juce::MessageManager::callAsync(
-                [this]() { finishShutdown(); });
+                [this, generation]() { finishShutdown(generation); });
             workerExitDispatchPosted_.store(posted, std::memory_order_release);
             workerExitDispatchAttempted_.store(true, std::memory_order_release);
             workerExitCv_.notify_all();
@@ -821,8 +857,13 @@ void ProcessRenderRuntime::controlWorkerLoop()
         try
         {
             if (command.transaction && command.transaction->crs)
+            {
                 command.transaction->crs->pauseRenderWorker();
+                command.transaction->paused.store(true, std::memory_order_release);
+            }
             result = reconfigureVocoder(command);
+            if (command.transaction && command.transaction->crs)
+                command.transaction->crs->waitAsyncRenderJobs();
         }
         catch (const std::exception& e)
         {
@@ -931,15 +972,52 @@ void ProcessRenderRuntime::resetInferenceBackend(bool forceCpu,
     postControlCommand(std::move(command));
 }
 
-bool ProcessRenderRuntime::submitVocoderJob(VocoderDomain::Job job, uint64_t expectedGeneration)
+void ProcessRenderRuntime::detachDeferredJobs(
+    void* owner, const std::shared_ptr<CompletionGate>& gate)
+{
+    std::vector<DeferredRetry> detached;
+    std::unique_lock<std::mutex> gateLock;
+    if (gate != nullptr)
+        gateLock = std::unique_lock<std::mutex>(gate->mutex);
+
+    {
+        std::lock_guard<std::mutex> lock(vocoderMutex_);
+        auto it = std::remove_if(deferredRetries_.begin(), deferredRetries_.end(),
+            [owner, &detached](DeferredRetry& retry) {
+                if (retry.ownerIdentity != owner)
+                    return false;
+                detached.push_back(std::move(retry));
+                return true;
+            });
+        deferredRetries_.erase(it, deferredRetries_.end());
+    }
+
+    if (gateLock.owns_lock())
+        gateLock.unlock();
+    failDeferredRetries(std::move(detached));
+}
+
+ProcessRenderRuntime::VocoderSubmitResult ProcessRenderRuntime::submitVocoderJob(
+    VocoderDomain::Job job, uint64_t expectedGeneration)
 {
     VocoderDomain* domain = nullptr;
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
         if (vocoderDomain_ == nullptr || vocoderGeneration_ != expectedGeneration)
-            return false;
+            return VocoderSubmitResult::Retryable;
         ++domainSubmitInFlight_;
         domain = vocoderDomain_.get();
+    }
+
+    if (!VocoderRenderScheduler::isJobPayloadWithinLimit(
+            job.f0.capacity(), job.uv.capacity(), job.conditioning.capacity()))
+    {
+        {
+            std::lock_guard<std::mutex> lock(vocoderMutex_);
+            --domainSubmitInFlight_;
+        }
+        domainSubmitCv_.notify_all();
+        return VocoderSubmitResult::PayloadTooLarge;
     }
 
     bool submitted = false;
@@ -957,7 +1035,7 @@ bool ProcessRenderRuntime::submitVocoderJob(VocoderDomain::Job job, uint64_t exp
         --domainSubmitInFlight_;
     }
     domainSubmitCv_.notify_all();
-    return submitted;
+    return submitted ? VocoderSubmitResult::Submitted : VocoderSubmitResult::Retryable;
 }
 
 bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
@@ -990,7 +1068,7 @@ void ProcessRenderRuntime::failDeferredRetries(std::vector<DeferredRetry> retrie
         if (retry.job.renderCache != nullptr
             && retry.job.renderCache->completeChunkRenderFailure(
                 retry.job.startSample, retry.job.targetRevision))
-            notifyChunkFailed(retry.completion, retry.job.contentKey);
+            notifyChunkFailed(retry.completion, retry.job.contentKey, retry.reason);
     }
 }
 
@@ -1038,7 +1116,8 @@ uint64_t ProcessRenderRuntime::vocoderGeneration() const noexcept
 
 int ProcessRenderRuntime::ownerCount() const noexcept
 {
-    return ownerCount_.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(shutdownMutex_);
+    return ownerCount_;
 }
 
 bool ProcessRenderRuntime::isControlWorkerJoinable() const noexcept
@@ -1050,7 +1129,8 @@ bool ProcessRenderRuntime::isControlWorkerJoinable() const noexcept
 void ProcessRenderRuntime::deferOrRequeue(
     std::shared_ptr<ContentRenderService> crs,
     RenderJob job,
-    CompletionContext completion)
+    CompletionContext completion,
+    juce::String reason)
 {
     const auto failureCache = job.renderCache;
     const auto failureContentKey = job.contentKey;
@@ -1059,23 +1139,41 @@ void ProcessRenderRuntime::deferOrRequeue(
     bool shouldDefer = false;
     bool deferredCapacityRejected = false;
     bool shuttingDown = false;
+    bool gateClosed = false;
+    std::unique_lock<std::mutex> gateLock;
+    if (completion.gate != nullptr)
+    {
+        gateLock = std::unique_lock<std::mutex>(completion.gate->mutex);
+        gateClosed = completion.gate->closed;
+    }
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
         shuttingDown = shuttingDown_.load(std::memory_order_acquire);
-        shouldDefer = !shuttingDown && (vocoderReconfiguring_ || vocoderDomain_ == nullptr);
+        shouldDefer = !gateClosed && !shuttingDown
+            && (vocoderReconfiguring_ || vocoderDomain_ == nullptr);
         if (shouldDefer && deferredRetries_.size() < ProcessRenderRuntime::kMaxDeferredRetryDepth)
-            deferredRetries_.push_back({crs, std::move(job), std::move(completion)});
+            deferredRetries_.push_back(
+                {crs, std::move(job), std::move(completion), crs.get(), std::move(reason)});
         else if (shouldDefer)
         {
             shouldDefer = false;
             deferredCapacityRejected = true;
         }
     }
+    if (gateLock.owns_lock())
+        gateLock.unlock();
+    if (gateClosed)
+    {
+        if (job.renderCache != nullptr
+            && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
+            notifyChunkFailed(completion, job.contentKey, reason);
+        return;
+    }
     if (shuttingDown)
     {
         if (job.renderCache != nullptr
             && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
-            notifyChunkFailed(completion, job.contentKey);
+            notifyChunkFailed(completion, job.contentKey, reason);
         return;
     }
     if (shouldDefer)
@@ -1105,19 +1203,19 @@ void ProcessRenderRuntime::deferOrRequeue(
             if (failed.job.renderCache != nullptr
                 && failed.job.renderCache->completeChunkRenderFailure(
                     failed.job.startSample, failed.job.targetRevision))
-                notifyChunkFailed(failed.completion, failed.job.contentKey);
+                notifyChunkFailed(failed.completion, failed.job.contentKey, failed.reason);
         }
     }
     else if (deferredCapacityRejected)
     {
         if (job.renderCache != nullptr
             && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
-            notifyChunkFailed(completion, job.contentKey);
+            notifyChunkFailed(completion, job.contentKey, reason);
     }
     else if (!crs->requeueRenderChunk(job)
         && job.renderCache != nullptr
         && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
-        notifyChunkFailed(completion, job.contentKey);
+        notifyChunkFailed(completion, job.contentKey, reason);
 }
 
 void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
@@ -1212,11 +1310,19 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         const auto result = publishChunkWithPerNoteEq(
             *coreJob.renderCache, boundaries, std::move(rawAudio),
             coreJob.targetRevision, contentSnap->notes);
-        if (result == RenderCache::ChunkRenderResult::InvalidInput) {
+        if (result == RenderCache::ChunkRenderResult::InvalidInput
+            || result == RenderCache::ChunkRenderResult::MemoryLimitExceeded) {
             failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
                       coreJob.targetRevision, coreJob.contentKey);
         } else if (result == RenderCache::ChunkRenderResult::Published)
             notifyChunkSettled(completion, coreJob);
+    };
+    const auto settleBlankChunk = [&]() {
+        if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
+            notifyChunkSettled(completion, coreJob);
+        else
+            failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
+                      coreJob.targetRevision, coreJob.contentKey);
     };
 
     if (!clipFound || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen)
@@ -1248,10 +1354,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     if (!pitchCurve->hasOriginalF0Data())
     {
         if (!intersectsActiveEqNote)
-        {
-            if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
-                notifyChunkSettled(completion, coreJob);
-        }
+            settleBlankChunk();
         else
         {
             publishRawWithEq();
@@ -1277,10 +1380,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     if (trueEndSeconds <= 0.0 || trueStartSeconds >= f0TimelineEndSeconds)
     {
         if (!intersectsActiveEqNote)
-        {
-            if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
-                notifyChunkSettled(completion, coreJob);
-        }
+            settleBlankChunk();
         else
         {
             publishRawWithEq();
@@ -1304,10 +1404,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     if (contentSnap->pitchShiftSettings.isIdentity() && !pitchCurve->hasCorrectionInRange(f0StartFrame, f0EndFrame))
     {
         if (!intersectsActiveEqNote)
-        {
-            if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
-                notifyChunkSettled(completion, coreJob);
-        }
+            settleBlankChunk();
         else
         {
             publishRawWithEq();
@@ -1330,10 +1427,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     if (!hasValidF0)
     {
         if (!intersectsActiveEqNote)
-        {
-            if (coreJob.renderCache->markChunkAsBlank(coreJob.startSample, coreJob.targetRevision))
-                notifyChunkSettled(completion, coreJob);
-        }
+            settleBlankChunk();
         else
         {
             publishRawWithEq();
@@ -1426,7 +1520,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     *coreJob.renderCache, boundaries, std::move(shiftedAudio),
                     coreJob.targetRevision, contentSnap->notes);
 
-                if (result == RenderCache::ChunkRenderResult::InvalidInput)
+                if (result == RenderCache::ChunkRenderResult::InvalidInput
+                    || result == RenderCache::ChunkRenderResult::MemoryLimitExceeded)
                 {
                     failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
                               coreJob.targetRevision, coreJob.contentKey);
@@ -1590,7 +1685,10 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         if (RenderWorker::isAsyncJobClosed(asyncCounter))
         {
             failChunk(completion, renderCache.get(), jobStartSample,
-                      targetRevision, captureContentKey);
+                      targetRevision, captureContentKey,
+                      result == VocoderRenderScheduler::JobResult::Succeeded
+                          ? juce::String("Render cancelled because its owner detached")
+                          : error);
             return;
         }
 
@@ -1610,7 +1708,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 *renderCache, boundaries, std::move(publishedAudio), targetRevision,
                 contentSnap->notes);
 
-            if (publishResult == RenderCache::ChunkRenderResult::InvalidInput)
+            if (publishResult == RenderCache::ChunkRenderResult::InvalidInput
+                || publishResult == RenderCache::ChunkRenderResult::MemoryLimitExceeded)
             {
                 failChunk(completion, renderCache.get(), jobStartSample,
                           targetRevision, captureContentKey);
@@ -1630,7 +1729,9 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         }
         else if (result == VocoderRenderScheduler::JobResult::Cancelled)
         {
-            // Cancelled (scheduler shutdown, superseded, queue overflow): requeue or defer
+            AppLogger::warn("ChunkRender: vocoder inference cancelled objId="
+                + juce::String(static_cast<juce::int64>(chunkObjId))
+                + " reason=" + error);
             RenderJob requeueJob;
             requeueJob.kind = RenderJob::Kind::Stage1Render;
             requeueJob.contentKey = captureContentKey;
@@ -1645,13 +1746,13 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             if (RenderWorker::isAsyncJobClosed(asyncCounter))
             {
                 failChunk(completion, renderCache.get(), jobStartSample,
-                          targetRevision, captureContentKey);
+                          targetRevision, captureContentKey, error);
             }
             else if (auto crs = weakCrs.lock())
-                deferOrRequeue(std::move(crs), std::move(requeueJob), completion);
+                deferOrRequeue(std::move(crs), std::move(requeueJob), completion, error);
             else
                 failChunk(completion, renderCache.get(), jobStartSample,
-                          targetRevision, captureContentKey);
+                          targetRevision, captureContentKey, error);
         }
         else
         {
@@ -1660,14 +1761,17 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 + juce::String(static_cast<juce::int64>(chunkObjId))
                 + " error=" + error);
             failChunk(completion, renderCache.get(), jobStartSample,
-                      targetRevision, captureContentKey);
+                      targetRevision, captureContentKey, error);
         }
     };
 
-    if (!submitVocoderJob(std::move(vocoderJob), vocoderCfg.generation))
+    const auto submitResult = submitVocoderJob(std::move(vocoderJob), vocoderCfg.generation);
+    if (submitResult != VocoderSubmitResult::Submitted)
     {
-        // stale generation or reconfiguring: deferOrRequeue handles both paths
-        deferOrRequeue(crs, std::move(coreJob), completion);
+        if (submitResult == VocoderSubmitResult::PayloadTooLarge)
+            failFrozen();
+        else
+            deferOrRequeue(crs, std::move(coreJob), completion);
         RenderWorker::completeAsyncJob(asyncCounter);
         return;
     }

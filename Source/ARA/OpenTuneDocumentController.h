@@ -17,6 +17,7 @@
 #include "AudioModification.h"
 #include "AudioSource.h"
 #include "../Render/ContentRenderService.h"
+#include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
 #include "../Content/ContentKey.h"
 #include "../Utils/PlayHeadState.h"
@@ -221,6 +222,8 @@ private:
         std::deque<F0CompletionRecord> pending;
     };
     std::shared_ptr<CompletionGate> completionGate_{std::make_shared<CompletionGate>()};
+    std::shared_ptr<ProcessRenderRuntime::CompletionGate> renderCompletionGate_{
+        std::make_shared<ProcessRenderRuntime::CompletionGate>()};
     uint64_t nextWrapperGeneration_{1};
 
     // Document-level shared PlayHeadState: all ARA roles within this document
@@ -292,7 +295,8 @@ private:
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void installDocumentRenderExecution();
     static void processDocumentRenderJob(std::shared_ptr<ContentRenderService> contentRenderService,
-                                         RenderJob& job);
+                                         RenderJob& job,
+                                         std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)

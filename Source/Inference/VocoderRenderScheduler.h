@@ -11,6 +11,7 @@
 #include <deque>
 #include <thread>
 #include <vector>
+#include "../Utils/Error.h"
 
 namespace OpenTune {
 
@@ -41,6 +42,16 @@ public:
         std::function<void(JobResult, const juce::String&, const std::vector<float>&)> onComplete;
     };
 
+    struct InferenceFailure {
+        JobResult result;
+        juce::String reason;
+    };
+
+    static constexpr std::size_t kMaxJobPayloadBytes = 16 * 1024 * 1024;
+    static bool isJobPayloadWithinLimit(std::size_t f0Capacity,
+                                        std::size_t uvCapacity,
+                                        std::size_t conditioningCapacity) noexcept;
+    static InferenceFailure classifyInferenceError(const Error& error);
     VocoderRenderScheduler();
     ~VocoderRenderScheduler();
 
@@ -62,11 +73,6 @@ public:
      */
     bool submit(Job job);
 
-    std::size_t jobQueueDepth() const noexcept;
-    std::size_t completionQueueDepth() const noexcept;
-    bool isAcceptingJobs() const noexcept;
-    bool isWorkerJoinable() const noexcept;
-
     static constexpr int kMaxQueueDepth = 100;
 
 private:
@@ -75,7 +81,6 @@ private:
 
     VocoderInferenceService* service_{nullptr};
     std::deque<Job> jobQueue_;
-    std::deque<std::function<void()>> completionQueue_;
     mutable std::mutex queueMutex_;
     std::condition_variable queueCV_;
     std::unique_ptr<std::thread> worker_;
@@ -86,7 +91,6 @@ private:
     Ort::RunOptions runOptions_;
 
     std::atomic<bool> acceptingJobs_{false};
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VocoderRenderScheduler)
 };
 

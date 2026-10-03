@@ -814,79 +814,56 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 #if JucePlugin_Build_VST3
                     auto gate = completionGate_;
                     const auto failedKey = job.contentKey;
-                    juce::MessageManager::callAsync(
-                        [this, gate, failedKey]()
-                        {
-                            std::lock_guard<std::mutex> lock(gate->mutex);
-                            if (gate->closed)
-                                return;
-                            if (auto* session = getCaptureSession())
-                                session->onRenderFailed(failedKey);
-                        });
 #endif
 #if JucePlugin_Build_Standalone
-                    renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
+                    auto gate = completionGate_;
+                    const auto failedKey = job.contentKey;
 #endif
+                    const bool posted = juce::MessageManager::callAsync(
+                        [this, gate, failedKey]()
+                        {
+                            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+                            if (!callbackLease)
+                                return;
+#if JucePlugin_Build_VST3
+                            if (auto* session = getCaptureSession())
+                                session->onRenderFailed(failedKey, "Render job has no content snapshot");
+#endif
+#if JucePlugin_Build_Standalone
+                            lastRenderFailureContentKey_ = failedKey;
+                            lastRenderFailureReason_ = "Render job has no content snapshot";
+                            renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
+#endif
+                        });
+                    if (!posted)
+                        AppLogger::error("PluginProcessor: failed to dispatch render error");
                 }
                 return;
             }
             ProcessRenderRuntime::CompletionContext completion;
             completion.gate = completionGate_;
-            const auto completionGate = completionGate_;
-            completion.chunkSettled = [this, completionGate](ContentKey key,
+            completion.chunkSettled = [this](ContentKey key,
                                              std::shared_ptr<const EditableContentSnapshot> snapshot,
                                              std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
                                              double audioSampleRate) {
 #if JucePlugin_Build_Standalone
-                // Stage2 must enter the worker queue before the worker reports
-                // this render callback complete; export drain() cannot wait for
-                // a MessageManager callback while running on that thread.
+                // Stage2 must enter the worker queue before the Runtime callback
+                // returns; export drain() cannot wait for a MessageManager hop
+                // while running on the render thread.
                 enqueueStage2WhenCanonicalSettled(
                     key, snapshot, audioBuffer, audioSampleRate);
 #endif
-                juce::MessageManager::callAsync(
-                    [this, completionGate, key,
-                     snapshot = std::move(snapshot),
-                     audioBuffer = std::move(audioBuffer),
-                     audioSampleRate]() mutable
-                    {
-                        {
-                            std::lock_guard<std::mutex> lock(completionGate->mutex);
-                            if (completionGate->closed)
-                                return;
-                        }
-                        handleStage1ChunkSettled(key, std::move(snapshot),
-                                                 std::move(audioBuffer), audioSampleRate);
-                    });
+                handleStage1ChunkSettled(key, std::move(snapshot),
+                                         std::move(audioBuffer), audioSampleRate);
             };
-            completion.chunkFailed = [this, completionGate](ContentKey key) {
+            completion.chunkFailed = [this](ContentKey key, const juce::String& reason) {
 #if JucePlugin_Build_VST3
-                juce::MessageManager::callAsync(
-                    [this, completionGate, key]()
-                    {
-                        {
-                            std::lock_guard<std::mutex> lock(completionGate->mutex);
-                            if (completionGate->closed)
-                                return;
-                        }
-                        if (auto* session = getCaptureSession())
-                            session->onRenderFailed(key);
-                    });
+                if (auto* session = getCaptureSession())
+                    session->onRenderFailed(key, reason);
 #else
-                // Deferred retries may outlive this processor. Defer the
-                // owner access until after notifyChunkFailed releases the
-                // completion gate, then re-check the gate on the message
-                // thread before touching the atomic.
-                juce::MessageManager::callAsync(
-                    [this, completionGate]()
-                    {
-                        {
-                            std::lock_guard<std::mutex> lock(completionGate->mutex);
-                            if (completionGate->closed)
-                                return;
-                        }
-                        renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
-                    });
+                lastRenderFailureContentKey_ = key;
+                lastRenderFailureReason_ = reason;
+                renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
                 juce::ignoreUnused(key);
 #endif
             };
@@ -1067,11 +1044,9 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                         return result;
                     },
                     [this, gate, segContentKey](F0ExtractionService::Result&& result) {
-                        {
-                            std::lock_guard<std::mutex> lk(gate->mutex);
-                            if (gate->closed)
-                                return;
-                        }
+                        ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+                        if (!callbackLease)
+                            return;
                         if (auto* session = getCaptureSession()) {
                             if (!result.success) {
                                 session->commitSegmentF0Result(
@@ -1199,10 +1174,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     // 1) 关闭 completion gate：与持锁进入的 F0 commit / chunkSettled / 模型切换
     //    completion 回调互斥。已进入者完成后才置 closed；此后进入者持锁见
     //    closed 即返回，不访问 owner。
-    {
-        std::lock_guard<std::mutex> lk(completionGate_->mutex);
-        completionGate_->closed = true;
-    }
+    completionGate_->closeAndWait();
 
     // 2) 仅当运行时已初始化时才关闭 F0 / Reference owner 服务、解除 CRS execution
     //    lease；未初始化（scanner-only 生命周期）时不得构造进程 runtime 单例 —
@@ -1216,6 +1188,8 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     if (contentRenderService_) {
         contentRenderService_->detachExecutionLease(this);
     }
+    ProcessRenderRuntime::getInstance().detachDeferredJobs(
+        contentRenderService_.get(), completionGate_);
 
     // Phase 4: 内部清理
 #if JucePlugin_Build_Standalone
@@ -1304,11 +1278,9 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu, std::function<
     auto* processor = this;
     ProcessRenderRuntime::getInstance().resetInferenceBackend(forceCpu, contentRenderService_,
         [processor, gate, beforeResume = std::move(beforeResume)](ProcessRenderRuntime::ControlResult result) mutable {
-            {
-                std::lock_guard<std::mutex> lk(gate->mutex);
-                if (gate->closed)
-                    return;
-            }
+            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+            if (!callbackLease)
+                return;
             if (result == ProcessRenderRuntime::ControlResult::Failed)
             {
                 AppLogger::error("[Processor] inference backend control failed");
@@ -1325,11 +1297,9 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& wei
     auto gate = completionGate_;
     auto* processor = this;
     ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight, contentRenderService_, [processor, gate](ProcessRenderRuntime::ControlResult result) {
-        {
-            std::lock_guard<std::mutex> lk(gate->mutex);
-            if (gate->closed)
-                return;
-        }
+        ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+        if (!callbackLease)
+            return;
         if (result == ProcessRenderRuntime::ControlResult::Failed)
         {
             AppLogger::error("[Processor] vocoder model control failed");
@@ -1627,6 +1597,8 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         // time-stretch cache。
         contentRenderService_->clearAll();
     }
+    ProcessRenderRuntime::getInstance().detachDeferredJobs(
+        contentRenderService_.get(), completionGate_);
 #if JucePlugin_Build_VST3
     captureSession_.reset();
 #endif
@@ -4031,11 +4003,9 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             // this callback on the message thread.  Do not add a second
             // dispatcher hop after the mailbox has already recovered the
             // failed post.
-            {
-                std::lock_guard<std::mutex> lk(gate->mutex);
-                if (gate->closed)
-                    return;
-            }
+            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+            if (!callbackLease)
+                return;
 
             auto currentSnap = processor->getContentSnapshot(capturedRequest.contentKey);
             if (!currentSnap
@@ -4152,11 +4122,9 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             processor->requestFullContentRender(capturedRequest.contentKey);
         },
         [processor, gate, capturedRequest](F0ExtractionService::Result&&) {
-            {
-                std::lock_guard<std::mutex> lk(gate->mutex);
-                if (gate->closed)
-                    return;
-            }
+            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+            if (!callbackLease)
+                return;
             processor->setContentOriginalF0State(
                 capturedRequest.contentKey, OriginalF0State::Failed);
         });
@@ -4399,15 +4367,11 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
     auto gate = completionGate_;
     auto* processor = this;
     auto completion = [processor, gate](const ReferenceAnalysisService::AnalysisJobKey& jobKey,
-                                        const ReferenceFeatureSet& result) {
+                                         const ReferenceFeatureSet& result) {
         // ReferenceAnalysisService posts this completion to the message thread.
-        // Only the admission check is locked; owner lifetime is then serialized
-        // by the message-thread contract rather than by a long-held gate lock.
-        {
-            std::lock_guard<std::mutex> lk(gate->mutex);
-            if (gate->closed)
-                return;
-        }
+        ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+        if (!callbackLease)
+            return;
         processor->analysisFinished(jobKey.contentKey, result);
     };
 
