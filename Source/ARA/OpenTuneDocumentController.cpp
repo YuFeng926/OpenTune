@@ -2300,12 +2300,18 @@ void OpenTuneDocumentController::processDocumentRenderJob(
     if (!job.contentSnapshot)
     {
         AppLogger::error("ARA-DIAG: render job failed without content snapshot");
-        job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision);
+        if (job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
+            ProcessRenderRuntime::notifyApplicationRenderFailure(
+                job.contentKey, job.targetRevision, "Render job has no content snapshot");
         return;
     }
 
     ProcessRenderRuntime::CompletionContext completion;
     completion.gate = std::move(completionGate);
+    completion.applicationFailure = [](ContentKey key, uint64_t revision,
+                                       const juce::String& reason) {
+        ProcessRenderRuntime::notifyApplicationRenderFailure(key, revision, reason);
+    };
     ProcessRenderRuntime::getInstance().processChunkRenderJob(
         std::move(contentRenderService), job,
         false, std::move(completion));

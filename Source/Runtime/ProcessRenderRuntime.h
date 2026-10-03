@@ -102,6 +102,9 @@ public:
                            std::shared_ptr<const juce::AudioBuffer<float>>,
                            double)> chunkSettled;
         std::function<void(ContentKey, const juce::String&)> chunkFailed;
+        // Application-level failure notification. Intentionally independent
+        // from gate: it must remain deliverable during owner teardown.
+        std::function<void(ContentKey, uint64_t, const juce::String&)> applicationFailure;
     };
 
     struct ControlTransaction
@@ -116,6 +119,11 @@ public:
     };
 
     static ProcessRenderRuntime& getInstance();
+    // Posts an application-level render failure notification without using an
+    // owner/editor completion gate. Safe to call from a render worker thread.
+    static void notifyApplicationRenderFailure(ContentKey key,
+                                                uint64_t revision,
+                                                const juce::String& reason);
     void retainOwner();
     void releaseOwner() noexcept;
 

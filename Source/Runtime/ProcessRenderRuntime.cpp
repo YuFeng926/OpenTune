@@ -2,6 +2,7 @@
 
 #include "../DSP/AutoTunePeriodDetector.h"
 #include "../DSP/AutoTunePitchShifter.h"
+#include "../Editor/ConfirmDialogContent.h"
 #include "../DSP/MelSpectrogram.h"
 #include "../DSP/NoteEqProcessor.h"
 #include "../Inference/ChunkRenderStrategy.h"
@@ -20,8 +21,45 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace OpenTune {
+
+namespace {
+
+std::unordered_map<ContentKey, uint64_t>& notifiedRenderFailures()
+{
+    static std::unordered_map<ContentKey, uint64_t> failures;
+    return failures;
+}
+
+} // namespace
+
+void ProcessRenderRuntime::notifyApplicationRenderFailure(ContentKey key,
+                                                           uint64_t revision,
+                                                           const juce::String& reason)
+{
+    const auto failureReason = reason.isNotEmpty() ? reason : juce::String("Render failed");
+    const bool posted = juce::MessageManager::callAsync([key, revision, failureReason]()
+    {
+        if (key.isValid())
+        {
+            auto& failures = notifiedRenderFailures();
+            const auto [it, inserted] = failures.emplace(key, revision);
+            if (!inserted && it->second == revision)
+                return;
+            it->second = revision;
+        }
+
+        ConfirmDialogContent::showDiagnostic(
+            nullptr,
+            "Render Failure",
+            juce::String::fromUTF8(u8"渲染失败，可能回退干声。原因：") + failureReason,
+            AppLogger::makeDiagnosticText("Render", failureReason));
+    });
+    if (!posted)
+        AppLogger::error("[ProcessRenderRuntime] render failure notification dispatcher rejected");
+}
 
 namespace {
 
@@ -226,8 +264,16 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
 
 void notifyChunkFailed(const ProcessRenderRuntime::CompletionContext& completion,
                        ContentKey key,
+                       uint64_t revision,
                        const juce::String& reason = {})
 {
+    // This notification intentionally does not use the completion gate. The
+    // processor/editor callback may be rejected during teardown, but a
+    // failure that has already been committed to RenderCache still needs to
+    // reach the application UI while the message manager is alive.
+    if (completion.applicationFailure)
+        completion.applicationFailure(key, revision, reason);
+
     if (!completion.chunkFailed)
         return;
     const auto gate = completion.gate;
@@ -252,7 +298,7 @@ void failChunk(const ProcessRenderRuntime::CompletionContext& completion,
                const juce::String& reason = {})
 {
     if (cache != nullptr && cache->completeChunkRenderFailure(startSample, revision))
-        notifyChunkFailed(completion, key, reason);
+        notifyChunkFailed(completion, key, revision, reason);
 }
 
 // ==============================================================================
@@ -729,7 +775,8 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(con
         if (retry.job.renderCache != nullptr
             && retry.job.renderCache->completeChunkRenderFailure(
                 retry.job.startSample, retry.job.targetRevision))
-            notifyChunkFailed(retry.completion, retry.job.contentKey, retry.reason);
+            notifyChunkFailed(retry.completion, retry.job.contentKey,
+                              retry.job.targetRevision, retry.reason);
     }
     return domainAvailable ? ControlResult::Changed : ControlResult::Failed;
 }
@@ -833,7 +880,8 @@ void ProcessRenderRuntime::controlWorkerLoop()
                 if (retry.job.renderCache != nullptr
                     && retry.job.renderCache->completeChunkRenderFailure(
                         retry.job.startSample, retry.job.targetRevision))
-                    notifyChunkFailed(retry.completion, retry.job.contentKey, retry.reason);
+                    notifyChunkFailed(retry.completion, retry.job.contentKey,
+                                      retry.job.targetRevision, retry.reason);
             }
             domain.reset();
 
@@ -1068,7 +1116,8 @@ void ProcessRenderRuntime::failDeferredRetries(std::vector<DeferredRetry> retrie
         if (retry.job.renderCache != nullptr
             && retry.job.renderCache->completeChunkRenderFailure(
                 retry.job.startSample, retry.job.targetRevision))
-            notifyChunkFailed(retry.completion, retry.job.contentKey, retry.reason);
+            notifyChunkFailed(retry.completion, retry.job.contentKey,
+                              retry.job.targetRevision, retry.reason);
     }
 }
 
@@ -1166,14 +1215,14 @@ void ProcessRenderRuntime::deferOrRequeue(
     {
         if (job.renderCache != nullptr
             && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
-            notifyChunkFailed(completion, job.contentKey, reason);
+            notifyChunkFailed(completion, job.contentKey, job.targetRevision, reason);
         return;
     }
     if (shuttingDown)
     {
         if (job.renderCache != nullptr
             && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
-            notifyChunkFailed(completion, job.contentKey, reason);
+            notifyChunkFailed(completion, job.contentKey, job.targetRevision, reason);
         return;
     }
     if (shouldDefer)
@@ -1203,19 +1252,20 @@ void ProcessRenderRuntime::deferOrRequeue(
             if (failed.job.renderCache != nullptr
                 && failed.job.renderCache->completeChunkRenderFailure(
                     failed.job.startSample, failed.job.targetRevision))
-                notifyChunkFailed(failed.completion, failed.job.contentKey, failed.reason);
+                notifyChunkFailed(failed.completion, failed.job.contentKey,
+                                  failed.job.targetRevision, failed.reason);
         }
     }
     else if (deferredCapacityRejected)
     {
         if (job.renderCache != nullptr
             && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
-            notifyChunkFailed(completion, job.contentKey, reason);
+            notifyChunkFailed(completion, job.contentKey, job.targetRevision, reason);
     }
     else if (!crs->requeueRenderChunk(job)
         && job.renderCache != nullptr
         && job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
-        notifyChunkFailed(completion, job.contentKey, reason);
+        notifyChunkFailed(completion, job.contentKey, job.targetRevision, reason);
 }
 
 void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,

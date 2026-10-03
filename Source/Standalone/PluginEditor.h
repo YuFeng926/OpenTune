@@ -340,11 +340,6 @@ private:
     bool originalF0OverlayLatched_ = false;
     ContentKey originalF0OverlayTargetContentKey_;
     uint64_t lastObservedF0FailureGeneration_ = 0;
-    uint64_t lastObservedRenderFailureGeneration_ = 0;
-    bool renderFailureDialogLatched_ = false;
-    ContentKey renderFailureDialogContentKey_;
-
-
     juce::ThreadPool projectWorkerPool_{1};
     // Message-thread only; includes the posted completion and direct continuation.
     bool projectOperationBusy_{false};

@@ -319,12 +319,13 @@ int runChild(int argc, char** argv)
     const auto completionGate = std::make_shared<OpenTune::ProcessRenderRuntime::CompletionGate>();
     std::atomic<int> settled{0};
     std::atomic<int> failed{0};
+    std::atomic<int> applicationFailures{0};
     OpenTune::ContentKey failedContentKey;
     juce::String failureReason;
     const auto weakService = std::weak_ptr<OpenTune::ContentRenderService>(service);
     int owner = 0;
     service->attachExecutionLease({&owner, [weakService, &runtime, completionGate, &settled,
-                                            &failed, &failedContentKey,
+                                            &failed, &applicationFailures, &failedContentKey,
                                             &failureReason](OpenTune::RenderJob& job) {
         OpenTuneTest::trace("RenderRuntimeLifecycleTests", "job_claim", {
             {"startSample", OpenTuneTest::jsonNumber(job.startSample)},
@@ -336,6 +337,11 @@ int runChild(int argc, char** argv)
             return;
         OpenTune::ProcessRenderRuntime::CompletionContext completion;
         completion.gate = completionGate;
+        completion.applicationFailure = [&applicationFailures](OpenTune::ContentKey,
+                                                                uint64_t,
+                                                                const juce::String&) {
+            applicationFailures.fetch_add(1, std::memory_order_relaxed);
+        };
         completion.chunkSettled = [&settled](OpenTune::ContentKey,
                                                std::shared_ptr<const OpenTune::EditableContentSnapshot>,
                                                std::shared_ptr<const juce::AudioBuffer<float>>,
@@ -416,7 +422,9 @@ int runChild(int argc, char** argv)
         || finalStats.running != 0
         || (!cache->isCanonicalSettled() && failed.load(std::memory_order_relaxed) == 0)
         || (failed.load(std::memory_order_relaxed) != 0
-            && (failureReason.isEmpty() || failedContentKey != key)))
+            && (failureReason.isEmpty() || failedContentKey != key))
+        || applicationFailures.load(std::memory_order_relaxed)
+            != failed.load(std::memory_order_relaxed))
     {
         std::fprintf(stderr, "{\"event\":\"lifecycle_boundary\",\"result\":\"failure\"}\n");
         return 1;

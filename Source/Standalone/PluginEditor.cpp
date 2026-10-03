@@ -521,7 +521,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , projectSession_(p, appPreferences_)
 {
     lastObservedF0FailureGeneration_ = processorRef_.getF0FailureGeneration();
-    lastObservedRenderFailureGeneration_ = processorRef_.getRenderFailureGeneration();
 
     // EQ popup「以后不再提示」偏好直接注入（无中转层）
     pianoRoll_.setAppPreferences(&appPreferences_);
@@ -1608,36 +1607,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 // Playhead position: each component reads presented position from PlayHeadState projection
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
-    const uint64_t renderFailureGeneration = processorRef_.getRenderFailureGeneration();
-    const bool renderFailureGenerationChanged =
-        renderFailureGeneration != lastObservedRenderFailureGeneration_;
-    lastObservedRenderFailureGeneration_ = renderFailureGeneration;
-
     const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
-
-    const bool activeRenderFailed = statusSnapshot.contentKey.isValid()
-        && statusSnapshot.chunkStats.failed > 0;
-    if (!activeRenderFailed) {
-        renderFailureDialogLatched_ = false;
-        renderFailureDialogContentKey_ = ContentKey{};
-    }
-
-    if (renderFailureGenerationChanged) {
-        if (!renderFailureDialogLatched_
-            || renderFailureDialogContentKey_ != statusSnapshot.contentKey) {
-            const auto reason = processorRef_.getLastRenderFailureReason(statusSnapshot.contentKey);
-            auto summary = juce::String::fromUTF8(u8"渲染失败，可能回退干声。");
-            if (reason.isNotEmpty())
-                summary += juce::String::fromUTF8(u8"原因：") + reason;
-            ConfirmDialogContent::showDiagnostic(
-                &contentRoot_,
-                "Render Failure",
-                summary,
-                AppLogger::makeDiagnosticText("Standalone render", summary));
-            renderFailureDialogLatched_ = true;
-            renderFailureDialogContentKey_ = statusSnapshot.contentKey;
-        }
-    }
 
     // Original F0 overlay：与 vocoder 无关，独立于渲染状态
     const uint64_t f0FailureGeneration = processorRef_.getF0FailureGeneration();

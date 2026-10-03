@@ -811,14 +811,12 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             if (!contentSnap) {
                 if (job.renderCache->completeChunkRenderFailure(job.startSample, job.targetRevision))
                 {
+                    const auto failureReason = juce::String("Render job has no content snapshot");
+                    ProcessRenderRuntime::notifyApplicationRenderFailure(
+                        job.contentKey, job.targetRevision, failureReason);
 #if JucePlugin_Build_VST3
                     auto gate = completionGate_;
                     const auto failedKey = job.contentKey;
-#endif
-#if JucePlugin_Build_Standalone
-                    auto gate = completionGate_;
-                    const auto failedKey = job.contentKey;
-#endif
                     const bool posted = juce::MessageManager::callAsync(
                         [this, gate, failedKey]()
                         {
@@ -829,19 +827,19 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                             if (auto* session = getCaptureSession())
                                 session->onRenderFailed(failedKey, "Render job has no content snapshot");
 #endif
-#if JucePlugin_Build_Standalone
-                            lastRenderFailureContentKey_ = failedKey;
-                            lastRenderFailureReason_ = "Render job has no content snapshot";
-                            renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
-#endif
                         });
                     if (!posted)
                         AppLogger::error("PluginProcessor: failed to dispatch render error");
+#endif
                 }
                 return;
             }
             ProcessRenderRuntime::CompletionContext completion;
             completion.gate = completionGate_;
+            completion.applicationFailure = [](ContentKey key, uint64_t revision,
+                                               const juce::String& reason) {
+                ProcessRenderRuntime::notifyApplicationRenderFailure(key, revision, reason);
+            };
             completion.chunkSettled = [this](ContentKey key,
                                              std::shared_ptr<const EditableContentSnapshot> snapshot,
                                              std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
@@ -861,9 +859,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 if (auto* session = getCaptureSession())
                     session->onRenderFailed(key, reason);
 #else
-                lastRenderFailureContentKey_ = key;
-                lastRenderFailureReason_ = reason;
-                renderFailureGeneration_.fetch_add(1, std::memory_order_relaxed);
                 juce::ignoreUnused(key);
 #endif
             };
