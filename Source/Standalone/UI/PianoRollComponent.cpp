@@ -3118,6 +3118,54 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
                                            int sampleRate,
                                            bool activePlacementChanged)
 {
+    applyEditedContent(contentKey, std::move(curve), std::move(buffer), sampleRate,
+                       activePlacementChanged, false);
+}
+
+bool PianoRollComponent::setEditedContentAndProjection(ContentKey contentKey,
+                                                        std::shared_ptr<const PitchCurveSnapshot> curve,
+                                                        std::shared_ptr<const juce::AudioBuffer<float>> buffer,
+                                                        int sampleRate,
+                                                        const ContentTimelineProjection& projection,
+                                                        bool activePlacementChanged)
+{
+    const bool projectionChanged = std::abs(pendingSingleContentProjection_.timelineStartSeconds - projection.timelineStartSeconds) > 1.0e-9
+        || std::abs(pendingSingleContentProjection_.timelineDurationSeconds - projection.timelineDurationSeconds) > 1.0e-9
+        || std::abs(pendingSingleContentProjection_.contentStartSeconds - projection.contentStartSeconds) > 1.0e-9
+        || std::abs(pendingSingleContentProjection_.contentDurationSeconds - projection.contentDurationSeconds) > 1.0e-9;
+    const double normalizedSampleRate = static_cast<double>(sampleRate);
+    const bool contentChanged = editedContentKey_ != contentKey;
+    const bool curveChanged = currentCurve_ != curve;
+    const bool bufferChanged = audioBuffer_ != buffer || audioBufferSampleRate_ != normalizedSampleRate;
+
+    if (!projectionChanged && !contentChanged && !activePlacementChanged && !curveChanged && !bufferChanged)
+        return false;
+
+    pendingSingleContentProjection_ = projection;
+    explicitTimelineContentPlacements_ = false;
+    applyEditedContent(contentKey, std::move(curve), std::move(buffer), sampleRate,
+                       activePlacementChanged, true);
+
+    if (!contentChanged && !bufferChanged)
+    {
+        deriveSingleTimelineContentPlacement();
+        userScrollHold_ = false;
+        updateScrollBars();
+    }
+
+    requestContentRedraw();
+    ensureOpenDyneNotesIfNeeded();
+
+    return projectionChanged;
+}
+
+void PianoRollComponent::applyEditedContent(ContentKey contentKey,
+                                             std::shared_ptr<const PitchCurveSnapshot> curve,
+                                             std::shared_ptr<const juce::AudioBuffer<float>> buffer,
+                                             int sampleRate,
+                                             bool activePlacementChanged,
+                                             bool deferRedraw)
+{
     const double normalizedSampleRate = static_cast<double>(sampleRate);
     const bool contentChanged = editedContentKey_ != contentKey;
     const bool curveChanged = currentCurve_ != curve;
@@ -3183,7 +3231,9 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     userScrollHold_ = false;
     updateScrollBars();
-    if (contentChanged || curveChanged)
+    if (deferRedraw) {
+        contentDirty_ = true;
+    } else if (contentChanged || curveChanged)
         requestContentRedraw();
     else {
         contentDirty_ = true;
@@ -3191,7 +3241,8 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
         repaint();
     }
 
-    ensureOpenDyneNotesIfNeeded();
+    if (!deferRedraw)
+        ensureOpenDyneNotesIfNeeded();
 }
 
 

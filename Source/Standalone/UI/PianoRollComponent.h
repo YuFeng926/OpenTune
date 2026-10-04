@@ -135,6 +135,12 @@ public:
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                            int sampleRate,
                            bool activePlacementChanged = false);
+    bool setEditedContentAndProjection(ContentKey contentKey,
+                                       std::shared_ptr<const PitchCurveSnapshot> curve,
+                                       std::shared_ptr<const juce::AudioBuffer<float>> buffer,
+                                       int sampleRate,
+                                       const ContentTimelineProjection& projection,
+                                       bool activePlacementChanged = false);
     void requestInitialF0View(ContentKey contentKey);
     /** 是否存在由当前内容或投影变化建立、尚未消费的 F0 初始视图定位请求。 */
     bool hasPendingInitialF0View() const noexcept { return pendingInitialF0ViewContentKey_.isValid(); }
@@ -470,6 +476,12 @@ private:
     void initializeToolHandler();
     void applyEditedContentCurve(std::shared_ptr<const PitchCurveSnapshot> curve);
     void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
+    void applyEditedContent(ContentKey contentKey,
+                            std::shared_ptr<const PitchCurveSnapshot> curve,
+                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
+                            int sampleRate,
+                            bool activePlacementChanged,
+                            bool deferRedraw);
     std::optional<PianoRollRenderer::ContentRenderItem> buildContentRenderItem(
         const TimelineContentPlacement& placement) const;
     const std::vector<Note>& getCommittedNotes() const;

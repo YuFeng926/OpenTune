@@ -1845,10 +1845,6 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
         && getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement);
     const ContentKey contentKey = hasPlacement ? placement.contentKey : ContentKey{};
 
-    const bool projectionChanged = pianoRoll_.setContentProjection(
-        hasPlacement ? makePianoRollProjection(placement, processorRef_)
-                     : ContentTimelineProjection{});
-
     const int sr = static_cast<int>(processorRef_.getSampleRate());
     auto snap = processorRef_.getContentSnapshot(contentKey);
     std::shared_ptr<const juce::AudioBuffer<float>> contentBuffer =
@@ -1856,7 +1852,10 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
     auto curve = snap ? snap->pitchCurve : nullptr;
     const bool contentChanged = contentKey != lastPianoRollContentKey_;
 
-    pianoRoll_.setEditedContent(contentKey, curve, contentBuffer, sr);
+    const bool projectionChanged = pianoRoll_.setEditedContentAndProjection(
+        contentKey, curve, contentBuffer, sr,
+        hasPlacement ? makePianoRollProjection(placement, processorRef_)
+                     : ContentTimelineProjection{});
     pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, trackId));
 
     lastPianoRollContentKey_ = contentKey;
@@ -1878,8 +1877,8 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
 {
     if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS)
     {
-        pianoRoll_.setContentProjection({});
-        pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        pianoRoll_.setEditedContentAndProjection(ContentKey{}, nullptr, nullptr,
+                                                  static_cast<int>(processorRef_.getSampleRate()), {});
         lastPianoRollContentKey_ = ContentKey{};
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
@@ -1892,8 +1891,8 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     if (placementId == 0)
     {
         setStandaloneSelectedPlacementIndex(processorRef_, trackId, -1);
-        pianoRoll_.setContentProjection({});
-        pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        pianoRoll_.setEditedContentAndProjection(ContentKey{}, nullptr, nullptr,
+                                                  static_cast<int>(processorRef_.getSampleRate()), {});
         lastPianoRollContentKey_ = ContentKey{};
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
@@ -1904,8 +1903,8 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     if (placementIndex < 0)
     {
         setStandaloneSelectedPlacementIndex(processorRef_, trackId, -1);
-        pianoRoll_.setContentProjection({});
-        pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        pianoRoll_.setEditedContentAndProjection(ContentKey{}, nullptr, nullptr,
+                                                  static_cast<int>(processorRef_.getSampleRate()), {});
         lastPianoRollContentKey_ = ContentKey{};
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
@@ -2253,16 +2252,6 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     safeThis->arrangementView_.requestContentRedraw();
                     safeThis->arrangementView_.grabKeyboardFocus();
                     safeThis->applyPlacementSelectionContext(placement.trackId, committedPlacement.placementId);
-                    auto importSnap = safeThis->processorRef_.getContentSnapshot(committedPlacement.contentKey);
-                    auto importBuf = importSnap ? importSnap->audioBuffer : nullptr;
-                    auto importCurve = importSnap ? importSnap->pitchCurve : nullptr;
-                    safeThis->pianoRoll_.setEditedContent(committedPlacement.contentKey,
-                                                          importCurve,
-                                                          importBuf,
-                                                          static_cast<int>(safeThis->processorRef_.getSampleRate()));
-                    safeThis->lastPianoRollContentKey_ = committedPlacement.contentKey;
-                    safeThis->lastPianoRollCurve_ = importCurve;
-                    safeThis->lastPianoRollBuffer_ = importBuf;
 
                     OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
                     refreshRequest.contentKey = committedPlacement.contentKey;
@@ -3348,16 +3337,13 @@ void OpenTuneAudioProcessorEditor::scrollModeChanged(bool isContinuous)
 
 void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int placementIndex)
 {
-    // 1. Switch to Piano Roll View
+    placementSelectionChanged(trackId, processorRef_.getPlacementId(trackId, placementIndex));
+
     if (isWorkspaceView_)
     {
         transportBar_.setWorkspaceView(false);
         viewToggled(false);
     }
-
-    // 2. Select the placement
-    placementSelectionChanged(trackId, processorRef_.getPlacementId(trackId, placementIndex));
-
 }
 
 
