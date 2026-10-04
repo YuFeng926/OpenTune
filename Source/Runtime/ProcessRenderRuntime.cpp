@@ -532,24 +532,17 @@ void ProcessRenderRuntime::shutdownLocked(std::unique_lock<std::mutex>& shutdown
     controlCv_.notify_all();
 
     // The worker posts finishShutdown() only after it has consumed Stop and
-    // released the Domain.  A message-thread caller must not wait here: the
-    // posted completion is the join handoff.  A non-message caller can wait
-    // for the worker's dispatcher attempt and synchronously join only when
-    // the dispatcher itself is unavailable.
-    auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
-    const bool onMessageThread = messageManager != nullptr
-        && messageManager->isThisTheMessageThread();
-    if (!onMessageThread)
+    // released the Domain.  Every caller waits until that dispatch attempt is
+    // published.  A successful post is the join handoff, including for the
+    // message thread; waiting for its completion there would deadlock.
+    workerExitCv_.wait(shutdownLock, [this]() {
+        return workerExitDispatchAttempted_.load(std::memory_order_acquire);
+    });
+    if (!workerExitDispatchPosted_.load(std::memory_order_acquire))
     {
-        workerExitCv_.wait(shutdownLock, [this]() {
-            return workerExitDispatchAttempted_.load(std::memory_order_acquire);
-        });
-        if (!workerExitDispatchPosted_.load(std::memory_order_acquire))
-        {
-            AppLogger::error("[ProcessRenderRuntime] worker-exit dispatcher rejected; synchronously joining");
-            shutdownLock.unlock();
-            finishShutdown(generation);
-        }
+        AppLogger::error("[ProcessRenderRuntime] worker-exit dispatcher rejected; synchronously joining");
+        shutdownLock.unlock();
+        finishShutdown(generation);
     }
 }
 
