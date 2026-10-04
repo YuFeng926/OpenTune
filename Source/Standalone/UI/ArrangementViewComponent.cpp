@@ -1644,6 +1644,10 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
         [[maybe_unused]] const bool found = arrangement.getPlacementById(state.trackId, state.placementId, placement);
         jassert(found);
 
+        const auto snapshot = processor_.getContentSnapshot(placement.contentKey);
+        if (snapshot == nullptr)
+            continue;
+
         const auto targetColour = arrangement.getTrackColour(target.trackId);
 
         const auto paintClip = bounds.getSmallestIntegerContainer()
@@ -1666,7 +1670,8 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
             placement.clipInSeconds,
             target.startSeconds,
             state.durationSeconds,
-            camera_.pixelsPerSecond
+            camera_.pixelsPerSecond,
+            snapshot->timeGrid
         };
         paintHistoricalClipShellAndWaveform(g, clip, waveformMipmapCache_);
         paintHistoricalClipTextFadeGain(g, clip);
