@@ -35,7 +35,7 @@ public:
         TimelineOverviewComponent& overviewStrip,
         Environment environment,
         std::function<void(AudioEditingScheme::Scheme)> applyScheme,
-        std::function<void()> showEditingView,
+        std::function<void(bool workspaceView)> showEditingView,
         std::function<void()> onFinished);
 
     ~OnboardingOverlayComponent() override;
@@ -54,7 +54,7 @@ public:
 private:
     enum class Step
     {
-        File, Edit, View, AudioEntry,
+        File, Edit, View, AudioEntry, TrackView,
         PianoRoll,
         Select,
         OtDrawNote, OtLineAnchor, OtHandDraw,
@@ -83,8 +83,8 @@ private:
     juce::Rectangle<int> targetBoundsInOverlay() const;
     juce::String stepTitle() const;
     juce::String stepBody() const;
-    int stepIndex() const noexcept { return static_cast<int>(step_); }
-    int stepCount() const noexcept { return static_cast<int>(Step::Count); }
+    int stepIndex() const noexcept;
+    int stepCount() const noexcept;
     bool isOpenDyne() const noexcept;
     bool isStepApplicable(Step step) const noexcept;
 
@@ -97,14 +97,13 @@ private:
     TimelineOverviewComponent& overviewStrip_;
     Environment environment_;
     std::function<void(AudioEditingScheme::Scheme)> applyScheme_;
-    std::function<void()> showEditingView_;
+    std::function<void(bool workspaceView)> showEditingView_;
     std::function<void()> onFinished_;
 
     AudioEditingScheme::Scheme scheme_ = AudioEditingScheme::Scheme::CorrectedF0Primary;
     Step step_ = Step::File;
     bool active_ = false;
     bool choiceResolved_ = false;
-    bool editingViewShown_ = false;
     int savedParameterScrollY_ = 0;
     juce::Component::SafePointer<ConfirmDialogContent> choiceDialog_;
 

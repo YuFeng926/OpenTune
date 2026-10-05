@@ -1,7 +1,6 @@
 #include "OnboardingOverlayComponent.h"
 
 #include <algorithm>
-#include <cassert>
 
 namespace OpenTune {
 namespace {
@@ -24,7 +23,7 @@ OnboardingOverlayComponent::OnboardingOverlayComponent(
     AppPreferences& appPreferences, juce::Component& contentRoot, TopBarComponent& topBar,
     TransportBarComponent& transportBar, ParameterPanel& parameterPanel, PianoRollComponent& pianoRoll,
     TimelineOverviewComponent& overviewStrip, Environment environment,
-    std::function<void(AudioEditingScheme::Scheme)> applyScheme, std::function<void()> showEditingView,
+    std::function<void(AudioEditingScheme::Scheme)> applyScheme, std::function<void(bool workspaceView)> showEditingView,
     std::function<void()> onFinished)
     : appPreferences_(appPreferences), contentRoot_(contentRoot), topBar_(topBar), transportBar_(transportBar),
       parameterPanel_(parameterPanel), pianoRoll_(pianoRoll), overviewStrip_(overviewStrip), environment_(environment),
@@ -59,6 +58,8 @@ bool OnboardingOverlayComponent::isOpenDyne() const noexcept { return scheme_ ==
 
 bool OnboardingOverlayComponent::isStepApplicable(Step step) const noexcept
 {
+    if (step == Step::TrackView)
+        return environment_ == Environment::Standalone;
     const auto value = static_cast<int>(step);
     if (value >= static_cast<int>(Step::OtDrawNote) && value <= static_cast<int>(Step::OtHandDraw))
         return !isOpenDyne();
@@ -77,7 +78,6 @@ void OnboardingOverlayComponent::start()
     scheme_ = appPreferences_.getState().shared.audioEditingScheme;
     step_ = Step::File;
     choiceResolved_ = false;
-    editingViewShown_ = false;
     savedParameterScrollY_ = parameterPanel_.getContentScrollY();
     active_ = true;
     setVisible(true);
@@ -144,6 +144,22 @@ void OnboardingOverlayComponent::beginTour()
     grabKeyboardFocus();
 }
 
+int OnboardingOverlayComponent::stepIndex() const noexcept
+{
+    int index = 0;
+    for (int value = 0; value < static_cast<int>(step_); ++value)
+        if (isStepApplicable(static_cast<Step>(value))) ++index;
+    return index;
+}
+
+int OnboardingOverlayComponent::stepCount() const noexcept
+{
+    int count = 0;
+    for (int value = 0; value < static_cast<int>(Step::Count); ++value)
+        if (isStepApplicable(static_cast<Step>(value))) ++count;
+    return count;
+}
+
 void OnboardingOverlayComponent::finish()
 {
     if (!active_) return;
@@ -158,10 +174,9 @@ void OnboardingOverlayComponent::finish()
 void OnboardingOverlayComponent::setStep(Step step)
 {
     step_ = step;
-    if (step_ == Step::PianoRoll && !editingViewShown_ && showEditingView_)
+    if (showEditingView_ && (step_ == Step::TrackView || step_ == Step::PianoRoll))
     {
-        showEditingView_();
-        editingViewShown_ = true;
+        showEditingView_(step_ == Step::TrackView);
     }
     updateStepGeometry();
     grabKeyboardFocus();
@@ -191,7 +206,8 @@ juce::Component* OnboardingOverlayComponent::targetComponent() const
         case Step::File: return &transportBar_.getFileButton();
         case Step::Edit: return &transportBar_.getEditButton();
         case Step::View: return &transportBar_.getViewButton();
-        case Step::AudioEntry: return environment_ == Environment::Standalone ? &transportBar_.getFileButton() : &transportBar_.getRecordButton();
+        case Step::AudioEntry: return environment_ == Environment::Standalone ? nullptr : &transportBar_.getRecordButton();
+        case Step::TrackView: return &transportBar_.getTrackViewButton();
         case Step::PianoRoll: return &pianoRoll_;
         case Step::Select: return parameterPanel_.getToolComponent(ToolId::Select);
         case Step::OtDrawNote: return parameterPanel_.getToolComponent(ToolId::DrawNote);
@@ -210,10 +226,9 @@ juce::Component* OnboardingOverlayComponent::targetComponent() const
         case Step::Scale: return &transportBar_;
         case Step::Overview: return &overviewStrip_;
         case Step::Transport: return environment_ == Environment::Standalone ? nullptr : &transportBar_.getRecordButton();
-        case Step::Help: return &transportBar_.getFileButton();
+        case Step::Help: return nullptr;
         case Step::Count: break;
     }
-    assert(false);
     return nullptr;
 }
 
@@ -223,15 +238,16 @@ juce::Rectangle<int> OnboardingOverlayComponent::targetBoundsInOverlay() const
         return contentRoot_.getLocalArea(&transportBar_, transportBar_.getPlaybackControlsBounds()).expanded(6);
     if (step_ == Step::Scale)
         return contentRoot_.getLocalArea(&transportBar_, transportBar_.getScaleControlsBounds()).expanded(6);
+    if (step_ == Step::Help || (step_ == Step::AudioEntry && environment_ == Environment::Standalone))
+        return {};
     auto* target = targetComponent();
-    assert(target != nullptr);
     return contentRoot_.getLocalArea(target, target->getLocalBounds()).expanded(6);
 }
 
 juce::String OnboardingOverlayComponent::stepTitle() const
 {
     static const char* const keys[] = {
-        "File menu", "Edit menu", "View menu", "Audio entry", "Piano roll", "Select", "Draw Note", "Line Anchor", "Hand Draw",
+        "File menu", "Edit menu", "View menu", "Audio entry", "Track view", "Piano roll", "Select", "Draw Note", "Line Anchor", "Hand Draw",
         "Pitch", "Modulation", "Drift", "Volume Envelope", "Scissors", "Retune Speed", "Vibrato Depth", "Vibrato Rate",
         "AUTO / SNAP", "Pitch Grid", "Scale", "Overview", "Audition", "Help and options" };
     return text(keys[static_cast<int>(step_)]);
@@ -245,7 +261,8 @@ juce::String OnboardingOverlayComponent::stepBody() const
         case Step::File: key = environment_ == Environment::Standalone ? "Import audio, save projects and export from File." : "In a plugin, do not import, save or export here; choose audio in the host."; break;
         case Step::Edit: key = "Edit contains the editing history and undo or redo actions."; break;
         case Step::View: key = "View controls the visible editor and display settings."; break;
-        case Step::AudioEntry: key = environment_ == Environment::Standalone ? "Import a file, or double-click a clip. The audio appears in the editor." : (environment_ == Environment::Ara ? "Select a host region to read its audio. Playback remains controlled by the host." : "Click Read Audio, start host playback, then click again to end capture."); break;
+        case Step::AudioEntry: key = environment_ == Environment::Standalone ? "Import a file, or double-click a clip. The audio appears in the track view." : (environment_ == Environment::Ara ? "Select a host region to read its audio. Playback remains controlled by the host." : "Click Read Audio, start host playback, then click again to end capture."); break;
+        case Step::TrackView: key = "Track view shows imported audio clips. Double-click a clip to enter the piano roll editor."; break;
         case Step::PianoRoll: key = isOpenDyne() ? "Waveform blobs, pitch, curves and the time ruler are shown here. Empty content reads: Import or read audio first." : "Keys, notes, pitch curves and the time ruler are shown here. Empty content reads: Import or read audio first."; break;
         case Step::Select: key = "Select notes or waveform blobs before editing them."; break;
         case Step::OtDrawNote: key = "Draw Note creates and edits note objects."; break;
@@ -264,7 +281,7 @@ juce::String OnboardingOverlayComponent::stepBody() const
         case Step::Scale: key = "Transport shows the current root and scale; More contains additional scale choices."; break;
         case Step::Overview: key = "Overview moves through the whole clip while keeping the current zoom."; break;
         case Step::Transport: key = environment_ == Environment::Standalone ? "Play, pause, stop and loop here." : "Audition with the plugin host transport."; break;
-        case Step::Help: key = "File can replay this guide. Options changes editing mode and introduces EQ."; break;
+        case Step::Help: key = "Options can change the editing mode and enable EQ. Help opens the user guide."; break;
         case Step::Count: break;
     }
     return text(key);
@@ -287,7 +304,8 @@ void OnboardingOverlayComponent::updateStepGeometry()
     const int height = juce::jmin(210, juce::jmax(175, getHeight() - 32));
     cardBounds_ = { 0, 0, width, height };
     const int gap = 16;
-    if (targetBounds_.getRight() + gap + width <= getWidth()) cardBounds_.setPosition(targetBounds_.getRight() + gap, targetBounds_.getY());
+    if (targetBounds_.isEmpty()) cardBounds_.setCentre(getLocalBounds().getCentre());
+    else if (targetBounds_.getRight() + gap + width <= getWidth()) cardBounds_.setPosition(targetBounds_.getRight() + gap, targetBounds_.getY());
     else if (targetBounds_.getX() - gap - width >= 0) cardBounds_.setPosition(targetBounds_.getX() - gap - width, targetBounds_.getY());
     else if (targetBounds_.getBottom() + gap + height <= getHeight()) cardBounds_.setPosition(targetBounds_.getX(), targetBounds_.getBottom() + gap);
     else cardBounds_.setCentre(getLocalBounds().getCentre());

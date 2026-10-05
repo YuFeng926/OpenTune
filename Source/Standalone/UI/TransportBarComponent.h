@@ -244,6 +244,7 @@ public:
     juce::Rectangle<int> getScaleControlsBounds() const;
     juce::Component& getRecordButton() { return recordButton_; }
     juce::Component& getPianoViewButton() { return pianoViewButton_; }
+    juce::Component& getTrackViewButton() { return trackViewButton_; }
 
 private:
     // Internal callbacks

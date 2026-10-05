@@ -243,7 +243,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
             appPreferences_.setAudioEditingScheme(scheme);
             syncSharedAppPreferences();
         },
-        [this] { resized(); },
+        [this](bool) { resized(); },
         [this] { pianoRoll_.grabKeyboardFocus(); });
     contentRoot_.addChildComponent(*onboardingOverlay_);
 

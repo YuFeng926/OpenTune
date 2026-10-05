@@ -746,13 +746,16 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
             appPreferences_.setAudioEditingScheme(scheme);
             syncSharedAppPreferences();
         },
-        [this] {
-            if (isWorkspaceView_)
-                viewToggled(false);
-            transportBar_.setWorkspaceView(false);
-            isParameterPanelVisible_ = true;
-            parameterPanel_.setVisible(true);
-            topBar_.setSidePanelsVisible(isTrackPanelVisible_, isParameterPanelVisible_);
+        [this](bool workspaceView) {
+            if (isWorkspaceView_ != workspaceView)
+                viewToggled(workspaceView);
+            transportBar_.setWorkspaceView(workspaceView);
+            if (!workspaceView)
+            {
+                isParameterPanelVisible_ = true;
+                parameterPanel_.setVisible(true);
+                topBar_.setSidePanelsVisible(isTrackPanelVisible_, isParameterPanelVisible_);
+            }
             resized();
         },
         [this] {
