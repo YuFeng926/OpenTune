@@ -62,10 +62,12 @@ bool OnboardingOverlayComponent::isStepApplicable(Step step) const noexcept
     const auto value = static_cast<int>(step);
     if (value >= static_cast<int>(Step::OtDrawNote) && value <= static_cast<int>(Step::OtHandDraw))
         return !isOpenDyne();
-    if (value >= static_cast<int>(Step::OdPitch) && value <= static_cast<int>(Step::OdPitchGrid))
+    if (value >= static_cast<int>(Step::OdPitch) && value <= static_cast<int>(Step::OdScissors))
         return isOpenDyne();
     if (value >= static_cast<int>(Step::OtRetuneSpeed) && value <= static_cast<int>(Step::OtVibratoRate))
         return !isOpenDyne();
+    if (step == Step::OdPitchGrid)
+        return isOpenDyne();
     return true;
 }
 
