@@ -81,21 +81,21 @@ public:
         }
 
         // 按按钮最佳宽度扩大弹窗，长文案不溢出；上限 kMaxWidth
-        const int preferredWidth = kMargin * 2 + getButtonsTotalWidth();
+        const int horizontalButtonWidth = getButtonsTotalWidth();
+        verticalButtons_ = buttonSpecs_.size() > 1
+                        && horizontalButtonWidth > kMaxWidth - kMargin * 2;
+        const int preferredWidth = kMargin * 2 + (verticalButtons_ ? getPreferredButtonWidth()
+                                                                      : horizontalButtonWidth);
         const int dialogWidth = juce::jlimit(kMinWidth, kMaxWidth, preferredWidth);
 
         // 消息高度按最终宽度计算
-        const juce::Font msgFont = UIColors::getUIFont(14.0f);
-        const int messageWidth = dialogWidth - kMargin * 2;
-        const int lineHeight = static_cast<int>(std::ceil(msgFont.getHeight()));
-        const float textWidth = juce::TextLayout::getStringWidth(msgFont, message_);
-        const int requiredHeight = textWidth > 0.0f
-            ? juce::jmax(lineHeight, (static_cast<int>(textWidth / messageWidth) + 1) * lineHeight)
-            : lineHeight;
-        const int messageAreaHeight = juce::jmin(juce::jmax(lineHeight, requiredHeight), kMaxMessageHeight);
+        const int messageAreaHeight = measureMessageHeight(dialogWidth - kMargin * 2);
+        buttonAreaHeight_ = verticalButtons_ ? static_cast<int>(buttons_.size()) * kButtonMultiLineHeight
+                                              + kButtonGap * juce::jmax(0, static_cast<int>(buttons_.size()) - 1)
+                                             : kButtonRowHeight;
 
         const int totalHeight = kMargin + kTitleHeight + kContentSpacing + messageAreaHeight
-                              + kContentSpacing + kButtonRowHeight + kMargin;
+                              + kContentSpacing + buttonAreaHeight_ + kMargin;
 
         setSize(dialogWidth, totalHeight);
         resized();
@@ -166,17 +166,18 @@ public:
         // Title
         g.setColour(UIColors::textPrimary);
         g.setFont(UIColors::getUIFont(16.0f));
-        g.drawText(title_, bounds.removeFromTop(kTitleHeight), juce::Justification::centredLeft, true);
+        g.drawText(title_, bounds.removeFromTop(kTitleHeight), juce::Justification::centredLeft, false);
 
         bounds.removeFromTop(kTitleGap);
 
         // Message - 动态高度计算
         g.setColour(UIColors::textSecondary);
-        g.setFont(UIColors::getUIFont(14.0f));
-        const int messageHeight = getHeight() - kMargin * 2 - kTitleHeight - kTitleGap
-                                - kButtonRowHeight - kContentSpacing;
-        g.drawFittedText(message_, bounds.removeFromTop(juce::jmax(24, messageHeight)),
-                         juce::Justification::centredLeft, 5);
+        juce::AttributedString attributed(message_);
+        attributed.setColour(UIColors::textSecondary);
+        attributed.setFont(UIColors::getUIFont(14.0f));
+        juce::TextLayout messageLayout;
+        messageLayout.createLayout(attributed, static_cast<float>(bounds.getWidth()));
+        messageLayout.draw(g, bounds.removeFromTop(messageHeight_).toFloat());
     }
 
     void resized() override
@@ -184,11 +185,21 @@ public:
         auto bounds = getLocalBounds().reduced(kMargin);
 
         // 按钮行 — 右对齐
-        auto buttonRow = bounds.removeFromBottom(kButtonHeight);
+        auto buttonRow = bounds.removeFromBottom(buttonAreaHeight_);
 
         const int count = buttons_.size();
         if (count <= 0)
             return;
+
+        if (verticalButtons_)
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                buttons_[i]->setBounds(buttonRow.removeFromTop(kButtonMultiLineHeight));
+                buttonRow.removeFromTop(kButtonGap);
+            }
+            return;
+        }
 
         const int gapTotal = kButtonGap * (count - 1);
         const int available = juce::jmax(0, buttonRow.getWidth() - gapTotal);
@@ -202,28 +213,8 @@ public:
             desiredTotal += widths[static_cast<size_t>(i)];
         }
 
-        // 总宽超出内容宽度时压缩：先削高于最小宽度的按钮，仍不够则继续均分，
-        // 保证按钮行不越过左右 margin
-        int excess = desiredTotal - available;
-        for (int floorWidth : { kButtonMinWidth, 0 })
-        {
-            while (excess > 0)
-            {
-                bool progressed = false;
-                for (int i = 0; i < count && excess > 0; ++i)
-                {
-                    auto& w = widths[static_cast<size_t>(i)];
-                    if (w > floorWidth)
-                    {
-                        --w;
-                        --excess;
-                        progressed = true;
-                    }
-                }
-                if (!progressed)
-                    break;
-            }
-        }
+        if (desiredTotal > available)
+            return;
 
         int totalWidth = gapTotal;
         for (int w : widths)
@@ -305,6 +296,7 @@ private:
     static constexpr int kContentSpacing = 16;
     static constexpr int kButtonRowHeight = 36;
     static constexpr int kButtonHeight = 32;
+    static constexpr int kButtonMultiLineHeight = 44;
     static constexpr int kButtonGap = 10;
     static constexpr int kButtonMinWidth = 80;
     static constexpr int kMinWidth = 380;
@@ -326,6 +318,9 @@ private:
     juce::Component::SafePointer<juce::Component> watchedParent_;
     juce::Component::SafePointer<juce::DialogWindow> watchedDialog_;
     bool closing_ = false;
+    bool verticalButtons_ = false;
+    int messageHeight_ = 24;
+    int buttonAreaHeight_ = kButtonRowHeight;
 
     // ============================================================================
     // Helpers
@@ -338,6 +333,25 @@ private:
             total += juce::jmax(kButtonMinWidth, btn->getBestWidthForHeight(kButtonHeight));
         total += kButtonGap * juce::jmax(0, static_cast<int>(buttons_.size()) - 1);
         return total;
+    }
+
+    int getPreferredButtonWidth() const
+    {
+        int width = kButtonMinWidth;
+        for (auto* btn : buttons_)
+            width = juce::jmax(width, btn->getBestWidthForHeight(kButtonMultiLineHeight));
+        return width;
+    }
+
+    int measureMessageHeight(int width)
+    {
+        juce::AttributedString attributed(message_);
+        attributed.setFont(UIColors::getUIFont(14.0f));
+        juce::TextLayout layout;
+        layout.createLayout(attributed, static_cast<float>(width));
+        messageHeight_ = juce::jmin(kMaxMessageHeight,
+                                    juce::jmax(24, juce::roundToInt(layout.getHeight())));
+        return messageHeight_;
     }
 
     void triggerButton(size_t idx)
@@ -388,11 +402,11 @@ private:
 
     void unwatchAll()
     {
-        if (watchedParent_ != nullptr)
-            watchedParent_->removeComponentListener(this);
+        if (auto* parent = watchedParent_.getComponent())
+            parent->removeComponentListener(this);
 
-        if (watchedDialog_ != nullptr)
-            watchedDialog_->removeComponentListener(this);
+        if (auto* dialog = watchedDialog_.getComponent())
+            dialog->removeComponentListener(this);
     }
 
     void componentBeingDeleted(juce::Component& comp) override
@@ -424,7 +438,7 @@ private:
     {
         juce::Component::SafePointer<ConfirmDialogContent> safeThis(this);
         juce::MessageManager::callAsync([safeThis] {
-            if (safeThis != nullptr)
+            if (safeThis != nullptr && safeThis->isShowing())
                 safeThis->grabKeyboardFocus();
         });
     }

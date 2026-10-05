@@ -326,6 +326,14 @@ public:
         return UIColors::getUIFont(static_cast<float>(juce::jmax(height, 16)));
     }
 
+    void drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool) override
+    {
+        g.setColour(button.findColour(juce::TextButton::textColourOffId));
+        g.setFont(getTextButtonFont(button, button.getHeight()));
+        g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(8, 2),
+                         juce::Justification::centred, 2, 1.0f);
+    }
+
     void drawButtonBackground(juce::Graphics& g, juce::Button& button,
                               const juce::Colour& backgroundColour,
                               bool shouldDrawButtonAsHighlighted,
@@ -480,7 +488,7 @@ public:
             g.drawFittedText(button.getButtonText(),
                              button.getLocalBounds().withTrimmedLeft(juce::roundToInt(tickWidth) + 10)
                                                   .withTrimmedRight(2),
-                             juce::Justification::centredLeft, 10);
+                             juce::Justification::centredLeft, 10, 1.0f);
         }
     }
 

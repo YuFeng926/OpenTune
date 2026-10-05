@@ -137,6 +137,14 @@ void AuroraLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& bu
                                      chromeIntensity);
 }
 
+void AuroraLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool)
+{
+    g.setColour(button.findColour(juce::TextButton::textColourOffId));
+    g.setFont(getTextButtonFont(button, button.getHeight()));
+    g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(8, 2),
+                     juce::Justification::centred, 2, 1.0f);
+}
+
 void AuroraLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
                                        bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {

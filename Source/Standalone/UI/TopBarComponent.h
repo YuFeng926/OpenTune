@@ -26,6 +26,7 @@ public:
     // 同步按钮状态（避免 ToggleState 与真实可见性不一致）
     void setSidePanelsVisible(bool trackPanelVisible, bool parameterPanelVisible);
     void setTrackPanelToggleVisible(bool visible);
+    juce::Component& getParameterPanelButton() { return parameterPanelToggleButton_; }
 
     void refreshLocalizedText();  // 刷新本地化文本
 

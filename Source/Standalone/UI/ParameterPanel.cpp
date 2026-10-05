@@ -1102,6 +1102,52 @@ float ParameterPanel::getVibratoRate() const
     return static_cast<float>(vibratoRateSlider_.getValue());
 }
 
+juce::Component* ParameterPanel::getToolComponent(ToolId tool)
+{
+    switch (tool)
+    {
+        case ToolId::AutoTune: return autoTuneToolButton_.get();
+        case ToolId::Select: return selectToolButton_.get();
+        case ToolId::DrawNote: return drawNoteToolButton_.get();
+        case ToolId::LineAnchor: return lineAnchorToolButton_.get();
+        case ToolId::HandDraw: return handDrawToolButton_.get();
+        case ToolId::TimeTool: return timeToolButton_.get();
+        case ToolId::Pitch: return pitchToolButton_.get();
+        case ToolId::VolumeEnvelope: return volumeEnvelopeToolButton_.get();
+        case ToolId::Scissors: return scissorsToolButton_.get();
+        case ToolId::PitchModulation: return pitchModulationToolButton_.get();
+        case ToolId::PitchDrift: return pitchDriftToolButton_.get();
+        case ToolId::Eq: return eqToolButton_.get();
+    }
+    return nullptr;
+}
+
+juce::Component& ParameterPanel::getRetuneSpeedControl() { return retuneSpeedSlider_; }
+juce::Component& ParameterPanel::getVibratoDepthControl() { return vibratoDepthSlider_; }
+juce::Component& ParameterPanel::getVibratoRateControl() { return vibratoRateSlider_; }
+juce::Component& ParameterPanel::getPitchGridControl() { return pitchGridSelector_; }
+
+void ParameterPanel::revealControl(juce::Component& control)
+{
+    const auto bounds = control.getBounds();
+    const auto visible = viewport_.getViewArea();
+    const int currentY = viewport_.getViewPositionY();
+    int targetY = currentY;
+    if (bounds.getY() < currentY)
+        targetY = bounds.getY();
+    else if (bounds.getBottom() > currentY + visible.getHeight())
+        targetY = bounds.getBottom() - visible.getHeight();
+    if (targetY != currentY)
+        viewport_.setViewPosition(viewport_.getViewPositionX(), targetY);
+}
+
+int ParameterPanel::getContentScrollY() const { return viewport_.getViewPositionY(); }
+
+void ParameterPanel::setContentScrollY(int y)
+{
+    viewport_.setViewPosition(viewport_.getViewPositionX(), y);
+}
+
 void ParameterPanel::onRetuneSpeedChanged()
 {
     listeners_.call([this](Listener& l) { l.retuneSpeedChanged(static_cast<float>(retuneSpeedSlider_.getValue())); });

@@ -110,6 +110,15 @@ public:
     float getVibratoDepth() const;
     float getVibratoRate() const;
 
+    juce::Component* getToolComponent(ToolId tool);
+    juce::Component& getRetuneSpeedControl();
+    juce::Component& getVibratoDepthControl();
+    juce::Component& getVibratoRateControl();
+    juce::Component& getPitchGridControl();
+    void revealControl(juce::Component& control);
+    int getContentScrollY() const;
+    void setContentScrollY(int y);
+
 private:
     class ToolIconButton : public juce::Button
     {

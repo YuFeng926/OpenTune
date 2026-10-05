@@ -71,12 +71,14 @@ void initialiseToggleButton(juce::ToggleButton& toggleButton)
 class SharedGeneralPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 120; // 20 + 34 + 12 + 34 + 20
+    static constexpr int kContentHeight = 166; // 20 + 34 + 12 + 34 + 12 + 34 + 20
 
     SharedGeneralPage(AppPreferences& appPreferences,
-                      std::function<void()> onPreferencesChanged)
+                      std::function<void()> onPreferencesChanged,
+                      std::function<void()> onReplayOnboarding)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
+        , onReplayOnboarding_(std::move(onReplayOnboarding))
     {
         auto state = appPreferences_.getState();
 
@@ -113,6 +115,20 @@ public:
         };
         initialiseComboBox(languageSelector_);
         addAndMakeVisible(languageSelector_);
+
+        replayOnboardingButton_.setButtonText(LOC(kReplayOnboarding));
+        replayOnboardingButton_.setColour(juce::TextButton::buttonColourId, UIColors::buttonNormal);
+        replayOnboardingButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
+        replayOnboardingButton_.onClick = [this] {
+            auto replay = onReplayOnboarding_;
+            if (auto* window = findParentComponentOfClass<juce::DialogWindow>())
+                window->exitModalState(0);
+            juce::MessageManager::callAsync([replay = std::move(replay)] {
+                if (replay)
+                    replay();
+            });
+        };
+        addAndMakeVisible(replayOnboardingButton_);
     }
 
     void paint(juce::Graphics& g) override
@@ -134,6 +150,9 @@ public:
         row = bounds.removeFromTop(rowHeight);
         languageLabel_.setBounds(row.removeFromLeft(labelWidth));
         languageSelector_.setBounds(row.removeFromLeft(240).reduced(0, 4));
+
+        bounds.removeFromTop(12);
+        replayOnboardingButton_.setBounds(bounds.removeFromTop(rowHeight).removeFromLeft(240));
     }
 
 private:
@@ -146,10 +165,12 @@ private:
 
     AppPreferences& appPreferences_;
     std::function<void()> onPreferencesChanged_;
+    std::function<void()> onReplayOnboarding_;
     juce::Label themeLabel_;
     juce::ComboBox themeSelector_;
     juce::Label languageLabel_;
     juce::ComboBox languageSelector_;
+    juce::TextButton replayOnboardingButton_;
 };
 
 class SharedAudioPage final : public juce::Component
@@ -1033,12 +1054,15 @@ private:
 std::vector<TabbedPreferencesDialog::PageSpec> SharedPreferencePages::create(
     AppPreferences& appPreferences,
     std::function<void()> onPreferencesChanged,
-    bool isVst3Plugin)
+    bool isVst3Plugin,
+    std::function<void()> onReplayOnboarding)
 {
     std::vector<TabbedPreferencesDialog::PageSpec> pages;
 
     {
-        auto page = std::make_unique<SharedGeneralPage>(appPreferences, onPreferencesChanged);
+        auto page = std::make_unique<SharedGeneralPage>(appPreferences,
+                                                       onPreferencesChanged,
+                                                       std::move(onReplayOnboarding));
         pages.push_back({ LOC(kTheme), std::move(page), SharedGeneralPage::kContentHeight });
     }
     {

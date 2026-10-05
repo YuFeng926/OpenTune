@@ -110,15 +110,18 @@ public:
         // 标题（窗口无 JUCE 标题栏，标题在内容里自绘）
         g.setColour (UIColors::textPrimary);
         g.setFont (UIColors::getUIFont (16.0f));
-        g.drawText (title_, bounds.removeFromTop (kTitleHeight), juce::Justification::centredLeft, true);
+        g.drawText (title_, bounds.removeFromTop (kTitleHeight), juce::Justification::centredLeft, false);
 
         bounds.removeFromTop (kTitleGap);
 
         // 说明：按测量高度完整显示，至少 4 行（含“当前绑定”）
         g.setColour (UIColors::textSecondary);
-        g.setFont (UIColors::getUIFont (static_cast<float> (kMessageFontHeight)));
-        g.drawFittedText (message_, bounds.removeFromTop (messageHeight_),
-                          juce::Justification::centredLeft, messageLines_);
+        juce::AttributedString attributed (message_);
+        attributed.setColour (UIColors::textSecondary);
+        attributed.setFont (UIColors::getUIFont (static_cast<float> (kMessageFontHeight)));
+        juce::TextLayout messageLayout;
+        messageLayout.createLayout (attributed, static_cast<float> (bounds.getWidth()));
+        messageLayout.draw (g, bounds.removeFromTop (messageHeight_).toFloat());
 
         bounds.removeFromTop (kRowGap);
 
@@ -264,7 +267,6 @@ private:
         juce::TextLayout layout;
         layout.createLayout (attributed, static_cast<float> (kWidth - kMargin * 2));
 
-        messageLines_ = juce::jmax (kMessageMinLines, layout.getNumLines());
         messageHeight_ = juce::jmax (kMessageMinLines * kMessageLineHeight,
                                      juce::roundToInt (layout.getHeight()));
     }
@@ -339,11 +341,11 @@ private:
 
     void unwatchAll()
     {
-        if (watchedParent_ != nullptr)
-            watchedParent_->removeComponentListener (this);
+        if (auto* parent = watchedParent_.getComponent())
+            parent->removeComponentListener (this);
 
-        if (watchedDialog_ != nullptr)
-            watchedDialog_->removeComponentListener (this);
+        if (auto* dialog = watchedDialog_.getComponent())
+            dialog->removeComponentListener (this);
     }
 
     void componentBeingDeleted (juce::Component& comp) override
@@ -382,7 +384,6 @@ private:
     juce::Component::SafePointer<juce::DialogWindow> watchedDialog_;
     bool closing_ = false;
 
-    int messageLines_ = kMessageMinLines;
     int messageHeight_ = kMessageMinLines * kMessageLineHeight;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ShortcutCaptureDialogContent)

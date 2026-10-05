@@ -234,6 +234,19 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     applyThemeToEditor(appPreferences_.getState().shared.theme);
 
+    onboardingOverlay_ = std::make_unique<OnboardingOverlayComponent>(
+        appPreferences_, contentRoot_, topBar_, transportBar_, parameterPanel_, pianoRoll_,
+        overviewStrip_, processorRef_.getCaptureSession() != nullptr
+            ? OnboardingOverlayComponent::Environment::Capture
+            : OnboardingOverlayComponent::Environment::Ara,
+        [this](AudioEditingScheme::Scheme scheme) {
+            appPreferences_.setAudioEditingScheme(scheme);
+            syncSharedAppPreferences();
+        },
+        [this] { resized(); },
+        [this] { pianoRoll_.grabKeyboardFocus(); });
+    contentRoot_.addChildComponent(*onboardingOverlay_);
+
     startTimerHz(kHeartbeatHz);
 
     const auto f0Type = appPreferences_.getState().shared.f0ModelType;
@@ -245,6 +258,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    onboardingOverlay_.reset();
     // Save current viewport state before teardown — unconditionally,
     // because the host removes the editor from the hierarchy before
     // destruction, making isShowing() false while state objects still exist.
@@ -327,10 +341,19 @@ void OpenTuneAudioProcessorEditor::resized()
 
     // Overlay 覆盖 PianoRoll 区域
     autoRenderOverlay_.setBounds(pianoRoll_.getBounds());
-    autoRenderOverlay_.toFront(false);
+    if (onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
+        autoRenderOverlay_.toFront(false);
 
     renderBadge_.setBounds(pianoRoll_.getRight() - 148, pianoRoll_.getY() + 8, 140, 28);
-    renderBadge_.toFront(false);
+    if (onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
+        renderBadge_.toFront(false);
+
+    if (onboardingOverlay_ != nullptr)
+    {
+        onboardingOverlay_->updateLayout();
+        if (onboardingOverlay_->isActive())
+            onboardingOverlay_->toFront(false);
+    }
 }
 
 void OpenTuneAudioProcessorEditor::mouseDown(const juce::MouseEvent& e)
@@ -410,6 +433,15 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     applyUiZoomIfNeeded();
 
     syncSharedAppPreferences();
+
+    if (onboardingOverlay_ != nullptr && !onboardingOverlay_->isActive()
+        && !appPreferences_.getState().shared.onboardingShown
+        && isShowing() && getPeer() != nullptr && getWidth() > 0 && getHeight() > 0
+        && juce::ModalComponentManager::getInstance()->getNumModalComponents() == 0
+        && !originalF0OverlayLatched_)
+    {
+        onboardingRequested();
+    }
 
     // Non-ARA capture state is driven by the processor's own Timer (tick()).
     // Editor only syncs UI state from the capture session.
@@ -714,6 +746,14 @@ void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
     parameterPanel_.refreshLocalizedText();
 
     repaint();
+    if (onboardingOverlay_ != nullptr)
+        onboardingOverlay_->refreshLanguage();
+}
+
+void OpenTuneAudioProcessorEditor::onboardingRequested()
+{
+    if (onboardingOverlay_ != nullptr && !onboardingOverlay_->isActive())
+        onboardingOverlay_->start();
 }
 
 ContentKey OpenTuneAudioProcessorEditor::resolveCurrentContentKey()
@@ -823,6 +863,9 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
 
 bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
+    if (onboardingOverlay_ != nullptr && onboardingOverlay_->isActive())
+        return true;
+
     return handleEditorShortcut(key);
 }
 
@@ -945,7 +988,12 @@ void OpenTuneAudioProcessorEditor::preferencesRequested()
 
 void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 {
-    auto pages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); }, true);
+    auto pages = SharedPreferencePages::create(
+        appPreferences_, [this] { syncSharedAppPreferences(); }, true,
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+                safeThis->onboardingRequested();
+        });
 
     // Insert Audio page (with rendering priority) at the beginning
     auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {

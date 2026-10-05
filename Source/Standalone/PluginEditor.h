@@ -42,6 +42,7 @@
 #include "Utils/LocalizationManager.h"
 #include "Utils/ScaleUiMapping.h"
 #include "Audio/AsyncAudioLoader.h"
+#include "Editor/OnboardingOverlayComponent.h"
 
 namespace OpenTune {
 
@@ -116,6 +117,7 @@ public:
     void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) override;
     void cursorStyleChanged(CursorStyleId style) override;
     void trackColorModeChanged(TrackColorMode mode) override;
+    void onboardingRequested() override;
 
     // TransportBarComponent::Listener
     void playRequested() override;
@@ -295,6 +297,9 @@ private:
     // 现代布局：左右面板可折叠（用于“沉浸主画布”模式）
     bool isTrackPanelVisible_ = true;
     bool isParameterPanelVisible_ = true;
+    std::unique_ptr<OnboardingOverlayComponent> onboardingOverlay_;
+    bool onboardingPreviousWorkspaceView_ = true;
+    bool onboardingPreviousParameterPanelVisible_ = true;
 
     // §5.1：外层窗口几何只在 peer/顶层可用后恢复一次，不在 resized 重入
     bool standaloneWindowGeometryRestored_ = false;

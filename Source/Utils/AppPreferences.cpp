@@ -37,6 +37,7 @@ constexpr const char* kSharedGridStyleKey = "shared.pianoRoll.gridStyle";
 constexpr const char* kSharedWholeNoteMoveSnapModeKey = "shared.pianoRoll.wholeNoteMoveSnapMode";
 constexpr const char* kSharedPitchLaneVisualModeKey = "shared.pianoRoll.pitchLaneVisualMode";
 constexpr const char* kSharedEqSuppressRemoveConfirmationKey = "shared.eq.suppressRemoveConfirmation";
+constexpr const char* kSharedOnboardingShownKey = "shared.onboardingShown";
 
 juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storageOptions)
 {
@@ -343,6 +344,7 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.suppressEqRemoveConfirmation = properties.getBoolValue(
         kSharedEqSuppressRemoveConfirmationKey,
         state.shared.suppressEqRemoveConfirmation);
+    state.shared.onboardingShown = properties.getBoolValue(kSharedOnboardingShownKey, state.shared.onboardingShown);
     state.shared.experimentalReferenceAlignMode = fromExperimentalRefAlignModeToken(
         properties.getValue(kSharedExperimentalReferenceAlignKey,
                             toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode)));
@@ -409,6 +411,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         toF0ModelTypeToken(state.shared.f0ModelType));
     properties.setValue(kSharedEqSuppressRemoveConfirmationKey,
                         state.shared.suppressEqRemoveConfirmation);
+    properties.setValue(kSharedOnboardingShownKey, state.shared.onboardingShown);
     properties.setValue(kSharedExperimentalReferenceAlignKey,
                         toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode));
     properties.setValue(kSharedSnapEnabledKey, state.shared.snap.enabled);
@@ -489,6 +492,13 @@ void AppPreferences::setLanguage(Language language)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.language = language;
+    saveLocked();
+}
+
+void AppPreferences::setOnboardingShown(bool shown)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.onboardingShown = shown;
     saveLocked();
 }
 

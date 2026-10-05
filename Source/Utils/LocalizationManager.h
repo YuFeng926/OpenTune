@@ -349,6 +349,9 @@ constexpr const char* kRootNote = "Root";
 
         constexpr const char* kClose = "Close";
         constexpr const char* kHelp = "Help...";
+        constexpr const char* kOnboarding = "Onboarding...";
+        constexpr const char* kReplayOnboarding = "Replay onboarding";
+        constexpr const char* kUserGuide = "User Guide...";
 
 constexpr const char* kMouseSelectTool = "Mouse Select Tool";
 constexpr const char* kDrawNoteTool = "Draw Note Tool";
@@ -573,6 +576,9 @@ inline juce::String get(Language lang, const char* key)
         
         { Keys::kClose, "Close", "关闭", "閉じる", "Закрыть", "Cerrar" },
         { Keys::kHelp, "Help...", "帮助...", "ヘルプ...", "Справка...", "Ayuda..." },
+        { Keys::kOnboarding, "Onboarding...", "上手引导...", "オンボーディング...", "Введение...", "Introducción..." },
+        { Keys::kReplayOnboarding, "Replay onboarding", "重新进入上手引导", "オンボーディングを再表示", "Повторить обучение", "Repetir introducción" },
+        { Keys::kUserGuide, "User Guide...", "用户手册...", "ユーザーガイド...", "Руководство пользователя...", "Manual de usuario..." },
         
         { Keys::kMouseSelectTool, "Mouse Select Tool", "鼠标选择工具", "マウス選択ツール", "Инструмент выбора", "Herram. selec." },
         { Keys::kDrawNoteTool, "Draw Note Tool", "绘制音符工具", "ノート描画ツール", "Рисование нот", "Herram. dibujo" },
@@ -618,6 +624,55 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kToolDrift, "Drift", "漂移", "ドリフト", "Дрейф", "Deriva" },
         { Keys::kToolVolumeEnvelope, "Volume Envelope", "音量包络", "ボリュームエンベロープ", "Огибающая громкости", "Sobre volumen" },
         { Keys::kToolScissors, "Scissors", "剪刀", "ハサミ", "Ножницы", "Tijeras" },
+        { "Choose your editing workflow", "Choose your editing workflow", "选择编辑工作流", "編集ワークフローを選択", "Выберите рабочий процесс редактирования", "Elige tu flujo de edición" },
+        { "OpenTune edits notes; OpenDyne edits waveform blobs. The choice really switches the editor, and you can change it later in Options > Editing.", "OpenTune edits notes; OpenDyne edits waveform blobs. The choice really switches the editor, and you can change it later in Options > Editing.", "OpenTune 编辑音符；OpenDyne 编辑波形块。此选择会切换编辑器，之后可在“选项 > 编辑”中更改。", "OpenTuneはノートを編集し、OpenDyneは波形ブロブを編集します。この選択でエディターが実際に切り替わり、後から「オプション > 編集」で変更できます。", "OpenTune редактирует ноты, а OpenDyne — волновые блоки. Выбор действительно переключает редактор, и позже его можно изменить в разделе «Настройки > Редактирование».", "OpenTune edita notas; OpenDyne edita bloques de forma de onda. La elección cambia realmente el editor y puedes cambiarla después en Opciones > Edición." },
+        { "Not now", "Not now", "暂不选择", "今は選択しない", "Не сейчас", "Ahora no" },
+        { "Previous", "Previous", "上一步", "前へ", "Назад", "Anterior" },
+        { "Next", "Next", "下一步", "次へ", "Далее", "Siguiente" },
+        { "Finish", "Finish", "完成", "完了", "Готово", "Finalizar" },
+        { "Exit guide", "Exit guide", "退出指南", "ガイドを終了", "Выйти из руководства", "Salir de la guía" },
+        { "File menu", "File menu", "文件菜单", "ファイルメニュー", "Меню «Файл»", "Menú Archivo" },
+        { "Edit menu", "Edit menu", "编辑菜单", "編集メニュー", "Меню «Правка»", "Menú Editar" },
+        { "View menu", "View menu", "视图菜单", "表示メニュー", "Меню «Вид»", "Menú Ver" },
+        { "Audio entry", "Audio entry", "音频入口", "オーディオ入力", "Источник аудио", "Entrada de audio" },
+        { "Piano roll", "Piano roll", "钢琴卷帘", "ピアノロール", "Пианоролл", "Piano roll" },
+        { "Hand Draw", "Hand Draw", "手绘", "手描き", "Ручное рисование", "Dibujo a mano" },
+        { "Vibrato Depth", "Vibrato Depth", "颤音深度", "ビブラートの深さ", "Глубина вибрато", "Profundidad del vibrato" },
+        { "Vibrato Rate", "Vibrato Rate", "颤音速率", "速度 вибрато", "Скорость вибрато", "Velocidad del vibrato" },
+        { "AUTO / SNAP", "AUTO / SNAP", "自动 / 吸附", "AUTO / SNAP", "АВТО / ПРИВЯЗКА", "AUTO / AJUSTE" },
+        { "Pitch Grid", "Pitch Grid", "音高网格", "ピッチグリッド", "Сетка высоты тона", "Cuadrícula de tono" },
+        { "Overview", "Overview", "概览", "概要", "Обзор", "Vista general" },
+        { "Audition", "Audition", "试听", "試聴", "Прослушивание", "Audición" },
+        { "Help and options", "Help and options", "帮助和选项", "ヘルプとオプション", "Справка и настройки", "Ayuda y opciones" },
+        { "Import audio, save projects and export from File.", "Import audio, save projects and export from File.", "从“文件”导入音频、保存工程并导出。", "「ファイル」からオーディオをインポートし、プロジェクトを保存・エクスポートします。", "Импортируйте аудио, сохраняйте проекты и экспортируйте их через меню «Файл».", "Importa audio, guarda proyectos y exporta desde Archivo." },
+        { "In a plugin, do not import, save or export here; choose audio in the host.", "In a plugin, do not import, save or export here; choose audio in the host.", "在插件中不要在此导入、保存或导出；请在宿主中选择音频。", "プラグインではここからインポート、保存、エクスポートせず、ホストでオーディオを選択してください。", "В плагине не импортируйте, не сохраняйте и не экспортируйте здесь; выберите аудио в хосте.", "En un plugin, no importes, guardes ni exportes aquí; elige el audio en el host." },
+        { "Edit contains the editing history and undo or redo actions.", "Edit contains the editing history and undo or redo actions.", "“编辑”包含编辑历史以及撤销和重做操作。", "「編集」には編集履歴と元に戻す・やり直す操作があります。", "В меню «Правка» находятся история редактирования, а также отмена и повтор действий.", "Editar contiene el historial de edición y las acciones de deshacer y rehacer." },
+        { "View controls the visible editor and display settings.", "View controls the visible editor and display settings.", "“视图”控制可见的编辑器和显示设置。", "「表示」では表示するエディターと表示設定を操作します。", "Меню «Вид» управляет отображаемым редактором и настройками отображения.", "Ver controla el editor visible y los ajustes de visualización." },
+        { "Import a file, or double-click a clip. The audio appears in the editor.", "Import a file, or double-click a clip. The audio appears in the editor.", "导入文件，或双击片段。音频会显示在编辑器中。", "ファイルをインポートするか、クリップをダブルクリックします。オーディオがエディターに表示されます。", "Импортируйте файл или дважды щёлкните клип. Аудио появится в редакторе.", "Importa un archivo o haz doble clic en un clip. El audio aparecerá en el editor." },
+        { "Select a host region to read its audio. Playback remains controlled by the host.", "Select a host region to read its audio. Playback remains controlled by the host.", "选择宿主区域以读取其音频。播放仍由宿主控制。", "ホストのリージョンを選択してオーディオを読み込みます。再生は引き続きホストが制御します。", "Выберите область хоста, чтобы считать её аудио. Воспроизведение по-прежнему управляется хостом.", "Selecciona una región del host para leer su audio. La reproducción sigue controlada por el host." },
+        { "Click Read Audio, start host playback, then click again to end capture.", "Click Read Audio, start host playback, then click again to end capture.", "点击“读取音频”，开始宿主播放，然后再次点击结束捕获。", "「オーディオを読み込み」をクリックし、ホストの再生を開始してから、もう一度クリックして取り込みを終了します。", "Нажмите «Загрузить аудио», запустите воспроизведение в хосте, затем нажмите ещё раз, чтобы завершить захват.", "Haz clic en Leer audio, inicia la reproducción del host y vuelve a hacer clic para terminar la captura." },
+        { "Waveform blobs, pitch, curves and the time ruler are shown here. Empty content reads: Import or read audio first.", "Waveform blobs, pitch, curves and the time ruler are shown here. Empty content reads: Import or read audio first.", "此处显示波形块、音高、曲线和时间标尺。无内容时显示：“请先导入或读取音频。”", "ここには波形ブロブ、ピッチ、カーブ、時間ルーラーが表示されます。空の場合は「まずオーディオをインポートまたは読み込み」と表示されます。", "Здесь отображаются волновые блоки, высота тона, кривые и шкала времени. При пустом содержимом отображается: «Сначала импортируйте или загрузите аудио».", "Aquí se muestran los bloques de forma de onda, el tono, las curvas y la regla de tiempo. Si está vacío, se indica: Importa o lee el audio primero." },
+        { "Keys, notes, pitch curves and the time ruler are shown here. Empty content reads: Import or read audio first.", "Keys, notes, pitch curves and the time ruler are shown here. Empty content reads: Import or read audio first.", "此处显示琴键、音符、音高曲线和时间标尺。无内容时显示：“请先导入或读取音频。”", "ここには鍵盤、ノート、ピッチカーブ、時間ルーラーが表示されます。空の場合は「まずオーディオをインポートまたは読み込み」と表示されます。", "Здесь отображаются клавиши, ноты, кривые высоты тона и шкала времени. При пустом содержимом отображается: «Сначала импортируйте или загрузите аудио».", "Aquí se muestran las teclas, las notas, las curvas de tono y la regla de tiempo. Si está vacío, se indica: Importa o lee el audio primero." },
+        { "Select notes or waveform blobs before editing them.", "Select notes or waveform blobs before editing them.", "编辑前请先选择音符或波形块。", "編集する前にノートまたは波形ブロブを選択してください。", "Перед редактированием выберите ноты или волновые блоки.", "Selecciona notas o bloques de forma de onda antes de editarlos." },
+        { "Draw Note creates and edits note objects.", "Draw Note creates and edits note objects.", "“绘制音符”用于创建和编辑音符对象。", "「ノート描画」はノートオブジェクトを作成・編集します。", "«Рисование нот» создаёт и редактирует объекты нот.", "Dibujar nota crea y edita objetos de nota." },
+        { "Line Anchor places points that shape the pitch curve.", "Line Anchor places points that shape the pitch curve.", "“锚点”用于放置塑造音高曲线的点。", "「ラインアンカー」はピッチカーブの形状を決める点を配置します。", "«Линейный якорь» размещает точки, формирующие кривую высоты тона.", "Ancla de línea coloca puntos que dan forma a la curva de tono." },
+        { "Hand Draw directly edits the pitch curve.", "Hand Draw directly edits the pitch curve.", "“手绘”直接编辑音高曲线。", "「手描き」はピッチカーブを直接編集します。", "«Ручное рисование» напрямую редактирует кривую высоты тона.", "Dibujo a mano edita directamente la curva de tono." },
+        { "Pitch edits the selected waveform blob's pitch.", "Pitch edits the selected waveform blob's pitch.", "“音高”编辑所选波形块的音高。", "「ピッチ」は選択した波形ブロブのピッチを編集します。", "«Высота тона» редактирует высоту выбранного волнового блока.", "Tono edita el tono del bloque de forma de onda seleccionado." },
+        { "Modulation edits expressive pitch movement in a blob.", "Modulation edits expressive pitch movement in a blob.", "“调制”编辑波形块中的表现性音高变化。", "「モジュレーション」はブロブ内の表情豊かなピッチ変化を編集します。", "«Модуляция» редактирует выразительное движение высоты тона в блоке.", "Modulación edita el movimiento expresivo del tono en un bloque." },
+        { "Drift corrects slower pitch movement in a blob.", "Drift corrects slower pitch movement in a blob.", "“漂移”修正波形块中较慢的音高变化。", "「ドリフト」はブロブ内のゆっくりしたピッチ変化を補正します。", "«Дрейф» корректирует медленное движение высоты тона в блоке.", "Deriva corrige el movimiento lento del tono en un bloque." },
+        { "Volume Envelope changes level over time.", "Volume Envelope changes level over time.", "“音量包络”改变音量随时间的变化。", "「ボリュームエンベロープ」は時間経過に伴うレベルを変更します。", "«Огибающая громкости» изменяет уровень во времени.", "La envolvente de volumen cambia el nivel con el tiempo." },
+        { "Scissors splits waveform blobs into editable parts.", "Scissors splits waveform blobs into editable parts.", "“剪刀”将波形块拆分为可编辑部分。", "「ハサミ」は波形ブロブを編集可能な部分に分割します。", "«Ножницы» разделяют волновые блоки на редактируемые части.", "Tijeras divide los bloques de forma de onda en partes editables." },
+        { "Retune Speed controls how quickly note correction follows the target.", "Retune Speed controls how quickly note correction follows the target.", "“校正速度”控制音符校正跟随目标的速度。", "「チューン速度」はノート補正がターゲットに追従する速さを制御します。", "«Скорость коррекции» управляет скоростью следования коррекции нот за целью.", "La velocidad de afinación controla la rapidez con que la corrección de notas sigue al objetivo." },
+        { "Vibrato Depth controls the amount of vibrato.", "Vibrato Depth controls the amount of vibrato.", "“颤音深度”控制颤音量。", "「ビブラートの深さ」はビブラートの量を制御します。", "«Глубина вибрато» управляет величиной вибрато.", "La profundidad del vibrato controla la cantidad de vibrato." },
+        { "Vibrato Rate controls how quickly vibrato cycles.", "Vibrato Rate controls how quickly vibrato cycles.", "“颤音速率”控制颤音循环的速度。", "「速度 вибрато」はビブラートの周期の速さを制御します。", "«Скорость вибрато» управляет скоростью циклов вибрато.", "La velocidad del vibrato controla la rapidez de sus ciclos." },
+        { "AUTO applies the current note correction settings.", "AUTO applies the current note correction settings.", "“自动”应用当前音符校正设置。", "「AUTO」は現在のノート補正設定を適用します。", "«АВТО» применяет текущие настройки коррекции нот.", "AUTO aplica los ajustes actuales de corrección de notas." },
+        { "SNAP constrains blob edits to the selected grid.", "SNAP constrains blob edits to the selected grid.", "“吸附”将波形块编辑限制到所选网格。", "「SNAP」はブロブの編集を選択したグリッドに制限します。", "«ПРИВЯЗКА» ограничивает редактирование блоков выбранной сеткой.", "AJUSTE limita la edición de bloques a la cuadrícula seleccionada." },
+        { "Pitch Grid chooses how OpenDyne pitch edits snap.", "Pitch Grid chooses how OpenDyne pitch edits snap.", "“音高网格”选择 OpenDyne 音高编辑的吸附方式。", "「ピッチグリッド」はOpenDyneのピッチ編集のスナップ方法を選択します。", "«Сетка высоты тона» задаёт привязку при редактировании высоты тона в OpenDyne.", "Cuadrícula de tono elige cómo se ajustan las ediciones de tono de OpenDyne." },
+        { "Transport shows the current root and scale; More contains additional scale choices.", "Transport shows the current root and scale; More contains additional scale choices.", "“走带”显示当前根音和音阶；“更多”包含其他音阶选项。", "「トランスポート」には現在のルートとスケールが表示され、「その他」には追加のスケール候補があります。", "Транспорт показывает текущую тонику и гамму; в разделе «Ещё» находятся дополнительные варианты гамм.", "Transporte muestra la raíz y escala actuales; Más contiene opciones de escala adicionales." },
+        { "Overview moves through the whole clip while keeping the current zoom.", "Overview moves through the whole clip while keeping the current zoom.", "“概览”在保持当前缩放的同时浏览整个片段。", "「概要」は現在のズームを保ったままクリップ全体を移動します。", "«Обзор» перемещается по всему клипу, сохраняя текущий масштаб.", "Vista general recorre todo el clip manteniendo el zoom actual." },
+        { "Play, pause, stop and loop here.", "Play, pause, stop and loop here.", "在此播放、暂停、停止和循环。", "ここで再生、一時停止、停止、ループを操作します。", "Здесь можно воспроизводить, ставить на паузу, останавливать и зацикливать.", "Reproduce, pausa, detén y repite aquí." },
+        { "Audition with the plugin host transport.", "Audition with the plugin host transport.", "使用插件宿主走带试听。", "プラグインホストのトランスポートで試聴します。", "Прослушивайте с помощью транспорта хоста плагина.", "Escucha con el transporte del host del plugin." },
+        { "File can replay this guide. Options changes editing mode and introduces EQ.", "File can replay this guide. Options changes editing mode and introduces EQ.", "“文件”可重新播放本指南。“选项”可更改编辑模式并启用 EQ。", "「ファイル」からこのガイドを再生できます。「オプション」では編集モードを変更し、EQを利用できます。", "В меню «Файл» можно повторно запустить это руководство. «Настройки» меняют режим редактирования и добавляют EQ.", "Archivo puede repetir esta guía. Opciones cambia el modo de edición e introduce EQ." },
     };
     
     for (const auto& t : translations)

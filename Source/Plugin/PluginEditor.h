@@ -38,6 +38,7 @@
 #include "UI/AuroraLookAndFeel.h"
 #include "UI/UIColors.h"
 #include "UI/TimelineOverviewComponent.h"
+#include "Editor/OnboardingOverlayComponent.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
 
@@ -89,6 +90,7 @@ public:
     void redoRequested() override;
     void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) override;
     void cursorStyleChanged(CursorStyleId style) override;
+    void onboardingRequested() override;
     void languageChanged(Language newLanguage) override;
 
     void playRequested() override;
@@ -177,6 +179,7 @@ private:
     TimelineOverviewComponent overviewStrip_;
     AutoRenderOverlayComponent autoRenderOverlay_;
     RenderBadgeComponent renderBadge_;
+    std::unique_ptr<OnboardingOverlayComponent> onboardingOverlay_;
     OpenTuneTooltipWindow tooltipWindow_{ &contentRoot_, 600 };
 
     bool suppressScaleChangedCallback_ = false;

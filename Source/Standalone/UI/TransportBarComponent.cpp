@@ -1440,6 +1440,27 @@ void TransportBarComponent::resized()
     bpmField_.setReadOnly(layoutProfile_ == LayoutProfile::VST3AraSingleClip);
 }
 
+juce::Rectangle<int> TransportBarComponent::getPlaybackControlsBounds() const
+{
+    juce::Rectangle<int> bounds;
+    for (const auto* button : { &playButton_, &pauseButton_, &stopButton_, &loopButton_ })
+        if (button->isVisible())
+            bounds = bounds.isEmpty() ? button->getBounds() : bounds.getUnion(button->getBounds());
+    return bounds;
+}
+
+juce::Rectangle<int> TransportBarComponent::getScaleControlsBounds() const
+{
+    if (moreButton_.isVisible())
+        return moreButton_.getBounds();
+    juce::Rectangle<int> bounds;
+    for (const auto* control : { static_cast<const juce::Component*>(&scaleRootSelector_),
+                                 static_cast<const juce::Component*>(&scaleTypeSelector_) })
+        if (control->isVisible())
+            bounds = bounds.isEmpty() ? control->getBounds() : bounds.getUnion(control->getBounds());
+    return bounds;
+}
+
 void TransportBarComponent::showOverflowMenu()
 {
     // Overflow 档唯一溢出入口：仅 Root/Scale，功能与两个选择器一致。

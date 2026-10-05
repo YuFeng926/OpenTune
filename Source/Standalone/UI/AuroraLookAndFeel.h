@@ -26,6 +26,7 @@ public:
                               const juce::Colour& backgroundColour,
                               bool shouldDrawButtonAsHighlighted,
                               bool shouldDrawButtonAsDown) override;
+    void drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool) override;
 
     // Draw Toggle Button (Neon Checkbox)
     void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,

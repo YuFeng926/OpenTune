@@ -657,6 +657,8 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Standalone/UI/WaveformMipmap.cpp
         Source/Standalone/UI/WaveformMipmap.h
         Source/Editor/AutoRenderOverlayComponent.h
+        Source/Editor/OnboardingOverlayComponent.cpp
+        Source/Editor/OnboardingOverlayComponent.h
         Source/Editor/PitchShiftDialogContent.h
         Source/Editor/ConfirmDialogContent.h
         Source/Editor/ShortcutCaptureDialogContent.h

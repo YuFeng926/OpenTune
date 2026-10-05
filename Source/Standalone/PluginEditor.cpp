@@ -739,6 +739,37 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     applyThemeToEditor(resolveEffectiveTheme(appPreferences_.getState().shared.theme));
 
+    onboardingOverlay_ = std::make_unique<OnboardingOverlayComponent>(
+        appPreferences_, contentRoot_, topBar_, transportBar_, parameterPanel_, pianoRoll_,
+        overviewStrip_, OnboardingOverlayComponent::Environment::Standalone,
+        [this](AudioEditingScheme::Scheme scheme) {
+            appPreferences_.setAudioEditingScheme(scheme);
+            syncSharedAppPreferences();
+        },
+        [this] {
+            if (isWorkspaceView_)
+                viewToggled(false);
+            transportBar_.setWorkspaceView(false);
+            isParameterPanelVisible_ = true;
+            parameterPanel_.setVisible(true);
+            topBar_.setSidePanelsVisible(isTrackPanelVisible_, isParameterPanelVisible_);
+            resized();
+        },
+        [this] {
+            if (isWorkspaceView_ != onboardingPreviousWorkspaceView_)
+                viewToggled(onboardingPreviousWorkspaceView_);
+            transportBar_.setWorkspaceView(onboardingPreviousWorkspaceView_);
+            isParameterPanelVisible_ = onboardingPreviousParameterPanelVisible_;
+            parameterPanel_.setVisible(isParameterPanelVisible_);
+            topBar_.setSidePanelsVisible(isTrackPanelVisible_, isParameterPanelVisible_);
+            resized();
+            if (isWorkspaceView_)
+                arrangementView_.grabKeyboardFocus();
+            else
+                pianoRoll_.grabKeyboardFocus();
+        });
+    contentRoot_.addChildComponent(*onboardingOverlay_);
+
     // Apply the purple theme to the window
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
 
@@ -796,6 +827,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    onboardingOverlay_.reset();
     // 退出保存外层窗口实际 width/height（§5.1）：此刻默认 StandaloneFilterWindow 仍存活，
     // windowX/windowY 由该窗口析构函数继续写入同一 OpenTune.settings。
     if (auto* holder = juce::StandalonePluginHolder::getInstance())
@@ -1009,6 +1041,9 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
 
 bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
+    if (onboardingOverlay_ != nullptr && onboardingOverlay_->isActive())
+        return true;
+
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Undo, key))
     {
         if (!shouldAcceptUndoRedoShortcut()) {
@@ -1063,6 +1098,9 @@ bool OpenTuneAudioProcessorEditor::shouldAcceptUndoRedoShortcut()
 
 bool OpenTuneAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArray& files)
 {
+    if (onboardingOverlay_ != nullptr && onboardingOverlay_->isActive())
+        return false;
+
     static const juce::String kImportExtensionSpec = getImportExtensionSpec();
     for (const auto& path : files)
     {
@@ -1075,6 +1113,9 @@ bool OpenTuneAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArra
 
 void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, int x, int y)
 {
+    if (onboardingOverlay_ != nullptr && onboardingOverlay_->isActive())
+        return;
+
     if (isImportInProgress_)
     {
         ConfirmDialogContent::showMessage(
@@ -1295,7 +1336,8 @@ void OpenTuneAudioProcessorEditor::resized()
 
     auto bounds = contentRoot_.getLocalBounds();
     rippleOverlay_.setBounds(bounds);
-    rippleOverlay_.toFront(false);
+    if (onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
+        rippleOverlay_.toFront(false);
 
 // Shadow margin: reserve space for panel shadow rendering
 // Each component paint() uses reduced(shadowMargin) for background; shadow renders in margin
@@ -1368,11 +1410,19 @@ void OpenTuneAudioProcessorEditor::resized()
     
 // AutoRenderOverlay covers entire PianoRoll area
     autoRenderOverlay_.setBounds(bounds);
-    autoRenderOverlay_.toFront(false);
+    if (onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
+        autoRenderOverlay_.toFront(false);
 
     renderBadge_.setBounds(bounds.getRight() - 148, bounds.getY() + 8, 140, 28);
-    renderBadge_.toFront(false);
+    if (onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
+        renderBadge_.toFront(false);
 
+    if (onboardingOverlay_ != nullptr)
+    {
+        onboardingOverlay_->updateLayout();
+        if (onboardingOverlay_->isActive())
+            onboardingOverlay_->toFront(false);
+    }
 }
 
 void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
@@ -1471,6 +1521,16 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     restoreStandaloneWindowGeometryOnce();
 
     syncSharedAppPreferences();
+
+    if (onboardingOverlay_ != nullptr && !onboardingOverlay_->isActive()
+        && !appPreferences_.getState().shared.onboardingShown
+        && isShowing() && getPeer() != nullptr && getWidth() > 0 && getHeight() > 0
+        && juce::ModalComponentManager::getInstance()->getNumModalComponents() == 0
+        && !projectOperationBusy_ && !isImportInProgress_ && !exportInProgress_.load()
+        && !originalF0OverlayLatched_)
+    {
+        onboardingRequested();
+    }
 
     const bool vocoderReady = processorRef_.isVocoderReady();
     const bool inferenceNow = false;
@@ -2666,7 +2726,12 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         std::move(onF0ModelChanged),
         std::move(onLightPitchCorrectionChanged));
 
-    auto sharedPages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); }, false);
+    auto sharedPages = SharedPreferencePages::create(
+        appPreferences_, [this] { syncSharedAppPreferences(); }, false,
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+                safeThis->onboardingRequested();
+        });
     pages.insert(pages.end(),
                  std::make_move_iterator(sharedPages.begin()),
                  std::make_move_iterator(sharedPages.end()));
@@ -2884,6 +2949,18 @@ void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
     
 // Refresh entire UI
     repaint();
+    if (onboardingOverlay_ != nullptr)
+        onboardingOverlay_->refreshLanguage();
+}
+
+void OpenTuneAudioProcessorEditor::onboardingRequested()
+{
+    if (onboardingOverlay_ == nullptr || onboardingOverlay_->isActive())
+        return;
+
+    onboardingPreviousWorkspaceView_ = isWorkspaceView_;
+    onboardingPreviousParameterPanelVisible_ = isParameterPanelVisible_;
+    onboardingOverlay_->start();
 }
 
 // ============================================================================

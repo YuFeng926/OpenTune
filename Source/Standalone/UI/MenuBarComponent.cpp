@@ -121,7 +121,10 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
 
             menu.addItem(OpenPreferences, LOC(kOptions));
             menu.addSeparator();
-            menu.addItem(OpenHelp, LOC(kHelp));
+            juce::PopupMenu helpMenu;
+            helpMenu.addItem(OpenOnboarding, LOC(kOnboarding));
+            helpMenu.addItem(OpenHelp, LOC(kUserGuide));
+            menu.addSubMenu(LOC(kHelp), helpMenu);
             break;
         }
         case 1:  // Edit
@@ -241,6 +244,10 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
 
         case OpenHelp:
             listeners_.call([](Listener& l) { l.helpRequested(); });
+            break;
+
+        case OpenOnboarding:
+            listeners_.call([](Listener& l) { l.onboardingRequested(); });
             break;
 
         case ShowWaveform:

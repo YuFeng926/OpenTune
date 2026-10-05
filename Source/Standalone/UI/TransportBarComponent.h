@@ -240,6 +240,10 @@ public:
     juce::Component& getFileButton() { return fileButton_; }
     juce::Component& getEditButton() { return editButton_; }
     juce::Component& getViewButton() { return viewButton_; }
+    juce::Rectangle<int> getPlaybackControlsBounds() const;
+    juce::Rectangle<int> getScaleControlsBounds() const;
+    juce::Component& getRecordButton() { return recordButton_; }
+    juce::Component& getPianoViewButton() { return pianoViewButton_; }
 
 private:
     // Internal callbacks

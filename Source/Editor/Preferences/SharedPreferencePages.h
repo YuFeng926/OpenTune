@@ -15,7 +15,8 @@ struct SharedPreferencePages {
     static std::vector<TabbedPreferencesDialog::PageSpec> create(
         AppPreferences& appPreferences,
         std::function<void()> onPreferencesChanged,
-        bool isVst3Plugin);
+        bool isVst3Plugin,
+        std::function<void()> onReplayOnboarding);
 
     static RenderingPriorityPage createRenderingPriorityComponent(
         AppPreferences& appPreferences,
