@@ -15,8 +15,7 @@ struct SharedPreferencePages {
     static std::vector<TabbedPreferencesDialog::PageSpec> create(
         AppPreferences& appPreferences,
         std::function<void()> onPreferencesChanged,
-        bool isVst3Plugin,
-        std::function<void()> onReplayOnboarding);
+        bool isVst3Plugin);
 
     static RenderingPriorityPage createRenderingPriorityComponent(
         AppPreferences& appPreferences,
@@ -25,6 +24,7 @@ struct SharedPreferencePages {
         std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
         std::function<bool(F0ModelType)> onF0ModelChanged,
         std::function<void(bool)> onLightPitchCorrectionChanged,
+        std::function<void()> onReplayOnboarding,
         bool isVst3Plugin);
 };
 

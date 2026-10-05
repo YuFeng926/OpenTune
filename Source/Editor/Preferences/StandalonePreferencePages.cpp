@@ -634,7 +634,8 @@ std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::create
     std::function<void(bool forceCpu)> onRenderingPriorityChanged,
     std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
     std::function<bool(F0ModelType)> onF0ModelChanged,
-    std::function<void(bool)> onLightPitchCorrectionChanged)
+    std::function<void(bool)> onLightPitchCorrectionChanged,
+    std::function<void()> onReplayOnboarding)
 {
     std::vector<TabbedPreferencesDialog::PageSpec> pages;
     if (audioDeviceManager != nullptr) {
@@ -644,6 +645,7 @@ std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::create
             std::move(onVocoderModelWeightChanged),
             std::move(onF0ModelChanged),
             std::move(onLightPitchCorrectionChanged),
+            std::move(onReplayOnboarding),
             false);
         auto audioContent = std::make_unique<AudioDeviceSettingsContent>(*audioDeviceManager);
         // renderingPriorityPage.height + 自绘音频设置内容高度

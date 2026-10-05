@@ -2724,14 +2724,14 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
         std::move(onVocoderModelWeightChanged),
         std::move(onF0ModelChanged),
-        std::move(onLightPitchCorrectionChanged));
-
-    auto sharedPages = SharedPreferencePages::create(
-        appPreferences_, [this] { syncSharedAppPreferences(); }, false,
+        std::move(onLightPitchCorrectionChanged),
         [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
             if (safeThis != nullptr)
                 safeThis->onboardingRequested();
         });
+
+    auto sharedPages = SharedPreferencePages::create(
+        appPreferences_, [this] { syncSharedAppPreferences(); }, false);
     pages.insert(pages.end(),
                  std::make_move_iterator(sharedPages.begin()),
                  std::make_move_iterator(sharedPages.end()));

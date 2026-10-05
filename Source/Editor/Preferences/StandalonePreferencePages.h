@@ -19,7 +19,8 @@ struct StandalonePreferencePages {
         std::function<void(bool forceCpu)> onRenderingPriorityChanged,
         std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
         std::function<bool(F0ModelType)> onF0ModelChanged,
-        std::function<void(bool)> onLightPitchCorrectionChanged);
+        std::function<void(bool)> onLightPitchCorrectionChanged,
+        std::function<void()> onReplayOnboarding);
     static std::vector<TabbedPreferencesDialog::PageSpec> createStandaloneOnlyPages(AppPreferences& appPreferences,
                                                                                     std::function<void()> onPreferencesChanged);
 };

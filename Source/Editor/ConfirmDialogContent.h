@@ -49,11 +49,13 @@ public:
     ConfirmDialogContent(const juce::String& title,
                          const juce::String& message,
                          std::vector<ButtonSpec> buttons,
-                         std::function<void()> onDismissed = {})
+                         std::function<void()> onDismissed = {},
+                         bool centreButtons = false)
         : title_(title),
           message_(message),
           buttonSpecs_(std::move(buttons)),
-          onDismissed_(std::move(onDismissed))
+          onDismissed_(std::move(onDismissed)),
+          centreButtons_(centreButtons)
     {
         setWantsKeyboardFocus(true);
 
@@ -220,7 +222,9 @@ public:
         for (int w : widths)
             totalWidth += w;
 
-        int x = buttonRow.getRight() - totalWidth;
+        int x = centreButtons_
+                    ? buttonRow.getX() + (buttonRow.getWidth() - totalWidth) / 2
+                    : buttonRow.getRight() - totalWidth;
         for (int i = 0; i < count; ++i) {
             const int w = widths[static_cast<size_t>(i)];
             buttons_[i]->setBounds(x, buttonRow.getY(), w, kButtonHeight);
@@ -319,6 +323,7 @@ private:
     juce::Component::SafePointer<juce::DialogWindow> watchedDialog_;
     bool closing_ = false;
     bool verticalButtons_ = false;
+    bool centreButtons_ = false;
     int messageHeight_ = 24;
     int buttonAreaHeight_ = kButtonRowHeight;
 

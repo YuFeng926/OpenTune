@@ -989,11 +989,7 @@ void OpenTuneAudioProcessorEditor::preferencesRequested()
 void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 {
     auto pages = SharedPreferencePages::create(
-        appPreferences_, [this] { syncSharedAppPreferences(); }, true,
-        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
-            if (safeThis != nullptr)
-                safeThis->onboardingRequested();
-        });
+        appPreferences_, [this] { syncSharedAppPreferences(); }, true);
 
     // Insert Audio page (with rendering priority) at the beginning
     auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
@@ -1011,6 +1007,10 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         std::move(onVocoderModelWeightChanged),
         std::move(onF0ModelChanged),
         std::move(onLightPitchCorrectionChanged),
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+                safeThis->onboardingRequested();
+        },
         true);
     pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage.component), audioPage.height });
 

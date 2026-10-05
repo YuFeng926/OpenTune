@@ -99,7 +99,8 @@ void OnboardingOverlayComponent::showWorkflowChoice()
         { { text(isOpenDyne() ? kOpenDyne : kOpenTune), [safeThis, current] { if (safeThis != nullptr) safeThis->chooseScheme(current); }, true },
           { text(isOpenDyne() ? kOpenTune : kOpenDyne), [safeThis, other] { if (safeThis != nullptr) safeThis->chooseScheme(other); } },
           { text(kLater), [safeThis] { if (safeThis != nullptr) safeThis->finish(); } } },
-        [safeThis] { if (safeThis != nullptr && !safeThis->choiceResolved_) safeThis->finish(); });
+        [safeThis] { if (safeThis != nullptr && !safeThis->choiceResolved_) safeThis->finish(); },
+        /*centreButtons=*/ true);
     choiceDialog_ = content;
     ConfirmDialogContent::launch(content, &contentRoot_);
     appPreferences_.setOnboardingShown(true);
@@ -204,7 +205,7 @@ juce::Component* OnboardingOverlayComponent::targetComponent() const
         case Step::OtRetuneSpeed: return &parameterPanel_.getRetuneSpeedControl();
         case Step::OtVibratoDepth: return &parameterPanel_.getVibratoDepthControl();
         case Step::OtVibratoRate: return &parameterPanel_.getVibratoRateControl();
-        case Step::AutoSnap: return parameterPanel_.getToolComponent(isOpenDyne() ? ToolId::Pitch : ToolId::AutoTune);
+        case Step::AutoSnap: return parameterPanel_.getToolComponent(ToolId::AutoTune);
         case Step::OdPitchGrid: return &parameterPanel_.getPitchGridControl();
         case Step::Scale: return &transportBar_;
         case Step::Overview: return &overviewStrip_;
