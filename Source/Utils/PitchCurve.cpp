@@ -678,7 +678,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::applyCorrectionToRange(
         std::move(correctionSegments),
         hopSize,
         sampleRate,
-        newGen
+        newGen, oldSnapshot->getErasedRanges()
     );
     std::atomic_store(&snapshot_, newSnapshot);
     return newSnapshot;
@@ -710,7 +710,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::setManualCorrectionRange(
         std::move(correctionSegments),
         oldSnapshot->getHopSize(),
         oldSnapshot->getSampleRate(),
-        newGen
+        newGen, oldSnapshot->getErasedRanges()
     );
     std::atomic_store(&snapshot_, newSnapshot);
     return newSnapshot;
@@ -732,7 +732,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::clearCorrectionRange(int s
         std::move(correctionSegments),
         oldSnapshot->getHopSize(),
         oldSnapshot->getSampleRate(),
-        newGen
+        newGen, oldSnapshot->getErasedRanges()
     );
     std::atomic_store(&snapshot_, newSnapshot);
     return newSnapshot;

@@ -38,14 +38,13 @@ class CaptureSession;
  * CaptureSegmentContent is the persisted content owner. ContentRenderService is
  * republished from the restored owner snapshot; it is not persistence state.
  *
- * v12 replaces all prior versions: adds authoritative hostStartSample/
- * hostSampleCount per segment. Older files are rejected on load (no migration).
+ * v13 adds erased F0 ranges to the pitch curve payload. v12 remains readable;
+ * v12 curves have no erased ranges.
  */
 class CapturePersistence
 {
 public:
-    /// Current archive version. Older versions are rejected (no migration).
-    static constexpr int kArchiveVersion = 12;
+    static constexpr int kArchiveVersion = 13;
 
     static juce::MemoryBlock serialize(const CaptureSession& session);
     static bool deserialize(CaptureSession& session, const juce::MemoryBlock& block);

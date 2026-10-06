@@ -30,7 +30,7 @@ namespace OpenTune {
 namespace {
 
 constexpr int kContentPayloadArchiveMagic = 0x4F544143;
-constexpr int kContentPayloadArchiveVersion = 7; // v7: EqFilter.paletteSlot (v6 dynamic EQ filters migrated with deterministic slot assignment)
+constexpr int kContentPayloadArchiveVersion = 8; // v8: PitchCurve erased F0 ranges
 constexpr int kContentPayloadArchiveVersionMin = 3;
 constexpr int kMaxContentPayloadRecords = 4096;
 
@@ -308,6 +308,13 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
                     juce::MemoryBlock mb(energy.data(), energy.size() * sizeof(float));
                     pc->setAttribute("energyBase64", mb.toBase64Encoding());
                 }
+            }
+            for (const auto& range : snap->getErasedRanges())
+            {
+                auto* erased = new juce::XmlElement("ErasedRange");
+                erased->setAttribute("startFrame", range.startFrame);
+                erased->setAttribute("endFrameExclusive", range.endFrameExclusive);
+                pc->addChildElement(erased);
             }
             analysis->addChildElement(pc);
         }
@@ -845,6 +852,18 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
                 if (!std::isfinite(value))
                     return std::nullopt;
 
+            const int frameCount = static_cast<int>(f0.size());
+            std::vector<F0FrameRange> erasedRanges;
+            for (auto* erased : pc->getChildWithTagNameIterator("ErasedRange"))
+            {
+                const int startFrame = erased->getIntAttribute("startFrame");
+                const int endFrameExclusive = erased->getIntAttribute("endFrameExclusive");
+                if (startFrame < 0 || endFrameExclusive <= startFrame
+                    || endFrameExclusive > frameCount)
+                    return std::nullopt;
+                erasedRanges.push_back({startFrame, endFrameExclusive});
+            }
+
             content.analysis.pitchCurve = std::make_shared<PitchCurve>();
             content.analysis.pitchCurve->setHopSize(hopSize);
             content.analysis.pitchCurve->setSampleRate(sampleRate);
@@ -852,6 +871,9 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
                 content.analysis.pitchCurve->setOriginalF0(std::move(f0));
             if (!energy.empty())
                 content.analysis.pitchCurve->setOriginalEnergy(std::move(energy));
+            if (!erasedRanges.empty())
+                content.analysis.pitchCurve->replaceErasedRangesInRange(
+                    0, frameCount, erasedRanges);
         }
     }
 
@@ -2243,12 +2265,19 @@ void OpenTuneDocumentController::commitF0Completion(F0CompletionRecord record)
         return;
     }
 
+    const auto previousPitchCurve = mod->content->analysis.pitchCurve;
     auto pitchCurve = std::make_shared<PitchCurve>();
     pitchCurve->setOriginalF0(record.result.f0);
     pitchCurve->setSampleRate(static_cast<double>(record.result.f0SampleRate));
     pitchCurve->setHopSize(record.result.hopSize);
     if (!record.result.energy.empty())
         pitchCurve->setOriginalEnergy(record.result.energy);
+    if (previousPitchCurve != nullptr
+        && !previousPitchCurve->getSnapshot()->getErasedRanges().empty()) {
+        pitchCurve->replaceErasedRangesInRange(
+            0, static_cast<int>(record.result.f0.size()),
+            previousPitchCurve->getSnapshot()->getErasedRanges());
+    }
 
     if (mod->content->analysis.detectedKey.origin != Origin::Manual)
     {

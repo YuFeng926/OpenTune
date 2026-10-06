@@ -18,7 +18,7 @@
 namespace OpenTune::Capture {
 
 namespace {
-    // CAPz v12: per-segment fixed bytes + embedded PCM audio + unified VolumeEnvelope + authoritative hostStartSample/hostSampleCount.
+    // CAPz v13: per-segment fixed bytes + embedded PCM audio + unified VolumeEnvelope + erased F0 ranges.
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
@@ -64,9 +64,17 @@ namespace {
             stream.writeFloat(segment.parameterSnapshot.vibratoDepth);
             stream.writeFloat(segment.parameterSnapshot.vibratoRate);
         }
+        const auto& erasedRanges = snapshot->getErasedRanges();
+        stream.writeInt(static_cast<int>(erasedRanges.size()));
+        for (const auto& range : erasedRanges) {
+            stream.writeInt(range.startFrame);
+            stream.writeInt(range.endFrameExclusive);
+        }
     }
 
-    std::shared_ptr<PitchCurve> readPitchCurve(juce::MemoryInputStream& stream, bool hasPitchDriftScale)
+    std::shared_ptr<PitchCurve> readPitchCurve(juce::MemoryInputStream& stream,
+                                               bool hasPitchDriftScale,
+                                               bool hasErasedRanges)
     {
         if (stream.readInt() == 0)
             return nullptr;
@@ -93,7 +101,16 @@ namespace {
             segment.parameterSnapshot.vibratoRate = stream.readFloat();
             segments.push_back(std::move(segment));
         }
+        std::vector<F0FrameRange> erasedRanges;
+        if (hasErasedRanges) {
+            const int erasedRangeCount = stream.readInt();
+            erasedRanges.reserve(static_cast<size_t>(juce::jmax(0, erasedRangeCount)));
+            for (int i = 0; i < erasedRangeCount; ++i)
+                erasedRanges.push_back({stream.readInt(), stream.readInt()});
+        }
         curve->replaceCorrectionSegments(segments);
+        if (!erasedRanges.empty())
+            curve->replaceErasedRangesInRange(0, static_cast<int>(curve->size()), erasedRanges);
         return curve;
     }
 }  // namespace
@@ -251,7 +268,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         return false;
     }
     const int fileVersion = stream.readInt();
-    if (fileVersion != CapturePersistence::kArchiveVersion)
+    if (fileVersion != 12 && fileVersion != CapturePersistence::kArchiveVersion)
         return false;
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
@@ -333,7 +350,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         p.detectedKey.scale = static_cast<Scale>(stream.readInt());
         p.detectedKey.confidence = stream.readFloat();
         p.detectedKey.origin = static_cast<Origin>(stream.readInt());
-        p.pitchCurve = readPitchCurve(stream, /*hasPitchDriftScale=*/true);
+        p.pitchCurve = readPitchCurve(stream, /*hasPitchDriftScale=*/true,
+                                      /*hasErasedRanges=*/fileVersion >= 13);
 
         const int noteCount = stream.readInt();
         if (noteCount < 0)

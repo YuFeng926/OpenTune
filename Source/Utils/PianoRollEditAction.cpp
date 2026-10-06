@@ -13,7 +13,9 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
                                          std::vector<PitchCorrectionSegment> afterSegments,
                                          ContentEditRangeFrames affectedRange,
                                          std::vector<float> beforeOriginalF0InRange,
-                                         std::vector<float> afterOriginalF0InRange)
+                                         std::vector<float> afterOriginalF0InRange,
+                                         std::vector<F0FrameRange> beforeErasedRanges,
+                                         std::vector<F0FrameRange> afterErasedRanges)
     : commands_(commands)
     , contentKey_(key)
     , description_(std::move(description))
@@ -23,6 +25,8 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
     , afterSegments_(std::move(afterSegments))
     , beforeOriginalF0_(std::move(beforeOriginalF0InRange))
     , afterOriginalF0_(std::move(afterOriginalF0InRange))
+    , beforeErasedRanges_(std::move(beforeErasedRanges))
+    , afterErasedRanges_(std::move(afterErasedRanges))
     , affectedRange_(affectedRange)
 {
     jassert(affectedRange_.startFrame >= 0);
@@ -31,16 +35,16 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
 
 void PianoRollEditAction::undo()
 {
-    if (!beforeOriginalF0_.empty())
-        commands_->commitNotesAndSegmentsWithOriginalF0(contentKey_, beforeNotes_, beforeSegments_, affectedRange_, beforeOriginalF0_);
+    if (!beforeOriginalF0_.empty() || hasErasedRangePatch_)
+        commands_->commitNotesAndSegmentsWithOriginalF0(contentKey_, beforeNotes_, beforeSegments_, affectedRange_, beforeOriginalF0_, beforeErasedRanges_);
     else
         commands_->commitNotesAndSegments(contentKey_, beforeNotes_, beforeSegments_, affectedRange_);
 }
 
 void PianoRollEditAction::redo()
 {
-    if (!afterOriginalF0_.empty())
-        commands_->commitNotesAndSegmentsWithOriginalF0(contentKey_, afterNotes_, afterSegments_, affectedRange_, afterOriginalF0_);
+    if (!afterOriginalF0_.empty() || hasErasedRangePatch_)
+        commands_->commitNotesAndSegmentsWithOriginalF0(contentKey_, afterNotes_, afterSegments_, affectedRange_, afterOriginalF0_, afterErasedRanges_);
     else
         commands_->commitNotesAndSegments(contentKey_, afterNotes_, afterSegments_, affectedRange_);
 }

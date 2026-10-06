@@ -70,19 +70,22 @@ public:
         std::vector<PitchCorrectionSegment> correctionSegments,
         int hopSize,
         double sampleRate,
-        uint64_t renderGeneration = 0)
+        uint64_t renderGeneration = 0,
+        std::vector<F0FrameRange> erasedRanges = {})
         : originalF0_(std::move(originalF0))
         , originalEnergy_(std::move(originalEnergy))
         , correctionSegments_(std::move(correctionSegments))
         , hopSize_(hopSize)
         , sampleRate_(sampleRate)
         , renderGeneration_(renderGeneration)
+        , erasedRanges_(std::move(erasedRanges))
         , vocoderMask_(computeVocoderMask(originalF0_, correctionSegments_))
     {}
 
     const std::vector<float>& getOriginalF0() const { return originalF0_; }
     const std::vector<float>& getOriginalEnergy() const { return originalEnergy_; }
     const std::vector<PitchCorrectionSegment>& getCorrectionSegments() const { return correctionSegments_; }
+    const std::vector<F0FrameRange>& getErasedRanges() const { return erasedRanges_; }
     int getHopSize() const { return hopSize_; }
     double getSampleRate() const { return sampleRate_; }
 
@@ -159,6 +162,7 @@ private:
     const int hopSize_;
     const double sampleRate_;
     const uint64_t renderGeneration_;
+    const std::vector<F0FrameRange> erasedRanges_;
     const std::vector<bool> vocoderMask_;
 };
 
@@ -198,7 +202,7 @@ public:
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
-            oldSnapshot->getRenderGeneration()
+            oldSnapshot->getRenderGeneration(), std::vector<F0FrameRange>{}
         );
         std::atomic_store(&snapshot_, newSnapshot);
     }
@@ -219,7 +223,7 @@ public:
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
-            oldSnapshot->getRenderGeneration()
+            oldSnapshot->getRenderGeneration(), oldSnapshot->getErasedRanges()
         );
         std::atomic_store(&snapshot_, newSnapshot);
     }
@@ -247,8 +251,45 @@ public:
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
-            oldSnapshot->getRenderGeneration()
+            oldSnapshot->getRenderGeneration(), oldSnapshot->getErasedRanges()
         );
+        std::atomic_store(&snapshot_, newSnapshot);
+    }
+
+    void replaceErasedRangesInRange(int startFrame, int endFrame,
+                                    const std::vector<F0FrameRange>& ranges) {
+        if (endFrame <= startFrame)
+            return;
+        auto oldSnapshot = getSnapshot();
+        std::vector<F0FrameRange> normalized;
+        for (const auto& range : oldSnapshot->getErasedRanges()) {
+            const int leftEnd = std::min(range.endFrameExclusive, startFrame);
+            if (range.startFrame < leftEnd)
+                normalized.push_back({range.startFrame, leftEnd});
+            const int rightStart = std::max(range.startFrame, endFrame);
+            if (rightStart < range.endFrameExclusive)
+                normalized.push_back({rightStart, range.endFrameExclusive});
+        }
+        for (const auto& range : ranges) {
+            const int clippedStart = std::max(startFrame, range.startFrame);
+            const int clippedEnd = std::min(endFrame, range.endFrameExclusive);
+            if (clippedStart < clippedEnd)
+                normalized.push_back({clippedStart, clippedEnd});
+        }
+        std::sort(normalized.begin(), normalized.end(), [](const auto& a, const auto& b) {
+            return a.startFrame < b.startFrame;
+        });
+        std::vector<F0FrameRange> merged;
+        for (const auto& range : normalized) {
+            if (range.endFrameExclusive <= range.startFrame) continue;
+            if (!merged.empty() && range.startFrame <= merged.back().endFrameExclusive)
+                merged.back().endFrameExclusive = std::max(merged.back().endFrameExclusive, range.endFrameExclusive);
+            else merged.push_back(range);
+        }
+        auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
+            oldSnapshot->getOriginalF0(), oldSnapshot->getOriginalEnergy(),
+            oldSnapshot->getCorrectionSegments(), oldSnapshot->getHopSize(),
+            oldSnapshot->getSampleRate(), incrementGeneration(), std::move(merged));
         std::atomic_store(&snapshot_, newSnapshot);
     }
 
@@ -275,7 +316,7 @@ public:
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
-            oldSnapshot->getRenderGeneration()
+            oldSnapshot->getRenderGeneration(), oldSnapshot->getErasedRanges()
         );
         std::atomic_store(&snapshot_, newSnapshot);
     }
@@ -311,7 +352,7 @@ public:
             std::vector<PitchCorrectionSegment>(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
-            newGen
+            newGen, oldSnapshot->getErasedRanges()
         );
         std::atomic_store(&snapshot_, newSnapshot);
     }
@@ -331,7 +372,7 @@ public:
             std::move(normalized),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
-            newGen
+            newGen, oldSnapshot->getErasedRanges()
         );
         std::atomic_store(&snapshot_, newSnapshot);
     }
@@ -368,7 +409,7 @@ public:
             segments,
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
-            newGen
+            newGen, oldSnapshot->getErasedRanges()
         );
         std::atomic_store(&snapshot_, newSnapshot);
     }
@@ -394,7 +435,7 @@ public:
             oldSnapshot->getCorrectionSegments(),
             hopSize,
             oldSnapshot->getSampleRate(),
-            oldSnapshot->getRenderGeneration()
+            oldSnapshot->getRenderGeneration(), oldSnapshot->getErasedRanges()
         );
         std::atomic_store(&snapshot_, newSnapshot);
     }
@@ -407,7 +448,7 @@ public:
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             sampleRate,
-            oldSnapshot->getRenderGeneration()
+            oldSnapshot->getRenderGeneration(), oldSnapshot->getErasedRanges()
         );
         std::atomic_store(&snapshot_, newSnapshot);
     }
@@ -422,6 +463,7 @@ public:
         copiedCurve->setSampleRate(snapshot->getSampleRate());
         copiedCurve->setOriginalF0(snapshot->getOriginalF0());
         copiedCurve->setOriginalEnergy(snapshot->getOriginalEnergy());
+        copiedCurve->replaceErasedRangesInRange(0, static_cast<int>(snapshot->size()), snapshot->getErasedRanges());
 
         std::vector<PitchCorrectionSegment> segments;
         segments.reserve(snapshot->getCorrectionSegments().size());

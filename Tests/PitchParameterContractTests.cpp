@@ -8,6 +8,7 @@
 #include "Utils/PitchControlConfig.h"
 #include "Utils/PitchUtils.h"
 #include "Utils/AudioEditingScheme.h"
+#include "Utils/F0GapFill.h"
 
 #include <cmath>
 #include <cstdio>
@@ -103,6 +104,31 @@ static void testUnvoicedOriginalF0FramesCannotReceiveCorrection()
           "erased NotesPrimary frame is not editable");
 }
 
+static void testErasedRangesBlockGapFill()
+{
+    std::vector<float> f0{440.0f, 0.0f, 0.0f, 660.0f};
+    OpenTune::fillF0GapsForVocoder(f0, {{1, 3}});
+    check(f0[1] == 0.0f && f0[2] == 0.0f, "erased range remains zero");
+    check(f0[0] == 440.0f && f0[3] == 660.0f, "voiced endpoints remain unchanged");
+}
+
+static void testOrdinaryGapsStillUseLogInterpolation()
+{
+    std::vector<float> f0{440.0f, 0.0f, 660.0f};
+    OpenTune::fillF0GapsForVocoder(f0);
+    check(std::abs(f0[1] - std::sqrt(440.0f * 660.0f)) < 0.01f,
+          "ordinary gap still uses log-domain interpolation");
+}
+
+static void testGapFillIsIndependentOnEachSideOfErasedRange()
+{
+    std::vector<float> f0{0.0f, 440.0f, 0.0f, 660.0f, 0.0f};
+    OpenTune::fillF0GapsForVocoder(f0, {{2, 3}});
+    check(f0[0] == 440.0f && f0[4] == 660.0f,
+          "gap-fill clamps independently outside an erased range");
+    check(f0[2] == 0.0f, "erased boundary remains zero");
+}
+
 int main()
 {
     std::printf("PitchParameterContractTests:\n");
@@ -111,6 +137,9 @@ int main()
     testMixRetune();
     testResolveParameterTarget();
     testUnvoicedOriginalF0FramesCannotReceiveCorrection();
+    testErasedRangesBlockGapFill();
+    testOrdinaryGapsStillUseLogInterpolation();
+    testGapFillIsIndependentOnEachSideOfErasedRange();
     if (failures == 0) { std::printf("All tests passed.\n"); return 0; }
     std::fprintf(stderr, "%d test(s) FAILED.\n", failures);
     return 1;

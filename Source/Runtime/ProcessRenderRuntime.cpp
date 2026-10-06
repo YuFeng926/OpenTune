@@ -14,6 +14,7 @@
 #include "../Utils/ChannelLayoutLogger.h"
 #include "../Utils/ModelPathResolver.h"
 #include "../Utils/PitchCurve.h"
+#include "../Utils/F0GapFill.h"
 #include "../Utils/TimeCoordinate.h"
 #include "ProcessF0Runtime.h"
 
@@ -82,73 +83,6 @@ std::vector<float> materializeEffectiveF0Range(
                 effectiveF0[static_cast<size_t>(offset + k)] = values[static_cast<size_t>(k)] * gain;
         });
     return effectiveF0;
-}
-
-// ==============================================================================
-// F0 Gap Filling for Vocoder (Mel Frame Space)
-// ==============================================================================
-// 对齐训练代码 interp_uv=True（utils/wav2F0.interp_f0）：
-//   在 log2 频域对所有 unvoiced（f0==0）帧做 np.interp 等价线性插值：
-//   - 内部间隙：log2 域左右 voiced 帧线性插值（无大小限制）
-//   - 前导零帧：flat clamp 到第一个 voiced 帧的 log2(F0)
-//   - 尾部零帧：flat clamp 到最后一个 voiced 帧的 log2(F0)
-//   - 全零输入：保持全零
-//
-// 旧实现有两大不一致：(1) 内部间隙 ≤50 帧限制（训练无此限制）；
-// (2) 前导/尾部通过 contentSnap 边界查询 + 几何均值延伸（训练只做 flat clamp）。
-// 这两处偏差导致 vocoder 拿到的 F0 与训练不一致，产生相位震荡（低频砰砰声）。
-void fillF0GapsForVocoder(std::vector<float>& f0)
-{
-    if (f0.empty()) return;
-
-    const int n = static_cast<int>(f0.size());
-
-    // 收集所有 voiced 帧的索引和 log2(F0) 值
-    std::vector<int> voicedIdx;
-    std::vector<float> voicedLogF0;
-    voicedIdx.reserve(n);
-    voicedLogF0.reserve(n);
-    for (int i = 0; i < n; ++i)
-    {
-        if (f0[static_cast<size_t>(i)] > 0.0f)
-        {
-            voicedIdx.push_back(i);
-            voicedLogF0.push_back(std::log2(f0[static_cast<size_t>(i)]));
-        }
-    }
-
-    // 全部 unvoiced → 保持全零（对齐 interp_f0 中 uv.all() 分支）
-    if (voicedIdx.empty()) return;
-
-    // 对每个 unvoiced 帧在 log2 域做线性插值
-    // 等价于 np.interp(x_unvoiced, x_voiced, f0_log2_voiced)
-    for (int i = 0; i < n; ++i)
-    {
-        if (f0[static_cast<size_t>(i)] > 0.0f) continue;
-
-        auto it = std::lower_bound(voicedIdx.begin(), voicedIdx.end(), i);
-
-        if (it == voicedIdx.begin())
-        {
-            // 前导零帧：flat clamp 到第一个 voiced F0
-            f0[static_cast<size_t>(i)] = std::pow(2.0f, voicedLogF0.front());
-        }
-        else if (it == voicedIdx.end())
-        {
-            // 尾部零帧：flat clamp 到最后一个 voiced F0
-            f0[static_cast<size_t>(i)] = std::pow(2.0f, voicedLogF0.back());
-        }
-        else
-        {
-            // 内部零帧：log2 域线性插值
-            const int rightIdx = *it;
-            const int leftIdx = *(it - 1);
-            const float rightLogF0 = voicedLogF0[static_cast<size_t>(it - voicedIdx.begin())];
-            const float leftLogF0 = voicedLogF0[static_cast<size_t>(it - voicedIdx.begin() - 1)];
-            const float t = static_cast<float>(i - leftIdx) / static_cast<float>(rightIdx - leftIdx);
-            f0[static_cast<size_t>(i)] = std::pow(2.0f, leftLogF0 + t * (rightLogF0 - leftLogF0));
-        }
-    }
 }
 
 struct ContentSampleRange
@@ -1651,7 +1585,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     // 语义填满所有 unvoiced 帧，填完后无法再区分浊音/清音。线性谱声码器需要
     // 显式 UV 才能在清音段抑制谐波源。
     const auto preFillF0 = vocoderSourceF0;
-    fillF0GapsForVocoder(vocoderSourceF0);
+    OpenTune::fillF0GapsForVocoder(vocoderSourceF0, pitchCurve->getErasedRanges());
 
     vocoderF0.assign(static_cast<size_t>(actualFrames), 0.0f);
     vocoderUv.assign(static_cast<size_t>(actualFrames), 0.0f);
@@ -1668,13 +1602,21 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         const double frac = srcPos - static_cast<double>(srcIdx0);
         const int globalIdx0 = f0StartFrame + srcIdx0;
         const int globalIdx1 = f0StartFrame + srcIdx1;
-        const float f0_0 = globalIdx0 >= 0
+        const auto isErased = [&](int frame) {
+            return std::any_of(pitchCurve->getErasedRanges().begin(), pitchCurve->getErasedRanges().end(),
+                [frame](const F0FrameRange& range) { return frame >= range.startFrame && frame < range.endFrameExclusive; });
+        };
+        const bool erased0 = isErased(globalIdx0);
+        const bool erased1 = isErased(globalIdx1);
+        const float f0_0 = erased0 ? 0.0f : (globalIdx0 >= 0
             && globalIdx0 < static_cast<int>(vocoderSourceF0.size())
-            ? vocoderSourceF0[static_cast<size_t>(globalIdx0)] : 0.0f;
-        const float f0_1 = globalIdx1 >= 0
+            ? vocoderSourceF0[static_cast<size_t>(globalIdx0)] : 0.0f);
+        const float f0_1 = erased1 ? 0.0f : (globalIdx1 >= 0
             && globalIdx1 < static_cast<int>(vocoderSourceF0.size())
-            ? vocoderSourceF0[static_cast<size_t>(globalIdx1)] : 0.0f;
-        if (f0_0 > 0.0f && f0_1 > 0.0f)
+            ? vocoderSourceF0[static_cast<size_t>(globalIdx1)] : 0.0f);
+        if (erased0 || erased1)
+            vocoderF0[static_cast<size_t>(i)] = 0.0f;
+        else if (f0_0 > 0.0f && f0_1 > 0.0f)
             vocoderF0[static_cast<size_t>(i)] =
                 static_cast<float>(std::exp(std::log(f0_0) * (1.0 - frac) + std::log(f0_1) * frac));
         else if (f0_0 > 0.0f)
@@ -1688,7 +1630,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         const bool voiced1 = globalIdx1 >= 0
             && globalIdx1 < static_cast<int>(preFillF0.size())
             && preFillF0[static_cast<size_t>(globalIdx1)] > 0.0f;
-        vocoderUv[static_cast<size_t>(i)] = (voiced0 || voiced1) ? 1.0f : 0.0f;
+        vocoderUv[static_cast<size_t>(i)] = (erased0 || erased1) ? 0.0f : ((voiced0 || voiced1) ? 1.0f : 0.0f);
     }
 
     VocoderDomain::Job vocoderJob;

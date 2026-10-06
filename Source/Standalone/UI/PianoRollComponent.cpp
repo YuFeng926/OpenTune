@@ -136,12 +136,13 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         const std::vector<Note>& notes,
         const std::vector<PitchCorrectionSegment>& segments,
         F0FrameRange affectedRange,
-        const std::vector<float>& originalF0InRange) {
+        const std::vector<float>& originalF0InRange,
+        const std::optional<std::vector<F0FrameRange>>& erasedRanges) {
         const auto snap = readEditedSnapshot();
         if (snap == nullptr) return ContentCommitSnapshot{};
         return commitEditedContentNotesAndSegments(
             *snap, notes, segments, affectedRange,
-            std::vector<float>(originalF0InRange));
+            std::vector<float>(originalF0InRange), erasedRanges);
     };
     // ── OpenDyne 契约回调（Pitch/Scissors/Gain 域） ──
     toolCtx.commitVolumeEnvelope = [this](AutomationLane before, AutomationLane after) -> ContentCommitSnapshot {
@@ -1119,28 +1120,46 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(
     const std::vector<Note>& notes,
     const std::vector<PitchCorrectionSegment>& segments,
     F0FrameRange affectedRange,
-    std::vector<float> originalF0InRange)
+    std::vector<float> originalF0InRange,
+    std::optional<std::vector<F0FrameRange>> erasedRanges)
 {
     const auto committed = contentCommands_->commitNotesAndSegmentsWithOriginalF0(
         editedContentKey_, notes, segments,
         ContentEditRangeFrames{ affectedRange.startFrame, affectedRange.endFrameExclusive },
-        std::move(originalF0InRange));
+        std::move(originalF0InRange), std::move(erasedRanges));
     if (committed == nullptr)
         return {};
 
+    const auto extractRangesInRange = [](const std::vector<F0FrameRange>& ranges, int start, int end) {
+        std::vector<F0FrameRange> result;
+        for (const auto& range : ranges) {
+            const int clippedStart = std::max(start, range.startFrame);
+            const int clippedEnd = std::min(end, range.endFrameExclusive);
+            if (clippedStart < clippedEnd)
+                result.push_back({clippedStart, clippedEnd});
+        }
+        return result;
+    };
+    const auto beforeErasedRanges = extractRangesInRange(
+        snapshot.pitchCurve->getErasedRanges(), affectedRange.startFrame, affectedRange.endFrameExclusive);
+    const auto afterErasedRanges = extractRangesInRange(
+        committed->pitchCurve->getErasedRanges(), affectedRange.startFrame, affectedRange.endFrameExclusive);
     const auto beforeOriginalF0 = std::vector<float>(
         snapshot.pitchCurve->getOriginalF0().begin() + affectedRange.startFrame,
         snapshot.pitchCurve->getOriginalF0().begin() + affectedRange.endFrameExclusive);
     const auto afterOriginalF0 = std::vector<float>(
         committed->pitchCurve->getOriginalF0().begin() + affectedRange.startFrame,
         committed->pitchCurve->getOriginalF0().begin() + affectedRange.endFrameExclusive);
-    undoManager_.addAction(std::make_unique<PianoRollEditAction>(
+    auto action = std::make_unique<PianoRollEditAction>(
         contentCommands_, editedContentKey_, pendingUndoDescription_.isNotEmpty()
             ? pendingUndoDescription_ : TRANS("编辑"),
         snapshot.notes, committed->notes,
         snapshot.pitchCurve->getCorrectionSegments(), committed->pitchCurve->getCorrectionSegments(),
         ContentEditRangeFrames{ affectedRange.startFrame, affectedRange.endFrameExclusive },
-        beforeOriginalF0, afterOriginalF0));
+        beforeOriginalF0, afterOriginalF0, beforeErasedRanges, afterErasedRanges);
+    if (erasedRanges.has_value())
+        action->setErasedRangePatch();
+    undoManager_.addAction(std::move(action));
     pendingUndoDescription_ = {};
 
     cachedNotes_ = committed->notes;

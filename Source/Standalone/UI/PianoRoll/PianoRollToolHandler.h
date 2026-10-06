@@ -112,7 +112,8 @@ public:
         std::function<ContentCommitSnapshot(const std::vector<Note>&,
                                              const std::vector<PitchCorrectionSegment>&,
                                              F0FrameRange,
-                                             const std::vector<float>&)> commitNotesAndSegmentsWithOriginalF0;
+                                             const std::vector<float>&,
+                                             const std::optional<std::vector<F0FrameRange>>&)> commitNotesAndSegmentsWithOriginalF0;
 
         // === OpenDyne（NotesPrimary）提交与配置回调 ===
         // Volume Envelope 提交：整体替换 AutomationLane，推进 outputGain/content

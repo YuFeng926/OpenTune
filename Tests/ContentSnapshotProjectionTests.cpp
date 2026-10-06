@@ -39,6 +39,36 @@ std::shared_ptr<OpenTune::PitchCurve> makeUsableOriginalF0Curve()
     return curve;
 }
 
+bool testErasedRangesSurviveContentSnapshotProjection()
+{
+    auto curve = makeUsableOriginalF0Curve();
+    curve->replaceErasedRangesInRange(0, 3, {{1, 2}});
+    OpenTune::StandaloneClipContent clip(12);
+    clip.applyOriginalF0(curve);
+    const auto snapshot = clip.snapshotContent();
+    return snapshot->pitchCurve != nullptr
+        && snapshot->pitchCurve->getErasedRanges().size() == 1
+        && snapshot->pitchCurve->getErasedRanges().front().startFrame == 1
+        && snapshot->pitchCurve->getErasedRanges().front().endFrameExclusive == 2;
+}
+
+bool testErasedRangesSurviveF0CurveRebuild()
+{
+    auto previous = makeUsableOriginalF0Curve();
+    previous->replaceErasedRangesInRange(0, 3, {{1, 2}});
+
+    auto rebuilt = std::make_shared<OpenTune::PitchCurve>();
+    rebuilt->setOriginalF0({450.0f, 451.0f, 452.0f, 453.0f});
+    rebuilt->replaceErasedRangesInRange(
+        0, static_cast<int>(rebuilt->size()),
+        previous->getSnapshot()->getErasedRanges());
+
+    const auto ranges = rebuilt->getSnapshot()->getErasedRanges();
+    return ranges.size() == 1
+        && ranges.front().startFrame == 1
+        && ranges.front().endFrameExclusive == 2;
+}
+
 bool testCommonFieldsRoundTrip()
 {
     // 新 owner/content 的运行时 revision 从 1 开始。
@@ -866,6 +896,18 @@ bool testAutomationLaneMergeSeamAndEmptySides()
 
 int main()
 {
+    if (!testErasedRangesSurviveContentSnapshotProjection())
+    {
+        std::fputs("FAIL: erased ranges content snapshot projection\n", stderr);
+        return 1;
+    }
+
+    if (!testErasedRangesSurviveF0CurveRebuild())
+    {
+        std::fputs("FAIL: erased ranges F0 curve rebuild\n", stderr);
+        return 1;
+    }
+
     if (!testCommonFieldsRoundTrip())
     {
         std::fputs("FAIL: ContentState snapshot round-trip\n", stderr);

@@ -58,7 +58,8 @@ public:
         std::vector<Note> notes,
         std::vector<PitchCorrectionSegment> segments,
         ContentEditRangeFrames affectedRange,
-        std::vector<float> originalF0InRange) = 0;
+        std::vector<float> originalF0InRange,
+        std::optional<std::vector<F0FrameRange>> erasedRanges = std::nullopt) = 0;
 
     virtual bool setTimeGrid(ContentKey key,
                              std::shared_ptr<const TimeGridSnapshot> grid) = 0;

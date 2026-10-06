@@ -25,10 +25,13 @@ public:
                         std::vector<PitchCorrectionSegment> afterSegments,
                         ContentEditRangeFrames affectedRange,
                         std::vector<float> beforeOriginalF0InRange = {},
-                        std::vector<float> afterOriginalF0InRange = {});
+                        std::vector<float> afterOriginalF0InRange = {},
+                        std::vector<F0FrameRange> beforeErasedRanges = {},
+                        std::vector<F0FrameRange> afterErasedRanges = {});
 
     void undo() override;
     void redo() override;
+    void setErasedRangePatch() noexcept { hasErasedRangePatch_ = true; }
     juce::String getDescription() const override { return description_; }
 
 private:
@@ -38,6 +41,8 @@ private:
     std::vector<Note> beforeNotes_, afterNotes_;
     std::vector<PitchCorrectionSegment> beforeSegments_, afterSegments_;
     std::vector<float> beforeOriginalF0_, afterOriginalF0_;
+    std::vector<F0FrameRange> beforeErasedRanges_, afterErasedRanges_;
+    bool hasErasedRangePatch_ = false;
     ContentEditRangeFrames affectedRange_;
 };
 

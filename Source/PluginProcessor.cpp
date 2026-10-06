@@ -348,6 +348,16 @@ std::shared_ptr<PitchCurve> slicePitchCurveToFrameRange(
 
     slicedCurve->setOriginalF0(std::vector<float>(originalF0.begin() + startFrame, originalF0.begin() + endFrameExclusive));
 
+    std::vector<F0FrameRange> slicedErasedRanges;
+    for (const auto& range : snapshot.getErasedRanges()) {
+        const int overlapStart = std::max(range.startFrame, startFrame);
+        const int overlapEnd = std::min(range.endFrameExclusive, endFrameExclusive);
+        if (overlapStart < overlapEnd)
+            slicedErasedRanges.push_back({overlapStart - startFrame, overlapEnd - startFrame});
+    }
+    if (!slicedErasedRanges.empty())
+        slicedCurve->replaceErasedRangesInRange(0, endFrameExclusive - startFrame, slicedErasedRanges);
+
     const auto& originalEnergy = snapshot.getOriginalEnergy();
     if (originalEnergy.size() >= static_cast<size_t>(endFrameExclusive)) {
         slicedCurve->setOriginalEnergy(std::vector<float>(originalEnergy.begin() + startFrame, originalEnergy.begin() + endFrameExclusive));
@@ -470,6 +480,20 @@ std::shared_ptr<PitchCurve> mergePitchCurves(
     mergedCurve->setSampleRate(leadingSnapshot.getSampleRate());
     mergedCurve->setOriginalF0(mergedOriginalF0);
     mergedCurve->setOriginalEnergy(mergedOriginalEnergy);
+    if (!leadingSnapshot.getErasedRanges().empty())
+        mergedCurve->replaceErasedRangesInRange(
+            0, leadingFrameCount, leadingSnapshot.getErasedRanges());
+    if (!trailingSnapshot.getErasedRanges().empty()) {
+        std::vector<F0FrameRange> trailingRanges = trailingSnapshot.getErasedRanges();
+        for (auto& range : trailingRanges) {
+            range.startFrame += leadingFrameCount;
+            range.endFrameExclusive += leadingFrameCount;
+        }
+        mergedCurve->replaceErasedRangesInRange(
+            leadingFrameCount,
+            leadingFrameCount + static_cast<int>(trailingOriginalF0.size()),
+            trailingRanges);
+    }
     mergedCurve->replaceCorrectionSegments(mergedSegments);
     return mergedCurve;
 }
@@ -943,11 +967,12 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             std::vector<Note> notes,
             std::vector<PitchCorrectionSegment> segments,
             ContentEditRangeFrames affectedRange,
-            std::vector<float> originalF0InRange) override
+            std::vector<float> originalF0InRange,
+            std::optional<std::vector<F0FrameRange>> erasedRanges) override
         {
             return proc_.commitContentNotesAndSegmentsWithOriginalF0(
                 key, std::move(notes), std::move(segments), affectedRange,
-                std::move(originalF0InRange));
+                std::move(originalF0InRange), std::move(erasedRanges));
         }
 
         bool setTimeGrid(ContentKey key,
@@ -4040,6 +4065,15 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 pitchCurve->setOriginalEnergy(result.energy);
             }
 
+            // Re-extraction replaces the curve object, but must not turn the
+            // user's erased frames back into ordinary F0 gaps.
+            if (currentSnap->pitchCurve != nullptr
+                && !currentSnap->pitchCurve->getErasedRanges().empty()) {
+                pitchCurve->replaceErasedRangesInRange(
+                    0, static_cast<int>(result.f0.size()),
+                    currentSnap->pitchCurve->getErasedRanges());
+            }
+
             if (capturedRequest.preserveCorrectionsOutsideChangedRange) {
                 auto previousSnap = processor->getContentSnapshot(capturedRequest.contentKey);
                 if (previousSnap && previousSnap->pitchCurve != nullptr) {
@@ -4755,7 +4789,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
                                                              ContentEditRangeFrames affectedRange)
 {
     return commitContentNotesAndSegmentsInternal(
-        key, std::move(notesInRange), std::move(segments), affectedRange, {});
+        key, std::move(notesInRange), std::move(segments), affectedRange, {}, std::nullopt);
 }
 
 ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsWithOriginalF0(
@@ -4763,10 +4797,12 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsWithO
     std::vector<Note> notesInRange,
     std::vector<PitchCorrectionSegment> segments,
     ContentEditRangeFrames affectedRange,
-    std::vector<float> originalF0InRange)
+    std::vector<float> originalF0InRange,
+    std::optional<std::vector<F0FrameRange>> erasedRanges)
 {
     return commitContentNotesAndSegmentsInternal(
-        key, std::move(notesInRange), std::move(segments), affectedRange, std::move(originalF0InRange));
+        key, std::move(notesInRange), std::move(segments), affectedRange,
+        std::move(originalF0InRange), std::move(erasedRanges));
 }
 
 ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInternal(
@@ -4774,7 +4810,8 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInter
     std::vector<Note> notesInRange,
     std::vector<PitchCorrectionSegment> segments,
     ContentEditRangeFrames affectedRange,
-    std::vector<float> originalF0InRange)
+    std::vector<float> originalF0InRange,
+    std::optional<std::vector<F0FrameRange>> erasedRanges)
 {
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return {};
@@ -4803,6 +4840,8 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInter
     auto newCurve = PitchCurve::fromSnapshot(snap->pitchCurve);
     if (!originalF0InRange.empty())
         newCurve->setOriginalF0Range(static_cast<size_t>(affectedRange.startFrame), originalF0InRange);
+    if (erasedRanges)
+        newCurve->replaceErasedRangesInRange(affectedRange.startFrame, affectedRange.endFrameExclusive, *erasedRanges);
     newCurve->replaceCorrectionSegments(mergedSegments);
     if (!newCurve) return {};
 

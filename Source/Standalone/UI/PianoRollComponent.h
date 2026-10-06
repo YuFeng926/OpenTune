@@ -497,7 +497,8 @@ private:
         const std::vector<Note>& notes,
         const std::vector<PitchCorrectionSegment>& segments,
         F0FrameRange affectedRange,
-        std::vector<float> originalF0InRange);
+        std::vector<float> originalF0InRange,
+        std::optional<std::vector<F0FrameRange>> erasedRanges = std::nullopt);
     ContentCommitSnapshot commitEditedContentNotesAndSegments(const EditableContentSnapshot& snapshot,
                                              const std::vector<Note>& notes,
                                              const std::vector<PitchCorrectionSegment>& segments,

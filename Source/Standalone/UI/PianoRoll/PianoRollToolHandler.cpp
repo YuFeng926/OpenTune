@@ -1490,12 +1490,25 @@ void PianoRollToolHandler::handleEraserUp()
     for (int frame = startFrame; frame < endFrameExclusive; ++frame)
         afterOriginalF0[static_cast<size_t>(frame - commitStartFrame)] = 0.0f;
 
+    // The commit range may have expanded to contain whole erased notes.  The
+    // range patch replaces erased metadata inside that range, so pass the
+    // complete old set in the expanded range together with this brush stroke.
+    std::vector<F0FrameRange> erasedRanges;
+    for (const auto& range : contentSnapshot->pitchCurve->getErasedRanges()) {
+        const int overlapStart = std::max(range.startFrame, commitStartFrame);
+        const int overlapEnd = std::min(range.endFrameExclusive, commitEndFrameExclusive);
+        if (overlapStart < overlapEnd)
+            erasedRanges.push_back({overlapStart, overlapEnd});
+    }
+    erasedRanges.push_back({startFrame, endFrameExclusive});
+
     ctx_.setUndoDescription(juce::String::fromUTF8(u8"橡皮擦"));
     const auto committedSnapshot = ctx_.commitNotesAndSegmentsWithOriginalF0(
         afterNotes,
         afterSegments,
         F0FrameRange{commitStartFrame, commitEndFrameExclusive},
-        afterOriginalF0);
+        afterOriginalF0,
+        std::move(erasedRanges));
     if (committedSnapshot != nullptr) {
         ctx_.getState().noteSelection.clear();
         if (ctx_.clearLineAnchorSegmentSelection)
