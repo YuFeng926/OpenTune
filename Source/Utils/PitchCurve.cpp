@@ -18,6 +18,52 @@ void insertSegmentSorted(std::vector<PitchCorrectionSegment>& segments, PitchCor
     segments.insert(insertPos, std::move(seg));
 }
 
+void insertVoicedSegmentPieces(std::vector<PitchCorrectionSegment>& segments,
+                               const PitchCorrectionSegment& segment,
+                               const std::vector<float>& originalF0)
+{
+    int pieceStart = -1;
+    auto flush = [&](int endFrame) {
+        if (pieceStart < 0 || endFrame <= pieceStart) {
+            pieceStart = -1;
+            return;
+        }
+
+        PitchCorrectionSegment piece = segment;
+        piece.startFrame = pieceStart;
+        piece.endFrame = endFrame;
+        const int dataOffset = pieceStart - segment.startFrame;
+        const int length = endFrame - pieceStart;
+        piece.f0Data.assign(segment.f0Data.begin() + dataOffset,
+                            segment.f0Data.begin() + dataOffset + length);
+        if (static_cast<int>(segment.baseF0Data.size()) >= dataOffset + length) {
+            piece.baseF0Data.assign(segment.baseF0Data.begin() + dataOffset,
+                                    segment.baseF0Data.begin() + dataOffset + length);
+        } else {
+            piece.baseF0Data.clear();
+        }
+        insertSegmentSorted(segments, std::move(piece));
+        pieceStart = -1;
+    };
+
+    for (int frame = segment.startFrame; frame < segment.endFrame; ++frame) {
+        const int offset = frame - segment.startFrame;
+        const bool voiced = frame >= 0
+            && frame < static_cast<int>(originalF0.size())
+            && originalF0[static_cast<size_t>(frame)] > 0.0f
+            && offset >= 0
+            && offset < static_cast<int>(segment.f0Data.size())
+            && segment.f0Data[static_cast<size_t>(offset)] > 0.0f;
+        if (voiced) {
+            if (pieceStart < 0)
+                pieceStart = frame;
+        } else {
+            flush(frame);
+        }
+    }
+    flush(segment.endFrame);
+}
+
 void clearSegmentsInRangePreserveOutside(std::vector<PitchCorrectionSegment>& segments, int startFrame, int endFrame)
 {
     if (startFrame >= endFrame) {
@@ -623,7 +669,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::applyCorrectionToRange(
     newSeg.parameterSnapshot.vibratoRate = vibratoRate;
     newSeg.parameterSnapshot.pitchDriftScale = pitchDriftScale;
 
-    insertSegmentSorted(correctionSegments, std::move(newSeg));
+    insertVoicedSegmentPieces(correctionSegments, newSeg, originalF0);
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
@@ -655,7 +701,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::setManualCorrectionRange(
     newSeg.baseF0Data = f0Data;
     newSeg.parameterSnapshot = snapshot;
     clearSegmentsInRangePreserveOutside(correctionSegments, startFrame, endFrame);
-    insertSegmentSorted(correctionSegments, std::move(newSeg));
+    insertVoicedSegmentPieces(correctionSegments, newSeg, oldSnapshot->getOriginalF0());
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(

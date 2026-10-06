@@ -261,6 +261,9 @@ public:
     // 不 enqueue render、不失效 RenderCache。
     void republishPlaybackSourceForModification(ContentKey key);
     bool applyPitchCurveToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
+    bool applyNotesAndPitchCurveToModification(const ContentKey& key,
+                                               std::vector<Note> notes,
+                                               std::shared_ptr<PitchCurve> curve);
     bool applyOriginalF0ToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
     bool applyTimeGridToModification(const ContentKey& key, std::shared_ptr<const TimeGridSnapshot> grid);
     bool applyPitchShiftStateToModification(const ContentKey& key, const PitchShiftEditState& state);

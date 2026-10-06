@@ -214,6 +214,7 @@ void InteractionState::resetTransient() noexcept
     drawing.isDrawingNote = false;
     drawing.isPlacingAnchors = false;
     drawing.pendingAnchors.clear();
+    eraser.clear();
     timeTool.clear();
     scissorsPreviewTime = -1.0;
     isVolumeDragging = false;

@@ -929,7 +929,7 @@ void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::Eq)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::Eraser)) {
         return;
     }
 

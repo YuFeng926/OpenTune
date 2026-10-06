@@ -938,6 +938,18 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             return proc_.commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
         }
 
+        ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
+            ContentKey key,
+            std::vector<Note> notes,
+            std::vector<PitchCorrectionSegment> segments,
+            ContentEditRangeFrames affectedRange,
+            std::vector<float> originalF0InRange) override
+        {
+            return proc_.commitContentNotesAndSegmentsWithOriginalF0(
+                key, std::move(notes), std::move(segments), affectedRange,
+                std::move(originalF0InRange));
+        }
+
         bool setTimeGrid(ContentKey key,
                           std::shared_ptr<const TimeGridSnapshot> grid) override
         {
@@ -4738,9 +4750,31 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
 }
 
 ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
-                                                            std::vector<Note> notesInRange,
-                                                            std::vector<PitchCorrectionSegment> segments,
-                                                            ContentEditRangeFrames affectedRange)
+                                                             std::vector<Note> notesInRange,
+                                                             std::vector<PitchCorrectionSegment> segments,
+                                                             ContentEditRangeFrames affectedRange)
+{
+    return commitContentNotesAndSegmentsInternal(
+        key, std::move(notesInRange), std::move(segments), affectedRange, {});
+}
+
+ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsWithOriginalF0(
+    ContentKey key,
+    std::vector<Note> notesInRange,
+    std::vector<PitchCorrectionSegment> segments,
+    ContentEditRangeFrames affectedRange,
+    std::vector<float> originalF0InRange)
+{
+    return commitContentNotesAndSegmentsInternal(
+        key, std::move(notesInRange), std::move(segments), affectedRange, std::move(originalF0InRange));
+}
+
+ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInternal(
+    ContentKey key,
+    std::vector<Note> notesInRange,
+    std::vector<PitchCorrectionSegment> segments,
+    ContentEditRangeFrames affectedRange,
+    std::vector<float> originalF0InRange)
 {
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return {};
@@ -4767,6 +4801,8 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
         affectedRange.endFrameExclusive);
 
     auto newCurve = PitchCurve::fromSnapshot(snap->pitchCurve);
+    if (!originalF0InRange.empty())
+        newCurve->setOriginalF0Range(static_cast<size_t>(affectedRange.startFrame), originalF0InRange);
     newCurve->replaceCorrectionSegments(mergedSegments);
     if (!newCurve) return {};
 
@@ -4786,8 +4822,9 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return {};
-            if (!dc->applyNotesToModification(key, std::move(normalizedNotes))) return {};
-            if (newCurve) dc->applyPitchCurveToModification(key, std::move(newCurve));
+            if (!dc->applyNotesAndPitchCurveToModification(
+                    key, std::move(normalizedNotes), std::move(newCurve)))
+                return {};
             ok = true;
             break;
         }

@@ -723,6 +723,12 @@ public:
                                         std::vector<Note> notes,
                                         std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange);
+    ContentCommitSnapshot commitContentNotesAndSegmentsWithOriginalF0(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        ContentEditRangeFrames affectedRange,
+        std::vector<float> originalF0InRange);
     ContentCommitSnapshot commitContentNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch);
     // 一次替换整个 VolumeEnvelope，推进
     // outputGain/content revision，只走 republishPlaybackSource()（零 render enqueue）。
@@ -739,6 +745,12 @@ public:
         ContentKey key,
         const PitchShiftSettings& newSettings);
 private:
+    ContentCommitSnapshot commitContentNotesAndSegmentsInternal(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        ContentEditRangeFrames affectedRange,
+        std::vector<float> originalF0InRange);
     // 调式检测唯一入口（F0 提交成功链调用）：origin==Manual 的内容永不自动覆盖
     void updateContentKeyFromOriginalF0(ContentKey key);
     // AUTO 提交底层：合并/吸附后的音符 + 派生曲线一次性写回。

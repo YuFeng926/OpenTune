@@ -126,11 +126,22 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.commitNoteDraft = [this]() { return commitNoteDraft(); };
     toolCtx.clearNoteDraft = [this]() { clearNoteDraft(); };
     toolCtx.commitNotesAndSegments = [this](const std::vector<Note>& notes,
-                                            const std::vector<PitchCorrectionSegment>& segments,
-                                            F0FrameRange affectedRange) {
+                                             const std::vector<PitchCorrectionSegment>& segments,
+                                             F0FrameRange affectedRange) {
         const auto snap = readEditedSnapshot();
         if (snap == nullptr) return ContentCommitSnapshot{};
         return commitEditedContentNotesAndSegments(*snap, notes, segments, affectedRange);
+    };
+    toolCtx.commitNotesAndSegmentsWithOriginalF0 = [this](
+        const std::vector<Note>& notes,
+        const std::vector<PitchCorrectionSegment>& segments,
+        F0FrameRange affectedRange,
+        const std::vector<float>& originalF0InRange) {
+        const auto snap = readEditedSnapshot();
+        if (snap == nullptr) return ContentCommitSnapshot{};
+        return commitEditedContentNotesAndSegments(
+            *snap, notes, segments, affectedRange,
+            std::vector<float>(originalF0InRange));
     };
     // ── OpenDyne 契约回调（Pitch/Scissors/Gain 域） ──
     toolCtx.commitVolumeEnvelope = [this](AutomationLane before, AutomationLane after) -> ContentCommitSnapshot {
@@ -331,6 +342,7 @@ juce::Path makeToolIcon(ToolId id) {
         case ToolId::TimeTool:        return ToolbarIcons::getTimeToolIcon();
         case ToolId::Scissors:        return ToolbarIcons::getScissorsToolIcon();
         case ToolId::Eq:              return ToolbarIcons::getEqIcon();
+        case ToolId::Eraser:          return ToolbarIcons::getEraseIcon();
         default:                      return {};
     }
 }
@@ -356,6 +368,7 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             { { ToolId::Select,    "Select",   "F1",  []{ return makeToolIcon(ToolId::Select); } } },
             { { ToolId::Pitch,     "Pitch",    "F2",  []{ return makeToolIcon(ToolId::Pitch); } }, true },
             { { ToolId::HandDraw,  "Hand Draw","5",   []{ return ToolbarIcons::getHandDrawIcon(); } } },
+            { { ToolId::Eraser,    "Eraser",   "",    []{ return ToolbarIcons::getEraseIcon(); } } },
             { { ToolId::VolumeEnvelope, "Volume", "F4", []{ return makeToolIcon(ToolId::VolumeEnvelope); } } },
         };
         if (experimentalFeaturesEnabled_)
@@ -372,6 +385,7 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
             { { ToolId::DrawNote,   "Draw Note",   "2", []{ return ToolbarIcons::getDrawNoteIcon(); } } },
             { { ToolId::LineAnchor, "Line Anchor", "4", []{ return ToolbarIcons::getLineAnchorIcon(); } } },
             { { ToolId::HandDraw,   "Hand Draw",   "5", []{ return ToolbarIcons::getHandDrawIcon(); } } },
+            { { ToolId::Eraser,     "Eraser",       "",  []{ return ToolbarIcons::getEraseIcon(); } } },
         };
         // Time 与侧栏一致：两种模式均仅在 experimental 开启时可选
         if (experimentalFeaturesEnabled_)
@@ -1100,6 +1114,46 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     return committedSnap;
 }
 
+ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(
+    const EditableContentSnapshot& snapshot,
+    const std::vector<Note>& notes,
+    const std::vector<PitchCorrectionSegment>& segments,
+    F0FrameRange affectedRange,
+    std::vector<float> originalF0InRange)
+{
+    const auto committed = contentCommands_->commitNotesAndSegmentsWithOriginalF0(
+        editedContentKey_, notes, segments,
+        ContentEditRangeFrames{ affectedRange.startFrame, affectedRange.endFrameExclusive },
+        std::move(originalF0InRange));
+    if (committed == nullptr)
+        return {};
+
+    const auto beforeOriginalF0 = std::vector<float>(
+        snapshot.pitchCurve->getOriginalF0().begin() + affectedRange.startFrame,
+        snapshot.pitchCurve->getOriginalF0().begin() + affectedRange.endFrameExclusive);
+    const auto afterOriginalF0 = std::vector<float>(
+        committed->pitchCurve->getOriginalF0().begin() + affectedRange.startFrame,
+        committed->pitchCurve->getOriginalF0().begin() + affectedRange.endFrameExclusive);
+    undoManager_.addAction(std::make_unique<PianoRollEditAction>(
+        contentCommands_, editedContentKey_, pendingUndoDescription_.isNotEmpty()
+            ? pendingUndoDescription_ : TRANS("编辑"),
+        snapshot.notes, committed->notes,
+        snapshot.pitchCurve->getCorrectionSegments(), committed->pitchCurve->getCorrectionSegments(),
+        ContentEditRangeFrames{ affectedRange.startFrame, affectedRange.endFrameExclusive },
+        beforeOriginalF0, afterOriginalF0));
+    pendingUndoDescription_ = {};
+
+    cachedNotes_ = committed->notes;
+    interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
+    if (committed->pitchCurve)
+        applyEditedContentCurve(committed->pitchCurve);
+    undoSnapshotCaptured_ = false;
+    lastKnownNotesRevision_ = committed->notesRevision;
+    lastKnownPitchRevision_ = committed->pitchRevision;
+    requestContentRedraw();
+    return committed;
+}
+
 std::vector<PitchCorrectionSegment> PianoRollComponent::getCurrentSegments() const
 {
     if (!currentCurve_) return {};
@@ -1529,6 +1583,8 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
         drawLineAnchorPreview(g);
     }
 
+    drawEraserPreview(g);
+
     // ── OpenDyne transient previews（Scissors 预览线、Mod/Drift tooltip、Volume dB tooltip） ──
     if (isOpenDyne()) {
         drawScissorsPreview(g);
@@ -1568,6 +1624,27 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     }
 
     drawSelectionBox(g, UIColors::currentThemeId());
+}
+
+void PianoRollComponent::drawEraserPreview(juce::Graphics& g)
+{
+    if (currentTool_ != ToolId::Eraser || !interactionState_.eraser.hasCursor)
+        return;
+
+    juce::Graphics::ScopedSaveState state(g);
+    const auto viewport = getTimelineViewportBounds().translated(0, -rulerHeight_);
+    g.reduceClipRegion(viewport);
+
+    const auto centre = interactionState_.eraser.cursorPosition;
+    constexpr float radius = 18.0f;
+    const float alpha = interactionState_.eraser.isErasing ? 0.58f : 0.36f;
+    juce::ColourGradient fill(
+        juce::Colours::white.withAlpha(alpha), centre.x, centre.y,
+        juce::Colours::white.withAlpha(0.02f), centre.x + radius, centre.y, true);
+    g.setGradientFill(fill);
+    g.fillEllipse(centre.x - radius, centre.y - radius, radius * 2.0f, radius * 2.0f);
+    g.setColour(juce::Colours::white.withAlpha(interactionState_.eraser.isErasing ? 0.85f : 0.55f));
+    g.drawEllipse(centre.x - radius, centre.y - radius, radius * 2.0f, radius * 2.0f, 1.2f);
 }
 
 // ============================================================================
@@ -3875,6 +3952,9 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             setMouseCursor(juce::MouseCursor::CrosshairCursor);
             break;
         case ToolId::HandDraw:
+            setMouseCursor(juce::MouseCursor::CrosshairCursor);
+            break;
+        case ToolId::Eraser:
             setMouseCursor(juce::MouseCursor::CrosshairCursor);
             break;
         case ToolId::AutoTune:

@@ -19,7 +19,8 @@ enum class ToolId : int
     // OpenDyne F2 sub-tools (Melodyne-style pitch editing)
     PitchModulation = 9,
     PitchDrift = 10,
-    Eq = 11
+    Eq = 11,
+    Eraser = 12
 };
 
 // Pitch Grid 全局开关：控制 Pitch 工具拖拽时的吸附行为（OpenDyne 模式）

@@ -375,6 +375,7 @@ constexpr const char* kTooltipSelect = "Selection Tool";
 constexpr const char* kTooltipDrawNote = "Draw Note";
 constexpr const char* kTooltipLineAnchor = "Line Anchor";
 constexpr const char* kTooltipHandDraw = "Hand Draw Pitch";
+constexpr const char* kTooltipEraser = "Eraser - Remove notes and pitch";
 constexpr const char* kTooltipTimeTool = "Time Tool";
 constexpr const char* kTooltipTrackPanel = "Track Panel";
 constexpr const char* kTooltipParameterPanel = "Parameter Panel";
@@ -601,6 +602,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTooltipDrawNote, "Draw Note", "绘制音符", "ノート描画", "Рисование нот", "Dibujar nota" },
         { Keys::kTooltipLineAnchor, "Line Anchor", "锚点工具", "ラインアンカー", "Линейный якорь", "Ancla de línea" },
         { Keys::kTooltipHandDraw, "Hand Draw Pitch", "手绘音高", "手描きピッチ", "Рисование тона", "Dibujar tono" },
+        { Keys::kTooltipEraser, "Eraser - Remove notes and pitch", "橡皮擦 - 擦除音符和音高", "消しゴム - ノートとピッチを消去", "Ластик - удалить ноты и тон", "Borrador - eliminar notas y tono" },
         { Keys::kTooltipTimeTool, "Time Tool - Drag handles to retime audio", "时间工具 - 拖动手柄重定时", "タイムツール - ハンドルで時間調整", "Инструмент времени - перетягивайте маркеры", "Herramienta de tiempo - Arrastra anclajes" },
         { Keys::kTooltipTrackPanel, "Track Panel", "轨道面板", "トラックパネル", "Панель дорожек", "Panel de pistas" },
         { Keys::kTooltipParameterPanel, "Parameter Panel", "参数面板", "パラメータパネル", "Панель параметров", "Panel de parámetros" },

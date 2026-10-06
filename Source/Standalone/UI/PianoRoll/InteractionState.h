@@ -125,6 +125,26 @@ struct DrawingState
     
 };
 
+struct EraserState
+{
+    bool isErasing = false;
+    bool hasCursor = false;
+    juce::Point<float> cursorPosition;
+    int startFrame = -1;
+    int endFrameExclusive = -1;
+    std::vector<int> noteIndices;
+
+    void clear()
+    {
+        isErasing = false;
+        hasCursor = false;
+        cursorPosition = {};
+        startFrame = -1;
+        endFrameExclusive = -1;
+        noteIndices.clear();
+    }
+};
+
 struct EmptySpaceMouseIntent
 {
     bool active = false;
@@ -237,6 +257,7 @@ public:
     NoteDragState noteDrag;
     NoteResizeState noteResize;
     DrawingState drawing;
+    EraserState eraser;
     TimeToolState timeTool;          // ⚡️ §8.3 — Time tool
 
     // OpenDyne（NotesPrimary）瞬态：

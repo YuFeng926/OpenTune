@@ -90,6 +90,19 @@ static void testResolveParameterTarget()
           "no selection resolves to None");
 }
 
+static void testUnvoicedOriginalF0FramesCannotReceiveCorrection()
+{
+    using namespace OpenTune::AudioEditingScheme;
+    const std::vector<float> originalF0{440.0f, 0.0f, 330.0f};
+
+    check(canEditFrame(Scheme::CorrectedF0Primary, originalF0, 0),
+          "voiced CorrectedF0Primary frame remains editable");
+    check(!canEditFrame(Scheme::CorrectedF0Primary, originalF0, 1),
+          "erased CorrectedF0Primary frame is not editable");
+    check(!canEditFrame(Scheme::NotesPrimary, originalF0, 1),
+          "erased NotesPrimary frame is not editable");
+}
+
 int main()
 {
     std::printf("PitchParameterContractTests:\n");
@@ -97,6 +110,7 @@ int main()
     testNoteCopyPreservesParams();
     testMixRetune();
     testResolveParameterTarget();
+    testUnvoicedOriginalF0FramesCannotReceiveCorrection();
     if (failures == 0) { std::printf("All tests passed.\n"); return 0; }
     std::fprintf(stderr, "%d test(s) FAILED.\n", failures);
     return 1;

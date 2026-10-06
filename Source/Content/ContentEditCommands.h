@@ -53,6 +53,13 @@ public:
         std::vector<PitchCorrectionSegment> segments,
         ContentEditRangeFrames affectedRange) = 0;
 
+    virtual ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        ContentEditRangeFrames affectedRange,
+        std::vector<float> originalF0InRange) = 0;
+
     virtual bool setTimeGrid(ContentKey key,
                              std::shared_ptr<const TimeGridSnapshot> grid) = 0;
 

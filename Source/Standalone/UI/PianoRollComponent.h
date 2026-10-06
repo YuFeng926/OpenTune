@@ -435,6 +435,7 @@ private:
     void drawPlayheadNoteHighlight(juce::Graphics& g);
     void drawTransientOverlay(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
+    void drawEraserPreview(juce::Graphics& g);
     void drawLineAnchorPreview(juce::Graphics& g);
     void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
     void drawTimeGridHandles(juce::Graphics& g);
@@ -491,6 +492,12 @@ private:
     void beginNoteDraft();
     bool commitNoteDraft();
     void clearNoteDraft();
+    ContentCommitSnapshot commitEditedContentNotesAndSegments(
+        const EditableContentSnapshot& snapshot,
+        const std::vector<Note>& notes,
+        const std::vector<PitchCorrectionSegment>& segments,
+        F0FrameRange affectedRange,
+        std::vector<float> originalF0InRange);
     ContentCommitSnapshot commitEditedContentNotesAndSegments(const EditableContentSnapshot& snapshot,
                                              const std::vector<Note>& notes,
                                              const std::vector<PitchCorrectionSegment>& segments,

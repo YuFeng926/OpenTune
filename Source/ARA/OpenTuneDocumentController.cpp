@@ -2769,6 +2769,29 @@ bool OpenTuneDocumentController::applyPitchCurveToModification(const ContentKey&
     return true;
 }
 
+bool OpenTuneDocumentController::applyNotesAndPitchCurveToModification(
+    const ContentKey& key,
+    std::vector<Note> notes,
+    std::shared_ptr<PitchCurve> curve)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr || !mod->hasContentState() || curve == nullptr)
+        return false;
+
+    mod->applyNotes(std::move(notes));
+    mod->applyPitchCurve(std::move(curve));
+
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(
+            juce::ARAContentUpdateScopes::samplesAreAffected()
+                + juce::ARAContentUpdateScopes::notesAreAffected()
+                + juce::ARAContentUpdateScopes::tuningIsAffected(),
+            true);
+
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
 bool OpenTuneDocumentController::applyOriginalF0ToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve)
 {
     auto* mod = findAudioModificationByContentKey(key);

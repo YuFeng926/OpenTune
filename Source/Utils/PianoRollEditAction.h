@@ -11,10 +11,9 @@
 
 namespace OpenTune {
 
-// Range-scoped undo action: stores only the notes and segments within
-// the affected frame range, not full vectors.  On undo/redo,
-// commitNotesAndSegments() merges the range-scoped patch with the
-// current stored data outside the range.
+// Range-scoped undo action: stores only the notes, correction segments and
+// optional OriginalF0 patch for the affected range. On undo/redo, the content
+// command merges the patch with the current data outside that range.
 class PianoRollEditAction : public UndoAction {
 public:
     PianoRollEditAction(std::shared_ptr<ContentEditCommands> commands,
@@ -24,7 +23,9 @@ public:
                         std::vector<Note> afterNotesInRange,
                         std::vector<PitchCorrectionSegment> beforeSegments,
                         std::vector<PitchCorrectionSegment> afterSegments,
-                        ContentEditRangeFrames affectedRange);
+                        ContentEditRangeFrames affectedRange,
+                        std::vector<float> beforeOriginalF0InRange = {},
+                        std::vector<float> afterOriginalF0InRange = {});
 
     void undo() override;
     void redo() override;
@@ -36,6 +37,7 @@ private:
     juce::String description_;
     std::vector<Note> beforeNotes_, afterNotes_;
     std::vector<PitchCorrectionSegment> beforeSegments_, afterSegments_;
+    std::vector<float> beforeOriginalF0_, afterOriginalF0_;
     ContentEditRangeFrames affectedRange_;
 };
 

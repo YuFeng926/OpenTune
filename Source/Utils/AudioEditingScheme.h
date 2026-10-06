@@ -100,11 +100,14 @@ inline FrameRange clampFrameRange(FrameRange range, int totalFrameCount) noexcep
 
 inline bool canEditFrame(Scheme scheme, const std::vector<float>& originalF0, int frameIndex) noexcept
 {
+    static_cast<void>(scheme);
     if (frameIndex < 0 || frameIndex >= static_cast<int>(originalF0.size())) {
         return false;
     }
 
-    return !usesNotesPrimaryScheme(scheme) || isEditableVoicedFrame(originalF0[static_cast<std::size_t>(frameIndex)]);
+    // A frame without extracted OriginalF0 is UV in both editing schemes. It
+    // must not receive a new CorrectedF0 segment after an erase operation.
+    return isEditableVoicedFrame(originalF0[static_cast<std::size_t>(frameIndex)]);
 }
 
 inline FrameRange trimFrameRangeToEditableBounds(Scheme scheme,

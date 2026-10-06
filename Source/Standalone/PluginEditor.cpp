@@ -1980,7 +1980,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::Eq)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::Eraser)) {
         return;
     }
 

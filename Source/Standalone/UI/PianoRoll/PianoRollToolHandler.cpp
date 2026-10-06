@@ -382,6 +382,12 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
         return;
     }
 
+    if (currentTool_ == ToolId::Eraser) {
+        updateEraserCursor(e);
+        ctx_.setMouseCursor(juce::MouseCursor::CrosshairCursor);
+        return;
+    }
+
     if (currentTool_ == ToolId::AutoTune) {
         ctx_.setMouseCursor(juce::MouseCursor::PointingHandCursor);
         return;
@@ -461,6 +467,9 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
             break;
         case ToolId::HandDraw:
             ctx_.getState().handDrawPendingDrag = true;
+            break;
+        case ToolId::Eraser:
+            handleEraserTool(e);
             break;
         case ToolId::LineAnchor:
             handleLineAnchorMouseDown(e);
@@ -552,6 +561,9 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
             } else if (ctx_.getState().drawing.isDrawingF0) {
                 handleDrawCurveTool(e);
             }
+            break;
+        case ToolId::Eraser:
+            handleEraserTool(e);
             break;
         case ToolId::LineAnchor:
             handleLineAnchorMouseDrag(e);
@@ -654,6 +666,9 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
             break;
         case ToolId::HandDraw:
             handleDrawCurveUp(e);
+            break;
+        case ToolId::Eraser:
+            handleEraserUp();
             break;
         case ToolId::DrawNote:
             // OpenDyne（NotesPrimary）：DrawNote 新建音符路径不进入。
@@ -818,6 +833,10 @@ bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
     }
 
     if (currentTool_ == ToolId::LineAnchor) {
+        return false;
+    }
+
+    if (currentTool_ == ToolId::Eraser) {
         return false;
     }
 
@@ -1291,6 +1310,202 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
     lastDrawF0_ = targetF0;
     if (ctx_.invalidateInteractionPreview)
         ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
+}
+
+namespace {
+
+bool eraserTouchesRectangle(const juce::Point<float>& point,
+                            const juce::Rectangle<float>& rectangle,
+                            float radius) noexcept
+{
+    const float closestX = juce::jlimit(rectangle.getX(), rectangle.getRight(), point.x);
+    const float closestY = juce::jlimit(rectangle.getY(), rectangle.getBottom(), point.y);
+    const float dx = point.x - closestX;
+    const float dy = point.y - closestY;
+    return dx * dx + dy * dy <= radius * radius;
+}
+
+}
+
+void PianoRollToolHandler::updateEraserCursor(const juce::MouseEvent& e)
+{
+    auto& eraser = ctx_.getState().eraser;
+    eraser.cursorPosition = { static_cast<float>(e.x),
+                               static_cast<float>(e.y - ctx_.contentOriginY) };
+    eraser.hasCursor = e.x >= ctx_.getPianoKeyWidth() && e.y >= ctx_.contentOriginY;
+    if (ctx_.invalidateSelectionFeedback)
+        ctx_.invalidateSelectionFeedback();
+}
+
+void PianoRollToolHandler::handleEraserTool(const juce::MouseEvent& e)
+{
+    auto& eraser = ctx_.getState().eraser;
+    if (!eraser.isErasing) {
+        eraser.clear();
+        eraser.isErasing = true;
+    }
+
+    updateEraserCursor(e);
+    if (!eraser.hasCursor)
+        return;
+
+    const auto f0tl = ctx_.getF0Timeline();
+    if (f0tl.isEmpty())
+        return;
+
+    const auto leftSourceTime = pixelXToSourceTime(
+        e.x - static_cast<int>(std::ceil(kEraserBrushRadiusPx)));
+    const auto rightSourceTime = pixelXToSourceTime(
+        e.x + static_cast<int>(std::ceil(kEraserBrushRadiusPx)));
+    if (!leftSourceTime || !rightSourceTime)
+        return;
+
+    const auto editRange = sourceEditRange();
+    const double startTime = juce::jlimit(editRange.startSeconds,
+                                          editRange.endSeconds,
+                                          std::min(*leftSourceTime, *rightSourceTime));
+    const double endTime = juce::jlimit(editRange.startSeconds,
+                                        editRange.endSeconds,
+                                        std::max(*leftSourceTime, *rightSourceTime));
+    const auto brushRange = f0tl.nonEmptyRangeForTimes(startTime, endTime);
+    if (!brushRange.isEmpty()) {
+        if (eraser.startFrame < 0) {
+            eraser.startFrame = brushRange.startFrame;
+            eraser.endFrameExclusive = brushRange.endFrameExclusive;
+        } else {
+            eraser.startFrame = std::min(eraser.startFrame, brushRange.startFrame);
+            eraser.endFrameExclusive = std::max(eraser.endFrameExclusive,
+                                                 brushRange.endFrameExclusive);
+        }
+    }
+
+    const auto& notes = ctx_.getCommittedNotes();
+    const auto mapper = ctx_.getViewMapper();
+    const auto point = eraser.cursorPosition;
+    for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
+        if (std::find(eraser.noteIndices.begin(), eraser.noteIndices.end(), noteIndex)
+            != eraser.noteIndices.end()) {
+            continue;
+        }
+
+        const auto& note = notes[static_cast<size_t>(noteIndex)];
+        const float adjustedPitch = note.getAdjustedPitch();
+        if (adjustedPitch <= 0.0f)
+            continue;
+
+        const int x1 = sourceTimeToScreenX(note.startTime);
+        const int x2 = sourceTimeToScreenX(note.endTime);
+        const float noteHeight = std::max(1.0f, mapper.pixelsPerSemitone);
+        const float noteY = mapper.freqToY(adjustedPitch) - noteHeight * 0.5f;
+        const juce::Rectangle<float> noteBounds(
+            static_cast<float>(std::min(x1, x2)), noteY,
+            static_cast<float>(std::max(1, std::abs(x2 - x1))), noteHeight);
+        if (!eraserTouchesRectangle(point, noteBounds, kEraserBrushRadiusPx))
+            continue;
+
+        eraser.noteIndices.push_back(noteIndex);
+    }
+}
+
+void PianoRollToolHandler::handleEraserUp()
+{
+    auto& eraser = ctx_.getState().eraser;
+    eraser.isErasing = false;
+
+    const auto clearFeedbackState = [&]() {
+        eraser.startFrame = -1;
+        eraser.endFrameExclusive = -1;
+        eraser.noteIndices.clear();
+        if (ctx_.invalidateSelectionFeedback)
+            ctx_.invalidateSelectionFeedback();
+    };
+
+    if (eraser.startFrame < 0 || eraser.endFrameExclusive <= eraser.startFrame) {
+        clearFeedbackState();
+        return;
+    }
+
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr) {
+        clearFeedbackState();
+        return;
+    }
+
+    const auto& originalF0 = contentSnapshot->pitchCurve->getOriginalF0();
+    const int startFrame = std::max(0, eraser.startFrame);
+    const int endFrameExclusive = std::min(static_cast<int>(originalF0.size()),
+                                           eraser.endFrameExclusive);
+    if (endFrameExclusive <= startFrame || !ctx_.commitNotesAndSegmentsWithOriginalF0) {
+        clearFeedbackState();
+        return;
+    }
+
+    const auto beforeNotes = std::vector<Note>(ctx_.getCommittedNotes());
+    std::vector<bool> eraseNote(beforeNotes.size(), false);
+    for (const int noteIndex : eraser.noteIndices) {
+        if (noteIndex >= 0 && noteIndex < static_cast<int>(eraseNote.size()))
+            eraseNote[static_cast<size_t>(noteIndex)] = true;
+    }
+
+    std::vector<Note> afterNotes;
+    afterNotes.reserve(beforeNotes.size());
+    for (size_t i = 0; i < beforeNotes.size(); ++i) {
+        if (!eraseNote[i])
+            afterNotes.push_back(beforeNotes[i]);
+    }
+
+    int commitStartFrame = startFrame;
+    int commitEndFrameExclusive = endFrameExclusive;
+    const auto f0tl = ctx_.getF0Timeline();
+    // The content transaction may be wider than the brush only to remove a
+    // touched note as a whole. The OriginalF0 patch below still zeros only
+    // the brush time range.
+    for (const int noteIndex : eraser.noteIndices) {
+        if (noteIndex < 0 || noteIndex >= static_cast<int>(beforeNotes.size()))
+            continue;
+        const auto noteRange = f0tl.nonEmptyRangeForTimes(
+            beforeNotes[static_cast<size_t>(noteIndex)].startTime,
+            beforeNotes[static_cast<size_t>(noteIndex)].endTime);
+        if (!noteRange.isEmpty()) {
+            commitStartFrame = std::min(commitStartFrame, noteRange.startFrame);
+            commitEndFrameExclusive = std::max(commitEndFrameExclusive,
+                                               noteRange.endFrameExclusive);
+        }
+    }
+
+    auto scratchCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
+    scratchCurve->clearCorrectionRange(startFrame, endFrameExclusive);
+    const auto allSegments = scratchCurve->copyCorrectionSegments();
+    std::vector<PitchCorrectionSegment> afterSegments;
+    for (const auto& segment : allSegments) {
+        if (segment.startFrame < commitEndFrameExclusive
+            && segment.endFrame > commitStartFrame)
+            afterSegments.push_back(segment);
+    }
+
+    const std::vector<float> beforeOriginalF0(
+        originalF0.begin() + commitStartFrame,
+        originalF0.begin() + commitEndFrameExclusive);
+    std::vector<float> afterOriginalF0 = beforeOriginalF0;
+    for (int frame = startFrame; frame < endFrameExclusive; ++frame)
+        afterOriginalF0[static_cast<size_t>(frame - commitStartFrame)] = 0.0f;
+
+    ctx_.setUndoDescription(juce::String::fromUTF8(u8"橡皮擦"));
+    const auto committedSnapshot = ctx_.commitNotesAndSegmentsWithOriginalF0(
+        afterNotes,
+        afterSegments,
+        F0FrameRange{commitStartFrame, commitEndFrameExclusive},
+        afterOriginalF0);
+    if (committedSnapshot != nullptr) {
+        ctx_.getState().noteSelection.clear();
+        if (ctx_.clearLineAnchorSegmentSelection)
+            ctx_.clearLineAnchorSegmentSelection();
+        if (ctx_.invalidateLiveNotes)
+            ctx_.invalidateLiveNotes(beforeNotes, ctx_.getCommittedNotes());
+        ctx_.notifyPitchCurveEdited(commitStartFrame, commitEndFrameExclusive - 1);
+    }
+
+    clearFeedbackState();
 }
 
 void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)

@@ -109,6 +109,10 @@ public:
         // 第三参 affectedRange 来自 ToolHandler 编辑时计算的精确范围，用于
         // undo/redo 时只重渲染该范围（而不是 segments 列表反推的并集 = 全长）。
         std::function<ContentCommitSnapshot(const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)> commitNotesAndSegments;
+        std::function<ContentCommitSnapshot(const std::vector<Note>&,
+                                             const std::vector<PitchCorrectionSegment>&,
+                                             F0FrameRange,
+                                             const std::vector<float>&)> commitNotesAndSegmentsWithOriginalF0;
 
         // === OpenDyne（NotesPrimary）提交与配置回调 ===
         // Volume Envelope 提交：整体替换 AutomationLane，推进 outputGain/content
@@ -245,6 +249,9 @@ private:
     void handleLineAnchorMouseDown(const juce::MouseEvent& e);
     void handleLineAnchorMouseDrag(const juce::MouseEvent& e);
     void clearLineAnchorPreview();
+    void handleEraserTool(const juce::MouseEvent& e);
+    void handleEraserUp();
+    void updateEraserCursor(const juce::MouseEvent& e);
 
     // === OpenDyne（NotesPrimary）工具 ===
     // 唯一 pitch-drag 内部流程：OpenTune Select 与 OpenDyne Pitch 共用。
@@ -368,6 +375,7 @@ private:
     static constexpr int kScissorsDoubleClickMaxDistPx = 30;  // 30像素位置容差
     // 分离线容差（像素）：鼠标在分离线 ±10px 内 → 不显示竖虚线、单击无效、双击合并。
     static constexpr int kScissorsSeparatorTolerancePx = 10;
+    static constexpr float kEraserBrushRadiusPx = 18.0f;
 
     juce::Point<int> dragStartPos_;
     // EQ 工具：mouseDown 命中的 pending 主音符 index（纯点击 mouseUp 时消费一次）。

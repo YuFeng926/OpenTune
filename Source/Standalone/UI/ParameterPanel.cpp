@@ -529,6 +529,12 @@ ParameterPanel::ParameterPanel()
     handDrawToolButton_->onClick = [this] { onToolClicked(4); };
     contentComponent_.addAndMakeVisible(*handDrawToolButton_);
 
+    eraserToolButton_ = std::make_unique<ToolIconButton>(12, "Eraser", LOC(kTooltipEraser));
+    eraserToolButton_->setRadioGroupId(1001);
+    eraserToolButton_->setIcon(ToolbarIcons::getEraseIcon(), false);
+    eraserToolButton_->onClick = [this] { onToolClicked(12); };
+    contentComponent_.addAndMakeVisible(*eraserToolButton_);
+
     // Pitch Shift action button
     pitchShiftButton_ = std::make_unique<juce::TextButton>("Pitch Shift...");
     pitchShiftButton_->setTooltip(juce::String::fromUTF8(u8"整体移调"));
@@ -816,6 +822,7 @@ int ParameterPanel::layoutContent(int width)
             buttons.push_back(timeToolButton_.get());
         buttons.push_back(scissorsToolButton_.get());
         buttons.push_back(handDrawToolButton_.get());
+        buttons.push_back(eraserToolButton_.get());
         buttons.push_back(autoTuneToolButton_.get());
         buttons.push_back(eqToolButton_.get());
 
@@ -843,6 +850,7 @@ int ParameterPanel::layoutContent(int width)
         if (drawNoteToolButton_) buttons.push_back(drawNoteToolButton_.get());
         if (lineAnchorToolButton_) buttons.push_back(lineAnchorToolButton_.get());
         if (handDrawToolButton_) buttons.push_back(handDrawToolButton_.get());
+        if (eraserToolButton_) buttons.push_back(eraserToolButton_.get());
         if (experimentalFeaturesEnabled_ && timeToolButton_) buttons.push_back(timeToolButton_.get());
         if (autoTuneToolButton_) buttons.push_back(autoTuneToolButton_.get());
         if (eqToolButton_) buttons.push_back(eqToolButton_.get());
@@ -912,6 +920,8 @@ void ParameterPanel::refreshLocalizedText()
         lineAnchorToolButton_->setTooltip(LOC(kTooltipLineAnchor) + "\n4");
     if (handDrawToolButton_)
         handDrawToolButton_->setTooltip(LOC(kTooltipHandDraw) + "\n5");
+    if (eraserToolButton_)
+        eraserToolButton_->setTooltip(LOC(kTooltipEraser));
     if (timeToolButton_)
         timeToolButton_->setTooltip(LOC(kTooltipTimeTool) + "\nT");
     if (pitchToolButton_)
@@ -988,6 +998,7 @@ void ParameterPanel::setActiveTool(int toolId)
     if (drawNoteToolButton_) drawNoteToolButton_->setToggleState(toolId == 2, juce::dontSendNotification);
     if (lineAnchorToolButton_) lineAnchorToolButton_->setToggleState(toolId == 3, juce::dontSendNotification);
     if (handDrawToolButton_) handDrawToolButton_->setToggleState(toolId == 4, juce::dontSendNotification);
+    if (eraserToolButton_) eraserToolButton_->setToggleState(toolId == 12, juce::dontSendNotification);
     if (timeToolButton_) timeToolButton_->setToggleState(toolId == 5 && experimentalFeaturesEnabled_, juce::dontSendNotification);
     // OpenDyne 工具
     if (pitchToolButton_) pitchToolButton_->setToggleState(toolId == 6, juce::dontSendNotification);
@@ -1111,6 +1122,7 @@ juce::Component* ParameterPanel::getToolComponent(ToolId tool)
         case ToolId::DrawNote: return drawNoteToolButton_.get();
         case ToolId::LineAnchor: return lineAnchorToolButton_.get();
         case ToolId::HandDraw: return handDrawToolButton_.get();
+        case ToolId::Eraser: return eraserToolButton_.get();
         case ToolId::TimeTool: return timeToolButton_.get();
         case ToolId::Pitch: return pitchToolButton_.get();
         case ToolId::VolumeEnvelope: return volumeEnvelopeToolButton_.get();
