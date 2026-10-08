@@ -204,6 +204,7 @@ validate_bundle_linkage() {
     local ort_library
     local binary_archs
     local ort_archs
+    local ort_min_os
 
     if [ ! -f "${binary}" ]; then
         echo "❌ ${label} 二进制不存在: ${binary}"
@@ -259,6 +260,12 @@ validate_bundle_linkage() {
     if ! printf '%s\n' "${binary_archs}" | tr ' ' '\n' | grep -Fxq "${OSX_ARCH}" \
         || ! printf '%s\n' "${ort_archs}" | tr ' ' '\n' | grep -Fxq "${OSX_ARCH}"; then
         echo "❌ ${label} 架构不一致: binary=${binary_archs}, onnxruntime=${ort_archs}, expected=${OSX_ARCH}"
+        exit 1
+    fi
+
+    ort_min_os="$(otool -l "${ort_library}" | awk '$1 == "minos" { print $2 }' | sort -u)"
+    if [ -z "${ort_min_os}" ] || printf '%s\n' "${ort_min_os}" | grep -vFxq "${PKG_MIN_OS}"; then
+        echo "❌ ${label} ORT 最低系统版本不符合 macOS ${PKG_MIN_OS}: ${ort_min_os}"
         exit 1
     fi
 

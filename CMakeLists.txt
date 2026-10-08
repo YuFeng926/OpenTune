@@ -8,10 +8,11 @@ cmake_minimum_required(VERSION 3.22)
 # ==============================================================================
 # macOS architecture and deployment target must be set before project() so CMake
 # writes the same minimum version into the Mach-O load commands and Info.plist.
-# Both architectures consume the same pinned ORT 1.19.2 universal2 runtime
-# (CoreML EP), which keeps the macOS 12.0 compatibility floor:
-#   x86_64 -> ORT 1.19.2 universal2, macOS 12.0+
-#   arm64  -> ORT 1.19.2 universal2, macOS 12.0+
+# Both architectures consume the same project-built ORT 1.20.0 universal2
+# runtime (CoreML EP), compiled with a macOS 12.0 deployment target. This is
+# intentionally not the upstream prebuilt package: those packages currently
+# carry a newer minimum OS target. ORT 1.20.0 contains the CoreML
+# MLModelConfiguration initialization fix required by macOS 15+.
 # ==============================================================================
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     if(CMAKE_OSX_ARCHITECTURES STREQUAL "")
@@ -240,11 +241,11 @@ if(WIN32)
     endif()
 
 elseif(APPLE)
-    # ---- macOS: pinned ONNX Runtime 1.19.2 universal2 ----
-    # Both x86_64 and arm64 consume the same universal2 package. Keep this
-    # version pinned: newer upstream ORT macOS builds raise their deployment
-    # target above the macOS 12.0 floor this project targets.
-    set(OPENTUNE_ONNXRUNTIME_VERSION "1.19.2")
+    # ---- macOS: project-built ONNX Runtime 1.20.0 universal2 ----
+    # The runtime is built from the upstream v1.20.0 source with CoreML
+    # enabled and CMAKE_OSX_DEPLOYMENT_TARGET=12.0. The project-built package
+    # is required because the upstream prebuilt macOS package targets 13.3+.
+    set(OPENTUNE_ONNXRUNTIME_VERSION "1.20.0")
 
     set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
         "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION}")
@@ -278,8 +279,8 @@ if(APPLE)
     if(NOT EXISTS "${ONNXRUNTIME_DYLIB}")
         message(FATAL_ERROR
             "ONNX Runtime dylib not found at ${ONNXRUNTIME_DYLIB}. "
-            "Place the pinned onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION} "
-            "package under ThirdParty/ (see BUILDING.md) instead of a newer ORT release.")
+            "Place the project-built onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION} "
+            "package under ThirdParty/ (see scripts/build-onnxruntime-macos.sh).")
     endif()
 endif()
 

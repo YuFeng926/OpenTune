@@ -186,14 +186,17 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(
     bool gpuMode = false;
 
 #if defined(__APPLE__)
-    if (!forceCpu) {
+    const auto backendSelection = AccelerationDetector::getInstance().getSelection();
+    if (!forceCpu && backendSelection.backend == AccelerationDetector::AccelBackend::CoreML) {
         try {
         appendCoreMlExecutionProvider(sessionOptions);
         gpuMode = true;
-        AppLogger::info("[ModelFactory] F0 session: CoreML EP added (macOS, MLProgram)");
+        AppLogger::info("[ModelFactory] F0 session: CoreML EP added ("
+            + juce::String(coreMlProviderDescription()) + ", computeUnits=ALL)");
         } catch (const std::exception& e) {
             AppLogger::warn(juce::String("[ModelFactory] Failed to add CoreML EP for F0: ") + e.what());
             AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
+            AccelerationDetector::getInstance().overrideBackend(AccelerationDetector::AccelBackend::CPU);
         }
     }
 #endif
@@ -277,9 +280,27 @@ std::unique_ptr<Ort::Session> ModelFactory::loadF0Session(
         return std::make_unique<Ort::Session>(env, modelPath.c_str(), sessionOptions);
 #endif
 
-    } catch (const Ort::Exception& e) {
+    } catch (const std::exception& e) {
         AppLogger::warn("[ModelFactory] F0 session creation failed: " + juce::String(e.what()) + "; retrying CPU");
         outGpuMode = false;
+        AccelerationDetector::getInstance().overrideBackend(AccelerationDetector::AccelBackend::CPU);
+        try {
+            auto cpuOptions = createF0SessionOptions(type, outGpuMode, true);
+#ifdef _WIN32
+            juce::File modelFile(modelPath);
+            std::wstring wModelPath = modelFile.getFullPathName().toWideCharPointer();
+            return std::make_unique<Ort::Session>(env, wModelPath.c_str(), cpuOptions);
+#else
+            return std::make_unique<Ort::Session>(env, modelPath.c_str(), cpuOptions);
+#endif
+        } catch (...) {
+            AppLogger::error("[ModelFactory] Failed to load F0 session (CPU fallback): " + juce::String(modelPath));
+            return nullptr;
+        }
+    } catch (...) {
+        AppLogger::warn("[ModelFactory] F0 session creation failed with an unknown exception; retrying CPU");
+        outGpuMode = false;
+        AccelerationDetector::getInstance().overrideBackend(AccelerationDetector::AccelBackend::CPU);
         try {
             auto cpuOptions = createF0SessionOptions(type, outGpuMode, true);
 #ifdef _WIN32

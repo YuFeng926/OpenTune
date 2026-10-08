@@ -51,7 +51,7 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-### 4. ONNX Runtime（Windows v1.24.4 / macOS v1.19.2 universal2）
+### 4. ONNX Runtime（Windows v1.24.4 / macOS v1.20.0 universal2）
 
 本项目需要 **两个** ONNX Runtime 包（Windows）：CPU 版提供头文件，DML 版提供原始 `onnxruntime.dll`（内置 DirectML 支持）。构建系统生成专用导入库，并把运行时 DLL 输出为 `OpenTuneOnnxRuntime_1_24_4.dll`。
 
@@ -89,24 +89,28 @@ ThirdParty/
 
 **macOS（Intel / Apple Silicon 通用）**：
 
-macOS 两个架构共用同一个 **universal2** 包（x86_64 + arm64 双架构，CoreML EP 已内置），版本固定为 **1.19.2**。该运行库的 Mach-O 最低系统版本为 macOS 11.0，配合 `CMAKE_OSX_DEPLOYMENT_TARGET = 12.0` 可在 macOS 12 及以上运行。**请下载并解压到指定目录；不要替换为更新的 ORT 版本**（较新版本会抬高最低系统要求）：
+macOS 两个架构共用同一个 **universal2** 包（x86_64 + arm64 双架构，CoreML EP 已内置），版本固定为 **1.20.0**。项目不直接使用官方 macOS 预编译包，而是从 ORT v1.20.0 源码分别构建 arm64/x86_64，并以 `CMAKE_OSX_DEPLOYMENT_TARGET = 12.0` 合并为 universal2；这样保留 macOS 12 兼容性，同时包含 macOS 15 CoreML 配置初始化修复。
 
 ```bash
-cd ThirdParty
-curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-osx-universal2-1.19.2.tgz | tar xz
-cd ..
+./scripts/build-onnxruntime-macos.sh
+```
+
+首次构建需要下载 ORT 源码及子模块，耗时可能较长。若需清理该脚本创建的源码、构建和输出目录后重建：
+
+```bash
+./scripts/build-onnxruntime-macos.sh --clean
 ```
 
 解压后结构：
 ```
-ThirdParty/onnxruntime-osx-universal2-1.19.2/
+ThirdParty/onnxruntime-osx-universal2-1.20.0/
 ├── include/
 │   └── onnxruntime_cxx_api.h
 └── lib/
-    └── libonnxruntime.1.19.2.dylib
+    └── libonnxruntime.1.20.0.dylib
 ```
 
-> **CoreML 注册路径**：ORT 1.19.2 不认识字符串版 `AppendExecutionProvider("CoreML", ...)`（会抛 `Unknown provider name`）。项目通过 `Source/Inference/OnnxRuntimeProviderCompat.h` 先尝试新版 provider-options API，失败后回退到 flag 版 C API（`COREML_FLAG_CREATE_MLPROGRAM`）。升级 macOS ORT 版本时必须重新验证该文件，并确认日志中出现 `CoreML EP added`、CoreML 实际生效。
+> **CoreML 注册路径**：macOS 12 使用 `NeuralNetwork` 格式，macOS 13+ 使用 `MLProgram` 格式；两者都使用 `MLComputeUnits=ALL`。项目通过 `Source/Inference/OnnxRuntimeProviderCompat.h` 直接调用 ORT 的 CoreML flag API 注册 provider。日志中会明确显示 `NeuralNetwork/macOS 12` 或 `MLProgram/macOS 13+`。
 
 ### 5. DirectML & DirectX Agility SDK（仅 Windows）
 
@@ -164,7 +168,7 @@ OpenTune/
 │   ├── r8brain-free-src-master/          ← 重采样库
 │   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
 │   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
-│   ├── onnxruntime-osx-universal2-1.19.2/ ← ONNX Runtime (macOS，Intel + Apple Silicon 通用)
+│   ├── onnxruntime-osx-universal2-1.20.0/ ← ONNX Runtime (macOS，Intel + Apple Silicon 通用)
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
 │   └── microsoft.direct3d.d3d12.1.619.5/ ← D3D12 Agility SDK (Windows)
 ├── models/
@@ -267,7 +271,7 @@ cmake --build --preset macos-intel-ara-release
 | `DirectML header missing` | DirectML NuGet 包未解压 | 确认 `ThirdParty/microsoft.ai.directml.1.15.4/include/DirectML.h` 存在 |
 | `D3D12 header missing from Agility SDK` | D3D12 NuGet 包未解压 | 确认 `ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include/d3d12.h` 存在 |
 | `ONNX Runtime DirectML DLL missing` | DML 版运行时 DLL 缺失 | 确认 `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` 存在 |
-| `ONNX Runtime dylib not found` | macOS universal2 包未下载或版本不符 | 确认 `ThirdParty/onnxruntime-osx-universal2-1.19.2/lib/libonnxruntime.1.19.2.dylib` 存在，且未替换为更新的 ORT 版本 |
+| `ONNX Runtime dylib not found` | macOS universal2 包未构建或版本不符 | 执行 `./scripts/build-onnxruntime-macos.sh`，确认 `ThirdParty/onnxruntime-osx-universal2-1.20.0/lib/libonnxruntime.1.20.0.dylib` 存在 |
 | `ARA SDK not found` | ARA SDK 未克隆 | 执行步骤 2 的 git clone 命令 |
 | MSVC 链接错误 LNK2019 | MSVC 运行时不匹配 | 本项目使用静态 CRT (`/MT`)，确保依赖库一致 |
 | Ninja 构建失败 | Ninja 未安装或不在 PATH 中 | 确保 Ninja 已安装并在系统 PATH 中，或使用 Visual Studio Generator |

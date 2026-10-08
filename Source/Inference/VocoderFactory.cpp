@@ -235,21 +235,27 @@ VocoderCreationResult VocoderFactory::create(
     
     try {
         Ort::SessionOptions sessionOptions;
-        
+
         sessionOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
         sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
         VocoderBackend selectedBackend = VocoderBackend::CPU;
 
 #if defined(__APPLE__)
-        // macOS: attempt CoreML acceleration for vocoder via Neural Engine
-        try {
-            appendCoreMlExecutionProvider(sessionOptions);
-            selectedBackend = VocoderBackend::CoreML;
-            AppLogger::info("[VocoderFactory] Vocoder session: CoreML EP added (macOS, MLProgram)");
-        } catch (const std::exception& e) {
-            AppLogger::warn(juce::String("[VocoderFactory] Failed to add CoreML EP for vocoder: ") + e.what());
-            AppLogger::info("[VocoderFactory] Vocoder session: falling back to CPU");
+        // macOS 12 deliberately uses the NeuralNetwork Core ML format. Newer
+        // systems use MLProgram with all available compute units.
+        if (AccelerationDetector::getInstance().getSelection().backend
+                == AccelerationDetector::AccelBackend::CoreML) {
+            try {
+                appendCoreMlExecutionProvider(sessionOptions);
+                selectedBackend = VocoderBackend::CoreML;
+                AppLogger::info("[VocoderFactory] Vocoder session: CoreML EP added ("
+                    + juce::String(coreMlProviderDescription()) + ", computeUnits=ALL)");
+            } catch (const std::exception& e) {
+                AppLogger::warn(juce::String("[VocoderFactory] Failed to add CoreML EP for vocoder: ") + e.what());
+                AppLogger::info("[VocoderFactory] Vocoder session: falling back to CPU");
+                AccelerationDetector::getInstance().overrideBackend(AccelerationDetector::AccelBackend::CPU);
+            }
         }
 #endif
 
@@ -259,13 +265,33 @@ VocoderCreationResult VocoderFactory::create(
             AppLogger::info("[VocoderFactory] Creating CoreML vocoder...");
         }
 
+        auto createSession = [&env, &modelPath](Ort::SessionOptions& options) {
 #ifdef _WIN32
-        juce::String jucePath(modelPath);
-        auto wPath = jucePath.toWideCharPointer();
-        auto session = std::make_unique<Ort::Session>(env, wPath, sessionOptions);
+            juce::String jucePath(modelPath);
+            auto wPath = jucePath.toWideCharPointer();
+            return std::make_unique<Ort::Session>(env, wPath, options);
 #else
-        auto session = std::make_unique<Ort::Session>(env, modelPath.c_str(), sessionOptions);
+            return std::make_unique<Ort::Session>(env, modelPath.c_str(), options);
 #endif
+        };
+
+        std::unique_ptr<Ort::Session> session;
+        try {
+            session = createSession(sessionOptions);
+        } catch (const std::exception& e) {
+            if (selectedBackend != VocoderBackend::CoreML)
+                throw;
+
+            AppLogger::warn(juce::String("[VocoderFactory] CoreML session creation failed: ") + e.what());
+            AppLogger::info("[VocoderFactory] Retrying vocoder with CPU");
+            AccelerationDetector::getInstance().overrideBackend(AccelerationDetector::AccelBackend::CPU);
+
+            Ort::SessionOptions cpuOptions;
+            cpuOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+            cpuOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+            session = createSession(cpuOptions);
+            selectedBackend = VocoderBackend::CPU;
+        }
         
         auto vocoder = std::make_unique<PCNSFHifiGANVocoder>(std::move(session));
 
