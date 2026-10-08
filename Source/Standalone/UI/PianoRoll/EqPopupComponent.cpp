@@ -140,7 +140,7 @@ void EqPopupComponent::paintFloatingCard(juce::Graphics& g, int filterIndex) con
         {
             const float x = card.getX() + kCardPadding + static_cast<float>(i) * kCardColumnWidth;
             g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.6f));
-            g.setFont(juce::FontOptions(10.0f));
+            g.setFont(UIColors::getUIFontExact(10.0f));
             g.drawText(labels[i], juce::Rectangle<float>(x, labelY, kCardColumnWidth, kCardLabelHeight),
                        juce::Justification::centred, false);
         }
@@ -529,7 +529,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
             const float finalY = juce::jmin(tooltipY, maxY);
 
             g.setColour(EqGraphRenderer::hudBgColor().withAlpha(0.92f));
-            const auto font = juce::Font(juce::FontOptions(10.0f));
+            const auto font = UIColors::getUIFontExact(10.0f);
             const auto textW = juce::TextLayout::getStringWidth(font, tooltipText) + 8.0f;
             const float tooltipX = juce::jmax(2.0f, juce::jmin(btnRect.getX(),
                                                                 static_cast<float>(getWidth()) - textW - 2.0f));
@@ -568,7 +568,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
             const float finalY = juce::jmin(tooltipY, maxY);
 
             g.setColour(EqGraphRenderer::hudBgColor().withAlpha(0.92f));
-            const auto font = juce::Font(juce::FontOptions(10.0f));
+            const auto font = UIColors::getUIFontExact(10.0f);
             const auto textW = juce::TextLayout::getStringWidth(font, tooltipText) + 8.0f;
             const float tooltipX = juce::jmax(2.0f, juce::jmin(btnRect.getX(),
                                                                  static_cast<float>(getWidth()) - textW - 2.0f));
@@ -595,7 +595,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
         g.setColour(EqGraphRenderer::hudBgColor());
         g.fillRoundedRectangle(dialogX, dialogY, dialogW, dialogH, 4.0f);
         g.setColour(EqGraphRenderer::hudTextColor());
-        g.setFont(juce::FontOptions(11.0f));
+        g.setFont(UIColors::getUIFontExact(11.0f));
         g.drawText(juce::String::fromUTF8(u8"确认移除 EQ?"),
                    juce::Rectangle<float>(dialogX, dialogY + 6.0f, dialogW, 18.0f),
                    juce::Justification::centred, false);
@@ -613,7 +613,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
                        checkRect.getX() + 14.0f, checkRect.getY() + 4.0f, 1.5f);
         }
         g.setColour(EqGraphRenderer::axisLabelColor());
-        g.setFont(juce::FontOptions(9.0f));
+        g.setFont(UIColors::getUIFontExact(9.0f));
         g.drawText(juce::String::fromUTF8(u8"不再提示"), checkRect.translated(16.0f, 0.0f),
                    juce::Justification::centredLeft, false);
 
@@ -621,7 +621,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
         g.setColour(EqGraphRenderer::combinedCurveColor().withAlpha(0.6f));
         g.fillRoundedRectangle(okRect, 3.0f);
         g.setColour(juce::Colours::black);
-        g.setFont(juce::FontOptions(10.0f));
+        g.setFont(UIColors::getUIFontExact(10.0f));
         g.drawText(juce::String::fromUTF8(u8"确认"), okRect, juce::Justification::centred, false);
 
         const auto cancelRect = juce::Rectangle<float>(dialogX + dialogW - 90.0f, dialogY + dialogH - 24.0f, 80.0f, 18.0f);

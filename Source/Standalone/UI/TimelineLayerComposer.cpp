@@ -193,7 +193,7 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         startBeat = (startBeat / beatInterval) * beatInterval;
         int64_t endBeat = static_cast<int64_t>(std::min(rulerClipEndTime, params.visibleEndSeconds) / beatSeconds) + 1;
 
-        g.setFont(UIColors::getUIFont(13.0f));
+        g.setFont(UIColors::getUIFontExact(13.0f));
 
         for (int64_t beatIndex = startBeat; beatIndex <= endBeat; beatIndex += beatInterval) {
             double time = static_cast<double>(beatIndex) * beatSeconds;
@@ -214,7 +214,7 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
             juce::Rectangle<int> labelRect { pixelX - 20, rulerTop + 2, 40, rulerHeight - 12 };
             if (labelRect.getX() < 0)
                 labelRect.setX(0);
-            g.drawText(label, labelRect, juce::Justification::centred);
+            g.drawText(label, labelRect, juce::Justification::centred, false);
         }
     } else { // Seconds
         double markerInterval = selectMarkerInterval(pps);
@@ -231,7 +231,7 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         startTime = std::floor(startTime / markerInterval) * markerInterval;
         double endTime = std::min(rulerClipEndTime, params.visibleEndSeconds);
 
-        g.setFont(UIColors::getUIFont(13.0f));
+        g.setFont(UIColors::getUIFontExact(13.0f));
         for (double time = startTime; time < endTime; time += markerInterval) {
             int pixelX = static_cast<int>(std::llround((time - params.visibleStartSeconds) * pps));
 
@@ -246,7 +246,7 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
             juce::Rectangle<int> labelRect { pixelX - 20, rulerTop + 2, 40, rulerHeight - 12 };
             if (labelRect.getX() < 0)
                 labelRect.setX(0);
-            g.drawText(timeStr, labelRect, juce::Justification::centred);
+            g.drawText(timeStr, labelRect, juce::Justification::centred, false);
         }
     }
 }

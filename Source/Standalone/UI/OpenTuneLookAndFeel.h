@@ -58,7 +58,7 @@ class OpenTuneLookAndFeel : public juce::LookAndFeel_V4
 public:
     OpenTuneLookAndFeel()
     {
-        auto typeface = UiAssets::createHonorSansTypeface();
+        auto typeface = UiAssets::getHonorSansTypeface();
 
         if (typeface != nullptr)
         {
@@ -664,8 +664,7 @@ public:
 
     juce::Font getPopupMenuFont() override
     {
-        // 显式使用 Noto Sans SC Medium 确保 CJK 字符正确渲染
-        return juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 16.0f));
+        return UIColors::getUIFont(16.0f);
     }
 
     juce::Font getLabelFont(juce::Label&) override

@@ -445,7 +445,7 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
                     textColor = active ? juce::Colours::white
                                        : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f);
                 g.setColour(textColor);
-                g.setFont(juce::Font(juce::FontOptions("Roboto", "Bold", bounds.getHeight() * 0.5f)));
+                g.setFont(UIColors::getUIFontExact(bounds.getHeight() * 0.5f, juce::Font::bold));
                 g.drawText("EQ", bounds, juce::Justification::centred);
             } else if (!iconPath_.isEmpty()) {
                 const float iconSz = bounds.getWidth() * 0.55f;
@@ -1728,7 +1728,7 @@ void PianoRollComponent::drawModDriftDragPreview(juce::Graphics& g)
     const juce::String text = isModulation
         ? juce::String::formatted("%.0f%%", value * 100.0f)
         : juce::String::formatted("%+.0f%%", value * 100.0f);
-    juce::Font font(juce::FontOptions(12.0f));
+    juce::Font font = UIColors::getUIFontExact(12.0f);
     const int textWidth = juce::roundToInt(juce::TextLayout::getStringWidth(font, text));
     g.setColour(juce::Colours::black.withAlpha(0.75f));
     g.fillRoundedRectangle(static_cast<float>(mousePos.x + 12), static_cast<float>(mousePos.y + 12),
@@ -1758,7 +1758,7 @@ void PianoRollComponent::drawVolumeDragPreview(juce::Graphics& g)
     const auto mousePos = getLocalPoint(nullptr, juce::Desktop::getInstance().getMousePosition())
         + juce::Point<int>(0, -rulerHeight_);
     const juce::String text = juce::String::formatted("%+.1f dB", static_cast<double>(deltaDb));
-    juce::Font font(juce::FontOptions(12.0f));
+    juce::Font font = UIColors::getUIFontExact(12.0f);
     const int textWidth = juce::roundToInt(juce::TextLayout::getStringWidth(font, text));
     g.setColour(juce::Colours::black.withAlpha(0.75f));
     g.fillRoundedRectangle(static_cast<float>(mousePos.x + 12), static_cast<float>(mousePos.y + 12),

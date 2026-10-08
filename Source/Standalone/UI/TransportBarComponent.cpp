@@ -156,7 +156,7 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
             g.setColour(juce::Colour(Overdose::Colors::PrimaryPink));
         else
             g.setColour(UIColors::textPrimary);
-        g.setFont(UIColors::getMonoFont(UIColors::navMonoFontHeight));
+        g.setFont(UIColors::getDisplayFont(UIColors::navMonoFontHeight));
         g.drawFittedText(timeString_, getLocalBounds().reduced(6, 0), juce::Justification::centred, 1, 1.0f);
         return;
     }

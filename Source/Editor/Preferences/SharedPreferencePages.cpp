@@ -811,7 +811,7 @@ public:
         auto makeSectionHeader = [this](const juce::String& text) {
             auto* label = new juce::Label();
             label->setText(text, juce::dontSendNotification);
-            label->setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
+            label->setFont(UIColors::getUIFontExact(16.0f, juce::Font::bold));
             label->setColour(juce::Label::textColourId, UIColors::textPrimary);
             label->setJustificationType(juce::Justification::centredLeft);
             sectionHeaders_.add(label);

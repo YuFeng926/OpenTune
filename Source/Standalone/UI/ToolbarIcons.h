@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "UIColors.h"
 
 namespace OpenTune {
 
@@ -626,7 +627,7 @@ public:
         juce::Image image(juce::Image::ARGB, 16, 16, true);
         juce::Graphics g(image);
         g.setColour(juce::Colours::white);
-        g.setFont(juce::Font(juce::FontOptions("Roboto", "Bold", 10.0f)));
+        g.setFont(UIColors::getUIFontExact(10.0f, juce::Font::bold));
         g.drawText("EQ", juce::Rectangle<float>(0.0f, 0.0f, 16.0f, 16.0f),
                    juce::Justification::centred);
         return image;

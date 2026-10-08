@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "../Standalone/UI/UIColors.h"
 
 class RenderBadgeComponent : public juce::Component
 {
@@ -26,7 +27,7 @@ public:
         g.setColour(juce::Colour(0xCC000000));
         g.fillRoundedRectangle(area, 6.0f);
         g.setColour(juce::Colours::white);
-        g.setFont(13.0f);
+        g.setFont(OpenTune::UIColors::getUIFontExact(13.0f));
         g.drawText(text_, area, juce::Justification::centred, false);
     }
 

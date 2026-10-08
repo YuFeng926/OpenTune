@@ -2068,22 +2068,29 @@ struct UIColors
     // Font Management
     static juce::Font getUIFont(float height = 16.0f)
     {
-        return juce::Font(juce::FontOptions("Roboto", "Regular", juce::jmax(16.0f, height)));
+        return getUIFontExact(juce::jmax(16.0f, height));
     }
 
     static juce::Font getHeaderFont(float height = 18.0f)
     {
-        return juce::Font(juce::FontOptions("Roboto", "Semibold", juce::jmax(18.0f, height)));
+        return getUIFontExact(juce::jmax(18.0f, height), juce::Font::bold);
     }
 
     static juce::Font getLabelFont(float height = 14.0f)
     {
-        return juce::Font(juce::FontOptions("Roboto", "Regular", juce::jmax(14.0f, height)));
+        return getUIFontExact(juce::jmax(14.0f, height));
     }
 
-    static juce::Font getMonoFont(float height = 20.0f)
+    static juce::Font getDisplayFont(float height = 20.0f)
     {
-        return juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), "Bold", height));
+        return getUIFontExact(height, juce::Font::bold);
+    }
+
+    static juce::Font getUIFontExact(float height, int styleFlags = juce::Font::plain)
+    {
+        // Both application LookAndFeels bind JUCE's generic sans face to the bundled HONOR font.
+        return juce::Font(juce::FontOptions(
+            juce::Font::getDefaultSansSerifFontName(), height, styleFlags));
     }
 
     static juce::Colour withAlpha(const juce::Colour& baseColor, float alpha)
@@ -2129,7 +2136,7 @@ public:
         g.fillRoundedRectangle(bounds, 4.0f);
 
         g.setColour(findColour(juce::TextButton::textColourOffId));
-        g.setFont(juce::Font(juce::FontOptions("Noto Sans SC", "Medium", 12.0f)));
+        g.setFont(UIColors::getUIFontExact(12.0f));
         g.drawText(getButtonText(), bounds, juce::Justification::centred);
     }
 };

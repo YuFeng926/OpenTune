@@ -42,10 +42,12 @@ enum class UiAssetId
 
 struct UiAssets
 {
-    static juce::Typeface::Ptr createHonorSansTypeface()
+    static juce::Typeface::Ptr getHonorSansTypeface()
     {
-        return juce::Typeface::createSystemTypefaceFor(BinaryData::HONORSansCNMedium_ttf,
-                                                       BinaryData::HONORSansCNMedium_ttfSize);
+        static const auto typeface = juce::Typeface::createSystemTypefaceFor(
+            BinaryData::HONORSansCNMedium_ttf,
+            BinaryData::HONORSansCNMedium_ttfSize);
+        return typeface;
     }
 
     /** 单一有效倍率：由当前绘制栈（peer/host/root transform）给出的真实物理像素倍率。

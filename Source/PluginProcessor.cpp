@@ -4,6 +4,7 @@
 #include "StandaloneArrangement.h"
 #endif
 #include "Editor/EditorFactory.h"
+#include "Standalone/UI/UIColors.h"
 #include "DSP/ResamplingManager.h"
 #include "DSP/MelSpectrogram.h"
 #include "DSP/F0KeyDetector.h"
@@ -2386,7 +2387,7 @@ public:
     {
         g.fillAll(juce::Colours::black);
         g.setColour(juce::Colours::red);
-        g.setFont(14.0f);
+        g.setFont(UIColors::getUIFontExact(14.0f));
         g.drawText(message_, getLocalBounds().reduced(12),
                    juce::Justification::centredLeft, true);
     }

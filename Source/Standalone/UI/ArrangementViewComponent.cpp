@@ -2,6 +2,7 @@
 #include "AuroraTheme.h"
 #include "../../PluginProcessor.h"
 #include "UiAssets.h"
+#include "UIColors.h"
 #include "TimelineViewportPolicy.h"
 #include "TimelineCompositeCache.h"
 #include "TimelineLayerComposer.h"
@@ -1596,7 +1597,7 @@ void ArrangementViewComponent::drawImportDropPreview(juce::Graphics& g)
                 g.setColour(UIColors::panelGlow.withAlpha(0.40f));
                 g.drawHorizontalLine(newTrackRect.getY(), 0.0f, static_cast<float>(barWidth));
                 g.setColour(UIColors::panelGlow.withAlpha(0.60f));
-                g.setFont(16.0f);
+                g.setFont(UIColors::getUIFontExact(16.0f));
                 g.drawText(juce::String::fromUTF8(u8"+ 鏂板缓杞ㄩ亾"),
                            newTrackRect.toFloat(),
                            juce::Justification::centredLeft);
@@ -3133,5 +3134,4 @@ uint64_t ArrangementViewComponent::computeSelectionRevision() const noexcept
 }
 
 } // namespace OpenTune
-
 

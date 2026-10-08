@@ -680,8 +680,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             && (effectiveNoteNameMode != 1 || noteInOctave != 0))
             return;
 
-        g.setFont(juce::Font(juce::FontOptions(
-            juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
+        g.setFont(UIColors::getUIFontExact(kNoteLabelFontSize, juce::Font::bold));
         const int octave = (drawMidi / 12) - 1;
         const char* name = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
         const juce::String noteName = juce::String(name) + juce::String(octave);

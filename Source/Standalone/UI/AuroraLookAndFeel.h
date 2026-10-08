@@ -3,13 +3,17 @@
 #include <juce_graphics/juce_graphics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "ThemeTokens.h"
+#include "UiAssets.h"
 
 namespace OpenTune {
 
 class AuroraLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    AuroraLookAndFeel() = default;
+    AuroraLookAndFeel()
+    {
+        setDefaultSansSerifTypeface(UiAssets::getHonorSansTypeface());
+    }
     
     // Draw Rotary Slider (Neon Ring, Dark Body)
     void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
