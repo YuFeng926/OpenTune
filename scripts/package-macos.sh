@@ -364,13 +364,13 @@ build_pkg() {
     echo "  复制 VST3（无模型副本）"
     cp -R "${STAGING}/${APP_NAME}.vst3" "${payload_dir}/Library/Audio/Plug-Ins/VST3/${APP_NAME}.vst3"
 
+    # 模型只保留 app bundle 内一份：VST3 通过 ModelPathResolver 的
+    # /Applications/OpenTune.app/Contents/Resources/models 回退路径直接读取。
     local models_src="${payload_dir}/Applications/${APP_NAME}.app/Contents/Resources/models"
     if [ ! -d "${models_src}" ]; then
         echo "❌ 未找到模型目录: ${models_src}"
         exit 1
     fi
-    echo "  部署共享模型到 /Applications/${APP_NAME}/models（供 VST3 使用）"
-    cp -R "${models_src}/." "${payload_dir}/Applications/${APP_NAME}/models/"
 
     echo "  复制许可证与声明文件"
     for doc in LICENSE NOTICE.txt NOTICE.zh-CN.txt STATEMENTS.txt; do
@@ -464,8 +464,8 @@ mkdir -p "${STAGING}"
 cp -R "${APP_BUNDLE}" "${STAGING}/${APP_NAME}.app"
 
 # ── 复制 VST3，剥离重复模型 ──────────────────────────────────────────────────
-# VST3 运行时通过 ModelPathResolver 查找 /Applications/OpenTune/models，
-# 无需自带模型副本，节省约 570MB。
+# VST3 运行时通过 ModelPathResolver 回退到 Standalone.app 内的模型目录，
+# 无需自带模型副本。
 cp -R "${VST3_BUNDLE}" "${STAGING}/${APP_NAME}.vst3"
 
 # 删除 VST3 bundle 中与 Standalone 重复的模型（节省 ~570MB）
@@ -556,24 +556,6 @@ fi
 cp -R "${VST3_SRC}" "${VST3_DEST}"
 echo "  ✓ ${VST3_DEST}"
 
-# ── 模型放置（VST3 运行时查找路径）────────────────────────────────────────────
-# ModelPathResolver 优先级 1: /Applications/OpenTune/models
-# Standalone.app 内已有模型，此处确保 /Applications/OpenTune/models 也存在
-# 供 VST3 插件在 DAW 中加载时使用
-MODELS_SRC="${APP_DEST}/Contents/Resources/models"
-MODELS_DEST="/Applications/${APP_NAME}/models"
-if [ -d "${MODELS_SRC}" ]; then
-    mkdir -p "${MODELS_DEST}"
-    # 仅在目标不存在或为空时复制，避免重复拷贝大文件
-    if [ ! -f "${MODELS_DEST}/fcpe.onnx" ]; then
-        echo "▶ 部署共享模型到 /Applications/OpenTune/models（供 VST3 使用）"
-        cp -R "${MODELS_SRC}/." "${MODELS_DEST}/"
-        echo "  ✓ 模型部署完成"
-    else
-        echo "  ✓ 共享模型已存在，跳过"
-    fi
-fi
-
 # ── Ad-hoc 签名 ──────────────────────────────────────────────────────────────
 echo "▶ Ad-hoc 签名（绕过 Gatekeeper）"
 codesign --force --deep --sign - "${APP_DEST}" 2>/dev/null
@@ -648,20 +630,6 @@ if [ -d "${VST3_DEST}" ]; then
 fi
 cp -R "${VST3_SRC}" "${VST3_DEST}"
 echo "  ✓ ${VST3_DEST}"
-
-# ── Deploy shared models (VST3 runtime lookup path) ──────────────────────────
-MODELS_SRC="${APP_DEST}/Contents/Resources/models"
-MODELS_DEST="/Applications/${APP_NAME}/models"
-if [ -d "${MODELS_SRC}" ]; then
-    mkdir -p "${MODELS_DEST}"
-    if [ ! -f "${MODELS_DEST}/fcpe.onnx" ]; then
-        echo "▶ Deploying shared models to /Applications/OpenTune/models (for VST3)"
-        cp -R "${MODELS_SRC}/." "${MODELS_DEST}/"
-        echo "  ✓ Models deployed"
-    else
-        echo "  ✓ Shared models already present, skipping"
-    fi
-fi
 
 # ── Ad-hoc code signing ──────────────────────────────────────────────────────
 echo "▶ Ad-hoc signing (bypass Gatekeeper)"

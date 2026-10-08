@@ -6,7 +6,7 @@
  * 负责解析 ONNX Runtime 动态库路径和模型目录路径。
  * 自带优先：模块所在目录（随应用分发的那一份）永远第一，共享安装目录只作兜底，
  * 避免旧安装静默遮蔽便携包/开发构建。
- * 搜索顺序：模块目录 > Resources > Program Files > ProgramData > 当前工作目录 > exe 目录
+ * 搜索顺序：模块目录 > Resources > OpenTune.app 内置模型（macOS）> Program Files > ProgramData > 当前工作目录 > exe 目录
  */
 
 #if defined(_WIN32)
@@ -88,6 +88,7 @@ public:
         const juce::File moduleFile = getCurrentModuleFile();
 
         // 自带优先：模块目录（Standalone 与 VST3 bundle 随包分发）> bundle Resources；
+        // macOS 追加 OpenTune.app 内置模型回退（VST3 宿主进程定位不到自身 bundle）；
         // Program Files / ProgramData 共享安装只作兜底。
         juce::File modelsDir = moduleFile.getParentDirectory().getChildFile("models");
         if (modelsDir.isDirectory()) {
@@ -98,6 +99,20 @@ public:
         if (modelsDir.isDirectory()) {
             return modelsDir.getFullPathName().toStdString();
         }
+
+#if defined(__APPLE__)
+        // macOS VST3 在宿主进程内运行，currentExecutableFile 指向宿主而非插件 bundle，
+        // 前两个候选都会落空。回退到随 Standalone 分发的模型目录
+        //（/Applications/OpenTune.app/Contents/Resources/models），两个产品共用同一份模型。
+        modelsDir = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory)
+            .getChildFile("OpenTune.app")
+            .getChildFile("Contents")
+            .getChildFile("Resources")
+            .getChildFile("models");
+        if (modelsDir.isDirectory()) {
+            return modelsDir.getFullPathName().toStdString();
+        }
+#endif
 
         const juce::File programFilesModelsDir = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory)
             .getChildFile("OpenTune")
