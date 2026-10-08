@@ -39,7 +39,7 @@ git clone https://github.com/juce-framework/JUCE.git JUCE-master
 
 ```bash
 cd ThirdParty
-git clone --recursive --branch releases/2.2.0 https://github.com/Celemony/ARA_SDK.git ARA_SDK-releases-2.2.0
+git clone --recursive --branch releases/2.3.0 https://github.com/Celemony/ARA_SDK.git ARA_SDK-releases-2.3.0
 cd ..
 ```
 
@@ -170,7 +170,7 @@ OpenTune/
 ├── CMakeLists.txt
 ├── JUCE-master/                          ← JUCE framework
 ├── ThirdParty/
-│   ├── ARA_SDK-releases-2.2.0/           ← ARA SDK
+│   ├── ARA_SDK-releases-2.3.0/           ← ARA SDK
 │   ├── r8brain-free-src-master/          ← Resampling library
 │   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
 │   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
@@ -250,11 +250,18 @@ cmake --build --preset macos-intel-ara-release
 
 Packaging commands:
 ```bash
-# Apple Silicon
+# Apple Silicon (DMG)
 ./scripts/package-macos.sh --arch silicon
 
-# Intel
+# Intel (DMG)
 ./scripts/package-macos.sh --arch intel
+
+# Build a PKG installer (welcome page shows the anti-fraud and license
+# notice sourced from Installer/NOTICE.md)
+./scripts/package-macos.sh --arch silicon --format pkg
+
+# Produce both DMG and PKG
+./scripts/package-macos.sh --arch intel --format both
 ```
 
 ## Build Artifacts

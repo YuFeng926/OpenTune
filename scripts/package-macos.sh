@@ -1,11 +1,13 @@
 #!/bin/bash
 # ==============================================================================
 # OpenTune - macOS 打包脚本
-# 功能：构建 + ad-hoc 签名 + 生成 DMG 安装包
+# 功能：构建 + ad-hoc 签名 + 生成 DMG / PKG 安装包
 # 用法：
 #   ./scripts/package-macos.sh                     # 根据当前架构自动选择
 #   ./scripts/package-macos.sh --arch intel        # Intel (x86_64) 构建 + 打包
 #   ./scripts/package-macos.sh --arch silicon      # Apple Silicon (arm64) 构建 + 打包
+#   ./scripts/package-macos.sh --format pkg        # 生成 PKG 安装包（默认 dmg）
+#   ./scripts/package-macos.sh --format both       # 同时生成 DMG 与 PKG
 #   ./scripts/package-macos.sh --skip-build        # 跳过构建，直接打包已有产物
 #   ./scripts/package-macos.sh --clean             # 清空构建目录后重新构建
 # ==============================================================================
@@ -15,7 +17,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STAGING="${ROOT_DIR}/dist/staging"
 DMG_DIR="${ROOT_DIR}/dist"
+PKG_BUILD_DIR="${ROOT_DIR}/dist/pkg-build"
 APP_NAME="OpenTune"
+BUNDLE_ID="com.daya.opentune"
 VERSION=$(sed -n 's/.*project(OpenTune VERSION \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "${ROOT_DIR}/CMakeLists.txt")
 SIGN_IDENTITY="-"
 
@@ -23,6 +27,7 @@ SIGN_IDENTITY="-"
 SKIP_BUILD=false
 CLEAN=false
 ARCH=""
+FORMAT="dmg"
 PREV_ARG=""
 for arg in "$@"; do
     case "$arg" in
@@ -41,17 +46,42 @@ for arg in "$@"; do
             echo "❌ 未知架构: ${arg#--arch=}（仅支持 intel|silicon）"
             exit 1
             ;;
+        --format)
+            # handled via next arg
+            ;;
+        --format=dmg)
+            FORMAT="dmg"
+            ;;
+        --format=pkg)
+            FORMAT="pkg"
+            ;;
+        --format=both)
+            FORMAT="both"
+            ;;
+        --format=*)
+            echo "❌ 未知打包格式: ${arg#--format=}（仅支持 dmg|pkg|both）"
+            exit 1
+            ;;
         -h|--help)
-            echo "用法: $0 [--arch intel|silicon] [--skip-build] [--clean]"
-            echo "  --arch ARCH  指定目标架构: intel (x86_64) 或 silicon (arm64)"
-            echo "  --skip-build 跳过构建，直接打包已有产物"
-            echo "  --clean      清空构建目录后重新构建"
+            echo "用法: $0 [--arch intel|silicon] [--format dmg|pkg|both] [--skip-build] [--clean]"
+            echo "  --arch ARCH    指定目标架构: intel (x86_64) 或 silicon (arm64)"
+            echo "  --format FMT   指定打包格式: dmg、pkg 或 both（默认 dmg）"
+            echo "  --skip-build   跳过构建，直接打包已有产物"
+            echo "  --clean        清空构建目录后重新构建"
             exit 0
             ;;
         *)
-            # Handle --arch <value> form (space-separated)
+            # Handle --arch/--format <value> form (space-separated)
             if [ "${PREV_ARG:-}" = "--arch" ]; then
                 ARCH="$arg"
+                PREV_ARG=""
+                continue
+            fi
+            if [ "${PREV_ARG:-}" = "--format" ]; then
+                case "$arg" in
+                    dmg|pkg|both) FORMAT="$arg" ;;
+                    *) echo "❌ 未知打包格式: $arg（仅支持 dmg|pkg|both）"; exit 1 ;;
+                esac
                 PREV_ARG=""
                 continue
             fi
@@ -63,6 +93,10 @@ done
 
 if [ "${PREV_ARG}" = "--arch" ]; then
     echo "❌ --arch 缺少值（仅支持 intel|silicon）"
+    exit 1
+fi
+if [ "${PREV_ARG}" = "--format" ]; then
+    echo "❌ --format 缺少值（仅支持 dmg|pkg|both）"
     exit 1
 fi
 
@@ -84,12 +118,16 @@ case "${ARCH}" in
         PRESET="macos-intel-ara-ninja"
         BUILD_DIR="${ROOT_DIR}/build-intel-ninja"
         DMG_ARCH_LABEL="Intel"
+        PKG_HOST_ARCHS="x86_64"
+        PKG_MIN_OS="13.4"
         ;;
     silicon)
         OSX_ARCH="arm64"
         PRESET="macos-silicon-ara-ninja"
         BUILD_DIR="${ROOT_DIR}/build-silicon-ninja"
         DMG_ARCH_LABEL="Apple-Silicon"
+        PKG_HOST_ARCHS="arm64"
+        PKG_MIN_OS="14.0"
         ;;
     *)
         echo "❌ 无效架构: ${ARCH}（仅支持 intel|silicon）"
@@ -100,6 +138,7 @@ esac
 STANDALONE_ARTIFACTS="${BUILD_DIR}/OpenTuneStandalone_artefacts/Release"
 VST3_ARTIFACTS="${BUILD_DIR}/OpenTune_artefacts/Release"
 DMG_NAME="${APP_NAME}-${VERSION}-macOS-${DMG_ARCH_LABEL}"
+PKG_NAME="${APP_NAME}-${VERSION}-macOS-${DMG_ARCH_LABEL}"
 
 # ── 工具检查 ──────────────────────────────────────────────────────────────────
 for cmd in cmake ninja hdiutil codesign xattr otool lipo; do
@@ -108,6 +147,19 @@ for cmd in cmake ninja hdiutil codesign xattr otool lipo; do
         exit 1
     fi
 done
+
+if [ "$FORMAT" != "dmg" ]; then
+    for cmd in pkgbuild productbuild; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo "❌ 缺少工具: $cmd（生成 PKG 需要 macOS 自带命令行工具）"
+            exit 1
+        fi
+    done
+    if [ ! -f "${ROOT_DIR}/Installer/NOTICE.md" ]; then
+        echo "❌ 生成 PKG 需要文案文件: Installer/NOTICE.md"
+        exit 1
+    fi
+fi
 
 # ── 构建 ──────────────────────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" = false ]; then
@@ -215,6 +267,193 @@ validate_bundle_linkage() {
 
 validate_bundle_linkage "${APP_BUNDLE}" "@executable_path/../Frameworks" "Standalone"
 validate_bundle_linkage "${VST3_BUNDLE}" "@loader_path/../Frameworks" "VST3"
+
+# ── PKG：从 Installer/NOTICE.md 提取首屏文案 ──────────────────────────────────
+NOTICE_SOURCE="${ROOT_DIR}/Installer/NOTICE.md"
+
+extract_notice_paragraph() {
+    # $1 = 语言段标记（NOTICE.md 中 "### " 行包含的文本）
+    # $2 = 段落序号（1 = 标题，2 = 防诈声明，3 = 许可/版权警示）
+    awk -v marker="$1" -v want="$2" '
+        function flush() {
+            if (collecting && count == want && !done) { print text; done = 1 }
+            text = ""
+            collecting = 0
+        }
+        /^## 完整版/ { in_full = 1; next }
+        /^## / {
+            if (in_full && in_lang) flush()
+            in_full = 0
+            in_lang = 0
+        }
+        in_full && /^### / {
+            if (in_lang) flush()
+            in_lang = index($0, marker) ? 1 : 0
+            next
+        }
+        in_full && in_lang {
+            if (length($0) > 0) {
+                if (!collecting) { collecting = 1; count++ }
+                text = (length(text) > 0) ? text " " $0 : $0
+            } else {
+                flush()
+            }
+        }
+        END { if (in_full && in_lang) flush() }
+    ' "${NOTICE_SOURCE}"
+}
+
+escape_html() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+render_welcome_html() {
+    # $1 = 输出文件, $2 = 语言段标记
+    local out="$1"
+    local marker="$2"
+    local title fraud license
+    title="$(extract_notice_paragraph "${marker}" 1)"
+    fraud="$(extract_notice_paragraph "${marker}" 2)"
+    license="$(extract_notice_paragraph "${marker}" 3)"
+    title="${title#\*\*}"
+    title="${title%\*\*}"
+
+    if [ -z "${title}" ] || [ -z "${fraud}" ] || [ -z "${license}" ]; then
+        echo "❌ 无法从 Installer/NOTICE.md 提取「${marker}」完整版文案"
+        exit 1
+    fi
+
+    cat > "${out}" << WELCOME_EOF
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body { font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; font-size: 13px; color: #000000; background: #ffffff; margin: 0 4px; }
+    h2 { color: #000000; font-size: 16px; font-weight: 600; margin: 0 0 12px 0; }
+    .notice { color: #000000; margin: 0 0 12px 0; }
+    .notice p { color: #000000; margin: 0; line-height: 1.55; }
+</style>
+</head>
+<body>
+<h2>$(escape_html "${title}")</h2>
+<div class="notice fraud"><p>$(escape_html "${fraud}")</p></div>
+<div class="notice license"><p>$(escape_html "${license}")</p></div>
+</body>
+</html>
+WELCOME_EOF
+}
+
+# ── PKG：组装产品包 ───────────────────────────────────────────────────────────
+build_pkg() {
+    echo "▶ 准备 PKG staging"
+
+    local payload_dir="${PKG_BUILD_DIR}/payload"
+    local packages_dir="${PKG_BUILD_DIR}/packages"
+    local resources_dir="${PKG_BUILD_DIR}/resources"
+    local scripts_dir="${PKG_BUILD_DIR}/scripts"
+
+    rm -rf "${PKG_BUILD_DIR}"
+    mkdir -p "${packages_dir}" "${resources_dir}" "${scripts_dir}"
+    mkdir -p "${payload_dir}/Applications/${APP_NAME}"
+    mkdir -p "${payload_dir}/Library/Audio/Plug-Ins/VST3"
+
+    echo "  复制 Standalone.app（含模型）"
+    cp -R "${STAGING}/${APP_NAME}.app" "${payload_dir}/Applications/${APP_NAME}.app"
+
+    echo "  复制 VST3（无模型副本）"
+    cp -R "${STAGING}/${APP_NAME}.vst3" "${payload_dir}/Library/Audio/Plug-Ins/VST3/${APP_NAME}.vst3"
+
+    local models_src="${payload_dir}/Applications/${APP_NAME}.app/Contents/Resources/models"
+    if [ ! -d "${models_src}" ]; then
+        echo "❌ 未找到模型目录: ${models_src}"
+        exit 1
+    fi
+    echo "  部署共享模型到 /Applications/${APP_NAME}/models（供 VST3 使用）"
+    cp -R "${models_src}/." "${payload_dir}/Applications/${APP_NAME}/models/"
+
+    echo "  复制许可证与声明文件"
+    for doc in LICENSE NOTICE.txt NOTICE.zh-CN.txt STATEMENTS.txt; do
+        cp "${ROOT_DIR}/${doc}" "${payload_dir}/Applications/${APP_NAME}/" 2>/dev/null || true
+    done
+    cp "${NOTICE_SOURCE}" "${payload_dir}/Applications/${APP_NAME}/NOTICE.md" 2>/dev/null || true
+
+    # 安装前清理：移除旧 DMG 安装脚本写入当前用户目录的 VST3 副本，
+    # 避免与本次系统级 VST3 在 DAW 中出现重复条目。
+    cat > "${scripts_dir}/preinstall" << 'PREINSTALL_EOF'
+#!/bin/bash
+set -u
+console_user="$(stat -f %Su /dev/console 2>/dev/null || true)"
+if [ -n "${console_user}" ] && [ "${console_user}" != "root" ] && [ "${console_user}" != "loginwindow" ]; then
+    user_vst3="/Users/${console_user}/Library/Audio/Plug-Ins/VST3/OpenTune.vst3"
+    if [ -d "${user_vst3}" ]; then
+        rm -rf "${user_vst3}"
+    fi
+fi
+exit 0
+PREINSTALL_EOF
+    chmod +x "${scripts_dir}/preinstall"
+
+    echo "  渲染欢迎页文案（Installer/NOTICE.md 完整版）"
+    # 根文件是 Installer 未命中本地化资源时的回退内容。项目主要面向中文用户，
+    # 因此使用中文作为回退；英文放入 en.lproj，避免英文系统显示中文。
+    render_welcome_html "${resources_dir}/welcome.html" "中文（zh）"
+    # 同时提供系统首选语言的精确 BCP-47 目录和通用简体中文目录。
+    # zh_CN.lproj 会被 productbuild 重写为 zh-Hans.lproj，因此直接使用
+    # zh-Hans-CN.lproj 可避免 Installer 在语言匹配时依赖旧式别名转换。
+    mkdir -p "${resources_dir}/en.lproj" "${resources_dir}/zh-Hans.lproj" \
+             "${resources_dir}/zh-Hans-CN.lproj" "${resources_dir}/ja.lproj"
+    mkdir -p "${resources_dir}/ru.lproj" "${resources_dir}/es.lproj"
+    render_welcome_html "${resources_dir}/en.lproj/welcome.html" "English (en)"
+    render_welcome_html "${resources_dir}/zh-Hans.lproj/welcome.html" "中文（zh）"
+    render_welcome_html "${resources_dir}/zh-Hans-CN.lproj/welcome.html" "中文（zh）"
+    render_welcome_html "${resources_dir}/ja.lproj/welcome.html" "日本語（ja）"
+    render_welcome_html "${resources_dir}/ru.lproj/welcome.html" "Русский（ru）"
+    render_welcome_html "${resources_dir}/es.lproj/welcome.html" "Español (es)"
+
+    cat > "${PKG_BUILD_DIR}/Distribution.xml" << DISTRIBUTION_EOF
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>${APP_NAME} ${VERSION}</title>
+    <organization>com.daya</organization>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <options customize="never" require-scripts="true" hostArchitectures="${PKG_HOST_ARCHS}"/>
+    <allowed-os-versions>
+        <os-version min="${PKG_MIN_OS}"/>
+    </allowed-os-versions>
+    <welcome file="welcome.html"/>
+    <choices-outline>
+        <line choice="${BUNDLE_ID}.pkg"/>
+    </choices-outline>
+    <choice id="${BUNDLE_ID}.pkg" visible="false">
+        <pkg-ref id="${BUNDLE_ID}.pkg"/>
+    </choice>
+    <pkg-ref id="${BUNDLE_ID}.pkg" version="${VERSION}" onConclusion="none">${APP_NAME}.pkg</pkg-ref>
+</installer-gui-script>
+DISTRIBUTION_EOF
+
+    echo "  构建组件包"
+    pkgbuild --root "${payload_dir}" \
+             --identifier "${BUNDLE_ID}.pkg" \
+             --version "${VERSION}" \
+             --install-location "/" \
+             --scripts "${scripts_dir}" \
+             "${packages_dir}/${APP_NAME}.pkg"
+
+    echo "  组装产品包"
+    if [ -n "${PKG_SIGN_IDENTITY:-}" ]; then
+        productbuild --distribution "${PKG_BUILD_DIR}/Distribution.xml" \
+                     --resources "${resources_dir}" \
+                     --package-path "${packages_dir}" \
+                     --sign "${PKG_SIGN_IDENTITY}" \
+                     "${DMG_DIR}/${PKG_NAME}.pkg"
+    else
+        productbuild --distribution "${PKG_BUILD_DIR}/Distribution.xml" \
+                     --resources "${resources_dir}" \
+                     --package-path "${packages_dir}" \
+                     "${DMG_DIR}/${PKG_NAME}.pkg"
+    fi
+}
 
 # ── 清理 staging ─────────────────────────────────────────────────────────────
 echo "▶ 准备安装包 staging"
@@ -441,35 +680,60 @@ STAGING_SIZE=$(du -sh "${STAGING}" | cut -f1)
 echo ""
 echo "▶ Staging 总大小: ${STAGING_SIZE}"
 
-# ── 生成 DMG ─────────────────────────────────────────────────────────────────
-echo "▶ 生成 DMG 安装包"
+# ── 生成 PKG（--format pkg|both）─────────────────────────────────────────────
+if [ "$FORMAT" != "dmg" ]; then
+    build_pkg
 
-DMG_PATH="${DMG_DIR}/${DMG_NAME}.dmg"
-# 如果已有同名 DMG，先删除
-rm -f "${DMG_PATH}"
+    PKG_PATH="${DMG_DIR}/${PKG_NAME}.pkg"
+    if [ ! -f "${PKG_PATH}" ]; then
+        echo "❌ PKG 生成失败: ${PKG_PATH}"
+        exit 1
+    fi
+    PKG_SIZE=$(du -sh "${PKG_PATH}" | cut -f1)
+    echo ""
+    echo "══════════════════════════════════════════════"
+    echo "  ✅ PKG 安装包生成完成"
+    echo "══════════════════════════════════════════════"
+    echo "  文件: ${PKG_PATH}"
+    echo "  大小: ${PKG_SIZE}"
+    echo "  版本: ${VERSION}"
+    echo "  架构: ${ARCH} (${OSX_ARCH})"
+    echo "  欢迎页: 防诈声明 + 许可/版权警示（文案来自 Installer/NOTICE.md）"
+    echo "  安装方式：双击 PKG，按提示完成安装"
+    echo "══════════════════════════════════════════════"
+fi
 
-# 直接从 staging 创建压缩只读 DMG（跳过 AppleScript 美化，终端环境不稳定）
-hdiutil create \
-    -srcfolder "${STAGING}" \
-    -volname "${APP_NAME} ${VERSION}" \
-    -fs HFS+ \
-    -fsargs "-c c=64,a=16,e=16" \
-    -format UDZO \
-    -imagekey zlib-level=9 \
-    "${DMG_PATH}" \
-    2>/dev/null
+# ── 生成 DMG（--format dmg|both）─────────────────────────────────────────────
+if [ "$FORMAT" != "pkg" ]; then
+    echo "▶ 生成 DMG 安装包"
 
-# ── 最终结果 ──────────────────────────────────────────────────────────────────
-DMG_SIZE=$(du -sh "${DMG_PATH}" | cut -f1)
-echo ""
-echo "══════════════════════════════════════════════"
-echo "  ✅ DMG 安装包生成完成"
-echo "══════════════════════════════════════════════"
-echo "  文件: ${DMG_PATH}"
-echo "  大小: ${DMG_SIZE}"
-echo "  版本: ${VERSION}"
-echo "  架构: ${ARCH} (${OSX_ARCH})"
-echo ""
-echo "  安装方式：双击 DMG → 双击「安装 OpenTune.command」"
-echo "  或直接拖拽 .app 到 /Applications，.vst3 到 VST3 目录"
-echo "══════════════════════════════════════════════"
+    DMG_PATH="${DMG_DIR}/${DMG_NAME}.dmg"
+    # 如果已有同名 DMG，先删除
+    rm -f "${DMG_PATH}"
+
+    # 直接从 staging 创建压缩只读 DMG（跳过 AppleScript 美化，终端环境不稳定）
+    hdiutil create \
+        -srcfolder "${STAGING}" \
+        -volname "${APP_NAME} ${VERSION}" \
+        -fs HFS+ \
+        -fsargs "-c c=64,a=16,e=16" \
+        -format UDZO \
+        -imagekey zlib-level=9 \
+        "${DMG_PATH}" \
+        2>/dev/null
+
+    # ── 最终结果 ──
+    DMG_SIZE=$(du -sh "${DMG_PATH}" | cut -f1)
+    echo ""
+    echo "══════════════════════════════════════════════"
+    echo "  ✅ DMG 安装包生成完成"
+    echo "══════════════════════════════════════════════"
+    echo "  文件: ${DMG_PATH}"
+    echo "  大小: ${DMG_SIZE}"
+    echo "  版本: ${VERSION}"
+    echo "  架构: ${ARCH} (${OSX_ARCH})"
+    echo ""
+    echo "  安装方式：双击 DMG → 双击「安装 OpenTune.command」"
+    echo "  或直接拖拽 .app 到 /Applications，.vst3 到 VST3 目录"
+    echo "══════════════════════════════════════════════"
+fi

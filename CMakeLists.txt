@@ -59,7 +59,7 @@ endif()
 # ==============================================================================
 # ARA SDK Configuration (for VST3 ARA Extension support)
 # ==============================================================================
-set(OPENTUNE_ARA_SDK_VERSION "2.2.0" CACHE STRING "ARA SDK version")
+set(OPENTUNE_ARA_SDK_VERSION "2.3.0" CACHE STRING "ARA SDK version")
 set(OPENTUNE_DEFAULT_ARA_SDK_PATH "${OPENTUNE_THIRDPARTY_DIR}/ARA_SDK-releases-${OPENTUNE_ARA_SDK_VERSION}")
 if(NOT DEFINED ARA_SDK_PATH OR "${ARA_SDK_PATH}" STREQUAL "")
     set(ARA_SDK_PATH "${OPENTUNE_DEFAULT_ARA_SDK_PATH}" CACHE PATH "Path to ARA SDK" FORCE)
@@ -1430,7 +1430,7 @@ if(OPENTUNE_BUILD_TESTS)
         "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
         "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
         "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
-        "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelArrangement.cpp")
+        "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelFormat.cpp")
     if(MSVC)
         target_compile_options(OpenTuneMelSpectrogramTests PRIVATE /utf-8 /EHsc)
     endif()
@@ -1584,7 +1584,7 @@ if(OPENTUNE_BUILD_TESTS)
             "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
             "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
             "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
-            "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelArrangement.cpp")
+            "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelFormat.cpp")
     endforeach()
 
     # Real SDK host/plugin-dispatch lifecycle harness.  This is deliberately a
@@ -1595,7 +1595,7 @@ if(OPENTUNE_BUILD_TESTS)
         "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
         "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
         "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
-        "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelArrangement.cpp"
+        "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelFormat.cpp"
     )
     target_include_directories(ARALifecycleContractTests PRIVATE
         "${ARA_SDK_PATH}/ARA_Library"

@@ -39,7 +39,7 @@ git clone https://github.com/juce-framework/JUCE.git JUCE-master
 
 ```bash
 cd ThirdParty
-git clone --recursive --branch releases/2.2.0 https://github.com/Celemony/ARA_SDK.git ARA_SDK-releases-2.2.0
+git clone --recursive --branch releases/2.3.0 https://github.com/Celemony/ARA_SDK.git ARA_SDK-releases-2.3.0
 cd ..
 ```
 
@@ -170,7 +170,7 @@ OpenTune/
 ├── CMakeLists.txt
 ├── JUCE-master/                          ← JUCE 框架
 ├── ThirdParty/
-│   ├── ARA_SDK-releases-2.2.0/           ← ARA SDK
+│   ├── ARA_SDK-releases-2.3.0/           ← ARA SDK
 │   ├── r8brain-free-src-master/          ← 重采样库
 │   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
 │   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
@@ -247,11 +247,17 @@ cmake --build --preset macos-intel-ara-release
 
 打包命令：
 ```bash
-# Apple Silicon
+# Apple Silicon（DMG）
 ./scripts/package-macos.sh --arch silicon
 
-# Intel
+# Intel（DMG）
 ./scripts/package-macos.sh --arch intel
+
+# 生成 PKG 安装包（欢迎页展示 Installer/NOTICE.md 的防诈与许可声明）
+./scripts/package-macos.sh --arch silicon --format pkg
+
+# 同时生成 DMG 与 PKG
+./scripts/package-macos.sh --arch intel --format both
 ```
 
 ## 构建产物
