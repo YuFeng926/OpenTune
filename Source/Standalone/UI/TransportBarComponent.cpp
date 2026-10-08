@@ -156,8 +156,17 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
             g.setColour(juce::Colour(Overdose::Colors::PrimaryPink));
         else
             g.setColour(UIColors::textPrimary);
-        g.setFont(UIColors::getDisplayFont(UIColors::navMonoFontHeight));
-        g.drawFittedText(timeString_, getLocalBounds().reduced(6, 0), juce::Justification::centred, 1, 1.0f);
+        auto font = UIColors::getDisplayFont(UIColors::navMonoFontHeight);
+        const auto textBounds = getLocalBounds().reduced(6, 0);
+        const float textWidth = juce::GlyphArrangement::getStringWidth(font, timeString_);
+        const float availableWidth = static_cast<float>(juce::jmax(0, textBounds.getWidth() - 1));
+
+        // Keep the complete timecode visible without JUCE's fitted-text ellipsis.
+        if (availableWidth > 0.0f && textWidth > availableWidth)
+            font = font.withHorizontalScale(font.getHorizontalScale() * availableWidth / textWidth);
+
+        g.setFont(font);
+        g.drawText(timeString_, textBounds, juce::Justification::centred, false);
         return;
     }
 
