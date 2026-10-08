@@ -74,11 +74,7 @@ public:
         closeButton_.setButtonText(LOC(kClose));
         closeButton_.setColour(juce::TextButton::buttonColourId, UIColors::accent);
         closeButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
-        closeButton_.onClick = [this] {
-            if (auto* window = findParentComponentOfClass<juce::DialogWindow>()) {
-                window->exitModalState(0);
-            }
-        };
+        closeButton_.onClick = [this] { closeDialog(); };
         addAndMakeVisible(closeButton_);
     }
 
@@ -128,6 +124,16 @@ public:
     }
 
 private:
+    void closeDialog()
+    {
+        if (closing_)
+            return;
+
+        closing_ = true;
+        if (auto* window = findParentComponentOfClass<juce::DialogWindow>())
+            window->exitModalState(0);
+    }
+
     void applyCurrentLookAndFeel()
     {
         if (UIColors::currentThemeId() == ThemeId::Aurora) {
@@ -143,12 +149,12 @@ private:
     OpenTuneLookAndFeel openTuneLookAndFeel_;
     AuroraLookAndFeel auroraLookAndFeel_;
     juce::Component::SafePointer<juce::Component> dialogParent_;
+    bool closing_ = false;
 
     void componentBeingDeleted(juce::Component&) override
     {
         setDialogParent(nullptr);
-        if (auto* window = findParentComponentOfClass<juce::DialogWindow>())
-            window->exitModalState(0);
+        closeDialog();
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TabbedPreferencesDialog)

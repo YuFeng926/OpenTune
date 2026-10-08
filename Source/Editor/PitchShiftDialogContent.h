@@ -217,6 +217,7 @@ private:
     std::function<void()> onReset_;
     juce::Component::SafePointer<juce::Component> dialogParent_;
     bool actionTriggered_ = false;
+    bool closing_ = false;
 
     void componentBeingDeleted(juce::Component&) override
     {
@@ -229,6 +230,10 @@ private:
     /** 关闭所在 DialogWindow */
     void closeParentDialog()
     {
+        if (closing_)
+            return;
+
+        closing_ = true;
         if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
             dw->exitModalState(0);
     }
