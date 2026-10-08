@@ -384,6 +384,9 @@ private:
 
     void closeDialog()
     {
+        if (closing_)
+            return;
+
         // 主动关闭标记：DialogWindow 隐藏时不再触发二次 dismiss 回调
         closing_ = true;
 

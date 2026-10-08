@@ -48,7 +48,6 @@ OnboardingOverlayComponent::OnboardingOverlayComponent(
 OnboardingOverlayComponent::~OnboardingOverlayComponent()
 {
     active_ = false;
-    closeChoiceDialog();
     previousButton_.onClick = {};
     nextButton_.onClick = {};
     exitButton_.onClick = {};
@@ -101,22 +100,8 @@ void OnboardingOverlayComponent::showWorkflowChoice()
           { text(kLater), [safeThis] { if (safeThis != nullptr) safeThis->finish(); } } },
         [safeThis] { if (safeThis != nullptr && !safeThis->choiceResolved_) safeThis->finish(); },
         /*centreButtons=*/ true);
-    choiceDialog_ = content;
     ConfirmDialogContent::launch(content, &contentRoot_);
     appPreferences_.setOnboardingShown(true);
-}
-
-void OnboardingOverlayComponent::closeChoiceDialog()
-{
-    if (choiceDialog_ != nullptr)
-    {
-        if (auto* window = dynamic_cast<juce::DialogWindow*>(choiceDialog_->getTopLevelComponent()))
-        {
-            window->exitModalState(0);
-            window->setVisible(false);
-        }
-    }
-    choiceDialog_ = nullptr;
 }
 
 void OnboardingOverlayComponent::chooseScheme(AudioEditingScheme::Scheme scheme)
@@ -124,7 +109,6 @@ void OnboardingOverlayComponent::chooseScheme(AudioEditingScheme::Scheme scheme)
     if (!active_) return;
     choiceResolved_ = true;
     scheme_ = scheme;
-    closeChoiceDialog();
     if (applyScheme_) applyScheme_(scheme);
     for (auto* button : { &previousButton_, &nextButton_, &exitButton_ })
         button->setVisible(true);
@@ -163,7 +147,6 @@ int OnboardingOverlayComponent::stepCount() const noexcept
 void OnboardingOverlayComponent::finish()
 {
     if (!active_) return;
-    closeChoiceDialog();
     active_ = false;
     choiceResolved_ = true;
     setVisible(false);

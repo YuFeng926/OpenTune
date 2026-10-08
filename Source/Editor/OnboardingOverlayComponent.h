@@ -77,7 +77,6 @@ private:
     void nextStep();
     void previousStep();
     void updateStepGeometry();
-    void closeChoiceDialog();
 
     juce::Component* targetComponent() const;
     juce::Rectangle<int> targetBoundsInOverlay() const;
@@ -105,8 +104,6 @@ private:
     bool active_ = false;
     bool choiceResolved_ = false;
     int savedParameterScrollY_ = 0;
-    juce::Component::SafePointer<ConfirmDialogContent> choiceDialog_;
-
     juce::Rectangle<int> targetBounds_;
     juce::Rectangle<int> cardBounds_;
     static constexpr int kFooterHeight = 32;
