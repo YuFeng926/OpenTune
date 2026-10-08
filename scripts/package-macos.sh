@@ -432,13 +432,67 @@ PREINSTALL_EOF
 </installer-gui-script>
 DISTRIBUTION_EOF
 
+    # 关闭 bundle 重定位：pkgbuild 默认把 bundle 标记为 relocatable，安装时
+    # Installer 若在别处（如开发构建目录）发现相同 CFBundleIdentifier 的副本，
+    # 会把内容“升级”到那份副本上，导致 /Applications 下没有主程序。
+    cat > "${PKG_BUILD_DIR}/components.plist" << COMPONENT_PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+    <dict>
+        <key>RootRelativeBundlePath</key>
+        <string>Applications/${APP_NAME}.app</string>
+        <key>BundleIsRelocatable</key>
+        <false/>
+        <key>BundleIsVersionChecked</key>
+        <false/>
+        <key>BundleHasStrictIdentifier</key>
+        <true/>
+        <key>BundleOverwriteAction</key>
+        <string>upgrade</string>
+    </dict>
+    <dict>
+        <key>RootRelativeBundlePath</key>
+        <string>Library/Audio/Plug-Ins/VST3/${APP_NAME}.vst3</string>
+        <key>BundleIsRelocatable</key>
+        <false/>
+        <key>BundleIsVersionChecked</key>
+        <false/>
+        <key>BundleHasStrictIdentifier</key>
+        <true/>
+        <key>BundleOverwriteAction</key>
+        <string>upgrade</string>
+    </dict>
+</array>
+</plist>
+COMPONENT_PLIST_EOF
+
     echo "  构建组件包"
     pkgbuild --root "${payload_dir}" \
              --identifier "${BUNDLE_ID}.pkg" \
              --version "${VERSION}" \
              --install-location "/" \
              --scripts "${scripts_dir}" \
+             --component-plist "${PKG_BUILD_DIR}/components.plist" \
              "${packages_dir}/${APP_NAME}.pkg"
+
+    # 回归保护：确认组件包不再携带可重定位 bundle 标记。
+    local verify_dir relocate_marked
+    verify_dir="$(mktemp -d)"
+    rmdir "${verify_dir}"
+    pkgutil --expand "${packages_dir}/${APP_NAME}.pkg" "${verify_dir}" >/dev/null
+    relocate_marked="$(awk '
+        /<relocate>/ { in_relocate = 1; next }
+        /<\/relocate>/ { in_relocate = 0 }
+        in_relocate && /<bundle/ { print "yes"; exit }
+    ' "${verify_dir}/PackageInfo")"
+    if [ -n "${relocate_marked}" ]; then
+        rm -rf "${verify_dir}"
+        echo "❌ 组件包仍包含可重定位 bundle，安装后主程序可能不会出现在 /Applications"
+        exit 1
+    fi
+    rm -rf "${verify_dir}"
 
     echo "  组装产品包"
     if [ -n "${PKG_SIGN_IDENTITY:-}" ]; then
