@@ -6,7 +6,7 @@
 
 | 需求 | Windows | macOS |
 |------|---------|-------|
-| **系统** | Windows 10 1903+ | macOS 13.4+ (Intel) / 14.0+ (Apple Silicon) |
+| **系统** | Windows 10 1903+ | macOS 12.0+ (Intel / Apple Silicon) |
 | **架构** | x64 | x86_64 (Intel) / arm64 (Apple Silicon) |
 | **编译器** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
@@ -51,7 +51,7 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-### 4. ONNX Runtime（Windows v1.24.4 / macOS Intel v1.23.0 / macOS Apple Silicon v1.24.4）
+### 4. ONNX Runtime（Windows v1.24.4 / macOS v1.19.2 universal2）
 
 本项目需要 **两个** ONNX Runtime 包（Windows）：CPU 版提供头文件，DML 版提供原始 `onnxruntime.dll`（内置 DirectML 支持）。构建系统生成专用导入库，并把运行时 DLL 输出为 `OpenTuneOnnxRuntime_1_24_4.dll`。
 
@@ -87,36 +87,26 @@ ThirdParty/
 
 **运行时解析顺序（Windows）**：应用优先加载自身目录中的 `OpenTuneOnnxRuntime_<版本>.dll`（Standalone 为 exe 同目录，VST3 为 bundle 的 `Contents\x86_64-win`），`Program Files\OpenTune` 共享安装只作兜底——避免旧安装静默遮蔽随包分发的那一份。文件名中的 ORT 版本号即 ABI 契约：升级 ONNX Runtime 必须同步修改 `OPENTUNE_ORT_DLL_NAME` 与安装器 `[Files]` 中的源文件名（两处不一致时 ISCC 会直接编译失败，不会静默打错包）；旧版本文件由安装器 `[InstallDelete]` 的 `OpenTuneOnnxRuntime_*.dll` 通配符清理，`scripts/validate-windows-release.ps1` 从 CMakeLists 读取期望名并断言产物中恰好一份。模型由安装器统一装到 `%ProgramData%\OpenTune\Models`，独立版与 VST3 共用一份（便携 ZIP 仍随包放在 exe 同目录）。
 
-**macOS (Intel, x86_64)**：
+**macOS（Intel / Apple Silicon 通用）**：
 
-macOS Intel 使用仓库中现有的 universal2 包（实际按 x86_64 构建），CoreML EP 已内置。该运行库最低支持 macOS 13.4：
-
-```
-ThirdParty/onnxruntime-osx-universal2-1.23.0/   ← 已包含在仓库中，无需额外下载
-├── include/
-│   └── onnxruntime_cxx_api.h
-└── lib/
-    └── libonnxruntime.1.23.0.dylib
-```
-
-**macOS (Apple Silicon, arm64)**：
-
-macOS Apple Silicon 使用 arm64 v1.24.4 包，CoreML EP 已内置。该运行库最低支持 macOS 14.0。**请手动下载并解压到指定目录**（仓库不包含此文件）：
+macOS 两个架构共用同一个 **universal2** 包（x86_64 + arm64 双架构，CoreML EP 已内置），版本固定为 **1.19.2**。该运行库的 Mach-O 最低系统版本为 macOS 11.0，配合 `CMAKE_OSX_DEPLOYMENT_TARGET = 12.0` 可在 macOS 12 及以上运行。**请下载并解压到指定目录；不要替换为更新的 ORT 版本**（较新版本会抬高最低系统要求）：
 
 ```bash
 cd ThirdParty
-curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz | tar xz
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-osx-universal2-1.19.2.tgz | tar xz
 cd ..
 ```
 
 解压后结构：
 ```
-ThirdParty/onnxruntime-osx-arm64-1.24.4/
+ThirdParty/onnxruntime-osx-universal2-1.19.2/
 ├── include/
 │   └── onnxruntime_cxx_api.h
 └── lib/
-    └── libonnxruntime.1.24.4.dylib
+    └── libonnxruntime.1.19.2.dylib
 ```
+
+> **CoreML 注册路径**：ORT 1.19.2 不认识字符串版 `AppendExecutionProvider("CoreML", ...)`（会抛 `Unknown provider name`）。项目通过 `Source/Inference/OnnxRuntimeProviderCompat.h` 先尝试新版 provider-options API，失败后回退到 flag 版 C API（`COREML_FLAG_CREATE_MLPROGRAM`）。升级 macOS ORT 版本时必须重新验证该文件，并确认日志中出现 `CoreML EP added`、CoreML 实际生效。
 
 ### 5. DirectML & DirectX Agility SDK（仅 Windows）
 
@@ -174,8 +164,7 @@ OpenTune/
 │   ├── r8brain-free-src-master/          ← 重采样库
 │   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
 │   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
-│   ├── onnxruntime-osx-universal2-1.23.0/ ← ONNX Runtime (macOS Intel, universal2)
-│   ├── onnxruntime-osx-arm64-1.24.4/     ← ONNX Runtime (macOS Apple Silicon, arm64)
+│   ├── onnxruntime-osx-universal2-1.19.2/ ← ONNX Runtime (macOS，Intel + Apple Silicon 通用)
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
 │   └── microsoft.direct3d.d3d12.1.619.5/ ← D3D12 Agility SDK (Windows)
 ├── models/
@@ -278,6 +267,7 @@ cmake --build --preset macos-intel-ara-release
 | `DirectML header missing` | DirectML NuGet 包未解压 | 确认 `ThirdParty/microsoft.ai.directml.1.15.4/include/DirectML.h` 存在 |
 | `D3D12 header missing from Agility SDK` | D3D12 NuGet 包未解压 | 确认 `ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include/d3d12.h` 存在 |
 | `ONNX Runtime DirectML DLL missing` | DML 版运行时 DLL 缺失 | 确认 `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` 存在 |
+| `ONNX Runtime dylib not found` | macOS universal2 包未下载或版本不符 | 确认 `ThirdParty/onnxruntime-osx-universal2-1.19.2/lib/libonnxruntime.1.19.2.dylib` 存在，且未替换为更新的 ORT 版本 |
 | `ARA SDK not found` | ARA SDK 未克隆 | 执行步骤 2 的 git clone 命令 |
 | MSVC 链接错误 LNK2019 | MSVC 运行时不匹配 | 本项目使用静态 CRT (`/MT`)，确保依赖库一致 |
 | Ninja 构建失败 | Ninja 未安装或不在 PATH 中 | 确保 Ninja 已安装并在系统 PATH 中，或使用 Visual Studio Generator |

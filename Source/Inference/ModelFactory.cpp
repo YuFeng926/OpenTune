@@ -1,5 +1,6 @@
 #include "ModelFactory.h"
 #include "FCPEExtractor.h"
+#include "OnnxRuntimeProviderCompat.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/CpuBudgetManager.h"
 #include "../Utils/AccelerationDetector.h"
@@ -187,14 +188,11 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(
 #if defined(__APPLE__)
     if (!forceCpu) {
         try {
-        std::unordered_map<std::string, std::string> coremlOptions;
-        coremlOptions["ModelFormat"] = "MLProgram";
-        coremlOptions["MLComputeUnits"] = "CPUAndGPU";
-        sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
+        appendCoreMlExecutionProvider(sessionOptions);
         gpuMode = true;
-        AppLogger::info("[ModelFactory] F0 session: CoreML EP added (macOS, MLProgram+CPUAndGPU)");
-        } catch (...) {
-            AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0 (unknown error)");
+        AppLogger::info("[ModelFactory] F0 session: CoreML EP added (macOS, MLProgram)");
+        } catch (const std::exception& e) {
+            AppLogger::warn(juce::String("[ModelFactory] Failed to add CoreML EP for F0: ") + e.what());
             AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
         }
     }

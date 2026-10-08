@@ -48,7 +48,7 @@ gratefully acknowledge the work of their authors.
 ## ONNX Runtime
 - **License**: MIT
 - **Project**: https://onnxruntime.ai/
-- **Version**: Windows 1.24.4; macOS Intel 1.23.0; macOS Apple Silicon 1.24.4
+- **Version**: Windows 1.24.4; macOS 1.19.2 (universal2, macOS 12+)
 - **Use**: Cross-platform AI inference (CPU on all platforms; DirectML
   on Windows; CoreML on macOS).
 

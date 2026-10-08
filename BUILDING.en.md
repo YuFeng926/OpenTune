@@ -6,7 +6,7 @@
 
 | Requirement | Windows | macOS |
 |-------------|---------|-------|
-| **System** | Windows 10 1903+ | macOS 13.4+ (Intel) / 14.0+ (Apple Silicon) |
+| **System** | Windows 10 1903+ | macOS 12.0+ (Intel / Apple Silicon) |
 | **Architecture** | x64 | x86_64 (Intel) / arm64 (Apple Silicon) |
 | **Compiler** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
@@ -51,7 +51,7 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-### 4. ONNX Runtime (Windows v1.24.4 / macOS Intel v1.23.0 / macOS Apple Silicon v1.24.4)
+### 4. ONNX Runtime (Windows v1.24.4 / macOS v1.19.2 universal2)
 
 This project requires **two** ONNX Runtime packages (Windows): the CPU version provides headers, and the DML version provides the original `onnxruntime.dll` (with built-in DirectML support). The build system generates a dedicated import library and outputs the runtime DLL as `OpenTuneOnnxRuntime_1_24_4.dll`.
 
@@ -87,36 +87,26 @@ ThirdParty/
 
 **Runtime resolution order (Windows)**: the app loads `OpenTuneOnnxRuntime_<version>.dll` from its own directory first (next to the Standalone executable, or in the VST3 bundle's `Contents\x86_64-win`); the shared `Program Files\OpenTune` install is only a fallback, so a stale installation can never shadow the copy shipped with the binary. The ORT version in the file name is an ABI contract: bumping ONNX Runtime requires updating `OPENTUNE_ORT_DLL_NAME` and the source file name in the installer's `[Files]` section (if they diverge, ISCC fails the compile instead of packaging the wrong file); stale files are cleaned by the installer's `OpenTuneOnnxRuntime_*.dll` wildcard in `[InstallDelete]`, and `scripts/validate-windows-release.ps1` reads the expected name from CMakeLists and asserts that exactly one copy exists. The installer places models in `%ProgramData%\OpenTune\Models`, shared by the Standalone and the VST3 (the portable ZIP still ships them next to the executable).
 
-**macOS (Intel, x86_64)**:
+**macOS (Intel / Apple Silicon, shared)**:
 
-macOS Intel uses the existing universal2 package from the repository (built as x86_64), with CoreML EP built in. This runtime requires macOS 13.4 or later:
-
-```
-ThirdParty/onnxruntime-osx-universal2-1.23.0/   ← Already included in the repository, no download needed
-├── include/
-│   └── onnxruntime_cxx_api.h
-└── lib/
-    └── libonnxruntime.1.23.0.dylib
-```
-
-**macOS (Apple Silicon, arm64)**:
-
-macOS Apple Silicon uses the arm64 v1.24.4 package with CoreML EP built in. This runtime requires macOS 14.0 or later. **Please download and extract to the specified directory manually** (not included in the repository):
+Both macOS architectures share the same **universal2** package (x86_64 + arm64 slices, CoreML EP built in), pinned to version **1.19.2**. The runtime's Mach-O minimum OS is macOS 11.0, so together with `CMAKE_OSX_DEPLOYMENT_TARGET = 12.0` it runs on macOS 12 and later. **Download and extract it to the specified directory; do not replace it with a newer ORT release** (newer releases raise the minimum OS requirement):
 
 ```bash
 cd ThirdParty
-curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz | tar xz
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-osx-universal2-1.19.2.tgz | tar xz
 cd ..
 ```
 
 Extracted structure:
 ```
-ThirdParty/onnxruntime-osx-arm64-1.24.4/
+ThirdParty/onnxruntime-osx-universal2-1.19.2/
 ├── include/
 │   └── onnxruntime_cxx_api.h
 └── lib/
-    └── libonnxruntime.1.24.4.dylib
+    └── libonnxruntime.1.19.2.dylib
 ```
+
+> **CoreML registration path**: ORT 1.19.2 does not recognise the string-based `AppendExecutionProvider("CoreML", ...)` (it throws `Unknown provider name`). The project uses `Source/Inference/OnnxRuntimeProviderCompat.h` to try the newer provider-options API first and fall back to the flag-based C API (`COREML_FLAG_CREATE_MLPROGRAM`). Re-verify this file and confirm the log shows `CoreML EP added` (CoreML actually active) before upgrading the macOS ORT version.
 
 ### 5. DirectML & DirectX Agility SDK (Windows only)
 
@@ -174,8 +164,7 @@ OpenTune/
 │   ├── r8brain-free-src-master/          ← Resampling library
 │   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
 │   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
-│   ├── onnxruntime-osx-universal2-1.23.0/ ← ONNX Runtime (macOS Intel, universal2)
-│   ├── onnxruntime-osx-arm64-1.24.4/     ← ONNX Runtime (macOS Apple Silicon, arm64)
+│   ├── onnxruntime-osx-universal2-1.19.2/ ← ONNX Runtime (macOS, shared Intel + Apple Silicon)
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
 │   └── microsoft.direct3d.d3d12.1.619.5/ ← D3D12 Agility SDK (Windows)
 ├── models/
@@ -282,6 +271,7 @@ After build completion, runtime DLLs, model files, and D3D12 directory will be a
 | `DirectML header missing` | DirectML NuGet package not extracted | Verify `ThirdParty/microsoft.ai.directml.1.15.4/include/DirectML.h` exists |
 | `D3D12 header missing from Agility SDK` | D3D12 NuGet package not extracted | Verify `ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include/d3d12.h` exists |
 | `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` exists |
+| `ONNX Runtime dylib not found` | macOS universal2 package missing or version mismatch | Verify `ThirdParty/onnxruntime-osx-universal2-1.19.2/lib/libonnxruntime.1.19.2.dylib` exists and has not been replaced with a newer ORT version |
 | `ARA SDK not found` | ARA SDK not cloned | Execute step 2 git clone command |
 | MSVC link error LNK2019 | MSVC runtime mismatch | This project uses static CRT (`/MT`), ensure dependency libraries are consistent |
 | Ninja build failure | Ninja not installed or not in PATH | Ensure Ninja is installed and in system PATH, or use Visual Studio Generator |

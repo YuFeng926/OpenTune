@@ -1,5 +1,6 @@
 #include "VocoderFactory.h"
 #include "PCNSFHifiGANVocoder.h"
+#include "OnnxRuntimeProviderCompat.h"
 #ifdef _WIN32
 #include "DmlVocoder.h"
 #endif
@@ -243,14 +244,11 @@ VocoderCreationResult VocoderFactory::create(
 #if defined(__APPLE__)
         // macOS: attempt CoreML acceleration for vocoder via Neural Engine
         try {
-            std::unordered_map<std::string, std::string> coremlOptions;
-            coremlOptions["ModelFormat"] = "MLProgram";
-            coremlOptions["MLComputeUnits"] = "CPUAndGPU";
-            sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
+            appendCoreMlExecutionProvider(sessionOptions);
             selectedBackend = VocoderBackend::CoreML;
-            AppLogger::info("[VocoderFactory] Vocoder session: CoreML EP added (macOS)");
-        } catch (...) {
-            AppLogger::warn("[VocoderFactory] Failed to add CoreML EP for vocoder (unknown error)");
+            AppLogger::info("[VocoderFactory] Vocoder session: CoreML EP added (macOS, MLProgram)");
+        } catch (const std::exception& e) {
+            AppLogger::warn(juce::String("[VocoderFactory] Failed to add CoreML EP for vocoder: ") + e.what());
             AppLogger::info("[VocoderFactory] Vocoder session: falling back to CPU");
         }
 #endif

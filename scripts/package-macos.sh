@@ -119,7 +119,7 @@ case "${ARCH}" in
         BUILD_DIR="${ROOT_DIR}/build-intel-ninja"
         DMG_ARCH_LABEL="Intel"
         PKG_HOST_ARCHS="x86_64"
-        PKG_MIN_OS="13.4"
+        PKG_MIN_OS="12.0"
         ;;
     silicon)
         OSX_ARCH="arm64"
@@ -127,7 +127,7 @@ case "${ARCH}" in
         BUILD_DIR="${ROOT_DIR}/build-silicon-ninja"
         DMG_ARCH_LABEL="Apple-Silicon"
         PKG_HOST_ARCHS="arm64"
-        PKG_MIN_OS="14.0"
+        PKG_MIN_OS="12.0"
         ;;
     *)
         echo "❌ 无效架构: ${ARCH}（仅支持 intel|silicon）"
@@ -475,6 +475,40 @@ if [ -d "${VST3_RESOURCES}/models" ]; then
     rm -rf "${VST3_RESOURCES}/models"
     echo "  VST3 剥离重复模型: -${MODELS_SIZE}"
 fi
+
+# ── 清理 bundle 中未引用的旧版 ONNX Runtime 动态库 ────────────────────────────
+# 构建目录切换 ORT 版本后，旧版 libonnxruntime.<old>.dylib 可能残留在
+# Contents/Frameworks 中。这里以二进制实际链接（otool -L）的版本为准，
+# 删除其余同名库，避免把旧运行库打进安装包。
+prune_stale_ort_dylibs() {
+    local bundle="$1"
+    local label="$2"
+    local binary="${bundle}/Contents/MacOS/${APP_NAME}"
+    local frameworks="${bundle}/Contents/Frameworks"
+    local linked keep lib name size
+
+    [ -d "${frameworks}" ] || return 0
+    [ -f "${binary}" ] || return 0
+
+    linked="$(otool -L "${binary}" | awk '
+        $1 ~ /^@rpath\/libonnxruntime\.[0-9].*\.dylib$/ { print $1; exit }
+    ')"
+    [ -n "${linked}" ] || return 0
+    keep="${linked#@rpath/}"
+
+    for lib in "${frameworks}"/libonnxruntime.*.dylib; do
+        [ -e "${lib}" ] || continue
+        name="$(basename "${lib}")"
+        if [ "${name}" != "${keep}" ]; then
+            size="$(du -sh "${lib}" | cut -f1)"
+            rm -f "${lib}"
+            echo "  ${label} 移除未引用的 ONNX Runtime 动态库: ${name} (-${size})"
+        fi
+    done
+}
+
+prune_stale_ort_dylibs "${STAGING}/${APP_NAME}.app" "Standalone"
+prune_stale_ort_dylibs "${STAGING}/${APP_NAME}.vst3" "VST3"
 
 # ── 生成安装脚本 ─────────────────────────────────────────────────────────────
 INSTALL_SCRIPT="${STAGING}/安装 OpenTune.command"

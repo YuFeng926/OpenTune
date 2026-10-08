@@ -8,8 +8,10 @@ cmake_minimum_required(VERSION 3.22)
 # ==============================================================================
 # macOS architecture and deployment target must be set before project() so CMake
 # writes the same minimum version into the Mach-O load commands and Info.plist.
-#   x86_64 -> ORT 1.23.0 universal2, macOS 13.4+
-#   arm64  -> ORT 1.24.4 arm64, macOS 14.0+
+# Both architectures consume the same pinned ORT 1.19.2 universal2 runtime
+# (CoreML EP), which keeps the macOS 12.0 compatibility floor:
+#   x86_64 -> ORT 1.19.2 universal2, macOS 12.0+
+#   arm64  -> ORT 1.19.2 universal2, macOS 12.0+
 # ==============================================================================
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     if(CMAKE_OSX_ARCHITECTURES STREQUAL "")
@@ -20,10 +22,8 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
         endif()
     endif()
 
-    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.4" CACHE STRING "Minimum macOS deployment target" FORCE)
-    elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target" FORCE)
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS deployment target" FORCE)
     else()
         message(FATAL_ERROR
             "Unsupported macOS architecture '${CMAKE_OSX_ARCHITECTURES}'. Use x86_64 or arm64.")
@@ -240,27 +240,23 @@ if(WIN32)
     endif()
 
 elseif(APPLE)
-    # ---- macOS: architecture-dependent ONNX Runtime version ----
-    # x86_64 → ORT 1.23.0 universal2 (deployment target 13.4)
-    # arm64  → ORT 1.24.4 arm64     (deployment target 14.0)
-    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-        set(OPENTUNE_ONNXRUNTIME_VERSION "1.23.0")
-    else()
-        set(OPENTUNE_ONNXRUNTIME_VERSION "1.24.4")
-    endif()
+    # ---- macOS: pinned ONNX Runtime 1.19.2 universal2 ----
+    # Both x86_64 and arm64 consume the same universal2 package. Keep this
+    # version pinned: newer upstream ORT macOS builds raise their deployment
+    # target above the macOS 12.0 floor this project targets.
+    set(OPENTUNE_ONNXRUNTIME_VERSION "1.19.2")
 
-    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-        set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
-            "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION}")
-    else()
-        set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
-            "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-arm64-${OPENTUNE_ONNXRUNTIME_VERSION}")
-    endif()
+    set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
+        "${OPENTUNE_THIRDPARTY_DIR}/onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION}")
     if(NOT DEFINED ONNXRUNTIME_ROOT OR "${ONNXRUNTIME_ROOT}" STREQUAL "")
         set(ONNXRUNTIME_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}"
             CACHE PATH "ONNX Runtime root directory" FORCE)
-    elseif(NOT EXISTS "${ONNXRUNTIME_ROOT}" AND EXISTS "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}")
-        message(STATUS "ONNXRUNTIME_ROOT reset to bundled dependency path: ${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}")
+    elseif(NOT EXISTS "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.${OPENTUNE_ONNXRUNTIME_VERSION}.dylib"
+           AND EXISTS "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}/lib/libonnxruntime.${OPENTUNE_ONNXRUNTIME_VERSION}.dylib")
+        # Existing build trees may cache an older ORT root (e.g. 1.23.0/1.24.4).
+        # That directory still exists, so the generic fallback above would not
+        # trigger; reset it whenever the pinned dylib is absent from the cache.
+        message(STATUS "ONNXRUNTIME_ROOT reset to pinned ORT ${OPENTUNE_ONNXRUNTIME_VERSION}: ${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}")
         set(ONNXRUNTIME_ROOT "${OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT}"
             CACHE PATH "ONNX Runtime root directory" FORCE)
     endif()
@@ -280,7 +276,10 @@ if(APPLE)
     set(ONNXRUNTIME_DYLIB
         "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.${OPENTUNE_ONNXRUNTIME_VERSION}.dylib")
     if(NOT EXISTS "${ONNXRUNTIME_DYLIB}")
-        message(FATAL_ERROR "ONNX Runtime dylib not found at ${ONNXRUNTIME_DYLIB}")
+        message(FATAL_ERROR
+            "ONNX Runtime dylib not found at ${ONNXRUNTIME_DYLIB}. "
+            "Place the pinned onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION} "
+            "package under ThirdParty/ (see BUILDING.md) instead of a newer ORT release.")
     endif()
 endif()
 
@@ -574,6 +573,7 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Inference/VocoderInterface.h
         Source/Inference/OnnxVocoderBase.h
         Source/Inference/OnnxVocoderBase.cpp
+        Source/Inference/OnnxRuntimeProviderCompat.h
 
         # AI Model Implementations
         Source/Inference/FCPEExtractor.cpp
@@ -1177,10 +1177,14 @@ elseif(APPLE)
     add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Frameworks"
+        COMMAND ${CMAKE_COMMAND}
+            "-DORT_FRAMEWORKS_DIR=$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Frameworks"
+            "-DORT_KEEP_FILENAME=libonnxruntime.${OPENTUNE_ONNXRUNTIME_VERSION}.dylib"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CleanStaleOrtDylibs.cmake"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${ONNXRUNTIME_DYLIB}"
             "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Frameworks/"
-        COMMENT "Copying ONNX Runtime dylib to app bundle Frameworks..."
+        COMMENT "Copying ONNX Runtime dylib to app bundle Frameworks (removing stale versions)..."
     )
 
     add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
@@ -1301,10 +1305,14 @@ if(TARGET OpenTune_VST3)
         add_custom_command(TARGET OpenTune_VST3 POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks"
+            COMMAND ${CMAKE_COMMAND}
+                "-DORT_FRAMEWORKS_DIR=$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks"
+                "-DORT_KEEP_FILENAME=libonnxruntime.${OPENTUNE_ONNXRUNTIME_VERSION}.dylib"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CleanStaleOrtDylibs.cmake"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ONNXRUNTIME_DYLIB}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks/"
-            COMMENT "Copying ONNX Runtime dylib to VST3 bundle Frameworks..."
+            COMMENT "Copying ONNX Runtime dylib to VST3 bundle Frameworks (removing stale versions)..."
         )
 
         # AI Models → Contents/Resources/models/
