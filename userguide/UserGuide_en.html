@@ -203,6 +203,10 @@
 <h3>3.3 Launching</h3>
 <p>Double-click <code>OpenTune.exe</code> to start the standalone version. AI models are automatically initialized on first launch. For VST3 plugin use, copy the <code>OpenTune.vst3</code> folder to your DAW's VST3 scan directory.</p>
 
+<h3>3.4 First-Run Onboarding</h3>
+<p>On first launch, OpenTune automatically opens the <strong>onboarding guide</strong>: after choosing an editing scheme, it introduces the File/Edit/View menus, audio import, the piano roll and toolbars, the core editing tools, and the parameter panel. The steps adapt to the environment (Standalone / ARA plug-in / live capture), and the guide can be exited at any time.</p>
+<p>To view it again, open <strong>Help → Onboarding...</strong> or click <strong>Replay onboarding</strong> in Preferences.</p>
+
 <div class="page-break"></div>
 <h2 id="interface">4. Interface Overview</h2>
 
@@ -338,7 +342,7 @@
 <div class="page-break"></div>
 <h2 id="tools">7. Editing Tools</h2>
 
-<p>OpenTune provides six professional editing tools, switchable via the tool area in the parameter panel or by keyboard shortcut:</p>
+<p>OpenTune provides seven professional editing tools, switchable via the tool area in the parameter panel or by keyboard shortcut:</p>
 
 <div class="tool-card">
     <h4>AutoTune — Automatic Correction Tool (Shortcut: 6)</h4>
@@ -365,6 +369,12 @@
 <div class="tool-card">
     <h4>HandDraw — Freehand Tool (Shortcut: 5)</h4>
     <p>Draw the pitch curve directly by hand for fully customized pitch shaping. Ideal for drawing vibrato, glides, bends, and other ornamental effects.</p>
+</div>
+
+<div class="tool-card">
+    <h4>Eraser</h4>
+    <p>Brush tool: drag to erase both notes and pitch correction within the brush range. The whole stroke is committed as a single undo step.</p>
+    <p><strong>Usage</strong>: select the eraser in the parameter panel or from the tool palette opened with a right-click, then drag with the left mouse button; a circular brush shows the range. No default shortcut.</p>
 </div>
 
 <div class="tool-card">
@@ -471,8 +481,9 @@
     <tr><td>Interface Language</td><td>Chinese / English / Japanese / Russian / Spanish</td><td>Chinese</td></tr>
     <tr><td>Theme</td><td>Aurora</td><td>Aurora</td></tr>
     <tr><td>Editing Scheme</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
+    <tr><td>Whole Note Move Snap</td><td>Snap mode when transposing notes as a whole: Follow Global Scale / Nearest Standard Pitch (Whole-Note Equal Steps); available in the OpenTune scheme only</td><td>Follow Global Scale</td></tr>
     <tr><td>Render Priority</td><td>GPU Preferred / CPU Preferred</td><td>GPU Preferred</td></tr>
-    <tr><td>Vocoder Model Weights</td><td>Community / Coulin9 v4 (Professional); falls back to the default automatically if unavailable</td><td>Community</td></tr>
+    <tr><td>Vocoder Model Weights</td><td>Community / Coulin9 v4 (Professional), plus custom weights placed in <code>models/vocoder_weights/</code> (same-name files override built-ins); more weight variants supported with automatic spectral-parameter adaptation; falls back to the default automatically if unavailable</td><td>Community</td></tr>
     <tr><td>Horizontal Zoom Sensitivity</td><td>Controls mouse wheel horizontal zoom speed</td><td>1.0</td></tr>
     <tr><td>Vertical Zoom Sensitivity</td><td>Controls mouse wheel vertical zoom speed</td><td>1.0</td></tr>
     <tr><td>Scroll Speed</td><td>View scrolling speed</td><td>1.0</td></tr>
@@ -626,6 +637,7 @@
     <li>The DAW provides audio source data via the ARA protocol — no file import/export needed</li>
     <li>Editing results are reflected in real time during DAW timeline playback</li>
     <li>Supports host transport sync (Play/Stop/Seek) and BPM following; seeking and playback follow steadily, with no playhead jitter</li>
+    <li>Stable continuous playback in hosts: no more stutter or repeated fragments (e.g. in Cubase 13 Pro); the output is cleared immediately when playback stops</li>
     <li>Supports ARA multi-region binding; multiple regions on the same source share editing state</li>
     <li>Reference auto-alignment: reference pitch is automatically aligned across ARA regions, improving multi-track editing consistency</li>
     <li>Reading and editing apply only to the currently selected audio clip — multiple clips no longer interfere with each other; the read button is temporarily unavailable until the focused clip is ready</li>
@@ -712,6 +724,9 @@
 
 <h3>Q7: How to switch the interface language?</h3>
 <p><strong>A:</strong> Preferences &rarr; Language — select your target language and the interface updates immediately. Supports Chinese, English, Japanese, Russian, and Spanish.</p>
+
+<h3>Q8: What should I do when rendering or pitch analysis fails?</h3>
+<p><strong>A:</strong> A diagnostic dialog appears (for example "Render failed, dry signal may be used") with the log file path and the latest log contents for easy copying. Log folders: Windows <code>%APPDATA%\OpenTune\Logs</code>, macOS <code>~/Library/OpenTune/Logs/</code>.</p>
 
 <hr>
 

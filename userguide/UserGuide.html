@@ -202,6 +202,10 @@
 <h3>3.3 启动程序</h3>
 <p>双击 <code>OpenTune.exe</code> 即可启动独立版。首次启动时自动初始化 AI 模型。VST3 插件需将 <code>OpenTune.vst3</code> 复制到宿主软件的 VST3 扫描目录。</p>
 
+<h3>3.4 首次启动引导</h3>
+<p>首次启动时会自动进入<strong>上手引导</strong>：选择编辑方案后，依次介绍文件/编辑/视图菜单、音频导入、钢琴卷帘与工具栏、核心编辑工具及参数面板。引导步骤会根据运行环境（Standalone / ARA 插件 / 实时采集）自动调整，随时可退出。</p>
+<p>需要再次查看时，通过菜单 <strong>Help → Onboarding...</strong> 重新打开，或在偏好设置中点击<strong>重新进入上手引导</strong>。</p>
+
 <div class="page-break"></div>
 <h2 id="interface">4. 界面概览</h2>
 
@@ -337,7 +341,7 @@
 <div class="page-break"></div>
 <h2 id="tools">7. 编辑工具</h2>
 
-<p>OpenTune 提供六种专业编辑工具，通过参数面板的工具区或快捷键切换：</p>
+<p>OpenTune 提供七种专业编辑工具，通过参数面板的工具区或快捷键切换：</p>
 
 <div class="tool-card">
     <h4>AutoTune — 自动修正工具 (快捷键: 6)</h4>
@@ -364,6 +368,12 @@
 <div class="tool-card">
     <h4>HandDraw — 手绘工具 (快捷键: 5)</h4>
     <p>直接手绘 F0 曲线，完全自定义音高走向。适合绘制颤音、滑音、弯音等装饰效果。</p>
+</div>
+
+<div class="tool-card">
+    <h4>Eraser — 橡皮擦工具</h4>
+    <p>笔刷擦除工具：按住拖动即可同时擦除笔刷范围内的音符与音高修正，整次擦除作为一步操作进入撤销历史。</p>
+    <p><strong>操作</strong>：在参数面板或右键打开的工具栏中选择橡皮擦，按住左键拖动，圆形笔刷实时显示擦除范围；无默认快捷键。</p>
 </div>
 
 <div class="tool-card">
@@ -470,8 +480,9 @@
     <tr><td>界面语言</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
     <tr><td>主题</td><td>Aurora</td><td>Aurora</td></tr>
     <tr><td>编辑方案</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
+    <tr><td>整体移动吸附</td><td>音符整体移调时的吸附方式：跟随全局调式 / 最近标准音（整体等距）；仅 OpenTune 编辑方案可用</td><td>跟随全局调式</td></tr>
     <tr><td>渲染优先级</td><td>GPU 优先 / CPU 优先</td><td>GPU 优先</td></tr>
-    <tr><td>声码器模型权重</td><td>Community（社区版）/ Coulin9 v4（专业版）；所选权重不可用时自动回退到默认</td><td>Community</td></tr>
+    <tr><td>声码器模型权重</td><td>Community（社区版）/ Coulin9 v4（专业版），以及放入 <code>models/vocoder_weights/</code> 的自定义权重（同名覆盖内置）；支持更多权重变体（自动适配其频谱参数）；所选权重不可用时自动回退到默认</td><td>Community</td></tr>
     <tr><td>水平缩放灵敏度</td><td>控制鼠标滚轮水平缩放速度</td><td>1.0</td></tr>
     <tr><td>垂直缩放灵敏度</td><td>控制鼠标滚轮垂直缩放速度</td><td>1.0</td></tr>
     <tr><td>滚动速度</td><td>视图滚动速度</td><td>1.0</td></tr>
@@ -625,6 +636,7 @@
     <li>DAW 通过 ARA 协议提供音频源数据，无需导入/导出文件</li>
     <li>编辑结果实时反映到 DAW 时间线播放中</li>
     <li>支持宿主传输同步（Play/Stop/Seek）和 BPM 跟随；跳转与播放跟随稳定，播放头不再抖动</li>
+    <li>宿主内连续播放更稳定：不再卡顿或重复同一片段；停止播放后输出立即清空</li>
     <li>支持 ARA 多 region 绑定，同一 source 的多个 region 共享编辑状态</li>
     <li>参考自动对齐：ARA 模式下多 region 之间自动对齐参考音高，提升多轨编辑一致性</li>
     <li>读取与编辑只作用于当前选中的音频段落，多段落工程不再相互干扰；焦点段落就绪前读取按钮暂时不可用</li>
@@ -710,6 +722,9 @@
 
 <h3>Q7: 如何切换界面语言？</h3>
 <p><strong>A:</strong> 偏好设置 → 语言（Language），选择目标语言后界面立即切换。支持中文、英文、日文、俄文、西班牙文。</p>
+
+<h3>Q8: 渲染或音高分析失败时怎么办？</h3>
+<p><strong>A:</strong> 软件会弹出诊断提示（如“渲染失败，可能回退干声”），其中包含日志文件路径与最近的日志内容，可直接复制反馈。日志目录：Windows <code>%APPDATA%\OpenTune\Logs</code>，macOS <code>~/Library/OpenTune/Logs/</code>。</p>
 
 <hr>
 

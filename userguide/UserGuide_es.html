@@ -202,6 +202,10 @@
 <h3>3.3 Iniciar el programa</h3>
 <p>Haga doble clic en <code>OpenTune.exe</code> para iniciar la versión independiente. Los modelos IA se inicializan automáticamente en el primer inicio. Para el plugin VST3, copie <code>OpenTune.vst3</code> en el directorio de escaneo VST3 de su DAW.</p>
 
+<h3>3.4 Introducción en el primer inicio</h3>
+<p>En el primer inicio se abre automáticamente la <strong>guía de introducción</strong>: tras elegir el modo de edición, presenta los menús Archivo/Edición/Ver, la importación de audio, el rollo de piano y las barras de herramientas, las herramientas de edición principales y el panel de parámetros. Los pasos se adaptan al entorno (Standalone / plugin ARA / captura en vivo) y se puede salir en cualquier momento.</p>
+<p>Para verla de nuevo, abra <strong>Ayuda → Introducción...</strong> o pulse <strong>Repetir introducción</strong> en las preferencias.</p>
+
 <div class="page-break"></div>
 <h2 id="interface">4. Descripción general de la interfaz</h2>
 
@@ -337,7 +341,7 @@
 <div class="page-break"></div>
 <h2 id="tools">7. Herramientas de edición</h2>
 
-<p>OpenTune ofrece seis herramientas de edición profesionales, alternables desde la zona de herramientas del panel de parámetros o mediante atajos de teclado:</p>
+<p>OpenTune ofrece siete herramientas de edición profesionales, alternables desde la zona de herramientas del panel de parámetros o mediante atajos de teclado:</p>
 
 <div class="tool-card">
     <h4>AutoTune — Herramienta de Corrección Automática (Atajo: 6)</h4>
@@ -364,6 +368,12 @@
 <div class="tool-card">
     <h4>HandDraw — Herramienta de Dibujo Libre (Atajo: 5)</h4>
     <p>Dibuja directamente la curva F0 para personalizar completamente el contorno tonal. Ideal para crear vibrato, glissando, pitch bend y otros efectos decorativos.</p>
+</div>
+
+<div class="tool-card">
+    <h4>Borrador (Eraser)</h4>
+    <p>Herramienta de pincel: al arrastrar borra a la vez las notas y la corrección de tono dentro del área del pincel. Todo el trazo se registra como un solo paso de deshacer.</p>
+    <p><strong>Uso</strong>: seleccione el borrador en el panel de parámetros o en la barra de herramientas que aparece al hacer clic con el botón derecho y arrastre con el botón izquierdo (el pincel circular muestra el área). Sin atajo predeterminado.</p>
 </div>
 
 <div class="tool-card">
@@ -469,8 +479,9 @@
     <tr><td>Idioma de la interfaz</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
     <tr><td>Tema</td><td>Aurora</td><td>Aurora</td></tr>
     <tr><td>Modo de edición</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
+    <tr><td>Ajuste de desplazamiento de notas</td><td>Modo de ajuste al transportar notas en conjunto: Seguir escala global / Tono estándar más cercano (pasos iguales); solo disponible en el esquema OpenTune</td><td>Seguir escala global</td></tr>
     <tr><td>Prioridad de renderizado</td><td>Prioridad GPU / Prioridad CPU</td><td>Prioridad GPU</td></tr>
-    <tr><td>Pesos del modelo de vocoder</td><td>Community / Coulin9 v4 (profesional); revierte automáticamente al predeterminado si no está disponible</td><td>Community</td></tr>
+    <tr><td>Pesos del modelo de vocoder</td><td>Community / Coulin9 v4 (profesional), además de pesos personalizados en <code>models/vocoder_weights/</code> (los archivos con el mismo nombre sustituyen a los integrados); se admiten más variantes de pesos (con adaptación automática de parámetros espectrales); revierte automáticamente al predeterminado si no está disponible</td><td>Community</td></tr>
     <tr><td>Sensibilidad de zoom horizontal</td><td>Controla la velocidad de zoom horizontal con la rueda del ratón</td><td>1.0</td></tr>
     <tr><td>Sensibilidad de zoom vertical</td><td>Controla la velocidad de zoom vertical con la rueda del ratón</td><td>1.0</td></tr>
     <tr><td>Velocidad de desplazamiento</td><td>Velocidad de desplazamiento de la vista</td><td>1.0</td></tr>
@@ -622,6 +633,7 @@
     <li>El DAW proporciona los datos de audio fuente mediante el protocolo ARA, sin necesidad de importar/exportar archivos</li>
     <li>Los resultados de edición se reflejan en tiempo real en la reproducción de la línea de tiempo del DAW</li>
     <li>Compatible con sincronización de transporte del host (Play/Stop/Seek) y seguimiento de BPM; el seguimiento de reproducción es estable, sin vibración del cabezal</li>
+    <li>Reproducción continua estable en los hosts: sin tartamudeos ni fragmentos repetidos (p. ej., en Cubase 13 Pro); la salida se limpia al instante al detener la reproducción</li>
     <li>Compatible con vinculación de múltiples regiones ARA; varias regiones de la misma fuente comparten el estado de edición</li>
     <li>Autoalineación de referencia: en modo ARA, el tono de referencia se alinea automáticamente entre regiones, mejorando la consistencia de la edición multipista</li>
     <li>La lectura y edición solo afectan al clip de audio seleccionado actualmente; el botón de lectura no está disponible hasta que el clip enfocado esté listo</li>
@@ -708,6 +720,9 @@
 
 <h3>Q7: ¿Cómo cambiar el idioma de la interfaz?</h3>
 <p><strong>R:</strong> Preferencias → Idioma (Language), seleccione el idioma deseado y la interfaz cambiará inmediatamente. Compatible con chino, inglés, japonés, ruso y español.</p>
+
+<h3>Q8: ¿Qué hacer si falla el renderizado o el análisis de tono?</h3>
+<p><strong>R:</strong> Aparecerá un diálogo de diagnóstico (por ejemplo, «Error de renderizado, puede usarse la señal seca») con la ruta del registro y su contenido reciente para copiarlo fácilmente. Carpetas de registro: Windows <code>%APPDATA%\OpenTune\Logs</code>, macOS <code>~/Library/OpenTune/Logs/</code>.</p>
 
 <hr>
 
