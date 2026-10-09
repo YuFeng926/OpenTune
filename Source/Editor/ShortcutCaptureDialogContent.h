@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include "ComponentListenerSubscription.h"
 #include "../Standalone/UI/UIColors.h"
 #include "../Utils/LocalizationManager.h"
 
@@ -43,7 +44,9 @@ public:
         : title_ (title),
           message_ (message),
           onCaptured_ (std::move (onCaptured)),
-          onCancelled_ (std::move (onCancelled))
+          onCancelled_ (std::move (onCancelled)),
+          parentSubscription_ (*this),
+          dialogSubscription_ (*this)
     {
         setWantsKeyboardFocus (true);
 
@@ -60,11 +63,6 @@ public:
         cancelButton_.setColour (juce::TextButton::textColourOnId, UIColors::textPrimary);
         cancelButton_.onClick = [this] { cancel(); };
         addAndMakeVisible (cancelButton_);
-    }
-
-    ~ShortcutCaptureDialogContent() override
-    {
-        unwatchAll();
     }
 
     // ============================================================================
@@ -92,7 +90,7 @@ public:
         options.componentToCentreAround = parent;
 
         if (parent != nullptr)
-            content->watchParent(parent);
+            content->watchParent (*parent);
 
         options.launchAsync();
     }
@@ -195,16 +193,10 @@ public:
         auto* dialog = findParentComponentOfClass<juce::DialogWindow>();
 
         // 跟踪所在 DialogWindow：其被隐藏（Alt+F4 / 关闭按钮）时需要走取消路径
-        if (watchedDialog_ != dialog)
-        {
-            if (watchedDialog_ != nullptr)
-                watchedDialog_->removeComponentListener(this);
-
-            watchedDialog_ = dialog;
-
-            if (watchedDialog_ != nullptr)
-                watchedDialog_->addComponentListener(this);
-        }
+        if (dialog != nullptr)
+            dialogSubscription_.watch (*dialog);
+        else
+            dialogSubscription_.reset();
 
         if (dialog != nullptr && ! dialog->isUsingNativeTitleBar())
         {
@@ -334,27 +326,18 @@ private:
     // Parent / DialogWindow lifecycle
     // ============================================================================
 
-    void watchParent (juce::Component* parent)
+    void watchParent (juce::Component& parent)
     {
-        watchedParent_ = parent;
-
-        if (watchedParent_ != nullptr)
-            watchedParent_->addComponentListener (this);
-    }
-
-    void unwatchAll()
-    {
-        if (auto* parent = watchedParent_.getComponent())
-            parent->removeComponentListener (this);
-
-        if (auto* dialog = watchedDialog_.getComponent())
-            dialog->removeComponentListener (this);
+        parentSubscription_.watch (parent);
     }
 
     void componentBeingDeleted (juce::Component& comp) override
     {
-        if (watchedParent_ == nullptr || &comp != watchedParent_.getComponent())
+        if (!parentSubscription_.resetIfWatching (comp))
+        {
+            dialogSubscription_.resetIfWatching (comp);
             return;
+        }
 
         // 父组件正在销毁：不能调用 onCancelled（回调会访问已销毁的父对象），只关闭窗口
         onCaptured_ = {};
@@ -364,7 +347,7 @@ private:
 
     void componentVisibilityChanged (juce::Component& comp) override
     {
-        if (closing_ || watchedDialog_ == nullptr || &comp != watchedDialog_.getComponent())
+        if (closing_ || !dialogSubscription_.watches (comp))
             return;
 
         // DialogWindow 被隐藏（Alt+F4 / 关闭按钮）而非主动关闭：走取消路径，清 currentEditingId_
@@ -382,12 +365,11 @@ private:
     CancelCallback onCancelled_;
     juce::TextButton cancelButton_;
 
-    // 父组件 / DialogWindow 生命周期监听（SafePointer，不保存裸指针跨异步）
-    juce::Component::SafePointer<juce::Component> watchedParent_;
-    juce::Component::SafePointer<juce::DialogWindow> watchedDialog_;
     bool closing_ = false;
 
     int messageHeight_ = kMessageMinLines * kMessageLineHeight;
+    ComponentListenerSubscription parentSubscription_;
+    ComponentListenerSubscription dialogSubscription_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ShortcutCaptureDialogContent)
 };

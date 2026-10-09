@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <vector>
+#include "ComponentListenerSubscription.h"
 #include "../Standalone/UI/UIColors.h"
 #include "../Utils/LocalizationManager.h"
 
@@ -55,7 +56,9 @@ public:
           message_(message),
           buttonSpecs_(std::move(buttons)),
           onDismissed_(std::move(onDismissed)),
-          centreButtons_(centreButtons)
+          centreButtons_(centreButtons),
+          parentSubscription_(*this),
+          dialogSubscription_(*this)
     {
         setWantsKeyboardFocus(true);
 
@@ -103,11 +106,6 @@ public:
         resized();
     }
 
-    ~ConfirmDialogContent() override
-    {
-        unwatchAll();
-    }
-
     // ============================================================================
     // Static convenience methods
     // ============================================================================
@@ -125,7 +123,7 @@ public:
         options.componentToCentreAround = parent;
 
         if (parent != nullptr)
-            content->watchParent(parent);
+            content->watchParent(*parent);
 
         options.launchAsync();
     }
@@ -259,16 +257,10 @@ public:
         auto* dialog = findParentComponentOfClass<juce::DialogWindow>();
 
         // 跟踪所在 DialogWindow：其被隐藏（Alt+F4 / 关闭按钮）时需要走 dismiss 路径
-        if (watchedDialog_ != dialog)
-        {
-            if (watchedDialog_ != nullptr)
-                watchedDialog_->removeComponentListener(this);
-
-            watchedDialog_ = dialog;
-
-            if (watchedDialog_ != nullptr)
-                watchedDialog_->addComponentListener(this);
-        }
+        if (dialog != nullptr)
+            dialogSubscription_.watch(*dialog);
+        else
+            dialogSubscription_.reset();
 
         if (dialog != nullptr)
         {
@@ -318,14 +310,13 @@ private:
     juce::OwnedArray<juce::TextButton> buttons_;
     int defaultButtonIdx_ = 0;
 
-    // 父组件 / DialogWindow 生命周期监听（SafePointer，不保存裸指针跨异步）
-    juce::Component::SafePointer<juce::Component> watchedParent_;
-    juce::Component::SafePointer<juce::DialogWindow> watchedDialog_;
     bool closing_ = false;
     bool verticalButtons_ = false;
     bool centreButtons_ = false;
     int messageHeight_ = 24;
     int buttonAreaHeight_ = kButtonRowHeight;
+    ComponentListenerSubscription parentSubscription_;
+    ComponentListenerSubscription dialogSubscription_;
 
     // ============================================================================
     // Helpers
@@ -400,27 +391,18 @@ private:
     // Parent / DialogWindow lifecycle
     // ============================================================================
 
-    void watchParent(juce::Component* parent)
+    void watchParent(juce::Component& parent)
     {
-        watchedParent_ = parent;
-
-        if (watchedParent_ != nullptr)
-            watchedParent_->addComponentListener(this);
-    }
-
-    void unwatchAll()
-    {
-        if (auto* parent = watchedParent_.getComponent())
-            parent->removeComponentListener(this);
-
-        if (auto* dialog = watchedDialog_.getComponent())
-            dialog->removeComponentListener(this);
+        parentSubscription_.watch(parent);
     }
 
     void componentBeingDeleted(juce::Component& comp) override
     {
-        if (watchedParent_ == nullptr || &comp != watchedParent_.getComponent())
+        if (!parentSubscription_.resetIfWatching(comp))
+        {
+            dialogSubscription_.resetIfWatching(comp);
             return;
+        }
 
         // 父组件正在销毁：只关闭窗口，绝不执行业务回调
         onDismissed_ = {};
@@ -433,7 +415,7 @@ private:
 
     void componentVisibilityChanged(juce::Component& comp) override
     {
-        if (closing_ || watchedDialog_ == nullptr || &comp != watchedDialog_.getComponent())
+        if (closing_ || !dialogSubscription_.watches(comp))
             return;
 
         // DialogWindow 被隐藏（Alt+F4 / 关闭按钮）而非主动关闭：走 dismiss 路径

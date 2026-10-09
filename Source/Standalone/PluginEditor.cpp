@@ -29,6 +29,7 @@
 #include "Utils/PitchShiftEditAction.h"
 #include "Editor/PitchShiftDialogContent.h"
 #include "Editor/ConfirmDialogContent.h"
+#include "Editor/ComponentListenerSubscription.h"
 #include "StandaloneAudioDeviceSync.h"
 #include "Utils/TimeCoordinate.h"
 #include "Content/StandaloneClipContent.h"
@@ -3203,11 +3204,10 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
     struct ColourPickerContent : public juce::Component,
                                  private juce::ComponentListener
     {
-        ColourPickerContent(OpenTuneAudioProcessorEditor* owner, int tid, juce::Colour current)
-            : owner_(owner), trackId_(tid)
+        ColourPickerContent(OpenTuneAudioProcessorEditor& editor, int tid, juce::Colour current)
+            : trackId_(tid), subscription_(*this)
         {
-            if (owner_ != nullptr)
-                owner_->addComponentListener(this);
+            subscription_.watch(editor);
 
             selector_ = std::make_unique<juce::ColourSelector>(
                 juce::ColourSelector::showColourAtTop |
@@ -3220,16 +3220,16 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
 
         ~ColourPickerContent() override
         {
-            if (owner_ != nullptr)
-                owner_->removeComponentListener(this);
+            auto* editor = dynamic_cast<OpenTuneAudioProcessorEditor*>(subscription_.target());
+            subscription_.reset();
 
-            if (selector_ && owner_ != nullptr)
+            if (editor != nullptr)
             {
                 juce::Colour selected = selector_->getCurrentColour();
-                setStandaloneTrackColour(owner_->processorRef_, trackId_, selected);
-                owner_->trackPanel_.setTrackColour(trackId_, selected);
-                owner_->arrangementView_.requestContentRedraw();
-                owner_->projectSession_.markDirty();
+                setStandaloneTrackColour(editor->processorRef_, trackId_, selected);
+                editor->trackPanel_.setTrackColour(trackId_, selected);
+                editor->arrangementView_.requestContentRedraw();
+                editor->projectSession_.markDirty();
             }
         }
 
@@ -3255,23 +3255,22 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
         }
 
     private:
-        void componentBeingDeleted(juce::Component&) override
+        void componentBeingDeleted(juce::Component& comp) override
         {
-            if (owner_ != nullptr)
-                owner_->removeComponentListener(this);
-            owner_ = nullptr;
+            if (!subscription_.resetIfWatching(comp))
+                return;
 
             if (auto* dialogWindow = findParentComponentOfClass<juce::DialogWindow>())
                 dialogWindow->exitModalState(0);
         }
 
-        juce::Component::SafePointer<OpenTuneAudioProcessorEditor> owner_;
         int trackId_;
         std::unique_ptr<juce::ColourSelector> selector_;
+        ComponentListenerSubscription subscription_;
     };
 
     juce::Colour current = getStandaloneTrackColour(processorRef_, trackId);
-    auto* content = new ColourPickerContent(this, trackId, current);
+    auto* content = new ColourPickerContent(*this, trackId, current);
     content->setSize(380, 300);
 
     juce::DialogWindow::LaunchOptions opts;

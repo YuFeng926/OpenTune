@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include "ComponentListenerSubscription.h"
 #include "../Utils/PitchShiftSettings.h"
 #include "../Standalone/UI/UIColors.h"
 
@@ -103,11 +104,6 @@ public:
         addAndMakeVisible(confirmButton_);
     }
 
-    ~PitchShiftDialogContent() override
-    {
-        setDialogParent(nullptr);
-    }
-
     // ============================================================================
     // Public API
     // ============================================================================
@@ -136,13 +132,10 @@ public:
     /** 注册父编辑器组件；父组件销毁时清空回调并关闭本对话框，避免回调访问已销毁对象 */
     void setDialogParent(juce::Component* parent)
     {
-        if (dialogParent_ != nullptr)
-            dialogParent_->removeComponentListener(this);
-
-        dialogParent_ = parent;
-
-        if (dialogParent_ != nullptr)
-            dialogParent_->addComponentListener(this);
+        if (parent != nullptr)
+            parentSubscription_.watch(*parent);
+        else
+            parentSubscription_.reset();
     }
 
     // ============================================================================
@@ -215,13 +208,14 @@ private:
     juce::TextButton confirmButton_;
     std::function<void(const PitchShiftSettings&)> onConfirm_;
     std::function<void()> onReset_;
-    juce::Component::SafePointer<juce::Component> dialogParent_;
     bool actionTriggered_ = false;
     bool closing_ = false;
+    ComponentListenerSubscription parentSubscription_{*this};
 
-    void componentBeingDeleted(juce::Component&) override
+    void componentBeingDeleted(juce::Component& comp) override
     {
-        setDialogParent(nullptr);
+        if (!parentSubscription_.resetIfWatching(comp))
+            return;
         onConfirm_ = nullptr;
         onReset_ = nullptr;
         closeParentDialog();

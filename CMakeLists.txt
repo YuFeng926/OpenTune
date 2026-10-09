@@ -663,6 +663,7 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Editor/PitchShiftDialogContent.h
         Source/Editor/ConfirmDialogContent.h
         Source/Editor/ShortcutCaptureDialogContent.h
+        Source/Editor/ComponentListenerSubscription.h
 
         # Utilities
         Source/Utils/PitchCurve.cpp
@@ -1385,11 +1386,24 @@ message(STATUS "")
 # ==============================================================================
 # Tests (optional; the state-codec test links JUCE Core only)
 # ==============================================================================
-option(OPENTUNE_BUILD_TESTS "Build AutoTune tests" OFF)
+option(OPENTUNE_BUILD_TESTS "Build OpenTune tests" OFF)
 option(OPENTUNE_ENABLE_APPROVED_BACKPRESSURE_TEST
        "Register the backpressure test only with an approved blocking-synthesize injector" OFF)
 if(OPENTUNE_BUILD_TESTS)
     enable_testing()
+    add_executable(OpenTuneComponentListenerSubscriptionTests
+        Tests/ComponentListenerSubscriptionTests.cpp
+    )
+    target_include_directories(OpenTuneComponentListenerSubscriptionTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneComponentListenerSubscriptionTests PRIVATE
+        juce::juce_gui_basics)
+    if(MSVC)
+        target_compile_options(OpenTuneComponentListenerSubscriptionTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME ComponentListenerSubscriptionTests
+        COMMAND OpenTuneComponentListenerSubscriptionTests)
+
     add_executable(OpenTuneAutoTuneTests
         Tests/AutoTunePitchShifterTests.cpp
         Source/DSP/AutoTunePitchShifter.cpp

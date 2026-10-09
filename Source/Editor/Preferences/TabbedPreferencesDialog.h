@@ -10,6 +10,7 @@
 #include "Standalone/UI/AuroraLookAndFeel.h"
 #include "Standalone/UI/OpenTuneLookAndFeel.h"
 #include "Standalone/UI/UIColors.h"
+#include "Editor/ComponentListenerSubscription.h"
 
 namespace OpenTune {
 
@@ -81,19 +82,15 @@ public:
     ~TabbedPreferencesDialog() override
     {
         setLookAndFeel(nullptr);
-        setDialogParent(nullptr);
     }
 
     /** 注册父编辑器组件；父组件销毁时关闭本对话框 */
     void setDialogParent(juce::Component* parent)
     {
-        if (dialogParent_ != nullptr)
-            dialogParent_->removeComponentListener(this);
-
-        dialogParent_ = parent;
-
-        if (dialogParent_ != nullptr)
-            dialogParent_->addComponentListener(this);
+        if (parent != nullptr)
+            parentSubscription_.watch(*parent);
+        else
+            parentSubscription_.reset();
     }
 
     void paint(juce::Graphics& g) override
@@ -148,12 +145,13 @@ private:
     juce::TextButton closeButton_;
     OpenTuneLookAndFeel openTuneLookAndFeel_;
     AuroraLookAndFeel auroraLookAndFeel_;
-    juce::Component::SafePointer<juce::Component> dialogParent_;
     bool closing_ = false;
+    ComponentListenerSubscription parentSubscription_{*this};
 
-    void componentBeingDeleted(juce::Component&) override
+    void componentBeingDeleted(juce::Component& comp) override
     {
-        setDialogParent(nullptr);
+        if (!parentSubscription_.resetIfWatching(comp))
+            return;
         closeDialog();
     }
 
