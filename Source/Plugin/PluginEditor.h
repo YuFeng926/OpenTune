@@ -158,6 +158,7 @@ private:
     std::shared_ptr<ContentEditCommands> getContentCommandsShared() const { return contentCommands_; }
 
     AppPreferences& appPreferences_;
+    std::unique_ptr<juce::DialogWindow> preferencesDialog_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;
     LocalizationManager::ScopedLanguageBinding languageBinding_;
     ThemeId appliedThemeId_ = ThemeId::Aurora;

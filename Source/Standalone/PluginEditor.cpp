@@ -837,6 +837,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    preferencesDialog_.reset();
     onboardingOverlay_.reset();
     // 退出保存外层窗口实际 width/height（§5.1）：此刻默认 StandaloneFilterWindow 仍存活，
     // windowX/windowY 由该窗口析构函数继续写入同一 OpenTune.settings。
@@ -2717,6 +2718,9 @@ void OpenTuneAudioProcessorEditor::preferencesRequested()
 
 void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 {
+    if (preferencesDialog_ != nullptr)
+        return;
+
     auto* holder = juce::StandalonePluginHolder::getInstance();
     auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
         processorRef_.setVocoderModelWeight(weight);
@@ -2754,7 +2758,6 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
                  std::make_move_iterator(standalonePages.end()));
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
-    dialogContent->setDialogParent(&contentRoot_);
 
     // 根据当前屏幕可用区域计算对话框尺寸，适配不同显示器和分辨率
     const auto usable = getParentMonitorArea();
@@ -2772,7 +2775,19 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     options.useBottomRightCornerResizer = true;
     // 独立弹窗以 transformed content root 为锚点（与 VST3 版一致，§7.4）。
     options.componentToCentreAround = &contentRoot_;
-    options.launchAsync();
+    preferencesDialog_.reset(options.create());
+
+    const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
+    const auto safeDialog = juce::Component::SafePointer<juce::DialogWindow>(preferencesDialog_.get());
+    preferencesDialog_->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create([safeEditor, safeDialog](int) {
+            if (safeEditor != nullptr
+                && safeDialog != nullptr
+                && safeEditor->preferencesDialog_.get() == safeDialog.getComponent())
+                safeEditor->preferencesDialog_.reset();
+        }),
+        false);
 }
 
 void OpenTuneAudioProcessorEditor::helpRequested()

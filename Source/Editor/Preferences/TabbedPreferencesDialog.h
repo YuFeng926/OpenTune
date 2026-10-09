@@ -10,7 +10,6 @@
 #include "Standalone/UI/AuroraLookAndFeel.h"
 #include "Standalone/UI/OpenTuneLookAndFeel.h"
 #include "Standalone/UI/UIColors.h"
-#include "Editor/ComponentListenerSubscription.h"
 
 namespace OpenTune {
 
@@ -42,8 +41,7 @@ private:
     int contentHeight_ = 0;
 };
 
-class TabbedPreferencesDialog : public juce::Component,
-                                private juce::ComponentListener
+class TabbedPreferencesDialog : public juce::Component
 {
 public:
     struct PageSpec {
@@ -82,15 +80,6 @@ public:
     ~TabbedPreferencesDialog() override
     {
         setLookAndFeel(nullptr);
-    }
-
-    /** 注册父编辑器组件；父组件销毁时关闭本对话框 */
-    void setDialogParent(juce::Component* parent)
-    {
-        if (parent != nullptr)
-            parentSubscription_.watch(*parent);
-        else
-            parentSubscription_.reset();
     }
 
     void paint(juce::Graphics& g) override
@@ -146,14 +135,6 @@ private:
     OpenTuneLookAndFeel openTuneLookAndFeel_;
     AuroraLookAndFeel auroraLookAndFeel_;
     bool closing_ = false;
-    ComponentListenerSubscription parentSubscription_{*this};
-
-    void componentBeingDeleted(juce::Component& comp) override
-    {
-        if (!parentSubscription_.resetIfWatching(comp))
-            return;
-        closeDialog();
-    }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TabbedPreferencesDialog)
 };

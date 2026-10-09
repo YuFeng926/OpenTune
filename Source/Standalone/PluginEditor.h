@@ -245,6 +245,7 @@ private:
 
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences& appPreferences_;
+    std::unique_ptr<juce::DialogWindow> preferencesDialog_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;
     LocalizationManager::ScopedLanguageBinding languageBinding_;
     KeyShortcutConfig::KeyShortcutSettings shortcutSettings_ = KeyShortcutConfig::KeyShortcutSettings::getDefault();

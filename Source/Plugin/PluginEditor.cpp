@@ -264,6 +264,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    preferencesDialog_.reset();
     onboardingOverlay_.reset();
     // Save current viewport state before teardown — unconditionally,
     // because the host removes the editor from the hierarchy before
@@ -994,6 +995,9 @@ void OpenTuneAudioProcessorEditor::preferencesRequested()
 
 void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 {
+    if (preferencesDialog_ != nullptr)
+        return;
+
     auto pages = SharedPreferencePages::create(
         appPreferences_, [this] { syncSharedAppPreferences(); }, true);
 
@@ -1021,7 +1025,6 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage.component), audioPage.height });
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
-    dialogContent->setDialogParent(&contentRoot_);
 
     // 根据当前屏幕可用区域计算对话框尺寸，适配不同显示器和分辨率
     const auto usable = getParentMonitorArea();
@@ -1040,7 +1043,19 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     options.useBottomRightCornerResizer = true;
     // 确保对话框打开前 PianoRoll 持有焦点，JUCE 模态管理器会在关闭时自动恢复
     pianoRoll_.grabKeyboardFocus();
-    options.launchAsync();
+    preferencesDialog_.reset(options.create());
+
+    const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
+    const auto safeDialog = juce::Component::SafePointer<juce::DialogWindow>(preferencesDialog_.get());
+    preferencesDialog_->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create([safeEditor, safeDialog](int) {
+            if (safeEditor != nullptr
+                && safeDialog != nullptr
+                && safeEditor->preferencesDialog_.get() == safeDialog.getComponent())
+                safeEditor->preferencesDialog_.reset();
+        }),
+        false);
 }
 
 void OpenTuneAudioProcessorEditor::helpRequested()
