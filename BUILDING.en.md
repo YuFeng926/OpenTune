@@ -43,6 +43,13 @@ git clone --recursive --branch releases/2.3.0 https://github.com/Celemony/ARA_SD
 cd ..
 ```
 
+> ⚠️ **ARA 2.3.0 requires a matching patch to your local JUCE checkout**: `JUCE-master/` (gitignored,
+> not shipped with this repository) still has
+> `modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp` including the 2.2.0 file
+> `ARA_Library/Utilities/ARAChannelArrangement.cpp`, which ARA 2.3.0 renamed to `ARAChannelFormat.cpp`.
+> After cloning the SDK, change that line to `#include <ARA_Library/Utilities/ARAChannelFormat.cpp>`,
+> otherwise compiling `juce_audio_plugin_client_ARA.cpp` fails with C1083 (include file not found).
+
 ### 3. r8brain Resampler
 
 ```bash

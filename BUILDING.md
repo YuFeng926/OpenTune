@@ -43,6 +43,12 @@ git clone --recursive --branch releases/2.3.0 https://github.com/Celemony/ARA_SD
 cd ..
 ```
 
+> ⚠️ **ARA 2.3.0 需要同步修补本地 JUCE 分支**：`JUCE-master/`（被 gitignore，不随仓库分发）的
+> `modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp` 仍 include 2.2.0 的
+> `ARA_Library/Utilities/ARAChannelArrangement.cpp`，而 2.3.0 已将该文件改名为 `ARAChannelFormat.cpp`。
+> 克隆 SDK 后必须把该行改为 `#include <ARA_Library/Utilities/ARAChannelFormat.cpp>`，
+> 否则编译 `juce_audio_plugin_client_ARA.cpp` 时报 C1083 找不到包含文件。
+
 ### 3. r8brain Resampler
 
 ```bash
