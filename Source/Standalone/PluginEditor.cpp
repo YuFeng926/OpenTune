@@ -576,30 +576,36 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Setup Transport Bar Menu Callbacks
 // menuName obtained at runtime (auto-reflects after language switch), matched by getMenuForIndex index
     transportBar_.onFileMenuRequested = [this]() {
+        const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
         auto menuNames = menuBar_.getMenuBarNames();
         juce::PopupMenu menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getFileButton())
-                                                     .withParentComponent(&contentRoot_),
-                           [this](int result) {
-                               if (result != 0) menuBar_.menuItemSelected(result, 0);
+                                                      .withParentComponent(&contentRoot_),
+                           [safeEditor](int result) {
+                               if (result != 0 && safeEditor != nullptr)
+                                   safeEditor->menuBar_.menuItemSelected(result, 0);
                            });
     };
     transportBar_.onEditMenuRequested = [this]() {
+        const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
         auto menuNames = menuBar_.getMenuBarNames();
         juce::PopupMenu menu = menuBar_.getMenuForIndex(1, menuNames.size() > 1 ? menuNames[1] : juce::String());
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getEditButton())
-                                                     .withParentComponent(&contentRoot_),
-                           [this](int result) {
-                               if (result != 0) menuBar_.menuItemSelected(result, 1);
+                                                      .withParentComponent(&contentRoot_),
+                           [safeEditor](int result) {
+                               if (result != 0 && safeEditor != nullptr)
+                                   safeEditor->menuBar_.menuItemSelected(result, 1);
                            });
     };
     transportBar_.onViewMenuRequested = [this]() {
+        const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
         auto menuNames = menuBar_.getMenuBarNames();
         juce::PopupMenu menu = menuBar_.getMenuForIndex(2, menuNames.size() > 2 ? menuNames[2] : juce::String());
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getViewButton())
-                                                     .withParentComponent(&contentRoot_),
-                           [this](int result) {
-                               if (result != 0) menuBar_.menuItemSelected(result, 2);
+                                                      .withParentComponent(&contentRoot_),
+                           [safeEditor](int result) {
+                               if (result != 0 && safeEditor != nullptr)
+                                   safeEditor->menuBar_.menuItemSelected(result, 2);
                            });
     };
 
@@ -3881,23 +3887,27 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
 // Check if already has reference binding
     const uint64_t existingRef = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
     if (existingRef != 0) {
-        menu.addItem(juce::String::fromUTF8(u8"\u4E0D\u4F7F\u7528\u53C2\u8003Clip"), [this, arrangement, trackId, targetPlacementId]() {
+        menu.addItem(juce::String::fromUTF8(u8"\u4E0D\u4F7F\u7528\u53C2\u8003Clip"),
+                     [safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this), trackId, targetPlacementId]() {
+            if (safeEditor == nullptr)
+                return;
+            auto* arrangement = safeEditor->processorRef_.getStandaloneArrangement();
             const uint64_t beforeReference = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
             if (beforeReference == 0)
                 return;
             if (!arrangement->setPlacementReferencePlacement(trackId, targetPlacementId, 0)) {
                 ConfirmDialogContent::showMessage(
-                    &contentRoot_,
+                    &safeEditor->contentRoot_,
                     juce::String::fromUTF8(u8"\u53C2\u8003 Clip"),
                     juce::String::fromUTF8(u8"\u65E0\u6CD5\u6E05\u9664\u5F53\u524D\u53C2\u8003 Clip \u7ED1\u5B9A\u3002"));
                 return;
             }
-            processorRef_.getUndoManager().addAction(std::make_unique<ReferenceBindingAction>(
-                processorRef_, trackId, targetPlacementId, beforeReference, 0));
-            projectSession_.markDirty();
-            arrangementView_.requestContentRedraw();
-            referenceRefreshPending_ = true;
-            refreshReferenceContext();
+            safeEditor->processorRef_.getUndoManager().addAction(std::make_unique<ReferenceBindingAction>(
+                safeEditor->processorRef_, trackId, targetPlacementId, beforeReference, 0));
+            safeEditor->projectSession_.markDirty();
+            safeEditor->arrangementView_.requestContentRedraw();
+            safeEditor->referenceRefreshPending_ = true;
+            safeEditor->refreshReferenceContext();
         });
         menu.addSeparator();
     }
@@ -3921,25 +3931,30 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
             const juce::String label = juce::String("Track ") + juce::String(t + 1)
                 + " - " + (candidate.name.isNotEmpty() ? candidate.name : "Clip")
                 + juce::String(" (Mat#") + juce::String(static_cast<juce::int64>(candidate.contentKey.objectId)) + ")";
-            refMenu.addItem(label, [this, arrangement, trackId, targetPlacementId, candidate]() {
+            refMenu.addItem(label,
+                            [safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
+                             trackId, targetPlacementId, candidate]() {
+                if (safeEditor == nullptr)
+                    return;
+                auto* arrangement = safeEditor->processorRef_.getStandaloneArrangement();
                 const uint64_t beforeReference = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
                 if (beforeReference == candidate.placementId)
                     return;
                 if (!arrangement->setPlacementReferencePlacement(
                         trackId, targetPlacementId, candidate.placementId)) {
                     ConfirmDialogContent::showMessage(
-                        &contentRoot_,
+                        &safeEditor->contentRoot_,
                         juce::String::fromUTF8(u8"\u53C2\u8003 Clip"),
                         juce::String::fromUTF8(u8"\u8BE5 Clip \u5DF2\u4E0D\u6EE1\u8DB3\u53C2\u8003\u7ED1\u5B9A\u6761\u4EF6\u3002"));
                     return;
                 }
-                processorRef_.getUndoManager().addAction(std::make_unique<ReferenceBindingAction>(
-                    processorRef_, trackId, targetPlacementId,
+                safeEditor->processorRef_.getUndoManager().addAction(std::make_unique<ReferenceBindingAction>(
+                    safeEditor->processorRef_, trackId, targetPlacementId,
                     beforeReference, candidate.placementId));
-                projectSession_.markDirty();
-                arrangementView_.requestContentRedraw();
-                referenceRefreshPending_ = true;
-                refreshReferenceContext();
+                safeEditor->projectSession_.markDirty();
+                safeEditor->arrangementView_.requestContentRedraw();
+                safeEditor->referenceRefreshPending_ = true;
+                safeEditor->refreshReferenceContext();
             });
         }
     }

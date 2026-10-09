@@ -558,14 +558,18 @@ void TrackPanelComponent::mouseUp(const juce::MouseEvent& event)
     menu.addSeparator();
     menu.addItem(5, LOC(kDeleteTrack));
 
-    menu.showMenuAsync(juce::PopupMenu::Options(),
-        [this, trackIndex](int result) {
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetComponent(this)
+                           .withMousePosition(),
+        [safeThis = juce::Component::SafePointer<TrackPanelComponent>(this), trackIndex](int result) {
+            if (safeThis == nullptr)
+                return;
             switch (result) {
-                case 1: listeners_.call([](Listener& l) { l.trackAddRequested(); }); break;
-                case 2: listeners_.call([trackIndex](Listener& l) { l.trackDuplicateRequested(trackIndex); }); break;
-                case 3: listeners_.call([trackIndex](Listener& l) { l.trackColorChangeRequested(trackIndex); }); break;
-                case 4: listeners_.call([trackIndex](Listener& l) { l.trackColorRandomizeRequested(trackIndex); }); break;
-                case 5: listeners_.call([trackIndex](Listener& l) { l.trackDeleteRequested(trackIndex); }); break;
+                case 1: safeThis->listeners_.call([](Listener& l) { l.trackAddRequested(); }); break;
+                case 2: safeThis->listeners_.call([trackIndex](Listener& l) { l.trackDuplicateRequested(trackIndex); }); break;
+                case 3: safeThis->listeners_.call([trackIndex](Listener& l) { l.trackColorChangeRequested(trackIndex); }); break;
+                case 4: safeThis->listeners_.call([trackIndex](Listener& l) { l.trackColorRandomizeRequested(trackIndex); }); break;
+                case 5: safeThis->listeners_.call([trackIndex](Listener& l) { l.trackDeleteRequested(trackIndex); }); break;
                 default: break;
             }
         });

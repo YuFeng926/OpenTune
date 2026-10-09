@@ -175,35 +175,41 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     menuBar_.setVisible(false);
 
     transportBar_.onFileMenuRequested = [this]() {
+        const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
         auto menuNames = menuBar_.getMenuBarNames();
         auto menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(&transportBar_.getFileButton())
                                .withParentComponent(&contentRoot_),
-                           [this](int result) {
-                               if (result != 0) menuBar_.menuItemSelected(result, 0);
+                           [safeEditor](int result) {
+                               if (result != 0 && safeEditor != nullptr)
+                                   safeEditor->menuBar_.menuItemSelected(result, 0);
                            });
     };
 
     transportBar_.onEditMenuRequested = [this]() {
+        const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
         auto menuNames = menuBar_.getMenuBarNames();
         auto menu = menuBar_.getMenuForIndex(1, menuNames.size() > 1 ? menuNames[1] : juce::String());
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(&transportBar_.getEditButton())
                                .withParentComponent(&contentRoot_),
-                           [this](int result) {
-                               if (result != 0) menuBar_.menuItemSelected(result, 1);
+                           [safeEditor](int result) {
+                               if (result != 0 && safeEditor != nullptr)
+                                   safeEditor->menuBar_.menuItemSelected(result, 1);
                            });
     };
 
     transportBar_.onViewMenuRequested = [this]() {
+        const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
         auto menuNames = menuBar_.getMenuBarNames();
         auto menu = menuBar_.getMenuForIndex(2, menuNames.size() > 2 ? menuNames[2] : juce::String());
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(&transportBar_.getViewButton())
                                .withParentComponent(&contentRoot_),
-                           [this](int result) {
-                               if (result != 0) menuBar_.menuItemSelected(result, 2);
+                           [safeEditor](int result) {
+                               if (result != 0 && safeEditor != nullptr)
+                                   safeEditor->menuBar_.menuItemSelected(result, 2);
                            });
     };
 
