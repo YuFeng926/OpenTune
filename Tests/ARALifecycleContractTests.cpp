@@ -96,7 +96,6 @@ int runChild(int argc, char** argv)
     regionSequenceProperties.structSize = sizeof (regionSequenceProperties);
     regionSequenceProperties.orderIndex = 0;
     regionSequenceProperties.musicalContextRef = musicalContext;
-    regionSequenceProperties.persistentID = "region-sequence-1";
     const auto regionSequence = documentController.createRegionSequence (nullptr, &regionSequenceProperties);
     if (! check (regionSequence != nullptr, "region_sequence_create_failed"))
         return 1;

@@ -66,7 +66,7 @@ CompileFlags:
     - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include/d3dx12"
     - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native"
     - "-IG:/Opentune0723/ThirdParty/microsoft.ai.directml.1.15.4/include"
-    - "-IG:/Opentune0723/ThirdParty/ARA_SDK-releases-2.2.0"
+    - "-IG:/Opentune0723/ThirdParty/ARA_SDK-releases-2.3.0"
 
     # ---- MSVC STL 与 Windows SDK ----
     - "-IF:/VSC/VC/Tools/MSVC/14.44.35207/include"
