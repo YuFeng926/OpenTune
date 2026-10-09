@@ -68,7 +68,8 @@ struct ImportDropPreview {
 };
 
 class ArrangementViewComponent : public juce::Component,
-                                 public juce::ScrollBar::Listener
+                                 public juce::ScrollBar::Listener,
+                                 private juce::Timer
 {
 public:
     class Listener
@@ -174,6 +175,8 @@ private:
     int getVisibleViewportWidth() const;
     juce::Rectangle<int> getContentViewportBounds() const;
     void rebuildContentMetrics();
+    void cancelZoomPreview() noexcept;
+    void timerCallback() override;
     TimelineViewportRequest makeViewportRequest(
         TimelineViewportRequest::Kind kind,
         double targetTime,
@@ -185,7 +188,7 @@ private:
 
 private:
     void updateScrollBars();
-    void rebuildTimelineCoverage();
+    void rebuildTimelineCoverage(bool includeOverscan = true);
     void invalidateStableScene();
     void updateMoveDragOverlay(const juce::MouseEvent& e);
     void clearMoveDragOverlay();
@@ -278,11 +281,25 @@ private:
                                   TimelineCompositeCache::TileKey key);
     void buildCompositeForeground(juce::Graphics& g, juce::Rectangle<int> tileBounds,
                                   TimelineCompositeCache::TileKey key);
-    void prepareCoverageCompositeTiles();
+    void prepareCoverageCompositeTiles(bool includeOverscan = true);
 
     // Smooth scrolling
     // 用户是否手动调整过缩放（用于避免自动缩放覆盖用户设置）
     bool userHasManuallyZoomed_ = false;
+    bool zoomPreviewActive_ = false;
+    bool playbackCoveragePreparationActive_ = false;
+    int64_t playbackPrepareNextTile_ = 0;
+    int64_t playbackPrepareFirstTile_ = 0;
+    int64_t playbackPrepareLastTile_ = -1;
+    int playbackPrepareFirstRow_ = 0, playbackPrepareLastRow_ = -1, playbackPrepareNextRow_ = 0;
+    BackgroundGenerationSignature playbackPrepareBgSignature_{};
+    ForegroundGenerationSignature playbackPrepareFgSignature_{};
+    int64_t zoomFirstTile_ = 0, zoomLastTile_ = -1, zoomNextTile_ = 0;
+    int zoomFirstRow_ = 0, zoomLastRow_ = -1, zoomNextRow_ = 0;
+    BackgroundGenerationSignature zoomBgSignature_{};
+    ForegroundGenerationSignature zoomFgSignature_{};
+    static constexpr int kZoomPreviewDelayMs = 120;
+    static constexpr int kZoomPreviewFrameMs = 16;
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity_ = ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
     KeyShortcutConfig::KeyShortcutSettings shortcutSettings_ = KeyShortcutConfig::KeyShortcutSettings::getDefault();
 

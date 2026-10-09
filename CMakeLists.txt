@@ -1440,6 +1440,20 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME PitchLaneVisualPolicyTests COMMAND OpenTunePitchLaneVisualPolicyTests)
 
+    # Arrangement composite cache keeps independent per-tile, per-layer generations.
+    add_executable(OpenTuneTimelineCompositeCacheTests
+        Tests/TimelineCompositeCacheTests.cpp
+        Source/Standalone/UI/TimelineCompositeCache.cpp
+    )
+    target_include_directories(OpenTuneTimelineCompositeCacheTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneTimelineCompositeCacheTests PRIVATE
+        juce::juce_gui_basics)
+    if(MSVC)
+        target_compile_options(OpenTuneTimelineCompositeCacheTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME TimelineCompositeCacheTests COMMAND OpenTuneTimelineCompositeCacheTests)
+
     add_executable(OpenTuneMelSpectrogramTests
         Tests/MelSpectrogramTests.cpp
     )

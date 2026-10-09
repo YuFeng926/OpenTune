@@ -2,7 +2,6 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
-#include <optional>
 #include <unordered_map>
 #include <cstdint>
 #include "../../Utils/TimelineDisplayMode.h"
@@ -38,8 +37,8 @@ struct ForegroundGenerationSignature {
 
 class TimelineCompositeCache {
 public:
-    static constexpr int kTileWidthPx = 4096;
-    static constexpr int kWorldTileHeight = 512;
+    static constexpr int kTileWidthPx = 1024;
+    static constexpr int kWorldTileHeight = 256;
 
     struct TileKey {
         int64_t timeTile = 0;
@@ -57,6 +56,22 @@ public:
     struct TileEntry {
         juce::Image background;
         juce::Image foreground;
+        BackgroundGenerationSignature backgroundSignature;
+        ForegroundGenerationSignature foregroundSignature;
+        bool hasBackgroundSignature = false;
+        bool hasForegroundSignature = false;
+
+        bool hasBackgroundFor(const BackgroundGenerationSignature& signature) const noexcept
+        {
+            return background.isValid() && hasBackgroundSignature
+                && backgroundSignature == signature;
+        }
+
+        bool hasForegroundFor(const ForegroundGenerationSignature& signature) const noexcept
+        {
+            return foreground.isValid() && hasForegroundSignature
+                && foregroundSignature == signature;
+        }
     };
 
     using TileBuilder = std::function<void(juce::Graphics&, juce::Rectangle<int>, TileKey)>;
@@ -69,6 +84,10 @@ public:
         TileBuilder backgroundBuilder,
         TileBuilder foregroundBuilder);
 
+    void prepareTile(const BackgroundGenerationSignature& bgSig,
+                     const ForegroundGenerationSignature& fgSig, TileKey key,
+                     TileBuilder backgroundBuilder, TileBuilder foregroundBuilder);
+
     void removeTilesInTimeRange(int64_t firstTimeTile, int64_t lastTimeTile,
                                  int firstVertRow, int lastVertRow);
 
@@ -77,8 +96,6 @@ public:
     size_t getTileCount() const noexcept { return tiles_.size(); }
 
 private:
-    std::optional<BackgroundGenerationSignature> bgGen_;
-    std::optional<ForegroundGenerationSignature> fgGen_;
     std::unordered_map<TileKey, TileEntry, TileKeyHash> tiles_;
 };
 

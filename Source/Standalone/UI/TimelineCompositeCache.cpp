@@ -32,22 +32,6 @@ void TimelineCompositeCache::prepare(
     TileBuilder backgroundBuilder,
     TileBuilder foregroundBuilder)
 {
-    // Background signature changed → clear all background planes
-    const bool bgChanged = !bgGen_ || !(*bgGen_ == bgSig);
-    if (bgChanged) {
-        for (auto& kv : tiles_)
-            kv.second.background = juce::Image();
-        bgGen_ = bgSig;
-    }
-
-    // Foreground signature changed → clear all foreground planes
-    const bool fgChanged = !fgGen_ || !(*fgGen_ == fgSig);
-    if (fgChanged) {
-        for (auto& kv : tiles_)
-            kv.second.foreground = juce::Image();
-        fgGen_ = fgSig;
-    }
-
     // Evict tiles outside coverage
     for (auto it = tiles_.begin(); it != tiles_.end(); ) {
         const auto& key = it->first;
@@ -68,20 +52,12 @@ void TimelineCompositeCache::prepare(
     for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
         for (int vr = firstVertRow; vr <= lastVertRow; ++vr) {
             TileKey key{tt, vr};
-            auto it = tiles_.find(key);
-            const bool missing = (it == tiles_.end());
-            const bool bgMissing = missing || (it->second.background.isValid() == false);
-            const bool fgMissing = missing || (it->second.foreground.isValid() == false);
+            auto& entry = tiles_[key];
+            const bool bgMissing = !entry.hasBackgroundFor(bgSig);
+            const bool fgMissing = !entry.hasForegroundFor(fgSig);
 
             if (!bgMissing && !fgMissing)
                 continue;
-
-            TileEntry entry;
-            if (missing) {
-                // New tile
-            } else {
-                entry = std::move(it->second);
-            }
 
             if (bgMissing) {
                 entry.background = juce::Image(juce::Image::ARGB, physTileW, physTileH, true);
@@ -89,6 +65,8 @@ void TimelineCompositeCache::prepare(
                 g.addTransform(juce::AffineTransform::scale(renderScale));
                 juce::Rectangle<int> b(0, 0, kTileWidthPx, kWorldTileHeight);
                 backgroundBuilder(g, b, key);
+                entry.backgroundSignature = bgSig;
+                entry.hasBackgroundSignature = true;
             }
 
             if (fgMissing) {
@@ -97,10 +75,37 @@ void TimelineCompositeCache::prepare(
                 g.addTransform(juce::AffineTransform::scale(renderScale));
                 juce::Rectangle<int> b(0, 0, kTileWidthPx, kWorldTileHeight);
                 foregroundBuilder(g, b, key);
+                entry.foregroundSignature = fgSig;
+                entry.hasForegroundSignature = true;
             }
-
-            tiles_[key] = std::move(entry);
         }
+    }
+}
+
+void TimelineCompositeCache::prepareTile(
+    const BackgroundGenerationSignature& bgSig,
+    const ForegroundGenerationSignature& fgSig, TileKey key,
+    TileBuilder backgroundBuilder, TileBuilder foregroundBuilder)
+{
+    const float scale = bgSig.renderScale;
+    const int width = static_cast<int>(std::ceil(kTileWidthPx * scale));
+    const int height = static_cast<int>(std::ceil(kWorldTileHeight * scale));
+    auto& entry = tiles_[key];
+    if (!entry.hasBackgroundFor(bgSig)) {
+        entry.background = juce::Image(juce::Image::ARGB, width, height, true);
+        juce::Graphics g(entry.background);
+        g.addTransform(juce::AffineTransform::scale(scale));
+        backgroundBuilder(g, {0, 0, kTileWidthPx, kWorldTileHeight}, key);
+        entry.backgroundSignature = bgSig;
+        entry.hasBackgroundSignature = true;
+    }
+    if (!entry.hasForegroundFor(fgSig)) {
+        entry.foreground = juce::Image(juce::Image::ARGB, width, height, true);
+        juce::Graphics g(entry.foreground);
+        g.addTransform(juce::AffineTransform::scale(scale));
+        foregroundBuilder(g, {0, 0, kTileWidthPx, kWorldTileHeight}, key);
+        entry.foregroundSignature = fgSig;
+        entry.hasForegroundSignature = true;
     }
 }
 
