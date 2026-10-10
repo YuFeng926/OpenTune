@@ -899,15 +899,21 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     g.drawVerticalLine(w, 0.0f, static_cast<float>(height));
 }
 
+struct NoteDisplayStyle
+{
+    juce::Colour colour;
+    float bodyAlpha = 0.72f;
+};
+
 // HiFiGAN vocoder: colour each note relative to the nearest chromatic pitch of its raw OriginalF0.
-static juce::Colour vocoderShiftedColour(
+static NoteDisplayStyle vocoderShiftedColour(
     juce::Colour base,
     const Note& note,
     const PitchCurveSnapshot& snap,
     const F0Timeline& tl)
 {
     if (snap.isEmpty())
-        return base;
+        return { base };
 
     const auto range = tl.rangeForTimes(note.startTime, note.endTime);
     const auto& originalF0 = snap.getOriginalF0();
@@ -918,7 +924,7 @@ static juce::Colour vocoderShiftedColour(
         const float original = originalF0[static_cast<size_t>(f)];
         if (original > 0.0f) voicedOriginalF0.push_back(original);
     }
-    if (voicedOriginalF0.empty()) return base;
+    if (voicedOriginalF0.empty()) return { base };
     std::sort(voicedOriginalF0.begin(), voicedOriginalF0.end());
     const float standardMidi = std::round(PitchUtils::freqToMidi(
         voicedOriginalF0[voicedOriginalF0.size() / 2]));
@@ -945,10 +951,10 @@ static juce::Colour vocoderShiftedColour(
         totalSignedCents += cents;
         ++count;
     }
-    if (count == 0) return base;
+    if (count == 0) return { base };
 
     const float avgSignedCents = totalSignedCents / static_cast<float>(count);
-    if (avgSignedCents == 0.0f) return base;
+    if (avgSignedCents == 0.0f) return { base };
     const float avgDistanceCents = std::abs(avgSignedCents);
 
     constexpr float kMinCents = 75.0f;
@@ -962,13 +968,15 @@ static juce::Colour vocoderShiftedColour(
         ? base.interpolatedWith(kWarmTarget, t)
         : base.interpolatedWith(kCoolTarget, t);
 
-    return base.interpolatedWith(target, t);
+    const auto colour = base.interpolatedWith(target, t);
+    const float blueShiftMix = avgSignedCents > 0.0f ? t * t : 0.0f;
+    return { colour, 0.72f - 0.18f * blueShiftMix };
 }
 
 // Compute the final display colour for a note, fully reusing drawNotes logic:
 // base = EQ active ? item.displayColour.darker(0.30f) : item.displayColour
 // if vocoder-needed, shift via vocoderShiftedColour; otherwise return base.
-static juce::Colour computeNoteDisplayColour(
+static NoteDisplayStyle computeNoteDisplayStyle(
     const PianoRollRenderer::ContentRenderItem& item,
     const Note& note)
 {
@@ -978,7 +986,7 @@ static juce::Colour computeNoteDisplayColour(
     if (item.pitchSnapshot
         && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline))
         return vocoderShiftedColour(base, note, *item.pitchSnapshot, item.f0Timeline);
-    return base;
+    return { base };
 }
 
 void PianoRollRenderer::drawNotes(juce::Graphics& g,
@@ -1058,7 +1066,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
                 continue;
 
-            const auto drawColour = computeNoteDisplayColour(item, note);
+            const auto drawColour = computeNoteDisplayStyle(item, note).colour;
 
             // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
             juce::Path blob;
@@ -1140,8 +1148,6 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
     const bool isOverdose = themeId == ThemeId::Overdose;
-    constexpr float kNoteBodyFillAlpha = 0.72f;
-
     for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
     {
         const auto& note = *noteIt;
@@ -1160,11 +1166,12 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float w = std::max(1.0f, static_cast<float>(x2 - x1));
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
-        const auto drawColor = computeNoteDisplayColour(item, note);
+        const auto noteStyle = computeNoteDisplayStyle(item, note);
+        const auto& drawColor = noteStyle.colour;
 
         if (isAurora)
         {
-            g.setColour(drawColor.withAlpha(kNoteBodyFillAlpha));
+            g.setColour(drawColor.withAlpha(noteStyle.bodyAlpha));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
@@ -1196,7 +1203,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(drawColor.withAlpha(kNoteBodyFillAlpha));
+            g.setColour(drawColor.withAlpha(noteStyle.bodyAlpha));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
@@ -1224,7 +1231,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else
         {
-            g.setColour(drawColor.withAlpha(kNoteBodyFillAlpha));
+            g.setColour(drawColor.withAlpha(noteStyle.bodyAlpha));
             g.fillRect(noteBounds);
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
@@ -1699,7 +1706,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             }
             if (noteIt != noteEnd && noteIt->startTime <= timeSec) {
                 if (!hasNoteColour) {
-                    currentNoteColour = computeNoteDisplayColour(item, *noteIt);
+                    currentNoteColour = computeNoteDisplayStyle(item, *noteIt).colour;
                     hasNoteColour = true;
                 }
                 return currentNoteColour;
