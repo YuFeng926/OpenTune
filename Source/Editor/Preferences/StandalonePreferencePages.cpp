@@ -107,7 +107,7 @@ public:
 
     void resized() override
     {
-        auto bounds = getLocalBounds();
+        auto bounds = getLocalBounds().reduced(10, 0);
         juce::Rectangle<int> row;
 
         if (typeSelector_.isVisible()) {
@@ -139,7 +139,7 @@ public:
 
         channelsLabel_.setBounds(bounds.removeFromTop(kRowHeight));
 
-        const int toggleWidth = getWidth() / 2;
+        const int toggleWidth = bounds.getWidth() / 2;
         for (int i = 0; i < channelToggles_.size(); ++i) {
             if (i % 2 == 0)
                 row = bounds.removeFromTop(kRowHeight);

@@ -116,6 +116,7 @@ public:
     void setShowUnvoicedFrames(bool shouldShow);
     void setBackgroundBrightness(float brightness);
     void setCorrectedF0Colour(std::uint32_t colour);
+    void setOriginalF0Colour(std::uint32_t colour);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
     void setTuning(const TuningConfig::TuningSettings& tuning);
     void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);

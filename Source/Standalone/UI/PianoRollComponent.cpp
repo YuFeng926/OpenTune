@@ -1862,6 +1862,7 @@ void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
     ctx.minMidi = minMidi_;
     ctx.maxMidi = maxMidi_;
     ctx.showOriginalF0 = showOriginalF0_;
+    ctx.originalF0Colour = originalF0Colour_;
     ctx.coords = makeViewMapper();
     ctx.hasF0Selection = true;
     ctx.f0SelectionRanges = frameSel.ranges;
@@ -2399,6 +2400,7 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     renderCtx.showOriginalF0 = showOriginalF0_;
     renderCtx.showCorrectedF0 = showCorrectedF0_;
     renderCtx.correctedF0Colour = correctedF0Colour_;
+    renderCtx.originalF0Colour = originalF0Colour_;
     renderCtx.coords = mapper;
     renderCtx.rasterBounds = clipArea;
 
@@ -4107,6 +4109,16 @@ void PianoRollComponent::setCorrectedF0Colour(juce::Colour colour)
     colour = colour.withAlpha(1.0f);
     if (correctedF0Colour_ == colour) return;
     correctedF0Colour_ = colour;
+    contentDirty_ = true;
+    rasterizeDirtySurfaces();
+    repaint();
+}
+
+void PianoRollComponent::setOriginalF0Colour(juce::Colour colour)
+{
+    colour = colour.withAlpha(1.0f);
+    if (originalF0Colour_ == colour) return;
+    originalF0Colour_ = colour;
     contentDirty_ = true;
     rasterizeDirtySurfaces();
     repaint();

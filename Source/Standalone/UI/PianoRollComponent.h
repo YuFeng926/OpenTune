@@ -192,6 +192,7 @@ public:
     void setShowUnvoicedFrames(bool shouldShow);
     void setBackgroundBrightness(float brightness);
     void setCorrectedF0Colour(juce::Colour colour);
+    void setOriginalF0Colour(juce::Colour colour);
     void setInferenceActive(bool active);
     void setBpm(double bpm);
     void setTimeSignature(int numerator, int denominator);
@@ -596,6 +597,7 @@ private:
     bool showUnvoicedFrames_ = false;
     float backgroundBrightness_ = 1.0f;
     juce::Colour correctedF0Colour_{0xFF1D6FC0};
+    juce::Colour originalF0Colour_{0xFFC91B1E};
     bool showOriginalF0_ = true;
     bool showCorrectedF0_ = true;
     float currentRetuneSpeed_ = PitchControlConfig::kDefaultRetuneSpeedNormalized;

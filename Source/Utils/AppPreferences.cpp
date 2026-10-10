@@ -17,6 +17,7 @@ constexpr const char* kSharedPianoRollShowPianoKeyboardKey = "shared.pianoRoll.s
 constexpr const char* kSharedPianoRollScaleAssistEnabledKey = "shared.pianoRoll.scaleAssistEnabled";
 constexpr const char* kSharedPianoRollBackgroundBrightnessKey = "shared.pianoRoll.backgroundBrightness";
 constexpr const char* kSharedPianoRollCorrectedF0ColourKey = "shared.pianoRoll.correctedF0Colour";
+constexpr const char* kSharedPianoRollOriginalF0ColourKey = "shared.pianoRoll.originalF0Colour";
 constexpr const char* kSharedZoomHorizontalFactorKey = "shared.zoom.horizontalFactor";
 constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor";
 constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
@@ -319,6 +320,10 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
         properties.getValue(kSharedPianoRollCorrectedF0ColourKey,
                             juce::Colour(state.shared.pianoRollVisualPreferences.correctedF0Colour).toString()))
         .withAlpha(1.0f).getARGB();
+    state.shared.pianoRollVisualPreferences.originalF0Colour = juce::Colour::fromString(
+        properties.getValue(kSharedPianoRollOriginalF0ColourKey,
+                            juce::Colour(state.shared.pianoRollVisualPreferences.originalF0Colour).toString()))
+        .withAlpha(1.0f).getARGB();
     state.shared.zoomSensitivity.horizontalZoomFactor = static_cast<float>(
         properties.getDoubleValue(kSharedZoomHorizontalFactorKey, state.shared.zoomSensitivity.horizontalZoomFactor));
     state.shared.zoomSensitivity.verticalZoomFactor = static_cast<float>(
@@ -400,6 +405,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         static_cast<double>(state.shared.pianoRollVisualPreferences.backgroundBrightness));
     properties.setValue(kSharedPianoRollCorrectedF0ColourKey,
                         juce::Colour(state.shared.pianoRollVisualPreferences.correctedF0Colour).toString());
+    properties.setValue(kSharedPianoRollOriginalF0ColourKey,
+                        juce::Colour(state.shared.pianoRollVisualPreferences.originalF0Colour).toString());
     properties.setValue(kSharedZoomHorizontalFactorKey, static_cast<double>(state.shared.zoomSensitivity.horizontalZoomFactor));
     properties.setValue(kSharedZoomVerticalFactorKey, static_cast<double>(state.shared.zoomSensitivity.verticalZoomFactor));
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
@@ -562,6 +569,13 @@ void AppPreferences::setCorrectedF0Colour(std::uint32_t colour)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.pianoRollVisualPreferences.correctedF0Colour = juce::Colour(colour).withAlpha(1.0f).getARGB();
+    saveLocked();
+}
+
+void AppPreferences::setOriginalF0Colour(std::uint32_t colour)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.pianoRollVisualPreferences.originalF0Colour = juce::Colour(colour).withAlpha(1.0f).getARGB();
     saveLocked();
 }
 

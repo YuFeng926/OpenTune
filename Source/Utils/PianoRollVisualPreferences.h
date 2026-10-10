@@ -57,6 +57,7 @@ struct PianoRollVisualPreferences {
     bool scaleAssistEnabled = false;
     float backgroundBrightness = 1.0f; // 0.0=纯黑, 1.0=当前默认, 2.0=高亮
     std::uint32_t correctedF0Colour = 0xFF1D6FC0;
+    std::uint32_t originalF0Colour = 0xFFC91B1E;
 };
 
 } // namespace OpenTune

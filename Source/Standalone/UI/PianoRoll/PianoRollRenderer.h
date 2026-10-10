@@ -108,6 +108,7 @@ public:
         bool showOriginalF0 = true;
         bool showCorrectedF0 = true;
         juce::Colour correctedF0Colour{0xFF1D6FC0};
+        juce::Colour originalF0Colour{0xFFC91B1E};
 
         bool hasF0Selection = false;
         std::vector<std::pair<int, int>> f0SelectionRanges;  // {startFrame, endFrameExclusive}，排序归并

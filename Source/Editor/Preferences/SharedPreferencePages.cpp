@@ -652,6 +652,47 @@ private:
 class SharedVisualPage final : public juce::Component
 {
 private:
+    class ColourSwatchButton final : public juce::Button
+    {
+    public:
+        ColourSwatchButton() : juce::Button("Colour") {}
+
+        void setColourValue(juce::Colour colour)
+        {
+            colour_ = colour;
+            setButtonText(colour_.toDisplayString(false).toUpperCase());
+            repaint();
+        }
+
+        void paintButton(juce::Graphics& g, bool highlighted, bool) override
+        {
+            const auto bounds = getLocalBounds().toFloat().reduced(0.5f);
+            g.setColour(UIColors::backgroundMedium);
+            g.fillRoundedRectangle(bounds, 4.0f);
+            g.setColour(UIColors::panelBorder);
+            g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
+
+            auto swatch = bounds.reduced(5.0f).removeFromLeft(28.0f);
+            g.setColour(colour_);
+            g.fillRoundedRectangle(swatch, 2.0f);
+            g.setColour(UIColors::panelBorder);
+            g.drawRoundedRectangle(swatch, 2.0f, 1.0f);
+
+            g.setColour(UIColors::textPrimary);
+            g.setFont(UIColors::getUIFontExact(12.0f));
+            g.drawText(colour_.toDisplayString(false).toUpperCase(),
+                       bounds.reduced(40.0f, 0.0f), juce::Justification::centredLeft);
+
+            if (highlighted) {
+                g.setColour(juce::Colours::white.withAlpha(0.08f));
+                g.fillRoundedRectangle(bounds, 4.0f);
+            }
+        }
+
+    private:
+        juce::Colour colour_{0xFF1D6FC0};
+    };
+
     class ColourPickerContent final : public juce::Component,
                                       private juce::ComponentListener
     {
@@ -697,7 +738,7 @@ private:
     };
 
 public:
-    static constexpr int kContentHeight = 218;
+    static constexpr int kContentHeight = 266;
 
     SharedVisualPage(AppPreferences& appPreferences, std::function<void()> onPreferencesChanged)
         : appPreferences_(appPreferences)
@@ -744,27 +785,31 @@ public:
 
         initialiseLabel(correctedF0ColourLabel_, LOC(kCorrectedF0Colour));
         addAndMakeVisible(correctedF0ColourLabel_);
-        correctedF0ColourButton_.setButtonText(
-            juce::Colour(visualPreferences.correctedF0Colour).toDisplayString(false));
-        correctedF0ColourButton_.setColour(juce::TextButton::buttonColourId,
-                                           juce::Colour(visualPreferences.correctedF0Colour));
-        correctedF0ColourButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
+        correctedF0ColourButton_.setColourValue(juce::Colour(visualPreferences.correctedF0Colour));
         correctedF0ColourButton_.onClick = [this] {
             const auto current = appPreferences_.getState().shared.pianoRollVisualPreferences.correctedF0Colour;
             const auto safeThis = juce::Component::SafePointer<SharedVisualPage>(this);
-            auto content = std::make_unique<ColourPickerContent>(
-                *this,
-                juce::Colour(current),
-                [safeThis](juce::Colour colour) {
-                    if (safeThis != nullptr)
-                        safeThis->setCorrectedF0Colour(colour);
-                });
-            content->setSize(380, 300);
-            juce::CallOutBox::launchAsynchronously(std::move(content),
-                                                   correctedF0ColourButton_.getScreenBounds(),
-                                                   nullptr);
+            openColourPicker(correctedF0ColourButton_, juce::Colour(current),
+                             [safeThis](juce::Colour colour) {
+                                 if (safeThis != nullptr)
+                                     safeThis->setCorrectedF0Colour(colour);
+                             });
         };
         addAndMakeVisible(correctedF0ColourButton_);
+
+        initialiseLabel(originalF0ColourLabel_, LOC(kOriginalF0Colour));
+        addAndMakeVisible(originalF0ColourLabel_);
+        originalF0ColourButton_.setColourValue(juce::Colour(visualPreferences.originalF0Colour));
+        originalF0ColourButton_.onClick = [this] {
+            const auto current = appPreferences_.getState().shared.pianoRollVisualPreferences.originalF0Colour;
+            const auto safeThis = juce::Component::SafePointer<SharedVisualPage>(this);
+            openColourPicker(originalF0ColourButton_, juce::Colour(current),
+                             [safeThis](juce::Colour colour) {
+                                 if (safeThis != nullptr)
+                                     safeThis->setOriginalF0Colour(colour);
+                             });
+        };
+        addAndMakeVisible(originalF0ColourButton_);
     }
 
     void paint(juce::Graphics& g) override
@@ -794,6 +839,11 @@ public:
         auto colourRow = bounds.removeFromTop(rowHeight);
         correctedF0ColourLabel_.setBounds(colourRow.removeFromLeft(labelWidth));
         correctedF0ColourButton_.setBounds(colourRow.removeFromLeft(240).reduced(0, 4));
+
+        bounds.removeFromTop(14);
+        auto originalColourRow = bounds.removeFromTop(rowHeight);
+        originalF0ColourLabel_.setBounds(originalColourRow.removeFromLeft(labelWidth));
+        originalF0ColourButton_.setBounds(originalColourRow.removeFromLeft(240).reduced(0, 4));
     }
 
 private:
@@ -828,9 +878,31 @@ private:
     {
         colour = colour.withAlpha(1.0f);
         appPreferences_.setCorrectedF0Colour(colour.getARGB());
-        correctedF0ColourButton_.setButtonText(colour.toDisplayString(false));
-        correctedF0ColourButton_.setColour(juce::TextButton::buttonColourId, colour);
+        correctedF0ColourButton_.setColourValue(colour);
         notifyChanged();
+    }
+
+    void setOriginalF0Colour(juce::Colour colour)
+    {
+        colour = colour.withAlpha(1.0f);
+        appPreferences_.setOriginalF0Colour(colour.getARGB());
+        originalF0ColourButton_.setColourValue(colour);
+        notifyChanged();
+    }
+
+    void openColourPicker(juce::Button& button,
+                          juce::Colour current,
+                          std::function<void(juce::Colour)> onDismiss)
+    {
+        const auto safeThis = juce::Component::SafePointer<SharedVisualPage>(this);
+        auto content = std::make_unique<ColourPickerContent>(
+            *this, current,
+            [safeThis, onDismiss = std::move(onDismiss)](juce::Colour colour) {
+                if (safeThis != nullptr && onDismiss)
+                    onDismiss(colour);
+            });
+        content->setSize(380, 300);
+        juce::CallOutBox::launchAsynchronously(std::move(content), button.getScreenBounds(), nullptr);
     }
 
     AppPreferences& appPreferences_;
@@ -841,7 +913,9 @@ private:
     juce::Label backgroundBrightnessLabel_;
     juce::Slider backgroundBrightnessSlider_;
     juce::Label correctedF0ColourLabel_;
-    juce::TextButton correctedF0ColourButton_;
+    ColourSwatchButton correctedF0ColourButton_;
+    juce::Label originalF0ColourLabel_;
+    ColourSwatchButton originalF0ColourButton_;
 };
 
 class ShortcutSettingsPage final : public juce::Component

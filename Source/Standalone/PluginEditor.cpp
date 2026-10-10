@@ -1850,6 +1850,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     pianoRoll_.setBackgroundBrightness(visualPreferences.backgroundBrightness);
     pianoRoll_.setCorrectedF0Colour(juce::Colour(visualPreferences.correctedF0Colour));
+    pianoRoll_.setOriginalF0Colour(juce::Colour(visualPreferences.originalF0Colour));
     pianoRoll_.setGridStyle(sharedPreferences.gridStyle);
     pianoRoll_.setShowPianoKeyboard(visualPreferences.showPianoKeyboard);
     pianoRoll_.setScaleAssistEnabled(visualPreferences.scaleAssistEnabled);
