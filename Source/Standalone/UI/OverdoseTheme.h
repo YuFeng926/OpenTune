@@ -110,8 +110,8 @@ namespace Overdose {
         static const juce::uint32 WaveformOutline    = 0xFFFF2097;
         static const juce::uint32 PianoWaveform      = 0xFFFF2097;
 
-        static const juce::uint32 OriginalF0         = 0xFFFF2097;
-        static const juce::uint32 CorrectedF0        = 0xFF6A92FF;
+        static const juce::uint32 OriginalF0         = 0xFFC91B1E;
+        static const juce::uint32 CorrectedF0        = 0xFF1D6FC0;
         static const juce::uint32 ShadowTrack        = 0x306A92FF;
 
         static const juce::uint32 NoteBlock          = 0x80FF2097;

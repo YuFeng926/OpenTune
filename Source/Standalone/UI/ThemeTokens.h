@@ -298,8 +298,8 @@ private:
             juce::Colour { BlueBreeze::Colors::GraphBgDeep }.withAlpha(0.14f),
             juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.18f),
 
-            juce::Colour { 0xFFD24A3A }, // originalF0
-            juce::Colour { 0xFF196FC4 }, // correctedF0
+            juce::Colour { 0xFFC91B1E }, // originalF0
+            juce::Colour { 0xFF1D6FC0 }, // correctedF0
             juce::Colour { 0x30196FC4 }, // shadowTrack
 
             juce::Colour { 0xFF235AA8 },

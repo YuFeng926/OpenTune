@@ -55,8 +55,8 @@ struct UIColors
     static inline juce::Colour gridLine { 0xFF3E4652 };
 
     // Pitch Curve Colors
-    static inline juce::Colour originalF0 { 0xFFD24A3A };   // Piano Roll reference red
-    static inline juce::Colour correctedF0 { 0xFF196FC4 };  // Piano Roll reference blue
+    static inline juce::Colour originalF0 { 0xFFC91B1E };   // Piano Roll reference red
+    static inline juce::Colour correctedF0 { 0xFF1D6FC0 };  // Piano Roll reference blue
     static inline juce::Colour shadowTrack { 0x30196FC4 };
 
     // Note Block Colors

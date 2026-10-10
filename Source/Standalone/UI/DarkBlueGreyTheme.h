@@ -51,8 +51,8 @@ namespace DarkBlueGrey {
         static const juce::uint32 GridLine       = 0xFF2B3643;
 
         // 音高曲线
-        static const juce::uint32 OriginalF0   = 0xFFD24A3A; // Piano Roll reference red
-        static const juce::uint32 CorrectedF0  = 0xFF196FC4; // Piano Roll reference blue
+        static const juce::uint32 OriginalF0   = 0xFFC91B1E; // Piano Roll reference red
+        static const juce::uint32 CorrectedF0  = 0xFF1D6FC0; // Piano Roll reference blue
         static const juce::uint32 ShadowTrack  = 0x30196FC4;
 
         // 音符块（以"边框强调"为主，填充克制）
