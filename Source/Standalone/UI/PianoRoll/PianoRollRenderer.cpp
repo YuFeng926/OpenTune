@@ -1837,6 +1837,27 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         const juce::PathStrokeType glowStrokeType(glowLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
         const juce::PathStrokeType innerGlowStrokeType(lineWidth + 0.95f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
         const juce::PathStrokeType highlightStrokeType(juce::jmax(0.75f, lineWidth * 0.46f), juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        const auto curveContrastColour = [](juce::Colour noteColour, float opacity) {
+            const float lum = (0.299f * noteColour.getRed()
+                             + 0.587f * noteColour.getGreen()
+                             + 0.114f * noteColour.getBlue()) / 255.0f;
+            const juce::Colour contrast = lum < 0.5f
+                ? juce::Colour(0xFFE8EDF2)
+                : juce::Colour(0xFF101820);
+            return contrast.withAlpha(opacity);
+        };
+        const auto buildContrastGradient = [&](const auto& pts, float leftX, float rightX, float opacity) {
+            juce::ColourGradient grad;
+            grad.isRadial = false;
+            grad.point1 = { leftX, 0.0f };
+            grad.point2 = { rightX, 0.0f };
+            const float xRange = juce::jmax(1.0f, rightX - leftX);
+            for (const auto& pt : pts) {
+                const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
+                grad.addColour(pos, curveContrastColour(pt.noteColour, opacity));
+            }
+            return grad;
+        };
 
         for (const auto& segment : visualSegments) {
             if (segment.points.empty()) continue;
@@ -1849,18 +1870,20 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 if (isAurora) {
                     g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.095f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.20f));
+                    g.setColour(curveContrastColour(p.noteColour, 0.46f));
                     g.strokePath(ptPath, innerGlowStrokeType);
                     g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else if (isBlueBreeze || isOverdose) {
                     g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.070f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.15f));
+                    g.setColour(curveContrastColour(p.noteColour, 0.40f));
                     g.strokePath(ptPath, innerGlowStrokeType);
                     g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else {
+                    g.setColour(curveContrastColour(p.noteColour, 0.38f));
+                    g.strokePath(ptPath, innerGlowStrokeType);
                     g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 }
@@ -1897,7 +1920,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
                 g.setGradientFill(buildGradient(0.095f));
                 g.strokePath(runPath, glowStrokeType);
-                g.setGradientFill(buildGradient(0.20f));
+                g.setGradientFill(buildContrastGradient(pts, leftX, rightX, 0.46f));
                 g.strokePath(runPath, innerGlowStrokeType);
                 g.setGradientFill(buildGradient(1.0f));
                 g.strokePath(runPath, strokeType);
@@ -1926,7 +1949,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
                 g.setGradientFill(buildGradient(0.070f));
                 g.strokePath(runPath, glowStrokeType);
-                g.setGradientFill(buildGradient(0.15f));
+                g.setGradientFill(buildContrastGradient(pts, leftX, rightX, 0.40f));
                 g.strokePath(runPath, innerGlowStrokeType);
                 g.setGradientFill(buildGradient(1.0f));
                 g.strokePath(runPath, strokeType);
@@ -1947,6 +1970,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
                     grad.addColour(pos, c.withAlpha(1.0f));
                 }
+                g.setGradientFill(buildContrastGradient(pts, leftX, rightX, 0.38f));
+                g.strokePath(runPath, innerGlowStrokeType);
                 g.setGradientFill(grad);
                 g.strokePath(runPath, strokeType);
 
