@@ -292,7 +292,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
             case PitchRowVisualRole::BlackKey:
                 // 暗色 lane（物理键明暗：物理黑键；音阶明暗：调外）
                 if (isAurora) {
-                    g.setColour(UIColors::glassSurface.withAlpha(0.075f));
+                    g.setColour(UIColors::glassSurface.withAlpha(0.095f));
                 } else {
                     g.setColour((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
                         ? UIColors::pianoRollLane.withAlpha(0.16f)
@@ -304,7 +304,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
             case PitchRowVisualRole::WhiteKey:
                 // 亮色 lane（物理键明暗：物理白键；音阶明暗：调内）
                 if (isAurora) {
-                    g.setColour(UIColors::pianoRollLane.withAlpha(0.024f));
+                    g.setColour(UIColors::pianoRollLane.withAlpha(0.032f));
                     g.fillRect(0.0f, y, static_cast<float>(w), laneH);
                 }
                 break;
