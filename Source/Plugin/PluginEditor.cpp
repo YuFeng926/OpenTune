@@ -396,6 +396,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     pianoRoll_.setBackgroundBrightness(visualPreferences.backgroundBrightness);
+    pianoRoll_.setCorrectedF0Colour(juce::Colour(visualPreferences.correctedF0Colour));
     pianoRoll_.setGridStyle(sharedPreferences.gridStyle);
     pianoRoll_.setShowPianoKeyboard(visualPreferences.showPianoKeyboard);
     pianoRoll_.setScaleAssistEnabled(visualPreferences.scaleAssistEnabled);

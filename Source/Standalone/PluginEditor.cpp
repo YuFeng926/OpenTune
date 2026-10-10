@@ -8,6 +8,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_gui_extra/juce_gui_extra.h>
 
 #include "UI/UIColors.h"
 #include "UI/UiAssets.h"
@@ -1848,6 +1849,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     pianoRoll_.setBackgroundBrightness(visualPreferences.backgroundBrightness);
+    pianoRoll_.setCorrectedF0Colour(juce::Colour(visualPreferences.correctedF0Colour));
     pianoRoll_.setGridStyle(sharedPreferences.gridStyle);
     pianoRoll_.setShowPianoKeyboard(visualPreferences.showPianoKeyboard);
     pianoRoll_.setScaleAssistEnabled(visualPreferences.scaleAssistEnabled);
@@ -3221,7 +3223,7 @@ void OpenTuneAudioProcessorEditor::visibleTrackCountChanged(int newCount)
 
 void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
 {
-    // Wrapper component: holds ColourSelector, applies result when dialog closes via destructor
+    // Wrapper component: holds ColourSelector, applies result when the call-out closes.
     struct ColourPickerContent : public juce::Component,
                                  private juce::ComponentListener
     {
@@ -3260,29 +3262,14 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
                 selector_->setBounds(getLocalBounds());
         }
 
-        /** 非原生标题栏时移除 DialogWindow 默认标题栏，仅保留主题内容 */
-        void parentHierarchyChanged() override
-        {
-            if (auto* dialogWindow = findParentComponentOfClass<juce::DialogWindow>())
-            {
-                if (! dialogWindow->isUsingNativeTitleBar())
-                {
-                    const int contentWidth = getWidth();
-                    const int contentHeight = getHeight();
-                    dialogWindow->setTitleBarHeight(0);
-                    dialogWindow->setContentComponentSize(contentWidth, contentHeight);
-                }
-            }
-        }
-
     private:
         void componentBeingDeleted(juce::Component& comp) override
         {
             if (!subscription_.resetIfWatching(comp))
                 return;
 
-            if (auto* dialogWindow = findParentComponentOfClass<juce::DialogWindow>())
-                dialogWindow->exitModalState(0);
+            if (auto* callOutBox = findParentComponentOfClass<juce::CallOutBox>())
+                callOutBox->dismiss();
         }
 
         int trackId_;
@@ -3294,14 +3281,10 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
     auto* content = new ColourPickerContent(*this, trackId, current);
     content->setSize(380, 300);
 
-    juce::DialogWindow::LaunchOptions opts;
-    opts.dialogTitle = "Track " + juce::String(trackId + 1) + " Color";
-    opts.content.setOwned(content);
-    opts.dialogBackgroundColour = UIColors::backgroundDark;
-    opts.componentToCentreAround = &contentRoot_;
-    opts.escapeKeyTriggersCloseButton = true;
-    opts.useNativeTitleBar = false;
-    opts.launchAsync();
+    juce::CallOutBox::launchAsynchronously(
+        std::unique_ptr<juce::Component>(content),
+        contentRoot_.getScreenBounds(),
+        nullptr);
 }
 
 void OpenTuneAudioProcessorEditor::trackAddRequested()

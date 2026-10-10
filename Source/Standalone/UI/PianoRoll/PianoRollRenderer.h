@@ -107,6 +107,7 @@ public:
         bool showUnvoicedFrames = false;
         bool showOriginalF0 = true;
         bool showCorrectedF0 = true;
+        juce::Colour correctedF0Colour{0xFF1D6FC0};
 
         bool hasF0Selection = false;
         std::vector<std::pair<int, int>> f0SelectionRanges;  // {startFrame, endFrameExclusive}，排序归并

@@ -1727,14 +1727,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s
         };
     };
-    const auto perceptualColourDistance = [&](juce::Colour a, juce::Colour b) {
-        const auto labA = toOklab(a);
-        const auto labB = toOklab(b);
-        const float deltaL = labA.l - labB.l;
-        const float deltaA = labA.a - labB.a;
-        const float deltaB = labA.b - labB.b;
-        return std::sqrt(deltaL * deltaL + deltaA * deltaA + deltaB * deltaB);
-    };
     const auto curveContrastColour = [&](juce::Colour noteColour, juce::Colour curveColour, float opacity) {
         const auto noteLab = toOklab(noteColour);
         const auto curveLab = toOklab(curveColour);
@@ -1764,17 +1756,9 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     };
 
     static const juce::Colour kLevelHotGold { 0xFFFFC24A };
-    static const juce::Colour kBrightCurve { 0xFFF4C473 }; // 暖橙候选色
-    static const juce::Colour kDarkCurve   { 0xFF1D6FC0 }; // 冷蓝候选色
-    // 同时考虑能量金色混合，选择与当前音符色感知差异更大的候选色。
-    const auto blendLevelHotColourFromNote = [&](juce::Colour noteColour, float hm) {
+    const auto blendLevelHotColour = [&](float hm) {
         const float hotMix = juce::jlimit(0.0f, 0.42f, hm);
-        const auto warm = kBrightCurve.interpolatedWith(kLevelHotGold, hotMix);
-        const auto cool = kDarkCurve.interpolatedWith(kLevelHotGold, hotMix);
-        constexpr float kWarmColourBias = 0.08f;
-        return perceptualColourDistance(noteColour, warm)
-                >= perceptualColourDistance(noteColour, cool) + kWarmColourBias
-            ? warm : cool;
+        return ctx.correctedF0Colour.interpolatedWith(kLevelHotGold, hotMix);
     };
 
     // Draw original F0 (thin) — single contiguous span producer
@@ -1915,26 +1899,26 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 ptPath.startNewSubPath(p.x - 0.01f, p.y);
                 ptPath.lineTo(p.x + 0.01f, p.y);
                 if (isAurora) {
-                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.095f));
+                    g.setColour(blendLevelHotColour(p.levelHotMix).withAlpha(alpha * 0.095f));
                     g.strokePath(ptPath, glowStrokeType);
                     g.setColour(curveContrastColour(p.noteColour,
-                        blendLevelHotColourFromNote(p.noteColour, p.levelHotMix), 0.46f));
+                        blendLevelHotColour(p.levelHotMix), 0.46f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
+                    g.setColour(blendLevelHotColour(p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else if (isBlueBreeze || isOverdose) {
-                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(alpha * 0.070f));
+                    g.setColour(blendLevelHotColour(p.levelHotMix).withAlpha(alpha * 0.070f));
                     g.strokePath(ptPath, glowStrokeType);
                     g.setColour(curveContrastColour(p.noteColour,
-                        blendLevelHotColourFromNote(p.noteColour, p.levelHotMix), 0.40f));
+                        blendLevelHotColour(p.levelHotMix), 0.40f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
+                    g.setColour(blendLevelHotColour(p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else {
                     g.setColour(curveContrastColour(p.noteColour,
-                        blendLevelHotColourFromNote(p.noteColour, p.levelHotMix), 0.38f));
+                        blendLevelHotColour(p.levelHotMix), 0.38f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(blendLevelHotColourFromNote(p.noteColour, p.levelHotMix).withAlpha(1.0f));
+                    g.setColour(blendLevelHotColour(p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 }
                 continue;
@@ -1960,8 +1944,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     grad.point2 = { rightX, 0.0f };
                     for (const auto& pt : pts) {
                         const juce::Colour c = brighter
-                            ? blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix).brighter(0.20f)
-                            : blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix);
+                            ? blendLevelHotColour(pt.levelHotMix).brighter(0.20f)
+                            : blendLevelHotColour(pt.levelHotMix);
                         const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
                         grad.addColour(pos, c.withAlpha(alpha * alphaScale));
                     }
@@ -1972,7 +1956,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, glowStrokeType);
                 g.setGradientFill(buildContrastGradient(pts, leftX, rightX, 0.46f,
                     [&](const auto& point) {
-                        return blendLevelHotColourFromNote(point.noteColour, point.levelHotMix);
+                        return blendLevelHotColour(point.levelHotMix);
                     }));
                 g.strokePath(runPath, innerGlowStrokeType);
                 g.setGradientFill(buildGradient(1.0f));
@@ -1992,8 +1976,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     grad.point2 = { rightX, 0.0f };
                     for (const auto& pt : pts) {
                         const juce::Colour c = brighter
-                            ? blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix).brighter(0.16f)
-                            : blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix);
+                            ? blendLevelHotColour(pt.levelHotMix).brighter(0.16f)
+                            : blendLevelHotColour(pt.levelHotMix);
                         const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
                         grad.addColour(pos, c.withAlpha(alpha * alphaScale));
                     }
@@ -2004,7 +1988,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, glowStrokeType);
                 g.setGradientFill(buildContrastGradient(pts, leftX, rightX, 0.40f,
                     [&](const auto& point) {
-                        return blendLevelHotColourFromNote(point.noteColour, point.levelHotMix);
+                        return blendLevelHotColour(point.levelHotMix);
                     }));
                 g.strokePath(runPath, innerGlowStrokeType);
                 g.setGradientFill(buildGradient(1.0f));
@@ -2022,13 +2006,13 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 grad.point1 = { leftX, 0.0f };
                 grad.point2 = { rightX, 0.0f };
                 for (const auto& pt : pts) {
-                    const juce::Colour c = blendLevelHotColourFromNote(pt.noteColour, pt.levelHotMix);
+                    const juce::Colour c = blendLevelHotColour(pt.levelHotMix);
                     const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
                     grad.addColour(pos, c.withAlpha(1.0f));
                 }
                 g.setGradientFill(buildContrastGradient(pts, leftX, rightX, 0.38f,
                     [&](const auto& point) {
-                        return blendLevelHotColourFromNote(point.noteColour, point.levelHotMix);
+                        return blendLevelHotColour(point.levelHotMix);
                     }));
                 g.strokePath(runPath, innerGlowStrokeType);
                 g.setGradientFill(grad);

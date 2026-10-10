@@ -201,6 +201,7 @@ constexpr const char* kNoteLabelsHide = "Hide";
 constexpr const char* kShowUnvoicedFrames = "Show Unvoiced Frames";
 constexpr const char* kUiZoom = "UI Zoom";
 constexpr const char* kBackgroundBrightness = "Background Brightness";
+constexpr const char* kCorrectedF0Colour = "Corrected F0 Curve Color";
 constexpr const char* kTrackColors = "Track Colors";
 constexpr const char* kTrackColorsRandom = "Random Colors";
 constexpr const char* kTrackColorsCustom = "Custom Colors";
@@ -437,6 +438,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kShowUnvoicedFrames, "Show Unvoiced Frames", "显示无声音帧", "無声音フレームを表示", "Показывать глухие кадры", "Mostrar cuadros sordos" },
         { Keys::kUiZoom, "UI Zoom", "界面缩放", "UIズーム", "Масштаб интерфейса", "Zoom de interfaz" },
         { Keys::kBackgroundBrightness, "Background Brightness", "背景亮度", "背景の明るさ", "Яркость фона", "Brillo de fondo" },
+        { Keys::kCorrectedF0Colour, "Corrected F0 Curve Color", "CorrectedF0 曲线颜色", "Corrected F0 曲線の色", "Цвет кривой Corrected F0", "Color de la curva Corrected F0" },
         { Keys::kTrackColors, "Track Colors", "轨道颜色", "トラック色", "Цвет дорожки", "Color pista" },
         { Keys::kTrackColorsRandom, "Random Colors", "随机颜色", "ランダム色", "Случайный цвет", "Color aleatorio" },
         { Keys::kTrackColorsCustom, "Custom Colors", "自定义颜色", "カスタム色", "Пользовательский", "Color personalizado" },

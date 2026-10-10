@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace OpenTune {
 
 enum class NoteNameMode
@@ -54,6 +56,7 @@ struct PianoRollVisualPreferences {
     bool showPianoKeyboard = true;
     bool scaleAssistEnabled = false;
     float backgroundBrightness = 1.0f; // 0.0=纯黑, 1.0=当前默认, 2.0=高亮
+    std::uint32_t correctedF0Colour = 0xFF1D6FC0;
 };
 
 } // namespace OpenTune

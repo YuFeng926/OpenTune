@@ -191,6 +191,7 @@ public:
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowUnvoicedFrames(bool shouldShow);
     void setBackgroundBrightness(float brightness);
+    void setCorrectedF0Colour(juce::Colour colour);
     void setInferenceActive(bool active);
     void setBpm(double bpm);
     void setTimeSignature(int numerator, int denominator);
@@ -594,6 +595,7 @@ private:
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showUnvoicedFrames_ = false;
     float backgroundBrightness_ = 1.0f;
+    juce::Colour correctedF0Colour_{0xFF1D6FC0};
     bool showOriginalF0_ = true;
     bool showCorrectedF0_ = true;
     float currentRetuneSpeed_ = PitchControlConfig::kDefaultRetuneSpeedNormalized;

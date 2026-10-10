@@ -1899,7 +1899,7 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
 
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) return;
-    juce::Colour previewColour = UIColors::correctedF0;
+    juce::Colour previewColour = correctedF0Colour_;
     juce::Path previewPath;
     bool pathStarted = false;
 
@@ -1936,7 +1936,7 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
 void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
     if (!interactionState_.drawing.isPlacingAnchors || currentTool_ != ToolId::LineAnchor || interactionState_.drawing.pendingAnchors.empty()) return;
 
-    juce::Colour anchorColour = UIColors::correctedF0;
+    juce::Colour anchorColour = correctedF0Colour_;
 
     for (size_t i = 0; i < interactionState_.drawing.pendingAnchors.size(); ++i) {
         const auto& anchor = interactionState_.drawing.pendingAnchors[i];
@@ -2398,6 +2398,7 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     renderCtx.showUnvoicedFrames = showUnvoicedFrames_;
     renderCtx.showOriginalF0 = showOriginalF0_;
     renderCtx.showCorrectedF0 = showCorrectedF0_;
+    renderCtx.correctedF0Colour = correctedF0Colour_;
     renderCtx.coords = mapper;
     renderCtx.rasterBounds = clipArea;
 
@@ -4097,6 +4098,16 @@ void PianoRollComponent::setBackgroundBrightness(float brightness)
     if (backgroundBrightness_ == clamped) return;
     backgroundBrightness_ = clamped;
     staticDirty_ = true;
+    rasterizeDirtySurfaces();
+    repaint();
+}
+
+void PianoRollComponent::setCorrectedF0Colour(juce::Colour colour)
+{
+    colour = colour.withAlpha(1.0f);
+    if (correctedF0Colour_ == colour) return;
+    correctedF0Colour_ = colour;
+    contentDirty_ = true;
     rasterizeDirtySurfaces();
     repaint();
 }

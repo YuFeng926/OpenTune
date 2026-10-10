@@ -4,6 +4,7 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 #include <mutex>
+#include <cstdint>
 #include <vector>
 
 #include "AudioEditingScheme.h"
@@ -114,6 +115,7 @@ public:
     void setScaleAssistEnabled(bool enabled);
     void setShowUnvoicedFrames(bool shouldShow);
     void setBackgroundBrightness(float brightness);
+    void setCorrectedF0Colour(std::uint32_t colour);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
     void setTuning(const TuningConfig::TuningSettings& tuning);
     void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
