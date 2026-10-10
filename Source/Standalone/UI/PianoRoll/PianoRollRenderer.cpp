@@ -1771,7 +1771,9 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         const float hotMix = juce::jlimit(0.0f, 0.42f, hm);
         const auto warm = kBrightCurve.interpolatedWith(kLevelHotGold, hotMix);
         const auto cool = kDarkCurve.interpolatedWith(kLevelHotGold, hotMix);
-        return perceptualColourDistance(noteColour, warm) > perceptualColourDistance(noteColour, cool)
+        constexpr float kWarmColourBias = 0.08f;
+        return perceptualColourDistance(noteColour, warm)
+                >= perceptualColourDistance(noteColour, cool) + kWarmColourBias
             ? warm : cool;
     };
 
