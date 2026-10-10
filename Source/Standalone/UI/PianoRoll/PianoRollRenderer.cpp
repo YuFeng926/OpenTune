@@ -1742,7 +1742,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         const float deltaA = noteLab.a - curveLab.a;
         const float deltaB = noteLab.b - curveLab.b;
         // Only add the outline when the main curve is perceptually close to its note fill.
-        const bool lowContrast = std::sqrt(deltaL * deltaL + deltaA * deltaA + deltaB * deltaB) < 0.08f;
+        const bool lowContrast = std::sqrt(deltaL * deltaL + deltaA * deltaA + deltaB * deltaB) < 0.02f;
         const juce::Colour outline = noteLab.l < 0.55f
             ? juce::Colour(0xFFE8EDF2)
             : juce::Colour(0xFF101820);
