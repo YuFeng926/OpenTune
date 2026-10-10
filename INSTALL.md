@@ -9,19 +9,16 @@
 将 `OpenTune.vst3` 文件夹复制到 `C:\Program Files\Common Files\VST3\` 即可在 DAW 中加载插件。
 
 ## macOS
-1. 根据 Mac 架构下载对应的 `OpenTune-<version>-macOS-Intel.dmg` 或 `OpenTune-<version>-macOS-Apple-Silicon.dmg`，双击挂载。
-2. 在挂载出的磁盘窗口中双击 **install.command**（如首次执行被 Gatekeeper 拦截，请到「系统设置 → 隐私与安全性」点击 *仍要打开*；或在 DMG 窗口右键脚本 → *打开*）。
-3. 终端会自动执行：
-    - 把 `OpenTune.app` 拷贝到 `/Applications/` 并去除 quarantine 属性；
-    - 询问是否同时安装 VST3。同意后会请求管理员密码，把 `OpenTune.vst3` 安装到系统级 `/Library/Audio/Plug-Ins/VST3/`（DAW 全局可见）；
-    - 询问是否立即启动 Standalone。
-4. 安装完成后即可弹出并丢弃 DMG。如需更新，重新执行该脚本会覆盖旧版本。
+发布包只有一个 `Universal2` 架构，适用于 Intel Mac、Apple Silicon 原生运行，以及 Apple Silicon 上通过 Rosetta 运行的 DAW。优先下载 `OpenTune-<version>-macOS-Universal2.pkg`，双击并按提示安装：Standalone 安装到 `/Applications`，VST3 安装到系统级 `/Library/Audio/Plug-Ins/VST3/`。
 
-> ⚠️ Release 包目前为 ad-hoc 签名（未做 Apple Notarization），首次启动可能弹出「无法验证开发者」提示。`install.command` 会自动剥离 quarantine 标志，若你绕过脚本手工拖拽 `.app`，则需要执行：
+也可下载 `OpenTune-<version>-macOS-Universal2.dmg`。挂载后双击 **安装 OpenTune.command** 或 **Install OpenTune.command**；脚本将 Standalone 放入 `/Applications`，并将 VST3 放入当前用户的 `~/Library/Audio/Plug-Ins/VST3/`。DMG 也包含 `.app` 和 `.vst3`，可手动复制安装。
+
+> ⚠️ Standalone 和 VST3 目前为 ad-hoc 签名；PKG 本身未做 Developer ID Installer 签名或 Apple 公证。首次安装或启动可能被 Gatekeeper 拦截。若 macOS 阻止打开，可在「系统设置 → 隐私与安全性」选择仍要打开，或清除应用/插件的隔离标志：
 >
 > ```bash
 > xattr -rd com.apple.quarantine /Applications/OpenTune.app
 > xattr -rd com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/OpenTune.vst3"
+> xattr -rd com.apple.quarantine "$HOME/Library/Audio/Plug-Ins/VST3/OpenTune.vst3"
 > ```
 
 ## 运行时文件结构（Windows）

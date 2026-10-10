@@ -7,26 +7,14 @@
   },
   "configurePresets": [
     {
-      "name": "macos-intel-ara-ninja",
-      "displayName": "macOS Intel Ninja Release (ARA2 VST3)",
+      "name": "macos-universal2-ara-ninja",
+      "displayName": "macOS Universal2 Ninja Release (ARA2 VST3)",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-intel-ninja",
+      "binaryDir": "${sourceDir}/build-macos-universal2-ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_OSX_ARCHITECTURES": "x86_64",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0"
-      }
-    },
-    {
-      "name": "macos-silicon-ara-ninja",
-      "displayName": "macOS Apple Silicon Ninja Release (ARA2 VST3)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-silicon-ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64;arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0"
       }
     },
@@ -54,12 +42,8 @@
   ],
   "buildPresets": [
     {
-      "name": "macos-intel-release",
-      "configurePreset": "macos-intel-ara-ninja"
-    },
-    {
-      "name": "macos-silicon-release",
-      "configurePreset": "macos-silicon-ara-ninja"
+      "name": "macos-universal2-ara-release",
+      "configurePreset": "macos-universal2-ara-ninja"
     },
     {
       "name": "windows-ara-release",

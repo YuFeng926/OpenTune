@@ -8,33 +8,30 @@ cmake_minimum_required(VERSION 3.22)
 # ==============================================================================
 # macOS architecture and deployment target must be set before project() so CMake
 # writes the same minimum version into the Mach-O load commands and Info.plist.
-# Both architectures consume the same project-built ORT 1.20.0 universal2
-# runtime (CoreML EP), compiled with a macOS 12.0 deployment target. This is
-# intentionally not the upstream prebuilt package: those packages currently
-# carry a newer minimum OS target. ORT 1.20.0 contains the CoreML
-# MLModelConfiguration initialization fix required by macOS 15+.
+# Release builds use one universal2 binary (x86_64 + arm64) and the existing
+# universal2 ORT 1.20.0 runtime (CoreML EP), both targeting macOS 12.0. ORT
+# 1.20.0 contains the CoreML MLModelConfiguration initialization fix required
+# by macOS 15+.
 # ==============================================================================
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     if(CMAKE_OSX_ARCHITECTURES STREQUAL "")
-        if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
-            set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "macOS architectures" FORCE)
-        else()
-            set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "macOS architectures" FORCE)
-        endif()
+        set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "macOS architectures" FORCE)
     endif()
 
-    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+    if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64;arm64"
+            OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64"
+            OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "arm64")
         set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS deployment target" FORCE)
     else()
         message(FATAL_ERROR
-            "Unsupported macOS architecture '${CMAKE_OSX_ARCHITECTURES}'. Use x86_64 or arm64.")
+            "Unsupported macOS architectures '${CMAKE_OSX_ARCHITECTURES}'. Use x86_64;arm64, x86_64, or arm64.")
     endif()
 endif()
 
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.8.0 LANGUAGES CXX C)
+project(OpenTune VERSION 1.8.1 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -886,12 +883,11 @@ if(EXISTS ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp)
         ${SOUNDTOUCH_DIR}/source/SoundTouch/sse_optimized.cpp
         ${SOUNDTOUCH_DIR}/source/SoundTouch/mmx_optimized.cpp
     )
+    # SoundTouch's STTypes.h gates x86 SIMD using the compiler's per-slice
+    # architecture macros; do not derive this from the configure host.
     foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
         target_sources(${_opentune_target} PRIVATE ${OPENTUNE_SOUNDTOUCH_SOURCES})
         target_compile_definitions(${_opentune_target} PRIVATE SOUNDTOUCH_FLOAT_SAMPLES)
-        if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-            target_compile_definitions(${_opentune_target} PRIVATE SOUNDTOUCH_DISABLE_X86_OPTIMIZATIONS)
-        endif()
     endforeach()
     if(MSVC)
         # Suppress benign MSVC warnings from vendored SoundTouch code:

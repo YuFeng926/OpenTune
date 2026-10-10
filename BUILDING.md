@@ -7,14 +7,14 @@
 | 需求 | Windows | macOS |
 |------|---------|-------|
 | **系统** | Windows 10 1903+ | macOS 12.0+ (Intel / Apple Silicon) |
-| **架构** | x64 | x86_64 (Intel) / arm64 (Apple Silicon) |
+| **架构** | x64 | universal2 (x86_64 + arm64) |
 | **编译器** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
 | **C++ 标准** | C++17 | C++17 |
 | **构建系统** | MSBuild (VS Generator) / Ninja | Ninja |
 
 > **注意：** Windows 构建支持 Visual Studio Generator + MSBuild 或 Ninja 两种方式。推荐使用 Visual Studio Generator 进行完整开发，Ninja 适合快速构建。
-> macOS Release 与 DMG 打包使用 `macos-silicon-ara-ninja`（Apple Silicon）或 `macos-intel-ara-ninja`（Intel）预设，因此需要安装 Ninja。
+> macOS Release 使用唯一的 `macos-universal2-ara-ninja` 预设；同一产物支持 Intel、Apple Silicon 原生和 Apple Silicon 上以 Rosetta 运行的 DAW，因此需要安装 Ninja。
 
 ## 依赖准备
 
@@ -235,36 +235,31 @@ ONNX Runtime、DirectML、D3D12 和 FCPE/HifiGAN 模型都位于同一套 Releas
 **macOS (Ninja + CMake)**
 
 ```bash
-# Apple Silicon (arm64)
-cmake --preset macos-silicon-ara-ninja
-cmake --build --preset macos-silicon-ara-release
-
-# Intel (x86_64)
-cmake --preset macos-intel-ara-ninja
-cmake --build --preset macos-intel-ara-release
+# macOS Universal2 Release (x86_64 + arm64, minimum macOS 12.0)
+cmake --preset macos-universal2-ara-ninja
+cmake --build --preset macos-universal2-ara-release
 ```
 
 打包命令：
 ```bash
-# Apple Silicon（DMG）
-./scripts/package-macos.sh --arch silicon
+# 默认生成 Universal2 PKG
+./scripts/package-macos.sh
 
-# Intel（DMG）
-./scripts/package-macos.sh --arch intel
+# 可选：生成 Universal2 DMG
+./scripts/package-macos.sh --format dmg
 
-# 生成 PKG 安装包（欢迎页展示 Installer/NOTICE.md 的防诈与许可声明）
-./scripts/package-macos.sh --arch silicon --format pkg
-
-# 同时生成 DMG 与 PKG
-./scripts/package-macos.sh --arch intel --format both
+# 同时生成 PKG 与 DMG
+./scripts/package-macos.sh --format both
 ```
+
+PKG 双击安装到 `/Applications`，并将 VST3 安装到系统级 `/Library/Audio/Plug-Ins/VST3/`；DMG 内含 Standalone、VST3 和中英文安装命令，命令脚本将 VST3 放入当前用户的插件目录。PKG 欢迎页展示 `Installer/NOTICE.md` 中的防诈与许可声明。
 
 ## 构建产物
 
 | 格式 | Windows | macOS |
 |------|---------|-------|
-| Standalone | `build-ara-overlay-vs18-clean/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.exe` | `build/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.app` |
-| VST3 ARA2 | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` |
+| Standalone | `build-ara-overlay-vs18-clean/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.exe` | `build-macos-universal2-ninja/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.app` |
+| VST3 ARA2 | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | `build-macos-universal2-ninja/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` |
 
 构建完成后，运行时 DLL、模型文件、D3D12 目录会自动复制到产物目录旁，无需手动操作。
 

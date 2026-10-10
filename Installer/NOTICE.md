@@ -1,6 +1,6 @@
 # OpenTune 安装声明文案（唯一来源）
 
-本文件是安装/首次启动「渠道与许可声明」的唯一文案来源，当前与 `Installer/OpenTune_Installer.iss`（v1.8.0 / `[Messages]` 段 `WelcomeLabel1/2`）保持一致。
+本文件是安装/首次启动「渠道与许可声明」的唯一文案来源，当前与 `Installer/OpenTune_Installer.iss`（v1.8.1 / `[Messages]` 段 `WelcomeLabel1/2`）保持一致。
 
 - 用途：反诈与官方渠道声明 + OpenVPI 声码器权重许可警示。
 - 修改约定：改文案先改本文件，再同步 Windows 安装器；macOS 安装包（DMG 必读文件 / pkg 欢迎页 / App 首启提示）均直接取用本文件，避免多语言文案漂移。

@@ -7,14 +7,14 @@
 | Requirement | Windows | macOS |
 |-------------|---------|-------|
 | **System** | Windows 10 1903+ | macOS 12.0+ (Intel / Apple Silicon) |
-| **Architecture** | x64 | x86_64 (Intel) / arm64 (Apple Silicon) |
+| **Architecture** | x64 | universal2 (x86_64 + arm64) |
 | **Compiler** | Visual Studio 2022 (MSVC 17+) | Xcode Command Line Tools / Apple Clang |
 | **CMake** | 3.22+ | 3.22+ |
 | **C++ Standard** | C++17 | C++17 |
 | **Build System** | MSBuild (VS Generator) / Ninja | Ninja |
 
 > **Note:** Windows builds support both Visual Studio Generator + MSBuild and Ninja. Visual Studio Generator is recommended for full development, while Ninja is suitable for quick builds.
-> macOS Release and DMG packaging use the `macos-silicon-ara-ninja` (Apple Silicon) or `macos-intel-ara-ninja` (Intel) preset, so Ninja must be installed.
+> macOS Release uses the single `macos-universal2-ara-ninja` preset. The same artifact supports Intel, native Apple Silicon, and DAWs running under Rosetta on Apple Silicon; Ninja is required.
 
 ## Dependency Preparation
 
@@ -58,7 +58,7 @@ git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-maste
 cd ..
 ```
 
-### 4. ONNX Runtime (Windows v1.24.4 / macOS v1.19.2 universal2)
+### 4. ONNX Runtime (Windows v1.24.4 / macOS v1.20.0 universal2)
 
 This project requires **two** ONNX Runtime packages (Windows): the CPU version provides headers, and the DML version provides the original `onnxruntime.dll` (with built-in DirectML support). The build system generates a dedicated import library and outputs the runtime DLL as `OpenTuneOnnxRuntime_1_24_4.dll`.
 
@@ -96,24 +96,20 @@ ThirdParty/
 
 **macOS (Intel / Apple Silicon, shared)**:
 
-Both macOS architectures share the same **universal2** package (x86_64 + arm64 slices, CoreML EP built in), pinned to version **1.19.2**. The runtime's Mach-O minimum OS is macOS 11.0, so together with `CMAKE_OSX_DEPLOYMENT_TARGET = 12.0` it runs on macOS 12 and later. **Download and extract it to the specified directory; do not replace it with a newer ORT release** (newer releases raise the minimum OS requirement):
+Both architectures use the same **universal2** package (x86_64 + arm64 slices, CoreML EP built in), pinned to **1.20.0** with a macOS 12.0 deployment target. This project-built runtime includes the CoreML initialization fix required by macOS 15+. Keep using this version; do not replace it with another ORT release.
 
-```bash
-cd ThirdParty
-curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-osx-universal2-1.19.2.tgz | tar xz
-cd ..
-```
+The package is located at `ThirdParty/onnxruntime-osx-universal2-1.20.0/`. The repository's `scripts/build-onnxruntime-macos.sh` describes how to recreate it if the dependency is missing.
 
 Extracted structure:
 ```
-ThirdParty/onnxruntime-osx-universal2-1.19.2/
+ThirdParty/onnxruntime-osx-universal2-1.20.0/
 ├── include/
 │   └── onnxruntime_cxx_api.h
 └── lib/
-    └── libonnxruntime.1.19.2.dylib
+    └── libonnxruntime.1.20.0.dylib
 ```
 
-> **CoreML registration path**: ORT 1.19.2 does not recognise the string-based `AppendExecutionProvider("CoreML", ...)` (it throws `Unknown provider name`). The project uses `Source/Inference/OnnxRuntimeProviderCompat.h` to try the newer provider-options API first and fall back to the flag-based C API (`COREML_FLAG_CREATE_MLPROGRAM`). Re-verify this file and confirm the log shows `CoreML EP added` (CoreML actually active) before upgrading the macOS ORT version.
+> **CoreML registration path**: the project uses `Source/Inference/OnnxRuntimeProviderCompat.h` to register CoreML through ORT's flag-based C API. macOS 12 uses `NeuralNetwork`; macOS 13+ uses `MLProgram` (both with `MLComputeUnits=ALL`).
 
 ### 5. DirectML & DirectX Agility SDK (Windows only)
 
@@ -171,7 +167,7 @@ OpenTune/
 │   ├── r8brain-free-src-master/          ← Resampling library
 │   ├── onnxruntime-win-x64-1.24.4/      ← ONNX Runtime CPU (Windows)
 │   ├── onnxruntime-dml-1.24.4/           ← ONNX Runtime DML (Windows)
-│   ├── onnxruntime-osx-universal2-1.19.2/ ← ONNX Runtime (macOS, shared Intel + Apple Silicon)
+│   ├── onnxruntime-osx-universal2-1.20.0/ ← ONNX Runtime (macOS, shared Intel + Apple Silicon)
 │   ├── microsoft.ai.directml.1.15.4/    ← DirectML SDK (Windows)
 │   └── microsoft.direct3d.d3d12.1.619.5/ ← D3D12 Agility SDK (Windows)
 ├── models/
@@ -235,37 +231,31 @@ For development in Visual Studio IDE:
 **macOS (Ninja + CMake)**
 
 ```bash
-# Apple Silicon (arm64)
-cmake --preset macos-silicon-ara-ninja
-cmake --build --preset macos-silicon-ara-release
-
-# Intel (x86_64)
-cmake --preset macos-intel-ara-ninja
-cmake --build --preset macos-intel-ara-release
+# macOS Universal2 Release (x86_64 + arm64, minimum macOS 12.0)
+cmake --preset macos-universal2-ara-ninja
+cmake --build --preset macos-universal2-ara-release
 ```
 
 Packaging commands:
 ```bash
-# Apple Silicon (DMG)
-./scripts/package-macos.sh --arch silicon
+# Generate a Universal2 PKG by default
+./scripts/package-macos.sh
 
-# Intel (DMG)
-./scripts/package-macos.sh --arch intel
+# Optional: generate a Universal2 DMG
+./scripts/package-macos.sh --format dmg
 
-# Build a PKG installer (welcome page shows the anti-fraud and license
-# notice sourced from Installer/NOTICE.md)
-./scripts/package-macos.sh --arch silicon --format pkg
-
-# Produce both DMG and PKG
-./scripts/package-macos.sh --arch intel --format both
+# Generate both PKG and DMG
+./scripts/package-macos.sh --format both
 ```
+
+The PKG installs the app in `/Applications` and the VST3 in the system-wide `/Library/Audio/Plug-Ins/VST3/`; the DMG contains the Standalone, VST3, and bilingual install commands, which place the VST3 in the current user's plug-in directory. The PKG welcome page uses the anti-fraud and license notice from `Installer/NOTICE.md`.
 
 ## Build Artifacts
 
 | Format | Windows | macOS |
 |--------|---------|-------|
-| Standalone | `build-ara-overlay-vs18-clean/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.exe` | `build/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.app` |
-| VST3 ARA2 | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` |
+| Standalone | `build-ara-overlay-vs18-clean/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.exe` | `build-macos-universal2-ninja/OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.app` |
+| VST3 ARA2 | `build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` | `build-macos-universal2-ninja/OpenTune_artefacts/Release/VST3/OpenTune.vst3/` |
 
 After build completion, runtime DLLs, model files, and D3D12 directory will be automatically copied to the artifact directory, requiring no manual operation.
 
@@ -278,7 +268,7 @@ After build completion, runtime DLLs, model files, and D3D12 directory will be a
 | `DirectML header missing` | DirectML NuGet package not extracted | Verify `ThirdParty/microsoft.ai.directml.1.15.4/include/DirectML.h` exists |
 | `D3D12 header missing from Agility SDK` | D3D12 NuGet package not extracted | Verify `ThirdParty/microsoft.direct3d.d3d12.1.619.5/build/native/include/d3d12.h` exists |
 | `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` exists |
-| `ONNX Runtime dylib not found` | macOS universal2 package missing or version mismatch | Verify `ThirdParty/onnxruntime-osx-universal2-1.19.2/lib/libonnxruntime.1.19.2.dylib` exists and has not been replaced with a newer ORT version |
+| `ONNX Runtime dylib not found` | macOS universal2 package missing or version mismatch | Verify `ThirdParty/onnxruntime-osx-universal2-1.20.0/lib/libonnxruntime.1.20.0.dylib` exists |
 | `ARA SDK not found` | ARA SDK not cloned | Execute step 2 git clone command |
 | MSVC link error LNK2019 | MSVC runtime mismatch | This project uses static CRT (`/MT`), ensure dependency libraries are consistent |
 | Ninja build failure | Ninja not installed or not in PATH | Ensure Ninja is installed and in system PATH, or use Visual Studio Generator |

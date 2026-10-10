@@ -3,10 +3,8 @@
 # OpenTune - macOS 打包脚本
 # 功能：构建 + ad-hoc 签名 + 生成 DMG / PKG 安装包
 # 用法：
-#   ./scripts/package-macos.sh                     # 根据当前架构自动选择
-#   ./scripts/package-macos.sh --arch intel        # Intel (x86_64) 构建 + 打包
-#   ./scripts/package-macos.sh --arch silicon      # Apple Silicon (arm64) 构建 + 打包
-#   ./scripts/package-macos.sh --format pkg        # 生成 PKG 安装包（默认 dmg）
+#   ./scripts/package-macos.sh                     # 构建 Universal2 并生成 PKG
+#   ./scripts/package-macos.sh --format dmg        # 生成 Universal2 DMG
 #   ./scripts/package-macos.sh --format both       # 同时生成 DMG 与 PKG
 #   ./scripts/package-macos.sh --skip-build        # 跳过构建，直接打包已有产物
 #   ./scripts/package-macos.sh --clean             # 清空构建目录后重新构建
@@ -26,26 +24,17 @@ SIGN_IDENTITY="-"
 # ── 参数解析 ──────────────────────────────────────────────────────────────────
 SKIP_BUILD=false
 CLEAN=false
-ARCH=""
-FORMAT="dmg"
+FORMAT="pkg"
 PREV_ARG=""
 for arg in "$@"; do
+    if [ "${PREV_ARG}" = "--format" ] && [[ "${arg}" == -* ]]; then
+        echo "❌ --format 缺少值（仅支持 dmg|pkg|both）"
+        exit 1
+    fi
+
     case "$arg" in
         --skip-build) SKIP_BUILD=true ;;
         --clean)      CLEAN=true ;;
-        --arch)
-            # handled via next arg
-            ;;
-        --arch=intel)
-            ARCH="intel"
-            ;;
-        --arch=silicon)
-            ARCH="silicon"
-            ;;
-        --arch=*)
-            echo "❌ 未知架构: ${arg#--arch=}（仅支持 intel|silicon）"
-            exit 1
-            ;;
         --format)
             # handled via next arg
             ;;
@@ -63,20 +52,14 @@ for arg in "$@"; do
             exit 1
             ;;
         -h|--help)
-            echo "用法: $0 [--arch intel|silicon] [--format dmg|pkg|both] [--skip-build] [--clean]"
-            echo "  --arch ARCH    指定目标架构: intel (x86_64) 或 silicon (arm64)"
-            echo "  --format FMT   指定打包格式: dmg、pkg 或 both（默认 dmg）"
+            echo "用法: $0 [--format dmg|pkg|both] [--skip-build] [--clean]"
+            echo "  --format FMT   指定打包格式: dmg、pkg 或 both（默认 pkg）"
             echo "  --skip-build   跳过构建，直接打包已有产物"
             echo "  --clean        清空构建目录后重新构建"
             exit 0
             ;;
         *)
-            # Handle --arch/--format <value> form (space-separated)
-            if [ "${PREV_ARG:-}" = "--arch" ]; then
-                ARCH="$arg"
-                PREV_ARG=""
-                continue
-            fi
+            # Handle --format <value> form (space-separated)
             if [ "${PREV_ARG:-}" = "--format" ]; then
                 case "$arg" in
                     dmg|pkg|both) FORMAT="$arg" ;;
@@ -91,49 +74,18 @@ for arg in "$@"; do
     PREV_ARG="$arg"
 done
 
-if [ "${PREV_ARG}" = "--arch" ]; then
-    echo "❌ --arch 缺少值（仅支持 intel|silicon）"
-    exit 1
-fi
 if [ "${PREV_ARG}" = "--format" ]; then
     echo "❌ --format 缺少值（仅支持 dmg|pkg|both）"
     exit 1
 fi
 
-# ── 自动检测架构 ──────────────────────────────────────────────────────────────
-if [ -z "${ARCH}" ]; then
-    HOST_ARCH="$(uname -m)"
-    if [ "${HOST_ARCH}" = "arm64" ]; then
-        ARCH="silicon"
-    else
-        ARCH="intel"
-    fi
-    echo "▶ 未指定 --arch，根据当前主机架构自动选择: ${ARCH} (${HOST_ARCH})"
-fi
-
-# ── 根据架构确定 preset / build dir / artifact / DMG 名 ─────────────────────
-case "${ARCH}" in
-    intel)
-        OSX_ARCH="x86_64"
-        PRESET="macos-intel-ara-ninja"
-        BUILD_DIR="${ROOT_DIR}/build-intel-ninja"
-        DMG_ARCH_LABEL="Intel"
-        PKG_HOST_ARCHS="x86_64"
-        PKG_MIN_OS="12.0"
-        ;;
-    silicon)
-        OSX_ARCH="arm64"
-        PRESET="macos-silicon-ara-ninja"
-        BUILD_DIR="${ROOT_DIR}/build-silicon-ninja"
-        DMG_ARCH_LABEL="Apple-Silicon"
-        PKG_HOST_ARCHS="arm64"
-        PKG_MIN_OS="12.0"
-        ;;
-    *)
-        echo "❌ 无效架构: ${ARCH}（仅支持 intel|silicon）"
-        exit 1
-        ;;
-esac
+# ── 唯一 macOS Release 目标：Universal2 ───────────────────────────────────────
+OSX_ARCHS="arm64 x86_64"
+PRESET="macos-universal2-ara-ninja"
+BUILD_DIR="${ROOT_DIR}/build-macos-universal2-ninja"
+DMG_ARCH_LABEL="Universal2"
+PKG_HOST_ARCHS="x86_64,arm64"
+PKG_MIN_OS="12.0"
 
 STANDALONE_ARTIFACTS="${BUILD_DIR}/OpenTuneStandalone_artefacts/Release"
 VST3_ARTIFACTS="${BUILD_DIR}/OpenTune_artefacts/Release"
@@ -141,7 +93,7 @@ DMG_NAME="${APP_NAME}-${VERSION}-macOS-${DMG_ARCH_LABEL}"
 PKG_NAME="${APP_NAME}-${VERSION}-macOS-${DMG_ARCH_LABEL}"
 
 # ── 工具检查 ──────────────────────────────────────────────────────────────────
-for cmd in cmake ninja hdiutil codesign xattr otool lipo; do
+for cmd in cmake ninja hdiutil codesign xattr otool lipo file; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "❌ 缺少工具: $cmd"
         exit 1
@@ -163,7 +115,7 @@ fi
 
 # ── 构建 ──────────────────────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" = false ]; then
-    echo "▶ 构建 OpenTune ${VERSION} (${ARCH} / ${OSX_ARCH}, Release, Ninja)"
+    echo "▶ 构建 OpenTune ${VERSION} (Universal2: x86_64 + arm64, Release, Ninja)"
 
     if [ "$CLEAN" = true ] && [ -d "${BUILD_DIR}" ]; then
         echo "  清空构建目录..."
@@ -193,6 +145,36 @@ echo "▶ 产物验证"
 echo "  Standalone.app: $(du -sh "${APP_BUNDLE}" | cut -f1)"
 echo "  VST3.vst3:      $(du -sh "${VST3_BUNDLE}" | cut -f1)"
 
+validate_macho_architectures() {
+    local binary="$1"
+    local label="$2"
+    local actual_archs
+
+    actual_archs="$(lipo -archs "${binary}" | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+    if [ "${actual_archs}" != "${OSX_ARCHS}" ]; then
+        echo "❌ ${label} 架构不是 Universal2: ${actual_archs}（期望 ${OSX_ARCHS}）"
+        exit 1
+    fi
+}
+
+validate_bundle_macho_architectures() {
+    local bundle="$1"
+    local label="$2"
+    local path
+    local relative_path
+    local count=0
+
+    while IFS= read -r -d '' path; do
+        if [[ "$(file -b "${path}")" == *Mach-O* ]]; then
+            relative_path="${path#"${bundle}"/}"
+            validate_macho_architectures "${path}" "${label}: ${relative_path}"
+            count=$((count + 1))
+        fi
+    done < <(find "${bundle}" -type f -print0)
+
+    echo "  ✓ ${label}: ${count} Mach-O 文件均含 x86_64 + arm64"
+}
+
 validate_bundle_linkage() {
     local bundle="$1"
     local expected_rpath="$2"
@@ -202,8 +184,6 @@ validate_bundle_linkage() {
     local ort_dependency
     local ort_filename
     local ort_library
-    local binary_archs
-    local ort_archs
     local ort_min_os
 
     if [ ! -f "${binary}" ]; then
@@ -255,21 +235,13 @@ validate_bundle_linkage() {
         exit 1
     fi
 
-    binary_archs="$(lipo -archs "${binary}")"
-    ort_archs="$(lipo -archs "${ort_library}")"
-    if ! printf '%s\n' "${binary_archs}" | tr ' ' '\n' | grep -Fxq "${OSX_ARCH}" \
-        || ! printf '%s\n' "${ort_archs}" | tr ' ' '\n' | grep -Fxq "${OSX_ARCH}"; then
-        echo "❌ ${label} 架构不一致: binary=${binary_archs}, onnxruntime=${ort_archs}, expected=${OSX_ARCH}"
-        exit 1
-    fi
-
     ort_min_os="$(otool -l "${ort_library}" | awk '$1 == "minos" { print $2 }' | sort -u)"
     if [ -z "${ort_min_os}" ] || printf '%s\n' "${ort_min_os}" | grep -vFxq "${PKG_MIN_OS}"; then
         echo "❌ ${label} ORT 最低系统版本不符合 macOS ${PKG_MIN_OS}: ${ort_min_os}"
         exit 1
     fi
 
-    echo "  ✓ ${label}: ${expected_rpath}, ${ort_filename}, ${OSX_ARCH}"
+    echo "  ✓ ${label}: ${expected_rpath}, ${ort_filename}, macOS ${PKG_MIN_OS}+"
 }
 
 validate_bundle_linkage "${APP_BUNDLE}" "@executable_path/../Frameworks" "Standalone"
@@ -421,7 +393,7 @@ PREINSTALL_EOF
     cat > "${PKG_BUILD_DIR}/Distribution.xml" << DISTRIBUTION_EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
-    <title>${APP_NAME} ${VERSION}</title>
+    <title>${APP_NAME} ${VERSION} Universal2</title>
     <organization>com.daya</organization>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
     <options customize="never" require-scripts="true" hostArchitectures="${PKG_HOST_ARCHS}"/>
@@ -727,7 +699,13 @@ cp "${ROOT_DIR}/NOTICE.txt" "${STAGING}/" 2>/dev/null || true
 cp "${ROOT_DIR}/NOTICE.zh-CN.txt" "${STAGING}/" 2>/dev/null || true
 cp "${ROOT_DIR}/STATEMENTS.txt" "${STAGING}/" 2>/dev/null || true
 
-# ── Ad-hoc 签名 staging 中的所有 bundle ──────────────────────────────────────
+# ── 校验最终 staging 中的双架构 Mach-O 与动态库链接 ────────────────────────────
+validate_bundle_macho_architectures "${STAGING}/${APP_NAME}.app" "Staged Standalone"
+validate_bundle_macho_architectures "${STAGING}/${APP_NAME}.vst3" "Staged VST3"
+validate_bundle_linkage "${STAGING}/${APP_NAME}.app" "@executable_path/../Frameworks" "Staged Standalone"
+validate_bundle_linkage "${STAGING}/${APP_NAME}.vst3" "@loader_path/../Frameworks" "Staged VST3"
+
+# ── 在最终双架构产物合并、复制和校验后进行 ad-hoc 签名 ─────────────────────────
 echo "▶ Ad-hoc 签名所有 bundle"
 codesign --force --deep --sign - "${STAGING}/${APP_NAME}.app" 2>/dev/null
 echo "  ✓ ${APP_NAME}.app"
@@ -735,8 +713,6 @@ codesign --force --deep --sign - "${STAGING}/${APP_NAME}.vst3" 2>/dev/null
 echo "  ✓ ${APP_NAME}.vst3"
 codesign --verify --deep --strict --verbose=2 "${STAGING}/${APP_NAME}.app"
 codesign --verify --deep --strict --verbose=2 "${STAGING}/${APP_NAME}.vst3"
-validate_bundle_linkage "${STAGING}/${APP_NAME}.app" "@executable_path/../Frameworks" "Staged Standalone"
-validate_bundle_linkage "${STAGING}/${APP_NAME}.vst3" "@loader_path/../Frameworks" "Staged VST3"
 
 # ── 统计 staging 大小 ─────────────────────────────────────────────────────────
 STAGING_SIZE=$(du -sh "${STAGING}" | cut -f1)
@@ -760,7 +736,7 @@ if [ "$FORMAT" != "dmg" ]; then
     echo "  文件: ${PKG_PATH}"
     echo "  大小: ${PKG_SIZE}"
     echo "  版本: ${VERSION}"
-    echo "  架构: ${ARCH} (${OSX_ARCH})"
+    echo "  架构: Universal2 (x86_64 + arm64)"
     echo "  欢迎页: 防诈声明 + 许可/版权警示（文案来自 Installer/NOTICE.md）"
     echo "  安装方式：双击 PKG，按提示完成安装"
     echo "══════════════════════════════════════════════"
@@ -777,7 +753,7 @@ if [ "$FORMAT" != "pkg" ]; then
     # 直接从 staging 创建压缩只读 DMG（跳过 AppleScript 美化，终端环境不稳定）
     hdiutil create \
         -srcfolder "${STAGING}" \
-        -volname "${APP_NAME} ${VERSION}" \
+        -volname "${APP_NAME} ${VERSION} Universal2" \
         -fs HFS+ \
         -fsargs "-c c=64,a=16,e=16" \
         -format UDZO \
@@ -794,9 +770,9 @@ if [ "$FORMAT" != "pkg" ]; then
     echo "  文件: ${DMG_PATH}"
     echo "  大小: ${DMG_SIZE}"
     echo "  版本: ${VERSION}"
-    echo "  架构: ${ARCH} (${OSX_ARCH})"
+    echo "  架构: Universal2 (x86_64 + arm64)"
     echo ""
     echo "  安装方式：双击 DMG → 双击「安装 OpenTune.command」"
-    echo "  或直接拖拽 .app 到 /Applications，.vst3 到 VST3 目录"
+    echo "  或手动复制 .app 到 /Applications、.vst3 到当前用户的 VST3 目录"
     echo "══════════════════════════════════════════════"
 fi

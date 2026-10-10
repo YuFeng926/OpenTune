@@ -9,19 +9,16 @@ Extract the ZIP package and run `OpenTune.exe` directly. Keep the `models/`, `D3
 Copy the `OpenTune.vst3` folder to `C:\Program Files\Common Files\VST3\` to load the plugin in your DAW.
 
 ## macOS
-1. Download the matching `OpenTune-<version>-macOS-Intel.dmg` or `OpenTune-<version>-macOS-Apple-Silicon.dmg` for your Mac architecture and double-click to mount.
-2. Double-click **install.command** in the mounted disk window (if blocked by Gatekeeper on first run, go to "System Settings → Privacy & Security" and click *Open Anyway*; or right-click the script in the DMG window → *Open*).
-3. The terminal will automatically execute:
-    - Copy `OpenTune.app` to `/Applications/` and remove the quarantine attribute;
-    - Ask whether to install VST3 as well. If agreed, it will request administrator password to install `OpenTune.vst3` to the system-level `/Library/Audio/Plug-Ins/VST3/` (globally visible in DAWs);
-    - Ask whether to launch the Standalone immediately.
-4. After installation is complete, you can eject and discard the DMG. To update, re-running the script will overwrite the old version.
+There is one **Universal2** release for Intel Macs, native Apple Silicon, and DAWs running under Rosetta on Apple Silicon. The recommended download is `OpenTune-<version>-macOS-Universal2.pkg`; double-click it and follow the installer. The Standalone is installed in `/Applications`, and the VST3 in the system-wide `/Library/Audio/Plug-Ins/VST3/` directory.
 
-> ⚠️ Release packages currently use ad-hoc signing (no Apple Notarization), so you may see a "Cannot verify developer" prompt on first launch. `install.command` automatically removes the quarantine flag. If you manually drag the `.app` bypassing the script, you need to run:
+You can also download `OpenTune-<version>-macOS-Universal2.dmg`. Mount it and run **Install OpenTune.command** or **安装 OpenTune.command**; the script installs the Standalone in `/Applications` and the VST3 in the current user's `~/Library/Audio/Plug-Ins/VST3/` directory. The DMG also contains the `.app` and `.vst3` bundles for manual copying.
+
+> ⚠️ The Standalone and VST3 bundles are ad-hoc signed; the PKG itself has no Developer ID Installer signature or Apple notarization. Gatekeeper may block installation or first launch. If macOS blocks an app, choose **Open Anyway** in System Settings → Privacy & Security, or remove the quarantine flag from the app/plugin:
 >
 > ```bash
 > xattr -rd com.apple.quarantine /Applications/OpenTune.app
 > xattr -rd com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/OpenTune.vst3"
+> xattr -rd com.apple.quarantine "$HOME/Library/Audio/Plug-Ins/VST3/OpenTune.vst3"
 > ```
 
 ## Runtime File Structure (Windows)
