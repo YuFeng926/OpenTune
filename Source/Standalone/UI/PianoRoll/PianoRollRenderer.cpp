@@ -899,25 +899,39 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     g.drawVerticalLine(w, 0.0f, static_cast<float>(height));
 }
 
-// HiFiGAN vocoder: warm/cool colour shift based on correction magnitude and note frequency.
-// Low freq → warm (orange), high freq → cool (blue). Shift proportional to cents deviation.
+// HiFiGAN vocoder: colour each note relative to the nearest chromatic pitch of its raw OriginalF0.
 static juce::Colour vocoderShiftedColour(
     juce::Colour base,
     const Note& note,
     const PitchCurveSnapshot& snap,
     const F0Timeline& tl)
 {
-    if (snap.isEmpty() || note.getAdjustedPitch() <= 0.0f)
+    if (snap.isEmpty())
         return base;
 
     const auto range = tl.rangeForTimes(note.startTime, note.endTime);
-    float totalCents = 0.0f;
+    const auto& originalF0 = snap.getOriginalF0();
+    std::vector<float> voicedOriginalF0;
+    voicedOriginalF0.reserve(static_cast<size_t>(range.endFrameExclusive - range.startFrame));
+    for (int f = range.startFrame; f < range.endFrameExclusive; ++f) {
+        if (f < 0 || f >= static_cast<int>(originalF0.size())) continue;
+        const float original = originalF0[static_cast<size_t>(f)];
+        if (original > 0.0f) voicedOriginalF0.push_back(original);
+    }
+    if (voicedOriginalF0.empty()) return base;
+    std::sort(voicedOriginalF0.begin(), voicedOriginalF0.end());
+    const float standardMidi = std::round(PitchUtils::freqToMidi(
+        voicedOriginalF0[voicedOriginalF0.size() / 2]));
+
+    // Corrected segment F0 is in the Effective domain; compare it to the raw OriginalF0 standard pitch
+    // so global pitch shift is visible as an up/down displacement from the original reference.
+    float totalSignedCents = 0.0f;
     int count = 0;
     for (int f = range.startFrame; f < range.endFrameExclusive; ++f) {
         if (f < 0 || f >= static_cast<int>(snap.size())) continue;
-        const float original = snap.getOriginalF0()[static_cast<size_t>(f)];
+        const float original = originalF0[static_cast<size_t>(f)];
         if (original <= 0.0f) continue;
-        float corrected = original;
+        float corrected = 0.0f;
         for (const auto& seg : snap.getCorrectionSegments()) {
             if (f >= seg.startFrame && f < seg.endFrame) {
                 const int off = f - seg.startFrame;
@@ -926,30 +940,27 @@ static juce::Colour vocoderShiftedColour(
                 break;
             }
         }
-        if (corrected <= 0.0f || corrected == original) continue;
-        totalCents += std::abs(1200.0f * std::log2f(corrected / original));
+        if (corrected <= 0.0f) continue;
+        const float cents = 100.0f * (PitchUtils::freqToMidi(corrected) - standardMidi);
+        totalSignedCents += cents;
         ++count;
     }
     if (count == 0) return base;
 
-    const float avgCents = totalCents / static_cast<float>(count);
+    const float avgSignedCents = totalSignedCents / static_cast<float>(count);
+    if (avgSignedCents == 0.0f) return base;
+    const float avgDistanceCents = std::abs(avgSignedCents);
 
     constexpr float kMinCents = 75.0f;
     constexpr float kMaxCents = 300.0f;
-    const float t = juce::jlimit(0.0f, 1.0f, (avgCents - kMinCents) / (kMaxCents - kMinCents));
-
-    const float midi = PitchUtils::freqToMidi(note.getAdjustedPitch());
-    constexpr float kLowMidi = 48.0f;
-    constexpr float kHighMidi = 72.0f;
-    const float freqBias = juce::jlimit(-1.0f, 1.0f,
-        (midi - (kLowMidi + kHighMidi) * 0.5f) / ((kHighMidi - kLowMidi) * 0.5f));
+    const float t = juce::jlimit(0.0f, 1.0f, (avgDistanceCents - kMinCents) / (kMaxCents - kMinCents));
 
     static const juce::Colour kWarmTarget(0xFFFFA040);
     static const juce::Colour kCoolTarget(0xFF40A0FF);
 
-    const auto target = freqBias < 0.0f
-        ? base.interpolatedWith(kWarmTarget, t * -freqBias)
-        : base.interpolatedWith(kCoolTarget, t * freqBias);
+    const auto target = avgSignedCents < 0.0f
+        ? base.interpolatedWith(kWarmTarget, t)
+        : base.interpolatedWith(kCoolTarget, t);
 
     return base.interpolatedWith(target, t);
 }
