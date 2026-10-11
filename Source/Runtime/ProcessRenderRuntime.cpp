@@ -13,6 +13,7 @@
 #include "../Utils/AppPreferences.h"
 #include "../Utils/ChannelLayoutLogger.h"
 #include "../Utils/ModelPathResolver.h"
+#include "../Utils/LocalizationManager.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/F0GapFill.h"
 #include "../Utils/TimeCoordinate.h"
@@ -40,7 +41,7 @@ void ProcessRenderRuntime::notifyApplicationRenderFailure(ContentKey key,
                                                            uint64_t revision,
                                                            const juce::String& reason)
 {
-    const auto failureReason = reason.isNotEmpty() ? reason : juce::String("Render failed");
+    const auto failureReason = reason;
     const bool posted = juce::MessageManager::callAsync([key, revision, failureReason]()
     {
         if (key.isValid())
@@ -52,11 +53,14 @@ void ProcessRenderRuntime::notifyApplicationRenderFailure(ContentKey key,
             it->second = revision;
         }
 
+        const auto displayedReason = failureReason.isNotEmpty()
+            ? failureReason
+            : LOC(kRenderFailed);
         ConfirmDialogContent::showDiagnostic(
             nullptr,
-            "Render Failure",
-            juce::String::fromUTF8(u8"渲染失败，可能回退干声。原因：") + failureReason,
-            AppLogger::makeDiagnosticText("Render", failureReason));
+            LOC(kRenderFailure),
+            Loc::format(LOC(kRenderFailureDetail), displayedReason),
+            AppLogger::makeDiagnosticText("Render", displayedReason));
     });
     if (!posted)
         AppLogger::error("[ProcessRenderRuntime] render failure notification dispatcher rejected");
@@ -212,7 +216,7 @@ void notifyChunkFailed(const ProcessRenderRuntime::CompletionContext& completion
         return;
     const auto gate = completion.gate;
     auto callback = completion.chunkFailed;
-    const auto failureReason = reason.isNotEmpty() ? reason : juce::String("Render failed");
+    const auto failureReason = reason;
     const bool posted = juce::MessageManager::callAsync(
         [gate, callback = std::move(callback), key, failureReason]() mutable {
             ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);

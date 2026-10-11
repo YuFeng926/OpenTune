@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UndoManager.h"
+#include "LocalizationManager.h"
 #include "../PluginProcessor.h"
 #include "../Content/ContentKey.h"
 #include <cstdint>
@@ -18,7 +19,7 @@ public:
     SplitPlacementAction(OpenTuneAudioProcessor& processor, const SplitOutcome& outcome);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("分割片段"); }
+    juce::String getDescription() const override { return LOC(kSplitClip); }
 
 private:
     OpenTuneAudioProcessor& processor_;
@@ -39,7 +40,7 @@ public:
     MergePlacementAction(OpenTuneAudioProcessor& processor, const MergeOutcome& outcome);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("合并片段"); }
+    juce::String getDescription() const override { return LOC(kMergeClips); }
 
 private:
     OpenTuneAudioProcessor& processor_;
@@ -60,7 +61,7 @@ public:
     DeletePlacementAction(OpenTuneAudioProcessor& processor, const DeleteOutcome& outcome);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("删除片段"); }
+    juce::String getDescription() const override { return LOC_RAW("Delete Clip"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
@@ -90,7 +91,7 @@ public:
                              PlacementKey primaryAfter);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("移动片段"); }
+    juce::String getDescription() const override { return LOC_RAW("Move Clip"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
@@ -109,7 +110,7 @@ public:
                      float oldGain, float newGain);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("调整增益"); }
+    juce::String getDescription() const override { return LOC_RAW("Adjust Gain"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
@@ -129,7 +130,7 @@ public:
                         double oldTimelineStart, double newTimelineStart);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("裁剪片段"); }
+    juce::String getDescription() const override { return LOC_RAW("Trim Clip"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
@@ -152,7 +153,7 @@ public:
                      double newFadeIn, double newFadeOut);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("调整淡变"); }
+    juce::String getDescription() const override { return LOC_RAW("Adjust Fade"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
@@ -172,7 +173,7 @@ public:
                            uint64_t oldReferencePlacementId, uint64_t newReferencePlacementId);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("调整参考绑定"); }
+    juce::String getDescription() const override { return LOC_RAW("Change Reference Binding"); }
 
 private:
     OpenTuneAudioProcessor& processor_;

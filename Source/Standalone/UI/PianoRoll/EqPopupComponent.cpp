@@ -8,6 +8,7 @@
 #include "EqPopupComponent.h"
 #include "../ParameterPanel.h"
 #include "../UIColors.h"
+#include "../../../Utils/LocalizationManager.h"
 #include <cmath>
 
 namespace OpenTune {
@@ -503,19 +504,19 @@ void EqPopupComponent::paint(juce::Graphics& g)
         switch (id)
         {
         case ButtonId::Maximize:
-            tooltipText = isMaximized_ ? juce::String::fromUTF8(u8"收起为预览")
-                                       : juce::String::fromUTF8(u8"展开EQ编辑器");
+            tooltipText = isMaximized_ ? LOC_RAW("Collapse to preview")
+                                       : LOC_RAW("Expand EQ editor");
             break;
         case ButtonId::Bypass:
-            tooltipText = settings_.active ? juce::String::fromUTF8(u8"旁通EQ")
-                                           : juce::String::fromUTF8(u8"启用EQ");
+            tooltipText = settings_.active ? LOC_RAW("Bypass EQ")
+                                           : LOC_RAW("Enable EQ");
             break;
         case ButtonId::Remove:
-            tooltipText = juce::String::fromUTF8(u8"删除EQ处理");
+            tooltipText = LOC_RAW("Remove EQ processing");
             break;
         case ButtonId::Minimize:
-            tooltipText = isPreview_ ? juce::String::fromUTF8(u8"隐藏EQ预览")
-                                     : juce::String::fromUTF8(u8"最小化为预览");
+            tooltipText = isPreview_ ? LOC_RAW("Hide EQ preview")
+                                     : LOC_RAW("Minimize to preview");
             break;
         default: break;
         }
@@ -552,12 +553,12 @@ void EqPopupComponent::paint(juce::Graphics& g)
         if (cardBtn == CardButton::Bypass)
         {
             const bool bypassed = settings_.filters[cardBand_].bypassed;
-            tooltipText = bypassed ? juce::String::fromUTF8(u8"启用此滤波器")
-                                  : juce::String::fromUTF8(u8"旁通此滤波器");
+            tooltipText = bypassed ? LOC_RAW("Enable this filter")
+                                  : LOC_RAW("Bypass this filter");
         }
         else if (cardBtn == CardButton::Remove)
         {
-            tooltipText = juce::String::fromUTF8(u8"删除此滤波器");
+            tooltipText = LOC_RAW("Delete this filter");
         }
 
         if (tooltipText.isNotEmpty())
@@ -596,7 +597,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
         g.fillRoundedRectangle(dialogX, dialogY, dialogW, dialogH, 4.0f);
         g.setColour(EqGraphRenderer::hudTextColor());
         g.setFont(UIColors::getUIFontExact(11.0f));
-        g.drawText(juce::String::fromUTF8(u8"确认移除 EQ?"),
+        g.drawText(LOC_RAW("Remove EQ?"),
                    juce::Rectangle<float>(dialogX, dialogY + 6.0f, dialogW, 18.0f),
                    juce::Justification::centred, false);
 
@@ -614,7 +615,7 @@ void EqPopupComponent::paint(juce::Graphics& g)
         }
         g.setColour(EqGraphRenderer::axisLabelColor());
         g.setFont(UIColors::getUIFontExact(9.0f));
-        g.drawText(juce::String::fromUTF8(u8"不再提示"), checkRect.translated(16.0f, 0.0f),
+        g.drawText(LOC_RAW("Don't show again"), checkRect.translated(16.0f, 0.0f),
                    juce::Justification::centredLeft, false);
 
         const auto okRect = juce::Rectangle<float>(dialogX + 10.0f, dialogY + dialogH - 24.0f, 80.0f, 18.0f);
@@ -622,13 +623,13 @@ void EqPopupComponent::paint(juce::Graphics& g)
         g.fillRoundedRectangle(okRect, 3.0f);
         g.setColour(juce::Colours::black);
         g.setFont(UIColors::getUIFontExact(10.0f));
-        g.drawText(juce::String::fromUTF8(u8"确认"), okRect, juce::Justification::centred, false);
+        g.drawText(LOC_RAW("Confirm"), okRect, juce::Justification::centred, false);
 
         const auto cancelRect = juce::Rectangle<float>(dialogX + dialogW - 90.0f, dialogY + dialogH - 24.0f, 80.0f, 18.0f);
         g.setColour(EqGraphRenderer::axisLabelColor().withAlpha(0.4f));
         g.fillRoundedRectangle(cancelRect, 3.0f);
         g.setColour(EqGraphRenderer::hudTextColor());
-        g.drawText(juce::String::fromUTF8(u8"取消"), cancelRect, juce::Justification::centred, false);
+        g.drawText(LOC(kCancel), cancelRect, juce::Justification::centred, false);
     }
 
 } // end of paint()

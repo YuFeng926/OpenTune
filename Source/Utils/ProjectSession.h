@@ -24,6 +24,7 @@
 #include "../PluginProcessor.h"
 #include "ProjectModel.h"
 #include "Error.h"
+#include "LocalizationManager.h"
 
 namespace OpenTune {
 
@@ -90,6 +91,7 @@ public:
         ProjectSnapshot snapshot;
         juce::File targetFile;
         juce::File mediaDirectory;
+        Language language = Language::Chinese;
     };
 
     /** 在消息线程调用：捕获目标文件快照。返回的 SaveTask 供后台线程使用。 */
@@ -113,10 +115,11 @@ public:
         ProjectSnapshot snapshot;
         juce::File projectFile;
         std::vector<PreparedProjectSource> sources;
+        Language language = Language::Chinese;
     };
 
     /** 在后台线程读取工程媒体并执行 canonical import 预处理。 */
-    Result<PreparedOpen> prepareOpen(const juce::File& file);
+    Result<PreparedOpen> prepareOpen(const juce::File& file, Language language);
 
     /** 在消息线程一次性提交已预处理的工程数据。 */
     Result<void> commitPreparedOpen(PreparedOpen&& preparedOpen);
@@ -143,7 +146,9 @@ private:
     // ============================================================================
 
     /** 复制所有引用媒体到指定媒体目录（静态，纯文件 I/O） */
-    static Result<void> copyMediaToProjectDirectory(ProjectSnapshot& snapshot, const juce::File& mediaDir);
+    static Result<void> copyMediaToProjectDirectory(ProjectSnapshot& snapshot,
+                                                     const juce::File& mediaDir,
+                                                     Language language);
 
     /** 生成媒体文件的稳定目标文件名 */
     static juce::String generateMediaFileName(const ProjectSourceEntry& source);

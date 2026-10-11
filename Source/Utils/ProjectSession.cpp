@@ -9,6 +9,7 @@
 #include "AppLogger.h"
 #include "AppPreferences.h"
 #include "ProjectPersistence.h"
+#include "LocalizationManager.h"
 #include "TimeCoordinate.h"
 #include <set>
 
@@ -43,7 +44,7 @@ const juce::File& ProjectSession::getCurrentProjectFile() const noexcept
 
 juce::String ProjectSession::getProjectName() const
 {
-    if (!hasProjectPath()) { return "Untitled"; }
+    if (!hasProjectPath()) { return LOC(kUntitled); }
     return currentProjectFile_.getFileNameWithoutExtension();
 }
 
@@ -334,9 +335,9 @@ static std::shared_ptr<const juce::AudioBuffer<float>> rebuildStandaloneClipAudi
 }
 } // namespace
 
-Result<ProjectSession::PreparedOpen> ProjectSession::prepareOpen(const juce::File& file)
+Result<ProjectSession::PreparedOpen> ProjectSession::prepareOpen(const juce::File& file, Language language)
 {
-    ProjectPersistence persistence;
+    ProjectPersistence persistence(language);
     auto readResult = persistence.readProjectFile(file);
     if (!readResult.ok())
         return Result<PreparedOpen>::failure(readResult.error());
@@ -344,6 +345,7 @@ Result<ProjectSession::PreparedOpen> ProjectSession::prepareOpen(const juce::Fil
     PreparedOpen preparedOpen;
     preparedOpen.snapshot = std::move(readResult).value();
     preparedOpen.projectFile = file;
+    preparedOpen.language = language;
     preparedOpen.sources.reserve(preparedOpen.snapshot.sources.size());
 
     const auto projectDirectory = file.getParentDirectory();
@@ -397,7 +399,7 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         AppLogger::error("ProjectSession: Cannot commit project —one or more core stores are unavailable");
         return Result<void>::failure(
             Error::fromCode(ErrorCode::InvalidParameter,
-                "Cannot commit project: core stores unavailable"));
+                Loc::get(preparedOpen.language, Loc::Keys::kProjectCoreStoresUnavailable).toStdString()));
     }
 
     if (auto* crs = processorRef_.getContentRenderService())
@@ -736,6 +738,7 @@ ProjectSession::SaveTask ProjectSession::prepareSave(const juce::File& targetFil
     task.snapshot.header.projectName = targetFile.getFileNameWithoutExtension();
     task.targetFile = targetFile;
     task.mediaDirectory = targetFile.getParentDirectory().getChildFile(kMediaDirectoryName);
+    task.language = LocalizationManager::getInstance().resolveLanguage();
     return task;
 }
 
@@ -743,18 +746,19 @@ Result<void> ProjectSession::executeSaveToFile(SaveTask& task)
 {
     // 1. Copy media files (pure file I/O)
     if (task.targetFile != juce::File{} && task.mediaDirectory != juce::File{}) {
-        auto mediaResult = copyMediaToProjectDirectory(task.snapshot, task.mediaDirectory);
+        auto mediaResult = copyMediaToProjectDirectory(task.snapshot, task.mediaDirectory, task.language);
         if (!mediaResult.ok()) {
             return mediaResult;
         }
     }
 
     // 2. Write .otproj (pure file I/O)
-    ProjectPersistence persistence;
+    ProjectPersistence persistence(task.language);
     if (!persistence.writeProjectFile(task.snapshot, task.targetFile)) {
         return Result<void>::failure(
             Error::fromCode(ErrorCode::UnknownError,
-                ("Failed to write project file: " + task.targetFile.getFullPathName()).toStdString()));
+                Loc::format(Loc::get(task.language, Loc::Keys::kProjectWriteFailed),
+                            task.targetFile.getFullPathName()).toStdString()));
     }
 
     return Result<void>::success();
@@ -779,17 +783,20 @@ juce::String ProjectSession::generateMediaFileName(const ProjectSourceEntry& sou
 }
 
 Result<void> ProjectSession::copyMediaToProjectDirectory(ProjectSnapshot& snapshot,
-                                                         const juce::File& mediaDir)
+                                                          const juce::File& mediaDir,
+                                                          Language language)
 {
     if (mediaDir == juce::File{}) {
         return Result<void>::failure(
-            Error::fromCode(ErrorCode::InvalidParameter, "Cannot copy media: no media directory"));
+            Error::fromCode(ErrorCode::InvalidParameter,
+                            Loc::get(language, Loc::Keys::kProjectNoMediaDirectory).toStdString()));
     }
 
     if (!mediaDir.createDirectory().wasOk()) {
         return Result<void>::failure(
             Error::fromCode(ErrorCode::UnknownError,
-                ("Failed to create media directory: " + mediaDir.getFullPathName()).toStdString()));
+                Loc::format(Loc::get(language, Loc::Keys::kProjectMediaDirectoryCreateFailed),
+                            mediaDir.getFullPathName()).toStdString()));
     }
 
     for (auto& srcEntry : snapshot.sources) {
@@ -802,7 +809,8 @@ Result<void> ProjectSession::copyMediaToProjectDirectory(ProjectSnapshot& snapsh
         if (!sourceFile.existsAsFile()) {
             return Result<void>::failure(
                 Error::fromCode(ErrorCode::UnknownError,
-                    ("Source file not found for copy: " + srcEntry.originalImportPath).toStdString()));
+                    Loc::format(Loc::get(language, Loc::Keys::kProjectSourceFileNotFoundForCopy),
+                                srcEntry.originalImportPath).toStdString()));
         }
 
         const auto destFileName = generateMediaFileName(srcEntry);
@@ -812,8 +820,9 @@ Result<void> ProjectSession::copyMediaToProjectDirectory(ProjectSnapshot& snapsh
             if (!sourceFile.copyFileTo(destFile)) {
                 return Result<void>::failure(
                     Error::fromCode(ErrorCode::UnknownError,
-                        ("Failed to copy media file: " + sourceFile.getFullPathName()
-                         + " -> " + destFile.getFullPathName()).toStdString()));
+                        Loc::format(Loc::get(language, Loc::Keys::kProjectMediaCopyFailed),
+                                    sourceFile.getFullPathName(),
+                                    destFile.getFullPathName()).toStdString()));
             }
         }
 

@@ -72,15 +72,15 @@ void PianoRollComponent::initializeUIComponents() {
     fitToAllNotesOnDoubleClick_ = std::make_unique<FitToAllNotesOnDoubleClick>(*this);
     verticalScrollBar_.addMouseListener(fitToAllNotesOnDoubleClick_.get(), false);
 
-    scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous ? "Cont" : "Page");
+    scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous ? LOC(kScrollContinuous) : LOC(kScrollPage));
     scrollModeToggleButton_.setFontHeight(11.0f);
     scrollModeToggleButton_.onClick = [this] {
         if (scrollMode_ == ScrollMode::Page) {
             setScrollMode(ScrollMode::Continuous);
-            scrollModeToggleButton_.setButtonText("Cont");
+            scrollModeToggleButton_.setButtonText(LOC(kScrollContinuous));
         } else {
             setScrollMode(ScrollMode::Page);
-            scrollModeToggleButton_.setButtonText("Page");
+            scrollModeToggleButton_.setButtonText(LOC(kScrollPage));
         }
     };
     addAndMakeVisible(scrollModeToggleButton_);
@@ -88,7 +88,7 @@ void PianoRollComponent::initializeUIComponents() {
 
     // Time/Bars 切换按钮
     timeUnitToggleButton_.setFontHeight(11.0f);
-    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? "Time" : "BPM");
+    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? LOC(kTime) : "BPM");
     timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
     timeUnitToggleButton_.onClick = [this] {
         const auto nextMode = (displayMode_ == TimelineDisplayMode::Time)
@@ -150,7 +150,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         const auto committedSnap = contentCommands_->commitVolumeEnvelope(editedContentKey_, after);
         if (committedSnap != nullptr) {
             undoManager_.addAction(std::make_unique<VolumeEnvelopeEditAction>(
-                contentCommands_, editedContentKey_, juce::String::fromUTF8(u8"音量包络"),
+                contentCommands_, editedContentKey_, LOC(kToolVolumeEnvelope),
                 std::move(before), std::move(after)));
         }
         refreshEditedContentNotes();
@@ -299,7 +299,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         auto action = std::make_unique<TimeGridEditAction>(
             contentCommands_,
             editedContentKey_,
-            description.isNotEmpty() ? description : juce::String("编辑时间网格"),
+            description.isNotEmpty() ? description : LOC_RAW("Edit time grid"),
             std::move(oldSnap),
             newSnap);
         const bool published = contentCommands_->setTimeGrid(editedContentKey_, newSnap);
@@ -328,7 +328,7 @@ namespace {
 
 struct ToolBarItem {
     ToolId id;
-    const char* name;
+    juce::String name;
     const char* shortcut;
     std::function<juce::Path()> iconFactory;
 };
@@ -366,31 +366,31 @@ void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
 
     if (isDyne) {
         mainItems = {
-            { { ToolId::Select,    "Select",   "F1",  []{ return makeToolIcon(ToolId::Select); } } },
-            { { ToolId::Pitch,     "Pitch",    "F2",  []{ return makeToolIcon(ToolId::Pitch); } }, true },
-            { { ToolId::HandDraw,  "Hand Draw","5",   []{ return ToolbarIcons::getHandDrawIcon(); } } },
-            { { ToolId::Eraser,    "Eraser",   "",    []{ return ToolbarIcons::getEraseIcon(); } } },
-            { { ToolId::VolumeEnvelope, "Volume", "F4", []{ return makeToolIcon(ToolId::VolumeEnvelope); } } },
+            { { ToolId::Select,    LOC(kToolODSelect),   "F1",  []{ return makeToolIcon(ToolId::Select); } } },
+            { { ToolId::Pitch,     LOC(kToolODPitch),    "F2",  []{ return makeToolIcon(ToolId::Pitch); } }, true },
+            { { ToolId::HandDraw,  LOC(kToolHandDraw), "5",   []{ return ToolbarIcons::getHandDrawIcon(); } } },
+            { { ToolId::Eraser,    LOC(kEraser),   "",    []{ return ToolbarIcons::getEraseIcon(); } } },
+            { { ToolId::VolumeEnvelope, LOC(kToolODVolumeEnvelope), "F4", []{ return makeToolIcon(ToolId::VolumeEnvelope); } } },
         };
         if (experimentalFeaturesEnabled_)
-            mainItems.push_back({ { ToolId::TimeTool, "Time", "T", []{ return makeToolIcon(ToolId::TimeTool); } } });
-        mainItems.push_back({ { ToolId::Scissors, "Scissors", "F6", []{ return makeToolIcon(ToolId::Scissors); } } });
-        mainItems.push_back({ { ToolId::Eq, "EQ", "E", []{ return makeToolIcon(ToolId::Eq); } } });
+            mainItems.push_back({ { ToolId::TimeTool, LOC(kTime), "T", []{ return makeToolIcon(ToolId::TimeTool); } } });
+        mainItems.push_back({ { ToolId::Scissors, LOC(kToolODScissors), "F6", []{ return makeToolIcon(ToolId::Scissors); } } });
+        mainItems.push_back({ { ToolId::Eq, LOC(kToolEq), "E", []{ return makeToolIcon(ToolId::Eq); } } });
         subItems = {
-            { ToolId::PitchModulation, "Modulation", "F2x2", []{ return makeToolIcon(ToolId::PitchModulation); } },
-            { ToolId::PitchDrift,      "Drift",      "F2x3", []{ return makeToolIcon(ToolId::PitchDrift); } },
+            { ToolId::PitchModulation, LOC(kToolODPitchModulation), "", []{ return makeToolIcon(ToolId::PitchModulation); } },
+            { ToolId::PitchDrift,      LOC(kToolODPitchDrift), "", []{ return makeToolIcon(ToolId::PitchDrift); } },
         };
     } else {
         mainItems = {
-            { { ToolId::Select,     "Select",      "3", []{ return makeToolIcon(ToolId::Select); } } },
-            { { ToolId::DrawNote,   "Draw Note",   "2", []{ return ToolbarIcons::getDrawNoteIcon(); } } },
-            { { ToolId::LineAnchor, "Line Anchor", "4", []{ return ToolbarIcons::getLineAnchorIcon(); } } },
-            { { ToolId::HandDraw,   "Hand Draw",   "5", []{ return ToolbarIcons::getHandDrawIcon(); } } },
-            { { ToolId::Eraser,     "Eraser",       "",  []{ return ToolbarIcons::getEraseIcon(); } } },
+            { { ToolId::Select,     LOC(kToolSelect),      "3", []{ return makeToolIcon(ToolId::Select); } } },
+            { { ToolId::DrawNote,   LOC(kToolDrawNote),   "2", []{ return ToolbarIcons::getDrawNoteIcon(); } } },
+            { { ToolId::LineAnchor, LOC(kToolLineAnchor), "4", []{ return ToolbarIcons::getLineAnchorIcon(); } } },
+            { { ToolId::HandDraw,   LOC(kToolHandDraw),   "5", []{ return ToolbarIcons::getHandDrawIcon(); } } },
+            { { ToolId::Eraser,     LOC(kEraser),       "",  []{ return ToolbarIcons::getEraseIcon(); } } },
         };
         // Time 与侧栏一致：两种模式均仅在 experimental 开启时可选
         if (experimentalFeaturesEnabled_)
-            mainItems.push_back({ { ToolId::TimeTool, "Time", "T", []{ return makeToolIcon(ToolId::TimeTool); } } });
+            mainItems.push_back({ { ToolId::TimeTool, LOC(kTime), "T", []{ return makeToolIcon(ToolId::TimeTool); } } });
     }
 
     // 布局常量
@@ -847,7 +847,7 @@ bool PianoRollComponent::commitNoteDraft()
     auto action = std::make_unique<PianoRollNotePatchAction>(
         contentCommands_,
         editedContentKey_,
-        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : TRANS("缂栬緫"),
+        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : LOC(kEdit),
         std::move(beforePatch),
         std::move(patch));
 
@@ -969,7 +969,7 @@ void PianoRollComponent::applyEqSettingsToSelection(const EqSettings& settings)
             working[idx].eq = settings;
     }
     interactionState_.noteDraft.contentDirty = true;
-    pendingUndoDescription_ = juce::String::fromUTF8(u8"编辑 EQ");
+    pendingUndoDescription_ = LOC_RAW("Edit EQ");
     commitNoteDraft();
 }
 
@@ -988,7 +988,7 @@ void PianoRollComponent::removeEqFromSelection()
             working[idx].eq = std::nullopt;
     }
     interactionState_.noteDraft.contentDirty = true;
-    pendingUndoDescription_ = juce::String::fromUTF8(u8"移除 EQ");
+    pendingUndoDescription_ = LOC_RAW("Remove EQ");
     commitNoteDraft();
 }
 
@@ -1097,7 +1097,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     auto action = std::make_unique<PianoRollEditAction>(
         contentCommands_,
         editedContentKey_,
-        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : TRANS("缂栬緫"),
+        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : LOC(kEdit),
         std::move(beforeNotes),
         std::move(afterNotes),
         std::move(beforeSegments),
@@ -1152,7 +1152,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(
         committed->pitchCurve->getOriginalF0().begin() + affectedRange.endFrameExclusive);
     auto action = std::make_unique<PianoRollEditAction>(
         contentCommands_, editedContentKey_, pendingUndoDescription_.isNotEmpty()
-            ? pendingUndoDescription_ : TRANS("编辑"),
+            ? pendingUndoDescription_ : LOC(kEdit),
         snapshot.notes, committed->notes,
         snapshot.pitchCurve->getCorrectionSegments(), committed->pitchCurve->getCorrectionSegments(),
         ContentEditRangeFrames{ affectedRange.startFrame, affectedRange.endFrameExclusive },
@@ -1250,7 +1250,7 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
     auto action = std::make_unique<PianoRollEditAction>(
         contentCommands_,
         editedContentKey_,
-        description.isNotEmpty() ? description : TRANS("缂栬緫"),
+        description.isNotEmpty() ? description : LOC(kEdit),
         std::move(beforeNotes),
         std::move(afterNotes),
         std::move(beforeSegments),
@@ -2722,7 +2722,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
 
         const auto postSnapCfg = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
         captureBeforeUndoSnapshot();
-        pendingUndoDescription_ = TRANS("重新分割音符");
+        pendingUndoDescription_ = LOC_RAW("Split note");
 
         if (!contentCommands_->autoTuneContentRange(
                 editedContentKey_,
@@ -2836,7 +2836,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
                         segmentsInRange.push_back(seg);
                 }
 
-                pendingUndoDescription_ = TRANS("Edit note parameter");
+                pendingUndoDescription_ = LOC_RAW("Edit note");
                 if (!commitEditedContentNotesAndSegments(*contentSnapshot, notesInRange, segmentsInRange, affectedRange)) {
                     result.status = AudioEditingScheme::ParameterEditStatus::Failed;
                     return result;
@@ -2889,7 +2889,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
         const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
             unionStart, unionEnd, f0tl.endFrameExclusive());
 
-        pendingUndoDescription_ = TRANS("Edit note parameter");
+        pendingUndoDescription_ = LOC_RAW("Edit note");
         if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, allSegments, affectedRange)) {
             result.status = AudioEditingScheme::ParameterEditStatus::Failed;
             return result;
@@ -4140,8 +4140,18 @@ void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
 void PianoRollComponent::setTimelineDisplayMode(TimelineDisplayMode mode) {
     if (displayMode_ == mode) return;
     displayMode_ = mode;
-    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? "Time" : "BPM");
+    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? LOC(kTime) : "BPM");
     invalidateTimeAxisStaticSurface();
+}
+
+void PianoRollComponent::refreshLocalizedText()
+{
+    scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous
+        ? LOC(kScrollContinuous)
+        : LOC(kScrollPage));
+    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time
+        ? LOC(kTime)
+        : "BPM");
 }
 
 void PianoRollComponent::addListener(Listener* listener) {
@@ -4901,7 +4911,7 @@ void PianoRollComponent::pasteNotes()
     auto action = std::make_unique<PianoRollNotePatchAction>(
         contentCommands_,
         editedContentKey_,
-        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : TRANS("粘贴"),
+        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : LOC(kPaste),
         std::move(beforePatch),
         std::move(afterPatch));
 
@@ -5229,32 +5239,32 @@ juce::String PianoRollComponent::AutoTuneApplyResult::message() const
 {
     switch (status) {
         case AutoTuneApplyStatus::Applied:
-            return juce::String("AUTO has been queued.");
+            return LOC(kAutoQueued);
         case AutoTuneApplyStatus::NoChange:
             return juce::String();   // 最终修正已达成：静默，不弹窗
         case AutoTuneApplyStatus::NoCurve:
-            return juce::String("AUTO needs an active pitch curve. Run audio analysis first.");
+            return LOC(kAutoNeedsPitchCurve);
         case AutoTuneApplyStatus::NoContentCommands:
-            return juce::String("AUTO cannot run because content edit commands are not attached.");
+            return LOC(kAutoNoContentCommands);
         case AutoTuneApplyStatus::NoContent:
-            return juce::String("AUTO needs an active editable clip.");
+            return LOC(kAutoNeedsEditableClip);
         case AutoTuneApplyStatus::MissingContentSnapshot:
-            return juce::String("AUTO cannot read the editable content snapshot.");
+            return LOC(kAutoCannotReadContentSnapshot);
         case AutoTuneApplyStatus::OriginalF0NotReady:
-            return juce::String("AUTO needs OriginalF0 to be ready for this clip.");
+            return LOC(kAutoOriginalF0NotReady);
         case AutoTuneApplyStatus::MissingCurveSnapshot:
-            return juce::String("AUTO cannot read the current pitch-curve snapshot.");
+            return LOC(kAutoCannotReadCurveSnapshot);
         case AutoTuneApplyStatus::EmptyOriginalF0:
-            return juce::String("AUTO needs non-empty OriginalF0 data.");
+            return LOC(kAutoNeedsOriginalF0);
         case AutoTuneApplyStatus::EmptyTimeline:
-            return juce::String("AUTO cannot map this clip to an F0 timeline.");
+            return LOC(kAutoCannotMapF0Timeline);
         case AutoTuneApplyStatus::NoTargetSelection:
-            return juce::String("AUTO needs a selected note, F0 range, or selection area.");
+            return LOC(kAutoNeedsSelection);
         case AutoTuneApplyStatus::EmptyTargetRange:
-            return juce::String("AUTO target range is empty.");
+            return LOC(kAutoTargetRangeEmpty);
     }
 
-    return juce::String("AUTO could not be applied.");
+    return LOC(kAutoCouldNotApply);
 }
 
 PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelection()
@@ -5331,7 +5341,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     const std::optional<ScaleSnapConfig> postSnapCfg = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
 
     captureBeforeUndoSnapshot();
-    pendingUndoDescription_ = TRANS("自动调音");
+    pendingUndoDescription_ = LOC_RAW("AUTO correction");
 
     if (!contentCommands_->autoTuneContentRange(
             editedContentKey_,
@@ -5537,7 +5547,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
         }
     }
 
-    pendingUndoDescription_ = TRANS("音高吸附");   // 与双击吸附语义一致
+    pendingUndoDescription_ = LOC_RAW("Pitch snap");   // 与双击吸附语义一致
     // 提交全量 notes：affectedRange 内未选中音符以原样保留，range-scoped merge 不丢音符
     if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, segmentsInRange, affectedRange)) {
         pendingUndoDescription_ = {};   // 提交失败清理本次事务的临时 undo 状态

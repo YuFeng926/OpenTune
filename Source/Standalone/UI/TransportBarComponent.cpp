@@ -1173,13 +1173,6 @@ TransportBarComponent::TransportBarComponent()
 
     // Apply styling (transport buttons use custom paintButton)
 
-    // Setup scale selector
-    scaleLabel_.setText("Scale:", juce::dontSendNotification);
-    scaleLabel_.setFont(UIColors::getUIFont(UIColors::navFontHeight));
-    scaleLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
-    scaleLabel_.setJustificationType(juce::Justification::centredRight);
-    scaleLabel_.setVisible(false);
-
     // Root note selector
     for (int i = 0; i < 12; ++i)
     {
@@ -1235,16 +1228,11 @@ void TransportBarComponent::refreshLocalizedText()
     tapButton_.setTooltip(LOC(kTooltipTapTempo));
     moreButton_.setTooltip(LOC(kScale));
 
-    // 刷新 scaleLabel
-    scaleLabel_.setText(LOC(kScale), juce::dontSendNotification);
-
     repaint();
 }
 
 void TransportBarComponent::applyTheme()
 {
-    scaleLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
-
     scaleRootSelector_.setColour(juce::ComboBox::backgroundColourId, UIColors::backgroundLight);
     scaleRootSelector_.setColour(juce::ComboBox::textColourId, UIColors::textPrimary);
     scaleRootSelector_.setColour(juce::ComboBox::outlineColourId, UIColors::panelBorder);

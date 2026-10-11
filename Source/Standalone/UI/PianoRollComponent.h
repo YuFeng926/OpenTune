@@ -198,6 +198,7 @@ public:
     void setTimeSignature(int numerator, int denominator);
     void setTimelineDisplayMode(TimelineDisplayMode mode);
     TimelineDisplayMode getTimelineDisplayMode() const { return displayMode_; }
+    void refreshLocalizedText();
     void setScrollMode(ScrollMode mode) {
         if (scrollMode_ == mode) return;
         scrollMode_ = mode;

@@ -1,4 +1,5 @@
 #include "AppLogger.h"
+#include "LocalizationManager.h"
 
 namespace OpenTune {
 
@@ -187,7 +188,7 @@ juce::String AppLogger::makeDiagnosticText(const juce::String& stage,
                 {
                     diagnostic += "\n\nCurrent log contents:";
                     if (start > 0)
-                        diagnostic += "\n(仅保留最后 256 KiB)";
+                        diagnostic += "\n" + LOC(kDiagnosticLogTail);
                     diagnostic += "\n";
                     if (contents.getSize() > 0)
                         diagnostic += juce::String::fromUTF8(

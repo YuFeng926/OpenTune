@@ -42,7 +42,7 @@ inline juce::String getLanguageNativeName(Language lang)
         case Language::Chinese:  return juce::String::fromUTF8("\xe7\xae\x80\xe4\xbd\x93\xe4\xb8\xad\xe6\x96\x87");  // 简体中文
         case Language::Japanese: return juce::String::fromUTF8("\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e");  // 日本語
         case Language::Russian:  return juce::String::fromUTF8("\xd0\xa0\xd1\x83\xd1\x81\xd1\x81\xd0\xba\xd0\xb8\xd0\xb9");  // Русский
-        case Language::Spanish:  return juce::String::fromUTF8("Espa\xcf\x81ol");  // Español
+        case Language::Spanish:  return juce::String::fromUTF8("Espa\xc3\xb1ol");  // Español
         default: return juce::String::fromUTF8("English");
     }
 }
@@ -248,7 +248,10 @@ constexpr const char* kAudioDeviceError = "Audio device error";
 constexpr const char* kAudioDeviceSwitchFailed = "Failed to switch audio device";
 constexpr const char* kEditing = "Editing";
 constexpr const char* kMouse = "Mouse";
-constexpr const char* kKeyswitch = "Keyswitch";
+constexpr const char* kShortcuts = "Shortcuts";
+constexpr const char* kShortcutGeneral = "General";
+constexpr const char* kShortcutOpenTuneMode = "OpenTune Mode";
+constexpr const char* kShortcutOpenDyneMode = "OpenDyne Mode";
 constexpr const char* kLanguage = "Language";
 constexpr const char* kLanguageLabel = "Interface Language";
 constexpr const char* kAudioEditingScheme = "Audio Editing Scheme";
@@ -267,6 +270,7 @@ constexpr const char* kScrollSpeed = "Scroll Speed";
 constexpr const char* kTuningHz = "Tuning Hz";
 constexpr const char* kResetToDefaults = "Reset to Defaults";
 constexpr const char* kRenderingPriority = "Rendering Priority";
+constexpr const char* kRendering = "Rendering";
 constexpr const char* kGpuFirst = "GPU First";
 constexpr const char* kCpuFirst = "CPU First";
 constexpr const char* kHybridMode = "Hybrid Mode";
@@ -288,6 +292,7 @@ constexpr const char* kResetAllToDefaults = "Reset All to Defaults";
 constexpr const char* kShortcutCaptureClickHint = "Click here, then press a key";
 constexpr const char* kShortcutCapturePressKey = "Press a key...";
 constexpr const char* kShortcutCaptureCancelHint = "Click Cancel to abort";
+constexpr const char* kDiagnosticLogTail = "(Only the last 256 KiB are retained)";
 
 constexpr const char* kPlayPause = "Play/Pause";
 constexpr const char* kStop = "Stop";
@@ -316,12 +321,12 @@ constexpr const char* kToolDrift = "Tool: Drift";
 constexpr const char* kToolVolumeEnvelope = "Tool: Volume Envelope";
 constexpr const char* kToolScissors = "Tool: Scissors";
 constexpr const char* kCancelSelection = "Cancel Selection";
-constexpr const char* kToolODSelect = "OD: Select";
-constexpr const char* kToolODPitch = "OD: Pitch";
-constexpr const char* kToolODPitchModulation = "OD: Pitch Modulation";
-constexpr const char* kToolODPitchDrift = "OD: Pitch Drift";
-constexpr const char* kToolODVolumeEnvelope = "OD: Volume Envelope";
-constexpr const char* kToolODScissors = "OD: Scissors";
+constexpr const char* kToolODSelect = "Select";
+constexpr const char* kToolODPitch = "Pitch";
+constexpr const char* kToolODPitchModulation = "Pitch Modulation";
+constexpr const char* kToolODPitchDrift = "Pitch Drift";
+constexpr const char* kToolODVolumeEnvelope = "Volume Envelope";
+constexpr const char* kToolODScissors = "Scissors";
 constexpr const char* kToolEq = "Tool: EQ";
 
 constexpr const char* kPitchCorrection = "Pitch correction";
@@ -348,6 +353,99 @@ constexpr const char* kTracks = "Tracks";
 constexpr const char* kProps = "Props";
 constexpr const char* kScale = "Scale";
 constexpr const char* kRootNote = "Root";
+constexpr const char* kScrollContinuous = "Cont";
+constexpr const char* kScrollPage = "Page";
+constexpr const char* kTime = "Time";
+constexpr const char* kNoSnap = "No Snap";
+constexpr const char* kChromatic = "Chromatic";
+constexpr const char* kKeyScale = "Key Scale";
+constexpr const char* kPitchShift = "Pitch Shift";
+constexpr const char* kPreferences = "Preferences";
+constexpr const char* kHostControlledTransport = "Host-controlled transport";
+constexpr const char* kUntitled = "Untitled";
+constexpr const char* kTrackPrefix = "Track ";
+constexpr const char* kClip = "Clip";
+constexpr const char* kImportAudioDialog = "Import Audio";
+constexpr const char* kImportFailed = "Import Failed";
+constexpr const char* kExportFailed = "Export Failed";
+constexpr const char* kOpenProjectDialog = "Open Project";
+constexpr const char* kAutoDialog = "AUTO";
+constexpr const char* kAudioImportInProgress = "Audio import is already in progress. Please try again later.";
+constexpr const char* kUnsupportedFileType = "Unsupported file type.\nSupported extensions: {0}";
+constexpr const char* kMultipleFilesDetected = "Multiple files detected. Only the first file will be imported.";
+constexpr const char* kNoAvailableTracksAfterCurrent = "There are no available tracks after the current track.";
+constexpr const char* kImportCountTrimmed = "Only {0} tracks are available after the current track. Extra files were not queued.";
+constexpr const char* kAudioImportPreprocessingFailed = "Audio import preprocessing failed. Please try again.";
+constexpr const char* kAudioImportCommitFailed = "Audio import commit failed. Please try again.";
+constexpr const char* kImportCountTrimmedTitle = "Import Count Trimmed";
+constexpr const char* kSelectAudioFilesToImport = "Select audio files to import";
+constexpr const char* kChooseImportMode = "Choose Import Mode";
+constexpr const char* kSelectedAudioFilesImportMode = "You selected {0} audio files. Choose an import mode.";
+constexpr const char* kImportSequentiallyToCurrentTrack = "Import Sequentially To Current Track";
+constexpr const char* kImportToSeparateTracks = "Import To Separate Tracks";
+constexpr const char* kMaximumTrackCountReached = "Maximum track count reached ({0}). Cannot create more tracks.";
+constexpr const char* kExportAudioFile = "Export Audio File";
+constexpr const char* kOverwriteExistingFile = "Overwrite Existing File?";
+constexpr const char* kOverwriteExistingFileMessage = "The target file already exists. Overwrite it?";
+constexpr const char* kOverwriteExistingProject = "Overwrite Existing Project?";
+constexpr const char* kOverwriteExistingProjectMessage = "The target project file already exists. Overwrite it?";
+constexpr const char* kExportInProgress = "An export task is already in progress. Please try again later.";
+constexpr const char* kNoAudioClipSelected = "No audio clip is selected. Select a clip on the track first.";
+constexpr const char* kSelectedPlacement = "Selected Placement (Track {0}, Clip {1})";
+constexpr const char* kTrackTarget = "Track {0}";
+constexpr const char* kBusMasterMix = "Bus (Master Mix)";
+constexpr const char* kHelpFileNotFound = "Help file not found: {0}";
+constexpr const char* kReferenceMenuEntry = "Track {0} - {1} (Mat#{2})";
+constexpr const char* kAutoRef = "AUTO Ref";
+constexpr const char* kAutoRefAlignmentFailed = "AUTO Ref alignment failed.";
+constexpr const char* kHostManagedActionPrefix = "In VST3 mode this action is managed by your DAW.\n\n";
+constexpr const char* kVst3ImportAudio = "Please import audio from your DAW in VST3 mode.";
+constexpr const char* kVst3ExportAudio = "Please render/export from your DAW in VST3 mode.";
+constexpr const char* kProjectFileManagementStandalone = "Project file management is handled in the Standalone version.";
+constexpr const char* kOpenRecentProject = "Open Recent Project";
+constexpr const char* kHelpDialog = "Help";
+constexpr const char* kVst3Help = "Open the host DAW plugin help/manual entry for VST3 usage guidance.";
+constexpr const char* kVst3ReadAudioNotReady = "This VST3 instance is not ready for audio capture or ARA reading.";
+constexpr const char* kVst3ReadAudioSelectionNotReady = "The selected item is not ready. Please re-select and try again.";
+constexpr const char* kVst3ReadAudioRegionsFailed = "Audio regions could not be processed.";
+constexpr const char* kAutoNeedsActiveAra = "AUTO needs an active ARA audio modification.";
+constexpr const char* kOriginalF0 = "OriginalF0";
+constexpr const char* kOriginalF0NotReady = "OriginalF0 is not ready.";
+constexpr const char* kOriginalF0Extracting = "OriginalF0 is being extracted. Please retry in a moment.";
+constexpr const char* kOriginalF0ExtractionFailed = "OriginalF0 extraction failed for this clip. Re-import the audio to regenerate OriginalF0.";
+constexpr const char* kOriginalF0NotReadyForClip = "OriginalF0 is not ready for this clip.";
+constexpr const char* kAutoQueued = "AUTO has been queued.";
+constexpr const char* kAutoNeedsPitchCurve = "AUTO needs an active pitch curve. Run audio analysis first.";
+constexpr const char* kAutoNoContentCommands = "AUTO cannot run because content edit commands are not attached.";
+constexpr const char* kAutoNeedsEditableClip = "AUTO needs an active editable clip.";
+constexpr const char* kAutoCannotReadContentSnapshot = "AUTO cannot read the editable content snapshot.";
+constexpr const char* kAutoOriginalF0NotReady = "AUTO needs OriginalF0 to be ready for this clip.";
+constexpr const char* kAutoCannotReadCurveSnapshot = "AUTO cannot read the current pitch-curve snapshot.";
+constexpr const char* kAutoNeedsOriginalF0 = "AUTO needs non-empty OriginalF0 data.";
+constexpr const char* kAutoCannotMapF0Timeline = "AUTO cannot map this clip to an F0 timeline.";
+constexpr const char* kAutoNeedsSelection = "AUTO needs a selected note, F0 range, or selection area.";
+constexpr const char* kAutoTargetRangeEmpty = "AUTO target range is empty.";
+constexpr const char* kAutoCouldNotApply = "AUTO could not be applied.";
+constexpr const char* kRenderFailure = "Render Failure";
+constexpr const char* kRenderFailed = "Render failed";
+constexpr const char* kRenderFailureDetail = "Render failed; dry audio may be used. Reason: {0}";
+constexpr const char* kProjectRootNodeInvalid = "Root node is not {0}";
+constexpr const char* kUnsupportedProjectFormat = "Unsupported project format version: {0} (supported {1}-{2})";
+constexpr const char* kProjectInvalidDynamicEq = "Project contains invalid dynamic EqSettings";
+constexpr const char* kProjectMissingSettings = "Project is missing required ProjectSettings node";
+constexpr const char* kProjectSettingsMissingTimeSignature = "ProjectSettings is missing required timeSignatureNumerator or timeSignatureDenominator";
+constexpr const char* kProjectFileNotFound = "Project file not found: {0}";
+constexpr const char* kProjectParseFailed = "Failed to parse project file: {0} — {1}";
+constexpr const char* kProjectInvalidXml = "Invalid XML structure in: {0}";
+constexpr const char* kProjectCoreStoresUnavailable = "Cannot commit project: core stores unavailable";
+constexpr const char* kProjectWriteFailed = "Failed to write project file: {0}";
+constexpr const char* kProjectNoMediaDirectory = "Cannot copy media: no media directory";
+constexpr const char* kProjectMediaDirectoryCreateFailed = "Failed to create media directory: {0}";
+constexpr const char* kProjectSourceFileNotFoundForCopy = "Source file not found for copy: {0}";
+constexpr const char* kProjectMediaCopyFailed = "Failed to copy media file: {0} -> {1}";
+constexpr const char* kPitchEditing = "Pitch editing";
+constexpr const char* kSplitNotes = "Split notes";
+constexpr const char* kEraser = "Eraser";
 
         constexpr const char* kClose = "Close";
         constexpr const char* kHelp = "Help...";
@@ -486,7 +584,10 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kAudioDeviceSwitchFailed, "Failed to switch audio device", "音频设备切换失败", "オーディオデバイスの切り替えに失敗しました", "Не удалось переключить аудиоустройство", "Error al cambiar el dispositivo de audio" },
         { Keys::kEditing, "Editing", "编辑", "編集", "Редактирование", "Edicion" },
         { Keys::kMouse, "Mouse", "鼠标", "マウス", "Мышь", "Ratón" },
-        { Keys::kKeyswitch, "Keyswitch", "快捷键", "キースイッチ", "Клавиши", "Atajos" },
+        { Keys::kShortcuts, "Shortcuts", "快捷键", "ショートカット", "Сочетания клавиш", "Atajos de teclado" },
+        { Keys::kShortcutGeneral, "General", "通用", "一般", "Общие", "General" },
+        { Keys::kShortcutOpenTuneMode, "OpenTune Mode", "OpenTune 模式", "OpenTune モード", "Режим OpenTune", "Modo OpenTune" },
+        { Keys::kShortcutOpenDyneMode, "OpenDyne Mode", "OpenDyne 模式", "OpenDyne モード", "Режим OpenDyne", "Modo OpenDyne" },
         { Keys::kLanguage, "Language", "语言", "言語", "Язык", "Idioma" },
         { Keys::kLanguageLabel, "Interface Language", "界面语言", "インターフェース言語", "Язык", "Idioma" },
         { Keys::kAudioEditingScheme, "Audio Editing Scheme", "音频编辑方案", "音声編集方式", "Схема аудиоредактирования", "Esquema de edicion de audio" },
@@ -505,6 +606,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTuningHz, "Tuning Hz", "基准音高", "基準ピッチ", "Частота настройки", "Frecuencia de afinación" },
         { Keys::kResetToDefaults, "Reset to Defaults", "恢复默认设置", "デフォルトに戻す", "Сбросить", "Restablecer" },
         { Keys::kRenderingPriority, "Rendering Priority", "渲染优先级", "レンダリング優先度", "Приоритет рендеринга", "Prioridad de renderizado" },
+        { Keys::kRendering, "Rendering", "渲染中", "レンダリング中", "Рендеринг", "Renderizando" },
         { Keys::kGpuFirst, "GPU First", "GPU 优先", "GPU 優先", "GPU приоритет", "GPU primero" },
         { Keys::kCpuFirst, "CPU First", "CPU 优先", "CPU 優先", "CPU приоритет", "CPU primero" },
         { Keys::kHybridMode, "Hybrid Mode: Small corrections use DSP, large corrections use vocoder", "混合模式:小修用dsp，大修用声码器", "ハイブリッドモード：小さな修正はDSP、大きな修正はボコーダー", "Гибридный режим: небольшие коррекции через DSP, большие через вокодер", "Modo híbrido: correcciones pequeñas con DSP, grandes con vocoder" },
@@ -524,6 +626,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kShortcutCaptureClickHint, "Click here, then press a key", "点击此处后按下快捷键", "ここをクリックしてキーを押してください", "Нажмите здесь и нажмите клавишу", "Haga clic aquí y pulse una tecla" },
         { Keys::kShortcutCapturePressKey, "Press a key...", "请按下快捷键...", "キーを押してください...", "Нажмите клавишу...", "Pulse una tecla..." },
         { Keys::kShortcutCaptureCancelHint, "Click Cancel to abort", "点击取消按钮取消", "キャンセルをクリックして中止", "Нажмите Отмена для отмены", "Pulse Cancelar para abortar" },
+        { Keys::kDiagnosticLogTail, "(Only the last 256 KiB are retained)", "(仅保留最后 256 KiB)", "(最後の 256 KiB のみ保持)", "(Сохранены только последние 256 КиБ)", "(Solo se conservan los últimos 256 KiB)" },
 
         { Keys::kPlayPause, "Play/Pause", "播放/暂停", "再生/一時停止", "Старт/Пауза", "Play/Pausa" },
         { Keys::kStop, "Stop", "停止", "停止", "Стоп", "Detener" },
@@ -546,12 +649,12 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kToolAutoTune, "Tool: AutoTune", "工具：自动校正", "ツール：オートチューン", "Инструмент: автотюн", "Herram: autoajuste" },
         { Keys::kToolTimeTool, "Tool: Time", "工具：时间", "ツール：タイム", "Инструмент: время", "Herram: tiempo" },
         { Keys::kCancelSelection, "Cancel Selection", "取消选择", "選択解除", "Отменить выбор", "Cancelar selección" },
-        { Keys::kToolODSelect, "OD: Select", "OD: 选择", "OD: 選択", "OD: выбор", "OD: seleccionar" },
-        { Keys::kToolODPitch, "OD: Pitch", "OD: 音高", "OD: ピッチ", "OD: тон", "OD: tono" },
-        { Keys::kToolODPitchModulation, "OD: Pitch Modulation", "OD: 音高调制", "OD: ピッチ変調", "OD: модуляция тона", "OD: modulación tono" },
-        { Keys::kToolODPitchDrift, "OD: Pitch Drift", "OD: 音高漂移", "OD: ピッチドリフト", "OD: дрифт тона", "OD: deriva tono" },
-        { Keys::kToolODVolumeEnvelope, "OD: Volume Envelope", "OD: 音量包络", "OD: ボリュームエンベロープ", "OD: огибающая громкости", "OD: envol. volumen" },
-        { Keys::kToolODScissors, "OD: Scissors", "OD: 剪刀", "OD: ハサミ", "OD: ножницы", "OD: tijeras" },
+        { Keys::kToolODSelect, "Select", "选择", "選択", "выбор", "seleccionar" },
+        { Keys::kToolODPitch, "Pitch", "音高", "ピッチ", "тон", "tono" },
+        { Keys::kToolODPitchModulation, "Pitch Modulation", "音高调制", "ピッチ変調", "модуляция тона", "modulación tono" },
+        { Keys::kToolODPitchDrift, "Pitch Drift", "音高漂移", "ピッチドリフト", "дрифт тона", "deriva tono" },
+        { Keys::kToolODVolumeEnvelope, "Volume Envelope", "音量包络", "ボリュームエンベロープ", "огибающая громкости", "envol. volumen" },
+        { Keys::kToolODScissors, "Scissors", "剪刀", "ハサミ", "ножницы", "tijeras" },
         { Keys::kToolEq, "Tool: EQ", "工具：均衡器", "ツール：イコライザー", "Инструмент: эквалайзер", "Herram: ecualizador" },
         
         { Keys::kPitchCorrection, "Pitch correction", "音高校正", "ピッチ補正", "Коррекция тона", "Corrección de tono" },
@@ -575,9 +678,65 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kPianoRollView, "Piano Roll View", "钢琴卷帘视图", "ピアノロールビュー", "Вид пиано-ролла", "Vista piano" },
         
         { Keys::kTracks, "Tracks", "轨道", "トラック", "Дорожки", "Pistas" },
-        { Keys::kProps, "Props", "属性", "プロパティ", "Свойства", "Props" },
+        { Keys::kProps, "Props", "属性", "プロパティ", "Свойства", "Propiedades" },
         { Keys::kScale, "Scale", "调式", "スケール", "Гамма", "Escala" },
         { Keys::kRootNote, "Root", "根音", "ルート", "Тоника", "Raíz" },
+        { Keys::kScrollContinuous, "Cont", "连续", "連続", "Непрерывно", "Continuo" },
+        { Keys::kScrollPage, "Page", "分页", "ページ", "Страница", "Página" },
+        { Keys::kTime, "Time", "时间", "時間", "Время", "Tiempo" },
+        { Keys::kNoSnap, "No Snap", "不吸附", "スナップなし", "Без привязки", "Sin ajuste" },
+        { Keys::kChromatic, "Chromatic", "半音阶", "クロマチック", "Хроматический", "Cromático" },
+        { Keys::kKeyScale, "Key Scale", "调式音阶", "キースケール", "Гамма тональности", "Escala tonal" },
+        { Keys::kUntitled, "Untitled", "未命名", "無題", "Без названия", "Sin título" },
+        { Keys::kTrackPrefix, "Track ", "轨道 ", "トラック ", "Дорожка ", "Pista " },
+        { Keys::kClip, "Clip", "片段", "クリップ", "Клип", "Clip" },
+        { Keys::kImportAudioDialog, "Import Audio", "导入音频", "オーディオをインポート", "Импорт аудио", "Importar audio" },
+        { Keys::kOpenProjectDialog, "Open Project", "打开工程", "プロジェクトを開く", "Открыть проект", "Abrir proyecto" },
+        { Keys::kAutoDialog, "AUTO", "AUTO", "AUTO", "AUTO", "AUTO" },
+        { Keys::kAudioImportInProgress, "Audio import is already in progress. Please try again later.", "音频导入正在进行中，请稍后再试。", "オーディオのインポートは既に進行中です。後でもう一度お試しください。", "Импорт аудио уже выполняется. Повторите попытку позже.", "La importación de audio ya está en curso. Inténtalo de nuevo más tarde." },
+        { Keys::kUnsupportedFileType, "Unsupported file type.\nSupported extensions: {0}", "不支持的文件类型。\n支持的扩展名：{0}", "サポートされていないファイル形式です。\n対応する拡張子：{0}", "Неподдерживаемый тип файла.\nПоддерживаемые расширения: {0}", "Tipo de archivo no compatible.\nExtensiones compatibles: {0}" },
+        { Keys::kMultipleFilesDetected, "Multiple files detected. Only the first file will be imported.", "检测到多个文件。只会导入第一个文件。", "複数のファイルが検出されました。最初のファイルのみインポートされます。", "Обнаружено несколько файлов. Будет импортирован только первый файл.", "Se detectaron varios archivos. Solo se importará el primero." },
+        { Keys::kNoAvailableTracksAfterCurrent, "There are no available tracks after the current track.", "当前轨道之后没有可用轨道。", "現在のトラック以降に使用できるトラックがありません。", "После текущей дорожки нет доступных дорожек.", "No hay pistas disponibles después de la pista actual." },
+        { Keys::kImportCountTrimmed, "Only {0} tracks are available after the current track. Extra files were not queued.", "当前轨道之后只有 {0} 条可用轨道，多余文件未加入队列。", "現在のトラック以降で使用できるトラックは {0} 個だけです。余分なファイルはキューに追加されませんでした。", "После текущей дорожки доступно только {0} дорожек. Лишние файлы не добавлены в очередь.", "Solo hay {0} pistas disponibles después de la pista actual. Los archivos adicionales no se añadieron a la cola." },
+        { Keys::kAudioImportPreprocessingFailed, "Audio import preprocessing failed. Please try again.", "音频导入预处理失败，请重试。", "オーディオのインポート前処理に失敗しました。もう一度お試しください。", "Не удалось выполнить предварительную обработку импорта аудио. Повторите попытку.", "Falló el preprocesamiento de la importación de audio. Inténtalo de nuevo." },
+        { Keys::kAudioImportCommitFailed, "Audio import commit failed. Please try again.", "音频导入提交失败，请重试。", "オーディオのインポートの確定に失敗しました。もう一度お試しください。", "Не удалось завершить импорт аудио. Повторите попытку.", "Falló la confirmación de la importación de audio. Inténtalo de nuevo." },
+        { Keys::kImportCountTrimmedTitle, "Import Count Trimmed", "导入数量已截断", "インポート数を調整しました", "Количество импорта ограничено", "Cantidad de importación ajustada" },
+        { Keys::kExportInProgress, "An export task is already in progress. Please try again later.", "导出任务正在进行中，请稍后再试。", "エクスポートタスクは既に進行中です。後でもう一度お試しください。", "Задача экспорта уже выполняется. Повторите попытку позже.", "Ya hay una tarea de exportación en curso. Inténtalo de nuevo más tarde." },
+        { Keys::kNoAudioClipSelected, "No audio clip is selected. Select a clip on the track first.", "未选择音频片段。请先在轨道上选择一个片段。", "オーディオクリップが選択されていません。まずトラック上のクリップを選択してください。", "Аудиоклип не выбран. Сначала выберите клип на дорожке.", "No hay ningún clip de audio seleccionado. Primero selecciona un clip en la pista." },
+        { Keys::kSelectedPlacement, "Selected Placement (Track {0}, Clip {1})", "已选片段（轨道 {0}，片段 {1}）", "選択中の配置（トラック {0}、クリップ {1}）", "Выбранное размещение (дорожка {0}, клип {1})", "Ubicación seleccionada (pista {0}, clip {1})" },
+        { Keys::kTrackTarget, "Track {0}", "轨道 {0}", "トラック {0}", "Дорожка {0}", "Pista {0}" },
+        { Keys::kBusMasterMix, "Bus (Master Mix)", "总线（主混音）", "バス（マスターミックス）", "Шина (мастер-микс)", "Bus (mezcla maestra)" },
+        { Keys::kHelpFileNotFound, "Help file not found: {0}", "找不到帮助文件：{0}", "ヘルプファイルが見つかりません：{0}", "Файл справки не найден: {0}", "No se encontró el archivo de ayuda: {0}" },
+        { Keys::kReferenceMenuEntry, "Track {0} - {1} (Mat#{2})", "轨道 {0} - {1}（Mat#{2}）", "トラック {0} - {1}（Mat#{2}）", "Дорожка {0} — {1} (Mat#{2})", "Pista {0} - {1} (Mat#{2})" },
+        { Keys::kAutoRef, "AUTO Ref", "AUTO Ref", "AUTO Ref", "AUTO Ref", "AUTO Ref" },
+        { Keys::kAutoRefAlignmentFailed, "AUTO Ref alignment failed.", "AUTO Ref 对齐失败。", "AUTO Ref のアライメントに失敗しました。", "Не удалось выполнить выравнивание AUTO Ref.", "Falló la alineación de AUTO Ref." },
+        { Keys::kHostManagedActionPrefix, "In VST3 mode this action is managed by your DAW.\n\n", "在 VST3 模式下，此操作由您的 DAW 管理。\n\n", "VST3モードでは、この操作はDAWによって管理されます。\n\n", "В режиме VST3 это действие управляется вашей DAW.\n\n", "En modo VST3, esta acción la gestiona tu DAW.\n\n" },
+        { Keys::kVst3ImportAudio, "Please import audio from your DAW in VST3 mode.", "在 VST3 模式下，请从 DAW 导入音频。", "VST3モードではDAWからオーディオをインポートしてください。", "В режиме VST3 импортируйте аудио из DAW.", "Importa audio desde tu DAW en modo VST3." },
+        { Keys::kVst3ExportAudio, "Please render/export from your DAW in VST3 mode.", "在 VST3 模式下，请从 DAW 渲染/导出。", "VST3モードではDAWからレンダー/エクスポートしてください。", "В режиме VST3 выполняйте рендеринг/экспорт из DAW.", "Renderiza/exporta desde tu DAW en modo VST3." },
+        { Keys::kProjectFileManagementStandalone, "Project file management is handled in the Standalone version.", "工程文件管理由 Standalone 版本处理。", "プロジェクトファイルの管理はスタンドアロン版で行います。", "Управление файлами проектов выполняется в версии Standalone.", "La gestión de archivos de proyecto se realiza en la versión Standalone." },
+        { Keys::kOpenRecentProject, "Open Recent Project", "打开最近工程", "最近のプロジェクトを開く", "Открыть недавний проект", "Abrir proyecto reciente" },
+        { Keys::kHelpDialog, "Help", "帮助", "ヘルプ", "Справка", "Ayuda" },
+        { Keys::kVst3Help, "Open the host DAW plugin help/manual entry for VST3 usage guidance.", "请打开宿主 DAW 的插件帮助/手册条目，查看 VST3 使用指南。", "VST3の使用方法については、ホストDAWのプラグインヘルプ/マニュアルを開いてください。", "Откройте справку/руководство плагина в DAW, чтобы узнать об использовании VST3.", "Abre la ayuda o el manual del plugin en tu DAW para consultar las instrucciones de uso de VST3." },
+        { Keys::kVst3ReadAudioNotReady, "This VST3 instance is not ready for audio capture or ARA reading.", "此 VST3 实例尚未准备好进行音频捕获或 ARA 读取。", "このVST3インスタンスはオーディオキャプチャまたはARA読み込みの準備ができていません。", "Этот экземпляр VST3 не готов к захвату аудио или чтению ARA.", "Esta instancia VST3 no está lista para capturar audio ni leer ARA." },
+        { Keys::kVst3ReadAudioSelectionNotReady, "The selected item is not ready. Please re-select and try again.", "所选项目尚未准备好。请重新选择后再试。", "選択した項目の準備ができていません。もう一度選択してお試しください。", "Выбранный объект не готов. Выберите его снова и повторите попытку.", "El elemento seleccionado no está listo. Vuelve a seleccionarlo e inténtalo de nuevo." },
+        { Keys::kVst3ReadAudioRegionsFailed, "Audio regions could not be processed.", "无法处理音频区域。", "オーディオリージョンを処理できませんでした。", "Не удалось обработать аудиорегионы.", "No se pudieron procesar las regiones de audio." },
+        { Keys::kAutoNeedsActiveAra, "AUTO needs an active ARA audio modification.", "AUTO 需要活动的 ARA 音频修改。", "AUTOにはアクティブなARAオーディオモディフィケーションが必要です。", "Для AUTO требуется активная аудиомодификация ARA.", "AUTO necesita una modificación de audio ARA activa." },
+        { Keys::kOriginalF0, "Original Pitch", "原始音高", "元のピッチ", "Исходная высота тона", "Tono original" },
+        { Keys::kOriginalF0Extracting, "Original Pitch is being extracted. Please retry in a moment.", "正在提取原始音高，请稍后重试。", "元のピッチを抽出中です。しばらくしてからもう一度お試しください。", "Выполняется извлечение исходной высоты тона. Повторите попытку через некоторое время.", "Se está extrayendo el tono original. Inténtalo de nuevo en un momento." },
+        { Keys::kOriginalF0ExtractionFailed, "Original Pitch extraction failed for this clip. Re-import the audio to regenerate the original pitch.", "此片段的原始音高提取失败。请重新导入音频以重新生成原始音高。", "このクリップの元のピッチの抽出に失敗しました。元のピッチを再生成するにはオーディオを再インポートしてください。", "Не удалось извлечь исходную высоту тона для этого клипа. Импортируйте аудио заново, чтобы восстановить исходную высоту тона.", "Falló la extracción del tono original para este clip. Vuelve a importar el audio para regenerar el tono original." },
+        { Keys::kOriginalF0NotReadyForClip, "Original Pitch is not ready for this clip.", "此片段的原始音高尚未就绪。", "このクリップの元のピッチはまだ準備できていません。", "Исходная высота тона для этого клипа не готова.", "El tono original no está listo para este clip." },
+        { Keys::kAutoQueued, "AUTO has been queued.", "AUTO 已加入队列。", "AUTOをキューに追加しました。", "AUTO добавлен в очередь.", "AUTO se ha añadido a la cola." },
+        { Keys::kAutoNeedsPitchCurve, "AUTO needs an active pitch curve. Run audio analysis first.", "AUTO 需要活动的音高曲线。请先运行音频分析。", "AUTOにはアクティブなピッチカーブが必要です。先にオーディオ解析を実行してください。", "Для AUTO нужна активная кривая высоты тона. Сначала выполните анализ аудио.", "AUTO necesita una curva de tono activa. Primero ejecuta el análisis de audio." },
+        { Keys::kAutoNoContentCommands, "AUTO cannot run because content edit commands are not attached.", "AUTO 无法运行，因为尚未连接内容编辑命令。", "コンテンツ編集コマンドが接続されていないため、AUTOを実行できません。", "AUTO не может работать: команды редактирования содержимого не подключены.", "AUTO no puede ejecutarse porque los comandos de edición de contenido no están conectados." },
+        { Keys::kAutoNeedsEditableClip, "AUTO needs an active editable clip.", "AUTO 需要活动的可编辑片段。", "AUTOにはアクティブな編集可能クリップが必要です。", "Для AUTO нужен активный редактируемый клип.", "AUTO necesita un clip editable activo." },
+        { Keys::kAutoCannotReadContentSnapshot, "AUTO cannot read the editable content snapshot.", "AUTO 无法读取可编辑内容快照。", "AUTOは編集可能なコンテンツスナップショットを読み込めません。", "AUTO не может прочитать снимок редактируемого содержимого.", "AUTO no puede leer la instantánea del contenido editable." },
+        { Keys::kAutoOriginalF0NotReady, "AUTO needs the original pitch to be ready for this clip.", "AUTO 需要此片段的原始音高就绪。", "AUTOにはこのクリップの元のピッチの準備完了が必要です。", "Для AUTO необходимо, чтобы исходная высота тона этого клипа была готова.", "AUTO necesita que el tono original esté listo para este clip." },
+        { Keys::kAutoCannotReadCurveSnapshot, "AUTO cannot read the current pitch-curve snapshot.", "AUTO 无法读取当前音高曲线快照。", "AUTOは現在のピッチカーブスナップショットを読み込めません。", "AUTO не может прочитать текущий снимок кривой высоты тона.", "AUTO no puede leer la instantánea actual de la curva de tono." },
+        { Keys::kAutoNeedsOriginalF0, "AUTO needs non-empty original pitch data.", "AUTO 需要非空的原始音高数据。", "AUTOには空でない元のピッチデータが必要です。", "Для AUTO нужны непустые данные исходной высоты тона.", "AUTO necesita datos de tono original no vacíos." },
+        { Keys::kAutoCannotMapF0Timeline, "AUTO cannot map this clip to an F0 timeline.", "AUTO 无法将此片段映射到 F0 时间线。", "AUTOはこのクリップをF0タイムラインにマッピングできません。", "AUTO не может сопоставить этот клип с временной шкалой F0.", "AUTO no puede asignar este clip a una línea de tiempo F0." },
+        { Keys::kAutoNeedsSelection, "AUTO needs a selected note, F0 range, or selection area.", "AUTO 需要选中的音符、F0 范围或选区。", "AUTOには選択したノート、F0範囲、または選択領域が必要です。", "Для AUTO нужна выбранная нота, диапазон F0 или область выделения.", "AUTO necesita una nota, un rango F0 o un área seleccionada." },
+        { Keys::kAutoTargetRangeEmpty, "AUTO target range is empty.", "AUTO 目标范围为空。", "AUTOの対象範囲が空です。", "Целевой диапазон AUTO пуст.", "El rango objetivo de AUTO está vacío." },
+        { Keys::kAutoCouldNotApply, "AUTO could not be applied.", "无法应用 AUTO。", "AUTOを適用できませんでした。", "Не удалось применить AUTO.", "No se pudo aplicar AUTO." },
         
         { Keys::kClose, "Close", "关闭", "閉じる", "Закрыть", "Cerrar" },
         { Keys::kHelp, "Help...", "帮助...", "ヘルプ...", "Справка...", "Ayuda..." },
@@ -645,7 +804,7 @@ inline juce::String get(Language lang, const char* key)
         { "Piano roll", "Piano roll", "钢琴卷帘", "ピアノロール", "Пианоролл", "Piano roll" },
         { "Hand Draw", "Hand Draw", "手绘", "手描き", "Ручное рисование", "Dibujo a mano" },
         { "Vibrato Depth", "Vibrato Depth", "颤音深度", "ビブラートの深さ", "Глубина вибрато", "Profundidad del vibrato" },
-        { "Vibrato Rate", "Vibrato Rate", "颤音速率", "速度 вибрато", "Скорость вибрато", "Velocidad del vibrato" },
+        { "Vibrato Rate", "Vibrato Rate", "颤音速率", "ビブラートの速度", "Скорость вибрато", "Velocidad del vibrato" },
         { "AUTO / SNAP", "AUTO / SNAP", "自动 / 吸附", "AUTO / SNAP", "АВТО / ПРИВЯЗКА", "AUTO / AJUSTE" },
         { "Pitch Grid", "Pitch Grid", "音高网格", "ピッチグリッド", "Сетка высоты тона", "Cuadrícula de tono" },
         { "Overview", "Overview", "概览", "概要", "Обзор", "Vista general" },
@@ -672,7 +831,7 @@ inline juce::String get(Language lang, const char* key)
         { "Scissors splits waveform blobs into editable parts.", "Scissors splits waveform blobs into editable parts.", "“剪刀”将波形块拆分为可编辑部分。", "「ハサミ」は波形ブロブを編集可能な部分に分割します。", "«Ножницы» разделяют волновые блоки на редактируемые части.", "Tijeras divide los bloques de forma de onda en partes editables." },
         { "Retune Speed controls how quickly note correction follows the target.", "Retune Speed controls how quickly note correction follows the target.", "“校正速度”控制音符校正跟随目标的速度。", "「チューン速度」はノート補正がターゲットに追従する速さを制御します。", "«Скорость коррекции» управляет скоростью следования коррекции нот за целью.", "La velocidad de afinación controla la rapidez con que la corrección de notas sigue al objetivo." },
         { "Vibrato Depth controls the amount of vibrato.", "Vibrato Depth controls the amount of vibrato.", "“颤音深度”控制颤音量。", "「ビブラートの深さ」はビブラートの量を制御します。", "«Глубина вибрато» управляет величиной вибрато.", "La profundidad del vibrato controla la cantidad de vibrato." },
-        { "Vibrato Rate controls how quickly vibrato cycles.", "Vibrato Rate controls how quickly vibrato cycles.", "“颤音速率”控制颤音循环的速度。", "「速度 вибрато」はビブラートの周期の速さを制御します。", "«Скорость вибрато» управляет скоростью циклов вибрато.", "La velocidad del vibrato controla la rapidez de sus ciclos." },
+        { "Vibrato Rate controls how quickly vibrato cycles.", "Vibrato Rate controls how quickly vibrato cycles.", "“颤音速率”控制颤音循环的速度。", "「ビブラートの速度」はビブラートの周期の速さを制御します。", "«Скорость вибрато» управляет скоростью циклов вибрато.", "La velocidad del vibrato controla la rapidez de sus ciclos." },
         { "AUTO applies the current note correction settings.", "AUTO applies the current note correction settings.", "“自动”应用当前音符校正设置。", "「AUTO」は現在のノート補正設定を適用します。", "«АВТО» применяет текущие настройки коррекции нот.", "AUTO aplica los ajustes actuales de corrección de notas." },
         { "SNAP constrains blob edits to the selected grid.", "SNAP constrains blob edits to the selected grid.", "“吸附”将波形块编辑限制到所选网格。", "「SNAP」はブロブの編集を選択したグリッドに制限します。", "«ПРИВЯЗКА» ограничивает редактирование блоков выбранной сеткой.", "AJUSTE limita la edición de bloques a la cuadrícula seleccionada." },
         { "Pitch Grid chooses how OpenDyne pitch edits snap.", "Pitch Grid chooses how OpenDyne pitch edits snap.", "“音高网格”选择 OpenDyne 音高编辑的吸附方式。", "「ピッチグリッド」はOpenDyneのピッチ編集のスナップ方法を選択します。", "«Сетка высоты тона» задаёт привязку при редактировании высоты тона в OpenDyne.", "Cuadrícula de tono elige cómo se ajustan las ediciones de tono de OpenDyne." },
@@ -681,6 +840,139 @@ inline juce::String get(Language lang, const char* key)
         { "Play, pause, stop and loop here.", "Play, pause, stop and loop here.", "在此播放、暂停、停止和循环。", "ここで再生、一時停止、停止、ループを操作します。", "Здесь можно воспроизводить, ставить на паузу, останавливать и зацикливать.", "Reproduce, pausa, detén y repite aquí." },
         { "Audition with the plugin host transport.", "Audition with the plugin host transport.", "使用插件宿主走带试听。", "プラグインホストのトランスポートで試聴します。", "Прослушивайте с помощью транспорта хоста плагина.", "Escucha con el transporte del host del plugin." },
         { "Options can change the editing mode and enable EQ. Help opens the user guide.", "Options can change the editing mode and enable EQ. Help opens the user guide.", "“选项”可更改编辑模式并启用 EQ。“帮助”可打开用户指南。", "「オプション」では編集モードを変更してEQを有効にできます。「ヘルプ」からユーザーガイドを開けます。", "«Настройки» меняют режим редактирования и включают EQ. «Справка» открывает руководство пользователя.", "Opciones puede cambiar el modo de edición y activar EQ. Ayuda abre la guía del usuario." },
+        { "Pitch Detection Model", "Pitch Detection Model", "音高检测模型", "ピッチ検出モデル", "Модель определения высоты тона", "Modelo de detección de tono" },
+        { "Enable Experimental Features (Reference Track, Time Stretch Tool)", "Enable Experimental Features (Reference Track, Time Stretch Tool)", "启用实验性功能（参考轨、伸缩工具）", "実験的機能を有効にする（リファレンストラック、タイムストレッチツール）", "Включить экспериментальные функции (референсная дорожка, инструмент растяжения времени)", "Activar funciones experimentales (pista de referencia, herramienta de estiramiento temporal)" },
+        { "Hint: Reference Track and Time Stretch Tool are still under development and may contain bugs.", "Hint: Reference Track and Time Stretch Tool are still under development and may contain bugs.", "提示：参考轨与伸缩工具目前仍不完善，属于实验性功能，可能存在 Bug。", "ヒント：リファレンストラックとタイムストレッチツールはまだ開発中の実験的機能であり、不具合がある場合があります。", "Примечание: референсная дорожка и инструмент растяжения времени всё ещё находятся в разработке и могут содержать ошибки.", "Aviso: La pista de referencia y la herramienta de estiramiento temporal siguen en desarrollo y pueden contener errores." },
+        { "AUTO Ref Mode", "AUTO Ref Mode", "AUTO Ref 模式", "AUTO Refモード", "Режим AUTO Ref", "Modo AUTO Ref" },
+        { "Standard AUTO", "Standard AUTO", "普通 AUTO", "通常のAUTO", "Обычный AUTO", "AUTO estándar" },
+        { "Semitones", "Semitones", "半音", "半音", "Полутоны", "Semitonos" },
+        { "Cents", "Cents", "音分", "セント", "Центы", "Cents" },
+        { "Reset", "Reset", "重置", "リセット", "Сбросить", "Restablecer" },
+        { "Confirm", "Confirm", "确认", "確定", "Подтвердить", "Confirmar" },
+        { "Opening file...", "Opening file...", "正在打开文件...", "ファイルを開いています...", "Открытие файла...", "Abriendo archivo..." },
+        { "Could not open this audio file.\n", "Could not open this audio file.\n", "无法打开该音频文件。\n", "このオーディオファイルを開けません。\n", "Не удалось открыть аудиофайл.\n", "No se pudo abrir este archivo de audio.\n" },
+        { "File: ", "File: ", "文件：", "ファイル：", "Файл: ", "Archivo: " },
+        { "Extension: ", "Extension: ", "扩展名：", "拡張子：", "Расширение: ", "Extensión: " },
+        { "Exists: ", "Exists: ", "存在：", "存在：", "Существует: ", "Existe: " },
+        { "File size: ", "File size: ", "文件大小：", "ファイルサイズ：", "Размер файла: ", "Tamaño del archivo: " },
+        { "bytes", "bytes", "字节", "バイト", "байт", "bytes" },
+        { "Stream accessible: ", "Stream accessible: ", "可开流：", "ストリームを開ける：", "Поток доступен: ", "Flujo accesible: " },
+        { "Supported formats: ", "Supported formats: ", "当前支持：", "対応形式：", "Поддерживаемые форматы: ", "Formatos compatibles: " },
+        { "No audio decoders are registered in this environment.", "No audio decoders are registered in this environment.", "当前环境未注册可用音频解码器。", "この環境には利用可能なオーディオデコーダーが登録されていません。", "В этой среде не зарегистрированы аудиодекодеры.", "No hay decodificadores de audio registrados en este entorno." },
+        { "Registered decoders: ", "Registered decoders: ", "已注册解码器：", "登録済みデコーダー：", "Зарегистрированные декодеры: ", "Decodificadores registrados: " },
+        { "Container diagnostics: ", "Container diagnostics: ", "容器诊断：", "コンテナ診断：", "Диагностика контейнера: ", "Diagnóstico del contenedor: " },
+        { "Reading audio data...", "Reading audio data...", "正在读取音频数据...", "オーディオデータを読み込んでいます...", "Чтение аудиоданных...", "Leyendo datos de audio..." },
+        { "Loading complete", "Loading complete", "加载完成", "読み込み完了", "Загрузка завершена", "Carga completada" },
+        { "Failed to read audio data. The file may be corrupted or use an unsupported encoding.", "Failed to read audio data. The file may be corrupted or use an unsupported encoding.", "读取音频数据失败，文件可能损坏或编码不受支持。", "オーディオデータを読み込めませんでした。ファイルが破損しているか、未対応のエンコード形式の可能性があります。", "Не удалось прочитать аудиоданные. Файл может быть повреждён или иметь неподдерживаемую кодировку.", "No se pudieron leer los datos de audio. El archivo puede estar dañado o usar una codificación no compatible." },
+        { "Create output file failed", "Could not create the output file", "无法创建输出文件", "出力ファイルを作成できませんでした", "Не удалось создать выходной файл", "No se pudo crear el archivo de salida" },
+        { "Unable to create WAV writer", "Unable to create WAV writer", "无法创建 WAV 写入器", "WAVライターを作成できませんでした", "Не удалось создать средство записи WAV", "No se pudo crear el escritor de archivos WAV" },
+        { "Placement audio is unavailable", "Placement audio is unavailable", "片段音频不可用", "クリップのオーディオを利用できません", "Аудио клипа недоступно", "El audio del clip no está disponible" },
+        { "Invalid track ID: ", "Invalid track ID: ", "无效的轨道ID: ", "無効なトラックID：", "Недопустимый ID дорожки: ", "ID de pista no válido: " },
+        { "Invalid clip index ", "Invalid clip index ", "无效的片段索引 ", "無効なクリップインデックス：", "Недопустимый индекс клипа: ", "Índice de clip no válido: " },
+        { "Clip audio length is zero", "Clip audio length is zero", "片段音频长度为零", "クリップのオーディオ長がゼロです", "Длительность аудио клипа равна нулю", "La duración de audio del clip es cero" },
+        { " has no audio clips", " has no audio clips", " 没有音频片段", "にオーディオクリップがありません", " не содержит аудиоклипов", " no tiene clips de audio" },
+        { "Total audio length is zero or invalid", "Total audio length is zero or invalid", "音频总长度为零或无效", "オーディオの合計長がゼロまたは無効です", "Общая длительность аудио равна нулю или недопустима", "La duración total del audio es cero o no válida" },
+        { Keys::kOriginalF0NotReady, "Original Pitch is not ready.", "原始音高尚未就绪。", "元のピッチの準備ができていません。", "Исходная высота тона не готова.", "El tono original no está listo." },
+        { "Processing audio", "Processing audio", "正在处理音频", "オーディオを処理しています", "Обработка аудио", "Procesando audio" },
+        { "Analyzing reference Clip", "Analyzing reference Clip", "正在分析参考 Clip", "リファレンスClipを解析しています", "Анализ референсного Clip", "Analizando el Clip de referencia" },
+        { "Rendering (", "Rendering (", "渲染中 (", "レンダリング中 (", "Рендеринг (", "Renderizando (" },
+        { "Failed to start OriginalF0 analysis.", "Failed to start Original Pitch analysis.", "未能启动原始音高分析。", "元のピッチの解析を開始できませんでした。", "Не удалось запустить анализ исходной высоты тона.", "No se pudo iniciar el análisis del tono original." },
+        { Keys::kRenderFailure, "Render Failure", "渲染失败", "レンダリング失敗", "Ошибка рендеринга", "Error de renderizado" },
+        { Keys::kRenderFailed, "Render failed", "渲染失败", "レンダリングに失敗しました", "Ошибка рендеринга", "Falló el renderizado" },
+        { Keys::kRenderFailureDetail, "Render failed; dry audio may be used. Reason: {0}", "渲染失败，可能回退干声。原因：{0}", "レンダリングに失敗しました。ドライ音声に切り替わる場合があります。原因：{0}", "Ошибка рендеринга; может использоваться необработанный звук. Причина: {0}", "Falló el renderizado; puede usarse el audio sin procesar. Motivo: {0}" },
+        { "Reference Clip AUTO aligns pitch and timing to the reference.", "Reference Clip AUTO aligns pitch and timing to the reference.", "按参考 Clip 自动修音并对齐节奏", "リファレンスClipに合わせてピッチとタイミングを自動調整", "AUTO по референсному Clip корректирует высоту тона и выравнивает ритм.", "AUTO con Clip de referencia ajusta el tono y alinea el ritmo." },
+        { "A reference is bound, but GAME backend/models are unavailable; standard AUTO will run.", "A reference is bound, but GAME backend/models are unavailable; standard AUTO will run.", "已绑定参考源，但当前缺少 GAME backend / models，本次执行普通 AUTO。", "リファレンスは設定されていますが、GAME backend/modelsがないため通常のAUTOを実行します。", "Референс привязан, но GAME backend/models недоступны; будет выполнен обычный AUTO.", "Hay una referencia vinculada, pero no están disponibles GAME backend/models; se ejecutará AUTO estándar." },
+        { "AUTO corrects pitch by snapping to nearby scale notes.", "AUTO corrects pitch by snapping to nearby scale notes.", "自动修音（吸附到临近音阶）", "AUTOで近くの音階にスナップしてピッチを補正", "AUTO корректирует высоту тона, привязывая её к ближайшим ступеням гаммы.", "AUTO corrige el tono ajustándolo a las notas cercanas de la escala." },
+        { Keys::kPitchShift, "Pitch Shift", "整体移调", "全体のピッチを移調", "Транспонирование", "Transposición" },
+        { Keys::kPreferences, "Preferences", "偏好设置", "環境設定", "Настройки", "Preferencias" },
+        { Keys::kHostControlledTransport, "Host-controlled transport", "由宿主控制走带", "ホスト制御のトランスポート", "Транспорт под управлением хоста", "Transporte controlado por el host" },
+        { Keys::kPitchEditing, "Pitch editing", "音高编辑", "ピッチ編集", "Редактирование высоты тона", "Edición de tono" },
+        { Keys::kSplitNotes, "Split notes", "切割音符", "ノートを分割", "Разделить ноты", "Dividir notas" },
+        { "EQ frequency equalizer", "EQ frequency equalizer", "EQ 频率均衡", "EQ周波数イコライザー", "Частотный эквалайзер EQ", "Ecualizador de frecuencia EQ" },
+        { "Collapse to preview", "Collapse to preview", "收起为预览", "プレビューに折りたたむ", "Свернуть в предпросмотр", "Contraer a vista previa" },
+        { "Expand EQ editor", "Expand EQ editor", "展开EQ编辑器", "EQエディターを展開", "Развернуть редактор EQ", "Expandir editor EQ" },
+        { "Bypass EQ", "Bypass EQ", "旁通EQ", "EQをバイパス", "Обойти EQ", "Desactivar EQ" },
+        { "Enable EQ", "Enable EQ", "启用EQ", "EQを有効化", "Включить EQ", "Activar EQ" },
+        { "Remove EQ processing", "Remove EQ processing", "删除EQ处理", "EQ処理を削除", "Удалить обработку EQ", "Eliminar procesamiento EQ" },
+        { "Hide EQ preview", "Hide EQ preview", "隐藏EQ预览", "EQプレビューを非表示", "Скрыть предпросмотр EQ", "Ocultar vista previa de EQ" },
+        { "Minimize to preview", "Minimize to preview", "最小化为预览", "プレビューに最小化", "Свернуть в предпросмотр", "Minimizar a vista previa" },
+        { "Enable this filter", "Enable this filter", "启用此滤波器", "このフィルターを有効化", "Включить этот фильтр", "Activar este filtro" },
+        { "Bypass this filter", "Bypass this filter", "旁通此滤波器", "このフィルターをバイパス", "Обойти этот фильтр", "Desactivar este filtro" },
+        { "Delete this filter", "Delete this filter", "删除此滤波器", "このフィルターを削除", "Удалить этот фильтр", "Eliminar este filtro" },
+        { "Remove EQ?", "Remove EQ?", "确认移除 EQ?", "EQを削除しますか？", "Удалить EQ?", "¿Eliminar EQ?" },
+        { "Don't show again", "Don't show again", "不再提示", "今後表示しない", "Больше не показывать", "No volver a mostrar" },
+        { "Edit time grid", "Edit time grid", "编辑时间网格", "タイムグリッドを編集", "Изменить временную сетку", "Editar cuadrícula de tiempo" },
+        { "Edit EQ", "Edit EQ", "编辑 EQ", "EQを編集", "Изменить EQ", "Editar EQ" },
+        { "Remove EQ", "Remove EQ", "移除 EQ", "EQを削除", "Удалить EQ", "Eliminar EQ" },
+        { "Edit note", "Edit note", "编辑音符", "ノートを編集", "Изменить ноту", "Editar nota" },
+        { "Delete note", "Delete note", "删除音符", "ノートを削除", "Удалить ноту", "Eliminar nota" },
+        { Keys::kEraser, "Eraser", "橡皮擦", "消しゴム", "Ластик", "Borrador" },
+        { "Resize note", "Resize note", "调整音符长度", "ノートの長さを調整", "Изменить длину ноты", "Cambiar duración de nota" },
+        { "Move note", "Move note", "移动音符", "ノートを移動", "Переместить ноту", "Mover nota" },
+        { "Pitch snap", "Pitch snap", "音高吸附", "ピッチをスナップ", "Привязка высоты тона", "Ajuste magnético del tono" },
+        { "Modulation depth", "Modulation depth", "调制深度", "モジュレーションの深さ", "Глубина модуляции", "Profundidad de modulación" },
+        { "Drift correction", "Drift correction", "漂移修正", "ドリフト補正", "Коррекция дрейфа", "Corrección de deriva" },
+        { "Split note", "Split note", "音符分割", "ノートを分割", "Разделить ноту", "Dividir nota" },
+        { "Merge notes", "Merge notes", "音符合并", "ノートを結合", "Объединить ноты", "Unir notas" },
+        { "Hand-drawn curve", "Hand-drawn curve", "手绘曲线", "手描きカーブ", "Кривая, нарисованная вручную", "Curva dibujada a mano" },
+        { "Draw note", "Draw note", "绘制音符", "ノートを描画", "Нарисовать ноту", "Dibujar nota" },
+        { "Anchor correction", "Anchor correction", "锚点修正", "アンカー補正", "Коррекция якоря", "Corrección de ancla" },
+        { "AUTO correction", "AUTO correction", "自动调音", "AUTO補正", "Автокоррекция", "Corrección automática" },
+        { "Drag time handle", "Drag time handle", "拖动时间手柄", "タイムハンドルをドラッグ", "Перетащить маркер времени", "Arrastrar el controlador de tiempo" },
+        { "Insert time handle", "Insert time handle", "插入时间手柄", "タイムハンドルを挿入", "Вставить маркер времени", "Insertar el controlador de tiempo" },
+        { "Delete time handle", "Delete time handle", "删除时间手柄", "タイムハンドルを削除", "Удалить маркер времени", "Eliminar el controlador de tiempo" },
+        { "Delete Clip", "Delete Clip", "删除片段", "クリップを削除", "Удалить клип", "Eliminar clip" },
+        { "Move Clip", "Move Clip", "移动片段", "クリップを移動", "Переместить клип", "Mover clip" },
+        { "Adjust Gain", "Adjust Gain", "调整增益", "ゲインを調整", "Изменить усиление", "Ajustar ganancia" },
+        { "Trim Clip", "Trim Clip", "裁剪片段", "クリップをトリミング", "Обрезать клип", "Recortar clip" },
+        { "Adjust Fade", "Adjust Fade", "调整淡变", "フェードを調整", "Изменить затухание", "Ajustar fundido" },
+        { "Change Reference Binding", "Change Reference Binding", "调整参考绑定", "リファレンスの割り当てを変更", "Изменить привязку референса", "Cambiar vínculo de referencia" },
+        { "Project Operation", "Project Operation", "工程操作", "プロジェクト操作", "Операция с проектом", "Operación del proyecto" },
+        { "Another project operation is already in progress.", "Another project operation is already in progress.", "另一个工程操作正在进行中。", "別のプロジェクト操作が進行中です。", "Другая операция с проектом уже выполняется.", "Ya hay otra operación del proyecto en curso." },
+        { "Save Project Failed", "Save Project Failed", "保存工程失败", "プロジェクトを保存できませんでした", "Не удалось сохранить проект", "Error al guardar el proyecto" },
+        { "Open Project Failed", "Open Project Failed", "打开工程失败", "プロジェクトを開けませんでした", "Не удалось открыть проект", "Error al abrir el proyecto" },
+        { Keys::kSelectAudioFilesToImport, "Select audio files to import", "选择要导入的音频文件", "インポートするオーディオファイルを選択", "Выберите аудиофайлы для импорта", "Selecciona archivos de audio para importar" },
+        { Keys::kChooseImportMode, "Choose Import Mode", "选择导入模式", "インポートモードを選択", "Выберите режим импорта", "Elegir modo de importación" },
+        { Keys::kSelectedAudioFilesImportMode, "You selected {0} audio files. Choose an import mode.", "你选择了 {0} 个音频文件。请选择导入模式。", "{0}個のオーディオファイルを選択しました。インポートモードを選択してください。", "Вы выбрали аудиофайлов: {0}. Выберите режим импорта.", "Has seleccionado {0} archivos de audio. Elige un modo de importación." },
+        { Keys::kImportSequentiallyToCurrentTrack, "Import Sequentially To Current Track", "按顺序导入到当前轨道", "現在のトラックに順番にインポート", "Импортировать последовательно в текущую дорожку", "Importar secuencialmente en la pista actual" },
+        { Keys::kImportToSeparateTracks, "Import To Separate Tracks", "导入到独立轨道", "別々のトラックにインポート", "Импортировать в отдельные дорожки", "Importar en pistas separadas" },
+        { Keys::kMaximumTrackCountReached, "Maximum track count reached ({0}). Cannot create more tracks.", "已达到最大轨道数（{0}），无法创建更多轨道。", "最大トラック数（{0}）に達したため、これ以上トラックを作成できません。", "Достигнуто максимальное число дорожек ({0}). Нельзя создать больше дорожек.", "Se alcanzó el máximo de pistas ({0}). No se pueden crear más pistas." },
+        { Keys::kExportAudioFile, "Export Audio File", "导出音频文件", "オーディオファイルをエクスポート", "Экспорт аудиофайла", "Exportar archivo de audio" },
+        { Keys::kOverwriteExistingFile, "Overwrite Existing File?", "覆盖现有文件？", "既存のファイルを上書きしますか？", "Перезаписать существующий файл?", "¿Sobrescribir el archivo existente?" },
+        { Keys::kOverwriteExistingFileMessage, "The target file already exists. Overwrite it?", "目标文件已存在。要覆盖它吗？", "対象ファイルは既に存在します。上書きしますか？", "Целевой файл уже существует. Перезаписать его?", "El archivo de destino ya existe. ¿Sobrescribirlo?" },
+        { Keys::kOverwriteExistingProject, "Overwrite Existing Project?", "覆盖现有工程？", "既存のプロジェクトを上書きしますか？", "Перезаписать существующий проект?", "¿Sobrescribir el proyecto existente?" },
+        { Keys::kOverwriteExistingProjectMessage, "The target project file already exists. Overwrite it?", "目标工程文件已存在。要覆盖它吗？", "対象プロジェクトファイルは既に存在します。上書きしますか？", "Целевой файл проекта уже существует. Перезаписать его?", "El archivo de proyecto de destino ya existe. ¿Sobrescribirlo?" },
+        { Keys::kProjectRootNodeInvalid, "Root node is not {0}", "根节点不是 {0}", "ルートノードが{0}ではありません", "Корневой узел не является {0}", "El nodo raíz no es {0}" },
+        { Keys::kUnsupportedProjectFormat, "Unsupported project format version: {0} (supported {1}-{2})", "不支持的工程格式版本：{0}（支持 {1}-{2}）", "サポートされていないプロジェクト形式のバージョンです：{0}（サポート範囲 {1}-{2}）", "Неподдерживаемая версия формата проекта: {0} (поддерживается {1}-{2})", "Versión de formato de proyecto no compatible: {0} (compatible con {1}-{2})" },
+        { Keys::kProjectInvalidDynamicEq, "Project contains invalid dynamic EqSettings", "工程包含无效的动态 EqSettings", "プロジェクトに無効な動的EqSettingsが含まれています", "Проект содержит недопустимые динамические EqSettings", "El proyecto contiene EqSettings dinámicos no válidos" },
+        { Keys::kProjectMissingSettings, "Project is missing required ProjectSettings node", "工程缺少必需的 ProjectSettings 节点", "プロジェクトに必須のProjectSettingsノードがありません", "В проекте отсутствует обязательный узел ProjectSettings", "Falta el nodo ProjectSettings obligatorio del proyecto" },
+        { Keys::kProjectSettingsMissingTimeSignature, "ProjectSettings is missing required timeSignatureNumerator or timeSignatureDenominator", "ProjectSettings 缺少必需的 timeSignatureNumerator 或 timeSignatureDenominator", "ProjectSettingsに必須のtimeSignatureNumeratorまたはtimeSignatureDenominatorがありません", "В ProjectSettings отсутствует обязательный timeSignatureNumerator или timeSignatureDenominator", "Falta timeSignatureNumerator o timeSignatureDenominator obligatorio en ProjectSettings" },
+        { Keys::kProjectFileNotFound, "Project file not found: {0}", "找不到工程文件：{0}", "プロジェクトファイルが見つかりません：{0}", "Файл проекта не найден: {0}", "No se encontró el archivo de proyecto: {0}" },
+        { Keys::kProjectParseFailed, "Failed to parse project file: {0} — {1}", "解析工程文件失败：{0} — {1}", "プロジェクトファイルの解析に失敗しました：{0} — {1}", "Не удалось разобрать файл проекта: {0} — {1}", "No se pudo analizar el archivo de proyecto: {0} — {1}" },
+        { Keys::kProjectInvalidXml, "Invalid XML structure in: {0}", "文件中的 XML 结构无效：{0}", "次のファイルのXML構造が無効です：{0}", "Недопустимая структура XML в файле: {0}", "Estructura XML no válida en: {0}" },
+        { Keys::kProjectCoreStoresUnavailable, "Cannot commit project: core stores unavailable", "无法提交工程：核心存储不可用", "プロジェクトを確定できません：コアストアを利用できません", "Нельзя применить проект: основные хранилища недоступны", "No se puede confirmar el proyecto: los almacenes principales no están disponibles" },
+        { Keys::kProjectWriteFailed, "Failed to write project file: {0}", "写入工程文件失败：{0}", "プロジェクトファイルの書き込みに失敗しました：{0}", "Не удалось записать файл проекта: {0}", "No se pudo escribir el archivo de proyecto: {0}" },
+        { Keys::kProjectNoMediaDirectory, "Cannot copy media: no media directory", "无法复制媒体：没有媒体目录", "メディアをコピーできません：メディアディレクトリがありません", "Нельзя скопировать медиа: каталог медиа отсутствует", "No se puede copiar el contenido multimedia: no hay directorio multimedia" },
+        { Keys::kProjectMediaDirectoryCreateFailed, "Failed to create media directory: {0}", "创建媒体目录失败：{0}", "メディアディレクトリの作成に失敗しました：{0}", "Не удалось создать каталог медиа: {0}", "No se pudo crear el directorio multimedia: {0}" },
+        { Keys::kProjectSourceFileNotFoundForCopy, "Source file not found for copy: {0}", "找不到要复制的源文件：{0}", "コピーするソースファイルが見つかりません：{0}", "Исходный файл для копирования не найден: {0}", "No se encontró el archivo de origen para copiar: {0}" },
+        { Keys::kProjectMediaCopyFailed, "Failed to copy media file: {0} -> {1}", "复制媒体文件失败：{0} -> {1}", "メディアファイルのコピーに失敗しました：{0} -> {1}", "Не удалось скопировать медиафайл: {0} -> {1}", "No se pudo copiar el archivo multimedia: {0} -> {1}" },
+        { Keys::kImportFailed, "Import Failed", "导入失败", "インポートに失敗しました", "Ошибка импорта", "Error de importación" },
+        { "Export Complete", "Export Complete", "导出完成", "エクスポート完了", "Экспорт завершён", "Exportación completada" },
+        { " has been exported to: ", " has been exported to: ", " 已导出到: ", " のエクスポート先：", " экспортирован в: ", " se ha exportado a: " },
+        { "Could not export audio to ", "Could not export audio to ", "无法导出音频到 ", "オーディオを次の場所にエクスポートできませんでした：", "Не удалось экспортировать аудио в ", "No se pudo exportar el audio a " },
+        { "\nReason: ", "\nReason: ", "\n原因: ", "\n原因：", "\nПричина: ", "\nMotivo: " },
+        { Keys::kExportFailed, "Export Failed", "导出失败", "エクスポートに失敗しました", "Ошибка экспорта", "Error de exportación" },
+        { "Overwrite", "Overwrite", "覆盖", "上書き", "Перезаписать", "Sobrescribir" },
+        { "Current project has unsaved changes", "Current project has unsaved changes", "当前工程尚未保存", "現在のプロジェクトに未保存の変更があります", "В текущем проекте есть несохранённые изменения", "El proyecto actual tiene cambios sin guardar" },
+        { "Save changes to the current project before opening another?", "Save changes to the current project before opening another?", "打开其他工程前，是否保存当前工程的更改？", "別のプロジェクトを開く前に、現在の変更を保存しますか？", "Сохранить изменения текущего проекта перед открытием другого?", "¿Guardar los cambios del proyecto actual antes de abrir otro?" },
+        { "Save", "Save", "保存", "保存", "Сохранить", "Guardar" },
+        { "Do Not Save", "Do Not Save", "不保存", "保存しない", "Не сохранять", "No guardar" },
+        { "Don't use reference Clip", "Don't use reference Clip", "不使用参考Clip", "リファレンスClipを使用しない", "Не использовать референсный Clip", "No usar el Clip de referencia" },
+        { "Reference Clip", "Reference Clip", "参考 Clip", "リファレンスClip", "Референсный Clip", "Clip de referencia" },
+        { "Unable to clear the current reference Clip binding.", "Unable to clear the current reference Clip binding.", "无法清除当前参考 Clip 绑定。", "現在のリファレンスClipの割り当てを解除できません。", "Не удалось снять текущую привязку референсного Clip.", "No se pudo quitar el vínculo actual del Clip de referencia." },
+        { "That Clip no longer meets the reference binding requirements.", "That Clip no longer meets the reference binding requirements.", "该 Clip 已不满足参考绑定条件。", "そのClipはリファレンスとして割り当てる条件を満たさなくなりました。", "Этот Clip больше не соответствует требованиям для привязки в качестве референса.", "Ese Clip ya no cumple los requisitos para vincularlo como referencia." },
+        { "Select reference Clip", "Select reference Clip", "选择参考Clip", "リファレンスClipを選択", "Выбрать референсный Clip", "Seleccionar Clip de referencia" },
+        { "(No available reference Clips)", "(No available reference Clips)", "（无可用的参考Clip）", "（利用可能なリファレンスClipはありません）", "(Нет доступных референсных Clip)", "(No hay Clips de referencia disponibles)" },
     };
     
     for (const auto& t : translations)
@@ -715,6 +1007,14 @@ inline juce::String format(const juce::String& pattern, const juce::String& arg0
 inline juce::String format(const juce::String& pattern, const juce::String& arg0, const juce::String& arg1)
 {
     return pattern.replace("{0}", arg0).replace("{1}", arg1);
+}
+
+inline juce::String format(const juce::String& pattern,
+                           const juce::String& arg0,
+                           const juce::String& arg1,
+                           const juce::String& arg2)
+{
+    return pattern.replace("{0}", arg0).replace("{1}", arg1).replace("{2}", arg2);
 }
 
 }

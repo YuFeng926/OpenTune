@@ -3,6 +3,7 @@
 #include <juce_core/juce_core.h>
 #include <juce_data_structures/juce_data_structures.h>
 #include <functional>
+#include "LocalizationManager.h"
 
 namespace OpenTune {
 
@@ -114,14 +115,17 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
     if (!tree.hasType(kRootNodeName)) {
         return Result<ProjectSnapshot>::failure(
             Error::fromCode(ErrorCode::InvalidParameter,
-                ("Root node is not " + juce::String(kRootNodeName)).toStdString()));
+                Loc::format(Loc::get(language_, Loc::Keys::kProjectRootNodeInvalid),
+                            kRootNodeName).toStdString()));
     }
 
     const auto version = static_cast<int>(tree.getProperty(kProjectFormatVersionAttr, 0));
     if (version < kMinimumProjectFormatVersion || version > kCurrentProjectFormatVersion) {
-        const auto msg = "Unsupported project format version: " + juce::String(version)
-            + " (supported " + juce::String(kMinimumProjectFormatVersion)
-            + "-" + juce::String(kCurrentProjectFormatVersion) + ")";
+        const auto msg = Loc::format(
+            Loc::get(language_, Loc::Keys::kUnsupportedProjectFormat),
+            juce::String(version),
+            juce::String(kMinimumProjectFormatVersion),
+            juce::String(kCurrentProjectFormatVersion));
         return Result<ProjectSnapshot>::failure(Error::fromCode(ErrorCode::InvalidParameter, msg.toStdString()));
     }
 
@@ -179,7 +183,7 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
         if (!validateDynamicEq(tree))
             return Result<ProjectSnapshot>::failure(
                 Error::fromCode(ErrorCode::InvalidParameter,
-                    "Project contains invalid dynamic EqSettings"));
+                    Loc::get(language_, Loc::Keys::kProjectInvalidDynamicEq).toStdString()));
     }
 
     ProjectSnapshot snapshot;
@@ -187,7 +191,7 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
     // Header
     snapshot.header.projectFormatVersion = kCurrentProjectFormatVersion;
     snapshot.header.appVersion = getOptionalProperty(tree, juce::Identifier(kAppVersionAttr), "");
-    snapshot.header.projectName = getOptionalProperty(tree, "projectName", "Untitled");
+    snapshot.header.projectName = getOptionalProperty(tree, "projectName", Loc::get(language_, Loc::Keys::kUntitled));
     snapshot.header.projectId = getOptionalProperty(tree, "projectId", "");
     snapshot.header.createdAt = getOptionalProperty(tree, "createdAt", "");
     snapshot.header.lastSavedAt = getOptionalProperty(tree, "lastSavedAt", "");
@@ -197,12 +201,12 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
     if (!settingsTree.isValid()) {
         return Result<ProjectSnapshot>::failure(
             Error::fromCode(ErrorCode::InvalidParameter,
-                "Project is missing required ProjectSettings node"));
+                Loc::get(language_, Loc::Keys::kProjectMissingSettings).toStdString()));
     }
     if (!settingsTree.hasProperty("timeSignatureNumerator") || !settingsTree.hasProperty("timeSignatureDenominator")) {
         return Result<ProjectSnapshot>::failure(
             Error::fromCode(ErrorCode::InvalidParameter,
-                "ProjectSettings is missing required timeSignatureNumerator or timeSignatureDenominator"));
+                Loc::get(language_, Loc::Keys::kProjectSettingsMissingTimeSignature).toStdString()));
     }
     snapshot.settings = settingsFromValueTree(settingsTree);
 
@@ -263,7 +267,8 @@ Result<ProjectSnapshot> ProjectPersistence::readProjectFile(const juce::File& fi
     if (!file.existsAsFile()) {
         return Result<ProjectSnapshot>::failure(
             Error::fromCode(ErrorCode::UnknownError,
-                ("Project file not found: " + file.getFullPathName()).toStdString()));
+                Loc::format(Loc::get(language_, Loc::Keys::kProjectFileNotFound),
+                            file.getFullPathName()).toStdString()));
     }
 
     juce::XmlDocument doc(file);
@@ -271,15 +276,16 @@ Result<ProjectSnapshot> ProjectPersistence::readProjectFile(const juce::File& fi
     if (!xml) {
         return Result<ProjectSnapshot>::failure(
             Error::fromCode(ErrorCode::UnknownError,
-                ("Failed to parse project file: " + file.getFullPathName()
-                 + " — " + doc.getLastParseError()).toStdString()));
+                Loc::format(Loc::get(language_, Loc::Keys::kProjectParseFailed),
+                            file.getFullPathName(), doc.getLastParseError()).toStdString()));
     }
 
     const auto vt = juce::ValueTree::fromXml(*xml);
     if (!vt.isValid()) {
         return Result<ProjectSnapshot>::failure(
             Error::fromCode(ErrorCode::UnknownError,
-                ("Invalid XML structure in: " + file.getFullPathName()).toStdString()));
+                Loc::format(Loc::get(language_, Loc::Keys::kProjectInvalidXml),
+                            file.getFullPathName()).toStdString()));
     }
 
     return fromValueTree(vt);

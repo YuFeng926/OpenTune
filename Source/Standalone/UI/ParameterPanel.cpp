@@ -82,19 +82,19 @@ juce::String buildAutoButtonTooltip(const ParameterPanel::AutoButtonPresentation
     if (tooltip.isEmpty()) {
         switch (presentation.mode) {
             case ParameterPanel::AutoButtonPresentation::Mode::ReferenceAuto:
-                tooltip = juce::String::fromUTF8(u8"按参考 Clip 自动修音并对齐节奏");
+                tooltip = LOC_RAW("Reference Clip AUTO aligns pitch and timing to the reference.");
                 break;
             case ParameterPanel::AutoButtonPresentation::Mode::ReferenceBoundButFallbackToAuto:
-                tooltip = juce::String::fromUTF8(u8"已绑定参考源，但当前缺少 GAME backend / models，本次执行普通 AUTO。");
+                tooltip = LOC_RAW("A reference is bound, but GAME backend/models are unavailable; standard AUTO will run.");
                 break;
             case ParameterPanel::AutoButtonPresentation::Mode::StandardAuto:
             default:
-                tooltip = juce::String::fromUTF8(u8"自动修音（吸附到临近音阶）");
+                tooltip = LOC_RAW("AUTO corrects pitch by snapping to nearby scale notes.");
                 break;
         }
     }
 
-    return tooltip + "\n6";
+    return tooltip;
 }
 
 } // namespace
@@ -496,7 +496,7 @@ ParameterPanel::ParameterPanel()
     setupHeader(toolsHeader_, LOC(kTools));
     contentComponent_.addAndMakeVisible(toolsHeader_);
 
-    autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Auto", LOC(kTooltipAutoTune) + "\n6");
+    autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Auto", LOC(kTooltipAutoTune));
     autoTuneToolButton_->setClickingTogglesState(false);
     autoTuneToolButton_->setTextIcon("AUTO");
     autoTuneToolButton_->onClick = [this] {
@@ -504,26 +504,26 @@ ParameterPanel::ParameterPanel()
     };
     contentComponent_.addAndMakeVisible(*autoTuneToolButton_);
 
-    selectToolButton_ = std::make_unique<ToolIconButton>(1, "Select", LOC(kTooltipSelect) + "\n3");
+    selectToolButton_ = std::make_unique<ToolIconButton>(1, "Select", LOC(kTooltipSelect));
     selectToolButton_->setRadioGroupId(1001);
     selectToolButton_->setToggleState(true, juce::dontSendNotification);
     selectToolButton_->setIcon(ToolbarIcons::getSelectIcon(), true);
     selectToolButton_->onClick = [this] { onToolClicked(1); };
     contentComponent_.addAndMakeVisible(*selectToolButton_);
 
-    drawNoteToolButton_ = std::make_unique<ToolIconButton>(2, "DrawNote", LOC(kTooltipDrawNote) + "\n2");
+    drawNoteToolButton_ = std::make_unique<ToolIconButton>(2, "DrawNote", LOC(kTooltipDrawNote));
     drawNoteToolButton_->setRadioGroupId(1001);
     drawNoteToolButton_->setIcon(ToolbarIcons::getDrawNoteIcon(), false);
     drawNoteToolButton_->onClick = [this] { onToolClicked(2); };
     contentComponent_.addAndMakeVisible(*drawNoteToolButton_);
 
-    lineAnchorToolButton_ = std::make_unique<ToolIconButton>(3, "LineAnchor", LOC(kTooltipLineAnchor) + "\n4");
+    lineAnchorToolButton_ = std::make_unique<ToolIconButton>(3, "LineAnchor", LOC(kTooltipLineAnchor));
     lineAnchorToolButton_->setRadioGroupId(1001);
     lineAnchorToolButton_->setIcon(ToolbarIcons::getLineAnchorIcon(), false);
     lineAnchorToolButton_->onClick = [this] { onToolClicked(3); };
     contentComponent_.addAndMakeVisible(*lineAnchorToolButton_);
 
-    handDrawToolButton_ = std::make_unique<ToolIconButton>(4, "HandDraw", LOC(kTooltipHandDraw) + "\n5");
+    handDrawToolButton_ = std::make_unique<ToolIconButton>(4, "HandDraw", LOC(kTooltipHandDraw));
     handDrawToolButton_->setRadioGroupId(1001);
     handDrawToolButton_->setIcon(ToolbarIcons::getHandDrawIcon(), false);
     handDrawToolButton_->onClick = [this] { onToolClicked(4); };
@@ -536,8 +536,8 @@ ParameterPanel::ParameterPanel()
     contentComponent_.addAndMakeVisible(*eraserToolButton_);
 
     // Pitch Shift action button
-    pitchShiftButton_ = std::make_unique<juce::TextButton>("Pitch Shift...");
-    pitchShiftButton_->setTooltip(juce::String::fromUTF8(u8"整体移调"));
+    pitchShiftButton_ = std::make_unique<juce::TextButton>(LOC(kPitchShift) + "...");
+    pitchShiftButton_->setTooltip(LOC(kPitchShift));
     pitchShiftButton_->getProperties().set(UIColors::auroraChromeIntensityProperty,
                                            kAuroraSidebarChromeIntensity);
     pitchShiftButton_->onClick = [this] {
@@ -556,38 +556,38 @@ ParameterPanel::ParameterPanel()
     contentComponent_.addChildComponent(*timeToolButton_);
 
     // ── OpenDyne 工具按钮（OpenDyne 专属，OpenTune 初态隐藏） ──
-    pitchToolButton_ = std::make_unique<ToolIconButton>(6, "Pitch", juce::String::fromUTF8(u8"Pitch 音高编辑\nF2"));
+    pitchToolButton_ = std::make_unique<ToolIconButton>(6, "Pitch", LOC(kToolODPitch));
     pitchToolButton_->setRadioGroupId(1001);
     pitchToolButton_->setIcon(ToolbarIcons::getPitchToolIcon(), false);
     pitchToolButton_->onClick = [this] { onToolClicked(6); };
     contentComponent_.addChildComponent(*pitchToolButton_);
 
-    volumeEnvelopeToolButton_ = std::make_unique<ToolIconButton>(7, "VolumeEnvelope", juce::String::fromUTF8(u8"Volume Envelope 音量包络\nF4"));
+    volumeEnvelopeToolButton_ = std::make_unique<ToolIconButton>(7, "VolumeEnvelope", LOC(kToolODVolumeEnvelope));
     volumeEnvelopeToolButton_->setRadioGroupId(1001);
     volumeEnvelopeToolButton_->setIcon(ToolbarIcons::getVolumeEnvelopeToolIcon(), false);
     volumeEnvelopeToolButton_->onClick = [this] { onToolClicked(7); };
     contentComponent_.addChildComponent(*volumeEnvelopeToolButton_);
 
-    scissorsToolButton_ = std::make_unique<ToolIconButton>(8, "Scissors", juce::String::fromUTF8(u8"Scissors 切割音符\nF6"));
+    scissorsToolButton_ = std::make_unique<ToolIconButton>(8, "Scissors", LOC(kToolODScissors));
     scissorsToolButton_->setRadioGroupId(1001);
     scissorsToolButton_->setIcon(ToolbarIcons::getScissorsToolIcon(), false);
     scissorsToolButton_->onClick = [this] { onToolClicked(8); };
     contentComponent_.addChildComponent(*scissorsToolButton_);
 
-    pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", LOC(kTooltipPitchModulation) + "\nF2x2");
+    pitchModulationToolButton_ = std::make_unique<ToolIconButton>(9, "PitchModulation", LOC(kToolODPitchModulation));
     pitchModulationToolButton_->setRadioGroupId(1001);
     pitchModulationToolButton_->setIcon(ToolbarIcons::getPitchModulationToolIcon(), false);
     pitchModulationToolButton_->onClick = [this] { onToolClicked(9); };
     contentComponent_.addChildComponent(*pitchModulationToolButton_);
 
-    pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", LOC(kTooltipPitchDrift) + "\nF2x3");
+    pitchDriftToolButton_ = std::make_unique<ToolIconButton>(10, "PitchDrift", LOC(kToolODPitchDrift));
     pitchDriftToolButton_->setRadioGroupId(1001);
     pitchDriftToolButton_->setIcon(ToolbarIcons::getPitchDriftToolIcon(), false);
     pitchDriftToolButton_->onClick = [this] { onToolClicked(10); };
     contentComponent_.addChildComponent(*pitchDriftToolButton_);
 
     // EQ tool button (visible in both OpenTune and OpenDyne modes)
-    eqToolButton_ = std::make_unique<ToolIconButton>(11, "EQ", juce::String::fromUTF8(u8"EQ 频率均衡\nE"));
+    eqToolButton_ = std::make_unique<ToolIconButton>(11, "EQ", LOC_RAW("EQ frequency equalizer"));
     eqToolButton_->setRadioGroupId(1001);
     eqToolButton_->setIcon(ToolbarIcons::getEqIcon(), false);
     eqToolButton_->setTextIcon("EQ");
@@ -595,9 +595,9 @@ ParameterPanel::ParameterPanel()
     contentComponent_.addAndMakeVisible(*eqToolButton_);
 
     // ── Pitch Grid 模式选择器（OpenDyne 专属，初态隐藏） ──
-    pitchGridSelector_.addItem(u8"No Snap", 1);
-    pitchGridSelector_.addItem(u8"Chromatic", 2);
-    pitchGridSelector_.addItem(u8"Key Scale", 3);
+    pitchGridSelector_.addItem(LOC(kNoSnap), 1);
+    pitchGridSelector_.addItem(LOC(kChromatic), 2);
+    pitchGridSelector_.addItem(LOC(kKeyScale), 3);
     pitchGridSelector_.setSelectedId(3, juce::dontSendNotification);  // 默认 Key Scale
     pitchGridSelector_.onChange = [this] {
         if (onPitchGridModeChanged) {
@@ -909,42 +909,51 @@ void ParameterPanel::refreshLocalizedText()
     
     // 更新 Tools 部分
     toolsHeader_.setText(LOC(kTools), juce::dontSendNotification);
+    if (pitchShiftButton_) {
+        pitchShiftButton_->setTooltip(LOC(kPitchShift));
+        setPitchShiftIndicator(pitchShiftSemitone_, pitchShiftCents_);
+    }
+    pitchGridSelector_.changeItemText(1, LOC(kNoSnap));
+    pitchGridSelector_.changeItemText(2, LOC(kChromatic));
+    pitchGridSelector_.changeItemText(3, LOC(kKeyScale));
     
     // 更新工具按钮 tooltip
     setAutoButtonPresentation(autoButtonPresentation_);
     if (selectToolButton_)
-        selectToolButton_->setTooltip(LOC(kTooltipSelect) + (openDyneMode_ ? "\nF1" : "\n3"));
+        selectToolButton_->setTooltip(LOC(kTooltipSelect));
     if (drawNoteToolButton_)
-        drawNoteToolButton_->setTooltip(LOC(kTooltipDrawNote) + "\n2");
+        drawNoteToolButton_->setTooltip(LOC(kTooltipDrawNote));
     if (lineAnchorToolButton_)
-        lineAnchorToolButton_->setTooltip(LOC(kTooltipLineAnchor) + "\n4");
+        lineAnchorToolButton_->setTooltip(LOC(kTooltipLineAnchor));
     if (handDrawToolButton_)
-        handDrawToolButton_->setTooltip(LOC(kTooltipHandDraw) + "\n5");
+        handDrawToolButton_->setTooltip(LOC(kTooltipHandDraw));
     if (eraserToolButton_)
         eraserToolButton_->setTooltip(LOC(kTooltipEraser));
     if (timeToolButton_)
-        timeToolButton_->setTooltip(LOC(kTooltipTimeTool) + "\nT");
+        timeToolButton_->setTooltip(LOC(kTooltipTimeTool));
     if (pitchToolButton_)
-        pitchToolButton_->setTooltip(juce::String::fromUTF8(u8"Pitch 音高编辑\nF2"));
+        pitchToolButton_->setTooltip(LOC(kToolODPitch));
     if (volumeEnvelopeToolButton_)
-        volumeEnvelopeToolButton_->setTooltip(juce::String::fromUTF8(u8"Volume Envelope 音量包络\nF4"));
+        volumeEnvelopeToolButton_->setTooltip(LOC(kToolODVolumeEnvelope));
     if (scissorsToolButton_)
-        scissorsToolButton_->setTooltip(juce::String::fromUTF8(u8"Scissors 切割音符\nF6"));
+        scissorsToolButton_->setTooltip(LOC(kToolODScissors));
     if (pitchModulationToolButton_)
-        pitchModulationToolButton_->setTooltip(LOC(kTooltipPitchModulation) + "\nF2x2");
+        pitchModulationToolButton_->setTooltip(LOC(kToolODPitchModulation));
     if (pitchDriftToolButton_)
-        pitchDriftToolButton_->setTooltip(LOC(kTooltipPitchDrift) + "\nF2x3");
+        pitchDriftToolButton_->setTooltip(LOC(kToolODPitchDrift));
 
     repaint();
 }
 
 void ParameterPanel::setPitchShiftIndicator(int semitone, int cents)
 {
+    pitchShiftSemitone_ = semitone;
+    pitchShiftCents_ = cents;
     if (pitchShiftButton_ == nullptr) return;
     if (semitone == 0 && cents == 0) {
-        pitchShiftButton_->setButtonText("Pitch Shift...");
+        pitchShiftButton_->setButtonText(LOC(kPitchShift) + "...");
     } else {
-        juce::String text = "Pitch Shift: ";
+        juce::String text = LOC(kPitchShift) + ": ";
         if (semitone != 0) text += juce::String(semitone > 0 ? "+" : "") + juce::String(semitone) + "st";
         if (cents != 0) {
             if (semitone != 0) text += " ";

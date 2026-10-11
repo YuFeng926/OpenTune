@@ -4,6 +4,7 @@
 #include <functional>
 #include "ComponentListenerSubscription.h"
 #include "../Utils/PitchShiftSettings.h"
+#include "../Utils/LocalizationManager.h"
 #include "../Standalone/UI/UIColors.h"
 
 namespace OpenTune {
@@ -39,7 +40,7 @@ public:
         addAndMakeVisible(semitoneSlider_);
 
         // -- Semitone label --
-        semitoneLabel_.setText(juce::String::fromUTF8(u8"半音"), juce::dontSendNotification);
+        semitoneLabel_.setText(LOC_RAW("Semitones"), juce::dontSendNotification);
         semitoneLabel_.setColour(juce::Label::textColourId, UIColors::textPrimary);
         semitoneLabel_.setFont(UIColors::getUIFont(14.0f));
         semitoneLabel_.setJustificationType(juce::Justification::centredLeft);
@@ -58,14 +59,14 @@ public:
         addAndMakeVisible(centsSlider_);
 
         // -- Cents label --
-        centsLabel_.setText(juce::String::fromUTF8(u8"音分"), juce::dontSendNotification);
+        centsLabel_.setText(LOC_RAW("Cents"), juce::dontSendNotification);
         centsLabel_.setColour(juce::Label::textColourId, UIColors::textPrimary);
         centsLabel_.setFont(UIColors::getUIFont(14.0f));
         centsLabel_.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(centsLabel_);
 
         // -- Reset button --
-        resetButton_.setButtonText(juce::String::fromUTF8(u8"重置"));
+        resetButton_.setButtonText(LOC_RAW("Reset"));
         resetButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundMedium);
         resetButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
         resetButton_.setColour(juce::TextButton::textColourOnId, UIColors::textPrimary);
@@ -85,7 +86,7 @@ public:
         addAndMakeVisible(resetButton_);
 
         // -- Confirm button --
-        confirmButton_.setButtonText(juce::String::fromUTF8(u8"确认"));
+        confirmButton_.setButtonText(LOC_RAW("Confirm"));
         confirmButton_.setColour(juce::TextButton::buttonColourId, UIColors::accent);
         confirmButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
         confirmButton_.setColour(juce::TextButton::textColourOnId, UIColors::textPrimary);

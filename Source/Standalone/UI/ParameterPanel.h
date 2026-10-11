@@ -205,6 +205,8 @@ private:
     std::unique_ptr<juce::TextButton> pitchShiftButton_;
     // OpenDyne Pitch Grid 全局开关（No Snap / Chromatic / Key Scale）
     juce::ComboBox pitchGridSelector_;
+    int pitchShiftSemitone_ = 0;
+    int pitchShiftCents_ = 0;
 
     LargeKnobLookAndFeel largeKnobLookAndFeel_;
     juce::Image auroraSidebarSurface_;

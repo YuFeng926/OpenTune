@@ -23,6 +23,7 @@
 #include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
 #include "Utils/AppLogger.h"
+#include "Utils/LocalizationManager.h"
 #include "Utils/EditorUiSync.h"
 #include "Utils/ParameterPanelSync.h"
 #include "Utils/PianoRollEditAction.h"
@@ -62,6 +63,13 @@ constexpr int kMaxWindowWidth = 3000;
 constexpr int kMaxWindowHeight = 2000;
 constexpr int kPreferredWidth = 1200;
 constexpr int kPreferredHeight = 900;
+
+juce::String projectErrorMessage(const Error& error)
+{
+    return error.context.empty()
+        ? juce::String::fromUTF8(error.message.c_str())
+        : juce::String::fromUTF8(error.context.c_str());
+}
 
 // 主题截图验证钩子：仅当设置 OPENTUNE_THEME 环境变量时覆盖配置主题（截图工具用），
 // 未设置时返回配置值，行为与之前完全一致。
@@ -524,6 +532,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 {
     lastObservedF0FailureGeneration_ = processorRef_.getF0FailureGeneration();
 
+    if (auto* arrangement = processorRef_.getStandaloneArrangement())
+        arrangement->setLanguage(appPreferences_.getState().shared.language);
+
     // EQ popup「以后不再提示」偏好直接注入（无中转层）
     pianoRoll_.setAppPreferences(&appPreferences_);
 
@@ -936,8 +947,8 @@ bool OpenTuneAudioProcessorEditor::rejectProjectOperationIfBusy()
 
     ConfirmDialogContent::showMessage(
         &contentRoot_,
-        juce::String::fromUTF8(u8"\u5DE5\u7A0B\u64CD\u4F5C"),
-        juce::String::fromUTF8(u8"\u53E6\u4E00\u4E2A\u5DE5\u7A0B\u64CD\u4F5C\u6B63\u5728\u8FDB\u884C\u4E2D\u3002"));
+        LOC_RAW("Project Operation"),
+        LOC_RAW("Another project operation is already in progress."));
     return true;
 }
 
@@ -971,9 +982,9 @@ void OpenTuneAudioProcessorEditor::saveProject(juce::File targetFile,
             if (!result.ok()) {
                 ConfirmDialogContent::launch(
                     new ConfirmDialogContent(
-                        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
-                        result.error().fullMessage(),
-                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                        LOC_RAW("Save Project Failed"),
+                        projectErrorMessage(result.error()),
+                        { { LOC(kOK), nullptr, true } }),
                     &safeThis->contentRoot_);
                 safeThis->projectOperationBusy_ = false;
                 return;
@@ -1010,10 +1021,11 @@ void OpenTuneAudioProcessorEditor::openProjectFile(const juce::File& file)
 void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
 {
     const auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
+    const auto openLanguage = LocalizationManager::getInstance().resolveLanguage();
     projectWorkerPool_.addJob(
-        [this, safeThis, file]() {
+        [this, safeThis, file, openLanguage]() {
         auto preparedResult = std::make_shared<Result<ProjectSession::PreparedOpen>>(
-            projectSession_.prepareOpen(file));
+            projectSession_.prepareOpen(file, openLanguage));
         juce::MessageManager::callAsync([safeThis, preparedResult]() mutable {
             if (safeThis == nullptr)
                 return;
@@ -1021,9 +1033,9 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
             if (!preparedResult->ok()) {
                 ConfirmDialogContent::launch(
                     new ConfirmDialogContent(
-                        juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
-                        preparedResult->error().fullMessage(),
-                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                        LOC_RAW("Open Project Failed"),
+                        projectErrorMessage(preparedResult->error()),
+                        { { LOC(kOK), nullptr, true } }),
                     &safeThis->contentRoot_);
                 safeThis->projectSession_.clearRecentProjects();
                 safeThis->projectOperationBusy_ = false;
@@ -1035,9 +1047,9 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
             if (!commitResult.ok()) {
                 ConfirmDialogContent::launch(
                     new ConfirmDialogContent(
-                        juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
-                        commitResult.error().fullMessage(),
-                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                        LOC_RAW("Open Project Failed"),
+                        projectErrorMessage(commitResult.error()),
+                        { { LOC(kOK), nullptr, true } }),
                     &safeThis->contentRoot_);
                 safeThis->projectOperationBusy_ = false;
                 return;
@@ -1132,8 +1144,8 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     {
         ConfirmDialogContent::showMessage(
             &contentRoot_,
-            juce::String("Import Audio"),
-            juce::String("Audio import is already in progress. Please try again later.")
+            LOC(kImportAudioDialog),
+            LOC(kAudioImportInProgress)
         );
         return;
     }
@@ -1153,8 +1165,8 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
         const auto wildcard = getImportWildcardFilter().replaceCharacters("*", "");
         ConfirmDialogContent::showMessage(
             &contentRoot_,
-            juce::String("Import Audio"),
-            juce::String("Unsupported file type.\nSupported extensions: ") + wildcard
+            LOC(kImportAudioDialog),
+            Loc::format(LOC(kUnsupportedFileType), wildcard)
         );
         return;
     }
@@ -1163,8 +1175,8 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     {
         ConfirmDialogContent::showMessage(
             &contentRoot_,
-            juce::String("Import Audio"),
-            juce::String("Multiple files detected. Only the first file will be imported.")
+            LOC(kImportAudioDialog),
+            LOC(kMultipleFilesDetected)
         );
     }
 
@@ -1277,9 +1289,9 @@ ImportDropTarget OpenTuneAudioProcessorEditor::resolveImportDropTarget(int globa
     {
         // Already at MAX_TRACKS 鈥?reject with a direct message
         result.kind = ImportDropTarget::Kind::Reject;
-        result.rejectReason = juce::String("Maximum track count reached (")
-                              + juce::String(OpenTuneAudioProcessor::MAX_TRACKS)
-                              + juce::String("). Cannot create more tracks.");
+        result.rejectReason = Loc::format(
+            LOC(kMaximumTrackCountReached),
+            juce::String(OpenTuneAudioProcessor::MAX_TRACKS));
         return result;
     }
 
@@ -1319,7 +1331,7 @@ void OpenTuneAudioProcessorEditor::applyImportDropTarget(ImportDropTarget target
     case ImportDropTarget::Kind::Reject:
         ConfirmDialogContent::showMessage(
             &contentRoot_,
-            juce::String::fromUTF8(u8"\u5BFC\u5165\u97F3\u9891"),
+            LOC_RAW("Import Failed"),
             target.rejectReason
         );
         break;
@@ -1685,10 +1697,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     const uint64_t f0FailureGeneration = processorRef_.getF0FailureGeneration();
     if (f0FailureGeneration != lastObservedF0FailureGeneration_) {
         lastObservedF0FailureGeneration_ = f0FailureGeneration;
-        const auto summary = juce::String::fromUTF8(u8"OriginalF0 未就绪。");
+        const auto summary = LOC(kOriginalF0NotReady);
         ConfirmDialogContent::showDiagnostic(
             &contentRoot_,
-            "OriginalF0",
+            LOC(kOriginalF0),
             summary,
             AppLogger::makeDiagnosticText("OriginalF0/FCPE", summary));
     }
@@ -1717,7 +1729,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     bool shouldShowOverlay = false;
 
     if (originalF0OverlayLatched_ && !isWorkspaceView_) {
-        autoRenderOverlay_.setMessageText(juce::String::fromUTF8(u8"\u6B63\u5728\u5904\u7406\u97F3\u9891"));
+        autoRenderOverlay_.setMessageText(LOC_RAW("Processing audio"));
         shouldShowOverlay = true;
     }
 
@@ -1731,7 +1743,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         if (activeContentKey.isValid()) {
             const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(activeContentKey);
             if (refFeatures.status == ReferenceFeatureStatus::Extracting) {
-                autoRenderOverlay_.setMessageText(juce::String::fromUTF8(u8"正在分析参考 Clip"));
+                autoRenderOverlay_.setMessageText(LOC_RAW("Analyzing reference Clip"));
                 shouldShowOverlay = true;
             }
         }
@@ -1770,7 +1782,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // Combined badge visibility — Stage 1 only (Stage 2 is synchronous in CRS).
     const bool shouldShowBadge = stage1HasWork && !isAutoProcessing;
     if (shouldShowBadge) {
-        renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
+        renderBadge_.setMessageText(LOC_RAW("Rendering (")
             + juce::String(stage1Done) + "/" + juce::String(stage1Total) + ")");
     }
     if (renderBadge_.isVisible() != shouldShowBadge) {
@@ -1833,6 +1845,9 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     if (languageState_ != nullptr) {
         languageState_->language = sharedPreferences.language;
     }
+
+    if (auto* arrangement = processorRef_.getStandaloneArrangement())
+        arrangement->setLanguage(sharedPreferences.language);
 
     if (appliedLanguage_ != sharedPreferences.language) {
         appliedLanguage_ = sharedPreferences.language;
@@ -2063,8 +2078,8 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
     {
         ConfirmDialogContent::showMessage(
             &contentRoot_,
-            juce::String("Import Audio"),
-            juce::String("Audio import is already in progress. Please try again later.")
+            LOC(kImportAudioDialog),
+            LOC(kAudioImportInProgress)
         );
         return;
     }
@@ -2074,7 +2089,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
     auto chooser = std::make_shared<juce::FileChooser>(
-        juce::String::fromUTF8(u8"\u9009\u62E9\u8981\u5BFC\u5165\u7684\u97F3\u9891\u6587\u4EF6"),
+        LOC(kSelectAudioFilesToImport),
         juce::File::getSpecialLocation(juce::File::userHomeDirectory),
         wildcardFilter);
     const auto chooserFlags = juce::FileBrowserComponent::openMode
@@ -2109,10 +2124,10 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
 
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String("Choose Import Mode"),
-                    juce::String("You selected ") + juce::String(selectedFiles.size()) + juce::String(" audio files. Choose an import mode."),
+                    LOC(kChooseImportMode),
+                    Loc::format(LOC(kSelectedAudioFilesImportMode), juce::String(selectedFiles.size())),
                     {
-                        { juce::String("Import Sequentially To Current Track"), [=]() {
+                        { LOC(kImportSequentiallyToCurrentTrack), [=]() {
                             if (safeThis == nullptr)
                                 return;
 
@@ -2131,7 +2146,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                                 safeThis->queuePendingImport(std::move(pending));
                             }
                         }, true },
-                        { juce::String("Import To Separate Tracks"), [=]() {
+                        { LOC(kImportToSeparateTracks), [=]() {
                             if (safeThis == nullptr)
                                 return;
 
@@ -2142,8 +2157,8 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                             {
                                 ConfirmDialogContent::showMessage(
                                     &safeThis->contentRoot_,
-                                    juce::String("Import Failed"),
-                                    juce::String("There are no available tracks after the current track.")
+                                    LOC(kImportFailed),
+                                    LOC(kNoAvailableTracksAfterCurrent)
                                 );
                                 return;
                             }
@@ -2171,14 +2186,12 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                             {
                                 ConfirmDialogContent::showMessage(
                                     &safeThis->contentRoot_,
-                                    juce::String("Import Count Trimmed"),
-                                    juce::String("Only ")
-                                        + juce::String(acceptedFileCount)
-                                        + juce::String(" tracks are available after the current track. Extra files were not queued.")
+                                    LOC(kImportCountTrimmedTitle),
+                                    Loc::format(LOC(kImportCountTrimmed), juce::String(acceptedFileCount))
                                 );
                             }
                         } },
-                        { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr }
+                        { LOC(kCancel), nullptr }
                     }
                 ),
                 &safeThis->contentRoot_
@@ -2243,7 +2256,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                 safeThis->processNextImportInQueue();
                 ConfirmDialogContent::showMessage(
                     &safeThis->contentRoot_,
-                    juce::String::fromUTF8(u8"\u5BFC\u5165\u5931\u8D25"),
+                    LOC_RAW("Import Failed"),
                     result.errorMessage
                 );
                 return;
@@ -2282,8 +2295,8 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                             safeThis->processNextImportInQueue();
                             ConfirmDialogContent::showMessage(
                                 &safeThis->contentRoot_,
-                                juce::String("Import Failed"),
-                                juce::String("Audio import preprocessing failed. Please try again.")
+                                LOC(kImportFailed),
+                                LOC(kAudioImportPreprocessingFailed)
                             );
                         });
                         return;
@@ -2309,8 +2322,8 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                         safeThis->processNextImportInQueue();
                         ConfirmDialogContent::showMessage(
                             &safeThis->contentRoot_,
-                            juce::String("Import Failed"),
-                            juce::String("Audio import commit failed. Please try again.")
+                            LOC(kImportFailed),
+                            LOC(kAudioImportCommitFailed)
                         );
                         return;
                     }
@@ -2343,10 +2356,10 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     if (!refreshAccepted) {
                         AppLogger::log("ClipDerivedRefresh: standalone request rejected contentKey.objectId="
                             + juce::String(static_cast<juce::int64>(committedPlacement.contentKey.objectId)));
-                        const auto summary = juce::String::fromUTF8(u8"未能启动 OriginalF0 分析。");
+                        const auto summary = LOC_RAW("Failed to start OriginalF0 analysis.");
                         ConfirmDialogContent::showDiagnostic(
                             &safeThis->contentRoot_,
-                            "OriginalF0",
+                            LOC(kOriginalF0),
                             summary,
                             AppLogger::makeDiagnosticText("OriginalF0/FCPE", summary));
                         safeThis->lastObservedF0FailureGeneration_ =
@@ -2440,8 +2453,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
     {
         ConfirmDialogContent::showMessage(
             &contentRoot_,
-            juce::String("Export Audio"),
-            juce::String("An export task is already in progress. Please try again later."));
+            LOC(kExportAudio),
+            LOC(kExportInProgress));
         return;
     }
     
@@ -2463,7 +2476,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
     auto chooser = std::make_shared<juce::FileChooser>(
-        "Export Audio File",
+        LOC(kExportAudioFile),
         juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(defaultFileName),
         "*.wav");
     const auto chooserFlags = juce::FileBrowserComponent::saveMode
@@ -2509,27 +2522,28 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                     {
                         ConfirmDialogContent::showMessage(
                             &safeThis->contentRoot_,
-                            juce::String("Export Failed"),
-                            juce::String("No audio clip is selected. Select a clip on the track first."));
+                            LOC(kExportFailed),
+                            LOC(kNoAudioClipSelected));
                         return;
                     }
 
-                    request.targetName = "Selected Placement (Track "
-                        + juce::String(request.trackId + 1)
-                        + ", Clip " + juce::String(request.placementIndex + 1) + ")";
+                    request.targetName = Loc::format(
+                        LOC(kSelectedPlacement),
+                        juce::String(request.trackId + 1),
+                        juce::String(request.placementIndex + 1));
                     break;
                 }
 
                 case ExportType::Track:
                 {
                     request.trackId = getStandaloneActiveTrack(safeThis->processorRef_);
-                    request.targetName = "Track " + juce::String(request.trackId + 1);
+                    request.targetName = Loc::format(LOC(kTrackTarget), juce::String(request.trackId + 1));
                     break;
                 }
 
                 case ExportType::Bus:
                 {
-                    request.targetName = "Bus (Master Mix)";
+                    request.targetName = LOC(kBusMasterMix);
                     break;
                 }
             }
@@ -2538,6 +2552,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
             const auto outFile = file;
             const auto outRequest = request;
             const juce::Component::SafePointer<OpenTuneAudioProcessorEditor> uiSafe = safeThis;
+            const auto exportLanguage = LocalizationManager::getInstance().resolveLanguage();
 
             // Join previous export thread if it exists
             if (safeThis->exportWorker_.joinable())
@@ -2549,7 +2564,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
             safeThis->exportInProgress_.store(true);
 
             // Create new controlled export thread
-            safeThis->exportWorker_ = std::thread([processor, outFile, outRequest, uiSafe]()
+            safeThis->exportWorker_ = std::thread([processor, outFile, outRequest, uiSafe, exportLanguage]()
                 {
                     bool ok = false;
                     juce::String errorText;
@@ -2557,13 +2572,13 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                     switch (outRequest.type)
                     {
                         case ExportType::SelectedClip:
-                            ok = processor->exportPlacementAudio(outRequest.trackId, outRequest.placementIndex, outFile);
+                            ok = processor->exportPlacementAudio(outRequest.trackId, outRequest.placementIndex, outFile, exportLanguage);
                             break;
                         case ExportType::Track:
-                            ok = processor->exportTrackAudio(outRequest.trackId, outFile);
+                            ok = processor->exportTrackAudio(outRequest.trackId, outFile, exportLanguage);
                             break;
                         case ExportType::Bus:
-                            ok = processor->exportMasterMixAudio(outFile);
+                            ok = processor->exportMasterMixAudio(outFile, exportLanguage);
                             break;
                     }
 
@@ -2586,20 +2601,20 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                             DBG("Successfully exported " + outRequest.targetName);
                             ConfirmDialogContent::showMessage(
                                 &uiSafe->contentRoot_,
-                                juce::String::fromUTF8(u8"\u5BFC\u51FA\u5B8C\u6210"),
-                                outRequest.targetName + juce::String::fromUTF8(u8" \u5DF2\u5BFC\u51FA\u5230: ") + outFile.getFullPathName());
+                                LOC_RAW("Export Complete"),
+                                outRequest.targetName + LOC_RAW(" has been exported to: ") + outFile.getFullPathName());
                             return;
                         }
 
-                        juce::String failText = juce::String::fromUTF8(u8"\u65E0\u6CD5\u5BFC\u51FA\u97F3\u9891\u5230 ") + outFile.getFullPathName();
+                        juce::String failText = LOC_RAW("Could not export audio to ") + outFile.getFullPathName();
                         if (errorText.isNotEmpty())
                         {
-                            failText += juce::String::fromUTF8(u8"\n\u539F\u56E0: ") + errorText;
+                            failText += LOC_RAW("\nReason: ") + errorText;
                         }
 
                         ConfirmDialogContent::showMessage(
                             &uiSafe->contentRoot_,
-                            juce::String::fromUTF8(u8"\u5BFC\u51FA\u5931\u8D25"),
+                            LOC_RAW("Export Failed"),
                             failText);
                     });
                 });
@@ -2609,10 +2624,10 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
         {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String("Overwrite Existing File?"),
-                    juce::String("The target file already exists. Overwrite it?"),
-                    { { juce::String::fromUTF8(u8"\u8986\u76D6"), startExport, true },
-                      { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
+                    LOC(kOverwriteExistingFile),
+                    LOC(kOverwriteExistingFileMessage),
+                    { { LOC_RAW("Overwrite"), startExport, true },
+                      { LOC(kCancel), nullptr, false } }),
                 &safeThis->contentRoot_);
             return;
         }
@@ -2643,9 +2658,9 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     ConfirmDialogContent::launch(
         new ConfirmDialogContent(
-            juce::String::fromUTF8(u8"\u5F53\u524D\u5DE5\u7A0B\u5C1A\u672A\u4FDD\u5B58"),
-            juce::String::fromUTF8(u8"\u6253\u5F00\u5176\u4ED6\u5DE5\u7A0B\u524D\uFF0C\u662F\u5426\u4FDD\u5B58\u5F53\u524D\u5DE5\u7A0B\u7684\u66F4\u6539\uFF1F"),
-            {               { juce::String::fromUTF8(u8"\u4FDD\u5B58"), [safeThis] {
+            LOC_RAW("Current project has unsaved changes"),
+            LOC_RAW("Save changes to the current project before opening another?"),
+            {               { LOC_RAW("Save"), [safeThis] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         safeThis->saveProjectAsThenOpenProject();
@@ -2653,18 +2668,18 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
                     }
                     safeThis->saveProject(juce::File(), true);
                 }, true },
-              { juce::String("Do Not Save"), [safeThis] {
+              { LOC_RAW("Do Not Save"), [safeThis] {
                     if (safeThis == nullptr) return;
                     safeThis->launchOpenProjectChooser();
                 }, false },
-              { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
+              { LOC(kCancel), nullptr, false } }),
         &contentRoot_);
 }
 
 void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 {
     auto chooser = std::make_shared<juce::FileChooser>(
-        juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B"), juce::File(), "*.otproj");
+        LOC(kOpenProject), juce::File(), "*.otproj");
     const auto chooserFlags = juce::FileBrowserComponent::openMode
                              | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
@@ -2684,7 +2699,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
         return;
 
     auto chooser = std::make_shared<juce::FileChooser>(
-        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
+        LOC(kSaveProject), juce::File(), "*.otproj");
     const auto chooserFlags = juce::FileBrowserComponent::saveMode
                              | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
@@ -2699,13 +2714,13 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
         if (file.existsAsFile()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String("Overwrite Existing Project?"),
-                    juce::String("The target project file already exists. Overwrite it?"),
-                    { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, file] {
+                    LOC(kOverwriteExistingProject),
+                    LOC(kOverwriteExistingProjectMessage),
+                    { { LOC_RAW("Overwrite"), [safeThis, file] {
                             if (safeThis == nullptr) return;
                             safeThis->saveProject(file, true);
                         }, true },
-                      { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
+                      { LOC(kCancel), nullptr, false } }),
                 &safeThis->contentRoot_);
             return;
         }
@@ -2770,7 +2785,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(dialogContent);
-    options.dialogTitle = "Preferences";
+    options.dialogTitle = LOC(kPreferences);
     options.dialogBackgroundColour = UIColors::backgroundDark;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
@@ -2816,7 +2831,7 @@ void OpenTuneAudioProcessorEditor::helpRequested()
         ConfirmDialogContent::showMessage(
             &contentRoot_,
             LOC(kClose),
-            juce::String("Help file not found: ") + helpFile.getFullPathName()
+            Loc::format(LOC(kHelpFileNotFound), helpFile.getFullPathName())
         );
     }
 }
@@ -2971,6 +2986,10 @@ void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
 // Refresh top toolbar
     transportBar_.refreshLocalizedText();
     topBar_.refreshLocalizedText();
+    arrangementView_.refreshLocalizedText();
+    pianoRoll_.refreshLocalizedText();
+    if (auto* arrangement = processorRef_.getStandaloneArrangement())
+        arrangement->setLanguage(newLanguage);
     
 // Refresh parameter panel
     parameterPanel_.refreshLocalizedText();
@@ -3490,7 +3509,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     if (!result.applied()) {
         if (result.status != PianoRollComponent::AutoTuneApplyStatus::NoChange) {
             ConfirmDialogContent::showMessage(&contentRoot_,
-                                              juce::String("AUTO"),
+                                              LOC(kAutoDialog),
                                               result.message());
         }
         return;
@@ -3541,7 +3560,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
 
     auto options = juce::DialogWindow::LaunchOptions();
     options.content.setOwned(content);
-    options.dialogTitle = "Pitch Shift";
+    options.dialogTitle = LOC(kPitchShift);
     options.dialogBackgroundColour = UIColors::backgroundDark;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
@@ -3581,7 +3600,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
         return;
 
     auto chooser = std::make_shared<juce::FileChooser>(
-        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
+        LOC(kSaveProject), juce::File(), "*.otproj");
     const auto chooserFlags = juce::FileBrowserComponent::saveMode
                              | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
@@ -3596,13 +3615,13 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
         if (file.existsAsFile()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String("Overwrite Existing Project?"),
-                    juce::String("The target project file already exists. Overwrite it?"),
-                    { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, file] {
+                    LOC(kOverwriteExistingProject),
+                    LOC(kOverwriteExistingProjectMessage),
+                    { { LOC_RAW("Overwrite"), [safeThis, file] {
                             if (safeThis == nullptr) return;
                             safeThis->saveProject(file);
                         }, true },
-                      { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
+                      { LOC(kCancel), nullptr, false } }),
                 &safeThis->contentRoot_);
             return; // Don't continue in outer callback — the inner callback handles save
         }
@@ -3624,14 +3643,14 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     ConfirmDialogContent::launch(
         new ConfirmDialogContent(
-            juce::String::fromUTF8(u8"\u5F53\u524D\u5DE5\u7A0B\u5C1A\u672A\u4FDD\u5B58"),
-            juce::String::fromUTF8(u8"\u6253\u5F00\u5176\u4ED6\u5DE5\u7A0B\u524D\uFF0C\u662F\u5426\u4FDD\u5B58\u5F53\u524D\u5DE5\u7A0B\u7684\u66F4\u6539\uFF1F"),
-            {               { juce::String::fromUTF8(u8"\u4FDD\u5B58"), [safeThis, file] {
+            LOC_RAW("Current project has unsaved changes"),
+            LOC_RAW("Save changes to the current project before opening another?"),
+            {               { LOC_RAW("Save"), [safeThis, file] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         // No project path: async save-as, then open recent file
                         auto chooser = std::make_shared<juce::FileChooser>(
-                            juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"),
+                            LOC(kSaveProject),
                             juce::File(),
                             "*.otproj");
                         const auto chooserFlags = juce::FileBrowserComponent::saveMode
@@ -3651,12 +3670,12 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                             if (saveFile.existsAsFile()) {
                                 ConfirmDialogContent::launch(
                                     new ConfirmDialogContent(
-                                        juce::String("Overwrite Existing Project?"),
-                                        juce::String("The target project file already exists. Overwrite it?"),
-                                        { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, saveFile, handleSaveAndOpen] {
+                                        LOC(kOverwriteExistingProject),
+                                        LOC(kOverwriteExistingProjectMessage),
+                                        { { LOC_RAW("Overwrite"), [safeThis, saveFile, handleSaveAndOpen] {
                                                 handleSaveAndOpen(saveFile);
                                             }, true },
-                                          { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
+                                          { LOC(kCancel), nullptr, false } }),
                                     &safeThis->contentRoot_);
                                 return;
                             }
@@ -3666,11 +3685,11 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                     }
                     safeThis->saveProject(juce::File(), false, file);
                   }, true },
-{ juce::String("Do Not Save"), [safeThis, file] {
+{ LOC_RAW("Do Not Save"), [safeThis, file] {
                      if (safeThis == nullptr) return;
                      safeThis->openProjectFile(file);
                  }, false },
-              { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
+              { LOC(kCancel), nullptr, false } }),
         &contentRoot_);
 }
 
@@ -3743,7 +3762,6 @@ OpenTuneAudioProcessorEditor::AutoRefUiState OpenTuneAudioProcessorEditor::evalu
 {
     AutoRefUiState uiState;
     uiState.presentation.mode = ParameterPanel::AutoButtonPresentation::Mode::StandardAuto;
-    uiState.presentation.tooltip = juce::String("Auto tune to nearby notes");
 
     // OpenDyne 模式下 AUTO 按钮永远走 snap-to-scale，不走 Ref 路径
     if (AudioEditingScheme::usesNotesPrimaryScheme(appliedAudioEditingScheme_)) {
@@ -3766,7 +3784,6 @@ OpenTuneAudioProcessorEditor::AutoRefUiState OpenTuneAudioProcessorEditor::evalu
 
     if (uiState.availability.status == OpenTuneAudioProcessor::AutoRefAvailability::Status::Ready) {
         uiState.presentation.mode = ParameterPanel::AutoButtonPresentation::Mode::ReferenceAuto;
-        uiState.presentation.tooltip = juce::String("Auto tune to the reference clip");
         return uiState;
     }
 
@@ -3886,7 +3903,7 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
 // Check if already has reference binding
     const uint64_t existingRef = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
     if (existingRef != 0) {
-        menu.addItem(juce::String::fromUTF8(u8"\u4E0D\u4F7F\u7528\u53C2\u8003Clip"),
+        menu.addItem(LOC_RAW("Don't use reference Clip"),
                      [safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this), trackId, targetPlacementId]() {
             if (safeEditor == nullptr)
                 return;
@@ -3897,8 +3914,8 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
             if (!arrangement->setPlacementReferencePlacement(trackId, targetPlacementId, 0)) {
                 ConfirmDialogContent::showMessage(
                     &safeEditor->contentRoot_,
-                    juce::String::fromUTF8(u8"\u53C2\u8003 Clip"),
-                    juce::String::fromUTF8(u8"\u65E0\u6CD5\u6E05\u9664\u5F53\u524D\u53C2\u8003 Clip \u7ED1\u5B9A\u3002"));
+                    LOC_RAW("Reference Clip"),
+                    LOC_RAW("Unable to clear the current reference Clip binding."));
                 return;
             }
             safeEditor->processorRef_.getUndoManager().addAction(std::make_unique<ReferenceBindingAction>(
@@ -3927,9 +3944,10 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
                     trackId, targetPlacementId, candidate.placementId)) continue;
 
             hasCandidates = true;
-            const juce::String label = juce::String("Track ") + juce::String(t + 1)
-                + " - " + (candidate.name.isNotEmpty() ? candidate.name : "Clip")
-                + juce::String(" (Mat#") + juce::String(static_cast<juce::int64>(candidate.contentKey.objectId)) + ")";
+            const juce::String label = LOC(kReferenceMenuEntry)
+                .replace("{0}", juce::String(t + 1))
+                .replace("{1}", candidate.name.isNotEmpty() ? candidate.name : LOC(kClip))
+                .replace("{2}", juce::String(static_cast<juce::int64>(candidate.contentKey.objectId)));
             refMenu.addItem(label,
                             [safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
                              trackId, targetPlacementId, candidate]() {
@@ -3943,8 +3961,8 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
                         trackId, targetPlacementId, candidate.placementId)) {
                     ConfirmDialogContent::showMessage(
                         &safeEditor->contentRoot_,
-                        juce::String::fromUTF8(u8"\u53C2\u8003 Clip"),
-                        juce::String::fromUTF8(u8"\u8BE5 Clip \u5DF2\u4E0D\u6EE1\u8DB3\u53C2\u8003\u7ED1\u5B9A\u6761\u4EF6\u3002"));
+                        LOC_RAW("Reference Clip"),
+                        LOC_RAW("That Clip no longer meets the reference binding requirements."));
                     return;
                 }
                 safeEditor->processorRef_.getUndoManager().addAction(std::make_unique<ReferenceBindingAction>(
@@ -3959,9 +3977,9 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
     }
 
     if (hasCandidates) {
-        menu.addSubMenu(juce::String::fromUTF8(u8"\u9009\u62E9\u53C2\u8003Clip"), refMenu);
+        menu.addSubMenu(LOC_RAW("Select reference Clip"), refMenu);
     } else {
-        menu.addItem(juce::String::fromUTF8(u8"(\u65E0\u53EF\u7528\u7684\u53C2\u8003Clip)"), false, false, nullptr);
+        menu.addItem(LOC_RAW("(No available reference Clips)"), false, false, nullptr);
     }
 
     if (buttonScreenArea.isEmpty())
@@ -3995,10 +4013,10 @@ bool OpenTuneAudioProcessorEditor::handleAutoRefExecute()
         }
         const juce::String message = result.message.isNotEmpty()
             ? result.message
-            : juce::String::fromUTF8(u8"AUTO Ref alignment failed.");
+            : LOC(kAutoRefAlignmentFailed);
         ConfirmDialogContent::showMessage(
             &contentRoot_,
-            juce::String::fromUTF8(u8"AUTO Ref"),
+            LOC(kAutoRef),
             message);
         refreshReferenceContext();
         return false;

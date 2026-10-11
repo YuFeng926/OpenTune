@@ -286,7 +286,6 @@ private:
     UnifiedToolbarButton tapButton_;
 
     // Scale controls
-    juce::Label scaleLabel_;
     juce::ComboBox scaleRootSelector_;
     juce::ComboBox scaleTypeSelector_;
 

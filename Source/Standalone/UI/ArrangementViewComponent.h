@@ -126,6 +126,7 @@ public:
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
     void setTimelineDisplayMode(TimelineDisplayMode mode);
     TimelineDisplayMode getTimelineDisplayMode() const noexcept { return displayMode_; }
+    void refreshLocalizedText();
 
     // 缩放状态管理
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }

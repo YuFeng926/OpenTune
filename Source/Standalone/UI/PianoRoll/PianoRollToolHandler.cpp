@@ -6,6 +6,7 @@
 #include "../../../Utils/ScissorsUndoAction.h"
 #include "../../../Utils/PitchUtils.h"
 #include "../../../Utils/TimeCoordinate.h"
+#include "../../../Utils/LocalizationManager.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -1046,7 +1047,7 @@ void PianoRollToolHandler::handleDeleteKey()
 
     ctx_.getNoteDraft().contentDirty = true;
     ctx_.getNoteDraft().workingNotes = notes;
-    ctx_.setUndoDescription(juce::String::fromUTF8(u8"删除音符"));
+    ctx_.setUndoDescription(LOC_RAW("Delete note"));
 
     // 同步计算清除修正 + 删除音符，一次性原子提交
     bool committed = false;
@@ -1502,7 +1503,7 @@ void PianoRollToolHandler::handleEraserUp()
     }
     erasedRanges.push_back({startFrame, endFrameExclusive});
 
-    ctx_.setUndoDescription(juce::String::fromUTF8(u8"橡皮擦"));
+    ctx_.setUndoDescription(LOC_RAW("Eraser"));
     const auto committedSnapshot = ctx_.commitNotesAndSegmentsWithOriginalF0(
         afterNotes,
         afterSegments,
@@ -1853,7 +1854,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
         }
 
         ctx_.getNoteDraft().workingNotes = notes;
-        ctx_.setUndoDescription(juce::String::fromUTF8(u8"调整音符长度"));
+        ctx_.setUndoDescription(LOC_RAW("Resize note"));
 
         // 同步计算修正并一次性提交音符和F0
         if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !editRange.isEmpty()) {
@@ -1866,7 +1867,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 
     if (ctx_.getNoteDraft().active && !suppressFinalNoteDraftCommit) {
         ctx_.getNoteDraft().workingNotes = notes;
-        ctx_.setUndoDescription(juce::String::fromUTF8(u8"编辑音符"));
+        ctx_.setUndoDescription(LOC_RAW("Edit note"));
         ctx_.commitNoteDraft();
     }
 
@@ -2135,8 +2136,8 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
         bool committed = false;
         if (!editRange.isEmpty() && contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr) {
             ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
-                ? juce::String::fromUTF8(u8"调制深度")
-                : juce::String::fromUTF8(u8"漂移修正"));
+                ? LOC_RAW("Modulation depth")
+                : LOC_RAW("Drift correction"));
             // applyCorrectionToRange + commitNotesAndSegments 唯一提交链
             committed = commitNoteBasedCorrection(ctx_, notes, editRange);
         }
@@ -2194,7 +2195,7 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
     if (!editRange.isEmpty()) {
         const auto contentSnapshot = ctx_.getEditableContentSnapshot();
         ctx_.getNoteDraft().workingNotes = notes;
-        ctx_.setUndoDescription(juce::String::fromUTF8(u8"移动音符"));
+        ctx_.setUndoDescription(LOC_RAW("Move note"));
 
         // 音高编辑失败（无 PitchCurve）不允许 note-only 提交。
         if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr) {
@@ -2300,8 +2301,8 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         work[static_cast<size_t>(clickedNoteIndex)].dirty = true;
         draft.workingNotes = work;
         ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
-            ? juce::String::fromUTF8(u8"调制深度")
-            : juce::String::fromUTF8(u8"漂移修正"));
+            ? LOC_RAW("Modulation depth")
+            : LOC_RAW("Drift correction"));
 
         const auto contentSnapshot = ctx_.getEditableContentSnapshot();
         const auto f0tl = ctx_.getF0Timeline();
@@ -2346,7 +2347,7 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
     work[static_cast<size_t>(clickedNoteIndex)].pitchOffset = snappedOffset;
     work[static_cast<size_t>(clickedNoteIndex)].dirty = true;
     draft.workingNotes = work;
-    ctx_.setUndoDescription(juce::String::fromUTF8(u8"音高吸附"));
+    ctx_.setUndoDescription(LOC_RAW("Pitch snap"));
 
     const auto contentSnapshot = ctx_.getEditableContentSnapshot();
     const auto f0tl = ctx_.getF0Timeline();
@@ -2649,7 +2650,7 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
 
     if (ctx_.pushUndoAction) {
         auto action = std::make_unique<ScissorsUndoAction>(
-            juce::String::fromUTF8(u8"音符分割"),
+            LOC_RAW("Split note"),
             beforeNotes,
             newNotes,
             ctx_.replaceContentNotesForFullMutation,
@@ -2792,7 +2793,7 @@ bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
 
     if (ctx_.pushUndoAction) {
         auto action = std::make_unique<ScissorsUndoAction>(
-            juce::String::fromUTF8(u8"音符合并"),
+            LOC_RAW("Merge notes"),
             beforeNotes,
             newNotes,
             ctx_.replaceContentNotesForFullMutation,
@@ -2848,7 +2849,7 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
         if (!ops.empty()) {
             const int editedStartFrame = ops.front().startFrame;
             const int editedEndFrameExclusive = ops.back().endFrameExclusive;
-            ctx_.setUndoDescription(juce::String::fromUTF8(u8"手绘曲线"));
+            ctx_.setUndoDescription(LOC_RAW("Hand-drawn curve"));
             ctx_.applyManualCorrection(std::move(ops), editedStartFrame, editedEndFrameExclusive - 1, false);
             ctx_.notifyPitchCurveEdited(editedStartFrame, editedEndFrameExclusive - 1);
             selectNotesForEditedFrameRange(ctx_, editedStartFrame, editedEndFrameExclusive);
@@ -2982,7 +2983,7 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 
     ctx_.getNoteDraft().contentDirty = true;
     ctx_.getNoteDraft().workingNotes = notes;
-    ctx_.setUndoDescription(juce::String::fromUTF8(u8"绘制音符"));
+    ctx_.setUndoDescription(LOC_RAW("Draw note"));
 
     // 同步计算修正并一次性提交音符和F0段，避免产生两个Undo Action
     const auto contentSnapshot = ctx_.getEditableContentSnapshot();
@@ -3152,7 +3153,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
 
     const int editedStartFrame = ops.front().startFrame;
     const int editedEndFrameExclusive = ops.back().endFrameExclusive;
-    ctx_.setUndoDescription(juce::String::fromUTF8(u8"锚点修正"));
+    ctx_.setUndoDescription(LOC_RAW("Anchor correction"));
     ctx_.applyManualCorrection(std::move(ops), editedStartFrame, editedEndFrameExclusive - 1, false);
     ctx_.notifyPitchCurveEdited(editedStartFrame, editedEndFrameExclusive - 1);
     selectNotesForEditedFrameRange(ctx_, editedStartFrame, editedEndFrameExclusive);
@@ -3583,7 +3584,7 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
         && ctx_.commitTimeGrid) {
         ctx_.commitTimeGrid(tt.dragWorkingSnapshot,
                              tt.dragOriginalSnapshot,
-                             juce::String::fromUTF8(u8"鎷栧姩鏃堕棿鎵嬫焺"));
+                             LOC_RAW("Drag time handle"));
     }
 
     tt.isDraggingHandle = false;
@@ -3672,7 +3673,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
         return;
     }
 
-    ctx_.commitTimeGrid(newSnap, snap, juce::String::fromUTF8(u8"鎻掑叆鏃堕棿鎵嬫焺"));
+    ctx_.commitTimeGrid(newSnap, snap, LOC_RAW("Insert time handle"));
 
     // Auto-select the newly-inserted handle so user can immediately drag.
     // commitTimeGrid already triggers cache dirty internally.
@@ -3724,7 +3725,7 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
         return false;
     }
 
-    ctx_.commitTimeGrid(newSnap, snap, juce::String::fromUTF8(u8"鍒犻櫎鏃堕棿鎵嬫焺"));
+    ctx_.commitTimeGrid(newSnap, snap, LOC_RAW("Delete time handle"));
 
     tt.selectedHandleId = 0;
     tt.hoveredHandleId  = 0;

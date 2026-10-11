@@ -6,6 +6,7 @@
 #include "Inference/RenderCache.h"
 #include "Standalone/UI/UIColors.h"
 #include "Content/ContentKey.h"
+#include "Utils/LocalizationManager.h"
 
 namespace OpenTune {
 
@@ -18,9 +19,9 @@ enum class RenderStatus {
 inline juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, float progress)
 {
     if (totalTasks <= 0)
-        return juce::String::fromUTF8("\xe6\xad\xa3\xe5\x9c\xa8\xe6\xb8\xb2\xe6\x9f\x93\xe4\xb8\xad");
+        return LOC(kRendering);
     const int pct = static_cast<int>(std::round(progress * 100.0f));
-    return juce::String::fromUTF8("\xe6\xb8\xb2\xe6\x9f\x93\xe4\xb8\xad ")
+    return LOC(kRendering) + " "
         + juce::String(pct) + "% ("
         + juce::String(completedTasks) + "/"
         + juce::String(totalTasks) + ")";
@@ -132,31 +133,7 @@ public:
     void setMessageText(const juce::String& text)
     {
         messageText_ = text;
-        subText_.clear();
         repaint();
-    }
-
-    void setMessageText(const juce::String& mainText, const juce::String& subText)
-    {
-        messageText_ = mainText;
-        subText_ = subText;
-        repaint();
-    }
-
-    void setStatus(RenderStatus status, const juce::String& customSubText = {})
-    {
-        switch (status)
-        {
-            case RenderStatus::Idle:
-                setMessageText(juce::String::fromUTF8(u8"\u5c31\u7eea"), customSubText);
-                break;
-            case RenderStatus::Rendering:
-                setMessageText(juce::String::fromUTF8(u8"\u6b63\u5728\u6e32\u67d3\u4e2d"), customSubText);
-                break;
-            case RenderStatus::Ready:
-                setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u5b8c\u6210"), customSubText);
-                break;
-        }
     }
 
     void paint(juce::Graphics& g) override
@@ -175,14 +152,13 @@ public:
         const float textHeight = 24.0f;
         const float spacing = 30.0f;
         const float spinnerSize = 60.0f;
-        const float totalTextHeight = subText_.isEmpty() ? textHeight : textHeight * 2.0f + 8.0f;
 
         g.setColour(themeId == ThemeId::Overdose
                         ? juce::Colour(Overdose::Colors::TextOnDark)
                         : juce::Colours::white);
         g.setFont(UIColors::getUIFont(18.0f).boldened());
 
-        float textStartY = centerY - totalTextHeight - spacing;
+        float textStartY = centerY - textHeight - spacing;
         juce::Rectangle<float> textBounds(
             centerX - 200.0f,
             textStartY,
@@ -190,18 +166,6 @@ public:
             textHeight
         );
         g.drawText(messageText_, textBounds, juce::Justification::centred, false);
-
-        if (subText_.isNotEmpty())
-        {
-            g.setFont(UIColors::getUIFont(16.0f));
-            juce::Rectangle<float> subTextBounds(
-                centerX - 200.0f,
-                textStartY + textHeight + 8.0f,
-                400.0f,
-                textHeight
-            );
-            g.drawText(subText_, subTextBounds, juce::Justification::centred, false);
-        }
 
         const double time = juce::Time::getMillisecondCounterHiRes() * 0.001;
         const float phase = static_cast<float>(std::fmod(time * 1.5, 1.0));
@@ -248,8 +212,7 @@ public:
 private:
     void timerCallback() override { repaint(); }
 
-    juce::String messageText_ = juce::String::fromUTF8(u8"\u6b63\u5728\u6e32\u67d3\u4e2d");
-    juce::String subText_;
+    juce::String messageText_ = LOC(kRendering);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AutoRenderOverlayComponent)
 };

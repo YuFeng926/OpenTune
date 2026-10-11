@@ -24,6 +24,7 @@
 
 #include "Content/ContentKey.h"
 #include "Content/StandaloneClipContent.h"
+#include "Utils/LocalizationManager.h"
 #include "Utils/TrackConstants.h"
 
 namespace OpenTune {
@@ -107,6 +108,8 @@ public:
 
     PlaybackSnapshotHandle loadPlaybackSnapshot() const;
 
+    void setLanguage(Language language);
+
     int getNumTracks() const noexcept { return kTrackCount; }
 
     int getActiveTrackId() const;
@@ -179,6 +182,9 @@ public:
     bool canSetPlacementReferencePlacement(int trackId, uint64_t targetPlacementId, uint64_t referencePlacementId) const;
 
 private:
+    juce::String defaultTrackName(int trackId) const;
+    static bool isDefaultTrackName(const juce::String& name, int trackId);
+
     static bool isValidTrackId(int trackId) noexcept;
     static int selectIndexAfterErase(int currentSelectedIndex, int erasedIndex, int remainingCount);
     bool placementIdExistsUnlocked(uint64_t placementId) const;
@@ -196,6 +202,7 @@ private:
 
     mutable juce::ReadWriteLock stateLock_;
     std::array<Track, kTrackCount> tracks_;
+    Language language_ = Language::Chinese;
     int activeTrackId_{0};
     uint64_t nextPlaybackEpoch_{1};
     uint64_t nextPlacementId_{1};

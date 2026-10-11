@@ -249,7 +249,7 @@ public:
                 onPreferencesChanged_();
         };
 
-        initialiseLabel(f0ModelLabel_, juce::String::fromUTF8(u8"音高检测模型"));
+        initialiseLabel(f0ModelLabel_, LOC_RAW("Pitch Detection Model"));
         addAndMakeVisible(f0ModelLabel_);
 
         const auto f0Models = ModelFactory::getAvailableF0Models(
@@ -290,7 +290,7 @@ public:
 
         if (!isVst3Plugin_) {
             initialiseToggleButton(experimentalFeaturesToggle_);
-            experimentalFeaturesToggle_.setButtonText(juce::String::fromUTF8(u8"启用实验性功能（参考轨、伸缩工具）"));
+            experimentalFeaturesToggle_.setButtonText(LOC_RAW("Enable Experimental Features (Reference Track, Time Stretch Tool)"));
             experimentalFeaturesToggle_.setToggleState(state.shared.experimentalFeaturesEnabled,
                                                        juce::dontSendNotification);
             experimentalFeaturesToggle_.onClick = [this] {
@@ -300,15 +300,15 @@ public:
             addAndMakeVisible(experimentalFeaturesToggle_);
 
             initialiseLabel(experimentalFeaturesHintLabel_,
-                            juce::String::fromUTF8(u8"提示：参考轨与伸缩工具目前仍不完善，属于实验性功能，可能存在 Bug。"));
+                            LOC_RAW("Hint: Reference Track and Time Stretch Tool are still under development and may contain bugs."));
             experimentalFeaturesHintLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
             experimentalFeaturesHintLabel_.setJustificationType(juce::Justification::topLeft);
             addAndMakeVisible(experimentalFeaturesHintLabel_);
 
-            initialiseLabel(experimentalReferenceAlignModeLabel_, juce::String::fromUTF8(u8"AUTO Ref 模式"));
+            initialiseLabel(experimentalReferenceAlignModeLabel_, LOC_RAW("AUTO Ref Mode"));
             addAndMakeVisible(experimentalReferenceAlignModeLabel_);
 
-            experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"普通 AUTO"), 1);
+            experimentalReferenceAlignModeSelector_.addItem(LOC_RAW("Standard AUTO"), 1);
             experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"GAME"), 2);
             experimentalReferenceAlignModeSelector_.setSelectedId(
                 static_cast<int>(state.shared.experimentalReferenceAlignMode) + 1,
@@ -923,7 +923,9 @@ class ShortcutSettingsPage final : public juce::Component
 public:
     int getContentHeight() const { return contentHeight_; }
 
-    ShortcutSettingsPage(AppPreferences& appPreferences, std::function<void()> onPreferencesChanged)
+    ShortcutSettingsPage(AppPreferences& appPreferences,
+                          std::function<void()> onPreferencesChanged,
+                          bool isVst3Plugin)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
         , settings_(appPreferences_.getState().shared.shortcuts)
@@ -932,43 +934,58 @@ public:
         // 通用: PlayPause, Stop, PlayFromStart, Undo, Redo, Cut, Copy, Paste, SelectAll,
         //        Delete, SplitClip, MergeClips, DuplicateClip, NudgeLeft, NudgeRight,
         //        ToggleSnap, ToolAutoTune, ToolTimeTool, CancelSelection, Eq
-        generalIds_ = {
-            KeyShortcutConfig::ShortcutId::PlayPause, KeyShortcutConfig::ShortcutId::Stop,
-            KeyShortcutConfig::ShortcutId::PlayFromStart,
-            KeyShortcutConfig::ShortcutId::Undo, KeyShortcutConfig::ShortcutId::Redo,
-            KeyShortcutConfig::ShortcutId::Cut, KeyShortcutConfig::ShortcutId::Copy,
-            KeyShortcutConfig::ShortcutId::Paste, KeyShortcutConfig::ShortcutId::SelectAll,
-            KeyShortcutConfig::ShortcutId::Delete,
-            KeyShortcutConfig::ShortcutId::SplitClip, KeyShortcutConfig::ShortcutId::MergeClips,
-            KeyShortcutConfig::ShortcutId::DuplicateClip,
-            KeyShortcutConfig::ShortcutId::NudgeLeft, KeyShortcutConfig::ShortcutId::NudgeRight,
-            KeyShortcutConfig::ShortcutId::ToggleSnap,
-            KeyShortcutConfig::ShortcutId::ToolAutoTune, KeyShortcutConfig::ShortcutId::ToolTimeTool,
-            KeyShortcutConfig::ShortcutId::CancelSelection,
-            KeyShortcutConfig::ShortcutId::Eq,
-        };
-        // OpenTune 专属: DrawNote, Select, LineAnchor, HandDraw
-        opentuneIds_ = {
-            KeyShortcutConfig::ShortcutId::ToolDrawNote, KeyShortcutConfig::ShortcutId::ToolSelect,
-            KeyShortcutConfig::ShortcutId::ToolLineAnchor, KeyShortcutConfig::ShortcutId::ToolHandDraw,
-        };
-        // OpenDyne 专属: Select, Pitch, PitchModulation, PitchDrift, VolumeEnvelope, Scissors
-        opendyneIds_ = {
-            KeyShortcutConfig::ShortcutId::ToolODSelect, KeyShortcutConfig::ShortcutId::ToolODPitch,
-            KeyShortcutConfig::ShortcutId::ToolODPitchModulation, KeyShortcutConfig::ShortcutId::ToolODPitchDrift,
-            KeyShortcutConfig::ShortcutId::ToolODVolumeEnvelope, KeyShortcutConfig::ShortcutId::ToolODScissors,
-        };
+        if (isVst3Plugin) {
+            generalIds_ = {
+                KeyShortcutConfig::ShortcutId::PlayPause, KeyShortcutConfig::ShortcutId::Stop,
+                KeyShortcutConfig::ShortcutId::Undo, KeyShortcutConfig::ShortcutId::Redo,
+                KeyShortcutConfig::ShortcutId::Cut, KeyShortcutConfig::ShortcutId::Copy,
+                KeyShortcutConfig::ShortcutId::Paste, KeyShortcutConfig::ShortcutId::SelectAll,
+                KeyShortcutConfig::ShortcutId::Delete,
+                KeyShortcutConfig::ShortcutId::DuplicateClip,
+                KeyShortcutConfig::ShortcutId::ToolAutoTune,
+                KeyShortcutConfig::ShortcutId::CancelSelection,
+                KeyShortcutConfig::ShortcutId::Eq,
+            };
+        } else {
+            generalIds_ = {
+                KeyShortcutConfig::ShortcutId::PlayPause, KeyShortcutConfig::ShortcutId::Stop,
+                KeyShortcutConfig::ShortcutId::PlayFromStart,
+                KeyShortcutConfig::ShortcutId::Undo, KeyShortcutConfig::ShortcutId::Redo,
+                KeyShortcutConfig::ShortcutId::Cut, KeyShortcutConfig::ShortcutId::Copy,
+                KeyShortcutConfig::ShortcutId::Paste, KeyShortcutConfig::ShortcutId::SelectAll,
+                KeyShortcutConfig::ShortcutId::Delete,
+                KeyShortcutConfig::ShortcutId::SplitClip, KeyShortcutConfig::ShortcutId::MergeClips,
+                KeyShortcutConfig::ShortcutId::DuplicateClip,
+                KeyShortcutConfig::ShortcutId::NudgeLeft, KeyShortcutConfig::ShortcutId::NudgeRight,
+                KeyShortcutConfig::ShortcutId::ToggleSnap,
+                KeyShortcutConfig::ShortcutId::ToolAutoTune, KeyShortcutConfig::ShortcutId::ToolTimeTool,
+                KeyShortcutConfig::ShortcutId::CancelSelection,
+                KeyShortcutConfig::ShortcutId::Eq,
+            };
+        }
+        // OpenTune/OpenDyne tool shortcuts have no execution path in VST3.
+        if (!isVst3Plugin) {
+            opentuneIds_ = {
+                KeyShortcutConfig::ShortcutId::ToolDrawNote, KeyShortcutConfig::ShortcutId::ToolSelect,
+                KeyShortcutConfig::ShortcutId::ToolLineAnchor, KeyShortcutConfig::ShortcutId::ToolHandDraw,
+            };
+            opendyneIds_ = {
+                KeyShortcutConfig::ShortcutId::ToolODSelect, KeyShortcutConfig::ShortcutId::ToolODPitch,
+                KeyShortcutConfig::ShortcutId::ToolODPitchModulation, KeyShortcutConfig::ShortcutId::ToolODPitchDrift,
+                KeyShortcutConfig::ShortcutId::ToolODVolumeEnvelope, KeyShortcutConfig::ShortcutId::ToolODScissors,
+            };
+        }
 
         // 内容高度，与 resized() 布局一一对应：
         // reduced(20) 的顶部+底部 40 + 每段(header 24 + gap 4 + rows*32 + gap 6) + 段间 10 + 底部 12 + 重置按钮 28
         const auto sectionH = [](int itemCount) {
             return 24 + 4 + itemCount * 32 + 6; // header + gapAfter + rows * rowH + trailingGap
         };
-        contentHeight_ = 40
-                       + sectionH(static_cast<int>(generalIds_.size())) + 10
-                       + sectionH(static_cast<int>(opentuneIds_.size())) + 10
-                       + sectionH(static_cast<int>(opendyneIds_.size()))
-                       + 12 + 28;
+        contentHeight_ = 40 + sectionH(static_cast<int>(generalIds_.size())) + 12 + 28;
+        if (!opentuneIds_.empty())
+            contentHeight_ += 10 + sectionH(static_cast<int>(opentuneIds_.size()));
+        if (!opendyneIds_.empty())
+            contentHeight_ += 10 + sectionH(static_cast<int>(opendyneIds_.size()));
 
         auto makeSectionHeader = [this](const juce::String& text) {
             auto* label = new juce::Label();
@@ -995,19 +1012,21 @@ public:
         };
 
         // === Section1: General ===
-        makeSectionHeader("General");
+        makeSectionHeader(LOC(kShortcutGeneral));
         for (auto id : generalIds_)
             makeShortcutRow(id);
 
-        // === Section 2: OpenTune Mode ===
-        makeSectionHeader("OpenTune Mode");
-        for (auto id : opentuneIds_)
-            makeShortcutRow(id);
+        if (!opentuneIds_.empty()) {
+            makeSectionHeader(LOC(kShortcutOpenTuneMode));
+            for (auto id : opentuneIds_)
+                makeShortcutRow(id);
+        }
 
-        // === Section 3: OpenDyne Mode ===
-        makeSectionHeader("OpenDyne Mode");
-        for (auto id : opendyneIds_)
-            makeShortcutRow(id);
+        if (!opendyneIds_.empty()) {
+            makeSectionHeader(LOC(kShortcutOpenDyneMode));
+            for (auto id : opendyneIds_)
+                makeShortcutRow(id);
+        }
 
         // Reset button
         resetAllButton_.setButtonText(LOC(kResetAllToDefaults));
@@ -1034,7 +1053,7 @@ public:
         const int buttonWidth = 220;
         int idx = 0;
 
-        auto layoutSection = [&](const juce::String& /*headerLabel*/, int itemCount, auto getRow) {
+        auto layoutSection = [&](int itemCount, auto getRow) {
             // Section header
             if (idx < sectionHeaders_.size())
                 sectionHeaders_[idx++]->setBounds(bounds.removeFromTop(24));
@@ -1048,7 +1067,7 @@ public:
         int shortcutIdx = 0;
 
         // Section1: General
-        layoutSection("General", static_cast<int>(generalIds_.size()), [&](int /*i*/, juce::Rectangle<int> row) {
+        layoutSection(static_cast<int>(generalIds_.size()), [&](int /*i*/, juce::Rectangle<int> row) {
             shortcutLabels_[shortcutIdx]->setBounds(row.removeFromLeft(labelWidth));
             shortcutButtons_[shortcutIdx]->setBounds(row.removeFromLeft(buttonWidth).reduced(0, 3));
             ++shortcutIdx;
@@ -1056,21 +1075,23 @@ public:
 
         bounds.removeFromTop(10);
 
-        // Section2: OpenTune Mode
-        layoutSection("OpenTune Mode", static_cast<int>(opentuneIds_.size()), [&](int /*i*/, juce::Rectangle<int> row) {
-            shortcutLabels_[shortcutIdx]->setBounds(row.removeFromLeft(labelWidth));
-            shortcutButtons_[shortcutIdx]->setBounds(row.removeFromLeft(buttonWidth).reduced(0, 3));
-            ++shortcutIdx;
-        });
+        if (!opentuneIds_.empty()) {
+            bounds.removeFromTop(10);
+            layoutSection(static_cast<int>(opentuneIds_.size()), [&](int /*i*/, juce::Rectangle<int> row) {
+                shortcutLabels_[shortcutIdx]->setBounds(row.removeFromLeft(labelWidth));
+                shortcutButtons_[shortcutIdx]->setBounds(row.removeFromLeft(buttonWidth).reduced(0, 3));
+                ++shortcutIdx;
+            });
+        }
 
-        bounds.removeFromTop(10);
-
-        // Section3: OpenDyne Mode
-        layoutSection("OpenDyne Mode", static_cast<int>(opendyneIds_.size()), [&](int /*i*/, juce::Rectangle<int> row) {
-            shortcutLabels_[shortcutIdx]->setBounds(row.removeFromLeft(labelWidth));
-            shortcutButtons_[shortcutIdx]->setBounds(row.removeFromLeft(buttonWidth).reduced(0, 3));
-            ++shortcutIdx;
-        });
+        if (!opendyneIds_.empty()) {
+            bounds.removeFromTop(10);
+            layoutSection(static_cast<int>(opendyneIds_.size()), [&](int /*i*/, juce::Rectangle<int> row) {
+                shortcutLabels_[shortcutIdx]->setBounds(row.removeFromLeft(labelWidth));
+                shortcutButtons_[shortcutIdx]->setBounds(row.removeFromLeft(buttonWidth).reduced(0, 3));
+                ++shortcutIdx;
+            });
+        }
 
         bounds.removeFromTop(12);
         resetAllButton_.setBounds(bounds.removeFromTop(28).removeFromLeft(180));
@@ -1235,9 +1256,9 @@ std::vector<TabbedPreferencesDialog::PageSpec> SharedPreferencePages::create(
         pages.push_back({ LOC(kView), std::move(page), SharedVisualPage::kContentHeight });
     }
     {
-        auto page = std::make_unique<ShortcutSettingsPage>(appPreferences, onPreferencesChanged);
+        auto page = std::make_unique<ShortcutSettingsPage>(appPreferences, onPreferencesChanged, isVst3Plugin);
         const int h = page->getContentHeight();
-        pages.push_back({ LOC(kKeyswitch), std::move(page), h });
+        pages.push_back({ LOC(kShortcuts), std::move(page), h });
     }
     return pages;
 }

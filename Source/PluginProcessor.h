@@ -52,6 +52,7 @@
 #include "Utils/PlayHeadState.h"
 #include "Utils/TrackConstants.h"
 #include "Utils/PitchShiftSettings.h"
+#include "Utils/LocalizationManager.h"
 #include "Utils/PlaybackAudioReader.h"
 #include "Content/ContentKey.h"
 #include "Content/ContentEditCommands.h"
@@ -801,11 +802,11 @@ public:
     void runReclaimSweepOnMessageThread();   // public for test synchronous invocation
     void scheduleReclaimSweep();
 
-    bool exportPlacementAudio(int trackId, int placementIndex, const juce::File& file);
+    bool exportPlacementAudio(int trackId, int placementIndex, const juce::File& file, Language language);
     // 导出整个轨道的音频（时长以最晚Clip结束为准）
-    bool exportTrackAudio(int trackId, const juce::File& file);
+    bool exportTrackAudio(int trackId, const juce::File& file, Language language);
     // 导出总线混音（所有轨道）
-    bool exportMasterMixAudio(const juce::File& file);
+    bool exportMasterMixAudio(const juce::File& file, Language language);
     
     // 导出错误信息
     juce::String getLastExportError() const { return lastExportError_; }

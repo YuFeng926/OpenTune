@@ -23,6 +23,7 @@
 #include "Plugin/StandaloneProcessorStateCodec.h"
 #endif
 #include "Utils/TimeCoordinate.h"
+#include "Utils/LocalizationManager.h"
 #include "Utils/PlacementFade.h"
 #include "Inference/GameNoteGenerator.h"      // GAME NoteGeneratorInput/Note DTO（进程级 GAME 入口）
 #include "Utils/LegacyNoteGenerator.h"
@@ -3379,6 +3380,7 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(
 // WAV文件写入辅助函数
 static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
                                        const juce::File& file,
+                                       Language language,
                                        juce::String* errorOut = nullptr)
 {
     auto outFile = file;
@@ -3390,7 +3392,7 @@ static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
     juce::WavAudioFormat wav;
     std::unique_ptr<juce::FileOutputStream> stream(outFile.createOutputStream());
     if (!stream) {
-        if (errorOut) *errorOut = "无法创建输出文件";
+        if (errorOut) *errorOut = Loc::get(language, "Create output file failed");
         return false;
     }
 
@@ -3403,7 +3405,7 @@ static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
 
     auto writer = wav.createWriterFor(outStream, options);
     if (!writer) {
-        if (errorOut) *errorOut = "Unable to create WAV writer";
+        if (errorOut) *errorOut = Loc::get(language, "Unable to create WAV writer");
         return false;
     }
 
@@ -3415,11 +3417,11 @@ static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
 // 音频导出
 // ============================================================================
 
-bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementIndex, const juce::File& file) {
+bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementIndex, const juce::File& file, Language language) {
     lastExportError_.clear();
     
     if (trackId < 0 || trackId >= MAX_TRACKS) {
-        lastExportError_ = "无效的轨道ID: " + juce::String(trackId);
+        lastExportError_ = Loc::get(language, "Invalid track ID: ") + juce::String(trackId);
         return false;
     }
 
@@ -3427,7 +3429,7 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
 
     StandaloneArrangement::Placement placement;
     if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-        lastExportError_ = "无效的片段索引 " + juce::String(placementIndex);
+        lastExportError_ = Loc::get(language, "Invalid clip index ") + juce::String(placementIndex);
         return false;
     }
 
@@ -3436,14 +3438,14 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
 
     PlaybackReadSource source;
     if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
-        lastExportError_ = "Placement audio is unavailable";
+        lastExportError_ = Loc::get(language, "Placement audio is unavailable");
         return false;
     }
 
     const int64_t placementLen = TimeCoordinate::secondsToSamplesCeil(
         placement.durationSeconds, kExportSampleRateHz);
     if (placementLen <= 0) {
-        lastExportError_ = "片段音频长度为零";
+        lastExportError_ = Loc::get(language, "Clip audio length is zero");
         return false;
     }
     
@@ -3468,14 +3470,14 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
                              placementLen,
                              source);
     
-    return writeAudioBufferToWavFile(out, file, &lastExportError_);
+    return writeAudioBufferToWavFile(out, file, language, &lastExportError_);
 }
 
-bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& file) {
+bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& file, Language language) {
     lastExportError_.clear();
     
     if (trackId < 0 || trackId >= MAX_TRACKS) {
-        lastExportError_ = "无效的轨道ID: " + juce::String(trackId);
+        lastExportError_ = Loc::get(language, "Invalid track ID: ") + juce::String(trackId);
         return false;
     }
 
@@ -3483,7 +3485,7 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
 
     const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
     if (placementCount <= 0) {
-        lastExportError_ = "轨道 " + juce::String(trackId + 1) + " 没有音频片段";
+        lastExportError_ = Loc::get(language, "Track ") + juce::String(trackId + 1) + Loc::get(language, " has no audio clips");
         return false;
     }
 
@@ -3506,7 +3508,7 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         totalLen = std::max(totalLen, placementEnd);
     }
     if (totalLen <= 0) {
-        lastExportError_ = "音频总长度为零或无效";
+        lastExportError_ = Loc::get(language, "Total audio length is zero or invalid");
         return false;
     }
 
@@ -3541,10 +3543,10 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
                                  0.0, out, totalLen, source);
     }
 
-    return writeAudioBufferToWavFile(out, file, &lastExportError_);
+    return writeAudioBufferToWavFile(out, file, language, &lastExportError_);
 }
 
-bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
+bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file, Language language) {
     jassert(standaloneArrangement_ != nullptr);
 
     const auto playbackSnapshot = standaloneArrangement_->loadPlaybackSnapshot();
@@ -3601,7 +3603,7 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
         }
     }
 
-    return writeAudioBufferToWavFile(mix, file);
+    return writeAudioBufferToWavFile(mix, file, language);
 }
 
 // ============================================================================

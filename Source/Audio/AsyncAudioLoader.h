@@ -16,6 +16,7 @@
 
 #include "AudioFormatRegistry.h"
 #include "../Utils/AppLogger.h"
+#include "../Utils/LocalizationManager.h"
 
 namespace OpenTune {
 
@@ -75,6 +76,7 @@ public:
     {
         stopThread(2000);
 
+        language_ = LocalizationManager::getInstance().resolveLanguage();
         fileToLoad_ = file;
         progressCallback_ = progressCallback;
         completionCallback_ = completionCallback;
@@ -87,7 +89,7 @@ public:
      */
     void run() override
     {
-        updateProgress(0.0f, juce::String::fromUTF8(u8"正在打开文件..."));
+        updateProgress(0.0f, Loc::get(language_, "Opening file..."));
 
         juce::AudioFormatManager formatManager;
         AudioFormatRegistry::registerImportFormats(formatManager);
@@ -100,26 +102,29 @@ public:
             const auto probe = AudioFormatRegistry::probeFile(fileToLoad_);
             const auto supportedWildcard = probe.wildcardFilter.replaceCharacters("*", "");
 
-            juce::String detail = juce::String::fromUTF8(u8"无法打开该音频文件。\n");
-            detail += juce::String::fromUTF8(u8"文件：") + fileToLoad_.getFileName() + "\n";
+            juce::String detail = Loc::get(language_, "Could not open this audio file.\n");
+            detail += Loc::get(language_, "File: ") + fileToLoad_.getFileName() + "\n";
             if (fileExt.isNotEmpty())
-                detail += juce::String::fromUTF8(u8"扩展名：") + fileExt + "\n";
+                detail += Loc::get(language_, "Extension: ") + fileExt + "\n";
 
-            detail += juce::String::fromUTF8(u8"存在：") + juce::String(probe.fileExists ? "yes" : "no") + "\n";
+            detail += Loc::get(language_, "Exists: ")
+                + Loc::get(language_, probe.fileExists ? Loc::Keys::kYes : Loc::Keys::kNo) + "\n";
             if (probe.fileSize >= 0)
-                detail += juce::String::fromUTF8(u8"文件大小：") + juce::String(probe.fileSize) + " bytes\n";
-            detail += juce::String::fromUTF8(u8"可开流：") + juce::String(probe.streamOpened ? "yes" : "no") + "\n";
+                detail += Loc::get(language_, "File size: ") + juce::String(probe.fileSize)
+                    + " " + Loc::get(language_, "bytes") + "\n";
+            detail += Loc::get(language_, "Stream accessible: ")
+                + Loc::get(language_, probe.streamOpened ? Loc::Keys::kYes : Loc::Keys::kNo) + "\n";
 
             if (supportedWildcard.isNotEmpty())
-                detail += juce::String::fromUTF8(u8"当前支持：") + supportedWildcard;
+                detail += Loc::get(language_, "Supported formats: ") + supportedWildcard;
             else
-                detail += juce::String::fromUTF8(u8"当前环境未注册可用音频解码器。");
+                detail += Loc::get(language_, "No audio decoders are registered in this environment.");
 
             if (probe.registeredFormats.isNotEmpty())
-                detail += "\n" + juce::String::fromUTF8(u8"已注册解码器：") + probe.registeredFormats;
+                detail += "\n" + Loc::get(language_, "Registered decoders: ") + probe.registeredFormats;
 
             if (probe.containerDiagnostics.isNotEmpty())
-                detail += "\n" + juce::String::fromUTF8(u8"容器诊断：") + probe.containerDiagnostics;
+                detail += "\n" + Loc::get(language_, "Container diagnostics: ") + probe.containerDiagnostics;
 
             AppLogger::error("AsyncAudioLoader: failed path=" + fileToLoad_.getFullPathName()
                 + " exists=" + juce::String(probe.fileExists ? "true" : "false")
@@ -134,19 +139,19 @@ public:
             return;
         }
 
-        updateProgress(0.1f, juce::String::fromUTF8(u8"正在读取音频数据..."));
+        updateProgress(0.1f, Loc::get(language_, "Reading audio data..."));
 
         juce::AudioBuffer<float> buffer(static_cast<int>(reader->numChannels),
                                         static_cast<int>(reader->lengthInSamples));
 
         if (reader->read(&buffer, 0, static_cast<int>(reader->lengthInSamples), 0, true, true))
         {
-            updateProgress(1.0f, juce::String::fromUTF8(u8"加载完成"));
+            updateProgress(1.0f, Loc::get(language_, "Loading complete"));
             notifyCompletion({ true, "", buffer, reader->sampleRate });
         }
         else
         {
-            notifyCompletion({ false, juce::String::fromUTF8(u8"读取音频数据失败，文件可能损坏或编码不受支持。"), {}, 0.0 });
+            notifyCompletion({ false, Loc::get(language_, "Failed to read audio data. The file may be corrupted or use an unsupported encoding."), {}, 0.0 });
         }
     }
 
@@ -199,6 +204,7 @@ private:
     ProgressCallback progressCallback_;                 // 进度回调
     CompletionCallback completionCallback_;             // 完成回调
     std::shared_ptr<std::atomic<bool>> validityToken_;  // 有效性令牌（用于安全取消）
+    Language language_ = Language::Chinese;
 };
 
 } // namespace OpenTune

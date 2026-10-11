@@ -25,7 +25,7 @@ juce::Colour makeDefaultTrackColour()
 StandaloneArrangement::StandaloneArrangement()
 {
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
-        tracks_[static_cast<size_t>(trackId)].name = "Track " + juce::String(trackId + 1);
+        tracks_[static_cast<size_t>(trackId)].name = defaultTrackName(trackId);
         tracks_[static_cast<size_t>(trackId)].colour = makeDefaultTrackColour();
     }
 
@@ -34,6 +34,35 @@ StandaloneArrangement::StandaloneArrangement()
 }
 
 StandaloneArrangement::~StandaloneArrangement() = default;
+
+juce::String StandaloneArrangement::defaultTrackName(int trackId) const
+{
+    return Loc::get(language_, Loc::Keys::kTrackPrefix) + juce::String(trackId + 1);
+}
+
+bool StandaloneArrangement::isDefaultTrackName(const juce::String& name, int trackId)
+{
+    for (int i = 0; i < static_cast<int>(Language::Count); ++i) {
+        const auto language = static_cast<Language>(i);
+        if (name == Loc::get(language, Loc::Keys::kTrackPrefix) + juce::String(trackId + 1))
+            return true;
+    }
+    return false;
+}
+
+void StandaloneArrangement::setLanguage(Language language)
+{
+    const juce::ScopedWriteLock lock(stateLock_);
+    if (language_ == language)
+        return;
+
+    language_ = language;
+    for (int trackId = 0; trackId < kTrackCount; ++trackId) {
+        auto& name = tracks_[static_cast<size_t>(trackId)].name;
+        if (isDefaultTrackName(name, trackId))
+            name = defaultTrackName(trackId);
+    }
+}
 
 StandaloneArrangement::PlaybackSnapshotHandle StandaloneArrangement::loadPlaybackSnapshot() const
 {
@@ -323,7 +352,7 @@ void StandaloneArrangement::clear()
         track.isMuted = false;
         track.isSolo = false;
         track.volume = 1.0f;
-        track.name = "Track " + juce::String(trackId + 1);
+        track.name = defaultTrackName(trackId);
         track.colour = makeDefaultTrackColour();
         track.currentRmsDb.store(-100.0f, std::memory_order_relaxed);
     }
@@ -990,7 +1019,7 @@ bool StandaloneArrangement::removeTrackAndShift(int trackId, int visibleCount)
     cleared.isMuted = false;
     cleared.isSolo = false;
     cleared.volume = 1.0f;
-    cleared.name = "Track " + juce::String(lastSlot + 1);
+    cleared.name = defaultTrackName(lastSlot);
     cleared.colour = makeDefaultTrackColour();
     cleared.currentRmsDb.store(-100.0f, std::memory_order_relaxed);
 

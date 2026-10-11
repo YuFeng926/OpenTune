@@ -20,12 +20,13 @@
 
 #include "ProjectModel.h"
 #include "Error.h"
+#include "LocalizationManager.h"
 
 namespace OpenTune {
 
 class ProjectPersistence {
 public:
-    ProjectPersistence() = default;
+    explicit ProjectPersistence(Language language = Language::Chinese) : language_(language) {}
 
     // ============================================================================
     // ValueTree 转换
@@ -98,6 +99,8 @@ private:
     static juce::String getOptionalProperty(const juce::ValueTree& tree, const juce::Identifier& name, const juce::String& defaultValue);
     static void setColourProperty(juce::ValueTree& tree, const juce::Identifier& name, const juce::Colour& colour);
     static juce::Colour getColourProperty(const juce::ValueTree& tree, const juce::Identifier& name, const juce::Colour& defaultColour);
+
+    Language language_ = Language::Chinese;
 };
 
 } // namespace OpenTune

@@ -537,17 +537,17 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     horizontalScrollBar_.setAutoHide(false);
     verticalScrollBar_.setAutoHide(false);
 
-    scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous ? "Cont" : "Page");
+    scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous ? LOC(kScrollContinuous) : LOC(kScrollPage));
     scrollModeToggleButton_.setLookAndFeel(&smallButtonLookAndFeel_);
     scrollModeToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
     scrollModeToggleButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
     scrollModeToggleButton_.onClick = [this] {
         if (scrollMode_ == ScrollMode::Page) {
             scrollMode_ = ScrollMode::Continuous;
-            scrollModeToggleButton_.setButtonText("Cont");
+            scrollModeToggleButton_.setButtonText(LOC(kScrollContinuous));
         } else {
             scrollMode_ = ScrollMode::Page;
-            scrollModeToggleButton_.setButtonText("Page");
+            scrollModeToggleButton_.setButtonText(LOC(kScrollPage));
         }
         transitionActive_ = false;
         requestTransition_ = false;
@@ -562,7 +562,7 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
 
     // Time/Bars 切换按钮
     timeUnitToggleButton_.setFontHeight(11.0f);
-    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? "Time" : "BPM");
+    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? LOC(kTime) : "BPM");
     timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
     timeUnitToggleButton_.onClick = [this] {
         const auto nextMode = (displayMode_ == TimelineDisplayMode::Time)
@@ -999,10 +999,20 @@ void ArrangementViewComponent::setTimelineDisplayMode(TimelineDisplayMode mode)
     if (displayMode_ == mode) return;
     cancelZoomPreview();
     displayMode_ = mode;
-    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? "Time" : "BPM");
+    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? LOC(kTime) : "BPM");
     // Only background changed (grid + ruler), no metric rebuild needed
     rebuildTimelineCoverage();
     repaint();
+}
+
+void ArrangementViewComponent::refreshLocalizedText()
+{
+    scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous
+        ? LOC(kScrollContinuous)
+        : LOC(kScrollPage));
+    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time
+        ? LOC(kTime)
+        : "BPM");
 }
 
 void ArrangementViewComponent::rebuildThemeBackdrop()
@@ -1791,7 +1801,7 @@ void ArrangementViewComponent::drawImportDropPreview(juce::Graphics& g)
                 g.drawHorizontalLine(newTrackRect.getY(), 0.0f, static_cast<float>(barWidth));
                 g.setColour(UIColors::panelGlow.withAlpha(0.60f));
                 g.setFont(UIColors::getUIFontExact(16.0f));
-                g.drawText(juce::String::fromUTF8(u8"+ 鏂板缓杞ㄩ亾"),
+                g.drawText("+ " + LOC(kAddTrack),
                            newTrackRect.toFloat(),
                            juce::Justification::centredLeft);
             }
