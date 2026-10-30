@@ -1377,6 +1377,9 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
                 // else: signal unchanged — preserve everything; PCM 由 readRestoredAudio / 用户 Read 重建
             }
         }
+
+        if (signalChanged)
+            markAllCompositeContentsDirty();
     }
 
     refreshRegisteredRenderers(publishModelChange());
@@ -1657,9 +1660,11 @@ juce::ARAAudioModification* OpenTuneDocumentController::doCreateAudioModificatio
         if (sourceDto != nullptr && sourceDto->hasContentState())
         {
             // 深拷贝项目 content，不读 PCM、不启动 F0、不通知 host。
+            // 克隆源自已 archive 恢复的 source：标记 restored，避免首读 force 清掉修音数据
             dto.content = cloneModificationContent(*sourceDto->content);
             dto.birthState = AudioModificationBirthState::WaitingForSource;
             dto.originalF0InputStamp = sourceDto->originalF0InputStamp;
+            dto.restoredFromArchive = sourceDto->restoredFromArchive;
         }
     }
 
@@ -1997,6 +2002,8 @@ void OpenTuneDocumentController::readRestoredAudio(const AudioSource* enabledSou
         if (auto* source = findAudioSource(mod.content->sourceWindow.sourcePersistentId))
             mod.originalF0InputStamp = makeF0InputStamp(*source, mod);
 
+        // archive 恢复的有效内容：首次自动 Read 不得 force-refresh（保留已归档修音数据）
+        mod.restoredFromArchive = true;
         birthContentForModification(mod);
     }
 }
@@ -3114,10 +3121,8 @@ ContentKey OpenTuneDocumentController::registerCompositeContent(
     content.dirty = true;
     auto [it, inserted] = compositeContents_.emplace(token, std::move(content));
     juce::ignoreUnused(inserted);
-    it->second.segments.clear();
     it->second.snapshot.reset();
     it->second.audioBuffer.reset();
-    it->second.complete = false;
     it->second.dirty = true;
     updateCompositeContent(it->second.key, scopeRegions);
     return it->second.key;
@@ -3134,6 +3139,8 @@ void OpenTuneDocumentController::updateCompositeContent(
     if (content == nullptr)
         return;
 
+    // scope 快照：dirty rebuild 从这里重新投影，保证 region 属性变化后用新几何
+    content->scopeRegions = scopeRegions;
     content->segments.clear();
     if (!scopeRegions.empty())
     {
@@ -3143,7 +3150,11 @@ void OpenTuneDocumentController::updateCompositeContent(
                   { return a.startInPlaybackTime < b.startInPlaybackTime; });
         for (const auto& p : projections)
         {
-            if (!p.contentKey.isValid() || p.durationInPlaybackTime <= 0.0)
+            // 与 PlaybackRegionProjection::isPlaybackRenderable 的 1:1 判定一致：
+            // 时间伸缩 region 排除在 composite 之外（不做伸缩映射），
+            // 避免其长度不一致导致 composite 音频/F0/notes 全部错位。
+            if (!p.contentKey.isValid()
+                || !p.isPlaybackRenderable())
                 continue;
             CompositeSegment segment;
             segment.playbackRegion = p.playbackRegion;
@@ -3151,6 +3162,7 @@ void OpenTuneDocumentController::updateCompositeContent(
             segment.trackStartSeconds = p.startInPlaybackTime;
             segment.trackEndSeconds = p.startInPlaybackTime + p.durationInPlaybackTime;
             segment.sourceStartSeconds = p.startInModificationTime;
+            segment.sourceEndSeconds = p.startInModificationTime + p.durationInModificationTime;
             content->segments.push_back(segment);
         }
     }
@@ -3204,9 +3216,13 @@ OpenTuneDocumentController::mapCompositeRange(ContentKey compositeKey,
     return mappings;
 }
 
-juce::ChangeBroadcaster& OpenTuneDocumentController::getCompositeChangeBroadcaster() noexcept
+bool OpenTuneDocumentController::hasArchivedContentNeedingRestore() const
 {
-    return compositeChangeBroadcaster_;
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    for (const auto& mod : audioModifications_)
+        if (mod.restoredFromArchive)
+            return true;
+    return false;
 }
 
 OpenTuneDocumentController::CompositeContent*
@@ -3241,13 +3257,35 @@ void OpenTuneDocumentController::rebuildCompositeContent(
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     content.dirty = false;
 
+    // P1-5：每次 dirty rebuild 都从当前 scopeRegions 重新投影 segments，
+    // 不使用缓存 segments —— region 几何（placement/属性）变化后用新几何。
+    content.segments.clear();
+    if (!content.scopeRegions.empty())
+    {
+        auto projections = getPlaybackRegionProjectionsFor(content.scopeRegions);
+        std::sort(projections.begin(), projections.end(),
+                  [](const PlaybackRegionProjection& a, const PlaybackRegionProjection& b)
+                  { return a.startInPlaybackTime < b.startInPlaybackTime; });
+        for (const auto& p : projections)
+        {
+            if (!p.contentKey.isValid() || !p.isPlaybackRenderable())
+                continue;
+            CompositeSegment segment;
+            segment.playbackRegion = p.playbackRegion;
+            segment.sourceContentKey = p.contentKey;
+            segment.trackStartSeconds = p.startInPlaybackTime;
+            segment.trackEndSeconds = p.startInPlaybackTime + p.durationInPlaybackTime;
+            segment.sourceStartSeconds = p.startInModificationTime;
+            segment.sourceEndSeconds = p.startInModificationTime + p.durationInModificationTime;
+            content.segments.push_back(segment);
+        }
+    }
+
     const auto& segments = content.segments;
     if (segments.empty())
     {
         content.snapshot.reset();
         content.audioBuffer.reset();
-        content.complete = false;
-        compositeChangeBroadcaster_.sendChangeMessage();
         return;
     }
 
@@ -3263,16 +3301,12 @@ void OpenTuneDocumentController::rebuildCompositeContent(
     {
         content.snapshot.reset();
         content.audioBuffer.reset();
-        content.complete = false;
-        compositeChangeBroadcaster_.sendChangeMessage();
         return;
     }
 
     const double renderSampleRate = TimeCoordinate::kRenderSampleRate;
 
     // ── Audio ──
-    bool allSegmentsHaveAudio = true;
-    bool allSegmentsHaveF0 = true;
     std::shared_ptr<const juce::AudioBuffer<float>> compositeBuffer;
     {
         int numChannels = 1;
@@ -3294,7 +3328,6 @@ void OpenTuneDocumentController::rebuildCompositeContent(
             const auto sourceBuffer = readAudioBuffer(segment.sourceContentKey);
             if (sourceBuffer == nullptr)
             {
-                allSegmentsHaveAudio = false;
                 continue;
             }
             const double segmentDuration = segment.trackEndSeconds - segment.trackStartSeconds;
@@ -3353,7 +3386,6 @@ void OpenTuneDocumentController::rebuildCompositeContent(
         const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
         if (sourceSnapshot == nullptr || sourceSnapshot->pitchCurve == nullptr)
         {
-            allSegmentsHaveF0 = false;
             continue;
         }
         const auto& sourceCurve = *sourceSnapshot->pitchCurve;
@@ -3363,7 +3395,6 @@ void OpenTuneDocumentController::rebuildCompositeContent(
         const auto& sourceEnergy = sourceCurve.getOriginalEnergy();
         if (sourceHop <= 0 || sourceSampleRate <= 0.0)
         {
-            allSegmentsHaveF0 = false;
             continue;
         }
 
@@ -3400,6 +3431,10 @@ void OpenTuneDocumentController::rebuildCompositeContent(
     }
 
     // ── Notes ──
+    // composite 局部时间 local = (segment.trackStart - trackStart)
+    //   + (note.time - segment.sourceStart)
+    // 只取 [sourceStart, sourceEnd) 窗口内的 note（与 mapCompositeRange/router
+    // 回写坐标一致：裁剪 note 到窗口后偏移）。
     std::vector<Note> mergedNotes;
     for (const auto& segment : segments)
     {
@@ -3408,9 +3443,15 @@ void OpenTuneDocumentController::rebuildCompositeContent(
             continue;
         for (const auto& note : sourceSnapshot->notes)
         {
+            // 与 source window 求交（裁剪而非丢弃，保留跨界 note 的可见部分）
+            const double clippedStart = std::max(note.startTime, segment.sourceStartSeconds);
+            const double clippedEnd = std::min(note.endTime, segment.sourceEndSeconds);
+            if (clippedEnd <= clippedStart)
+                continue;
+            const double localOffset = segment.trackStartSeconds - trackStart;
             Note shifted = note;
-            shifted.startTime += segment.trackStartSeconds - trackStart;
-            shifted.endTime += segment.trackStartSeconds - trackStart;
+            shifted.startTime = localOffset + (clippedStart - segment.sourceStartSeconds);
+            shifted.endTime = localOffset + (clippedEnd - segment.sourceStartSeconds);
             mergedNotes.push_back(shifted);
         }
     }
@@ -3430,7 +3471,9 @@ void OpenTuneDocumentController::rebuildCompositeContent(
     state.analysis.pitchCurve->setOriginalEnergy(mergedEnergy);
 
     // 合并 correction segments 到 composite 时间轴，保证 pitch 编辑后的曲线可见。
-    std::vector<PitchCorrectionSegment> mergedSegments;
+    // 映射与原始 F0 合并同一约定：composite 局部时间 = (segment.trackStart - trackStart)
+    //   + (sourceTime - segment.sourceStart)，并裁剪到 source window。
+    std::vector<PitchCorrectionSegment> mappedSegments;
     for (const auto& segment : segments)
     {
         const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
@@ -3442,30 +3485,38 @@ void OpenTuneDocumentController::rebuildCompositeContent(
         if (sourceHop <= 0 || sourceSampleRate <= 0.0)
             continue;
 
-        const auto mapFrame = [&](int sourceFrame)
+        const double localOffset = segment.trackStartSeconds - trackStart;
+        const auto mapFrame = [&](int sourceFrame) -> int
         {
             const double sourceTime = static_cast<double>(sourceFrame)
                 * sourceHop / sourceSampleRate;
-            const double trackTime = segment.trackStartSeconds
-                + (sourceTime - segment.sourceStartSeconds);
+            const double localTime = localOffset + (sourceTime - segment.sourceStartSeconds);
             return static_cast<int>(std::round(
-                trackTime * compositeSampleRate / compositeHop));
+                localTime * compositeSampleRate / compositeHop));
         };
 
         for (const auto& sourceSegment : sourceCurve.getCorrectionSegments())
         {
-            const int startFrame = mapFrame(sourceSegment.startFrame);
-            const int endFrame = mapFrame(sourceSegment.endFrame);
+            // 裁剪到 segment 的 source window：窗口外 frame 不参与
+            const int windowStartFrame = static_cast<int>(std::floor(
+                segment.sourceStartSeconds * sourceSampleRate / sourceHop));
+            const int windowEndFrame = static_cast<int>(std::ceil(
+                segment.sourceEndSeconds * sourceSampleRate / sourceHop));
+            const int startFrame = std::max(mapFrame(sourceSegment.startFrame),
+                                            mapFrame(windowStartFrame));
+            const int endFrame = std::min(mapFrame(sourceSegment.endFrame),
+                                          mapFrame(windowEndFrame));
             if (endFrame <= startFrame)
                 continue;
 
             std::vector<float> data(static_cast<size_t>(endFrame - startFrame), 0.0f);
             for (int frame = startFrame; frame < endFrame; ++frame)
             {
-                const double trackTime = static_cast<double>(frame)
+                // composite 局部时间 → source 时间（同一偏移约定）
+                const double localTime = static_cast<double>(frame)
                     * compositeHop / compositeSampleRate;
                 const double sourceTime = segment.sourceStartSeconds
-                    + (trackTime - segment.trackStartSeconds);
+                    + (localTime - localOffset);
                 const int sourceFrame = static_cast<int>(std::round(
                     sourceTime * sourceSampleRate / sourceHop));
                 const int offset = sourceFrame - sourceSegment.startFrame;
@@ -3476,14 +3527,68 @@ void OpenTuneDocumentController::rebuildCompositeContent(
 
             PitchCorrectionSegment mapped(startFrame, endFrame, data, sourceSegment.source);
             mapped.parameterSnapshot = sourceSegment.parameterSnapshot;
-            mergedSegments.push_back(std::move(mapped));
+            mappedSegments.push_back(std::move(mapped));
         }
     }
-    std::sort(mergedSegments.begin(), mergedSegments.end(),
+
+    // last-wins：按 startFrame 排序后，后段覆盖前段的重叠区间（必要时拆分）。
+    // 只在 composite 合并层实现，不改动 PitchCurve 单 item 语义。
+    std::sort(mappedSegments.begin(), mappedSegments.end(),
               [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b)
               { return a.startFrame < b.startFrame; });
+    std::vector<PitchCorrectionSegment> mergedSegments;
+    for (auto& incoming : mappedSegments)
+    {
+        std::vector<PitchCorrectionSegment> next;
+        next.reserve(mergedSegments.size() + 2);
+        for (auto& existing : mergedSegments)
+        {
+            if (existing.endFrame <= incoming.startFrame
+                || existing.startFrame >= incoming.endFrame)
+            {
+                next.push_back(std::move(existing));   // 无重叠
+                continue;
+            }
+            // 拆分 existing：保留 incoming 覆盖区间之外的部分
+            if (existing.startFrame < incoming.startFrame)
+            {
+                PitchCorrectionSegment head(existing.startFrame, incoming.startFrame,
+                                            { existing.f0Data.begin(),
+                                              existing.f0Data.begin() + (incoming.startFrame - existing.startFrame) },
+                                            existing.source);
+                head.parameterSnapshot = existing.parameterSnapshot;
+                next.push_back(std::move(head));
+            }
+            if (existing.endFrame > incoming.endFrame)
+            {
+                const int headCut = incoming.endFrame - existing.startFrame;
+                PitchCorrectionSegment tail(incoming.endFrame, existing.endFrame,
+                                            { existing.f0Data.begin() + headCut,
+                                              existing.f0Data.end() },
+                                            existing.source);
+                tail.parameterSnapshot = existing.parameterSnapshot;
+                next.push_back(std::move(tail));
+            }
+        }
+        next.push_back(std::move(incoming));
+        std::sort(next.begin(), next.end(),
+                  [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b)
+                  { return a.startFrame < b.startFrame; });
+        mergedSegments = std::move(next);
+    }
     state.analysis.pitchCurve->replaceCorrectionSegments(mergedSegments);
 
+    // detectedKey：composite snapshot 取第一个有内容的 source（只读展示值）
+    for (const auto& segment : segments)
+    {
+        const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
+        if (sourceSnapshot != nullptr
+            && sourceSnapshot->detectedKey.origin != Origin::Unset)
+        {
+            state.analysis.detectedKey = sourceSnapshot->detectedKey;
+            break;
+        }
+    }
     for (const auto& segment : segments)
     {
         const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
@@ -3514,8 +3619,6 @@ void OpenTuneDocumentController::rebuildCompositeContent(
         makeContentSnapshot(state));
     content.snapshot = snapshot;
     content.audioBuffer = state.audioBuffer;
-    content.complete = allSegmentsHaveAudio && allSegmentsHaveF0;
-    compositeChangeBroadcaster_.sendChangeMessage();
 }
 
 void OpenTuneDocumentController::markAllCompositeContentsDirty()
@@ -3711,6 +3814,7 @@ bool OpenTuneDocumentController::applyDetectedKeyToModification(const ContentKey
             juce::ARAContentUpdateScopes::harmoniesAreAffected(), true);
     
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
     return true;
 }
 

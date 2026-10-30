@@ -89,24 +89,7 @@ ContentKey chooseActiveCaptureContentKey(Capture::CaptureSession& session,
 }
 
 #if JucePlugin_Enable_ARA
-// Composite 接入后 resolveCurrentContentSync 不再走 per-region projection；
-// 保留此自由函数供后续 composite 编辑回写 lane 使用（内部快照路由保留 processor 路径）。
-[[maybe_unused]] ContentTimelineProjection makePianoRollLocalProjection(
-    const OpenTuneAudioProcessor& processor,
-    const OpenTuneDocumentController::PlaybackRegionProjection& region)
-{
-    const auto snapshot = processor.getContentSnapshot(region.contentKey);
-    if (snapshot == nullptr)
-        return {};
 
-    ContentTimelineProjection projection;
-    projection.timelineStartSeconds = region.startInPlaybackTime;
-    projection.timelineDurationSeconds = region.durationInPlaybackTime;
-    projection.contentStartSeconds = region.startInModificationTime
-        - snapshot->sourceWindow.sourceStartSeconds;
-    projection.contentDurationSeconds = region.durationInModificationTime;
-    return projection;
-}
 #endif
 
 } // anonymous namespace
@@ -965,7 +948,10 @@ void OpenTuneAudioProcessorEditor::readScopeAudio(bool manual)
         return;
     }
 
-    const bool force = processorRef_.takeInitialAraReadPending();
+    // P1-2：archive 恢复的有效内容不 force（保住已归档修音数据）；
+    // split 克隆的新 modification / 新实例仍走 force 首读。
+    const bool archivedContentPresent = dc->hasArchivedContentNeedingRestore();
+    const bool force = processorRef_.takeInitialAraReadPending() && !archivedContentPresent;
     dc->requestReadAudioForPlaybackRegionsAsync(uniqueRegions, force,
         [this, manual](int refreshed) {
             if (refreshed < 0) {
@@ -976,9 +962,13 @@ void OpenTuneAudioProcessorEditor::readScopeAudio(bool manual)
                 } else {
                     AppLogger::log("ReadAudio: auto-read failed, refreshed=" + juce::String(refreshed));
                 }
+                // P2-8：失败不清 autoReadAttempted_/compositeScopeChanged_，
+                // 允许同 scope 自动重试；节流防死循环（见 autoReadFailureCount_）。
+                ++autoReadFailureCount_;
                 return;
             }
 
+            autoReadFailureCount_ = 0;
             if (refreshed == 0)
                 return;
 
@@ -1969,10 +1959,11 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     }
 
     // 一次性 auto-Read：composite placement 就绪且尚未读过（或 scope 变化）时
-    // 自动触发一次读取。先置 flag 再调用，避免 syncContentProjectionToPianoRoll
-    // 在回调中递归重入时重复读取。
+    // 自动触发一次读取。失败时不清 flags（P2-8 同 scope 自动重试），
+    // 但连续失败达上限后停止自动重试，防 30Hz 死循环。
     if (!sync.isRegularVst3Capture && sync.hasPlacements()
-        && (!autoReadAttempted_ || compositeScopeChanged_)) {
+        && (!autoReadAttempted_ || compositeScopeChanged_)
+        && autoReadFailureCount_ < kMaxAutoReadFailures) {
         autoReadAttempted_ = true;
         compositeScopeChanged_ = false;
         readScopeAudio(false);

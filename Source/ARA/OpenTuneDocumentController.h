@@ -138,6 +138,7 @@ public:
         double trackStartSeconds{0.0};
         double trackEndSeconds{0.0};
         double sourceStartSeconds{0.0};
+        double sourceEndSeconds{0.0};
     };
 
     struct CompositeEditMapping
@@ -159,7 +160,10 @@ public:
     std::vector<CompositeEditMapping> mapCompositeRange(ContentKey compositeKey,
                                                         double trackStartSeconds,
                                                         double trackEndSeconds) const;
-    juce::ChangeBroadcaster& getCompositeChangeBroadcaster() noexcept;
+
+    // 任一已注册 AudioModification 在 archive 恢复路径获得了有效内容
+    // （restoredFromArchive）时为 true：编辑器首读不应 force-refresh。
+    bool hasArchivedContentNeedingRestore() const;
 
     void didUpdateMusicalContextProperties(juce::ARAMusicalContext* musicalContext) override;
     void didUpdateRegionSequenceProperties(juce::ARARegionSequence* regionSequence) override;
@@ -370,16 +374,17 @@ private:
     {
         ContentKey key;
         uint64_t instanceToken{0};
+        // 当前 composite scope 的 PlaybackRegion 指针列表（update 时写入）。
+        // dirty rebuild 按此重新投影 segments，保证 region 几何变化后用新几何。
+        std::vector<juce::ARAPlaybackRegion*> scopeRegions;
         std::vector<CompositeSegment> segments;
         std::shared_ptr<const EditableContentSnapshot> snapshot;
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-        bool complete{false};
         bool dirty{true};
         uint64_t generation{0};
     };
     mutable std::unordered_map<uint64_t, CompositeContent> compositeContents_;
     uint64_t nextCompositeInstanceToken_{1};
-    mutable juce::ChangeBroadcaster compositeChangeBroadcaster_;
     CompositeContent* findCompositeContent(ContentKey key);
     const CompositeContent* findCompositeContent(ContentKey key) const;
     void rebuildCompositeContent(CompositeContent& content) const;

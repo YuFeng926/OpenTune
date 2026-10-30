@@ -56,6 +56,9 @@ struct AudioModification
     ContentKey contentIdentity;
     uint64_t birthRevision{0};
     AudioModificationBirthState birthState{AudioModificationBirthState::Empty};
+    // archive 恢复路径（readRestoredAudio）发现有效 F0 时置位：
+    // 首次自动 Read 不得对这类内容 force-refresh（会清掉已归档修音数据）。
+    bool restoredFromArchive{false};
     // 内容所有权
     std::optional<ContentState> content;
     std::optional<OriginalF0InputStamp> originalF0InputStamp;

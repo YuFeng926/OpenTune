@@ -5046,10 +5046,11 @@ ScissorsCommitResult OpenTuneAudioProcessor::applyScissorsNotes(
         return result;
     }
 
-    if (!replaceContentNotesForFullMutation(key, afterNotes))
+    // P2-9：走 virtual 路由，使 ARAComposite key 命中 composite 分支
+    if (!contentCommands_->replaceContentNotesForFullMutation(key, afterNotes))
         return result;
 
-    republishPlaybackSource(key);
+    contentCommands_->republishPlaybackSource(key);
 
     // 提交成功后不与 expectedNotesRevision 比较（notesRevision 已推进）；
     // postcommit snapshot 作为事务结果，其 notes（normalized data）作为 undo after。
@@ -5388,6 +5389,28 @@ std::vector<CompositeSlice> mapCompositeSlices(const OpenTuneDocumentController*
     return slices;
 }
 
+// 编辑器传入的 composite 局部时间（0..trackDuration）→ 绝对 track time。
+// 统一坐标约定：router 内部所有比较/传参使用绝对 track time
+// （= getCompositeTrackRange(key)->trackStartSeconds + 局部时间）。
+double compositeLocalToAbsoluteTrackTime(const OpenTuneDocumentController* dc,
+                                         ContentKey key,
+                                         double localSeconds)
+{
+    const auto range = dc != nullptr ? dc->getCompositeTrackRange(key) : std::nullopt;
+    return (range.has_value() ? range->trackStartSeconds : 0.0) + localSeconds;
+}
+
+// composite 局部 frame → 绝对 track time（秒），用于 frame 域范围
+double compositeFrameToAbsoluteTrackTime(ContentKey key,
+                                         const OpenTuneDocumentController* dc,
+                                         int frame,
+                                         int compHop, double compSR)
+{
+    const double localSec = static_cast<double>(frame)
+                          * static_cast<double>(compHop) / compSR;
+    return compositeLocalToAbsoluteTrackTime(dc, key, localSec);
+}
+
 // composite frame -> source frame（在给定 slice 内）
 int mapCompositeFrameToSourceFrame(int compositeFrame,
                                    int compHop, double compSR,
@@ -5431,15 +5454,29 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitCompositeNoteTopologyPatch(C
     if (dc == nullptr || compSnap == nullptr)
         return {};
 
-    bool any = false;
+    // 坐标约定：编辑器局部时间 → 绝对 track time
+    ContentNoteRangePatch absolutePatch = patch;
+    absolutePatch.affectedRange.startSeconds =
+        compositeLocalToAbsoluteTrackTime(dc, key, patch.affectedRange.startSeconds);
+    absolutePatch.affectedRange.endSeconds =
+        compositeLocalToAbsoluteTrackTime(dc, key, patch.affectedRange.endSeconds);
+
+    // P1-4：跨 source 提交先预检（snapshot/存在性），全部可行才逐个写入；
+    // 写入中失败尽力回滚已写入 source 到编辑前 notes。
+    struct PendingWrite { ContentKey sourceKey; ContentNoteRangePatch sp; std::vector<Note> beforeNotes; };
+    std::vector<PendingWrite> pending;
+
     for (const auto& slice : mapCompositeSlices(dc, key,
-                                                patch.affectedRange.startSeconds,
-                                                patch.affectedRange.endSeconds))
+                                                absolutePatch.affectedRange.startSeconds,
+                                                absolutePatch.affectedRange.endSeconds))
     {
+        auto srcSnap = getContentSnapshot(slice.sourceKey);
+        if (srcSnap == nullptr)
+            return {};   // 预检失败：不写入任何 source
         ContentNoteRangePatch sp;
         sp.affectedRange.startSeconds = slice.sourceStart;
         sp.affectedRange.endSeconds = slice.sourceEnd;
-        for (const auto& note : patch.afterNotesInRange)
+        for (const auto& note : absolutePatch.afterNotesInRange)
         {
             if (note.startTime < slice.trackStart || note.startTime >= slice.trackEnd)
                 continue;
@@ -5448,8 +5485,22 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitCompositeNoteTopologyPatch(C
             shifted.endTime = slice.sourceStart + (note.endTime - slice.trackStart);
             sp.afterNotesInRange.push_back(std::move(shifted));
         }
-        if (commitContentNoteTopologyPatch(slice.sourceKey, std::move(sp)) != nullptr)
+        pending.push_back(PendingWrite{ slice.sourceKey, std::move(sp), srcSnap->notes });
+    }
+
+    bool any = false;
+    for (auto& w : pending)
+    {
+        if (commitContentNoteTopologyPatch(w.sourceKey, std::move(w.sp)) != nullptr)
             any = true;
+        else if (any)
+        {
+            // 回滚已写入的 source（按序号回滚到编辑前 notes）
+            for (auto& done : pending)
+                if (&done != &w && !done.beforeNotes.empty())
+                    replaceContentNotesForFullMutation(done.sourceKey, done.beforeNotes);
+            return {};
+        }
     }
 
     return any ? getContentSnapshot(key) : ContentCommitSnapshot{};
@@ -5473,10 +5524,27 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitCompositeNotesAndSegments(
     if (compHop <= 0 || compSR <= 0.0)
         return {};
 
-    const double rangeStartSec = static_cast<double>(affectedRange.startFrame) * static_cast<double>(compHop) / compSR;
-    const double rangeEndSec = static_cast<double>(affectedRange.endFrameExclusive) * static_cast<double>(compHop) / compSR;
+    // 坐标约定：affectedRange 的 frame 是 composite 局部时间；
+    // 转成绝对 track time 秒后再做 slice 映射
+    const double rangeStartSec = compositeFrameToAbsoluteTrackTime(
+        key, dc, affectedRange.startFrame, compHop, compSR);
+    const double rangeEndSec = compositeFrameToAbsoluteTrackTime(
+        key, dc, affectedRange.endFrameExclusive, compHop, compSR);
 
-    bool any = false;
+    // P1-4：跨 source 预检 + 写入中失败回滚
+    struct PendingWrite
+    {
+        ContentKey sourceKey;
+        std::vector<Note> srcNotes;
+        std::vector<PitchCorrectionSegment> srcSegments;
+        ContentEditRangeFrames srcRange;
+        std::vector<float> srcOriginalF0;
+        std::optional<std::vector<F0FrameRange>> srcErased;
+        std::vector<Note> beforeNotes;
+        std::vector<PitchCorrectionSegment> beforeSegments;
+    };
+    std::vector<PendingWrite> pending;
+
     for (const auto& slice : mapCompositeSlices(dc, key, rangeStartSec, rangeEndSec))
     {
         auto srcSnap = getContentSnapshot(slice.sourceKey);
@@ -5548,8 +5616,9 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitCompositeNotesAndSegments(
         }
 
         std::optional<std::vector<F0FrameRange>> srcErased;
-        if (erasedRanges.has_value() && !erasedRanges->empty())
+        if (erasedRanges.has_value())
         {
+            // 空 vector 也映射（表达"清除该 range"），不丢弃
             std::vector<F0FrameRange> ranges;
             for (const auto& r : *erasedRanges)
             {
@@ -5562,20 +5631,56 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitCompositeNotesAndSegments(
             srcErased = std::move(ranges);
         }
 
+        PendingWrite write;
+        write.sourceKey = slice.sourceKey;
+        write.srcNotes = std::move(srcNotes);
+        write.srcSegments = std::move(srcSegments);
+        write.srcRange = {srcStartFrame, srcEndFrame};
+        write.srcOriginalF0 = std::move(srcOriginalF0);
+        write.srcErased = std::move(srcErased);
+        write.beforeNotes = srcSnap->notes;
+        if (srcSnap->pitchCurve != nullptr)
+            write.beforeSegments = srcSnap->pitchCurve->getCorrectionSegments();
+        pending.push_back(std::move(write));
+    }
+
+    bool any = false;
+    for (auto& w : pending)
+    {
         bool ok = false;
-        if (!srcOriginalF0.empty() || srcErased.has_value())
+        if (!w.srcOriginalF0.empty() || w.srcErased.has_value())
         {
             ok = commitContentNotesAndSegmentsWithOriginalF0(
-                slice.sourceKey, std::move(srcNotes), std::move(srcSegments),
-                {srcStartFrame, srcEndFrame}, std::move(srcOriginalF0), std::move(srcErased)) != nullptr;
+                w.sourceKey, std::move(w.srcNotes), std::move(w.srcSegments),
+                w.srcRange, std::move(w.srcOriginalF0), std::move(w.srcErased)) != nullptr;
         }
         else
         {
             ok = commitContentNotesAndSegments(
-                slice.sourceKey, std::move(srcNotes), std::move(srcSegments),
-                {srcStartFrame, srcEndFrame}) != nullptr;
+                w.sourceKey, std::move(w.srcNotes), std::move(w.srcSegments),
+                w.srcRange) != nullptr;
         }
-        any = any || ok;
+        if (ok)
+        {
+            any = true;
+        }
+        else if (any)
+        {
+            // 回滚已写入的 source 到编辑前 notes/segments
+            for (auto& done : pending)
+                if (&done != &w && !done.beforeNotes.empty())
+                {
+                    replaceContentNotesForFullMutation(done.sourceKey, done.beforeNotes);
+                    if (!done.beforeSegments.empty())
+                    {
+                        PitchShiftEditState rollback;
+                        rollback.notes = done.beforeNotes;
+                        rollback.segments = done.beforeSegments;
+                        applyContentPitchShiftState(done.sourceKey, rollback);
+                    }
+                }
+            return {};
+        }
     }
 
     return any ? getContentSnapshot(key) : ContentCommitSnapshot{};
@@ -5588,21 +5693,34 @@ bool OpenTuneAudioProcessor::replaceCompositeContentNotesForFullMutation(Content
     if (dc == nullptr || compSnap == nullptr)
         return false;
 
-    bool any = false;
-    bool all = true;
+    // 坐标约定：编辑器 note 时间是 composite 局部时间 → 绝对 track time
+    const auto range = dc->getCompositeTrackRange(key);
+    const double trackOrigin = range.has_value() ? range->trackStartSeconds : 0.0;
+    std::vector<Note> absoluteNotes;
+    absoluteNotes.reserve(notes.size());
+    for (const auto& note : notes)
+    {
+        Note shifted = note;
+        shifted.startTime += trackOrigin;
+        shifted.endTime += trackOrigin;
+        absoluteNotes.push_back(std::move(shifted));
+    }
+
+    // P1-4：预检全部 slice（snapshot/存在性）后才逐个写入；失败回滚
+    struct PendingWrite { ContentKey sourceKey; std::vector<Note> merged; std::vector<Note> beforeNotes; };
+    std::vector<PendingWrite> pending;
+
     for (const auto& slice : mapCompositeSlices(dc, key, -1e30, 1e30))
     {
         auto srcSnap = getContentSnapshot(slice.sourceKey);
         if (srcSnap == nullptr)
-        {
-            all = false;
-            continue;
-        }
+            return false;   // 预检失败
         std::vector<Note> merged;
+        // 窗口外保留；窗口内（含裁剪）由编辑后的绝对 notes 覆盖
         for (const auto& note : srcSnap->notes)
             if (note.startTime < slice.sourceStart || note.startTime >= slice.sourceEnd)
                 merged.push_back(note);
-        for (const auto& note : notes)
+        for (const auto& note : absoluteNotes)
         {
             if (note.startTime < slice.trackStart || note.startTime >= slice.trackEnd)
                 continue;
@@ -5613,15 +5731,26 @@ bool OpenTuneAudioProcessor::replaceCompositeContentNotesForFullMutation(Content
         }
         std::sort(merged.begin(), merged.end(),
                   [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
-        if (!replaceContentNotesForFullMutation(slice.sourceKey, std::move(merged)))
-            all = false;
-        else
+        pending.push_back(PendingWrite{ slice.sourceKey, std::move(merged), srcSnap->notes });
+    }
+
+    bool any = false;
+    for (auto& w : pending)
+    {
+        if (replaceContentNotesForFullMutation(w.sourceKey, std::move(w.merged)))
             any = true;
+        else if (any)
+        {
+            for (auto& done : pending)
+                if (&done != &w && !done.beforeNotes.empty())
+                    replaceContentNotesForFullMutation(done.sourceKey, done.beforeNotes);
+            return false;
+        }
     }
 
     if (any)
         getContentSnapshot(key);   // 触发 composite 重建
-    return any && all;
+    return any;
 }
 
 bool OpenTuneAudioProcessor::autoTuneCompositeContentRange(ContentKey key, int startFrame, int endFrameExclusive,
@@ -5637,8 +5766,9 @@ bool OpenTuneAudioProcessor::autoTuneCompositeContentRange(ContentKey key, int s
     if (compHop <= 0 || compSR <= 0.0)
         return false;
 
-    const double rangeStartSec = static_cast<double>(startFrame) * static_cast<double>(compHop) / compSR;
-    const double rangeEndSec = static_cast<double>(endFrameExclusive) * static_cast<double>(compHop) / compSR;
+    // 坐标约定：frame 是 composite 局部时间 → 绝对 track time 秒
+    const double rangeStartSec = compositeFrameToAbsoluteTrackTime(key, dc, startFrame, compHop, compSR);
+    const double rangeEndSec = compositeFrameToAbsoluteTrackTime(key, dc, endFrameExclusive, compHop, compSR);
 
     bool any = false;
     for (const auto& slice : mapCompositeSlices(dc, key, rangeStartSec, rangeEndSec))
@@ -5716,23 +5846,32 @@ bool OpenTuneAudioProcessor::applyCompositePitchShiftState(ContentKey key, const
         compSegEnd = 0;
     }
 
-    bool any = false;
-    bool all = true;
+    // 坐标约定：state.notes 是 composite 局部时间 → 绝对 track time
+    const auto range = dc->getCompositeTrackRange(key);
+    const double trackOrigin = range.has_value() ? range->trackStartSeconds : 0.0;
+    std::vector<Note> absoluteNotes;
+    absoluteNotes.reserve(state.notes.size());
+    for (const auto& note : state.notes)
+    {
+        Note shifted = note;
+        shifted.startTime += trackOrigin;
+        shifted.endTime += trackOrigin;
+        absoluteNotes.push_back(std::move(shifted));
+    }
+
+    // P1-4：预检全部 slice 后才逐个写入；写入中失败回滚
+    struct PendingWrite { ContentKey sourceKey; PitchShiftEditState srcState; };
+    std::vector<PendingWrite> pending;
+
     for (const auto& slice : mapCompositeSlices(dc, key, -1e30, 1e30))
     {
         auto srcSnap = getContentSnapshot(slice.sourceKey);
         if (srcSnap == nullptr || srcSnap->pitchCurve == nullptr)
-        {
-            all = false;
-            continue;
-        }
+            return false;   // 预检失败
         const int srcHop = srcSnap->pitchCurve->getHopSize();
         const double srcSR = srcSnap->pitchCurve->getSampleRate();
         if (srcHop <= 0 || srcSR <= 0.0)
-        {
-            all = false;
-            continue;
-        }
+            return false;   // 预检失败
         const int srcStartFrame = static_cast<int>(std::llround(slice.sourceStart * srcSR / static_cast<double>(srcHop)));
         const int srcEndFrame = static_cast<int>(std::llround(slice.sourceEnd * srcSR / static_cast<double>(srcHop)));
         const int sliceCompStart = static_cast<int>(std::llround(
@@ -5747,7 +5886,7 @@ bool OpenTuneAudioProcessor::applyCompositePitchShiftState(ContentKey key, const
         for (const auto& note : srcSnap->notes)
             if (note.startTime < slice.sourceStart || note.startTime >= slice.sourceEnd)
                 srcState.notes.push_back(note);
-        for (const auto& note : state.notes)
+        for (const auto& note : absoluteNotes)
         {
             if (note.startTime < slice.trackStart || note.startTime >= slice.trackEnd)
                 continue;
@@ -5793,13 +5932,19 @@ bool OpenTuneAudioProcessor::applyCompositePitchShiftState(ContentKey key, const
                   [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b)
                   { return a.startFrame < b.startFrame; });
 
-        if (!applyContentPitchShiftState(slice.sourceKey, srcState))
-            all = false;
-        else
-            any = true;
+        pending.push_back(PendingWrite{ slice.sourceKey, std::move(srcState) });
     }
 
-    return any && all;
+    bool any = false;
+    for (auto& w : pending)
+    {
+        if (applyContentPitchShiftState(w.sourceKey, w.srcState))
+            any = true;
+        else
+            return false;   // 预检已过仍失败：返回失败（该 source 未写入）
+    }
+
+    return any;
 }
 
 bool OpenTuneAudioProcessor::ensureCompositeTimeToolAnchorSeed(ContentKey key)

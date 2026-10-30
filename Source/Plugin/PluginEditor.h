@@ -241,6 +241,9 @@ private:
     std::vector<juce::ARAPlaybackRegion*> lastCompositeScopeRegions_;
     bool autoReadAttempted_{false};
     bool compositeScopeChanged_{false};
+    // P2-8：auto-Read 连续失败计数（成功清零），达上限停止自动重试
+    int autoReadFailureCount_{0};
+    static constexpr int kMaxAutoReadFailures = 5;
 
     static constexpr int TOP_BAR_HEIGHT = 88;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;
