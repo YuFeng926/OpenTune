@@ -57,12 +57,13 @@ namespace {
 constexpr int kHeartbeatHzIdle = 30;
 constexpr int kHeartbeatHzInferenceActive = 10;
 
-// 100% 基线窗口尺寸（§4.4）：min 900×500，max 固定 3000×2000，preferred 1200×900。
+// 100% 基线窗口尺寸（§4.4）：min 900×500，max 8192×4096（覆盖 4K/5K 显示器工作区，
+// 最大化不再被旧上限 3000×2000 卡住），preferred 1200×900。
 // 实际外层窗口尺寸在挂入默认 StandaloneFilterWindow 后按 settings 恢复/约束（§5.1）。
 constexpr int kBaseMinWidth = 900;
 constexpr int kBaseMinHeight = 500;
-constexpr int kMaxWindowWidth = 3000;
-constexpr int kMaxWindowHeight = 2000;
+constexpr int kMaxWindowWidth = 8192;
+constexpr int kMaxWindowHeight = 4096;
 constexpr int kPreferredWidth = 1200;
 constexpr int kPreferredHeight = 900;
 
@@ -1725,47 +1726,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
         if (revisionPulse.pitchChanged) {
             pianoRoll_.onPitchRevisionChanged();
-    // 完整快照必须总含完整内容投影，不能依赖之前某次 patch 的缓存。
-    reactProjectionPayloadValid_ = false;
-    const juce::var patches[] = {
-        buildTopBarChromeState(), buildEditorPresentationPatch(), buildParameterChromeState(),
-        buildProcessingOverlayState()
-    };
-    for (const auto& patch : patches)
-        if (const auto* object = patch.getDynamicObject())
-            for (const auto& property : object->getProperties())
-                state->setProperty(property.name, property.value);
-    state->setProperty("trackProjection", buildTrackProjection());
-    std::array<float, OpenTuneAudioProcessor::MAX_TRACKS> trackLevels{};
-    juce::Array<juce::var> trackLevelValues;
-    for (int i = 0; i < OpenTuneAudioProcessor::MAX_TRACKS; ++i)
-    {
-        const float level = getStandaloneTrackRms(processorRef_, i);
-        trackLevels[static_cast<std::size_t>(i)] = level;
-        trackLevelValues.add(level);
-    }
-    state->setProperty("trackLevels", trackLevelValues);
-    lastPresentedTrackLevels_ = trackLevels;
-    hasPresentedTrackLevels_ = true;
-    editorChrome_.pushState(juce::var(state));
-}
-
-juce::Array<juce::var> OpenTuneAudioProcessorEditor::buildTrackProjection()
-{
-    juce::Array<juce::var> tracks;
-    if (const auto* arrangement = processorRef_.getStandaloneArrangement())
-    {
-        for (int track = 0; track < arrangement->getNumTracks(); ++track)
-        {
-            auto* item = new juce::DynamicObject();
-            item->setProperty("track", track);
-            item->setProperty("name", juce::String("Track ") + juce::String(track + 1));
-            item->setProperty("muted", arrangement->isTrackMuted(track));
-            item->setProperty("solo", arrangement->isTrackSolo(track));
-            item->setProperty("volume", arrangement->getTrackVolume(track));
-            item->setProperty("color", ChromeSupport::cssColour(arrangement->getTrackColour(track)));
-            item->setProperty("selectedPlacementId", static_cast<juce::int64>(arrangement->getSelectedPlacementId(track)));
-            tracks.add(juce::var(item));
         }
         if (activeTrack >= 0 && activePlacementIndex >= 0) {
             pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, activeTrack));
