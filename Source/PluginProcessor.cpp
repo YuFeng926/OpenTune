@@ -47,6 +47,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <mutex>
 
 #if JucePlugin_Enable_ARA
@@ -780,11 +781,19 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 
         bool setDetectedKey(ContentKey key, const DetectedKey& detectedKey) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.setCompositeDetectedKey(key, detectedKey);
+#endif
             return proc_.setContentDetectedKey(key, detectedKey);
         }
 
         bool applyPitchShiftState(ContentKey key, const PitchShiftEditState& state) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.applyCompositePitchShiftState(key, state);
+#endif
             return proc_.applyContentPitchShiftState(key, state);
         }
 
@@ -800,37 +809,72 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                                    const NoteGeneratorParams& params,
                                    const std::optional<ScaleSnapConfig>& scaleSnap) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.autoTuneCompositeContentRange(
+                    key, startFrame, endFrameExclusive, params, scaleSnap);
+#endif
             return proc_.autoTuneContentRangeByContentKey(
                 key, startFrame, endFrameExclusive, params, scaleSnap);
         }
 
         bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.generateCompositeNotesOnly(key, params);
+#endif
             return proc_.generateNotesOnlyByContentKey(key, params);
         }
 
         bool ensureTimeToolAnchorSeed(ContentKey key) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.ensureCompositeTimeToolAnchorSeed(key);
+#endif
             return proc_.ensureTimeToolAnchorSeed(key);
         }
 
         bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.replaceCompositeContentNotesForFullMutation(key, std::move(notes));
+#endif
             return proc_.replaceContentNotesForFullMutation(key, std::move(notes));
         }
 
         ContentCommitSnapshot commitNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.commitCompositeNoteTopologyPatch(key, std::move(patch));
+#endif
             return proc_.commitContentNoteTopologyPatch(key, std::move(patch));
         }
 
         ContentCommitSnapshot commitVolumeEnvelope(ContentKey key, AutomationLane envelope) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+            {
+                AppLogger::log("Composite edit: unsupported commitVolumeEnvelope");
+                return {};
+            }
+#endif
             return proc_.commitVolumeEnvelope(key, std::move(envelope));
         }
 
         void republishPlaybackSource(ContentKey key) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+            {
+                proc_.republishCompositePlaybackSource(key);
+                return;
+            }
+#endif
             proc_.republishPlaybackSource(key);
         }
 
@@ -839,6 +883,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                                      std::vector<PitchCorrectionSegment> segments,
                                      ContentEditRangeFrames affectedRange) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.commitCompositeNotesAndSegments(key, std::move(notes), std::move(segments),
+                                                             affectedRange, {}, std::nullopt);
+#endif
             return proc_.commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
         }
 
@@ -850,6 +899,13 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             std::vector<float> originalF0InRange,
             std::optional<std::vector<F0FrameRange>> erasedRanges) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+                return proc_.commitCompositeNotesAndSegments(key, std::move(notes), std::move(segments),
+                                                             affectedRange,
+                                                             std::move(originalF0InRange),
+                                                             std::move(erasedRanges));
+#endif
             return proc_.commitContentNotesAndSegmentsWithOriginalF0(
                 key, std::move(notes), std::move(segments), affectedRange,
                 std::move(originalF0InRange), std::move(erasedRanges));
@@ -858,6 +914,13 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         bool setTimeGrid(ContentKey key,
                           std::shared_ptr<const TimeGridSnapshot> grid) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAComposite)
+            {
+                AppLogger::log("Composite edit: unsupported setTimeGrid");
+                return false;
+            }
+#endif
             return proc_.setContentTimeGrid(key, std::move(grid));
         }
 
@@ -3043,7 +3106,8 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneAudioProcessor::getConten
         }
 #endif
 #if JucePlugin_Enable_ARA
-        case DomainKind::ARAAudioModification: {
+        case DomainKind::ARAAudioModification:
+        case DomainKind::ARAComposite: {
             const auto* dc = getDocumentController();
             return dc ? dc->readContentSnapshot(key) : nullptr;
         }
@@ -5287,6 +5351,485 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
     return {};
 }
 
+#if JucePlugin_Enable_ARA
+// ============================================================================
+// ARA composite 编辑回落到 source content（mapCompositeRange 拆分）
+// ============================================================================
+
+namespace
+{
+struct CompositeSlice
+{
+    ContentKey sourceKey;
+    double trackStart{0.0};
+    double trackEnd{0.0};
+    double sourceStart{0.0};
+    double sourceEnd{0.0};
+};
+
+std::vector<CompositeSlice> mapCompositeSlices(const OpenTuneDocumentController* dc,
+                                               ContentKey key,
+                                               double rangeStartSec,
+                                               double rangeEndSec)
+{
+    std::vector<CompositeSlice> slices;
+    if (dc == nullptr)
+        return slices;
+    for (const auto& m : dc->mapCompositeRange(key, rangeStartSec, rangeEndSec))
+    {
+        CompositeSlice s;
+        s.sourceKey = m.sourceContentKey;
+        s.trackStart = m.trackStartSeconds;
+        s.trackEnd = m.trackEndSeconds;
+        s.sourceStart = m.sourceStartSeconds;
+        s.sourceEnd = m.sourceEndSeconds;
+        slices.push_back(std::move(s));
+    }
+    return slices;
+}
+
+// composite frame -> source frame（在给定 slice 内）
+int mapCompositeFrameToSourceFrame(int compositeFrame,
+                                   int compHop, double compSR,
+                                   const CompositeSlice& slice,
+                                   int srcHop, double srcSR)
+{
+    const double trackTime = static_cast<double>(compositeFrame)
+                           * static_cast<double>(compHop) / compSR;
+    const double sourceTime = slice.sourceStart + (trackTime - slice.trackStart);
+    return static_cast<int>(std::llround(sourceTime * srcSR / static_cast<double>(srcHop)));
+}
+
+// source frame -> composite frame（同一 slice 的逆映射）
+int mapSourceFrameToCompositeFrame(int sourceFrame,
+                                   int srcHop, double srcSR,
+                                   const CompositeSlice& slice,
+                                   int compHop, double compSR)
+{
+    const double sourceTime = static_cast<double>(sourceFrame)
+                            * static_cast<double>(srcHop) / srcSR;
+    const double trackTime = slice.trackStart + (sourceTime - slice.sourceStart);
+    return static_cast<int>(std::llround(trackTime * compSR / static_cast<double>(compHop)));
+}
+
+// 收集 mapCompositeRange 全范围覆盖的唯一 source key（保持首次出现顺序）
+std::vector<ContentKey> collectCompositeSourceKeys(const OpenTuneDocumentController* dc,
+                                                   ContentKey key)
+{
+    std::vector<ContentKey> keys;
+    for (const auto& s : mapCompositeSlices(dc, key, -1e30, 1e30))
+        if (std::find(keys.begin(), keys.end(), s.sourceKey) == keys.end())
+            keys.push_back(s.sourceKey);
+    return keys;
+}
+} // namespace
+
+ContentCommitSnapshot OpenTuneAudioProcessor::commitCompositeNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch)
+{
+    auto* dc = getDocumentController();
+    auto compSnap = getContentSnapshot(key);
+    if (dc == nullptr || compSnap == nullptr)
+        return {};
+
+    bool any = false;
+    for (const auto& slice : mapCompositeSlices(dc, key,
+                                                patch.affectedRange.startSeconds,
+                                                patch.affectedRange.endSeconds))
+    {
+        ContentNoteRangePatch sp;
+        sp.affectedRange.startSeconds = slice.sourceStart;
+        sp.affectedRange.endSeconds = slice.sourceEnd;
+        for (const auto& note : patch.afterNotesInRange)
+        {
+            if (note.startTime < slice.trackStart || note.startTime >= slice.trackEnd)
+                continue;
+            Note shifted = note;
+            shifted.startTime = slice.sourceStart + (note.startTime - slice.trackStart);
+            shifted.endTime = slice.sourceStart + (note.endTime - slice.trackStart);
+            sp.afterNotesInRange.push_back(std::move(shifted));
+        }
+        if (commitContentNoteTopologyPatch(slice.sourceKey, std::move(sp)) != nullptr)
+            any = true;
+    }
+
+    return any ? getContentSnapshot(key) : ContentCommitSnapshot{};
+}
+
+ContentCommitSnapshot OpenTuneAudioProcessor::commitCompositeNotesAndSegments(
+    ContentKey key, std::vector<Note> notes,
+    std::vector<PitchCorrectionSegment> segments,
+    ContentEditRangeFrames affectedRange,
+    std::vector<float> originalF0InRange,
+    std::optional<std::vector<F0FrameRange>> erasedRanges)
+{
+    auto* dc = getDocumentController();
+    auto compSnap = getContentSnapshot(key);
+    if (dc == nullptr || compSnap == nullptr)
+        return {};
+    if (compSnap->pitchCurve == nullptr)
+        return {};
+    const int compHop = compSnap->pitchCurve->getHopSize();
+    const double compSR = compSnap->pitchCurve->getSampleRate();
+    if (compHop <= 0 || compSR <= 0.0)
+        return {};
+
+    const double rangeStartSec = static_cast<double>(affectedRange.startFrame) * static_cast<double>(compHop) / compSR;
+    const double rangeEndSec = static_cast<double>(affectedRange.endFrameExclusive) * static_cast<double>(compHop) / compSR;
+
+    bool any = false;
+    for (const auto& slice : mapCompositeSlices(dc, key, rangeStartSec, rangeEndSec))
+    {
+        auto srcSnap = getContentSnapshot(slice.sourceKey);
+        if (srcSnap == nullptr || srcSnap->pitchCurve == nullptr)
+            continue;
+        const int srcHop = srcSnap->pitchCurve->getHopSize();
+        const double srcSR = srcSnap->pitchCurve->getSampleRate();
+        if (srcHop <= 0 || srcSR <= 0.0)
+            continue;
+
+        const int srcStartFrame = static_cast<int>(std::llround(slice.sourceStart * srcSR / static_cast<double>(srcHop)));
+        const int srcEndFrame = static_cast<int>(std::llround(slice.sourceEnd * srcSR / static_cast<double>(srcHop)));
+        if (srcEndFrame <= srcStartFrame)
+            continue;
+
+        // notes：track 时间 → source 时间
+        std::vector<Note> srcNotes;
+        for (const auto& note : notes)
+        {
+            if (note.startTime < slice.trackStart || note.startTime >= slice.trackEnd)
+                continue;
+            Note shifted = note;
+            shifted.startTime = slice.sourceStart + (note.startTime - slice.trackStart);
+            shifted.endTime = slice.sourceStart + (note.endTime - slice.trackStart);
+            srcNotes.push_back(std::move(shifted));
+        }
+
+        // segments：clip 到 composite affected range 后映射到 source frames
+        auto mapFrame = [&](int f)
+        {
+            return mapCompositeFrameToSourceFrame(f, compHop, compSR, slice, srcHop, srcSR);
+        };
+        std::vector<PitchCorrectionSegment> srcSegments;
+        for (const auto& seg : segments)
+        {
+            const int clipStart = std::max(seg.startFrame, affectedRange.startFrame);
+            const int clipEnd = std::min(seg.endFrame, affectedRange.endFrameExclusive);
+            if (clipEnd <= clipStart)
+                continue;
+            const int srcSegStart = mapFrame(clipStart);
+            const int srcSegEnd = mapFrame(clipEnd);
+            if (srcSegEnd <= srcSegStart)
+                continue;
+            std::vector<float> data(static_cast<size_t>(srcSegEnd - srcSegStart), 0.0f);
+            for (int f = srcSegStart; f < srcSegEnd; ++f)
+            {
+                const int compFrame = mapSourceFrameToCompositeFrame(f, srcHop, srcSR, slice, compHop, compSR);
+                const int offset = compFrame - seg.startFrame;
+                if (offset >= 0 && offset < static_cast<int>(seg.f0Data.size()))
+                    data[static_cast<size_t>(f - srcSegStart)] = seg.f0Data[static_cast<size_t>(offset)];
+            }
+            PitchCorrectionSegment out(srcSegStart, srcSegEnd, data, seg.source);
+            out.parameterSnapshot = seg.parameterSnapshot;
+            srcSegments.push_back(std::move(out));
+        }
+
+        std::vector<float> srcOriginalF0;
+        if (!originalF0InRange.empty())
+        {
+            srcOriginalF0.assign(static_cast<size_t>(srcEndFrame - srcStartFrame), 0.0f);
+            for (int f = srcStartFrame; f < srcEndFrame; ++f)
+            {
+                const int compFrame = mapSourceFrameToCompositeFrame(f, srcHop, srcSR, slice, compHop, compSR);
+                const int compIndex = compFrame - affectedRange.startFrame;
+                if (compIndex >= 0 && compIndex < static_cast<int>(originalF0InRange.size()))
+                    srcOriginalF0[static_cast<size_t>(f - srcStartFrame)] =
+                        originalF0InRange[static_cast<size_t>(compIndex)];
+            }
+        }
+
+        std::optional<std::vector<F0FrameRange>> srcErased;
+        if (erasedRanges.has_value() && !erasedRanges->empty())
+        {
+            std::vector<F0FrameRange> ranges;
+            for (const auto& r : *erasedRanges)
+            {
+                F0FrameRange mapped;
+                mapped.startFrame = std::max(mapFrame(r.startFrame), srcStartFrame);
+                mapped.endFrameExclusive = std::min(mapFrame(r.endFrameExclusive), srcEndFrame);
+                if (!mapped.isEmpty())
+                    ranges.push_back(mapped);
+            }
+            srcErased = std::move(ranges);
+        }
+
+        bool ok = false;
+        if (!srcOriginalF0.empty() || srcErased.has_value())
+        {
+            ok = commitContentNotesAndSegmentsWithOriginalF0(
+                slice.sourceKey, std::move(srcNotes), std::move(srcSegments),
+                {srcStartFrame, srcEndFrame}, std::move(srcOriginalF0), std::move(srcErased)) != nullptr;
+        }
+        else
+        {
+            ok = commitContentNotesAndSegments(
+                slice.sourceKey, std::move(srcNotes), std::move(srcSegments),
+                {srcStartFrame, srcEndFrame}) != nullptr;
+        }
+        any = any || ok;
+    }
+
+    return any ? getContentSnapshot(key) : ContentCommitSnapshot{};
+}
+
+bool OpenTuneAudioProcessor::replaceCompositeContentNotesForFullMutation(ContentKey key, std::vector<Note> notes)
+{
+    auto* dc = getDocumentController();
+    auto compSnap = getContentSnapshot(key);
+    if (dc == nullptr || compSnap == nullptr)
+        return false;
+
+    bool any = false;
+    bool all = true;
+    for (const auto& slice : mapCompositeSlices(dc, key, -1e30, 1e30))
+    {
+        auto srcSnap = getContentSnapshot(slice.sourceKey);
+        if (srcSnap == nullptr)
+        {
+            all = false;
+            continue;
+        }
+        std::vector<Note> merged;
+        for (const auto& note : srcSnap->notes)
+            if (note.startTime < slice.sourceStart || note.startTime >= slice.sourceEnd)
+                merged.push_back(note);
+        for (const auto& note : notes)
+        {
+            if (note.startTime < slice.trackStart || note.startTime >= slice.trackEnd)
+                continue;
+            Note shifted = note;
+            shifted.startTime = slice.sourceStart + (note.startTime - slice.trackStart);
+            shifted.endTime = slice.sourceStart + (note.endTime - slice.trackStart);
+            merged.push_back(std::move(shifted));
+        }
+        std::sort(merged.begin(), merged.end(),
+                  [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
+        if (!replaceContentNotesForFullMutation(slice.sourceKey, std::move(merged)))
+            all = false;
+        else
+            any = true;
+    }
+
+    if (any)
+        getContentSnapshot(key);   // 触发 composite 重建
+    return any && all;
+}
+
+bool OpenTuneAudioProcessor::autoTuneCompositeContentRange(ContentKey key, int startFrame, int endFrameExclusive,
+                                                            const NoteGeneratorParams& params,
+                                                            const std::optional<ScaleSnapConfig>& scaleSnap)
+{
+    auto* dc = getDocumentController();
+    auto compSnap = getContentSnapshot(key);
+    if (dc == nullptr || compSnap == nullptr || compSnap->pitchCurve == nullptr)
+        return false;
+    const int compHop = compSnap->pitchCurve->getHopSize();
+    const double compSR = compSnap->pitchCurve->getSampleRate();
+    if (compHop <= 0 || compSR <= 0.0)
+        return false;
+
+    const double rangeStartSec = static_cast<double>(startFrame) * static_cast<double>(compHop) / compSR;
+    const double rangeEndSec = static_cast<double>(endFrameExclusive) * static_cast<double>(compHop) / compSR;
+
+    bool any = false;
+    for (const auto& slice : mapCompositeSlices(dc, key, rangeStartSec, rangeEndSec))
+    {
+        auto srcSnap = getContentSnapshot(slice.sourceKey);
+        if (srcSnap == nullptr || srcSnap->pitchCurve == nullptr)
+            continue;
+        const int srcHop = srcSnap->pitchCurve->getHopSize();
+        const double srcSR = srcSnap->pitchCurve->getSampleRate();
+        if (srcHop <= 0 || srcSR <= 0.0)
+            continue;
+        const int srcStart = static_cast<int>(std::llround(slice.sourceStart * srcSR / static_cast<double>(srcHop)));
+        const int srcEnd = static_cast<int>(std::llround(slice.sourceEnd * srcSR / static_cast<double>(srcHop)));
+        if (srcEnd <= srcStart)
+            continue;
+        if (autoTuneContentRangeByContentKey(slice.sourceKey, srcStart, srcEnd, params, scaleSnap))
+            any = true;
+    }
+    return any;
+}
+
+bool OpenTuneAudioProcessor::generateCompositeNotesOnly(ContentKey key, const NoteGeneratorParams& params)
+{
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+    bool any = false;
+    for (const auto& sourceKey : collectCompositeSourceKeys(dc, key))
+    {
+        if (generateNotesOnlyByContentKey(sourceKey, params))
+            any = true;
+    }
+    return any;
+}
+
+bool OpenTuneAudioProcessor::setCompositeDetectedKey(ContentKey key, const DetectedKey& detectedKey)
+{
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+    bool any = false;
+    bool all = true;
+    for (const auto& sourceKey : collectCompositeSourceKeys(dc, key))
+    {
+        if (!setContentDetectedKey(sourceKey, detectedKey))
+            all = false;
+        else
+            any = true;
+    }
+    return any && all;
+}
+
+bool OpenTuneAudioProcessor::applyCompositePitchShiftState(ContentKey key, const PitchShiftEditState& state)
+{
+    auto* dc = getDocumentController();
+    auto compSnap = getContentSnapshot(key);
+    if (dc == nullptr || compSnap == nullptr || compSnap->pitchCurve == nullptr)
+        return false;
+    const int compHop = compSnap->pitchCurve->getHopSize();
+    const double compSR = compSnap->pitchCurve->getSampleRate();
+    if (compHop <= 0 || compSR <= 0.0)
+        return false;
+
+    const auto& compSegments = state.segments;
+    int compSegStart = std::numeric_limits<int>::max();
+    int compSegEnd = std::numeric_limits<int>::min();
+    for (const auto& seg : compSegments)
+    {
+        compSegStart = std::min(compSegStart, seg.startFrame);
+        compSegEnd = std::max(compSegEnd, seg.endFrame);
+    }
+    if (compSegStart > compSegEnd)
+    {
+        compSegStart = 0;
+        compSegEnd = 0;
+    }
+
+    bool any = false;
+    bool all = true;
+    for (const auto& slice : mapCompositeSlices(dc, key, -1e30, 1e30))
+    {
+        auto srcSnap = getContentSnapshot(slice.sourceKey);
+        if (srcSnap == nullptr || srcSnap->pitchCurve == nullptr)
+        {
+            all = false;
+            continue;
+        }
+        const int srcHop = srcSnap->pitchCurve->getHopSize();
+        const double srcSR = srcSnap->pitchCurve->getSampleRate();
+        if (srcHop <= 0 || srcSR <= 0.0)
+        {
+            all = false;
+            continue;
+        }
+        const int srcStartFrame = static_cast<int>(std::llround(slice.sourceStart * srcSR / static_cast<double>(srcHop)));
+        const int srcEndFrame = static_cast<int>(std::llround(slice.sourceEnd * srcSR / static_cast<double>(srcHop)));
+        const int sliceCompStart = static_cast<int>(std::llround(
+            slice.trackStart * compSR / static_cast<double>(compHop)));
+        const int sliceCompEnd = static_cast<int>(std::llround(
+            slice.trackEnd * compSR / static_cast<double>(compHop)));
+
+        PitchShiftEditState srcState;
+        srcState.settings = state.settings;
+
+        // notes：区域外保留 + composite notes shift 到 source 时间
+        for (const auto& note : srcSnap->notes)
+            if (note.startTime < slice.sourceStart || note.startTime >= slice.sourceEnd)
+                srcState.notes.push_back(note);
+        for (const auto& note : state.notes)
+        {
+            if (note.startTime < slice.trackStart || note.startTime >= slice.trackEnd)
+                continue;
+            Note shifted = note;
+            shifted.startTime = slice.sourceStart + (note.startTime - slice.trackStart);
+            shifted.endTime = slice.sourceStart + (note.endTime - slice.trackStart);
+            srcState.notes.push_back(std::move(shifted));
+        }
+        std::sort(srcState.notes.begin(), srcState.notes.end(),
+                  [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
+
+        // segments：区域外保留 + composite segments clip/映射到 source frames
+        auto mapFrame = [&](int f)
+        {
+            return mapCompositeFrameToSourceFrame(f, compHop, compSR, slice, srcHop, srcSR);
+        };
+        for (const auto& seg : srcSnap->pitchCurve->getCorrectionSegments())
+            if (seg.endFrame <= srcStartFrame || seg.startFrame >= srcEndFrame)
+                srcState.segments.push_back(seg);
+        for (const auto& seg : compSegments)
+        {
+            const int clipStart = std::max(seg.startFrame, std::max(compSegStart, sliceCompStart));
+            const int clipEnd = std::min(seg.endFrame, std::min(compSegEnd, sliceCompEnd));
+            if (clipEnd <= clipStart)
+                continue;
+            const int srcSegStart = mapFrame(clipStart);
+            const int srcSegEnd = mapFrame(clipEnd);
+            if (srcSegEnd <= srcSegStart)
+                continue;
+            std::vector<float> data(static_cast<size_t>(srcSegEnd - srcSegStart), 0.0f);
+            for (int f = srcSegStart; f < srcSegEnd; ++f)
+            {
+                const int compFrame = mapSourceFrameToCompositeFrame(f, srcHop, srcSR, slice, compHop, compSR);
+                const int offset = compFrame - seg.startFrame;
+                if (offset >= 0 && offset < static_cast<int>(seg.f0Data.size()))
+                    data[static_cast<size_t>(f - srcSegStart)] = seg.f0Data[static_cast<size_t>(offset)];
+            }
+            PitchCorrectionSegment out(srcSegStart, srcSegEnd, data, seg.source);
+            out.parameterSnapshot = seg.parameterSnapshot;
+            srcState.segments.push_back(std::move(out));
+        }
+        std::sort(srcState.segments.begin(), srcState.segments.end(),
+                  [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b)
+                  { return a.startFrame < b.startFrame; });
+
+        if (!applyContentPitchShiftState(slice.sourceKey, srcState))
+            all = false;
+        else
+            any = true;
+    }
+
+    return any && all;
+}
+
+bool OpenTuneAudioProcessor::ensureCompositeTimeToolAnchorSeed(ContentKey key)
+{
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+    bool any = false;
+    bool all = true;
+    for (const auto& sourceKey : collectCompositeSourceKeys(dc, key))
+    {
+        if (!ensureTimeToolAnchorSeed(sourceKey))
+            all = false;
+        else
+            any = true;
+    }
+    return any && all;
+}
+
+void OpenTuneAudioProcessor::republishCompositePlaybackSource(ContentKey key)
+{
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return;
+    for (const auto& sourceKey : collectCompositeSourceKeys(dc, key))
+        republishPlaybackSource(sourceKey);
+    getContentSnapshot(key);   // 触发 composite 重建/发布
+}
+#endif
+
 ContentCommitSnapshot OpenTuneAudioProcessor::commitVolumeEnvelope(ContentKey key, AutomationLane envelope)
 {
     bool ok = false;
@@ -5746,6 +6289,9 @@ bool OpenTuneAudioProcessor::applyContentPitchShiftState(ContentKey key,
             ok = dc->applyPitchShiftStateToModification(key, state);
             break;
         }
+        case DomainKind::ARAComposite:
+            ok = applyCompositePitchShiftState(key, state);
+            break;
 #endif
 #if !JucePlugin_Build_Standalone
         case DomainKind::RegularVST3Capture: {
@@ -5759,7 +6305,7 @@ bool OpenTuneAudioProcessor::applyContentPitchShiftState(ContentKey key,
         default:
             break;
     }
-    if (ok) {
+    if (ok && key.domainKind != DomainKind::ARAComposite) {
         onContentFullMutationCompleted(key);
     }
     return ok;

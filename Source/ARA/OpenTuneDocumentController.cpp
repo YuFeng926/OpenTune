@@ -3428,6 +3428,71 @@ void OpenTuneDocumentController::rebuildCompositeContent(
     state.analysis.pitchCurve = std::make_shared<PitchCurve>();
     state.analysis.pitchCurve->setOriginalF0(mergedF0);
     state.analysis.pitchCurve->setOriginalEnergy(mergedEnergy);
+
+    // 合并 correction segments 到 composite 时间轴，保证 pitch 编辑后的曲线可见。
+    std::vector<PitchCorrectionSegment> mergedSegments;
+    for (const auto& segment : segments)
+    {
+        const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
+        if (sourceSnapshot == nullptr || sourceSnapshot->pitchCurve == nullptr)
+            continue;
+        const auto& sourceCurve = *sourceSnapshot->pitchCurve;
+        const int sourceHop = sourceCurve.getHopSize();
+        const double sourceSampleRate = sourceCurve.getSampleRate();
+        if (sourceHop <= 0 || sourceSampleRate <= 0.0)
+            continue;
+
+        const auto mapFrame = [&](int sourceFrame)
+        {
+            const double sourceTime = static_cast<double>(sourceFrame)
+                * sourceHop / sourceSampleRate;
+            const double trackTime = segment.trackStartSeconds
+                + (sourceTime - segment.sourceStartSeconds);
+            return static_cast<int>(std::round(
+                trackTime * compositeSampleRate / compositeHop));
+        };
+
+        for (const auto& sourceSegment : sourceCurve.getCorrectionSegments())
+        {
+            const int startFrame = mapFrame(sourceSegment.startFrame);
+            const int endFrame = mapFrame(sourceSegment.endFrame);
+            if (endFrame <= startFrame)
+                continue;
+
+            std::vector<float> data(static_cast<size_t>(endFrame - startFrame), 0.0f);
+            for (int frame = startFrame; frame < endFrame; ++frame)
+            {
+                const double trackTime = static_cast<double>(frame)
+                    * compositeHop / compositeSampleRate;
+                const double sourceTime = segment.sourceStartSeconds
+                    + (trackTime - segment.trackStartSeconds);
+                const int sourceFrame = static_cast<int>(std::round(
+                    sourceTime * sourceSampleRate / sourceHop));
+                const int offset = sourceFrame - sourceSegment.startFrame;
+                if (offset >= 0 && offset < static_cast<int>(sourceSegment.f0Data.size()))
+                    data[static_cast<size_t>(frame - startFrame)] =
+                        sourceSegment.f0Data[static_cast<size_t>(offset)];
+            }
+
+            PitchCorrectionSegment mapped(startFrame, endFrame, data, sourceSegment.source);
+            mapped.parameterSnapshot = sourceSegment.parameterSnapshot;
+            mergedSegments.push_back(std::move(mapped));
+        }
+    }
+    std::sort(mergedSegments.begin(), mergedSegments.end(),
+              [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b)
+              { return a.startFrame < b.startFrame; });
+    state.analysis.pitchCurve->replaceCorrectionSegments(mergedSegments);
+
+    for (const auto& segment : segments)
+    {
+        const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
+        if (sourceSnapshot != nullptr)
+        {
+            state.pitchShiftSettings = sourceSnapshot->pitchShiftSettings;
+            break;
+        }
+    }
     OriginalF0State f0State = OriginalF0State::NotRequested;
     if (anyFailed)
         f0State = OriginalF0State::Failed;
@@ -3480,6 +3545,7 @@ bool OpenTuneDocumentController::applyNotesToModification(const ContentKey& key,
             true);
     
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
     return true;
 }
 
@@ -3497,6 +3563,7 @@ bool OpenTuneDocumentController::applyVolumeEnvelopeToModification(const Content
             juce::ARAContentUpdateScopes::samplesAreAffected(), true);
 
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
     return true;
 }
 
@@ -3569,6 +3636,7 @@ bool OpenTuneDocumentController::applyNotesAndPitchCurveToModification(
             true);
 
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
     return true;
 }
 
@@ -3585,6 +3653,7 @@ bool OpenTuneDocumentController::applyOriginalF0ToModification(const ContentKey&
             juce::ARAContentUpdateScopes::tuningIsAffected(), true);
 
     // OriginalF0 只更新分析数据，不触发音频渲染，所以不调用 refreshRegisteredRenderers
+    markAllCompositeContentsDirty();
     return true;
 }
 
@@ -3604,6 +3673,7 @@ bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& k
         mod->audioModification->notifyContentChanged(
             juce::ARAContentUpdateScopes::timelineIsAffected(), true);
 
+    markAllCompositeContentsDirty();
     return true;
 }
 
@@ -3622,8 +3692,9 @@ bool OpenTuneDocumentController::applyPitchShiftStateToModification(const Conten
                 + juce::ARAContentUpdateScopes::notesAreAffected()
                 + juce::ARAContentUpdateScopes::tuningIsAffected(),
             true);
-    
+
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
     return true;
 }
 

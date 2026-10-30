@@ -797,6 +797,23 @@ public:
         int dirtyEndFrame,
         juce::String undoDescription);
     ContentCommitSnapshot commitContentNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch);
+    // ---- ARA composite 编辑回落：按 DC mapCompositeRange 拆到 source content key ----
+    ContentCommitSnapshot commitCompositeNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch);
+    ContentCommitSnapshot commitCompositeNotesAndSegments(
+        ContentKey key, std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        ContentEditRangeFrames affectedRange,
+        std::vector<float> originalF0InRange,
+        std::optional<std::vector<F0FrameRange>> erasedRanges);
+    bool replaceCompositeContentNotesForFullMutation(ContentKey key, std::vector<Note> notes);
+    bool autoTuneCompositeContentRange(ContentKey key, int startFrame, int endFrameExclusive,
+                                       const NoteGeneratorParams& params,
+                                       const std::optional<ScaleSnapConfig>& scaleSnap);
+    bool generateCompositeNotesOnly(ContentKey key, const NoteGeneratorParams& params);
+    bool setCompositeDetectedKey(ContentKey key, const DetectedKey& detectedKey);
+    bool applyCompositePitchShiftState(ContentKey key, const PitchShiftEditState& state);
+    bool ensureCompositeTimeToolAnchorSeed(ContentKey key);
+    void republishCompositePlaybackSource(ContentKey key);
     // 一次替换整个 VolumeEnvelope，推进 notesRevision（owner 的 applyVolumeEnvelope
     // 只 ++notesRevision，不推进 contentRevision——gain 仅 playback 读 late apply，
     // 不使 render cache 失效），只走 republishPlaybackSource()（零 render enqueue）。
