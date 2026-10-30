@@ -14,6 +14,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 #include "AudioModification.h"
 #include "AudioSource.h"
@@ -100,14 +101,65 @@ public:
         const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const;
     // 用户 Read 入口：只读取当前内容范围内的首个 PlaybackRegion。
     // archive 恢复且已有有效 F0 的内容由 readRestoredAudio 自动读取，无需此入口。
-    int requestReadAudioForPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+    int requestReadAudioForPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion,
+                                          bool forceRefresh = false);
     // ARA SDK requires DocumentController operations on main thread.
     // This method executes synchronously to comply with ARA thread constraints.
     // Callers should display a loading overlay before calling if UI responsiveness is needed.
     void requestReadAudioForPlaybackRegionAsync(juce::ARAPlaybackRegion* playbackRegion,
+                                                bool forceRefresh,
                                                 std::function<void(int)> completionCallback);
+
+    // Composite scope Read：去重后对 scope 内每个唯一 AudioModification 调一次
+    // requestReadAudioForPlaybackRegion。返回 -1 表示任一失败，否则累计 refreshed。
+    int requestReadAudioForPlaybackRegions(
+        const std::vector<juce::ARAPlaybackRegion*>& playbackRegions, bool forceRefresh);
+    void requestReadAudioForPlaybackRegionsAsync(
+        const std::vector<juce::ARAPlaybackRegion*>& playbackRegions,
+        bool forceRefresh,
+        std::function<void(int)> completionCallback);
+
+    // composite timeline 的轨道时间范围（min trackStart / max trackEnd）。
+    // composite 不存在或 segments 为空时返回 nullopt。
+    struct CompositeTrackRange { double trackStartSeconds{0.0}; double trackDurationSeconds{0.0}; };
+    std::optional<CompositeTrackRange> getCompositeTrackRange(ContentKey compositeKey) const;
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
+
+    // ============================================================
+    // Track FX composite content — 整轨多 PlaybackRegion 合成的派生缓存。
+    // Source of truth 仍是 PlaybackRegion/AudioModification；composite 只读。
+    // composite key = {ARAComposite, instanceToken, 0}
+    // ============================================================
+    struct CompositeSegment
+    {
+        juce::ARAPlaybackRegion* playbackRegion{nullptr};
+        ContentKey sourceContentKey;
+        double trackStartSeconds{0.0};
+        double trackEndSeconds{0.0};
+        double sourceStartSeconds{0.0};
+    };
+
+    struct CompositeEditMapping
+    {
+        juce::ARAPlaybackRegion* playbackRegion{nullptr};
+        ContentKey sourceContentKey;
+        double trackStartSeconds{0.0};
+        double trackEndSeconds{0.0};
+        double sourceStartSeconds{0.0};
+        double sourceEndSeconds{0.0};
+    };
+
+    ContentKey registerCompositeContent(uint64_t instanceToken,
+                                        const std::vector<juce::ARAPlaybackRegion*>& scopeRegions);
+    void updateCompositeContent(ContentKey compositeKey,
+                                const std::vector<juce::ARAPlaybackRegion*>& scopeRegions);
+    void removeCompositeContent(ContentKey compositeKey);
+    bool isCompositeContentKey(ContentKey key) const noexcept;
+    std::vector<CompositeEditMapping> mapCompositeRange(ContentKey compositeKey,
+                                                        double trackStartSeconds,
+                                                        double trackEndSeconds) const;
+    juce::ChangeBroadcaster& getCompositeChangeBroadcaster() noexcept;
 
     void didUpdateMusicalContextProperties(juce::ARAMusicalContext* musicalContext) override;
     void didUpdateRegionSequenceProperties(juce::ARARegionSequence* regionSequence) override;
@@ -312,6 +364,27 @@ private:
                                          RenderJob& job,
                                          std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+
+    // Track FX composite 派生缓存（消息线程访问；读路径 const，重建用 mutable）
+    struct CompositeContent
+    {
+        ContentKey key;
+        uint64_t instanceToken{0};
+        std::vector<CompositeSegment> segments;
+        std::shared_ptr<const EditableContentSnapshot> snapshot;
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+        bool complete{false};
+        bool dirty{true};
+        uint64_t generation{0};
+    };
+    mutable std::unordered_map<uint64_t, CompositeContent> compositeContents_;
+    uint64_t nextCompositeInstanceToken_{1};
+    mutable juce::ChangeBroadcaster compositeChangeBroadcaster_;
+    CompositeContent* findCompositeContent(ContentKey key);
+    const CompositeContent* findCompositeContent(ContentKey key) const;
+    void rebuildCompositeContent(CompositeContent& content) const;
+    void ensureCompositeUpToDate(const CompositeContent& content) const;
+    void markAllCompositeContentsDirty();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)
 };

@@ -179,7 +179,6 @@ class OpenTuneAudioProcessor : public juce::AudioProcessor
                              , public juce::AsyncUpdater
 #else
                              , public juce::Timer
-                             , public juce::ChangeBroadcaster
 #endif
 #if JucePlugin_Enable_ARA
                            , public juce::AudioProcessorARAExtension
@@ -491,11 +490,16 @@ private:
     std::atomic<bool> hostTransportIsRecording_{false};
     std::atomic<int> hostTransportTimeSignatureNumerator_{4};
     std::atomic<int> hostTransportTimeSignatureDenominator_{4};
-    // Audio-thread-only dedup baseline for change detection; last values pushed
-    // to the message thread via triggerAsyncUpdate().
+    // Audio-thread-only dedup baseline for change detection (written and read
+    // exclusively inside updateHostTransportSnapshot on the audio thread).
     double lastPushedHostBpm_{120.0};
     int lastPushedHostTimeSigNum_{4};
     int lastPushedHostTimeSigDen_{4};
+    // RT-safe change counter: bumped by the audio thread when metadata differs
+    // from the pushed baseline. Message thread polls this in the editor
+    // heartbeat and refreshes BPM/time-signature UI only on move.
+    std::atomic<uint32_t> hostTransportMetadataGeneration_{0};
+
     HostTransportSnapshot updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo);
 #endif
 
@@ -598,6 +602,14 @@ public:
     /** Returns the unbound host-plugin Capture session, or nullptr in Standalone/ARA mode. */
     Capture::CaptureSession* getCaptureSession() noexcept;
     const Capture::CaptureSession* getCaptureSession() const noexcept;
+
+    /** RT-safe host metadata generation counter: bumped by the audio thread in
+     *  updateHostTransportSnapshot when BPM/time signature change. The editor
+     *  polls this (one acquire load per heartbeat tick) instead of the audio
+     *  thread posting messages — no locks or allocations on the real-time path.
+     *  Acquire pairs with the release bump so metadata stores are visible. */
+    uint32_t getHostTransportMetadataGeneration() const noexcept
+    { return hostTransportMetadataGeneration_.load(std::memory_order_acquire); }
 #endif
 #if JucePlugin_Build_Standalone
     StandaloneArrangement* getStandaloneArrangement() noexcept { return standaloneArrangement_.get(); }
@@ -608,7 +620,12 @@ public:
 
 #if JucePlugin_Enable_ARA
     OpenTuneDocumentController* getDocumentController() const;
-    std::vector<juce::ARAPlaybackRegion*> getAssignedPlaybackRegions() const;
+    /** PlaybackRenderer regions 优先，其次 EditorRenderer regions，否则空。 */
+    std::vector<juce::ARAPlaybackRegion*> getAssignedContentRegions() const;
+    /** 本插件实例的 ARA composite 实例 token（构造时分配，进程内唯一）。 */
+    uint64_t getAraInstanceToken() const noexcept { return araInstanceToken_; }
+    /** 一次性取走初始 ARA Read 意图（exchange(false)）。 */
+    bool takeInitialAraReadPending() noexcept { return initialAraReadPending_.exchange(false); }
     void didBindToARA() noexcept override;
 #endif
 
@@ -991,6 +1008,12 @@ private:
     // Message-thread only: setStateInformation and the replay entry points all
     // run on the message thread, so no locking is required.
     juce::MemoryBlock pendingState_;
+
+#if JucePlugin_Enable_ARA
+    // ARA composite scope: per-instance token + one-shot initial Read intent.
+    uint64_t araInstanceToken_{0};
+    std::atomic<bool> initialAraReadPending_{true};
+#endif
 
 public:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessor)

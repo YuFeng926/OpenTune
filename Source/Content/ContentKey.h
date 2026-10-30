@@ -9,7 +9,9 @@ enum class DomainKind : uint8_t
 {
     ARAAudioModification,
     StandaloneClip,
-    RegularVST3Capture
+    RegularVST3Capture,
+    // Track FX composite：整轨多 PlaybackRegion 合成的派生内容缓存
+    ARAComposite
 };
 
 inline const char* getDomainKindName(DomainKind domainKind) noexcept
@@ -19,6 +21,7 @@ inline const char* getDomainKindName(DomainKind domainKind) noexcept
         case DomainKind::ARAAudioModification: return "ARAAudioModification";
         case DomainKind::StandaloneClip: return "StandaloneClip";
         case DomainKind::RegularVST3Capture: return "RegularVST3Capture";
+        case DomainKind::ARAComposite: return "ARAComposite";
     }
     return "Unknown";
 }

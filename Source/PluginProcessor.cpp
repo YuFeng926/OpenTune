@@ -600,6 +600,12 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 #if JucePlugin_Build_Standalone
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
 #endif
+
+#if JucePlugin_Enable_ARA
+    // Per-instance ARA composite token（进程内唯一，构造即分配，扫描安全：纯原子递增）。
+    static std::atomic<uint64_t> nextAraInstanceToken{1};
+    araInstanceToken_ = nextAraInstanceToken.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 bool OpenTuneAudioProcessor::initializeRuntimeState() noexcept
@@ -1487,10 +1493,16 @@ OpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() cons
     return juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(controller);
 }
 
-std::vector<juce::ARAPlaybackRegion*> OpenTuneAudioProcessor::getAssignedPlaybackRegions() const
+std::vector<juce::ARAPlaybackRegion*> OpenTuneAudioProcessor::getAssignedContentRegions() const
 {
     if (auto* renderer = getPlaybackRenderer())
-        return renderer->getPlaybackRegions<juce::ARAPlaybackRegion>();
+    {
+        auto regions = renderer->getPlaybackRegions<juce::ARAPlaybackRegion>();
+        if (!regions.empty())
+            return regions;
+    }
+    if (auto* editorRenderer = getEditorRenderer())
+        return editorRenderer->getPlaybackRegions<juce::ARAPlaybackRegion>();
     return {};
 }
 
@@ -2219,10 +2231,11 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
     hostTransportTimeSignatureNumerator_.store(newNum, std::memory_order_relaxed);
     hostTransportTimeSignatureDenominator_.store(newDen, std::memory_order_relaxed);
 
-    // Audio-thread change detection -> coalesced message-thread push. The editor
-    // consumes this in handleAsyncUpdate() instead of polling at 30Hz. Reads are
-    // relaxed atomics; a missed notification is impossible for equal values and
-    // harmless for a stale epoch (next differing block re-triggers).
+    // RT-SAFE change signalling ONLY: a release atomic generation bump when
+    // metadata differs from the last pushed baseline. The audio thread must
+    // never post system messages (sendChangeMessage/triggerAsyncUpdate take a
+    // message-queue lock); the message thread pulls this counter in the editor
+    // heartbeat and pushes UI updates only when the generation moves.
     if (newBpm != lastPushedHostBpm_
         || newNum != lastPushedHostTimeSigNum_
         || newDen != lastPushedHostTimeSigDen_)
@@ -2230,7 +2243,9 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
         lastPushedHostBpm_ = newBpm;
         lastPushedHostTimeSigNum_ = newNum;
         lastPushedHostTimeSigDen_ = newDen;
-        sendChangeMessage();
+        // Release: guarantees the metadata stores above are visible to the
+        // editor before it observes the new generation (acquire on its side).
+        hostTransportMetadataGeneration_.fetch_add(1, std::memory_order_release);
     }
     return snapshot;
 }

@@ -19,6 +19,7 @@
 #include "../Content/ContentSnapshotProjection.h"
 
 #include <algorithm>
+#include <set>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -1006,7 +1007,7 @@ OpenTuneDocumentController::getPlaybackRegionProjectionsFor(
 }
 
 int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
-    juce::ARAPlaybackRegion* playbackRegion)
+    juce::ARAPlaybackRegion* playbackRegion, bool forceRefresh)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     if (playbackRegion == nullptr)
@@ -1051,6 +1052,9 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
     const bool sameStamp = modification->originalF0InputStamp.has_value()
         && modification->originalF0InputStamp.value() == currentStamp;
 
+    // forceRefresh：跳过三个提前返回，直接走 force-refresh 路径
+    if (!forceRefresh)
+    {
     // 同输入已 materialized：no-op
     if (sameStamp && hasValidF0
         && modification->birthState == AudioModificationBirthState::Ready)
@@ -1083,8 +1087,9 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
         refreshRegisteredRenderers(publishModelChange());
         return 1;
     }
+    } // !forceRefresh
 
-    // stamp 不同或没有有效 F0：force-refresh
+    // stamp 不同或没有有效 F0：force-refresh（forceRefresh 时直接走到这里）
     if (modification->originalF0InputStamp.has_value()
         && modification->originalF0InputStamp.value() != currentStamp)
     {
@@ -1116,6 +1121,9 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
     modification->invalidateDerivedContent();
     // invalidateDerivedContent 已清除 analysis（含 pitchCurve）和 originalF0InputStamp
 
+    if (forceRefresh)
+        modification->birthState = AudioModificationBirthState::WaitingForSource;
+
     if (modification->birthState != AudioModificationBirthState::WaitingForSource
         && modification->birthState != AudioModificationBirthState::Failed)
         return -1;
@@ -1127,20 +1135,87 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
         return -1;
 
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
     return 1;
 }
 
 void OpenTuneDocumentController::requestReadAudioForPlaybackRegionAsync(
     juce::ARAPlaybackRegion* playbackRegion,
+    bool forceRefresh,
     std::function<void(int)> completionCallback)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     // ARA SDK requires DocumentController operations on main thread.
     // This method now executes synchronously to comply with ARA thread constraints.
     // Callers should display a loading overlay before calling if UI responsiveness is needed.
-    const int count = requestReadAudioForPlaybackRegion(playbackRegion);
+    const int count = requestReadAudioForPlaybackRegion(playbackRegion, forceRefresh);
     if (completionCallback)
         completionCallback(count);
+}
+
+int OpenTuneDocumentController::requestReadAudioForPlaybackRegions(
+    const std::vector<juce::ARAPlaybackRegion*>& playbackRegions, bool forceRefresh)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    // 按 AudioModification 指针去重：多个 region 可能共享同一 modification。
+    std::set<juce::ARAAudioModification*> seenModifications;
+    std::vector<juce::ARAPlaybackRegion*> uniqueRegions;
+    uniqueRegions.reserve(playbackRegions.size());
+    for (auto* region : playbackRegions)
+    {
+        if (region == nullptr)
+            continue;
+        auto* modification = region->getAudioModification();
+        if (modification == nullptr || !seenModifications.insert(modification).second)
+            continue;
+        uniqueRegions.push_back(region);
+    }
+
+    int refreshedTotal = 0;
+    for (auto* region : uniqueRegions)
+    {
+        const int refreshed = requestReadAudioForPlaybackRegion(region, forceRefresh);
+        if (refreshed < 0)
+            return -1;
+        refreshedTotal += refreshed;
+    }
+    return refreshedTotal;
+}
+
+void OpenTuneDocumentController::requestReadAudioForPlaybackRegionsAsync(
+    const std::vector<juce::ARAPlaybackRegion*>& playbackRegions,
+    bool forceRefresh,
+    std::function<void(int)> completionCallback)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    // 同步执行以遵守 ARA 线程约束；调用方在调用前自行展示 loading 遮罩。
+    const int refreshed = requestReadAudioForPlaybackRegions(playbackRegions, forceRefresh);
+    if (completionCallback)
+        completionCallback(refreshed);
+}
+
+std::optional<OpenTuneDocumentController::CompositeTrackRange>
+OpenTuneDocumentController::getCompositeTrackRange(ContentKey compositeKey) const
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    const auto* content = findCompositeContent(compositeKey);
+    if (content == nullptr)
+        return std::nullopt;
+    ensureCompositeUpToDate(*content);
+    if (content->segments.empty())
+        return std::nullopt;
+
+    double minStart = content->segments.front().trackStartSeconds;
+    double maxEnd = content->segments.front().trackEndSeconds;
+    for (const auto& segment : content->segments)
+    {
+        minStart = std::min(minStart, segment.trackStartSeconds);
+        maxEnd = std::max(maxEnd, segment.trackEndSeconds);
+    }
+    CompositeTrackRange range;
+    range.trackStartSeconds = minStart;
+    range.trackDurationSeconds = maxEnd - minStart;
+    return range;
 }
 
 void OpenTuneDocumentController::registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer)
@@ -1178,6 +1253,7 @@ void OpenTuneDocumentController::didEndEditing(juce::ARADocument* document)
     juce::ignoreUnused(document);
     readRestoredAudio(nullptr);
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
 }
 
 void OpenTuneDocumentController::didUpdateAudioModificationProperties(juce::ARAAudioModification* audioModification)
@@ -1192,6 +1268,7 @@ void OpenTuneDocumentController::didUpdateAudioModificationProperties(juce::ARAA
     // Note: birthContentForModification() called lazily on read request, not here
 
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
 }
 
 void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModification* audioModification)
@@ -1222,18 +1299,21 @@ void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModi
                                   });
 
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
 }
 
 void OpenTuneDocumentController::didUpdatePlaybackRegionProperties(juce::ARAPlaybackRegion* playbackRegion)
 {
     ensurePlaybackRegion(playbackRegion);
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
 }
 
 void OpenTuneDocumentController::willDestroyPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion)
 {
     removePlaybackRegion(playbackRegion);
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
 }
 
 void OpenTuneDocumentController::didAddPlaybackRegionToAudioModification(
@@ -1244,6 +1324,7 @@ void OpenTuneDocumentController::didAddPlaybackRegionToAudioModification(
     // 只保留 host pointer 生命周期索引。
     ensurePlaybackRegion(playbackRegion);
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
 }
 
 void OpenTuneDocumentController::didAddAudioSourceToDocument(juce::ARADocument* /*document*/, juce::ARAAudioSource* audioSource)
@@ -1334,6 +1415,7 @@ void OpenTuneDocumentController::willRemovePlaybackRegionFromAudioModification(
     juce::ignoreUnused(audioModification);
     removePlaybackRegion(playbackRegion);
     refreshRegisteredRenderers(publishModelChange());
+    markAllCompositeContentsDirty();
 }
 
 void OpenTuneDocumentController::willDestroyAudioSource(juce::ARAAudioSource* audioSource)
@@ -2949,6 +3031,14 @@ bool OpenTuneDocumentController::requestEnableCycle(bool enabled)
 
 std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::readAudioBuffer(ContentKey key) const
 {
+    if (isCompositeContentKey(key))
+    {
+        const auto* content = findCompositeContent(key);
+        if (content == nullptr)
+            return nullptr;
+        ensureCompositeUpToDate(*content);
+        return content->audioBuffer;
+    }
     PlaybackReadSource crsSrc;
     if (contentRenderService_ != nullptr && contentRenderService_->getPlaybackReadSource(key, crsSrc) && crsSrc.audioBuffer != nullptr)
         return crsSrc.audioBuffer;
@@ -2993,10 +3083,385 @@ std::shared_ptr<const EditableContentSnapshot>
 OpenTuneDocumentController::readContentSnapshot(ContentKey key) const
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    if (isCompositeContentKey(key))
+    {
+        const auto* content = findCompositeContent(key);
+        if (content == nullptr)
+            return nullptr;
+        ensureCompositeUpToDate(*content);
+        return content->snapshot;
+    }
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return nullptr;
     return mod->snapshotContent();
 }
+
+// -----------------------------------------------------------------------
+// Track FX composite content
+// -----------------------------------------------------------------------
+
+ContentKey OpenTuneDocumentController::registerCompositeContent(
+    uint64_t instanceToken,
+    const std::vector<juce::ARAPlaybackRegion*>& scopeRegions)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    const uint64_t token = instanceToken != 0
+        ? instanceToken
+        : nextCompositeInstanceToken_++;
+    CompositeContent content;
+    content.key = ContentKey{DomainKind::ARAComposite, token, 0};
+    content.instanceToken = token;
+    content.dirty = true;
+    auto [it, inserted] = compositeContents_.emplace(token, std::move(content));
+    juce::ignoreUnused(inserted);
+    it->second.segments.clear();
+    it->second.snapshot.reset();
+    it->second.audioBuffer.reset();
+    it->second.complete = false;
+    it->second.dirty = true;
+    updateCompositeContent(it->second.key, scopeRegions);
+    return it->second.key;
+}
+
+void OpenTuneDocumentController::updateCompositeContent(
+    ContentKey compositeKey,
+    const std::vector<juce::ARAPlaybackRegion*>& scopeRegions)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    if (!isCompositeContentKey(compositeKey))
+        return;
+    auto* content = findCompositeContent(compositeKey);
+    if (content == nullptr)
+        return;
+
+    content->segments.clear();
+    if (!scopeRegions.empty())
+    {
+        auto projections = getPlaybackRegionProjectionsFor(scopeRegions);
+        std::sort(projections.begin(), projections.end(),
+                  [](const PlaybackRegionProjection& a, const PlaybackRegionProjection& b)
+                  { return a.startInPlaybackTime < b.startInPlaybackTime; });
+        for (const auto& p : projections)
+        {
+            if (!p.contentKey.isValid() || p.durationInPlaybackTime <= 0.0)
+                continue;
+            CompositeSegment segment;
+            segment.playbackRegion = p.playbackRegion;
+            segment.sourceContentKey = p.contentKey;
+            segment.trackStartSeconds = p.startInPlaybackTime;
+            segment.trackEndSeconds = p.startInPlaybackTime + p.durationInPlaybackTime;
+            segment.sourceStartSeconds = p.startInModificationTime;
+            content->segments.push_back(segment);
+        }
+    }
+    content->dirty = true;
+    ensureCompositeUpToDate(*content);
+}
+
+void OpenTuneDocumentController::removeCompositeContent(ContentKey compositeKey)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    if (!isCompositeContentKey(compositeKey))
+        return;
+    compositeContents_.erase(compositeKey.objectId);
+}
+
+bool OpenTuneDocumentController::isCompositeContentKey(ContentKey key) const noexcept
+{
+    return key.domainKind == DomainKind::ARAComposite;
+}
+
+std::vector<OpenTuneDocumentController::CompositeEditMapping>
+OpenTuneDocumentController::mapCompositeRange(ContentKey compositeKey,
+                                              double trackStartSeconds,
+                                              double trackEndSeconds) const
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    std::vector<CompositeEditMapping> mappings;
+    if (!isCompositeContentKey(compositeKey))
+        return mappings;
+    const auto* content = findCompositeContent(compositeKey);
+    if (content == nullptr)
+        return mappings;
+    ensureCompositeUpToDate(*content);
+
+    for (const auto& segment : content->segments)
+    {
+        const double start = std::max(segment.trackStartSeconds, trackStartSeconds);
+        const double end = std::min(segment.trackEndSeconds, trackEndSeconds);
+        if (end <= start)
+            continue;
+        CompositeEditMapping mapping;
+        mapping.playbackRegion = segment.playbackRegion;
+        mapping.sourceContentKey = segment.sourceContentKey;
+        mapping.trackStartSeconds = start;
+        mapping.trackEndSeconds = end;
+        const double offset = start - segment.trackStartSeconds;
+        mapping.sourceStartSeconds = segment.sourceStartSeconds + offset;
+        mapping.sourceEndSeconds = segment.sourceStartSeconds + (end - segment.trackStartSeconds);
+        mappings.push_back(mapping);
+    }
+    return mappings;
+}
+
+juce::ChangeBroadcaster& OpenTuneDocumentController::getCompositeChangeBroadcaster() noexcept
+{
+    return compositeChangeBroadcaster_;
+}
+
+OpenTuneDocumentController::CompositeContent*
+OpenTuneDocumentController::findCompositeContent(ContentKey key)
+{
+    if (!isCompositeContentKey(key))
+        return nullptr;
+    const auto it = compositeContents_.find(key.objectId);
+    return it != compositeContents_.end() ? &it->second : nullptr;
+}
+
+const OpenTuneDocumentController::CompositeContent*
+OpenTuneDocumentController::findCompositeContent(ContentKey key) const
+{
+    if (!isCompositeContentKey(key))
+        return nullptr;
+    const auto it = compositeContents_.find(key.objectId);
+    return it != compositeContents_.end() ? &it->second : nullptr;
+}
+
+void OpenTuneDocumentController::ensureCompositeUpToDate(
+    const CompositeContent& content) const
+{
+    if (!content.dirty)
+        return;
+    rebuildCompositeContent(const_cast<CompositeContent&>(content));
+}
+
+void OpenTuneDocumentController::rebuildCompositeContent(
+    CompositeContent& content) const
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    content.dirty = false;
+
+    const auto& segments = content.segments;
+    if (segments.empty())
+    {
+        content.snapshot.reset();
+        content.audioBuffer.reset();
+        content.complete = false;
+        compositeChangeBroadcaster_.sendChangeMessage();
+        return;
+    }
+
+    double trackStart = segments.front().trackStartSeconds;
+    double trackEnd = segments.front().trackEndSeconds;
+    for (const auto& segment : segments)
+    {
+        trackStart = std::min(trackStart, segment.trackStartSeconds);
+        trackEnd = std::max(trackEnd, segment.trackEndSeconds);
+    }
+    const double trackDuration = trackEnd - trackStart;
+    if (trackDuration <= 0.0)
+    {
+        content.snapshot.reset();
+        content.audioBuffer.reset();
+        content.complete = false;
+        compositeChangeBroadcaster_.sendChangeMessage();
+        return;
+    }
+
+    const double renderSampleRate = TimeCoordinate::kRenderSampleRate;
+
+    // ── Audio ──
+    bool allSegmentsHaveAudio = true;
+    bool allSegmentsHaveF0 = true;
+    std::shared_ptr<const juce::AudioBuffer<float>> compositeBuffer;
+    {
+        int numChannels = 1;
+        for (const auto& segment : segments)
+        {
+            const auto sourceBuffer = readAudioBuffer(segment.sourceContentKey);
+            if (sourceBuffer == nullptr)
+                continue;
+            numChannels = std::max(numChannels, sourceBuffer->getNumChannels());
+        }
+        const int64_t totalSamples = static_cast<int64_t>(
+            std::ceil(trackDuration * renderSampleRate));
+        auto buffer = std::make_shared<juce::AudioBuffer<float>>(
+            numChannels, static_cast<int>(totalSamples));
+        buffer->clear();
+
+        for (const auto& segment : segments)
+        {
+            const auto sourceBuffer = readAudioBuffer(segment.sourceContentKey);
+            if (sourceBuffer == nullptr)
+            {
+                allSegmentsHaveAudio = false;
+                continue;
+            }
+            const double segmentDuration = segment.trackEndSeconds - segment.trackStartSeconds;
+            const int numSamples = static_cast<int>(
+                std::ceil(segmentDuration * renderSampleRate));
+            const int trackOffsetSamples = static_cast<int>(
+                std::floor((segment.trackStartSeconds - trackStart) * renderSampleRate));
+            const int sourceOffsetSamples = static_cast<int>(
+                std::floor(segment.sourceStartSeconds * renderSampleRate));
+            const int available = std::min(numSamples,
+                sourceBuffer->getNumSamples() - sourceOffsetSamples);
+            if (available <= 0)
+                continue;
+            for (int ch = 0; ch < buffer->getNumChannels(); ++ch)
+            {
+                const int sourceChannel = std::min(ch, sourceBuffer->getNumChannels() - 1);
+                const auto* src = sourceBuffer->getReadPointer(sourceChannel, sourceOffsetSamples);
+                buffer->addFrom(ch, trackOffsetSamples, src, available);
+            }
+        }
+        for (int ch = 0; ch < buffer->getNumChannels(); ++ch)
+        {
+            auto* dst = buffer->getWritePointer(ch);
+            for (int i = 0; i < buffer->getNumSamples(); ++i)
+                dst[i] = juce::jlimit(-1.0f, 1.0f, dst[i]);
+        }
+        compositeBuffer = buffer;
+    }
+
+    // ── F0 ──
+    int compositeHop = 512;
+    double compositeSampleRate = 16000.0;
+    for (const auto& segment : segments)
+    {
+        const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
+        if (sourceSnapshot == nullptr || sourceSnapshot->pitchCurve == nullptr)
+            continue;
+        const auto& curve = *sourceSnapshot->pitchCurve;
+        if (curve.getHopSize() > 0 && curve.getSampleRate() > 0.0)
+        {
+            compositeHop = curve.getHopSize();
+            compositeSampleRate = curve.getSampleRate();
+        }
+        break;
+    }
+    const int compositeNumFrames = static_cast<int>(
+        std::ceil(trackDuration * compositeSampleRate / compositeHop));
+    std::vector<float> mergedF0(std::max(0, compositeNumFrames), 0.0f);
+    std::vector<float> mergedEnergy(std::max(0, compositeNumFrames), 0.0f);
+    bool anyExtracting = false;
+    bool anyFailed = false;
+    bool anyReady = false;
+
+    for (const auto& segment : segments)
+    {
+        const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
+        if (sourceSnapshot == nullptr || sourceSnapshot->pitchCurve == nullptr)
+        {
+            allSegmentsHaveF0 = false;
+            continue;
+        }
+        const auto& sourceCurve = *sourceSnapshot->pitchCurve;
+        const int sourceHop = sourceCurve.getHopSize();
+        const double sourceSampleRate = sourceCurve.getSampleRate();
+        const auto& sourceF0 = sourceCurve.getOriginalF0();
+        const auto& sourceEnergy = sourceCurve.getOriginalEnergy();
+        if (sourceHop <= 0 || sourceSampleRate <= 0.0)
+        {
+            allSegmentsHaveF0 = false;
+            continue;
+        }
+
+        switch (sourceSnapshot->originalF0State)
+        {
+            case OriginalF0State::Ready: anyReady = true; break;
+            case OriginalF0State::Extracting: anyExtracting = true; break;
+            case OriginalF0State::Failed: anyFailed = true; break;
+            default: break;
+        }
+
+        const int frameStart = static_cast<int>(std::max(
+            0.0, std::floor((segment.trackStartSeconds - trackStart) * compositeSampleRate / compositeHop)));
+        const int frameEnd = static_cast<int>(std::min(
+            static_cast<double>(compositeNumFrames),
+            std::ceil((segment.trackEndSeconds - trackStart) * compositeSampleRate / compositeHop)));
+        for (int frame = frameStart; frame < frameEnd; ++frame)
+        {
+            // last-wins：重叠段按 track 顺序遍历，后一段覆盖前一段
+            const double trackTime =
+                static_cast<double>(frame) * compositeHop / compositeSampleRate;
+            const double sourceTime =
+                segment.sourceStartSeconds + (trackTime - (segment.trackStartSeconds - trackStart));
+            const int sourceFrame = static_cast<int>(std::round(
+                sourceTime * sourceSampleRate / sourceHop));
+            if (sourceFrame < 0 || sourceFrame >= static_cast<int>(sourceF0.size()))
+                continue;
+            mergedF0[static_cast<size_t>(frame)] = sourceF0[static_cast<size_t>(sourceFrame)];
+            mergedEnergy[static_cast<size_t>(frame)] =
+                sourceFrame < static_cast<int>(sourceEnergy.size())
+                    ? sourceEnergy[static_cast<size_t>(sourceFrame)]
+                    : 0.0f;
+        }
+    }
+
+    // ── Notes ──
+    std::vector<Note> mergedNotes;
+    for (const auto& segment : segments)
+    {
+        const auto sourceSnapshot = readContentSnapshot(segment.sourceContentKey);
+        if (sourceSnapshot == nullptr)
+            continue;
+        for (const auto& note : sourceSnapshot->notes)
+        {
+            Note shifted = note;
+            shifted.startTime += segment.trackStartSeconds - trackStart;
+            shifted.endTime += segment.trackStartSeconds - trackStart;
+            mergedNotes.push_back(shifted);
+        }
+    }
+    std::sort(mergedNotes.begin(), mergedNotes.end(),
+              [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
+
+    // ── Snapshot ──
+    ContentState state;
+    state.sourceWindow.sourceId = 1;
+    state.sourceWindow.sourceStartSeconds = 0.0;
+    state.sourceWindow.sourceEndSeconds = trackDuration;
+    state.audioBuffer = compositeBuffer;
+    state.sampleRate = renderSampleRate;
+    state.notes = std::move(mergedNotes);
+    state.analysis.pitchCurve = std::make_shared<PitchCurve>();
+    state.analysis.pitchCurve->setOriginalF0(mergedF0);
+    state.analysis.pitchCurve->setOriginalEnergy(mergedEnergy);
+    OriginalF0State f0State = OriginalF0State::NotRequested;
+    if (anyFailed)
+        f0State = OriginalF0State::Failed;
+    else if (anyExtracting)
+        f0State = OriginalF0State::Extracting;
+    else if (anyReady)
+        f0State = OriginalF0State::Ready;
+    state.analysis.setOriginalF0State(f0State);
+    if (auto grid = TimeGridSnapshot::makeIdentity(trackDuration))
+        state.timeGrid = grid;
+    const uint64_t generation = ++content.generation;
+    state.notesRevision = generation;
+    state.pitchRevision = generation;
+    state.timeGridRevision = generation;
+    state.contentRevision = generation;
+    state.noteTopologyInitialized = !state.notes.empty();
+
+    auto snapshot = std::make_shared<const EditableContentSnapshot>(
+        makeContentSnapshot(state));
+    content.snapshot = snapshot;
+    content.audioBuffer = state.audioBuffer;
+    content.complete = allSegmentsHaveAudio && allSegmentsHaveF0;
+    compositeChangeBroadcaster_.sendChangeMessage();
+}
+
+void OpenTuneDocumentController::markAllCompositeContentsDirty()
+{
+    for (auto& [token, content] : compositeContents_)
+    {
+        juce::ignoreUnused(token);
+        content.dirty = true;
+    }
+}
+
 
 // ARA mutation API implementations — Processor delegates ARA writes here
 

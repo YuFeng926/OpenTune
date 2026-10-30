@@ -54,8 +54,7 @@ class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
                                      public TransportBarComponent::Listener,
                                      public PianoRollComponent::Listener,
                                      public LanguageChangeListener,
-                                     private juce::Timer,
-                                     private juce::ChangeListener
+                                     private juce::Timer
 {
 public:
     explicit OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& processor);
@@ -141,10 +140,10 @@ private:
     };
 
     void timerCallback() override;
-    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
-    // Push-based host transport metadata (BPM / time signature); called from
-    // changeListenerCallback when the processor's audio thread detects a change.
+    // Host transport metadata (BPM / time signature) UI application; called
+    // from the heartbeat when the processor's RT-safe generation counter moved.
     void syncHostTransportMetadata();
+    uint32_t lastHostMetadataGeneration_ = 0;
     // Onboarding is started on demand from state-change hooks (visibility,
     // resize, F0 overlay release) instead of polling in the heartbeat.
     void maybeStartOnboarding();
@@ -157,6 +156,8 @@ private:
     ContentKey resolveCurrentContentKey();
     PianoRollContentSync resolveCurrentContentSync();
     std::vector<juce::ARAPlaybackRegion*> resolveContentScopeRegions() const;
+    std::shared_ptr<const EditableContentSnapshot> readContentSnapshot(ContentKey key) const;
+    void readScopeAudio(bool manual);
     void syncParameterPanelFromSelection();
     PianoRollContentSync syncContentProjectionToPianoRoll();
     void rememberPresentedPianoRollViewport();
@@ -234,6 +235,12 @@ private:
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
     juce::File externalEditSessionDir_;
     ContentKey externalEditContentKey_;
+
+    // ARA composite：单一 composite placement 的 key 与 scope 缓存。
+    ContentKey compositeKey_;
+    std::vector<juce::ARAPlaybackRegion*> lastCompositeScopeRegions_;
+    bool autoReadAttempted_{false};
+    bool compositeScopeChanged_{false};
 
     static constexpr int TOP_BAR_HEIGHT = 88;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;
