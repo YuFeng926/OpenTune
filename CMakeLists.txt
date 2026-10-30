@@ -1012,8 +1012,6 @@ set(OPENTUNE_ARA_SOURCES
     Source/ARA/PlaybackRegion.h
     Source/ARA/OpenTuneDocumentController.cpp
     Source/ARA/OpenTuneDocumentController.h
-    Source/ARA/OpenTuneEditorView.cpp
-    Source/ARA/OpenTuneEditorView.h
     Source/ARA/OpenTunePlaybackRenderer.cpp
     Source/ARA/OpenTunePlaybackRenderer.h
 )

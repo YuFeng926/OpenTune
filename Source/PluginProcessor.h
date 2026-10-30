@@ -179,6 +179,7 @@ class OpenTuneAudioProcessor : public juce::AudioProcessor
                              , public juce::AsyncUpdater
 #else
                              , public juce::Timer
+                             , public juce::ChangeBroadcaster
 #endif
 #if JucePlugin_Enable_ARA
                            , public juce::AudioProcessorARAExtension
@@ -490,6 +491,11 @@ private:
     std::atomic<bool> hostTransportIsRecording_{false};
     std::atomic<int> hostTransportTimeSignatureNumerator_{4};
     std::atomic<int> hostTransportTimeSignatureDenominator_{4};
+    // Audio-thread-only dedup baseline for change detection; last values pushed
+    // to the message thread via triggerAsyncUpdate().
+    double lastPushedHostBpm_{120.0};
+    int lastPushedHostTimeSigNum_{4};
+    int lastPushedHostTimeSigDen_{4};
     HostTransportSnapshot updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo);
 #endif
 
@@ -602,6 +608,7 @@ public:
 
 #if JucePlugin_Enable_ARA
     OpenTuneDocumentController* getDocumentController() const;
+    std::vector<juce::ARAPlaybackRegion*> getAssignedPlaybackRegions() const;
     void didBindToARA() noexcept override;
 #endif
 

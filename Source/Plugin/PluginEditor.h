@@ -54,7 +54,8 @@ class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
                                      public TransportBarComponent::Listener,
                                      public PianoRollComponent::Listener,
                                      public LanguageChangeListener,
-                                     private juce::Timer
+                                     private juce::Timer,
+                                     private juce::ChangeListener
 {
 public:
     explicit OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& processor);
@@ -140,6 +141,13 @@ private:
     };
 
     void timerCallback() override;
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
+    // Push-based host transport metadata (BPM / time signature); called from
+    // changeListenerCallback when the processor's audio thread detects a change.
+    void syncHostTransportMetadata();
+    // Onboarding is started on demand from state-change hooks (visibility,
+    // resize, F0 overlay release) instead of polling in the heartbeat.
+    void maybeStartOnboarding();
     // §7.3：心跳对比 Processor uiZoom（唯一真相），不同则重设 transform 与 resize limits。
     void applyUiZoomIfNeeded();
     void overviewNavigateRequested(double visibleStartSeconds,
@@ -148,6 +156,7 @@ private:
     void applyThemeToEditor(ThemeId themeId);
     ContentKey resolveCurrentContentKey();
     PianoRollContentSync resolveCurrentContentSync();
+    std::vector<juce::ARAPlaybackRegion*> resolveContentScopeRegions() const;
     void syncParameterPanelFromSelection();
     PianoRollContentSync syncContentProjectionToPianoRoll();
     void rememberPresentedPianoRollViewport();

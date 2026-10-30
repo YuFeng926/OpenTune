@@ -1487,6 +1487,13 @@ OpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() cons
     return juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(controller);
 }
 
+std::vector<juce::ARAPlaybackRegion*> OpenTuneAudioProcessor::getAssignedPlaybackRegions() const
+{
+    if (auto* renderer = getPlaybackRenderer())
+        return renderer->getPlaybackRegions<juce::ARAPlaybackRegion>();
+    return {};
+}
+
 const PlayHeadState& OpenTuneAudioProcessor::getPlayHeadState() const noexcept
 {
     if (isBoundToARA())
@@ -2204,10 +2211,27 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
         snapshot.timeSignatureDenominator = timeSignature->denominator;
     }
 
-    hostTransportBpm_.store(snapshot.bpm, std::memory_order_relaxed);
+    const double newBpm = snapshot.bpm;
+    const int newNum = snapshot.timeSignatureNumerator;
+    const int newDen = snapshot.timeSignatureDenominator;
+    hostTransportBpm_.store(newBpm, std::memory_order_relaxed);
     hostTransportIsRecording_.store(snapshot.isRecording, std::memory_order_relaxed);
-    hostTransportTimeSignatureNumerator_.store(snapshot.timeSignatureNumerator, std::memory_order_relaxed);
-    hostTransportTimeSignatureDenominator_.store(snapshot.timeSignatureDenominator, std::memory_order_relaxed);
+    hostTransportTimeSignatureNumerator_.store(newNum, std::memory_order_relaxed);
+    hostTransportTimeSignatureDenominator_.store(newDen, std::memory_order_relaxed);
+
+    // Audio-thread change detection -> coalesced message-thread push. The editor
+    // consumes this in handleAsyncUpdate() instead of polling at 30Hz. Reads are
+    // relaxed atomics; a missed notification is impossible for equal values and
+    // harmless for a stale epoch (next differing block re-triggers).
+    if (newBpm != lastPushedHostBpm_
+        || newNum != lastPushedHostTimeSigNum_
+        || newDen != lastPushedHostTimeSigDen_)
+    {
+        lastPushedHostBpm_ = newBpm;
+        lastPushedHostTimeSigNum_ = newNum;
+        lastPushedHostTimeSigDen_ = newDen;
+        sendChangeMessage();
+    }
     return snapshot;
 }
 #endif // !JucePlugin_Build_Standalone

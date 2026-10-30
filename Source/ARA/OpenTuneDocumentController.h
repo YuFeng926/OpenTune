@@ -28,7 +28,6 @@
 
 namespace OpenTune {
 
-class OpenTuneEditorView;
 class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class ResamplingManager;
@@ -97,12 +96,9 @@ public:
     /** Phase 4: 返回 EditableContentSnapshot — 唯一的跨域 snapshot 类型 */
     std::shared_ptr<const EditableContentSnapshot> readContentSnapshot(ContentKey key) const;
 
-    std::vector<PlaybackRegionProjection> getPlaybackRegionProjections() const;
     std::vector<PlaybackRegionProjection> getPlaybackRegionProjectionsFor(
         const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const;
-    std::vector<PlaybackRegionProjection> getEditorSelectionPlaybackRegionProjections() const;
-    std::optional<PlaybackRegionProjection> getFocusedEditorPlaybackRegionProjection() const;
-    // 用户 Read 入口：只读取当前 focused PlaybackRegion 对应的内容。
+    // 用户 Read 入口：只读取当前内容范围内的首个 PlaybackRegion。
     // archive 恢复且已有有效 F0 的内容由 readRestoredAudio 自动读取，无需此入口。
     int requestReadAudioForPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     // ARA SDK requires DocumentController operations on main thread.
@@ -110,7 +106,6 @@ public:
     // Callers should display a loading overlay before calling if UI responsiveness is needed.
     void requestReadAudioForPlaybackRegionAsync(juce::ARAPlaybackRegion* playbackRegion,
                                                 std::function<void(int)> completionCallback);
-    void setEditorViewSelectionPlaybackRegions(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
 
@@ -182,7 +177,6 @@ private:
     std::vector<AudioSource> audioSources_;
     std::list<AudioModification> audioModifications_;
     std::vector<PlaybackRegion> playbackRegions_;
-    std::vector<juce::ARAPlaybackRegion*> editorSelectionPlaybackRegions_;
     std::vector<OpenTunePlaybackRenderer*> playbackRenderers_;
     std::map<uint64_t, juce::String> araPersistentIdsByObjectId_;
     std::map<juce::String, uint64_t> araObjectIdsByPersistentId_;
@@ -295,10 +289,8 @@ private:
     const PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion) const;
     PlaybackRegion& ensurePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     PlaybackRegionProjection makeProjection(const PlaybackRegion& region) const;
-    std::vector<PlaybackRegionProjection> buildProjections() const;
     std::vector<OpenTunePlaybackRenderer*> publishModelChange();
     static void refreshRegisteredRenderers(const std::vector<OpenTunePlaybackRenderer*>& renderers);
-    void reconcileEditorSelectionPlaybackRegions();
     bool publishPlaybackReadSourceForModification(
         AudioModification& modification,
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer);

@@ -1,6 +1,5 @@
 #include "OpenTuneDocumentController.h"
 
-#include "OpenTuneEditorView.h"
 #include "OpenTunePlaybackRenderer.h"
 
 #include "../Inference/F0InferenceService.h"
@@ -990,12 +989,6 @@ bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable(
 }
 
 std::vector<OpenTuneDocumentController::PlaybackRegionProjection>
-OpenTuneDocumentController::getPlaybackRegionProjections() const
-{
-    return buildProjections();
-}
-
-std::vector<OpenTuneDocumentController::PlaybackRegionProjection>
 OpenTuneDocumentController::getPlaybackRegionProjectionsFor(
     const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const
 {
@@ -1010,22 +1003,6 @@ OpenTuneDocumentController::getPlaybackRegionProjectionsFor(
     }
 
     return projections;
-}
-
-std::vector<OpenTuneDocumentController::PlaybackRegionProjection>
-OpenTuneDocumentController::getEditorSelectionPlaybackRegionProjections() const
-{
-    return getPlaybackRegionProjectionsFor(editorSelectionPlaybackRegions_);
-}
-
-std::optional<OpenTuneDocumentController::PlaybackRegionProjection>
-OpenTuneDocumentController::getFocusedEditorPlaybackRegionProjection() const
-{
-    const auto projections = getEditorSelectionPlaybackRegionProjections();
-    if (projections.empty())
-        return std::nullopt;
-
-    return projections.front();
 }
 
 int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
@@ -1166,14 +1143,6 @@ void OpenTuneDocumentController::requestReadAudioForPlaybackRegionAsync(
         completionCallback(count);
 }
 
-void OpenTuneDocumentController::setEditorViewSelectionPlaybackRegions(
-    std::vector<juce::ARAPlaybackRegion*> playbackRegions)
-{
-    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    editorSelectionPlaybackRegions_ = std::move(playbackRegions);
-    reconcileEditorSelectionPlaybackRegions();
-}
-
 void OpenTuneDocumentController::registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer)
 {
     if (std::find(playbackRenderers_.begin(), playbackRenderers_.end(), &renderer) == playbackRenderers_.end())
@@ -1243,7 +1212,7 @@ void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModi
                                                   && region.playbackRegion->getAudioModification() == audioModification;
                                           }),
                            playbackRegions_.end());
-    reconcileEditorSelectionPlaybackRegions();
+
     // 直接按 Host 指针 erase，不先把匹配字段置空
     // persistent-id→ContentKey 映射保持稳定（araPersistentIdsByObjectId_ 不动）
     // 新 Host modification 仍创建新 wrapper
@@ -1264,7 +1233,6 @@ void OpenTuneDocumentController::didUpdatePlaybackRegionProperties(juce::ARAPlay
 void OpenTuneDocumentController::willDestroyPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion)
 {
     removePlaybackRegion(playbackRegion);
-    reconcileEditorSelectionPlaybackRegions();
     refreshRegisteredRenderers(publishModelChange());
 }
 
@@ -1365,7 +1333,6 @@ void OpenTuneDocumentController::willRemovePlaybackRegionFromAudioModification(
 {
     juce::ignoreUnused(audioModification);
     removePlaybackRegion(playbackRegion);
-    reconcileEditorSelectionPlaybackRegions();
     refreshRegisteredRenderers(publishModelChange());
 }
 
@@ -1628,7 +1595,7 @@ juce::ARAPlaybackRenderer* OpenTuneDocumentController::doCreatePlaybackRenderer(
 
 juce::ARAEditorView* OpenTuneDocumentController::doCreateEditorView()
 {
-    return new OpenTuneEditorView(getDocumentController(), *this);
+    return new juce::ARAEditorView(getDocumentController());
 }
 
 AudioSource* OpenTuneDocumentController::findAudioSource(juce::ARAAudioSource* audioSource)
@@ -1865,21 +1832,6 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
     return projection;
 }
 
-std::vector<OpenTuneDocumentController::PlaybackRegionProjection>
-OpenTuneDocumentController::buildProjections() const
-{
-    std::vector<PlaybackRegionProjection> projections;
-    projections.reserve(playbackRegions_.size());
-
-    for (const auto& region : playbackRegions_)
-    {
-        if (region.hasValidPlacement())
-            projections.push_back(makeProjection(region));
-    }
-
-    return projections;
-}
-
 std::vector<OpenTunePlaybackRenderer*> OpenTuneDocumentController::publishModelChange()
 {
     return playbackRenderers_;
@@ -1890,18 +1842,6 @@ void OpenTuneDocumentController::refreshRegisteredRenderers(const std::vector<Op
     for (auto* renderer : renderers)
         if (renderer != nullptr)
             renderer->refreshRenderPlanFromDocument();
-}
-
-void OpenTuneDocumentController::reconcileEditorSelectionPlaybackRegions()
-{
-    editorSelectionPlaybackRegions_.erase(
-        std::remove_if(editorSelectionPlaybackRegions_.begin(),
-                       editorSelectionPlaybackRegions_.end(),
-                       [this](juce::ARAPlaybackRegion* playbackRegion)
-                       {
-                           return findPlaybackRegion(playbackRegion) == nullptr;
-                       }),
-        editorSelectionPlaybackRegions_.end());
 }
 
 bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
