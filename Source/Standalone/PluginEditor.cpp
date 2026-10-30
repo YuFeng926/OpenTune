@@ -871,7 +871,11 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
                 props->setValue("windowHeight", window->getHeight());
             }
 
+        AppLogger::log("ShutdownDiag: restoreAsioSampleRateToSystem begin");
+        const auto restoreStart = juce::Time::getMillisecondCounter();
         restoreAsioSampleRateToSystem(holder->deviceManager, "editor exit");
+        AppLogger::log("ShutdownDiag: restoreAsioSampleRateToSystem elapsedMs="
+            + juce::String(juce::Time::getMillisecondCounter() - restoreStart));
     }
 
     // Stop timer
@@ -884,15 +888,39 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 
     // Ensure import/deferred background tasks are fully completed
     // before tearing down UI/listeners to avoid lifetime races.
+    const auto backgroundTaskCount = backgroundTasks_.size();
+    AppLogger::log("ShutdownDiag: waitForBackgroundUiTasks begin futureCount="
+        + juce::String(static_cast<int>(backgroundTaskCount)));
+    const auto backgroundTasksStart = juce::Time::getMillisecondCounter();
     waitForBackgroundUiTasks();
+    AppLogger::log("ShutdownDiag: waitForBackgroundUiTasks futureCount="
+        + juce::String(static_cast<int>(backgroundTaskCount))
+        + " elapsedMs=" + juce::String(juce::Time::getMillisecondCounter() - backgroundTasksStart));
 
     // Safely join export worker thread if it exists
+    const auto exportJoinable = exportWorker_.joinable();
+    const auto exportInProgress = exportInProgress_.load();
+    AppLogger::log("ShutdownDiag: exportThreadJoin begin joinable="
+        + juce::String(exportJoinable ? "true" : "false")
+        + " exportInProgress=" + juce::String(exportInProgress ? "true" : "false"));
+    const auto exportJoinStart = juce::Time::getMillisecondCounter();
     if (exportWorker_.joinable())
     {
         exportWorker_.join();
     }
+    AppLogger::log("ShutdownDiag: exportThreadJoin joinable="
+        + juce::String(exportJoinable ? "true" : "false")
+        + " exportInProgress=" + juce::String(exportInProgress ? "true" : "false")
+        + " elapsedMs=" + juce::String(juce::Time::getMillisecondCounter() - exportJoinStart));
 
+    const auto projectJobCount = projectWorkerPool_.getNumJobs();
+    AppLogger::log("ShutdownDiag: projectWorkerPool.removeAllJobs begin jobCount="
+        + juce::String(projectJobCount));
+    const auto projectJobsStart = juce::Time::getMillisecondCounter();
     projectWorkerPool_.removeAllJobs(false, -1);
+    AppLogger::log("ShutdownDiag: projectWorkerPool.removeAllJobs jobCount="
+        + juce::String(projectJobCount)
+        + " elapsedMs=" + juce::String(juce::Time::getMillisecondCounter() - projectJobsStart));
 
     // Remove custom LookAndFeel
     setLookAndFeel(nullptr);
@@ -1697,6 +1725,47 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
         if (revisionPulse.pitchChanged) {
             pianoRoll_.onPitchRevisionChanged();
+    // 完整快照必须总含完整内容投影，不能依赖之前某次 patch 的缓存。
+    reactProjectionPayloadValid_ = false;
+    const juce::var patches[] = {
+        buildTopBarChromeState(), buildEditorPresentationPatch(), buildParameterChromeState(),
+        buildProcessingOverlayState()
+    };
+    for (const auto& patch : patches)
+        if (const auto* object = patch.getDynamicObject())
+            for (const auto& property : object->getProperties())
+                state->setProperty(property.name, property.value);
+    state->setProperty("trackProjection", buildTrackProjection());
+    std::array<float, OpenTuneAudioProcessor::MAX_TRACKS> trackLevels{};
+    juce::Array<juce::var> trackLevelValues;
+    for (int i = 0; i < OpenTuneAudioProcessor::MAX_TRACKS; ++i)
+    {
+        const float level = getStandaloneTrackRms(processorRef_, i);
+        trackLevels[static_cast<std::size_t>(i)] = level;
+        trackLevelValues.add(level);
+    }
+    state->setProperty("trackLevels", trackLevelValues);
+    lastPresentedTrackLevels_ = trackLevels;
+    hasPresentedTrackLevels_ = true;
+    editorChrome_.pushState(juce::var(state));
+}
+
+juce::Array<juce::var> OpenTuneAudioProcessorEditor::buildTrackProjection()
+{
+    juce::Array<juce::var> tracks;
+    if (const auto* arrangement = processorRef_.getStandaloneArrangement())
+    {
+        for (int track = 0; track < arrangement->getNumTracks(); ++track)
+        {
+            auto* item = new juce::DynamicObject();
+            item->setProperty("track", track);
+            item->setProperty("name", juce::String("Track ") + juce::String(track + 1));
+            item->setProperty("muted", arrangement->isTrackMuted(track));
+            item->setProperty("solo", arrangement->isTrackSolo(track));
+            item->setProperty("volume", arrangement->getTrackVolume(track));
+            item->setProperty("color", ChromeSupport::cssColour(arrangement->getTrackColour(track)));
+            item->setProperty("selectedPlacementId", static_cast<juce::int64>(arrangement->getSelectedPlacementId(track)));
+            tracks.add(juce::var(item));
         }
         if (activeTrack >= 0 && activePlacementIndex >= 0) {
             pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, activeTrack));
