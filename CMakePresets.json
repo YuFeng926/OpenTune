@@ -47,7 +47,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_MAKE_PROGRAM": "E:/Visual Studio/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
+        "CMAKE_MAKE_PROGRAM": "F:/VSC/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
       }
     }
   ],

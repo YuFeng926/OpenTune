@@ -54,6 +54,7 @@ UninstallDisplayName={#MyAppName}
 CloseApplications=force
 SetupLogging=yes
 DisableDirPage=auto
+UsePreviousAppDir=no
 
 [Messages]
 ; 向导内置消息（WelcomeLabel1/2 等）只能在 [Messages] 段覆盖；[CustomMessages] 段仅用于 {cm:} 引用的自定义消息。
@@ -160,6 +161,9 @@ Type: filesandordirs; Name: "{commonappdata}\OpenTune\Models"
 ; so both locations are cleaned before the new files are copied.
 Type: filesandordirs; Name: "{app}\models"
 Type: filesandordirs; Name: "{commonpf}\OpenTune\models"
+; Clean install: drop previous shortcuts before recreating them.
+Type: files; Name: "{commondesktop}\{#MyAppShortName}.lnk"; Components: standalone
+Type: filesandordirs; Name: "{commonprograms}\{#MyAppShortName}"; Components: standalone
 
 [Dirs]
 Name: "{app}"; Components: standalone
@@ -381,9 +385,54 @@ begin
     Result := (major = 14) and (minor >= 30);
 end;
 
+function CleanPreviousInstall(var FailureDetails: String): Boolean;
+var
+  PreviousDir: String;
+begin
+  Result := True;
+
+  if not RegQueryStringValue(
+       HKEY_LOCAL_MACHINE_64,
+       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B8F7C3D2-9E1A-4F6B-8C5D-7E3F2A1B4C9D}_is1',
+       'InstallLocation', PreviousDir) then
+  begin
+    Log('Clean install: no previous install location found');
+    Exit;
+  end;
+
+  PreviousDir := RemoveBackslashUnlessRoot(PreviousDir);
+  if (PreviousDir = '') or not DirExists(PreviousDir) then
+  begin
+    Log('Clean install: previous install directory not present: ' + PreviousDir);
+    Exit;
+  end;
+
+  if CompareText(PreviousDir, RemoveBackslashUnlessRoot(ExpandConstant('{app}'))) = 0 then
+  begin
+    Log('Clean install: previous install directory is the target directory, skipping removal: ' + PreviousDir);
+    Exit;
+  end;
+
+  if not (FileExists(PreviousDir + '\OpenTune.exe') and
+          FileExists(PreviousDir + '\unins000.exe')) then
+  begin
+    Log('Clean install: previous install directory does not look like an OpenTune install, skipping: ' + PreviousDir);
+    Exit;
+  end;
+
+  Log('Clean install: removing previous install directory: ' + PreviousDir);
+  if not DelTree(PreviousDir, True, True, True) then
+  begin
+    FailureDetails := PreviousDir;
+    Result := False;
+    Log('Clean install: failed to remove previous install directory: ' + PreviousDir);
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   resCode: Integer;
+  FailureDetails: String;
 begin
   Result := '';
 
@@ -465,6 +514,17 @@ begin
         Result := ExpandConstant('{cm:VCRedistInstallFailed}');
         Exit;
       end;
+    end;
+  end;
+
+  if WizardIsComponentSelected('standalone') then
+  begin
+    if not CleanPreviousInstall(FailureDetails) then
+    begin
+      Result := 'Could not remove the previous OpenTune installation directory:' + #13#10 +
+        FailureDetails + #13#10 +
+        'Close any program using it and run the installer again.';
+      Exit;
     end;
   end;
 end;
