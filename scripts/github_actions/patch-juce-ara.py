@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply the reproducible JUCE source patches required by this repository.
 
-Two patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
+Three patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
 
 1. The ARA 2.3.0 include rename required by BUILDING.md
    (modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp).
@@ -15,10 +15,14 @@ Two patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
      wrapper over a new private setAudioDeviceSetupInternal(setup,
      treatAsChosenDevice, updateLastDeviceTypeConfigs).
    - a JUCE_UNIT_TESTS case covering the temporary-setup semantics.
+3. The StandaloneFilterWindow title bar gains the maximise button, so the
+   standalone app shows minimise/maximise/close instead of the upstream
+   minimise/close pair
+   (modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h).
 
 The patches are needle-based: if the pinned upstream content does not contain
 the expected context exactly once, the script fails loudly instead of guessing.
-After patching, the JUCE checkout must be dirty in exactly the three expected
+After patching, the JUCE checkout must be dirty in exactly the four expected
 files and nothing else.
 """
 
@@ -36,8 +40,10 @@ ADM_H_RELATIVE = pathlib.Path(
     "modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.h")
 ADM_CPP_RELATIVE = pathlib.Path(
     "modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.cpp")
+STANDALONE_RELATIVE = pathlib.Path(
+    "modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h")
 
-EXPECTED_FILES = [ARA_RELATIVE, ADM_H_RELATIVE, ADM_CPP_RELATIVE]
+EXPECTED_FILES = [ARA_RELATIVE, ADM_H_RELATIVE, ADM_CPP_RELATIVE, STANDALONE_RELATIVE]
 
 # ---------------------------------------------------------------------------
 # Patch 1: ARA include rename.
@@ -203,6 +209,18 @@ ADM_CPP_TEST_NEW = b'''            closeDeviceByRequestingEmptyNames       (mana
 
         beginTest ("AudioDeviceManager updates its current settings before notifying callbacks when device restarts itself");'''
 
+# ---------------------------------------------------------------------------
+# Patch 3: StandaloneFilterWindow title bar.
+# ---------------------------------------------------------------------------
+# Upstream only asks for minimise and close. The standalone app can be resized
+# up to the editor's resize limits, so it must expose the maximise button that
+# fills the work area.
+STANDALONE_CTOR_OLD = b"        : DocumentWindow (title, backgroundColour, DocumentWindow::minimiseButton | DocumentWindow::closeButton),"
+STANDALONE_CTOR_NEW = b"        : DocumentWindow (title, backgroundColour, DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton),"
+
+STANDALONE_BUTTONS_OLD = b"        setTitleBarButtonsRequired (DocumentWindow::minimiseButton | DocumentWindow::closeButton, false);"
+STANDALONE_BUTTONS_NEW = b"        setTitleBarButtonsRequired (DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton, false);"
+
 
 def git(*args: str) -> bytes:
     result = subprocess.run(
@@ -262,6 +280,10 @@ def main() -> None:
             (ADM_CPP_CACHE_OLD, ADM_CPP_CACHE_NEW, "per-device-type cache guard"),
             (ADM_CPP_TEST_ANCHOR, ADM_CPP_TEST_NEW, "temporary setup unit test"),
         ],
+        STANDALONE_RELATIVE: [
+            (STANDALONE_CTOR_OLD, STANDALONE_CTOR_NEW, "title-bar button set"),
+            (STANDALONE_BUTTONS_OLD, STANDALONE_BUTTONS_NEW, "title-bar required buttons"),
+        ],
     }
 
     outputs = {}
@@ -307,7 +329,7 @@ def main() -> None:
             + "\n".join(s.decode("utf-8", errors="replace") for s in status_after))
 
     print("JUCE patches applied: ARA include + AudioDeviceManager temporary setup "
-          "(exactly 3 files dirty)")
+          "+ Standalone title bar maximise button (exactly 4 files dirty)")
 
 
 if __name__ == "__main__":

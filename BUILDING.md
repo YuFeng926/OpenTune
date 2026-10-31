@@ -46,6 +46,9 @@ macOS：
 python3 scripts/github_actions/patch-juce-ara.py
 ```
 
+> 脚本同时给 `juce_StandaloneFilterWindow.h` 的标题栏补上最大化按钮（JUCE 8.0.12 上游只有最小化和关闭）。
+> 不运行脚本时，Standalone 主窗口右上角只有 — 和 ×，且最大化按钮缺失。
+
 ### 2. ARA SDK
 
 ```bash
@@ -58,7 +61,7 @@ cd ..
 > `modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp` 仍 include 2.2.0 的
 > `ARA_Library/Utilities/ARAChannelArrangement.cpp`，而 2.3.0 已将该文件改名为 `ARAChannelFormat.cpp`。
 > 不要手工编辑该文件；克隆 JUCE 8.0.12 后运行上文对应操作系统的 Python 命令，
-> 脚本会同时应用 ARA include 改名和 AudioDeviceManager 临时 setup API 补丁。
+> 脚本会同时应用 ARA include 改名、AudioDeviceManager 临时 setup API 补丁和 Standalone 标题栏最大化按钮补丁。
 
 ### 3. r8brain 与 SoundTouch
 
@@ -179,7 +182,7 @@ ThirdParty/microsoft.direct3d.d3d12.1.619.5/
 
 | 路径 | 必需性 | 准备方式 / 用途 |
 |------|--------|----------------|
-| `JUCE-master/` | 必需 | 克隆 JUCE 8.0.12 到仓库根目录，随后运行 `python3 scripts/github_actions/patch-juce-ara.py`（macOS 命令；同一脚本同时处理 ARA include 与 AudioDeviceManager 补丁）。 |
+| `JUCE-master/` | 必需 | 克隆 JUCE 8.0.12 到仓库根目录，随后运行 `python3 scripts/github_actions/patch-juce-ara.py`（macOS 命令；同一脚本同时处理 ARA include、AudioDeviceManager 与 Standalone 标题栏最大化按钮补丁）。 |
 | `ThirdParty/ARA_SDK-releases-2.3.0/` | 必需 | 克隆 ARA SDK `releases/2.3.0` 分支并包含子模块。 |
 | `ThirdParty/r8brain-free-src-master/` | 必需 | 已随 Git 仓库提供，无需另行下载。 |
 | `ThirdParty/soundtouch-2.3.2/` | 必需 | 从上文链接的 SoundTouch 官方仓库克隆 `2.3.2` tag。 |
