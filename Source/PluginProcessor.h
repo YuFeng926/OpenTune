@@ -499,7 +499,6 @@ private:
     // from the pushed baseline. Message thread polls this in the editor
     // heartbeat and refreshes BPM/time-signature UI only on move.
     std::atomic<uint32_t> hostTransportMetadataGeneration_{0};
-
     HostTransportSnapshot updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo);
 #endif
 
@@ -620,12 +619,8 @@ public:
 
 #if JucePlugin_Enable_ARA
     OpenTuneDocumentController* getDocumentController() const;
-    /** PlaybackRenderer regions 优先，其次 EditorRenderer regions，否则空。 */
+    /** 本插件实例 PlaybackRenderer 绑定的 regions。 */
     std::vector<juce::ARAPlaybackRegion*> getAssignedContentRegions() const;
-    /** 本插件实例的 ARA composite 实例 token（构造时分配，进程内唯一）。 */
-    uint64_t getAraInstanceToken() const noexcept { return araInstanceToken_; }
-    /** 一次性取走初始 ARA Read 意图（exchange(false)）。 */
-    bool takeInitialAraReadPending() noexcept { return initialAraReadPending_.exchange(false); }
     void didBindToARA() noexcept override;
 #endif
 
@@ -797,23 +792,6 @@ public:
         int dirtyEndFrame,
         juce::String undoDescription);
     ContentCommitSnapshot commitContentNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch);
-    // ---- ARA composite 编辑回落：按 DC mapCompositeRange 拆到 source content key ----
-    ContentCommitSnapshot commitCompositeNoteTopologyPatch(ContentKey key, ContentNoteRangePatch patch);
-    ContentCommitSnapshot commitCompositeNotesAndSegments(
-        ContentKey key, std::vector<Note> notes,
-        std::vector<PitchCorrectionSegment> segments,
-        ContentEditRangeFrames affectedRange,
-        std::vector<float> originalF0InRange,
-        std::optional<std::vector<F0FrameRange>> erasedRanges);
-    bool replaceCompositeContentNotesForFullMutation(ContentKey key, std::vector<Note> notes);
-    bool autoTuneCompositeContentRange(ContentKey key, int startFrame, int endFrameExclusive,
-                                       const NoteGeneratorParams& params,
-                                       const std::optional<ScaleSnapConfig>& scaleSnap);
-    bool generateCompositeNotesOnly(ContentKey key, const NoteGeneratorParams& params);
-    bool setCompositeDetectedKey(ContentKey key, const DetectedKey& detectedKey);
-    bool applyCompositePitchShiftState(ContentKey key, const PitchShiftEditState& state);
-    bool ensureCompositeTimeToolAnchorSeed(ContentKey key);
-    void republishCompositePlaybackSource(ContentKey key);
     // 一次替换整个 VolumeEnvelope，推进 notesRevision（owner 的 applyVolumeEnvelope
     // 只 ++notesRevision，不推进 contentRevision——gain 仅 playback 读 late apply，
     // 不使 render cache 失效），只走 republishPlaybackSource()（零 render enqueue）。
@@ -1025,12 +1003,6 @@ private:
     // Message-thread only: setStateInformation and the replay entry points all
     // run on the message thread, so no locking is required.
     juce::MemoryBlock pendingState_;
-
-#if JucePlugin_Enable_ARA
-    // ARA composite scope: per-instance token + one-shot initial Read intent.
-    uint64_t araInstanceToken_{0};
-    std::atomic<bool> initialAraReadPending_{true};
-#endif
 
 public:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessor)

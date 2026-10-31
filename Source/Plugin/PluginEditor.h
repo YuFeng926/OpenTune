@@ -156,8 +156,7 @@ private:
     ContentKey resolveCurrentContentKey();
     PianoRollContentSync resolveCurrentContentSync();
     std::vector<juce::ARAPlaybackRegion*> resolveContentScopeRegions() const;
-    std::shared_ptr<const EditableContentSnapshot> readContentSnapshot(ContentKey key) const;
-    void readScopeAudio(bool manual);
+    void readScopeAudio();
     void syncParameterPanelFromSelection();
     PianoRollContentSync syncContentProjectionToPianoRoll();
     void rememberPresentedPianoRollViewport();
@@ -236,12 +235,8 @@ private:
     juce::File externalEditSessionDir_;
     ContentKey externalEditContentKey_;
 
-    // ARA composite：单一 composite placement 的 key 与 scope 缓存。
-    ContentKey compositeKey_;
-    std::vector<juce::ARAPlaybackRegion*> lastCompositeScopeRegions_;
+    // First-insert auto Read: run once per scope; failures re-arm with a cap.
     bool autoReadAttempted_{false};
-    bool compositeScopeChanged_{false};
-    // P2-8：auto-Read 连续失败计数（成功清零），达上限停止自动重试
     int autoReadFailureCount_{0};
     static constexpr int kMaxAutoReadFailures = 5;
 

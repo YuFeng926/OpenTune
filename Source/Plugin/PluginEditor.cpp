@@ -89,7 +89,22 @@ ContentKey chooseActiveCaptureContentKey(Capture::CaptureSession& session,
 }
 
 #if JucePlugin_Enable_ARA
+ContentTimelineProjection makePianoRollLocalProjection(
+    const OpenTuneAudioProcessor& processor,
+    const OpenTuneDocumentController::PlaybackRegionProjection& region)
+{
+    const auto snapshot = processor.getContentSnapshot(region.contentKey);
+    if (snapshot == nullptr)
+        return {};
 
+    ContentTimelineProjection projection;
+    projection.timelineStartSeconds = region.startInPlaybackTime;
+    projection.timelineDurationSeconds = region.durationInPlaybackTime;
+    projection.contentStartSeconds = region.startInModificationTime
+        - snapshot->sourceWindow.sourceStartSeconds;
+    projection.contentDurationSeconds = region.durationInModificationTime;
+    return projection;
+}
 #endif
 
 } // anonymous namespace
@@ -229,7 +244,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setProcessor(&processorRef_);
     pianoRoll_.setContentCommands(contentCommands_);
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
-        return readContentSnapshot(key);
+        return processorRef_.getContentSnapshot(key);
     });
     // EQ popup「以后不再提示」偏好直接注入（无中转层）
     pianoRoll_.setAppPreferences(&appPreferences_);
@@ -278,12 +293,8 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
     rememberPresentedPianoRollViewport();
     setLookAndFeel(nullptr);
     stopTimer();
-#if JucePlugin_Enable_ARA
-    if (compositeKey_.isValid())
-        if (auto* dc = processorRef_.getDocumentController())
-            dc->removeCompositeContent(compositeKey_);
-#endif
-    overviewStrip_.removeListener(this);    LocalizationManager::getInstance().removeListener(this);
+    overviewStrip_.removeListener(this);
+    LocalizationManager::getInstance().removeListener(this);
     menuBar_.removeListener(this);
     transportBar_.removeListener(this);
     parameterPanel_.removeListener(this);
@@ -557,7 +568,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         auto it = tickSnapshotCache.find(key);
         if (it != tickSnapshotCache.end())
             return it->second;
-        auto snap = readContentSnapshot(key);
+        auto snap = processorRef_.getContentSnapshot(key);
         tickSnapshotCache.emplace(key, std::move(snap));
         return tickSnapshotCache.find(key)->second;
     };
@@ -792,7 +803,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 }
 
 // =========================================================================
-// syncHostTransportMetadata — host transport metadata (BPM / time signature)
+// syncHostTransportMetadata �?host transport metadata (BPM / time signature)
 // applied to the UI. Called from the heartbeat when the processor's RT-safe
 // generation counter moved (audio thread bumps it on change; never posts
 // messages, no locks/allocations on the real-time path).
@@ -888,107 +899,49 @@ OpenTuneAudioProcessorEditor::resolveContentScopeRegions() const
 {
 #if JucePlugin_Enable_ARA
     // Host selection 完全不参与：scope 只由本实例绑定的 ARA roles 决定
-    // （PlaybackRenderer regions 优先，否则 EditorRenderer regions）。
+    // （PlaybackRenderer regions 优先，其次 EditorRenderer regions）。
     return processorRef_.getAssignedContentRegions();
 #else
     return {};
 #endif
 }
 
-std::shared_ptr<const EditableContentSnapshot>
-OpenTuneAudioProcessorEditor::readContentSnapshot(ContentKey key) const
+void OpenTuneAudioProcessorEditor::readScopeAudio()
 {
 #if JucePlugin_Enable_ARA
-    if (key.domainKind == DomainKind::ARAComposite) {
-        if (auto* dc = processorRef_.getDocumentController())
-            return dc->readContentSnapshot(key);
-        return nullptr;
-    }
-#endif
-    return processorRef_.getContentSnapshot(key);
-}
-
-void OpenTuneAudioProcessorEditor::readScopeAudio(bool manual)
-{
-#if JucePlugin_Enable_ARA
-    // 先确保 compositeKey_ 已注册/已随最新 scope 更新。
-    resolveCurrentContentSync();
     auto* dc = processorRef_.getDocumentController();
-    if (!dc)
+    if (dc == nullptr)
         return;
 
-    const auto scope = resolveContentScopeRegions();
-    const auto projections = dc->getPlaybackRegionProjectionsFor(scope);
+    const auto projections = dc->getPlaybackRegionProjectionsFor(resolveContentScopeRegions());
+    if (projections.empty() || projections.front().playbackRegion == nullptr)
+        return;
 
-    if (projections.empty()) {
-        if (manual) {
-            OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
-                                                        LOC(kTooltipRecord),
-                                                        LOC(kVst3ReadAudioSelectionNotReady));
-        }
+    const auto& target = projections.front();
+    const int refreshed = dc->requestReadAudioForPlaybackRegion(target.playbackRegion);
+    if (refreshed < 0) {
+        AppLogger::log("ReadAudio: auto-read failed");
+        ++autoReadFailureCount_;
         return;
     }
-
-    // 按 contentKey 去重，收集唯一 playbackRegion。
-    std::set<ContentKey> seenKeys;
-    std::vector<juce::ARAPlaybackRegion*> uniqueRegions;
-    uniqueRegions.reserve(projections.size());
-    for (const auto& projection : projections) {
-        if (!projection.contentKey.isValid() || projection.playbackRegion == nullptr)
-            continue;
-        if (!seenKeys.insert(projection.contentKey).second)
-            continue;
-        uniqueRegions.push_back(projection.playbackRegion);
-    }
-    if (uniqueRegions.empty()) {
-        if (manual)
-            OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
-                                                        LOC(kTooltipRecord),
-                                                        LOC(kVst3ReadAudioSelectionNotReady));
+    if (refreshed == 0)
         return;
-    }
 
-    // P1-2：archive 恢复的有效内容不 force（保住已归档修音数据）；
-    // split 克隆的新 modification / 新实例仍走 force 首读。
-    const bool archivedContentPresent = dc->hasArchivedContentNeedingRestore();
-    const bool force = processorRef_.takeInitialAraReadPending() && !archivedContentPresent;
-    dc->requestReadAudioForPlaybackRegionsAsync(uniqueRegions, force,
-        [this, manual](int refreshed) {
-            if (refreshed < 0) {
-                if (manual) {
-                    OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
-                                                                LOC(kTooltipRecord),
-                                                                LOC(kVst3ReadAudioRegionsFailed));
-                } else {
-                    AppLogger::log("ReadAudio: auto-read failed, refreshed=" + juce::String(refreshed));
-                }
-                // P2-8：失败不清 autoReadAttempted_/compositeScopeChanged_，
-                // 允许同 scope 自动重试；节流防死循环（见 autoReadFailureCount_）。
-                ++autoReadFailureCount_;
-                return;
-            }
+    autoReadFailureCount_ = 0;
+    AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
+        + " AudioModification(s) for scoped playback region");
 
-            autoReadFailureCount_ = 0;
-            if (refreshed == 0)
-                return;
+    syncContentProjectionToPianoRoll();
 
-            AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
-                + " AudioModification(s) for composite scope");
-
-            // ARA Read 成功且已清旧 curve 后，立即同步投影，让旧 F0 不等待 timer 才消失
-            syncContentProjectionToPianoRoll();
-
-            // 遮罩只覆盖本次 composite scope 读取。
-            if (compositeKey_.isValid()) {
-                originalF0OverlayTargetContentKeys_ = { compositeKey_ };
-                // F0 状态机基线重置：防止 F0 完成早于首次 timer 观察导致跳变丢失
-                lastObservedOriginalF0States_[compositeKey_] = OriginalF0State::NotRequested;
-            }
-            // Composite 编辑回写是后续 lane：不给 composite 设置 pendingNoteGenerationOnReady_。
-            originalF0OverlayLatched_ = true;
-        });
-#else
-    juce::ignoreUnused(manual);
+    if (!target.contentKey.isValid())
+        return;
+    originalF0OverlayTargetContentKeys_ = { target.contentKey };
+    lastObservedOriginalF0States_[target.contentKey] = OriginalF0State::NotRequested;
+    if (pianoRoll_.isOpenDyne())
+        pendingNoteGenerationOnReady_[target.contentKey] = pianoRoll_.getCurrentAutoTuneParams();
+    else
+        pendingNoteGenerationOnReady_.erase(target.contentKey);
+    originalF0OverlayLatched_ = true;
 #endif
 }
 
@@ -998,38 +951,24 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
     PianoRollContentSync sync;
 
 #if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController()) {
-        const auto scope = resolveContentScopeRegions();
-        if (scope.empty()) {
-            if (compositeKey_.isValid() && !lastCompositeScopeRegions_.empty()) {
-                dc->updateCompositeContent(compositeKey_, {});
-                lastCompositeScopeRegions_.clear();
-                compositeScopeChanged_ = true;
-            }
-            return sync;
+    if (const auto* dc = processorRef_.getDocumentController()) {
+        const auto projections = dc->getPlaybackRegionProjectionsFor(resolveContentScopeRegions());
+        for (const auto& region : projections) {
+            if (!region.contentKey.isValid())
+                continue;
+            const auto projection = makePianoRollLocalProjection(processorRef_, region);
+            if (!projection.isValid())
+                continue;
+            sync.placements.push_back(makePlacement(region.contentKey, projection,
+                region.displayColour.value_or(UIColors::noteBlock)));
         }
-        if (!compositeKey_.isValid()) {
-            compositeKey_ = dc->registerCompositeContent(processorRef_.getAraInstanceToken(), scope);
-            lastCompositeScopeRegions_ = scope;
-            compositeScopeChanged_ = true;
-        } else if (scope != lastCompositeScopeRegions_) {
-            dc->updateCompositeContent(compositeKey_, scope);
-            lastCompositeScopeRegions_ = scope;
-            compositeScopeChanged_ = true;
-        }
-        const auto range = dc->getCompositeTrackRange(compositeKey_);
-        if (!range.has_value())
+
+        if (sync.placements.empty())
             return sync;
-        ContentTimelineProjection projection;
-        projection.timelineStartSeconds = range->trackStartSeconds;
-        projection.timelineDurationSeconds = range->trackDurationSeconds;
-        projection.contentStartSeconds = 0.0;
-        projection.contentDurationSeconds = range->trackDurationSeconds;
-        if (!projection.isValid())
-            return sync;
-        sync.placements.push_back(makePlacement(compositeKey_, projection, UIColors::noteBlock));
-        sync.activeContentKey = compositeKey_;
-        sync.activePlacementIdentity = PianoRollPlacementIdentity{compositeKey_, projection};
+
+        sync.activeContentKey = sync.placements.front().contentKey;
+        sync.activePlacementIdentity = PianoRollPlacementIdentity{
+            sync.activeContentKey, sync.placements.front().projection};
         return sync;
     }
 #endif
@@ -1523,7 +1462,7 @@ void OpenTuneAudioProcessorEditor::externalEditRequested()
     }
 
     const auto activeKey = resolveCurrentContentKey();
-    const auto snapshot = readContentSnapshot(activeKey);
+    const auto snapshot = processorRef_.getContentSnapshot(activeKey);
     if (!activeKey.isValid() || snapshot == nullptr || snapshot->audioBuffer == nullptr
         || snapshot->audioBuffer->getNumSamples() <= 0) {
         OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
@@ -1576,13 +1515,61 @@ void OpenTuneAudioProcessorEditor::recordRequested()
 #endif
     return;
 #else
+    auto* dc = processorRef_.getDocumentController();
+
     AppLogger::log("VST3 recordRequested mode=ara-bound processor="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(&processorRef_))
-        + " dc=" + juce::String::toHexString(
-            reinterpret_cast<uintptr_t>(processorRef_.getDocumentController())));
+        + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc)));
 
-    // Composite scope Read：去重后读取 scope 内全部唯一 AudioModification。
-    readScopeAudio(true);
+    const auto scopedProjections = dc->getPlaybackRegionProjectionsFor(resolveContentScopeRegions());
+    if (scopedProjections.empty() || scopedProjections.front().playbackRegion == nullptr)
+    {
+        AppLogger::log("VST3 recordRequested mode=ara-bound scoped region unavailable");
+        transportBar_.setRecordButtonEnabled(false);
+        OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
+                                                    LOC(kTooltipRecord),
+                                                    LOC(kVst3ReadAudioSelectionNotReady));
+        return;
+    }
+
+    const auto targetPlaybackRegion = scopedProjections.front().playbackRegion;
+    dc->requestReadAudioForPlaybackRegionAsync(
+        targetPlaybackRegion,
+        [this, dc, targetPlaybackRegion](int refreshed) {
+            if (refreshed < 0) {
+                OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
+                                                            LOC(kTooltipRecord),
+                                                            LOC(kVst3ReadAudioRegionsFailed));
+                return;
+            }
+
+            if (refreshed == 0)
+                return;
+
+            AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
+                + " AudioModification(s) for scoped playback region");
+
+            // ARA Read 成功且已清旧 curve 后，立即同步投影，让旧 F0 不等待 timer 才消失
+            syncContentProjectionToPianoRoll();
+
+            // 遮罩只覆盖本次读取的 focused modification。
+            originalF0OverlayTargetContentKeys_.clear();
+            const auto targetProjections = dc->getPlaybackRegionProjectionsFor(
+                std::vector<juce::ARAPlaybackRegion*>{targetPlaybackRegion});
+            if (targetProjections.empty() || !targetProjections.front().contentKey.isValid())
+                return;
+
+            const auto targetKey = targetProjections.front().contentKey;
+            originalF0OverlayTargetContentKeys_.push_back(targetKey);
+            // F0 状态机基线重置：防止 F0 完成早于首次 timer 观察导致跳变丢失
+            lastObservedOriginalF0States_[targetKey] = OriginalF0State::NotRequested;
+            // 捕获 OpenDyne 一次性音符生成意图，F0 Ready 跳变时消费
+            if (pianoRoll_.isOpenDyne())
+                pendingNoteGenerationOnReady_[targetKey] = pianoRoll_.getCurrentAutoTuneParams();
+            else
+                pendingNoteGenerationOnReady_.erase(targetKey);
+            originalF0OverlayLatched_ = true;
+        });
 #endif
 }
 
@@ -1677,7 +1664,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     }
 
     OriginalF0State f0State = OriginalF0State::NotRequested;
-    if (auto snap = readContentSnapshot(activeKey))
+    if (auto snap = processorRef_.getContentSnapshot(activeKey))
         f0State = snap->originalF0State;
 #if JucePlugin_Enable_ARA
     else if (auto* dc = processorRef_.getDocumentController())
@@ -1693,7 +1680,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     }
 
     if (f0State == OriginalF0State::Failed) {
-        auto reason = readContentSnapshot(activeKey);
+        auto reason = processorRef_.getContentSnapshot(activeKey);
         juce::String failureReason = reason != nullptr
             ? juce::String(reason->originalF0FailureReason)
             : juce::String{};
@@ -1877,17 +1864,10 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
             curveSnapshot = dc->readPitchCurve(sync.activeContentKey);
             detectedKey = dc->readDetectedKey(sync.activeContentKey);
         }
-    } else if (sync.activeContentKey.domainKind == DomainKind::ARAComposite) {
-        if (const auto* dc = processorRef_.getDocumentController()) {
-            auto snap = dc->readContentSnapshot(sync.activeContentKey);
-            syncBuffer = snap ? snap->audioBuffer : nullptr;
-            curveSnapshot = snap ? snap->pitchCurve : nullptr;
-            detectedKey = snap ? snap->detectedKey : DetectedKey{};
-        }
     } else
 #endif
     {
-        auto snap = readContentSnapshot(sync.activeContentKey);
+        auto snap = processorRef_.getContentSnapshot(sync.activeContentKey);
         syncBuffer = snap ? snap->audioBuffer : nullptr;
         curveSnapshot = snap ? snap->pitchCurve : nullptr;
         detectedKey = snap ? snap->detectedKey : DetectedKey{};
@@ -1958,15 +1938,13 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         }
     }
 
-    // 一次性 auto-Read：composite placement 就绪且尚未读过（或 scope 变化）时
-    // 自动触发一次读取。失败时不清 flags（P2-8 同 scope 自动重试），
-    // 但连续失败达上限后停止自动重试，防 30Hz 死循环。
+    // First-insert auto Read: run once when the instance scope has placements.
+    // Set the flag before the call so the recursive sync from the Read callback
+    // cannot trigger a second read.
     if (!sync.isRegularVst3Capture && sync.hasPlacements()
-        && (!autoReadAttempted_ || compositeScopeChanged_)
-        && autoReadFailureCount_ < kMaxAutoReadFailures) {
+        && !autoReadAttempted_ && autoReadFailureCount_ < kMaxAutoReadFailures) {
         autoReadAttempted_ = true;
-        compositeScopeChanged_ = false;
-        readScopeAudio(false);
+        readScopeAudio();
     }
 
     return sync;
