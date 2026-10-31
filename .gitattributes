@@ -3,3 +3,4 @@
 *.command text eol=lf
 .github/** text eol=lf
 scripts/github_actions/** text eol=lf
+scripts/github_actions/assets/*.dll binary

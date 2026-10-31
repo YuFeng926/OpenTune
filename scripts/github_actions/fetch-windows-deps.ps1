@@ -15,6 +15,7 @@ $OnnxRuntimeDirectMlSha256 = "57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013f
 $DirectMlSha256 = "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9"
 $Direct3DSha256 = "0e9bcf32aac9a79343ede9b21e4864950ee54577e3d8e19bfcdf002bb4e9bfd6"
 $OnnxRuntimeCpuSha256 = "d2319fddfb6ea4db99ccc4b60c85c517bcd855721f5daa6a06d40d7cb2ee2357"
+$OnnxRuntimeDmlMtDllSha256 = "402856ef7f06a9c598eef0b14b62a6be242c63908b0811563f0d5d6a13ea2d51"
 
 $Work = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $env:TEMP "opentune-ci" }
 New-Item -ItemType Directory -Force -Path $Work, (Join-Path $Root "ThirdParty"), (Join-Path $Root "models") | Out-Null
@@ -268,6 +269,19 @@ if (Test-Path -LiteralPath $ortTarget) {
     Remove-Item -LiteralPath $ortTarget -Recurse -Force
 }
 Move-Item -LiteralPath $packageRoot -Destination $ortTarget
+
+# Replace the upstream NuGet onnxruntime.dll with the project-maintained
+# /MT RelWithDebInfo build tracked under scripts/github_actions/assets/.
+$mtDll = Join-Path $Root "scripts\github_actions\assets\onnxruntime-1.24.4-mt.dll"
+$dmlNative = Join-Path $Root "ThirdParty\onnxruntime-dml-1.24.4\runtimes\win-x64\native"
+if (-not (Test-Path -LiteralPath $mtDll)) {
+    throw "Project-maintained ONNX Runtime /MT DLL is missing: scripts\github_actions\assets\onnxruntime-1.24.4-mt.dll"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $dmlNative "onnxruntime.dll"))) {
+    throw "DML NuGet package did not unpack onnxruntime.dll under $dmlNative; cannot apply the /MT override"
+}
+Assert-Sha256 -Path $mtDll -Expected $OnnxRuntimeDmlMtDllSha256 -Label "onnxruntime-1.24.4-mt.dll"
+Copy-Item -LiteralPath $mtDll -Destination (Join-Path $dmlNative "onnxruntime.dll") -Force
 
 Invoke-Checked $Python @((Join-Path $Root "scripts\github_actions\fetch-models.py"))
 
