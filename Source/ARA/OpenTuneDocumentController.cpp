@@ -2784,15 +2784,15 @@ void OpenTuneDocumentController::observeHostPlaybackPosition(
     if (positionInfo.hasValue())
         observeHostPlaybackState(positionInfo->getIsPlaying());
 
-    // Update document-shared canonical transport truth from the playback renderer.
-    const uint64_t epoch = sharedPlayHeadState_.update(positionInfo);
+    // Update document-shared canonical transport truth from a realtime editor
+    // renderer. Playback renderers may be ahead of the current playhead and must
+    // not enter this path.
+    const auto updateResult = sharedPlayHeadState_.update(positionInfo);
 
-    // Publish projection anchor with CAS: multi-writer safe (multiple ARA roles
-    // may call this from their processBlock). On contention, skip — canonical
-    // atomics already hold the latest truth, so UI falls back to timeInSeconds.
-    // Only publish when blockDurationSeconds > 0 (real audio data); zero-sample
-    // blocks still update canonical state but must not publish a zero-horizon projection.
-    if (blockDurationSeconds > 0.0 && positionInfo.hasValue())
+    // Publish a projection only when this call advanced canonical time. A
+    // duplicate observation of the same current time is a no-op: it must not
+    // bump the generation or invalidate the existing anchor.
+    if (blockDurationSeconds > 0.0 && updateResult.timeChanged && positionInfo.hasValue())
     {
         if (const auto timeSec = positionInfo->getTimeInSeconds())
         {
@@ -2800,7 +2800,7 @@ void OpenTuneDocumentController::observeHostPlaybackPosition(
             const double horizon = *timeSec + blockDurationSeconds;
             if (sharedPlayHeadState_.timeInSeconds.load(std::memory_order_relaxed) == *timeSec)
                 sharedPlayHeadState_.presentationProjection.tryPublish(
-                    *timeSec, nowClock, horizon, epoch);
+                    *timeSec, nowClock, horizon, updateResult.epoch);
         }
     }
 }

@@ -1669,10 +1669,10 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         playHeadState_.update(hostPosOpt);
 
 #if JucePlugin_Enable_ARA
-    // REAPER may split ARA roles across processor instances. The playback
-    // renderer is the sole publisher of the host's PositionInfo to the shared
-    // document-level PlayHeadState; editor renderers must not overwrite it.
-    if (hostPosOpt.hasValue() && isBoundToARA() && isPlaybackRenderer())
+    // ARA2 playback renderers can run ahead of the actual playhead on track
+    // processing threads. The realtime editor renderer is the current transport
+    // source; only this role publishes to the shared document-level PlayHeadState.
+    if (hostPosOpt.hasValue() && isBoundToARA() && isEditorRenderer())
         if (auto* dc = getDocumentController())
             dc->observeHostPlaybackPosition(hostPosOpt,
                 (numSamples > 0)

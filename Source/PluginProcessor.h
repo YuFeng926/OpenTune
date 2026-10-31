@@ -441,8 +441,9 @@ private:
     int    timeSigDenominator_{4};
 #endif
 
-    // Processor-owned canonical transport truth. Updated only from this
-    // processor's processBlock(); ARA/UI read it via getPlayHeadState().
+    // Processor-owned canonical transport truth for Standalone/non-ARA. In ARA,
+    // getPlayHeadState() returns the document-shared state published by the
+    // realtime editor renderer.
     PlayHeadState playHeadState_;
 
     // Plugin piano roll camera session memory (message thread only, no locks).
@@ -924,8 +925,8 @@ public:
 #endif
 
     /** Canonical transport truth; UI binds a const non-owning reference.
-     *  In ARA mode, returns the document-level shared state so all roles
-     *  (including ones that never receive processBlock) see the same truth.
+     *  In ARA mode, returns the document-level shared state published by the
+     *  realtime editor renderer; every role/view reads the same current truth.
      *  In Standalone/non-ARA VST3, returns this processor's local state.
      *  Defined in PluginProcessor.cpp (requires complete OpenTuneDocumentController type). */
     const PlayHeadState& getPlayHeadState() const noexcept;

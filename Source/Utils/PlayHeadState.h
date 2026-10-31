@@ -10,11 +10,11 @@
  * PlayHeadPresentationProjection — seqlock-based smooth projection anchor.
  * Audio thread publishes anchors; UI thread reads snapshots and projects.
  *
- * Multi-writer variant (tryPublish): When multiple ARA-role processors share
- * one PlayHeadState, the projection may be published from different audio
- * threads. The CAS-based tryPublish path aborts on contention rather than
- * spinning — the canonical atomics already hold the latest truth, so a lost
- * publish is harmless (UI falls back to canonical timeInSeconds).
+ * Multi-writer variant (tryPublish): ARA realtime editor renderers may share
+ * one PlayHeadState. Duplicate observations of the same canonical time are
+ * idempotent: they do not advance presentationEpoch or publish another anchor.
+ * Only the writer that advances canonical time publishes the anchor for that
+ * transport generation.
  */
 
 #include <atomic>
@@ -104,11 +104,11 @@ struct PlayHeadPresentationProjection
         sequence.fetch_add(1, std::memory_order_release);  // commit (even)
     }
 
-    // Multi-writer CAS publish: attempts one projection commit. On contention
-    // (another writer is active), returns false — the caller's canonical atomics
-    // are already updated so the UI will read correct time via fallback path.
-    // The epoch bump on new PositionInfo with time ensures stale projections
-    // from an older epoch are invalidated by readers.
+    // Multi-writer CAS publish for ARA realtime editor renderers. Only the
+    // writer that advanced canonical time calls this; duplicate observations do
+    // not publish. Reject an older epoch so a stale anchor cannot overwrite a
+    // newer one. On CAS contention, skip; the writer for the newer transport
+    // generation, or the next block, owns the anchor.
     bool tryPublish(double positionSec, double nowClockSec, double horizonSec, uint64_t epoch)
     {
         uint64_t expected = sequence.load(std::memory_order_relaxed);
@@ -116,6 +116,9 @@ struct PlayHeadPresentationProjection
         // (never-published is fine to transition from).
         if (expected & 1)
             return false;  // writer active right now, skip
+
+        if (epoch < anchorEpoch.load(std::memory_order_relaxed))
+            return false;  // stale anchor from an older transport generation
 
         if (!sequence.compare_exchange_strong(expected, expected + 1,
                                               std::memory_order_acq_rel,
@@ -145,11 +148,12 @@ struct PlayHeadPresentationProjection
 // atomics directly. ARA transport requests are single-direction
 // HostPlaybackController requests and never write back here.
 //
-// presentationEpoch is incremented on every discrete control change
-// (play/stop/seek/reset) or on every valid PositionInfo with time; the audio
-// thread publishes projection anchors tagged with the current epoch. UI
-// projection is only valid when anchorEpoch == presentationEpoch; otherwise
-// fall back to canonical time.
+// presentationEpoch is a transport generation: it advances only when the
+// canonical time changes or play state changes, not for duplicate observations
+// of the same current time. The writer that advances time publishes an anchor
+// tagged with that generation; duplicate realtime writers are no-ops. UI
+// projection is valid when anchorEpoch == presentationEpoch; otherwise fall
+// back to canonical time.
 //
 // isPlaying is the release/acquire publication point between writer
 // (audio/control thread) and reader (UI thread). getPresentedPositionAt
@@ -159,22 +163,20 @@ struct PlayHeadPresentationProjection
 //
 // update() contract:
 //  1. nullopt: no-op. Do not clear fields or fake stopped.
-//  2. valid PositionInfo but no timeInSeconds: keep the last valid time; still
-//     write isPlaying/isLooping and loop points when present.
-//  3. valid PositionInfo with timeInSeconds: write time before isPlaying, then
-//     write isLooping and loop points when present. Advance presentationEpoch
-//     so that any stale projection from a previous epoch is invalidated.
+//  2. valid PositionInfo but no timeInSeconds: keep the last valid time; write
+//     isPlaying/isLooping. A play-state change advances the transport generation.
+//  3. valid PositionInfo with timeInSeconds: update canonical time with CAS.
+//     Only the writer that actually changes time advances the transport
+//     generation; duplicate observations of the same current time are no-ops.
 //
 // reset() contract (only prepareToPlay/releaseResources call it on local state):
-//  - clear isPlaying/isLooping; keep last time/loop range; bump presentationEpoch.
+//  - clear isPlaying/isLooping; keep last time; bump presentationEpoch.
 //  In shared (DC) mode, reset is NOT called from per-processor prepare/release.
 struct PlayHeadState
 {
     std::atomic<bool>    isPlaying { false };
     std::atomic<bool>    isLooping { false };
     std::atomic<double>  timeInSeconds { 0.0 };
-    std::atomic<double>  loopPpqStart { 0.0 };
-    std::atomic<double>  loopPpqEnd { 0.0 };
     std::atomic<uint64_t> presentationEpoch { 0 };
 
     PlayHeadPresentationProjection presentationProjection;
@@ -200,44 +202,61 @@ struct PlayHeadState
 
     // ---- canonical-state update (audio thread only) ----
     //
-    // Returns the presentationEpoch actually used during this call:
-    //  - PositionInfo present with timeInSeconds → bumped epoch (old+1)
-    //  - PositionInfo absent, or present without time → current epoch (unchanged)
+    // Returns the transport generation and whether this call advanced canonical
+    // time. Only the caller that observes timeChanged=true publishes a
+    // projection anchor. Duplicate observations of the same current time are
+    // idempotent: no epoch bump, no anchor.
 
-    uint64_t update(const juce::Optional<juce::AudioPlayHead::PositionInfo>& info)
+    struct UpdateResult
     {
+        uint64_t epoch = 0;
+        bool timeChanged = false;
+    };
+
+    UpdateResult update(const juce::Optional<juce::AudioPlayHead::PositionInfo>& info)
+    {
+        UpdateResult result;
+        result.epoch = presentationEpoch.load(std::memory_order_acquire);
+
         if (!info.hasValue())
-            return presentationEpoch.load(std::memory_order_relaxed);
+            return result;
 
         const auto& positionInfo = *info;
+        bool transportChanged = false;
 
-        // Write time-in-seconds before isPlaying so a reader that acquires
-        // isPlaying==false sees this block's canonical time.
-        uint64_t epoch = presentationEpoch.load(std::memory_order_relaxed);
+        // CAS on canonical time: concurrent ARA realtime editor renderers that
+        // observe the same current time do not each advance the generation.
         if (const auto timeSeconds = positionInfo.getTimeInSeconds())
         {
-            timeInSeconds.store(*timeSeconds, std::memory_order_relaxed);
-            // Advance epoch on every new PositionInfo with time: this ensures
-            // any projection published with an older epoch is considered stale
-            // by the reader, even if the projection CAS succeeded before the
-            // canonical time write became visible.
-            epoch = presentationEpoch.fetch_add(1, std::memory_order_release) + 1;
-        }
-
-        if (const auto loopPoints = positionInfo.getLoopPoints())
-        {
-            loopPpqStart.store(loopPoints->ppqStart, std::memory_order_relaxed);
-            loopPpqEnd.store(loopPoints->ppqEnd, std::memory_order_relaxed);
+            double current = timeInSeconds.load(std::memory_order_relaxed);
+            while (current != *timeSeconds)
+            {
+                if (timeInSeconds.compare_exchange_weak(current, *timeSeconds,
+                                                         std::memory_order_acq_rel,
+                                                         std::memory_order_relaxed))
+                {
+                    result.timeChanged = true;
+                    transportChanged = true;
+                    break;
+                }
+                // CAS failure reloads current. If another writer already
+                // installed the same time, the loop exits without a bump.
+            }
         }
 
         isLooping.store(positionInfo.getIsLooping(), std::memory_order_relaxed);
 
-        // isPlaying release publishes timeInSeconds/loop written above.
-        // Pairs with getPresentedPositionAt's isPlaying acquire: when
-        // the UI sees false, the canonical pause position is visible.
-        isPlaying.store(positionInfo.getIsPlaying(), std::memory_order_release);
+        // isPlaying exchange publishes time/loop written above and lets only
+        // the first observer of a play-state change advance the generation.
+        const bool wasPlaying = isPlaying.exchange(positionInfo.getIsPlaying(),
+                                                   std::memory_order_acq_rel);
+        if (wasPlaying != positionInfo.getIsPlaying())
+            transportChanged = true;
 
-        return epoch;
+        if (transportChanged)
+            result.epoch = presentationEpoch.fetch_add(1, std::memory_order_release) + 1;
+
+        return result;
     }
 
     // reset() is only called from prepareToPlay/releaseResources on the audio thread

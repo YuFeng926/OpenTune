@@ -801,7 +801,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 // Playhead render via VBlank overlay; main editor heartbeat reduced to 30Hz to ease message thread pressure
     startTimerHz(kHeartbeatHzIdle);
 
-// Playhead position read from shared projection — each component calls getPresentedPositionSeconds()
+// Playhead position read from local PlayHeadState projection — each component calls getPresentedPositionSeconds()
 
     // Hide the standalone "Options" button and Mute Warning if running in standalone mode
     juce::Timer::callAfterDelay(50, [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)]() {
@@ -1645,7 +1645,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     const bool allowSecondaryRefresh = !inferenceActive_ || ((++inferenceActiveTickCounter_ % 4) == 0);
-// Update playhead position from processor (presented position via shared projection)
+// Update playhead position from processor (presented position via local PlayHeadState projection)
     double currentPositionSeconds = processorRef_.getPosition();
     double sampleRate = processorRef_.getSampleRate();
 
