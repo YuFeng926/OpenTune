@@ -24,6 +24,7 @@ docs/UserGuide.html
 !.github/
 !.github/**
 Logs/
+lifecycle-traces/
 openspec/
 specs/
 research/
