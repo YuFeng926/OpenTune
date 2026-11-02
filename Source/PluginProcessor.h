@@ -627,6 +627,9 @@ public:
     /** 本插件实例 PlaybackRenderer 绑定的 regions。 */
     std::vector<juce::ARAPlaybackRegion*> getAssignedPlaybackRegions() const;
     void didBindToARA() noexcept override;
+
+    void setNotePitchAuditionTargetRegion(juce::ARAPlaybackRegion* region) noexcept
+    { notePitchAuditionTargetRegion_ = region; }
 #endif
 
 #if JucePlugin_Build_Standalone
@@ -986,6 +989,9 @@ private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
     NotePitchAudition notePitchAudition_;
+#if JucePlugin_Enable_ARA
+    juce::ARAPlaybackRegion* notePitchAuditionTargetRegion_ = nullptr;
+#endif
     OutputSpectrumAnalyzer outputSpectrumAnalyzer_;
 
     // Hard-cut render mutation request primitive. This is the only path

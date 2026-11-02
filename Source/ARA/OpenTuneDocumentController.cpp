@@ -2,6 +2,8 @@
 
 #include "OpenTunePlaybackRenderer.h"
 
+#include "../Audio/NotePitchAudition.h"
+
 #include "../Inference/F0InferenceService.h"
 #include "../Runtime/ProcessF0Runtime.h"
 #include "../Runtime/ProcessRenderRuntime.h"
@@ -124,6 +126,27 @@ bool playbackMemberCallable(const ARA::ARAPlaybackControllerInterface* iface,
     return iface->*member != nullptr;
 }
 
+bool editorRendererOwnsRegion(juce::ARAEditorRenderer* renderer,
+                              juce::ARAPlaybackRegion* region) noexcept
+{
+    if (renderer == nullptr || region == nullptr)
+        return false;
+
+    const auto& direct = renderer->getPlaybackRegions<juce::ARAPlaybackRegion>();
+    if (std::find(direct.begin(), direct.end(), region) != direct.end())
+        return true;
+
+    for (auto* sequence : renderer->getRegionSequences<juce::ARARegionSequence>())
+    {
+        if (sequence == nullptr)
+            continue;
+        const auto& inSequence = sequence->getPlaybackRegions<juce::ARAPlaybackRegion>();
+        if (std::find(inSequence.begin(), inSequence.end(), region) != inSequence.end())
+            return true;
+    }
+    return false;
+}
+
 } // namespace
 
 OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugInEntry* entry,
@@ -134,6 +157,7 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(
         1, 100, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
     , transportRelay_(std::make_shared<HostTransportRelayState>())
+    , notePitchAudition_(std::make_unique<NotePitchAudition>())
 {
     ProcessRenderRuntime::getInstance().retainOwner();
     installDocumentRenderExecution();
@@ -975,6 +999,55 @@ const ContentRenderService* OpenTuneDocumentController::getContentRenderService(
 std::shared_ptr<ContentRenderService> OpenTuneDocumentController::getContentRenderServiceShared() const noexcept
 {
     return contentRenderService_;
+}
+
+NotePitchAudition& OpenTuneDocumentController::getNotePitchAudition() noexcept
+{
+    return *notePitchAudition_;
+}
+
+bool OpenTuneDocumentController::selectNotePitchAuditionRendererForRegion(
+    juce::ARAPlaybackRegion* region) noexcept
+{
+    juce::ARAEditorRenderer* selected = nullptr;
+    if (region != nullptr)
+    {
+        if (auto* controller = getDocumentController())
+        {
+            for (auto* renderer : controller->getEditorRenderers<juce::ARAEditorRenderer>())
+            {
+                if (editorRendererOwnsRegion(renderer, region))
+                {
+                    selected = renderer;
+                    break;
+                }
+            }
+        }
+    }
+
+    notePitchAuditionRenderer_.store(selected, std::memory_order_release);
+    return selected != nullptr;
+}
+
+void OpenTuneDocumentController::mixNotePitchAuditionIfOwner(
+    juce::ARAEditorRenderer* renderer,
+    juce::AudioBuffer<float>& buffer,
+    int numSamples,
+    double sampleRate) noexcept
+{
+    if (notePitchAuditionMixLock_.test_and_set(std::memory_order_acquire))
+        return;
+
+    if (notePitchAuditionRenderer_.load(std::memory_order_acquire) == renderer)
+        notePitchAudition_->mixIntoBuffer(buffer, numSamples, sampleRate);
+
+    notePitchAuditionMixLock_.clear(std::memory_order_release);
+}
+
+void OpenTuneDocumentController::stopNotePitchAudition() noexcept
+{
+    notePitchAuditionRenderer_.store(nullptr, std::memory_order_release);
+    notePitchAudition_->stop();
 }
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable() const noexcept

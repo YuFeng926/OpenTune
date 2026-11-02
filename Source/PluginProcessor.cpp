@@ -1368,7 +1368,7 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     currentBlockSize_ = samplesPerBlock;
 
     // Any in-flight note pitch audition is bound to the previous device rate; stop it.
-    notePitchAudition_.stop();
+    stopNotePitchAudition();
 
     // Real sample rate change: project transportCursor_ from old rate to new rate
     if (realRateChange) {
@@ -1431,7 +1431,7 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
 void OpenTuneAudioProcessor::releaseResources() {
     // 停止可能仍在进行的音符移调试听（设备即将释放）
-    notePitchAudition_.stop();
+    stopNotePitchAudition();
 
     const RuntimePhase entryPhase = phase_;  // snapshot before any mutation
     // Cancel transition; align cursors, gain=0
@@ -3081,6 +3081,16 @@ const ContentRenderService* OpenTuneAudioProcessor::resolveReadableContentRender
 void OpenTuneAudioProcessor::mixAuditions(juce::AudioBuffer<float>& buffer, int numSamples, double sampleRate)
 {
     pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+    {
+        auto* dc = getDocumentController();
+        auto* editorRenderer = getEditorRenderer();
+        if (dc != nullptr && editorRenderer != nullptr && !isNonRealtime())
+            dc->mixNotePitchAuditionIfOwner(editorRenderer, buffer, numSamples, sampleRate);
+        return;
+    }
+#endif
     // 音符移调预览仅在实时处理时混入；离线（宿主 bounce/export）渲染静音。
     if (!isNonRealtime())
         notePitchAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
@@ -3090,28 +3100,54 @@ void OpenTuneAudioProcessor::auditionNotePitch(ContentKey key, double startSecon
 {
     // UI 线程入口：不投递 render job，不触碰 RenderCache，只读取已发布的 playback read source。
     if (!appPreferences_->getNoteTransposePreviewEnabled() || !key.isValid() || targetHz <= 0.0f) {
-        notePitchAudition_.stop();
+        stopNotePitchAudition();
         return;
     }
 
     const auto* crs = resolveReadableContentRenderService(key);
     if (crs == nullptr) {
-        notePitchAudition_.stop();
+        stopNotePitchAudition();
         return;
     }
 
     PlaybackReadSource source;
     if (!crs->getPlaybackReadSource(key, source) || source.audioBuffer == nullptr) {
-        notePitchAudition_.stop();
+        stopNotePitchAudition();
         return;
     }
 
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+    {
+        auto* dc = getDocumentController();
+        if (dc == nullptr
+            || !dc->selectNotePitchAuditionRendererForRegion(notePitchAuditionTargetRegion_))
+        {
+            stopNotePitchAudition();
+            return;
+        }
+
+        dc->getNotePitchAudition().request(std::move(source), startSeconds, endSeconds, targetHz,
+                                           static_cast<double>(getSampleRate()));
+        return;
+    }
+#endif
     notePitchAudition_.request(std::move(source), startSeconds, endSeconds, targetHz,
                                static_cast<double>(getSampleRate()));
 }
 
 void OpenTuneAudioProcessor::stopNotePitchAudition()
 {
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+    {
+        if (auto* dc = getDocumentController())
+        {
+            dc->stopNotePitchAudition();
+            return;
+        }
+    }
+#endif
     notePitchAudition_.stop();
 }
 

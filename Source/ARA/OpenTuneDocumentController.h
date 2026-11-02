@@ -31,6 +31,7 @@ namespace OpenTune {
 class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class ResamplingManager;
+class NotePitchAudition;
 struct RenderJob;
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
@@ -231,6 +232,15 @@ private:
     const AudioModification* findAudioModificationByContentKey(const ContentKey& key) const;
 
 public:
+    // 文档级音符移调试听：UI 实例投递请求，拥有当前编辑 region 的 editor renderer 混音。
+    NotePitchAudition& getNotePitchAudition() noexcept;
+    bool selectNotePitchAuditionRendererForRegion(juce::ARAPlaybackRegion* region) noexcept;
+    void mixNotePitchAuditionIfOwner(juce::ARAEditorRenderer* renderer,
+                                     juce::AudioBuffer<float>& buffer,
+                                     int numSamples,
+                                     double sampleRate) noexcept;
+    void stopNotePitchAudition() noexcept;
+
     /** Shared PlayHeadState for all ARA roles bound to this document. The
      *  realtime editor renderer publishes host transport here; UI binds to this. */
     const PlayHeadState& getSharedPlayHeadState() const noexcept { return sharedPlayHeadState_; }
@@ -281,6 +291,10 @@ private:
                                          RenderJob& job,
                                          std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+
+    std::unique_ptr<NotePitchAudition> notePitchAudition_;
+    std::atomic<juce::ARAEditorRenderer*> notePitchAuditionRenderer_{nullptr};
+    std::atomic_flag notePitchAuditionMixLock_ = ATOMIC_FLAG_INIT;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)
 };
