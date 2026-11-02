@@ -973,6 +973,10 @@ set(OPENTUNE_STANDALONE_APP_SOURCES
     Source/Editor/Preferences/StandalonePreferencePages.h
     Source/Utils/PlatformFileDialogs.cpp
     Source/Utils/PlatformFileDialogs.h
+    Source/Utils/DemoProject.h
+    Source/Utils/DemoProject.cpp
+    Source/Utils/DemoTourGate.h
+    Source/Standalone/UI/DemoTourCallout.h
 )
 
 target_sources(OpenTuneStandalone_Standalone PRIVATE ${OPENTUNE_STANDALONE_APP_SOURCES})
@@ -1296,6 +1300,14 @@ endif()
 set(HIFIGAN_MODEL_COMMUNITY "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx")
 set(FCPE_MODEL              "${CMAKE_CURRENT_SOURCE_DIR}/models/fcpe.onnx")
 
+# First-run demo (Source/Utils/DemoProject.cpp): the audio stays inside the bundle/dir,
+# only the project file is generated under Documents/Projects.
+file(GLOB OPENTUNE_DEMO_AUDIO "${CMAKE_CURRENT_SOURCE_DIR}/assets/*.wav")
+list(LENGTH OPENTUNE_DEMO_AUDIO OPENTUNE_DEMO_AUDIO_COUNT)
+if(NOT OPENTUNE_DEMO_AUDIO_COUNT EQUAL 1 OR NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/Demo.otproj")
+    message(FATAL_ERROR "assets/ must contain Demo.otproj and exactly one demo .wav")
+endif()
+
 # --- ONNX Runtime library copying ---
 if(WIN32)
     add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
@@ -1341,6 +1353,18 @@ if(WIN32)
         COMMENT "Copying AI models to Standalone..."
     )
 
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/Demo"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/Demo.otproj"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/Demo/Demo.otproj"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${OPENTUNE_DEMO_AUDIO}"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/Demo/Demo.wav"
+        COMMENT "Copying the demo project to Standalone directory..."
+    )
+
 elseif(OPENTUNE_IOS)
     # iOS bundles are flat: ModelPathResolver finds <executable dir>/models.
     add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
@@ -1353,6 +1377,18 @@ elseif(OPENTUNE_IOS)
             "${FCPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/models/fcpe.onnx"
         COMMENT "Copying AI models into the iPadOS app bundle..."
+    )
+
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Demo"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/Demo.otproj"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Demo/Demo.otproj"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${OPENTUNE_DEMO_AUDIO}"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Demo/Demo.wav"
+        COMMENT "Copying the demo project into the iPadOS app bundle..."
     )
 
 elseif(APPLE)
@@ -1381,6 +1417,30 @@ elseif(APPLE)
             "${FCPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/models/fcpe.onnx"
         COMMENT "Copying AI models to app bundle Resources..."
+    )
+
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/Demo"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/Demo.otproj"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/Demo/Demo.otproj"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${OPENTUNE_DEMO_AUDIO}"
+            "$<TARGET_BUNDLE_DIR:OpenTuneStandalone_Standalone>/Contents/Resources/Demo/Demo.wav"
+        COMMENT "Copying the demo project to macOS app bundle Resources..."
+    )
+else()
+    add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/Demo"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/Demo.otproj"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/Demo/Demo.otproj"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${OPENTUNE_DEMO_AUDIO}"
+            "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/Demo/Demo.wav"
+        COMMENT "Copying the demo project alongside the Standalone executable..."
     )
 endif()
 
@@ -1938,6 +1998,27 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneVisibleTrackCountTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME VisibleTrackCountTests COMMAND OpenTuneVisibleTrackCountTests)
+
+    # Demo-tour load gate: a not-yet-started open is not a failed open.
+    add_executable(OpenTuneDemoTourGateTests
+        Tests/DemoTourGateTests.cpp
+    )
+    target_include_directories(OpenTuneDemoTourGateTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(OpenTuneDemoTourGateTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME DemoTourGateTests COMMAND OpenTuneDemoTourGateTests)
+
+    add_executable(OpenTunePianoRollNoteEntryTests
+        Tests/PianoRollNoteEntryTests.cpp
+    )
+    target_include_directories(OpenTunePianoRollNoteEntryTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(OpenTunePianoRollNoteEntryTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME PianoRollNoteEntryTests COMMAND OpenTunePianoRollNoteEntryTests)
 
     # Standalone processor settings codec (OTSS v3 / legacy v2) tests.
     add_executable(OpenTuneStandaloneStateCodecTests
