@@ -83,7 +83,9 @@ jobs:
   macos:
     name: macOS Universal2
     needs: prepare
-    runs-on: macos-15
+    # macos-15（arm64）长期拿不到 hosted runner，排队 15 分钟后被取消；
+    # macos-15-intel 池可用。包体由 package-macos.sh 交叉编译并 lipo 校验为 Universal2。
+    runs-on: macos-15-intel
     env:
       OPENTUNE_BUILD_LABEL: ${{ needs.prepare.outputs.label }}
     timeout-minutes: 360
