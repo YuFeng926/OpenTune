@@ -243,6 +243,19 @@ cmake --preset windows-ara-ninja
 cmake --build --preset windows-ara-ninja-release
 ```
 
+> **中文 Windows 代码页（Ninja）**：`assets/` 下的 demo 音频文件名包含中文。Ninja 生成的
+> `post-build.bat` 以 UTF-8 写入该路径，`cmd.exe` 使用 GBK/936 代码页时会把路径读成乱码，
+> 构建在复制 demo 音频时失败（`cmake -E copy_if_different ... Invalid argument`）。
+> 配置和构建前把控制台切到 UTF-8：
+>
+> ```powershell
+> cmd /c "chcp 65001 >nul && cmake --preset windows-ara-ninja"
+> cmd /c "chcp 65001 >nul && cmake --build --preset windows-ara-ninja-release"
+> ```
+>
+> 也可以先执行 `chcp 65001`。`scripts/build-ninja.ps1` 已在配置和构建子进程中加入
+> `chcp 65001`。
+
 Release 构建完成后，发布前必须校验 Standalone 产物。校验与打包脚本为本地维护，
 不随仓库分发（`scripts/build-ninja.ps1`、`scripts/validate-windows-release.ps1`、
 `scripts/package-windows.ps1`、`Installer/`），需从本机获取。
@@ -310,6 +323,7 @@ PKG 双击安装到 `/Applications`，并将 VST3、AU 分别安装到系统级 
 | `ONNX Runtime DirectML DLL missing` | DML 版运行时 DLL 缺失 | 确认 `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` 存在 |
 | `ONNX Runtime dylib not found` | macOS universal2 包未构建或版本不符 | 执行 `./scripts/build-onnxruntime-macos.sh`，确认 `ThirdParty/onnxruntime-osx-universal2-1.20.0/lib/libonnxruntime.1.20.0.dylib` 存在 |
 | `ARA SDK not found` | ARA SDK 未克隆 | 执行步骤 2 的 git clone 命令 |
+| Demo 音频复制失败：`cmake -E copy_if_different ... Invalid argument` | 中文 Windows 使用 GBK/936 代码页，Ninja 生成的 `post-build.bat` 以 UTF-8 写入中文音频路径 | 配置和构建前执行 `chcp 65001`，或用 `cmd /c "chcp 65001 >nul && cmake ..."`；也可以把 `assets/` 下的 demo 音频改为 ASCII 文件名 |
 | MSVC 链接错误 LNK2019 | MSVC 运行时不匹配 | 本项目使用静态 CRT (`/MT`)，确保依赖库一致 |
 | Ninja 构建失败 | Ninja 未安装或不在 PATH 中 | 确保 Ninja 已安装并在系统 PATH 中，或使用 Visual Studio Generator |
 

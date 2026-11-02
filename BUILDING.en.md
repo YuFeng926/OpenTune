@@ -237,6 +237,20 @@ cmake --preset windows-ara-ninja
 cmake --build --preset windows-ara-ninja-release
 ```
 
+> **Chinese Windows code page (Ninja)**: the demo audio filename under `assets/`
+> contains Chinese characters. Ninja writes that path into `post-build.bat` as
+> UTF-8, but `cmd.exe` reads it using the GBK/936 code page, so copying the demo
+> audio fails with `cmake -E copy_if_different ... Invalid argument`. Switch the
+> console to UTF-8 before configure and build:
+>
+> ```powershell
+> cmd /c "chcp 65001 >nul && cmake --preset windows-ara-ninja"
+> cmd /c "chcp 65001 >nul && cmake --build --preset windows-ara-ninja-release"
+> ```
+>
+> Alternatively, run `chcp 65001` first. `scripts/build-ninja.ps1` already runs
+> `chcp 65001` in its configure and build child processes.
+
 Before packaging a Release build, validate the Standalone artifact. The
 validation and packaging scripts are maintained locally and are not
 distributed with the repository (`scripts/build-ninja.ps1`,
@@ -307,6 +321,7 @@ After build completion, runtime DLLs, model files, and D3D12 directory will be a
 | `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` exists |
 | `ONNX Runtime dylib not found` | macOS universal2 package missing or version mismatch | Verify `ThirdParty/onnxruntime-osx-universal2-1.20.0/lib/libonnxruntime.1.20.0.dylib` exists |
 | `ARA SDK not found` | ARA SDK not cloned | Execute step 2 git clone command |
+| Demo audio copy fails: `cmake -E copy_if_different ... Invalid argument` | Chinese Windows uses the GBK/936 code page; Ninja writes the Chinese audio path into `post-build.bat` as UTF-8 | Run `chcp 65001` before configure/build, or use `cmd /c "chcp 65001 >nul && cmake ..."`; alternatively rename the demo audio under `assets/` to an ASCII filename |
 | MSVC link error LNK2019 | MSVC runtime mismatch | This project uses static CRT (`/MT`), ensure dependency libraries are consistent |
 | Ninja build failure | Ninja not installed or not in PATH | Ensure Ninja is installed and in system PATH, or use Visual Studio Generator |
 
