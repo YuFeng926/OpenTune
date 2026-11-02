@@ -155,6 +155,7 @@ public:
     void placementTimingChanged(int trackId, int placementIndex) override;
     void placementDoubleClicked(int trackId, int placementIndex) override;
     void verticalScrollChanged(int newOffset) override;
+    void arrangementViewportChanged() override;
 
     void scrollModeChanged(bool isContinuous) override;
     void timelineDisplayModeChanged(TimelineDisplayMode mode) override;
@@ -202,7 +203,6 @@ private:
                                    double pixelsPerSecond) override;
     void applyThemeToEditor(ThemeId themeId);
     RenderStatusSnapshot getRenderStatusSnapshot() const;
-    void setInferenceActive(bool active);
     void syncParameterPanelFromSelection();
     void updateTitleWithProjectPath();
     void syncRecentProjectsToMenu();
@@ -320,8 +320,6 @@ private:
 
     ThemeId appliedThemeId_ = ThemeId::Aurora;
     Language appliedLanguage_ = Language::Chinese;
-    bool inferenceActive_ = false;
-    int inferenceActiveTickCounter_ = 0;
     ContentKey lastPianoRollContentKey_;
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
     int lastPianoRollSampleRate_ = 0;

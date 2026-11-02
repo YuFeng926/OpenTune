@@ -220,7 +220,6 @@ public:
     void setTrackCaptureTint(bool active);
     void setCorrectedF0Colour(juce::Colour colour);
     void setOriginalF0Colour(juce::Colour colour);
-    void setInferenceActive(bool active);
     void setBpm(double bpm);
     void setTimeSignature(int numerator, int denominator);
     void setTimelineDisplayMode(TimelineDisplayMode mode);
@@ -689,8 +688,6 @@ private:
     std::vector<TimelineContentPlacement> timelineContentPlacements_;
     ContentTimelineProjection pendingSingleContentProjection_;
     bool explicitTimelineContentPlacements_ = false;
-    bool inferenceActive_ = false;
-    int waveformBuildTickCounter_ = 0;
 
     AppPreferences* appPreferences_ = nullptr;
 

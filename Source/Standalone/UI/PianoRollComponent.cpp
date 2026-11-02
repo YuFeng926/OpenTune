@@ -3029,12 +3029,6 @@ int PianoRollComponent::getTimelineContentStartX() const noexcept
     return shouldShowPianoKeys() ? pianoKeyWidth_ : 0;
 }
 
-void PianoRollComponent::setInferenceActive(bool active)
-{
-    inferenceActive_ = active;
-    waveformBuildTickCounter_ = 0;
-}
-
 bool PianoRollComponent::getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const
 {
     const auto notes = getEditedContentNotesCopy();
@@ -4068,15 +4062,7 @@ void PianoRollComponent::onHeartbeatTick()
 
     // 波形缓存增量构建在可见性 guard 之前：导入音频后即使钢琴卷帘尚未显示也预先构建
     if (showWaveform_ || isOpenDyne()) {
-        bool progressed = false;
-        if (inferenceActive_) {
-            waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;
-            if (waveformBuildTickCounter_ == 0)
-                progressed = waveformMipmapCache_.buildIncremental(0.15);
-        } else {
-            waveformBuildTickCounter_ = 0;
-            progressed = waveformMipmapCache_.buildIncremental(0.75);
-        }
+        const bool progressed = waveformMipmapCache_.buildIncremental(0.75);
 
         // 先持久化构建进度，再按可见性决定是否立即提交 surface。
         if (progressed) {
@@ -4088,8 +4074,6 @@ void PianoRollComponent::onHeartbeatTick()
             rasterizeDirtySurfaces();
             repaint();
         }
-    } else {
-        waveformBuildTickCounter_ = 0;
     }
 
     if (!isShowing())

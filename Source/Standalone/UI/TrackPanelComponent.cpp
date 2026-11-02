@@ -863,14 +863,6 @@ void TrackPanelComponent::setTrackLevel(int trackId, float levelDB)
     }
 }
 
-void TrackPanelComponent::setInferenceActive(bool active)
-{
-    for (auto& track : tracks_)
-        track.levelMeter.setInferenceActive(active);
-
-    addTrackButton_.setInferenceActive(active);
-}
-
 // 设置可见轨道数量
 void TrackPanelComponent::setVisibleTrackCount(int count)
 {

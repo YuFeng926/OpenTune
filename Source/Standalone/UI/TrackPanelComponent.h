@@ -55,11 +55,6 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = kDefaultVisibleTracks; // 默认�
             }
         }
 
-        void setInferenceActive(bool active)
-        {
-            startTimerHz(active ? 12 : 30);
-        }
-
         void paint(juce::Graphics& g) override
         {
             auto bounds = getLocalBounds().toFloat();
@@ -343,11 +338,6 @@ public:
 
     std::function<void()> onClick;
 
-    void setInferenceActive(bool active)
-    {
-        startTimerHz(active ? 30 : 60);
-    }
-
     void paint(juce::Graphics& g) override
     {
         auto bounds = getLocalBounds().toFloat().reduced(4.0f);
@@ -536,7 +526,6 @@ public:
     float getTrackVolume(int trackId) const;
 
     void setTrackLevel(int trackId, float levelDB);
-    void setInferenceActive(bool active);
 
     // 可见轨道数量控制
     void setVisibleTrackCount(int count);

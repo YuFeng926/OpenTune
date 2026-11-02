@@ -542,6 +542,8 @@ void ArrangementViewComponent::activateTimelineCamera(TimelineViewportCamera cam
 
     updateScrollBars();
     repaint();
+
+    listeners_.call([](Listener& l) { l.arrangementViewportChanged(); });
 }
 
 void ArrangementViewComponent::cancelTilePreparation() noexcept
@@ -1870,13 +1872,7 @@ void ArrangementViewComponent::onHeartbeatTick()
 
     // 非播放期 waveform 构建限频：低频小预算
     bool progressed = false;
-    if (inferenceActive_)
-    {
-        waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;
-        if (waveformBuildTickCounter_ == 0)
-            progressed = buildWaveformCaches(0.15);
-    }
-    else if (playingNow)
+    if (playingNow)
     {
         waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 6;
         if (waveformBuildTickCounter_ == 0)
