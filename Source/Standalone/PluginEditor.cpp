@@ -1609,8 +1609,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     restoreStandaloneWindowGeometryOnce();
 
-    syncSharedAppPreferences();
-
     if (onboardingOverlay_ != nullptr && !onboardingOverlay_->isActive()
         && !appPreferences_.getState().shared.onboardingShown
         && isShowing() && getPeer() != nullptr && getWidth() > 0 && getHeight() > 0
