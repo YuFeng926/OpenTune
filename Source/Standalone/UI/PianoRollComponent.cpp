@@ -514,6 +514,10 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.notifyNoteOffsetChanged = [this](size_t noteIndex, float oldOffset, float newOffset) {
         listeners_.call([noteIndex, oldOffset, newOffset](Listener& l) { l.noteOffsetChanged(noteIndex, oldOffset, newOffset); });
     };
+    toolCtx.auditionNotePitch = [this](double start, double end, float targetHz) {
+        if (processor_ != nullptr) processor_->auditionNotePitch(editedContentKey_, start, end, targetHz);
+    };
+    toolCtx.stopNotePitchAudition = [this]() { stopNotePitchAudition(); };
     toolCtx.getPianoKeyWidth = [this]() { return getTimelineContentStartX(); };
     toolCtx.getContentProjection = [this]() { return activeContentProjection(); };
     toolCtx.getHandDrawPreviewBounds = [this]() { return getHandDrawPreviewBounds(); };
@@ -1017,8 +1021,13 @@ PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState,
 }
 
 PianoRollComponent::~PianoRollComponent() {
+    stopNotePitchAudition();
     scrollVBlankAttachment_.reset();
     verticalScrollBar_.removeListener(this);
+}
+
+void PianoRollComponent::stopNotePitchAudition() {
+    if (processor_ != nullptr) processor_->stopNotePitchAudition();
 }
 
 
@@ -3671,6 +3680,7 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
     if (contentChanged) {
         // 切换编辑目标：EQ 弹窗由选中组驱动，内容切换即失效
         closeEqPopup();
+        stopNotePitchAudition();
         if (!contentKey.isValid())
             pendingInitialF0ViewContentKey_ = ContentKey{};
         editedContentKey_ = contentKey;
@@ -4358,6 +4368,7 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
     audioEditingScheme_ = scheme;
     const bool nowOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_);
 
+    stopNotePitchAudition();
     // 清除当前 transient drag/resize/drawing/scissors/volume 预览
     interactionState_.resetTransient();
     if (interactionState_.isPanning)
@@ -4412,6 +4423,9 @@ void PianoRollComponent::ensureOpenDyneNotesIfNeeded()
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {
+    if (currentTool_ != tool)
+        stopNotePitchAudition();
+
     // Time 仅在 experimental 开启时有效
     if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_) {
         tool = ToolId::Select;
@@ -5870,6 +5884,10 @@ void PianoRollComponent::visibilityChanged()
                 safeThis->grabKeyboardFocus();
             }
         });
+    }
+    else
+    {
+        stopNotePitchAudition();
     }
 }
 

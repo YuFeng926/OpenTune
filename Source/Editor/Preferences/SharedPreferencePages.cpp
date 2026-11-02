@@ -417,7 +417,7 @@ private:
 class SharedEditingPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 384; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 34 + 10 + 34 + 10 + 28 + 20
+    static constexpr int kContentHeight = 428; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 34 + 10 + 34 + 10 + 34 + 10 + 28 + 20
 
     SharedEditingPage(AppPreferences& appPreferences,
                       std::function<void()> onPreferencesChanged,
@@ -547,6 +547,18 @@ public:
         initialiseComboBox(wholeNoteMoveSnapSelector_);
         addAndMakeVisible(wholeNoteMoveSnapSelector_);
         wholeNoteMoveSnapSelector_.setEnabled(state.shared.audioEditingScheme != AudioEditingScheme::Scheme::NotesPrimary);
+
+        // Note transpose preview toggle
+        noteTransposePreviewToggle_.setButtonText(LOC(kNoteTransposePreview));
+        noteTransposePreviewToggle_.setToggleState(
+            appPreferences_.getState().shared.noteTransposePreviewEnabled,
+            juce::dontSendNotification);
+        noteTransposePreviewToggle_.onClick = [this] {
+            appPreferences_.setNoteTransposePreviewEnabled(noteTransposePreviewToggle_.getToggleState());
+            notifyChanged();
+        };
+        initialiseToggleButton(noteTransposePreviewToggle_);
+        addAndMakeVisible(noteTransposePreviewToggle_);
     }
 
     void paint(juce::Graphics& g) override
@@ -595,6 +607,10 @@ public:
         wholeNoteMoveSnapSelector_.setBounds(row);
 
         bounds.removeFromTop(10);
+        row = bounds.removeFromTop(rowHeight);
+        noteTransposePreviewToggle_.setBounds(row.removeFromLeft(labelWidth + 300));
+
+        bounds.removeFromTop(10);
         auto resetRow = bounds.removeFromTop(28);
         resetButton_.setBounds(resetRow.removeFromLeft(150));
     }
@@ -632,6 +648,7 @@ private:
     juce::ComboBox gridStyleSelector_;
     juce::Label wholeNoteMoveSnapLabel_;
     juce::ComboBox wholeNoteMoveSnapSelector_;
+    juce::ToggleButton noteTransposePreviewToggle_;
 };
 
 class SharedVisualPage final : public juce::Component

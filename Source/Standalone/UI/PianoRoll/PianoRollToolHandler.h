@@ -182,6 +182,11 @@ public:
         std::function<void()> notifyEscapeKey;
         std::function<void(size_t, float, float)> notifyNoteOffsetChanged;
 
+        // === Note pitch audition (piano roll trigger/lifecycle) ===
+        // startSeconds/endSeconds/targetHz: anchor note range + adjusted pitch.
+        std::function<void(double, double, float)> auditionNotePitch;
+        std::function<void()> stopNotePitchAudition;
+
         // === EQ Tool ===
         // 打开 EQ 弹窗预览：参数为主音符 index（纯点击 = mouseDown 记录的 pending
         // 主音符；框选 = 完成选择后的 anchor 音符）。只打开弹窗，不改 Note 数据。
@@ -260,7 +265,7 @@ private:
     // === OpenDyne（NotesPrimary）工具 ===
     // 唯一 pitch-drag 内部流程：OpenTune Select 与 OpenDyne Pitch 共用。
     void beginNotePitchDrag(const std::vector<Note>& notes, int anchorNoteIndex);
-    void dragNotePitch(const juce::MouseEvent& e);
+    void dragNotePitch(const juce::MouseEvent& e, bool allowAudition = true);
     bool endNotePitchDrag(const juce::MouseEvent& e);
     // 唯一拖拽 editRange：只聚合实际变化的音符（普通 Pitch 比 pitchOffset、
     // Modulation 比有效 retuneSpeed、Drift 比 pitchDriftScale，阈值 0.001f），

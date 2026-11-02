@@ -2128,6 +2128,9 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     // EQ popup「以后不再提示」偏好直接注入（无中转层）
     pianoRoll_.setAppPreferences(&appPreferences_);
 
+    if (!appPreferences_.getNoteTransposePreviewEnabled())
+        processorRef_.stopNotePitchAudition();
+
     if (appliedExperimentalFeaturesEnabled_ != experimentalFeaturesEnabled) {
         appliedExperimentalFeaturesEnabled_ = experimentalFeaturesEnabled;
     }

@@ -139,6 +139,7 @@ void NoteDragState::clear()
     draggedNoteIndices.clear();
     anchorNoteIndex = -1;
     isDraggingNotes = false;
+    lastAuditionTargetHz = 0.0f;
     previewSnapshot.reset();
 }
 

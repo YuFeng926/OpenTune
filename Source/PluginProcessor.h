@@ -51,6 +51,7 @@
 #include "Utils/UndoManager.h"
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
+#include "Audio/NotePitchAudition.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlayHeadState.h"
 #include "Utils/TrackConstants.h"
@@ -559,6 +560,9 @@ private:
     void analysisFinished(ContentKey key,
                           const ReferenceFeatureSet& result);
 
+    /** 混音全部试听源：pianoKeyAudition 无条件混入；notePitchAudition 仅实时处理时混入。 */
+    void mixAuditions(juce::AudioBuffer<float>& buffer, int numSamples, double sampleRate);
+
 public:
     // Track State Management
     // Track height (shared state)
@@ -970,9 +974,18 @@ public:
     UndoManager& getUndoManager() { return undoManager_; }
     PianoKeyAudition& getPianoKeyAudition() { return pianoKeyAudition_; }
 
+    /**
+     * 音符移调试听（UI 线程调用）：按给定时间窗与目标频率请求一次
+     * NotePitchAudition 预览；偏好关闭、key 无效或 targetHz 非法时停止试听。
+     */
+    void auditionNotePitch(ContentKey key, double startSeconds, double endSeconds, float targetHz);
+    /** 停止当前音符移调试听（UI 线程调用，任意时刻调用均安全）。 */
+    void stopNotePitchAudition();
+
 private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
+    NotePitchAudition notePitchAudition_;
     OutputSpectrumAnalyzer outputSpectrumAnalyzer_;
 
     // Hard-cut render mutation request primitive. This is the only path

@@ -1766,6 +1766,9 @@ void PianoRollToolHandler::beginNotePitchDrag(const std::vector<Note>& notes, in
     auto& state = ctx_.getState();
     state.noteDrag.draggedNoteIndices = collectSelectedNoteIndices(notes);
     state.noteDrag.anchorNoteIndex = anchorNoteIndex;
+    state.noteDrag.lastAuditionTargetHz = (anchorNoteIndex >= 0 && anchorNoteIndex < (int)notes.size())
+        ? notes[(size_t)anchorNoteIndex].getAdjustedPitch()
+        : 0.0f;
     state.noteDrag.previewSnapshot.reset();
 }
 
@@ -1826,7 +1829,7 @@ void PianoRollToolHandler::updateNoteBasedCorrectionPreview(const std::vector<No
     state.noteDrag.previewSnapshot = buildNoteBasedCorrectionState(ctx_, notes, editRange);
 }
 
-void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
+void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAudition)
 {
     auto& state = ctx_.getState();
 
@@ -1961,11 +1964,31 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e)
 
     updateNoteBasedCorrectionPreview(notes);
     if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, notes);
+
+    if (allowAudition && ctx_.auditionNotePitch) {
+        const int anchorIndex = state.noteDrag.anchorNoteIndex;
+        if (anchorIndex >= 0 && anchorIndex < (int)notes.size()) {
+            const auto& anchor = notes[(size_t)anchorIndex];
+            const float targetHz = anchor.getAdjustedPitch();
+            if (targetHz > 0.0f) {
+                if (targetHz != state.noteDrag.lastAuditionTargetHz) {
+                    state.noteDrag.lastAuditionTargetHz = targetHz;
+                    ctx_.auditionNotePitch(anchor.startTime, anchor.endTime, targetHz);
+                }
+            } else {
+                state.noteDrag.lastAuditionTargetHz = 0.0f;
+            }
+        }
+    }
 }
 
 bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
 {
     auto& state = ctx_.getState();
+
+    if (ctx_.stopNotePitchAudition)
+        ctx_.stopNotePitchAudition();
+    state.noteDrag.lastAuditionTargetHz = 0.0f;
 
     // PitchModulation / PitchDrift：提交标量参数变更
     if (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift) {
@@ -1978,7 +2001,7 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
         }
 
         // 以 mouseUp 时刻位置应用最终参数
-        dragNotePitch(e);
+        dragNotePitch(e, false);
 
         auto baselineNotes = std::vector<Note>(draftBaselineNotes(ctx_));
         auto notes = std::vector<Note>(displayNotes(ctx_));
@@ -2028,7 +2051,7 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
     }
 
     // 以 mouseUp 时刻的 Alt 状态重算最终吸附（Alt 状态变化瞬间生效）。
-    dragNotePitch(e);
+    dragNotePitch(e, false);
 
     auto baselineNotes = std::vector<Note>(draftBaselineNotes(ctx_));
     auto notes = std::vector<Note>(displayNotes(ctx_));

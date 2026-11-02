@@ -78,6 +78,7 @@ struct SharedPreferencesState {
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
     TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
     WholeNoteMoveSnapMode wholeNoteMoveSnapMode = WholeNoteMoveSnapMode::Scale;
+    bool noteTransposePreviewEnabled = false;  ///< 拖动音符移调时试听预览
 };
 
 struct StandalonePreferencesState {
@@ -135,6 +136,8 @@ public:
     TrackColorMode getTrackColorMode() const;
 
     void setLightPitchCorrectionEnabled(bool enabled);
+    void setNoteTransposePreviewEnabled(bool enabled);
+    bool getNoteTransposePreviewEnabled() const;
 
     void setF0ModelType(F0ModelType type);
     F0ModelType getF0ModelType() const;

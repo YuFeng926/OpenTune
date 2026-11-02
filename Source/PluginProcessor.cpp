@@ -1367,6 +1367,9 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     currentSampleRate_ = sampleRate;
     currentBlockSize_ = samplesPerBlock;
 
+    // Any in-flight note pitch audition is bound to the previous device rate; stop it.
+    notePitchAudition_.stop();
+
     // Real sample rate change: project transportCursor_ from old rate to new rate
     if (realRateChange) {
         const double oldRate = preparedPlaybackSampleRate_;
@@ -1427,6 +1430,9 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
+    // 停止可能仍在进行的音符移调试听（设备即将释放）
+    notePitchAudition_.stop();
+
     const RuntimePhase entryPhase = phase_;  // snapshot before any mutation
     // Cancel transition; align cursors, gain=0
     transitionActive_ = false;
@@ -1725,7 +1731,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
         if (processBlockForARA(buffer, isRealtime(), araPositionInfo))
         {
-            pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+            mixAuditions(buffer, numSamples, static_cast<double>(getSampleRate()));
             outputSpectrumAnalyzer_.push(buffer);
             return;
         }
@@ -1750,7 +1756,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
 
         captureSession->processBlock(buffer, hostAbsoluteSample, getSampleRate(), isPlaying);
-        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+        mixAuditions(buffer, numSamples, static_cast<double>(getSampleRate()));
         outputSpectrumAnalyzer_.push(buffer);
         return;
     }
@@ -1760,7 +1766,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     for (int i = 0; i < totalNumOutputChannels; ++i) {
         buffer.clear(i, 0, numSamples);
     }
-    pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+    mixAuditions(buffer, numSamples, static_cast<double>(getSampleRate()));
     outputSpectrumAnalyzer_.push(buffer);
 #elif JucePlugin_Build_Standalone
     // --- Standalone state machine ---
@@ -1944,7 +1950,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // Stopped/Paused with no active transition — only piano audition
     if (phase_ != RuntimePhase::Playing && !transitionActive_) {
-        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
+        mixAuditions(buffer, numSamples, deviceSampleRate);
         outputSpectrumAnalyzer_.push(buffer);
         jassert(standaloneArrangement_ != nullptr);
         for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
@@ -2136,7 +2142,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
+    mixAuditions(buffer, numSamples, deviceSampleRate);
 
     // Standalone 频谱分析：接收最终输出（含 pianoKeyAudition 混音）
     outputSpectrumAnalyzer_.push(buffer);
@@ -3070,6 +3076,43 @@ const ContentRenderService* OpenTuneAudioProcessor::resolveReadableContentRender
             break;
     }
     return nullptr;
+}
+
+void OpenTuneAudioProcessor::mixAuditions(juce::AudioBuffer<float>& buffer, int numSamples, double sampleRate)
+{
+    pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
+    // 音符移调预览仅在实时处理时混入；离线（宿主 bounce/export）渲染静音。
+    if (!isNonRealtime())
+        notePitchAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
+}
+
+void OpenTuneAudioProcessor::auditionNotePitch(ContentKey key, double startSeconds, double endSeconds, float targetHz)
+{
+    // UI 线程入口：不投递 render job，不触碰 RenderCache，只读取已发布的 playback read source。
+    if (!appPreferences_->getNoteTransposePreviewEnabled() || !key.isValid() || targetHz <= 0.0f) {
+        notePitchAudition_.stop();
+        return;
+    }
+
+    const auto* crs = resolveReadableContentRenderService(key);
+    if (crs == nullptr) {
+        notePitchAudition_.stop();
+        return;
+    }
+
+    PlaybackReadSource source;
+    if (!crs->getPlaybackReadSource(key, source) || source.audioBuffer == nullptr) {
+        notePitchAudition_.stop();
+        return;
+    }
+
+    notePitchAudition_.request(std::move(source), startSeconds, endSeconds, targetHz,
+                               static_cast<double>(getSampleRate()));
+}
+
+void OpenTuneAudioProcessor::stopNotePitchAudition()
+{
+    notePitchAudition_.stop();
 }
 
 RenderCache::ChunkStats OpenTuneAudioProcessor::getReadableContentChunkStats(ContentKey key) const noexcept

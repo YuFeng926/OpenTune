@@ -268,6 +268,7 @@ constexpr const char* kGridStyleEqualSpacing = "Equal Spacing";
 constexpr const char* kWholeNoteMoveSnap = "Move Snap";
 constexpr const char* kWholeNoteMoveSnapScale = "Follow Global Scale";
 constexpr const char* kWholeNoteMoveSnapStandardPitch = "Snap to Semitones";
+constexpr const char* kNoteTransposePreview = "Note Transpose Preview";
 
 constexpr const char* kHorizontalZoomSensitivity = "Horizontal Zoom Sensitivity";
 constexpr const char* kVerticalZoomSensitivity = "Vertical Zoom Sensitivity";
@@ -617,6 +618,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kWholeNoteMoveSnap, "Move Snap", "移动吸附", "移動スナップ", "Привязка при сдвиге", "Ajuste al mover" },
         { Keys::kWholeNoteMoveSnapScale, "Follow Global Scale", "跟随全局调式", "グローバルスケールに従う", "Следовать глобальной гамме", "Seguir escala global" },
         { Keys::kWholeNoteMoveSnapStandardPitch, "Snap to Semitones", "半音吸附", "半音スナップ", "По полутонам", "Por semitonos" },
+        { Keys::kNoteTransposePreview, "Preview transposition while dragging notes", "拖动音符时试听移调", "音符ドラッグ時に移調を試聴", "Прослушивание транспонирования при перетаскивании нот", "Escuchar transposición al arrastrar notas" },
         
         { Keys::kHorizontalZoomSensitivity, "Horizontal Zoom Sensitivity", "水平缩放灵敏度", "水平ズーム感度", "Чувств. гориз. zoom", "Sensibilidad zoom horizontal" },
         { Keys::kVerticalZoomSensitivity, "Vertical Zoom Sensitivity", "垂直缩放灵敏度", "垂直ズーム感度", "Чувств. верт. zoom", "Sensibilidad zoom vertical" },

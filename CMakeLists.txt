@@ -718,6 +718,8 @@ set(OPENTUNE_COMMON_SOURCES
         Source/DSP/AutoTunePeriodDetector.cpp
         Source/DSP/AutoTunePeriodDetector.h
         Source/DSP/NoteEqProcessor.h
+        Source/Audio/NotePitchAudition.cpp
+        Source/Audio/NotePitchAudition.h
 
         # UI Layer
         Source/Standalone/UI/UIColors.h
