@@ -975,6 +975,8 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
 #if JucePlugin_Enable_ARA
     if (const auto* dc = processorRef_.getDocumentController()) {
         const auto projections = dc->getPlaybackRegionProjectionsFor(resolveContentScopeRegions());
+        processorRef_.setNotePitchAuditionTargetRegion(
+            projections.empty() ? nullptr : projections.front().playbackRegion);
         for (const auto& region : projections) {
             if (!region.contentKey.isValid())
                 continue;
