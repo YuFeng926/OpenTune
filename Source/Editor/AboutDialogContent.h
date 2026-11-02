@@ -229,7 +229,12 @@ private:
         button->onClick = [target] {
             if (target.startsWithIgnoreCase("https://") || target.startsWithIgnoreCase("http://")
                 || target.startsWithIgnoreCase("mailto:"))
-                juce::URL(target).launchInDefaultBrowser();
+            {
+                // juce::URL 会拆开 fragment，再用 addEscapeChars 拼回去，
+                // `#/artist?id=…` 会变成 `#%2Fartist%3Fid%3D…`，哈希路由打不开。
+                // 不解析，把链接原文交给系统浏览器。
+                juce::URL::createWithoutParsing(target).launchInDefaultBrowser();
+            }
         };
 
         body_.addAndMakeVisible(*button);
