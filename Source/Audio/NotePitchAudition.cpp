@@ -121,11 +121,29 @@ NotePitchPreview renderNotePitchPreview(
     const int numLookaheadOut = static_cast<int>(
         static_cast<int64_t>(window.size()) - inputEndOut);
 
-    const auto detected = AutoTunePeriodDetector::analyze(
+    auto detected = AutoTunePeriodDetector::analyze(
         prefixPtr, numPrefix,
         inputPtr, numDetectorInput,
         kDetectorSampleRate,
         originalF0Hint, numF0HintFrames, f0HintFrameRate);
+
+    // UV frames (original F0 <= 0) never participate in pitch correction,
+    // matching the render chain: force them neutral instead of trusting a
+    // spurious detector lock inside unvoiced audio. Frame mapping matches
+    // AutoTunePeriodDetector's internal hint lookup ((endIndex - prefix)).
+    if (originalF0Hint != nullptr && numF0HintFrames > 0 && f0HintFrameRate > 0.0) {
+        const double hintFramesPerSample = f0HintFrameRate / kDetectorSampleRate;
+        for (int i = 0; i < numDetectorInput; ++i) {
+            const int frame = std::clamp(
+                static_cast<int>(static_cast<double>(i) * hintFramesPerSample),
+                0, numF0HintFrames - 1);
+            if (originalF0Hint[frame] <= 0.0f) {
+                detected[static_cast<size_t>(i)].periodSamples = 0.0f;
+                detected[static_cast<size_t>(i)].valid = false;
+                detected[static_cast<size_t>(i)].trackingUpdated = false;
+            }
+        }
+    }
 
     bool hasValidFrame = false;
     for (const auto& d : detected) {
