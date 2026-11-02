@@ -49,6 +49,11 @@ python3 scripts/github_actions/patch-juce-ara.py
 > The script also adds the maximise button to the `juce_StandaloneFilterWindow.h` title bar
 > (JUCE 8.0.12 upstream ships minimise and close only). Without it the standalone window shows
 > only — and × in the top right.
+>
+> The script also handles `WM_SETCURSOR` in `juce_Windowing_windows.cpp` and re-applies the JUCE
+> cursor. The standalone title bar is reported to Win32 as `HTCAPTION` (a non-client area), and
+> without this handler Windows resets the cursor to the system arrow on every move, so the theme
+> cursor can never stay visible over the title bar.
 
 ### 2. ARA SDK
 
@@ -63,7 +68,7 @@ cd ..
 > `ARA_Library/Utilities/ARAChannelArrangement.cpp`, which ARA 2.3.0 renamed to `ARAChannelFormat.cpp`.
 > Do not edit the file by hand; after cloning JUCE 8.0.12 run the platform-specific command above.
 > The script applies the ARA include rename, the AudioDeviceManager temporary-setup patch,
-> and the standalone title-bar maximise button patch.
+> the standalone title-bar maximise button patch, and the Windows `WM_SETCURSOR` cursor patch.
 
 ### 3. r8brain and SoundTouch
 
@@ -176,7 +181,7 @@ Except for the r8brain source included in the repository, obtain the following d
 
 | Path | Required? | Setup / purpose |
 |------|----------|-----------------|
-| `JUCE-master/` | Yes | Clone JUCE 8.0.12 at the repository root, then run `python3 scripts/github_actions/patch-juce-ara.py` (macOS command; the same script handles the ARA include, AudioDeviceManager and standalone title-bar maximise button patches). |
+| `JUCE-master/` | Yes | Clone JUCE 8.0.12 at the repository root, then run `python3 scripts/github_actions/patch-juce-ara.py` (macOS command; the same script handles the ARA include, AudioDeviceManager, standalone title-bar maximise button and Windows `WM_SETCURSOR` cursor patches). |
 | `ThirdParty/ARA_SDK-releases-2.3.0/` | Yes | Clone the ARA SDK `releases/2.3.0` branch with submodules. |
 | `ThirdParty/r8brain-free-src-master/` | Yes | Included in the Git repository; no separate download is needed. |
 | `ThirdParty/soundtouch-2.3.2/` | Yes | Clone the `2.3.2` tag from the official SoundTouch repository linked above. |
