@@ -76,6 +76,101 @@ juce::String projectErrorMessage(const Error& error)
         : juce::String::fromUTF8(error.context.c_str());
 }
 
+} // namespace
+
+// 首次运行 Onboarding 的事件驱动触发器（替代 30Hz 轮询）。
+class OnboardingVisibilityWatcher : public juce::ComponentMovementWatcher
+{
+public:
+    using Callback = std::function<void()>;
+
+    OnboardingVisibilityWatcher(juce::Component& watched, Callback callback)
+        : juce::ComponentMovementWatcher(&watched), callback_(std::move(callback)) {}
+
+    void componentMovedOrResized(bool, bool) override
+    {
+        if (callback_)
+            callback_();
+    }
+
+    void componentPeerChanged() override
+    {
+        if (callback_)
+            callback_();
+    }
+
+    void componentVisibilityChanged() override
+    {
+        if (callback_)
+            callback_();
+    }
+
+private:
+    Callback callback_;
+};
+
+// 监听当前最前面的模态组件关闭/销毁，延迟通知避免在模态状态切换或析构中重入。
+class OnboardingModalWatcher : public juce::ComponentListener
+{
+public:
+    using Callback = std::function<void()>;
+
+    explicit OnboardingModalWatcher(Callback callback)
+        : callback_(std::move(callback)) {}
+
+    ~OnboardingModalWatcher() override
+    {
+        detach();
+    }
+
+    void watchCurrentModal()
+    {
+        auto* modal = juce::Component::getCurrentlyModalComponent(0);
+        if (modal == watched_.getComponent())
+            return;
+        detach();
+        if (modal != nullptr)
+        {
+            watched_ = juce::Component::SafePointer<juce::Component>(modal);
+            modal->addComponentListener(this);
+        }
+    }
+
+    void detach()
+    {
+        if (auto* watched = watched_.getComponent())
+            watched->removeComponentListener(this);
+        watched_ = nullptr;
+    }
+
+    void componentVisibilityChanged(juce::Component& component) override
+    {
+        if (&component == watched_.getComponent() && !component.isShowing())
+            notify();
+    }
+
+    void componentBeingDeleted(juce::Component& component) override
+    {
+        if (&component == watched_.getComponent())
+        {
+            watched_ = nullptr;
+            notify();
+        }
+    }
+
+private:
+    void notify()
+    {
+        if (callback_)
+            juce::MessageManager::callAsync(callback_);
+    }
+
+    Callback callback_;
+    juce::Component::SafePointer<juce::Component> watched_;
+};
+
+namespace {
+
 // 主题截图验证钩子：仅当设置 OPENTUNE_THEME 环境变量时覆盖配置主题（截图工具用），
 // 未设置时返回配置值，行为与之前完全一致。
 ThemeId resolveEffectiveTheme(ThemeId configured)
@@ -812,6 +907,23 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         });
     contentRoot_.addChildComponent(*onboardingOverlay_);
 
+    onboardingVisibilityWatcher_ = std::make_unique<OnboardingVisibilityWatcher>(
+        *this,
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+                safeThis->maybeStartOnboarding();
+        });
+    onboardingModalWatcher_ = std::make_unique<OnboardingModalWatcher>(
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+                safeThis->maybeStartOnboarding();
+        });
+    juce::MessageManager::callAsync(
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+                safeThis->maybeStartOnboarding();
+        });
+
     // Apply the purple theme to the window
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
 
@@ -876,6 +988,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    onboardingVisibilityWatcher_.reset();
+    onboardingModalWatcher_.reset();
     preferencesDialog_.reset();
     onboardingOverlay_.reset();
     // 退出保存外层窗口实际 width/height（§5.1）：此刻默认 StandaloneFilterWindow 仍存活，
@@ -1286,6 +1400,7 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
                     &safeThis->contentRoot_);
                 safeThis->projectSession_.clearRecentProjects();
                 safeThis->projectOperationBusy_ = false;
+                safeThis->maybeStartOnboarding();
                 return;
             }
 
@@ -1299,6 +1414,7 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
                         { { LOC(kOK), nullptr, true } }),
                     &safeThis->contentRoot_);
                 safeThis->projectOperationBusy_ = false;
+                safeThis->maybeStartOnboarding();
                 return;
             }
 
@@ -1306,6 +1422,7 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
             safeThis->updateTitleWithProjectPath();
             safeThis->refreshAllUIFromProject();
             safeThis->projectOperationBusy_ = false;
+            safeThis->maybeStartOnboarding();
             safeThis->updateDemoTour();
         });
     });
@@ -1822,16 +1939,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     applyUiZoomIfNeeded();
 
     restoreStandaloneWindowGeometryOnce();
-
-    if (onboardingOverlay_ != nullptr && !onboardingOverlay_->isActive()
-        && !appPreferences_.getState().shared.onboardingShown
-        && isShowing() && getPeer() != nullptr && getWidth() > 0 && getHeight() > 0
-        && juce::ModalComponentManager::getInstance()->getNumModalComponents() == 0
-        && !projectOperationBusy_ && !isImportInProgress_ && !exportInProgress_.load()
-        && !originalF0OverlayLatched_ && !externalEditActive_)
-    {
-        onboardingRequested();
-    }
 
     // 引导在开始时就记下“已展示”。这里等它结束（或上次已经结束）再加载演示工程。
     if ((onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
@@ -3351,6 +3458,35 @@ void OpenTuneAudioProcessorEditor::onboardingRequested()
     onboardingPreviousWorkspaceView_ = isWorkspaceView_;
     onboardingPreviousParameterPanelVisible_ = isParameterPanelVisible_;
     onboardingOverlay_->start();
+}
+
+void OpenTuneAudioProcessorEditor::maybeStartOnboarding()
+{
+    if (onboardingOverlay_ == nullptr || onboardingOverlay_->isActive())
+        return;
+
+    if (appPreferences_.getState().shared.onboardingShown)
+        return;
+
+    if (!isShowing() || getPeer() == nullptr || getWidth() <= 0 || getHeight() <= 0)
+        return;
+
+    if (juce::Component::getNumCurrentlyModalComponents() > 0)
+    {
+        // 有模态组件时挂监听，等它关闭后再尝试触发引导
+        if (onboardingModalWatcher_ != nullptr)
+            onboardingModalWatcher_->watchCurrentModal();
+        return;
+    }
+
+    if (onboardingModalWatcher_ != nullptr)
+        onboardingModalWatcher_->detach();
+
+    if (projectOperationBusy_ || isImportInProgress_ || exportInProgress_.load()
+        || originalF0OverlayLatched_ || externalEditActive_)
+        return;
+
+    onboardingRequested();
 }
 
 // ============================================================================

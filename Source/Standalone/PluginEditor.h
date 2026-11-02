@@ -48,6 +48,9 @@
 
 namespace OpenTune {
 
+class OnboardingVisibilityWatcher;
+class OnboardingModalWatcher;
+
 class ProjectSession;
 
 // ============================================================================
@@ -292,6 +295,9 @@ private:
     bool isTrackPanelVisible_ = true;
     bool isParameterPanelVisible_ = true;
     std::unique_ptr<OnboardingOverlayComponent> onboardingOverlay_;
+    std::unique_ptr<OnboardingVisibilityWatcher> onboardingVisibilityWatcher_;
+    std::unique_ptr<OnboardingModalWatcher> onboardingModalWatcher_;
+    void maybeStartOnboarding();
     bool onboardingPreviousWorkspaceView_ = true;
     bool onboardingPreviousParameterPanelVisible_ = true;
 
