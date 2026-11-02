@@ -1,6 +1,7 @@
 #include "OpenTunePlaybackRenderer.h"
 
 #include "OpenTuneDocumentController.h"
+#include "../Utils/AppLogger.h"
 #include "../Utils/PlaybackAudioReader.h"
 
 #include <algorithm>
@@ -106,16 +107,27 @@ std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRend
     const auto projections = documentController_->getPlaybackRegionProjectionsFor(nextPlan->playbackRegions);
     nextPlan->items.reserve(projections.size());
 
+    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+    juce::String diagnostic;
+    int unrenderable = 0;
+    int missingSource = 0;
+    const auto* contentRenderService = documentController_->getContentRenderService();
+
     for (const auto& projection : projections)
     {
         if (!projection.isPlaybackRenderable())
+        {
+            ++unrenderable;
             continue;
+        }
 
-        const auto* contentRenderService = documentController_->getContentRenderService();
         PlaybackReadSource readSource;
         if (contentRenderService == nullptr
             || !contentRenderService->getPlaybackReadSource(projection.contentKey, readSource))
+        {
+            ++missingSource;
             continue;
+        }
 
         PlaybackRegionRenderItem item;
         item.contentKey = projection.contentKey;
@@ -123,7 +135,19 @@ std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRend
         item.startInModificationTime = projection.startInModificationTime;
         item.durationInPlaybackTime = projection.durationInPlaybackTime;
         nextPlan->items.push_back(item);
+        diagnostic += " item{start=" + juce::String(item.startInPlaybackTime, 6)
+            + " dur=" + juce::String(item.durationInPlaybackTime, 6) + "}";
     }
+
+    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+    AppLogger::logNoThrow("ARA-PLAN: renderer="
+        + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+        + " regions=" + juce::String(static_cast<int>(nextPlan->playbackRegions.size()))
+        + " projections=" + juce::String(static_cast<int>(projections.size()))
+        + " unrenderable=" + juce::String(unrenderable)
+        + " missingSource=" + juce::String(missingSource)
+        + " items=" + juce::String(static_cast<int>(nextPlan->items.size()))
+        + diagnostic);
 
     return nextPlan;
 }
@@ -167,55 +191,110 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
     const int numSamples = buffer.getNumSamples();
     buffer.clear();
 
-    if (!shouldRenderPlaybackBlock(realtime, positionInfo.getIsPlaying()))
+    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+    const bool isPlaying = positionInfo.getIsPlaying();
+    const bool gateOpen = shouldRenderPlaybackBlock(realtime, isPlaying);
+
+    if (!gateOpen)
+    {
+        if (numSamples > 0 && !gateDiagnosticLogged_.exchange(true, std::memory_order_relaxed))
+            AppLogger::logNoThrow("ARA-PLAY: closed by transport gate n=" + juce::String(numSamples)
+                + " realtime=" + juce::String(static_cast<int>(realtime))
+                + " playing=" + juce::String(isPlaying ? "true" : "false"));
         return true;
+    }
 
     auto crs = std::atomic_load_explicit(&contentRenderServiceSnapshot_, std::memory_order_acquire);
     const auto plan = currentPlan_.load(std::memory_order_acquire);
     const auto timeInSamples = positionInfo.getTimeInSamples();
 
-    if (crs == nullptr || plan == nullptr || plan->items.empty() || !timeInSamples.hasValue())
-        return true;
+    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+    const int planItems = plan != nullptr ? static_cast<int>(plan->items.size()) : -1;
+    const bool hasTime = timeInSamples.hasValue();
+    const int64_t timeSamples = hasTime ? *timeInSamples : 0;
+    int overlaps = 0;
+    int readSourceMisses = 0;
+    int zeroReads = 0;
+    int totalCopied = 0;
+    const bool renderable = crs != nullptr
+        && plan != nullptr
+        && !plan->items.empty()
+        && timeInSamples.hasValue();
 
-    for (const auto& region : plan->items)
+    if (renderable)
     {
-        const auto overlap = computeRegionBlockRenderSpanFromSamplePosition(
-            *timeInSamples,
-            numSamples,
-            hostSampleRate_,
-            region.startInPlaybackTime,
-            region.endInPlaybackTime());
-        if (!overlap.has_value())
-            continue;
+        for (const auto& region : plan->items)
+        {
+            const auto overlap = computeRegionBlockRenderSpanFromSamplePosition(
+                *timeInSamples,
+                numSamples,
+                hostSampleRate_,
+                region.startInPlaybackTime,
+                region.endInPlaybackTime());
+            if (!overlap.has_value())
+                continue;
 
-        PlaybackReadSource readSource;
-        if (!crs->getPlaybackReadSource(region.contentKey, readSource))
-            continue;
+            ++overlaps;
 
-        const double readStartSeconds = mapPlaybackTimeToSourceLocalTime(
-            region, readSource, overlap->overlapStartSeconds);
-        const int64_t readStartSample = TimeCoordinate::secondsToSamples(
-            readStartSeconds, hostSampleRate_);
-        const PlaybackReadRequest request(readSource,
-                                          readStartSample,
-                                          hostSampleRate_,
-                                          overlap->samplesToCopy);
+            PlaybackReadSource readSource;
+            if (!crs->getPlaybackReadSource(region.contentKey, readSource))
+            {
+                ++readSourceMisses;
+                continue;
+            }
 
-        playbackScratch_.clear();
-        const int copied = readPlaybackAudio(request, playbackScratch_, 0);
-        const int samplesToCopy = juce::jmin(copied, overlap->samplesToCopy);
-        if (samplesToCopy <= 0)
-            continue;
+            const double readStartSeconds = mapPlaybackTimeToSourceLocalTime(
+                region, readSource, overlap->overlapStartSeconds);
+            const int64_t readStartSample = TimeCoordinate::secondsToSamples(
+                readStartSeconds, hostSampleRate_);
+            const PlaybackReadRequest request(readSource,
+                                              readStartSample,
+                                              hostSampleRate_,
+                                              overlap->samplesToCopy);
 
-        const int channels = juce::jmin(buffer.getNumChannels(), playbackScratch_.getNumChannels());
-        for (int channel = 0; channel < channels; ++channel)
-            buffer.addFrom(channel,
-                           overlap->destinationStartSample,
-                           playbackScratch_,
-                           channel,
-                           0,
-                           samplesToCopy);
+            playbackScratch_.clear();
+            const int copied = readPlaybackAudio(request, playbackScratch_, 0);
+            const int samplesToCopy = juce::jmin(copied, overlap->samplesToCopy);
+            if (samplesToCopy <= 0)
+            {
+                ++zeroReads;
+                continue;
+            }
+
+            totalCopied += samplesToCopy;
+
+            const int channels = juce::jmin(buffer.getNumChannels(), playbackScratch_.getNumChannels());
+            for (int channel = 0; channel < channels; ++channel)
+                buffer.addFrom(channel,
+                               overlap->destinationStartSample,
+                               playbackScratch_,
+                               channel,
+                               0,
+                               samplesToCopy);
+        }
     }
+
+    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+    if (numSamples > 0 && !blockDiagnosticLogged_.exchange(true, std::memory_order_relaxed))
+        AppLogger::logNoThrow("ARA-PLAY: first block n=" + juce::String(numSamples)
+            + " realtime=" + juce::String(static_cast<int>(realtime))
+            + " playing=" + juce::String(isPlaying ? "true" : "false")
+            + " hostRate=" + juce::String(hostSampleRate_, 2)
+            + " timeSamples=" + juce::String(static_cast<juce::int64>(timeSamples))
+            + " hasTime=" + juce::String(hasTime ? "1" : "0")
+            + " crs=" + juce::String(crs != nullptr ? "1" : "0")
+            + " planItems=" + juce::String(planItems)
+            + " overlaps=" + juce::String(overlaps)
+            + " readSourceMisses=" + juce::String(readSourceMisses)
+            + " zeroReads=" + juce::String(zeroReads)
+            + " copied=" + juce::String(totalCopied));
+
+    if (overlaps > 0 && !inRangeDiagnosticLogged_.exchange(true, std::memory_order_relaxed))
+        AppLogger::logNoThrow("ARA-PLAY: in-range block copied=" + juce::String(totalCopied)
+            + " overlaps=" + juce::String(overlaps)
+            + " readSourceMisses=" + juce::String(readSourceMisses)
+            + " zeroReads=" + juce::String(zeroReads)
+            + " timeSamples=" + juce::String(static_cast<juce::int64>(timeSamples)));
 
     return true;
 }

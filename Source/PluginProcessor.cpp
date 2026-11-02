@@ -1583,7 +1583,10 @@ bool OpenTuneAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
     return (in == juce::AudioChannelSet::mono() && out == juce::AudioChannelSet::mono())
         || (in == juce::AudioChannelSet::stereo() && out == juce::AudioChannelSet::stereo());
 #else
-    return in == juce::AudioChannelSet::stereo() && out == juce::AudioChannelSet::stereo();
+    // ARA 宿主只保证渲染实例的输出总线；输入端在 ARA 渲染实例上可为禁用。
+    // 约束对齐 JUCE 官方 ARA 示例：只要求输出为立体声。
+    return out == juce::AudioChannelSet::stereo()
+        && (in == juce::AudioChannelSet::stereo() || in.isDisabled());
 #endif
 }
 
@@ -1717,6 +1720,26 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 #if JucePlugin_Enable_ARA
     if (isBoundToARA())
     {
+        // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+        {
+            if (numSamples > 0 && !araChannelDiagnosticLogged_.exchange(true, std::memory_order_relaxed))
+            {
+                juce::String layout;
+                for (int bus = 0; bus < getBusCount(false); ++bus)
+                    layout += (getBus(false, bus)->isEnabled() ? "on" : "off");
+                AppLogger::logNoThrow("ARA-CHANNELS: processor="
+                    + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+                    + " playbackRenderer=" + juce::String(isPlaybackRenderer() ? "1" : "0")
+                    + " editorRenderer=" + juce::String(isEditorRenderer() ? "1" : "0")
+                    + " editorView=" + juce::String(isEditorView() ? "1" : "0")
+                    + " bufferChannels=" + juce::String(buffer.getNumChannels())
+                    + " inChannels=" + juce::String(getTotalNumInputChannels())
+                    + " outChannels=" + juce::String(totalNumOutputChannels)
+                    + " outBusEnabled=" + layout
+                    + " n=" + juce::String(numSamples));
+            }
+        }
+
         // Forward same PositionInfo to ARA. Build a local empty PositionInfo when the
         // host did not provide one; this never enters playHeadState_ (update above was
         // a no-op for nullopt). Metadata snapshot is only refreshed when the host

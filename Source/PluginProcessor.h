@@ -543,6 +543,9 @@ private:
     std::atomic<bool> runtimeStateInitialized_{false};
     std::once_flag runtimeInitOnce_;
 
+    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+    std::atomic<bool> araChannelDiagnosticLogged_{false};
+
     // 状态恢复核心：解析并应用完整 raw payload。调用方保证 runtime 已初始化
     // （runtimeStateInitialized_ == true），因此不得触碰 initializeRuntimeState()。
     // 用于 setStateInformation 的立即恢复路径和 deferred replay 路径。

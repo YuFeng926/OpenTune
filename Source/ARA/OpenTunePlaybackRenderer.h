@@ -167,6 +167,11 @@ private:
 
     AtomicRenderPlan currentPlan_;
 
+    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+    std::atomic<bool> gateDiagnosticLogged_{false};
+    std::atomic<bool> blockDiagnosticLogged_{false};
+    std::atomic<bool> inRangeDiagnosticLogged_{false};
+
     std::shared_ptr<const RenderPlan> buildRenderPlan(
         std::vector<juce::ARAPlaybackRegion*> playbackRegions) const;
     void publishRenderPlanFor(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
