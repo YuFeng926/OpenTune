@@ -153,6 +153,21 @@ public:
     void requestInitialF0View(ContentKey contentKey);
     /** 是否存在由当前内容或投影变化建立、尚未消费的 F0 初始视图定位请求。 */
     bool hasPendingInitialF0View() const noexcept { return pendingInitialF0ViewContentKey_.isValid(); }
+
+    /**
+     * 双击片段进入钢琴卷帘之前调用。该片段有可定位音符时取消尚未消费的 F0
+     * 初始定位（否则进入后 F0 Ready 会把镜头再移走），并返回 true。
+     * 没有可定位音符时什么都不做，返回 false。
+     */
+    bool prepareNoteCenterOnClipEntry();
+
+    /**
+     * 把离播放头最近的音符放到视口中央。播放头在音符内时对准播放头，
+     * 否则对准离播放头更近的端点。横向用传入的钢琴卷帘缩放（Kind::Cont，
+     * 不另算一套缩放），纵向保持当前音高缩放只滚动。成功后置 userScrollHold_，
+     * 用户之后的平移/缩放不会被这次定位覆盖。没有可定位音符时返回 false。
+     */
+    bool centerNoteNearestPlayhead(double pixelsPerSecond);
     void onTimeGridRevisionChanged();
     void onNotesRevisionChanged();
     void onPitchRevisionChanged();

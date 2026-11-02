@@ -1,4 +1,4 @@
-﻿#if defined(_WIN32) && !defined(NOMINMAX)
+#if defined(_WIN32) && !defined(NOMINMAX)
 #define NOMINMAX
 #endif
 
@@ -20,6 +20,8 @@
 #include "StandaloneArrangementHelpers.h"
 #include "Utils/ProjectSession.h"
 #include "Utils/PlatformFileDialogs.h"
+#include "Utils/DemoProject.h"
+#include "Utils/DemoTourGate.h"
 #include "Utils/TouchInput.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/LegacyNoteGenerator.h"
@@ -748,6 +750,16 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     contentRoot_.addAndMakeVisible(renderBadge_);
     renderBadge_.setVisible(false);
 
+    DemoProject::repairIfInstalled();
+    demoTourCallout_.onPrimary = [this] {
+        if (demoTourStep_ == DemoTourStep::Rendering)
+            showDemoTourStep(DemoTourStep::Tools);
+        else
+            endDemoTour();
+    };
+    demoTourCallout_.onSkip = [this] { endDemoTour(); };
+    contentRoot_.addChildComponent(demoTourCallout_);
+
     // Ensure initial focus
     if (isWorkspaceView_)
         arrangementView_.grabKeyboardFocus();
@@ -792,6 +804,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
                 arrangementView_.grabKeyboardFocus();
             else
                 pianoRoll_.grabKeyboardFocus();
+            const juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+            juce::MessageManager::callAsync([safeThis] {
+                if (safeThis != nullptr)
+                    safeThis->startDemoTourIfFirstRun();
+            });
         });
     contentRoot_.addChildComponent(*onboardingOverlay_);
 
@@ -1056,6 +1073,198 @@ void OpenTuneAudioProcessorEditor::openProjectFile(const juce::File& file)
     startOpenProject(file);
 }
 
+namespace {
+
+juce::File demoTourMarkerFile()
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("OpenTune")
+        .getChildFile("DemoTourShown");
+}
+
+bool findFirstPlacement(OpenTuneAudioProcessor& processor, int& trackId, int& placementIndex)
+{
+    if (processor.getStandaloneArrangement() == nullptr)
+        return false;
+
+    for (int track = 0; track < OpenTuneAudioProcessor::MAX_TRACKS; ++track)
+    {
+        if (getStandalonePlacementCount(processor, track) > 0)
+        {
+            trackId = track;
+            placementIndex = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool OpenTuneAudioProcessorEditor::isDemoTourConsumed() const
+{
+    return appPreferences_.getState().shared.demoTourConsumed
+        || demoTourMarkerFile().existsAsFile();
+}
+
+void OpenTuneAudioProcessorEditor::markDemoTourDone()
+{
+    const auto marker = demoTourMarkerFile();
+    marker.getParentDirectory().createDirectory();
+    marker.replaceWithText({});
+    appPreferences_.setDemoTourConsumed(true);
+}
+
+void OpenTuneAudioProcessorEditor::startDemoTourIfFirstRun()
+{
+    if (demoTourSettled_ || demoTourStep_ != DemoTourStep::None)
+        return;
+
+    if (isDemoTourConsumed())
+    {
+        // 旧版本只写了标记文件。补进偏好，下次不必再依赖那个文件。
+        if (!appPreferences_.getState().shared.demoTourConsumed)
+            markDemoTourDone();
+        demoTourSettled_ = true;
+        return;
+    }
+
+    int trackId = -1;
+    int placementIndex = -1;
+    if (projectOperationBusy_ || findFirstPlacement(processorRef_, trackId, placementIndex))
+    {
+        // 工程里已经有音频，不再覆盖。安装失败不走这里，下次启动还会再试。
+        markDemoTourDone();
+        demoTourSettled_ = true;
+        return;
+    }
+
+    const auto demo = DemoProject::install();
+    if (demo == juce::File())
+    {
+        demoTourSettled_ = true;
+        return;
+    }
+
+    // 先发出打开，再进入 LoadingProject。若在 projectOperationBusy_ 置上之前
+    // 就判断“还没有片段”，会把尚未开始的打开误当成失败：导览被取消、首次运行
+    // 不记消费，但工程仍然打开，于是每次启动都重复，第二段引导永远不出现。
+    demoTourOpenStarted_ = true;
+    openProjectFile(demo);
+    showDemoTourStep(DemoTourStep::LoadingProject);
+}
+
+void OpenTuneAudioProcessorEditor::showDemoTourStep(DemoTourStep step)
+{
+    demoTourStep_ = step;
+    const auto skip = LOC_RAW("Skip Tour");
+    switch (step)
+    {
+        case DemoTourStep::None:
+        case DemoTourStep::LoadingProject:
+            demoTourCallout_.setVisible(false);
+            break;
+        case DemoTourStep::OpenPianoRoll:
+            demoTourCallout_.show(LOC_RAW("Demo project"),
+                LOC_RAW("This demo song is now on the track. Double-tap the audio clip to open the piano roll and edit its pitch."),
+                {}, skip);
+            break;
+        case DemoTourStep::Rendering:
+            demoTourCallout_.show(LOC_RAW("Rendering audio"),
+                LOC_RAW("The audio is being rendered. Rendering starts after loading a project, editing pitch or transposing; please wait until it finishes. If you play now, you will hear the original pitch."),
+                LOC_RAW("Next"), skip);
+            break;
+        case DemoTourStep::Tools:
+            demoTourCallout_.show(LOC_RAW("Editing tools"),
+                LOC_RAW("The tools on the right edit pitch and notes. Long-press any tool to see its name and how to use it."),
+                LOC_RAW("Done"), skip);
+            break;
+    }
+    updateDemoTour();
+}
+
+void OpenTuneAudioProcessorEditor::updateDemoTour()
+{
+    juce::Rectangle<int> target;
+    switch (demoTourStep_)
+    {
+        case DemoTourStep::None:
+            return;
+
+        case DemoTourStep::LoadingProject:
+        {
+            int trackId = -1;
+            int placementIndex = -1;
+            const bool hasPlacement = findFirstPlacement(processorRef_, trackId, placementIndex);
+            const auto phase = resolveDemoTourLoad({
+                demoTourOpenStarted_, projectOperationBusy_, hasPlacement });
+            if (phase == DemoTourLoadPhase::WaitingForOpen)
+                return;
+            if (phase == DemoTourLoadPhase::OpenFailed)
+            {
+                // 打开已经结束，工程里仍然没有音频。不记消费，下次启动再试。
+                demoTourOpenStarted_ = false;
+                demoTourStep_ = DemoTourStep::None;
+                demoTourSettled_ = true;
+                return;
+            }
+            // 片段已经在轨道上：此刻就记首次运行已消费，导览中途退出也不会再自动打开。
+            markDemoTourDone();
+            demoTourOpenStarted_ = false;
+            if (!isWorkspaceView_)
+            {
+                viewToggled(true);
+                transportBar_.setWorkspaceView(true);
+            }
+            showDemoTourStep(DemoTourStep::OpenPianoRoll);
+            return;
+        }
+
+        case DemoTourStep::OpenPianoRoll:
+        {
+            if (!isWorkspaceView_)
+            {
+                showDemoTourStep(DemoTourStep::Rendering);
+                return;
+            }
+            int trackId = -1;
+            int placementIndex = -1;
+            if (findFirstPlacement(processorRef_, trackId, placementIndex))
+            {
+                const auto visible = arrangementView_.getLocalBounds()
+                    .withTrimmedTop(arrangementView_.getRulerHeight());
+                target = contentRoot_.getLocalArea(&arrangementView_,
+                    arrangementView_.getClipBounds(trackId, placementIndex).getIntersection(visible));
+            }
+            break;
+        }
+
+        case DemoTourStep::Rendering:
+            target = renderBadge_.isVisible() ? renderBadge_.getBounds() : juce::Rectangle<int>();
+            break;
+
+        case DemoTourStep::Tools:
+            if (!isParameterPanelVisible_)
+            {
+                isParameterPanelVisible_ = true;
+                parameterPanel_.setVisible(true);
+                topBar_.setSidePanelsVisible(isTrackPanelVisible_, isParameterPanelVisible_);
+                resized();
+            }
+            target = contentRoot_.getLocalArea(&parameterPanel_, parameterPanel_.getLocalBounds());
+            break;
+    }
+    demoTourCallout_.setTarget(target);
+}
+
+void OpenTuneAudioProcessorEditor::endDemoTour()
+{
+    markDemoTourDone();
+    demoTourSettled_ = true;
+    demoTourStep_ = DemoTourStep::None;
+    demoTourCallout_.setVisible(false);
+}
+
 void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
 {
     const auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
@@ -1097,6 +1306,7 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
             safeThis->updateTitleWithProjectPath();
             safeThis->refreshAllUIFromProject();
             safeThis->projectOperationBusy_ = false;
+            safeThis->updateDemoTour();
         });
     });
 }
@@ -1501,6 +1711,10 @@ void OpenTuneAudioProcessorEditor::resized()
     if (onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
         renderBadge_.toFront(false);
 
+    demoTourCallout_.setBounds(contentRoot_.getLocalBounds());
+    if (demoTourCallout_.isVisible())
+        demoTourCallout_.toFront(false);
+
     if (onboardingOverlay_ != nullptr)
     {
         onboardingOverlay_->updateLayout();
@@ -1618,6 +1832,12 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     {
         onboardingRequested();
     }
+
+    // 引导在开始时就记下“已展示”。这里等它结束（或上次已经结束）再加载演示工程。
+    if ((onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
+        && appPreferences_.getState().shared.onboardingShown)
+        startDemoTourIfFirstRun();
+    updateDemoTour();
 
     const bool vocoderReady = processorRef_.isVocoderReady();
     const bool inferenceNow = false;
@@ -1851,10 +2071,15 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     // Combined badge visibility — Stage 1 only (Stage 2 is synchronous in CRS).
-    const bool shouldShowBadge = stage1HasWork && !isAutoProcessing;
+    bool shouldShowBadge = stage1HasWork && !isAutoProcessing;
     if (shouldShowBadge) {
         renderBadge_.setMessageText(LOC_RAW("Rendering (")
             + juce::String(stage1Done) + "/" + juce::String(stage1Total) + ")");
+    }
+    // 引导讲解渲染时徽标保持可见；渲染已结束则显示 0/0。
+    if (demoTourStep_ == DemoTourStep::Rendering && !shouldShowBadge) {
+        renderBadge_.setMessageText(LOC_RAW("Rendering (") + "0/0)");
+        shouldShowBadge = true;
     }
     if (renderBadge_.isVisible() != shouldShowBadge) {
         renderBadge_.setVisible(shouldShowBadge);
@@ -3563,11 +3788,17 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
 {
     placementSelectionChanged(trackId, processorRef_.getPlacementId(trackId, placementIndex));
 
-    if (isWorkspaceView_)
-    {
-        transportBar_.setWorkspaceView(false);
-        viewToggled(false);
-    }
+    if (!isWorkspaceView_)
+        return;
+
+    // 记下钢琴卷帘自己的横向缩放。viewToggled 可能把编曲相机抄过来，
+    // 居中时仍用这个缩放，不跟着编曲视图的缩放走。
+    const double pianoPixelsPerSecond = pianoRoll_.timelineCamera().pixelsPerSecond;
+    const bool centerNote = pianoRoll_.prepareNoteCenterOnClipEntry();
+    transportBar_.setWorkspaceView(false);
+    viewToggled(false);
+    if (centerNote && !pianoRoll_.centerNoteNearestPlayhead(pianoPixelsPerSecond))
+        pianoRoll_.requestInitialF0View(pianoRoll_.editedContentKey());
 }
 
 

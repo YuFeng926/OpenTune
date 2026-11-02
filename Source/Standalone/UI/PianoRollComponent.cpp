@@ -1,4 +1,5 @@
 #include "PianoRollComponent.h"
+#include "PianoRollNoteEntry.h"
 #include "../../Content/EditableContentSnapshot.h"
 #include "../../Utils/AppPreferences.h"
 #include "../../Utils/PendingSeekPolicy.h"
@@ -3746,6 +3747,100 @@ void PianoRollComponent::requestInitialF0View(ContentKey contentKey)
 
     pendingInitialF0ViewContentKey_ = contentKey;
     tryConsumeInitialF0View(contentKey);
+}
+
+namespace {
+
+bool clipHasCenterableNote(const std::vector<Note>& notes)
+{
+    for (const auto& note : notes)
+    {
+        const CenterableNote sample { note.startTime, note.endTime, note.getAdjustedPitch() };
+        if (isCenterableNote(sample))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
+bool PianoRollComponent::prepareNoteCenterOnClipEntry()
+{
+    if (!clipHasCenterableNote(getCommittedNotes()))
+        return false;
+
+    // 进入后 F0 Ready 会沿同一条 pending 把镜头改到首帧。这里先取消，
+    // 让随后的 centerNoteNearestPlayhead 成为这次进入的唯一镜头。
+    pendingInitialF0ViewContentKey_ = ContentKey{};
+    return true;
+}
+
+bool PianoRollComponent::centerNoteNearestPlayhead(double pixelsPerSecond)
+{
+    const auto& notes = getCommittedNotes();
+    const int viewportW = getTimelineContentViewportWidth();
+    const int viewportH = getTimelineContentViewportHeight();
+    if (viewportW <= 0 || viewportH <= 0)
+        return false;
+
+    const double pps = pixelsPerSecond > 0.0 ? pixelsPerSecond : camera_.pixelsPerSecond;
+    if (!(pps > 0.0) || !std::isfinite(pps))
+        return false;
+
+    const auto* placement = findEditedPlacement();
+    if (placement == nullptr)
+        return false;
+    const auto snap = readSnapshotFor(placement->contentKey);
+    if (snap == nullptr || snap->timeGrid == nullptr)
+        return false;
+
+    const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
+    double playhead = playHeadState_.getPresentedPositionSeconds();
+    if (!std::isfinite(playhead))
+        playhead = 0.0;
+
+    std::vector<CenterableNote> onTimeline;
+    onTimeline.reserve(notes.size());
+    for (const auto& note : notes)
+    {
+        onTimeline.push_back({
+            map.sourceToTimeline(note.startTime),
+            map.sourceToTimeline(note.endTime),
+            note.getAdjustedPitch()
+        });
+    }
+
+    const int index = noteIndexNearestTime(onTimeline.data(), static_cast<int>(onTimeline.size()), playhead);
+    if (index < 0)
+        return false;
+
+    const double timelineSeconds = noteCenterTimeNearest(playhead, onTimeline[static_cast<size_t>(index)]);
+    if (!std::isfinite(timelineSeconds))
+        return false;
+
+    const float noteMidi = makeViewMapper().freqToMidi(notes[static_cast<size_t>(index)].getAdjustedPitch());
+    if (!std::isfinite(noteMidi))
+        return false;
+
+    // 保持当前音高缩放，只把该音高车道滚到内容区中央。
+    verticalScrollOffset_ = (maxMidi_ - noteMidi) * pixelsPerSemitone_
+        - static_cast<float>(viewportH) * 0.5f;
+    const float maxScroll = juce::jmax(0.0f, getTotalHeight() - static_cast<float>(viewportH));
+    verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
+
+    // 挡住播放跟随，直到用户自己平移或缩放。Kind::Cont 用现有横向缩放把时间点放在视口中央。
+    userScrollHold_ = true;
+    staticDirty_ = true;
+    contentDirty_ = true;
+    commitViewportRequest(makeViewportRequest(
+        TimelineViewportRequest::Kind::Cont,
+        timelineSeconds,
+        0.0,
+        pps));
+    updateScrollBars();
+    repaint();
+    overlay_->repaint();
+    return true;
 }
 
 void PianoRollComponent::onTimeGridRevisionChanged()

@@ -32,6 +32,7 @@
 #include "UI/AuroraLookAndFeel.h"
 #include "UI/UIColors.h"
 #include "UI/RippleOverlayComponent.h"
+#include "UI/DemoTourCallout.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
 #include "Utils/PitchShiftSettings.h"
@@ -293,6 +294,20 @@ private:
     std::unique_ptr<OnboardingOverlayComponent> onboardingOverlay_;
     bool onboardingPreviousWorkspaceView_ = true;
     bool onboardingPreviousParameterPanelVisible_ = true;
+
+    // 首次运行：界面引导结束后加载演示工程，并逐步提示双击进入钢琴卷帘、渲染、工具用法。
+    enum class DemoTourStep { None, LoadingProject, OpenPianoRoll, Rendering, Tools };
+    DemoTourStep demoTourStep_ = DemoTourStep::None;
+    bool demoTourSettled_ = false;
+    // 自动打开已经发出。LoadingProject 在这条打开结束前不能当成失败。
+    bool demoTourOpenStarted_ = false;
+    DemoTourCallout demoTourCallout_;
+    void startDemoTourIfFirstRun();
+    void showDemoTourStep(DemoTourStep step);
+    void updateDemoTour();
+    void endDemoTour();
+    bool isDemoTourConsumed() const;
+    void markDemoTourDone();
 
     // §5.1：外层窗口几何只在 peer/顶层可用后恢复一次，不在 resized 重入
     bool standaloneWindowGeometryRestored_ = false;

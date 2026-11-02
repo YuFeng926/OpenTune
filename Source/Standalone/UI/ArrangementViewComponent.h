@@ -149,6 +149,7 @@ public:
     int trackIdForViewportY(int y) const noexcept;
     double viewportXToAbsoluteTime(int x) const;
     int getRulerHeight() const noexcept { return rulerHeight_; }
+    juce::Rectangle<int> getClipBounds(int trackId, int placementIndex) const { return getPlacementBounds(trackId, placementIndex); }
 
 private:
     bool matchesShortcut(KeyShortcutConfig::ShortcutId id, const juce::KeyPress& key) const;

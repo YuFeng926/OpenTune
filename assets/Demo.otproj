@@ -1,0 +1,1544 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<OpenTuneProject projectFormatVersion="7" appVersion="1.5.0" projectName="Demo"
+                 projectId="1a1815dffec-091270ed" createdAt="2026-10-28T15:16:23"
+                 lastSavedAt="2026-10-28T15:27:03">
+  <ProjectSettings bpm="120.0" sampleRate="48000.0" timeSignatureNumerator="4" timeSignatureDenominator="4"
+                   selectedTrackId="0" selectedPlacementId="0" activeTrackId="0"
+                   scrollX="0.0" scrollY="0.0" zoomLevel="1.0" verticalZoom="1.0"
+                   timelineOriginSeconds="0.0" visibleTrackCount="1"/>
+  <MediaPool>
+    <Source sourceId="1" displayName="&#12298;&#36176;&#25105;&#12299;-&#33505;&#26592;-&#38750;&#21830;&#29992;&#28436;&#31034;.wav"
+            originalImportPath="/var/mobile/Containers/Data/Application/75D548EB-5047-435C-8C3C-248AA762F020/Documents/Projects/.Demo_Media/1.wav"
+            relativeMediaPath=".Demo_Media/1.wav" sampleRate="44100.0" numChannels="1"
+            lengthSamples="3175200" lengthSeconds="72.0" contentHash="1"
+            fileSizeBytes="10208690"/>
+  </MediaPool>
+  <Contents>
+    <Content contentDomain="1" contentObjectId="1" contentDiscriminator="0"
+             sourceId="1" retired="0" lineageParentDomain="0" lineageParentObjectId="0"
+             lineageParentDiscriminator="0" noteTopologyInitialized="1" pitchShiftSemitones="0"
+             pitchShiftCents="0" originalF0State="2">
+      <SourceWindow sourceId="1" sourceStartSeconds="0.0" sourceEndSeconds="72.0"/>
+      <DetectedKey tonic="5" scale="1" confidence="1.0" origin="2"/>
+      <Notes>
+        <Note startTime="1.095996331530985" endTime="1.397668131382145" pitch="246.941650390625"
+              originalPitch="247.2027740478516" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="1.397668131382145" endTime="1.4" pitch="261.6255493164062"
+              originalPitch="251.3750610351562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="1.4" endTime="1.48" pitch="261.6255493164062" originalPitch="267.3499145507812"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="1.48" endTime="1.565" pitch="261.6255493164062" originalPitch="255.0734100341797"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="1.58" endTime="1.86" pitch="261.6255493164062" originalPitch="264.7742919921875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="1.86" endTime="1.92" pitch="233.0818634033203" originalPitch="244.2112579345703"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="1.92" endTime="2.01" pitch="233.0818634033203" originalPitch="235.1340026855469"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="2.01" endTime="2.055" pitch="233.0818634033203" originalPitch="220.1845550537109"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="2.16" endTime="2.655" pitch="261.6255493164062" originalPitch="263.3890380859375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="2.7" endTime="2.86" pitch="277.1826477050781" originalPitch="286.805908203125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="2.86" endTime="3.01" pitch="311.1269836425781" originalPitch="312.9396362304688"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="3.01" endTime="3.054858874757965" pitch="311.1269836425781"
+              originalPitch="294.0361328125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="3.054858874757965" endTime="3.065711791820328" pitch="246.941650390625"
+              originalPitch="246.5444641113281" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="3.065711791820328" endTime="3.232306666364998" pitch="246.941650390625"
+              originalPitch="246.7336730957031" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="3.232306666364998" endTime="3.430419490147849" pitch="261.6255493164062"
+              originalPitch="264.0224914550781" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="3.45" endTime="3.457434875209147" pitch="233.0818634033203"
+              originalPitch="236.3074035644531" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="3.457434875209147" endTime="3.750101546706541" pitch="233.0818634033203"
+              originalPitch="234.490478515625" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="3.81" endTime="4.58" pitch="233.0818634033203" originalPitch="236.3379516601562"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="4.58" endTime="4.8" pitch="261.6255493164062" originalPitch="266.4226684570312"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="4.8" endTime="4.845" pitch="233.0818634033203" originalPitch="239.0144958496094"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="4.893304233967394" endTime="5.919888866296715" pitch="174.6141204833984"
+              originalPitch="174.2348022460938" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="7.08" endTime="7.16" pitch="233.0818634033203" originalPitch="229.3225250244141"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="7.16" endTime="7.16112260714171" pitch="233.0818634033203"
+              originalPitch="246.572021484375" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="7.16112260714171" endTime="7.25912260714171" pitch="246.941650390625"
+              originalPitch="246.572021484375" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="7.26" endTime="7.285" pitch="261.6255493164062" originalPitch="249.2809753417969"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="7.29" endTime="7.71" pitch="261.6255493164062" originalPitch="258.2072143554688"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="7.71" endTime="7.755" pitch="233.0818634033203" originalPitch="239.0437316894531"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="7.81" endTime="8.006235108598279" pitch="233.0818634033203"
+              originalPitch="236.7379150390625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="8.006235108598279" endTime="8.547215116817853" pitch="261.6255493164062"
+              originalPitch="266.07373046875" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="8.547215116817853" endTime="8.550000000000001" pitch="261.6255493164062"
+              originalPitch="266.1095275878906" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="8.550000000000001" endTime="8.710000000000001" pitch="311.1269836425781"
+              originalPitch="323.932861328125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="8.710000000000001" endTime="8.82" pitch="349.2282409667969"
+              originalPitch="354.758056640625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="8.82" endTime="8.865" pitch="311.1269836425781" originalPitch="327.2856140136719"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="8.950000000000001" endTime="9.300000000000001" pitch="261.6255493164062"
+              originalPitch="268.3773498535156" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="9.300000000000001" endTime="9.56" pitch="233.0818634033203"
+              originalPitch="236.9051971435547" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="9.56" endTime="9.595000000000001" pitch="233.0818634033203"
+              originalPitch="224.6066589355469" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="9.595414975792309" endTime="9.95887651404554" pitch="293.6647644042969"
+              originalPitch="294.006103515625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="9.95887651404554" endTime="9.960000000000001" pitch="311.1269836425781"
+              originalPitch="294.006103515625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="9.960000000000001" endTime="10.165" pitch="311.1269836425781"
+              originalPitch="309.710205078125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="10.25113731611207" endTime="11.28222451261827" pitch="261.6255493164062"
+              originalPitch="267.165283203125" pitchOffset="0.0" retuneSpeed="0.609000027179718"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="12.21" endTime="12.33" pitch="233.0818634033203" originalPitch="244.0331115722656"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="12.33" endTime="12.46" pitch="261.6255493164062" originalPitch="260.0455932617188"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="12.46" endTime="12.555" pitch="261.6255493164062"
+              originalPitch="257.5087890625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="12.58" endTime="13.09" pitch="233.0818634033203" originalPitch="238.3882293701172"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="13.09" endTime="13.13" pitch="233.0818634033203" originalPitch="226.5180358886719"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="13.13" endTime="13.14" pitch="261.6255493164062" originalPitch="248.13720703125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="13.14" endTime="13.66" pitch="261.6255493164062" originalPitch="267.2981567382812"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="13.66" endTime="13.67" pitch="277.1826477050781" originalPitch="290.8292846679688"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="13.67" endTime="13.95" pitch="311.1269836425781" originalPitch="324.0286865234375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="13.95" endTime="14.005" pitch="311.1269836425781"
+              originalPitch="300.7926635742188" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="14.05" endTime="14.24" pitch="233.0818634033203" originalPitch="242.6987457275391"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="14.24" endTime="14.475" pitch="261.6255493164062"
+              originalPitch="268.2683715820312" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="14.53369658859909" endTime="14.87138890186532" pitch="246.941650390625"
+              originalPitch="245.3292236328125" pitchOffset="-1.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="15.15" endTime="15.5050244119264" pitch="174.6141204833984"
+              originalPitch="177.3538360595703" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="15.5050244119264" endTime="15.59790902725779" pitch="220.0"
+              originalPitch="215.7459411621094" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="15.59790902725779" endTime="15.70290902719761" pitch="220.0"
+              originalPitch="224.8872375488281" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="15.70290902719761" endTime="15.94" pitch="233.0818634033203"
+              originalPitch="241.1018524169922" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="15.94" endTime="15.985" pitch="233.0818634033203"
+              originalPitch="227.2294921875" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="16.0542551808424" endTime="16.25617825764975" pitch="246.941650390625"
+              originalPitch="247.901611328125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="16.25617825764975" endTime="16.44" pitch="261.6255493164062"
+              originalPitch="266.5671997070312" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="16.44" endTime="16.485" pitch="261.6255493164062"
+              originalPitch="248.6254272460938" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="16.61" endTime="16.71" pitch="195.9977264404297" originalPitch="198.1647644042969"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="16.71" endTime="16.77" pitch="195.9977264404297" originalPitch="189.9484100341797"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="16.77" endTime="16.82" pitch="207.65234375" originalPitch="210.3621826171875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="16.82" endTime="16.92342895766945" pitch="207.65234375"
+              originalPitch="216.6937103271484" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="16.92342895766945" endTime="16.94765972688634" pitch="220.0"
+              originalPitch="216.6937103271484" pitchOffset="-1.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="16.94765972688634" endTime="16.99" pitch="207.65234375"
+              originalPitch="216.6937103271484" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="16.99" endTime="17.01" pitch="207.65234375" originalPitch="204.2309875488281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="17.01" endTime="17.01654952720369" pitch="195.9977264404297"
+              originalPitch="188.7133178710938" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="17.01654952720369" endTime="17.9907000801264" pitch="174.6141204833984"
+              originalPitch="171.6026916503906" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="18.79" endTime="18.95" pitch="233.0818634033203" originalPitch="246.3462066650391"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="18.95" endTime="19.11" pitch="261.6255493164062" originalPitch="268.147705078125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.11" endTime="19.17" pitch="261.6255493164062" originalPitch="250.6895599365234"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.17" endTime="19.23" pitch="277.1826477050781" originalPitch="275.8854370117188"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.23" endTime="19.26" pitch="261.6255493164062" originalPitch="250.5938720703125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.26" endTime="19.39" pitch="233.0818634033203" originalPitch="239.4292907714844"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.39" endTime="19.42" pitch="233.0818634033203" originalPitch="221.2143859863281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.42" endTime="19.455" pitch="207.65234375" originalPitch="215.5560607910156"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.54" endTime="19.75" pitch="207.65234375" originalPitch="210.1539306640625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.75" endTime="19.77" pitch="195.9977264404297" originalPitch="194.7622680664062"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.77" endTime="19.805" pitch="174.6141204833984"
+              originalPitch="177.941162109375" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="19.89" endTime="19.92" pitch="195.9977264404297" originalPitch="200.7244110107422"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="19.92" endTime="20.16" pitch="207.65234375" originalPitch="210.82861328125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="20.16" endTime="20.19" pitch="233.0818634033203" originalPitch="231.3126373291016"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="20.19" endTime="20.39" pitch="233.0818634033203" originalPitch="243.1971588134766"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="20.39" endTime="20.425" pitch="233.0818634033203"
+              originalPitch="232.0155334472656" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="20.52" endTime="20.69" pitch="233.0818634033203" originalPitch="234.4593200683594"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="20.69" endTime="20.94" pitch="261.6255493164062" originalPitch="263.3408203125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="20.94" endTime="20.96" pitch="261.6255493164062" originalPitch="247.3561859130859"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="20.96" endTime="20.97" pitch="233.0818634033203" originalPitch="229.3031311035156"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="20.97" endTime="20.98" pitch="207.65234375" originalPitch="216.9867706298828"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="20.98" endTime="21.02" pitch="195.9977264404297" originalPitch="198.6627044677734"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="21.02" endTime="21.2" pitch="174.6141204833984" originalPitch="179.24267578125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="21.2" endTime="21.55" pitch="195.9977264404297" originalPitch="194.4920959472656"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="21.55" endTime="21.605" pitch="174.6141204833984"
+              originalPitch="177.5946197509766" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="21.68" endTime="21.81" pitch="174.6141204833984" originalPitch="182.5229797363281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="21.81" endTime="21.89673305430063" pitch="174.6141204833984"
+              originalPitch="172.1530456542969" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="21.89673305430063" endTime="23.00327151520491" pitch="174.6141204833984"
+              originalPitch="171.7465972900391" pitchOffset="0.0" retuneSpeed="0.4420000016689301"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="24.60295961692469" endTime="24.7605493631156" pitch="246.941650390625"
+              originalPitch="243.775390625" pitchOffset="-1.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="24.7605493631156" endTime="25.3547694316468" pitch="261.6255493164062"
+              originalPitch="257.0335083007812" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="25.3547694316468" endTime="25.355" pitch="261.6255493164062"
+              originalPitch="260.4866333007812" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="25.36" endTime="25.36827712417745" pitch="233.0818634033203"
+              originalPitch="243.6815185546875" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="25.36827712417745" endTime="25.58890276884472" pitch="246.941650390625"
+              originalPitch="243.6815185546875" pitchOffset="-1.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="25.58890276884472" endTime="25.59" pitch="233.0818634033203"
+              originalPitch="243.6815185546875" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="25.59" endTime="25.59522012828281" pitch="261.6255493164062"
+              originalPitch="269.1373901367188" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="25.59522012828281" endTime="26.08149705938617" pitch="261.6255493164062"
+              originalPitch="265.7934265136719" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="26.08149705938617" endTime="26.0943270936346" pitch="261.6255493164062"
+              originalPitch="266.8040161132812" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="26.0943270936346" endTime="26.2103270936346" pitch="293.6647644042969"
+              originalPitch="290.4712524414062" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="26.2103270936346" endTime="26.39896299138635" pitch="311.1269836425781"
+              originalPitch="317.8885192871094" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="26.39896299138635" endTime="26.78618351059828" pitch="261.6255493164062"
+              originalPitch="268.9669189453125" pitchOffset="0.0" retuneSpeed="0.3991000056266785"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="26.8" endTime="26.82" pitch="207.65234375" originalPitch="219.7806549072266"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="26.82" endTime="26.83" pitch="233.0818634033203" originalPitch="229.8717956542969"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="26.83" endTime="26.83952901645866" pitch="233.0818634033203"
+              originalPitch="241.6802062988281" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="26.83952901645866" endTime="27.08991363169977" pitch="246.941650390625"
+              originalPitch="251.7763519287109" pitchOffset="-1.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="27.08991363169977" endTime="27.11414440091665" pitch="246.941650390625"
+              originalPitch="249.9110717773438" pitchOffset="-1.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="27.11414440091665" endTime="27.12" pitch="233.0818634033203"
+              originalPitch="232.7217254638672" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="27.12" endTime="27.145" pitch="207.65234375" originalPitch="219.2380523681641"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="27.16" endTime="27.18" pitch="207.65234375" originalPitch="213.3233489990234"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="27.18" endTime="27.2" pitch="233.0818634033203" originalPitch="231.0613861083984"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="27.2" endTime="27.93" pitch="233.0818634033203" originalPitch="239.9983978271484"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="27.93" endTime="28.19" pitch="261.6255493164062" originalPitch="265.363037109375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="28.19" endTime="28.21" pitch="233.0818634033203" originalPitch="246.0789642333984"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="28.21" endTime="28.22" pitch="207.65234375" originalPitch="219.64013671875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="28.22" endTime="28.24646494574745" pitch="195.9977264404297"
+              originalPitch="196.3836364746094" pitchOffset="-2.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="28.24646494574745" endTime="29.34959316908378" pitch="184.9972076416016"
+              originalPitch="180.4053955078125" pitchOffset="-1.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="30.44" endTime="30.53" pitch="233.0818634033203" originalPitch="235.1113128662109"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="30.53" endTime="30.55622916339829" pitch="261.6255493164062"
+              originalPitch="265.2174072265625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="30.55622916339829" endTime="31.08753173627048" pitch="261.6255493164062"
+              originalPitch="266.2971801757812" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="31.08753173627048" endTime="31.1" pitch="261.6255493164062"
+              originalPitch="266.2971801757812" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="31.1" endTime="31.10166018649698" pitch="233.0818634033203"
+              originalPitch="241.8299560546875" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="31.10166018649698" endTime="31.3583063445793" pitch="233.0818634033203"
+              originalPitch="239.1755523681641" pitchOffset="0.0" retuneSpeed="0.3522000014781952"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="31.41" endTime="31.73" pitch="261.6255493164062" originalPitch="267.4806518554688"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="31.73" endTime="31.76" pitch="261.6255493164062" originalPitch="255.4530639648438"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="31.76" endTime="31.77" pitch="277.1826477050781" originalPitch="269.61328125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="31.77" endTime="31.78" pitch="277.1826477050781" originalPitch="289.3320617675781"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="31.78" endTime="31.89411148162839" pitch="311.1269836425781"
+              originalPitch="310.9624938964844" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="31.89411148162839" endTime="32.101229433765" pitch="329.6275634765625"
+              originalPitch="320.6564331054688" pitchOffset="1.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="32.101229433765" endTime="32.44706305309592" pitch="261.6255493164062"
+              originalPitch="269.0069885253906" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="32.66" endTime="32.89" pitch="261.6255493164062" originalPitch="262.4293518066406"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="32.89" endTime="32.92" pitch="261.6255493164062" originalPitch="249.0990447998047"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="32.92" endTime="32.975" pitch="261.6255493164062"
+              originalPitch="262.1842651367188" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="33.02206445196875" endTime="33.22918240410536" pitch="369.9944152832031"
+              originalPitch="371.1947937011719" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="33.22918240410536" endTime="33.56" pitch="391.9954223632812"
+              originalPitch="398.3688354492188" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="33.56" endTime="33.58" pitch="391.9954223632812" originalPitch="375.333251953125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="33.58" endTime="33.59" pitch="349.2282409667969" originalPitch="345.429443359375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="33.59" endTime="33.6164029233173" pitch="311.1269836425781"
+              originalPitch="326.5870361328125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="33.6164029233173" endTime="34.15220806036637" pitch="311.1269836425781"
+              originalPitch="318.3775634765625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="34.16" endTime="34.18" pitch="207.65234375" originalPitch="216.5774383544922"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="34.18" endTime="34.42" pitch="233.0818634033203" originalPitch="240.3650665283203"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="34.42" endTime="34.43" pitch="207.65234375" originalPitch="218.8330688476562"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="34.43" endTime="34.465" pitch="207.65234375" originalPitch="208.9039001464844"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="34.5" endTime="34.53" pitch="207.65234375" originalPitch="219.6594543457031"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="34.53" endTime="34.87" pitch="233.0818634033203" originalPitch="237.1121520996094"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="34.87" endTime="34.87140992428544" pitch="261.6255493164062"
+              originalPitch="264.3958129882812" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="34.87140992428544" endTime="35.25863044349738" pitch="261.6255493164062"
+              originalPitch="268.3870239257812" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="35.59" endTime="35.73" pitch="233.0818634033203" originalPitch="240.5687713623047"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="35.73" endTime="35.73307234017653" pitch="261.6255493164062"
+              originalPitch="262.7100219726562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="35.73307234017653" endTime="35.93361797058913" pitch="261.6255493164062"
+              originalPitch="255.4304504394531" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="35.93361797058913" endTime="35.935" pitch="261.6255493164062"
+              originalPitch="254.0937194824219" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="35.95" endTime="35.95227337806936" pitch="233.0818634033203"
+              originalPitch="241.5227355957031" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="35.95227337806936" endTime="36.51659945434668" pitch="246.941650390625"
+              originalPitch="242.9714813232422" pitchOffset="-1.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="36.51659945434668" endTime="36.52195412218024" pitch="246.941650390625"
+              originalPitch="244.7603454589844" pitchOffset="-1.0" retuneSpeed="0.578000009059906"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="36.52195412218024" endTime="36.84" pitch="261.6255493164062"
+              originalPitch="266.4012451171875" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="36.84" endTime="36.905" pitch="261.6255493164062"
+              originalPitch="259.5380249023438" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="37.03" endTime="37.32" pitch="311.1269836425781" originalPitch="318.9803466796875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="37.32" endTime="37.385" pitch="277.1826477050781"
+              originalPitch="290.0542907714844" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="37.41" endTime="37.66" pitch="233.0818634033203" originalPitch="240.5244140625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="37.66" endTime="37.92" pitch="261.6255493164062" originalPitch="266.7850036621094"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="37.92" endTime="37.93" pitch="261.6255493164062" originalPitch="249.347900390625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="37.93" endTime="37.94" pitch="233.0818634033203" originalPitch="234.1606903076172"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="37.94" endTime="37.98680869593588" pitch="207.65234375"
+              originalPitch="217.3320770263672" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="37.98680869593588" endTime="38.30198818831769" pitch="246.941650390625"
+              originalPitch="248.8560333251953" pitchOffset="-1.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="38.52" endTime="38.8" pitch="174.6141204833984" originalPitch="177.4802551269531"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="38.8" endTime="38.85" pitch="174.6141204833984" originalPitch="166.0395812988281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="38.85" endTime="38.86" pitch="174.6141204833984" originalPitch="183.5947570800781"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="38.86" endTime="38.87" pitch="195.9977264404297" originalPitch="194.9148254394531"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="38.87" endTime="38.88" pitch="207.65234375" originalPitch="205.6468048095703"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="38.88" endTime="39.04" pitch="233.0818634033203" originalPitch="224.7724914550781"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="39.04" endTime="39.68" pitch="233.0818634033203" originalPitch="240.6556854248047"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="39.68" endTime="39.95" pitch="261.6255493164062" originalPitch="264.40185546875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="39.95" endTime="39.96" pitch="233.0818634033203" originalPitch="243.6701049804688"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="39.96" endTime="39.97" pitch="233.0818634033203" originalPitch="229.0256958007812"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="39.97" endTime="39.98" pitch="207.65234375" originalPitch="213.4284210205078"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="39.98" endTime="40.16" pitch="195.9977264404297" originalPitch="192.6279296875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="40.16" endTime="40.23" pitch="207.65234375" originalPitch="212.2122955322266"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="40.23" endTime="40.25" pitch="195.9977264404297" originalPitch="199.6622314453125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="40.25" endTime="40.26" pitch="174.6141204833984" originalPitch="181.3720855712891"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="40.26" endTime="40.27665002247821" pitch="174.6141204833984"
+              originalPitch="172.3670806884766" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="40.27665002247821" endTime="41.06910131760961" pitch="174.6141204833984"
+              originalPitch="175.4128265380859" pitchOffset="0.0" retuneSpeed="0.5806000232696533"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="41.45" endTime="41.65" pitch="174.6141204833984" originalPitch="176.2669372558594"
+              pitchOffset="0.0" retuneSpeed="0.5593000054359436" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="41.65" endTime="41.705" pitch="174.6141204833984"
+              originalPitch="167.4998779296875" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="41.81" endTime="41.89" pitch="195.9977264404297" originalPitch="192.9684143066406"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="41.89" endTime="42.125" pitch="174.6141204833984"
+              originalPitch="178.6717071533203" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="42.19" endTime="42.27" pitch="233.0818634033203" originalPitch="236.0686950683594"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="42.27" endTime="42.38" pitch="261.6255493164062" originalPitch="256.8716430664062"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="42.38" endTime="42.625" pitch="261.6255493164062"
+              originalPitch="267.5052185058594" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="42.90817914472683" endTime="43.29501188478585" pitch="261.6255493164062"
+              originalPitch="263.7437744140625" pitchOffset="0.0" retuneSpeed="0.3418000042438507"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="43.29501188478585" endTime="43.40307342503105" pitch="293.6647644042969"
+              originalPitch="298.5869750976562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="43.40307342503105" endTime="43.41" pitch="311.1269836425781"
+              originalPitch="298.5869750976562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="43.41" endTime="43.61" pitch="311.1269836425781" originalPitch="314.0360717773438"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="43.61" endTime="43.62820163387519" pitch="311.1269836425781"
+              originalPitch="295.1172485351562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="43.62820163387519" endTime="44.2090324126931" pitch="261.6255493164062"
+              originalPitch="262.8500061035156" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="44.3" endTime="44.82" pitch="311.1269836425781" originalPitch="317.513427734375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="44.82" endTime="45.77" pitch="349.2282409667969" originalPitch="352.6434020996094"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="45.77" endTime="46.04" pitch="349.2282409667969" originalPitch="345.2254943847656"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="46.04" endTime="46.14" pitch="349.2282409667969" originalPitch="362.2509155273438"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="46.14" endTime="46.22" pitch="349.2282409667969" originalPitch="348.2451171875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="46.22" endTime="46.31" pitch="349.2282409667969" originalPitch="362.1112060546875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="46.31" endTime="46.68" pitch="349.2282409667969" originalPitch="349.517578125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="46.68" endTime="46.755" pitch="311.1269836425781"
+              originalPitch="315.4135437011719" pitchOffset="2.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="48.11" endTime="48.27" pitch="261.6255493164062" originalPitch="247.9563598632812"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="48.27" endTime="48.37" pitch="261.6255493164062" originalPitch="261.9092712402344"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="48.37" endTime="48.37157259231364" pitch="277.1826477050781"
+              originalPitch="287.2431640625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="48.37157259231364" endTime="48.61409288955678" pitch="311.1269836425781"
+              originalPitch="319.8359985351562" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="48.61409288955678" endTime="48.615" pitch="311.1269836425781"
+              originalPitch="313.4068908691406" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="48.62" endTime="49.0" pitch="349.2282409667969" originalPitch="356.6175537109375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="49.0" endTime="49.02" pitch="391.9954223632812" originalPitch="382.2056274414062"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="49.02" endTime="49.03" pitch="415.3046875" originalPitch="407.5783996582031"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="49.03" endTime="49.04" pitch="415.3046875" originalPitch="435.90576171875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="49.04" endTime="49.19" pitch="466.1637878417969" originalPitch="491.5232849121094"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="49.19" endTime="49.305" pitch="523.2510986328125"
+              originalPitch="526.4378051757812" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="49.39" endTime="49.59" pitch="349.2282409667969" originalPitch="360.1650390625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="49.59" endTime="49.62" pitch="349.2282409667969" originalPitch="332.38037109375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="49.62" endTime="49.84" pitch="311.1269836425781" originalPitch="320.5527954101562"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="49.84" endTime="49.925" pitch="311.1269836425781"
+              originalPitch="310.1257629394531" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="49.95890323385418" endTime="50.45868785748819" pitch="349.2282409667969"
+              originalPitch="350.4439086914062" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="50.51" endTime="50.68" pitch="466.1637878417969" originalPitch="472.9096984863281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="50.68" endTime="50.8" pitch="523.2510986328125" originalPitch="512.443603515625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="50.8" endTime="50.845" pitch="466.1637878417969" originalPitch="477.0989685058594"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="50.89" endTime="51.17" pitch="349.2282409667969" originalPitch="357.4889526367188"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="51.17" endTime="51.18218137261799" pitch="349.2282409667969"
+              originalPitch="340.5122680664062" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="51.18218137261799" endTime="51.83055061408914" pitch="311.1269836425781"
+              originalPitch="319.9270324707031" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="51.83055061408914" endTime="52.12321728558653" pitch="349.2282409667969"
+              originalPitch="355.3838500976562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="52.21" endTime="52.21642438943894" pitch="233.0818634033203"
+              originalPitch="235.9473266601562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="52.21642438943894" endTime="52.61715260118153" pitch="233.0818634033203"
+              originalPitch="234.5087585449219" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="52.73" endTime="52.92" pitch="233.0818634033203" originalPitch="244.5243988037109"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="52.92" endTime="52.92782952938645" pitch="261.6255493164062"
+              originalPitch="263.045654296875" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="52.92782952938645" endTime="53.74279364540227" pitch="261.6255493164062"
+              originalPitch="263.5421142578125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="53.98372758395315" endTime="54.33492758975002" pitch="261.6255493164062"
+              originalPitch="262.2496032714844" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="54.33492758975002" endTime="54.51503015682535" pitch="311.1269836425781"
+              originalPitch="313.2462768554688" pitchOffset="0.0" retuneSpeed="0.3061000108718872"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="54.51503015682535" endTime="54.85722503426845" pitch="349.2282409667969"
+              originalPitch="355.5363464355469" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="54.86623016262222" endTime="55.01031221628247" pitch="493.88330078125"
+              originalPitch="506.1233215332031" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="55.01031221628247" endTime="55.01481478045935" pitch="493.88330078125"
+              originalPitch="506.1233215332031" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="55.01481478045935" endTime="55.26245581018792" pitch="523.2510986328125"
+              originalPitch="514.1603393554688" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="55.26245581018792" endTime="55.4" pitch="349.2282409667969"
+              originalPitch="356.99267578125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="55.4" endTime="55.41" pitch="349.2282409667969" originalPitch="336.7458801269531"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="55.41" endTime="55.655" pitch="311.1269836425781"
+              originalPitch="318.3157958984375" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="55.8" endTime="56.21" pitch="349.2282409667969" originalPitch="358.8745422363281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="56.21" endTime="56.285" pitch="349.2282409667969"
+              originalPitch="330.2209167480469" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="56.31574642342496" endTime="56.51836181138469" pitch="493.88330078125"
+              originalPitch="495.2717590332031" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="56.51836181138469" endTime="56.52" pitch="523.2510986328125"
+              originalPitch="496.4118957519531" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="56.52" endTime="56.73" pitch="523.2510986328125" originalPitch="528.7334594726562"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="56.73" endTime="56.985" pitch="466.1637878417969"
+              originalPitch="474.880859375" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="57.08" endTime="57.12" pitch="622.2539672851562" originalPitch="613.9775390625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="57.12" endTime="57.315" pitch="622.2539672851562"
+              originalPitch="639.1539916992188" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="57.43" endTime="58.17" pitch="466.1637878417969" originalPitch="476.7455749511719"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="58.17" endTime="59.35334158867362" pitch="523.2510986328125"
+              originalPitch="522.9485473632812" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="59.35334158867362" endTime="59.41637748714997" pitch="493.88330078125"
+              originalPitch="495.4172973632812" pitchOffset="1.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="59.89" endTime="59.89364928989957" pitch="261.6255493164062"
+              originalPitch="267.2871704101562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="59.89364928989957" endTime="60.10076724203618" pitch="261.6255493164062"
+              originalPitch="267.0395812988281" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="60.10076724203618" endTime="60.13678775545125" pitch="261.6255493164062"
+              originalPitch="267.2871704101562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="60.13678775545125" endTime="60.36641852847228" pitch="311.1269836425781"
+              originalPitch="306.4239196777344" pitchOffset="0.0" retuneSpeed="0.6345999836921692"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="60.37" endTime="60.71" pitch="349.2282409667969" originalPitch="349.4396362304688"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="60.71" endTime="60.72" pitch="349.2282409667969" originalPitch="367.5569458007812"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="60.72" endTime="60.73" pitch="391.9954223632812" originalPitch="387.245361328125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="60.73" endTime="60.75" pitch="415.3046875" originalPitch="433.5159301757812"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="60.75" endTime="60.77" pitch="466.1637878417969" originalPitch="471.067626953125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="60.77" endTime="60.9" pitch="466.1637878417969" originalPitch="486.0309448242188"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="60.9" endTime="61.01" pitch="523.2510986328125" originalPitch="519.241455078125"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="61.01" endTime="61.045" pitch="466.1637878417969"
+              originalPitch="491.936279296875" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="61.08" endTime="61.11" pitch="349.2282409667969" originalPitch="360.17822265625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="61.11" endTime="61.23" pitch="349.2282409667969" originalPitch="342.0347900390625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="61.23" endTime="61.285" pitch="311.1269836425781"
+              originalPitch="312.4052734375" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="61.31" endTime="61.485" pitch="311.1269836425781"
+              originalPitch="315.6418151855469" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="61.67" endTime="62.11" pitch="349.2282409667969" originalPitch="348.9476013183594"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="62.11" endTime="62.155" pitch="311.1269836425781"
+              originalPitch="315.4049072265625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="62.18" endTime="62.21" pitch="523.2510986328125" originalPitch="501.3506469726562"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="62.21" endTime="62.65" pitch="523.2510986328125" originalPitch="516.9169921875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="62.65" endTime="62.7" pitch="554.3652954101562" originalPitch="565.9625854492188"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="62.7" endTime="62.88500000000001" pitch="622.2539672851562"
+              originalPitch="610.3130493164062" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="62.9" endTime="62.98" pitch="622.2539672851562" originalPitch="589.9150390625"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="62.98" endTime="63.19" pitch="523.2510986328125" originalPitch="526.5919799804688"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="63.19" endTime="63.25" pitch="523.2510986328125" originalPitch="499.9282531738281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="63.25" endTime="64.02" pitch="466.1637878417969" originalPitch="471.1401672363281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="64.02" endTime="64.295" pitch="523.2510986328125"
+              originalPitch="518.3671264648438" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="64.38" endTime="64.58" pitch="391.9954223632812" originalPitch="382.7157897949219"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="64.58" endTime="64.69" pitch="415.3046875" originalPitch="406.8872375488281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="64.69" endTime="64.72500000000001" pitch="391.9954223632812"
+              originalPitch="373.0235290527344" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="64.78" endTime="64.78116454933223" pitch="349.2282409667969"
+              originalPitch="352.9147338867188" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="64.78116454933223" endTime="65.55560558775611" pitch="349.2282409667969"
+              originalPitch="347.5330200195312" pitchOffset="0.0" retuneSpeed="0.3370000123977661"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="65.83" endTime="65.84999999999999" pitch="311.1269836425781"
+              originalPitch="297.0360717773438" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="65.84999999999999" endTime="66.15000000000001" pitch="311.1269836425781"
+              originalPitch="315.8844604492188" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="66.15000000000001" endTime="66.2" pitch="311.1269836425781"
+              originalPitch="297.655517578125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="66.2" endTime="66.21000000000001" pitch="311.1269836425781"
+              originalPitch="316.5772399902344" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="66.21000000000001" endTime="66.46000000000001" pitch="349.2282409667969"
+              originalPitch="351.0923461914062" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="66.46000000000001" endTime="66.545" pitch="311.1269836425781"
+              originalPitch="310.5509338378906" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="66.56" endTime="66.58" pitch="466.1637878417969" originalPitch="442.2049560546875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="66.58" endTime="66.59999999999999" pitch="466.1637878417969"
+              originalPitch="472.7510375976562" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="66.59999999999999" endTime="66.73" pitch="466.1637878417969"
+              originalPitch="492.0344543457031" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="66.73" endTime="66.88500000000001" pitch="523.2510986328125"
+              originalPitch="521.9572143554688" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="66.93000000000001" endTime="67.14" pitch="466.1637878417969"
+              originalPitch="473.251953125" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="67.14" endTime="67.435" pitch="523.2510986328125"
+              originalPitch="524.2028198242188" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="67.48" endTime="68.19" pitch="466.1637878417969" originalPitch="475.7608032226562"
+              pitchOffset="0.0" retuneSpeed="0.0" pitchDriftScale="1.0" vibratoDepth="0.0"
+              vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="68.19" endTime="68.36" pitch="523.2510986328125" originalPitch="518.294677734375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="68.36" endTime="68.38" pitch="466.1637878417969" originalPitch="493.3734130859375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="68.38" endTime="68.39" pitch="466.1637878417969" originalPitch="459.24560546875"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="68.39" endTime="68.40000000000001" pitch="391.9954223632812"
+              originalPitch="370.0809020996094" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="68.40000000000001" endTime="68.41" pitch="349.2282409667969"
+              originalPitch="342.4136962890625" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="68.41" endTime="68.42" pitch="277.1826477050781" originalPitch="280.2173767089844"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="68.42" endTime="68.43000000000001" pitch="261.6255493164062"
+              originalPitch="257.8406677246094" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="68.43000000000001" endTime="68.44" pitch="233.0818634033203"
+              originalPitch="238.7463684082031" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="68.44" endTime="68.46000000000001" pitch="155.5634918212891"
+              originalPitch="146.8473663330078" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="68.46000000000001" endTime="68.51000000000001" pitch="277.1826477050781"
+              originalPitch="280.0587768554688" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="68.51000000000001" endTime="68.89" pitch="311.1269836425781"
+              originalPitch="317.91162109375" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="68.89" endTime="69.08" pitch="349.2282409667969" originalPitch="355.9106750488281"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="69.08" endTime="69.09" pitch="349.2282409667969" originalPitch="333.4547729492188"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="69.09" endTime="69.13500000000001" pitch="311.1269836425781"
+              originalPitch="314.9426879882812" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="69.18000000000001" endTime="69.47" pitch="349.2282409667969"
+              originalPitch="356.0857849121094" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+        <Note startTime="69.47" endTime="71.44" pitch="349.2282409667969" originalPitch="352.08984375"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="71.44" endTime="71.52" pitch="349.2282409667969" originalPitch="362.7884216308594"
+              pitchOffset="0.0" retuneSpeed="0.1500000059604645" pitchDriftScale="1.0"
+              vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0" isVoiced="1"/>
+        <Note startTime="71.52" endTime="71.565" pitch="349.2282409667969"
+              originalPitch="337.6872253417969" pitchOffset="0.0" retuneSpeed="0.1500000059604645"
+              pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" outputGainDb="0.0"
+              isVoiced="1"/>
+      </Notes>
+      <CorrectedSegments>
+        <Segment startFrame="111" endFrame="155" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="176.pE.XC8bBgMzN8F1PO.eXCkyBhMTe1J1P1kCYCEAWlMzADg1PLlhZCYHGrMTI151POYkbCsPP1MTFXh2P1IadCUyL5MD2En2PeZTdCgDj2MDDwa2PzvzcCQte4MjPkm2PI4wdCoBz7MTHmC3PQ8+fCw8CGNTO7g3PVl5gCQCTENzV1N3PUE0fContBNzgdG3Pb+EfCMyr5MTBVh2PRWEeCUK6ANj23R3PBSNgCIZSDND"/>
+        <Segment startFrame="158" endFrame="204" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="184.qq4gCkCRGNzOGX3PBPMgCwEpCNDEGJ3PWEXfCstz.NDcXA3PoSAfC8t7+MjW..3PERDfCk82.NjoXF3PbMjfCYV4BNT2EM3PE52fCo.oCNDfAO3PdC8fCQLlCND0oK3PZbafCEs6+MzG2t2PuQmcCMiYuMjjik1PaebYCIn.kMjhsE2PN2MZCM6ffMzcsH1PFXdYC0.7nMzW+s1Py2OaCg2zsMTye11PhGfZCI.8jMj9HN1PSE6YCA"/>
+        <Segment startFrame="216" endFrame="264" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="192.yI.eCIaR+MjPGD3POhjfCU+SCNDRYP3PtLFgCIX9CNjSRL3PSZcfC8vi.NTCu62PzAYeCI4W8MDkt32PlF6eCgD3.NTb6G3PgSwfC8dGDND9YS3PIESgCoNGENzajR3PL+9fCI6ECNjSDI3P20WfC0r0.NzKlA3PYsAfCEY4+MzUc+2PbECfCg0r.NDWQE3PwuffCIAzBNz1YO3PsGNgC863ENjVtY3PVZngCsyLFNz9VV3P.kVgC8mMENDBuY3P"/>
+        <Segment startFrame="270" endFrame="289" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="76.mzqgCwwDINDSCo3PhkshCIHRKNzEPt3PtB4hCY5KKNjWWp3Pw5fhCMbaINzAsj3PXNZhCwEEKNjnI03P4.5iC45WSNzrsX4Ps9NlCA"/>
+        <Segment startFrame="289" endFrame="290" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="4.saGmCA"/>
+        <Segment startFrame="290" endFrame="306" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="64.DCpmC463eNzGG.5PNMxmCUPIdNjPHz4PETGmC0hWbNTy.x4PZGKmCsijbNDl9s4PBInlCQQoZNj73Y4PCj.jCA"/>
+        <Segment startFrame="309" endFrame="341" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="128.mVvdC8kI3MDlCb2PFuqcCMUx1MzyUa2PrPrcCs8g1MztRX2PGLXcCEaQ0Mj4pW2PyC9cCQZr5Mzql12P4rKfC8+LBNzMkN3Pw7QgCIcLFNDYgZ3PDdkgC8oWENjuSO3PwmefCAdJ.NjLV32PWrLfCwuUBNzA6J3Pk1pfCoymAND"/>
+        <Segment startFrame="345" endFrame="360" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="60.ry4XCA+5iMD3kY1PNjIZC0LNpMDL2q1PkzrZCsC9oMjoWi1PNL8YCYsImMjOUa1P0IsYCwSTmMz7hh1P"/>
+        <Segment startFrame="360" endFrame="373" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="52.ZVnZCwRprMD6i31PxuuaCIgDuMTbk41PQBPaCIWZpMj2Ib1PC5wXCkhIeMjKe10P4snYCA"/>
+        <Segment startFrame="381" endFrame="392" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="44.W+mWCYe3gMz50R1P0y0YCUsXoMzrsq1PRD.aCcXcrMjP.x1PqHCaCA0pqMD"/>
+        <Segment startFrame="392" endFrame="473" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="324.MZuZCUKHpMzJtj1POvFZCkJ9mMjsTe1PMU.ZCYymnMDFLl1P87mZCY+AqMz55r1PipyZCwQHqMjJtq1PW3mZC07woMzgEj1PHZDZCIFvmMTBfd1Pg58YCIQRnMD4jh1PRVMZCMQ3nMDaTi1P5yLZCsIznMD.ni1P0SQZCQFQoMjUok1PP4VZCclPoMz0oi1Pm2FZCAA9mMzy2d1PHw5YCk9smMDBNe1PT2+YCUeQnMTceh1PV6OZCoZYoMjyTm1PhFjZCo8gpMD5tp1PhWqZCsynpMzGNp1PmsmZCg2TpMzZ3m1PgKTZCEqKnMTTqZ1PyFUYCAYRkMD6jc1P9RwZCweTuMjhTN2PAWmdC4ua9MjeXD3P4iofCAIeCNDPeP3PHnBgCIMwCNjfsL3PAWnfCExwANjNXE3PyVTfCMpfANDwkH3P"/>
+        <Segment startFrame="473" endFrame="483" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="40.xLqfCweOCNzm8N3PMp9fCwCfCNz48G3PUwVeCwGewMTaUk1P75QZCA"/>
+        <Segment startFrame="493" endFrame="589" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="384.xXZQCUkQDMzzBIzPGKtOC8MF8LD0vsyPvdWNC44x1LTwwPyPu0bLCc5GvLD5s6xPAokKCAFMtLjI93xPkDlKC8frtLjmn8xP4.ELCUj3vLTa2CyPSEKLCQTIvLj+D8xP7OcKCE.uqLD.1lxPo0DJCARdnLjvWmxPWE2JCkCGsLDec7xPVCTLCA6cyLjf.XyPld4MCspd2LTPiWyPo62LCERTwLz067xPi+QKCc7OqLzYklxPoWGJCI9UoLjLdtxP0iXKCgG3tLj9k+xPaqMLC8piwLD97GyPe2jLCIKKxLjGJEyP+T9KCQg7sLTxCvxPG3bJCIFemLTbMZxPIeuICMcGmLDNkcxP0PEJC41xoLDPorxPLaAKCgjvrLzxb0xPymfKCkSmtLDy56xPX3tKCo9ktLjf73xPTQcKCECWsLjNAyxPt3.KCg.XqLTNIqxPA7qJC09aqLjbNwxPbFQKCABvsLD3Q4xPKTrKCYvLuLD2v8xPY11KColNuLzKa8xP"/>
+        <Segment startFrame="708" endFrame="723" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="60.dENYC87nkMjJJV1PaoJYCUrehMDdUB1P+XCXC003gMD2.U1PPQuZCk46wMDVwY2PRircCEnr0MznXa2P"/>
+        <Segment startFrame="726" endFrame="727" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="4.P+pfCA"/>
+        <Segment startFrame="729" endFrame="742" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="52.0pYgC8MmGNTn.f3PyI6gC8bIGNz97Y3PQ4ZgC4wqDNDIYO3PtcxfCoqvBNz7MJ3PKPmfCA"/>
+        <Segment startFrame="742" endFrame="774" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="128.uglfCg6aBNTW.J3PeIpfCY4yBNTMvK3PIbufCkQ5BNjDPK3P.2qfCIasBNzYsJ3PspofCkZbBNTmTH3Pa0afCsybANToQE3PfAVfCUEpANzebH3PAgufC8v6CNjm9R3PSSRgCYp4DNzQtO3PxPgfCYOY9MT90H2PfqbZCoV2mMD"/>
+        <Segment startFrame="781" endFrame="784" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="12.opeWCQm8hMTKdZ1P"/>
+        <Segment startFrame="784" endFrame="854" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="280.2SRZCsrLpMztHn1P0SQZCMNLnMTVee1PQQ9YCI1UnMDrZk1POtoZC4CmqMDgCw1Pjv+ZCQgDqMjmHl1PeC.ZCM5WlMDR+Q1PY6wXCwd76MTN+G3PwH7fC4qBENDRaX3PHCvgCMcZGNDwGc3PsZngCUYWEND.EO3PyFefCciV.Nj2G32PidLeC4Uw8MzwGA3PyNefCAvxCNDbIT3PxqZgCQiuENT+wU3PuvNgCwLRDNzGlM3PuoofC4HsANTYRD3P0KHfCoFQ.NDJzA3Pr1OfCQ8lANjm9H3PPLsfCggRCND65N3PrR.gCI1FDNT7nO3PGs1fCIfxBNTLyG3PLAKfCAK+9MTAb.3PO+ifCQxyBNj+eK3PjtHgCA"/>
+        <Segment startFrame="855" endFrame="871" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="64.ddHkCwsnVNzsxg4PL+dlComXaNjGrv4PIgFmCsALbNTPPt4P1WrlC4RVZNze9o4Pb30lCczpbNzJq44Pv5JnCA"/>
+        <Segment startFrame="871" endFrame="885" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="56.a7zoCg1NpNz.Ay5PFhpqCo7xuNjsyA6PWdFrCAeRuNDDwz5P48bpCgshkNzSDC5PmPAmCsr6aND"/>
+        <Segment startFrame="895" endFrame="943" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="192.MECgC4k0DNDClQ3PR5BgC0+9CNzUFO3PJO3fCsgLCNDTWK3P0MnfC83RBNjVmH3P1fhfCo6SBNjlLJ3P9fsfCQG.CNzk0K3P7jrfCMTjBNjApI3PTpkfCAUWBNDa2I3PNuofCIAzBND7XL3P2J0fC8wZCNDxcM3P9ZwfC05fBNjg0F3PCBFfCIzg8MTPhb2PbU1bCYzpuMjWIx1PQIdZC8TJnMT+fd1PQG9YCI+gnMD1yk1PLNgZCcybpMDIEp1P"/>
+        <Segment startFrame="943" endFrame="958" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="60.iWjZCAv3oMjSbk1P0POZCYbznMzA4i1PSQSZCU5toMzQTq1PP9CaCcHxsMjXB61PdmkaCgJznMTJMQ1P"/>
+        <Segment startFrame="967" endFrame="1009" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="168.gMMjCs2KRNzYgJ4PVLsjCYGASNTDYL4PpCxjCkJHSNzSJL4P41ujCQf9RNjysK4Pn.tjCEixRNzSfJ4Pd5ljC8zNRNDP+G4PuEbjC8OjQNjl4E4PwIXjC4a0QNDoYL4PYqWkC4AmXNzK9u4PnBpmCQWdfNTcOI5P99znCskGiNz1nG5PZbAnC0OWdNDdwz4PSMDmCAIMaNjiwo4PyeelCoz5YNjzFo4P"/>
+        <Segment startFrame="1009" endFrame="1015" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="24.J4rlCMrYaNDmKu4PEu7lCEDjaNDOOq4P"/>
+        <Segment startFrame="1026" endFrame="1126" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="400.1dMfCE7.BNzA1J3P6X1fCo78CNzSnQ3PvBJgCgEkDNjWAQ3Ppe6fCYmDCNDrvI3PgidfCwOqANzECG3PtqffCMofBNDl8K3Ppv3fCc2ADNDKhQ3PLuHgCgrhDNDcdQ3P1U.gCA4hCNTZnK3PHTifCUNnANTvsD3PP+OfCcbGANT5pE3PkYcfCUtbBNzfrL3PKv8fCkAcDNj4nS3PxeTgCEJdENzofU3PPVNgCUVEDNzjML3Pr9dfCQuJANzrbB3PjOEfCkyZ.ND9GC3PVJUfC8T+ANzXaK3PLR8fCYAmDNTMpT3P3hWgCgXfENTvmT3PMfHgCgUiCNDf0I3PhQZfCIG.ANju8A3P5VFfCY7n.NTI3C3PndWfCIXGBNjDPK3P7.3fCQK+CNjVBQ3PYdEgC0wLDNjVJO3PFjzfC8uwBNzIXI3PVldfCMKeANzlLD3P79LfCYg4.NT.2D3PdnYfCMi6ANj4+H3PHbofCot7BNjDGM3P1E2fCcqWCNzSPL3POCqfCw3VBNjuRH3PIZefCA"/>
+        <Segment startFrame="1221" endFrame="1254" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="132.c3tVCUddeMjb5K1PMgZYCgBLmMTPJg1PjISZCQBHpMzkwt1PiShaC8TGwMzoxS2PTnYdCIet8MjmEB3PUlafCMSnBNjNOM3PWb9fCUEbDNDdvR3PzZHgC4IHDNDswH3Pr8TeCcbH7MTwB52P4UqfCU01CNT8cN3P9ZwfC0pUBNTkIF3P"/>
+        <Segment startFrame="1258" endFrame="1399" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="564.xZZYCQN3jMjyCX1PwqPZCYusqMTZR11PwtoaCEtdtMDge11PSOGaCch8pMT8Tj1PaquYCg5LkMD8iO1PApzXCYPeiMz1sQ1PoucYCcIbmMDqXj1P2omZCc5qqMTJ0w1PJ+LaCQ8mrMjPtu1PP8nZC8g8nMjvgc1PsblYCgW2kMDa8V1P7dbYCg6vkMja.W1PpReYCkgklMj1de1P3OYZCcnVqMjQlw1PVEQaCQVmsMjKg21PI4aaCgyxsMz9N31P9NfaC47TsMTeNu1PSMKZCgOFjMTDjT1PiZ7bCIAzBNT3fg3PuwwhCILDKNz0ql3Pcp7gCwcNFNzACU3PlHGgCshaCNDh9H3Pv0NfCQwv+MziD72PNg+eCETz.NDOYG3P9HsfCMMrCNzQ7Q3PsNSgC4wsENjX9V3PWOTgCYEiDNj5UN3PqjmfCgnbANTWGC3PvoJfCMy.ANjkVF3Pc7gfCA6bBNTysJ3PiNsfCUx2BNjDPK3PkOpfCQcdBNzboI3PcSnfCMK0BNjHWM3PzC8fC8X7CNTmON3P4mnfCsSGANT1j82PzEgeCgAA+MTBuM3PdcohC00fRND79Z4PwJUlC4vtaNz8824P8exmCoNReNDlk44P1PKmCw7BaNz64l4P6rGlCYnpWNjprc4P674kCIxCXNjDHi4PPxXlCIRTZNTPPt4PjOLmCIPBdNjB064Pdb2mCcxfeNjt+84PO7vmCEMDdNDs4w4Pm9rlCU5HYNDABl4P"/>
+        <Segment startFrame="1405" endFrame="1437" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="128.PzLbC4cDsMjL1q1PjvgZCY98oMTLbm1PorXZCUOEoMDTih1P6wCZCAG4mMDdRd1PPHyYCI2vlMzzUZ1PHzyYCEXdoMjP5z1PhinbCwHw2MTrSz2Pw7MfCcciBNTZ5N3PBbDgCMEWDNTlAP3P4A1fCMwlBNzS6G3P9QbfCI6EBND"/>
+        <Segment startFrame="1437" endFrame="1446" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="36..RsfCg52CNztXS3PoeRgCM+fDNj5VK3PJzAfCkrf7MzDZs2P"/>
+        <Segment startFrame="1455" endFrame="1484" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="116.5KnYCQ.KlMTRGa1PGZ6YC4iAoMTK1n1PJspZCAKepMjjlk1PQ3zYCgR3jMzWoJ1PyNNXCodzeMjm090PQwQXC0xGjMDEFi1PMeNaCM3DuMj9E91PKInaCUKQqMTr.m1PnxrZCIC1rMD9ez1PO9ZaCAF3sMD"/>
+        <Segment startFrame="1515" endFrame="1534" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="76.Q9uMCkpV1LTLLVyP.43LCocUwLjVI8xPu5cKC4BKsLzGzzxPTNbKCwAUtLTNc5xPF6nKCorWtLjxT3xPfxWKCkvmrLDNAuxPBAvJCA"/>
+        <Segment startFrame="1534" endFrame="1576" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="168.PqoJCk+UpLjTLoxPXRqJCwcsqLDQL0xPcPxKCU4WwLj02KyPKh8LCgO4yLDWNNyPcSyLCc8GyLDInMyPTULMC4dc3LDhG8yPoPXRCwXHQMjSOb0Pk7+VCAibeMTvhG1PlEtXCIZYhMD7TB1Pb2dWC0WKaMD2ri0Pra2UCouiWMDP1k0PTILWCQV0fMzRIU1PVZTZCsGlqMDqhz1Pj+VaCwaprMzjzq1P"/>
+        <Segment startFrame="1576" endFrame="1587" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="44.DeOZCkgtlMz4LR1PIiyXCce.iMz8oN1PdZKYCAxClMzMFd1PJzSZCIVipMD"/>
+        <Segment startFrame="1587" endFrame="1589" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="8.RR2ZCEKuqMD"/>
+        <Segment startFrame="1589" endFrame="1597" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="32.lT7ZCg.oqMTufr1PeagZCMx0nMDtNa1PMBUYCIdOsMD"/>
+        <Segment startFrame="1608" endFrame="1642" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="136.UvRcCQFJ1MDDwa2Pdf4cCcKB3MzJag2Pq49cCwpp1MDbOT2PUesbC0EkvMDi+91PNzTbC0zrzMzuGl2PenneCI7jANDbsN3P6ANgCk5bENTnMU3PWrKgCYi1CNj.5J3PfyafCYpKANTPFD3P8ZRfC00bANzluG3P1LpfC0PXCNDQQO3Pxl5fCA"/>
+        <Segment startFrame="1642" endFrame="1647" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="20..WUgC0B2CNDXrH3PtATfCMxGBND"/>
+        <Segment startFrame="1661" endFrame="1676" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="60.6KXQCoN5EMj8AVzPC5IQCUZHDMzU+QzPyySQCcHSEMTCpQzPFAsPCkNoAMzr1DzPXUdPCsd8CMjwKYzP"/>
+        <Segment startFrame="1676" endFrame="1685" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="36.LpbQCsy3HMz+5vzP.b5SCAs8RMjeBT0P7tiUCosEVMzVcR0P"/>
+        <Segment startFrame="1685" endFrame="1796" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="444.PamTC0ZTQMDO8+zP1IvSCoMuNMDlf6zP7QwSCwtQOMD.m9zPB5.TCwWyOMjKc5zPP5RSCcFAOMzdQ8zP8ihRCwx+CMDmx0yPOU7MCAnryLTjpDyPEAELCIQivLzpZDyPozVLC8LewLDQZFyPy9ZLCMQjwLDYXDyPgxDLCoXKuLDss2xPrELKCEBJrLD+EwxPU.MKC0tesLDvj4xPTUzKCARAvLTD7.yPwD.LCAJpuLzOw8xP8ywKCkSmtLjdN3xPAtWKCIEvrLTWEuxPVCzJCwgEqLDL+qxPjSvJCcRKqLzq5txPDKQKCwuEuLDnxEyPRd8LCQ9x0LjbEayPl.oMCUxM0Lz6pKyPcZ4KCIS0qLDjTcxPi4MICYuCkLTwEYxP.pzIC8kWnLjiRmxPm87JC4rGtLTWL.yPUgbLC0nPyLjoFMyPGneLCE10uLDrn0xP4p3JC4zQpLTcvlxPkjbJCwZyoLj7RkxPpyKJCQ5unLTjElxP+DwJC4kxrLDgh3xPe+tKCckPuLzAU7xPg3nKCUgysLDHIzxPWrHKCQmnrLDnW2xPTi0KCUDdvLjTPEyPLLZLCs4twLDrZGyP"/>
+        <Segment startFrame="1879" endFrame="1901" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="88.nXHXCQKNiMjeiU1Pn49YCYAFpMD8ku1PCUNaCE2trMTRYs1P5TQZCAGGlMzGPO1PLkIYCc7bnMzK731PoXKcCoWR5MTky72PaCVfCYWuBND5xM3Phb6fCA"/>
+        <Segment startFrame="1901" endFrame="1944" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="172.X15fCkKfCND4GM3PJXvfCYF8BNjXEM3PE.+fCIKqDNTsHS3PSuEgCQ6pCNjMZJ3PmSZfCweAANjYgF3PL09fCskXHNDStq3PI33hCkXAKNDPQm3PKr+gCYZwENjDPK3Pco4eC01d4Mj2fQ2PrUDbC4zWsMTwzu1P3N8ZCI4drMj.Jz1PZccaCMyNuMD6YA2PA3MbCg9VvMTpo01P0SQZC0hBhMDvSm0PZc1UCA"/>
+        <Segment startFrame="1954" endFrame="1956" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="8.k37QCkzfJMD"/>
+        <Segment startFrame="1956" endFrame="1979" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="92.S4SSCwR0OMz..H0Pbq6TCo1ZTMTHuP0PeY1TCUbeRMzI0F0PuzKTCAvoOMTRH6zPvMnSCM80NMzBH9zPp4CTCErGPMzjZ3zPvJTRCco+CMDMLxyPPvDMCcThwLD"/>
+        <Segment startFrame="1989" endFrame="2041" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="208.wJ5OCIFLDMD0rhzPlkZSCwClQMjsER0PaMkUCktaVMjopS0PGziTCMfQPMDQz7zPlXqSCksvNMjNg6zPzSsSCERnNMDQs4zP9rkSC47WNMTg73zPZXlSCQdqOMD3MH0PvlUUCkzYYMTM940Pll9XCUOEoMTsW81PtFmbC81zxMzDsE2PpUsaCwU7qMjd0k1PnN4YCQoBlMThST1PJSDYCI0kiMzscN1PKwMYCU75lMzU1j1P56zZCwIkrMjuQz1Po7DaC8WdoMTrSW1PdXCZCA"/>
+        <Segment startFrame="2052" endFrame="2111" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="236.zPcXCA5dkMT8Tj1Prp8ZCYklsMTmm51Pi3raCcRqsMzF7r1PRM+YCYbGkMTTSM1PJY1XCQ5dkMj7Sl1P0ziaCY0nyMjK7i2PMsceCcM2.NDf2H3PtcwfCo1nCNjgeO3PPr9fC0evCNzibM3PR.sfC8JSBNDGhG3PDRbfCcHBBNzZMJ3PCGzfCc92CNTjlP3PIuEgCc93DNz8.V3PJQggCQQFFNDFST3PRurfCwgc7MT8Tj1P.b5SCwp2GMTVMOzPyg.PCECU8LT+NnyPWMnMCAtfyLzAiEyPyy8KCQTutLj9V2xPPNSKCIP2rLD"/>
+        <Segment startFrame="2111" endFrame="2159" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="192.+CKKC0IRrLD9fuxPnn9JC8V4rLD2m7xPTamLCgQU1LDDqlyPmVEOC4qQ+LThnIzPHVRQCAvlFMTbWazP.MlQCsWuEMTsrTzP9aJQCYe5CMzXVKzPyAcPCcd8.MjmpAzPltKPC4iCBMDDgPzPZghQC4xyGMjuNfzPFe0QCcjPFMTtQUzP8BIQCsnHDMjNBOzP.i0PCwl3BMjeYJzPjZpPCA9YBMDmKEzPwTrOCwXt5LTgyTyPLf1KCop3rLjOq5xP"/>
+        <Segment startFrame="2168" endFrame="2171" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="12.1DlLCk3KyLj8bLyP"/>
+        <Segment startFrame="2171" endFrame="2173" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="8.malLCgsZvLD"/>
+        <Segment startFrame="2173" endFrame="2298" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="500.nHwKCMZmtLDhx5xPLbsKCc6ztLjHk5xPismKC4ZItLDgq2xPkDYKCYUxrLTF0uxPOsxJC4WBqLTmMtxPHCFKCsthsLztM5xPEmzKCE10uLzB.ByPDpTLCAZ2wLjJ1GyPXOZLCIlAwLDTNAyPaP1KCI2atLDPW0xPJUBKCQyXqLDTIuxPP9IKCcyfsLzMa5xPt07KC8h6vLTJPGyPDolLCgN1xLzK.LyPN0rLCI1LxLTSwDyPnO.LCcC1tLjje1xP08HKCUwBrLzkBwxPdNOKCYfosLDfE4xPDWqKCkgIuLTam9xPzE+KCA28uLzud+xPqH6KCIMFuLjq92xP2dIKCkbYqLz9NrxPCE0JC05rqLjW2uxP12DKCUE0rLzic1xP4zoKCUFfuLDJAAyPY6LLC4rRwLDu9FyPgufLCMKDxLjWlFyPjuELCgnLtLTSCsxPxoOJCcBlnLTjEkxPH+fJCUA1pLjEcuxPMSWKCYVWuLTttCyPRgeLCoaWxLj5MIyPBTeLCkBWwLD61AyPcT0KCMM8sLTCjvxPHepJCAKApLjEImxPFEYJC0GWoLTXhlxPYDuJCUeTsLzUK8xP7UCLCMelvLjXnByP9+BLCsE6tLzyuxxP7wmJCov9nLjClgxPjICJCc56mLTWScxPZ+rICQD5lLD"/>
+        <Segment startFrame="2462" endFrame="2493" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="124.6r5WCk7tgMzNTQ1PHQhYCoppmMjGzh1Pn4TZCE.VoMT8Tj1PEYOZCY6toMD0pu1Pp.1aCg96yMTkJj2PB9deCwy2.NTO7H3PQkufCQXPCNzatM3PYk4fCkwwCNzAyO3PGA.gC0FyCNTMiM3Pp5pfCQ8lANDkdA3PxEleCA"/>
+        <Segment startFrame="2493" endFrame="2497" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="16.qtYeCMxf.NTzpI3P.3cfCA"/>
+        <Segment startFrame="2499" endFrame="2520" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="84.UACgCAk+ENjktZ3PNpsgCI5xFNjFBZ3PofegC8uJENz6yP3PCEyfCMTUBNTBoF3PnrSfCgaPANDh3F3PHuofCg4lCNDbMR3PFYVgCMa+ENTrEZ3P"/>
+        <Segment startFrame="2520" endFrame="2534" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="56.K6qgCwThFNjoeW3PuSOgCYIYCNzhnE3PrrleCAMu4MDalA3PiX4fC0gUCNDQqL3PxOwfCgzDCND"/>
+        <Segment startFrame="2536" endFrame="2543" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="28.brXYC4hRmMj29g1PyaUZCgSaoMzPNk1PgVSZCA"/>
+        <Segment startFrame="2543" endFrame="2623" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="320.d+RZCQ2NoMD0Vk1PjwYZCkDwoMjZQl1PqRPZCQHNnMjrDa1P1nEYC4L8iMjfZe1PUbyZCscArMTtHv1P07raC0d+5Mzrg.3POYgfCwbqCNjV1R3PWkUgCwoYENDBVS3PRa9fCIAzBNjC9E3PUbBfC8ZD9Mj0n02PJdoeCcyk.NzEII3PbQ.gCYedENzE1X3PP0kgCscIFNDPxV3PWTPgCUnNDNziQM3PwTmfCognANTT6C3POFKfCYc5.NTZDF3PvAhfCIOxBNjajL3PM7yfCIoDCNT40J3PBcifCczzANzrdF3PodYfCkzvANjAwH3PDprfC8XTCNTYzO3PJ1KgCYv1ENTeZb3PbBChCE.qINzPNv3PcfoiC82tPNDR.I4PGTsjCglKSNz7iN4PZjHkCM4fUNz2sZ4Py.9kC4nnYND"/>
+        <Segment startFrame="2623" endFrame="2674" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="204.gNglCo0UaNjoyv4PfDJmC8j1bNzITy4Pr8HmC8iIbNTjKt4PUWrlC4nRZNDOkn4P1PilCk+PZNTXCm4P3dHlC49nVNjfER4PAVbjCAe+NNz8Gu3PS3MhCAcPFNDLoO3PxBffCIKl.NT4u52PTIIeCwkn5MjWhj2PfDEdCsd92MT+jf2PRCPdCgs05MD8u02P7lEfCgu6ANDxJM3P9MDgC47uDNDTOS3PRuHgCs9EDNDTbM3PCqifC04SBNDWcK3PvksfCIAzBNjKEK3P"/>
+        <Segment startFrame="2680" endFrame="2695" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="60.nbLRCMnhVMT8Tj1P0SQZCwdtxMj+qQ2PzU3bC8MCwMzNz11PTlcZC46skMjwvF1PyJeWC46FbMzdQy0P"/>
+        <Segment startFrame="2695" endFrame="2713" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="72.u76WCUdUiMzGLW1PAm7YCoZ4oMzkat1PmPHaCM0jrMTTMv1PFLyZCwC8oMjoFh1PXtvYCwSyjMjMJ.1PQCBWCkRSjMDl1h0P"/>
+        <Segment startFrame="2716" endFrame="2725" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="36.So4RC8LRRMDzBB1PeAQZCQiLtMDFeD2PfiUbCgZhuMzFMy1P"/>
+        <Segment startFrame="2725" endFrame="2728" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="12.rKoZCghmnMD4Ob1P"/>
+        <Segment startFrame="2728" endFrame="2791" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="252.QaYYC0WkjMzdKP1Pfr9XCAKIjMz30S1P8alYC0QcnMTYbq1PSXOaCAQttMDjc91P9u4aCcQutMDCaz1PEhtZCsnTnMjKZX1PAsEYC4MJiMTMKK1PDYzXCgnljMzMBZ1PyGKZC4xspMDopv1P9FYaCMybtMzT351PNVmaCoWssMTW3w1PIzuZC4HuoMzaIi1Pc8DZCUgGnMzThf1P7rDZCcdenMT6lh1PmqMZC8EIoMjgDl1P0xcZCUUJpMD82o1PxzpZC4qwpMThtp1PfYmZCwZLpMzu.m1P0SQZCcwRnMDvtc1Pa6mYCEkzkMzqeU1P7DUYCgaClMTwOg1P"/>
+        <Segment startFrame="2791" endFrame="2806" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="60.dAGaCUpjwMzGib2PpS+dC01N.Nzh.H3Pt30fCUvbDNTEsS3PrqNgCsUkDNT9fP3Ph15fCUeJCNTZmJ3P"/>
+        <Segment startFrame="2806" endFrame="2808" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="8.pwifCAJGBND"/>
+        <Segment startFrame="2808" endFrame="2850" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="168.3EkfCIAzBNzVaM3P.E6fCAJrCNjlYL3PNwafCILa+MTHJq2Pu7UcCwEguMDSbj1PIMzWCAvoOMzTAwyPWkFLCU7NtLDxoyxPJoxKCU4rwLTb6OyPjdZMCcMC2Lj8KgyP6aRNCctn4LjC1kyPbXDNCET.1LDiGMyPHMKLCwTHuLTbY4xP7gdKCg4zsLTcz3xPS9tKCc+2uLDfuCyPAudLC4bvxLjA0LyP"/>
+        <Segment startFrame="2850" endFrame="2932" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="328.5MvLC48CxLztoByPPByKCA52sLDcbyxPBACKC8BxqLzkIvxP41JKCg5msLzRB5xPFMzKC0z4uLDWIAyPn7FLCcVVvLTFI.yPOy2KCAG3tLzbm4xPUEjKCYhRtLjAp3xPvudKCYiosLjD6zxPS9JKC0IErLj9stxPgx7JCs4WrLzVC0xPonhKCMVCuLDMQ+xPetFLCcMyvLz.ADyPOKOLC0bbvLTU98xP03iKCUv3rLzzOsxP8UeJC4GxnLDkecxPL9lICIcimLDROmxPOi5JCIPYsLT1i7xPmEJLCUqkwLTRuGyPbzaLCom0vLDZB7xPUHRKC0TEqLTzWkxPvt0ICInUkLzVITxPt0qICQ0knLTWnmxPdlxJCEYYrLDZ30xPJafKC8t3sLzLN0xPJrCKC4MtpLTIZgxPKzcICI8kiLzimMxPy9.ICA"/>
+        <Segment startFrame="3044" endFrame="3125" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="324.xWYYC8sElMzK6a1Ph6.ZCABgoMjekt1PjdiaCg9VwMD+XS2Px4JdComR7MzW882Pr0UfCoUkBNzvfM3PpH+fCQeADNDTTN3P6grfCIU0AND+0I3P9uQgCYEIFNznGW3PFnJgCwTZCNDn1J3P3jnfCIAzBNDMCM3Pke8fC4eKDNTEhQ3P+aHgCk+lDNzYZR3PxNGgCQUEDNzcxM3P9TtfCw8dBNjALI3PMwmfC480BNDq+L3PwE4fCgioCNTV0M3PNtwfCQMqBNz5hH3PvHZfC0MPANzIYC3PhwHfC0vc.NzoXB3PJINfCMJLANDSAF3Ph1bfCgBBBNjVVH3PmDafCQ22.NTFN32PRpPbCgKVoMj3KY1Pc1qXCE0NjMzjkp1PtzjZCocWpMzUJo1PX8fZC4wwoMTQ3k1P+iSZCUOEoMj.Nj1P"/>
+        <Segment startFrame="3125" endFrame="3132" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="28.9KNZC4JRnMTdXY1Pg3rXCYUxaMD8JQ0PdLeVCA"/>
+        <Segment startFrame="3141" endFrame="3152" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="44.CdggC0k8FNT8eb3PeQsgCEhQFNDbIV3PFNKgCMx+CNTVwM3P7eufCc1bBND"/>
+        <Segment startFrame="3152" endFrame="3173" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="84.UVdfC0HTANztoC3PAlLfCsC4.ND7nD3PjAZfCsXPBNj4TK3P0y0fCEahCND3mM3PODyfCQAECNDaNL3PszxfCE3lCNz4DQ3PgFMgCscAENTHkR3P"/>
+        <Segment startFrame="3173" endFrame="3227" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="216.cl8fCsYICNDxJT3PdcohC40kJNzlVB4PYwDkC0uqWNDUHp4PU.CmCgvUbNj0Eu4P+uzlCYSnaNzPQy4P3BymCQdhhNjHEY5Pn6hpC8FosNjMTA6PcvgrC4WDyNjHyN6P407rCg5SyND0iJ6PBxXrCIWdvNT.665PXVVqCsxrqNTkMl5Pp0voCMIXiNjUw74Pnc0lCQO4ONTkyS3PNF5eCAz47MD1v12PzeLfCkKZCNTqpV3P5SwgCMcoGNjZdc3PRilgCst3DNjDPK3PoXFfCMdq7MDLVl2P"/>
+        <Segment startFrame="3227" endFrame="3238" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="44.wYRdCobi6MzcC+2P4SmfCAiLENTnvb3PWJ9gCUuYGNzuzU3PxomfC4AF.ND"/>
+        <Segment startFrame="3266" endFrame="3286" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="80.+HciCUKpJNDUxh3PZOygCkr4ENj8zR3PW25fC0AACNjDPK3PNxrfCoguBNjIdJ3PuUmfCwfQBNDEUH3PsKefCY4ABNjlHJ3P844fCofDEND"/>
+        <Segment startFrame="3286" endFrame="3296" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="40.byigCAAQFNTVhR3PUpqfCIkcANzOLR3PAdrgCUoGENj2OM3PYRtfCA"/>
+        <Segment startFrame="3304" endFrame="3339" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="140.7YlsCwmh2NDBLi6Py6XtC0Q54NTwmm6PDvZtCUJX4NTR+i6PXeEtCwPj2Nzfea6PuQosCY.s1NTIVd6PSjPtC0EI6NT7M46P+pTvCApKDOjobX7Pv5ywCUUUGODjKZ7PAjVwC0bXDOTjIM7PgTivCoDkAOzWPE7P0vVvC0P4AOzUhJ7P023vCMFNDOD"/>
+        <Segment startFrame="3339" endFrame="3345" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="24.PEJwC4m1DOD+RS7PoOJwCMdbDODFFQ7P"/>
+        <Segment startFrame="3345" endFrame="3410" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="260.2vAwC4JADODKDP7Pk8+vC4G6COT9fP7PlVSwCM5EGOjivi7PpHdxC8QAIOjU4O7P2M3tCcSmtNTeuA5P0RjkCcyPTNjvYT4PscClC0j.bND1G64P4dFnC0fJgNDYSD5PdwCnCEzUdNTqgv4Pt+YlCoDSWNz+CW4PmYckCAfLWNzs2j4Ps.0lCUdRcNDBv64PyOFnCozEgNjOGE5Pq7KnCoUIeNzzx04PGG3lCs9iYNzTDe4PPXokC8AQVNTtya4POIBlCsZnYNzJ5q4Pr.BmCga.cNTdH34PjAqmCYW7dNjuv54Pj9XmCcv8aNjFSm4PDP7kC8ANVNDUaX4PNMDlCwG+YND"/>
+        <Segment startFrame="3416" endFrame="3432" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="64.mp4RCQyqOMDrGb0PlG.XCE00kMT+6g1PWhXZCIZqoMjHTj1Piq+YC8pxlMTyvV1PP7QYCwORkMD5XX1P1s1YCA"/>
+        <Segment startFrame="3432" endFrame="3437" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="20.g3OZC0NupMz02w1PWlVaCQvLsMD"/>
+        <Segment startFrame="3437" endFrame="3445" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="32.fe1ZCwlOnMDnAQ1PplyWCsiMYMD.m9zPv8QRCkvFMMD"/>
+        <Segment startFrame="3450" endFrame="3463" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="52.fgGSC4wtOMzPuZ0Pm+RWCMj2hMj.Dc1PZvgZCs0PqMjt0r1PinkZCkJUoMDH2f1PJS3YCA"/>
+        <Segment startFrame="3463" endFrame="3471" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="32.Ur3YC0m+mMD+sg1Pt+IZC8W3nMD1fk1PA9fZCoRjpMD"/>
+        <Segment startFrame="3471" endFrame="3523" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="208.S5rZCwdrpMT3.o1P51XZC8f3nMz0Kh1PahGZCg00nMzJQk1P2ZaZCI+OoMDcTb1PA1LYC8AAlMT0Hz1PUrMcCMIv7MTRzK3PhuYgCI+yFNTjSZ3PLPZgCstQDNDV5J3PCUTfCsG0+MDv902PZf+dCEs66Mj8k02PlG4eCQf2.NjasG3PpdsfCQ.qCNT2YP3P.BEgCA5XDNDWKP3P1dzfCYLFBNDohC3PqyCfCwaFANT0LN3PaQmgCEezHNDh3k3P45.hCAeCENjh8H3PpkMfCA"/>
+        <Segment startFrame="3559" endFrame="3579" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="80.33JXCc4+jMzNdf1PpJmZCMoeqMzSos1PAcnZCgIEoMTVSf1PYqMZCo3oqMjQy+1PZSNcCQ7j4MDDD02PUoGfCsewBNj6MR3PXJXgCEdxEND"/>
+        <Segment startFrame="3579" endFrame="3592" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="52.MxZgCE5JENzuzL3P1S0eC8np5MTbgb2PsJscCcr8.NTQ5K3PQ3sfCMLdBNTZkH3P8iZfCA"/>
+        <Segment startFrame="3595" endFrame="3668" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="292.oVsWCYR7fMDpnT1PJREZC49LpMT.Ou1PR3GaCEPOrMDN6r1PPGUZCcIzkMjKMK1P2rMXCQq0eMzmi+0PVGYXC4CljMDBfg1PLaBaCkIauMz.NE2PnaabCAh2vMD9071P1fSaCEAJqMDOnh1PzrfYC48fiMD3VG1PwUbXCM9RiMjRhW1PNLDZCsDJpMzAYt1PJDEaCoRerMj5gv1PnczZCInNpMj4mj1P74KZCUOEoMj32n1PFC7ZCcN3rMDsdy1PlXLZCsmYZMD0Ta0P8dhVCo0fdMTvBK1PbcaYCwRfqMjoZ71PTXWbCEt6zMjWko2P0C.fCYwwANz1gI3PranfCIVfBNTE3I3PB5ifCMJ2ANz1BF3PBWUfC4fWANjRWF3PIDefCA"/>
+        <Segment startFrame="3668" endFrame="3669" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="4.OilfCA"/>
+        <Segment startFrame="3669" endFrame="3687" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="72.R.sfCsVGCNj1.M3PAXzfCIfOCNTYwL3PWrwfCsnBCNzAnL3P.h4fCM5aDNDXWT3PzuOgCA7fCNTOt.3PvfEeC8Ww6MD0bI3P"/>
+        <Segment startFrame="3688" endFrame="3689" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="4.Ny7fCA"/>
+        <Segment startFrame="3703" endFrame="3737" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="136.DL0lCMVybNzTG14PdRhmCABldNzNP64PZopmCIGLdNzzE04PtA+lC4nvZNTQMm4PDDVlCMxSYNjjNl4PkdglCg10ZNjX.t4P0+9lCkqLbNz26v4PPSAmCAhwaNTI0r4P2GjlCQtIYNjGCe4P3cdkC4xnSNzsw.4PgiSiCgNqJND.8e3PRZogCA"/>
+        <Segment startFrame="3741" endFrame="3782" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="164.MQ+XCQflkMTPnb1P3iDZCEFjoMDoLp1P8EvZCQk3pMDR.o1PlvRZC4iGnMjesc1PGsvYCwG+lMzS6b1PXZ9YCYiWoMjOnq1PIl.aCsrHrMjPlr1PLITZCgHlnMzwcu1PX9ibC40H6MDxUD3PYewfCY54CNjv9N3PNxxfCA5jBNz0+G3PfSYfCsDjANDAMG3PuQgfCY+OBNjTYI3PwQmfC4wkBND"/>
+        <Segment startFrame="3782" endFrame="3827" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="180.R.sfC0GKCNjUuN3PHdEgCc6RENjDja3PJRJhCQ4zINTCel3PCN0gCIAzBNT8Tj1PIOrVCYcSLMDDinzPm4ASCENpOMDDkU0PfSNWCgCrjMzRPj1P+80ZC0YHrMjQ.s1PXjOZCQMUkMDnlB1PawEWCYBXYMzVud0PVmwUC8ZWXMDuVz0PGE8XCUYEoMzVXw1PycVaCsy.sMToNt1PiCZZC4eqpMjfCz1P9dSaCEnirMjLZv1P"/>
+        <Segment startFrame="3852" endFrame="3873" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="84.EkWNCUH33Lj+DbyPUrIMCgBtxLz1IEyPIoBLC4tUuLj+25xPOKjKCASLtLTNc5xP5fwKCwXXuLzBD8xPoVtKCsgftLjzb3xPMtaKCMDbsLDu0zxP"/>
+        <Segment startFrame="3873" endFrame="4005" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="528.RKRKCkbbsLDVF4xPQb4KCoYBwLTbgHyPfUfLCMDouLjc0zxPm9AKCAtfqLjj1jxP4zoKCs1+CMD.m9zPpAZVC0.ifMTXSV1PkLQZCc.MqMjMAt1P5ihZCAiKnMT9iY1PcyPYCg3cjMTHIR1PHjRYCQVYlMDZAd1PwlGZCwtnpMTxNw1PaERaCQeurMDjTv1P4k7ZCQt3qMznQu1PyO3ZCsD.qMTotn1P0SQZCMG7mMTrob1P7HtYCEHFmMD+5d1P0iMZCM0GpMjfRs1POmDaCgvurMDf3x1PXPDaCQXbqMzIEp1P5UbZCAiboMzLvk1PduXZCk2eoMjPdj1PFDHZCk61mMDb8c1Pte5YC0mOnMzu8i1PcXXZC0VxoMzlXm1PMDeZC8BIpMDj2n1PjeaZC4ibnMzyub1PKpgYCYDakMzzAT1PwgKYCkdfjMTSAR1PCkJYCsAIkMjvsW1PYrrYC87VmMDEac1PSXsYCUiNlMzHna1PQ6iZC0wUvMDodf2PCozeCM6fBNDWlQ3PBoQgCYivDNjOlO3PR.sfCIdtANzVCC3Pc4AfCYRY+Mj6J72PCB1eCYvM.NjniD3P3KhfCYCLCNz7ZO3PS9DgCorpDNTkNR3P+53fC4srANDLj52P+TLdCYstwMT8Tj1P0SQZCAvoOMz+fPzPaYlOCwaS8Lz2L1yPbGmOCs4Y+LT1rAzP"/>
+        <Segment startFrame="4005" endFrame="4011" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="24.97YPCMV0BMjnrNzPwMAQCglGDMDGqOzP"/>
+        <Segment startFrame="4011" endFrame="4028" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="68.UW5PCsLdCMzzBOzP9RLQCYAoFMDTbmzP2TLSC8WnOMTXiE0PZsaTCEpeOMTTVozPaK.QCMFP7LTNc5xPPYcKCUh8rLD"/>
+        <Segment startFrame="4034" endFrame="4099" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="260.eq1LCwjRzLjAISyP6VIMCgAJzLDubNyP1NrLCQ77wLzs8CyPGJ9KCQhIuLz7C6xPNfnKCoiVtLzmF4xPmwjKCc.itLTLO7xPB95KCkSVvLTPcCyPydQLCsj4vLjrTAyPj13KC4WxtLj182xP+MUKCcGlrLD52txP6NvJCcUxpLzvEsxPhDAKCMr0rLTFk1xP9UoKCgDouLT2KByP5GQLCg7HwLzG+ByP0A+KCQuBuLjSn3xPxTUKC8kYrLDRKtxPu1uJCoyNqLT+5txPTBCKCMlqrLjFC0xPycaKCIWEtLTIL5xPQsuKCU6MuLz1.7xPmmjKCICEsLDDDtxP0BfJCUZVpLD"/>
+        <Segment startFrame="4145" endFrame="4169" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="96.VZwLCwE6xLTSAKyPH1jLCsaswLT+BDyPU9BLC4+euLDKz6xP4zoKC04QtLDdu2xPn5YKCMMWsLTFN0xPjFWKCMQmsLjzI1xP+nSKCwm0rLDZTwxPSs5JCMoNrLjP.wxP"/>
+        <Segment startFrame="4181" endFrame="4211" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="120.YlqPCg1+CMzcfPzPlSBQCUQqCMjFHFzP2KbOCQ5d4LDLdTyPKCVLCU6ntLjKSyxPNdCKCkqerLDZZ0xPEumKCYW1uLD3EDyPe6aLCoBtwLzC9CyPjq9KCM44tLDCV3xPD4SKCgWbrLzOutxPEwqJCgHwpLzJQCyP"/>
+        <Segment startFrame="4219" endFrame="4261" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="168.0ICZCgqUmMj2Oc1P6e+YCosloMDaax1PlrLbCMmr0MTj+r2P9V.fC8OFBNDvaN3PwWHgCU4bDNz+cL3PMeLfCU9T7Mzo9v2P0JLgCMVrFNTw7X3P23UgCE8aDNTcMN3PgtsfCYEbBNzP4G3PnNSfCkyb.Nzcq72PF7eeCcXm8MzEk42PU2FfC8qoBND2ST3PijpgCM8kFNTTPU3PSi0fCgyIBNTu3N3P"/>
+        <Segment startFrame="4291" endFrame="4313" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="88.SCBhCAsNGNzxeY3PjVVgCwcVDNzvIN3P5KufC41uBNzNgK3P6mxfCcaWCNTBpM3PuC0fCcgFCNjDPK3PdIofC8QYBNDZEI3P.difC4iOBNzXVI3Pf1kfCA"/>
+        <Segment startFrame="4313" endFrame="4346" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="132.I9gfCciXANzZPA3P+FEeCUgO2MTMHo2PKiSfCgu6ANz4HK3PU7SgCoVBGNTeJf3P1L0gCwslCNT0ZC3PPIWfCw6RENjear3PSjDjCoJWSNTEXP4Pky6jCcZ5RNzXDL4P1aLkCQI2WNTEcs4PWzpmCgsRgNDmWK5P4RunCEg+gNTziA5P"/>
+        <Segment startFrame="4346" endFrame="4401" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="220.DhkmC44pcNzmny4PJr+lCcubaNjt+r4PXuzlCk9gaNjSut4PvO.mCMB1bNThx34P6w4mCQYTfNzBx84PU03lCsFpWNzAAK4PvOwhCkNDHNDeya3Pc5NgCQs6BNj9KE3PtFGfCIHY.Nzg3B3P7XRfCEPvANjEwI3PCuvfCIGkCNjx5N3Pa+2fCYXHCNTbRK3PT+qfC489BNjJ+M3PQ6.gCI5fDNjK9S3P3QVgCMqUENTy1R3PKn3fC8uqAND1P52PnHWdCYH9wMjg4n2PPbefCQYpBNT6BK3P3ayfCA"/>
+        <Segment startFrame="4402" endFrame="4419" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="68.2RviCIVJKNz2Wh3Pb9pgCUzCENjkLN3Pt6pfCULEBNToVC3PRDoeCsHI6MD1ux2PBTWfCU9BBNTEqI3PuinfCIAzBND"/>
+        <Segment startFrame="4430" endFrame="4437" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="28.OP1nCkxThNTI5E5PspLnC0r9eNDQ174PCujmCA"/>
+        <Segment startFrame="4437" endFrame="4631" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="776.3lQmC8eHbNjaqq4Pr0elCgtZYNTZLk4PDKZlCwsCZNTYap4PggxlC0BdaNDxNt4Pll2lCs9RaNjGbr4PgMulCYYwZNzQYp4PtwmlCY+hZNThFq4PvqwlCkTaaNjgZt4P.D5lCEDjaNDF.t4PyV3lC8ulaNTtst4PYL6lCo.raNTSqt4PUA6lCMk1aNjXmv4Px7FmCE0jbNTFww4P+S+lCwaKaNzFmq4Pif5lCAjEdNDgUG5P6JqoCk8ZqNTY185PlUhrCA1SyNDoUN6PzaxrCAzGxNzrxB6PuP8qCM7KuNDxd65PIZvqCIwUuNzBh95Pu88qCw5CvNj+y.6PifDrCA4OvNTOZ.6PI08qCgUkuNDfI85P3PvqCMvvtNzR845PzBiqCET7sNjeP25PX9bqC4t3sNTM+25P.lgqCY9KtNzHI45P2tlqC0BjtNTIq55PF3qqC4FutNzMc55PAWlqCAYItNji425PNteqCUqLtNTLB55P8crqC8I7tNT0365PSxtqCk+ztNj9655PUxpqCI7ktNzc245PNakqCQaDtNzXt15P7iTqCA89rNTzJy5PGNLqC8q1rNjCPz5PkAWqCI36sNzQ445P1BvqC0nduNjlO+5PqL8qCI9ZuNzLZ55PkoWqCobNrNzQ3r5PzRopCYWapNDTkp5PS2ypCo5QrNjfo15PDdwqCknXvNTohE6P0NfrCwNExNDjTF6PQcIrCMa6tNDNsy5PVZtpCY0moNz+bn5PnwjpCkmypNDIrt5PByMqCIQgtNzwNA6PTyarCUs9xNzttN6PXF8rC0KayNTBOJ6P6aUrCUbEvNjLw55PeRUqCgkVrNDjrt5Pw5zpCM3YqNzehu5PkUHqCAATsNDXH35PXTqqCwDcuNj7sC6Ps0NrCYLfvNz4095PC5oqCIaEsNTU5s5PDWhpCMAhoNziQk5PbsapCgrkpNj2nt5P05PqCUmltNTEr.6PqzXrCglcxNzDuJ6P1rlrCUYcwNTDV.6P2zoqCcEtrNzlsq5PZVWpCsspnND"/>
+        <Segment startFrame="4631" endFrame="4652" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="84.2dGpCgx+nNzhHn5Pt22pCoV8rNTD035PDUxqC4lyuNzrr.6PlQDrCcvDvNzML95POSrqCYE8sNzDh05PQJSqCMgXsNDlL25P59jqCgnztNTBs75P"/>
+        <Segment startFrame="4652" endFrame="4674" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="88.pN0qCgLYuNzZv85PAw2qCIhguNjT885Pyd0qCAgFuNTIc65Pf1oqC4BhtNjsK65PEi0qCMx7uNjYc.6PU.5qC81MsNzyZn5PpnQpCgqApNTszu5PkCnqCA"/>
+        <Segment startFrame="4811" endFrame="4821" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="40.f8vfCMXSCNTEzL3POlufC8qnBNTiOI3PFWffCc72ANT3bG3PXaefCA"/>
+        <Segment startFrame="4821" endFrame="4860" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="156.jXhfCUTTBNThXJ3PP+tfC8PKCNji2M3PrBHgCIcTDNjc0N3P8itfCMozANDLwB3PtE7eCQ6j+MDAQB3PgTofC4WuFNzlGr3PG16iCcdqUNTVFs4PM8qmCgYtfNj11F5PY8dnCAoqgNDO.D5PzrDnCwsxeNDql74PoVhmCIA6bNT3Sm4P4yMkCUe2QNDAoD4Pr0AkCAbxXNDEZq4P"/>
+        <Segment startFrame="4862" endFrame="4878" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="64.oFNoCMhYoNj6Jv5PQcSqCEVctNTiI+5PAVLrC4o7vNT4xA6P10yqCU5KtNjBYx5PsltpCETDoNDfKf5Pou6oCA"/>
+        <Segment startFrame="4878" endFrame="4929" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="204.R0ApCcpVoNDpgs5Ph.aqCQliuNDycD6PvcdrCg7WxND6lI6Pk7drCYQKwNDtY+5PMvpqC4q6sNTJW05Ph.TqC0s7sNDIA+5PA8prC0JV1NTsvk6PLG.uCkvr+NDXfP7P.b5yCAvoOOTp+i8PvAM3CMbjkOTZ4e9PRkR5CgMkoOTJlk9PyyM5CM1SnOzu4e9PuBH5C8RWpOTMx19Pb3e7CAF51OTB7t+PRz9+CEzyAPjvZL.Q.b6.DU9kCPTyQK.Qa4X.DQQ6.PDbj++P"/>
+        <Segment startFrame="4939" endFrame="4979" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="160.jV3rCQK9wNj41.6Pse9qCw91uNTYt+5PRg+qCsp1uNjs585P2zoqC8cmsNjHmy5PkVFqCYPErNTERw5P7jXqC8eeuNj+9F6PnW2rCcjGzNTsvI6P2zoqC4OApNDN1W5P2vjnCcRFeNjAZw4Pa5llCsCjYNTfxm4PyzslC4aoaNTjXx4PZyTmCcGkcNDGW14PQ5VmCoxMcNDW+y4PpKNmCA"/>
+        <Segment startFrame="4979" endFrame="4991" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="48.XCPmC0LCcNDuww4PcZylCMG7XNTxlX4PFqFkCEBjUNTU5s4PI6BmC8+LcNDpy04P"/>
+        <Segment startFrame="4996" endFrame="5043" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="188.YXkqCAb5tNTAO85Pq.ArCkK4vNDj4F6PGcdrCgQHwNjGs.6P2zoqCMv7rNTJLs5P3pcpC8T2nNjNvg5P2kIpC8YYoNDQmq5PRaGqC03XtNTuKA6POSarC8obxNDaJJ6PCVfrCI45vNT1v95PZ5eqCs9JrNjAqq5PUvdpCskfoNz9Rm5PmhspCIt8qNT6h15Pon1qCgCFwNDAmJ6Ph25rCgy7yNTW7L6PhgWrCodItNTJbq5PxMooCgJljND"/>
+        <Segment startFrame="5051" endFrame="5062" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="44.qUm2C8nXiODp1V9PG834C4HJoOTrdn9PLXk5Csr3oOD7Tj9PD0D5CIcrmOD"/>
+        <Segment startFrame="5062" endFrame="5083" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="84.hC64C0aqnOjwjp9P45b6CQSswOzCjY+PU.29Cop6+OT3sG.QkD2.Dc1PDPjBoQ.QLrAAD83PCPzHSG.Q.70+CU6J5ODGHR+PI6o6CknzoOjpaS9P"/>
+        <Segment startFrame="5089" endFrame="5102" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="52.f4AtCQIi0NDq9M6PoBTrC4FvuND7r55PvIkqCsrTtNDue45PwRlqCE9VtNTrR45PSmjqCA"/>
+        <Segment startFrame="5102" endFrame="5200" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="392.5CjqCUURtNzMi45P8doqCov2tNDAY75PIQyqCEqKuNTyh75P.7zqCgiAvNDE8D6PWthrC4sMxNjDiF6PmzoqCwNFqNDa6P5P+TKmCMR7UNToAH4PyoUjCscSSND5VX4PRqFlCcScZNDTov4PvBTmCY3acNTVUy4PN+5lCgK+YNT9og4PuhukCEZDVNj+.V4P8BXkCQxGVNzmec4PFgNlC8fXZNj4Ku4PU+PmC49ucNDQb24P0qWmCkbubNz3yt4PV5klCc.6XNDtta4Pn+YjC01vHNz2HU3Pm4jfCwHsCNTObs3PaLPkCY25dNDjKN5PaSMnC488cNzPox4PlcAmCMYUbNj9Gy4PIBSmCwpacNzeH14POoXmCEvecNTLH04PEBMmC0rLbNTSDt4Pa0olCEHDZNTMBp4PduDmCQCSeNTcpN5PL6MpCs5MsNTiR.6PM1arColSxNTW8G6Pa0IrCQ0vtNT+Ay5PljypC8zcpNDfqo5P.LtpCUzvqNzLXz5PWJpqCQHgvND"/>
+        <Segment startFrame="5200" endFrame="5209" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="36.eOhrCIQCyNj0CJ6Ps6vqCk2RlNTDZ44PpUMlCoFcVNjLXb4P"/>
+        <Segment startFrame="5221" endFrame="5229" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="32.nl7YCgvXoMDvHp1PmT2ZCYudrMz4r01PRPXaC06GsMD"/>
+        <Segment startFrame="5229" endFrame="5259" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="120.1uIaCEABrMz1er1P.hbZCkuEnMTD3Z1PxgdYCgzskMD3iW1PHeiYCc+slMTrcb1PtByYCcW8lMD3Ya1PsR2YCUOEoMDfKs1PrDPaCsgosMzBm11Po1TaCIZarMjNkp1PX3zYCg3ShMzySi0P17CTCA5ZMMjcXF0P"/>
+        <Segment startFrame="5273" endFrame="5278" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="20.z7GcCgH6uMTp5x1PzMmZCASEoMD"/>
+        <Segment startFrame="5278" endFrame="5372" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="376.obJZC0E0nMj.8i1P0SQZCUFBoMDNGi1PIXCZCghmmMjQre1P6yhZCUlytMjdvR2PDqqdCUNZ+MDBCF3PTMsfCopxCNjYnP3Pys.gCUAgCNz2aJ3PQ9bfC8x3.NTj1.3Pz12eC4kW+MTsB.3PmOIfCoqQANjOHH3PR.sfCEl+CNzBiU3PGFpgCA7ZGNTbXd3PzhzgC4biFNTx3U3PyY+fCI0HBNTXlA3P8lieCA937MDisx2PM6QeCsQM9Mj0k.3P0GYfCgXgCNzYzV3Pt03gCsExHNjSHl3PhsahCwJLINzACf3PiWigCEIEDNjFsG3PncCfCQy48MDQkw2P9oBeCcAQ8MTBT82PjvMfCM9DBNjHiM3PRxLgCUx8ENTPqY3P02ggCgiIENTaQO3PsJmfCosEANTwP.3Pm.3eCIOZ.NTDXG3PbL4fCsQXENDtBb3PtY8gC8RkGNzmmW3PnFafCQ9V+MTHx72PQPlfCsLFDNj35Q3PetTgCA"/>
+        <Segment startFrame="5399" endFrame="5411" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="48.yrihCkCNKNzNQr3PjFYhCMCSDNzQmF3P5nPfCkyz.NjMD82PalYdCkKa4MDwHx2P"/>
+        <Segment startFrame="5414" endFrame="5450" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="144.qbZfCQZhBNTaYY3Po4EhCgpzHNjT7c3PbLSgCQX2CNDV.L3PuXlfCclBBNzE3G3PCkefCY55.NDpE.3P0GYfCsN6CNjIXW3PVOihC8O.VNTf354Pqx7mCAzIfNzyY.5Piw3mCYxYdNTMh04Puo.mCEM8ZNj0Ao4P0NllCo2JaNTPPt4PR.0lCgCTZNTOgj4P"/>
+        <Segment startFrame="5450" endFrame="5468" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="72.e.vlCQW+mNzOT05PXA0qC8SuvNzF5E6PP2ZrCwFLwNzzN+5PAVnqC8NDsNjQDv5P4R7pCkbBrNT7sy5Pf5gqCAVHuND9mA6P"/>
+        <Segment startFrame="5468" endFrame="5484" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="64.NLXrCYqExNDJNI6PRLjrCUKCxNjEhF6PTZNrCoCquNDgfx5P.jjnCsc2dNjkQz4PcNOmCk6WeNzgdK5PS7CpCA"/>
+        <Segment startFrame="5489" endFrame="5502" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="52.SwC0CQ0IbODTCa9PL.P7CAQ71Ojf6i+PILP9C0IF3Oj45a+PJ5i8CcDY1OjJ5c+PKbQ9CA"/>
+        <Segment startFrame="5502" endFrame="5518" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="64.9z89C47t+OTHXI.QFwNADs3yFPjZwd.QtT6ADQLNGPT0dY.QheWADwvoDPTVBP.QMi4.DUgcCPjaFN.Qax4.DA"/>
+        <Segment startFrame="5518" endFrame="5543" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="100.Qo4.D0LVCPDBCK.QX7V.DkPY9ODkhc+P0az4CgaiTOT16C7PydEtC8mmyNTLdB6Ph8oqCEeZsNjhQz5Pp3VqC0qYtNjT1.6PTInrCoLlzNDtKV6Pqz6rCcSmtNDHHc5Ph3QnCA"/>
+        <Segment startFrame="5543" endFrame="5564" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="84.hZbmCokbdNDHNB5PE80mCsXhaNDUVm4PoTWlC4IuYNjyGp4Pje6lC40sbNj+p04PJWRmCMb0aNTPem4P5jUlC8fYZNjI6s4PXL2lCAXxaNzShv4P"/>
+        <Segment startFrame="5580" endFrame="5615" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="140.3eVrCk2TvNzTl95PEa4qCEFnuNzRL95PwIzqCcSmtNjUj15PzWFqCwz7pNTCyn5PWRgpC4sYpND5sr5PwICqCEbPsNj0v45PMz4qCAebvNzWhD6P.WbrC8E7wND2aE6PqGIrCEMQuNDvf15PIs+pCYfgpNzqEm5P2KWpCwwkoNzX6n5PY+1pCoIvrND"/>
+        <Segment startFrame="5615" endFrame="5627" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="48.tegqC887uND+yG6P4yBsCU4g1NDq6h6Pnb5qC4VGsNjint5PvUypC4+frNjgxJ6P"/>
+        <Segment startFrame="5635" endFrame="5668" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="132.U7s3CwbNpOz7z+9PYLD8CYKa2OT5Xi+PjsR9CIdn3Ojq7d+P1Lm8C4fN0OjISV+PXZH9CgGA9Ozv5H.QJnSADY8hGPzHZj.Q+cfBD8uvIPj6Ch.Q38qADw6OEPD3lQ.QZy7.DgbHCPjwkJ.QDWl.DIaQBPzCJI.QqVm.DkQvBPD1UL.Q"/>
+        <Segment startFrame="5668" endFrame="5697" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="116.2Mw.DgqoBPz1pF.QHQ..D0gQ6Oz1cO+PCKw6C0W8qODjlm9P29H5CoCumODcDc9PuVv4CMl1lOj5Ea9PDJs4C0jDmOj8Yd9PYBC5C85snOD3ij9PzbW5C44toOzUqm9PTTg5CA2KpOTIzn9P.RY5CMkCnOD"/>
+        <Segment startFrame="5708" endFrame="5730" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="88.SLVEDYPRXPTE4qAQFJUGDs2OePz.8.BQDa+GD01rdPDmyyAQm9wFD8RYYPjEZgAQvB8EDUe1WPzRrgAQ2yUFDEhfZPDkjsAQ7s6FD4V4aPDuGuAQJk6FDA"/>
+        <Segment startFrame="5743" endFrame="5919" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="704.SPG2CUgOgOzUqW9PKoZ5CQEYrOTOv29P.ou6CEasuOjqx+9PVR66C035tOD0m19PZ7.6CkdSpOj+lh9PMu34CkO7lOj0Wa9Pgly4CgB1mOD2uh9P3uW5CQ0BpOzgxo9P1Io5CkJapODQWn9P8+Y5CAoEoOzAHh9Ptl94CU7QmODNgZ9PApf4CELwkOTbaW9Puzh4C4aklOTZza9P.dx4CEFQmOTmbc9P7x24CcVtmOTCEf9PUcE5CM3unOzeJj9PvSQ5CYn3nOz5Rh9PzjD5C8XGnOzWJf9P.RB5CkVYnOT7ki9PrOa5CYdlpOT59r9PwJ75Csk9qODDTu9PWI25CcXAqOD3hp9Pq2i5C0I7oOTiXm9P3Xj5CgwcqOTOW19PMYM7C4g4zODlNk+Po+X+Ckh2.PjDaK.QZ5HADs2wEPTqFY.Q3LjADwFsEPTfRR.QHG0.DIOMBPj.0E.QRYR.D0xLAPDavE.QzOb.D4kMBPjMIK.QPH1.Dki0CPz03P.QyzGADA0lDPTlCR.QTMDADQk3CPjr5M.QRiv.DoQlBPj8nH.Q7Bb.D4UWAPD4OD.QSFO.DM3CAPTHtE.Q+Je.D0vbBPT0uK.Qwu2.D02ADPDnqQ.QLJIADcaZDPDuJP.QC72.DIAzBPT1jH.QuXX.DUPBAPj5BC.QslK.Dct8.PjjAF.QxRj.D82HCPD5MP.Qx7NADUjiEPDq4V.Q4yUAD4PfDPTcvM.Q3Vl.DouaAPzqtB.QzQC.Do16+ODTq++Pj5C.DwXy.PzCAF.QGIk.Dk9TCPjGsQ.Qk5UADYFxEPTJ.W.Qd.VADMasDPj.oO.Qhvw.DgBXBPjS8F.QZyS.DQ54.PDGMC.QoXO.DcNXAPDaAH.Quxq.DwbhCPDdzP.Qi9JADgm4DPzj7R.Qs6CAD0IfCPTdHJ.QZgZ.D8cDAPD"/>
+        <Segment startFrame="5919" endFrame="5940" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="84.5+M.DgX4.PzwCD.Qv0S.DwAfAPjGFG.QZtf.DQSZBPjOkK.QV12.DYnDDPDwcR.Q0wQADsEgEPDQUW.QaYgADU4+EPTB7S.Qf1W.DQ4N8OjLQs+P"/>
+        <Segment startFrame="5989" endFrame="5997" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="32.HThhCQBgGNTR+V3PMVCgCAk7BNjqDI3PlVjfC46hBND"/>
+        <Segment startFrame="5997" endFrame="6033" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="144.13rfCUn1BNDnJK3PPIqfCc6nBNj4dJ3POOpfCEznBNDaTJ3PNkofCc+6BNDJdN3PjsCgCYimDNT.0R3PiCOgCQwAGNTYd13PN6RkCYuJYNTJjt4P8QfmCorceNTA8.5PKBHnCsfifNzN9A5PCaEnC46AfNjtR84PTQelC0CIXNjwMc4PmY3kC0HFXND7Th4P"/>
+        <Segment startFrame="6037" endFrame="6053" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="64.VZaoCEakoNzpwy5P0W+qCwGhwNTTUG6PEYRrCgBkuNDNi15P8RzpCQJsoNzP.j5PVBYpCAAHqNjxl05Puq1qCA"/>
+        <Segment startFrame="6053" endFrame="6071" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="72.j9NrCgMdwNTKDF6PxtTrCIRxvNTDy95P3fnqCMyxsNjCz05PR0aqCkLjtNTFW+5PMD+qC0GesND8Rj5PggXoCY0NjNjrKe5P"/>
+        <Segment startFrame="6071" endFrame="6090" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="76.2zoqCU1+COTyHm7P65IzCoOBfOjtPj9PMbh6CUQ0tOj2gz9PChj5CY1lmOTzSX9PHwg4CUjOmOzvRl9P3eK6CEAdvOjD0S+PG2c9CA"/>
+        <Segment startFrame="6090" endFrame="6103" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="52.yMl+Cc9BAPDukI.Qt3z.DAOrCPjUnN.QESy.D4Q8APzbB9+P6Ea9CAYKyOD93q9PjFA4CA"/>
+        <Segment startFrame="6108" endFrame="6127" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="76.H01rC8CrtNzEKt5PaAcpC83XoNTgtm5PwJ0pCguJsNjZY55Pjm.rCQIhvNDXD+5PmzZqCQt7pNDwAc5PxCemCYHZaNzCGq4PAA4lCA"/>
+        <Segment startFrame="6131" endFrame="6147" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="64.6XnnC4AEeNTOsy4Pkn+lCQDoaNTZvt4PAj8lCEDjaNTpnp4PjVLlC4fIWNzeZZ4PIsMlCQ1XZNzoJp4PH6ilCA"/>
+        <Segment startFrame="6167" endFrame="6214" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="188.nwCsC8TlxNDLwB6PD6rqCEIjrNDE3q5P+JipCYL6oNDnEm5PWqYpCsSZoNDUfk5PsYcpCcj0pNT6bv5PXpbqCgkMuNDMkA6PitPrC8ZLwNjR1C6P+vErCYpduNTKP55PE5cqCU6DsNzTvv5PIh6pCAAuqNToIw5PvYVqCs9ctNDt0+5PI7QrCoEywNjXtH6PuYjrCAJXxNz1LJ6PTiprC0t+wNjAj95Ppg9pCMX3kNzGlA5PTs5lCAmdaND"/>
+        <Segment startFrame="6218" endFrame="6287" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="276.hbs+C8UyBPzxmW.QuB7ADs+gHPjSef.QGavADgMfEPDQFP.QUnr.Dw.7APzafE.QRIP.Dwe8.PzftD.QKpX.Ds43APjKBI.QGfn.D0npBPTh1J.Qm8q.DkowBPD4EK.Q1rq.DoimBPTDBJ.Qt2l.DsfYBPDF0I.Q9eo.DIAzBPT+VL.QCo1.DoVrCPTp1O.QXeAADo2GDPzunP.Q2+BADkxKDPTYjP.QsSAAD86GDPDyxQ.Qh2OADQ.IFPDPXc.Qx+JBDw0kJPDy.y.QDT2CDciPSPDa4bAQ36jFD4kZbPDG2zAQMwQGD8XabPzSZsAQTsyFDIDuaPDW+uAQDr4FDwM+ZPDhGqAQHktFDEuvZPj+IsAQ"/>
+        <Segment startFrame="6290" endFrame="6324" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="136.5hZED4WtXPzLFtAQVihGDsqIePjZR1AQV2aFDgX0TPTxm.AQx5CCDod8HPz..Y.Qu0DADgqPCPzu1K.Qlsu.DU8+BPzk2K.QR.s.DoUlBPjGnI.Qr6i.DQ6FBPjJPH.QHAh.DUNSBPTneJ.QWDt.Dos3BPDijJ.Qi+i.DQgbBPzYMK.QGgq.DA"/>
+        <Segment startFrame="6325" endFrame="6428" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="412.Uq87CQ5yvODi739PvsH6CIaSqOz7uq9Pqyy5CEtXqOzuLr9PC5h5CoQ3nOTSob9PwhS4CcVfiODJ8J9P8Nu3C8NJjOD9gX9P6sD5CUFWpOjM1v9PQDV6CMhHtODhD49PVZc6C0i7rOjiZu9PwUn5Cg5MoODMle9PTRs4CAHDlOzEaV9P5hX4CIb6kODSZZ9PFh24C0aSnOTcoi9P+8R5CorMoOT4uj9PxYR5C8nGoOjLbj9PEOR5CAOEoOzGUi9P7UG5CkgEnOzzIe9PpE54CEdpmOzuUe9PkQA5CwKRnOT9Sg9PWhB5CsHymOz.9c9Pwd44CghMnOjsFj9PoJb5CwBRpOzpQp9Pl3p5Co4spOTw3p9PRmr5CM27pODxHs9P.j.6CwZYsOj+x89Pcgi7CY6r0Oj.Qm+P2il+CYVmAPjgbO.QbxZADA.vFPzblb.QhXuADA0SFPzFfT.Qb9+.DkqGCPT0EJ.QZjj.D0AdBPjDPK.QtZx.DchVCPzc.M.QKOq.DQsjAPjqsB.QvZ++CU18.PTfhG.Q3He.DA"/>
+        <Segment startFrame="6438" endFrame="6462" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="96..uDyCkvdFOjA3I7PEQbvCQcfBOTASM7Pk8+vCAabDODteR7Pa9FwCsr6CODFZM7PCvsvCAUlBOjCFK7Ppy0vCALUDOzSKX7PzNCxCEb0JODTa07P9q1yCIb7POjzSG8P"/>
+        <Segment startFrame="6462" endFrame="6471" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="36.C7hzCcx8QOjHdE8PBjDzCkRyNOjWxz7PGbixCQwmCOzzWJ7P"/>
+        <Segment startFrame="6478" endFrame="6552" source="1" retuneSpeed="0.3370000123977661"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="296.tKZrC8ScuNz0b55PHW7qCIAlwNTkKI6PhgjrCkfowNz7lA6PdzkqCgjarNDdMt5PKn2pCQjCrNzvhz5P7HnqCwb+uNzC0E6Pb3nrCsxRyNzi.N6P3szrCUUjxNzgkE6Phd8qCwXDtNDtgv5PyonpCQbeoNTyYj5P6DTpCIK.pNTNmr5PZ1KqCcX4tNzzKC6Pp3grC0g6xNjivL6PQXurCYCNxNT2oD6Pnl8qCwOTtNjZCx5P+4vpC0gTpNDlln5PRpppCICqqND7dy5PhmiqCghjuNz38B6P0rZrC4bPxNj9zI6PHRirCoShwNTHKB6PZv1qCkEatNTwK25P.AaqC4rAtNTzE55P2zoqCwpnsNDE6n5PjgUoCkFsjNDVDV5PwnpoCY7VmND"/>
+        <Segment startFrame="6583" endFrame="6653" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="280.nPpkCo.FXNjG1+4PhAonC0R9fNTzi74PFSamC80dbNzjos4PrOslCwlrZNjTkq4PCiwlCI0GaNTngq4PzIllCILwYNzA3j4PjkQlCINvYNT5ar4PJYGmCUeNcNDLE14PMOXmCgaQcNj.Oz4P2RSmCkJqcNDqu34PxGlmCQ+DcNjYCr4PeLklC0LjZNz9Lp4PUsHlCEDjaNzZiU5PUajpCsA6rNjDO55Pkg2qCgKxuNTaU95PTMxqC4lftNTjq15PwJLqCgIGrNDJOv5P69JqCghpsNDLn55POW1qCQ6wuNDuK+5Pny3qCANKuND9h55PGOdqCUoFsNToDt5PRUTmCoGoaNzM6q4PvEwlCEDjaNTp814PYdenCA"/>
+        <Segment startFrame="6656" endFrame="6687" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="124.l4a3CQ7lkOz8zL9PE9P5CMpFuOTcY+9P1DZ6C4ilpOTCEf9P3Pq4C0.jlOzlmc9PG1W5C0ZgrOzZz.+Ph7C8CkBa3ODc5w+PTZ9+CIYRAPTl6H.QrGr.Dwe9BPDI4K.Qdpt.DIAzBPzteJ.Q5ag.DgK9.PDDp8+PDTG+CA"/>
+        <Segment startFrame="6693" endFrame="6732" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="156.zPM5CsijoOzrfl9PIcc5CYMyoOz8vk9P+hN5CEejnODZ8g9PcAK5CEAEoODiNl9PZad5CMpEpOTPZn9PMJd5C4.UoOz9Xf9P1wu4CsyqnOjyaJ+P6jQ9CcTc9OjhbH.QIWFADUj.FPTROZ.QWdhADgEFEPT.wO.QX4s.DkEIBPDeFG.QEXa.D8z3APDp8H.QLCs.DMeYCPjflO.Q"/>
+        <Segment startFrame="6732" endFrame="6742" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="40.xGAADQGuCPj.1K.QVDh.DQQLAPjIv9+P+xR.DQtqAPDPaF.QWNQ.DA"/>
+        <Segment startFrame="6748" endFrame="6835" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="348.M4W2CclbgOjPRX9Pqam5CQtksOjrf69PCcn6CgXMsOjk9s9P63X5CAccmOjfJU9Pyar3C460fOjayA9PX.V3C4CkiODzKY9PbdR5CYmsqODVt09P3wg6CMi4sOzncz9Plf95CQonpOD7Tj9P3.44C05LlODoIT9PdjF4CwRUjOj+2R9P3.Z4CUbxlODdge9P40M5CAiXoODs8j9PIDL5CI2BnOTmsc9PU1u4CY4nlOzfkY9Pstj4CQ4TlOT57Y9PbQr4CQRPmODrae9PLBH5C8BCoOjBKl9Pv5e5CElWpOzZcp9PtEq5C8sgpODuvn9PY8b5CErhoOTDwk9PuoV5Cw1WoOj51k9PB7g5CwoqqOzkv39PUJV7CoXO0OjRNo+PV4l+CE.GAPzTTK.QspAADQE5DPD8WT.QmZMAD47SDPjVkN.QE.w.DoqsBPDZrJ.Qdmq.DghrBPT8pH.Q"/>
+        <Segment startFrame="6835" endFrame="6912" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="308.b7.7Co2GoOT4nM9PvSQ5CU1+COzMc55PdcohCIAzBNT8Tj1PDbzFCcr1YLDCVf3PaM7gCIgpHNjA0y3P.V2iCchsRNjsyP4P2BXkCwCvVNzJXf4Pp6UlCIKKZNTgmo4PDoilCIB9YNDKam4PGwelCUBTZNzCxp4POpxlCEgqaNzv0v4PuVJmC8Y4bNj5ny4PsULmCQPebNzYkv4PNp7lCktfaNDMPs4PDHylCgoLaNj9Hs4P5K1lCYGgaNjb1t4Pcy+lCExWbNjTFz4PwggmCYIXeNTnED5Px.9nCIFwkNj33d5PoIbpCAocqNj8bz5P7woqCk43uNDDMC6PBsQrCEj+vNTMaB6P0p.rCkS8uND4ND6P0RwrCEqI0NzwMW6PbeAsCcSmtNTN7Y5PqQ1mCsTYbND"/>
+        <Segment startFrame="6918" endFrame="7155" source="1" retuneSpeed="0.1500000059604645"
+                 pitchDriftScale="1.0" vibratoDepth="0.0" vibratoRate="7.5" f0Data="948.CtKrCYx8vNz+NE6PYLWrCA2PwNjG.C6PA25qC8PWtNzqly5Pur2pCkEapNDYPm5PnBapCwlDpNTM4p5PXB5pCYy3rNjT735PCA5qCcO6vNTGaF6PBhcrCUVowNT1QD6PC07qCcSetNjuly5PS82pCMVFpNzfHg5PiX+oCkdTnNT6vj5PpLipC0IkqNTj8y5PPnmqCUd1uNzqZC6P6vXrCQCnwNzojD6P4jErC0BVuNT9925PuBLqC0RpqNjzmp5PD.ipC8FMpNz.pp5Pdv3pCwRorNTSh25PArzqCUXavNzHvE6PZ4frCQ0JxNjybG6Pa5RrCACXvNT5g85PR+fqCYy4rNDLfu5PEltpCkompNzrqq5Pbq6pCE9orNjLm15P5TvqCsKIvNz4WD6PLadrCU2QxNzx2H6PvNarCQsxvNDYZ+5P8ZlqCYy3rNDaFs5PH4gpCMgsoNj9Sm5P.zlpCEUlqNTVby5PNbhqCAdguNjm+A6PYsWrCAeYxNT.hK6PZYurCMmkxNDnIF6P93DrCM4ytNDPdz5Psa3pC8VCpNTD7k5PaQYpCMbPpNjVXt5Pe5OqC4DXtNj1Z95P7IHrCoahwNDuQI6PTRnrCMkHxNTemD6PRQArCQUqtNz6zz5PFV9pCA5xpNjhNo5PBzkpC0L8pNTghu5PvQOqC4vItNj4685PtQJrCI9gwNTP6G6Pe6crCMAQwNDW5.6P2zoqCI2wrNzmSs5PrTmpCUKLpNTE2n5PAMppCQxcqNjBYx5PyHbqCQgztND2x+5PtBOrCMf8wNzf8J6PO9urCIPxxNT8bH6PY3OrCQuwuNjBQ45P91LqCoPZqNTwzo5PHZopCIciqNjwDy5PHYcqCczytNjzU95PrYCrCw74vNz9HG6PkXmrC0NnxNj4vH6PN5OrCgzfuNja805PLz6pCU3SpNDROm5PfpbpCEKLpNzn9r5PBRJqC08.tNz6c85PhbErCQ3SwNDmmH6P8uprCQpxxNzsQJ6PK6frC4KWwNzqaB6PEb8qCY2ttNzH905PV4IqCsURrNTpzw5PfEOqCIipsNDLJ55Pqt1qCEZQvNzUYD6PcuarCkiGxNzbiH6PDfarCIswvNDtG95Pv6fqCo0hrNTilr5P2slpCksdpNjHEq5PYczpC8BFrNzQSz5PqThqCcoCuNj1o95PA8.rCEuevNjQfD6PgXjrCgJqxNz6fG6P6mErCcjmtNzbFy5PdOzpCE3QpNjwKm5PpTVpCIXioNz+So5P"/>
+      </CorrectedSegments>
+      <TimeGrid>
+        <Handle id="5" kind="0" sourceSeconds="0.0" outputSeconds="0.0" confidence="0"/>
+        <Handle id="6" kind="1" sourceSeconds="72.0" outputSeconds="72.0" confidence="0"/>
+      </TimeGrid>
+      <SilentGaps>
+        <SilentGap startSample="0" endSampleExclusive="49544" minLevel_dB="-74.0550537109375"/>
+        <SilentGap startSample="147576" endSampleExclusive="152504" minLevel_dB="-49.62216186523438"/>
+        <SilentGap startSample="165792" endSampleExclusive="168520" minLevel_dB="-52.89833068847656"/>
+        <SilentGap startSample="255640" endSampleExclusive="297616" minLevel_dB="-76.65603637695312"/>
+        <SilentGap startSample="304304" endSampleExclusive="310992" minLevel_dB="-73.47700500488281"/>
+        <SilentGap startSample="388960" endSampleExclusive="395208" minLevel_dB="-53.74117279052734"/>
+        <SilentGap startSample="421520" endSampleExclusive="423896" minLevel_dB="-60.35968399047852"/>
+        <SilentGap startSample="424248" endSampleExclusive="426800" minLevel_dB="-50.19680786132812"/>
+        <SilentGap startSample="446688" endSampleExclusive="448976" minLevel_dB="-70.10823059082031"/>
+        <SilentGap startSample="449504" endSampleExclusive="452760" minLevel_dB="-49.04430389404297"/>
+        <SilentGap startSample="495264" endSampleExclusive="522720" minLevel_dB="-76.00222778320312"/>
+        <SilentGap startSample="529760" endSampleExclusive="538736" minLevel_dB="-69.09492492675781"/>
+        <SilentGap startSample="660704" endSampleExclusive="666336" minLevel_dB="-71.01425170898438"/>
+        <SilentGap startSample="730312" endSampleExclusive="732600" minLevel_dB="-47.24919891357422"/>
+        <SilentGap startSample="789360" endSampleExclusive="811888" minLevel_dB="-77.08344268798828"/>
+        <SilentGap startSample="819720" endSampleExclusive="823856" minLevel_dB="-66.96856689453125"/>
+        <SilentGap startSample="950752" endSampleExclusive="954976" minLevel_dB="-75.51142883300781"/>
+        <SilentGap startSample="1010592" endSampleExclusive="1069816" minLevel_dB="-77.03260803222656"/>
+        <SilentGap startSample="1077912" endSampleExclusive="1081960" minLevel_dB="-66.88539886474609"/>
+        <SilentGap startSample="1176472" endSampleExclusive="1179904" minLevel_dB="-57.31593704223633"/>
+        <SilentGap startSample="1291312" endSampleExclusive="1326336" minLevel_dB="-73.42194366455078"/>
+        <SilentGap startSample="1338744" endSampleExclusive="1342704" minLevel_dB="-67.14450073242188"/>
+        <SilentGap startSample="1434048" endSampleExclusive="1437480" minLevel_dB="-63.97505187988281"/>
+        <SilentGap startSample="1553816" endSampleExclusive="1557248" minLevel_dB="-55.41247940063477"/>
+        <SilentGap startSample="1567104" endSampleExclusive="1569656" minLevel_dB="-62.23079681396484"/>
+        <SilentGap startSample="1694088" endSampleExclusive="1698488" minLevel_dB="-66.50785827636719"/>
+        <SilentGap startSample="1775312" endSampleExclusive="1777952" minLevel_dB="-61.38410949707031"/>
+        <SilentGap startSample="1806728" endSampleExclusive="1809984" minLevel_dB="-62.72555541992188"/>
+        <SilentGap startSample="1887512" endSampleExclusive="1891296" minLevel_dB="-60.59627532958984"/>
+        <SilentGap startSample="2060344" endSampleExclusive="2108128" minLevel_dB="-77.37438201904297"/>
+        <SilentGap startSample="2112968" endSampleExclusive="2116400" minLevel_dB="-64.88108062744141"/>
+        <SilentGap startSample="2620376" endSampleExclusive="2625920" minLevel_dB="-63.35289764404297"/>
+        <SilentGap startSample="2769624" endSampleExclusive="2772880" minLevel_dB="-58.12947082519531"/>
+        <SilentGap startSample="2787400" endSampleExclusive="2789776" minLevel_dB="-53.09916687011719"/>
+        <SilentGap startSample="2971408" endSampleExclusive="2974840" minLevel_dB="-58.82715606689453"/>
+        <SilentGap startSample="3151544" endSampleExclusive="3175200" minLevel_dB="-75.70940399169922"/>
+      </SilentGaps>
+      <ReferenceFeatures analysisRevision="0" status="0" producer="0" inputFingerprint="0"
+                         sourceDurationSeconds="0.0" errorMessage=""/>
+    </Content>
+  </Contents>
+  <Tracks>
+    <Track trackId="0" name="" gain="1.0" mute="0" solo="0" colour="ff5dbc68">
+      <Placements>
+        <Placement placementId="1" contentDomain="1" contentObjectId="1" contentDiscriminator="0"
+                   timelineStartSeconds="0.0" timelineDurationSeconds="72.0" clipGain="1.0"
+                   fadeInDurationSeconds="0.0" fadeOutDurationSeconds="0.0" clipInSeconds="0.0"
+                   name="&#12298;&#36176;&#25105;&#12299;-&#33505;&#26592;-&#38750;&#21830;&#29992;&#28436;&#31034;.wav"/>
+      </Placements>
+    </Track>
+    <Track trackId="1" name="" gain="1.0" mute="0" solo="0" colour="ffba57b2"/>
+    <Track trackId="2" name="" gain="1.0" mute="0" solo="0" colour="ff2cbcd7"/>
+    <Track trackId="3" name="" gain="1.0" mute="0" solo="0" colour="ffcf3481"/>
+    <Track trackId="4" name="" gain="1.0" mute="0" solo="0" colour="ff2dbb83"/>
+    <Track trackId="5" name="" gain="1.0" mute="0" solo="0" colour="ffc847dd"/>
+    <Track trackId="6" name="" gain="1.0" mute="0" solo="0" colour="ff32d543"/>
+    <Track trackId="7" name="" gain="1.0" mute="0" solo="0" colour="ff84d03e"/>
+    <Track trackId="8" name="" gain="1.0" mute="0" solo="0" colour="ff35c1ab"/>
+    <Track trackId="9" name="" gain="1.0" mute="0" solo="0" colour="ffde65b8"/>
+    <Track trackId="10" name="" gain="1.0" mute="0" solo="0" colour="ff7cf4fc"/>
+    <Track trackId="11" name="" gain="1.0" mute="0" solo="0" colour="ffee73f9"/>
+  </Tracks>
+</OpenTuneProject>

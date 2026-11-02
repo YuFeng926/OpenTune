@@ -70,6 +70,9 @@ struct SharedPreferencesState {
     bool suppressEqRemoveConfirmation = false;  ///< 抑制 EQ 工具删除确认弹窗
     bool lightPitchCorrectionEnabled = true;  ///< 轻量修音开关（AutoTune cycle resampling，默认开）
     bool onboardingShown = false;
+    // 首次运行的演示工程已经自动打开过。和 onboardingShown 放在同一份偏好里，
+    // 避免只靠旁路标记文件时，中途退出导致下次启动再次自动打开。
+    bool demoTourConsumed = false;
     F0ModelType f0ModelType = F0ModelType::FCPE;
     PianoGridStyle gridStyle = PianoGridStyle::PianoLanes;
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
@@ -106,6 +109,7 @@ public:
 
     void setLanguage(Language language);
     void setOnboardingShown(bool shown);
+    void setDemoTourConsumed(bool consumed);
     void setTheme(ThemeId theme);
     void setAudioEditingScheme(AudioEditingScheme::Scheme scheme);
     void setNoteNameMode(NoteNameMode noteNameMode);
