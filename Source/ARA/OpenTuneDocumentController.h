@@ -32,8 +32,7 @@ class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class ResamplingManager;
 struct RenderJob;
-class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation,
-                                   private juce::Timer
+class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
 public:
     struct PlaybackRegionProjection
@@ -187,8 +186,8 @@ private:
     void performHostTransportBatch(const HostTransportBatch& batch);
     bool hostSeekAvailable();
 
-    // DC/ARA model ownership、F0 completion 和 DC destruction 均遵守消息线程契约。
-    // gate 只由消息线程访问；排队 completion 持有 shared_ptr，先检查 closed 再访问 DC。
+    // F0 completion 无锁提交：completion 由 F0ExtractionService 投递到消息线程
+    // 执行，捕获共享 sink；析构时在消息线程把指针置空，回调看到空指针直接退出。
     struct F0CompletionRecord
     {
         F0ExtractionService::Result result;
@@ -198,13 +197,11 @@ private:
         uint64_t birthRevision{0};
         OriginalF0InputStamp stamp;
     };
-    struct CompletionGate
+    struct CompletionSink
     {
-        std::mutex mutex;
-        bool closed{false};
-        std::deque<F0CompletionRecord> pending;
+        OpenTuneDocumentController* controller{nullptr};
     };
-    std::shared_ptr<CompletionGate> completionGate_{std::make_shared<CompletionGate>()};
+    std::shared_ptr<CompletionSink> completionSink_{std::make_shared<CompletionSink>()};
     std::deque<OriginalF0FailureEvent> pendingF0FailureEvents_;
     std::shared_ptr<ProcessRenderRuntime::CompletionGate> renderCompletionGate_{
         std::make_shared<ProcessRenderRuntime::CompletionGate>()};
@@ -276,7 +273,6 @@ private:
                                    uint64_t wrapperGeneration,
                                    juce::String persistentId,
                                    OriginalF0InputStamp stamp);
-    void timerCallback() override;
     void commitF0Completion(F0CompletionRecord record);
     static OriginalF0InputStamp makeF0InputStamp(const AudioSource& source, const AudioModification& modification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;

@@ -328,7 +328,6 @@ class AddTrackButton : public juce::Component, private juce::Timer
 public:
     AddTrackButton()
     {
-        startTimerHz(60);
     }
 
     ~AddTrackButton() override
@@ -398,12 +397,14 @@ public:
     {
         isMouseOver_ = true;
         repaint();
+        startAnimation();
     }
 
     void mouseExit(const juce::MouseEvent&) override
     {
         isMouseOver_ = false;
         repaint();
+        startAnimation();
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -417,8 +418,9 @@ public:
         r.radius = 5.0f;
         r.alpha = 1.0f;
         ripples_.push_back(r);
-        
+
         repaint();
+        startAnimation();
     }
 
     void mouseUp(const juce::MouseEvent& e) override
@@ -427,6 +429,7 @@ public:
         if (onClick && getLocalBounds().contains(e.x, e.y))
             onClick();
         repaint();
+        startAnimation();
     }
 
 private:
@@ -442,12 +445,18 @@ private:
     float glowAlpha_ = 0.0f;
     std::vector<Ripple> ripples_;
 
+    void startAnimation()
+    {
+        if (!isTimerRunning())
+            startTimerHz(60);
+    }
+
     void timerCallback() override
     {
         bool needsRepaint = false;
         
         // 更新发光效果
-        float targetGlow = isMouseOver_ ? 1.0f : 0.0f;
+        const float targetGlow = isMouseOver_ ? 1.0f : 0.0f;
         if (std::abs(glowAlpha_ - targetGlow) > 0.01f)
         {
             glowAlpha_ += (targetGlow - glowAlpha_) * 0.2f;
@@ -468,6 +477,16 @@ private:
         
         if (needsRepaint)
             repaint();
+
+        // 动画收敛后停表，避免空闲时 60Hz 空转
+        if (std::abs(glowAlpha_ - targetGlow) <= 0.01f && ripples_.empty())
+        {
+            const bool changed = std::abs(glowAlpha_ - targetGlow) > 0.0f;
+            glowAlpha_ = targetGlow;
+            if (changed)
+                repaint();
+            stopTimer();
+        }
     }
 };
 

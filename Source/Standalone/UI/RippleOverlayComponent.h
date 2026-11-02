@@ -30,7 +30,6 @@ public:
     {
         setInterceptsMouseClicks(false, false);
         juce::Desktop::getInstance().addGlobalMouseListener(this);
-        startTimerHz(30);
     }
 
     ~RippleOverlayComponent() override
@@ -42,6 +41,18 @@ public:
     void setTrailTheme(MouseTrailConfig::TrailTheme theme)
     {
         trailTheme_ = theme;
+
+        if (!MouseTrailConfig::isEnabled(trailTheme_))
+        {
+            const bool hadContent = !trailPoints.empty() || !ripples.empty();
+            trailPoints.clear();
+            ripples.clear();
+            lastPos = {};
+            stopTimer();
+            if (hadContent)
+                repaint();
+        }
+        // 主题启用时不主动启动 timer，等鼠标活动再启动。
     }
 
     void paint(juce::Graphics& g) override
@@ -123,11 +134,12 @@ public:
                 ripples.clear();
                 repaint();
             }
+            stopTimer();
             return;
         }
 
         bool stateChanged = false;
-        
+
         auto style = MouseTrailConfig::getThemeStyle(trailTheme_);
 
         for (auto it = ripples.begin(); it != ripples.end(); )
@@ -160,37 +172,51 @@ public:
             stateChanged = true;
         }
 
-        auto mousePos = juce::Desktop::getInstance().getMousePosition();
-        auto localPos = getLocalPoint(nullptr, mousePos).toFloat();
-
         // 手指触摸不画轨迹；鼠标/触控板指针保留。
-        bool shouldDrawTrail = TouchInput::isPointerActive();
-        if (!shouldDrawTrail && !trailPoints.empty())
+        if (!TouchInput::isPointerActive() && !trailPoints.empty())
         {
             trailPoints.clear();
             stateChanged = true;
         }
-        if (auto* componentUnderMouse = juce::Desktop::getInstance().getMainMouseSource().getComponentUnderMouse())
-        {
-            if (shouldIgnoreComponent(componentUnderMouse))
-                shouldDrawTrail = false;
-        }
-
-        if (getLocalBounds().toFloat().contains(localPos) && shouldDrawTrail)
-        {
-            if (localPos.getDistanceFrom(lastPos) > 1.5f)
-            {
-                trailPoints.push_back({ localPos, 0 });
-                lastPos = localPos;
-                stateChanged = true;
-            }
-        }
 
         if (stateChanged)
             repaint();
+
+        if (ripples.empty() && trailPoints.empty())
+            stopTimer();
     }
 
-    void mouseMove(const juce::MouseEvent&) override {}
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        if (!MouseTrailConfig::isEnabled(trailTheme_))
+            return;
+
+        // 全局鼠标监听下用屏幕坐标转换，避免事件坐标误判。
+        auto screenPos = e.getScreenPosition();
+        auto localPos = getLocalPoint(nullptr, screenPos).toFloat();
+
+        // 手指触摸不画轨迹；鼠标/触控板指针保留。
+        if (!TouchInput::isPointerActive())
+            return;
+
+        if (auto* componentUnderMouse = juce::Desktop::getInstance().getMainMouseSource().getComponentUnderMouse())
+        {
+            if (shouldIgnoreComponent(componentUnderMouse))
+                return;
+        }
+
+        if (!getLocalBounds().toFloat().contains(localPos))
+            return;
+
+        if (localPos.getDistanceFrom(lastPos) > 1.5f)
+        {
+            trailPoints.push_back({ localPos, 0 });
+            lastPos = localPos;
+            if (!isTimerRunning())
+                startTimerHz(30);
+            repaint();
+        }
+    }
 
     void mouseDown(const juce::MouseEvent& e) override
     {
@@ -214,6 +240,8 @@ public:
             r.radius = 6.0f;
             r.life = 1.0f;
             ripples.push_back(r);
+            if (!isTimerRunning())
+                startTimerHz(30);
         }
     }
 

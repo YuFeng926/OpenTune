@@ -137,7 +137,7 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
 {
     ProcessRenderRuntime::getInstance().retainOwner();
     installDocumentRenderExecution();
-    startTimerHz(30);
+    completionSink_->controller = this;
     AppLogger::logNoThrow("ARA-DIAG: DocumentController created dc="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
 
@@ -155,12 +155,9 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
         AppLogger::error("ARA-DIAG: DocumentController destroyed off message thread; ownership contract violated");
         std::terminate();
     }
-    stopTimer();
-    {
-        std::lock_guard<std::mutex> lock(completionGate_->mutex);
-        completionGate_->closed = true;
-        completionGate_->pending.clear();
-    }
+    // sink 指针必须在 F0 service reset 之前置空：之后由 service 投递的
+    // completion 仍可能被消息线程执行，看到空 controller 直接退出。
+    completionSink_->controller = nullptr;
     renderCompletionGate_->closeAndWait();
 
     // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
@@ -2262,26 +2259,28 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             result.energy = std::move(energy);
             return result;
         },
-        [completionGate = completionGate_, key, wrapperGeneration, persistentId, birthRevision, stamp]
+        [sink = completionSink_, key, wrapperGeneration, persistentId, birthRevision, stamp]
         (F0ExtractionService::Result&& result)
         {
             jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-            std::lock_guard<std::mutex> lock(completionGate->mutex);
-            if (completionGate->closed)
+            if (sink->controller == nullptr)
                 return;
-            completionGate->pending.push_back({std::move(result), key, wrapperGeneration,
-                                               persistentId, birthRevision, stamp});
+            sink->controller->commitF0Completion(
+                F0CompletionRecord{std::move(result), key, wrapperGeneration,
+                                    persistentId, birthRevision, stamp});
         },
 
-        [completionGate = completionGate_, key, wrapperGeneration, persistentId, birthRevision, stamp]
+        [sink = completionSink_, key, wrapperGeneration, persistentId, birthRevision, stamp]
          (F0ExtractionService::Result&& result)
          {
-             // Dispatcher failure runs on the worker; only enqueue pure data here.
-             std::lock_guard<std::mutex> lock(completionGate->mutex);
-             if (completionGate->closed)
+             // Dispatcher failure 路径：service 的 DispatcherFailureMailbox 在消息线程调用本回调，
+             // 与成功路径一致，可直接提交 completion。
+             jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+             if (sink->controller == nullptr)
                  return;
-             completionGate->pending.push_back({std::move(result), key, wrapperGeneration,
-                                                persistentId, birthRevision, stamp});
+             sink->controller->commitF0Completion(
+                 F0CompletionRecord{std::move(result), key, wrapperGeneration,
+                                     persistentId, birthRevision, stamp});
          });
 
     // Non-Accepted: set Failed if current modification still matches this submission
@@ -2299,20 +2298,6 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     }
 
     return true;
-}
-
-void OpenTuneDocumentController::timerCallback()
-{
-    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    std::deque<F0CompletionRecord> records;
-    {
-        std::lock_guard<std::mutex> lock(completionGate_->mutex);
-        if (completionGate_->closed)
-            return;
-        records.swap(completionGate_->pending);
-    }
-    for (auto& record : records)
-        commitF0Completion(std::move(record));
 }
 
 void OpenTuneDocumentController::commitF0Completion(F0CompletionRecord record)
