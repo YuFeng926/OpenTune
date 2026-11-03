@@ -5158,17 +5158,33 @@ void PianoRollComponent::handleVerticalScrollWheel(float deltaY) {
 }
 
 void PianoRollComponent::handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY) {
-    if (!zoomPreviewActive_ || zoomAnchorTime_ < 0.0) {
-        beginZoomPreview(e, deltaY);
-    } else {
-        updateZoomPreview(deltaY);
-    }
+    const int anchorViewportX = e.x - getTimelineContentStartX();
+    userScrollHold_ = true;
+    beginZoomPreviewAt(anchorViewportX,
+                       1.0 + static_cast<double>(deltaY) * zoomSensitivity_.horizontalZoomFactor);
 }
 
 void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) {
     KeyShortcutConfig::BindingType wheelType;
     if (KeyShortcutConfig::getWheelBindingType(wheel, e.mods, wheelType)) {
         const KeyShortcutConfig::KeyBinding binding(wheelType, e.mods);
+
+        // Resolve the wheel binding to a ShortcutId BEFORE generic handlePointerShortcut
+        // so pointer-anchored horizontal zoom can use the matched shortcut for direction
+        // and magnitude (custom wheel bindings may map up/down/left/right arbitrarily).
+        const auto scope = AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_)
+            ? KeyShortcutConfig::kPianoRollOpenDyneScope
+            : KeyShortcutConfig::kPianoRollOpenTuneScope;
+        const auto id = KeyShortcutConfig::findShortcutForBinding(shortcutSettings_, binding, scope);
+
+        if (id == KeyShortcutConfig::ShortcutId::ZoomHorizontalIn
+            || id == KeyShortcutConfig::ShortcutId::ZoomHorizontalOut) {
+            const bool zoomIn = id == KeyShortcutConfig::ShortcutId::ZoomHorizontalIn;
+            const float magnitude = std::max(std::abs(wheel.deltaY), std::abs(wheel.deltaX));
+            handleHorizontalZoomWheel(e, (zoomIn ? 1.0f : -1.0f) * magnitude);
+            return;
+        }
+
         if (handlePointerShortcut(binding))
             return;
     }
@@ -5508,11 +5524,6 @@ void PianoRollComponent::fitToSelectedNotes()
     overlay_->repaint();
 }
 
-void PianoRollComponent::beginZoomPreview(const juce::MouseEvent& e, float deltaY) {
-    const double zoomFactor = 1.0 + static_cast<double>(deltaY) * zoomSensitivity_.horizontalZoomFactor;
-    beginZoomPreviewAt(e.x - getTimelineContentStartX(), zoomFactor);
-}
-
 void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFactor) {
     const double oldPps = camera_.pixelsPerSecond;
     const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
@@ -5526,21 +5537,6 @@ void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFact
     zoomDeadlineTicks_ = kZoomDeadlineTicks;
 
     userHasManuallyZoomed_ = true;
-    commitViewportRequest(makeViewportRequest(
-        TimelineViewportRequest::Kind::Zoom,
-        zoomAnchorTime_,
-        static_cast<double>(zoomAnchorViewportX_),
-        newPps));
-}
-
-void PianoRollComponent::updateZoomPreview(float deltaY) {
-    const auto& settings = zoomSensitivity_;
-    const double zoomFactor = 1.0 + static_cast<double>(deltaY) * settings.horizontalZoomFactor;
-    const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
-        camera_.pixelsPerSecond * zoomFactor,
-        TimelineViewportRequest::ViewKind::PianoRoll);
-
-    zoomDeadlineTicks_ = kZoomDeadlineTicks;
     commitViewportRequest(makeViewportRequest(
         TimelineViewportRequest::Kind::Zoom,
         zoomAnchorTime_,

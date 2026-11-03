@@ -1958,6 +1958,18 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME TimelineCompositeCacheTests COMMAND OpenTuneTimelineCompositeCacheTests)
 
+    # Timeline viewport policy keeps zoom anchors stable under PianoRoll zoom.
+    add_executable(OpenTuneTimelineViewportPolicyTests
+        Tests/TimelineViewportPolicyTests.cpp
+        Source/Standalone/UI/TimelineViewportPolicy.cpp
+    )
+    target_include_directories(OpenTuneTimelineViewportPolicyTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(OpenTuneTimelineViewportPolicyTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME TimelineViewportPolicyTests COMMAND OpenTuneTimelineViewportPolicyTests)
+
     add_executable(OpenTuneMelSpectrogramTests
         Tests/MelSpectrogramTests.cpp
     )

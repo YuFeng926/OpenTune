@@ -354,7 +354,7 @@ private:
 
     // ── 缩放事务 ──────────────────────────────────────────────
     bool zoomPreviewActive_ = false;
-    double zoomAnchorTime_ = -1.0;   // -1.0 sentinel: invalid until beginZoomPreview sets it
+    double zoomAnchorTime_ = -1.0;   // -1.0 sentinel: invalid until beginZoomPreviewAt sets it
     int zoomAnchorViewportX_ = 0;
     int zoomDeadlineTicks_ = 0;          // 心跳计数倒计时，0 表示事务结束
     static constexpr int kZoomDeadlineTicks = 10;  // ~400ms @ 25Hz 心跳
@@ -403,9 +403,7 @@ private:
     void handleVerticalScrollPixels(double pixelDelta);
 
     // ── 缩放事务 ──────────────────────────────────────────────
-    void beginZoomPreview(const juce::MouseEvent& e, float deltaY);
     void beginZoomPreviewAt(int anchorViewportX, double zoomFactor);
-    void updateZoomPreview(float deltaY);
     void endZoomPreview();
     void handleVerticalZoomAt(float zoomFactor, float contentY);
     void zoomHorizontalIn();
