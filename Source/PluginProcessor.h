@@ -426,6 +426,13 @@ private:
     // insert instances; didBindToARA tears down any instance created before binding.
     // nullptr in Standalone instances and plugin instances bound to ARA.
     std::unique_ptr<Capture::CaptureSession> captureSession_;
+
+    // External edit session state (message thread only). Lives on the processor
+    // so the check-and-apply flow survives editor destruction (host closing the
+    // plugin window) and continues on the processor's existing 30Hz timer.
+    juce::File externalEditSessionDir_;
+    ContentKey externalEditContentKey_;
+    bool externalEditCorruptCurveShown_ = false;
 #endif
 
 
@@ -610,6 +617,23 @@ public:
     Capture::CaptureSession* getCaptureSession() noexcept;
     const Capture::CaptureSession* getCaptureSession() const noexcept;
 
+    // ── External edit session ownership (message thread only) ──────────────────
+    // 会话状态唯一真相在 Processor：Editor 销毁（宿主关窗）不清会话，返回检查与
+    // 应用继续在 Processor 的 30Hz timerCallback 内进行；Processor 析构时清理。
+    // 启动会话 / 按钮可用性仍由 Editor 委托到 Processor。
+    bool externalEditSessionActive() const noexcept
+    {
+        return externalEditSessionDir_.getFullPathName().isNotEmpty();
+    }
+    // 启动（或重新拉起）外部编辑会话；成功时处理器接管会话状态。
+    bool externalEditLaunchRequested(ContentKey key, const EditableContentSnapshot& snapshot);
+
+private:
+#if !JucePlugin_Build_Standalone
+    /** 30Hz timer 内的返回检查与应用（消息线程唯一所有权）。 */
+    void pollReturnedExternalEdit();
+#endif
+public:
     /** RT-safe host metadata generation counter: bumped by the audio thread in
      *  updateHostTransportSnapshot when BPM/time signature change. The editor
      *  polls this (one acquire load per heartbeat tick) instead of the audio

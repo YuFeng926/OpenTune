@@ -1382,6 +1382,16 @@ void TransportBarComponent::setLayoutProfile(LayoutProfile profile)
     repaint();
 }
 
+void TransportBarComponent::setExternalEditAvailable(bool available)
+{
+    if (externalEditAvailable_ == available)
+        return;
+
+    externalEditAvailable_ = available;
+    resized();
+    repaint();
+}
+
 void TransportBarComponent::paint(juce::Graphics& g)
 {
     const auto& style = UIColors::currentThemeStyle();
@@ -1499,27 +1509,38 @@ void TransportBarComponent::mouseDown(const juce::MouseEvent& e)
 }
 
 TransportBarComponent::TierLayout
-TransportBarComponent::computeTierLayout(LayoutProfile profile, juce::Rectangle<int> bounds)
+TransportBarComponent::computeTierLayout(LayoutProfile profile, juce::Rectangle<int> bounds,
+                                         bool externalEditAvailable)
 {
     const TierMetrics& fullMetrics = (profile == LayoutProfile::VST3AraSingleClip)
                                          ? kFullVst3Metrics
                                          : kFullStandaloneMetrics;
 
-    auto full = buildTierLayout(profile, LayoutTier::Full, fullMetrics, bounds);
+    // ARA 绑定实例不显示外部编辑按钮：直接置零外部编辑宽度，
+    // 让槽位不分配（不留布局空档）。
+    TierMetrics fullMetricsAdjusted = fullMetrics;
+    TierMetrics compactMetricsAdjusted = kCompactMetrics;
+    if (!externalEditAvailable)
+    {
+        fullMetricsAdjusted.externalEditWidth = 0;
+        compactMetricsAdjusted.externalEditWidth = 0;
+    }
+
+    auto full = buildTierLayout(profile, LayoutTier::Full, fullMetricsAdjusted, bounds);
     if (full.requiredWidth <= bounds.getWidth())
         return full;
 
-    auto compact = buildTierLayout(profile, LayoutTier::Compact, kCompactMetrics, bounds);
+    auto compact = buildTierLayout(profile, LayoutTier::Compact, compactMetricsAdjusted, bounds);
     if (compact.requiredWidth <= bounds.getWidth())
         return compact;
 
-    return buildTierLayout(profile, LayoutTier::Overflow, kCompactMetrics, bounds);
+    return buildTierLayout(profile, LayoutTier::Overflow, compactMetricsAdjusted, bounds);
 }
 
 void TransportBarComponent::resized()
 {
     // 一次性决定档位并应用：可见性与边界来自同一份结果，阈值两侧无裁切、无抖动。
-    const auto layout = computeTierLayout(layoutProfile_, getLocalBounds());
+    const auto layout = computeTierLayout(layoutProfile_, getLocalBounds(), externalEditAvailable_);
 
     auto apply = [](juce::Component& component, juce::Rectangle<int> slot)
     {

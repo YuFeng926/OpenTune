@@ -695,6 +695,44 @@ bool CaptureSession::applyPitchShiftState(ContentKey segmentContentKey, const Pi
     return seg->content->applyPitchShiftState(state);
 }
 
+bool CaptureSession::applyExternalEdit(ContentKey segmentContentKey,
+                                       std::vector<Note> notes,
+                                       std::shared_ptr<PitchCurve> pitchCurve,
+                                       AutomationLane envelope,
+                                       PitchShiftSettings pitchShift)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
+    // Owner lookup must complete before any mutation: no partial state on miss.
+    if (seg == nullptr || !seg->content)
+        return false;
+
+    auto* content = seg->content.get();
+
+    if (pitchCurve != nullptr) {
+        // Usable Original F0 → applyOriginalF0 (curve + Ready, single revision bump),
+        // otherwise plain applyPitchCurve. Then apply the composed pitch-shift state
+        // (notes + settings + curve correction segments).
+        if (pitchCurve->hasUsableOriginalF0())
+            content->applyOriginalF0(std::move(pitchCurve));
+        else
+            content->applyPitchCurve(std::move(pitchCurve));
+
+        PitchShiftEditState shift;
+        shift.settings = std::move(pitchShift);
+        shift.notes = std::move(notes);
+        shift.segments = content->content().analysis.pitchCurve->getSnapshot()->getCorrectionSegments();
+        content->applyPitchShiftState(shift);
+    } else {
+        // No curve: replace notes only.
+        content->applyNotes(std::move(notes));
+    }
+
+    // Envelope last: note outputGainDb is derived from the new envelope.
+    content->applyVolumeEnvelope(std::move(envelope));
+    return true;
+}
+
 // ─── Query ────────────────────────────────────────────────────────────────
 
 SessionState CaptureSession::getGlobalState() const noexcept

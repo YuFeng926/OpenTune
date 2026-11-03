@@ -1154,6 +1154,16 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     cancelPendingUpdate();
 #endif
 
+#if !JucePlugin_Build_Standalone
+    // Processor 生命周期结束：清理尚未返回的外部编辑会话目录（消息线程，
+    // 析构时 MessageManager 已在；Timer 已先停止，不再有 pollReturnedExternalEdit）。
+    if (externalEditSessionDir_.isDirectory()) {
+        externalEditSessionDir_.deleteRecursively();
+        externalEditSessionDir_ = juce::File();
+        externalEditContentKey_ = {};
+    }
+#endif
+
     ProcessRenderRuntime::getInstance().releaseOwner();
 
     // Vocoder / F0 / AppLogger 全部是进程级资源（ProcessRenderRuntime /
@@ -1478,6 +1488,34 @@ const Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() const
         return nullptr;
 #endif
     return captureSession_.get();
+}
+
+bool OpenTuneAudioProcessor::externalEditLaunchRequested(ContentKey key, const EditableContentSnapshot& snapshot)
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+
+    // 已有活动会话：重新拉起独立编辑器窗口（不新建会话）。
+    if (externalEditSessionActive()) {
+        ExternalEditSession::launchStandalone(externalEditSessionDir_);
+        return true;
+    }
+
+    if (!key.isValid() || snapshot.audioBuffer == nullptr
+        || snapshot.audioBuffer->getNumSamples() <= 0)
+        return false;
+
+    const auto directory = ExternalEditSession::createSessionDirectory();
+    if (!ExternalEditSession::writeSession(directory, key, snapshot)
+        || !ExternalEditSession::launchStandalone(directory)) {
+        directory.deleteRecursively();
+        return false;
+    }
+
+    externalEditSessionDir_ = directory;
+    externalEditContentKey_ = key;
+    externalEditCorruptCurveShown_ = false;
+    AppLogger::log("External edit launched " + directory.getFullPathName());
+    return true;
 }
 #endif // !JucePlugin_Build_Standalone
 
@@ -2989,8 +3027,54 @@ void OpenTuneAudioProcessor::timerCallback()
 {
     if (auto* session = getCaptureSession())
         session->tick();
+
+    pollReturnedExternalEdit();
 }
 #endif // !JucePlugin_Build_Standalone
+
+#if !JucePlugin_Build_Standalone
+void OpenTuneAudioProcessor::pollReturnedExternalEdit()
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    if (!externalEditSessionActive())
+        return;
+
+    const auto check = ExternalEditSession::checkReturned(externalEditSessionDir_);
+    if (check.result == ExternalCurveCheckResult::Pending)
+        return;
+
+    if (check.result == ExternalCurveCheckResult::CorruptCurve) {
+        // 一次性提示：返回的 curve.bin 存在却损坏。会话保持打开，外部修复后
+        // 重试（返回检查会再次运行）。使用无父组件依赖的异步消息框，插件窗口
+        // 关闭后提示仍然可见。
+        if (!externalEditCorruptCurveShown_) {
+            externalEditCorruptCurveShown_ = true;
+            AppLogger::log("External edit: returned curve.bin is corrupt "
+                           + externalEditSessionDir_.getFullPathName());
+            juce::AlertWindow::showAsync(
+                juce::MessageBoxOptions()
+                    .withIconType(juce::MessageBoxIconType::WarningIcon)
+                    .withTitle(LOC(kExternalEdit))
+                    .withMessage(LOC(kExternalEditCurveCorrupt)),
+                nullptr);
+        }
+        return;
+    }
+
+    // Ok：应用返回结果；成功后清理会话状态。
+    const bool applied = applyReturnedExternalEdit(externalEditContentKey_, check.document);
+    if (applied) {
+        const auto completedPath = externalEditSessionDir_.getFullPathName();
+        externalEditSessionDir_.deleteRecursively();
+        externalEditSessionDir_ = juce::File();
+        externalEditContentKey_ = {};
+        externalEditCorruptCurveShown_ = false;
+        AppLogger::log("External edit returned and applied "
+                       + completedPath);
+    }
+}
+#endif // !JucePlugin_Build_Standalone
+
 
 #if JucePlugin_Build_Standalone
 void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
@@ -4621,25 +4705,52 @@ bool OpenTuneAudioProcessor::applyReturnedExternalEdit(ContentKey key, const Ext
     if (!key.isValid())
         return false;
 
-    commitVolumeEnvelope(key, document.envelope);
+#if JucePlugin_Build_Standalone
+    if (key.domainKind == DomainKind::StandaloneClip) {
+        commitVolumeEnvelope(key, document.envelope);
 
-    if (document.pitchCurve != nullptr) {
-        if (!writePitchCurveToOwner(key, PitchCurve::fromSnapshot(document.pitchCurve->getSnapshot())))
+        if (document.pitchCurve != nullptr) {
+            if (!writePitchCurveToOwner(key, PitchCurve::fromSnapshot(document.pitchCurve->getSnapshot())))
+                return false;
+            if (document.pitchCurve->hasUsableOriginalF0())
+                setContentOriginalF0State(key, OriginalF0State::Ready);
+
+            PitchShiftEditState shift;
+            shift.settings = document.pitchShift;
+            shift.notes = document.notes;
+            shift.segments = document.pitchCurve->copyCorrectionSegments();
+            return applyContentPitchShiftState(key, shift);
+        }
+
+        if (!replaceContentNotesForFullMutation(key, document.notes))
             return false;
-        if (document.pitchCurve->hasUsableOriginalF0())
-            setContentOriginalF0State(key, OriginalF0State::Ready);
-
-        PitchShiftEditState shift;
-        shift.settings = document.pitchShift;
-        shift.notes = document.notes;
-        shift.segments = document.pitchCurve->copyCorrectionSegments();
-        return applyContentPitchShiftState(key, shift);
+        onContentFullMutationCompleted(key);
+        return true;
     }
+#endif
 
-    if (!replaceContentNotesForFullMutation(key, document.notes))
-        return false;
-    onContentFullMutationCompleted(key);
-    return true;
+    // Plugin external edits are Capture-Session-only: apply notes + curve +
+    // pitch-shift state + envelope as a single owner commit, then republish once.
+#if !JucePlugin_Build_Standalone
+    if (key.domainKind == DomainKind::RegularVST3Capture) {
+        auto* session = getCaptureSession();
+        if (session == nullptr)
+            return false;
+        auto curve = document.pitchCurve != nullptr
+            ? PitchCurve::fromSnapshot(document.pitchCurve->getSnapshot())
+            : nullptr;
+        if (!session->applyExternalEdit(key,
+                                        document.notes,
+                                        std::move(curve),
+                                        document.envelope,
+                                        document.pitchShift))
+            return false;
+        onContentFullMutationCompleted(key);
+        return true;
+    }
+#endif
+
+    return false;
 }
 
 ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,

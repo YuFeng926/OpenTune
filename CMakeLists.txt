@@ -2047,6 +2047,48 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME StandaloneProcessorStateCodecTests COMMAND OpenTuneStandaloneStateCodecTests)
 
+    # TransportBar External Edit slot availability (pure layout, links juce_gui_basics only).
+    add_executable(OpenTuneTransportBarExternalEditLayoutTests
+        Tests/TransportBarExternalEditLayoutTests.cpp
+        Source/Standalone/UI/TransportBarComponent.cpp
+    )
+    target_include_directories(OpenTuneTransportBarExternalEditLayoutTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone)
+    target_link_libraries(OpenTuneTransportBarExternalEditLayoutTests PRIVATE
+        OpenTuneResources
+        juce::juce_gui_basics
+        juce::juce_audio_processors
+        juce::juce_data_structures
+        juce::juce_core)
+    if(MSVC)
+        target_compile_options(OpenTuneTransportBarExternalEditLayoutTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME TransportBarExternalEditLayoutTests COMMAND OpenTuneTransportBarExternalEditLayoutTests)
+
+    # External edit session file contract: Pending / Ok / CorruptCurve detection.
+    add_executable(OpenTuneExternalEditSessionTests
+        Tests/ExternalEditSessionTests.cpp
+        Source/Utils/ExternalEditSession.cpp
+        Source/Utils/PitchCurve.cpp
+        Source/Utils/AutomationLane.cpp
+        Source/Utils/TimeGrid.cpp
+        Source/Utils/AppLogger.cpp
+    )
+    target_include_directories(OpenTuneExternalEditSessionTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneExternalEditSessionTests PRIVATE
+        juce::juce_audio_basics
+        juce::juce_audio_formats
+        juce::juce_core
+        juce::juce_events
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneExternalEditSessionTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME ExternalEditSessionTests COMMAND OpenTuneExternalEditSessionTests)
+
     # Shared VST3 editor size preference survives stale per-instance preference saves.
     add_executable(OpenTuneAppPreferencesEditorSizeTests
         Tests/AppPreferencesEditorSizeTests.cpp

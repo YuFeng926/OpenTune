@@ -177,6 +177,18 @@ public:
     bool applyDetectedKey(ContentKey segmentContentKey, const DetectedKey& detectedKey);
     bool applyPitchShiftState(ContentKey segmentContentKey, const PitchShiftEditState& state);
 
+    /** Combined external-edit return commit (message thread). Applies notes, pitch
+     *  curve (via applyOriginalF0 when usable, else applyPitchCurve), pitch-shift
+     *  state (settings + notes + curve correction segments) and volume envelope to
+     *  one segment content in a single mutableMutex_ critical section. No publish,
+     *  no partial state on early exit: the segment/content lookup happens before
+     *  any mutation. Returns false if the key has no valid Capture segment/content. */
+    bool applyExternalEdit(ContentKey segmentContentKey,
+                           std::vector<Note> notes,
+                           std::shared_ptr<PitchCurve> pitchCurve,
+                           AutomationLane envelope,
+                           PitchShiftSettings pitchShift);
+
     // ─── Query (message thread) ────────────────────────────────────────────
     SessionState getGlobalState() const noexcept;
 

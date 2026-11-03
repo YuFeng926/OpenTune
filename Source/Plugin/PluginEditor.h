@@ -231,8 +231,6 @@ private:
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
     int lastPianoRollSampleRate_{0};
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
-    juce::File externalEditSessionDir_;
-    ContentKey externalEditContentKey_;
 
     // First-insert auto Read: run once per scope; failures re-arm with a cap.
     bool autoReadAttempted_{false};

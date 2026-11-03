@@ -12,7 +12,6 @@
 #include "Editor/PitchShiftDialogContent.h"
 #include "Plugin/Capture/CaptureSession.h"
 #include "Utils/AppLogger.h"
-#include "Utils/ExternalEditSession.h"
 #include "Utils/LocalizationManager.h"
 #include "Utils/EditorUiSync.h"
 #include "Utils/KeyShortcutConfig.h"
@@ -161,6 +160,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // VST3 ARA layout: show record button, hide standalone transport group
     transportBar_.setLayoutProfile(TransportBarComponent::LayoutProfile::VST3AraSingleClip);
+
+    // External Edit 按钮只在实例以 Capture Session 形式运行时可用；
+    // ARA 绑定实例的 CaptureSession 为 nullptr，隐藏该按钮。
+    transportBar_.setExternalEditAvailable(processorRef_.getCaptureSession() != nullptr);
 
     // Sync initial record button state for ARA mode.
     // Button is available once the instance's content scope is non-empty
@@ -517,6 +520,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // hook (visibility/resized), so keep this as a fallback trigger.
     maybeStartOnboarding();
 
+    // External Edit 按钮可用性跟随 Capture Session 对象的存在（ARA 绑定会清空
+    // CaptureSession）。心跳内低成本比对，setter 相同值时为 no-op，不触发 resized。
+    transportBar_.setExternalEditAvailable(processorRef_.getCaptureSession() != nullptr);
+
     // Non-ARA capture state is driven by the processor's own Timer (tick()).
     // Editor only syncs UI state from the capture session.
     if (auto* session = processorRef_.getCaptureSession()) {
@@ -532,17 +539,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             transportBar_.setRecordButtonState(RecordButtonState::Idle);
     }
 
-    if (externalEditSessionDir_.isDirectory()) {
-        if (auto returned = ExternalEditSession::readIfReturned(externalEditSessionDir_)) {
-            const bool applied = processorRef_.applyReturnedExternalEdit(externalEditContentKey_, *returned);
-            if (applied) {
-                externalEditSessionDir_.deleteRecursively();
-                externalEditSessionDir_ = juce::File();
-                externalEditContentKey_ = {};
-                syncContentProjectionToPianoRoll();
-            }
-        }
-    }
+    // External edit 返回检查由 Processor 拥有（pollReturnedExternalEdit，在
+    // Processor 的 30Hz timer 内执行）：Editor 销毁（宿主关窗）不会中断进行中的
+    // 外部编辑会话；损坏曲线的一次性提示也由 Processor 发出（无父组件依赖，
+    // 窗口关闭后仍可见）。
 
     syncParameterPanelFromSelection();
 
@@ -1423,34 +1423,20 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
 
 void OpenTuneAudioProcessorEditor::externalEditRequested()
 {
-    if (externalEditSessionDir_.isDirectory()) {
-        ExternalEditSession::launchStandalone(externalEditSessionDir_);
-        return;
-    }
-
+    // 会话状态与启动委托给 Processor（Editor 销毁不清会话）。
     const auto activeKey = resolveCurrentContentKey();
     const auto snapshot = processorRef_.getContentSnapshot(activeKey);
-    if (!activeKey.isValid() || snapshot == nullptr || snapshot->audioBuffer == nullptr
-        || snapshot->audioBuffer->getNumSamples() <= 0) {
-        OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
-                                                    LOC(kExternalEdit),
-                                                    LOC(kExternalEditNeedsAudio));
+    if (processorRef_.externalEditLaunchRequested(activeKey, snapshot ? *snapshot : EditableContentSnapshot{})) {
+        syncContentProjectionToPianoRoll();
         return;
     }
 
-    const auto directory = ExternalEditSession::createSessionDirectory();
-    if (!ExternalEditSession::writeSession(directory, activeKey, *snapshot)
-        || !ExternalEditSession::launchStandalone(directory)) {
-        directory.deleteRecursively();
-        OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
-                                                    LOC(kExternalEdit),
-                                                    LOC(kExternalEditUnavailable));
-        return;
-    }
-
-    externalEditSessionDir_ = directory;
-    externalEditContentKey_ = activeKey;
-    AppLogger::log("External edit launched " + directory.getFullPathName());
+    OpenTune::ConfirmDialogContent::showMessage(&contentRoot_,
+                                                LOC(kExternalEdit),
+                                                snapshot != nullptr && snapshot->audioBuffer != nullptr
+                                                    && snapshot->audioBuffer->getNumSamples() > 0
+                                                    ? LOC(kExternalEditUnavailable)
+                                                    : LOC(kExternalEditNeedsAudio));
 }
 
 void OpenTuneAudioProcessorEditor::recordRequested()

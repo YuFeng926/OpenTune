@@ -191,6 +191,7 @@ constexpr const char* kExternalEdit = "External Edit";
 constexpr const char* kSaveAndReturn = "Save and Return";
 constexpr const char* kExternalEditNeedsAudio = "Read audio before opening the external editor.";
 constexpr const char* kExternalEditUnavailable = "The OpenTune standalone editor was not found.";
+constexpr const char* kExternalEditCurveCorrupt = "The returned curve file is corrupt. The external edit session stays open — fix or save the curve in the standalone editor and try again.";
 
 constexpr const char* kUndo = "Undo";
 constexpr const char* kRedo = "Redo";
@@ -541,7 +542,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kSaveAndReturn, "Save and Return", "保存并返回", "保存して戻る", "Сохранить и вернуться", "Guardar y volver" },
         { Keys::kExternalEditNeedsAudio, "Read audio before opening the external editor.", "请先读取音频，再打开外部编辑器。", "外部エディタを開く前にオーディオを読み込んでください。", "Сначала загрузите аудио.", "Lee el audio antes de abrir el editor externo." },
         { Keys::kExternalEditUnavailable, "The OpenTune standalone editor was not found.", "没有找到 OpenTune 独立编辑器。", "OpenTune スタンドアロンが見つかりません。", "Автономный редактор OpenTune не найден.", "No se encontró el editor independiente de OpenTune." },
-        
+        { Keys::kExternalEditCurveCorrupt, "The returned curve file is corrupt. The external edit session stays open — fix or save the curve in the standalone editor and try again.", "返回的曲线文件已损坏。外部编辑会话保持打开，请在独立编辑器中修复或重新保存曲线后重试。", "返されたカーブファイルが破損しています。外部編集セッションは開いたままです。スタンドアロンエディターで曲線を修復または保存し直して、再試行してください。", "Файл кривой повреждён. Сессия внешнего редактирования остаётся открытой — исправьте или сохраните кривую заново в автономном редакторе и повторите попытку.", "El archivo de curva devuelto está dañado. La sesión de edición externa permanece abierta: corrija o vuelva a guardar la curva en el editor independiente e inténtelo de nuevo." },
         { Keys::kUndo, "Undo", "撤销", "元に戻す", "Отменить", "Deshacer" },
         { Keys::kRedo, "Redo", "重做", "やり直す", "Повтор", "Rehacer" },
         
