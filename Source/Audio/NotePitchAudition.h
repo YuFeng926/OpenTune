@@ -79,6 +79,21 @@ public:
                        int numSamples,
                        double outputSampleRate) noexcept;
 
+    /// Audio-thread state query: call from the same audio thread as
+    /// mixIntoBuffer(), before mixing the block. Reads voices_ only; no locks,
+    /// no atomics. Returns true when any voice is sounding or fading.
+    bool isActive() const noexcept;
+
+    /// Audio-thread state query: true when any voice is sounding or fading
+    /// for @p key. Same threading contract as isActive().
+    bool isContentActive(const ContentKey& key) const noexcept;
+
+    /// Message thread: set the target region carried by the next request.
+    void setTargetRegion(const void* region) noexcept;
+
+    /// Any thread: target region currently sounding or fading to suppress.
+    const void* activeTargetRegion() const noexcept;
+
 private:
     /// Published snippet payload (audio thread reads it lock-free via
     /// shared_ptr; the producer prunes retired copies so the audio thread
@@ -86,6 +101,8 @@ private:
     struct Snippet {
         std::vector<float> mono;
         double sampleRate = 0.0;
+        ContentKey contentKey;
+        const void* targetRegion = nullptr;
     };
 
     struct Request {
@@ -94,6 +111,7 @@ private:
         double endSeconds = 0.0;
         float targetHz = 0.0f;
         double outputSampleRate = 0.0;
+        const void* targetRegion = nullptr;
     };
 
     void run() override;
@@ -107,6 +125,9 @@ private:
 
     /// Set by stop(); the producer drops results when it observes it.
     std::atomic<bool> stopRequested_{false};
+
+    std::atomic<const void*> nextTargetRegion_{nullptr};
+    std::atomic<const void*> activeTargetRegion_{nullptr};
 
     // Audio-thread state -----------------------------------------------------
     struct Voice {

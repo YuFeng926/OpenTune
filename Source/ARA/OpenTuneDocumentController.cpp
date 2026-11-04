@@ -1026,6 +1026,8 @@ bool OpenTuneDocumentController::selectNotePitchAuditionRendererForRegion(
     }
 
     notePitchAuditionRenderer_.store(selected, std::memory_order_release);
+    notePitchAudition_->setTargetRegion(selected != nullptr ? region : nullptr);
+
     return selected != nullptr;
 }
 
@@ -1047,6 +1049,7 @@ void OpenTuneDocumentController::mixNotePitchAuditionIfOwner(
 void OpenTuneDocumentController::stopNotePitchAudition() noexcept
 {
     notePitchAuditionRenderer_.store(nullptr, std::memory_order_release);
+    notePitchAudition_->setTargetRegion(nullptr);
     notePitchAudition_->stop();
 }
 

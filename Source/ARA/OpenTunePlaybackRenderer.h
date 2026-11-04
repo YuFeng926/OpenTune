@@ -93,6 +93,7 @@ inline std::optional<RenderBlockSpan> computeRegionBlockRenderSpanFromSamplePosi
 #if JucePlugin_Enable_ARA
 class OpenTuneDocumentController;
 class ContentRenderService;
+class NotePitchAudition;
 class OpenTunePlaybackRenderer : public juce::ARAPlaybackRenderer
 {
 public:
@@ -102,6 +103,7 @@ public:
 
     struct PlaybackRegionRenderItem
     {
+        juce::ARAPlaybackRegion* playbackRegion{nullptr};
         ContentKey contentKey;
         double startInPlaybackTime{0.0};
         double startInModificationTime{0.0};
@@ -148,6 +150,7 @@ private:
 
     OpenTuneDocumentController* documentController_ = nullptr;
     std::shared_ptr<ContentRenderService> contentRenderServiceSnapshot_;
+    std::atomic<const NotePitchAudition*> notePitchAudition_{nullptr};
 
     struct AtomicRenderPlan
     {

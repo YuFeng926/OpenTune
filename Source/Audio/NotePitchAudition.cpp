@@ -182,6 +182,7 @@ void NotePitchAudition::request(PlaybackReadSource source,
         pending_.endSeconds = endSeconds;
         pending_.targetHz = targetHz;
         pending_.outputSampleRate = outputSampleRate;
+        pending_.targetRegion = nextTargetRegion_.load(std::memory_order_acquire);
         hasPending_ = true;
     }
     stopRequested_.store(false, std::memory_order_release);
@@ -200,6 +201,35 @@ void NotePitchAudition::stop()
     }
     fadeOutAll_.store(true, std::memory_order_release);
     wakeup_.signal();
+}
+
+bool NotePitchAudition::isActive() const noexcept
+{
+    for (const auto& voice : voices_) {
+        if (voice.snippet && (voice.gain > 0.0f || voice.targetGain > 0.0f))
+            return true;
+    }
+    return false;
+}
+
+bool NotePitchAudition::isContentActive(const ContentKey& key) const noexcept
+{
+    for (const auto& voice : voices_) {
+        if (voice.snippet && voice.snippet->contentKey == key
+                && (voice.gain > 0.0f || voice.targetGain > 0.0f))
+            return true;
+    }
+    return false;
+}
+
+void NotePitchAudition::setTargetRegion(const void* region) noexcept
+{
+    nextTargetRegion_.store(region, std::memory_order_release);
+}
+
+const void* NotePitchAudition::activeTargetRegion() const noexcept
+{
+    return activeTargetRegion_.load(std::memory_order_acquire);
 }
 
 void NotePitchAudition::pruneRetired()
@@ -288,7 +318,8 @@ void NotePitchAudition::run()
         // the new snippet atomically.
         {
             auto newSnippet = std::make_shared<const Snippet>(
-                Snippet{std::move(preview.mono), preview.sampleRate});
+                Snippet{std::move(preview.mono), preview.sampleRate,
+                        source.contentKey, request.targetRegion});
             auto previous = std::atomic_load(&published_);
             if (previous)
                 retired_.push_back(std::move(previous));
@@ -336,6 +367,8 @@ void NotePitchAudition::mixIntoBuffer(juce::AudioBuffer<float>& output,
             incoming->position = 0.0;
             incoming->gain = 1.0f;
             incoming->targetGain = 1.0f;
+            activeTargetRegion_.store(incoming->snippet->targetRegion,
+                                      std::memory_order_release);
             fadeOutAll_.store(false, std::memory_order_release);
         }
     }
@@ -409,6 +442,9 @@ void NotePitchAudition::mixIntoBuffer(juce::AudioBuffer<float>& output,
             fadeOutAll_.store(false, std::memory_order_release);
         }
     }
+
+    if (!isActive())
+        activeTargetRegion_.store(nullptr, std::memory_order_release);
 }
 
 } // namespace OpenTune
