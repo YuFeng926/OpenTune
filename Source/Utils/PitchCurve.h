@@ -56,7 +56,9 @@ static std::vector<bool> computeVocoderMask(
             if (offset < 0 || offset >= static_cast<int>(seg.f0Data.size())) continue;
             const float corrected = seg.f0Data[static_cast<size_t>(offset)];
             if (corrected <= 0.0f) continue;
-            if (std::abs(1200.0f * std::log2f(corrected / original)) >= kPitchShiftThresholdCents)
+            if (!isPitchShiftRateWithinCents(
+                    static_cast<double>(corrected) / static_cast<double>(original),
+                    kPitchShiftThresholdCents))
                 mask[static_cast<size_t>(f)] = true;
         }
     }

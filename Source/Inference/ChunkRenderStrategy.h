@@ -1,14 +1,12 @@
 #pragma once
 
 #include <vector>
-#include <cmath>
+
+#include "../DSP/PitchShiftRateContract.h"
 
 namespace OpenTune {
 
-/// 75 cents — 超过此阈值走声码器（75 音分内使用 AutoTune 周期重采样）
-constexpr float kPitchShiftThresholdCents = 75.0f;
-
-/// 判断 chunk 是否需要声码器（任一有声帧偏差 >= 阈值）。
+/// 判断 chunk 是否需要声码器（任一有声帧偏差 > 阈值）。
 /// @param correctedF0    修正后 F0 数组（chunk 局部，100fps）
 /// @param numF0Frames    correctedF0 帧数
 /// @param originalF0     原始 F0 全局数组
@@ -33,8 +31,9 @@ inline bool chunkNeedsVocoder(
         // 跳过无声帧
         if (corrected <= 0.0f || original <= 0.0f) continue;
 
-        const float deviationCents = std::abs(1200.0f * std::log2f(corrected / original));
-        if (deviationCents >= thresholdCents)
+        const double resampleRate =
+            static_cast<double>(corrected) / static_cast<double>(original);
+        if (!isPitchShiftRateWithinCents(resampleRate, thresholdCents))
             return true;
     }
     return false;
