@@ -713,6 +713,10 @@ set(OPENTUNE_COMMON_SOURCES
         Source/DSP/HybridAperiodicResidual.h
         Source/DSP/F0KeyDetector.cpp
         Source/DSP/F0KeyDetector.h
+        Source/DSP/AutoTunePitchShifter.cpp
+        Source/DSP/AutoTunePitchShifter.h
+        Source/DSP/AutoTunePeriodDetector.cpp
+        Source/DSP/AutoTunePeriodDetector.h
         Source/DSP/PhaseVocoderPitchShifter.cpp
         Source/DSP/PhaseVocoderPitchShifter.h
         Source/DSP/NoteEqProcessor.h
@@ -1696,6 +1700,18 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME ComponentListenerSubscriptionTests
         COMMAND OpenTuneComponentListenerSubscriptionTests)
+
+    add_executable(OpenTuneAutoTuneTests
+        Tests/AutoTunePitchShifterTests.cpp
+        Source/DSP/AutoTunePitchShifter.cpp
+        Source/DSP/AutoTunePeriodDetector.cpp
+    )
+    target_include_directories(OpenTuneAutoTuneTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(OpenTuneAutoTuneTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME AutoTunePitchShifterTests COMMAND OpenTuneAutoTuneTests)
 
     add_executable(OpenTunePhaseVocoderTests
         Tests/PhaseVocoderPitchShifterTests.cpp

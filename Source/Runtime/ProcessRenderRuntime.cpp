@@ -1,6 +1,7 @@
 #include "ProcessRenderRuntime.h"
 
-#include "../DSP/PhaseVocoderPitchShifter.h"
+#include "../DSP/AutoTunePeriodDetector.h"
+#include "../DSP/AutoTunePitchShifter.h"
 #include "../Services/HnsepAudio.h"
 #include "../Editor/ConfirmDialogContent.h"
 #include "../DSP/MelSpectrogram.h"
@@ -1992,6 +1993,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         static_cast<int>(pitchCurve->getOriginalF0().size()),
         contentF0Range.endFrameExclusive + 1);
     const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
+    const double firstSampleFramePhase = trueStartSeconds * f0FrameRate - static_cast<double>(f0StartFrame);
 
     // Blank 判定：仅当全局移调为恒等（effectiveF0 与 originalF0 一致，无差异可
     // 合成）且该 chunk 帧范围内无任何 correction segment 时，才 Blank 回退原始
@@ -2041,41 +2043,76 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 effectiveF0.data(), numF0Frames, originalF0Full, f0StartFrame);
             if (!needsVocoder)
             {
-                // Full-track target keeps every chunk on the same content-wide
-                // phase anchor: actual retune curve materialized with gain,
-                // neutral outside the edited range, no EMA smoothing.
-                const std::vector<float> fullTargetF0 =
-                    materializeEffectiveF0Range(*contentSnap, 0, originalF0Size);
-                // monoAudio is channel 0 copied from this same buffer, so the
-                // PhaseVocoder reads the complete immutable source once.
-                const float* fullSource = coreJob.audioBuffer->getReadPointer(0);
-                const int fullSourceCount = coreJob.audioBuffer->getNumSamples();
+                AutoTunePitchShifter autoTuneShifter(RenderCache::kSampleRate);
+                const int safeNumF0Frames = std::min(numF0Frames, originalF0Size - f0StartFrame);
 
-                PhaseVocoderPitchShifter phaseVocoder(RenderCache::kSampleRate);
-                auto shiftedAudio = phaseVocoder.render(
-                    fullSource,
-                    fullSourceCount,
-                    static_cast<int>(boundaries.trueStartSample),
-                    static_cast<int>(boundaries.publishSampleCount),
-                    originalF0Full.data(),
-                    fullTargetF0.data(),
-                    originalF0Size,
-                    f0FrameRate);
-                const auto shiftedAudioSamples = shiftedAudio.size();
-
-                if (shiftedAudioSamples != static_cast<size_t>(boundaries.publishSampleCount))
+                // Supply the source context needed by the pitch resampler:
+                // preceding waveform history for cycle jumps and five future
+                // samples for zero-latency interpolation.
+                float shifterLookahead[AutoTunePitchShifter::kLookaheadSamples] = {};
+                int shifterLookaheadSamples = 0;
+                const float* shifterLookbehind = nullptr;
+                int shifterLookbehindSamples = 0;
                 {
-                    failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
-                              coreJob.targetRevision, coreJob.contentKey,
-                              "PhaseVocoder render returned an unexpected sample count (startSample="
-                                  + juce::String(boundaries.trueStartSample) + ", endSampleExclusive="
-                                  + juce::String(boundaries.trueEndSample) + ", expectedSamples="
-                                  + juce::String(static_cast<juce::int64>(boundaries.publishSampleCount))
-                                  + ", actualSamples="
-                                  + juce::String(static_cast<juce::int64>(shiftedAudioSamples))
-                                  + ", revision=" + juce::String(static_cast<juce::int64>(coreJob.targetRevision)) + ")");
-                    return;
+                    const int64_t clipNumSamples = coreJob.audioBuffer->getNumSamples();
+                    const int64_t tailStart = boundaries.trueStartSample + boundaries.publishSampleCount;
+                    const float* clipCh0 = coreJob.audioBuffer->getReadPointer(0);
+                    const int64_t avail = std::clamp<int64_t>(
+                        clipNumSamples - tailStart, 0, AutoTunePitchShifter::kLookaheadSamples);
+                    shifterLookaheadSamples = static_cast<int>(avail);
+                    for (int64_t i = 0; i < avail; ++i)
+                        shifterLookahead[i] = clipCh0[tailStart + i];
+
+                    // 周期检测器需要完整 coarse window 及其因果 FIR 历史，
+                    // 其固定上下文长度由 detector 自身声明。
+                    const int lookbehindCapacity =
+                        AutoTunePeriodDetector::kRequiredLookbehindSamples
+                        + AutoTunePitchShifter::kLookaheadSamples + 2;
+                    const int64_t lookbehindStart = std::max<int64_t>(
+                        0, boundaries.trueStartSample - lookbehindCapacity);
+                    shifterLookbehind = clipCh0 + lookbehindStart;
+                    shifterLookbehindSamples = static_cast<int>(
+                        boundaries.trueStartSample - lookbehindStart);
                 }
+
+                // Chunk-local 双阶段周期检测：downsampled lag 粗搜 + full-rate
+                // V=E-2H 局部精搜，逐样本输出 period/valid 影子源交给 shifter。
+                // FCPE F0 hint provides an octave prior for coarse acquisition.
+                const int detectorNumSamples =
+                    static_cast<int>(boundaries.publishSampleCount);
+                // UV/V is decided by the waveform detector itself.  RMVPE's
+                // originalF0 remains the editable source/target track, but it
+                // must not gate the AutoTune detector's periodicity analysis.
+                const float* f0HintPtr = originalF0Full.data() + f0StartFrame;
+                const std::vector<AutoTunePeriodDetector::DetectedPeriod>
+                    detectorFrames = AutoTunePeriodDetector::analyze(
+                        shifterLookbehind, shifterLookbehindSamples,
+                        monoAudio.data(), detectorNumSamples,
+                        RenderCache::kSampleRate,
+                        f0HintPtr, safeNumF0Frames, f0FrameRate);
+
+                // snapMode：所有音符 retuneSpeed 均为 1.0 时，DSP 跳过 EMA 直接锁定
+                bool snapMode = true;
+                for (const auto& n : contentSnap->notes) {
+                    if (n.retuneSpeed < 1.0f) { snapMode = false; break; }
+                }
+
+                auto shiftedAudio = autoTuneShifter.shiftChunk(
+                    monoAudio.data(),
+                    static_cast<int>(boundaries.publishSampleCount),
+                    originalF0Full.data() + f0StartFrame,
+                    effectiveF0.data(),
+                    safeNumF0Frames,
+                    f0FrameRate,
+                    firstSampleFramePhase,
+                    shifterLookahead,
+                    shifterLookaheadSamples,
+                    shifterLookbehind,
+                    shifterLookbehindSamples,
+                    detectorFrames.data(),
+                    detectorNumSamples,
+                    snapMode);
+                const auto shiftedAudioSamples = shiftedAudio.size();
 
                 const uint64_t objectId = coreJob.contentKey.objectId;
                 const auto result = publishChunkWithPerNoteEq(
@@ -2088,13 +2125,13 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
                               coreJob.targetRevision, coreJob.contentKey,
                               result == RenderCache::ChunkRenderResult::InvalidInput
-                                  ? "RenderCache rejected PhaseVocoder audio as invalid input (startSample="
+                                  ? "RenderCache rejected AutoTune audio as invalid input (startSample="
                                       + juce::String(boundaries.trueStartSample) + ", endSampleExclusive="
                                       + juce::String(boundaries.trueEndSample) + ", expectedSamples="
                                       + juce::String(boundaries.publishSampleCount) + ", actualSamples="
                                       + juce::String(static_cast<juce::int64>(shiftedAudioSamples))
                                       + ", revision=" + juce::String(static_cast<juce::int64>(coreJob.targetRevision)) + ")"
-                                  : "RenderCache could not publish PhaseVocoder audio because its memory limit was exceeded (samples="
+                                  : "RenderCache could not publish AutoTune audio because its memory limit was exceeded (samples="
                                       + juce::String(static_cast<juce::int64>(shiftedAudioSamples)) + ")");
                 }
                 else if (result == RenderCache::ChunkRenderResult::Published)
@@ -2102,7 +2139,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     notifyChunkSettled(completion, coreJob);
                 }
 
-                AppLogger::debug("RenderWorker: PhaseVocoder pitch-shift chunk objId="
+                AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk objId="
                     + juce::String(static_cast<juce::int64>(objectId))
                     + " start=" + juce::String(relChunkStartSec, 3));
                 return;
