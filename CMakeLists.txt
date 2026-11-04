@@ -2265,3 +2265,7 @@ if(OPENTUNE_BUILD_TESTS)
         "${ARA_SDK_PATH}/ARA_API"
     )
 endif()
+
+# OpenTune Control API hook: build option and control sources, see Source/Control/README.md#hooks
+option(OPENTUNE_ENABLE_CONTROL_API "Build the local control API (OTCP v1) into OpenTune Standalone" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneControl.cmake")

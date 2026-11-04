@@ -1,4 +1,7 @@
 #include "AppPreferences.h"
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+#include "Control/ControlDataDirectory.h"  // OpenTune Control API hook: OPENTUNE_DATA_DIR, see Source/Control/README.md#hooks
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -52,6 +55,11 @@ juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storag
     if (storageOptions.settingsDirectory != juce::File{}) {
         return storageOptions.settingsDirectory;
     }
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: OPENTUNE_DATA_DIR replaces the per-user OpenTune folder, see Source/Control/README.md#hooks
+    if (const auto dataDirectory = controlDataDirectory(); dataDirectory != juce::File{})
+        return dataDirectory;
+#endif
 
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
         .getChildFile(storageOptions.applicationName);
