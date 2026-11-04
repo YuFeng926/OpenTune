@@ -3,6 +3,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 
+#include <cmath>
 #include <cstring>
 
 namespace OpenTune {
@@ -114,6 +115,8 @@ bool writeFloats(juce::OutputStream& out, const std::vector<float>& values)
 
 bool readFloats(juce::InputStream& in, std::vector<float>& values)
 {
+    if (in.getNumBytesRemaining() < 4)
+        return false;
     const int count = in.readInt();
     if (count < 0 || static_cast<juce::int64>(count) * 4 > in.getNumBytesRemaining())
         return false;
@@ -177,15 +180,23 @@ std::shared_ptr<PitchCurve> readCurve(const juce::File& file)
     if (stream.read(magic, 4) != 4 || std::memcmp(magic, "OTC1", 4) != 0)
         return nullptr;
 
+    if (stream.getNumBytesRemaining() < 12)
+        return nullptr;
     const int hopSize = stream.readInt();
     const double sampleRate = stream.readDouble();
+    if (hopSize <= 0 || !std::isfinite(sampleRate) || sampleRate <= 0.0)
+        return nullptr;
+
     std::vector<float> originalF0;
     std::vector<float> energy;
     if (!readFloats(stream, originalF0) || !readFloats(stream, energy))
         return nullptr;
 
+    if (stream.getNumBytesRemaining() < 4)
+        return nullptr;
     const int erasedCount = stream.readInt();
-    if (erasedCount < 0)
+    if (erasedCount < 0
+        || static_cast<juce::int64>(erasedCount) * 8 > stream.getNumBytesRemaining())
         return nullptr;
     std::vector<F0FrameRange> erased(static_cast<size_t>(erasedCount));
     for (int i = 0; i < erasedCount; ++i) {
@@ -193,12 +204,17 @@ std::shared_ptr<PitchCurve> readCurve(const juce::File& file)
         erased[static_cast<size_t>(i)].endFrameExclusive = stream.readInt();
     }
 
+    if (stream.getNumBytesRemaining() < 4)
+        return nullptr;
     const int segmentCount = stream.readInt();
-    if (segmentCount < 0)
+    if (segmentCount < 0
+        || static_cast<juce::int64>(segmentCount) * 36 > stream.getNumBytesRemaining())
         return nullptr;
     std::vector<PitchCorrectionSegment> segments(static_cast<size_t>(segmentCount));
     for (int i = 0; i < segmentCount; ++i) {
         auto& segment = segments[static_cast<size_t>(i)];
+        if (stream.getNumBytesRemaining() < 28)
+            return nullptr;
         segment.startFrame = stream.readInt();
         segment.endFrame = stream.readInt();
         segment.source = static_cast<PitchCorrectionSegment::Source>(stream.readInt());
@@ -209,6 +225,8 @@ std::shared_ptr<PitchCurve> readCurve(const juce::File& file)
         if (!readFloats(stream, segment.f0Data) || !readFloats(stream, segment.baseF0Data))
             return nullptr;
     }
+    if (stream.getNumBytesRemaining() != 0 || originalF0.size() != energy.size())
+        return nullptr;
 
     auto curve = std::make_shared<PitchCurve>();
     curve->setHopSize(hopSize);
@@ -275,9 +293,44 @@ bool writeEditFiles(const juce::File& directory,
     if (snapshot.pitchCurve != nullptr) {
         if (!writeCurve(curveFile(directory), *snapshot.pitchCurve))
             return false;
+    } else {
+        auto staleCurve = curveFile(directory);
+        if (staleCurve.existsAsFile() && !staleCurve.deleteFile())
+            return false;
     }
     const auto xml = buildEditXml(sourceKey, snapshot, returned);
     return xml != nullptr && xml->writeTo(editFile(directory));
+}
+
+std::optional<ExternalEditDocument> readDocumentFromXml(const juce::File& directory,
+                                                        const juce::XmlElement& xml)
+{
+    if (!xml.hasTagName("ExternalEdit"))
+        return std::nullopt;
+
+    ExternalEditDocument document;
+    document.returned = xml.getStringAttribute("status") == "returned";
+    document.sourceKey.domainKind = static_cast<DomainKind>(xml.getIntAttribute("domain"));
+    document.sourceKey.objectId = static_cast<uint64_t>(xml.getStringAttribute("objectId").getLargeIntValue());
+    document.notes = readNotes(xml);
+    document.pitchShift.semitone = xml.getIntAttribute("semitone");
+    document.pitchShift.cents = xml.getIntAttribute("cents");
+    std::vector<AutomationPoint> points;
+    for (auto* element = xml.getChildByName("EnvelopePoint");
+         element != nullptr;
+         element = element->getNextElementWithTagName("EnvelopePoint")) {
+        AutomationPoint point;
+        point.timeSeconds = element->getDoubleAttribute("time");
+        point.gainDb = static_cast<float>(element->getDoubleAttribute("gainDb"));
+        points.push_back(point);
+    }
+    document.envelope = AutomationLane::fromSnapshot(points);
+    if (curveFile(directory).existsAsFile()) {
+        document.pitchCurve = readCurve(curveFile(directory));
+        if (document.pitchCurve == nullptr)
+            return std::nullopt;
+    }
+    return document;
 }
 
 } // namespace
@@ -319,40 +372,23 @@ bool ExternalEditSession::writeReturn(const juce::File& directory,
 std::optional<ExternalEditDocument> ExternalEditSession::readDocument(const juce::File& directory)
 {
     const auto xml = juce::XmlDocument::parse(editFile(directory));
-    if (xml == nullptr || !xml->hasTagName("ExternalEdit"))
-        return std::nullopt;
-
-    ExternalEditDocument document;
-    document.returned = xml->getStringAttribute("status") == "returned";
-    document.sourceKey.domainKind = static_cast<DomainKind>(xml->getIntAttribute("domain"));
-    document.sourceKey.objectId = static_cast<uint64_t>(xml->getStringAttribute("objectId").getLargeIntValue());
-    document.notes = readNotes(*xml);
-    document.pitchShift.semitone = xml->getIntAttribute("semitone");
-    document.pitchShift.cents = xml->getIntAttribute("cents");
-    std::vector<AutomationPoint> points;
-    for (auto* element = xml->getChildByName("EnvelopePoint");
-         element != nullptr;
-         element = element->getNextElementWithTagName("EnvelopePoint")) {
-        AutomationPoint point;
-        point.timeSeconds = element->getDoubleAttribute("time");
-        point.gainDb = static_cast<float>(element->getDoubleAttribute("gainDb"));
-        points.push_back(point);
-    }
-    document.envelope = AutomationLane::fromSnapshot(points);
-    if (curveFile(directory).existsAsFile())
-        document.pitchCurve = readCurve(curveFile(directory));
-    return document;
+    return xml != nullptr ? readDocumentFromXml(directory, *xml) : std::nullopt;
 }
 
-std::optional<ExternalEditDocument> ExternalEditSession::readIfReturned(const juce::File& directory)
+ExternalEditCheckResult ExternalEditSession::checkReturned(const juce::File& directory)
 {
-    const auto file = editFile(directory);
-    if (!file.existsAsFile())
-        return std::nullopt;
-    const auto text = file.loadFileAsString();
-    if (!text.contains("status=\"returned\""))
-        return std::nullopt;
-    return readDocument(directory);
+    const auto xml = juce::XmlDocument::parse(editFile(directory));
+    if (xml == nullptr || !xml->hasTagName("ExternalEdit")
+        || xml->getStringAttribute("status") != "returned")
+        return { ExternalCurveCheckResult::Pending, {} };
+
+    auto document = readDocumentFromXml(directory, *xml);
+    if (!document.has_value()) {
+        if (curveFile(directory).existsAsFile())
+            return { ExternalCurveCheckResult::CorruptCurve, {} };
+        return { ExternalCurveCheckResult::Pending, {} };
+    }
+    return { ExternalCurveCheckResult::Ok, std::move(*document) };
 }
 
 juce::File ExternalEditSession::findStandaloneExecutable()

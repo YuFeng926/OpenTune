@@ -31,9 +31,9 @@ namespace OpenTune {
 class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class ResamplingManager;
+class NotePitchAudition;
 struct RenderJob;
-class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation,
-                                   private juce::Timer
+class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
 public:
     struct PlaybackRegionProjection
@@ -187,8 +187,8 @@ private:
     void performHostTransportBatch(const HostTransportBatch& batch);
     bool hostSeekAvailable();
 
-    // DC/ARA model ownership、F0 completion 和 DC destruction 均遵守消息线程契约。
-    // gate 只由消息线程访问；排队 completion 持有 shared_ptr，先检查 closed 再访问 DC。
+    // F0 completion 无锁提交：completion 由 F0ExtractionService 投递到消息线程
+    // 执行，捕获共享 sink；析构时在消息线程把指针置空，回调看到空指针直接退出。
     struct F0CompletionRecord
     {
         F0ExtractionService::Result result;
@@ -198,13 +198,11 @@ private:
         uint64_t birthRevision{0};
         OriginalF0InputStamp stamp;
     };
-    struct CompletionGate
+    struct CompletionSink
     {
-        std::mutex mutex;
-        bool closed{false};
-        std::deque<F0CompletionRecord> pending;
+        OpenTuneDocumentController* controller{nullptr};
     };
-    std::shared_ptr<CompletionGate> completionGate_{std::make_shared<CompletionGate>()};
+    std::shared_ptr<CompletionSink> completionSink_{std::make_shared<CompletionSink>()};
     std::deque<OriginalF0FailureEvent> pendingF0FailureEvents_;
     std::shared_ptr<ProcessRenderRuntime::CompletionGate> renderCompletionGate_{
         std::make_shared<ProcessRenderRuntime::CompletionGate>()};
@@ -234,6 +232,15 @@ private:
     const AudioModification* findAudioModificationByContentKey(const ContentKey& key) const;
 
 public:
+    // 文档级音符移调试听：UI 实例投递请求，拥有当前编辑 region 的 editor renderer 混音。
+    NotePitchAudition& getNotePitchAudition() noexcept;
+    bool selectNotePitchAuditionRendererForRegion(juce::ARAPlaybackRegion* region) noexcept;
+    void mixNotePitchAuditionIfOwner(juce::ARAEditorRenderer* renderer,
+                                     juce::AudioBuffer<float>& buffer,
+                                     int numSamples,
+                                     double sampleRate) noexcept;
+    void stopNotePitchAudition() noexcept;
+
     /** Shared PlayHeadState for all ARA roles bound to this document. The
      *  realtime editor renderer publishes host transport here; UI binds to this. */
     const PlayHeadState& getSharedPlayHeadState() const noexcept { return sharedPlayHeadState_; }
@@ -276,7 +283,6 @@ private:
                                    uint64_t wrapperGeneration,
                                    juce::String persistentId,
                                    OriginalF0InputStamp stamp);
-    void timerCallback() override;
     void commitF0Completion(F0CompletionRecord record);
     static OriginalF0InputStamp makeF0InputStamp(const AudioSource& source, const AudioModification& modification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
@@ -285,6 +291,10 @@ private:
                                          RenderJob& job,
                                          std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+
+    std::unique_ptr<NotePitchAudition> notePitchAudition_;
+    std::atomic<juce::ARAEditorRenderer*> notePitchAuditionRenderer_{nullptr};
+    std::atomic_flag notePitchAuditionMixLock_ = ATOMIC_FLAG_INIT;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)
 };

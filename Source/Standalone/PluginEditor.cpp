@@ -1,4 +1,4 @@
-﻿#if defined(_WIN32) && !defined(NOMINMAX)
+#if defined(_WIN32) && !defined(NOMINMAX)
 #define NOMINMAX
 #endif
 
@@ -20,6 +20,8 @@
 #include "StandaloneArrangementHelpers.h"
 #include "Utils/ProjectSession.h"
 #include "Utils/PlatformFileDialogs.h"
+#include "Utils/DemoProject.h"
+#include "Utils/DemoTourGate.h"
 #include "Utils/TouchInput.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/LegacyNoteGenerator.h"
@@ -55,7 +57,6 @@ namespace OpenTune {
 namespace {
 
 constexpr int kHeartbeatHzIdle = 30;
-constexpr int kHeartbeatHzInferenceActive = 10;
 
 // 100% 基线窗口尺寸（§4.4）：min 900×500，max 8192×4096（覆盖 4K/5K 显示器工作区，
 // 最大化不再被旧上限 3000×2000 卡住），preferred 1200×900。
@@ -73,6 +74,101 @@ juce::String projectErrorMessage(const Error& error)
         ? juce::String::fromUTF8(error.message.c_str())
         : juce::String::fromUTF8(error.context.c_str());
 }
+
+} // namespace
+
+// 首次运行 Onboarding 的事件驱动触发器（替代 30Hz 轮询）。
+class OnboardingVisibilityWatcher : public juce::ComponentMovementWatcher
+{
+public:
+    using Callback = std::function<void()>;
+
+    OnboardingVisibilityWatcher(juce::Component& watched, Callback callback)
+        : juce::ComponentMovementWatcher(&watched), callback_(std::move(callback)) {}
+
+    void componentMovedOrResized(bool, bool) override
+    {
+        if (callback_)
+            callback_();
+    }
+
+    void componentPeerChanged() override
+    {
+        if (callback_)
+            callback_();
+    }
+
+    void componentVisibilityChanged() override
+    {
+        if (callback_)
+            callback_();
+    }
+
+private:
+    Callback callback_;
+};
+
+// 监听当前最前面的模态组件关闭/销毁，延迟通知避免在模态状态切换或析构中重入。
+class OnboardingModalWatcher : public juce::ComponentListener
+{
+public:
+    using Callback = std::function<void()>;
+
+    explicit OnboardingModalWatcher(Callback callback)
+        : callback_(std::move(callback)) {}
+
+    ~OnboardingModalWatcher() override
+    {
+        detach();
+    }
+
+    void watchCurrentModal()
+    {
+        auto* modal = juce::Component::getCurrentlyModalComponent(0);
+        if (modal == watched_.getComponent())
+            return;
+        detach();
+        if (modal != nullptr)
+        {
+            watched_ = juce::Component::SafePointer<juce::Component>(modal);
+            modal->addComponentListener(this);
+        }
+    }
+
+    void detach()
+    {
+        if (auto* watched = watched_.getComponent())
+            watched->removeComponentListener(this);
+        watched_ = nullptr;
+    }
+
+    void componentVisibilityChanged(juce::Component& component) override
+    {
+        if (&component == watched_.getComponent() && !component.isShowing())
+            notify();
+    }
+
+    void componentBeingDeleted(juce::Component& component) override
+    {
+        if (&component == watched_.getComponent())
+        {
+            watched_ = nullptr;
+            notify();
+        }
+    }
+
+private:
+    void notify()
+    {
+        if (callback_)
+            juce::MessageManager::callAsync(callback_);
+    }
+
+    Callback callback_;
+    juce::Component::SafePointer<juce::Component> watched_;
+};
+
+namespace {
 
 // 主题截图验证钩子：仅当设置 OPENTUNE_THEME 环境变量时覆盖配置主题（截图工具用），
 // 未设置时返回配置值，行为与之前完全一致。
@@ -502,20 +598,6 @@ void OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent(int tra
         + " scale=" + juce::String(scaleType));
 }
 
-void OpenTuneAudioProcessorEditor::setInferenceActive(bool active)
-{
-    if (inferenceActive_ == active)
-        return;
-
-    inferenceActive_ = active;
-    inferenceActiveTickCounter_ = 0;
-
-    startTimerHz(inferenceActive_ ? kHeartbeatHzInferenceActive : kHeartbeatHzIdle);
-    arrangementView_.setInferenceActive(inferenceActive_);
-    pianoRoll_.setInferenceActive(inferenceActive_);
-    trackPanel_.setInferenceActive(inferenceActive_);
-}
-
 OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& p)
     : AudioProcessorEditor(&p)
     , processorRef_(p)
@@ -750,6 +832,16 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     contentRoot_.addAndMakeVisible(renderBadge_);
     renderBadge_.setVisible(false);
 
+    DemoProject::repairIfInstalled();
+    demoTourCallout_.onPrimary = [this] {
+        if (demoTourStep_ == DemoTourStep::Rendering)
+            showDemoTourStep(DemoTourStep::Tools);
+        else
+            endDemoTour();
+    };
+    demoTourCallout_.onSkip = [this] { endDemoTour(); };
+    contentRoot_.addChildComponent(demoTourCallout_);
+
     // Ensure initial focus
     if (isWorkspaceView_)
         arrangementView_.grabKeyboardFocus();
@@ -794,8 +886,34 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
                 arrangementView_.grabKeyboardFocus();
             else
                 pianoRoll_.grabKeyboardFocus();
+            const juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+            juce::MessageManager::callAsync([safeThis] {
+                if (safeThis != nullptr)
+                    safeThis->startDemoTourIfFirstRun();
+            });
         });
     contentRoot_.addChildComponent(*onboardingOverlay_);
+
+    onboardingVisibilityWatcher_ = std::make_unique<OnboardingVisibilityWatcher>(
+        *this,
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+                safeThis->maybeStartOnboarding();
+        });
+    onboardingModalWatcher_ = std::make_unique<OnboardingModalWatcher>(
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+                safeThis->maybeStartOnboarding();
+        });
+    juce::MessageManager::callAsync(
+        [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
+            if (safeThis != nullptr)
+            {
+                safeThis->maybeStartOnboarding();
+                // 引导未结束/未展示时 startDemoTourIfFirstRun 的守卫会直接返回
+                safeThis->startDemoTourIfFirstRun();
+            }
+        });
 
     // Apply the purple theme to the window
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
@@ -861,6 +979,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    onboardingVisibilityWatcher_.reset();
+    onboardingModalWatcher_.reset();
     preferencesDialog_.reset();
     onboardingOverlay_.reset();
     // 退出保存外层窗口实际 width/height（§5.1）：此刻默认 StandaloneFilterWindow 仍存活，
@@ -1058,6 +1178,203 @@ void OpenTuneAudioProcessorEditor::openProjectFile(const juce::File& file)
     startOpenProject(file);
 }
 
+namespace {
+
+juce::File demoTourMarkerFile()
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("OpenTune")
+        .getChildFile("DemoTourShown");
+}
+
+bool findFirstPlacement(OpenTuneAudioProcessor& processor, int& trackId, int& placementIndex)
+{
+    if (processor.getStandaloneArrangement() == nullptr)
+        return false;
+
+    for (int track = 0; track < OpenTuneAudioProcessor::MAX_TRACKS; ++track)
+    {
+        if (getStandalonePlacementCount(processor, track) > 0)
+        {
+            trackId = track;
+            placementIndex = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool OpenTuneAudioProcessorEditor::isDemoTourConsumed() const
+{
+    return appPreferences_.getState().shared.demoTourConsumed
+        || demoTourMarkerFile().existsAsFile();
+}
+
+void OpenTuneAudioProcessorEditor::markDemoTourDone()
+{
+    const auto marker = demoTourMarkerFile();
+    marker.getParentDirectory().createDirectory();
+    marker.replaceWithText({});
+    appPreferences_.setDemoTourConsumed(true);
+}
+
+void OpenTuneAudioProcessorEditor::startDemoTourIfFirstRun()
+{
+    if (onboardingOverlay_ != nullptr && onboardingOverlay_->isActive())
+        return;
+    if (!appPreferences_.getState().shared.onboardingShown)
+        return;
+
+    if (demoTourSettled_ || demoTourStep_ != DemoTourStep::None)
+        return;
+
+    if (isDemoTourConsumed())
+    {
+        // 旧版本只写了标记文件。补进偏好，下次不必再依赖那个文件。
+        if (!appPreferences_.getState().shared.demoTourConsumed)
+            markDemoTourDone();
+        demoTourSettled_ = true;
+        return;
+    }
+
+    int trackId = -1;
+    int placementIndex = -1;
+    if (projectOperationBusy_ || findFirstPlacement(processorRef_, trackId, placementIndex))
+    {
+        // 工程里已经有音频，不再覆盖。安装失败不走这里，下次启动还会再试。
+        markDemoTourDone();
+        demoTourSettled_ = true;
+        return;
+    }
+
+    const auto demo = DemoProject::install();
+    if (demo == juce::File())
+    {
+        demoTourSettled_ = true;
+        return;
+    }
+
+    // 先发出打开，再进入 LoadingProject。若在 projectOperationBusy_ 置上之前
+    // 就判断“还没有片段”，会把尚未开始的打开误当成失败：导览被取消、首次运行
+    // 不记消费，但工程仍然打开，于是每次启动都重复，第二段引导永远不出现。
+    demoTourOpenStarted_ = true;
+    openProjectFile(demo);
+    showDemoTourStep(DemoTourStep::LoadingProject);
+}
+
+void OpenTuneAudioProcessorEditor::showDemoTourStep(DemoTourStep step)
+{
+    demoTourStep_ = step;
+    const auto skip = LOC_RAW("Skip Tour");
+    switch (step)
+    {
+        case DemoTourStep::None:
+        case DemoTourStep::LoadingProject:
+            demoTourCallout_.setVisible(false);
+            break;
+        case DemoTourStep::OpenPianoRoll:
+            demoTourCallout_.show(LOC_RAW("Demo project"),
+                LOC_RAW("This demo song is now on the track. Double-tap the audio clip to open the piano roll and edit its pitch."),
+                {}, skip);
+            break;
+        case DemoTourStep::Rendering:
+            demoTourCallout_.show(LOC_RAW("Rendering audio"),
+                LOC_RAW("The audio is being rendered. Rendering starts after loading a project, editing pitch or transposing; please wait until it finishes. If you play now, you will hear the original pitch."),
+                LOC_RAW("Next"), skip);
+            break;
+        case DemoTourStep::Tools:
+            demoTourCallout_.show(LOC_RAW("Editing tools"),
+                LOC_RAW("The tools on the right edit pitch and notes. Long-press any tool to see its name and how to use it."),
+                LOC_RAW("Done"), skip);
+            break;
+    }
+    updateDemoTour();
+}
+
+void OpenTuneAudioProcessorEditor::updateDemoTour()
+{
+    juce::Rectangle<int> target;
+    switch (demoTourStep_)
+    {
+        case DemoTourStep::None:
+            return;
+
+        case DemoTourStep::LoadingProject:
+        {
+            int trackId = -1;
+            int placementIndex = -1;
+            const bool hasPlacement = findFirstPlacement(processorRef_, trackId, placementIndex);
+            const auto phase = resolveDemoTourLoad({
+                demoTourOpenStarted_, projectOperationBusy_, hasPlacement });
+            if (phase == DemoTourLoadPhase::WaitingForOpen)
+                return;
+            if (phase == DemoTourLoadPhase::OpenFailed)
+            {
+                // 打开已经结束，工程里仍然没有音频。不记消费，下次启动再试。
+                demoTourOpenStarted_ = false;
+                demoTourStep_ = DemoTourStep::None;
+                demoTourSettled_ = true;
+                return;
+            }
+            // 片段已经在轨道上：此刻就记首次运行已消费，导览中途退出也不会再自动打开。
+            markDemoTourDone();
+            demoTourOpenStarted_ = false;
+            if (!isWorkspaceView_)
+            {
+                viewToggled(true);
+                transportBar_.setWorkspaceView(true);
+            }
+            showDemoTourStep(DemoTourStep::OpenPianoRoll);
+            return;
+        }
+
+        case DemoTourStep::OpenPianoRoll:
+        {
+            if (!isWorkspaceView_)
+            {
+                showDemoTourStep(DemoTourStep::Rendering);
+                return;
+            }
+            int trackId = -1;
+            int placementIndex = -1;
+            if (findFirstPlacement(processorRef_, trackId, placementIndex))
+            {
+                const auto visible = arrangementView_.getLocalBounds()
+                    .withTrimmedTop(arrangementView_.getRulerHeight());
+                target = contentRoot_.getLocalArea(&arrangementView_,
+                    arrangementView_.getClipBounds(trackId, placementIndex).getIntersection(visible));
+            }
+            break;
+        }
+
+        case DemoTourStep::Rendering:
+            target = renderBadge_.isVisible() ? renderBadge_.getBounds() : juce::Rectangle<int>();
+            break;
+
+        case DemoTourStep::Tools:
+            if (!isParameterPanelVisible_)
+            {
+                isParameterPanelVisible_ = true;
+                parameterPanel_.setVisible(true);
+                topBar_.setSidePanelsVisible(isTrackPanelVisible_, isParameterPanelVisible_);
+                resized();
+            }
+            target = contentRoot_.getLocalArea(&parameterPanel_, parameterPanel_.getLocalBounds());
+            break;
+    }
+    demoTourCallout_.setTarget(target);
+}
+
+void OpenTuneAudioProcessorEditor::endDemoTour()
+{
+    markDemoTourDone();
+    demoTourSettled_ = true;
+    demoTourStep_ = DemoTourStep::None;
+    demoTourCallout_.setVisible(false);
+}
+
 void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
 {
     const auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
@@ -1079,6 +1396,8 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
                     &safeThis->contentRoot_);
                 safeThis->projectSession_.clearRecentProjects();
                 safeThis->projectOperationBusy_ = false;
+                safeThis->maybeStartOnboarding();
+                safeThis->updateDemoTour();
                 return;
             }
 
@@ -1092,6 +1411,8 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
                         { { LOC(kOK), nullptr, true } }),
                     &safeThis->contentRoot_);
                 safeThis->projectOperationBusy_ = false;
+                safeThis->maybeStartOnboarding();
+                safeThis->updateDemoTour();
                 return;
             }
 
@@ -1099,6 +1420,8 @@ void OpenTuneAudioProcessorEditor::startOpenProject(const juce::File& file)
             safeThis->updateTitleWithProjectPath();
             safeThis->refreshAllUIFromProject();
             safeThis->projectOperationBusy_ = false;
+            safeThis->maybeStartOnboarding();
+            safeThis->updateDemoTour();
         });
     });
 }
@@ -1503,12 +1826,19 @@ void OpenTuneAudioProcessorEditor::resized()
     if (onboardingOverlay_ == nullptr || !onboardingOverlay_->isActive())
         renderBadge_.toFront(false);
 
+    demoTourCallout_.setBounds(contentRoot_.getLocalBounds());
+    if (demoTourCallout_.isVisible())
+        demoTourCallout_.toFront(false);
+
     if (onboardingOverlay_ != nullptr)
     {
         onboardingOverlay_->updateLayout();
         if (onboardingOverlay_->isActive())
             onboardingOverlay_->toFront(false);
     }
+
+    if (demoTourStep_ != DemoTourStep::None)
+        updateDemoTour();
 }
 
 void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
@@ -1611,21 +1941,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     restoreStandaloneWindowGeometryOnce();
 
-    syncSharedAppPreferences();
-
-    if (onboardingOverlay_ != nullptr && !onboardingOverlay_->isActive()
-        && !appPreferences_.getState().shared.onboardingShown
-        && isShowing() && getPeer() != nullptr && getWidth() > 0 && getHeight() > 0
-        && juce::ModalComponentManager::getInstance()->getNumModalComponents() == 0
-        && !projectOperationBusy_ && !isImportInProgress_ && !exportInProgress_.load()
-        && !originalF0OverlayLatched_ && !externalEditActive_)
-    {
-        onboardingRequested();
-    }
-
     const bool vocoderReady = processorRef_.isVocoderReady();
-    const bool inferenceNow = false;
-    setInferenceActive(inferenceNow);
 
     syncParameterPanelFromSelection();
 
@@ -1646,7 +1962,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
                                        overviewSampleRate);
     }
 
-    const bool allowSecondaryRefresh = !inferenceActive_ || ((++inferenceActiveTickCounter_ % 4) == 0);
+    constexpr bool allowSecondaryRefresh = true;
 // Update playhead position from processor (presented position via local PlayHeadState projection)
     double currentPositionSeconds = processorRef_.getPosition();
     double sampleRate = processorRef_.getSampleRate();
@@ -1759,8 +2075,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 // Playhead position: each component reads presented position from PlayHeadState projection
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
-    const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
-
     for (const auto& f0FailureEvent : processorRef_.takeOriginalF0FailureEvents()) {
         const auto reason = f0FailureEvent.reason.isNotEmpty()
             ? f0FailureEvent.reason
@@ -1855,13 +2169,20 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     // Combined badge visibility — Stage 1 only (Stage 2 is synchronous in CRS).
-    const bool shouldShowBadge = stage1HasWork && !isAutoProcessing;
+    bool shouldShowBadge = stage1HasWork && !isAutoProcessing;
     if (shouldShowBadge) {
         renderBadge_.setMessageText(LOC_RAW("Rendering (")
             + juce::String(stage1Done) + "/" + juce::String(stage1Total) + ")");
     }
+    // 引导讲解渲染时徽标保持可见；渲染已结束则显示 0/0。
+    if (demoTourStep_ == DemoTourStep::Rendering && !shouldShowBadge) {
+        renderBadge_.setMessageText(LOC_RAW("Rendering (") + "0/0)");
+        shouldShowBadge = true;
+    }
     if (renderBadge_.isVisible() != shouldShowBadge) {
         renderBadge_.setVisible(shouldShowBadge);
+        if (demoTourStep_ != DemoTourStep::None)
+            updateDemoTour();
     }
 
     if (autoRenderOverlay_.isVisible() != shouldShowOverlay) {
@@ -1869,6 +2190,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
 #if JUCE_DEBUG
+    const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
     if (++diagnosticHeartbeatCounter_ >= 300) {
         diagnosticHeartbeatCounter_ = 0;
         const auto diagnosticInfo = processorRef_.getDiagnosticInfo(getStandaloneActiveTrack(processorRef_), statusSnapshot.placementId);
@@ -1906,6 +2228,9 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
 
     // EQ popup「以后不再提示」偏好直接注入（无中转层）
     pianoRoll_.setAppPreferences(&appPreferences_);
+
+    if (!appPreferences_.getNoteTransposePreviewEnabled())
+        processorRef_.stopNotePitchAudition();
 
     if (appliedExperimentalFeaturesEnabled_ != experimentalFeaturesEnabled) {
         appliedExperimentalFeaturesEnabled_ = experimentalFeaturesEnabled;
@@ -3129,6 +3454,35 @@ void OpenTuneAudioProcessorEditor::onboardingRequested()
     onboardingOverlay_->start();
 }
 
+void OpenTuneAudioProcessorEditor::maybeStartOnboarding()
+{
+    if (onboardingOverlay_ == nullptr || onboardingOverlay_->isActive())
+        return;
+
+    if (appPreferences_.getState().shared.onboardingShown)
+        return;
+
+    if (!isShowing() || getPeer() == nullptr || getWidth() <= 0 || getHeight() <= 0)
+        return;
+
+    if (juce::Component::getNumCurrentlyModalComponents() > 0)
+    {
+        // 有模态组件时挂监听，等它关闭后再尝试触发引导
+        if (onboardingModalWatcher_ != nullptr)
+            onboardingModalWatcher_->watchCurrentModal();
+        return;
+    }
+
+    if (onboardingModalWatcher_ != nullptr)
+        onboardingModalWatcher_->detach();
+
+    if (projectOperationBusy_ || isImportInProgress_ || exportInProgress_.load()
+        || originalF0OverlayLatched_ || externalEditActive_)
+        return;
+
+    onboardingRequested();
+}
+
 // ============================================================================
 // TransportBarComponent::Listener Implementation
 // ============================================================================
@@ -3291,6 +3645,9 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
 
     resized();
     repaint();
+
+    if (demoTourStep_ != DemoTourStep::None)
+        updateDemoTour();
 }
 
 void OpenTuneAudioProcessorEditor::overviewNavigateRequested(double visibleStartSeconds,
@@ -3355,6 +3712,9 @@ void OpenTuneAudioProcessorEditor::trackHeightChanged(int newHeight)
     // 鍒锋柊ArrangementView
     if (needsArrangementRebuild)
         arrangementView_.requestContentRedraw();
+
+    if (demoTourStep_ != DemoTourStep::None)
+        updateDemoTour();
 }
 
 void OpenTuneAudioProcessorEditor::visibleTrackCountChanged(int newCount)
@@ -3532,6 +3892,8 @@ void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64
     applyPlacementSelectionContext(trackId, placementId);
 
     // 更新 reference context
+    if (demoTourStep_ != DemoTourStep::None)
+        updateDemoTour();
 }
 
 void OpenTuneAudioProcessorEditor::placementTimingChanged(int trackId, int placementIndex)
@@ -3543,6 +3905,9 @@ void OpenTuneAudioProcessorEditor::placementTimingChanged(int trackId, int place
     }
 
     projectSession_.markDirty();
+
+    if (demoTourStep_ != DemoTourStep::None)
+        updateDemoTour();
 }
 
 // Y-axis scroll sync: notify other component when ArrangementView or TrackPanel scrolls
@@ -3552,6 +3917,15 @@ void OpenTuneAudioProcessorEditor::verticalScrollChanged(int newOffset)
     trackPanel_.setVerticalScrollOffset(newOffset);
     // 同步ArrangementView
     arrangementView_.setVerticalScrollOffset(newOffset);
+
+    if (demoTourStep_ != DemoTourStep::None)
+        updateDemoTour();
+}
+
+void OpenTuneAudioProcessorEditor::arrangementViewportChanged()
+{
+    if (demoTourStep_ != DemoTourStep::None)
+        updateDemoTour();
 }
 
 void OpenTuneAudioProcessorEditor::scrollModeChanged(bool isContinuous)
@@ -3567,11 +3941,17 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
 {
     placementSelectionChanged(trackId, processorRef_.getPlacementId(trackId, placementIndex));
 
-    if (isWorkspaceView_)
-    {
-        transportBar_.setWorkspaceView(false);
-        viewToggled(false);
-    }
+    if (!isWorkspaceView_)
+        return;
+
+    // 记下钢琴卷帘自己的横向缩放。viewToggled 可能把编曲相机抄过来，
+    // 居中时仍用这个缩放，不跟着编曲视图的缩放走。
+    const double pianoPixelsPerSecond = pianoRoll_.timelineCamera().pixelsPerSecond;
+    const bool centerNote = pianoRoll_.prepareNoteCenterOnClipEntry();
+    transportBar_.setWorkspaceView(false);
+    viewToggled(false);
+    if (centerNote && !pianoRoll_.centerNoteNearestPlayhead(pianoPixelsPerSecond))
+        pianoRoll_.requestInitialF0View(pianoRoll_.editedContentKey());
 }
 
 

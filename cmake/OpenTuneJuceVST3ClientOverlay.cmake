@@ -146,6 +146,74 @@ function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
         endif()
     endif()
 
+    # ---- Patch 3: host-active buses when the host skips activateBus -------------
+    # Cubase 12 / Nuendo 12 do not call IComponent::activateBus() for ARA plug-in
+    # instances, so ClientBufferMapper keeps every bus host-inactive and the wrapper
+    # never copies the plug-in output back to the host buffer. Treating the buses of
+    # the accepted arrangement as host active restores output; a later activateBus
+    # call from a well-behaved host still overrides this state.
+    set(bus_active_needle [=[
+        if (pluginInstance->checkBusesLayoutSupported (requestedLayout))
+        {
+            if (! pluginInstance->setBusesLayoutWithoutEnabling (requestedLayout))
+                return kResultFalse;
+
+            bufferMapper.updateFromProcessor (*pluginInstance);
+            return kResultTrue;
+        }
+]=])
+
+    set(bus_active_patched [=[
+        if (pluginInstance->checkBusesLayoutSupported (requestedLayout))
+        {
+            if (! pluginInstance->setBusesLayoutWithoutEnabling (requestedLayout))
+                return kResultFalse;
+
+            bufferMapper.updateFromProcessor (*pluginInstance);
+
+            // OpenTune: hosts that never call activateBus still need host-active buses.
+            for (int dir = 0; dir < 2; ++dir)
+            {
+                const auto isInput = (dir != 0);
+                const auto& buses = isInput ? requestedLayout.inputBuses
+                                            : requestedLayout.outputBuses;
+
+                for (int i = 0; i < (int) buses.size(); ++i)
+                {
+                    const auto busIsActive = buses[(size_t) i] != AudioChannelSet::disabled();
+
+                    if (isInput) bufferMapper.setInputBusHostActive  ((size_t) i, busIsActive);
+                    else         bufferMapper.setOutputBusHostActive ((size_t) i, busIsActive);
+                }
+            }
+
+            return kResultTrue;
+        }
+]=])
+
+    string(FIND "${vst3_client_source}" "${bus_active_patched}" bus_active_patched_pos)
+    if(NOT bus_active_patched_pos EQUAL -1)
+        message(STATUS
+            "JUCE VST3 client already treats accepted buses as host active; skipping bus patch")
+    else()
+        string(FIND "${vst3_client_source}" "${bus_active_needle}" bus_active_pos)
+        if(bus_active_pos EQUAL -1)
+            string(REPLACE "\n" "\r\n" bus_active_needle_crlf "${bus_active_needle}")
+            string(REPLACE "\n" "\r\n" bus_active_patched_crlf "${bus_active_patched}")
+            string(FIND "${vst3_client_source}" "${bus_active_needle_crlf}" bus_active_crlf_pos)
+            if(bus_active_crlf_pos EQUAL -1)
+                message(FATAL_ERROR
+                    "OpenTune JUCE VST3 client overlay cannot apply host-active bus patch. "
+                    "Inspect ${vst3_cpp_path}; the audited setBusArrangements body no longer matches.")
+            endif()
+            string(REPLACE "${bus_active_needle_crlf}" "${bus_active_patched_crlf}"
+                   vst3_client_source "${vst3_client_source}")
+        else()
+            string(REPLACE "${bus_active_needle}" "${bus_active_patched}"
+                   vst3_client_source "${vst3_client_source}")
+        endif()
+    endif()
+
     # ---- Emit patched source and rewire INTERFACE_SOURCES -----------------------
     set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/Generated/OpenTune/JUCE")
     set(generated_vst3_cpp_path "${generated_dir}/juce_audio_plugin_client_VST3.cpp")

@@ -110,6 +110,8 @@ Source: "{#StandaloneBuildDir}\Standalone\models\fcpe.onnx"; DestDir: "{commonap
 Source: "{#StandaloneBuildDir}\Standalone\models\hifigan.onnx"; DestDir: "{commonappdata}\OpenTune\Models"; Components: standalone vst3plugin; Flags: ignoreversion
 ; Standalone - documents
 Source: "{#StandaloneBuildDir}\Standalone\docs\*"; DestDir: "{app}\docs"; Components: standalone; Flags: ignoreversion recursesubdirs
+; Standalone - first-run demo project and bundled audio
+Source: "{#StandaloneBuildDir}\Standalone\Demo\*"; DestDir: "{app}\Demo"; Components: standalone; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Standalone - license notices
 Source: "..\NOTICE.txt"; DestDir: "{app}"; Components: standalone; Flags: ignoreversion

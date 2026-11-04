@@ -1,4 +1,5 @@
 #include "PianoRollComponent.h"
+#include "PianoRollNoteEntry.h"
 #include "../../Content/EditableContentSnapshot.h"
 #include "../../Utils/AppPreferences.h"
 #include "../../Utils/PendingSeekPolicy.h"
@@ -551,6 +552,10 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         if (name.isNotEmpty())
             a11y::announce(*this, name);
     };
+    toolCtx.auditionNotePitch = [this](double start, double end, float targetHz) {
+        if (processor_ != nullptr) processor_->auditionNotePitch(editedContentKey_, start, end, targetHz);
+    };
+    toolCtx.stopNotePitchAudition = [this]() { stopNotePitchAudition(); };
     toolCtx.getPianoKeyWidth = [this]() { return getTimelineContentStartX(); };
     toolCtx.getContentProjection = [this]() { return activeContentProjection(); };
     toolCtx.getHandDrawPreviewBounds = [this]() { return getHandDrawPreviewBounds(); };
@@ -1139,8 +1144,13 @@ PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState,
 }
 
 PianoRollComponent::~PianoRollComponent() {
+    stopNotePitchAudition();
     scrollVBlankAttachment_.reset();
     verticalScrollBar_.removeListener(this);
+}
+
+void PianoRollComponent::stopNotePitchAudition() {
+    if (processor_ != nullptr) processor_->stopNotePitchAudition();
 }
 
 
@@ -3173,12 +3183,6 @@ int PianoRollComponent::getTimelineContentStartX() const noexcept
     return shouldShowPianoKeys() ? pianoKeyWidth_ : 0;
 }
 
-void PianoRollComponent::setInferenceActive(bool active)
-{
-    inferenceActive_ = active;
-    waveformBuildTickCounter_ = 0;
-}
-
 bool PianoRollComponent::getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const
 {
     const auto notes = getEditedContentNotesCopy();
@@ -3844,6 +3848,7 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
     if (contentChanged) {
         // 切换编辑目标：EQ 弹窗由选中组驱动，内容切换即失效
         closeEqPopup();
+        stopNotePitchAudition();
         if (!contentKey.isValid())
             pendingInitialF0ViewContentKey_ = ContentKey{};
         editedContentKey_ = contentKey;
@@ -3920,6 +3925,100 @@ void PianoRollComponent::requestInitialF0View(ContentKey contentKey)
 
     pendingInitialF0ViewContentKey_ = contentKey;
     tryConsumeInitialF0View(contentKey);
+}
+
+namespace {
+
+bool clipHasCenterableNote(const std::vector<Note>& notes)
+{
+    for (const auto& note : notes)
+    {
+        const CenterableNote sample { note.startTime, note.endTime, note.getAdjustedPitch() };
+        if (isCenterableNote(sample))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
+bool PianoRollComponent::prepareNoteCenterOnClipEntry()
+{
+    if (!clipHasCenterableNote(getCommittedNotes()))
+        return false;
+
+    // 进入后 F0 Ready 会沿同一条 pending 把镜头改到首帧。这里先取消，
+    // 让随后的 centerNoteNearestPlayhead 成为这次进入的唯一镜头。
+    pendingInitialF0ViewContentKey_ = ContentKey{};
+    return true;
+}
+
+bool PianoRollComponent::centerNoteNearestPlayhead(double pixelsPerSecond)
+{
+    const auto& notes = getCommittedNotes();
+    const int viewportW = getTimelineContentViewportWidth();
+    const int viewportH = getTimelineContentViewportHeight();
+    if (viewportW <= 0 || viewportH <= 0)
+        return false;
+
+    const double pps = pixelsPerSecond > 0.0 ? pixelsPerSecond : camera_.pixelsPerSecond;
+    if (!(pps > 0.0) || !std::isfinite(pps))
+        return false;
+
+    const auto* placement = findEditedPlacement();
+    if (placement == nullptr)
+        return false;
+    const auto snap = readSnapshotFor(placement->contentKey);
+    if (snap == nullptr || snap->timeGrid == nullptr)
+        return false;
+
+    const PianoRollTimeMap map(placement->projection, *snap->timeGrid, makeViewMapper());
+    double playhead = playHeadState_.getPresentedPositionSeconds();
+    if (!std::isfinite(playhead))
+        playhead = 0.0;
+
+    std::vector<CenterableNote> onTimeline;
+    onTimeline.reserve(notes.size());
+    for (const auto& note : notes)
+    {
+        onTimeline.push_back({
+            map.sourceToTimeline(note.startTime),
+            map.sourceToTimeline(note.endTime),
+            note.getAdjustedPitch()
+        });
+    }
+
+    const int index = noteIndexNearestTime(onTimeline.data(), static_cast<int>(onTimeline.size()), playhead);
+    if (index < 0)
+        return false;
+
+    const double timelineSeconds = noteCenterTimeNearest(playhead, onTimeline[static_cast<size_t>(index)]);
+    if (!std::isfinite(timelineSeconds))
+        return false;
+
+    const float noteMidi = makeViewMapper().freqToMidi(notes[static_cast<size_t>(index)].getAdjustedPitch());
+    if (!std::isfinite(noteMidi))
+        return false;
+
+    // 保持当前音高缩放，只把该音高车道滚到内容区中央。
+    verticalScrollOffset_ = (maxMidi_ - noteMidi) * pixelsPerSemitone_
+        - static_cast<float>(viewportH) * 0.5f;
+    const float maxScroll = juce::jmax(0.0f, getTotalHeight() - static_cast<float>(viewportH));
+    verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
+
+    // 挡住播放跟随，直到用户自己平移或缩放。Kind::Cont 用现有横向缩放把时间点放在视口中央。
+    userScrollHold_ = true;
+    staticDirty_ = true;
+    contentDirty_ = true;
+    commitViewportRequest(makeViewportRequest(
+        TimelineViewportRequest::Kind::Cont,
+        timelineSeconds,
+        0.0,
+        pps));
+    updateScrollBars();
+    repaint();
+    overlay_->repaint();
+    return true;
 }
 
 void PianoRollComponent::onTimeGridRevisionChanged()
@@ -4137,15 +4236,7 @@ void PianoRollComponent::onHeartbeatTick()
 
     // 波形缓存增量构建在可见性 guard 之前：导入音频后即使钢琴卷帘尚未显示也预先构建
     if (showWaveform_ || isOpenDyne()) {
-        bool progressed = false;
-        if (inferenceActive_) {
-            waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;
-            if (waveformBuildTickCounter_ == 0)
-                progressed = waveformMipmapCache_.buildIncremental(0.15);
-        } else {
-            waveformBuildTickCounter_ = 0;
-            progressed = waveformMipmapCache_.buildIncremental(0.75);
-        }
+        const bool progressed = waveformMipmapCache_.buildIncremental(0.75);
 
         // 先持久化构建进度，再按可见性决定是否立即提交 surface。
         if (progressed) {
@@ -4157,8 +4248,6 @@ void PianoRollComponent::onHeartbeatTick()
             rasterizeDirtySurfaces();
             repaint();
         }
-    } else {
-        waveformBuildTickCounter_ = 0;
     }
 
     if (!isShowing())
@@ -4438,6 +4527,7 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
     audioEditingScheme_ = scheme;
     const bool nowOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_);
 
+    stopNotePitchAudition();
     // 清除当前 transient drag/resize/drawing/scissors/volume 预览
     interactionState_.resetTransient();
     if (interactionState_.isPanning)
@@ -4492,6 +4582,9 @@ void PianoRollComponent::ensureOpenDyneNotesIfNeeded()
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {
+    if (currentTool_ != tool)
+        stopNotePitchAudition();
+
     // Time 仅在 experimental 开启时有效
     if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_) {
         tool = ToolId::Select;
@@ -5240,17 +5333,33 @@ void PianoRollComponent::handleVerticalScrollWheel(float deltaY) {
 }
 
 void PianoRollComponent::handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY) {
-    if (!zoomPreviewActive_ || zoomAnchorTime_ < 0.0) {
-        beginZoomPreview(e, deltaY);
-    } else {
-        updateZoomPreview(deltaY);
-    }
+    const int anchorViewportX = e.x - getTimelineContentStartX();
+    userScrollHold_ = true;
+    beginZoomPreviewAt(anchorViewportX,
+                       1.0 + static_cast<double>(deltaY) * zoomSensitivity_.horizontalZoomFactor);
 }
 
 void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) {
     KeyShortcutConfig::BindingType wheelType;
     if (KeyShortcutConfig::getWheelBindingType(wheel, e.mods, wheelType)) {
         const KeyShortcutConfig::KeyBinding binding(wheelType, e.mods);
+
+        // Resolve the wheel binding to a ShortcutId BEFORE generic handlePointerShortcut
+        // so pointer-anchored horizontal zoom can use the matched shortcut for direction
+        // and magnitude (custom wheel bindings may map up/down/left/right arbitrarily).
+        const auto scope = AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_)
+            ? KeyShortcutConfig::kPianoRollOpenDyneScope
+            : KeyShortcutConfig::kPianoRollOpenTuneScope;
+        const auto id = KeyShortcutConfig::findShortcutForBinding(shortcutSettings_, binding, scope);
+
+        if (id == KeyShortcutConfig::ShortcutId::ZoomHorizontalIn
+            || id == KeyShortcutConfig::ShortcutId::ZoomHorizontalOut) {
+            const bool zoomIn = id == KeyShortcutConfig::ShortcutId::ZoomHorizontalIn;
+            const float magnitude = std::max(std::abs(wheel.deltaY), std::abs(wheel.deltaX));
+            handleHorizontalZoomWheel(e, (zoomIn ? 1.0f : -1.0f) * magnitude);
+            return;
+        }
+
         if (handlePointerShortcut(binding))
             return;
     }
@@ -5590,11 +5699,6 @@ void PianoRollComponent::fitToSelectedNotes()
     overlay_->repaint();
 }
 
-void PianoRollComponent::beginZoomPreview(const juce::MouseEvent& e, float deltaY) {
-    const double zoomFactor = 1.0 + static_cast<double>(deltaY) * zoomSensitivity_.horizontalZoomFactor;
-    beginZoomPreviewAt(e.x - getTimelineContentStartX(), zoomFactor);
-}
-
 void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFactor) {
     const double oldPps = camera_.pixelsPerSecond;
     const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
@@ -5608,21 +5712,6 @@ void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFact
     zoomDeadlineTicks_ = kZoomDeadlineTicks;
 
     userHasManuallyZoomed_ = true;
-    commitViewportRequest(makeViewportRequest(
-        TimelineViewportRequest::Kind::Zoom,
-        zoomAnchorTime_,
-        static_cast<double>(zoomAnchorViewportX_),
-        newPps));
-}
-
-void PianoRollComponent::updateZoomPreview(float deltaY) {
-    const auto& settings = zoomSensitivity_;
-    const double zoomFactor = 1.0 + static_cast<double>(deltaY) * settings.horizontalZoomFactor;
-    const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
-        camera_.pixelsPerSecond * zoomFactor,
-        TimelineViewportRequest::ViewKind::PianoRoll);
-
-    zoomDeadlineTicks_ = kZoomDeadlineTicks;
     commitViewportRequest(makeViewportRequest(
         TimelineViewportRequest::Kind::Zoom,
         zoomAnchorTime_,
@@ -6018,6 +6107,10 @@ void PianoRollComponent::visibilityChanged()
                 safeThis->grabKeyboardFocus();
             }
         });
+    }
+    else
+    {
+        stopNotePitchAudition();
     }
 }
 

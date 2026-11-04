@@ -1154,6 +1154,16 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     cancelPendingUpdate();
 #endif
 
+#if !JucePlugin_Build_Standalone
+    // Processor 生命周期结束：清理尚未返回的外部编辑会话目录（消息线程，
+    // 析构时 MessageManager 已在；Timer 已先停止，不再有 pollReturnedExternalEdit）。
+    if (externalEditSessionDir_.isDirectory()) {
+        externalEditSessionDir_.deleteRecursively();
+        externalEditSessionDir_ = juce::File();
+        externalEditContentKey_ = {};
+    }
+#endif
+
     ProcessRenderRuntime::getInstance().releaseOwner();
 
     // Vocoder / F0 / AppLogger 全部是进程级资源（ProcessRenderRuntime /
@@ -1367,6 +1377,9 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     currentSampleRate_ = sampleRate;
     currentBlockSize_ = samplesPerBlock;
 
+    // Any in-flight note pitch audition is bound to the previous device rate; stop it.
+    stopNotePitchAudition();
+
     // Real sample rate change: project transportCursor_ from old rate to new rate
     if (realRateChange) {
         const double oldRate = preparedPlaybackSampleRate_;
@@ -1427,6 +1440,9 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
+    // 停止可能仍在进行的音符移调试听（设备即将释放）
+    stopNotePitchAudition();
+
     const RuntimePhase entryPhase = phase_;  // snapshot before any mutation
     // Cancel transition; align cursors, gain=0
     transitionActive_ = false;
@@ -1472,6 +1488,34 @@ const Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() const
         return nullptr;
 #endif
     return captureSession_.get();
+}
+
+bool OpenTuneAudioProcessor::externalEditLaunchRequested(ContentKey key, const EditableContentSnapshot& snapshot)
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+
+    // 已有活动会话：重新拉起独立编辑器窗口（不新建会话）。
+    if (externalEditSessionActive()) {
+        ExternalEditSession::launchStandalone(externalEditSessionDir_);
+        return true;
+    }
+
+    if (!key.isValid() || snapshot.audioBuffer == nullptr
+        || snapshot.audioBuffer->getNumSamples() <= 0)
+        return false;
+
+    const auto directory = ExternalEditSession::createSessionDirectory();
+    if (!ExternalEditSession::writeSession(directory, key, snapshot)
+        || !ExternalEditSession::launchStandalone(directory)) {
+        directory.deleteRecursively();
+        return false;
+    }
+
+    externalEditSessionDir_ = directory;
+    externalEditContentKey_ = key;
+    externalEditCorruptCurveShown_ = false;
+    AppLogger::log("External edit launched " + directory.getFullPathName());
+    return true;
 }
 #endif // !JucePlugin_Build_Standalone
 
@@ -1577,7 +1621,10 @@ bool OpenTuneAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
     return (in == juce::AudioChannelSet::mono() && out == juce::AudioChannelSet::mono())
         || (in == juce::AudioChannelSet::stereo() && out == juce::AudioChannelSet::stereo());
 #else
-    return in == juce::AudioChannelSet::stereo() && out == juce::AudioChannelSet::stereo();
+    // ARA 宿主只保证渲染实例的输出总线；输入端在 ARA 渲染实例上可为禁用。
+    // 约束对齐 JUCE 官方 ARA 示例：只要求输出为立体声。
+    return out == juce::AudioChannelSet::stereo()
+        && (in == juce::AudioChannelSet::stereo() || in.isDisabled());
 #endif
 }
 
@@ -1711,6 +1758,26 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 #if JucePlugin_Enable_ARA
     if (isBoundToARA())
     {
+        // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+        {
+            if (numSamples > 0 && !araChannelDiagnosticLogged_.exchange(true, std::memory_order_relaxed))
+            {
+                juce::String layout;
+                for (int bus = 0; bus < getBusCount(false); ++bus)
+                    layout += (getBus(false, bus)->isEnabled() ? "on" : "off");
+                AppLogger::logNoThrow("ARA-CHANNELS: processor="
+                    + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+                    + " playbackRenderer=" + juce::String(isPlaybackRenderer() ? "1" : "0")
+                    + " editorRenderer=" + juce::String(isEditorRenderer() ? "1" : "0")
+                    + " editorView=" + juce::String(isEditorView() ? "1" : "0")
+                    + " bufferChannels=" + juce::String(buffer.getNumChannels())
+                    + " inChannels=" + juce::String(getTotalNumInputChannels())
+                    + " outChannels=" + juce::String(totalNumOutputChannels)
+                    + " outBusEnabled=" + layout
+                    + " n=" + juce::String(numSamples));
+            }
+        }
+
         // Forward same PositionInfo to ARA. Build a local empty PositionInfo when the
         // host did not provide one; this never enters playHeadState_ (update above was
         // a no-op for nullopt). Metadata snapshot is only refreshed when the host
@@ -1725,8 +1792,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
         if (processBlockForARA(buffer, isRealtime(), araPositionInfo))
         {
-            pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
-            noteAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+            mixAuditions(buffer, numSamples, static_cast<double>(getSampleRate()));
             outputSpectrumAnalyzer_.push(buffer);
             return;
         }
@@ -1751,8 +1817,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
 
         captureSession->processBlock(buffer, hostAbsoluteSample, getSampleRate(), isPlaying);
-        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
-        noteAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+        mixAuditions(buffer, numSamples, static_cast<double>(getSampleRate()));
         outputSpectrumAnalyzer_.push(buffer);
         return;
     }
@@ -1762,8 +1827,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     for (int i = 0; i < totalNumOutputChannels; ++i) {
         buffer.clear(i, 0, numSamples);
     }
-    pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
-    noteAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+    mixAuditions(buffer, numSamples, static_cast<double>(getSampleRate()));
     outputSpectrumAnalyzer_.push(buffer);
 #elif JucePlugin_Build_Standalone
     // --- Standalone state machine ---
@@ -1947,8 +2011,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // Stopped/Paused with no active transition — only piano audition
     if (phase_ != RuntimePhase::Playing && !transitionActive_) {
-        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
-        noteAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
+        mixAuditions(buffer, numSamples, deviceSampleRate);
         outputSpectrumAnalyzer_.push(buffer);
         jassert(standaloneArrangement_ != nullptr);
         for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
@@ -2140,8 +2203,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
-    noteAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
+    mixAuditions(buffer, numSamples, deviceSampleRate);
 
     // Standalone 频谱分析：接收最终输出（含 pianoKeyAudition 混音）
     outputSpectrumAnalyzer_.push(buffer);
@@ -2965,8 +3027,55 @@ void OpenTuneAudioProcessor::timerCallback()
 {
     if (auto* session = getCaptureSession())
         session->tick();
+
+    pollReturnedExternalEdit();
 }
 #endif // !JucePlugin_Build_Standalone
+
+#if !JucePlugin_Build_Standalone
+void OpenTuneAudioProcessor::pollReturnedExternalEdit()
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    if (!externalEditSessionActive())
+        return;
+
+    const auto check = ExternalEditSession::checkReturned(externalEditSessionDir_);
+    if (check.result == ExternalCurveCheckResult::Pending)
+        return;
+
+    if (check.result == ExternalCurveCheckResult::CorruptCurve) {
+        // 一次性提示：返回的 curve.bin 存在却损坏。会话保持打开，外部修复后
+        // 重试（返回检查会再次运行）。使用无父组件依赖的异步消息框，插件窗口
+        // 关闭后提示仍然可见。
+        if (!externalEditCorruptCurveShown_) {
+            externalEditCorruptCurveShown_ = true;
+            AppLogger::log("External edit: returned curve.bin is corrupt "
+                           + externalEditSessionDir_.getFullPathName());
+            juce::AlertWindow::showAsync(
+                juce::MessageBoxOptions()
+                    .withIconType(juce::MessageBoxIconType::WarningIcon)
+                    .withTitle(LOC(kExternalEdit))
+                    .withMessage(LOC(kExternalEditCurveCorrupt)),
+                nullptr);
+        }
+        return;
+    }
+
+    // Ok：应用返回结果；成功后清理会话状态。
+    const bool applied = applyReturnedExternalEdit(externalEditContentKey_, check.document);
+    if (applied) {
+        const auto completedPath = externalEditSessionDir_.getFullPathName();
+        externalEditSessionDir_.deleteRecursively();
+        externalEditSessionDir_ = juce::File();
+        externalEditContentKey_ = {};
+        externalEditCorruptCurveShown_ = false;
+        ++externalEditAppliedCount_;
+        AppLogger::log("External edit returned and applied "
+                       + completedPath);
+    }
+}
+#endif // !JucePlugin_Build_Standalone
+
 
 #if JucePlugin_Build_Standalone
 void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
@@ -3075,6 +3184,81 @@ const ContentRenderService* OpenTuneAudioProcessor::resolveReadableContentRender
             break;
     }
     return nullptr;
+}
+
+void OpenTuneAudioProcessor::mixAuditions(juce::AudioBuffer<float>& buffer, int numSamples, double sampleRate)
+{
+    pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
+    // Keyboard note audition: mixed in every path, before the ARA early return below.
+    noteAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+    {
+        auto* dc = getDocumentController();
+        auto* editorRenderer = getEditorRenderer();
+        if (dc != nullptr && editorRenderer != nullptr && !isNonRealtime())
+            dc->mixNotePitchAuditionIfOwner(editorRenderer, buffer, numSamples, sampleRate);
+        return;
+    }
+#endif
+    // 音符移调预览仅在实时处理时混入；离线（宿主 bounce/export）渲染静音。
+    if (!isNonRealtime())
+        notePitchAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
+}
+
+void OpenTuneAudioProcessor::auditionNotePitch(ContentKey key, double startSeconds, double endSeconds, float targetHz)
+{
+    // UI 线程入口：不投递 render job，不触碰 RenderCache，只读取已发布的 playback read source。
+    if (!appPreferences_->getNoteTransposePreviewEnabled() || !key.isValid() || targetHz <= 0.0f) {
+        stopNotePitchAudition();
+        return;
+    }
+
+    const auto* crs = resolveReadableContentRenderService(key);
+    if (crs == nullptr) {
+        stopNotePitchAudition();
+        return;
+    }
+
+    PlaybackReadSource source;
+    if (!crs->getPlaybackReadSource(key, source) || source.audioBuffer == nullptr) {
+        stopNotePitchAudition();
+        return;
+    }
+
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+    {
+        auto* dc = getDocumentController();
+        if (dc == nullptr
+            || !dc->selectNotePitchAuditionRendererForRegion(notePitchAuditionTargetRegion_))
+        {
+            stopNotePitchAudition();
+            return;
+        }
+
+        dc->getNotePitchAudition().request(std::move(source), startSeconds, endSeconds, targetHz,
+                                           static_cast<double>(getSampleRate()));
+        return;
+    }
+#endif
+    notePitchAudition_.request(std::move(source), startSeconds, endSeconds, targetHz,
+                               static_cast<double>(getSampleRate()));
+}
+
+void OpenTuneAudioProcessor::stopNotePitchAudition()
+{
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+    {
+        if (auto* dc = getDocumentController())
+        {
+            dc->stopNotePitchAudition();
+            return;
+        }
+    }
+#endif
+    notePitchAudition_.stop();
 }
 
 RenderCache::ChunkStats OpenTuneAudioProcessor::getReadableContentChunkStats(ContentKey key) const noexcept
@@ -4524,25 +4708,52 @@ bool OpenTuneAudioProcessor::applyReturnedExternalEdit(ContentKey key, const Ext
     if (!key.isValid())
         return false;
 
-    commitVolumeEnvelope(key, document.envelope);
+#if JucePlugin_Build_Standalone
+    if (key.domainKind == DomainKind::StandaloneClip) {
+        commitVolumeEnvelope(key, document.envelope);
 
-    if (document.pitchCurve != nullptr) {
-        if (!writePitchCurveToOwner(key, PitchCurve::fromSnapshot(document.pitchCurve->getSnapshot())))
+        if (document.pitchCurve != nullptr) {
+            if (!writePitchCurveToOwner(key, PitchCurve::fromSnapshot(document.pitchCurve->getSnapshot())))
+                return false;
+            if (document.pitchCurve->hasUsableOriginalF0())
+                setContentOriginalF0State(key, OriginalF0State::Ready);
+
+            PitchShiftEditState shift;
+            shift.settings = document.pitchShift;
+            shift.notes = document.notes;
+            shift.segments = document.pitchCurve->copyCorrectionSegments();
+            return applyContentPitchShiftState(key, shift);
+        }
+
+        if (!replaceContentNotesForFullMutation(key, document.notes))
             return false;
-        if (document.pitchCurve->hasUsableOriginalF0())
-            setContentOriginalF0State(key, OriginalF0State::Ready);
-
-        PitchShiftEditState shift;
-        shift.settings = document.pitchShift;
-        shift.notes = document.notes;
-        shift.segments = document.pitchCurve->copyCorrectionSegments();
-        return applyContentPitchShiftState(key, shift);
+        onContentFullMutationCompleted(key);
+        return true;
     }
+#endif
 
-    if (!replaceContentNotesForFullMutation(key, document.notes))
-        return false;
-    onContentFullMutationCompleted(key);
-    return true;
+    // Plugin external edits are Capture-Session-only: apply notes + curve +
+    // pitch-shift state + envelope as a single owner commit, then republish once.
+#if !JucePlugin_Build_Standalone
+    if (key.domainKind == DomainKind::RegularVST3Capture) {
+        auto* session = getCaptureSession();
+        if (session == nullptr)
+            return false;
+        auto curve = document.pitchCurve != nullptr
+            ? PitchCurve::fromSnapshot(document.pitchCurve->getSnapshot())
+            : nullptr;
+        if (!session->applyExternalEdit(key,
+                                        document.notes,
+                                        std::move(curve),
+                                        document.envelope,
+                                        document.pitchShift))
+            return false;
+        onContentFullMutationCompleted(key);
+        return true;
+    }
+#endif
+
+    return false;
 }
 
 ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,

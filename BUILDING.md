@@ -48,6 +48,10 @@ python3 scripts/github_actions/patch-juce-ara.py
 
 > 脚本同时给 `juce_StandaloneFilterWindow.h` 的标题栏补上最大化按钮（JUCE 8.0.12 上游只有最小化和关闭）。
 > 不运行脚本时，Standalone 主窗口右上角只有 — 和 ×，且最大化按钮缺失。
+>
+> 脚本还会在 `juce_Windowing_windows.cpp` 中处理 `WM_SETCURSOR`，重新应用 JUCE 光标。
+> Standalone 标题栏在 Win32 命中测试中是 `HTCAPTION`（非客户区），不处理该消息时 Windows 每次移动
+> 都会把光标重置为系统箭头，自定义光标主题在标题栏上无法保持。
 
 ### 2. ARA SDK
 
@@ -61,7 +65,8 @@ cd ..
 > `modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp` 仍 include 2.2.0 的
 > `ARA_Library/Utilities/ARAChannelArrangement.cpp`，而 2.3.0 已将该文件改名为 `ARAChannelFormat.cpp`。
 > 不要手工编辑该文件；克隆 JUCE 8.0.12 后运行上文对应操作系统的 Python 命令，
-> 脚本会同时应用 ARA include 改名、AudioDeviceManager 临时 setup API 补丁和 Standalone 标题栏最大化按钮补丁。
+> 脚本会同时应用 ARA include 改名、AudioDeviceManager 临时 setup API、Standalone 标题栏最大化按钮
+> 和 Windows `WM_SETCURSOR` 光标四个补丁。
 
 ### 3. r8brain 与 SoundTouch
 
@@ -182,7 +187,7 @@ ThirdParty/microsoft.direct3d.d3d12.1.619.5/
 
 | 路径 | 必需性 | 准备方式 / 用途 |
 |------|--------|----------------|
-| `JUCE-master/` | 必需 | 克隆 JUCE 8.0.12 到仓库根目录，随后运行 `python3 scripts/github_actions/patch-juce-ara.py`（macOS 命令；同一脚本同时处理 ARA include、AudioDeviceManager 与 Standalone 标题栏最大化按钮补丁）。 |
+| `JUCE-master/` | 必需 | 克隆 JUCE 8.0.12 到仓库根目录，随后运行 `python3 scripts/github_actions/patch-juce-ara.py`（macOS 命令；同一脚本同时处理 ARA include、AudioDeviceManager、Standalone 标题栏最大化按钮与 Windows `WM_SETCURSOR` 光标补丁）。 |
 | `ThirdParty/ARA_SDK-releases-2.3.0/` | 必需 | 克隆 ARA SDK `releases/2.3.0` 分支并包含子模块。 |
 | `ThirdParty/r8brain-free-src-master/` | 必需 | 已随 Git 仓库提供，无需另行下载。 |
 | `ThirdParty/soundtouch-2.3.2/` | 必需 | 从上文链接的 SoundTouch 官方仓库克隆 `2.3.2` tag。 |
@@ -237,6 +242,19 @@ cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --b
 cmake --preset windows-ara-ninja
 cmake --build --preset windows-ara-ninja-release
 ```
+
+> **中文 Windows 代码页（Ninja）**：`assets/` 下的 demo 音频文件名包含中文。Ninja 生成的
+> `post-build.bat` 以 UTF-8 写入该路径，`cmd.exe` 使用 GBK/936 代码页时会把路径读成乱码，
+> 构建在复制 demo 音频时失败（`cmake -E copy_if_different ... Invalid argument`）。
+> 配置和构建前把控制台切到 UTF-8：
+>
+> ```powershell
+> cmd /c "chcp 65001 >nul && cmake --preset windows-ara-ninja"
+> cmd /c "chcp 65001 >nul && cmake --build --preset windows-ara-ninja-release"
+> ```
+>
+> 也可以先执行 `chcp 65001`。`scripts/build-ninja.ps1` 已在配置和构建子进程中加入
+> `chcp 65001`。
 
 Release 构建完成后，发布前必须校验 Standalone 产物。校验与打包脚本为本地维护，
 不随仓库分发（`scripts/build-ninja.ps1`、`scripts/validate-windows-release.ps1`、
@@ -305,6 +323,7 @@ PKG 双击安装到 `/Applications`，并将 VST3、AU 分别安装到系统级 
 | `ONNX Runtime DirectML DLL missing` | DML 版运行时 DLL 缺失 | 确认 `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` 存在 |
 | `ONNX Runtime dylib not found` | macOS universal2 包未构建或版本不符 | 执行 `./scripts/build-onnxruntime-macos.sh`，确认 `ThirdParty/onnxruntime-osx-universal2-1.20.0/lib/libonnxruntime.1.20.0.dylib` 存在 |
 | `ARA SDK not found` | ARA SDK 未克隆 | 执行步骤 2 的 git clone 命令 |
+| Demo 音频复制失败：`cmake -E copy_if_different ... Invalid argument` | 中文 Windows 使用 GBK/936 代码页，Ninja 生成的 `post-build.bat` 以 UTF-8 写入中文音频路径 | 配置和构建前执行 `chcp 65001`，或用 `cmd /c "chcp 65001 >nul && cmake ..."`；也可以把 `assets/` 下的 demo 音频改为 ASCII 文件名 |
 | MSVC 链接错误 LNK2019 | MSVC 运行时不匹配 | 本项目使用静态 CRT (`/MT`)，确保依赖库一致 |
 | Ninja 构建失败 | Ninja 未安装或不在 PATH 中 | 确保 Ninja 已安装并在系统 PATH 中，或使用 Visual Studio Generator |
 

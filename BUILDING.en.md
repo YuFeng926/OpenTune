@@ -49,6 +49,11 @@ python3 scripts/github_actions/patch-juce-ara.py
 > The script also adds the maximise button to the `juce_StandaloneFilterWindow.h` title bar
 > (JUCE 8.0.12 upstream ships minimise and close only). Without it the standalone window shows
 > only — and × in the top right.
+>
+> The script also handles `WM_SETCURSOR` in `juce_Windowing_windows.cpp` and re-applies the JUCE
+> cursor. The standalone title bar is reported to Win32 as `HTCAPTION` (a non-client area), and
+> without this handler Windows resets the cursor to the system arrow on every move, so the theme
+> cursor can never stay visible over the title bar.
 
 ### 2. ARA SDK
 
@@ -63,7 +68,7 @@ cd ..
 > `ARA_Library/Utilities/ARAChannelArrangement.cpp`, which ARA 2.3.0 renamed to `ARAChannelFormat.cpp`.
 > Do not edit the file by hand; after cloning JUCE 8.0.12 run the platform-specific command above.
 > The script applies the ARA include rename, the AudioDeviceManager temporary-setup patch,
-> and the standalone title-bar maximise button patch.
+> the standalone title-bar maximise button patch, and the Windows `WM_SETCURSOR` cursor patch.
 
 ### 3. r8brain and SoundTouch
 
@@ -176,7 +181,7 @@ Except for the r8brain source included in the repository, obtain the following d
 
 | Path | Required? | Setup / purpose |
 |------|----------|-----------------|
-| `JUCE-master/` | Yes | Clone JUCE 8.0.12 at the repository root, then run `python3 scripts/github_actions/patch-juce-ara.py` (macOS command; the same script handles the ARA include, AudioDeviceManager and standalone title-bar maximise button patches). |
+| `JUCE-master/` | Yes | Clone JUCE 8.0.12 at the repository root, then run `python3 scripts/github_actions/patch-juce-ara.py` (macOS command; the same script handles the ARA include, AudioDeviceManager, standalone title-bar maximise button and Windows `WM_SETCURSOR` cursor patches). |
 | `ThirdParty/ARA_SDK-releases-2.3.0/` | Yes | Clone the ARA SDK `releases/2.3.0` branch with submodules. |
 | `ThirdParty/r8brain-free-src-master/` | Yes | Included in the Git repository; no separate download is needed. |
 | `ThirdParty/soundtouch-2.3.2/` | Yes | Clone the `2.3.2` tag from the official SoundTouch repository linked above. |
@@ -231,6 +236,20 @@ cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --b
 cmake --preset windows-ara-ninja
 cmake --build --preset windows-ara-ninja-release
 ```
+
+> **Chinese Windows code page (Ninja)**: the demo audio filename under `assets/`
+> contains Chinese characters. Ninja writes that path into `post-build.bat` as
+> UTF-8, but `cmd.exe` reads it using the GBK/936 code page, so copying the demo
+> audio fails with `cmake -E copy_if_different ... Invalid argument`. Switch the
+> console to UTF-8 before configure and build:
+>
+> ```powershell
+> cmd /c "chcp 65001 >nul && cmake --preset windows-ara-ninja"
+> cmd /c "chcp 65001 >nul && cmake --build --preset windows-ara-ninja-release"
+> ```
+>
+> Alternatively, run `chcp 65001` first. `scripts/build-ninja.ps1` already runs
+> `chcp 65001` in its configure and build child processes.
 
 Before packaging a Release build, validate the Standalone artifact. The
 validation and packaging scripts are maintained locally and are not
@@ -302,6 +321,7 @@ After build completion, runtime DLLs, model files, and D3D12 directory will be a
 | `ONNX Runtime DirectML DLL missing` | DML version runtime DLL missing | Verify `ThirdParty/onnxruntime-dml-1.24.4/runtimes/win-x64/native/onnxruntime.dll` exists |
 | `ONNX Runtime dylib not found` | macOS universal2 package missing or version mismatch | Verify `ThirdParty/onnxruntime-osx-universal2-1.20.0/lib/libonnxruntime.1.20.0.dylib` exists |
 | `ARA SDK not found` | ARA SDK not cloned | Execute step 2 git clone command |
+| Demo audio copy fails: `cmake -E copy_if_different ... Invalid argument` | Chinese Windows uses the GBK/936 code page; Ninja writes the Chinese audio path into `post-build.bat` as UTF-8 | Run `chcp 65001` before configure/build, or use `cmd /c "chcp 65001 >nul && cmake ..."`; alternatively rename the demo audio under `assets/` to an ASCII filename |
 | MSVC link error LNK2019 | MSVC runtime mismatch | This project uses static CRT (`/MT`), ensure dependency libraries are consistent |
 | Ninja build failure | Ninja not installed or not in PATH | Ensure Ninja is installed and in system PATH, or use Visual Studio Generator |
 

@@ -19,10 +19,16 @@ Three patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
    standalone app shows minimise/maximise/close instead of the upstream
    minimise/close pair
    (modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h).
+4. The Windows peer handles WM_SETCURSOR by re-applying the JUCE cursor
+   (modules/juce_gui_basics/native/juce_Windowing_windows.cpp). The
+   DocumentWindow title bar is reported to Windows as HTCAPTION, so
+   DefWindowProc resets the cursor to the system arrow on every non-client
+   move; the theme cursors from CursorThemeManager would never stay visible
+   there without this patch.
 
 The patches are needle-based: if the pinned upstream content does not contain
 the expected context exactly once, the script fails loudly instead of guessing.
-After patching, the JUCE checkout must be dirty in exactly the four expected
+After patching, the JUCE checkout must be dirty in exactly the five expected
 files and nothing else.
 """
 
@@ -42,8 +48,11 @@ ADM_CPP_RELATIVE = pathlib.Path(
     "modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.cpp")
 STANDALONE_RELATIVE = pathlib.Path(
     "modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h")
+WINDOWING_RELATIVE = pathlib.Path(
+    "modules/juce_gui_basics/native/juce_Windowing_windows.cpp")
 
-EXPECTED_FILES = [ARA_RELATIVE, ADM_H_RELATIVE, ADM_CPP_RELATIVE, STANDALONE_RELATIVE]
+EXPECTED_FILES = [ARA_RELATIVE, ADM_H_RELATIVE, ADM_CPP_RELATIVE,
+                  STANDALONE_RELATIVE, WINDOWING_RELATIVE]
 
 # ---------------------------------------------------------------------------
 # Patch 1: ARA include rename.
@@ -221,6 +230,25 @@ STANDALONE_CTOR_NEW = b"        : DocumentWindow (title, backgroundColour, Docum
 STANDALONE_BUTTONS_OLD = b"        setTitleBarButtonsRequired (DocumentWindow::minimiseButton | DocumentWindow::closeButton, false);"
 STANDALONE_BUTTONS_NEW = b"        setTitleBarButtonsRequired (DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton, false);"
 
+# ---------------------------------------------------------------------------
+# Patch 4: Windows WM_SETCURSOR.
+# ---------------------------------------------------------------------------
+# The DocumentWindow title bar is reported as HTCAPTION, so Windows treats it as
+# a non-client area and DefWindowProc resets the cursor to the system arrow on
+# every move. Re-apply the JUCE cursor instead of letting the default handling
+# overwrite the theme cursor.
+WINDOWING_SETCURSOR_OLD = b'''            //==============================================================================
+            case WM_NCMOUSEMOVE:
+            case WM_MOUSEMOVE:'''
+
+WINDOWING_SETCURSOR_NEW = b'''            //==============================================================================
+            case WM_SETCURSOR:
+                Desktop::getInstance().getMainMouseSource().forceMouseCursorUpdate();
+                return TRUE;
+
+            case WM_NCMOUSEMOVE:
+            case WM_MOUSEMOVE:'''
+
 
 def git(*args: str) -> bytes:
     result = subprocess.run(
@@ -284,6 +312,9 @@ def main() -> None:
             (STANDALONE_CTOR_OLD, STANDALONE_CTOR_NEW, "title-bar button set"),
             (STANDALONE_BUTTONS_OLD, STANDALONE_BUTTONS_NEW, "title-bar required buttons"),
         ],
+        WINDOWING_RELATIVE: [
+            (WINDOWING_SETCURSOR_OLD, WINDOWING_SETCURSOR_NEW, "WM_SETCURSOR handler"),
+        ],
     }
 
     outputs = {}
@@ -329,7 +360,8 @@ def main() -> None:
             + "\n".join(s.decode("utf-8", errors="replace") for s in status_after))
 
     print("JUCE patches applied: ARA include + AudioDeviceManager temporary setup "
-          "+ Standalone title bar maximise button (exactly 4 files dirty)")
+          "+ Standalone title bar maximise button + WM_SETCURSOR handler "
+          "(exactly 5 files dirty)")
 
 
 if __name__ == "__main__":

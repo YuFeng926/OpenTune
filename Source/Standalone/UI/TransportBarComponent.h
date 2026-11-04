@@ -178,8 +178,11 @@ public:
         juce::Rectangle<int> externalEditButton, saveAndReturnButton;
     };
 
-    /** 唯一的档位选择与布局计算规则，resized() 与自检共用。 */
-    static TierLayout computeTierLayout(LayoutProfile profile, juce::Rectangle<int> bounds);
+    /** 唯一的档位选择与布局计算规则，resized() 与自检共用。
+        externalEditAvailable：仅影响 VST3AraSingleClip profile 的外部编辑按钮槽位
+        （Capture Session 形式运行才可用；ARA 实例置 false 时槽位为空，不占布局宽度）。 */
+    static TierLayout computeTierLayout(LayoutProfile profile, juce::Rectangle<int> bounds,
+                                        bool externalEditAvailable = true);
 
     class Listener
     {
@@ -213,6 +216,10 @@ public:
     void applyTheme();
     void setEmbeddedInTopBar(bool embedded);
     void setLayoutProfile(LayoutProfile profile);
+
+    /** 外部编辑按钮是否分配布局槽位。仅 Capture Session 形式的插件实例为 true；
+        ARA 绑定实例（CaptureSession 为空）必须为 false。相同值不触发重排。 */
+    void setExternalEditAvailable(bool available);
 
     void addListener(Listener* l);
     void removeListener(Listener* l);
@@ -308,6 +315,7 @@ private:
     bool workspaceView_ = true;
     bool embeddedInTopBar_ = false;
     LayoutProfile layoutProfile_ = LayoutProfile::StandaloneFull;
+    bool externalEditAvailable_ = true;
     juce::Time lastTapTime_;
     std::vector<double> tapIntervals_;
     static const int maxTapSamples_ = 5;

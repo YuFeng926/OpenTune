@@ -55,11 +55,6 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = kDefaultVisibleTracks; // 默认�
             }
         }
 
-        void setInferenceActive(bool active)
-        {
-            startTimerHz(active ? 12 : 30);
-        }
-
         void paint(juce::Graphics& g) override
         {
             auto bounds = getLocalBounds().toFloat();
@@ -333,7 +328,6 @@ class AddTrackButton : public juce::Component, private juce::Timer
 public:
     AddTrackButton()
     {
-        startTimerHz(60);
     }
 
     ~AddTrackButton() override
@@ -342,11 +336,6 @@ public:
     }
 
     std::function<void()> onClick;
-
-    void setInferenceActive(bool active)
-    {
-        startTimerHz(active ? 30 : 60);
-    }
 
     void paint(juce::Graphics& g) override
     {
@@ -408,12 +397,14 @@ public:
     {
         isMouseOver_ = true;
         repaint();
+        startAnimation();
     }
 
     void mouseExit(const juce::MouseEvent&) override
     {
         isMouseOver_ = false;
         repaint();
+        startAnimation();
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -427,8 +418,9 @@ public:
         r.radius = 5.0f;
         r.alpha = 1.0f;
         ripples_.push_back(r);
-        
+
         repaint();
+        startAnimation();
     }
 
     void mouseUp(const juce::MouseEvent& e) override
@@ -437,6 +429,7 @@ public:
         if (onClick && getLocalBounds().contains(e.x, e.y))
             onClick();
         repaint();
+        startAnimation();
     }
 
 private:
@@ -452,12 +445,18 @@ private:
     float glowAlpha_ = 0.0f;
     std::vector<Ripple> ripples_;
 
+    void startAnimation()
+    {
+        if (!isTimerRunning())
+            startTimerHz(60);
+    }
+
     void timerCallback() override
     {
         bool needsRepaint = false;
         
         // 更新发光效果
-        float targetGlow = isMouseOver_ ? 1.0f : 0.0f;
+        const float targetGlow = isMouseOver_ ? 1.0f : 0.0f;
         if (std::abs(glowAlpha_ - targetGlow) > 0.01f)
         {
             glowAlpha_ += (targetGlow - glowAlpha_) * 0.2f;
@@ -478,6 +477,16 @@ private:
         
         if (needsRepaint)
             repaint();
+
+        // 动画收敛后停表，避免空闲时 60Hz 空转
+        if (std::abs(glowAlpha_ - targetGlow) <= 0.01f && ripples_.empty())
+        {
+            const bool changed = std::abs(glowAlpha_ - targetGlow) > 0.0f;
+            glowAlpha_ = targetGlow;
+            if (changed)
+                repaint();
+            stopTimer();
+        }
     }
 };
 
@@ -536,7 +545,6 @@ public:
     float getTrackVolume(int trackId) const;
 
     void setTrackLevel(int trackId, float levelDB);
-    void setInferenceActive(bool active);
 
     // 可见轨道数量控制
     void setVisibleTrackCount(int count);

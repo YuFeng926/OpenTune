@@ -219,6 +219,7 @@ private:
     // Accessibility: "Rendering done" is spoken only for renders at least this long.
     static constexpr juce::uint32 kRenderDoneSpeechMinMs = 1000;
     bool renderBadgeWasShown_ = false;
+    int lastExternalEditAppliedCount_ = -1;
     juce::uint32 renderStartedMs_ = 0;
     // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator commits late.
@@ -238,8 +239,6 @@ private:
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
     int lastPianoRollSampleRate_{0};
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
-    juce::File externalEditSessionDir_;
-    ContentKey externalEditContentKey_;
 
     // First-insert auto Read: run once per scope; failures re-arm with a cap.
     bool autoReadAttempted_{false};

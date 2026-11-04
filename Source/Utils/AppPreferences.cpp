@@ -37,9 +37,11 @@ constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
 constexpr const char* kSharedGridStyleKey = "shared.pianoRoll.gridStyle";
 constexpr const char* kSharedWholeNoteMoveSnapModeKey = "shared.pianoRoll.wholeNoteMoveSnapMode";
 constexpr const char* kSharedAuditionAfterKeyboardEditKey = "shared.pianoRoll.auditionAfterKeyboardEdit";
+constexpr const char* kSharedNoteTransposePreviewEnabledKey = "shared.editing.noteTransposePreview";
 constexpr const char* kSharedPitchLaneVisualModeKey = "shared.pianoRoll.pitchLaneVisualMode";
 constexpr const char* kSharedEqSuppressRemoveConfirmationKey = "shared.eq.suppressRemoveConfirmation";
 constexpr const char* kSharedOnboardingShownKey = "shared.onboardingShown";
+constexpr const char* kSharedDemoTourConsumedKey = "shared.demoTourConsumed";
 constexpr const char* kPluginEditorSizeKey = "defaultSize";
 constexpr const char* kShortcutSchemaVersionKey = "shared.shortcuts.schemaVersion";
 constexpr int kShortcutMouseSchemaVersion = 1;
@@ -457,6 +459,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.lightPitchCorrectionEnabled = properties.getBoolValue(
         kSharedLightPitchCorrectionEnabledKey,
         state.shared.lightPitchCorrectionEnabled);
+    state.shared.noteTransposePreviewEnabled = properties.getBoolValue(
+        kSharedNoteTransposePreviewEnabledKey,
+        state.shared.noteTransposePreviewEnabled);
     state.shared.f0ModelType = fromF0ModelTypeToken(
         properties.getValue(kSharedF0ModelTypeKey, toF0ModelTypeToken(state.shared.f0ModelType)));
     state.shared.suppressEqRemoveConfirmation = properties.getBoolValue(
@@ -466,6 +471,7 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.auditionAfterKeyboardEdit = properties.getBoolValue(
         kSharedAuditionAfterKeyboardEditKey,
         state.shared.auditionAfterKeyboardEdit);
+    state.shared.demoTourConsumed = properties.getBoolValue(kSharedDemoTourConsumedKey, state.shared.demoTourConsumed);
     state.shared.snap.enabled = properties.getBoolValue(kSharedSnapEnabledKey, false);
     state.shared.snap.mode = static_cast<SnapSettings::Mode>(
         properties.getIntValue(kSharedSnapModeKey, static_cast<int>(SnapSettings::Mode::Off)));
@@ -530,11 +536,14 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         state.shared.experimentalFeaturesEnabled);
     properties.setValue(kSharedLightPitchCorrectionEnabledKey,
                         state.shared.lightPitchCorrectionEnabled);
+    properties.setValue(kSharedNoteTransposePreviewEnabledKey,
+                        state.shared.noteTransposePreviewEnabled);
     properties.setValue(kSharedF0ModelTypeKey,
                         toF0ModelTypeToken(state.shared.f0ModelType));
     properties.setValue(kSharedEqSuppressRemoveConfirmationKey,
                         state.shared.suppressEqRemoveConfirmation);
     properties.setValue(kSharedOnboardingShownKey, state.shared.onboardingShown);
+    properties.setValue(kSharedDemoTourConsumedKey, state.shared.demoTourConsumed);
     properties.setValue(kSharedSnapEnabledKey, state.shared.snap.enabled);
     properties.setValue(kSharedSnapModeKey, static_cast<int>(state.shared.snap.mode));
     properties.setValue(kSharedTrackColorModeKey, toTrackColorModeToken(state.shared.trackColorMode));
@@ -621,6 +630,15 @@ void AppPreferences::setOnboardingShown(bool shown)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.onboardingShown = shown;
+    saveLocked();
+}
+
+void AppPreferences::setDemoTourConsumed(bool consumed)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (state_.shared.demoTourConsumed == consumed)
+        return;
+    state_.shared.demoTourConsumed = consumed;
     saveLocked();
 }
 
@@ -838,6 +856,19 @@ void AppPreferences::setLightPitchCorrectionEnabled(bool enabled)
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.lightPitchCorrectionEnabled = enabled;
     saveLocked();
+}
+
+void AppPreferences::setNoteTransposePreviewEnabled(bool enabled)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.noteTransposePreviewEnabled = enabled;
+    saveLocked();
+}
+
+bool AppPreferences::getNoteTransposePreviewEnabled() const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return state_.shared.noteTransposePreviewEnabled;
 }
 
 void AppPreferences::setF0ModelType(F0ModelType type)

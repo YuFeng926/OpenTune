@@ -2,6 +2,8 @@
 
 #include "OpenTunePlaybackRenderer.h"
 
+#include "../Audio/NotePitchAudition.h"
+
 #include "../Inference/F0InferenceService.h"
 #include "../Runtime/ProcessF0Runtime.h"
 #include "../Runtime/ProcessRenderRuntime.h"
@@ -124,6 +126,27 @@ bool playbackMemberCallable(const ARA::ARAPlaybackControllerInterface* iface,
     return iface->*member != nullptr;
 }
 
+bool editorRendererOwnsRegion(juce::ARAEditorRenderer* renderer,
+                              juce::ARAPlaybackRegion* region) noexcept
+{
+    if (renderer == nullptr || region == nullptr)
+        return false;
+
+    const auto& direct = renderer->getPlaybackRegions<juce::ARAPlaybackRegion>();
+    if (std::find(direct.begin(), direct.end(), region) != direct.end())
+        return true;
+
+    for (auto* sequence : renderer->getRegionSequences<juce::ARARegionSequence>())
+    {
+        if (sequence == nullptr)
+            continue;
+        const auto& inSequence = sequence->getPlaybackRegions<juce::ARAPlaybackRegion>();
+        if (std::find(inSequence.begin(), inSequence.end(), region) != inSequence.end())
+            return true;
+    }
+    return false;
+}
+
 } // namespace
 
 OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugInEntry* entry,
@@ -134,10 +157,11 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(
         1, 100, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
     , transportRelay_(std::make_shared<HostTransportRelayState>())
+    , notePitchAudition_(std::make_unique<NotePitchAudition>())
 {
     ProcessRenderRuntime::getInstance().retainOwner();
     installDocumentRenderExecution();
-    startTimerHz(30);
+    completionSink_->controller = this;
     AppLogger::logNoThrow("ARA-DIAG: DocumentController created dc="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
 
@@ -155,12 +179,9 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
         AppLogger::error("ARA-DIAG: DocumentController destroyed off message thread; ownership contract violated");
         std::terminate();
     }
-    stopTimer();
-    {
-        std::lock_guard<std::mutex> lock(completionGate_->mutex);
-        completionGate_->closed = true;
-        completionGate_->pending.clear();
-    }
+    // sink 指针必须在 F0 service reset 之前置空：之后由 service 投递的
+    // completion 仍可能被消息线程执行，看到空 controller 直接退出。
+    completionSink_->controller = nullptr;
     renderCompletionGate_->closeAndWait();
 
     // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
@@ -978,6 +999,55 @@ const ContentRenderService* OpenTuneDocumentController::getContentRenderService(
 std::shared_ptr<ContentRenderService> OpenTuneDocumentController::getContentRenderServiceShared() const noexcept
 {
     return contentRenderService_;
+}
+
+NotePitchAudition& OpenTuneDocumentController::getNotePitchAudition() noexcept
+{
+    return *notePitchAudition_;
+}
+
+bool OpenTuneDocumentController::selectNotePitchAuditionRendererForRegion(
+    juce::ARAPlaybackRegion* region) noexcept
+{
+    juce::ARAEditorRenderer* selected = nullptr;
+    if (region != nullptr)
+    {
+        if (auto* controller = getDocumentController())
+        {
+            for (auto* renderer : controller->getEditorRenderers<juce::ARAEditorRenderer>())
+            {
+                if (editorRendererOwnsRegion(renderer, region))
+                {
+                    selected = renderer;
+                    break;
+                }
+            }
+        }
+    }
+
+    notePitchAuditionRenderer_.store(selected, std::memory_order_release);
+    return selected != nullptr;
+}
+
+void OpenTuneDocumentController::mixNotePitchAuditionIfOwner(
+    juce::ARAEditorRenderer* renderer,
+    juce::AudioBuffer<float>& buffer,
+    int numSamples,
+    double sampleRate) noexcept
+{
+    if (notePitchAuditionMixLock_.test_and_set(std::memory_order_acquire))
+        return;
+
+    if (notePitchAuditionRenderer_.load(std::memory_order_acquire) == renderer)
+        notePitchAudition_->mixIntoBuffer(buffer, numSamples, sampleRate);
+
+    notePitchAuditionMixLock_.clear(std::memory_order_release);
+}
+
+void OpenTuneDocumentController::stopNotePitchAudition() noexcept
+{
+    notePitchAuditionRenderer_.store(nullptr, std::memory_order_release);
+    notePitchAudition_->stop();
 }
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable() const noexcept
@@ -2262,26 +2332,28 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             result.energy = std::move(energy);
             return result;
         },
-        [completionGate = completionGate_, key, wrapperGeneration, persistentId, birthRevision, stamp]
+        [sink = completionSink_, key, wrapperGeneration, persistentId, birthRevision, stamp]
         (F0ExtractionService::Result&& result)
         {
             jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-            std::lock_guard<std::mutex> lock(completionGate->mutex);
-            if (completionGate->closed)
+            if (sink->controller == nullptr)
                 return;
-            completionGate->pending.push_back({std::move(result), key, wrapperGeneration,
-                                               persistentId, birthRevision, stamp});
+            sink->controller->commitF0Completion(
+                F0CompletionRecord{std::move(result), key, wrapperGeneration,
+                                    persistentId, birthRevision, stamp});
         },
 
-        [completionGate = completionGate_, key, wrapperGeneration, persistentId, birthRevision, stamp]
+        [sink = completionSink_, key, wrapperGeneration, persistentId, birthRevision, stamp]
          (F0ExtractionService::Result&& result)
          {
-             // Dispatcher failure runs on the worker; only enqueue pure data here.
-             std::lock_guard<std::mutex> lock(completionGate->mutex);
-             if (completionGate->closed)
+             // Dispatcher failure 路径：service 的 DispatcherFailureMailbox 在消息线程调用本回调，
+             // 与成功路径一致，可直接提交 completion。
+             jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+             if (sink->controller == nullptr)
                  return;
-             completionGate->pending.push_back({std::move(result), key, wrapperGeneration,
-                                                persistentId, birthRevision, stamp});
+             sink->controller->commitF0Completion(
+                 F0CompletionRecord{std::move(result), key, wrapperGeneration,
+                                     persistentId, birthRevision, stamp});
          });
 
     // Non-Accepted: set Failed if current modification still matches this submission
@@ -2299,20 +2371,6 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     }
 
     return true;
-}
-
-void OpenTuneDocumentController::timerCallback()
-{
-    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    std::deque<F0CompletionRecord> records;
-    {
-        std::lock_guard<std::mutex> lock(completionGate_->mutex);
-        if (completionGate_->closed)
-            return;
-        records.swap(completionGate_->pending);
-    }
-    for (auto& record : records)
-        commitF0Completion(std::move(record));
 }
 
 void OpenTuneDocumentController::commitF0Completion(F0CompletionRecord record)

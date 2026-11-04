@@ -62,7 +62,11 @@ juce::StringArray extensionsFromWildcard(const juce::String& wildcard)
 
 juce::File getAppDocumentsDirectory()
 {
+#if JUCE_IOS
     return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+#else
+    return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("OpenTune");
+#endif
 }
 
 void chooseSaveTarget(const juce::String& title,

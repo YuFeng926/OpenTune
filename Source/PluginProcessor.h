@@ -53,6 +53,7 @@
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
 #include "Utils/NoteAudition.h"
+#include "Audio/NotePitchAudition.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlayHeadState.h"
 #include "Utils/TrackConstants.h"
@@ -427,6 +428,14 @@ private:
     // insert instances; didBindToARA tears down any instance created before binding.
     // nullptr in Standalone instances and plugin instances bound to ARA.
     std::unique_ptr<Capture::CaptureSession> captureSession_;
+
+    // External edit session state (message thread only). Lives on the processor
+    // so the check-and-apply flow survives editor destruction (host closing the
+    // plugin window) and continues on the processor's existing 30Hz timer.
+    juce::File externalEditSessionDir_;
+    ContentKey externalEditContentKey_;
+    bool externalEditCorruptCurveShown_ = false;
+    int externalEditAppliedCount_ = 0;
 #endif
 
 
@@ -544,6 +553,9 @@ private:
     std::atomic<bool> runtimeStateInitialized_{false};
     std::once_flag runtimeInitOnce_;
 
+    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
+    std::atomic<bool> araChannelDiagnosticLogged_{false};
+
     // 状态恢复核心：解析并应用完整 raw payload。调用方保证 runtime 已初始化
     // （runtimeStateInitialized_ == true），因此不得触碰 initializeRuntimeState()。
     // 用于 setStateInformation 的立即恢复路径和 deferred replay 路径。
@@ -560,6 +572,9 @@ private:
 
     void analysisFinished(ContentKey key,
                           const ReferenceFeatureSet& result);
+
+    /** 混音全部试听源：pianoKeyAudition 无条件混入；notePitchAudition 仅实时处理时混入。 */
+    void mixAuditions(juce::AudioBuffer<float>& buffer, int numSamples, double sampleRate);
 
 public:
     // Track State Management
@@ -605,6 +620,25 @@ public:
     Capture::CaptureSession* getCaptureSession() noexcept;
     const Capture::CaptureSession* getCaptureSession() const noexcept;
 
+    // ── External edit session ownership (message thread only) ──────────────────
+    // 会话状态唯一真相在 Processor：Editor 销毁（宿主关窗）不清会话，返回检查与
+    // 应用继续在 Processor 的 30Hz timerCallback 内进行；Processor 析构时清理。
+    // 启动会话 / 按钮可用性仍由 Editor 委托到 Processor。
+    bool externalEditSessionActive() const noexcept
+    {
+        return externalEditSessionDir_.getFullPathName().isNotEmpty();
+    }
+    // Accessibility: grows on every applied external edit, so an open editor can speak it.
+    int getExternalEditAppliedCount() const noexcept { return externalEditAppliedCount_; }
+    // 启动（或重新拉起）外部编辑会话；成功时处理器接管会话状态。
+    bool externalEditLaunchRequested(ContentKey key, const EditableContentSnapshot& snapshot);
+
+private:
+#if !JucePlugin_Build_Standalone
+    /** 30Hz timer 内的返回检查与应用（消息线程唯一所有权）。 */
+    void pollReturnedExternalEdit();
+#endif
+public:
     /** RT-safe host metadata generation counter: bumped by the audio thread in
      *  updateHostTransportSnapshot when BPM/time signature change. The editor
      *  polls this (one acquire load per heartbeat tick) instead of the audio
@@ -625,6 +659,9 @@ public:
     /** 本插件实例 PlaybackRenderer 绑定的 regions。 */
     std::vector<juce::ARAPlaybackRegion*> getAssignedPlaybackRegions() const;
     void didBindToARA() noexcept override;
+
+    void setNotePitchAuditionTargetRegion(juce::ARAPlaybackRegion* region) noexcept
+    { notePitchAuditionTargetRegion_ = region; }
 #endif
 
 #if JucePlugin_Build_Standalone
@@ -987,12 +1024,24 @@ public:
         return renderService != nullptr ? renderService->getRenderCache(key) : nullptr;
     }
 
+    /**
+     * 音符移调试听（UI 线程调用）：按给定时间窗与目标频率请求一次
+     * NotePitchAudition 预览；偏好关闭、key 无效或 targetHz 非法时停止试听。
+     */
+    void auditionNotePitch(ContentKey key, double startSeconds, double endSeconds, float targetHz);
+    /** 停止当前音符移调试听（UI 线程调用，任意时刻调用均安全）。 */
+    void stopNotePitchAudition();
+
 private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
     NoteAudition noteAudition_;
+    NotePitchAudition notePitchAudition_;
 #if !JucePlugin_Build_Standalone
     ReaperHostBridge reaperHost_;
+#endif
+#if JucePlugin_Enable_ARA
+    juce::ARAPlaybackRegion* notePitchAuditionTargetRegion_ = nullptr;
 #endif
     OutputSpectrumAnalyzer outputSpectrumAnalyzer_;
 

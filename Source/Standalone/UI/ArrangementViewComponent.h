@@ -86,6 +86,8 @@ public:
         virtual void verticalScrollChanged(int newOffset) { juce::ignoreUnused(newOffset); }
         virtual void scrollModeChanged(bool isContinuous) { juce::ignoreUnused(isContinuous); }
         virtual void timelineDisplayModeChanged(TimelineDisplayMode mode) { juce::ignoreUnused(mode); }
+        // 手动滚动/缩放（activateTimelineCamera）后通知，供提示卡等跟随更新
+        virtual void arrangementViewportChanged() {}
         // View emits playhead position requests only (ruler seek / empty-space seek).
         // The editor owns transport decisions; the view never drives transport state.
         virtual bool playheadPositionChangeRequested(double /*timeSeconds*/) { return false; }
@@ -126,7 +128,6 @@ public:
     int timelinePolicyViewportWidth() const noexcept { return getVisibleViewportWidth(); }
     void setVerticalScrollOffset(int offset);
     void setVisibleTrackCount(int count);
-    void setInferenceActive(bool active) { inferenceActive_ = active; }
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
     void setTimelineDisplayMode(TimelineDisplayMode mode);
@@ -149,6 +150,7 @@ public:
     int trackIdForViewportY(int y) const noexcept;
     double viewportXToAbsoluteTime(int x) const;
     int getRulerHeight() const noexcept { return rulerHeight_; }
+    juce::Rectangle<int> getClipBounds(int trackId, int placementIndex) const { return getPlacementBounds(trackId, placementIndex); }
 
 private:
     bool matchesShortcut(KeyShortcutConfig::ShortcutId id, const juce::KeyPress& key) const;
@@ -311,7 +313,6 @@ private:
     const KeyShortcutConfig::KeyBinding* pointerShortcutBinding_ = nullptr;
 
     int waveformBuildTickCounter_{ 0 }; // 播放状态下的限频计数器
-    bool inferenceActive_{ false };
     bool waveformVisualRefreshPending_{ false };
 
     int selectedTrack_{0};

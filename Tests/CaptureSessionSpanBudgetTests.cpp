@@ -960,6 +960,87 @@ bool testActiveDisplayFollowsTrimmedPiece()
         && info.T_start == 0.0;
 }
 
+bool testApplyExternalEditCombinesAllOwners()
+{
+    Counters counters;
+    CaptureSession session(countingBindings(counters));
+    session.prepareToPlay(48000.0, 512, 1);
+
+    const int64_t numSamples = 128;
+    auto state = makeContentState(numSamples, 48000.0,
+                                  [](int64_t s) { return static_cast<float>(s) * 0.001f; });
+    state.analysis.setOriginalF0State(OpenTune::OriginalF0State::Extracting);
+    const uint64_t id = session.testInjectSegment(std::move(state), SegmentState::Edited,
+                                                  0.0, static_cast<double>(numSamples) / 48000.0,
+                                                  1, 48000.0);
+    CaptureSegment* seg = findById(session, id);
+    if (seg == nullptr || !seg->content)
+        return false;
+    const ContentKey key = seg->contentKey;
+
+    // External edit document payload: curve with usable Original F0 + correction segments,
+    // notes, pitch-shift settings, volume envelope.
+    auto curve = std::make_shared<OpenTune::PitchCurve>();
+    curve->setHopSize(1);
+    curve->setSampleRate(48000.0);
+    curve->setOriginalF0(std::vector<float>(static_cast<size_t>(numSamples), 220.0f));
+    OpenTune::PitchCorrectionSegment correction;
+    correction.startFrame = 0;
+    correction.endFrame = numSamples;
+    correction.f0Data.assign(static_cast<size_t>(numSamples), 110.0f);
+    correction.baseF0Data.assign(static_cast<size_t>(numSamples), 220.0f);
+    curve->replaceCorrectionSegments({correction});
+
+    std::vector<OpenTune::Note> notes;
+    OpenTune::Note note;
+    note.startTime = 0.0;
+    note.endTime = static_cast<double>(numSamples) / 48000.0;
+    note.pitch = 69.0f;
+    notes.push_back(note);
+
+    OpenTune::AutomationLane envelope;
+    envelope = OpenTune::AutomationLane::fromSnapshot({OpenTune::AutomationPoint{0.0, -6.0f}});
+
+    const OpenTune::PitchShiftSettings shiftSettings{2, 50};
+    const auto preCurve = seg->content->content().analysis.pitchCurve;
+    if (!session.applyExternalEdit(key, notes, curve, envelope, shiftSettings))
+        return false;
+
+    const auto& content = seg->content->content();
+    // Notes replaced.
+    if (content.notes.size() != 1 || std::abs(content.notes.front().pitch - 69.0f) > 1e-5f)
+        return false;
+    // Curve + Ready Original F0 applied (was Extracting before).
+    if (content.analysis.pitchCurve == nullptr || preCurve == content.analysis.pitchCurve)
+        return false;
+    if (content.analysis.originalF0State != OpenTune::OriginalF0State::Ready)
+        return false;
+    // Correction segments from the curve are present.
+    const auto segments = content.analysis.pitchCurve->getSnapshot()->getCorrectionSegments();
+    if (segments.size() != 1 || segments.front().f0Data.front() != 110.0f)
+        return false;
+    // Pitch-shift settings written.
+    if (!(content.pitchShiftSettings == shiftSettings))
+        return false;
+    // Envelope applied; note outputGainDb derived from the new envelope.
+    if (std::abs(content.notes.front().outputGainDb - (-6.0f)) > 1e-4f)
+        return false;
+
+    // Invalid key: returns false and leaves existing content untouched.
+    ContentKey bogus;
+    bogus.domainKind = DomainKind::RegularVST3Capture;
+    bogus.objectId = 0xdeadbeef;
+    const auto revisionBefore = content.contentRevision;
+    const auto notesRevisionBefore = content.notesRevision;
+    if (session.applyExternalEdit(bogus, notes, curve, envelope, shiftSettings))
+        return false;
+    if (seg->content->content().contentRevision != revisionBefore
+        || seg->content->content().notesRevision != notesRevisionBefore
+        || seg->content->content().notes.size() != 1)
+        return false;
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -1043,6 +1124,10 @@ int main()
     }
     if (!testActiveDisplayFollowsTrimmedPiece()) {
         std::fputs("FAIL: activeDisplaySegmentId follows trimmed piece\n", stderr);
+        ++failed;
+    }
+    if (!testApplyExternalEditCombinesAllOwners()) {
+        std::fputs("FAIL: applyExternalEdit combines all owners in one commit\n", stderr);
         ++failed;
     }
     if (failed == 0) {

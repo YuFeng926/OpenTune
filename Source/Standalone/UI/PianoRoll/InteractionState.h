@@ -72,6 +72,8 @@ struct NoteDragState
     std::vector<int> draggedNoteIndices;
     int anchorNoteIndex = -1;
     bool isDraggingNotes = false;
+    // 最近一次 pitch 试听的目标频率；0 = 无活动试听。
+    float lastAuditionTargetHz = 0.0f;
 
     // 拖拽预览：buildNoteBasedCorrectionState 构建的临时 EditableContentSnapshot
     // （scratch 后经 applyCorrectionToRange 烘焙的 pitchCurve + working notes）。
