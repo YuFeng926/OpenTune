@@ -1,0 +1,115 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-vocoder-load-failed",
+  "type": "scenario",
+  "description": "How job.get reports a prefsApply job whose vocoder could not load the new weight (for example a corrupt or incompatible weight file): MODEL_UNAVAILABLE(vocoder_load_failed), not retryable. The command for the vocoder had finished but the vocoder was not ready, so the job did not wait for its limit; it took its changes back at once, executed is false and prefs.get still reports the previous weight (PROTOCOL.md section 12.7 rule 5). No request can make a weight fail to load, so the job is a precondition and this vector shows the form of the error.",
+  "capability": "prefs.write",
+  "extraCapabilities": [
+    "jobs.v1"
+  ],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "preferences": {
+      "vocoderWeight": "hifigan.onnx",
+      "options": {
+        "vocoderWeight": [
+          "hifigan.onnx",
+          "hifigan_coulin9.onnx"
+        ],
+        "f0Model": [
+          "fcpe"
+        ]
+      }
+    },
+    "jobs": [
+      {
+        "bind": "weightLoadFailed",
+        "kind": "prefsApply",
+        "state": "failed",
+        "cancellable": false,
+        "error": {
+          "kind": "MODEL_UNAVAILABLE",
+          "reason": "vocoder_load_failed"
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "weightLoadFailed"
+          }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": {
+              "$ref": "weightLoadFailed"
+            },
+            "kind": "prefsApply",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": {
+              "$any": "integer"
+            },
+            "updatedAtMs": {
+              "$any": "integer"
+            },
+            "finishedAtMs": {
+              "$any": "integer"
+            },
+            "progress": {
+              "$any": "object"
+            },
+            "result": {
+              "$any": true
+            },
+            "error": {
+              "code": -32000,
+              "message": "MODEL_UNAVAILABLE",
+              "data": {
+                "kind": "MODEL_UNAVAILABLE",
+                "reason": "vocoder_load_failed",
+                "retryable": false,
+                "detail": {
+                  "$any": "string"
+                },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "prefs.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "processing": {
+            "vocoderWeight": "hifigan.onnx"
+          }
+        }
+      }
+    }
+  ]
+}

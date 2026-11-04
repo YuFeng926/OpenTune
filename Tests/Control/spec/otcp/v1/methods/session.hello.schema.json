@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/session.hello.schema.json",
+  "title": "session.hello",
+  "description": "Authenticates the connection and negotiates the protocol version. Must be the first line on a connection (PROTOCOL.md sections 3.5 and 4). The server checks token and protocol before the other params (section 4.2); the params are frozen for major 1 (section 2.2). The client must check that serverProof, instanceId and pid in the result equal the values in the discovery file before sending anything else.",
+  "x-otcp": {
+    "method": "session.hello",
+    "layer": "L2",
+    "capability": "session.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": false,
+    "mainThread": false,
+    "errors": [
+      "AUTH_FAILED",
+      "PROTOCOL_MISMATCH",
+      "INVALID_ARGUMENT",
+      "BUSY",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["token", "protocol", "client"],
+      "additionalProperties": false,
+      "properties": {
+        "token": { "$ref": "../schemas/common.schema.json#/$defs/secretHex" },
+        "protocol": {
+          "description": "The MAJOR.MINOR protocol version the client implements.",
+          "$ref": "../schemas/common.schema.json#/$defs/protocolVersion"
+        },
+        "client": {
+          "type": "object",
+          "required": ["name", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "pattern": "^[A-Za-z0-9._@/-]{1,64}$" },
+            "version": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9.+_-]{1,64}$"
+            }
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "instanceId",
+        "pid",
+        "serverProof",
+        "appVersion",
+        "flavor",
+        "capabilities",
+        "limits"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "description": "The server's MAJOR.MINOR for the client's major. The session uses this major.",
+          "$ref": "../schemas/common.schema.json#/$defs/protocolVersion"
+        },
+        "instanceId": {
+          "$ref": "../schemas/common.schema.json#/$defs/instanceId"
+        },
+        "pid": { "type": "integer", "minimum": 1 },
+        "serverProof": {
+          "$ref": "../schemas/common.schema.json#/$defs/hex128"
+        },
+        "appVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "flavor": { "const": "standalone" },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "contains": { "const": "session.v1" },
+          "items": { "$ref": "../schemas/common.schema.json#/$defs/capability" }
+        },
+        "limits": { "$ref": "../schemas/common.schema.json#/$defs/limits" }
+      }
+    }
+  }
+}

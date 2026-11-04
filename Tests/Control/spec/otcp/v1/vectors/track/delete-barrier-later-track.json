@@ -1,0 +1,111 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/delete-barrier-later-track",
+  "type": "scenario",
+  "description": "A clip move made through this API on track 0 is on the undo history. Deleting track 2, after the clip's track, moves no track the entry addresses, so the entry does not become possibly stale, and edit.undo without force applies it as usual, without a warning (PROTOCOL.md section 15.3 rule 6).",
+  "capability": "tracks.v1",
+  "extraCapabilities": ["history.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "visibleTrackCount": 3,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "bind": "moveEntry",
+          "origin": "control",
+          "action": "clipMove",
+          "clip": "clip"
+        }
+      ],
+      "redo": []
+    }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "track.delete",
+        "params": {
+          "trackId": 2,
+          "expectedArrangementRevision": {
+            "$ref": "runner.arrangementRevision"
+          },
+          "confirm": true
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "warnings": [
+            {
+              "code": "IRREVERSIBLE",
+              "subject": { "trackId": 2 },
+              "data": null
+            }
+          ],
+          "possiblyStaleEntries": { "undo": 0, "redo": 0 }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "history": {
+            "undoTop": {
+              "undoId": { "$ref": "moveEntry" },
+              "description": { "$any": "string" },
+              "origin": "control",
+              "unsafe": false,
+              "possiblyStale": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "moveEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "warnings": [],
+          "entry": { "undoId": { "$ref": "moveEntry" }, "possiblyStale": false }
+        }
+      }
+    }
+  ]
+}

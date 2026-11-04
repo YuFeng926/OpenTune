@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-ok",
+  "type": "request",
+  "description": "A hello with the discovery token and a supported major authenticates the session. The result echoes the identity from the discovery file, which the client must verify.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.hello",
+  "session": "unauthenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "session.hello",
+    "params": {
+      "token": { "$ref": "discovery.token" },
+      "protocol": "1.0",
+      "client": { "name": "otcp-vector-runner", "version": "1.0.0" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocol": { "$any": "string" },
+      "instanceId": { "$ref": "discovery.instanceId" },
+      "pid": { "$ref": "discovery.pid" },
+      "serverProof": { "$ref": "discovery.serverProof" },
+      "appVersion": { "$ref": "discovery.appVersion" },
+      "flavor": "standalone",
+      "capabilities": { "$any": "array" },
+      "limits": {
+        "preAuthReadBytes": 8192,
+        "helloTimeoutMs": 2000,
+        "maxPreAuthConnections": 8,
+        "maxSessions": 4,
+        "maxLineBytes": 4194304,
+        "maxInFlightPerSession": 16,
+        "idleTimeoutMs": 600000,
+        "dispatchTimeoutMs": { "$any": "integer" },
+        "jobWaitMaxMs": 30000,
+        "jobRetentionMs": 1800000,
+        "jobRetentionCount": 64
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

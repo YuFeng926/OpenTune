@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/ui.dismiss.schema.json",
+  "title": "ui.dismiss",
+  "description": "Closes dialogs or the first-run onboarding overlay, as pressing Escape does in OpenTune; it never presses a button of a dialog. target dialogs closes every open dialog, the topmost first, and lists them in sideEffects.dialogClosed ({dialogs: [{kind, trackId}], revert: null}). Closing a dialog whose closeCommits is true in ui.getState commits the value it shows: closing the track-colour dialog commits its colour (PROTOCOL.md section 15.4 rule 4), and a dialog of kind unknown may do the same. Unless confirm is true, the call then fails with INVALID_ARGUMENT(dialog_commits_on_close) and closes nothing (PROTOCOL.md section 20.2 rule 3); clients set confirm only when the end user accepts the value that closing commits. With confirm true the dialogs are closed; a committed track colour is listed in changes (entity track, member colour) and in sideEffects.dialogCommitted ({kind, trackId, colourBefore, colourAfter, revert}), the project is marked as changed, and the result carries the warning DIALOG_CLOSE_COMMITTED (subject the track, data {kind}). As in OpenTune a colour change has no undo entry (undo reason ui_parity); the revert recipe sets the previous colour with track.set on instances that report tracks.v1. Closing dialogs that commit nothing changes no project state: dialogs are view state (section 15.2 rule 6), so the undo reason is not_persisted_state and revert is null; closing a confirmation dialog cancels the action it asked about, as Escape does. With no dialog open the call is a no-op. target onboarding prevents the first-run overlay while it is not showing: it marks onboarding as shown (preference onboardingShown), so that OpenTune does not start the overlay; this changes a user-global preference that no request of this protocol resets (undo reason no_upstream_undo, revert null, warning IRREVERSIBLE), and when onboarding was already shown the call is a no-op. While the overlay is showing, the call closes it and marks onboarding as shown, as finishing the overlay does; this needs the capability ui.onboardingClose besides ui.bridge, and an instance without it answers UNSUPPORTED(capability_missing). OpenTune itself marks onboarding as shown once the overlay shows its choice, so closing a showing overlay usually changes the view only: changes is empty, there is no warning, the undo reason is not_persisted_state and revert is null, and the call is not a no-op. Only where onboarding was not yet marked as shown does the result list the preference (entity preference, member onboardingShown) with undo reason no_upstream_undo and the warning IRREVERSIBLE, as when the overlay is prevented. confirm is accepted with target dialogs only. ui.dismiss is the only write that an open dialog does not refuse with BUSY (reason modal_open), since closing dialogs is its purpose; it is refused while the user is in the middle of a gesture (reason pointer_down), like every write (section 13.2).",
+  "x-otcp": {
+    "method": "ui.dismiss",
+    "layer": "L3",
+    "capability": "ui.bridge",
+    "since": "1.0",
+    "write": "conditional",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["target"],
+      "additionalProperties": false,
+      "properties": {
+        "target": { "enum": ["dialogs", "onboarding"] },
+        "confirm": {
+          "description": "The end user accepts that closing a dialog commits the value it shows. Without true, the call does not close a dialog whose closeCommits is true and fails with INVALID_ARGUMENT(dialog_commits_on_close).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "if": { "properties": { "target": { "const": "onboarding" } } },
+      "then": { "not": { "required": ["confirm"] } }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    }
+  }
+}

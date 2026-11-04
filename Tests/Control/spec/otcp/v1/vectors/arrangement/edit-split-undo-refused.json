@@ -1,0 +1,108 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-split-undo-refused",
+  "type": "scenario",
+  "description": "After a split through this API, edit.getHistory shows the split's undo entry as unsafe, and edit.undo refuses it with UNSUPPORTED(undo_unsafe_build), because undoing it in OpenTune would remove the clips (PROTOCOL.md section 15.4 rule 1).",
+  "capability": "arrangement.v1",
+  "extraCapabilities": ["history.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "arrangement.edit",
+        "params": {
+          "expectedArrangementRevision": {
+            "$ref": "runner.arrangementRevision"
+          },
+          "ops": [
+            {
+              "op": "split",
+              "placementId": { "$ref": "clip.placementId" },
+              "atTimelineSec": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "warnings": [
+            {
+              "code": "UPSTREAM_UNDO_DEFECT",
+              "subject": { "placementId": { "$ref": "clip.placementId" } },
+              "data": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "history": {
+            "undoTop": {
+              "undoId": { "$capture": "splitEntry", "$any": "string" },
+              "description": { "$any": "string" },
+              "origin": "control",
+              "possiblyStale": false,
+              "unsafe": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "splitEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32000,
+          "message": "UNSUPPORTED",
+          "data": {
+            "kind": "UNSUPPORTED",
+            "reason": "undo_unsafe_build",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

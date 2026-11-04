@@ -1,0 +1,111 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-ui-entry-possibly-stale",
+  "type": "scenario",
+  "description": "A clip move made in the OpenTune UI was recorded before a track was deleted. The server cannot inspect UI entries, so the entry is possibly stale even though the clip's track did not move. Applied with force, which the end user asked for after seeing possiblyStale, it carries no UNDO_ENTRY_POSSIBLY_STALE warning, gets an undoId and is no longer possibly stale (PROTOCOL.md section 15.3 rules 6 and 8).",
+  "capability": "history.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "origin": "ui",
+          "action": "clipMove",
+          "clip": "clip",
+          "laterTrackDeletedAfter": true
+        }
+      ],
+      "redo": []
+    }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "history": {
+            "undoTop": {
+              "undoId": null,
+              "description": { "$any": "string" },
+              "origin": "ui",
+              "possiblyStale": true,
+              "unsafe": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.undo",
+        "params": { "force": true }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "warnings": [],
+          "entry": {
+            "undoId": { "$capture": "uiEntry", "$any": "string" },
+            "description": { "$any": "string" },
+            "origin": "ui",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "history": {
+            "undoTop": null,
+            "redoTop": {
+              "undoId": { "$ref": "uiEntry" },
+              "description": { "$any": "string" },
+              "origin": "ui",
+              "possiblyStale": false,
+              "unsafe": false
+            }
+          }
+        }
+      }
+    }
+  ]
+}

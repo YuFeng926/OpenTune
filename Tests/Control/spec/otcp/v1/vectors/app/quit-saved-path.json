@@ -1,0 +1,34 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "app/quit-saved-path",
+  "type": "request",
+  "description": "A project that was saved to a file and has no unsaved changes: app.quit reports the file in projectPath, so that the client can tell the end user where the project is. Nothing is discarded and there is no warning. The vector ends the instance (vectors/README.md, \"Vectors that end the instance\").",
+  "capability": "app.quit",
+  "since": "1.0",
+  "method": "app.quit",
+  "session": "authenticated",
+  "endsSession": true,
+  "given": {
+    "dirty": false,
+    "files": [{ "bind": "proj", "kind": "existing", "extension": ".otproj" }],
+    "projectFile": "proj"
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "app.quit",
+    "params": { "discardUnsaved": false }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "quitting": true,
+      "discardedUnsavedChanges": false,
+      "projectPath": { "$ref": "proj" },
+      "exitDeadlineMs": { "$any": "integer" },
+      "warnings": []
+    }
+  },
+  "connectionAfter": "closed"
+}

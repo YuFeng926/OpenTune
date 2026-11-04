@@ -1,0 +1,1041 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/schemas/common.schema.json",
+  "title": "OTCP v1 common definitions",
+  "description": "Shared types referenced by method schemas as common.schema.json#/$defs/<name>. Schemas are closed (no undefined members) so that conformance tests catch mistakes; clients must still ignore members they do not know (PROTOCOL.md section 2.3).",
+  "$defs": {
+    "protocolVersion": {
+      "description": "MAJOR.MINOR, as carried on the wire.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "methodName": {
+      "description": "Form of the names of defined methods (methods/README.md). Requests do not use it: any string is a valid method member, and a string that names no defined method gets UNSUPPORTED(unknown_method) (PROTOCOL.md section 3.3).",
+      "type": "string",
+      "pattern": "^[a-z][a-zA-Z0-9]*\\.[a-z][a-zA-Z0-9]*$"
+    },
+    "errorKind": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+    "warningCode": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+    "reasonCode": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "capability": {
+      "type": "string",
+      "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-zA-Z0-9]+)+$"
+    },
+    "camelName": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+    "requestId": {
+      "description": "JSON-RPC id: a string of 1 to 128 Unicode code points, or a number whose value is an integer from 0 to 2^53-1 (1.0 and 1e2 are the integers 1 and 100). Responses write a number id as a plain integer literal. null is not allowed in requests (PROTOCOL.md section 3.3 rule 3).",
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 128 },
+        { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      ]
+    },
+    "hex128": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "secretHex": {
+      "description": "A secret of at least 128 random bits from the operating system CSPRNG, lowercase hex.",
+      "type": "string",
+      "pattern": "^([0-9a-f]{2}){16,64}$"
+    },
+    "instanceId": { "$ref": "#/$defs/hex128" },
+    "instanceIdShort": {
+      "description": "The first 8 characters of the instanceId.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}$"
+    },
+    "revisionToken": {
+      "description": "Opaque revision token. Compare for equality only; never order, parse or do arithmetic on it.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+    },
+    "contentId": {
+      "description": "c:<instanceIdShort>:<contentEpoch>:<objectId> (PROTOCOL.md section 9). The type prefix c: keeps the form disjoint from placementId (p:), undoId (u:) and jobId (j:).",
+      "type": "string",
+      "pattern": "^c:[0-9a-f]{8}:(0|[1-9][0-9]*):(0|[1-9][0-9]*)$",
+      "examples": ["c:01234567:0:1"]
+    },
+    "placementId": {
+      "description": "p:<instanceIdShort>:<contentEpoch>:<placementSerial> (PROTOCOL.md section 9). instanceIdShort and contentEpoch as for contentId; placementSerial is never reused within an epoch. The type prefix p: keeps the form disjoint from contentId (c:), undoId (u:) and jobId (j:).",
+      "type": "string",
+      "pattern": "^p:[0-9a-f]{8}:(0|[1-9][0-9]*):(0|[1-9][0-9]*)$",
+      "examples": ["p:01234567:0:3"]
+    },
+    "trackId": {
+      "description": "Zero-based track position. Positional: deleting a track shifts later tracks down.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "noteRef": {
+      "type": "object",
+      "required": ["index", "atRevision"],
+      "additionalProperties": false,
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "atRevision": { "$ref": "#/$defs/revisionToken" }
+      }
+    },
+    "undoId": {
+      "description": "u:<instanceIdShort>:<seq> (PROTOCOL.md section 9).",
+      "type": "string",
+      "pattern": "^u:[0-9a-f]{8}:[1-9][0-9]*$",
+      "examples": ["u:01234567:1"]
+    },
+    "jobId": {
+      "description": "j:<instanceIdShort>:<seq> (PROTOCOL.md section 9).",
+      "type": "string",
+      "pattern": "^j:[0-9a-f]{8}:[1-9][0-9]*$",
+      "examples": ["j:01234567:1"]
+    },
+    "timestampMs": {
+      "description": "Milliseconds since the Unix epoch (UTC).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "clock": { "enum": ["content", "output", "timeline"] },
+    "secAny": { "type": "number" },
+    "secNonNegative": { "type": "number", "minimum": 0 },
+    "unitName": {
+      "description": "Unit of a changed field: the member's unit suffix in lower case (sec, frame, midi, hz, cents, semitones, db, linear, ms, bytes), bpm for tempo, or null for members without a unit (PROTOCOL.md sections 8.2 and 14.3).",
+      "type": ["string", "null"],
+      "pattern": "^[a-z]+$"
+    },
+    "contentRange": {
+      "type": "object",
+      "required": ["startContentSec", "endContentSec"],
+      "additionalProperties": false,
+      "properties": {
+        "startContentSec": { "$ref": "#/$defs/secNonNegative" },
+        "endContentSec": { "$ref": "#/$defs/secNonNegative" }
+      }
+    },
+    "outputRange": {
+      "type": "object",
+      "required": ["startOutputSec", "endOutputSec"],
+      "additionalProperties": false,
+      "properties": {
+        "startOutputSec": { "$ref": "#/$defs/secNonNegative" },
+        "endOutputSec": { "$ref": "#/$defs/secNonNegative" }
+      }
+    },
+    "timelineRange": {
+      "type": "object",
+      "required": ["startTimelineSec", "endTimelineSec"],
+      "additionalProperties": false,
+      "properties": {
+        "startTimelineSec": { "$ref": "#/$defs/secNonNegative" },
+        "endTimelineSec": { "$ref": "#/$defs/secNonNegative" }
+      }
+    },
+    "timeRange": {
+      "description": "A range whose clock is stated by its member names.",
+      "oneOf": [
+        { "$ref": "#/$defs/contentRange" },
+        { "$ref": "#/$defs/outputRange" },
+        { "$ref": "#/$defs/timelineRange" }
+      ]
+    },
+    "editingScheme": {
+      "description": "openTune or openDyne (PROTOCOL.md section 21).",
+      "$ref": "#/$defs/camelName"
+    },
+    "f0State": {
+      "description": "notRequested, extracting, ready or failed.",
+      "$ref": "#/$defs/camelName"
+    },
+    "path": {
+      "description": "A local file path. In params, an absolute path that the server accepts exactly as given or rejects (PROTOCOL.md section 20.1). In results, untrusted data (section 20.2).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "cursor": {
+      "description": "Opaque pagination cursor, bound to the tokens of the read that issued it (PROTOCOL.md section 10 rule 6).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "scaleName": {
+      "description": "Scale of a key: major, minor, chromatic, harmonicMinor, dorian, mixolydian, pentatonicMajor or pentatonicMinor.",
+      "$ref": "#/$defs/camelName"
+    },
+    "keyInput": {
+      "description": "A key as params give it. root is the pitch class of the tonic: 0 = C, 1 = C sharp, ..., 11 = B.",
+      "type": "object",
+      "required": ["root", "scale"],
+      "additionalProperties": false,
+      "properties": {
+        "root": { "type": "integer", "minimum": 0, "maximum": 11 },
+        "scale": {
+          "enum": [
+            "major",
+            "minor",
+            "chromatic",
+            "harmonicMinor",
+            "dorian",
+            "mixolydian",
+            "pentatonicMajor",
+            "pentatonicMinor"
+          ]
+        }
+      }
+    },
+    "key": {
+      "description": "The key of a content. root as in keyInput. origin is automatic (detected from the pitch analysis) or manual (chosen in OpenTune or set with content.setKey). confidence is the detector's confidence as OpenTune reports it, null for a manual key.",
+      "type": "object",
+      "required": ["root", "scale", "origin", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "root": { "type": "integer", "minimum": 0, "maximum": 11 },
+        "scale": { "$ref": "#/$defs/scaleName" },
+        "origin": { "$ref": "#/$defs/camelName" },
+        "confidence": { "type": ["number", "null"] }
+      }
+    },
+    "pitchShift": {
+      "description": "Pitch shift of a content: whole semitones plus cents.",
+      "type": "object",
+      "required": ["semitones", "cents"],
+      "additionalProperties": false,
+      "properties": {
+        "semitones": { "type": "integer", "minimum": -24, "maximum": 24 },
+        "cents": { "type": "integer", "minimum": -99, "maximum": 99 }
+      }
+    },
+    "retuneSpeed": {
+      "description": "0 keeps the natural pitch contour, 1 flattens the note to its target (PROTOCOL.md section 8.3).",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "vibratoDepth": {
+      "description": "Added vibrato depth; 100 is plus or minus one semitone.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "vibratoRateHz": { "type": "number", "minimum": 3, "maximum": 12 },
+    "pitchDriftScale": {
+      "description": "Scale of the natural pitch drift; 1 keeps it unchanged.",
+      "type": "number",
+      "minimum": -2,
+      "maximum": 3
+    },
+    "noteSplitCents": {
+      "description": "Note-split sensitivity of OpenTune's note generator.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 200
+    },
+    "handleId": {
+      "description": "Opaque identifier of a time-grid handle, unique within its content's time grid.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "timeHandle": {
+      "description": "A time-grid handle: the point at contentSec of the source audio plays at outputSec.",
+      "type": "object",
+      "required": ["handleId", "contentSec", "outputSec"],
+      "additionalProperties": false,
+      "properties": {
+        "handleId": { "$ref": "#/$defs/handleId" },
+        "contentSec": { "$ref": "#/$defs/secNonNegative" },
+        "outputSec": { "$ref": "#/$defs/secNonNegative" }
+      }
+    },
+    "clampedMove": {
+      "description": "A handle move that was limited by the minimum spacing to its neighbours; the handle moved to appliedOutputSec.",
+      "type": "object",
+      "required": ["handleId", "requestedOutputSec", "appliedOutputSec"],
+      "additionalProperties": false,
+      "properties": {
+        "handleId": { "$ref": "#/$defs/handleId" },
+        "requestedOutputSec": { "$ref": "#/$defs/secAny" },
+        "appliedOutputSec": { "$ref": "#/$defs/secNonNegative" }
+      }
+    },
+    "transport": {
+      "description": "Transport state. playStartTimelineSec is where \"play from start\" returns to: the position of the last play or seek, not 0 (PROTOCOL.md section 15.4 rule 5). lastControl is the last transport call (from the UI or this API) as OpenTune records it, null if there was none since OpenTune started.",
+      "type": "object",
+      "required": [
+        "playing",
+        "positionTimelineSec",
+        "playStartTimelineSec",
+        "loopEnabled",
+        "bpm",
+        "timeSignature",
+        "audioDeviceRunning",
+        "lastControl"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "playing": { "type": "boolean" },
+        "positionTimelineSec": { "$ref": "#/$defs/secNonNegative" },
+        "playStartTimelineSec": { "$ref": "#/$defs/secNonNegative" },
+        "loopEnabled": {
+          "description": "The loop flag. It has no audible effect in OpenTune Standalone.",
+          "type": "boolean"
+        },
+        "bpm": { "type": "number", "minimum": 1, "maximum": 999 },
+        "timeSignature": {
+          "type": "object",
+          "required": ["numerator", "denominator"],
+          "additionalProperties": false,
+          "properties": {
+            "numerator": { "type": "integer", "minimum": 1 },
+            "denominator": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "audioDeviceRunning": {
+          "description": "false: playback does not advance and nothing is heard.",
+          "type": "boolean"
+        },
+        "lastControl": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["call", "atMs"],
+              "additionalProperties": false,
+              "properties": {
+                "call": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "atMs": { "$ref": "#/$defs/timestampMs" }
+              }
+            },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "historyEntry": {
+      "description": "An entry of OpenTune's undo or redo history. undoId is null for an entry created in the OpenTune UI that edit.undo or edit.redo has not applied (PROTOCOL.md section 15.3 rule 8). origin is control (created through this API) or ui. possiblyStale: a track was deleted after the entry was recorded, so it may target a track that has since moved, and no call with force has applied the entry since that deletion (section 15.3 rule 6); for an entry with origin control it is true only when such a deletion moved or removed a track the entry addresses, so that without force edit.undo and edit.redo refuse exactly the control entries that are possibly stale. unsafe: the entry is a clip split, merge or delete, which edit.undo and edit.redo refuse (section 15.4 rule 1).",
+      "type": "object",
+      "required": [
+        "undoId",
+        "description",
+        "origin",
+        "possiblyStale",
+        "unsafe"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "undoId": {
+          "anyOf": [{ "$ref": "#/$defs/undoId" }, { "type": "null" }]
+        },
+        "description": {
+          "description": "The text that the undo menu of the OpenTune window shows for the entry. It follows the language of the OpenTune interface; clients show it and do not parse it.",
+          "type": "string",
+          "maxLength": 200
+        },
+        "origin": { "$ref": "#/$defs/camelName" },
+        "possiblyStale": { "type": "boolean" },
+        "unsafe": { "type": "boolean" }
+      }
+    },
+    "history": {
+      "description": "The tops of the undo and redo histories. undoCount and redoCount are the numbers of entries; a top is null when its history is empty.",
+      "type": "object",
+      "required": [
+        "canUndo",
+        "canRedo",
+        "undoCount",
+        "redoCount",
+        "undoTop",
+        "redoTop"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "canUndo": { "type": "boolean" },
+        "canRedo": { "type": "boolean" },
+        "undoCount": { "type": "integer", "minimum": 0 },
+        "redoCount": { "type": "integer", "minimum": 0 },
+        "undoTop": {
+          "anyOf": [{ "$ref": "#/$defs/historyEntry" }, { "type": "null" }]
+        },
+        "redoTop": {
+          "anyOf": [{ "$ref": "#/$defs/historyEntry" }, { "type": "null" }]
+        }
+      }
+    },
+    "entityRef": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "contentId": { "$ref": "#/$defs/contentId" },
+        "placementId": { "$ref": "#/$defs/placementId" },
+        "trackId": { "$ref": "#/$defs/trackId" },
+        "note": { "$ref": "#/$defs/noteRef" },
+        "handleId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "preference": { "$ref": "#/$defs/camelName" },
+        "jobId": { "$ref": "#/$defs/jobId" },
+        "path": { "type": "string", "minLength": 1 },
+        "singleton": {
+          "description": "Names an entity of which the instance has exactly one: transport, tempo, project, selection or audioDevice, or the workspace member group of the entity ui (PROTOCOL.md section 14.3).",
+          "$ref": "#/$defs/camelName"
+        }
+      }
+    },
+    "label": {
+      "description": "Short display label generated by the server from positions and values, for example \"Track 3\". Never contains user-supplied names.",
+      "type": ["string", "null"],
+      "maxLength": 200
+    },
+    "fieldChange": {
+      "type": "object",
+      "required": ["before", "after", "unit"],
+      "additionalProperties": false,
+      "properties": {
+        "before": true,
+        "after": true,
+        "unit": { "$ref": "#/$defs/unitName" }
+      }
+    },
+    "change": {
+      "type": "object",
+      "required": ["entity", "ref", "label", "fields"],
+      "additionalProperties": false,
+      "properties": {
+        "entity": { "$ref": "#/$defs/camelName" },
+        "ref": { "$ref": "#/$defs/entityRef" },
+        "label": { "$ref": "#/$defs/label" },
+        "fields": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/camelName" },
+          "additionalProperties": { "$ref": "#/$defs/fieldChange" }
+        }
+      }
+    },
+    "entityItem": {
+      "type": "object",
+      "required": ["entity", "ref", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "entity": { "$ref": "#/$defs/camelName" },
+        "ref": { "$ref": "#/$defs/entityRef" },
+        "label": { "$ref": "#/$defs/label" }
+      }
+    },
+    "idMapEntry": {
+      "type": "object",
+      "required": ["entity", "relation", "from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "entity": { "$ref": "#/$defs/camelName" },
+        "relation": {
+          "description": "split, merge, shift or copy.",
+          "$ref": "#/$defs/camelName"
+        },
+        "from": { "type": "array", "items": { "$ref": "#/$defs/entityRef" } },
+        "to": { "type": "array", "items": { "$ref": "#/$defs/entityRef" } }
+      }
+    },
+    "revisionPair": {
+      "description": "A changed component of the world revision vector. null means the object did not exist on that side.",
+      "type": "object",
+      "required": ["before", "after"],
+      "additionalProperties": false,
+      "properties": {
+        "before": {
+          "anyOf": [{ "$ref": "#/$defs/revisionToken" }, { "type": "null" }]
+        },
+        "after": {
+          "anyOf": [{ "$ref": "#/$defs/revisionToken" }, { "type": "null" }]
+        }
+      }
+    },
+    "contentRevisionDiff": {
+      "type": "object",
+      "required": ["contentId", "changed"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": { "$ref": "#/$defs/contentId" },
+        "changed": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "notes": { "$ref": "#/$defs/revisionPair" },
+            "pitch": { "$ref": "#/$defs/revisionPair" },
+            "grid": { "$ref": "#/$defs/revisionPair" },
+            "content": { "$ref": "#/$defs/revisionPair" },
+            "key": { "$ref": "#/$defs/revisionPair" },
+            "pitchShift": { "$ref": "#/$defs/revisionPair" }
+          }
+        }
+      }
+    },
+    "revisionDiff": {
+      "description": "Changed components of the world revision vector, captured on the main thread immediately before and after the write. Empty when arrangement and trackState are null and contents is empty.",
+      "type": "object",
+      "required": ["arrangement", "trackState", "contents"],
+      "additionalProperties": false,
+      "properties": {
+        "arrangement": {
+          "anyOf": [{ "$ref": "#/$defs/revisionPair" }, { "type": "null" }]
+        },
+        "trackState": {
+          "anyOf": [{ "$ref": "#/$defs/revisionPair" }, { "type": "null" }]
+        },
+        "contents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contentRevisionDiff" }
+        }
+      }
+    },
+    "contentTokens": {
+      "type": "object",
+      "required": ["contentId", "revision", "gridRevision", "keyRevision"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": { "$ref": "#/$defs/contentId" },
+        "revision": { "$ref": "#/$defs/revisionToken" },
+        "gridRevision": { "$ref": "#/$defs/revisionToken" },
+        "keyRevision": { "$ref": "#/$defs/revisionToken" }
+      }
+    },
+    "placementTokens": {
+      "type": "object",
+      "required": ["placementId", "geometryHash"],
+      "additionalProperties": false,
+      "properties": {
+        "placementId": { "$ref": "#/$defs/placementId" },
+        "geometryHash": { "$ref": "#/$defs/revisionToken" }
+      }
+    },
+    "tokens": {
+      "description": "Tokens read back from a fresh snapshot after the commit, for every object the write touched.",
+      "type": "object",
+      "required": ["arrangementRevision", "contents", "placements"],
+      "additionalProperties": false,
+      "properties": {
+        "arrangementRevision": { "$ref": "#/$defs/revisionToken" },
+        "contents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contentTokens" }
+        },
+        "placements": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/placementTokens" }
+        }
+      }
+    },
+    "asOf": {
+      "type": "object",
+      "required": ["arrangementRevision", "contents"],
+      "additionalProperties": false,
+      "properties": {
+        "arrangementRevision": { "$ref": "#/$defs/revisionToken" },
+        "contents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contentTokens" }
+        }
+      }
+    },
+    "derived": {
+      "description": "Paths of derived fields in this result, for example \"tracks[].label\".",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][A-Za-z0-9]*(\\[\\])?(\\.[a-z][A-Za-z0-9]*(\\[\\])?)*$"
+      }
+    },
+    "nullReasons": {
+      "description": "Maps the name of each member of the enclosing object whose value is null because it is unavailable to a reason code (scope null).",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/camelName" },
+      "additionalProperties": { "$ref": "#/$defs/reasonCode" }
+    },
+    "revert": {
+      "description": "A request that restores the previous state (PROTOCOL.md section 15.2). params never contains a member that expresses the end user's consent (confirm, or a name starting with discard). When requiresConsent is true, the client adds the method's consent params itself, and only after the end user explicitly agreed; otherwise the recipe is complete and is sent as is.",
+      "type": "object",
+      "required": ["method", "params"],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "$ref": "#/$defs/methodName" },
+        "params": {
+          "type": "object",
+          "propertyNames": { "not": { "pattern": "^(confirm$|discard)" } }
+        },
+        "requiresConsent": { "type": "boolean", "default": false }
+      }
+    },
+    "undoable": {
+      "type": "object",
+      "required": [
+        "undoable",
+        "undoId",
+        "description",
+        "innerActions",
+        "steps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "undoable": { "const": true },
+        "undoId": { "$ref": "#/$defs/undoId" },
+        "description": {
+          "description": "The text that the undo menu of the OpenTune window shows for the entry. It follows the language of the OpenTune interface; clients show it and do not parse it.",
+          "type": "string",
+          "maxLength": 200
+        },
+        "innerActions": {
+          "description": "Implementation-defined names of the inner undo actions. Opaque to clients.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1, "maxLength": 100 }
+        },
+        "steps": { "const": 1 }
+      }
+    },
+    "notUndoable": {
+      "type": "object",
+      "required": ["undoable", "reason", "revert"],
+      "additionalProperties": false,
+      "properties": {
+        "undoable": { "const": false },
+        "reason": { "$ref": "#/$defs/reasonCode" },
+        "revert": {
+          "anyOf": [{ "$ref": "#/$defs/revert" }, { "type": "null" }]
+        }
+      }
+    },
+    "undoDescriptor": {
+      "oneOf": [
+        { "$ref": "#/$defs/undoable" },
+        { "$ref": "#/$defs/notUndoable" }
+      ]
+    },
+    "sideEffect": {
+      "description": "One side effect. Members other than revert are defined per side-effect name in PROTOCOL.md section 14.6.",
+      "type": "object",
+      "required": ["revert"],
+      "properties": {
+        "revert": {
+          "anyOf": [{ "$ref": "#/$defs/revert" }, { "type": "null" }]
+        }
+      }
+    },
+    "sideEffects": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/camelName" },
+      "additionalProperties": { "$ref": "#/$defs/sideEffect" }
+    },
+    "uiSnapshot": {
+      "type": "object",
+      "required": [
+        "workspace",
+        "pianoRollContentId",
+        "activeTrackId",
+        "selectedPlacementIds",
+        "visibleTrackCount"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workspace": {
+          "description": "arrangement or pianoRoll.",
+          "$ref": "#/$defs/camelName"
+        },
+        "pianoRollContentId": {
+          "anyOf": [{ "$ref": "#/$defs/contentId" }, { "type": "null" }]
+        },
+        "activeTrackId": {
+          "anyOf": [{ "$ref": "#/$defs/trackId" }, { "type": "null" }]
+        },
+        "selectedPlacementIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/placementId" }
+        },
+        "visibleTrackCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "dirty": {
+      "type": "object",
+      "required": ["before", "after"],
+      "additionalProperties": false,
+      "properties": {
+        "before": { "type": "boolean" },
+        "after": { "type": "boolean" }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "required": ["code", "subject", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "$ref": "#/$defs/warningCode" },
+        "subject": {
+          "anyOf": [{ "$ref": "#/$defs/entityRef" }, { "type": "null" }]
+        },
+        "data": { "type": ["object", "null"] }
+      }
+    },
+    "jobKind": {
+      "description": "import, export, projectOpen, projectSave, projectCopy, timeGridSeed or prefsApply.",
+      "$ref": "#/$defs/camelName"
+    },
+    "jobState": {
+      "enum": ["queued", "running", "succeeded", "failed", "cancelled"]
+    },
+    "jobRef": {
+      "type": "object",
+      "required": ["jobId", "kind", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "jobId": { "$ref": "#/$defs/jobId" },
+        "kind": { "$ref": "#/$defs/jobKind" },
+        "state": { "$ref": "#/$defs/jobState" }
+      }
+    },
+    "jobProgress": {
+      "type": "object",
+      "required": ["fraction", "phase", "itemsDone", "itemsTotal"],
+      "additionalProperties": false,
+      "properties": {
+        "fraction": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "phase": {
+          "anyOf": [{ "$ref": "#/$defs/camelName" }, { "type": "null" }]
+        },
+        "itemsDone": { "type": ["integer", "null"], "minimum": 0 },
+        "itemsTotal": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "job": {
+      "type": "object",
+      "required": [
+        "jobId",
+        "kind",
+        "state",
+        "cancellable",
+        "createdAtMs",
+        "updatedAtMs",
+        "finishedAtMs",
+        "progress",
+        "result",
+        "error"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "jobId": { "$ref": "#/$defs/jobId" },
+        "kind": { "$ref": "#/$defs/jobKind" },
+        "state": { "$ref": "#/$defs/jobState" },
+        "cancellable": { "type": "boolean" },
+        "createdAtMs": { "$ref": "#/$defs/timestampMs" },
+        "updatedAtMs": { "$ref": "#/$defs/timestampMs" },
+        "finishedAtMs": {
+          "anyOf": [{ "$ref": "#/$defs/timestampMs" }, { "type": "null" }]
+        },
+        "progress": { "$ref": "#/$defs/jobProgress" },
+        "result": {
+          "description": "Kind-specific result, defined by the method that starts the job. null until the job is terminal; may be non-null for a cancelled or failed job that committed part of its work.",
+          "type": ["object", "null"]
+        },
+        "error": {
+          "anyOf": [{ "$ref": "#/$defs/errorObject" }, { "type": "null" }]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "enum": ["queued", "running"] } }
+          },
+          "then": {
+            "properties": {
+              "finishedAtMs": { "type": "null" },
+              "result": { "type": "null" },
+              "error": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "state": { "const": "succeeded" } } },
+          "then": {
+            "properties": {
+              "finishedAtMs": { "type": "integer" },
+              "result": { "type": "object" },
+              "error": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "state": { "enum": ["failed", "cancelled"] } }
+          },
+          "then": {
+            "properties": {
+              "finishedAtMs": { "type": "integer" },
+              "error": { "type": "object" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": { "enum": ["succeeded", "failed", "cancelled"] }
+            }
+          },
+          "then": { "properties": { "cancellable": { "const": false } } }
+        }
+      ]
+    },
+    "errorData": {
+      "type": "object",
+      "required": ["kind", "retryable", "detail", "executed"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/errorKind" },
+        "reason": { "$ref": "#/$defs/reasonCode" },
+        "retryable": { "type": "boolean" },
+        "retryAfterMs": { "type": "integer", "minimum": 0 },
+        "detail": {
+          "description": "Diagnostic text in English. Printable ASCII only, so that the limit of 1024 characters is also a limit of 1024 bytes. Not for branching.",
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^[\\x20-\\x7E]*$"
+        },
+        "executed": {
+          "description": "false: the request changed nothing and will not run later. true: state may have changed.",
+          "type": "boolean"
+        }
+      }
+    },
+    "errorObject": {
+      "type": "object",
+      "required": ["code", "message", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "integer" },
+        "message": {
+          "description": "Equal to data.kind.",
+          "$ref": "#/$defs/errorKind"
+        },
+        "data": { "$ref": "#/$defs/errorData" }
+      }
+    },
+    "writeEnvelope": {
+      "description": "Members every write result carries (PROTOCOL.md section 14). Method schemas extend it with allOf and close it with unevaluatedProperties: false.",
+      "type": "object",
+      "required": [
+        "applied",
+        "noOp",
+        "dryRun",
+        "changes",
+        "created",
+        "removed",
+        "idMap",
+        "revisionDiff",
+        "tokens",
+        "undo",
+        "dirty",
+        "ui",
+        "sideEffects",
+        "warnings",
+        "job"
+      ],
+      "properties": {
+        "applied": { "type": "boolean" },
+        "noOp": { "type": "boolean" },
+        "dryRun": { "type": "boolean" },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/change" } },
+        "created": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/entityItem" }
+        },
+        "removed": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/entityItem" }
+        },
+        "idMap": { "type": "array", "items": { "$ref": "#/$defs/idMapEntry" } },
+        "revisionDiff": { "$ref": "#/$defs/revisionDiff" },
+        "tokens": { "$ref": "#/$defs/tokens" },
+        "undo": {
+          "anyOf": [{ "$ref": "#/$defs/undoDescriptor" }, { "type": "null" }]
+        },
+        "dirty": { "$ref": "#/$defs/dirty" },
+        "ui": {
+          "anyOf": [{ "$ref": "#/$defs/uiSnapshot" }, { "type": "null" }]
+        },
+        "sideEffects": { "$ref": "#/$defs/sideEffects" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } },
+        "job": { "anyOf": [{ "$ref": "#/$defs/jobRef" }, { "type": "null" }] },
+        "nullReasons": { "$ref": "#/$defs/nullReasons" }
+      },
+      "$comment": "The allOf below admits exactly the four states of PROTOCOL.md section 14.2: committed with changes, committed without changes (noOp), prediction (dryRun) and work handed to a job.",
+      "allOf": [
+        {
+          "if": { "properties": { "dryRun": { "const": true } } },
+          "then": {
+            "properties": {
+              "applied": { "const": false },
+              "noOp": { "const": false },
+              "undo": { "type": "null" },
+              "job": { "type": "null" },
+              "revisionDiff": {
+                "type": "object",
+                "properties": {
+                  "arrangement": { "type": "null" },
+                  "trackState": { "type": "null" },
+                  "contents": { "type": "array", "maxItems": 0 }
+                }
+              },
+              "dirty": {
+                "type": "object",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "before": { "const": true },
+                      "after": { "const": true }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "before": { "const": false },
+                      "after": { "const": false }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "applied": { "const": false },
+              "dryRun": { "const": false }
+            }
+          },
+          "then": { "properties": { "job": { "type": "object" } } }
+        },
+        {
+          "if": { "properties": { "noOp": { "const": true } } },
+          "then": {
+            "properties": {
+              "applied": { "const": true },
+              "changes": { "type": "array", "maxItems": 0 },
+              "created": { "type": "array", "maxItems": 0 },
+              "removed": { "type": "array", "maxItems": 0 },
+              "idMap": { "type": "array", "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "job": { "type": "object" } },
+            "required": ["job"]
+          },
+          "then": {
+            "properties": {
+              "applied": { "const": false },
+              "dryRun": { "const": false },
+              "undo": { "type": "null" },
+              "changes": { "type": "array", "maxItems": 0 },
+              "created": { "type": "array", "maxItems": 0 },
+              "removed": { "type": "array", "maxItems": 0 },
+              "idMap": { "type": "array", "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "applied": { "const": true } } },
+          "then": { "properties": { "undo": { "type": "object" } } }
+        }
+      ]
+    },
+    "readMeta": {
+      "description": "Members every read result of project or content state carries (PROTOCOL.md section 16).",
+      "type": "object",
+      "required": ["asOf", "derived"],
+      "properties": {
+        "asOf": { "$ref": "#/$defs/asOf" },
+        "derived": { "$ref": "#/$defs/derived" },
+        "nullReasons": { "$ref": "#/$defs/nullReasons" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "preAuthReadBytes",
+        "helloTimeoutMs",
+        "maxPreAuthConnections",
+        "maxSessions",
+        "maxLineBytes",
+        "maxInFlightPerSession",
+        "idleTimeoutMs",
+        "dispatchTimeoutMs",
+        "jobWaitMaxMs",
+        "jobRetentionMs",
+        "jobRetentionCount"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "preAuthReadBytes": { "const": 8192 },
+        "helloTimeoutMs": { "const": 2000 },
+        "maxPreAuthConnections": { "const": 8 },
+        "maxSessions": { "const": 4 },
+        "maxLineBytes": { "const": 4194304 },
+        "maxInFlightPerSession": { "const": 16 },
+        "idleTimeoutMs": { "const": 600000 },
+        "dispatchTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 30000
+        },
+        "jobWaitMaxMs": { "const": 30000 },
+        "jobRetentionMs": { "const": 1800000 },
+        "jobRetentionCount": { "const": 64 }
+      }
+    },
+    "buildInfo": {
+      "type": "object",
+      "required": ["commit", "tag"],
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "description": "Full commit id of the source the binary was built from.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "tag": {
+          "description": "Version-control tag of that commit, if the build was made from a tag.",
+          "type": ["string", "null"],
+          "maxLength": 200
+        }
+      }
+    },
+    "rpcRequest": {
+      "type": "object",
+      "required": ["jsonrpc", "id", "method"],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/requestId" },
+        "method": {
+          "description": "Any string, including the empty string. A string that names no method of the session's protocol version gets UNSUPPORTED(unknown_method); a missing or non-string method gets INVALID_ARGUMENT(invalid_request).",
+          "type": "string"
+        },
+        "params": { "type": "object" }
+      }
+    },
+    "rpcSuccess": {
+      "type": "object",
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/requestId" },
+        "result": { "type": "object" }
+      }
+    },
+    "rpcError": {
+      "type": "object",
+      "required": ["jsonrpc", "id", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": {
+          "anyOf": [{ "$ref": "#/$defs/requestId" }, { "type": "null" }]
+        },
+        "error": { "$ref": "#/$defs/errorObject" }
+      }
+    }
+  }
+}

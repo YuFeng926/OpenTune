@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/open-unsaved-changes",
+  "type": "request",
+  "description": "With unsaved changes and without discardUnsaved, project.open fails with UNSAVED_CHANGES(project_dirty) and starts no job; it never saves implicitly.",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.open",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [
+      {
+        "bind": "proj",
+        "kind": "project",
+        "extension": ".otproj",
+        "durationSec": 4
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.open",
+    "params": { "path": { "$ref": "proj" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNSAVED_CHANGES",
+      "data": {
+        "kind": "UNSAVED_CHANGES",
+        "reason": "project_dirty",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.getPitchCurve.schema.json",
+  "title": "content.getPitchCurve",
+  "description": "Returns the original (detected) and the corrected pitch of a content, one value per analysis frame, as MIDI note numbers at tuningHz. Value i of a page belongs to the frame at startContentSec + i * stepFrame * hopSec on the content clock; stepFrame above 1 returns every stepFrame-th frame. correctedMidi is the pitch OpenTune renders, equal to originalMidi where nothing is corrected. Both values are null for an unvoiced frame. range keeps the frames whose time lies in it. correctedMidi includes the content's pitch shift, which does not change revision. Paginated: at most limit values per page (default 10000); nextCursor reads the next page and is bound to the tokens in asOf and to the content's pitch shift (PROTOCOL.md section 10 rule 6). Reads are not gated: before the analysis is ready the arrays are empty and f0State says why.",
+  "x-otcp": {
+    "method": "content.getPitchCurve",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "read",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["contentId"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "range": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentRange"
+        },
+        "stepFrame": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 1
+        },
+        "cursor": { "$ref": "../schemas/common.schema.json#/$defs/cursor" },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 10000
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [{ "$ref": "../schemas/common.schema.json#/$defs/readMeta" }],
+      "required": [
+        "contentId",
+        "f0State",
+        "tuningHz",
+        "hopSec",
+        "stepFrame",
+        "startContentSec",
+        "pointCount",
+        "originalMidi",
+        "correctedMidi",
+        "nextCursor"
+      ],
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "f0State": { "$ref": "../schemas/common.schema.json#/$defs/f0State" },
+        "tuningHz": { "type": "number" },
+        "hopSec": { "type": "number", "exclusiveMinimum": 0 },
+        "stepFrame": { "type": "integer", "minimum": 1 },
+        "startContentSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "pointCount": { "type": "integer", "minimum": 0 },
+        "originalMidi": {
+          "type": "array",
+          "items": { "anyOf": [{ "type": "number" }, { "type": "null" }] }
+        },
+        "correctedMidi": {
+          "type": "array",
+          "items": { "anyOf": [{ "type": "number" }, { "type": "null" }] }
+        },
+        "nextCursor": {
+          "description": "Reads the next page; null on the last page.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/cursor" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

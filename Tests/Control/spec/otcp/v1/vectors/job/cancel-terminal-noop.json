@@ -1,0 +1,46 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "job/cancel-terminal-noop",
+  "type": "request",
+  "description": "Cancelling a job that has already succeeded is a no-op success: cancelRequested is false and the job is unchanged.",
+  "capability": "jobs.v1",
+  "since": "1.0",
+  "method": "job.cancel",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "doneJob",
+        "kind": "export",
+        "state": "succeeded",
+        "cancellable": false
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "job.cancel",
+    "params": { "jobId": { "$ref": "doneJob" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "result": {
+      "cancelRequested": false,
+      "job": {
+        "jobId": { "$ref": "doneJob" },
+        "kind": "export",
+        "state": "succeeded",
+        "cancellable": false,
+        "createdAtMs": { "$any": "integer" },
+        "updatedAtMs": { "$any": "integer" },
+        "finishedAtMs": { "$any": "integer" },
+        "progress": { "$any": "object" },
+        "result": { "$any": "object" },
+        "error": null
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

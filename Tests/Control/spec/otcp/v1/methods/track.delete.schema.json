@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/track.delete.schema.json",
+  "title": "track.delete",
+  "description": "Deletes a track, as Delete Track in OpenTune's track menu does: its clips are removed, every later visible track moves down by one position together with its clips and its mute, solo, volume and colour, and one track fewer is visible. Hidden track slots do not move: OpenTune shifts only the range of visible tracks, so a hidden slot keeps its position, its settings and any clips it holds. The deletion cannot be undone in OpenTune or through this protocol (undo reason no_upstream_undo, revert null, warning IRREVERSIBLE), so it needs confirm true; without it the call fails with INVALID_ARGUMENT(confirm_required) and changes nothing (PROTOCOL.md section 20.2 rule 3). Clients set confirm only when the end user explicitly agreed to delete the track. expectedArrangementRevision guards against concurrent changes (REVISION_CONFLICT(arrangement_changed)). The only visible track cannot be deleted (INVALID_ARGUMENT(last_track)), nor can a hidden track (INVALID_ARGUMENT(track_hidden)), and a trackId that names no track slot gives NOT_FOUND(unknown_handle). trackIdMap maps the positions that changed: the deleted track (after null) and every later visible track ({before, after}); hidden tracks do not move and are not listed. removed lists the deleted clips. changes lists every clip that moved to another track (member trackId). The deletion is a barrier in the undo and redo histories (section 15.3 rule 6): entries recorded before it may address tracks that have moved since. possiblyStaleEntries counts the entries that it made possibly stale, and when there are any the result carries the warning UNDO_HISTORY_POSSIBLY_STALE with the same counts as data ({undo, redo}).",
+  "x-otcp": {
+    "method": "track.delete",
+    "layer": "L6",
+    "capability": "tracks.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["trackId", "expectedArrangementRevision"],
+      "additionalProperties": false,
+      "properties": {
+        "trackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "expectedArrangementRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        },
+        "confirm": {
+          "description": "The end user explicitly agreed to delete the track. Without true the call fails with INVALID_ARGUMENT(confirm_required).",
+          "type": "boolean"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["trackIdMap", "possiblyStaleEntries"],
+      "properties": {
+        "trackIdMap": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["before", "after"],
+            "additionalProperties": false,
+            "properties": {
+              "before": {
+                "$ref": "../schemas/common.schema.json#/$defs/trackId"
+              },
+              "after": {
+                "anyOf": [
+                  { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        },
+        "possiblyStaleEntries": {
+          "type": "object",
+          "required": ["undo", "redo"],
+          "additionalProperties": false,
+          "properties": {
+            "undo": { "type": "integer", "minimum": 0 },
+            "redo": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

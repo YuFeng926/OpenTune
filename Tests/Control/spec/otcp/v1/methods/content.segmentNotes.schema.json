@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.segmentNotes.schema.json",
+  "title": "content.segmentNotes",
+  "description": "Segments the original pitch of a content into notes as OpenTune's note generator would, without changing anything. The segments are for analysis only and are not stored. noteSplitCents absent takes the generator's default; the result reports the value used. range keeps the segments that overlap it. detectedMidi is the median detected pitch of a segment. Reads are not gated: before the analysis is ready, segments is empty and f0State says why.",
+  "x-otcp": {
+    "method": "content.segmentNotes",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "read",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["contentId"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "range": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentRange"
+        },
+        "noteSplitCents": {
+          "$ref": "../schemas/common.schema.json#/$defs/noteSplitCents"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [{ "$ref": "../schemas/common.schema.json#/$defs/readMeta" }],
+      "required": [
+        "contentId",
+        "f0State",
+        "tuningHz",
+        "noteSplitCents",
+        "segments"
+      ],
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "f0State": { "$ref": "../schemas/common.schema.json#/$defs/f0State" },
+        "tuningHz": { "type": "number" },
+        "noteSplitCents": {
+          "$ref": "../schemas/common.schema.json#/$defs/noteSplitCents"
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["startContentSec", "endContentSec", "detectedMidi"],
+            "additionalProperties": false,
+            "properties": {
+              "startContentSec": {
+                "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+              },
+              "endContentSec": {
+                "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+              },
+              "detectedMidi": { "type": "number" }
+            }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

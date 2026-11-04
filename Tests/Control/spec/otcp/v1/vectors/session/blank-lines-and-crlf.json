@@ -1,0 +1,26 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/blank-lines-and-crlf",
+  "type": "scenario",
+  "description": "After authentication, empty and whitespace-only lines get no response, and a CR before the LF is accepted as JSON whitespace.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendRaw": "\n \r\n\n"
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"session.info\",\"params\":{}}\r\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "result": {
+          "$any": "object"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/set-not-found",
+  "type": "request",
+  "description": "A trackId that names no track slot gives NOT_FOUND(unknown_handle) and changes nothing.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.set",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.set",
+    "params": {
+      "tracks": [
+        { "trackId": { "$ref": "runner.unknownTrackId" }, "muted": true }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

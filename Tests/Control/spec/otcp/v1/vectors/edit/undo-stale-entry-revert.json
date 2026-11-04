@@ -1,0 +1,129 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-stale-entry-revert",
+  "type": "scenario",
+  "description": "The end user asked to undo the stale clip move, so the client applies it with force. The call clears the entry's possiblyStale (PROTOCOL.md section 15.3 rule 6): edit.getHistory shows it on top of the redo history with possiblyStale false. The revert recipe of the step, edit.redo with the entry's undoId and without force, is then sent unchanged and succeeds; it is not refused with UNDO_CONFLICT(stale_entry).",
+  "capability": "history.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "bind": "moveEntry",
+          "origin": "control",
+          "action": "clipMove",
+          "clip": "clip",
+          "trackDeletedAfter": true
+        }
+      ],
+      "redo": []
+    }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "edit.undo",
+        "params": { "force": true }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "edit.redo",
+              "params": { "expectedUndoId": { "$ref": "moveEntry" } }
+            }
+          },
+          "entry": {
+            "undoId": { "$ref": "moveEntry" },
+            "description": { "$any": "string" },
+            "origin": "control",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "history": {
+            "canUndo": false,
+            "canRedo": true,
+            "undoCount": 0,
+            "redoCount": 1,
+            "undoTop": null,
+            "redoTop": {
+              "undoId": { "$ref": "moveEntry" },
+              "description": { "$any": "string" },
+              "origin": "control",
+              "possiblyStale": false,
+              "unsafe": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.redo",
+        "params": { "expectedUndoId": { "$ref": "moveEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "applied": true,
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "edit.undo",
+              "params": { "expectedUndoId": { "$ref": "moveEntry" } }
+            }
+          },
+          "entry": {
+            "undoId": { "$ref": "moveEntry" },
+            "description": { "$any": "string" },
+            "origin": "control",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    }
+  ]
+}

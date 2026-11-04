@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/prefs.get.schema.json",
+  "title": "prefs.get",
+  "description": "Returns OpenTune's preferences: the processing settings, whether the first-run onboarding was shown, the UI language (read-only through this protocol) and the recent projects. Preferences are user-global: they belong to the OpenTune installation, not to the project, so the result carries no asOf. processing members that cannot be determined are null and named in processing.nullReasons. processing.options lists the values prefs.set accepts for vocoderWeight, f0Model and renderingPriority; it is reported by prefs.get only, not by session.info, and an instance of an earlier release candidate does not report it. A name that cannot be carried (empty, not valid UTF-8 or longer than 64 code points) is left out of a list, which holds at most 64 entries. Recent project paths are untrusted data (PROTOCOL.md section 20.2).",
+  "x-otcp": {
+    "method": "prefs.get",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "optionList": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "processing",
+        "onboardingShown",
+        "language",
+        "recentProjects"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "processing": {
+          "type": "object",
+          "required": [
+            "tuningHz",
+            "editingScheme",
+            "hybridMode",
+            "vocoderWeight",
+            "f0Model",
+            "renderingPriority",
+            "experimentalFeatures"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "tuningHz": { "type": "number", "minimum": 400, "maximum": 500 },
+            "editingScheme": {
+              "$ref": "../schemas/common.schema.json#/$defs/editingScheme"
+            },
+            "hybridMode": {
+              "description": "Whether OpenTune's hybrid mode is on. With it on, OpenTune renders small corrections with a pitch shift of the audio instead of the vocoder, so the corrected pitch that results report can differ from what is heard (informative, PROTOCOL.md section 19, \"Hybrid mode\").",
+              "type": "boolean"
+            },
+            "vocoderWeight": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "f0Model": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "renderingPriority": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "experimentalFeatures": { "type": "boolean" },
+            "options": {
+              "description": "The values prefs.set accepts for the members that choose among several: the weight files and the pitch models the installation offers (empty when it has none) and the fixed values of the rendering priority. Every value is at most 64 code points and every list has at most 64 entries. Not in required: an instance of an earlier release candidate does not report it.",
+              "type": "object",
+              "required": ["vocoderWeight", "f0Model", "renderingPriority"],
+              "additionalProperties": false,
+              "properties": {
+                "vocoderWeight": {
+                  "description": "The file names of the vocoder weights, in the order of OpenTune's preferences window.",
+                  "$ref": "#/$defs/optionList"
+                },
+                "f0Model": {
+                  "description": "The names of the pitch models that are available.",
+                  "$ref": "#/$defs/optionList"
+                },
+                "renderingPriority": {
+                  "description": "gpuFirst and cpuFirst. gpuFirst makes OpenTune try the GPU for inference and use the CPU when the GPU cannot be used; cpuFirst makes it use the CPU only. A new priority takes effect when OpenTune has reconfigured its vocoder, an asynchronous step that the job of prefs.set waits for when the vocoder was ready before. session.info reports the backend that runs in processing.backend, which after a fall back to the CPU differs from the priority.",
+                  "$ref": "#/$defs/optionList"
+                }
+              }
+            },
+            "nullReasons": {
+              "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+            }
+          }
+        },
+        "onboardingShown": { "type": "boolean" },
+        "language": { "type": "string", "maxLength": 32 },
+        "recentProjects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "exists"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "$ref": "../schemas/common.schema.json#/$defs/path" },
+              "exists": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

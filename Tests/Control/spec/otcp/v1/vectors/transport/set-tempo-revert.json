@@ -1,0 +1,67 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/set-tempo-revert",
+  "type": "scenario",
+  "description": "The revert recipe of transport.setTempo, sent unchanged, restores the previous tempo and time signature.",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "transport.setTempo",
+        "params": {
+          "bpm": 96,
+          "timeSignature": { "numerator": 3, "denominator": 4 }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "transport.setTempo",
+              "params": {
+                "bpm": 120,
+                "timeSignature": { "numerator": 4, "denominator": 4 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "transport.setTempo",
+        "params": {
+          "bpm": 120,
+          "timeSignature": { "numerator": 4, "denominator": 4 }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "tempo": {
+            "bpm": 120,
+            "timeSignature": { "numerator": 4, "denominator": 4 }
+          }
+        }
+      }
+    }
+  ]
+}

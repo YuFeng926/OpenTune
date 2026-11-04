@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/get-no-device",
+  "type": "request",
+  "description": "Without a running device, the members of device other than running are null with nullReasons no_audio_device.",
+  "capability": "audio.device",
+  "since": "1.0",
+  "method": "audio.get",
+  "session": "authenticated",
+  "given": { "audio": { "running": false } },
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "audio.get", "params": {} },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "device": {
+        "running": false,
+        "deviceType": null,
+        "outputDevice": null,
+        "sampleRateHz": null,
+        "bufferSizeFrame": null,
+        "outputChannelPair": null,
+        "nullReasons": {
+          "deviceType": "no_audio_device",
+          "outputDevice": "no_audio_device",
+          "sampleRateHz": "no_audio_device",
+          "bufferSizeFrame": "no_audio_device",
+          "outputChannelPair": "no_audio_device"
+        }
+      },
+      "available": { "$any": "object" }
+    }
+  },
+  "connectionAfter": "open"
+}

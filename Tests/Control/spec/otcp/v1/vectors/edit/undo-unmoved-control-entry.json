@@ -1,0 +1,112 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-unmoved-control-entry",
+  "type": "scenario",
+  "description": "A clip move made through this API was recorded before a track after the clip's track was deleted. The clip's track did not move, so the entry is not possibly stale (edit.getHistory), and edit.undo without force applies it as usual: no UNDO_CONFLICT(stale_entry) and no warning UNDO_ENTRY_POSSIBLY_STALE (PROTOCOL.md section 15.3 rule 6).",
+  "capability": "history.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "bind": "moveEntry",
+          "origin": "control",
+          "action": "clipMove",
+          "clip": "clip",
+          "laterTrackDeletedAfter": true
+        }
+      ],
+      "redo": []
+    }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "history": {
+            "undoTop": {
+              "undoId": { "$ref": "moveEntry" },
+              "description": { "$any": "string" },
+              "origin": "control",
+              "possiblyStale": false,
+              "unsafe": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "moveEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "dryRun": false,
+          "changes": { "$any": "array" },
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": {
+              "before": { "$any": "string" },
+              "after": { "$any": "string" }
+            },
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "edit.redo",
+              "params": { "expectedUndoId": { "$ref": "moveEntry" } }
+            }
+          },
+          "dirty": { "before": false, "after": true },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [],
+          "job": null,
+          "entry": {
+            "undoId": { "$ref": "moveEntry" },
+            "description": { "$any": "string" },
+            "origin": "control",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    }
+  ]
+}

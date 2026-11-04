@@ -1,0 +1,127 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/set-asio-rate-not-restored",
+  "type": "request",
+  "description": "OpenTune cannot restore the sample rate of an ASIO device before the switch of the device type. The restoration is best effort, as on OpenTune's audio settings page: the switch goes on and succeeds, and the result carries the warning ASIO_RATE_NOT_RESTORED (data: the device whose rate was to be restored and the rate in Hz) after GLOBAL_PREFERENCE, instead of the call failing with IO_ERROR(device_open_failed). The setup is user-global; there is no undo entry, and the revert recipe names the previous device type.",
+  "capability": "audio.device",
+  "since": "1.0",
+  "method": "audio.set",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "audio": {
+      "running": true,
+      "alternatives": true,
+      "asioRateRestoreFails": true
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "audio.set",
+    "params": {
+      "deviceType": {
+        "$ref": "audio.otherDeviceType"
+      }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "audioDevice",
+          "ref": {
+            "singleton": "audioDevice"
+          },
+          "label": {
+            "$any": true
+          },
+          "fields": {
+            "deviceType": {
+              "before": {
+                "$ref": "audio.deviceType"
+              },
+              "after": {
+                "$ref": "audio.otherDeviceType"
+              },
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": {
+          "$any": "string"
+        },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "audio.set",
+          "params": {
+            "deviceType": {
+              "$ref": "audio.deviceType"
+            }
+          }
+        }
+      },
+      "dirty": {
+        "before": false,
+        "after": false
+      },
+      "ui": {
+        "$any": true
+      },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "GLOBAL_PREFERENCE",
+          "subject": null,
+          "data": {
+            "preferences": [
+              "audioDevice"
+            ]
+          }
+        },
+        {
+          "code": "ASIO_RATE_NOT_RESTORED",
+          "subject": {
+            "singleton": "audioDevice"
+          },
+          "data": {
+            "deviceName": {
+              "$any": "string"
+            },
+            "sampleRateHz": {
+              "$any": "integer"
+            }
+          }
+        }
+      ],
+      "job": null,
+      "device": {
+        "running": true,
+        "deviceType": {
+          "$ref": "audio.otherDeviceType"
+        }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

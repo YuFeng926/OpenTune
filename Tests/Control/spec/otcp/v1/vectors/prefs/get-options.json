@@ -1,0 +1,42 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/get-options",
+  "type": "request",
+  "description": "prefs.get reports in processing.options the values that prefs.set accepts: the vocoder weight files and the pitch models the installation offers, and the fixed values of the rendering priority. The weight and the pitch model in use are among the listed ones. session.info does not report the options.",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "prefs.get",
+  "session": "authenticated",
+  "given": {
+    "preferences": {
+      "vocoderWeight": "hifigan.onnx",
+      "renderingPriority": "gpuFirst",
+      "f0Model": "fcpe",
+      "options": {
+        "vocoderWeight": ["hifigan.onnx", "hifigan_coulin9.onnx"],
+        "f0Model": ["fcpe"]
+      }
+    }
+  },
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "prefs.get", "params": {} },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "processing": {
+        "vocoderWeight": "hifigan.onnx",
+        "f0Model": "fcpe",
+        "renderingPriority": "gpuFirst",
+        "options": {
+          "vocoderWeight": ["hifigan.onnx", "hifigan_coulin9.onnx"],
+          "f0Model": ["fcpe"],
+          "renderingPriority": ["gpuFirst", "cpuFirst"]
+        }
+      },
+      "onboardingShown": { "$any": "boolean" },
+      "language": { "$any": "string" },
+      "recentProjects": { "$any": "array" }
+    }
+  },
+  "connectionAfter": "open"
+}

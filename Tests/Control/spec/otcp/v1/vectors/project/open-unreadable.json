@@ -1,0 +1,77 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/open-unreadable",
+  "type": "scenario",
+  "description": "A file that OpenTune cannot read as a project ends the projectOpen job with IO_ERROR(read_failed); the current project is untouched (executed false).",
+  "capability": "project.io",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "files": [
+      { "bind": "broken", "kind": "undecodable", "extension": ".otproj" }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "project.open",
+        "params": { "path": { "$ref": "broken" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "brokenJob", "$any": "string" },
+            "kind": "projectOpen",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "brokenJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "brokenJob" },
+            "kind": "projectOpen",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "IO_ERROR",
+              "data": {
+                "kind": "IO_ERROR",
+                "reason": "read_failed",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

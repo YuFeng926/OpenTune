@@ -1,0 +1,80 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/set-loop-ok",
+  "type": "request",
+  "description": "transport.setLoop turns the loop flag on. OpenTune Standalone has no loop range, so this has no audible effect (warning LOOP_NO_EFFECT_STANDALONE), and the flag is not saved with the project (warning NOT_PERSISTED). The flag is view state with a revert recipe.",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "method": "transport.setLoop",
+  "session": "authenticated",
+  "given": { "dirty": false },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "transport.setLoop",
+    "params": { "enabled": true }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "transport",
+          "ref": { "singleton": "transport" },
+          "label": { "$any": true },
+          "fields": {
+            "loopEnabled": { "before": false, "after": true, "unit": null }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "not_persisted_state",
+        "revert": {
+          "method": "transport.setLoop",
+          "params": { "enabled": false }
+        }
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        { "code": "LOOP_NO_EFFECT_STANDALONE", "subject": null, "data": null },
+        {
+          "code": "NOT_PERSISTED",
+          "subject": { "singleton": "transport" },
+          "data": null
+        }
+      ],
+      "job": null,
+      "transport": {
+        "playing": false,
+        "positionTimelineSec": 0,
+        "playStartTimelineSec": 0,
+        "loopEnabled": true,
+        "bpm": 120,
+        "timeSignature": { "numerator": 4, "denominator": 4 },
+        "audioDeviceRunning": { "$any": "boolean" },
+        "lastControl": { "$any": true }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

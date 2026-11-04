@@ -1,0 +1,92 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/get-ok",
+  "type": "request",
+  "description": "project.get with one clip on track 0 that starts at 2 s and lasts 6 s. The placement reports its timeline geometry, the content summary its analysis state, key and notes, and asOf the tokens of the content. Track slots, the selection, the transport and the history depend on the target and are matched by type only.",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "project.get",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "key": { "root": 9, "scale": "minor" },
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.get",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "asOf": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$ref": "clip.revision" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ]
+      },
+      "derived": { "$any": "array" },
+      "project": { "path": { "$any": true }, "dirty": false },
+      "tracks": { "$any": "array" },
+      "visibleTrackCount": { "$any": "integer" },
+      "activeTrackId": { "$any": true },
+      "placements": [
+        {
+          "placementId": { "$ref": "clip.placementId" },
+          "trackId": 0,
+          "contentId": { "$ref": "clip.contentId" },
+          "name": { "$any": true },
+          "startTimelineSec": { "$approx": 2 },
+          "endTimelineSec": { "$approx": 8 },
+          "durationSec": { "$approx": 6 },
+          "clipInContentSec": { "$approx": 0 },
+          "gainDb": { "$approx": 0 },
+          "gainLinear": { "$approx": 1 },
+          "fadeInSec": { "$approx": 0 },
+          "fadeOutSec": { "$approx": 0 },
+          "sourcePath": { "$ref": "clip.sourcePath" },
+          "geometryHash": { "$ref": "clip.geometryHash" }
+        }
+      ],
+      "contents": [
+        {
+          "contentId": { "$ref": "clip.contentId" },
+          "f0State": "ready",
+          "key": {
+            "root": 9,
+            "scale": "minor",
+            "origin": { "$any": "string" },
+            "confidence": { "$any": true }
+          },
+          "noteCount": 2,
+          "pitchShift": { "semitones": 0, "cents": 0 },
+          "timeGridIdentity": true
+        }
+      ],
+      "selection": { "$any": true },
+      "transport": { "$any": "object" },
+      "history": { "$any": true }
+    }
+  },
+  "connectionAfter": "open"
+}

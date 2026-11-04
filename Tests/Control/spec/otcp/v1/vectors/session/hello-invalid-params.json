@@ -1,0 +1,40 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-invalid-params",
+  "type": "request",
+  "description": "A hello with the right token and a supported major whose other params do not validate (client is missing) gets INVALID_ARGUMENT(invalid_params), not AUTH_FAILED, and the server closes the connection.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.hello",
+  "session": "unauthenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "session.hello",
+    "params": {
+      "token": {
+        "$ref": "discovery.token"
+      },
+      "protocol": "1.0"
+    }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "invalid_params",
+        "retryable": false,
+        "detail": {
+          "$any": "string"
+        },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "closed"
+}

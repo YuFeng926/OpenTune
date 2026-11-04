@@ -1,0 +1,115 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-dry-contents",
+  "type": "scenario",
+  "description": "Exporting a clip whose analysis found no voiced audio. Its content is exported uncorrected and listed in dryContents, so the export is never silently uncorrected. A file already exists at the requested path and ifExists is rename, so the job writes the next free name, <stem> (2).wav in the same directory (bound as existing.next), which result.path reports. A clip export starts at the clip's start on the timeline.",
+  "capability": "export.v1",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "unvoiced"
+      }
+    ],
+    "files": [{ "bind": "existing", "kind": "existing" }]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "export.start",
+        "params": {
+          "kind": "clip",
+          "target": { "placementId": { "$ref": "clip.placementId" } },
+          "path": { "$ref": "existing" },
+          "ifExists": "rename"
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": null,
+          "dirty": { "$any": "object" },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [],
+          "job": {
+            "jobId": { "$capture": "exportJob", "$any": "string" },
+            "kind": "export",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "exportJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "exportJob" },
+            "kind": "export",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "path": { "$ref": "existing.next" },
+              "sampleRateHz": 44100,
+              "channelCount": 1,
+              "sampleFormat": "float32",
+              "durationSec": { "$approx": 6, "$tol": 0.01 },
+              "startTimelineSec": { "$approx": 2 },
+              "dryContents": [
+                {
+                  "contentId": { "$ref": "clip.contentId" },
+                  "reason": "unvoiced"
+                }
+              ],
+              "processing": {
+                "vocoderWeight": { "$any": true },
+                "hybridMode": { "$any": "boolean" },
+                "backend": { "$any": true },
+                "tuningHz": { "$any": "number" }
+              }
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

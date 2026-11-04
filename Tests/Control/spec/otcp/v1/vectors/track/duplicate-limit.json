@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/duplicate-limit",
+  "type": "request",
+  "description": "With every track slot visible there is no slot for the copy: INVALID_ARGUMENT(track_limit).",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.duplicate",
+  "session": "authenticated",
+  "given": { "visibleTrackCount": "all" },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.duplicate",
+    "params": { "trackId": 0 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "track_limit",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

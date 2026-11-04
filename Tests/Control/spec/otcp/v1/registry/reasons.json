@@ -1,0 +1,667 @@
+{
+  "$schema": "../schemas/registry.schema.json",
+  "registry": "reasons",
+  "description": "Reason codes. scope is an error kind (the code is used in error.data.reason with that kind), \"undo\" (undo.reason of a not-undoable result) or \"null\" (values in a nullReasons map). A code is unique within its scope. Append-only within protocol major 1; clients must accept codes they do not know. jsonrpcCode, where present, overrides the kind's default JSON-RPC error code.",
+  "entries": [
+    {
+      "code": "parse_error",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "jsonrpcCode": -32700,
+      "description": "The line is not valid UTF-8 or not valid JSON."
+    },
+    {
+      "code": "invalid_request",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "jsonrpcCode": -32600,
+      "description": "The line is JSON but not a request that this profile of JSON-RPC 2.0 accepts, for example because method is missing or not a string, or id is not a valid id."
+    },
+    {
+      "code": "batch_unsupported",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "jsonrpcCode": -32600,
+      "description": "The line is a JSON array (a JSON-RPC batch). Batches are not supported."
+    },
+    {
+      "code": "duplicate_id",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "jsonrpcCode": -32600,
+      "description": "The request id equals the id of a request that is still in flight on the same session."
+    },
+    {
+      "code": "invalid_params",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "params does not validate against the method's params schema, including unknown members."
+    },
+    {
+      "code": "line_too_long",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "jsonrpcCode": -32600,
+      "description": "The line exceeds the session's maximum line length. The server closes the connection after this response."
+    },
+    {
+      "code": "hello_repeated",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "session.hello was sent on a session that is already authenticated. The server closes the connection after this response."
+    },
+    {
+      "code": "confirm_required",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The request is destructive (for example it deletes a track or clips, or saves over an existing file other than the current project file) and needs confirm: true."
+    },
+    {
+      "code": "path_not_absolute",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The path is not an absolute local path in the form the platform requires."
+    },
+    {
+      "code": "path_unc",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The path is a UNC network path."
+    },
+    {
+      "code": "path_device_namespace",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The path uses a device or extended-length namespace prefix."
+    },
+    {
+      "code": "path_drive_relative",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The path is drive-relative (a drive letter and colon not followed by a backslash)."
+    },
+    {
+      "code": "path_alternate_stream",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The path names an alternate data stream."
+    },
+    {
+      "code": "path_not_normalized",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The path is not in the exact form the server requires: it contains an empty, \".\" or \"..\" segment, on Windows a \"/\", or a segment that ends in a dot or a space."
+    },
+    {
+      "code": "path_reserved_name",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "On Windows, a path segment is a reserved device name such as CON, NUL, COM1 or LPT1, also with an extension."
+    },
+    {
+      "code": "path_invalid_character",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The path contains a control character."
+    },
+    {
+      "code": "path_bad_extension",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The file extension is not accepted for this operation."
+    },
+    {
+      "code": "target_is_loaded_media",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The target is, by file identity, a loaded source file or a media file of the current project; it is never written."
+    },
+    {
+      "code": "stale_handle",
+      "scope": "NOT_FOUND",
+      "since": "1.0",
+      "description": "The handle belongs to another instance or to an earlier content epoch (for example before a project was opened)."
+    },
+    {
+      "code": "unknown_handle",
+      "scope": "NOT_FOUND",
+      "since": "1.0",
+      "description": "The handle is current in form but names nothing that exists now."
+    },
+    {
+      "code": "job_not_found",
+      "scope": "NOT_FOUND",
+      "since": "1.0",
+      "description": "No job with this id exists, or it is no longer retained."
+    },
+    {
+      "code": "file_not_found",
+      "scope": "NOT_FOUND",
+      "since": "1.0",
+      "description": "The named file does not exist."
+    },
+    {
+      "code": "f0_not_ready",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "Pitch analysis of the content has not finished (not requested yet or still running)."
+    },
+    {
+      "code": "f0_failed",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "Pitch analysis of the content failed, so content edits are not possible."
+    },
+    {
+      "code": "f0_empty",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "Pitch analysis finished but found no voiced frames, so content edits are not possible."
+    },
+    {
+      "code": "notes_generating",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "Note generation for the content is still running."
+    },
+    {
+      "code": "export_wait_timeout",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "An export waited the maximum time for analysis and rendering to settle and gave up. Rendering includes the render blocks that OpenTune has set aside for a delayed retry: an export does not start while any is left, and one that cannot be drained within the wait fails with this reason. Retryable: a new export waits again."
+    },
+    {
+      "code": "f0_failed",
+      "scope": "ANALYSIS_FAILED",
+      "since": "1.0",
+      "description": "Pitch analysis of a content failed for a reason other than silence."
+    },
+    {
+      "code": "render_chunk_failed",
+      "scope": "RENDER_FAILED",
+      "since": "1.0",
+      "description": "A render block failed and failed again after one retry."
+    },
+    {
+      "code": "model_missing",
+      "scope": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "description": "A required model file is not installed."
+    },
+    {
+      "code": "backend_unavailable",
+      "scope": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "description": "The inference backend could not be initialized."
+    },
+    {
+      "code": "content_changed",
+      "scope": "REVISION_CONFLICT",
+      "since": "1.0",
+      "description": "The content revision differs from expectedRevision."
+    },
+    {
+      "code": "grid_changed",
+      "scope": "REVISION_CONFLICT",
+      "since": "1.0",
+      "description": "The time grid revision differs from expectedGridRevision."
+    },
+    {
+      "code": "key_changed",
+      "scope": "REVISION_CONFLICT",
+      "since": "1.0",
+      "description": "The key revision differs from expectedKeyRevision."
+    },
+    {
+      "code": "geometry_changed",
+      "scope": "REVISION_CONFLICT",
+      "since": "1.0",
+      "description": "The clip's timeline geometry differs from expectedGeometryHash."
+    },
+    {
+      "code": "arrangement_changed",
+      "scope": "REVISION_CONFLICT",
+      "since": "1.0",
+      "description": "The arrangement revision differs from expectedArrangementRevision."
+    },
+    {
+      "code": "changed_during_export",
+      "scope": "REVISION_CONFLICT",
+      "since": "1.0",
+      "description": "A content revision changed while the export wrote its file, after all contents were ready. The temporary file was deleted and the target was not touched."
+    },
+    {
+      "code": "cursor_stale",
+      "scope": "REVISION_CONFLICT",
+      "since": "1.0",
+      "description": "A pagination cursor was issued for a revision that is no longer current."
+    },
+    {
+      "code": "top_mismatch",
+      "scope": "UNDO_CONFLICT",
+      "since": "1.0",
+      "description": "The entry on top of the undo (or redo) history is not the expected one."
+    },
+    {
+      "code": "history_empty",
+      "scope": "UNDO_CONFLICT",
+      "since": "1.0",
+      "description": "There is nothing to undo (or redo)."
+    },
+    {
+      "code": "stale_entry",
+      "scope": "UNDO_CONFLICT",
+      "since": "1.0",
+      "description": "The entry was recorded through this API before a track was deleted and targets a track that has since moved. It is applied only with force."
+    },
+    {
+      "code": "project_dirty",
+      "scope": "UNSAVED_CHANGES",
+      "since": "1.0",
+      "description": "The project has unsaved changes."
+    },
+    {
+      "code": "target_exists",
+      "scope": "ALREADY_EXISTS",
+      "since": "1.0",
+      "description": "The target file already exists, and the operation was not asked to replace it."
+    },
+    {
+      "code": "pointer_down",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "The user is in the middle of a mouse or pen gesture in OpenTune."
+    },
+    {
+      "code": "modal_open",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "A modal dialog is open in OpenTune."
+    },
+    {
+      "code": "import_in_progress",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "An import started in the OpenTune UI is running."
+    },
+    {
+      "code": "export_in_progress",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "An export (from the UI or from this API) holds the export lock."
+    },
+    {
+      "code": "project_operation",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "A project save, copy or open is running."
+    },
+    {
+      "code": "job_in_progress",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "A job that no other busy reason names has not finished: a prefsApply or timeGridSeed job. Sent by app.quit only, which does not quit while any job is unfinished; the jobs of kind import, export, projectOpen, projectSave and projectCopy give import_in_progress, export_in_progress and project_operation."
+    },
+    {
+      "code": "session_limit",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "The maximum number of authenticated sessions is reached. Sent in reply to session.hello; the server closes the connection after it."
+    },
+    {
+      "code": "request_limit",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "The session already has the maximum number of requests in flight."
+    },
+    {
+      "code": "job_limit",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "No job slot is free because every retained job is still active."
+    },
+    {
+      "code": "dispatch_timeout",
+      "scope": "TIMEOUT",
+      "since": "1.0",
+      "description": "The request did not start executing before the dispatch deadline."
+    },
+    {
+      "code": "cancelled_by_request",
+      "scope": "CANCELLED",
+      "since": "1.0",
+      "description": "job.cancel was called for the job."
+    },
+    {
+      "code": "read_failed",
+      "scope": "IO_ERROR",
+      "since": "1.0",
+      "description": "Reading a file, or determining the identity of a file, failed."
+    },
+    {
+      "code": "write_failed",
+      "scope": "IO_ERROR",
+      "since": "1.0",
+      "description": "Writing a file failed, including when the target's file system offers no rename that never replaces an existing file."
+    },
+    {
+      "code": "unknown_method",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "jsonrpcCode": -32601,
+      "description": "The method member is a string that names no method defined by the session's protocol version, for example \"foo\" or the empty string. A defined method that the instance does not implement gives capability_missing instead."
+    },
+    {
+      "code": "capability_missing",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "The instance lacks the capability the request needs. detail names the capability."
+    },
+    {
+      "code": "no_editor_window",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "The method acts through the OpenTune editor window (PROTOCOL.md section 7 rule 6), and this instance has no editor window, for example in a window-less run. The request changes nothing (executed false). The method works when OpenTune Standalone is started with its window. Not retryable: the same request fails until OpenTune is started with a window."
+    },
+    {
+      "code": "undo_unsafe_build",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "The top undo (or redo) entry is a clip split, merge or delete, which OpenTune cannot undo correctly; this API refuses to apply it."
+    },
+    {
+      "code": "upstream_absent",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "OpenTune has no such feature."
+    },
+    {
+      "code": "job_not_cancellable",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "The job's kind cannot be cancelled, or the job has passed the point after which it can no longer be cancelled."
+    },
+    {
+      "code": "ui_parity",
+      "scope": "undo",
+      "since": "1.0",
+      "description": "The same operation in the OpenTune UI creates no undo entry, so neither does this API."
+    },
+    {
+      "code": "no_upstream_undo",
+      "scope": "undo",
+      "since": "1.0",
+      "description": "OpenTune has no undo mechanism for this kind of change."
+    },
+    {
+      "code": "not_persisted_state",
+      "scope": "undo",
+      "since": "1.0",
+      "description": "The change affects session state that is not part of the project and is not tracked by undo."
+    },
+    {
+      "code": "upstream_undo_defect",
+      "scope": "undo",
+      "since": "1.0",
+      "description": "OpenTune pushed an undo entry, but undoing it does not restore the previous state (known OpenTune defect)."
+    },
+    {
+      "code": "no_op",
+      "scope": "undo",
+      "since": "1.0",
+      "description": "Nothing changed, so there is nothing to undo."
+    },
+    {
+      "code": "not_recorded",
+      "scope": "null",
+      "since": "1.0",
+      "description": "OpenTune does not record this value."
+    },
+    {
+      "code": "capability_missing",
+      "scope": "null",
+      "since": "1.0",
+      "description": "The instance lacks the capability that provides this value."
+    },
+    {
+      "code": "no_editor",
+      "scope": "null",
+      "since": "1.0",
+      "description": "The value comes from the OpenTune editor window, and no editor exists (for example in a window-less run)."
+    },
+    {
+      "code": "no_audio_device",
+      "scope": "null",
+      "since": "1.0",
+      "description": "No audio device is open."
+    },
+    {
+      "code": "not_analyzed",
+      "scope": "null",
+      "since": "1.0",
+      "description": "The value depends on an analysis that has not finished."
+    },
+    {
+      "code": "unavailable",
+      "scope": "null",
+      "since": "1.0",
+      "description": "The value cannot be determined at this time."
+    },
+    {
+      "code": "no_project_path",
+      "scope": "null",
+      "since": "1.0",
+      "description": "The project was never saved, so it has no project file."
+    },
+    {
+      "code": "grid_not_seeded",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "The content's time grid has no handles yet. Seed it with content.editTimeGrid (op seed) first. Not retryable: waiting does not seed the grid."
+    },
+    {
+      "code": "track_capacity",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The import needs more tracks after the target track than OpenTune has, or it asked for a track without clips (newTrack) and every track holds clips."
+    },
+    {
+      "code": "reference_not_bound",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. AUTO in reference mode needed a reference binding on the placement, and it had none."
+    },
+    {
+      "code": "audio_too_long",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The audio file is longer than session.info import.maxAnalysisSec."
+    },
+    {
+      "code": "unsupported_format",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "OpenTune cannot decode the file's audio format."
+    },
+    {
+      "code": "too_many_channels",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "The audio file has more channels than session.info import.maxChannels."
+    },
+    {
+      "code": "idempotency_key_reused",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "import.start named the idempotencyKey of a retained import job, but with other params than that job. Nothing was started; use a new key for a different import."
+    },
+    {
+      "code": "placement_content_mismatch",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7, and no longer sent: only AUTO in reference mode, which was removed, named a placement besides a content. The request named a placement that does not show the content it names."
+    },
+    {
+      "code": "duplicate_handle",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The request names the same time-grid handle more than once, for example twice in the moves of content.editTimeGrid. Nothing was changed."
+    },
+    {
+      "code": "dialog_commits_on_close",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "Closing an open dialog would commit the value it shows, as closing the track-colour dialog does, or the server cannot tell whether it would; the request did not accept that with confirm: true. Nothing was closed."
+    },
+    {
+      "code": "split_out_of_range",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The split position is not strictly inside the clip."
+    },
+    {
+      "code": "merge_not_possible",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The clips cannot be merged: they must be on one track, the trailing clip must start where the leading clip ends, and both must show adjacent parts of one content with equal gain. detail names the condition that fails."
+    },
+    {
+      "code": "trim_out_of_range",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The trim would move a clip edge beyond the audio of the clip's content or past the clip's other edge."
+    },
+    {
+      "code": "reference_ineligible",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. The clip could not be bound to that reference clip: it was the clip itself, it did not overlap the clip in time, or the binding would have formed a cycle."
+    },
+    {
+      "code": "duplicate_track",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The request names the same track more than once. Nothing was changed."
+    },
+    {
+      "code": "track_limit",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "Every track slot is visible already, or fewer hidden track slots remain than the request needs."
+    },
+    {
+      "code": "target_track_occupied",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The track slot that a duplicated track would go to, the first hidden slot, already holds clips."
+    },
+    {
+      "code": "last_track",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The track is the only visible track, which OpenTune does not delete."
+    },
+    {
+      "code": "track_hidden",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The track is hidden. A hidden track cannot be deleted or duplicated: OpenTune deletes and duplicates only visible tracks (track.delete, track.duplicate)."
+    },
+    {
+      "code": "no_project_path",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The project was never saved, so it has no project file to save to. Saving it under a path (project.saveAs) works."
+    },
+    {
+      "code": "audio_setting_unavailable",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The requested audio device type, output device, sample rate, buffer size or output channel pair is not offered by the instance; audio.get lists the values it offers."
+    },
+    {
+      "code": "device_open_failed",
+      "scope": "IO_ERROR",
+      "since": "1.0",
+      "description": "The audio device could not be opened with the requested setup. The previous setup was restored, unless executed is true. A failure to restore the sample rate of an ASIO device before a switch is not this reason: the switch goes on and the result carries the warning ASIO_RATE_NOT_RESTORED."
+    },
+    {
+      "code": "content_key_unset",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "key clipKey names the content's own key, but the content has none yet (content.getDetails reports key null), so there is no key to snap to. Used by content.autoTune and by op snapToScale of content.editNotes. Not retryable: the same request fails until the content has a key; giving the key explicitly works at once."
+    },
+    {
+      "code": "nothing_to_export",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The export would hold no audio: a track export of a track without clips, or a master export in which no clip is heard. An export job whose clips were all removed while it waited ends with it too. Not retryable."
+    },
+    {
+      "code": "export_dry_stretched",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "A content of the export would be exported uncorrected (PROTOCOL.md section 19 rule 6), but its time grid is not the identity, and OpenTune builds time-stretched audio only from a render, so there is no audio of that content for the file. The job ends at once instead of waiting. Not retryable: the same export fails again until the content's time grid is the identity again or the content has a render."
+    },
+    {
+      "code": "export_stretch_dropped",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "The time-stretched audio of a content whose time grid is not the identity was asked for repeatedly while the export waited and was still not built at the content's current state. Retryable: a new export asks for it again."
+    },
+    {
+      "code": "timing_analysis_failed",
+      "scope": "ANALYSIS_FAILED",
+      "since": "1.0",
+      "description": "OpenTune's timing analysis of the content, from which a seed of the time grid places its handles, failed or found no onset to place a handle at, so no handle was placed. Not retryable."
+    },
+    {
+      "code": "timing_analysis_timeout",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "OpenTune's timing analysis of the content did not finish within the wait limit of the timeGridSeed job, so no handle was placed. Retryable: a new seed waits for the analysis again."
+    },
+    {
+      "code": "reference_analysis_stalled",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. The reference analysis of a clip could not complete, because OpenTune completes only one reference analysis in a session and a later analysis never finishes."
+    },
+    {
+      "code": "reference_analysis_timeout",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. The reference analysis of a clip did not finish within the wait limit of the job, so no alignment data was stored."
+    },
+    {
+      "code": "reference_analysis_failed",
+      "scope": "ANALYSIS_FAILED",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. OpenTune's reference analysis of the clip failed, so no alignment data was stored and nothing was written."
+    },
+    {
+      "code": "option_unavailable",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The vocoder weight or the pitch model that prefs.set asks for is not among the values the instance offers (prefs.get lists them in processing.options); detail names the member. Nothing is changed (executed false). Not retryable: the same request fails until the installation offers the value."
+    },
+    {
+      "code": "vocoder_not_ready",
+      "scope": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "description": "The vocoder was still busy (loading) when the wait limit of the prefsApply job passed after a change of the vocoder weight or the rendering priority; the implementation defines the limit. The job took its changes back (executed is true only where a preference that another write changed meanwhile kept that write's value, PROTOCOL.md section 12.7). Retryable: a new request waits for the vocoder again."
+    },
+    {
+      "code": "vocoder_load_failed",
+      "scope": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "description": "The command to change the vocoder weight or the rendering priority was carried out, but the vocoder did not become ready, because it could not load the new weight or backend (for example a corrupt or incompatible weight file). The prefsApply job did not wait for its wait limit: it took its changes back at once (executed is true only where a preference that another write changed meanwhile kept that write's value, PROTOCOL.md section 12.7). Not retryable: the same request fails the same way until the weight file or the installation changes."
+    }
+  ]
+}

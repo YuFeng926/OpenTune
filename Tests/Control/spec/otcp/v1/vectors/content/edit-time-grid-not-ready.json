@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-time-grid-not-ready",
+  "type": "request",
+  "description": "Seeding the time grid while pitch analysis is still running gets NOT_READY(f0_not_ready) and starts no job.",
+  "capability": "timing.v1",
+  "since": "1.0",
+  "method": "content.editTimeGrid",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "running"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.editTimeGrid",
+    "params": { "contentId": { "$ref": "clip.contentId" }, "op": "seed" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_READY",
+      "data": {
+        "kind": "NOT_READY",
+        "reason": "f0_not_ready",
+        "retryable": true,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

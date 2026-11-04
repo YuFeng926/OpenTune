@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/job.cancel.schema.json",
+  "title": "job.cancel",
+  "description": "Requests cancellation of a job (PROTOCOL.md section 12.3). Cancellation is asynchronous: the job stops at its next cancellation point and then reaches state cancelled, or succeeded if it finished first. Poll job.get for the outcome. Cancelling a terminal job is a no-op success with cancelRequested false.",
+  "x-otcp": {
+    "method": "job.cancel",
+    "layer": "L3",
+    "capability": "jobs.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": false,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSUPPORTED",
+      "BUSY",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["jobId"],
+      "additionalProperties": false,
+      "properties": {
+        "jobId": { "$ref": "../schemas/common.schema.json#/$defs/jobId" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["cancelRequested", "job"],
+      "additionalProperties": false,
+      "properties": {
+        "cancelRequested": {
+          "description": "true: cancellation was requested now or earlier and the job was not terminal. false: the job was already terminal; nothing was done.",
+          "type": "boolean"
+        },
+        "job": {
+          "description": "The job as it is right after the request.",
+          "$ref": "../schemas/common.schema.json#/$defs/job"
+        }
+      }
+    }
+  }
+}

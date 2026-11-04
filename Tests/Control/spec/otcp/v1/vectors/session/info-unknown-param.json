@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/info-unknown-param",
+  "type": "request",
+  "description": "Unknown members in params are rejected, never ignored.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.info",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "session.info",
+    "params": { "verbose": true }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "invalid_params",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

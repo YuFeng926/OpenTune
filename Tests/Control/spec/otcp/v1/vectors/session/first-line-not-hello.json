@@ -1,0 +1,20 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/first-line-not-hello",
+  "type": "scenario",
+  "description": "A valid JSON-RPC request for any method other than session.hello as the first line closes the connection without a response.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "unauthenticated",
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    { "expectClosed": { "noBytes": true } }
+  ]
+}

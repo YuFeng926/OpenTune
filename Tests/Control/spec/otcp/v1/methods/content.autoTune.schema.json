@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.autoTune.schema.json",
+  "title": "content.autoTune",
+  "description": "Runs AUTO on a content with an explicit mode, key and parameters. It never uses the mode of the AUTO button, the positions of the UI's knobs or the scale shown in the transport bar (PROTOCOL.md section 21 rule 1). mode regenerate regenerates the notes in ranges from the original pitch and snaps them to key, as the AUTO button does in the openTune scheme: the notes inside a range are replaced (removed and created), and notes that touch the edge of a range are dropped instead of regenerated, which the result reports in removed and with the warning DROPPED_BOUNDARY_NOTES (data.notes: [{note, startContentSec, endContentSec}] at the revision before the call). mode snapNotes moves the targets of the existing notes in ranges to key, as the AUTO button does in the openDyne scheme; it takes no params. As OpenTune's snap does, it keeps each note's base pitch and sets offsetCents so that targetMidi lies on the key's scale, and it snaps from the base pitch alone, so an earlier cent offset of the note does not count; op snapToScale of content.editNotes instead snaps targetMidi and sets offsetCents to 0. Both report the resulting targetMidi, which is what clients compare. mode notesOnly generates notes for the whole content and replaces all its notes; as in OpenTune there is no undo entry, and the previous notes cannot be restored (warnings REPLACES_ALL_NOTES, data {removedCount, createdCount}, and IRREVERSIBLE). ranges (content clock, at most 16) default to the whole content; one call is one undo step. key is an explicit key or clipKey, the content's own key, which then needs expectedKeyRevision (REVISION_CONFLICT(key_changed)); clipKey on a content that has no key yet (content.getDetails, key null) gives INVALID_ARGUMENT(content_key_unset), which an implementation of this release candidate may still send without a reason. Absent params members take the note generator's defaults, not the UI's knob positions; paramsUsed and keyUsed report what was used. changes, created and removed list at most 200 entries each and omittedCount counts the rest; content.getNotes reads them at the new revision.",
+  "x-otcp": {
+    "method": "content.autoTune",
+    "layer": "L4",
+    "capability": "edit.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "NOT_READY",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["contentId", "mode", "expectedRevision"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "mode": {
+          "enum": ["regenerate", "snapNotes", "notesOnly"]
+        },
+        "expectedRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        },
+        "ranges": {
+          "type": "array",
+          "items": {
+            "$ref": "../schemas/common.schema.json#/$defs/contentRange"
+          },
+          "minItems": 1,
+          "maxItems": 16
+        },
+        "key": {
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/keyInput" },
+            { "const": "clipKey" }
+          ]
+        },
+        "expectedKeyRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "retuneSpeed": {
+              "$ref": "../schemas/common.schema.json#/$defs/retuneSpeed"
+            },
+            "vibratoDepth": {
+              "$ref": "../schemas/common.schema.json#/$defs/vibratoDepth"
+            },
+            "vibratoRateHz": {
+              "$ref": "../schemas/common.schema.json#/$defs/vibratoRateHz"
+            },
+            "noteSplitCents": {
+              "$ref": "../schemas/common.schema.json#/$defs/noteSplitCents"
+            }
+          }
+        },
+        "dryRun": { "type": "boolean", "default": false }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "regenerate" } } },
+          "then": { "required": ["key"] }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "snapNotes" } } },
+          "then": {
+            "required": ["key"],
+            "not": { "required": ["params"] }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "notesOnly" } } },
+          "then": {
+            "not": {
+              "anyOf": [{ "required": ["ranges"] }, { "required": ["key"] }]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "key": { "const": "clipKey" } },
+            "required": ["key"]
+          },
+          "then": { "required": ["expectedKeyRevision"] }
+        }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": [
+        "mode",
+        "keyUsed",
+        "paramsUsed",
+        "noteCount",
+        "omittedCount"
+      ],
+      "properties": {
+        "mode": { "$ref": "../schemas/common.schema.json#/$defs/camelName" },
+        "keyUsed": {
+          "description": "The key the notes were snapped to; null for notesOnly.",
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["root", "scale"],
+              "additionalProperties": false,
+              "properties": {
+                "root": { "type": "integer", "minimum": 0, "maximum": 11 },
+                "scale": {
+                  "$ref": "../schemas/common.schema.json#/$defs/scaleName"
+                }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "paramsUsed": {
+          "description": "The generator parameters used; null for snapNotes.",
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "retuneSpeed",
+                "vibratoDepth",
+                "vibratoRateHz",
+                "noteSplitCents"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "retuneSpeed": {
+                  "$ref": "../schemas/common.schema.json#/$defs/retuneSpeed"
+                },
+                "vibratoDepth": {
+                  "$ref": "../schemas/common.schema.json#/$defs/vibratoDepth"
+                },
+                "vibratoRateHz": {
+                  "$ref": "../schemas/common.schema.json#/$defs/vibratoRateHz"
+                },
+                "noteSplitCents": {
+                  "$ref": "../schemas/common.schema.json#/$defs/noteSplitCents"
+                }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "noteCount": {
+          "description": "Notes of the content before and after the work.",
+          "type": "object",
+          "required": ["before", "after"],
+          "additionalProperties": false,
+          "properties": {
+            "before": { "type": "integer", "minimum": 0 },
+            "after": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "omittedCount": {
+          "type": "object",
+          "required": ["changes", "created", "removed"],
+          "additionalProperties": false,
+          "properties": {
+            "changes": { "type": "integer", "minimum": 0 },
+            "created": { "type": "integer", "minimum": 0 },
+            "removed": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

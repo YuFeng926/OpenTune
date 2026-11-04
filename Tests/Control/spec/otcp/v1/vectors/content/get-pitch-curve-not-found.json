@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-pitch-curve-not-found",
+  "type": "request",
+  "description": "A contentId of this instance and epoch that names no content gives NOT_FOUND(unknown_handle).",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "content.getPitchCurve",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.getPitchCurve",
+    "params": { "contentId": { "$ref": "runner.unknownContentId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-no-path",
+  "type": "request",
+  "description": "A project that was never saved has no file: project.save fails with INVALID_ARGUMENT(no_project_path) and starts no job.",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.save",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.save",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "no_project_path",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

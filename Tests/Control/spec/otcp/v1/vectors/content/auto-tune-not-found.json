@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/auto-tune-not-found",
+  "type": "request",
+  "description": "Handles are checked before tokens: an unknown contentId gives NOT_FOUND(unknown_handle) whatever expectedRevision is.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.autoTune",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.autoTune",
+    "params": {
+      "contentId": { "$ref": "runner.unknownContentId" },
+      "mode": "notesOnly",
+      "expectedRevision": "r0"
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

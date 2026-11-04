@@ -1,0 +1,110 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/unknown-method",
+  "type": "scenario",
+  "description": "A request whose method is a string that names no method of the protocol is answered with UNSUPPORTED(unknown_method) and JSON-RPC code -32601, whatever the string is: a method that OpenTune does not have (it cannot rename tracks), a name without a namespace, and the empty string. The session stays open.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 67,
+        "method": "track.rename",
+        "params": {
+          "trackId": 0
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 67,
+        "error": {
+          "code": -32601,
+          "message": "UNSUPPORTED",
+          "data": {
+            "kind": "UNSUPPORTED",
+            "reason": "unknown_method",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 68,
+        "method": "foo",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 68,
+        "error": {
+          "code": -32601,
+          "message": "UNSUPPORTED",
+          "data": {
+            "kind": "UNSUPPORTED",
+            "reason": "unknown_method",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 69,
+        "method": ""
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 69,
+        "error": {
+          "code": -32601,
+          "message": "UNSUPPORTED",
+          "data": {
+            "kind": "UNSUPPORTED",
+            "reason": "unknown_method",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 70,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 70,
+        "result": {
+          "$any": "object"
+        }
+      }
+    }
+  ]
+}

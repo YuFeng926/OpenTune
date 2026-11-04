@@ -1,0 +1,145 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-notes-note-refs",
+  "type": "scenario",
+  "description": "Notes in changes are referenced at the revision after the write (PROTOCOL.md section 14.3): the atRevision of the changed note equals the revision that tokens report and that content.getNotes then reports in asOf, so the reference can be used at once.",
+  "capability": "edit.v1",
+  "extraCapabilities": ["read.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 },
+          { "startContentSec": 3.5, "endContentSec": 4.5, "targetMidi": 69.3 }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.editNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "expectedRevision": { "$ref": "clip.revision" },
+          "ops": [
+            {
+              "op": "shiftCents",
+              "select": { "indices": [2] },
+              "deltaCents": -30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "changes": [
+            {
+              "entity": "note",
+              "ref": {
+                "contentId": { "$ref": "clip.contentId" },
+                "note": {
+                  "index": 2,
+                  "atRevision": { "$capture": "noteRevision", "$any": "string" }
+                }
+              },
+              "label": { "$any": true },
+              "fields": { "$any": "object" }
+            }
+          ],
+          "tokens": {
+            "arrangementRevision": { "$any": "string" },
+            "contents": [
+              {
+                "contentId": { "$ref": "clip.contentId" },
+                "revision": { "$capture": "tokenRevision", "$any": "string" },
+                "gridRevision": { "$ref": "clip.gridRevision" },
+                "keyRevision": { "$ref": "clip.keyRevision" }
+              }
+            ],
+            "placements": []
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "content.getNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "range": { "startContentSec": 3.5, "endContentSec": 4.5 }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "asOf": {
+            "arrangementRevision": { "$any": "string" },
+            "contents": [
+              {
+                "contentId": { "$ref": "clip.contentId" },
+                "revision": { "$ref": "noteRevision" },
+                "gridRevision": { "$ref": "clip.gridRevision" },
+                "keyRevision": { "$ref": "clip.keyRevision" }
+              }
+            ]
+          },
+          "notes": [
+            {
+              "index": 2,
+              "targetMidi": { "$approx": 69 },
+              "offsetCents": { "$approx": -30 }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "content.getNotes",
+        "params": { "contentId": { "$ref": "clip.contentId" }, "limit": 1 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "asOf": {
+            "arrangementRevision": { "$any": "string" },
+            "contents": [
+              {
+                "contentId": { "$ref": "clip.contentId" },
+                "revision": { "$ref": "tokenRevision" },
+                "gridRevision": { "$ref": "clip.gridRevision" },
+                "keyRevision": { "$ref": "clip.keyRevision" }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

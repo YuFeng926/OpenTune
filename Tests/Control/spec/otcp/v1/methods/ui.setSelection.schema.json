@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/ui.setSelection.schema.json",
+  "title": "ui.setSelection",
+  "description": "Selects a clip (placementId) or a track (trackId, which selects no clip), as clicking it in OpenTune's arrangement view does; the track of a selected clip becomes the active track. openEditor true, with placementId, also opens the clip in the piano roll, as double-clicking it does (sideEffects.workspaceSwitched {from, to, revert: null} when the window switches; a switch moves the keyboard focus, and when the tempo field of the transport bar holds it, as in a window in the foreground that has just started, OpenTune rounds a tempo that has more than one decimal to one decimal and marks the project as changed, as it does when a user switches the view; a window in the background may not hold the focus there and then rounds nothing. The result reports the rounding only when it happened, in changes and in sideEffects.tempoRounded {fromBpm, toBpm, revert}, PROTOCOL.md section 14.6; when the window already shows the piano roll nothing switches and nothing is rounded). Selecting can change more than the selection, and the result reports what changed (PROTOCOL.md section 21 rule 3): in the openDyne scheme, selecting or opening a clip whose analysis has finished and whose notes were never generated makes OpenTune generate them with no undo entry and mark the project as changed (sideEffects.notesGenerated {contentId, noteCount, revert: null}, warnings SELECTION_GENERATED_NOTES and IRREVERSIBLE); and the scale shown in the transport bar follows the clip's key (sideEffects.uiScaleChanged {before, after, revert: null}). With dryRun true nothing is selected and the result predicts these effects. changes lists the selection (entity selection, members activeTrackId and selectedPlacementIds). The selection is view state (section 15.2 rule 6): the undo reason is not_persisted_state, and the revert recipe selects the previously active track and its selected clip again with ui.setSelection ({placementId} when a clip was selected, else {trackId}); OpenTune always has an active track (track 0 until something selects another), so it is null only for an instance that reports no active track, and it never takes back generated notes or switches the window back; use ui.setWorkspace to switch back. A placement or track that does not exist gives NOT_FOUND(unknown_handle). Selecting what is already selected, with no other effect, is a no-op.",
+  "x-otcp": {
+    "method": "ui.setSelection",
+    "layer": "L6",
+    "capability": "ui.bridge",
+    "since": "1.0",
+    "write": "conditional",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "trackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "openEditor": {
+          "description": "Also open the clip in the piano roll. Only with placementId.",
+          "type": "boolean",
+          "default": false
+        },
+        "dryRun": { "type": "boolean", "default": false }
+      },
+      "oneOf": [{ "required": ["placementId"] }, { "required": ["trackId"] }],
+      "if": { "required": ["trackId"] },
+      "then": { "not": { "required": ["openEditor"] } }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    }
+  }
+}

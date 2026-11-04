@@ -1,0 +1,55 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-stale-entry",
+  "type": "request",
+  "description": "The top entry is a clip move made through this API before a track below the clip's track was deleted; the clip has since moved. Without force the server refuses it with UNDO_CONFLICT(stale_entry).",
+  "capability": "history.v1",
+  "since": "1.0",
+  "method": "edit.undo",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "bind": "moveEntry",
+          "origin": "control",
+          "action": "clipMove",
+          "clip": "clip",
+          "trackDeletedAfter": true
+        }
+      ],
+      "redo": []
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "edit.undo",
+    "params": { "expectedUndoId": { "$ref": "moveEntry" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNDO_CONFLICT",
+      "data": {
+        "kind": "UNDO_CONFLICT",
+        "reason": "stale_entry",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,263 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/set-workspace-piano-roll-opendyne",
+  "type": "scenario",
+  "description": "ui.setWorkspace generates nothing and changes no content, also in the openDyne scheme. Selecting a clip loads it into the piano roll even while the window shows the arrangement view (ui.pianoRollContentId names it), so in a running window the state 'a clip without notes is shown in the piano roll in the openDyne scheme' does not exist: selecting it, or switching the scheme while it is selected, generates its notes (PROTOCOL.md section 21 rules 3 and 4). The scenario therefore selects the clip in the openTune scheme, where selecting generates nothing, and switches to openDyne with prefs.set, which generates the notes of the clip the piano roll holds and says so (sideEffects.notesGenerated, the warnings SCHEME_GENERATED_NOTES and IRREVERSIBLE, a changed notes revision, dirty true). A read captures the note count. Then ui.setWorkspace with pianoRoll changes only the view: revisionDiff is empty, dirty stays as it was (true), sideEffects.workspaceSwitched is the only side effect, warnings is empty, and the piano roll shows the selected clip. A last read confirms that the note count is the one captured.",
+  "capability": "ui.workspace",
+  "extraCapabilities": ["ui.bridge", "prefs.write", "jobs.v1", "read.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "editingScheme": "openTune",
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "ui.setSelection",
+        "params": { "placementId": { "$ref": "clip.placementId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "dirty": { "before": false, "after": false },
+          "ui": {
+            "workspace": "arrangement",
+            "pianoRollContentId": { "$ref": "clip.contentId" },
+            "selectedPlacementIds": [{ "$ref": "clip.placementId" }]
+          },
+          "warnings": []
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "prefs.set",
+        "params": { "editingScheme": "openDyne" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "schemeJob", "$any": "string" },
+            "kind": "prefsApply",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "schemeJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "schemeJob" },
+            "kind": "prefsApply",
+            "state": "succeeded",
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "changes": [
+                {
+                  "entity": "preference",
+                  "ref": { "preference": "editingScheme" },
+                  "label": { "$any": true },
+                  "fields": {
+                    "editingScheme": {
+                      "before": "openTune",
+                      "after": "openDyne",
+                      "unit": null
+                    }
+                  }
+                }
+              ],
+              "revisionDiff": {
+                "arrangement": null,
+                "trackState": null,
+                "contents": [
+                  {
+                    "contentId": { "$ref": "clip.contentId" },
+                    "changed": {
+                      "notes": {
+                        "before": { "$any": "string" },
+                        "after": { "$any": "string" }
+                      }
+                    }
+                  }
+                ]
+              },
+              "undo": {
+                "undoable": false,
+                "reason": "ui_parity",
+                "revert": {
+                  "method": "prefs.set",
+                  "params": { "editingScheme": "openTune" }
+                }
+              },
+              "dirty": { "before": false, "after": true },
+              "sideEffects": {
+                "notesGenerated": {
+                  "contentId": { "$ref": "clip.contentId" },
+                  "noteCount": { "$any": "integer" },
+                  "revert": null
+                }
+              },
+              "warnings": [
+                {
+                  "code": "GLOBAL_PREFERENCE",
+                  "subject": null,
+                  "data": { "preferences": ["editingScheme"] }
+                },
+                {
+                  "code": "SCHEME_GENERATED_NOTES",
+                  "subject": { "contentId": { "$ref": "clip.contentId" } },
+                  "data": null
+                },
+                {
+                  "code": "IRREVERSIBLE",
+                  "subject": { "contentId": { "$ref": "clip.contentId" } },
+                  "data": null
+                }
+              ]
+            },
+            "error": null
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "content.getNotes",
+        "params": { "contentId": { "$ref": "clip.contentId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "contentId": { "$ref": "clip.contentId" },
+          "totalCount": { "$capture": "noteCount", "$any": "integer" }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "ui.setWorkspace",
+        "params": { "workspace": "pianoRoll" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [
+            {
+              "entity": "ui",
+              "ref": { "singleton": "workspace" },
+              "label": { "$any": true },
+              "fields": {
+                "workspace": {
+                  "before": "arrangement",
+                  "after": "pianoRoll",
+                  "unit": null
+                }
+              }
+            }
+          ],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": {
+            "arrangementRevision": { "$any": "string" },
+            "contents": [],
+            "placements": []
+          },
+          "undo": {
+            "undoable": false,
+            "reason": "not_persisted_state",
+            "revert": {
+              "method": "ui.setWorkspace",
+              "params": { "workspace": "arrangement" }
+            }
+          },
+          "dirty": { "before": true, "after": true },
+          "ui": {
+            "workspace": "pianoRoll",
+            "pianoRollContentId": { "$ref": "clip.contentId" },
+            "selectedPlacementIds": [{ "$ref": "clip.placementId" }]
+          },
+          "sideEffects": {
+            "workspaceSwitched": {
+              "from": "arrangement",
+              "to": "pianoRoll",
+              "revert": null
+            }
+          },
+          "warnings": [],
+          "job": null
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "content.getNotes",
+        "params": { "contentId": { "$ref": "clip.contentId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "contentId": { "$ref": "clip.contentId" },
+          "totalCount": { "$ref": "noteCount" }
+        }
+      }
+    }
+  ]
+}

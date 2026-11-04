@@ -1,0 +1,92 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-tuning-revert",
+  "type": "scenario",
+  "description": "The instance runs at a tuning other than 440 Hz after prefs.set (session.info reports 432 Hz), and back at 440 Hz once the revert recipe is sent unchanged, so that tests can run at both tunings.",
+  "capability": "prefs.write",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": { "preferences": { "tuningHz": 440 } },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "prefs.set",
+        "params": { "tuningHz": 432 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": { "method": "prefs.set", "params": { "tuningHz": 440 } }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": { "processing": { "tuningHz": 432 } }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "prefs.set",
+        "params": { "tuningHz": 440 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "changes": [
+            {
+              "entity": "preference",
+              "ref": { "preference": "tuningHz" },
+              "label": { "$any": true },
+              "fields": {
+                "tuningHz": { "before": 432, "after": 440, "unit": "hz" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": { "processing": { "tuningHz": 440 } }
+      }
+    }
+  ]
+}

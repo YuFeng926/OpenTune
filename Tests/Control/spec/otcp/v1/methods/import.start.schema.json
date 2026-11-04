@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/import.start.schema.json",
+  "title": "import.start",
+  "description": "Imports audio files as new clips, as a job of kind import (PROTOCOL.md section 12). Every path is checked before the job starts (section 20.1); extensions must be in session.info import.extensions. layout single imports one file onto the target track. layout sequential places the files end to end on the target track, in the order given. layout separateTracks places each file on its own track: the first on the target track, each next one on the next track; if there are not enough tracks the call fails with INVALID_ARGUMENT(track_capacity) and imports nothing. The target track is trackId; with newTrack it is the first track without clips, and when every track holds clips the call fails with INVALID_ARGUMENT(track_capacity) and imports nothing, because the request asked for a track of its own; without trackId and newTrack it is the active track (track 0 if none). A trackId that names no track slot gives NOT_FOUND(unknown_handle) in every layout, and the call imports nothing. The first clip starts at startTimelineSec; without it each clip is appended after the last clip on its track, as the OpenTune UI does. generateNotes generates notes once a clip's analysis has finished; it is never inferred from the editing scheme. focus (default true) selects the last imported clip, as the UI does, and loads it into the piano roll without switching the view (the workspace the window shows stays as it was); in the openDyne scheme OpenTune then generates notes for it even without generateNotes, with no undo entry (section 21 rule 2), and the item reports notesGeneratedBy focus. Two differences from the import of the OpenTune UI are intended: in the openDyne scheme the UI generates notes for every clip it imports, while this method generates them only for the focused clip unless generateNotes asks for all, so that the request decides which notes are generated; and the UI's import into separate tracks places every file at timeline 0 of its track, while layout separateTracks without startTimelineSec appends each file after the last clip on its track, as the other layouts do, so that an imported clip never lies over clips already there. After a project was opened, OpenTune can hand out a clip id that a clip of the project already has, so that committing an imported clip fails; the job then commits the clip again until it is accepted, which the UI does not do, and the result carries the warning IMPORT_COMMIT_REPEATED (subject: the placement; data: {repeatCount}). An implementation of this release candidate may leave that warning out. The job ends when every clip has been committed and analysed and, where notes are generated, has its notes. A file that fails does not stop the others: its item has imported false and the error, for example NOT_FOUND(file_not_found), IO_ERROR(read_failed), UNSUPPORTED(unsupported_format), UNSUPPORTED(too_many_channels) or INVALID_ARGUMENT(audio_too_long). A clip whose analysis fails stays in the project; its item has f0State failed and the error ANALYSIS_FAILED(f0_failed). The job's result (jobResult) is the write envelope of the committed clips. As in the UI there is no undo entry (undo reason ui_parity). When the instance reports arrangement.v1, the revert recipe deletes the imported clips with arrangement.edit, whose params that method's schema defines; deleting clips needs the end user's consent, so the recipe carries requiresConsent true (section 15.2 rule 4); otherwise no request the instance accepts can remove them, so revert is null and the result carries the warning IRREVERSIBLE (section 15.2 rule 2). The same holds for the revert of sideEffects.notesGenerated. Item members other than path, imported, notesGenerated and error are null when imported is false. Cancelling stops before the next file is committed; the result of the cancelled job reports the clips committed before. idempotencyKey makes a repeated call safe (section 12.5): while an import job started with the same key is retained (section 12.4), a call with that key starts nothing and returns that job, in whatever state it is, provided its other params equal those of that job after defaults are applied; otherwise it fails with INVALID_ARGUMENT(idempotency_key_reused) and starts nothing. Clients derive the key from the items they import, so that repeating a call, for example after a lost response, does not import the files twice; a call without idempotencyKey always starts a new job.",
+  "x-otcp": {
+    "method": "import.start",
+    "layer": "L3",
+    "capability": "import.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "import",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": ["CANCELLED", "INTERNAL"]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["items", "layout"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "$ref": "../schemas/common.schema.json#/$defs/path" }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "idempotencyKey": {
+          "description": "Optional key of this import; printable ASCII without spaces.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7E]+$"
+        },
+        "layout": { "enum": ["single", "sequential", "separateTracks"] },
+        "trackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "newTrack": { "type": "boolean", "default": false },
+        "startTimelineSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "generateNotes": { "type": "boolean", "default": false },
+        "focus": {
+          "description": "Select the last imported clip and load it into the piano roll, without switching the view (PROTOCOL.md section 21 rule 2). false leaves the selection, the active track and the piano roll as they were.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "layout": { "const": "single" } } },
+          "then": {
+            "properties": { "items": { "type": "array", "maxItems": 1 } }
+          }
+        },
+        { "not": { "required": ["trackId", "newTrack"] } }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["items", "counts"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "imported",
+              "placementId",
+              "contentId",
+              "trackId",
+              "startTimelineSec",
+              "durationSec",
+              "channelCount",
+              "originalSampleRateHz",
+              "resampled",
+              "f0State",
+              "notesGenerated",
+              "notesGeneratedBy",
+              "error"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "$ref": "../schemas/common.schema.json#/$defs/path" },
+              "imported": {
+                "description": "A clip was created for the file.",
+                "type": "boolean"
+              },
+              "placementId": {
+                "anyOf": [
+                  {
+                    "$ref": "../schemas/common.schema.json#/$defs/placementId"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "contentId": {
+                "anyOf": [
+                  { "$ref": "../schemas/common.schema.json#/$defs/contentId" },
+                  { "type": "null" }
+                ]
+              },
+              "trackId": {
+                "anyOf": [
+                  { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+                  { "type": "null" }
+                ]
+              },
+              "startTimelineSec": {
+                "anyOf": [
+                  {
+                    "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "durationSec": {
+                "anyOf": [
+                  {
+                    "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "channelCount": {
+                "anyOf": [
+                  { "type": "integer", "minimum": 1 },
+                  { "type": "null" }
+                ]
+              },
+              "originalSampleRateHz": {
+                "anyOf": [
+                  { "type": "number", "exclusiveMinimum": 0 },
+                  { "type": "null" }
+                ]
+              },
+              "resampled": {
+                "anyOf": [{ "type": "boolean" }, { "type": "null" }]
+              },
+              "f0State": {
+                "anyOf": [
+                  { "$ref": "../schemas/common.schema.json#/$defs/f0State" },
+                  { "type": "null" }
+                ]
+              },
+              "notesGenerated": { "type": "boolean" },
+              "notesGeneratedBy": {
+                "description": "request (generateNotes) or focus (openDyne scheme, PROTOCOL.md section 21 rule 2); null when no notes were generated.",
+                "anyOf": [
+                  { "$ref": "../schemas/common.schema.json#/$defs/camelName" },
+                  { "type": "null" }
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "$ref": "../schemas/common.schema.json#/$defs/errorObject"
+                  },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        },
+        "counts": {
+          "type": "object",
+          "required": ["requested", "imported", "failed"],
+          "additionalProperties": false,
+          "properties": {
+            "requested": { "type": "integer", "minimum": 0 },
+            "imported": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

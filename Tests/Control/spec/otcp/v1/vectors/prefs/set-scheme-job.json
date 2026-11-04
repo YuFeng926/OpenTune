@@ -1,0 +1,164 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-scheme-job",
+  "type": "scenario",
+  "description": "A clip without notes is open in the piano roll in the openTune scheme. Switching to openDyne makes OpenTune generate its notes (PROTOCOL.md section 21 rule 4): the job result reports sideEffects.notesGenerated with the warnings SCHEME_GENERATED_NOTES and IRREVERSIBLE, and the project is marked as changed.",
+  "capability": "prefs.write",
+  "extraCapabilities": ["jobs.v1", "ui.bridge"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "editingScheme": "openTune",
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "ui.setSelection",
+        "params": {
+          "placementId": { "$ref": "clip.placementId" },
+          "openEditor": true
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "applied": true, "warnings": [] }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "prefs.set",
+        "params": { "editingScheme": "openDyne" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "schemeJob", "$any": "string" },
+            "kind": "prefsApply",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "schemeJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "schemeJob" },
+            "kind": "prefsApply",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "dryRun": false,
+              "changes": [
+                {
+                  "entity": "preference",
+                  "ref": { "preference": "editingScheme" },
+                  "label": { "$any": true },
+                  "fields": {
+                    "editingScheme": {
+                      "before": "openTune",
+                      "after": "openDyne",
+                      "unit": null
+                    }
+                  }
+                }
+              ],
+              "created": [],
+              "removed": [],
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": null,
+                "trackState": null,
+                "contents": [
+                  {
+                    "contentId": { "$ref": "clip.contentId" },
+                    "changed": {
+                      "notes": {
+                        "before": { "$any": "string" },
+                        "after": { "$any": "string" }
+                      }
+                    }
+                  }
+                ]
+              },
+              "tokens": { "$any": "object" },
+              "undo": {
+                "undoable": false,
+                "reason": "ui_parity",
+                "revert": {
+                  "method": "prefs.set",
+                  "params": { "editingScheme": "openTune" }
+                }
+              },
+              "dirty": { "before": false, "after": true },
+              "ui": { "$any": true },
+              "sideEffects": {
+                "notesGenerated": {
+                  "contentId": { "$ref": "clip.contentId" },
+                  "noteCount": { "$any": "integer" },
+                  "revert": null
+                }
+              },
+              "warnings": [
+                {
+                  "code": "GLOBAL_PREFERENCE",
+                  "subject": null,
+                  "data": { "preferences": ["editingScheme"] }
+                },
+                {
+                  "code": "SCHEME_GENERATED_NOTES",
+                  "subject": { "contentId": { "$ref": "clip.contentId" } },
+                  "data": null
+                },
+                {
+                  "code": "IRREVERSIBLE",
+                  "subject": { "contentId": { "$ref": "clip.contentId" } },
+                  "data": null
+                }
+              ],
+              "job": null
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

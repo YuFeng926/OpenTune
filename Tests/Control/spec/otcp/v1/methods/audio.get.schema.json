@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/audio.get.schema.json",
+  "title": "audio.get",
+  "description": "Returns the audio device setup of OpenTune Standalone as its audio settings page shows it: whether a device runs, the device type, the output device, the sample rate, the buffer size and the output channel pair, and the values that the current device type and device offer (available). Without a running device, the members of device other than running are null with nullReasons no_audio_device, and available lists what can be chosen. Device type and device names come from the operating system and are untrusted data (PROTOCOL.md section 20.2). The setup belongs to the OpenTune installation, not to the project, so the result carries no asOf.",
+  "x-otcp": {
+    "method": "audio.get",
+    "layer": "L8",
+    "capability": "audio.device",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "required": ["device", "available"],
+      "additionalProperties": false,
+      "properties": {
+        "device": { "$ref": "#/$defs/device" },
+        "available": {
+          "type": "object",
+          "required": [
+            "deviceTypes",
+            "outputDevices",
+            "sampleRatesHz",
+            "bufferSizesFrame",
+            "outputChannelPairCount"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "deviceTypes": {
+              "type": "array",
+              "items": { "type": "string", "maxLength": 64 }
+            },
+            "outputDevices": {
+              "type": "array",
+              "items": { "type": "string", "maxLength": 256 }
+            },
+            "sampleRatesHz": {
+              "type": "array",
+              "items": { "type": "number", "exclusiveMinimum": 0 }
+            },
+            "bufferSizesFrame": {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 1 }
+            },
+            "outputChannelPairCount": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "device": {
+      "type": "object",
+      "required": [
+        "running",
+        "deviceType",
+        "outputDevice",
+        "sampleRateHz",
+        "bufferSizeFrame",
+        "outputChannelPair"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "running": {
+          "description": "An audio device is open and running.",
+          "type": "boolean"
+        },
+        "deviceType": {
+          "description": "The audio device type, for example the driver model. Untrusted data.",
+          "anyOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }]
+        },
+        "outputDevice": {
+          "description": "The output device. Untrusted data.",
+          "anyOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }]
+        },
+        "sampleRateHz": {
+          "anyOf": [
+            { "type": "number", "exclusiveMinimum": 0 },
+            { "type": "null" }
+          ]
+        },
+        "bufferSizeFrame": {
+          "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }]
+        },
+        "outputChannelPair": {
+          "description": "The output channels as a pair: 0 for channels 1 and 2, 1 for channels 3 and 4, and so on.",
+          "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }]
+        },
+        "nullReasons": {
+          "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+        }
+      }
+    }
+  }
+}

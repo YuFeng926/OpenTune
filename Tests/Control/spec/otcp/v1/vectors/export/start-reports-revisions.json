@@ -1,0 +1,96 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-reports-revisions",
+  "type": "scenario",
+  "description": "The result of an export job lists the revision of every content in the file (contents), as the job recorded it when all contents were ready, so that a client can tell which version of the clip the file holds.",
+  "capability": "export.v1",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "files": [{ "bind": "out", "kind": "absent" }]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "export.start",
+        "params": {
+          "kind": "clip",
+          "target": { "placementId": { "$ref": "clip.placementId" } },
+          "path": { "$ref": "out" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "exportJob", "$any": "string" },
+            "kind": "export",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "exportJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "exportJob" },
+            "kind": "export",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "path": { "$ref": "out" },
+              "sampleRateHz": 44100,
+              "channelCount": 1,
+              "sampleFormat": "float32",
+              "durationSec": { "$approx": 6, "$tol": 0.01 },
+              "startTimelineSec": { "$approx": 2 },
+              "contents": [
+                {
+                  "contentId": { "$ref": "clip.contentId" },
+                  "revision": { "$ref": "clip.revision" }
+                }
+              ],
+              "dryContents": [],
+              "processing": { "$any": "object" }
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}
