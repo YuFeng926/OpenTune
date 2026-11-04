@@ -25,6 +25,9 @@ constexpr int kProcessingImportantMostRecent = 1;      // NotificationProcessing
 
 using RaiseNotificationFn = HRESULT(WINAPI*)(IRawElementProviderSimple*, int, int, BSTR, BSTR);
 using ClientsListeningFn = BOOL(WINAPI*)();
+using RaisePropertyChangedFn = HRESULT(WINAPI*)(IRawElementProviderSimple*, int, VARIANT, VARIANT);
+
+constexpr int kToggleStatePropertyId = 30086;          // UIA_ToggleToggleStatePropertyId
 
 struct UiaFunctions
 {
@@ -35,17 +38,40 @@ struct UiaFunctions
         if (auto* module = ::LoadLibraryW(L"UIAutomationCore.dll")) {
             raise = reinterpret_cast<RaiseNotificationFn>(::GetProcAddress(module, "UiaRaiseNotificationEvent"));
             listening = reinterpret_cast<ClientsListeningFn>(::GetProcAddress(module, "UiaClientsAreListening"));
+            raiseProperty = reinterpret_cast<RaisePropertyChangedFn>(
+                ::GetProcAddress(module, "UiaRaiseAutomationPropertyChangedEvent"));
         }
     }
 
     RaiseNotificationFn raise = nullptr;
     ClientsListeningFn listening = nullptr;
+    RaisePropertyChangedFn raiseProperty = nullptr;
 };
 
 const UiaFunctions& uia()
 {
     static const UiaFunctions instance;
     return instance;
+}
+
+// The caller releases the result. nullptr if the component is excluded from the
+// accessibility tree or not on screen yet.
+IRawElementProviderSimple* providerFor(juce::Component& source)
+{
+    auto* handler = source.getAccessibilityHandler();
+    if (handler == nullptr)
+        return nullptr;
+
+    // On Windows JUCE's native implementation is a UI Automation provider COM object.
+    auto* unknown = reinterpret_cast<IUnknown*>(handler->getNativeImplementation());
+    if (unknown == nullptr)
+        return nullptr;
+
+    IRawElementProviderSimple* provider = nullptr;
+    if (FAILED(unknown->QueryInterface(__uuidof(IRawElementProviderSimple),
+                                       reinterpret_cast<void**>(&provider))))
+        return nullptr;
+    return provider;
 }
 
 } // namespace
@@ -67,20 +93,8 @@ void announce(juce::Component& source, const juce::String& text, SpeechQueue que
     if (functions.listening != nullptr && !functions.listening())
         return; // no screen reader running
 
-    // nullptr if the component is excluded from the accessibility tree or not on screen yet.
-    auto* handler = source.getAccessibilityHandler();
-    if (handler == nullptr)
-        return;
-
-    // On Windows JUCE's native implementation is a UI Automation provider COM object.
-    auto* unknown = reinterpret_cast<IUnknown*>(handler->getNativeImplementation());
-    if (unknown == nullptr)
-        return;
-
-    IRawElementProviderSimple* provider = nullptr;
-    if (FAILED(unknown->QueryInterface(__uuidof(IRawElementProviderSimple),
-                                       reinterpret_cast<void**>(&provider)))
-        || provider == nullptr)
+    auto* provider = providerFor(source);
+    if (provider == nullptr)
         return;
 
     auto* message = ::SysAllocString(text.toWideCharPointer());
@@ -102,6 +116,37 @@ void announce(juce::Component& source, const juce::String& text, SpeechQueue que
     juce::AccessibilityHandler::postAnnouncement(text,
         queue == SpeechQueue::replacePrevious ? juce::AccessibilityHandler::AnnouncementPriority::high
                                               : juce::AccessibilityHandler::AnnouncementPriority::medium);
+#endif
+}
+
+void notifyToggleChanged(juce::Component& source, bool checked)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+
+#if JUCE_WINDOWS
+    const auto& functions = uia();
+    if (functions.raiseProperty == nullptr)
+        return;
+    if (functions.listening != nullptr && !functions.listening())
+        return; // no screen reader running
+
+    auto* provider = providerFor(source);
+    if (provider == nullptr)
+        return;
+
+    VARIANT oldValue;
+    VARIANT newValue;
+    ::VariantInit(&oldValue);
+    ::VariantInit(&newValue);
+    oldValue.vt = VT_I4;
+    newValue.vt = VT_I4;
+    oldValue.lVal = checked ? 0 : 1; // ToggleState_Off / ToggleState_On
+    newValue.lVal = checked ? 1 : 0;
+
+    functions.raiseProperty(provider, kToggleStatePropertyId, oldValue, newValue);
+    provider->Release();
+#else
+    announce(source, checked ? "Checked" : "Not checked");
 #endif
 }
 

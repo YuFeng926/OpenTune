@@ -6,6 +6,7 @@
 #include "Inference/ModelFactory.h"
 #include "Utils/AccessibleComboBox.h"
 #include "Utils/AccessibleKnob.h"
+#include "Utils/AccessibleToggleButton.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/LocalizationManager.h"
 #include "Utils/ModelPathResolver.h"
@@ -411,9 +412,9 @@ private:
     a11y::AccessibleComboBox vocoderWeightSelector_;
     juce::Label f0ModelLabel_;
     a11y::AccessibleComboBox f0ModelSelector_;
-    juce::ToggleButton experimentalFeaturesToggle_;
+    a11y::AccessibleToggleButton experimentalFeaturesToggle_;
     juce::Label experimentalFeaturesHintLabel_;
-    juce::ToggleButton lightPitchCorrectionToggle_;
+    a11y::AccessibleToggleButton lightPitchCorrectionToggle_;
 };
 
 class SharedEditingPage final : public juce::Component
@@ -668,8 +669,8 @@ private:
     a11y::AccessibleComboBox gridStyleSelector_;
     juce::Label wholeNoteMoveSnapLabel_;
     a11y::AccessibleComboBox wholeNoteMoveSnapSelector_;
-    juce::ToggleButton auditionToggle_;
-    juce::ToggleButton noteTransposePreviewToggle_;
+    a11y::AccessibleToggleButton auditionToggle_;
+    a11y::AccessibleToggleButton noteTransposePreviewToggle_;
 };
 
 class SharedVisualPage final : public juce::Component
@@ -934,7 +935,7 @@ private:
     std::function<void()> onPreferencesChanged_;
     juce::Label noteNameModeLabel_;
     a11y::AccessibleComboBox noteNameModeSelector_;
-    juce::ToggleButton showUnvoicedFramesToggle_;
+    a11y::AccessibleToggleButton showUnvoicedFramesToggle_;
     juce::Label backgroundBrightnessLabel_;
     a11y::AccessibleKnob backgroundBrightnessSlider_;
     juce::Label correctedF0ColourLabel_;

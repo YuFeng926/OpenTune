@@ -7,6 +7,7 @@
 #include "Standalone/UI/UIColors.h"
 #include "Editor/Preferences/SharedPreferencePages.h"
 #include "Utils/AccessibleComboBox.h"
+#include "Utils/AccessibleToggleButton.h"
 #include "Utils/AppLogger.h"
 
 namespace OpenTune {
@@ -300,7 +301,7 @@ private:
             channelToggles_.removeLast();
 
         while (channelToggles_.size() < numPairs) {
-            auto* toggle = channelToggles_.add(new juce::ToggleButton());
+            auto* toggle = channelToggles_.add(new a11y::AccessibleToggleButton());
             initialiseToggleButton(*toggle);
             const int pairIndex = channelToggles_.size() - 1;
             toggle->onClick = [this, pairIndex] { channelPairClicked(pairIndex); };

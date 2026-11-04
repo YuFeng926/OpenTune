@@ -13,6 +13,7 @@
 #include "EqGraphRenderer.h"
 #include "EqBandInteraction.h"
 #include "Utils/AccessibleComboBox.h"
+#include "Utils/AccessibleToggleButton.h"
 #include <memory>
 
 namespace OpenTune {
@@ -196,7 +197,7 @@ private:
     EqConfirmPanel confirmPanel_;
     juce::TextButton confirmButton_;
     juce::TextButton cancelButton_;
-    juce::ToggleButton dontShowToggle_;
+    a11y::AccessibleToggleButton dontShowToggle_;
 
     KeyRow keyRow_ = KeyRow::Type;
     bool keyboardAdjusting_ = false;   // knob changes from arrows wait before the commit

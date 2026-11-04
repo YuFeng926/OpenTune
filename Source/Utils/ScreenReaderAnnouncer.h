@@ -18,4 +18,10 @@ enum class SpeechQueue
 void announce(juce::Component& source, const juce::String& text,
               SpeechQueue queue = SpeechQueue::replacePrevious);
 
+// Tell the screen reader that a check box on the source component changed: it then says
+// "checked" / "not checked" itself, in its own language, as for a native check box.
+// JUCE raises this event only for a toggle made through UI Automation, not for key presses.
+// Message thread only.
+void notifyToggleChanged(juce::Component& source, bool checked);
+
 } // namespace OpenTune::a11y
