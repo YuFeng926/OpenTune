@@ -6,8 +6,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <vector>
+
+// The test target links the production translation unit, so the signed
+// interpolation tap is asserted directly.
+namespace OpenTune {
+namespace PhaseVocoderDetail {
+std::complex<float> scaledBinPhasor(float magnitude, double weight, double phase);
+}
+}
 
 namespace {
 
@@ -134,6 +143,27 @@ std::vector<float> makeHarmonicTone(double f0, double sampleRate, int numSamples
         }
         out[static_cast<size_t>(i)] = static_cast<float>(value);
         phase += kTwoPi * f0 / sampleRate;
+    }
+    return out;
+}
+
+// Short Hann-windowed tone burst: 1 ms at 2 kHz, amplitude 0.5, centred on
+// centreSample. Silence outside the burst isolates the transient detector.
+std::vector<float> makeBurst(double sampleRate, int numSamples, int centreSample)
+{
+    constexpr double kFrequency = 2000.0;
+    constexpr double kAmplitude = 0.5;
+    const int burstLength = static_cast<int>(std::lround(sampleRate * 0.001));
+    std::vector<float> out(static_cast<size_t>(numSamples), 0.0f);
+    const int first = centreSample - burstLength / 2;
+    for (int i = 0; i < burstLength; ++i) {
+        const int index = first + i;
+        if (index < 0 || index >= numSamples) continue;
+        const double w = 0.5 - 0.5 * std::cos(
+            kTwoPi * static_cast<double>(i) / static_cast<double>(burstLength - 1));
+        out[static_cast<size_t>(index)] = static_cast<float>(
+            kAmplitude * w
+            * std::sin(kTwoPi * kFrequency * static_cast<double>(index) / sampleRate));
     }
     return out;
 }
@@ -505,6 +535,132 @@ void testTargetVibratoEnvelope()
     expectTrue(ratio > 0.90, "vibrato: modulated target envelope stable");
 }
 
+void testSignedScatterTap()
+{
+    using OpenTune::PhaseVocoderDetail::scaledBinPhasor;
+
+    constexpr float kMagnitude = 0.6f;
+    constexpr double kPhase = 0.9;
+    const auto positive = scaledBinPhasor(kMagnitude, 0.25, kPhase);
+    const auto negative = scaledBinPhasor(kMagnitude, -0.25, kPhase);
+    const auto unity = scaledBinPhasor(kMagnitude, 1.0, kPhase);
+
+    expectTrue(std::fabs(positive.real() + negative.real()) < 1e-6f
+                   && std::fabs(positive.imag() + negative.imag()) < 1e-6f,
+               "scatter: negative Lanczos tap negates the complex contribution");
+
+    const float expectedReal = kMagnitude * static_cast<float>(std::cos(kPhase));
+    const float expectedImag = kMagnitude * static_cast<float>(std::sin(kPhase));
+    expectTrue(std::fabs(unity.real() - expectedReal) < 1e-6f
+                   && std::fabs(unity.imag() - expectedImag) < 1e-6f,
+               "scatter: tap scales the phasor by the signed weight");
+}
+
+void testGlideAcrossPeakSwitchesTracksPitch()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 22050;
+    constexpr double kStartHz = 400.0;
+    constexpr double kEndHz = 560.0;
+    constexpr double kDuration = 0.5;
+    constexpr double kFrameRate = 100.0;
+    const double shiftRatio = std::exp2(40.0 / 1200.0);
+
+    const std::vector<float> source =
+        makeGlide(kStartHz, kEndHz, kSampleRate, kSamples);
+    const int numFrames = static_cast<int>(kDuration * kFrameRate) + 3;
+    std::vector<float> original(static_cast<size_t>(numFrames));
+    std::vector<float> target(static_cast<size_t>(numFrames));
+    for (int f = 0; f < numFrames; ++f) {
+        const double t = std::min(static_cast<double>(f) / kFrameRate, kDuration);
+        const double hz = kStartHz + (kEndHz - kStartHz) * t / kDuration;
+        original[static_cast<size_t>(f)] = static_cast<float>(hz);
+        target[static_cast<size_t>(f)] = static_cast<float>(hz * shiftRatio);
+    }
+
+    Shifter shifter(kSampleRate);
+    const auto out = shifter.render(source.data(), kSamples, 0, kSamples,
+                                    original.data(), target.data(),
+                                    numFrames, kFrameRate);
+    constexpr int kMeasureBegin = 8000;
+    constexpr int kMeasureEnd = 16000;
+    const double measured =
+        measureFrequency(out, kMeasureBegin, kMeasureEnd, kSampleRate);
+    const double midpoint = 0.5 * (kMeasureBegin + kMeasureEnd);
+    const double expected = (kStartHz
+        + (kEndHz - kStartHz) * (midpoint / kSampleRate) / kDuration) * shiftRatio;
+    const double errorCents = cents(measured, expected);
+    std::printf("SWITCH_GLIDE expected=%.2f measured=%.2f cents=%.2f\n",
+                expected, measured, errorCents);
+    expectTrue(std::fabs(errorCents) < 10.0,
+               "glide switch: frequency follows target across peak changes");
+}
+
+void testTransientRangeMatchesFull()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 44100;
+    constexpr int kBurstCentre = 22050;
+    constexpr int kOffset = 15000;
+    constexpr int kCount = 25000;
+    const double targetHz = 2000.0 * std::exp2(50.0 / 1200.0);
+
+    const std::vector<float> source = makeBurst(kSampleRate, kSamples, kBurstCentre);
+    const int numFrames = kSamples * 100 / kSampleRate + 3;
+    const auto original = constantF0(numFrames, 2000.0f);
+    const auto target = constantF0(numFrames, static_cast<float>(targetHz));
+
+    Shifter shifter(kSampleRate);
+    const auto full = shifter.render(source.data(), kSamples, 0, kSamples,
+                                     original.data(), target.data(),
+                                     numFrames, 100.0);
+    const auto part = shifter.render(source.data(), kSamples, kOffset, kCount,
+                                     original.data(), target.data(),
+                                     numFrames, 100.0);
+
+    double maxDiff = 0.0;
+    for (int i = kBurstCentre + Shifter::kFftSize; i < kOffset + kCount; ++i) {
+        maxDiff = std::max(maxDiff, std::fabs(static_cast<double>(
+            part[static_cast<size_t>(i - kOffset)]
+            - full[static_cast<size_t>(i)])));
+    }
+    std::printf("TRANSIENT_RANGE maxAbsDiff=%.6f\n", maxDiff);
+    expectTrue(maxDiff < 1e-3,
+               "transient: independent range equals full slice after event");
+}
+
+void testTransientAttackRetainsEnergy()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 44100;
+    constexpr int kBurstCentre = 22050;
+    constexpr int kOneMs = kSampleRate / 1000;
+    constexpr int kFiveMs = 5 * kOneMs;
+    const double targetHz = 2000.0 * std::exp2(50.0 / 1200.0);
+
+    const std::vector<float> source = makeBurst(kSampleRate, kSamples, kBurstCentre);
+    const int numFrames = kSamples * 100 / kSampleRate + 3;
+    const auto original = constantF0(numFrames, 2000.0f);
+    const auto target = constantF0(numFrames, static_cast<float>(targetHz));
+
+    Shifter shifter(kSampleRate);
+    const auto out = shifter.render(source.data(), kSamples, 0, kSamples,
+                                    original.data(), target.data(),
+                                    numFrames, 100.0);
+
+    const double sourceRms =
+        rmsOf(source, kBurstCentre - kOneMs, kBurstCentre + kOneMs);
+    const double outputRms =
+        rmsOf(out, kBurstCentre - kOneMs, kBurstCentre + kOneMs);
+    const double gainDb = 20.0 * std::log10(outputRms / sourceRms);
+    const double quietRms =
+        rmsOf(out, kBurstCentre - kFiveMs, kBurstCentre - kOneMs);
+    const double quietDb = 20.0 * std::log10(quietRms);
+    std::printf("TRANSIENT_ATTACK gainDb=%.3f quietDbfs=%.2f\n", gainDb, quietDb);
+    expectTrue(std::fabs(gainDb) < 3.0, "transient: attack RMS within 3 dB");
+    expectTrue(quietDb < -40.0, "transient: pre-attack output below -40 dBFS");
+}
+
 } // namespace
 
 int main()
@@ -521,6 +677,10 @@ int main()
     testGlideEnvelopeStable();
     testVibratoTargetSteadyEnvelope();
     testTargetVibratoEnvelope();
+    testSignedScatterTap();
+    testGlideAcrossPeakSwitchesTracksPitch();
+    testTransientRangeMatchesFull();
+    testTransientAttackRetainsEnergy();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

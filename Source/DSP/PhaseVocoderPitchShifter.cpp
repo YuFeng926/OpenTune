@@ -1,4 +1,4 @@
-#include "PhaseVocoderPitchShifter.h"
+﻿#include "PhaseVocoderPitchShifter.h"
 
 #include <juce_dsp/juce_dsp.h>
 
@@ -10,6 +10,18 @@
 #include <vector>
 
 namespace OpenTune {
+
+// A signed Lanczos tap scales the complex phasor: a negative tap subtracts
+// its contribution from the synthesis bin.
+namespace PhaseVocoderDetail {
+
+std::complex<float> scaledBinPhasor(float magnitude, double weight, double phase)
+{
+    return std::polar(magnitude, (float) phase) * (float) weight;
+}
+
+} // namespace PhaseVocoderDetail
+
 namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;
@@ -125,6 +137,8 @@ std::vector<float> PhaseVocoderPitchShifter::render(
     std::vector<float> analysisPhase((size_t) numBins);
     std::vector<float> previousAnalysisPhase((size_t) numBins);
     std::vector<double> deviation((size_t) numBins);
+    std::vector<double> highEnergy((size_t) fftSize);
+    std::vector<double> energyPrefix((size_t) fftSize + 1);
 
     std::vector<PeakState> peaks;
     std::vector<PeakState> previousPeaks;
@@ -155,16 +169,25 @@ std::vector<float> PhaseVocoderPitchShifter::render(
         }
     }
 
+    double frameHighEnergy = 0.0;
     const auto analyzeFrame = [&](int64_t frame)
     {
         const int64_t firstSample = frame * hopSize - halfFft;
+        frameHighEnergy = 0.0;
         for (int n = 0; n < fftSize; ++n)
         {
             const int64_t sampleIndex = firstSample + n;
-            const float sample =
-                (sampleIndex >= 0 && sampleIndex < (int64_t) sourceSampleCount)
-                    ? source[(size_t) sampleIndex]
+            const bool inRange =
+                sampleIndex >= 0 && sampleIndex < (int64_t) sourceSampleCount;
+            const float sample = inRange ? source[(size_t) sampleIndex] : 0.0f;
+            const int64_t previousIndex = sampleIndex - 1;
+            const float previous =
+                (previousIndex >= 0 && previousIndex < (int64_t) sourceSampleCount)
+                    ? source[(size_t) previousIndex]
                     : 0.0f;
+            const double difference = (double) sample - (double) previous;
+            highEnergy[(size_t) n] = difference * difference;
+            frameHighEnergy += difference * difference;
             fftInput[(size_t) n] = std::complex<float>(
                 sample * window[(size_t) n], 0.0f);
         }
@@ -219,8 +242,26 @@ std::vector<float> PhaseVocoderPitchShifter::render(
         }
     };
 
-    const auto advancePeakPhases = [&](double ratio, bool reset)
+    const auto advancePeakPhases = [&](double ratio, bool reset, int64_t frame,
+                                       bool transient, int64_t transientSample)
     {
+        // A detected event anchors every peak at its source sample: the phase
+        // advance from the window centre to the event is applied once here.
+        if (transient)
+        {
+            const double centre = (double) frame * hopSize;
+            for (auto& peak : peaks)
+            {
+                const double peakFrequency =
+                    (double) peak.bin + deviation[(size_t) peak.bin];
+                peak.synthesisPhase = wrapPhase(
+                    (double) analysisPhase[(size_t) peak.bin]
+                    + kTwoPi * (ratio - 1.0) * peakFrequency
+                        * (centre - (double) transientSample) / (double) fftSize);
+            }
+            return;
+        }
+
         if (reset)
         {
             for (auto& peak : peaks)
@@ -255,8 +296,8 @@ std::vector<float> PhaseVocoderPitchShifter::render(
             const double advance =
                 kTwoPi * peakFrequency * ratio * hopSize / fftSize;
             const double phaseHandoff =
-                (double) analysisPhase[(size_t) peak.bin]
-                - (double) analysisPhase[(size_t) inherited->bin];
+                (double) previousAnalysisPhase[(size_t) peak.bin]
+                - (double) previousAnalysisPhase[(size_t) inherited->bin];
             peak.synthesisPhase = wrapPhase(
                 inherited->synthesisPhase + phaseHandoff + advance);
         }
@@ -315,8 +356,9 @@ std::vector<float> PhaseVocoderPitchShifter::render(
                     const double weight = sinc * lanczosWindow;
                     const double targetPhase =
                         synthesisPhase + kPi * (double) (b - t);
-                    synthesisSpectrum[(size_t) t] += std::polar(
-                        binMagnitude * (float) weight, (float) targetPhase);
+                    synthesisSpectrum[(size_t) t] +=
+                        PhaseVocoderDetail::scaledBinPhasor(
+                            binMagnitude, weight, targetPhase);
                 }
             }
 
@@ -352,10 +394,68 @@ std::vector<float> PhaseVocoderPitchShifter::render(
         }
     };
 
+    constexpr int kTransientWindow = hopSize / 4;
+    double previousFrameHighEnergy = 0.0;
+
+    // A first-order difference high-pass emphasises the attack against the
+    // voiced body. A recent block rising over its prior block marks one event,
+    // located by the high-energy centroid inside the recent block.
+    const auto detectTransientSample = [&](int64_t firstSample) -> int64_t
+    {
+        if (frameHighEnergy <= 1.5 * previousFrameHighEnergy)
+            return -1;
+
+        energyPrefix[0] = 0.0;
+        for (int n = 0; n < fftSize; ++n)
+            energyPrefix[(size_t) n + 1] =
+                energyPrefix[(size_t) n] + highEnergy[(size_t) n];
+
+        double bestRise = 0.0;
+        int bestEnd = -1;
+        for (int n = 2 * kTransientWindow - 1; n < fftSize; ++n)
+        {
+            const int firstRecent = n - kTransientWindow + 1;
+            const int firstPrior = firstRecent - kTransientWindow;
+            const double recent = energyPrefix[(size_t) n + 1]
+                                - energyPrefix[(size_t) firstRecent];
+            const double prior = energyPrefix[(size_t) firstRecent]
+                               - energyPrefix[(size_t) firstPrior];
+            const double rise = recent - prior;
+            if (rise > bestRise)
+            {
+                bestRise = rise;
+                bestEnd = n;
+            }
+        }
+        if (bestEnd < 0)
+            return -1;
+
+        const int firstRecent = bestEnd - kTransientWindow + 1;
+        const double recentSum = energyPrefix[(size_t) bestEnd + 1]
+                               - energyPrefix[(size_t) firstRecent];
+        const double priorSum = energyPrefix[(size_t) firstRecent]
+                              - energyPrefix[(size_t) (firstRecent - kTransientWindow)];
+        if (bestRise <= 0.5 * (recentSum + priorSum))
+            return -1;
+
+        double weighted = 0.0;
+        double total = 0.0;
+        for (int n = firstRecent; n <= bestEnd; ++n)
+        {
+            weighted += (double) n * highEnergy[(size_t) n];
+            total += highEnergy[(size_t) n];
+        }
+        const int64_t event =
+            firstSample + (int64_t) std::llround(weighted / total);
+        return std::clamp(event, firstSample, firstSample + fftSize - 1);
+    };
+
     analyzeFrame(anchorFrame - 1);
     previousAnalysisPhase = analysisPhase;
+    previousFrameHighEnergy = frameHighEnergy;
 
     const bool initializeFromContentStart = (anchorFrame == firstContentFrame);
+    int64_t activeTransientSample = -1;
 
     for (int64_t frame = anchorFrame; frame <= lastOutputFrame; ++frame)
     {
@@ -372,14 +472,28 @@ std::vector<float> PhaseVocoderPitchShifter::render(
         const bool neutral = (ratio == 1.0);
         const bool reset = neutral || frame == anchorFrame;
 
+        // One event keeps one sample label while it stays inside the analysis
+        // window, so every overlapping frame resets to the same source time.
+        const int64_t firstSample = frame * hopSize - halfFft;
+        if (activeTransientSample >= 0
+            && (activeTransientSample < firstSample
+                || activeTransientSample >= firstSample + fftSize))
+        {
+            activeTransientSample = -1;
+        }
+        if (activeTransientSample < 0)
+            activeTransientSample = detectTransientSample(firstSample);
+        const bool transient = activeTransientSample >= 0;
+
         detectPeaks();
-        advancePeakPhases(ratio, reset);
+        advancePeakPhases(ratio, reset, frame, transient, activeTransientSample);
 
         if (frame >= firstOutputFrame)
             synthesizeFrame(frame, ratio);
 
         previousAnalysisPhase = analysisPhase;
         previousPeaks = peaks;
+        previousFrameHighEnergy = frameHighEnergy;
     }
 
     for (size_t i = 0; i < accumulated.size(); ++i)
