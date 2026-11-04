@@ -713,10 +713,8 @@ set(OPENTUNE_COMMON_SOURCES
         Source/DSP/HybridAperiodicResidual.h
         Source/DSP/F0KeyDetector.cpp
         Source/DSP/F0KeyDetector.h
-        Source/DSP/AutoTunePitchShifter.cpp
-        Source/DSP/AutoTunePitchShifter.h
-        Source/DSP/AutoTunePeriodDetector.cpp
-        Source/DSP/AutoTunePeriodDetector.h
+        Source/DSP/PhaseVocoderPitchShifter.cpp
+        Source/DSP/PhaseVocoderPitchShifter.h
         Source/DSP/NoteEqProcessor.h
         Source/Audio/NotePitchAudition.cpp
         Source/Audio/NotePitchAudition.h
@@ -1699,19 +1697,18 @@ if(OPENTUNE_BUILD_TESTS)
     add_test(NAME ComponentListenerSubscriptionTests
         COMMAND OpenTuneComponentListenerSubscriptionTests)
 
-    add_executable(OpenTuneAutoTuneTests
-        Tests/AutoTunePitchShifterTests.cpp
-        Source/DSP/AutoTunePitchShifter.cpp
-        Source/DSP/AutoTunePeriodDetector.cpp
+    add_executable(OpenTunePhaseVocoderTests
+        Tests/PhaseVocoderPitchShifterTests.cpp
+        Source/DSP/PhaseVocoderPitchShifter.cpp
     )
-    target_include_directories(OpenTuneAutoTuneTests
+    target_include_directories(OpenTunePhaseVocoderTests
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTunePhaseVocoderTests PRIVATE
+        juce::juce_dsp)
     if(MSVC)
-        # 与主工程目标一致：/utf-8 消除 C4819（源码含 UTF-8 注释字符），
-        # /EHsc 消除 C4530（std::vector 实例化含异常处理）。
-        target_compile_options(OpenTuneAutoTuneTests PRIVATE /utf-8 /EHsc)
+        target_compile_options(OpenTunePhaseVocoderTests PRIVATE /utf-8 /EHsc)
     endif()
-    add_test(NAME AutoTunePitchShifterTests COMMAND OpenTuneAutoTuneTests)
+    add_test(NAME PhaseVocoderPitchShifterTests COMMAND OpenTunePhaseVocoderTests)
 
     add_executable(OpenTuneHybridAperiodicResidualTests
         Tests/HybridAperiodicResidualTests.cpp

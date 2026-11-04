@@ -21,12 +21,16 @@ struct NotePitchPreview {
 /// Render one output-side note pitch audition snippet (no cache writes, no disk).
 ///
 /// Reads channel 0 of @p source between @p startSeconds and @p endSeconds
-/// (source/content seconds at @p sourceSampleRate), pitch-shifts the region to
-/// a constant @p targetHz with the period detector + pitch shifter on the
-/// 44.1 kHz detection grid, then resamples the result to @p outputSampleRate.
+/// (source/content seconds at @p sourceSampleRate). @p originalF0 with
+/// @p numOriginalF0Frames at @p originalF0FrameRate is the complete source F0
+/// track; its time origin is zero, matching @p source. The preview range is
+/// shifted to a constant @p targetHz by PhaseVocoderPitchShifter on the native
+/// source rate, while all frames outside the range keep their original F0 as
+/// neutral phase context. The result is resampled to @p outputSampleRate.
 /// The returned preview is at least 0.3 s long (or the note duration, whichever
 /// is longer) and clamped to the source buffer duration. Returns an empty
-/// preview on invalid input or when the detector produces no valid frame.
+/// preview on invalid input or when every frame in the preview range is
+/// unvoiced.
 NotePitchPreview renderNotePitchPreview(
     const juce::AudioBuffer<float>& source,
     double sourceSampleRate,
@@ -34,9 +38,9 @@ NotePitchPreview renderNotePitchPreview(
     double endSeconds,
     float targetHz,
     double outputSampleRate,
-    const float* originalF0Hint,
-    int numF0HintFrames,
-    double f0HintFrameRate);
+    const float* originalF0,
+    int numOriginalF0Frames,
+    double originalF0FrameRate);
 
 /**
  * NotePitchAudition - output-side, non-persistent note transposition audition.

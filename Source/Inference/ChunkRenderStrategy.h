@@ -5,7 +5,7 @@
 
 namespace OpenTune {
 
-/// 75 cents — 超过此阈值走声码器（DSP 移调在 75 音分内质量优于声码器）
+/// 75 cents — 超过此阈值走声码器（PhaseVocoder 移调在 75 音分内质量优于声码器）
 constexpr float kPitchShiftThresholdCents = 75.0f;
 
 /// 判断 chunk 是否需要声码器（任一有声帧偏差 >= 阈值）。
@@ -14,7 +14,7 @@ constexpr float kPitchShiftThresholdCents = 75.0f;
 /// @param originalF0     原始 F0 全局数组
 /// @param f0StartFrame   chunk 在全局 F0 中的起始帧索引
 /// @param thresholdCents 偏差阈值（默认 75 cents）
-/// @return true = 需要声码器；false = 可用 AutoTune cycle resampling
+/// @return true = 需要声码器；false = 可用 PhaseVocoder DSP 移调
 inline bool chunkNeedsVocoder(
     const float* correctedF0,
     int numF0Frames,
