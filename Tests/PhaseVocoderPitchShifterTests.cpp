@@ -619,14 +619,60 @@ void testTransientRangeMatchesFull()
                                      numFrames, 100.0);
 
     double maxDiff = 0.0;
-    for (int i = kBurstCentre + Shifter::kFftSize; i < kOffset + kCount; ++i) {
+    for (int i = kOffset; i < kOffset + kCount; ++i) {
         maxDiff = std::max(maxDiff, std::fabs(static_cast<double>(
             part[static_cast<size_t>(i - kOffset)]
             - full[static_cast<size_t>(i)])));
     }
     std::printf("TRANSIENT_RANGE maxAbsDiff=%.6f\n", maxDiff);
     expectTrue(maxDiff < 1e-3,
-               "transient: independent range equals full slice after event");
+               "transient: independent range equals full slice including attack");
+}
+
+void testNeutralAnchorRestoresTransientState(bool unvoiced, const char* label)
+{
+    constexpr int kSampleRate = 32768;
+    constexpr int kSamples = 8192;
+    constexpr double kF0FrameRate = 128.0;
+    constexpr int kNumFrames = 34;
+    constexpr int kNeutralFrame = 16;
+    constexpr int kEventSample = 4096;
+    constexpr int kStart = 4864;
+    constexpr int kCount = 1280;
+
+    std::vector<float> source(static_cast<size_t>(kSamples), 0.0f);
+    source[static_cast<size_t>(kEventSample)] = 1.0f;
+
+    std::vector<float> original = constantF0(kNumFrames, 2000.0f);
+    std::vector<float> target = constantF0(kNumFrames, 4000.0f);
+    if (unvoiced)
+    {
+        original[static_cast<size_t>(kNeutralFrame)] = 0.0f;
+        target[static_cast<size_t>(kNeutralFrame)] = 0.0f;
+    }
+    else
+    {
+        target[static_cast<size_t>(kNeutralFrame)] = 2000.0f;
+    }
+
+    Shifter shifter(kSampleRate);
+    const auto full = shifter.render(source.data(), kSamples, 0, kSamples,
+                                     original.data(), target.data(),
+                                     kNumFrames, kF0FrameRate);
+    const auto part = shifter.render(source.data(), kSamples, kStart, kCount,
+                                     original.data(), target.data(),
+                                     kNumFrames, kF0FrameRate);
+
+    double maxDiff = 0.0;
+    for (int i = kStart; i < kStart + kCount; ++i)
+    {
+        maxDiff = std::max(maxDiff, std::fabs(static_cast<double>(
+            part[static_cast<size_t>(i - kStart)]
+            - full[static_cast<size_t>(i)])));
+    }
+    std::printf("TRANSIENT_NEUTRAL_%s maxAbsDiff=%.6f\n", label, maxDiff);
+    expectTrue(maxDiff < 1e-3,
+               "transient: neutral anchor keeps the active event label");
 }
 
 void testTransientAttackRetainsEnergy()
@@ -679,6 +725,8 @@ int main()
     testTargetVibratoEnvelope();
     testSignedScatterTap();
     testGlideAcrossPeakSwitchesTracksPitch();
+    testNeutralAnchorRestoresTransientState(false, "voiced");
+    testNeutralAnchorRestoresTransientState(true, "unvoiced");
     testTransientRangeMatchesFull();
     testTransientAttackRetainsEnergy();
 

@@ -450,12 +450,41 @@ std::vector<float> PhaseVocoderPitchShifter::render(
         return std::clamp(event, firstSample, firstSample + fftSize - 1);
     };
 
-    analyzeFrame(anchorFrame - 1);
-    previousAnalysisPhase = analysisPhase;
-    previousFrameHighEnergy = frameHighEnergy;
-
     const bool initializeFromContentStart = (anchorFrame == firstContentFrame);
     int64_t activeTransientSample = -1;
+
+    if (initializeFromContentStart)
+    {
+        analyzeFrame(anchorFrame - 1);
+        previousFrameHighEnergy = frameHighEnergy;
+    }
+    else
+    {
+        // A neutral frame resets phase, but a transient event detected before
+        // it can still cover the neutral frame's analysis window. Replay the
+        // detector over the preceding frames so an independent request starts
+        // with the same event label as the full render.
+        const int64_t lookbackFrames = (fftSize + hopSize - 1) / hopSize;
+        const int64_t primingFrame = anchorFrame - lookbackFrames - 1;
+        analyzeFrame(primingFrame);
+        previousFrameHighEnergy = frameHighEnergy;
+
+        for (int64_t frame = primingFrame + 1; frame < anchorFrame; ++frame)
+        {
+            analyzeFrame(frame);
+            const int64_t firstSample = frame * hopSize - halfFft;
+            if (activeTransientSample >= 0
+                && (activeTransientSample < firstSample
+                    || activeTransientSample >= firstSample + fftSize))
+            {
+                activeTransientSample = -1;
+            }
+            if (activeTransientSample < 0)
+                activeTransientSample = detectTransientSample(firstSample);
+            previousFrameHighEnergy = frameHighEnergy;
+        }
+    }
+    previousAnalysisPhase = analysisPhase;
 
     for (int64_t frame = anchorFrame; frame <= lastOutputFrame; ++frame)
     {
