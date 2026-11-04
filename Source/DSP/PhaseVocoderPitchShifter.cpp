@@ -254,8 +254,11 @@ std::vector<float> PhaseVocoderPitchShifter::render(
                 (double) peak.bin + deviation[(size_t) peak.bin];
             const double advance =
                 kTwoPi * peakFrequency * ratio * hopSize / fftSize;
+            const double phaseHandoff =
+                (double) analysisPhase[(size_t) peak.bin]
+                - (double) analysisPhase[(size_t) inherited->bin];
             peak.synthesisPhase = wrapPhase(
-                inherited->synthesisPhase + advance);
+                inherited->synthesisPhase + phaseHandoff + advance);
         }
     };
 
@@ -291,18 +294,29 @@ std::vector<float> PhaseVocoderPitchShifter::render(
                        - (double) analysisPhase[(size_t) peak.bin]));
                 const float binMagnitude = magnitude[(size_t) b];
 
-                const int targetBin = (int) std::floor(target);
-                const double fraction = target - (double) targetBin;
-
-                synthesisSpectrum[(size_t) targetBin] += std::polar(
-                    binMagnitude * (float) (1.0 - fraction),
-                    (float) synthesisPhase);
-
-                if (fraction > 0.0)
+                constexpr double kPi = kTwoPi * 0.5;
+                constexpr int kInterpolationRadius = 2;
+                const int firstTarget =
+                    std::max(0, (int) std::floor(target) - kInterpolationRadius);
+                const int lastTarget = std::min(
+                    numBins - 1, (int) std::ceil(target) + kInterpolationRadius);
+                for (int t = firstTarget; t <= lastTarget; ++t)
                 {
-                    synthesisSpectrum[(size_t) targetBin + 1] += std::polar(
-                        binMagnitude * (float) fraction,
-                        (float) synthesisPhase);
+                    const double x = target - (double) t;
+                    if (std::abs(x) >= (double) kInterpolationRadius)
+                        continue;
+                    const double sinc = (x == 0.0)
+                        ? 1.0
+                        : std::sin(kPi * x) / (kPi * x);
+                    const double lanczosWindow = (x == 0.0)
+                        ? 1.0
+                        : std::sin(kPi * x / (double) kInterpolationRadius)
+                            / (kPi * x / (double) kInterpolationRadius);
+                    const double weight = sinc * lanczosWindow;
+                    const double targetPhase =
+                        synthesisPhase + kPi * (double) (b - t);
+                    synthesisSpectrum[(size_t) t] += std::polar(
+                        binMagnitude * (float) weight, (float) targetPhase);
                 }
             }
 

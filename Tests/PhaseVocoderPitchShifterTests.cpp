@@ -78,6 +78,96 @@ std::vector<float> constantF0(int numFrames, float hz)
     return std::vector<float>(static_cast<size_t>(numFrames), hz);
 }
 
+double rmsOf(const std::vector<float>& s, int begin, int end)
+{
+    double sum = 0.0;
+    for (int i = begin; i < end; ++i) {
+        const double value = static_cast<double>(s[static_cast<size_t>(i)]);
+        sum += value * value;
+    }
+    return std::sqrt(sum / static_cast<double>(end - begin));
+}
+
+double envelopeRatio(const std::vector<float>& s, int begin, int end)
+{
+    constexpr int kWindow = 1024;
+    constexpr int kHop = 512;
+    std::vector<double> rms;
+    for (int start = begin; start + kWindow <= end; start += kHop)
+        rms.push_back(rmsOf(s, start, start + kWindow));
+    std::sort(rms.begin(), rms.end());
+    const size_t low = rms.size() * 5 / 100;
+    const size_t high = rms.size() * 95 / 100;
+    if (rms[high] <= 0.0) return 0.0;
+    return rms[low] / rms[high];
+}
+
+double amplitudeAt(const std::vector<float>& s, int begin, int end,
+                   double hz, double sampleRate)
+{
+    const int count = end - begin;
+    const double omega = kTwoPi * hz / sampleRate;
+    double re = 0.0;
+    double im = 0.0;
+    double weightSum = 0.0;
+    for (int i = 0; i < count; ++i) {
+        const double w = 0.5 - 0.5 * std::cos(kTwoPi * static_cast<double>(i)
+                                               / static_cast<double>(count - 1));
+        const double value = static_cast<double>(s[static_cast<size_t>(begin + i)]);
+        re += w * value * std::cos(omega * static_cast<double>(i));
+        im -= w * value * std::sin(omega * static_cast<double>(i));
+        weightSum += w;
+    }
+    return 2.0 * std::sqrt(re * re + im * im) / weightSum;
+}
+
+std::vector<float> makeHarmonicTone(double f0, double sampleRate, int numSamples,
+                                    int harmonics)
+{
+    std::vector<float> out(static_cast<size_t>(numSamples));
+    double phase = 0.0;
+    for (int i = 0; i < numSamples; ++i) {
+        double value = 0.0;
+        for (int h = 1; h <= harmonics; ++h) {
+            const double amplitude = 0.25 / std::pow(static_cast<double>(h), 1.2);
+            value += amplitude * std::sin(static_cast<double>(h) * phase + 0.37 * h);
+        }
+        out[static_cast<size_t>(i)] = static_cast<float>(value);
+        phase += kTwoPi * f0 / sampleRate;
+    }
+    return out;
+}
+
+std::vector<float> makeGlide(double startHz, double endHz, double sampleRate,
+                             int numSamples)
+{
+    std::vector<float> out(static_cast<size_t>(numSamples));
+    const double duration = static_cast<double>(numSamples) / sampleRate;
+    double phase = 0.0;
+    for (int i = 0; i < numSamples; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const double hz = startHz + (endHz - startHz) * t / duration;
+        out[static_cast<size_t>(i)] = static_cast<float>(0.4 * std::sin(phase));
+        phase += kTwoPi * hz / sampleRate;
+    }
+    return out;
+}
+
+std::vector<float> makeVibrato(double centerHz, double depthCents, double rateHz,
+                               double sampleRate, int numSamples)
+{
+    std::vector<float> out(static_cast<size_t>(numSamples));
+    double phase = 0.0;
+    for (int i = 0; i < numSamples; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const double hz = centerHz
+            * std::exp2(depthCents * std::sin(kTwoPi * rateHz * t) / 1200.0);
+        out[static_cast<size_t>(i)] = static_cast<float>(0.4 * std::sin(phase));
+        phase += kTwoPi * hz / sampleRate;
+    }
+    return out;
+}
+
 void testIdentityAndSubranges()
 {
     constexpr int kSampleRate = 44100;
@@ -238,6 +328,183 @@ void testEmptyAndShortRanges()
     expectTrue(shortOut.size() == 64, "short clip keeps requested length");
 }
 
+void testSteadyShiftPreservesLevel()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 88200;
+    constexpr double kSourceHz = 220.0;
+    constexpr double kTargetHz = 226.5; // +50 cents
+
+    const std::vector<float> source = makeSine(kSourceHz, kSampleRate, kSamples, 0.4);
+    const int numFrames = kSamples * 100 / kSampleRate + 3;
+    const auto original = constantF0(numFrames, static_cast<float>(kSourceHz));
+    const auto target = constantF0(numFrames, static_cast<float>(kTargetHz));
+
+    Shifter shifter(kSampleRate);
+    const auto out = shifter.render(source.data(), kSamples, 0, kSamples,
+                                    original.data(), target.data(),
+                                    numFrames, 100.0);
+    const int begin = kSampleRate / 2;
+    const int end = kSampleRate * 3 / 2;
+    const double inRms = rmsOf(source, begin, end);
+    const double outRms = rmsOf(out, begin, end);
+    const double gainDb = 20.0 * std::log10(outRms / inRms);
+    std::printf("LEVEL source=%.1f target=%.1f gainDb=%.3f\n",
+                kSourceHz, kTargetHz, gainDb);
+    expectTrue(std::fabs(gainDb) < 1.0, "level: steady +50 cents keeps RMS");
+}
+
+void testHalfBinShiftPreservesLevel()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 88200;
+    constexpr double kSourceHz = 440.0;
+    const double targetHz = kSourceHz + kSampleRate / (2.0 * Shifter::kFftSize);
+
+    const std::vector<float> source = makeSine(kSourceHz, kSampleRate, kSamples, 0.4);
+    const int numFrames = kSamples * 100 / kSampleRate + 3;
+    const auto original = constantF0(numFrames, static_cast<float>(kSourceHz));
+    const auto target = constantF0(numFrames, static_cast<float>(targetHz));
+
+    Shifter shifter(kSampleRate);
+    const auto out = shifter.render(source.data(), kSamples, 0, kSamples,
+                                    original.data(), target.data(),
+                                    numFrames, 100.0);
+    const int begin = kSampleRate / 2;
+    const int end = kSampleRate * 3 / 2;
+    const double inRms = rmsOf(source, begin, end);
+    const double outRms = rmsOf(out, begin, end);
+    const double gainDb = 20.0 * std::log10(outRms / inRms);
+    std::printf("HALFBIN source=%.1f target=%.3f gainDb=%.3f\n",
+                kSourceHz, targetHz, gainDb);
+    expectTrue(std::fabs(gainDb) < 1.0, "level: half-bin shift keeps RMS");
+}
+
+void testHarmonicSpectrumPreservesShape()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 88200;
+    constexpr double kSourceHz = 110.0;
+    constexpr int kHarmonics = 12;
+    const double targetHz = kSourceHz * std::exp2(50.0 / 1200.0);
+
+    const std::vector<float> source =
+        makeHarmonicTone(kSourceHz, kSampleRate, kSamples, kHarmonics);
+    const int numFrames = kSamples * 100 / kSampleRate + 3;
+    const auto original = constantF0(numFrames, static_cast<float>(kSourceHz));
+    const auto target = constantF0(numFrames, static_cast<float>(targetHz));
+
+    Shifter shifter(kSampleRate);
+    const auto out = shifter.render(source.data(), kSamples, 0, kSamples,
+                                    original.data(), target.data(),
+                                    numFrames, 100.0);
+    const int begin = kSampleRate / 2;
+    const int end = kSampleRate * 3 / 2;
+    double maxDeviationDb = 0.0;
+    for (int h = 1; h <= kHarmonics; ++h) {
+        const double expectedAmplitude = 0.25 / std::pow(static_cast<double>(h), 1.2);
+        const double measured =
+            amplitudeAt(out, begin, end, targetHz * h, kSampleRate);
+        const double deviationDb =
+            std::fabs(20.0 * std::log10(measured / expectedAmplitude));
+        maxDeviationDb = std::max(maxDeviationDb, deviationDb);
+    }
+    std::printf("HARMONICS maxDeviationDb=%.3f\n", maxDeviationDb);
+    expectTrue(maxDeviationDb < 1.5, "harmonics: every partial within 1.5 dB");
+}
+
+void testGlideEnvelopeStable()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 88200;
+    constexpr double kStartHz = 150.0;
+    constexpr double kEndHz = 310.0;
+    constexpr double kDuration = 2.0;
+    constexpr double kFrameRate = 100.0;
+    const double shiftRatio = std::exp2(50.0 / 1200.0);
+
+    const std::vector<float> source =
+        makeGlide(kStartHz, kEndHz, kSampleRate, kSamples);
+    const int numFrames = static_cast<int>(kDuration * kFrameRate) + 3;
+    std::vector<float> original(static_cast<size_t>(numFrames));
+    std::vector<float> target(static_cast<size_t>(numFrames));
+    for (int f = 0; f < numFrames; ++f) {
+        const double t = std::min(static_cast<double>(f) / kFrameRate, kDuration);
+        const double hz = kStartHz + (kEndHz - kStartHz) * t / kDuration;
+        original[static_cast<size_t>(f)] = static_cast<float>(hz);
+        target[static_cast<size_t>(f)] = static_cast<float>(hz * shiftRatio);
+    }
+
+    Shifter shifter(kSampleRate);
+    const auto out = shifter.render(source.data(), kSamples, 0, kSamples,
+                                    original.data(), target.data(),
+                                    numFrames, 100.0);
+    const double ratio = envelopeRatio(out, kSampleRate / 4, kSampleRate * 7 / 4);
+    std::printf("GLIDE envelopeRatio=%.4f\n", ratio);
+    expectTrue(ratio > 0.90, "glide: output envelope stable");
+}
+
+void testVibratoTargetSteadyEnvelope()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 88200;
+    constexpr double kCenterHz = 220.0;
+    constexpr double kDepthCents = 50.0;
+    constexpr double kRateHz = 5.0;
+    constexpr double kDuration = 2.0;
+    constexpr double kFrameRate = 100.0;
+
+    const std::vector<float> source =
+        makeVibrato(kCenterHz, kDepthCents, kRateHz, kSampleRate, kSamples);
+    const int numFrames = static_cast<int>(kDuration * kFrameRate) + 3;
+    std::vector<float> original(static_cast<size_t>(numFrames));
+    for (int f = 0; f < numFrames; ++f) {
+        const double t = static_cast<double>(f) / kFrameRate;
+        original[static_cast<size_t>(f)] = static_cast<float>(
+            kCenterHz
+            * std::exp2(kDepthCents * std::sin(kTwoPi * kRateHz * t) / 1200.0));
+    }
+    const auto target = constantF0(numFrames, static_cast<float>(kCenterHz));
+
+    Shifter shifter(kSampleRate);
+    const auto out = shifter.render(source.data(), kSamples, 0, kSamples,
+                                    original.data(), target.data(),
+                                    numFrames, 100.0);
+    const double ratio = envelopeRatio(out, kSampleRate / 4, kSampleRate * 7 / 4);
+    std::printf("VIBRATO_SOURCE envelopeRatio=%.4f\n", ratio);
+    expectTrue(ratio > 0.90, "vibrato: steady target envelope stable");
+}
+
+void testTargetVibratoEnvelope()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kSamples = 88200;
+    constexpr double kCenterHz = 220.0;
+    constexpr double kDepthCents = 50.0;
+    constexpr double kRateHz = 5.0;
+    constexpr double kDuration = 2.0;
+    constexpr double kFrameRate = 100.0;
+
+    const std::vector<float> source = makeSine(kCenterHz, kSampleRate, kSamples, 0.4);
+    const int numFrames = static_cast<int>(kDuration * kFrameRate) + 3;
+    const auto original = constantF0(numFrames, static_cast<float>(kCenterHz));
+    std::vector<float> target(static_cast<size_t>(numFrames));
+    for (int f = 0; f < numFrames; ++f) {
+        const double t = static_cast<double>(f) / kFrameRate;
+        target[static_cast<size_t>(f)] = static_cast<float>(
+            kCenterHz
+            * std::exp2(kDepthCents * std::sin(kTwoPi * kRateHz * t) / 1200.0));
+    }
+
+    Shifter shifter(kSampleRate);
+    const auto out = shifter.render(source.data(), kSamples, 0, kSamples,
+                                    original.data(), target.data(),
+                                    numFrames, 100.0);
+    const double ratio = envelopeRatio(out, kSampleRate / 4, kSampleRate * 7 / 4);
+    std::printf("VIBRATO_TARGET envelopeRatio=%.4f\n", ratio);
+    expectTrue(ratio > 0.90, "vibrato: modulated target envelope stable");
+}
+
 } // namespace
 
 int main()
@@ -248,6 +515,12 @@ int main()
     testUnvoicedStaysNeutral();
     testLargePreviewShift();
     testEmptyAndShortRanges();
+    testSteadyShiftPreservesLevel();
+    testHalfBinShiftPreservesLevel();
+    testHarmonicSpectrumPreservesShape();
+    testGlideEnvelopeStable();
+    testVibratoTargetSteadyEnvelope();
+    testTargetVibratoEnvelope();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);
