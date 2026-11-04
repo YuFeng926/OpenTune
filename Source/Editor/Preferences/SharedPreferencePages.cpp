@@ -560,14 +560,6 @@ public:
         addAndMakeVisible(wholeNoteMoveSnapSelector_);
         wholeNoteMoveSnapSelector_.setEnabled(state.shared.audioEditingScheme != AudioEditingScheme::Scheme::NotesPrimary);
 
-        initialiseToggleButton(auditionToggle_);
-        auditionToggle_.setButtonText(LOC_RAW("Play the note after a keyboard edit"));
-        auditionToggle_.setToggleState(state.shared.auditionAfterKeyboardEdit, juce::dontSendNotification);
-        auditionToggle_.onClick = [this] {
-            appPreferences_.setAuditionAfterKeyboardEdit(auditionToggle_.getToggleState());
-            notifyChanged();
-        };
-        addAndMakeVisible(auditionToggle_);
         // Note transpose preview toggle
         noteTransposePreviewToggle_.setButtonText(LOC(kNoteTransposePreview));
         noteTransposePreviewToggle_.setToggleState(
@@ -627,7 +619,6 @@ public:
         wholeNoteMoveSnapSelector_.setBounds(row);
 
         bounds.removeFromTop(10);
-        auditionToggle_.setBounds(bounds.removeFromTop(rowHeight));
         row = bounds.removeFromTop(rowHeight);
         noteTransposePreviewToggle_.setBounds(row.removeFromLeft(labelWidth + 300));
 
@@ -669,7 +660,6 @@ private:
     a11y::AccessibleComboBox gridStyleSelector_;
     juce::Label wholeNoteMoveSnapLabel_;
     a11y::AccessibleComboBox wholeNoteMoveSnapSelector_;
-    a11y::AccessibleToggleButton auditionToggle_;
     a11y::AccessibleToggleButton noteTransposePreviewToggle_;
 };
 

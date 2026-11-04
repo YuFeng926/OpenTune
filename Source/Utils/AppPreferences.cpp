@@ -36,7 +36,6 @@ constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMo
 constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
 constexpr const char* kSharedGridStyleKey = "shared.pianoRoll.gridStyle";
 constexpr const char* kSharedWholeNoteMoveSnapModeKey = "shared.pianoRoll.wholeNoteMoveSnapMode";
-constexpr const char* kSharedAuditionAfterKeyboardEditKey = "shared.pianoRoll.auditionAfterKeyboardEdit";
 constexpr const char* kSharedNoteTransposePreviewEnabledKey = "shared.editing.noteTransposePreview";
 constexpr const char* kSharedPitchLaneVisualModeKey = "shared.pianoRoll.pitchLaneVisualMode";
 constexpr const char* kSharedEqSuppressRemoveConfirmationKey = "shared.eq.suppressRemoveConfirmation";
@@ -468,9 +467,6 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
         kSharedEqSuppressRemoveConfirmationKey,
         state.shared.suppressEqRemoveConfirmation);
     state.shared.onboardingShown = properties.getBoolValue(kSharedOnboardingShownKey, state.shared.onboardingShown);
-    state.shared.auditionAfterKeyboardEdit = properties.getBoolValue(
-        kSharedAuditionAfterKeyboardEditKey,
-        state.shared.auditionAfterKeyboardEdit);
     state.shared.demoTourConsumed = properties.getBoolValue(kSharedDemoTourConsumedKey, state.shared.demoTourConsumed);
     state.shared.snap.enabled = properties.getBoolValue(kSharedSnapEnabledKey, false);
     state.shared.snap.mode = static_cast<SnapSettings::Mode>(
@@ -527,7 +523,6 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedTuningHzKey, static_cast<double>(state.shared.tuning.tuningHz));
     properties.setValue(kSharedGridStyleKey, static_cast<int>(state.shared.gridStyle));
     properties.setValue(kSharedWholeNoteMoveSnapModeKey, static_cast<int>(state.shared.wholeNoteMoveSnapMode));
-    properties.setValue(kSharedAuditionAfterKeyboardEditKey, state.shared.auditionAfterKeyboardEdit);
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
     properties.setValue(kSharedVocoderWeightKey,
@@ -921,19 +916,6 @@ WholeNoteMoveSnapMode AppPreferences::getWholeNoteMoveSnapMode() const
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     return state_.shared.wholeNoteMoveSnapMode;
-}
-
-void AppPreferences::setAuditionAfterKeyboardEdit(bool enabled)
-{
-    const std::lock_guard<std::mutex> lock(mutex_);
-    state_.shared.auditionAfterKeyboardEdit = enabled;
-    saveLocked();
-}
-
-bool AppPreferences::getAuditionAfterKeyboardEdit() const
-{
-    const std::lock_guard<std::mutex> lock(mutex_);
-    return state_.shared.auditionAfterKeyboardEdit;
 }
 
 PluginEditorSize AppPreferences::getDefaultPluginEditorSize()

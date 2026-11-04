@@ -78,9 +78,6 @@ struct SharedPreferencesState {
     TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
     TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
     WholeNoteMoveSnapMode wholeNoteMoveSnapMode = WholeNoteMoveSnapMode::Scale;
-    // Accessibility: play the corrected note after a keyboard edit (like Melodyne's
-    // "Monitor When Editing Blobs"). Navigation with Left/Right always plays.
-    bool auditionAfterKeyboardEdit = true;
     bool noteTransposePreviewEnabled = false;  ///< 拖动音符移调时试听预览
 };
 
@@ -153,8 +150,6 @@ public:
 
     void setWholeNoteMoveSnapMode(WholeNoteMoveSnapMode mode);
     WholeNoteMoveSnapMode getWholeNoteMoveSnapMode() const;
-    void setAuditionAfterKeyboardEdit(bool enabled);
-    bool getAuditionAfterKeyboardEdit() const;
 
     PluginEditorSize getDefaultPluginEditorSize();
     void setDefaultPluginEditorSize(PluginEditorSize size);
