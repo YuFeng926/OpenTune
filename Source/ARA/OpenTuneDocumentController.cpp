@@ -3,6 +3,7 @@
 #include "OpenTunePlaybackRenderer.h"
 
 #include "../Audio/NotePitchAudition.h"
+#include "../Utils/NoteAudition.h"
 
 #include "../Inference/F0InferenceService.h"
 #include "../Runtime/ProcessF0Runtime.h"
@@ -1048,6 +1049,42 @@ void OpenTuneDocumentController::stopNotePitchAudition() noexcept
 {
     notePitchAuditionRenderer_.store(nullptr, std::memory_order_release);
     notePitchAudition_->stop();
+}
+
+void OpenTuneDocumentController::setKeyboardAuditionSource(NoteAudition* source) noexcept
+{
+    while (keyboardAuditionLock_.test_and_set(std::memory_order_acquire)) {}
+    keyboardAuditionSource_ = source;
+    keyboardAuditionLock_.clear(std::memory_order_release);
+}
+
+void OpenTuneDocumentController::mixKeyboardAudition(
+    juce::ARAEditorRenderer* renderer,
+    juce::AudioBuffer<float>& buffer,
+    int numSamples,
+    double sampleRate) noexcept
+{
+    if (keyboardAuditionLock_.test_and_set(std::memory_order_acquire))
+        return;
+
+    // One mixer per document: a second one would advance the clip twice per block.
+    if (keyboardAuditionMixer_ == nullptr)
+        keyboardAuditionMixer_ = renderer;
+    if (keyboardAuditionMixer_ == renderer && keyboardAuditionSource_ != nullptr)
+        keyboardAuditionSource_->mixIntoBuffer(buffer, numSamples, sampleRate);
+
+    keyboardAuditionLock_.clear(std::memory_order_release);
+}
+
+void OpenTuneDocumentController::releaseKeyboardAudition(
+    NoteAudition* source, juce::ARAEditorRenderer* renderer) noexcept
+{
+    while (keyboardAuditionLock_.test_and_set(std::memory_order_acquire)) {}
+    if (keyboardAuditionSource_ == source)
+        keyboardAuditionSource_ = nullptr;
+    if (renderer != nullptr && keyboardAuditionMixer_ == renderer)
+        keyboardAuditionMixer_ = nullptr;
+    keyboardAuditionLock_.clear(std::memory_order_release);
 }
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable() const noexcept
