@@ -49,8 +49,10 @@
 #include "Utils/SilentGapDetector.h"
 #include "Utils/TimeCoordinate.h"
 #include "Utils/UndoManager.h"
+#include "Plugin/ReaperHostBridge.h"   // declarations only; the .cpp is built for the plugin
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
+#include "Utils/NoteAudition.h"
 #include "Audio/NotePitchAudition.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlayHeadState.h"
@@ -433,6 +435,7 @@ private:
     juce::File externalEditSessionDir_;
     ContentKey externalEditContentKey_;
     bool externalEditCorruptCurveShown_ = false;
+    int externalEditAppliedCount_ = 0;
 #endif
 
 
@@ -625,6 +628,8 @@ public:
     {
         return externalEditSessionDir_.getFullPathName().isNotEmpty();
     }
+    // Accessibility: grows on every applied external edit, so an open editor can speak it.
+    int getExternalEditAppliedCount() const noexcept { return externalEditAppliedCount_; }
     // 启动（或重新拉起）外部编辑会话；成功时处理器接管会话状态。
     bool externalEditLaunchRequested(ContentKey key, const EditableContentSnapshot& snapshot);
 
@@ -1003,6 +1008,21 @@ public:
 
     UndoManager& getUndoManager() { return undoManager_; }
     PianoKeyAudition& getPianoKeyAudition() { return pianoKeyAudition_; }
+    NoteAudition& getNoteAudition() { return noteAudition_; }
+#if !JucePlugin_Build_Standalone
+    // Accessibility: REAPER's transport state and positions (see ReaperHostBridge).
+    juce::VST3ClientExtensions* getVST3ClientExtensions() override { return &reaperHost_; }
+    std::optional<ReaperHostBridge::Transport> getReaperTransport() const { return reaperHost_.getTransport(); }
+#else
+    std::optional<ReaperHostBridge::Transport> getReaperTransport() const { return std::nullopt; }
+#endif
+    // Rendered (corrected) audio of a content. In ARA it is owned by the DocumentController,
+    // not by this plugin instance, so resolve it through the shared service lookup.
+    std::shared_ptr<const RenderCache> getReadableRenderCache(ContentKey key) const
+    {
+        const auto* renderService = resolveReadableContentRenderService(key);
+        return renderService != nullptr ? renderService->getRenderCache(key) : nullptr;
+    }
 
     /**
      * 音符移调试听（UI 线程调用）：按给定时间窗与目标频率请求一次
@@ -1015,7 +1035,11 @@ public:
 private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
+    NoteAudition noteAudition_;
     NotePitchAudition notePitchAudition_;
+#if !JucePlugin_Build_Standalone
+    ReaperHostBridge reaperHost_;
+#endif
 #if JucePlugin_Enable_ARA
     juce::ARAPlaybackRegion* notePitchAuditionTargetRegion_ = nullptr;
 #endif

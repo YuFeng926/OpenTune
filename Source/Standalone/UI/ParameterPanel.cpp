@@ -440,7 +440,9 @@ ParameterPanel::ParameterPanel()
 
     setupLargeKnob(retuneSpeedSlider_, 0.0, 100.0, PitchControlConfig::kDefaultRetuneSpeedPercent, "%");
     retuneSpeedSlider_.getProperties().set("minimalKnob", true);
-    retuneSpeedSlider_.onValueChange = [this] { onRetuneSpeedChanged(); };
+    // Accessibility: key steps (normal, Alt, Page). onCommit waits until the keys stop.
+    retuneSpeedSlider_.setKeySteps(1.0, 0.1, 10.0);
+    retuneSpeedSlider_.onCommit = [this] { onRetuneSpeedChanged(); };
     contentComponent_.addAndMakeVisible(retuneSpeedSlider_);
     retuneSpeedSlider_.setTooltip(LOC(kTooltipRetuneSpeed));
 
@@ -450,7 +452,8 @@ ParameterPanel::ParameterPanel()
 
     setupLargeKnob(vibratoDepthSlider_, 0.0, 100.0, PitchControlConfig::kDefaultVibratoDepth, "%");
     vibratoDepthSlider_.getProperties().set("minimalKnob", true);
-    vibratoDepthSlider_.onValueChange = [this] { onVibratoDepthChanged(); };
+    vibratoDepthSlider_.setKeySteps(1.0, 0.1, 10.0);
+    vibratoDepthSlider_.onCommit = [this] { onVibratoDepthChanged(); };
     contentComponent_.addAndMakeVisible(vibratoDepthSlider_);
     vibratoDepthSlider_.setTooltip(LOC(kTooltipVibratoDepth));
 
@@ -460,7 +463,8 @@ ParameterPanel::ParameterPanel()
 
     setupLargeKnob(vibratoRateSlider_, 3.0, 12.0, PitchControlConfig::kDefaultVibratoRateHz, " Hz");
     vibratoRateSlider_.getProperties().set("minimalKnob", true);
-    vibratoRateSlider_.onValueChange = [this] { onVibratoRateChanged(); };
+    vibratoRateSlider_.setKeySteps(0.1, 0.01, 1.0);
+    vibratoRateSlider_.onCommit = [this] { onVibratoRateChanged(); };
     contentComponent_.addAndMakeVisible(vibratoRateSlider_);
     vibratoRateSlider_.setTooltip(LOC(kTooltipVibratoRate));
 
@@ -477,7 +481,8 @@ ParameterPanel::ParameterPanel()
     // NoteSplit 触发范围重分割（拓扑重建+undo 事务），代价远高于其他参数旋钮：
     // 拖动期间不逐格提交，释放时才通知一次（滚轮/键盘无拖拽语义，逐次提交，频率低可接受）。
     noteSplitSlider_.setChangeNotificationOnlyOnRelease(true);
-    noteSplitSlider_.onValueChange = [this] { onNoteSplitChanged(); };
+    noteSplitSlider_.setKeySteps(5.0, 1.0, 20.0);
+    noteSplitSlider_.onCommit = [this] { onNoteSplitChanged(); };
     contentComponent_.addAndMakeVisible(noteSplitSlider_);
     noteSplitSlider_.setTooltip(LOC(kTooltipNoteSplit));
 
@@ -526,7 +531,7 @@ ParameterPanel::ParameterPanel()
 
     // Pitch Shift action button
     pitchShiftButton_ = std::make_unique<juce::TextButton>(LOC(kPitchShift) + "...");
-    pitchShiftButton_->setTooltip(LOC(kPitchShift));
+    // No tooltip: it repeated the button text, and NVDA read "Pitch Shift..., Pitch Shift".
     pitchShiftButton_->getProperties().set(UIColors::auroraChromeIntensityProperty,
                                            kAuroraSidebarChromeIntensity);
     pitchShiftButton_->onClick = [this] {
@@ -603,10 +608,54 @@ ParameterPanel::ParameterPanel()
     // 滚轮调参：ComboBox 在 JUCE 中默认关闭，此处显式开启；鼠标在控件上时事件被其消费，Viewport 不滚
     pitchGridSelector_.setScrollWheelEnabled(true);
     contentComponent_.addChildComponent(pitchGridSelector_);
+
+    // Accessibility: the viewport itself took Tab focus and NVDA read it
+    // as "unknown". Controls inside it remain reachable with Tab.
+    viewport_.setWantsKeyboardFocus(false);
+    // Scroll bars are mouse-only and NVDA read them as "scroll bar 0".
+    viewport_.getVerticalScrollBar().setAccessible(false);
+    viewport_.getHorizontalScrollBar().setAccessible(false);
+    // Knob captions and section headers: JUCE exposes a label's text both as name and as
+    // value, so NVDA read them twice. The knobs now carry the names themselves.
+    for (auto* caption : { &pitchCorrectionHeader_, &retuneSpeedLabel_, &vibratoDepthLabel_,
+                           &vibratoRateLabel_, &noteSplitLabel_, &toolsHeader_ })
+        caption->setAccessible(false);
+    applyAccessibilityTitles();
+    juce::Desktop::getInstance().addFocusChangeListener(this);
+}
+
+// Screen reader names: knob captions are separate Labels, so the value boxes
+// and tool buttons (internal names like PitchModulation) were read without a proper name.
+void ParameterPanel::applyAccessibilityTitles()
+{
+    // The value editor picks up the knob name too (see LargeKnobLookAndFeel::createSliderTextBox).
+    retuneSpeedSlider_.setTitle(LOC(kRetuneSpeed));
+    vibratoDepthSlider_.setTitle(LOC(kVibratoDepth));
+    vibratoRateSlider_.setTitle(LOC(kVibratoRate));
+    noteSplitSlider_.setTitle(LOC(kNoteSplit));
+
+    const auto titleButton = [](const std::unique_ptr<ToolIconButton>& button, const juce::String& title) {
+        if (button != nullptr)
+            button->setTitle(title);
+    };
+    titleButton(selectToolButton_, LOC(kToolODSelect));
+    titleButton(drawNoteToolButton_, LOC(kTooltipDrawNote));
+    titleButton(lineAnchorToolButton_, LOC(kTooltipLineAnchor));
+    titleButton(handDrawToolButton_, LOC(kTooltipHandDraw));
+    titleButton(eraserToolButton_, LOC(kEraser));
+    titleButton(timeToolButton_, LOC_RAW("Time tool"));
+    titleButton(pitchToolButton_, LOC(kToolODPitch));
+    titleButton(pitchModulationToolButton_, LOC(kToolODPitchModulation));
+    titleButton(pitchDriftToolButton_, LOC(kToolODPitchDrift));
+    titleButton(volumeEnvelopeToolButton_, LOC(kToolODVolumeEnvelope));
+    titleButton(scissorsToolButton_, LOC(kToolODScissors));
+
+    pitchGridSelector_.setTitle(LOC_RAW("Pitch snap"));
 }
 
 ParameterPanel::~ParameterPanel()
 {
+    juce::Desktop::getInstance().removeFocusChangeListener(this);
     retuneSpeedSlider_.setLookAndFeel(nullptr);
     vibratoDepthSlider_.setLookAndFeel(nullptr);
     vibratoRateSlider_.setLookAndFeel(nullptr);
@@ -938,6 +987,8 @@ void ParameterPanel::applyTheme()
 
 void ParameterPanel::refreshLocalizedText()
 {
+    applyAccessibilityTitles();
+
     // 更新 Pitch Correction 部分
     pitchCorrectionHeader_.setText(LOC(kPitchCorrection), juce::dontSendNotification);
     retuneSpeedLabel_.setText(LOC(kRetuneSpeed), juce::dontSendNotification);
@@ -948,7 +999,6 @@ void ParameterPanel::refreshLocalizedText()
     // 更新 Tools 部分
     toolsHeader_.setText(LOC(kTools), juce::dontSendNotification);
     if (pitchShiftButton_) {
-        pitchShiftButton_->setTooltip(LOC(kPitchShift));
         setPitchShiftIndicator(pitchShiftSemitone_, pitchShiftCents_);
     }
     pitchGridSelector_.changeItemText(1, LOC(kNoSnap));
@@ -1188,6 +1238,18 @@ void ParameterPanel::revealControl(juce::Component& control)
         targetY = bounds.getBottom() - visible.getHeight();
     if (targetY != currentY)
         viewport_.setViewPosition(viewport_.getViewPositionX(), targetY);
+}
+
+void ParameterPanel::globalFocusChanged(juce::Component* focusedComponent)
+{
+    // revealControl works with direct children of the content, so climb up from
+    // inner parts such as a knob value editor.
+    for (auto* c = focusedComponent; c != nullptr; c = c->getParentComponent()) {
+        if (c->getParentComponent() == &contentComponent_) {
+            revealControl(*c);
+            return;
+        }
+    }
 }
 
 int ParameterPanel::getContentScrollY() const { return viewport_.getViewPositionY(); }

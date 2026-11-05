@@ -45,7 +45,10 @@ constexpr const char* kPluginEditorSizeKey = "defaultSize";
 constexpr const char* kShortcutSchemaVersionKey = "shared.shortcuts.schemaVersion";
 constexpr int kShortcutMouseSchemaVersion = 1;
 constexpr int kShortcutMacModifierSchemaVersion = 2;
-constexpr int kShortcutSchemaVersion = 3;
+constexpr int kShortcutMacSpacePlaySchemaVersion = 3;
+// 4: Pitch Modulation / Pitch Drift got default keys F3 / F5 (Windows).
+constexpr int kShortcutModDriftKeysSchemaVersion = 4;
+constexpr int kShortcutSchemaVersion = 4;
 
 juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storageOptions)
 {
@@ -268,8 +271,11 @@ KeyShortcutConfig::KeyShortcutSettings decodeShortcutSettings(const juce::Proper
     const bool migrateMouseDefaults = storedSchemaVersion < kShortcutMouseSchemaVersion;
 #if JUCE_MAC || JUCE_IOS
     const bool migrateMacDefaultShortcuts = storedSchemaVersion < kShortcutMacModifierSchemaVersion;
-    const bool restoreMacSpacePlay = storedSchemaVersion < kShortcutSchemaVersion;
+    const bool restoreMacSpacePlay = storedSchemaVersion < kShortcutMacSpacePlaySchemaVersion;
 #endif
+    // Modulation and drift used to have no keys, so settings stored an empty string.
+    // Do not treat it as a user choice; adopt the new F3 / F5.
+    const bool adoptNewToolDefaults = storedSchemaVersion < kShortcutModDriftKeysSchemaVersion;
 
     for (const auto& info : KeyShortcutConfig::kShortcutInfos) {
         if (!properties.containsKey(info.storageKey))
@@ -277,7 +283,11 @@ KeyShortcutConfig::KeyShortcutSettings decodeShortcutSettings(const juce::Proper
 
         const auto stored = properties.getValue(info.storageKey, {});
         if (stored.isEmpty()) {
-            settings.bindings[static_cast<size_t>(info.id)].bindings.clear();
+            const bool keepNewDefault = adoptNewToolDefaults
+                && (info.id == KeyShortcutConfig::ShortcutId::ToolODPitchModulation
+                    || info.id == KeyShortcutConfig::ShortcutId::ToolODPitchDrift);
+            if (!keepNewDefault)
+                settings.bindings[static_cast<size_t>(info.id)].bindings.clear();
             continue;
         }
 

@@ -793,6 +793,16 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Utils/NoteGeneratorTypes.h
         Source/Utils/PianoKeyAudition.cpp
         Source/Utils/PianoKeyAudition.h
+        Source/Utils/NoteAudition.cpp
+        Source/Utils/NoteAudition.h
+        Source/Utils/NoteSpeech.h
+        Source/Utils/ScreenReaderAnnouncer.cpp
+        Source/Utils/ScreenReaderAnnouncer.h
+        Source/Utils/AccessibleComboBox.h
+        Source/Utils/AccessibleKnob.h
+        Source/Utils/AccessibleToggleButton.h
+        Source/Utils/ContextMenuKey.cpp
+        Source/Utils/ContextMenuKey.h
         Source/Utils/AppLogger.cpp
         Source/Utils/AppLogger.h
         Source/Utils/ExternalEditSession.cpp
@@ -940,6 +950,8 @@ set(OPENTUNE_STANDALONE_SOURCES
 set(OPENTUNE_NON_STANDALONE_SOURCES
         Source/Plugin/Vst3ProcessorStateCodec.cpp
         Source/Plugin/Vst3ProcessorStateCodec.h
+        Source/Plugin/ReaperHostBridge.cpp
+        Source/Plugin/ReaperHostBridge.h
         Source/Content/CaptureSegmentContent.h
         Source/Content/CaptureSegmentContent.cpp
 )
@@ -1936,6 +1948,17 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTunePitchLaneVisualPolicyTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME PitchLaneVisualPolicyTests COMMAND OpenTunePitchLaneVisualPolicyTests)
+
+    # Spoken note pitch text for screen readers - standard library only
+    add_executable(OpenTuneNoteSpeechTests
+        Tests/NoteSpeechTests.cpp
+    )
+    target_include_directories(OpenTuneNoteSpeechTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(OpenTuneNoteSpeechTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME NoteSpeechTests COMMAND OpenTuneNoteSpeechTests)
 
     add_executable(OpenTuneHostTransportTests
         Tests/HostTransportTests.cpp

@@ -27,6 +27,9 @@ public:
     // 同步按钮状态（避免 ToggleState 与真实可见性不一致）
     void setSidePanelsVisible(bool trackPanelVisible, bool parameterPanelVisible);
     void setTrackPanelToggleVisible(bool visible);
+    // Accessibility: false takes both toggles out of the Tab order and the screen reader tree
+    // (for an editor where they have no effect); they stay visible.
+    void setSidePanelTogglesAccessible(bool accessible);
     juce::Component& getParameterPanelButton() { return parameterPanelToggleButton_; }
 
     void refreshLocalizedText();  // 刷新本地化文本
