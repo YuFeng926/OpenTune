@@ -1827,6 +1827,8 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
 
         captureSession->processBlock(buffer, hostAbsoluteSample, getSampleRate(), isPlaying);
+        if (!isNonRealtime() && notePitchAudition_.isActive())
+            buffer.clear();
         mixAuditions(buffer, numSamples, static_cast<double>(getSampleRate()));
         outputSpectrumAnalyzer_.push(buffer);
         return;
@@ -2091,6 +2093,10 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         bool trackHasOutput = false;
 
         for (const auto& placement : track.placements) {
+            if (!isNonRealtime()
+                && notePitchAudition_.isContentActive(placement.contentKey))
+                continue;
+
             PlaybackReadSource readSource;
             if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, readSource)
                 || !readSource.hasAudio()) {

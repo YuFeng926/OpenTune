@@ -23,6 +23,10 @@ constexpr double kCoarseEpsilon = 0.4;
 constexpr double kPeriodicityEpsilon = 0.1;
 constexpr double kMinimumEnergy = 1.0e-6;
 constexpr double kReferenceSampleRate = 44100.0;
+// EH tie margin relative to candidate energy: hint ordering applies only
+// when the waveform evidence of two qualified candidates is indistinguishable
+// at this scale.
+constexpr double kPeriodicityTieMargin = 0.005;
 
 struct EHValue {
     double energy = 0.0;
@@ -34,8 +38,10 @@ struct EHValue {
     }
 };
 
-struct CoarseAcquisition {
-    int selectedPeriod = 0;
+struct PeriodCandidate {
+    int lag = 0;
+    double score = std::numeric_limits<double>::infinity();
+    double energy = 0.0;
 };
 
 std::optional<EHValue> computeEHAt(
@@ -59,6 +65,75 @@ std::optional<EHValue> computeEHAt(
             * static_cast<double>(samples[static_cast<size_t>(i - lag)]);
     }
     return result;
+}
+
+std::optional<PeriodCandidate> confirmFullRateCandidate(
+    const std::vector<float>& samples, int endIndex, int centerLag,
+    int halfWindow)
+{
+    const int firstLag = std::max(
+        centerLag - halfWindow, AutoTunePeriodDetector::kMinFullLag);
+    const int lastLag = std::min(
+        centerLag + halfWindow, AutoTunePeriodDetector::kMaxFullLag);
+
+    std::optional<PeriodCandidate> best;
+    for (int lag = firstLag; lag <= lastLag; ++lag)
+    {
+        const auto eh = computeEHAt(samples, endIndex, lag);
+        if (!eh.has_value()
+            || eh->energy < kMinimumEnergy
+            || eh->value() > kPeriodicityEpsilon * eh->energy)
+            continue;
+
+        if (!best.has_value()
+            || eh->value() < best->score
+            || (eh->value() == best->score && lag < best->lag))
+        {
+            best = PeriodCandidate{lag, eh->value(), eh->energy};
+        }
+    }
+    return best;
+}
+
+std::optional<PeriodCandidate> chooseCandidate(
+    std::optional<PeriodCandidate> first,
+    std::optional<PeriodCandidate> second,
+    double hintPeriod)
+{
+    if (!first.has_value())
+        return second;
+    if (!second.has_value())
+        return first;
+
+    const double tieMargin = kPeriodicityTieMargin
+        * std::max(first->energy, second->energy);
+    if (std::fabs(first->score - second->score) > tieMargin)
+    {
+        return first->score < second->score ? first : second;
+    }
+
+    if (hintPeriod > 0.0)
+    {
+        const double firstDistance = std::fabs(
+            static_cast<double>(first->lag) - hintPeriod);
+        const double secondDistance = std::fabs(
+            static_cast<double>(second->lag) - hintPeriod);
+        if (firstDistance != secondDistance)
+            return firstDistance < secondDistance ? first : second;
+    }
+
+    return first->lag <= second->lag ? first : second;
+}
+
+bool hasOctaveDivergence(double period, double hintPeriod)
+{
+    constexpr double kUpperLow = 1.8;
+    constexpr double kUpperHigh = 2.2;
+    constexpr double kLowerLow = 0.45;
+    constexpr double kLowerHigh = 0.55;
+    const double ratio = period / hintPeriod;
+    return (ratio > kUpperLow && ratio < kUpperHigh)
+        || (ratio > kLowerLow && ratio < kLowerHigh);
 }
 
 const std::array<double, AutoTunePeriodDetector::kCoarseFilterTaps>&
@@ -107,11 +182,11 @@ double lowPassAt(const std::vector<float>& samples, int index)
     return value;
 }
 
-std::optional<CoarseAcquisition> coarsePeriod(
+std::optional<PeriodCandidate> coarsePeriod(
     const std::vector<float>& samples,
     int endIndex,
     int windowSamples = AutoTunePeriodDetector::kCoarseWindowSamples,
-    double fcpeHintPeriod = 0.0)
+    double hintPeriod = 0.0)
 {
     const int kWindow = windowSamples;
     constexpr int kFilterHistory = AutoTunePeriodDetector::kCoarseFilterTaps - 1;
@@ -178,7 +253,12 @@ std::optional<CoarseAcquisition> coarsePeriod(
         return std::nullopt;
 
 
-    int selectedPeriod = firstLag * AutoTunePeriodDetector::kDecimFactor;
+    constexpr int kHalfWindow = AutoTunePeriodDetector::kDecimFactor / 2;
+    const auto firstCandidate = confirmFullRateCandidate(
+        samples, endIndex,
+        firstLag * AutoTunePeriodDetector::kDecimFactor, kHalfWindow);
+
+    std::optional<PeriodCandidate> secondCandidate;
     if (firstLag < AutoTunePeriodDetector::kMaxDecimLag / 2)
     {
         int secondLag = 0;
@@ -193,146 +273,12 @@ std::optional<CoarseAcquisition> coarsePeriod(
         }
         if (secondLag == 0)
             return std::nullopt;
-
-        // Full-rate confirmation: search ±(kDecimFactor/2) around each
-        // coarse candidate's full-rate center (8*lag), intersected with
-        // [kMinFullLag, kMaxFullLag]. Both candidates are confirmed; the
-        // best is chosen by score with an energy-scaled tie margin.
-        constexpr int kHalfWindow =
-            AutoTunePeriodDetector::kDecimFactor / 2;
-
-        struct FullRateCandidate {
-            int lag = 0;
-            double score = std::numeric_limits<double>::infinity();
-            double energy = 0.0;
-        };
-
-        const auto confirmCandidate = [&](int coarseLag)
-            -> std::optional<FullRateCandidate>
-        {
-            const int center =
-                coarseLag * AutoTunePeriodDetector::kDecimFactor;
-            FullRateCandidate best{};
-            for (int lag = center - kHalfWindow;
-                 lag <= center + kHalfWindow; ++lag)
-            {
-                if (lag < AutoTunePeriodDetector::kMinFullLag
-                    || lag > AutoTunePeriodDetector::kMaxFullLag)
-                    continue;
-                const auto eh = computeEHAt(samples, endIndex, lag);
-                if (!eh.has_value())
-                    continue;
-                if (eh->energy < kMinimumEnergy)
-                    continue;
-                const double v = eh->value();
-                if (v > kPeriodicityEpsilon * eh->energy)
-                    continue;
-                if (v < best.score
-                    || (v == best.score && lag < best.lag))
-                {
-                    best = FullRateCandidate{lag, v, eh->energy};
-                }
-            }
-            return best.lag > 0
-                ? std::optional<FullRateCandidate>(best)
-                : std::nullopt;
-        };
-
-        constexpr double kTieMarginScale = 0.005;
-        const auto firstCand = confirmCandidate(firstLag);
-        const auto secondCand = confirmCandidate(secondLag);
-        if (firstCand.has_value() && secondCand.has_value())
-        {
-            const double tieMargin =
-                kTieMarginScale
-                * std::max(firstCand->energy, secondCand->energy);
-
-            // ── Sub-harmonic consistency check ──────────────────────────
-            // When secondLag ≈ 2 × firstLag AND the EH scores are within
-            // tie margin (a "tie"), the raw scores alone cannot reliably
-            // distinguish P+non-stationarity from genuine 2P.  We verify
-            // that P is also a good prediction lag inside the 2P window.
-            //
-            // If P passes the periodicity threshold in the 2P context,
-            // the signal is P-periodic → select P.  Otherwise normal
-            // tie-breaking applies.
-            //
-            // Only triggered on "ties" to avoid disrupting weak-fundamental
-            // cases where secondCand (the longer period) genuinely wins.
-            constexpr double kHarmonicRatioTolerance = 0.15;
-            const double ratio = static_cast<double>(secondCand->lag)
-                / static_cast<double>(firstCand->lag);
-            const bool isHarmonicRelation = std::fabs(ratio - 2.0)
-                < kHarmonicRatioTolerance * 2.0;
-
-            const bool scoresTied =
-                std::fabs(firstCand->score - secondCand->score) <= tieMargin;
-
-            if (isHarmonicRelation && scoresTied)
-            {
-                const auto ehAtHalf = computeEHAt(
-                    samples, endIndex, firstCand->lag);
-                if (ehAtHalf.has_value()
-                    && ehAtHalf->energy >= kMinimumEnergy
-                    && ehAtHalf->value()
-                        <= kPeriodicityEpsilon * ehAtHalf->energy)
-                {
-                    selectedPeriod = firstCand->lag;
-                }
-                else
-                {
-                    if (secondCand->score < firstCand->score)
-                        selectedPeriod = secondCand->lag;
-                    else
-                        selectedPeriod = firstCand->lag;
-                }
-            }
-            else
-            {
-                if (secondCand->score + tieMargin < firstCand->score)
-                    selectedPeriod = secondCand->lag;
-                else
-                    selectedPeriod = firstCand->lag;
-            }
-        }
-        else if (firstCand.has_value())
-            selectedPeriod = firstCand->lag;
-        else if (secondCand.has_value())
-            selectedPeriod = secondCand->lag;
-        else
-            return std::nullopt;
-
-        // ── FCPE octave prior ─────────────────────────────────────────
-        // When an AI F0 hint is available, verify that the selected period
-        // is within ±1 octave of the reference.  If not, pick the confirmed
-        // candidate closest to the reference.  This prevents the EH-first
-        // heuristic from locking onto a subharmonic when the AI model
-        // confidently reports the correct octave.
-        if (fcpeHintPeriod > 0.0 && selectedPeriod > 0)
-        {
-            constexpr double kOctaveRange = 0.5;
-            const double ref = fcpeHintPeriod;
-            const double selD = static_cast<double>(selectedPeriod);
-            if (std::fabs(selD - ref) / ref > kOctaveRange)
-            {
-                auto pickClosest = [&](int lag) -> bool {
-                    if (lag <= 0) return false;
-                    const double d = static_cast<double>(lag);
-                    return std::fabs(d - ref) / ref <= kOctaveRange;
-                };
-                if (pickClosest(firstCand.has_value() ? firstCand->lag : 0))
-                    selectedPeriod = firstCand->lag;
-                else if (pickClosest(secondCand.has_value() ? secondCand->lag : 0))
-                    selectedPeriod = secondCand->lag;
-                // Both outside ±1 oct → keep EH-selected period (graceful degradation)
-            }
-        }
+        secondCandidate = confirmFullRateCandidate(
+            samples, endIndex,
+            secondLag * AutoTunePeriodDetector::kDecimFactor, kHalfWindow);
     }
 
-    if (selectedPeriod < AutoTunePeriodDetector::kMinFullLag
-        || selectedPeriod > AutoTunePeriodDetector::kMaxFullLag)
-        return std::nullopt;
-    return CoarseAcquisition{selectedPeriod};
+    return chooseCandidate(firstCandidate, secondCandidate, hintPeriod);
 }
 
 } // namespace
@@ -344,7 +290,8 @@ AutoTunePeriodDetector::analyze(
     double sampleRate,
     const float* fcpeF0Hint,
     int numF0HintFrames,
-    double f0HintFrameRate)
+    double f0HintFrameRate,
+    double firstSampleFramePhase)
 {
     // The lag grid is defined for a preferred 44.1 kHz sample rate.
     // These constants are sample-domain values and are intentionally not
@@ -364,20 +311,25 @@ AutoTunePeriodDetector::analyze(
         std::copy(lookbehind, lookbehind + prefix, samples.begin());
     std::copy(input, input + numInputSamples, samples.begin() + prefix);
 
-    // ── FCPE hint interpolation helper ────────────────────────────────
+    // ── FCPE hint lookup helper ───────────────────────────────────────
     // Maps a sample-domain endIndex (in the concatenated buffer) to the
-    // reference period derived from the FCPE F0 array.  Returns 0 when
-    // no hint is available or the interpolated F0 is unvoiced (≤ 0).
+    // reference period derived from the FCPE F0 array.  firstSampleFramePhase
+    // is the float frame position of input[0] in the supplied array, so the
+    // lookup indexes the true global frame grid.  A position outside
+    // [0, numF0HintFrames) has no hint.  Returns 0 when no hint is available
+    // or the addressed F0 is unvoiced (≤ 0).
     const auto hintPeriodAt = [&](int endIndex) -> double {
         if (fcpeF0Hint == nullptr || numF0HintFrames <= 0
             || f0HintFrameRate <= 0.0)
             return 0.0;
         const double samplePos =
             static_cast<double>(endIndex - prefix);
-        const double framePos = samplePos / kReferenceSampleRate * f0HintFrameRate;
-        const int frame = std::clamp(
-            static_cast<int>(std::floor(framePos)),
-            0, numF0HintFrames - 1);
+        const double framePos = firstSampleFramePhase
+            + samplePos / kReferenceSampleRate * f0HintFrameRate;
+        if (framePos < 0.0
+            || framePos >= static_cast<double>(numF0HintFrames))
+            return 0.0;
+        const int frame = static_cast<int>(framePos);
         const float f0 = fcpeF0Hint[frame];
         return f0 > 0.0f ? kReferenceSampleRate / static_cast<double>(f0) : 0.0;
     };
@@ -386,15 +338,9 @@ AutoTunePeriodDetector::analyze(
     int ehOffset = kMinFullLag;
     bool trackingInitialized = false;
     DetectedPeriod held;
-    // Failure-recovery state: after any tracking failure we record the
-    // sample index where the failure occurred and the last reliably held
-    // period.  On subsequent samples the detector first tries to
-    // re-establish tracking using that period (only when the entire EH
-    // window is guaranteed to sit in post-failure data), and only falls
-    // back to coarse acquisition once kRequiredLookbehindSamples of
-    // post-failure history have accumulated.
+    // Failure-recovery boundary: tracking re-acquisition may not use samples
+    // before the sample where tracking failed.
     int failureSampleIndex = -1;
-    double lastReliablePeriod = 0.0;
 
     const auto initializeTracking = [&](int endIndex, int base) {
         const int centerLag = base + kTrackingCenterIndex;
@@ -433,72 +379,84 @@ AutoTunePeriodDetector::analyze(
         return true;
     };
 
-    const auto acquire = [&](int endIndex, bool useLargeWindow) {
-        // The public history contract covers the larger coarse window.  Do
-        // not silently fall back to the shorter window when that context is
-        // incomplete; otherwise kRequiredLookbehindSamples is misleading and
-        // chunk-start detection becomes dependent on the fallback path.
+    // Unified coarse -> full-rate acquisition for initial lock and every
+    // failure recovery.  maxWindowStart excludes pre-failure waveform samples
+    // during recovery.  The short and large coarse windows are cross-checked
+    // when the large window is fully inside the allowed region: identical
+    // lags keep the short seed, divergent lags select the seed closer to the
+    // FCPE hint, and without a hint the large window wins because it
+    // resolves low frequencies better.  A single available seed is used
+    // directly; no seed fails acquisition.
+    const auto acquire = [&](int endIndex, int maxWindowStart) {
+        // The public history contract covers the larger coarse window.
         if (endIndex + 1 < kRequiredLookbehindSamples)
+            return false;
+
+        const int largeWindowStart = endIndex
+            - kCoarseWindowSamplesLarge - (kCoarseFilterTaps - 1) + 1;
+        const int shortWindowStart = endIndex
+            - kCoarseWindowSamples - (kCoarseFilterTaps - 1) + 1;
+        const bool useLargeWindow = largeWindowStart >= maxWindowStart;
+        if (!useLargeWindow && shortWindowStart < maxWindowStart)
             return false;
 
         const double hintPeriod = hintPeriodAt(endIndex);
 
-        // ── Multi-window cross-validation ─────────────────────────────
-        // Run coarse acquisition at two window sizes.  When they agree
-        // the result is robust; when they disagree, the FCPE hint
-        // (highest-priority octave prior) picks the correct one.
-        const auto seedA = coarsePeriod(
+        // Seat the nominal center (zero-based kTrackingCenterIndex) on N/2;
+        // the surrounding neighborhood may overhang [16, 880] per the
+        // EH_OFFSET semantics. initializeTracking validates that center
+        // against the full-rate lag bounds.
+        const auto shortSeed = coarsePeriod(
             samples, endIndex, kCoarseWindowSamples, hintPeriod);
-        const auto seedB = useLargeWindow
-            ? coarsePeriod(
-                samples, endIndex, kCoarseWindowSamplesLarge, hintPeriod)
-            : std::optional<CoarseAcquisition>{};
+        std::optional<PeriodCandidate> largeSeed;
+        if (useLargeWindow)
+        {
+            largeSeed = coarsePeriod(
+                samples, endIndex, kCoarseWindowSamplesLarge, hintPeriod);
+        }
 
-        const auto selectSeed = [&]() -> std::optional<CoarseAcquisition> {
-            if (seedA.has_value() && seedB.has_value())
+        std::optional<PeriodCandidate> seed = shortSeed;
+        if (shortSeed.has_value() && largeSeed.has_value())
+        {
+            if (shortSeed->lag == largeSeed->lag)
             {
-                if (seedA->selectedPeriod == seedB->selectedPeriod)
-                    return seedA;
-                // Disagreement: use FCPE hint to pick closer candidate.
-                if (hintPeriod > 0.0)
-                {
-                    const double diffA = std::fabs(
-                        static_cast<double>(seedA->selectedPeriod) - hintPeriod);
-                    const double diffB = std::fabs(
-                        static_cast<double>(seedB->selectedPeriod) - hintPeriod);
-                    return diffA <= diffB ? seedA : seedB;
-                }
-                // No hint: prefer larger window (better low-frequency resolution).
-                return seedB;
+                seed = shortSeed;
             }
-            return seedA.has_value() ? seedA : seedB;
-        };
+            else if (hintPeriod > 0.0)
+            {
+                const double shortDistance = std::fabs(
+                    static_cast<double>(shortSeed->lag) - hintPeriod);
+                const double largeDistance = std::fabs(
+                    static_cast<double>(largeSeed->lag) - hintPeriod);
+                seed = shortDistance <= largeDistance ? shortSeed : largeSeed;
+            }
+            else
+            {
+                seed = largeSeed;
+            }
+        }
+        else if (largeSeed.has_value())
+        {
+            seed = largeSeed;
+        }
 
-        const auto seed = selectSeed();
         if (!seed.has_value())
             return false;
 
-        // Seat the nominal center (zero-based kTrackingCenterIndex) on N/2;
-        // the surrounding neighborhood may overhang [16, 880] per the
-        // EH_OFFSET semantics. initializeTracking validates that
-        // center against the full-rate lag bounds.
-        const int base = seed->selectedPeriod - kTrackingCenterIndex;
-        return initializeTracking(endIndex, base);
+        return initializeTracking(
+            endIndex, seed->lag - kTrackingCenterIndex);
     };
 
-    // Unified failure transition: preserve the last reliable period for
-    // recovery, clear held, and record the failure position.
+    // Unified failure transition: clear held and record the failure position.
     const auto failTracking = [&](int sampleEndIndex,
                                   bool preserveFailureBoundary = false) {
-        if (!preserveFailureBoundary && held.valid)
-            lastReliablePeriod = held.periodSamples;
         held = {};
         trackingInitialized = false;
         if (!preserveFailureBoundary)
             failureSampleIndex = sampleEndIndex;
     };
 
-    if (prefix > 0 && acquire(prefix - 1, true))
+    if (prefix > 0 && acquire(prefix - 1, 0))
         trackingInitialized = true;
 
     for (int i = 0; i < numInputSamples; ++i)
@@ -511,70 +469,19 @@ AutoTunePeriodDetector::analyze(
 
         bool initializedNow = false;
         bool initializedFromRecovery = false;
-        if (!trackingInitialized)
+        if (!trackingInitialized && i % kTrackingUpdateInterval == 0)
         {
-            if (failureSampleIndex < 0)
+            // Initial lock and failure recovery share the same coarse ->
+            // full-rate acquisition on the existing 5-sample cadence.  During
+            // recovery no waveform sample before the failure sample is used
+            // as evidence.
+            const int maxWindowStart = failureSampleIndex >= 0
+                ? failureSampleIndex : 0;
+            if (acquire(endIndex, maxWindowStart))
             {
-                // No prior failure: normal initial/post-prefix acquisition.
-                if (acquire(endIndex, true))
-                {
-                    trackingInitialized = true;
-                    initializedNow = true;
-                }
-            }
-            else
-            {
-                // Recovery after tracking failure: search only around the
-                // last reliable period using current post-failure samples.
-                // This avoids a global coarse relock onto stale pre-failure V
-                // while still allowing a small period change at V recovery.
-                int recoveryLag = 0;
-                double recoveryScore = std::numeric_limits<double>::infinity();
-                const int recoveryCenter = static_cast<int>(
-                    std::round(lastReliablePeriod));
-                for (int lag = recoveryCenter - kTrackingLagCount;
-                     lag <= recoveryCenter + kTrackingLagCount; ++lag)
-                {
-                    if (lag < kMinFullLag || lag > kMaxFullLag)
-                        continue;
-                    const int base = lag - kTrackingCenterIndex;
-                    const int maxLag = base + kTrackingLagCount - 1;
-                    if (lastReliablePeriod <= 0.0
-                        || endIndex - 2 * maxLag + 1 <= failureSampleIndex)
-                        continue;
-                    const auto eh = computeEHAt(samples, endIndex, lag);
-                    if (!eh.has_value()
-                        || !std::isfinite(eh->value())
-                        || eh->energy < kMinimumEnergy
-                        || eh->value() > kPeriodicityEpsilon * eh->energy)
-                        continue;
-                    if (eh->value() < recoveryScore)
-                    {
-                        recoveryScore = eh->value();
-                        recoveryLag = lag;
-                    }
-                }
-
-                if (recoveryLag > 0
-                    && initializeTracking(
-                        endIndex, recoveryLag - kTrackingCenterIndex))
-                {
-                    trackingInitialized = true;
-                    initializedNow = true;
-                    initializedFromRecovery = true;
-                }
-                else if (endIndex - failureSampleIndex + 1
-                         >= kCoarseWindowSamples + kCoarseFilterTaps - 1)
-                {
-                    // Coarse fallback uses the short window only after its
-                    // complete window and FIR history are post-failure.
-                    if (acquire(endIndex, false))
-                    {
-                        trackingInitialized = true;
-                        initializedNow = true;
-                        initializedFromRecovery = true;
-                    }
-                }
+                trackingInitialized = true;
+                initializedNow = true;
+                initializedFromRecovery = failureSampleIndex >= 0;
             }
         }
 
@@ -702,55 +609,53 @@ AutoTunePeriodDetector::analyze(
             }
             else
             {
-                held.periodSamples = static_cast<float>(refined);
-                held.valid = true;
-                lastReliablePeriod = held.periodSamples;
-                rateUpdated = true;
+                // Stable-tracking octave check: when the hint and the tracked
+                // period clearly disagree by an octave, confirm both around
+                // the same waveform position with the shared full-rate
+                // helper.  The tracked period is kept when its waveform
+                // evidence wins; a qualified hint-side candidate re-seats the
+                // tracking window.  A stale hint cannot reject the waveform.
+                const double hintPeriod = hintPeriodAt(endIndex);
+                if (hintPeriod > 0.0
+                    && hasOctaveDivergence(refined, hintPeriod))
+                {
+                    constexpr int kConfirmHalfWindow =
+                        kDecimFactor / 2;
+                    const auto currentCandidate = confirmFullRateCandidate(
+                        samples, endIndex,
+                        static_cast<int>(std::lround(refined)),
+                        kConfirmHalfWindow);
+                    const auto hintCandidate = confirmFullRateCandidate(
+                        samples, endIndex,
+                        static_cast<int>(std::lround(hintPeriod)),
+                        kConfirmHalfWindow);
+                    const auto selected = chooseCandidate(
+                        currentCandidate, hintCandidate, hintPeriod);
+
+                    if (selected.has_value()
+                        && (!currentCandidate.has_value()
+                            || selected->lag != currentCandidate->lag))
+                    {
+                        if (initializeTracking(
+                                endIndex,
+                                selected->lag - kTrackingCenterIndex))
+                            refined = static_cast<double>(selected->lag);
+                        else
+                            failTracking(endIndex, initializedFromRecovery);
+                    }
+                }
+
+                if (trackingInitialized)
+                {
+                    held.periodSamples = static_cast<float>(refined);
+                    held.valid = true;
+                    rateUpdated = true;
+                }
             }
         }
 
         result[static_cast<size_t>(i)] = held;
         result[static_cast<size_t>(i)].trackingUpdated = rateUpdated;
-    }
-
-    // ── Post-pass: octave-jump correction ──────────────────────────────
-    // Mirrors the RMVPEExtractor::fixOctaveErrors pattern: a simple
-    // forward + backward scan through consecutive valid frames.  When the
-    // period ratio between neighbours is ≈2.0, snap the outlier back.
-    // The bidirectional scan ensures that a single misplaced frame
-    // (whether it jumped up or dropped down) is caught regardless of
-    // scan direction.
-    //
-    // The tolerance is deliberately tight (±10%) to avoid interfering
-    // with normal frequency glides or vibrato, where the period changes
-    // smoothly by small ratios between frames.
-    {
-        constexpr float kOctaveLow = 1.85f;
-        constexpr float kOctaveHigh = 2.15f;
-
-        // Forward pass: if curr ≈ 2× prev, curr is wrong → snap to prev.
-        for (int i = 1; i < numInputSamples; ++i)
-        {
-            auto& prev = result[static_cast<size_t>(i - 1)];
-            auto& curr = result[static_cast<size_t>(i)];
-            if (!prev.valid || !curr.valid)
-                continue;
-            const float ratio = curr.periodSamples / prev.periodSamples;
-            if (ratio > kOctaveLow && ratio < kOctaveHigh)
-                curr.periodSamples = prev.periodSamples;
-        }
-
-        // Backward pass: if prev ≈ 2× next, prev is wrong → snap to next.
-        for (int i = numInputSamples - 2; i >= 0; --i)
-        {
-            auto& curr = result[static_cast<size_t>(i)];
-            auto& next = result[static_cast<size_t>(i + 1)];
-            if (!curr.valid || !next.valid)
-                continue;
-            const float ratio = curr.periodSamples / next.periodSamples;
-            if (ratio > kOctaveLow && ratio < kOctaveHigh)
-                curr.periodSamples = next.periodSamples;
-        }
     }
 
     return result;

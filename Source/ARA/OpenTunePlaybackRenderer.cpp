@@ -1,6 +1,7 @@
 #include "OpenTunePlaybackRenderer.h"
 
 #include "OpenTuneDocumentController.h"
+#include "../Audio/NotePitchAudition.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/PlaybackAudioReader.h"
 
@@ -33,6 +34,9 @@ OpenTunePlaybackRenderer::OpenTunePlaybackRenderer(ARA::PlugIn::DocumentControll
     std::atomic_store_explicit(&contentRenderServiceSnapshot_,
                                 docController ? docController->getContentRenderServiceShared() : nullptr,
                                 std::memory_order_release);
+    if (docController != nullptr)
+        notePitchAudition_.store(&docController->getNotePitchAudition(),
+                                 std::memory_order_release);
 }
 
 OpenTunePlaybackRenderer::~OpenTunePlaybackRenderer()
@@ -49,13 +53,15 @@ void OpenTunePlaybackRenderer::detachDocumentController(OpenTuneDocumentControll
     // Per architecture: teardown is owner-driven. Renderer cannot call into destroyed DC.
     if (documentController_ == &owner)
     {
-        // 1. Publish empty render plan FIRST to stop audio thread from entering render loop
+        // 1. Clear audition pointer FIRST so audio thread stops querying it
+        notePitchAudition_.store(nullptr, std::memory_order_release);
+        // 2. Publish empty render plan to stop audio thread from entering render loop
         currentPlan_.store(std::make_shared<RenderPlan>(), std::memory_order_release);
-        // 2. Clear CRS snapshot atomically so audio thread sees nullptr
+        // 3. Clear CRS snapshot atomically so audio thread sees nullptr
         std::atomic_store_explicit(&contentRenderServiceSnapshot_,
                                    std::shared_ptr<ContentRenderService>(),
                                    std::memory_order_release);
-        // 3. Finally clear documentController_ pointer
+        // 4. Finally clear documentController_ pointer
         documentController_ = nullptr;
     }
 }
@@ -130,6 +136,7 @@ std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRend
         }
 
         PlaybackRegionRenderItem item;
+        item.playbackRegion = projection.playbackRegion;
         item.contentKey = projection.contentKey;
         item.startInPlaybackTime = projection.startInPlaybackTime;
         item.startInModificationTime = projection.startInModificationTime;
@@ -221,6 +228,11 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
         && !plan->items.empty()
         && timeInSamples.hasValue();
 
+    const auto* audition = notePitchAudition_.load(std::memory_order_acquire);
+    const void* suppressedRegion =
+        (realtime == juce::AudioProcessor::Realtime::yes && audition != nullptr)
+            ? audition->activeTargetRegion() : nullptr;
+
     if (renderable)
     {
         for (const auto& region : plan->items)
@@ -232,6 +244,9 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
                 region.startInPlaybackTime,
                 region.endInPlaybackTime());
             if (!overlap.has_value())
+                continue;
+
+            if (static_cast<const void*>(region.playbackRegion) == suppressedRegion)
                 continue;
 
             ++overlaps;

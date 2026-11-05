@@ -5,15 +5,13 @@
 #include <iterator>
 #include <mutex>
 
-#include "../DSP/AutoTunePeriodDetector.h"
-#include "../DSP/AutoTunePitchShifter.h"
+#include "../DSP/PhaseVocoderPitchShifter.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/TimeCoordinate.h"
 
 namespace OpenTune {
 namespace {
 
-constexpr double kDetectorSampleRate = TimeCoordinate::kRenderSampleRate; // 44100
 constexpr float kPreviewGain = 0.7f;
 constexpr double kMinPreviewSeconds = 0.3;
 constexpr double kFadeSeconds = 0.01;
@@ -40,9 +38,9 @@ NotePitchPreview renderNotePitchPreview(
     double endSeconds,
     float targetHz,
     double outputSampleRate,
-    const float* originalF0Hint,
-    int numF0HintFrames,
-    double f0HintFrameRate)
+    const float* originalF0,
+    int numOriginalF0Frames,
+    double originalF0FrameRate)
 {
     NotePitchPreview preview;
     if (targetHz <= 0.0f)
@@ -52,6 +50,9 @@ NotePitchPreview renderNotePitchPreview(
     if (!(endSeconds > startSeconds) || startSeconds < 0.0)
         return preview;
     if (source.getNumSamples() <= 0)
+        return preview;
+    if (originalF0 == nullptr || numOriginalF0Frames <= 0
+        || !(originalF0FrameRate > 0.0))
         return preview;
 
     const int64_t sourceNumSamples = source.getNumSamples();
@@ -66,115 +67,63 @@ NotePitchPreview renderNotePitchPreview(
     if (!(previewEnd > previewStart))
         return preview;
 
-    // Prefix lookbehind before previewStart and lookahead after previewEnd,
-    // expressed on the detector's 44.1 kHz grid and converted to source
-    // samples so the whole window is read and resampled once (continuously).
-    const double lookbehindSeconds = TimeCoordinate::samplesToSeconds(
-        AutoTunePeriodDetector::kRequiredLookbehindSamples, kDetectorSampleRate);
-    const double lookaheadSeconds = TimeCoordinate::samplesToSeconds(
-        AutoTunePitchShifter::kLookaheadSamples, kDetectorSampleRate);
     const int64_t startSample = TimeCoordinate::secondsToSamplesFloor(
         previewStart, sourceSampleRate);
     const int64_t endSample = std::min(
         TimeCoordinate::secondsToSamplesCeil(previewEnd, sourceSampleRate),
         sourceNumSamples);
-    const int64_t numInputSamples = endSample - startSample;
-    if (numInputSamples <= 0)
-        return preview;
-    const int64_t prefixSourceStart = std::max<int64_t>(0, startSample
-        - TimeCoordinate::secondsToSamplesCeil(lookbehindSeconds,
-                                               sourceSampleRate));
-    const int64_t lookaheadEnd = std::min(
-        endSample + TimeCoordinate::secondsToSamplesCeil(lookaheadSeconds,
-                                                         sourceSampleRate),
-        sourceNumSamples);
-    if (lookaheadEnd <= prefixSourceStart)
+    const int64_t outputCount = endSample - startSample;
+    if (outputCount <= 0)
         return preview;
 
-    // Channel 0 only, matching the render path's monoAudio convention.
-    const float* channel0 = source.getReadPointer(0);
-
-    // One contiguous source window, resampled to 44.1 kHz in a single pass so
-    // prefix/input/lookahead boundaries are consistent (no seams, no ±1
-    // sample mismatch at non-44.1k rates).
-    const int64_t windowLength = lookaheadEnd - prefixSourceStart;
-    std::vector<float> window = resampleMono(
-        channel0 + prefixSourceStart, static_cast<size_t>(windowLength),
-        static_cast<int>(sourceSampleRate), static_cast<int>(kDetectorSampleRate));
-    if (window.empty())
-        return preview;
-    const int64_t prefixOut = std::min<int64_t>(
-        TimeCoordinate::sampleRateProject(
-            startSample - prefixSourceStart, sourceSampleRate, kDetectorSampleRate),
-        static_cast<int64_t>(window.size()));
-    const int64_t inputEndOut = std::min<int64_t>(
-        TimeCoordinate::sampleRateProject(
-            endSample - prefixSourceStart, sourceSampleRate, kDetectorSampleRate),
-        static_cast<int64_t>(window.size()));
-    if (!(inputEndOut > prefixOut))
-        return preview;
-    const float* prefixPtr = window.data();
-    const int numPrefix = static_cast<int>(prefixOut);
-    const float* inputPtr = window.data() + prefixOut;
-    const int numDetectorInput = static_cast<int>(inputEndOut - prefixOut);
-    const float* lookaheadPtr = window.data() + inputEndOut;
-    const int numLookaheadOut = static_cast<int>(
-        static_cast<int64_t>(window.size()) - inputEndOut);
-
-    auto detected = AutoTunePeriodDetector::analyze(
-        prefixPtr, numPrefix,
-        inputPtr, numDetectorInput,
-        kDetectorSampleRate,
-        originalF0Hint, numF0HintFrames, f0HintFrameRate);
-
-    // UV frames (original F0 <= 0) never participate in pitch correction,
-    // matching the render chain: force them neutral instead of trusting a
-    // spurious detector lock inside unvoiced audio. Frame mapping matches
-    // AutoTunePeriodDetector's internal hint lookup ((endIndex - prefix)).
-    if (originalF0Hint != nullptr && numF0HintFrames > 0 && f0HintFrameRate > 0.0) {
-        const double hintFramesPerSample = f0HintFrameRate / kDetectorSampleRate;
-        for (int i = 0; i < numDetectorInput; ++i) {
-            const int frame = std::clamp(
-                static_cast<int>(static_cast<double>(i) * hintFramesPerSample),
-                0, numF0HintFrames - 1);
-            if (originalF0Hint[frame] <= 0.0f) {
-                detected[static_cast<size_t>(i)].periodSamples = 0.0f;
-                detected[static_cast<size_t>(i)].valid = false;
-                detected[static_cast<size_t>(i)].trackingUpdated = false;
-            }
+    // Target curve has the full source F0 length. Frames outside the preview
+    // range copy originalF0 (neutral) so phase replay starts close to the
+    // window; frames covering the actual start/end control the shifted range.
+    std::vector<float> targetF0(originalF0, originalF0 + numOriginalF0Frames);
+    const double shiftStartSeconds = TimeCoordinate::samplesToSeconds(
+        startSample, sourceSampleRate);
+    const double shiftEndSeconds = TimeCoordinate::samplesToSeconds(
+        endSample, sourceSampleRate);
+    const int firstFrame = static_cast<int>(std::clamp<int64_t>(
+        TimeCoordinate::secondsToSamplesFloor(shiftStartSeconds, originalF0FrameRate),
+        0, numOriginalF0Frames));
+    const int lastFrame = static_cast<int>(std::clamp<int64_t>(
+        TimeCoordinate::secondsToSamplesCeil(shiftEndSeconds, originalF0FrameRate) + 1,
+        firstFrame, numOriginalF0Frames));
+    bool hasVoicedFrame = false;
+    for (int i = firstFrame; i < lastFrame; ++i)
+    {
+        if (originalF0[static_cast<size_t>(i)] > 0.0f)
+        {
+            targetF0[static_cast<size_t>(i)] = targetHz;
+            hasVoicedFrame = true;
+        }
+        else
+        {
+            targetF0[static_cast<size_t>(i)] = 0.0f;
         }
     }
-
-    bool hasValidFrame = false;
-    for (const auto& d : detected) {
-        if (d.valid) { hasValidFrame = true; break; }
-    }
-    if (!hasValidFrame)
+    if (!hasVoicedFrame)
         return preview; // Never play unshifted audio as a "preview".
 
-    // Constant target Hz used for both originalF0 and correctedF0.
-    const std::vector<float> constantF0(1, targetHz);
-
-    AutoTunePitchShifter shifter(kDetectorSampleRate);
-    std::vector<float> shifted = shifter.shiftChunk(
-        inputPtr, numDetectorInput,
-        constantF0.data(), constantF0.data(),
-        1, 100.0, 0.0,
-        numLookaheadOut > 0 ? lookaheadPtr : nullptr,
-        numLookaheadOut,
-        numPrefix > 0 ? prefixPtr : nullptr,
-        numPrefix,
-        detected.data(), numDetectorInput,
-        true);
-
-    if (shifted.empty())
+    PhaseVocoderPitchShifter shifter(sourceSampleRate);
+    std::vector<float> shifted = shifter.render(
+        source.getReadPointer(0),
+        static_cast<int>(sourceNumSamples),
+        static_cast<int>(startSample),
+        static_cast<int>(outputCount),
+        originalF0,
+        targetF0.data(),
+        numOriginalF0Frames,
+        originalF0FrameRate);
+    if (shifted.size() != static_cast<size_t>(outputCount))
         return preview;
 
-    // Resample the shifted result to the output rate.
-    std::vector<float> output = (outputSampleRate == kDetectorSampleRate)
+    // Resample only the returned preview to the output rate.
+    std::vector<float> output = (outputSampleRate == sourceSampleRate)
         ? std::move(shifted)
         : resampleMono(shifted.data(), shifted.size(),
-            static_cast<int>(kDetectorSampleRate),
+            static_cast<int>(sourceSampleRate),
             static_cast<int>(outputSampleRate));
     if (output.empty())
         return preview;
@@ -233,6 +182,7 @@ void NotePitchAudition::request(PlaybackReadSource source,
         pending_.endSeconds = endSeconds;
         pending_.targetHz = targetHz;
         pending_.outputSampleRate = outputSampleRate;
+        pending_.targetRegion = nextTargetRegion_.load(std::memory_order_acquire);
         hasPending_ = true;
     }
     stopRequested_.store(false, std::memory_order_release);
@@ -251,6 +201,35 @@ void NotePitchAudition::stop()
     }
     fadeOutAll_.store(true, std::memory_order_release);
     wakeup_.signal();
+}
+
+bool NotePitchAudition::isActive() const noexcept
+{
+    for (const auto& voice : voices_) {
+        if (voice.snippet && (voice.gain > 0.0f || voice.targetGain > 0.0f))
+            return true;
+    }
+    return false;
+}
+
+bool NotePitchAudition::isContentActive(const ContentKey& key) const noexcept
+{
+    for (const auto& voice : voices_) {
+        if (voice.snippet && voice.snippet->contentKey == key
+                && (voice.gain > 0.0f || voice.targetGain > 0.0f))
+            return true;
+    }
+    return false;
+}
+
+void NotePitchAudition::setTargetRegion(const void* region) noexcept
+{
+    nextTargetRegion_.store(region, std::memory_order_release);
+}
+
+const void* NotePitchAudition::activeTargetRegion() const noexcept
+{
+    return activeTargetRegion_.load(std::memory_order_acquire);
 }
 
 void NotePitchAudition::pruneRetired()
@@ -291,41 +270,22 @@ void NotePitchAudition::run()
         const auto& source = request.source;
         NotePitchPreview preview;
         if (source.hasAudio()) {
-            // Build the originalF0 hint from the immutable snapshot's pitch
-            // curve. Frames are indexed against the source/content timeline.
-            std::vector<float> f0HintSlice;
-            const float* f0Hint = nullptr;
-            int numF0HintFrames = 0;
-            double f0HintFrameRate = 0.0;
+            // The immutable snapshot's complete originalF0 track shares the
+            // source/content time origin; no slicing loses frame phase.
+            const float* originalF0 = nullptr;
+            int numOriginalF0Frames = 0;
+            double originalF0FrameRate = 0.0;
             if (source.contentSnapshot != nullptr
-                    && source.contentSnapshot->pitchCurve != nullptr
-                    && source.contentSnapshot->pitchCurve->getHopSize() > 0
-                    && source.contentSnapshot->pitchCurve->getSampleRate() > 0.0) {
+                    && source.contentSnapshot->pitchCurve != nullptr) {
                 const auto& curve = *source.contentSnapshot->pitchCurve;
-                const double frameRate =
-                    curve.getSampleRate() / curve.getHopSize();
-                const auto& originalF0 = curve.getOriginalF0();
-                if (frameRate > 0.0 && !originalF0.empty()) {
-                    const int totalFrames = static_cast<int>(originalF0.size());
-                    const double previewEnd = std::max(
-                        request.endSeconds,
-                        request.startSeconds + kMinPreviewSeconds);
-                    const int firstFrame = static_cast<int>(std::min(
-                        std::max<int64_t>(0, TimeCoordinate::secondsToSamplesFloor(
-                                                 request.startSeconds, frameRate)),
-                        static_cast<int64_t>(totalFrames)));
-                    const int lastFrame = static_cast<int>(std::min(
-                        std::max<int64_t>(firstFrame,
-                            TimeCoordinate::secondsToSamplesCeil(
-                                previewEnd, frameRate) + 1),
-                        static_cast<int64_t>(totalFrames)));
-                    if (lastFrame > firstFrame) {
-                        f0HintSlice.assign(
-                            originalF0.begin() + firstFrame,
-                            originalF0.begin() + lastFrame);
-                        f0Hint = f0HintSlice.data();
-                        numF0HintFrames = static_cast<int>(f0HintSlice.size());
-                        f0HintFrameRate = frameRate;
+                if (curve.getHopSize() > 0 && curve.getSampleRate() > 0.0) {
+                    const double frameRate =
+                        curve.getSampleRate() / static_cast<double>(curve.getHopSize());
+                    const auto& track = curve.getOriginalF0();
+                    if (frameRate > 0.0 && !track.empty()) {
+                        originalF0 = track.data();
+                        numOriginalF0Frames = static_cast<int>(track.size());
+                        originalF0FrameRate = frameRate;
                     }
                 }
             }
@@ -337,7 +297,7 @@ void NotePitchAudition::run()
                 request.endSeconds,
                 request.targetHz,
                 request.outputSampleRate,
-                f0Hint, numF0HintFrames, f0HintFrameRate);
+                originalF0, numOriginalF0Frames, originalF0FrameRate);
         }
 
         // Drop the result if stop was requested or a newer pending request
@@ -358,7 +318,8 @@ void NotePitchAudition::run()
         // the new snippet atomically.
         {
             auto newSnippet = std::make_shared<const Snippet>(
-                Snippet{std::move(preview.mono), preview.sampleRate});
+                Snippet{std::move(preview.mono), preview.sampleRate,
+                        source.contentKey, request.targetRegion});
             auto previous = std::atomic_load(&published_);
             if (previous)
                 retired_.push_back(std::move(previous));
@@ -406,6 +367,8 @@ void NotePitchAudition::mixIntoBuffer(juce::AudioBuffer<float>& output,
             incoming->position = 0.0;
             incoming->gain = 1.0f;
             incoming->targetGain = 1.0f;
+            activeTargetRegion_.store(incoming->snippet->targetRegion,
+                                      std::memory_order_release);
             fadeOutAll_.store(false, std::memory_order_release);
         }
     }
@@ -479,6 +442,9 @@ void NotePitchAudition::mixIntoBuffer(juce::AudioBuffer<float>& output,
             fadeOutAll_.store(false, std::memory_order_release);
         }
     }
+
+    if (!isActive())
+        activeTargetRegion_.store(nullptr, std::memory_order_release);
 }
 
 } // namespace OpenTune

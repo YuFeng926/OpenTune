@@ -85,6 +85,7 @@ public:
     ~ParameterPanel() override;
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
 
     void addListener(Listener* listener);
@@ -175,8 +176,18 @@ private:
 
     juce::ListenerList<Listener> listeners_;
 
+    class FadingViewport : public juce::Viewport
+    {
+    public:
+        explicit FadingViewport(ParameterPanel& owner) : owner_(owner) {}
+        void visibleAreaChanged(const juce::Rectangle<int>&) override { owner_.repaint(); }
+
+    private:
+        ParameterPanel& owner_;
+    };
+
     // ── 滚动结构：面板 chrome 固定 → 单个 Viewport → 单个内容组件 ──
-    juce::Viewport viewport_;
+    FadingViewport viewport_;
     ContentComponent contentComponent_;
 
     // Tab can land on a control scrolled out of the panel (NVDA reported Pitch snap as
