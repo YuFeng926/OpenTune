@@ -423,7 +423,7 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
 // ============================================================================
 
 ParameterPanel::ParameterPanel()
-    : contentComponent_(*this)
+    : viewport_(*this), contentComponent_(*this)
 {
     viewport_.setScrollBarsShown(true, false);
     viewport_.setScrollBarThickness(UIColors::scrollBarThickness);
@@ -673,6 +673,55 @@ void ParameterPanel::paint(juce::Graphics& g)
     
     // Draw Frame
     UIColors::drawPanelFrame(g, bounds, style.panelRadius);
+}
+
+void ParameterPanel::paintOverChildren(juce::Graphics& g)
+{
+    const auto viewportBounds = viewport_.getBounds().toFloat();
+    const auto& viewed = viewport_.getViewedComponent();
+    const int contentHeight = viewed->getHeight();
+    const int viewHeight = viewport_.getHeight();
+    if (contentHeight <= viewHeight)
+        return;
+
+    const int scrollY = viewport_.getViewPositionY();
+    const int maxScrollY = contentHeight - viewHeight;
+    const bool canScrollUp = scrollY > 0;
+    const bool canScrollDown = scrollY < maxScrollY;
+    if (!canScrollUp && !canScrollDown)
+        return;
+
+    const float fadeDepth = 8.0f;
+    const float fadeWidth = static_cast<float>(viewport_.getMaximumVisibleWidth());
+    const auto fadeColour = UIColors::currentThemeId() == ThemeId::Aurora
+        ? UIColors::auroraSidebarShellBottom
+        : UIColors::backgroundDark;
+
+    const auto topRect = juce::Rectangle<float>(viewportBounds.getX(), viewportBounds.getY(), fadeWidth, fadeDepth);
+    const auto bottomRect = juce::Rectangle<float>(viewportBounds.getX(),
+                                                   viewportBounds.getBottom() - fadeDepth,
+                                                   fadeWidth,
+                                                   fadeDepth);
+
+    if (canScrollUp)
+    {
+        juce::ColourGradient fade(fadeColour.withAlpha(0.9f),
+                                  topRect.getCentreX(), topRect.getY(),
+                                  fadeColour.withAlpha(0.0f),
+                                  topRect.getCentreX(), topRect.getBottom(), false);
+        g.setGradientFill(fade);
+        g.fillRect(topRect);
+    }
+
+    if (canScrollDown)
+    {
+        juce::ColourGradient fade(fadeColour.withAlpha(0.0f),
+                                  bottomRect.getCentreX(), bottomRect.getY(),
+                                  fadeColour.withAlpha(0.9f),
+                                  bottomRect.getCentreX(), bottomRect.getBottom(), false);
+        g.setGradientFill(fade);
+        g.fillRect(bottomRect);
+    }
 }
 
 void ParameterPanel::ContentComponent::paint(juce::Graphics& g)
