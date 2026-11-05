@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/schemas/discovery-file.schema.json",
+  "title": "OTCP discovery file",
+  "description": "Content of <discovery directory>/<pid>.json (PROTOCOL.md section 5). Every member is always present; inapplicable values are null. This root schema is closed: a server writes exactly these members. Clients validate against $defs/knownMembers instead, which allows members added by later versions. The ready file written for --control-api-ready-file= is defined in $defs/readyFile (closed) and $defs/readyFileKnownMembers (open).",
+  "type": "object",
+  "$ref": "#/$defs/knownMembers",
+  "unevaluatedProperties": false,
+  "$defs": {
+    "knownMembers": {
+      "description": "The members this version defines, without forbidding others. Clients validate discovery files against this definition and ignore members they do not know (PROTOCOL.md section 5.4 rule 4).",
+      "type": "object",
+      "required": [
+        "protocolMajors",
+        "pid",
+        "processStartTimeMs",
+        "instanceId",
+        "port",
+        "token",
+        "serverProof",
+        "launchNonce",
+        "appVersion",
+        "build",
+        "buildTag",
+        "sourceUrl",
+        "startedAtMs",
+        "flavor"
+      ],
+      "properties": {
+        "protocolMajors": {
+          "description": "Protocol major versions this instance serves, ascending.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "processStartTimeMs": {
+          "description": "Start time of the OpenTune process as reported by the operating system, in milliseconds since the Unix epoch. Used with pid to detect process id reuse.",
+          "$ref": "common.schema.json#/$defs/timestampMs"
+        },
+        "instanceId": {
+          "$ref": "common.schema.json#/$defs/instanceId"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "token": {
+          "description": "Per-launch secret sent in session.hello. Never appears anywhere else.",
+          "$ref": "common.schema.json#/$defs/secretHex"
+        },
+        "serverProof": {
+          "description": "Per-launch 128-bit value returned by session.hello so that the client can verify it reached this instance.",
+          "$ref": "common.schema.json#/$defs/hex128"
+        },
+        "launchNonce": {
+          "description": "Value of --control-api-launch-nonce=, or null when the option was not given.",
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+        },
+        "appVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "build": {
+          "$ref": "common.schema.json#/$defs/buildInfo"
+        },
+        "buildTag": {
+          "description": "Distribution label of this binary (for example the tag of a published test build), or null for builds without one.",
+          "type": ["string", "null"],
+          "maxLength": 200
+        },
+        "sourceUrl": {
+          "description": "Where the corresponding source code of this build can be obtained.",
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "startedAtMs": {
+          "description": "When the control API started listening, in milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/timestampMs"
+        },
+        "flavor": {
+          "const": "standalone"
+        }
+      }
+    },
+    "readyFile": {
+      "title": "OTCP ready file",
+      "description": "Written after the discovery file is in place and the listener accepts connections. Contains no secrets. Closed: a server writes exactly these members.",
+      "type": "object",
+      "$ref": "#/$defs/readyFileKnownMembers",
+      "unevaluatedProperties": false
+    },
+    "readyFileKnownMembers": {
+      "description": "The members of the ready file this version defines, without forbidding others. Clients validate ready files against this definition.",
+      "type": "object",
+      "required": ["pid", "instanceId"],
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "instanceId": {
+          "$ref": "common.schema.json#/$defs/instanceId"
+        }
+      }
+    }
+  }
+}

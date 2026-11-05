@@ -1,0 +1,106 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/parse-error-lone-surrogate",
+  "type": "scenario",
+  "description": "After authentication, a line whose JSON strings escape a lone surrogate is not valid JSON in the sense of PROTOCOL.md section 3.2 rule 3: a high surrogate escape without a low one in a string id, a low surrogate escape on its own in a member name, a reversed pair, and a lone surrogate in the first value of a member name that appears twice, which a parser would drop, each get INVALID_ARGUMENT(parse_error) with id null, also when the line has an id. A correct surrogate pair is valid: the string id of one code point is answered. The session stays open.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":\"\\ud800\",\"method\":\"session.info\"}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32700,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "parse_error",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session.info\",\"params\":{\"\\udc00\":1}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32700,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "parse_error",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"session.info\",\"note\":\"\\uDE00\\uD83D\"}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32700,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "parse_error",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session.info\",\"note\":\"\\ud800\",\"note\":\"ok\"}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32700,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "parse_error",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":\"\\ud83c\\udfb5\",\"method\":\"session.info\"}\n"
+    },
+    {
+      "expect": { "jsonrpc": "2.0", "id": "🎵", "result": { "$any": "object" } }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 5, "result": { "$any": "object" } } }
+  ]
+}

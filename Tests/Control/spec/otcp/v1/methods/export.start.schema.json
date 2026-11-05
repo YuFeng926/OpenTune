@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/export.start.schema.json",
+  "title": "export.start",
+  "description": "Writes a WAV file of a clip (kind clip, target.placementId), a track (kind track, target.trackId) or the master mix (kind master, no target) as a job of kind export, under the export contract of PROTOCOL.md section 19: the path is checked before the job starts; an export that would hold no audio (a track without clips, a master mix in which no clip is heard) fails at once with INVALID_ARGUMENT(nothing_to_export), and so does a job whose clips were all removed while it waited; loaded source files and project media are never written (INVALID_ARGUMENT(target_is_loaded_media)), and when the identity of one of them cannot be determined, for example because its volume is not available, the export is refused with IO_ERROR(read_failed) (section 20.3 rule 4); ifExists decides what happens to an existing target: with error, a target that already exists makes the call fail at once with ALREADY_EXISTS(target_exists), starting no job, and a target that appears before the final rename makes the job fail with the same error; the UI and this API share one export lock (BUSY(export_in_progress)); the job waits for analysis and rendering to settle (NOT_READY(export_wait_timeout), ANALYSIS_FAILED(f0_failed), RENDER_FAILED(render_chunk_failed)); render blocks that OpenTune has set aside for a delayed retry are drained first, and when they cannot be drained the job fails with the same retryable NOT_READY(export_wait_timeout) (section 19 rules 6 and 7); and for a content whose time grid is not the identity also for its time-stretched audio, which ends the job early with NOT_READY(export_dry_stretched) when the content would be exported uncorrected and with NOT_READY(export_stretch_dropped) when the stretched audio is not built (section 19 rule 6); the revision of every content is recorded once all contents are ready and the file starts to be written, so a revision that changes while the job waits (for example because an analysis finishes) is no conflict, while a revision that changes after it was recorded, before the final check, fails the job with REVISION_CONFLICT(changed_during_export) and leaves the target untouched; contents exported uncorrected are listed in dryContents. contents lists the revision of every content in the file, as the job recorded it when all contents were ready, so that a client can tell whether edits made after export.start are in the file. A call with the same normalized params as an export job that is not terminal returns that job. The call itself changes no project state: its result hands the work to the job, whose result is jobResult. dryContents[].reason is unvoiced (no voiced audio), nothingToRender, or analysisFailed (with allowDry). processing members that cannot be determined are null and named in processing.nullReasons.",
+  "x-otcp": {
+    "method": "export.start",
+    "layer": "L3",
+    "capability": "export.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "export",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "ALREADY_EXISTS",
+      "IO_ERROR",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": [
+      "INVALID_ARGUMENT",
+      "NOT_READY",
+      "ANALYSIS_FAILED",
+      "RENDER_FAILED",
+      "REVISION_CONFLICT",
+      "ALREADY_EXISTS",
+      "CANCELLED",
+      "IO_ERROR",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["kind", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["clip", "track", "master"] },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "placementId": {
+              "$ref": "../schemas/common.schema.json#/$defs/placementId"
+            },
+            "trackId": {
+              "$ref": "../schemas/common.schema.json#/$defs/trackId"
+            }
+          },
+          "oneOf": [
+            { "required": ["placementId"] },
+            { "required": ["trackId"] }
+          ]
+        },
+        "path": {
+          "description": "Absolute path of the WAV file to write; the extension must be .wav.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        },
+        "ifExists": {
+          "enum": ["error", "rename", "overwrite"],
+          "default": "error"
+        },
+        "allowDry": {
+          "description": "Export a content whose analysis failed uncorrected instead of failing (PROTOCOL.md section 19 rule 6).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "clip" } } },
+          "then": {
+            "required": ["target"],
+            "properties": {
+              "target": { "type": "object", "required": ["placementId"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "track" } } },
+          "then": {
+            "required": ["target"],
+            "properties": {
+              "target": { "type": "object", "required": ["trackId"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "master" } } },
+          "then": { "not": { "required": ["target"] } }
+        }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "type": "object",
+      "required": [
+        "path",
+        "sampleRateHz",
+        "channelCount",
+        "sampleFormat",
+        "durationSec",
+        "startTimelineSec",
+        "contents",
+        "dryContents",
+        "processing"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "The file that was written; with ifExists rename it may differ from the requested path.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        },
+        "sampleRateHz": { "type": "number", "exclusiveMinimum": 0 },
+        "channelCount": { "type": "integer", "minimum": 1 },
+        "sampleFormat": {
+          "$ref": "../schemas/common.schema.json#/$defs/camelName"
+        },
+        "durationSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "startTimelineSec": {
+          "description": "0 for master and track exports, the clip's start for a clip export.",
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "contents": {
+          "description": "The revision of every content the file holds, recorded when all contents were ready (PROTOCOL.md section 19 rule 8).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["contentId", "revision"],
+            "additionalProperties": false,
+            "properties": {
+              "contentId": {
+                "$ref": "../schemas/common.schema.json#/$defs/contentId"
+              },
+              "revision": {
+                "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+              }
+            }
+          }
+        },
+        "dryContents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["contentId", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "contentId": {
+                "$ref": "../schemas/common.schema.json#/$defs/contentId"
+              },
+              "reason": {
+                "$ref": "../schemas/common.schema.json#/$defs/camelName"
+              }
+            }
+          }
+        },
+        "processing": {
+          "type": "object",
+          "required": ["vocoderWeight", "hybridMode", "backend", "tuningHz"],
+          "additionalProperties": false,
+          "properties": {
+            "vocoderWeight": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "hybridMode": {
+              "description": "Whether OpenTune's hybrid mode is on. With it on, OpenTune renders small corrections with a pitch shift of the audio instead of the vocoder, so the corrected pitch that results report can differ from what is heard (informative, PROTOCOL.md section 19, \"Hybrid mode\").",
+              "type": "boolean"
+            },
+            "backend": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "tuningHz": { "type": "number" },
+            "nullReasons": {
+              "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+            }
+          }
+        }
+      }
+    }
+  }
+}

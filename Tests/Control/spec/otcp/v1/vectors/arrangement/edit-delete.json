@@ -1,0 +1,93 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-delete",
+  "type": "request",
+  "description": "op delete, with confirm true, removes a clip. No other clip shows its content, so the content leaves the project with it and is listed in removed after the clip (PROTOCOL.md section 14.4 rule 6). OpenTune cannot undo a delete (PROTOCOL.md section 15.4 rule 1), and no request can restore the clip: undo reason upstream_undo_defect, revert null, and the warnings UPSTREAM_UNDO_DEFECT and IRREVERSIBLE.",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.edit",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.edit",
+    "params": {
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "ops": [
+        { "op": "delete", "placementIds": [{ "$ref": "clip.placementId" }] }
+      ],
+      "confirm": true
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [
+        {
+          "entity": "placement",
+          "ref": { "placementId": { "$ref": "clip.placementId" } },
+          "label": { "$any": true }
+        },
+        {
+          "entity": "content",
+          "ref": { "contentId": { "$ref": "clip.contentId" } },
+          "label": { "$any": true }
+        }
+      ],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": {
+          "before": { "$ref": "runner.arrangementRevision" },
+          "after": { "$any": "string" }
+        },
+        "trackState": null,
+        "contents": { "$any": "array" }
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "upstream_undo_defect",
+        "revert": null
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "UPSTREAM_UNDO_DEFECT",
+          "subject": { "placementId": { "$ref": "clip.placementId" } },
+          "data": null
+        },
+        {
+          "code": "IRREVERSIBLE",
+          "subject": { "placementId": { "$ref": "clip.placementId" } },
+          "data": null
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "job/get-wait-too-long",
+  "type": "request",
+  "description": "waitMs above 30000 is rejected; the server never holds a response longer than 30 seconds.",
+  "capability": "jobs.v1",
+  "since": "1.0",
+  "method": "job.get",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "exportJob",
+        "kind": "export",
+        "state": "running",
+        "cancellable": true
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "job.get",
+    "params": { "jobId": { "$ref": "exportJob" }, "waitMs": 45000 }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "invalid_params",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

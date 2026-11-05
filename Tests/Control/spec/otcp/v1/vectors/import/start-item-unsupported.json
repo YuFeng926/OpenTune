@@ -1,0 +1,191 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-item-unsupported",
+  "type": "scenario",
+  "description": "A .wav file whose content OpenTune cannot decode does not fail the job: its item has imported false and the error UNSUPPORTED(unsupported_format). The other file is imported. The instance does not report arrangement.v1, so the import cannot be reverted through the protocol (revert null, IRREVERSIBLE).",
+  "capability": "import.v1",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "files": [
+      { "bind": "take1", "kind": "audio", "durationSec": 4 },
+      { "bind": "garbled", "kind": "undecodable" }
+    ],
+    "withoutCapabilities": ["arrangement.v1"]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "import.start",
+        "params": {
+          "items": [
+            { "path": { "$ref": "take1" } },
+            { "path": { "$ref": "garbled" } }
+          ],
+          "layout": "sequential",
+          "trackId": 0,
+          "startTimelineSec": 0,
+          "focus": false
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": null,
+          "dirty": { "before": false, "after": false },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [],
+          "job": {
+            "jobId": { "$capture": "importJob", "$any": "string" },
+            "kind": "import",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "importJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "importJob" },
+            "kind": "import",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "dryRun": false,
+              "changes": [],
+              "created": [
+                {
+                  "entity": "placement",
+                  "ref": { "placementId": { "$any": "string" } },
+                  "label": { "$any": true }
+                },
+                {
+                  "entity": "content",
+                  "ref": { "contentId": { "$any": "string" } },
+                  "label": { "$any": true }
+                }
+              ],
+              "removed": [],
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": {
+                  "before": { "$any": "string" },
+                  "after": { "$any": "string" }
+                },
+                "trackState": { "$any": true },
+                "contents": [
+                  {
+                    "contentId": { "$any": "string" },
+                    "changed": {
+                      "content": {
+                        "before": null,
+                        "after": { "$any": "string" }
+                      }
+                    }
+                  }
+                ]
+              },
+              "tokens": { "$any": "object" },
+              "undo": {
+                "undoable": false,
+                "reason": "ui_parity",
+                "revert": null
+              },
+              "dirty": { "before": false, "after": true },
+              "ui": { "$any": true },
+              "sideEffects": {},
+              "warnings": [
+                { "code": "IRREVERSIBLE", "subject": null, "data": null }
+              ],
+              "job": null,
+              "items": [
+                {
+                  "path": { "$ref": "take1" },
+                  "imported": true,
+                  "placementId": { "$any": "string" },
+                  "contentId": { "$any": "string" },
+                  "trackId": 0,
+                  "startTimelineSec": { "$approx": 0 },
+                  "durationSec": { "$approx": 4, "$tol": 0.01 },
+                  "channelCount": 1,
+                  "originalSampleRateHz": { "$any": "number" },
+                  "resampled": { "$any": "boolean" },
+                  "f0State": "ready",
+                  "notesGenerated": false,
+                  "notesGeneratedBy": null,
+                  "error": null
+                },
+                {
+                  "path": { "$ref": "garbled" },
+                  "imported": false,
+                  "placementId": null,
+                  "contentId": null,
+                  "trackId": null,
+                  "startTimelineSec": null,
+                  "durationSec": null,
+                  "channelCount": null,
+                  "originalSampleRateHz": null,
+                  "resampled": null,
+                  "f0State": null,
+                  "notesGenerated": false,
+                  "notesGeneratedBy": null,
+                  "error": {
+                    "code": -32000,
+                    "message": "UNSUPPORTED",
+                    "data": {
+                      "kind": "UNSUPPORTED",
+                      "reason": "unsupported_format",
+                      "retryable": false,
+                      "detail": { "$any": "string" },
+                      "executed": false
+                    }
+                  }
+                }
+              ],
+              "counts": { "requested": 2, "imported": 1, "failed": 1 }
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

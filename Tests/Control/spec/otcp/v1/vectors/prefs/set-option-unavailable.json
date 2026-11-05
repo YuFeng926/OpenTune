@@ -1,0 +1,42 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-option-unavailable",
+  "type": "request",
+  "description": "A vocoder weight that is not among the weights the installation offers (prefs.get, processing.options.vocoderWeight) gives INVALID_ARGUMENT(option_unavailable); detail names the member. The call changes nothing (executed false), and there is no job. The pitch model is checked the same way.",
+  "capability": "prefs.write",
+  "since": "1.0",
+  "method": "prefs.set",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "preferences": {
+      "vocoderWeight": "hifigan.onnx",
+      "options": {
+        "vocoderWeight": ["hifigan.onnx", "hifigan_coulin9.onnx"],
+        "f0Model": ["fcpe"]
+      }
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "prefs.set",
+    "params": { "vocoderWeight": "missing_weight.onnx" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "option_unavailable",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

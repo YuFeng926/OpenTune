@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/arrangement.copy.schema.json",
+  "title": "arrangement.copy",
+  "description": "Copies clips, as pasting copied clips (mode window) and duplicating clips (mode full) do in OpenTune. Every copy is a new clip with a new content: with mode window the content holds only the part of the source content that the clip shows, with its notes, pitch curve and time grid in that part; with mode full it is a complete copy of the source content, and the copy shows the same part of it. Copies keep the gain and the fades of their sources. They go to track toTrackId: the copy of the earliest source starts at startTimelineSec and the others keep their distances from it. A copy that starts where its source starts plays together with it (warning STACKED_ON_SOURCE), a copy that overlaps another clip carries the warning OVERLAPS_CLIP, and copying onto a hidden track shows it (sideEffects.tracksRevealed {trackIds, revert: null}, warning TRACK_AUTO_REVEALED). expectedArrangementRevision guards against concurrent changes (REVISION_CONFLICT(arrangement_changed)); a source that does not exist, or a toTrackId that names no track slot, gives NOT_FOUND(unknown_handle). created lists the new placements and contents, and idMap relates every source to its copy (relation copy). As in OpenTune there is no undo entry: the undo reason is ui_parity, and the revert recipe removes the copies with arrangement.edit, op delete, which needs the end user's consent, so the recipe carries requiresConsent true (PROTOCOL.md section 15.2 rule 4).",
+  "x-otcp": {
+    "method": "arrangement.copy",
+    "layer": "L6",
+    "capability": "arrangement.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": [
+        "sources",
+        "mode",
+        "toTrackId",
+        "startTimelineSec",
+        "expectedArrangementRevision"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": ["placementId"],
+            "additionalProperties": false,
+            "properties": {
+              "placementId": {
+                "$ref": "../schemas/common.schema.json#/$defs/placementId"
+              }
+            }
+          }
+        },
+        "mode": { "enum": ["window", "full"] },
+        "toTrackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "startTimelineSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "expectedArrangementRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    }
+  }
+}

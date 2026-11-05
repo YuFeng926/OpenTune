@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/project.saveAs.schema.json",
+  "title": "project.saveAs",
+  "description": "Saves the project to a project file, as Save As in OpenTune's file menu does, as a job of kind projectSave; from then on path is the project's file (changes: entity project, member path). path is an absolute path ending in .otproj (PROTOCOL.md section 20.1). Whether path names the current project file, another existing file or no file is decided by file identity (section 20.3), when the call is validated and again immediately before the final rename (section 20.4); an identity that cannot be determined fails the call with IO_ERROR(read_failed). Saving to the current project file is a save. Replacing another existing file destroys it, so it needs confirm true; without it the call fails with INVALID_ARGUMENT(confirm_required) and starts no job (section 20.2 rules 3 and 4). Clients set confirm only when the end user explicitly agreed to replace that file; the job result then carries the warning OVERWROTE_OTHER_PROJECT (data {path}). If such a file appears at the target while a job without confirm runs, the job fails with INVALID_ARGUMENT(confirm_required), deletes its temporary file and leaves the target untouched. The job is that of project.save: it cannot be cancelled, its result (jobResult) is the write envelope with the file that was written, the unsaved-changes flag is cleared unless the project changed meanwhile, the undo reason is no_upstream_undo with revert null and the warning IRREVERSIBLE, and a write that fails ends the job with IO_ERROR(write_failed). Some state is not part of the project file: the result carries the warning NOT_SAVED_IN_PROJECT with data {items}, the names undoHistory and preferences.",
+  "x-otcp": {
+    "method": "project.saveAs",
+    "layer": "L8",
+    "capability": "project.io",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "projectSave",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "IO_ERROR",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": ["INVALID_ARGUMENT", "IO_ERROR", "INTERNAL"]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Absolute path of the project file to write; the extension must be .otproj.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        },
+        "confirm": {
+          "description": "The end user explicitly agreed to replace the existing file at path. Needed only when that file is not the current project file.",
+          "type": "boolean"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["path", "sizeBytes"],
+      "properties": {
+        "path": {
+          "description": "The project file that was written; from now on the project's file.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        },
+        "sizeBytes": { "type": "integer", "minimum": 0 }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

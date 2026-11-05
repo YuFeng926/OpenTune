@@ -33,6 +33,14 @@ public:
     bool canUndo() const;
     bool canRedo() const;
     void clear();
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: read the history and clear the redo history, see Source/Control/README.md#hooks
+    UndoAction* peekUndo() const { return canUndo() ? actions_[static_cast<std::size_t>(cursor_ - 1)].get() : nullptr; }
+    UndoAction* peekRedo() const { return canRedo() ? actions_[static_cast<std::size_t>(cursor_)].get() : nullptr; }
+    int size() const { return static_cast<int>(actions_.size()); }
+    int cursor() const { return cursor_; }
+    void clearRedo() { if (!isPerformingUndoRedo_) actions_.erase(actions_.begin() + cursor_, actions_.end()); }
+#endif
 
 private:
     std::vector<std::unique_ptr<UndoAction>> actions_;

@@ -1,0 +1,58 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/segment-notes-ok",
+  "type": "request",
+  "description": "content.segmentNotes segments the original pitch with the given note-split sensitivity and changes nothing; the segments depend on the audio and are matched by type.",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "content.segmentNotes",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.segmentNotes",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "noteSplitCents": 80
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "asOf": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$ref": "clip.revision" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ]
+      },
+      "derived": { "$any": "array" },
+      "contentId": { "$ref": "clip.contentId" },
+      "f0State": "ready",
+      "tuningHz": { "$any": "number" },
+      "noteSplitCents": { "$approx": 80 },
+      "segments": { "$any": "array" }
+    }
+  },
+  "connectionAfter": "open"
+}

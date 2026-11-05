@@ -1,0 +1,65 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/control-pause-at-last-start",
+  "type": "scenario",
+  "description": "pauseAtLastStart, which OpenTune's play-from-start button does during playback, pauses and returns to the position of the last play or seek.",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": { "audio": { "running": true } },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "transport.control",
+        "params": { "action": "seek", "positionTimelineSec": 2 }
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 1, "result": { "applied": true } } },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "transport.control",
+        "params": { "action": "play" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": { "applied": true, "transport": { "playing": true } }
+      }
+    },
+    { "pauseMs": 300 },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "transport.control",
+        "params": { "action": "pauseAtLastStart" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "undo": {
+            "undoable": false,
+            "reason": "not_persisted_state",
+            "revert": null
+          },
+          "transport": {
+            "playing": false,
+            "positionTimelineSec": 2,
+            "playStartTimelineSec": 2
+          }
+        }
+      }
+    }
+  ]
+}

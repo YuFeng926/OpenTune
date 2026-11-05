@@ -1,0 +1,81 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/set-ok",
+  "type": "request",
+  "description": "track.set mutes track 0 and lowers its volume. The track is no longer audible. As in OpenTune there is no undo entry (undo reason ui_parity); the revert recipe sets the previous values with track.set.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.set",
+  "session": "authenticated",
+  "given": { "dirty": false, "visibleTrackCount": 2 },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.set",
+    "params": { "tracks": [{ "trackId": 0, "muted": true, "volumeDb": -6 }] }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "track",
+          "ref": { "trackId": 0 },
+          "label": { "$any": true },
+          "fields": {
+            "muted": { "before": false, "after": true, "unit": null },
+            "volumeDb": {
+              "before": { "$any": "number" },
+              "after": { "$approx": -6 },
+              "unit": "db"
+            },
+            "volumeLinear": {
+              "before": { "$any": "number" },
+              "after": { "$approx": 0.501187 },
+              "unit": "linear"
+            },
+            "audible": { "before": true, "after": false, "unit": null }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": {
+          "before": { "$any": "string" },
+          "after": { "$any": "string" }
+        },
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "track.set",
+          "params": {
+            "tracks": [
+              { "trackId": 0, "muted": false, "volumeDb": { "$any": "number" } }
+            ]
+          }
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

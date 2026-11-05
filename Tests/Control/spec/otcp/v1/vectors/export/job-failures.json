@@ -1,0 +1,382 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/job-failures",
+  "type": "scenario",
+  "description": "How job.get reports the errors with which the export contract stops a job (PROTOCOL.md section 19): a content revision changed while the file was written (after all contents were ready), a render block failed twice, analysis and rendering did not settle within 120 s, the target appeared before the final rename, analysis failed without allowDry, the file could not be written, the target turned out to be loaded media before the final rename, and a cancelled export. Each job is failed (or cancelled) with the error in job.error and executed false: the target was not touched. The failed jobs are preconditions (given.jobs[].error), so this vector shows the form of these errors, not the behaviour that produces them; export/job-analysis-failed shows one of them produced by an export (vectors/README.md, Coverage rule 7).",
+  "capability": "export.v1",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "changedDuring",
+        "kind": "export",
+        "state": "failed",
+        "cancellable": false,
+        "error": {
+          "kind": "REVISION_CONFLICT",
+          "reason": "changed_during_export"
+        }
+      },
+      {
+        "bind": "renderFailed",
+        "kind": "export",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "RENDER_FAILED", "reason": "render_chunk_failed" }
+      },
+      {
+        "bind": "waitTimeout",
+        "kind": "export",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "NOT_READY", "reason": "export_wait_timeout" }
+      },
+      {
+        "bind": "targetExists",
+        "kind": "export",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "ALREADY_EXISTS", "reason": "target_exists" }
+      },
+      {
+        "bind": "analysisFailed",
+        "kind": "export",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "ANALYSIS_FAILED", "reason": "f0_failed" }
+      },
+      {
+        "bind": "writeFailed",
+        "kind": "export",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "IO_ERROR", "reason": "write_failed" }
+      },
+      {
+        "bind": "loadedMedia",
+        "kind": "export",
+        "state": "failed",
+        "cancellable": false,
+        "error": {
+          "kind": "INVALID_ARGUMENT",
+          "reason": "target_is_loaded_media"
+        }
+      },
+      {
+        "bind": "cancelled",
+        "kind": "export",
+        "state": "cancelled",
+        "cancellable": false,
+        "error": { "kind": "CANCELLED", "reason": "cancelled_by_request" }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "changedDuring" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "changedDuring" },
+            "kind": "export",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "REVISION_CONFLICT",
+              "data": {
+                "kind": "REVISION_CONFLICT",
+                "reason": "changed_during_export",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "renderFailed" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "renderFailed" },
+            "kind": "export",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "RENDER_FAILED",
+              "data": {
+                "kind": "RENDER_FAILED",
+                "reason": "render_chunk_failed",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "waitTimeout" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "waitTimeout" },
+            "kind": "export",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "NOT_READY",
+              "data": {
+                "kind": "NOT_READY",
+                "reason": "export_wait_timeout",
+                "retryable": true,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "targetExists" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "targetExists" },
+            "kind": "export",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "ALREADY_EXISTS",
+              "data": {
+                "kind": "ALREADY_EXISTS",
+                "reason": "target_exists",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "analysisFailed" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "analysisFailed" },
+            "kind": "export",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "ANALYSIS_FAILED",
+              "data": {
+                "kind": "ANALYSIS_FAILED",
+                "reason": "f0_failed",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "writeFailed" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "writeFailed" },
+            "kind": "export",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "IO_ERROR",
+              "data": {
+                "kind": "IO_ERROR",
+                "reason": "write_failed",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "loadedMedia" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "loadedMedia" },
+            "kind": "export",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32602,
+              "message": "INVALID_ARGUMENT",
+              "data": {
+                "kind": "INVALID_ARGUMENT",
+                "reason": "target_is_loaded_media",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "cancelled" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "cancelled" },
+            "kind": "export",
+            "state": "cancelled",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "CANCELLED",
+              "data": {
+                "kind": "CANCELLED",
+                "reason": "cancelled_by_request",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

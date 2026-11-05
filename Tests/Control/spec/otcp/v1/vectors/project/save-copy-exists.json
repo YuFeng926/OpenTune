@@ -1,0 +1,49 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-copy-exists",
+  "type": "request",
+  "description": "project.saveCopy never replaces a file: when another file already exists at path, the call fails with ALREADY_EXISTS(target_exists), starts no job and changes nothing, and there is no confirm that would allow it (project.saveAs needs confirm for the same target). The client picks another name.",
+  "capability": "project.copy",
+  "since": "1.0",
+  "method": "project.saveCopy",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [
+      { "bind": "proj", "kind": "existing", "extension": ".otproj" },
+      { "bind": "other", "kind": "existing", "extension": ".otproj" }
+    ],
+    "projectFile": "proj"
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.saveCopy",
+    "params": { "path": { "$ref": "other" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "ALREADY_EXISTS",
+      "data": {
+        "kind": "ALREADY_EXISTS",
+        "reason": "target_exists",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

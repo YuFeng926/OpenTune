@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/transport.get.schema.json",
+  "title": "transport.get",
+  "description": "Returns the transport: play state, position, the position that \"play from start\" returns to (the last play or seek, PROTOCOL.md section 15.4 rule 5), the loop flag (no audible effect in OpenTune Standalone), tempo, time signature, whether an audio device runs, and the last transport call.",
+  "x-otcp": {
+    "method": "transport.get",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "read",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "allOf": [{ "$ref": "../schemas/common.schema.json#/$defs/readMeta" }],
+      "required": ["transport"],
+      "properties": {
+        "transport": {
+          "$ref": "../schemas/common.schema.json#/$defs/transport"
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/duplicate-not-found",
+  "type": "request",
+  "description": "A trackId that names no track slot gives NOT_FOUND(unknown_handle).",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.duplicate",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.duplicate",
+    "params": { "trackId": { "$ref": "runner.unknownTrackId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

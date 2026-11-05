@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/arrangement.edit.schema.json",
+  "title": "arrangement.edit",
+  "description": "Edits clips (placements) on the timeline as OpenTune's arrangement view does. The ops are applied in the order given to the arrangement that expectedArrangementRevision names (else REVISION_CONFLICT(arrangement_changed)); each op addresses clips that exist when the call starts, and one call is one undo step. op move moves a clip in time, to another track, or both; op trim moves the start or the end edge of a clip, within the audio of its content (else INVALID_ARGUMENT(trim_out_of_range)); op setGain sets the clip gain, limited to the range OpenTune accepts (warning CLAMPED, data {field, requested, applied}); op setFade sets fade lengths, limited to the clip's length (warning CLAMPED); op split cuts a clip in two at the nearest analysis frame (warning SPLIT_SNAPPED, data {requestedTimelineSec, appliedTimelineSec}, when that differs from atTimelineSec), which needs the clip's pitch analysis (NOT_READY(f0_not_ready) while it runs) and a position strictly inside the clip (else INVALID_ARGUMENT(split_out_of_range)); op merge joins two clips that OpenTune can merge: on one track, the trailing clip starting where the leading clip ends, both showing adjacent parts of one content with equal gain (else INVALID_ARGUMENT(merge_not_possible)); op delete removes clips; OpenTune cannot undo that and no request restores the clips, so a call with op delete needs confirm true, and without it fails with INVALID_ARGUMENT(confirm_required) and changes nothing (PROTOCOL.md section 20.2 rule 3); clients set confirm only when the end user explicitly agreed to delete these clips, and only a call with op delete accepts confirm. A placement that does not exist, or a toTrackId that names no track slot, gives NOT_FOUND(unknown_handle). A clip moved onto a hidden track shows that track (sideEffects.tracksRevealed {trackIds, revert: null}, warning TRACK_AUTO_REVEALED), and a clip that now overlaps another clip on its track carries the warning OVERLAPS_CLIP. changes lists every changed clip with the members that changed; created, removed and idMap (relation split or merge) report the clips that split and merge replace. A trim records the clip's fades in its undo step before the trim, so undoing it restores fades that the trim shortened (PROTOCOL.md section 15.4 rule 2); the result then carries the warning FADES_RECLAMPED (subject the clip, data {fadeInSec, fadeOutSec}, each {before, after}, or null for a fade that kept its length). Split, merge and delete meet a known OpenTune defect (section 15.4 rule 1): the server pushes the same undo entry as the UI, reports undo {undoable: false, reason: upstream_undo_defect} with the warning UPSTREAM_UNDO_DEFECT, and edit.undo and edit.redo refuse that entry. A call with an op split, merge or delete has no other op. The revert recipe of a split merges the two clips with arrangement.edit, and that of a merge splits the clip again at the former boundary; the restored clips get new placementIds, and fades the clips had at the boundary are not restored. A deleted clip cannot be restored: revert is null and the result carries the warning IRREVERSIBLE. With dryRun true nothing changes, and the result predicts the changes (section 14.2); a prediction needs no confirm.",
+  "x-otcp": {
+    "method": "arrangement.edit",
+    "layer": "L6",
+    "capability": "arrangement.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "NOT_READY",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["expectedArrangementRevision", "ops"],
+      "additionalProperties": false,
+      "properties": {
+        "expectedArrangementRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        },
+        "ops": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/op" }
+        },
+        "dryRun": { "type": "boolean", "default": false },
+        "confirm": {
+          "description": "The end user explicitly agreed to delete the clips of op delete. Without true, a call with op delete fails with INVALID_ARGUMENT(confirm_required), unless dryRun is true. Only a call with op delete accepts it.",
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ops": {
+                "type": "array",
+                "contains": {
+                  "type": "object",
+                  "required": ["op"],
+                  "properties": {
+                    "op": { "enum": ["split", "merge", "delete"] }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": { "ops": { "type": "array", "maxItems": 1 } }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ops": {
+                "type": "array",
+                "contains": {
+                  "type": "object",
+                  "required": ["op"],
+                  "properties": { "op": { "const": "delete" } }
+                }
+              }
+            }
+          },
+          "else": { "not": { "required": ["confirm"] } }
+        }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "op": {
+      "oneOf": [
+        { "$ref": "#/$defs/opMove" },
+        { "$ref": "#/$defs/opTrim" },
+        { "$ref": "#/$defs/opSetGain" },
+        { "$ref": "#/$defs/opSetFade" },
+        { "$ref": "#/$defs/opSplit" },
+        { "$ref": "#/$defs/opMerge" },
+        { "$ref": "#/$defs/opDelete" }
+      ]
+    },
+    "opMove": {
+      "description": "Moves a clip to startTimelineSec, to track toTrackId, or both.",
+      "type": "object",
+      "required": ["op", "placementId"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "move" },
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "toTrackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "startTimelineSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        }
+      },
+      "anyOf": [
+        { "required": ["toTrackId"] },
+        { "required": ["startTimelineSec"] }
+      ]
+    },
+    "opTrim": {
+      "description": "Moves the start or the end edge of a clip to toTimelineSec. Moving the start edge also moves the start of the part of the content the clip shows.",
+      "type": "object",
+      "required": ["op", "placementId", "edge", "toTimelineSec"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "trim" },
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "edge": { "enum": ["start", "end"] },
+        "toTimelineSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        }
+      }
+    },
+    "opSetGain": {
+      "description": "Sets the clip gain, in dB or as a linear factor.",
+      "type": "object",
+      "required": ["op", "placementId"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "setGain" },
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "gainDb": { "type": "number" },
+        "gainLinear": { "type": "number", "minimum": 0 }
+      },
+      "oneOf": [{ "required": ["gainDb"] }, { "required": ["gainLinear"] }]
+    },
+    "opSetFade": {
+      "description": "Sets the length of the fade-in, of the fade-out, or of both.",
+      "type": "object",
+      "required": ["op", "placementId"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "setFade" },
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "fadeInSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "fadeOutSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        }
+      },
+      "anyOf": [{ "required": ["fadeInSec"] }, { "required": ["fadeOutSec"] }]
+    },
+    "opSplit": {
+      "description": "Cuts a clip into two clips at atTimelineSec.",
+      "type": "object",
+      "required": ["op", "placementId", "atTimelineSec"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "split" },
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "atTimelineSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        }
+      }
+    },
+    "opMerge": {
+      "description": "Joins two clips into one.",
+      "type": "object",
+      "required": ["op", "leadingPlacementId", "trailingPlacementId"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "merge" },
+        "leadingPlacementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "trailingPlacementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        }
+      }
+    },
+    "opDelete": {
+      "description": "Removes clips.",
+      "type": "object",
+      "required": ["op", "placementIds"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "const": "delete" },
+        "placementIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "../schemas/common.schema.json#/$defs/placementId"
+          }
+        }
+      }
+    }
+  }
+}

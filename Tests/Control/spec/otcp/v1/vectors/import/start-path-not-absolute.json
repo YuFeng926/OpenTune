@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-path-not-absolute",
+  "type": "request",
+  "description": "A relative path is rejected before the job starts and before any file-system access: INVALID_ARGUMENT(path_not_absolute) on every platform.",
+  "capability": "import.v1",
+  "since": "1.0",
+  "method": "import.start",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "import.start",
+    "params": { "items": [{ "path": "take1.wav" }], "layout": "single" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "path_not_absolute",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

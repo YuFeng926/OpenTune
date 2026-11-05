@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-protocol-mismatch",
+  "type": "request",
+  "description": "A hello with the right token but a protocol major the instance does not serve gets the fixed PROTOCOL_MISMATCH response, and the server closes the connection.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.hello",
+  "session": "unauthenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "session.hello",
+    "params": {
+      "token": { "$ref": "discovery.token" },
+      "protocol": "99.0",
+      "client": { "name": "otcp-vector-runner", "version": "1.0.0" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32002,
+      "message": "PROTOCOL_MISMATCH",
+      "data": {
+        "kind": "PROTOCOL_MISMATCH",
+        "retryable": false,
+        "detail": "unsupported protocol major version",
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "closed"
+}

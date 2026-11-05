@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.shiftTiming.schema.json",
+  "title": "content.shiftTiming",
+  "description": "Moves a section of a content earlier or later by deltaSec, as dragging time-grid handles in OpenTune's time tool does: every handle whose output position lies in range moves by deltaSec and the other handles stay, so the audio next to the section is stretched or compressed. range is a closed interval: a handle exactly at its start and a handle exactly at its end both move (OpenTune selects the handles with start <= position <= end). So when two ranges of one batch share an end point, a handle at that point is moved twice, once by each range; adjacent ranges must not share an end point. range uses the content or the output clock; a content range is mapped through the grid at expectedGridRevision. Moves are limited as in OpenTune's time tool, in two passes, by the minimum spacing to the neighbouring handles; a limited move is applied as far as allowed and reported in clamped and with the warning CLAMPED (subject: the handle; data: {field: outputSec, requested, applied}). The time grid must have handles (content.editTimeGrid op seed), else NOT_READY(grid_not_seeded). If no handle lies in range, the call is a no-op. One call is one undo step. Rendering is queued again (sideEffects.reRenderQueued); exports wait for it (PROTOCOL.md section 19).",
+  "x-otcp": {
+    "method": "content.shiftTiming",
+    "layer": "L5",
+    "capability": "timing.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "NOT_READY",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["contentId", "expectedGridRevision", "range", "deltaSec"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "expectedGridRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        },
+        "range": {
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/contentRange" },
+            { "$ref": "../schemas/common.schema.json#/$defs/outputRange" }
+          ]
+        },
+        "deltaSec": { "type": "number", "minimum": -10, "maximum": 10 },
+        "dryRun": { "type": "boolean", "default": false }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["clamped"],
+      "properties": {
+        "clamped": {
+          "type": "array",
+          "items": {
+            "$ref": "../schemas/common.schema.json#/$defs/clampedMove"
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

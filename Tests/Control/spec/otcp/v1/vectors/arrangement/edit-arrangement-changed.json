@@ -1,0 +1,78 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-arrangement-changed",
+  "type": "scenario",
+  "description": "A second edit that still names the arrangement revision from before the first edit gets REVISION_CONFLICT(arrangement_changed) and changes nothing.",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "arrangement.edit",
+        "params": {
+          "expectedArrangementRevision": {
+            "$ref": "runner.arrangementRevision"
+          },
+          "ops": [
+            {
+              "op": "move",
+              "placementId": { "$ref": "clip.placementId" },
+              "startTimelineSec": 4
+            }
+          ]
+        }
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 1, "result": { "applied": true } } },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "arrangement.edit",
+        "params": {
+          "expectedArrangementRevision": {
+            "$ref": "runner.arrangementRevision"
+          },
+          "ops": [
+            {
+              "op": "move",
+              "placementId": { "$ref": "clip.placementId" },
+              "startTimelineSec": 6
+            }
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32000,
+          "message": "REVISION_CONFLICT",
+          "data": {
+            "kind": "REVISION_CONFLICT",
+            "reason": "arrangement_changed",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

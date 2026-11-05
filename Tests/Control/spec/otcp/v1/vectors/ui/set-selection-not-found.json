@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/set-selection-not-found",
+  "type": "request",
+  "description": "Selecting a placement that does not exist gives NOT_FOUND(unknown_handle).",
+  "capability": "ui.bridge",
+  "since": "1.0",
+  "method": "ui.setSelection",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.setSelection",
+    "params": { "placementId": { "$ref": "runner.unknownPlacementId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

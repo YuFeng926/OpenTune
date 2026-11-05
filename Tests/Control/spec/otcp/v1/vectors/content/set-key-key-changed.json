@@ -1,0 +1,68 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/set-key-key-changed",
+  "type": "scenario",
+  "description": "expectedKeyRevision guards against a concurrent key change: after another setKey, a request with the old key revision gets REVISION_CONFLICT(key_changed) and changes nothing.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "key": { "root": 9, "scale": "minor" },
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.setKey",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "key": { "root": 2, "scale": "major" }
+        }
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 1, "result": { "$any": "object" } } },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "content.setKey",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "key": { "root": 4, "scale": "major" },
+          "expectedKeyRevision": { "$ref": "clip.keyRevision" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32000,
+          "message": "REVISION_CONFLICT",
+          "data": {
+            "kind": "REVISION_CONFLICT",
+            "reason": "key_changed",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

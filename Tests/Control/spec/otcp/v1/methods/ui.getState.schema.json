@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/ui.getState.schema.json",
+  "title": "ui.getState",
+  "description": "Returns the state of the OpenTune window that decides whether writes are refused and what the user sees: the busy conditions of PROTOCOL.md section 13.2, the open dialogs from the bottom of the stack to the top, the first-run onboarding, the generic UI snapshot of section 14.6 and the scale shown in the transport bar. For each dialog, kind is trackColour, confirm, pitchShift, preferences, message or unknown; closeCommits is true when closing the dialog commits the value it shows, as closing the track-colour dialog does (section 15.4 rule 4), and also for kind unknown, whose behaviour the server cannot tell; trackId names the track of a track-colour dialog and is null for the other kinds. Dialog titles come from OpenTune and may contain file and project names: they are untrusted data (section 20.2). onboarding.shown is the user-global preference that the first-run overlay was shown (prefs.get onboardingShown), and onboarding.showing is true while the overlay is on screen. uiScale is the scale that the AUTO button, SNAP and the pitch tool of the OpenTune UI use; it follows the key of the selected clip and is read-only through this protocol. The result describes the window, not the project, so it carries no asOf. File choosers of the operating system are not listed as dialogs.",
+  "x-otcp": {
+    "method": "ui.getState",
+    "layer": "L3",
+    "capability": "ui.bridge",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "required": ["busy", "dialogs", "onboarding", "ui", "uiScale"],
+      "additionalProperties": false,
+      "properties": {
+        "busy": {
+          "type": "object",
+          "required": [
+            "pointerDown",
+            "modalOpen",
+            "importInProgress",
+            "exportInProgress",
+            "projectOperation"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "pointerDown": {
+              "description": "The user is in the middle of a mouse or pen gesture (BUSY reason pointer_down).",
+              "type": "boolean"
+            },
+            "modalOpen": {
+              "description": "A dialog is open (BUSY reason modal_open).",
+              "type": "boolean"
+            },
+            "importInProgress": {
+              "description": "An import started in the OpenTune UI is running (BUSY reason import_in_progress).",
+              "type": "boolean"
+            },
+            "exportInProgress": {
+              "description": "An export holds the export lock (BUSY reason export_in_progress).",
+              "type": "boolean"
+            },
+            "projectOperation": {
+              "description": "A project save or open is running (BUSY reason project_operation).",
+              "type": "boolean"
+            }
+          }
+        },
+        "dialogs": { "type": "array", "items": { "$ref": "#/$defs/dialog" } },
+        "onboarding": {
+          "type": "object",
+          "required": ["shown", "showing"],
+          "additionalProperties": false,
+          "properties": {
+            "shown": { "type": "boolean" },
+            "showing": { "type": "boolean" }
+          }
+        },
+        "ui": { "$ref": "../schemas/common.schema.json#/$defs/uiSnapshot" },
+        "uiScale": {
+          "type": "object",
+          "required": ["root", "scale"],
+          "additionalProperties": false,
+          "properties": {
+            "root": { "type": "integer", "minimum": 0, "maximum": 11 },
+            "scale": {
+              "$ref": "../schemas/common.schema.json#/$defs/scaleName"
+            }
+          }
+        }
+      }
+    },
+    "dialog": {
+      "type": "object",
+      "required": ["kind", "title", "closeCommits", "trackId"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "description": "trackColour, confirm, pitchShift, preferences, message or unknown.",
+          "$ref": "../schemas/common.schema.json#/$defs/camelName"
+        },
+        "title": {
+          "description": "The dialog's title as OpenTune shows it. Untrusted data.",
+          "type": "string",
+          "maxLength": 256
+        },
+        "closeCommits": { "type": "boolean" },
+        "trackId": {
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+            { "type": "null" }
+          ]
+        }
+      }
+    }
+  }
+}

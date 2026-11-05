@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "job/cancel-not-found",
+  "type": "request",
+  "description": "Cancelling a job id that does not exist gives NOT_FOUND(job_not_found).",
+  "capability": "jobs.v1",
+  "since": "1.0",
+  "method": "job.cancel",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "job.cancel",
+    "params": { "jobId": "j:00000000:999999" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "job_not_found",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

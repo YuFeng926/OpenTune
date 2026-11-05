@@ -1,0 +1,226 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/invalid-request",
+  "type": "scenario",
+  "description": "After authentication, JSON values that are neither a valid request, a batch nor a notification get INVALID_ARGUMENT(invalid_request): a method that is not a string or is missing, a wrong jsonrpc, params that are not an object, an extra member, an id that is not a string or a number, and a value that is not an object. The response carries the id when the value is an object with a valid id, otherwise id null. The session stays open.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":7}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 40,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"1.0\",\"id\":41,\"method\":\"session.info\"}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 41,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"session.info\",\"params\":[]}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 42,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"session.info\",\"extra\":1}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 43,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":true,\"method\":\"session.info\"}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"session.info\"}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"method\":7}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":45,\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 45,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "\"session.info\"\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 44,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 44,
+        "result": {
+          "$any": "object"
+        }
+      }
+    }
+  ]
+}

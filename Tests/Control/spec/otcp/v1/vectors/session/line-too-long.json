@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/line-too-long",
+  "type": "scenario",
+  "description": "After authentication, a line longer than 4194304 bytes is answered with INVALID_ARGUMENT(line_too_long) with id null as soon as the limit is passed, and the server closes the connection.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendFilled": {
+        "head": "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"session.info\",\"params\":{\"pad\":\"",
+        "fill": "a",
+        "bytes": 4194305,
+        "tail": ""
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "line_too_long",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "expectClosed": {
+        "noBytes": true
+      }
+    }
+  ]
+}

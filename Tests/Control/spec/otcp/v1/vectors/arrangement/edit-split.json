@@ -1,0 +1,115 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-split",
+  "type": "request",
+  "description": "op split cuts a clip at 5 s, a frame boundary of its analysis, into two clips that replace it (removed, created, idMap relation split). OpenTune cannot undo a split (PROTOCOL.md section 15.4 rule 1): the server pushes the same undo entry as the UI and reports undo reason upstream_undo_defect with the warning UPSTREAM_UNDO_DEFECT. The revert recipe merges the two clips again.",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.edit",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.edit",
+    "params": {
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "ops": [
+        {
+          "op": "split",
+          "placementId": { "$ref": "clip.placementId" },
+          "atTimelineSec": 5
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [
+        {
+          "entity": "placement",
+          "ref": { "placementId": { "$any": "string" } },
+          "label": { "$any": true }
+        },
+        {
+          "entity": "placement",
+          "ref": { "placementId": { "$any": "string" } },
+          "label": { "$any": true }
+        }
+      ],
+      "removed": [
+        {
+          "entity": "placement",
+          "ref": { "placementId": { "$ref": "clip.placementId" } },
+          "label": { "$any": true }
+        }
+      ],
+      "idMap": [
+        {
+          "entity": "placement",
+          "relation": "split",
+          "from": [{ "placementId": { "$ref": "clip.placementId" } }],
+          "to": [
+            { "placementId": { "$any": "string" } },
+            { "placementId": { "$any": "string" } }
+          ]
+        }
+      ],
+      "revisionDiff": {
+        "arrangement": {
+          "before": { "$ref": "runner.arrangementRevision" },
+          "after": { "$any": "string" }
+        },
+        "trackState": null,
+        "contents": { "$any": "array" }
+      },
+      "tokens": { "$any": "object" },
+      "undo": {
+        "undoable": false,
+        "reason": "upstream_undo_defect",
+        "revert": {
+          "method": "arrangement.edit",
+          "params": {
+            "expectedArrangementRevision": { "$any": "string" },
+            "ops": [
+              {
+                "op": "merge",
+                "leadingPlacementId": { "$any": "string" },
+                "trailingPlacementId": { "$any": "string" }
+              }
+            ]
+          }
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "UPSTREAM_UNDO_DEFECT",
+          "subject": { "placementId": { "$ref": "clip.placementId" } },
+          "data": null
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

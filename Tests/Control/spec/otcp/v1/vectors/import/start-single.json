@@ -1,0 +1,55 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-single",
+  "type": "request",
+  "description": "layout single imports one file onto track 0 at the start of the timeline. The call hands the work to a job of kind import and changes nothing itself.",
+  "capability": "import.v1",
+  "since": "1.0",
+  "method": "import.start",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "files": [{ "bind": "take1", "kind": "audio", "durationSec": 4 }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "import.start",
+    "params": {
+      "items": [{ "path": { "$ref": "take1" } }],
+      "layout": "single",
+      "trackId": 0,
+      "startTimelineSec": 0
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": false,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": { "$any": "object" },
+      "undo": null,
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": {
+        "jobId": { "$any": "string" },
+        "kind": "import",
+        "state": { "$any": "string" }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

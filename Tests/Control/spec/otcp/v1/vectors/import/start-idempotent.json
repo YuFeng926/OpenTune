@@ -1,0 +1,186 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-idempotent",
+  "type": "scenario",
+  "description": "Repeating import.start with the same idempotencyKey, for example after a lost response, starts nothing and returns the job of the first call, so the file is imported once: project.get then shows a single clip. The same key with other params fails with INVALID_ARGUMENT(idempotency_key_reused) and starts nothing.",
+  "capability": "import.v1",
+  "extraCapabilities": ["jobs.v1", "read.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [],
+    "files": [{ "bind": "take1", "kind": "audio", "durationSec": 4 }]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "import.start",
+        "params": {
+          "items": [{ "path": { "$ref": "take1" } }],
+          "layout": "single",
+          "trackId": 0,
+          "startTimelineSec": 0,
+          "focus": false,
+          "idempotencyKey": "take1-at-0"
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": null,
+          "dirty": { "before": false, "after": false },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [],
+          "job": {
+            "jobId": { "$capture": "importJob", "$any": "string" },
+            "kind": "import",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "import.start",
+        "params": {
+          "items": [{ "path": { "$ref": "take1" } }],
+          "layout": "single",
+          "trackId": 0,
+          "startTimelineSec": 0,
+          "focus": false,
+          "idempotencyKey": "take1-at-0"
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": null,
+          "dirty": { "$any": "object" },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [],
+          "job": {
+            "jobId": { "$ref": "importJob" },
+            "kind": "import",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "import.start",
+        "params": {
+          "items": [{ "path": { "$ref": "take1" } }],
+          "layout": "single",
+          "trackId": 1,
+          "startTimelineSec": 0,
+          "focus": false,
+          "idempotencyKey": "take1-at-0"
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32602,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "idempotency_key_reused",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "importJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "importJob" },
+            "kind": "import",
+            "state": "succeeded",
+            "result": { "$any": "object" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "project.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "placements": [
+            {
+              "trackId": 0,
+              "startTimelineSec": { "$approx": 0 },
+              "sourcePath": { "$ref": "take1" }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

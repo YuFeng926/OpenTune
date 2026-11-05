@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/transport.setTempo.schema.json",
+  "title": "transport.setTempo",
+  "description": "Sets the tempo (bpm, 1 to 999) and the time signature of the project, as the tempo and time-signature fields of OpenTune's transport bar do; at least one of them is given. The time signature has a numerator from 1 to 32 and a denominator that is a power of two from 1 to 32; the schema rejects other values, which OpenTune would ignore without saying so. Clip positions are in seconds and do not move. The values are saved with the project, so the project is marked as changed. As in OpenTune there is no undo entry: the undo reason is ui_parity, and the revert recipe sets the previous tempo and time signature with transport.setTempo. Values equal to the current ones are a no-op. changes lists the tempo (entity tempo) with the members that changed (bpm with unit bpm, timeSignature), and tempo is the tempo and time signature after the call.",
+  "x-otcp": {
+    "method": "transport.setTempo",
+    "layer": "L6",
+    "capability": "transport.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "bpm": { "type": "number", "minimum": 1, "maximum": 999 },
+        "timeSignature": {
+          "type": "object",
+          "required": ["numerator", "denominator"],
+          "additionalProperties": false,
+          "properties": {
+            "numerator": { "type": "integer", "minimum": 1, "maximum": 32 },
+            "denominator": { "enum": [1, 2, 4, 8, 16, 32] }
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["tempo"],
+      "properties": {
+        "tempo": {
+          "type": "object",
+          "required": ["bpm", "timeSignature"],
+          "additionalProperties": false,
+          "properties": {
+            "bpm": { "type": "number", "minimum": 1, "maximum": 999 },
+            "timeSignature": {
+              "type": "object",
+              "required": ["numerator", "denominator"],
+              "additionalProperties": false,
+              "properties": {
+                "numerator": { "type": "integer", "minimum": 1 },
+                "denominator": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

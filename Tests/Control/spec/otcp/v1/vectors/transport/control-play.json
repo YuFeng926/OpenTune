@@ -1,0 +1,73 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/control-play",
+  "type": "request",
+  "description": "action play starts playback at the current position. The play state is view state (PROTOCOL.md section 15.2 rule 6): undo reason not_persisted_state, revert null, no IRREVERSIBLE warning, and the project is not marked as changed. transport is the state right after the call.",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "method": "transport.control",
+  "session": "authenticated",
+  "given": { "dirty": false, "audio": { "running": true } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "transport.control",
+    "params": { "action": "play" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "transport",
+          "ref": { "singleton": "transport" },
+          "label": { "$any": true },
+          "fields": {
+            "playing": { "before": false, "after": true, "unit": null }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "not_persisted_state",
+        "revert": null
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null,
+      "transport": {
+        "playing": true,
+        "positionTimelineSec": { "$any": "number" },
+        "playStartTimelineSec": 0,
+        "loopEnabled": false,
+        "bpm": 120,
+        "timeSignature": { "numerator": 4, "denominator": 4 },
+        "audioDeviceRunning": true,
+        "lastControl": {
+          "call": { "$any": "string" },
+          "atMs": { "$any": "integer" }
+        }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,5 +1,8 @@
 #include "AppLogger.h"
 #include "LocalizationManager.h"
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+#include "Control/ControlDataDirectory.h"  // OpenTune Control API hook: OPENTUNE_DATA_DIR, see Source/Control/README.md#hooks
+#endif
 
 namespace OpenTune {
 
@@ -74,6 +77,11 @@ void AppLogger::initialize()
     juce::File logDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
         .getChildFile("OpenTune")
         .getChildFile("Logs");
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: OPENTUNE_DATA_DIR replaces the per-user OpenTune folder, see Source/Control/README.md#hooks
+    if (const auto dataDirectory = controlDataDirectory(); dataDirectory != juce::File{})
+        logDir = dataDirectory.getChildFile("Logs");
+#endif
     if (!logDir.createDirectory()) {
         logDir = juce::File::getSpecialLocation(juce::File::tempDirectory)
             .getChildFile("OpenTune")

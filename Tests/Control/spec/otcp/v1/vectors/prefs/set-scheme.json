@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-scheme",
+  "type": "request",
+  "description": "A change of the editing scheme is applied by a job of kind prefsApply, because OpenTune applies it to its editor asynchronously; the call itself changes nothing.",
+  "capability": "prefs.write",
+  "since": "1.0",
+  "method": "prefs.set",
+  "session": "authenticated",
+  "given": { "dirty": false, "editingScheme": "openTune" },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "prefs.set",
+    "params": { "editingScheme": "openDyne" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": false,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": { "$any": "object" },
+      "undo": null,
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": {
+        "jobId": { "$any": "string" },
+        "kind": "prefsApply",
+        "state": { "$any": "string" }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

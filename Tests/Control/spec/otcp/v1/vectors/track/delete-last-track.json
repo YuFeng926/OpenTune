@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/delete-last-track",
+  "type": "request",
+  "description": "The only visible track cannot be deleted: INVALID_ARGUMENT(last_track).",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.delete",
+  "session": "authenticated",
+  "given": { "visibleTrackCount": 1 },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.delete",
+    "params": {
+      "trackId": 0,
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "confirm": true
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "last_track",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

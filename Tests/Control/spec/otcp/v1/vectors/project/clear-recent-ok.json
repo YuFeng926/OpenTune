@@ -1,0 +1,77 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/clear-recent-ok",
+  "type": "request",
+  "description": "project.clearRecent empties the list of recent projects, a user-global preference that no request can fill again (warning IRREVERSIBLE). The project files are not touched.",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.clearRecent",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "files": [
+      { "bind": "first", "kind": "existing", "extension": ".otproj" },
+      { "bind": "second", "kind": "existing", "extension": ".otproj" }
+    ],
+    "preferences": { "recentProjects": ["first", "second"] }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.clearRecent",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "preference",
+          "ref": { "preference": "recentProjects" },
+          "label": { "$any": true },
+          "fields": {
+            "recentProjects": {
+              "before": [{ "$ref": "first" }, { "$ref": "second" }],
+              "after": [],
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "no_upstream_undo",
+        "revert": null
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "IRREVERSIBLE",
+          "subject": { "preference": "recentProjects" },
+          "data": null
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

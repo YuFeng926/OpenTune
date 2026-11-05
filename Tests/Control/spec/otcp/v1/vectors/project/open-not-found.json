@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/open-not-found",
+  "type": "request",
+  "description": "Opening a path where no file exists gives NOT_FOUND(file_not_found) and starts no job.",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.open",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "files": [{ "bind": "missing", "kind": "absent", "extension": ".otproj" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.open",
+    "params": { "path": { "$ref": "missing" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "file_not_found",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

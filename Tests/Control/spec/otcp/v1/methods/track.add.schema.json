@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/track.add.schema.json",
+  "title": "track.add",
+  "description": "Shows count more track slots after the visible ones (default 1), as the + button of OpenTune's track panel does. If fewer hidden slots remain, the call fails with INVALID_ARGUMENT(track_limit) and shows none. changes lists every track that became visible (member visible), and visibleTrackCount gives the number of visible tracks before and after. A shown track keeps the clips it holds, as a later track can after a project was opened. OpenTune saves the number of visible tracks with the project, so the call marks the project as changed (dirty.after is true), as the + button does. The + button has no undo in OpenTune and no request restores the previous number, so undo is {undoable: false, reason: no_upstream_undo, revert: null} and the result carries the warning IRREVERSIBLE (subject the first track shown; PROTOCOL.md section 15.2 rule 2). track.delete can remove a track that was shown, but it is no revert recipe: it deletes the clips on the track with it, one request deletes one track, so it cannot take back several shown tracks, and it needs the end user's consent.",
+  "x-otcp": {
+    "method": "track.add",
+    "layer": "L6",
+    "capability": "tracks.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "default": 1
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["visibleTrackCount"],
+      "properties": {
+        "visibleTrackCount": {
+          "type": "object",
+          "required": ["before", "after"],
+          "additionalProperties": false,
+          "properties": {
+            "before": { "type": "integer", "minimum": 0 },
+            "after": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

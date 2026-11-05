@@ -1,0 +1,162 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/open-discard",
+  "type": "scenario",
+  "description": "With discardUnsaved true, given only because the end user agreed to lose the changes, project.open replaces a project with unsaved changes that was never saved: removed lists its clip and content, previous reports the discarded changes, and since nothing can bring them back, revert is null and the result carries the warning IRREVERSIBLE.",
+  "capability": "project.io",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [
+      {
+        "bind": "proj",
+        "kind": "project",
+        "extension": ".otproj",
+        "durationSec": 4
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "project.open",
+        "params": { "path": { "$ref": "proj" }, "discardUnsaved": true }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "discardJob", "$any": "string" },
+            "kind": "projectOpen",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "discardJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "discardJob" },
+            "kind": "projectOpen",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "dryRun": false,
+              "changes": [
+                {
+                  "entity": "project",
+                  "ref": { "singleton": "project" },
+                  "label": { "$any": true },
+                  "fields": {
+                    "path": {
+                      "before": null,
+                      "after": { "$ref": "proj" },
+                      "unit": null
+                    }
+                  }
+                }
+              ],
+              "created": [
+                {
+                  "entity": "placement",
+                  "ref": { "placementId": { "$any": "string" } },
+                  "label": { "$any": true }
+                },
+                {
+                  "entity": "content",
+                  "ref": { "contentId": { "$any": "string" } },
+                  "label": { "$any": true }
+                }
+              ],
+              "removed": [
+                {
+                  "entity": "placement",
+                  "ref": { "placementId": { "$ref": "clip.placementId" } },
+                  "label": { "$any": true }
+                },
+                {
+                  "entity": "content",
+                  "ref": { "contentId": { "$ref": "clip.contentId" } },
+                  "label": { "$any": true }
+                }
+              ],
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": {
+                  "before": { "$any": "string" },
+                  "after": { "$any": "string" }
+                },
+                "trackState": { "$any": true },
+                "contents": { "$any": "array" }
+              },
+              "tokens": { "$any": "object" },
+              "undo": {
+                "undoable": false,
+                "reason": "no_upstream_undo",
+                "revert": null
+              },
+              "dirty": { "before": true, "after": false },
+              "ui": { "$any": true },
+              "sideEffects": {},
+              "warnings": [
+                {
+                  "code": "IRREVERSIBLE",
+                  "subject": { "singleton": "project" },
+                  "data": null
+                }
+              ],
+              "job": null,
+              "path": { "$ref": "proj" },
+              "previous": { "path": null, "dirty": true, "discarded": true },
+              "restored": {
+                "placementCount": 1,
+                "contentCount": 1,
+                "visibleTrackCount": { "$any": "integer" }
+              },
+              "skipped": {
+                "media": [],
+                "placementCount": 0
+              },
+              "historyCleared": { "undoCount": 0, "redoCount": 0 },
+              "omittedCount": { "created": 0, "removed": 0 }
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

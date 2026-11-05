@@ -1,0 +1,61 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/get-history-ok",
+  "type": "request",
+  "description": "edit.getHistory with one pitch-shift entry created through this API on the undo history and an empty redo history.",
+  "capability": "history.v1",
+  "since": "1.0",
+  "method": "edit.getHistory",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "bind": "u1",
+          "origin": "control",
+          "action": "pitchShift",
+          "clip": "clip"
+        }
+      ],
+      "redo": []
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "edit.getHistory",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "asOf": { "$any": "object" },
+      "derived": { "$any": "array" },
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoCount": 1,
+        "redoCount": 0,
+        "undoTop": {
+          "undoId": { "$ref": "u1" },
+          "description": { "$any": "string" },
+          "origin": "control",
+          "possiblyStale": false,
+          "unsafe": false
+        },
+        "redoTop": null
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

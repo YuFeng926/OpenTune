@@ -1,0 +1,46 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "job/cancel-ok",
+  "type": "request",
+  "description": "Cancelling a running, cancellable job is accepted. The job stops at its next cancellation point, so right after the request it may still be running; cancellable is false once cancellation is requested.",
+  "capability": "jobs.v1",
+  "since": "1.0",
+  "method": "job.cancel",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "exportJob",
+        "kind": "export",
+        "state": "running",
+        "cancellable": true
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "job.cancel",
+    "params": { "jobId": { "$ref": "exportJob" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": {
+      "cancelRequested": true,
+      "job": {
+        "jobId": { "$ref": "exportJob" },
+        "kind": "export",
+        "state": { "$any": "string" },
+        "cancellable": false,
+        "createdAtMs": { "$any": "integer" },
+        "updatedAtMs": { "$any": "integer" },
+        "finishedAtMs": { "$any": true },
+        "progress": { "$any": "object" },
+        "result": { "$any": true },
+        "error": { "$any": true }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

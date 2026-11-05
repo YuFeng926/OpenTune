@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/set-workspace-invalid",
+  "type": "request",
+  "description": "A workspace that is not arrangement or pianoRoll violates the params schema: INVALID_ARGUMENT(invalid_params), executed false, and the window is not changed. A call without workspace fails the same way.",
+  "capability": "ui.workspace",
+  "since": "1.0",
+  "method": "ui.setWorkspace",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.setWorkspace",
+    "params": { "workspace": "mixer" }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "invalid_params",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

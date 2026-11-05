@@ -1,0 +1,31 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/notification-ignored",
+  "type": "scenario",
+  "description": "After authentication, a notification (an object with jsonrpc \"2.0\", a string method and no id) is neither executed nor answered: the next line the server sends is the response to the following request.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 39,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 39,
+        "result": {
+          "$any": "object"
+        }
+      }
+    }
+  ]
+}

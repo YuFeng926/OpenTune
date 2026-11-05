@@ -1,0 +1,62 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/control-pause",
+  "type": "scenario",
+  "description": "action pause stops playback and keeps the position where playback was.",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": { "audio": { "running": true } },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "transport.control",
+        "params": { "action": "play" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "applied": true, "transport": { "playing": true } }
+      }
+    },
+    { "pauseMs": 300 },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "transport.control",
+        "params": { "action": "pause" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "changes": [
+            {
+              "entity": "transport",
+              "ref": { "singleton": "transport" },
+              "label": { "$any": true },
+              "fields": {
+                "playing": { "before": true, "after": false, "unit": null }
+              }
+            }
+          ],
+          "undo": {
+            "undoable": false,
+            "reason": "not_persisted_state",
+            "revert": null
+          },
+          "transport": { "playing": false, "playStartTimelineSec": 0 }
+        }
+      }
+    }
+  ]
+}

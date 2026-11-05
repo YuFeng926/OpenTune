@@ -1,0 +1,59 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-top-mismatch",
+  "type": "request",
+  "description": "The client expects its own pitch-shift entry on top of the undo history, but the user has since made a note edit in the OpenTune UI, which is now on top: UNDO_CONFLICT(top_mismatch), and both changes stay. Only force, which needs the end user's explicit request, would undo the user's change.",
+  "capability": "history.v1",
+  "since": "1.0",
+  "method": "edit.undo",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "bind": "older",
+          "origin": "control",
+          "action": "pitchShift",
+          "clip": "clip"
+        },
+        { "origin": "ui", "action": "noteEdit", "clip": "clip" }
+      ],
+      "redo": []
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "edit.undo",
+    "params": { "expectedUndoId": { "$ref": "older" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNDO_CONFLICT",
+      "data": {
+        "kind": "UNDO_CONFLICT",
+        "reason": "top_mismatch",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

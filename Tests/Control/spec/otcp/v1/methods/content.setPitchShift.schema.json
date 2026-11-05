@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.setPitchShift.schema.json",
+  "title": "content.setPitchShift",
+  "description": "Sets the pitch shift of a content (whole semitones and cents), as OpenTune's pitch-shift dialog does: one undo step. The key is not transposed with it (warning KEY_NOT_TRANSPOSED, data null). Rendering is queued again (sideEffects.reRenderQueued: {contentIds, revert: null}). A pitch shift does not change revision (PROTOCOL.md section 10 rule 2). Setting the current shift is a no-op.",
+  "x-otcp": {
+    "method": "content.setPitchShift",
+    "layer": "L4",
+    "capability": "edit.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "NOT_READY",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["contentId", "pitchShift"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "pitchShift": {
+          "$ref": "../schemas/common.schema.json#/$defs/pitchShift"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/ui.setWorkspace.schema.json",
+  "title": "ui.setWorkspace",
+  "description": "Switches the OpenTune window between the arrangement view and the piano roll, as the two view buttons of the transport bar do; closing the piano roll is switching to arrangement, which is the way back after ui.setSelection with openEditor true opened it. Switching to pianoRoll shows the clip that is selected; with no clip selected the piano roll is empty, as in the window, and that is not an error. Only the view changes: no content, key, note, clip or track is touched and nothing is generated or queued, in either editing scheme, so revisionDiff is empty and dirty does not change (the workspace is not saved with the project), with one exception that is OpenTune's own behaviour (a click on a view button does the same): when the tempo field of the transport bar holds the keyboard focus, as in a window in the foreground that has just started, a switch moves the focus out of the field, which writes the tempo it shows back, so a tempo with more than one decimal is rounded to one decimal; the result then lists it in changes (entity tempo, member bpm), reports sideEffects.tempoRounded {fromBpm, toBpm, revert} and sets dirty.after to true. When the field does not hold the focus, as may be so in a window in the background, or when the tempo has one decimal or none, nothing is rounded and the result reports nothing about the tempo (PROTOCOL.md section 14.6). changes lists one entry (entity ui, ref {singleton: workspace}, member workspace {before, after}) besides that one; sideEffects.workspaceSwitched ({from, to, revert: null}) is the same side effect that ui.setSelection reports when it opens the editor; ui shows the workspace after the switch. The workspace is view state (section 15.2 rule 6): the undo reason is not_persisted_state, and the revert recipe switches back with ui.setWorkspace to the workspace the window showed before. Asking for the workspace the window already shows is a no-op (applied true, noOp true, changes empty, no side effect, undo reason no_op). The busy checks are those of every write (section 13.2): a modal dialog (modal_open) or a gesture in progress (pointer_down) refuses the call with BUSY and nothing changes. An instance that has no editor window fails with UNSUPPORTED(no_editor_window).",
+  "x-otcp": {
+    "method": "ui.setWorkspace",
+    "layer": "L6",
+    "capability": "ui.workspace",
+    "since": "1.0",
+    "write": "conditional",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["workspace"],
+      "additionalProperties": false,
+      "properties": {
+        "workspace": {
+          "description": "The view to show: arrangement (the arrangement view) or pianoRoll (the piano roll).",
+          "enum": ["arrangement", "pianoRoll"]
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    }
+  }
+}

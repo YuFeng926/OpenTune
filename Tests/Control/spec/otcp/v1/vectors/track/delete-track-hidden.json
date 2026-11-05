@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/delete-track-hidden",
+  "type": "request",
+  "description": "A hidden track cannot be deleted: INVALID_ARGUMENT(track_hidden).",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.delete",
+  "session": "authenticated",
+  "given": { "visibleTrackCount": 2 },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.delete",
+    "params": {
+      "trackId": { "$ref": "runner.lastTrackId" },
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "confirm": true
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "track_hidden",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

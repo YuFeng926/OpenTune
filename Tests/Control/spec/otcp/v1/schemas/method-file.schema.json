@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/schemas/method-file.schema.json",
+  "title": "OTCP method schema file",
+  "description": "Shape of methods/<method>.schema.json (methods/README.md). Each method file is itself a JSON Schema 2020-12 document whose $defs hold params and result, plus the x-otcp annotation with the method's metadata.",
+  "type": "object",
+  "required": ["$schema", "$id", "title", "description", "x-otcp", "$defs"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "const": "https://json-schema.org/draft/2020-12/schema" },
+    "$id": {
+      "type": "string",
+      "pattern": "^https://otcp\\.invalid/v1/methods/[a-z][a-zA-Z0-9]*\\.[a-z][a-zA-Z0-9]*\\.schema\\.json$"
+    },
+    "title": { "$ref": "common.schema.json#/$defs/methodName" },
+    "description": { "type": "string", "minLength": 1 },
+    "x-otcp": { "$ref": "#/$defs/otcpMeta" },
+    "$defs": {
+      "type": "object",
+      "required": ["params", "result"],
+      "properties": {
+        "params": { "type": "object" },
+        "result": { "type": "object" },
+        "jobResult": {
+          "description": "Result of the job the method starts (job.result), for methods whose startsJob is not null.",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "x-otcp": {
+        "type": "object",
+        "properties": { "startsJob": { "type": "string" } }
+      }
+    }
+  },
+  "then": {
+    "properties": { "$defs": { "type": "object", "required": ["jobResult"] } }
+  },
+  "else": {
+    "properties": {
+      "$defs": { "type": "object", "not": { "required": ["jobResult"] } }
+    }
+  },
+  "$defs": {
+    "otcpMeta": {
+      "type": "object",
+      "required": [
+        "method",
+        "layer",
+        "capability",
+        "since",
+        "write",
+        "resultKind",
+        "startsJob",
+        "requiresSession",
+        "mainThread",
+        "errors"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "$ref": "common.schema.json#/$defs/methodName" },
+        "layer": { "type": "string", "pattern": "^L[2-8]$" },
+        "capability": { "$ref": "common.schema.json#/$defs/capability" },
+        "since": { "$ref": "common.schema.json#/$defs/protocolVersion" },
+        "write": {
+          "description": "yes: changes project, content, file or preference state. conditional: changes state only for some params or as a reported side effect. no: never changes such state.",
+          "enum": ["yes", "no", "conditional"]
+        },
+        "resultKind": {
+          "description": "write: the result extends the write envelope. read: the result carries asOf and derived. plain: neither.",
+          "enum": ["write", "read", "plain"]
+        },
+        "startsJob": {
+          "description": "Job kind the method may start, or null.",
+          "anyOf": [
+            { "$ref": "common.schema.json#/$defs/jobKind" },
+            { "type": "null" }
+          ]
+        },
+        "requiresSession": {
+          "description": "false only for session.hello, which is sent before authentication.",
+          "type": "boolean"
+        },
+        "mainThread": {
+          "description": "true when the method runs on OpenTune's main thread and may therefore return TIMEOUT(dispatch_timeout) (PROTOCOL.md section 13).",
+          "type": "boolean"
+        },
+        "errors": {
+          "description": "Every error kind the method may return, including the generic ones (methods/README.md): INVALID_ARGUMENT, BUSY, SHUTTING_DOWN and INTERNAL always; UNSUPPORTED unless the capability is session.v1; TIMEOUT exactly when mainThread is true.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "common.schema.json#/$defs/errorKind" }
+        },
+        "jobErrors": {
+          "description": "Every error kind that a job the method starts may end with (job.error): INTERNAL always, CANCELLED when the job kind can be cancelled, and the kinds the job itself can produce (methods/README.md). Present exactly when startsJob is not null.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "common.schema.json#/$defs/errorKind" }
+        },
+        "valueCapabilities": {
+          "description": "Values of top-level params members that need a capability besides capability: maps the member name to an object that maps each such value to the capability it needs (PROTOCOL.md section 3.3 rule 5 case 10). Absent when no value needs one.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "common.schema.json#/$defs/camelName" },
+          "additionalProperties": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "$ref": "common.schema.json#/$defs/capability"
+            }
+          }
+        }
+      },
+      "if": { "properties": { "startsJob": { "type": "string" } } },
+      "then": { "required": ["jobErrors"] },
+      "else": { "not": { "required": ["jobErrors"] } }
+    }
+  }
+}

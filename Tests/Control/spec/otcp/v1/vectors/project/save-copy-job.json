@@ -1,0 +1,127 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-copy-job",
+  "type": "scenario",
+  "description": "The projectCopy job writes the copy and reports the file it wrote, its size, and the project's own file and unsaved-changes flag as they are after the copy: projectPath is the project's file and projectDirty is still true. The copy leaves the project alone, which the reads after the job show: project.get names the same file and still reports unsaved changes, and the list of recent projects holds the project's file and not the copy. The job result is not a write envelope (no undo, no IRREVERSIBLE: nothing was replaced), and the warning NOT_SAVED_IN_PROJECT lists the state a project file does not hold.",
+  "capability": "project.copy",
+  "extraCapabilities": ["jobs.v1", "read.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [
+      { "bind": "proj", "kind": "existing", "extension": ".otproj" },
+      { "bind": "copy", "kind": "absent", "extension": ".otproj" }
+    ],
+    "projectFile": "proj",
+    "preferences": { "recentProjects": ["proj"] }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "project.saveCopy",
+        "params": { "path": { "$ref": "copy" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "copyJob", "$any": "string" },
+            "kind": "projectCopy",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "copyJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "copyJob" },
+            "kind": "projectCopy",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "path": { "$ref": "copy" },
+              "sizeBytes": { "$any": "integer" },
+              "projectPath": { "$ref": "proj" },
+              "projectDirty": true,
+              "warnings": [
+                {
+                  "code": "NOT_SAVED_IN_PROJECT",
+                  "subject": null,
+                  "data": {
+                    "items": ["undoHistory", "preferences"]
+                  }
+                }
+              ]
+            },
+            "error": null
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "project.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "project": { "path": { "$ref": "proj" }, "dirty": true }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "prefs.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "recentProjects": [{ "path": { "$ref": "proj" }, "exists": true }]
+        }
+      }
+    }
+  ]
+}

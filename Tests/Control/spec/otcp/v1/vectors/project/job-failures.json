@@ -1,0 +1,151 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/job-failures",
+  "type": "scenario",
+  "description": "How job.get reports errors of project jobs that no request can bring about: a projectSave job whose write failed, a projectSave job of project.saveAs without confirm that found another file at the target before the final rename (PROTOCOL.md section 20.2 rule 4), and a cancelled projectOpen job. Each leaves the files and the project untouched (executed false). The jobs are preconditions, so this vector shows the form of these errors; project/open-unreadable shows a job error that an open produces.",
+  "capability": "project.io",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "writeFailed",
+        "kind": "projectSave",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "IO_ERROR", "reason": "write_failed" }
+      },
+      {
+        "bind": "appeared",
+        "kind": "projectSave",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "INVALID_ARGUMENT", "reason": "confirm_required" }
+      },
+      {
+        "bind": "cancelledOpen",
+        "kind": "projectOpen",
+        "state": "cancelled",
+        "cancellable": false,
+        "error": { "kind": "CANCELLED", "reason": "cancelled_by_request" }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "writeFailed" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "writeFailed" },
+            "kind": "projectSave",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "IO_ERROR",
+              "data": {
+                "kind": "IO_ERROR",
+                "reason": "write_failed",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "appeared" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "appeared" },
+            "kind": "projectSave",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32602,
+              "message": "INVALID_ARGUMENT",
+              "data": {
+                "kind": "INVALID_ARGUMENT",
+                "reason": "confirm_required",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "cancelledOpen" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "cancelledOpen" },
+            "kind": "projectOpen",
+            "state": "cancelled",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "CANCELLED",
+              "data": {
+                "kind": "CANCELLED",
+                "reason": "cancelled_by_request",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

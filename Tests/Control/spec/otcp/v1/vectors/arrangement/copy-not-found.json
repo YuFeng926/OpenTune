@@ -1,0 +1,49 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/copy-not-found",
+  "type": "request",
+  "description": "Copying a placement that does not exist gives NOT_FOUND(unknown_handle).",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.copy",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.copy",
+    "params": {
+      "sources": [{ "placementId": { "$ref": "runner.unknownPlacementId" } }],
+      "mode": "full",
+      "toTrackId": 0,
+      "startTimelineSec": 10,
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

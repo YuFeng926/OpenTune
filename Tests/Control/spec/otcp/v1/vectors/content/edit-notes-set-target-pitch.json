@@ -1,0 +1,118 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-notes-set-target-pitch",
+  "type": "request",
+  "description": "setTargetPitch moves note 1 from 69 to 70.5 (a quarter tone above B flat 4). One undo step; revision changes, gridRevision and keyRevision stay.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.editNotes",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 },
+          { "startContentSec": 3.5, "endContentSec": 4.5, "targetMidi": 69.3 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.editNotes",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "expectedRevision": { "$ref": "clip.revision" },
+      "ops": [
+        {
+          "op": "setTargetPitch",
+          "select": { "indices": [1] },
+          "targetMidi": 70.5
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "note",
+          "ref": {
+            "contentId": { "$ref": "clip.contentId" },
+            "note": { "index": 1, "atRevision": { "$any": "string" } }
+          },
+          "label": { "$any": true },
+          "fields": {
+            "targetMidi": {
+              "before": { "$approx": 69 },
+              "after": { "$approx": 70.5 },
+              "unit": "midi"
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "changed": {
+              "notes": {
+                "before": { "$any": "string" },
+                "after": { "$any": "string" }
+              }
+            }
+          }
+        ]
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$any": "string" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ],
+        "placements": []
+      },
+      "undo": {
+        "undoable": true,
+        "undoId": { "$any": "string" },
+        "description": { "$any": "string" },
+        "innerActions": { "$any": "array" },
+        "steps": 1
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {
+        "reRenderQueued": {
+          "contentIds": [{ "$ref": "clip.contentId" }],
+          "revert": null
+        }
+      },
+      "warnings": [],
+      "job": null,
+      "omittedChangeCount": 0
+    }
+  },
+  "connectionAfter": "open"
+}

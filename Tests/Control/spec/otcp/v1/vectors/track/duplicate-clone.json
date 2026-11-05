@@ -1,0 +1,91 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/duplicate-clone",
+  "type": "request",
+  "description": "track.duplicate with mode clone copies track 0 with its clip to the first hidden slot, track 2, and shows it; the copied clip gets a new content. As in OpenTune there is no undo entry; the revert recipe deletes the new track with track.delete, which needs the end user's consent (requiresConsent true).",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.duplicate",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "visibleTrackCount": 2,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.duplicate",
+    "params": { "trackId": 0, "mode": "clone" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": { "$any": "array" },
+      "created": [
+        {
+          "entity": "placement",
+          "ref": { "placementId": { "$any": "string" } },
+          "label": { "$any": true }
+        },
+        {
+          "entity": "content",
+          "ref": { "contentId": { "$any": "string" } },
+          "label": { "$any": true }
+        }
+      ],
+      "removed": [],
+      "idMap": [
+        {
+          "entity": "placement",
+          "relation": "copy",
+          "from": [{ "placementId": { "$ref": "clip.placementId" } }],
+          "to": [{ "placementId": { "$any": "string" } }]
+        }
+      ],
+      "revisionDiff": {
+        "arrangement": {
+          "before": { "$ref": "runner.arrangementRevision" },
+          "after": { "$any": "string" }
+        },
+        "trackState": {
+          "before": { "$any": "string" },
+          "after": { "$any": "string" }
+        },
+        "contents": { "$any": "array" }
+      },
+      "tokens": { "$any": "object" },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "track.delete",
+          "params": {
+            "trackId": 2,
+            "expectedArrangementRevision": { "$any": "string" }
+          },
+          "requiresConsent": true
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null,
+      "newTrackId": 2
+    }
+  },
+  "connectionAfter": "open"
+}

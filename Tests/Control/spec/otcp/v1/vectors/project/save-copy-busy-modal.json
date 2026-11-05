@@ -1,0 +1,45 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-copy-busy-modal",
+  "type": "request",
+  "description": "project.saveCopy is a write and has the busy checks of every write (PROTOCOL.md section 13.2): while a modal dialog is open in OpenTune it fails with BUSY(modal_open), executed false, and no job starts. The target does not exist yet, so the busy check is what refuses the call.",
+  "capability": "project.copy",
+  "since": "1.0",
+  "method": "project.saveCopy",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "copy", "kind": "absent", "extension": ".otproj" }],
+    "dialogs": [{ "kind": "message" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.saveCopy",
+    "params": { "path": { "$ref": "copy" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "BUSY",
+      "data": {
+        "kind": "BUSY",
+        "reason": "modal_open",
+        "retryable": true,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

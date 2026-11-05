@@ -1,0 +1,142 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/redo-cleared-by-write-without-entry",
+  "type": "scenario",
+  "description": "A change without an undo entry clears the redo history, so that no redo step writes older values over it (PROTOCOL.md section 15.3 rule 9): after a note edit is undone, a key change leaves nothing to redo, and edit.redo fails with UNDO_CONFLICT(history_empty).",
+  "capability": "history.v1",
+  "extraCapabilities": ["edit.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "key": { "root": 9, "scale": "minor" },
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "history": { "undo": [], "redo": [] }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.editNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "expectedRevision": { "$ref": "clip.revision" },
+          "ops": [
+            { "op": "shiftCents", "select": { "all": true }, "deltaCents": 20 }
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "undo": {
+            "undoable": true,
+            "undoId": { "$capture": "editEntry", "$any": "string" },
+            "description": { "$any": "string" },
+            "innerActions": { "$any": "array" },
+            "steps": 1
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "editEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": { "applied": true, "noOp": false }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "content.setKey",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "key": { "root": 2, "scale": "dorian" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": { "applied": true, "noOp": false }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "history": {
+            "canUndo": false,
+            "canRedo": false,
+            "undoCount": 0,
+            "redoCount": 0,
+            "undoTop": null,
+            "redoTop": null
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "edit.redo",
+        "params": { "expectedUndoId": { "$ref": "editEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "error": {
+          "code": -32000,
+          "message": "UNDO_CONFLICT",
+          "data": {
+            "kind": "UNDO_CONFLICT",
+            "reason": "history_empty",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

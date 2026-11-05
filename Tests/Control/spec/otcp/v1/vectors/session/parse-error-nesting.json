@@ -1,0 +1,72 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/parse-error-nesting",
+  "type": "scenario",
+  "description": "Nesting of exactly 64 objects is parsed (here it fails params validation, with the request id); nesting of 65 objects is a parse error with id null. The outermost value has depth 1.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"session.info\",\"params\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 36,
+        "error": {
+          "code": -32602,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_params",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":37,\"method\":\"session.info\",\"params\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32700,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "parse_error",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 38,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 38,
+        "result": {
+          "$any": "object"
+        }
+      }
+    }
+  ]
+}

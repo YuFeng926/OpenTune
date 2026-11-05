@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/track.set.schema.json",
+  "title": "track.set",
+  "description": "Sets the mute, solo, volume and colour of tracks, as OpenTune's track panel does. tracks names every track at most once (else INVALID_ARGUMENT(duplicate_track)), and a trackId that names no track slot gives NOT_FOUND(unknown_handle); either way nothing changes. volumeDb or volumeLinear sets the volume; OpenTune's volume knob covers the linear range 0 to 4, and a value outside it is limited to it (warning CLAMPED, subject the track, data {field, requested, applied}). Solo changes which other tracks are audible: changes lists the members that changed for every track, among them audible, also for tracks the call did not name. Colours are #RRGGBB. The settings are saved with the project, so the project is marked as changed. As in OpenTune there is no undo entry: the undo reason is ui_parity, and the revert recipe sets the previous values of the members the call changed, with track.set. Settings equal to the current ones are a no-op.",
+  "x-otcp": {
+    "method": "track.set",
+    "layer": "L6",
+    "capability": "tracks.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["tracks"],
+      "additionalProperties": false,
+      "properties": {
+        "tracks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/trackSetting" }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "trackSetting": {
+      "type": "object",
+      "required": ["trackId"],
+      "minProperties": 2,
+      "additionalProperties": false,
+      "properties": {
+        "trackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "muted": { "type": "boolean" },
+        "solo": { "type": "boolean" },
+        "volumeDb": { "type": "number" },
+        "volumeLinear": { "type": "number", "minimum": 0 },
+        "colour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+      },
+      "not": { "required": ["volumeDb", "volumeLinear"] }
+    }
+  }
+}

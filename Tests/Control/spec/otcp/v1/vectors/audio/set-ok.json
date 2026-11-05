@@ -1,0 +1,77 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/set-ok",
+  "type": "request",
+  "description": "audio.set changes the buffer size and reopens the device. The setup is user-global (warning GLOBAL_PREFERENCE); there is no undo entry, and the revert recipe sets the previous buffer size.",
+  "capability": "audio.device",
+  "since": "1.0",
+  "method": "audio.set",
+  "session": "authenticated",
+  "given": { "dirty": false, "audio": { "running": true } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "audio.set",
+    "params": { "bufferSizeFrame": 256 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "audioDevice",
+          "ref": { "singleton": "audioDevice" },
+          "label": { "$any": true },
+          "fields": {
+            "bufferSizeFrame": { "before": 512, "after": 256, "unit": "frame" }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "audio.set",
+          "params": { "bufferSizeFrame": 512 }
+        }
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "GLOBAL_PREFERENCE",
+          "subject": null,
+          "data": { "preferences": ["audioDevice"] }
+        }
+      ],
+      "job": null,
+      "device": {
+        "running": true,
+        "deviceType": { "$any": "string" },
+        "outputDevice": { "$any": "string" },
+        "sampleRateHz": 44100,
+        "bufferSizeFrame": 256,
+        "outputChannelPair": 0
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

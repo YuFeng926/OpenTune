@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/set-key-not-found",
+  "type": "request",
+  "description": "content.setKey with a contentId that names no content gives NOT_FOUND(unknown_handle).",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.setKey",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.setKey",
+    "params": {
+      "contentId": { "$ref": "runner.unknownContentId" },
+      "key": { "root": 0, "scale": "major" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

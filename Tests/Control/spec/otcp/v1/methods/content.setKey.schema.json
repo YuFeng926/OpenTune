@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.setKey.schema.json",
+  "title": "content.setKey",
+  "description": "Sets the key of a content, as choosing a key in OpenTune's transport bar does for the selected clip. As in the UI there is no undo entry: undo has reason ui_parity and a revert recipe that restores the previous root and scale and carries the key revision after the change. The revert is partial: content.setKey always sets a manual key, so the restored key has origin manual and confidence null, and a detected key's origin and confidence are not restored. expectedKeyRevision, if given, guards against a concurrent key change (REVISION_CONFLICT(key_changed)). Setting the key the content already has is a no-op. A key change does not change revision (PROTOCOL.md section 10 rule 2). If the clip is selected, the scale shown in the transport bar follows; this is reported as sideEffects.uiScaleChanged, whose revert is the result's revert recipe.",
+  "x-otcp": {
+    "method": "content.setKey",
+    "layer": "L4",
+    "capability": "edit.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "NOT_READY",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["contentId", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "key": { "$ref": "../schemas/common.schema.json#/$defs/keyInput" },
+        "expectedKeyRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    }
+  }
+}

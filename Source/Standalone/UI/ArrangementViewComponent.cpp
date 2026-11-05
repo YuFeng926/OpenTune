@@ -3186,6 +3186,24 @@ void ArrangementViewComponent::commitEmptyPlacementSelection()
     invalidateStableScene();
     }
 
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+// OpenTune Control API hook: public selection commit, see Source/Control/README.md#hooks
+void ArrangementViewComponent::commitControlSelection(int trackId, uint64_t placementId)
+{
+    // What a plain click does: on a clip that is not selected (mouseDown), or on an empty area (placementId 0).
+    if (placementId == 0)
+    {
+        commitEmptyPlacementSelection();
+        return;
+    }
+    clearPlacementSelection();
+    selectedPlacements_.insert(PlacementSelectionKey{trackId, placementId});
+    shiftAnchor_ = PlacementSelectionKey{trackId, placementId};
+    hasShiftAnchor_ = true;
+    commitPlacementSelection(PlacementSelectionKey{trackId, placementId});
+}
+#endif
+
 // ============================================================================
 // ViewMapper construction
 // ============================================================================

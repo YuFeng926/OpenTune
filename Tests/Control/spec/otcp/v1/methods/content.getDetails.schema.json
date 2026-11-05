@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.getDetails.schema.json",
+  "title": "content.getDetails",
+  "description": "Returns the state of one content besides its notes and curves: duration, key, pitch shift, analysis state and failure, whether the audible render is current, the time grid with its handles and the AUTO modes. Values that depend on a placement (render, the mode the AUTO button would run) are taken through viaPlacementId: the placement named in the request, or else the first placement that shows the content. analysis.failure is f0_failed or f0_empty when the analysis failed, else null. render.current is true when the audible render reflects the current revision; exports wait for it (PROTOCOL.md section 19). autoModes.uiButtonRuns is the mode the AUTO button in the OpenTune window would run now: regenerate in the openTune scheme and snapNotes in the openDyne scheme, so that content.autoTune can run that mode (section 21 rule 1). A build whose window still offers the reference alignment (a build from before OpenTune's upstream project removed it) reports reference while a reference track is bound to the clip. That is not a mode of content.autoTune, so autoModes.available never lists it. A client that finds a uiButtonRuns that is not a mode of content.autoTune says that the button runs a mode the service cannot run, and does not try to run it. autoModes.available lists the modes of content.autoTune that this content accepts now. timeGrid.seeded is false until the time grid has handles (content.editTimeGrid op seed). timeGrid.minHandleSpacingSec is the least distance on the output clock that moves of content.editTimeGrid keep between neighbouring handles and between a handle and either end of the content; it is implementation-defined and equals that of OpenTune's time tool, and it is null with timeGrid.nullReasons.minHandleSpacingSec unavailable when the server cannot determine it.",
+  "x-otcp": {
+    "method": "content.getDetails",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "read",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        }
+      },
+      "oneOf": [{ "required": ["contentId"] }, { "required": ["placementId"] }]
+    },
+    "result": {
+      "type": "object",
+      "allOf": [{ "$ref": "../schemas/common.schema.json#/$defs/readMeta" }],
+      "required": [
+        "contentId",
+        "viaPlacementId",
+        "placementIds",
+        "durationSec",
+        "key",
+        "pitchShift",
+        "analysis",
+        "render",
+        "timeGrid",
+        "autoModes"
+      ],
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "viaPlacementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "placementIds": {
+          "description": "Every placement that shows this content.",
+          "type": "array",
+          "items": {
+            "$ref": "../schemas/common.schema.json#/$defs/placementId"
+          }
+        },
+        "durationSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "key": {
+          "description": "The content's key; null with nullReasons.key not_analyzed until the analysis has determined one.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/key" },
+            { "type": "null" }
+          ]
+        },
+        "pitchShift": {
+          "$ref": "../schemas/common.schema.json#/$defs/pitchShift"
+        },
+        "analysis": {
+          "type": "object",
+          "required": ["f0State", "failure", "hopSec"],
+          "additionalProperties": false,
+          "properties": {
+            "f0State": {
+              "$ref": "../schemas/common.schema.json#/$defs/f0State"
+            },
+            "failure": {
+              "anyOf": [
+                { "$ref": "../schemas/common.schema.json#/$defs/reasonCode" },
+                { "type": "null" }
+              ]
+            },
+            "hopSec": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        "render": {
+          "type": "object",
+          "required": ["current", "publishedRevision", "desiredRevision"],
+          "additionalProperties": false,
+          "properties": {
+            "current": { "type": "boolean" },
+            "publishedRevision": {
+              "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+            },
+            "desiredRevision": {
+              "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+            }
+          }
+        },
+        "timeGrid": {
+          "type": "object",
+          "required": ["seeded", "identity", "handles", "minHandleSpacingSec"],
+          "additionalProperties": false,
+          "properties": {
+            "seeded": { "type": "boolean" },
+            "identity": { "type": "boolean" },
+            "handles": {
+              "type": "array",
+              "items": {
+                "$ref": "../schemas/common.schema.json#/$defs/timeHandle"
+              }
+            },
+            "minHandleSpacingSec": {
+              "description": "The least distance, in seconds on the output clock, that moves keep between neighbouring handles and between a handle and either end of the content, as OpenTune's time tool keeps it. Implementation-defined: clients read it here or rely on clamped in the results of moves, and never assume a value. null, with timeGrid.nullReasons.minHandleSpacingSec unavailable, when the server cannot determine it.",
+              "anyOf": [
+                { "type": "number", "exclusiveMinimum": 0 },
+                { "type": "null" }
+              ]
+            },
+            "nullReasons": {
+              "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+            }
+          }
+        },
+        "autoModes": {
+          "type": "object",
+          "required": ["editingScheme", "uiButtonRuns", "available"],
+          "additionalProperties": false,
+          "properties": {
+            "editingScheme": {
+              "$ref": "../schemas/common.schema.json#/$defs/editingScheme"
+            },
+            "uiButtonRuns": {
+              "$ref": "../schemas/common.schema.json#/$defs/camelName"
+            },
+            "available": {
+              "type": "array",
+              "items": {
+                "$ref": "../schemas/common.schema.json#/$defs/camelName"
+              },
+              "uniqueItems": true
+            }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

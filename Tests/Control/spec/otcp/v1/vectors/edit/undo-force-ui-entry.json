@@ -1,0 +1,138 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-force-ui-entry",
+  "type": "scenario",
+  "description": "The end user asked to undo a note edit they made in the OpenTune UI, so the client sets force. The entry had no undoId; the server assigns one and reports it in entry (PROTOCOL.md section 15.3 rule 8). edit.getHistory then shows the entry on top of the redo history with that undoId, and the revert recipe, edit.redo with that undoId and without force, redoes the entry.",
+  "capability": "history.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "bind": "older",
+          "origin": "control",
+          "action": "pitchShift",
+          "clip": "clip"
+        },
+        { "origin": "ui", "action": "noteEdit", "clip": "clip" }
+      ],
+      "redo": []
+    }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "older" }, "force": true }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "edit.redo",
+              "params": {
+                "expectedUndoId": {
+                  "$capture": "revertUndoId",
+                  "$any": "string"
+                }
+              }
+            }
+          },
+          "entry": {
+            "undoId": { "$capture": "uiUndoId", "$any": "string" },
+            "description": { "$any": "string" },
+            "origin": "ui",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "history": {
+            "canUndo": true,
+            "canRedo": true,
+            "undoCount": 1,
+            "redoCount": 1,
+            "undoTop": {
+              "undoId": { "$ref": "older" },
+              "description": { "$any": "string" },
+              "origin": "control",
+              "possiblyStale": false,
+              "unsafe": false
+            },
+            "redoTop": {
+              "undoId": { "$ref": "uiUndoId" },
+              "description": { "$any": "string" },
+              "origin": "ui",
+              "possiblyStale": false,
+              "unsafe": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.redo",
+        "params": { "expectedUndoId": { "$ref": "revertUndoId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "entry": {
+            "undoId": { "$ref": "uiUndoId" },
+            "description": { "$any": "string" },
+            "origin": "ui",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    }
+  ]
+}

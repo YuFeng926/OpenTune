@@ -1,0 +1,72 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/set-solo",
+  "type": "request",
+  "description": "Soloing track 1 makes track 0 inaudible: changes lists track 0's audible as well, although the call did not name track 0.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.set",
+  "session": "authenticated",
+  "given": { "dirty": false, "visibleTrackCount": 2 },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.set",
+    "params": { "tracks": [{ "trackId": 1, "solo": true }] }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "track",
+          "ref": { "trackId": 0 },
+          "label": { "$any": true },
+          "fields": {
+            "audible": { "before": true, "after": false, "unit": null }
+          }
+        },
+        {
+          "entity": "track",
+          "ref": { "trackId": 1 },
+          "label": { "$any": true },
+          "fields": { "solo": { "before": false, "after": true, "unit": null } }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": {
+          "before": { "$any": "string" },
+          "after": { "$any": "string" }
+        },
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "track.set",
+          "params": { "tracks": [{ "trackId": 1, "solo": false }] }
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

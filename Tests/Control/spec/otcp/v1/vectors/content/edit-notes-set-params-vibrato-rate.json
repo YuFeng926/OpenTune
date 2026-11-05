@@ -1,0 +1,211 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-notes-set-params-vibrato-rate",
+  "type": "request",
+  "description": "setParams of vibratoRateHz (3 to 12 Hz) on notes 0 and 2. The given notes have OpenTune's default parameters, so the rate changes and the other parameters stay; the rate is a frequency, so the change carries the unit hz.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.editNotes",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          {
+            "startContentSec": 0.5,
+            "endContentSec": 1.5,
+            "targetMidi": 64
+          },
+          {
+            "startContentSec": 2,
+            "endContentSec": 3,
+            "targetMidi": 69
+          },
+          {
+            "startContentSec": 3.5,
+            "endContentSec": 4.5,
+            "targetMidi": 69.3
+          }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.editNotes",
+    "params": {
+      "contentId": {
+        "$ref": "clip.contentId"
+      },
+      "expectedRevision": {
+        "$ref": "clip.revision"
+      },
+      "ops": [
+        {
+          "op": "setParams",
+          "select": {
+            "indices": [
+              0,
+              2
+            ]
+          },
+          "vibratoRateHz": 9
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "note",
+          "ref": {
+            "contentId": {
+              "$ref": "clip.contentId"
+            },
+            "note": {
+              "index": 0,
+              "atRevision": {
+                "$any": "string"
+              }
+            }
+          },
+          "label": {
+            "$any": true
+          },
+          "fields": {
+            "vibratoRateHz": {
+              "before": {
+                "$any": "number"
+              },
+              "after": {
+                "$approx": 9
+              },
+              "unit": "hz"
+            }
+          }
+        },
+        {
+          "entity": "note",
+          "ref": {
+            "contentId": {
+              "$ref": "clip.contentId"
+            },
+            "note": {
+              "index": 2,
+              "atRevision": {
+                "$any": "string"
+              }
+            }
+          },
+          "label": {
+            "$any": true
+          },
+          "fields": {
+            "vibratoRateHz": {
+              "before": {
+                "$any": "number"
+              },
+              "after": {
+                "$approx": 9
+              },
+              "unit": "hz"
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": [
+          {
+            "contentId": {
+              "$ref": "clip.contentId"
+            },
+            "changed": {
+              "notes": {
+                "before": {
+                  "$any": "string"
+                },
+                "after": {
+                  "$any": "string"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "tokens": {
+        "arrangementRevision": {
+          "$any": "string"
+        },
+        "contents": [
+          {
+            "contentId": {
+              "$ref": "clip.contentId"
+            },
+            "revision": {
+              "$any": "string"
+            },
+            "gridRevision": {
+              "$ref": "clip.gridRevision"
+            },
+            "keyRevision": {
+              "$ref": "clip.keyRevision"
+            }
+          }
+        ],
+        "placements": []
+      },
+      "undo": {
+        "undoable": true,
+        "undoId": {
+          "$any": "string"
+        },
+        "description": {
+          "$any": "string"
+        },
+        "innerActions": {
+          "$any": "array"
+        },
+        "steps": 1
+      },
+      "dirty": {
+        "before": false,
+        "after": true
+      },
+      "ui": {
+        "$any": true
+      },
+      "sideEffects": {
+        "reRenderQueued": {
+          "contentIds": [
+            {
+              "$ref": "clip.contentId"
+            }
+          ],
+          "revert": null
+        }
+      },
+      "warnings": [],
+      "job": null,
+      "omittedChangeCount": 0
+    }
+  },
+  "connectionAfter": "open"
+}

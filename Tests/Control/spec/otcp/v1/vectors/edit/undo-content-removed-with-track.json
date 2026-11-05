@@ -1,0 +1,177 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-content-removed-with-track",
+  "type": "scenario",
+  "description": "A note edit made through this API addresses its content, not a track, so deleting the track of its clip does not make the entry possibly stale (PROTOCOL.md section 15.3 rule 6). The deletion removed the content with the clip, though, so undoing the entry changes nothing, as in the OpenTune UI: the step is used up, the project is marked as changed, noOp is true and the warning UNDO_NO_EFFECT says so.",
+  "capability": "history.v1",
+  "extraCapabilities": ["edit.v1", "tracks.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "visibleTrackCount": 2,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "history": { "undo": [], "redo": [] }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.editNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "expectedRevision": { "$ref": "clip.revision" },
+          "ops": [
+            { "op": "shiftCents", "select": { "all": true }, "deltaCents": 20 }
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "undo": {
+            "undoable": true,
+            "undoId": { "$capture": "editEntry", "$any": "string" },
+            "description": { "$any": "string" },
+            "innerActions": { "$any": "array" },
+            "steps": 1
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "track.delete",
+        "params": {
+          "trackId": 1,
+          "expectedArrangementRevision": {
+            "$ref": "runner.arrangementRevision"
+          },
+          "confirm": true
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "removed": [
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "clip.placementId" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "content",
+              "ref": { "contentId": { "$ref": "clip.contentId" } },
+              "label": { "$any": true }
+            }
+          ],
+          "possiblyStaleEntries": { "undo": 0, "redo": 0 }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "history": {
+            "canUndo": true,
+            "canRedo": false,
+            "undoCount": 1,
+            "redoCount": 0,
+            "undoTop": {
+              "undoId": { "$ref": "editEntry" },
+              "description": { "$any": "string" },
+              "origin": "control",
+              "possiblyStale": false,
+              "unsafe": false
+            },
+            "redoTop": null
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "editEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "applied": true,
+          "noOp": true,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "edit.redo",
+              "params": { "expectedUndoId": { "$ref": "editEntry" } }
+            }
+          },
+          "dirty": { "before": true, "after": true },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [
+            { "code": "UNDO_NO_EFFECT", "subject": null, "data": null }
+          ],
+          "job": null,
+          "entry": {
+            "undoId": { "$ref": "editEntry" },
+            "description": { "$any": "string" },
+            "origin": "control",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    }
+  ]
+}

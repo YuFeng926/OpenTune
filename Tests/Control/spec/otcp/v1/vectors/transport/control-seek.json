@@ -1,0 +1,74 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/control-seek",
+  "type": "request",
+  "description": "action seek moves the position, and like every seek it also sets the position that play from start returns to (PROTOCOL.md section 15.4 rule 5).",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "method": "transport.control",
+  "session": "authenticated",
+  "given": { "dirty": false, "audio": { "running": true } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "transport.control",
+    "params": { "action": "seek", "positionTimelineSec": 4.5 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "transport",
+          "ref": { "singleton": "transport" },
+          "label": { "$any": true },
+          "fields": {
+            "positionTimelineSec": { "before": 0, "after": 4.5, "unit": "sec" },
+            "playStartTimelineSec": { "before": 0, "after": 4.5, "unit": "sec" }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "not_persisted_state",
+        "revert": null
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null,
+      "transport": {
+        "playing": false,
+        "positionTimelineSec": 4.5,
+        "playStartTimelineSec": 4.5,
+        "loopEnabled": false,
+        "bpm": 120,
+        "timeSignature": { "numerator": 4, "denominator": 4 },
+        "audioDeviceRunning": true,
+        "lastControl": {
+          "call": { "$any": "string" },
+          "atMs": { "$any": "integer" }
+        }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}
