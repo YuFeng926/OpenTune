@@ -470,7 +470,7 @@ A write is refused with `BUSY` and `executed` false, without waiting, while:
 | the user is in the middle of a mouse or pen gesture in OpenTune | `pointer_down`       |
 | a modal dialog is open in OpenTune                              | `modal_open`         |
 | an import started from the OpenTune UI is running               | `import_in_progress` |
-| an export holds the export lock (shared by the UI and this API) | `export_in_progress` |
+| an export is in progress (shared by the UI and this API)  | `export_in_progress` |
 | a project save, copy or open is running                         | `project_operation`  |
 
 These checks run on the main thread, immediately before the write applies. The server SHOULD set `retryAfterMs`. `ui.dismiss` is not refused because a dialog is open (`modal_open`), since closing dialogs is its purpose; the other conditions refuse it like every write.
@@ -739,7 +739,7 @@ The value in each error instance is authoritative; for example `NOT_READY(f0_fai
    - `error`: a rename that never replaces. If it fails because the target exists, the job fails with `ALREADY_EXISTS(target_exists)`. The server MUST also fail `export.start` at once with `ALREADY_EXISTS(target_exists)`, and create no job, if the target already exists when the job would be created, so that no rendering is wasted and the client gets the answer at once; this early answer never takes the place of the rename's own failure.
    - `rename`: a rename that never replaces, first to the target path and then, each time it fails because the name exists, to the next of `<stem> (2).wav`, `<stem> (3).wav`, … `<stem> (999).wav`, where `<stem>` is the target's file name without `.wav`. Rule 2 applies to every name before it is tried. If `<stem> (999).wav` exists as well, the job fails with `ALREADY_EXISTS(target_exists)`. The result's `path` is the name that was written.
    - `overwrite`: a rename that replaces an existing target.
-4. The UI and this API share one export lock. While it is held, `export.start` fails with `BUSY(export_in_progress)`.
+4. The UI and this API share one export admission state. While an export is in progress, `export.start` fails with `BUSY(export_in_progress)`.
 5. A call with the same normalized params as an export job that is not terminal returns that job (section 12.5).
 6. For every content in the export, a main-thread timer decides:
    - pitch analysis not finished: wait;

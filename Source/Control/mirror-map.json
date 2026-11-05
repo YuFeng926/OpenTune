@@ -1222,7 +1222,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::maybeStartOnboarding",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "193eb010fef4beb9ab4e8ed949af23d5b1a43206840517d327d838b98787be1a"
+        "sha256": "7bde70fb2fdf02efe7a00cbaaa95afd779d872bf05c7ceef1a24e8768e7a5c86"
       },
       "control": [
         {

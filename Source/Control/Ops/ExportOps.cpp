@@ -451,22 +451,23 @@ std::optional<ControlJobError> loadedMediaError(const std::vector<std::string>& 
     return std::nullopt;
 }
 
-/** The lock that the editor's export and export.start share, released once. */
-class ExportLock
+/** The shared message-thread export busy state of the processor, released once. The admission was
+    taken on the message thread in runExportStart; the guard only releases it. */
+class ExportBusyGuard
 {
 public:
-    ExportLock() = default;
-    explicit ExportLock(OpenTuneAudioProcessor& processor) : processor_(&processor) {}
-    ExportLock(ExportLock&& other) noexcept : processor_(std::exchange(other.processor_, nullptr)) {}
-    ExportLock& operator=(ExportLock&&) = delete;
-    ExportLock(const ExportLock&) = delete;
-    ExportLock& operator=(const ExportLock&) = delete;
-    ~ExportLock() { release(); }
+    ExportBusyGuard() = default;
+    explicit ExportBusyGuard(OpenTuneAudioProcessor& processor) : processor_(&processor) {}
+    ExportBusyGuard(ExportBusyGuard&& other) noexcept : processor_(std::exchange(other.processor_, nullptr)) {}
+    ExportBusyGuard& operator=(ExportBusyGuard&&) = delete;
+    ExportBusyGuard(const ExportBusyGuard&) = delete;
+    ExportBusyGuard& operator=(const ExportBusyGuard&) = delete;
+    ~ExportBusyGuard() { release(); }
 
     void release() noexcept
     {
         if (processor_ != nullptr)
-            processor_->releaseExportLock();
+            processor_->finishExport();
         processor_ = nullptr;
     }
 
@@ -635,16 +636,17 @@ struct Readiness
  *   (changed_during_export) when they changed), cancellability ends, loaded media are checked again for
  *   the name used, and the final rename moves the file into place (section 20.4).
  * - Every failure and cancellation deletes the temporary file and leaves the target untouched (executed
- *   false). The export lock is released when the job ends or its work is destroyed.
+ *   false). The processor's message-thread export state is released when the job ends or its work is destroyed.
  */
 class ExportJob
 {
 public:
-    ExportJob(ControlOpEnvironment environment, const ExportParams& params, const ExportTarget& target, ExportLock lock)
+    ExportJob(ControlOpEnvironment environment, const ExportParams& params, const ExportTarget& target,
+              ExportBusyGuard busyAdmission)
         : environment_(std::move(environment))
         , params_(params)
         , target_(target)
-        , lock_(std::move(lock))
+        , busyAdmission_(std::move(busyAdmission))
         , started_(std::chrono::steady_clock::now())
         , waitLimit_(std::chrono::milliseconds(waitLimitOverrideMs() > 0 ? waitLimitOverrideMs() : kWaitLimitMs))
     {}
@@ -653,7 +655,7 @@ public:
     {
         writer_.reset();
         removeTemporary();
-        lock_.release();
+        busyAdmission_.release();
     }
 
     ExportJob(const ExportJob&) = delete;
@@ -1160,7 +1162,7 @@ private:
         result.appendMember("dryContents", dryContents_);
         result.appendMember("processing", processing_);
         writer_.reset();
-        lock_.release();
+        busyAdmission_.release();
         step.succeed(std::move(result));
     }
 
@@ -1236,7 +1238,7 @@ private:
     {
         writer_.reset();
         removeTemporary();
-        lock_.release();
+        busyAdmission_.release();
         if (error.kind != "INVALID_ARGUMENT" || !error.reason.empty())
             AppLogger::logNoThrow("control API: export.start: the export failed with " + juce::String(error.kind) + "("
                                   + juce::String(error.reason) + ")");
@@ -1247,14 +1249,14 @@ private:
     {
         writer_.reset();
         removeTemporary();
-        lock_.release();
+        busyAdmission_.release();
         step.cancel(JsonValue(), false);
     }
 
     ControlOpEnvironment environment_;
     ExportParams params_;
     ExportTarget target_;
-    ExportLock lock_;
+    ExportBusyGuard busyAdmission_;
     std::chrono::steady_clock::time_point started_;
     std::chrono::milliseconds waitLimit_;
     std::map<ContentKey, ContentProgress> contentProgress_;
@@ -1279,13 +1281,13 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
     const auto digest = params.digest();
 
     // Section 19 rule 5: the same normalized params as an export job that still runs return that job,
-    // before any check of state (that job holds the export lock).
+    // before any check of state (that job holds the export admission).
     if (const auto existing = jobs->findActiveByDigest("export", digest); !existing.empty()) {
         ControlWriteEnvelope envelope(context);
         return envelope.handedToJob(context, jobs->jobRef(existing));
     }
 
-    // Handles, then busy state (with the export lock), then the method's own checks (section 13.1 rule 4).
+    // Handles, then busy state (including an active export), then the method's own checks (section 13.1 rule 4).
     auto& processor = context.processor();
     const auto* arrangement = processor.getStandaloneArrangement();
     if (arrangement == nullptr)
@@ -1322,11 +1324,12 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
     if (params.ifExists == IfExists::Error && fileOf(params.path).exists())
         return controlOpError("ALREADY_EXISTS", "target_exists", "a file exists at the target");
 
-    // The lock that the editor's export shares, held until the job ends (section 19 rule 4).
-    if (!processor.tryAcquireExportLock())
+    // The shared message-thread busy state that the editor's export keeps too, taken here on the
+    // message thread after every check, held until the job ends (section 19 rule 4).
+    if (!processor.tryBeginExport())
         return controlOpError("BUSY", "export_in_progress", "an export is running");
-    ExportLock lock(processor);
-    auto job = std::make_shared<ExportJob>(context.environment(), params, target, std::move(lock));
+    ExportBusyGuard busyAdmission(processor);
+    auto job = std::make_shared<ExportJob>(context.environment(), params, target, std::move(busyAdmission));
     const auto started =
         jobs->start("export", true, [job](ControlJobStep& step) { job->step(step); }, std::string(), digest);
     if (started.jobId.empty())

@@ -602,15 +602,15 @@ void scenarioJobDisconnect();
     and files with too many channels fail alone with their reasons. */
 void scenarioImportFailures();
 
-// Scenarios of export.start and the export lock (ControlExportTests.cpp).
+// Scenarios of export.start and the shared export busy state (ControlExportTests.cpp).
 
 /** export.start of a clip, a track and the master mix: the result, dry contents, ifExists, the path
-    checks before the job (also loaded media by file identity), repeated calls, the export lock that the
+    checks before the job (also loaded media by file identity), repeated calls, the export busy state that the
     UI shares and the busy checks of other writes while an export runs. */
 void scenarioExport();
 /** The failures of an export job: ANALYSIS_FAILED, RENDER_FAILED after one retry, REVISION_CONFLICT while
     the file is written, NOT_READY after the wait limit, and cancellation while it waits; the target is
-    never touched and the export lock is released. */
+    never touched and the export busy state is released. */
 void scenarioExportFailures();
 /** A deferred render retry in the render runtime keeps the export job waiting although every content is ready: it
     ends with NOT_READY(export_wait_timeout) at the wait limit, leaving the target as it was, and writes the file once
@@ -623,9 +623,9 @@ void scenarioExportVectors();
     REVISION_CONFLICT, never a mix, a silent file or one listed as dry. */
 void scenarioExportAfterEdit();
 /** An export that would overwrite a file and is cancelled while it waits leaves the target as it was and releases
-    the lock. */
+    the shared export busy state. */
 void scenarioExportCancelOverwrite();
-/** An export job that waits, and one that writes, when the service stops: the export lock is released, no temporary
+/** An export job that waits, and one that writes, when the service stops: the export busy state is released, no temporary
     file is left and the stop is within the bound. */
 void scenarioExportDestroy();
 /** Import and export in a folder and a file named in Chinese with spaces: the paths round trip. */

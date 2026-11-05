@@ -1067,14 +1067,42 @@ public:
         return ready;
     }
     ControlService& getControlService() noexcept { return *controlService_; }
-    // OpenTune Control API hook: the export lock that the editor's export and export.start share (any thread), see Source/Control/README.md#hooks
-    bool tryAcquireExportLock() noexcept { return !exportLockHeld_.exchange(true); }
-    void releaseExportLock() noexcept { exportLockHeld_.store(false); }
-    bool isExportLockHeld() const noexcept { return exportLockHeld_.load(); }
 
 private:
     std::unique_ptr<ControlService> controlService_;
-    std::atomic<bool> exportLockHeld_{false};
+#endif
+
+#if JucePlugin_Build_Standalone
+public:
+    // Standalone export busy state, shared by the editor's export and (with the Control API)
+    // export.start (Source/Control/Ops/ExportOps.cpp). One export of either side at a time, held
+    // from the last admission before a worker starts to the moment its file is written or the
+    // attempt fails. Message thread only — every tryBeginExport / finishExport / query runs on the
+    // message thread; a plain bool, not a lock, so a repeated finishExport or a finish without a
+    // begin is an assertable contract breach. Deliberately not gated by OPENTUNE_ENABLE_CONTROL_API,
+    // so UI-only builds share the same state.
+    bool tryBeginExport() noexcept
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        if (exportBusy_)
+            return false;
+        exportBusy_ = true;
+        return true;
+    }
+    void finishExport() noexcept
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        jassert(exportBusy_);
+        exportBusy_ = false;
+    }
+    bool isExportBusy() const noexcept
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        return exportBusy_;
+    }
+
+private:
+    bool exportBusy_ = false;
 #endif
 
 public:

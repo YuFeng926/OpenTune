@@ -288,7 +288,7 @@
       "code": "export_in_progress",
       "scope": "BUSY",
       "since": "1.0",
-      "description": "An export (from the UI or from this API) holds the export lock."
+      "description": "An export (from the UI or from this API) is in progress."
     },
     {
       "code": "project_operation",

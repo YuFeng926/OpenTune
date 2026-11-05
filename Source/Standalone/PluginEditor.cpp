@@ -1029,9 +1029,13 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
         + juce::String(static_cast<int>(backgroundTaskCount))
         + " elapsedMs=" + juce::String(juce::Time::getMillisecondCounter() - backgroundTasksStart));
 
-    // Safely join export worker thread if it exists
+    // Safely join export worker thread if it exists. The worker's own completion callback releases
+    // the processor's shared export busy state on the message thread; when this editor started the
+    // worker and its callback is gone with the editor (or the callback has not run yet), the
+    // destructor joins first and releases the admission it holds. It never clears an admission the
+    // API holds: exportWorkerOwnedByEditor_ is only true while this editor's own admission is out.
     const auto exportJoinable = exportWorker_.joinable();
-    const auto exportInProgress = exportInProgress_.load();
+    const auto exportInProgress = exportWorkerOwnedByEditor_;
     AppLogger::log("ShutdownDiag: exportThreadJoin begin joinable="
         + juce::String(exportJoinable ? "true" : "false")
         + " exportInProgress=" + juce::String(exportInProgress ? "true" : "false"));
@@ -1039,6 +1043,13 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
     if (exportWorker_.joinable())
     {
         exportWorker_.join();
+    }
+    if (exportWorkerOwnedByEditor_)
+    {
+        // Only this editor's own admission; tryBeginExport was taken for it and was not released
+        // yet (the callback that releases it is gone with the editor or would arrive after join).
+        exportWorkerOwnedByEditor_ = false;
+        processorRef_.finishExport();
     }
     AppLogger::log("ShutdownDiag: exportThreadJoin joinable="
         + juce::String(exportJoinable ? "true" : "false")
@@ -2909,8 +2920,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
 {
     using ExportType = MenuBarComponent::ExportType;
     
-    // Check if export is already in progress
-    if (exportInProgress_.load())
+    // Check if an export of either side is already admitted on the shared processor state
+    if (processorRef_.isExportBusy())
     {
         ConfirmDialogContent::showMessage(
             &contentRoot_,
@@ -3012,9 +3023,11 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                 safeThis->exportWorker_.join();
             }
 
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-            // OpenTune Control API hook: take the export lock shared with export.start, see Source/Control/README.md#hooks
-            if (!safeThis->processorRef_.tryAcquireExportLock())
+            // OpenTune Control API hook and UI: last admission before the worker starts, on the
+            // shared message-thread state of the processor (see Source/Control/README.md#hooks).
+            // Not taken during the file picker or overwrite confirmation, so a UI selection phase
+            // never blocks an API export, and whichever admission is last wins.
+            if (!safeThis->processorRef_.tryBeginExport())
             {
                 ConfirmDialogContent::showMessage(
                     &safeThis->contentRoot_,
@@ -3022,9 +3035,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                     LOC(kExportInProgress));
                 return;
             }
-#endif
-            // Set export in progress flag
-            safeThis->exportInProgress_.store(true);
+            safeThis->exportWorkerOwnedByEditor_ = true;
 
             // Create new controlled export thread
             safeThis->exportWorker_ = std::thread([processor, outFile, outRequest, uiSafe, exportLanguage]()
@@ -3050,18 +3061,24 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                         errorText = processor->getLastExportError();
                     }
 
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-                    // OpenTune Control API hook: release the shared export lock once the file is written, see Source/Control/README.md#hooks
-                    processor->releaseExportLock();
-#endif
                     juce::MessageManager::callAsync([ok, outFile, outRequest, errorText, uiSafe]()
                     {
+                        // Release this export's admission on the shared processor state, on the
+                        // message thread. Only the export this editor started releases it (the
+                        // owner flag), so a callback that arrives after the editor died (its
+                        // destructor already joined the worker and released) or after any other
+                        // admission was taken cannot clear someone else's state.
+                        if (uiSafe != nullptr && uiSafe->exportWorkerOwnedByEditor_)
+                        {
+                            if (uiSafe->exportWorker_.joinable())
+                                uiSafe->exportWorker_.join();
+                            uiSafe->exportWorkerOwnedByEditor_ = false;
+                            uiSafe->processorRef_.finishExport();
+                        }
+
                         // Check if editor is still alive
                         if (uiSafe == nullptr)
                             return;
-
-                        // Clear export in progress flag
-                        uiSafe->exportInProgress_.store(false);
 
                         if (ok)
                         {
@@ -3508,7 +3525,7 @@ void OpenTuneAudioProcessorEditor::maybeStartOnboarding()
     if (onboardingModalWatcher_ != nullptr)
         onboardingModalWatcher_->detach();
 
-    if (projectOperationBusy_ || isImportInProgress_ || exportInProgress_.load()
+    if (projectOperationBusy_ || isImportInProgress_ || processorRef_.isExportBusy()
         || originalF0OverlayLatched_ || externalEditActive_)
         return;
 

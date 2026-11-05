@@ -613,10 +613,10 @@ void scenarioAppQuit()
         CONTROL_CHECK(refuses(f, R"({"discardUnsaved":true})", "BUSY", flag.reason));
         bridge.busy.*(flag.member) = false;
     }
-    // An export that holds the export lock, without the editor's flag: the lock of the processor counts as well.
-    if (CONTROL_CHECK(f.processor->tryAcquireExportLock())) {
+    // An export that takes the shared export busy state, without the editor's flag: the processor's state counts too.
+    if (CONTROL_CHECK(f.processor->tryBeginExport())) {
         CONTROL_CHECK(refuses(f, R"({"discardUnsaved":true})", "BUSY", "export_in_progress"));
-        f.processor->releaseExportLock();
+        f.processor->finishExport();
     }
     // Without busy, the project's changes are what refuses the call.
     CONTROL_CHECK(refuses(f, "{}", "UNSAVED_CHANGES", "project_dirty"));
@@ -1024,7 +1024,7 @@ std::string runQuitVector(const JsonValue& vector, const std::string& slug)
         f.bridge.project.projectPath = bound->second.text();
     }
     std::vector<std::shared_ptr<HeldJob>> jobs;
-    bool lockHeld = false;
+    bool exportBusy = false;
     const auto& jobSpecs = memberOf(given, "jobs");
     for (std::size_t i = 0; i < jobSpecs.size(); ++i) {
         const auto& spec = jobSpecs.at(i);
@@ -1035,9 +1035,9 @@ std::string runQuitVector(const JsonValue& vector, const std::string& slug)
             return "a given job could not be started";
         matcher.bindings[memberOf(spec, "bind").text()] = JsonValue::string(job->id);
         jobs.push_back(job);
-        // README: a running export job holds the export lock.
-        if (memberOf(spec, "kind").text() == "export" && !lockHeld)
-            lockHeld = f.processor->tryAcquireExportLock();
+        // README: a running export job takes the shared export busy state.
+        if (memberOf(spec, "kind").text() == "export" && !exportBusy)
+            exportBusy = f.processor->tryBeginExport();
     }
 
     if (!f.api.open(f.service()))
@@ -1103,8 +1103,8 @@ std::string runQuitVector(const JsonValue& vector, const std::string& slug)
     }
     for (const auto& job : jobs)
         job->release = true;
-    if (lockHeld)
-        f.processor->releaseExportLock();
+    if (exportBusy)
+        f.processor->finishExport();
     return failure;
 }
 

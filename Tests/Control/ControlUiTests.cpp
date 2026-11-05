@@ -263,13 +263,13 @@ void scenarioUiState()
     f.bridge.busy.pointerDown = true;
     f.bridge.busy.importRunning = true;
     f.bridge.busy.operationRunning = true;
-    CONTROL_CHECK(f.processor->tryAcquireExportLock());
+    CONTROL_CHECK(f.processor->tryBeginExport());
     f.preferences().setOnboardingShown(true);
     f.bridge.onboarding = true;
     f.bridge.scale = ControlUiBridge::UiScale{9, 2};
     // A read: never BUSY, also while the UI is busy.
     const auto state = f.api.result("ui.getState");
-    f.processor->releaseExportLock();
+    f.processor->finishExport();
     const auto& busy = memberOf(state, "busy");
     CONTROL_CHECK(memberOf(busy, "pointerDown").asBoolean() && memberOf(busy, "modalOpen").asBoolean()
                   && memberOf(busy, "importInProgress").asBoolean() && memberOf(busy, "exportInProgress").asBoolean()
@@ -342,9 +342,9 @@ void scenarioUiDismiss()
     f.bridge.busy.importRunning = true;
     CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "BUSY", "import_in_progress"));
     f.bridge.busy.importRunning = false;
-    CONTROL_CHECK(f.processor->tryAcquireExportLock());
+    CONTROL_CHECK(f.processor->tryBeginExport());
     CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "BUSY", "export_in_progress"));
-    f.processor->releaseExportLock();
+    f.processor->finishExport();
     f.bridge.busy.operationRunning = true;
     CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "BUSY", "project_operation"));
     f.bridge.busy.operationRunning = false;
@@ -811,9 +811,9 @@ void scenarioUiWorkspace()
     bridge.busy.importRunning = true;
     CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "import_in_progress"));
     bridge.busy.importRunning = false;
-    CONTROL_CHECK(f.processor->tryAcquireExportLock());
+    CONTROL_CHECK(f.processor->tryBeginExport());
     CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "export_in_progress"));
-    f.processor->releaseExportLock();
+    f.processor->finishExport();
     bridge.busy.operationRunning = true;
     CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "project_operation"));
     bridge.busy.operationRunning = false;

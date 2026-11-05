@@ -75,6 +75,7 @@ public:
     ~ParameterPanel() override;
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
 
     void addListener(Listener* listener);
@@ -164,8 +165,20 @@ private:
 
     juce::ListenerList<Listener> listeners_;
 
+    /** 滚动结构：面板 chrome 固定 → 单个 Viewport → 单个内容组件；
+     *  视口滚动位置变化时重绘父面板，使 paintOverChildren 的纵向边缘渐隐跟随滚动。 */
+    class FadingViewport : public juce::Viewport
+    {
+    public:
+        explicit FadingViewport(ParameterPanel& owner) : owner_(owner) {}
+        void visibleAreaChanged(const juce::Rectangle<int>&) override { owner_.repaint(); }
+
+    private:
+        ParameterPanel& owner_;
+    };
+
     // ── 滚动结构：面板 chrome 固定 → 单个 Viewport → 单个内容组件 ──
-    juce::Viewport viewport_;
+    FadingViewport viewport_;
     ContentComponent contentComponent_;
 
     // Pitch Correction Section

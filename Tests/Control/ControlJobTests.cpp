@@ -1444,8 +1444,8 @@ struct WriteCall
     std::string params;
 };
 
-/** Everything a client or the user could see of the project, the content, the undo history, the jobs and the
-    export lock, as one string: a refused write must leave it as it was. */
+/** Everything a client or the user could see of the project, the content, the undo history and the jobs, as one
+    string: a refused write must leave it as it was. */
 std::string observableState(ApiSession& api, OpenTuneAudioProcessor& processor, TestUiBridge& bridge,
                             ControlService& service, const std::string& contentId)
 {
@@ -1457,7 +1457,6 @@ std::string observableState(ApiSession& api, OpenTuneAudioProcessor& processor, 
              + std::to_string(bridge.undoRedoNotifications) + "/" + std::to_string(bridge.timeGridNotifications);
     state += "|undo " + std::to_string(processor.getUndoManager().size());
     state += "|jobs " + std::to_string(service.jobs()->retainedCount());
-    state += processor.isExportLockHeld() ? "|locked" : "|free";
     return state;
 }
 
@@ -1557,8 +1556,8 @@ void scenarioBusyMatrix()
     const auto cell = [&](const WriteCall& call, const char* condition, const char* reason) {
         const bool refused = CONTROL_CHECK(api.fails(call.method, json(call.params), "BUSY", reason));
         bridge.busy = {};
-        if (processor->isExportLockHeld())
-            processor->releaseExportLock();
+        if (processor->isExportBusy())
+            processor->finishExport();
         const bool unchanged = CONTROL_CHECK(observableState(api, *processor, bridge, service, contentId) == before);
         if (!refused || !unchanged)
             note(std::string("the cell ") + call.label + " x " + condition + " failed");
@@ -1570,10 +1569,14 @@ void scenarioBusyMatrix()
             bridge.busy.*(condition.flag) = true;
             cell(call, condition.name, condition.reason);
         }
-        // The export lock that the UI and the API share, held by an export that is not the editor's flag.
+        // The export busy state that the UI and the API share, taken by an admission that is not the editor's
+        // flag: while it is taken a second begin is refused, and after the finish it is idle again.
         bridge.busy = {};
-        CONTROL_CHECK(processor->tryAcquireExportLock());
-        cell(call, "the export lock", "export_in_progress");
+        CONTROL_CHECK(processor->tryBeginExport());
+        CONTROL_CHECK(!processor->tryBeginExport() && processor->isExportBusy());
+        cell(call, "the shared export busy state", "export_in_progress");
+        // cell released it: after the finish the state queries as idle.
+        CONTROL_CHECK(!processor->isExportBusy());
     }
     CONTROL_CHECK(cells == static_cast<int>(calls.size()) * 6);
     CONTROL_CHECK(!juceFileOf(std::filesystem::u8path(target)).exists());

@@ -63,10 +63,9 @@ std::optional<ControlUiBridge::BusyState> ControlEditorBridge::queryBusy() const
     busy.pointerDown = juce::Desktop::getInstance().getNumDraggingMouseSources() > 0;
     // The editor's dialogs (DialogWindow, ConfirmDialogContent) enter the modal state.
     busy.modalOpen = juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0;
-    // The editor's own flags of its project save/open, its import queue and its export worker.
+    // The editor's own flags of its project save/open and its import queue. Export state belongs to the processor.
     busy.operationRunning = editor_.projectOperationBusy_;
     busy.importRunning = editor_.isImportInProgress_ || !editor_.importQueue_.empty();
-    busy.exportRunning = editor_.exportInProgress_.load();
     return busy;
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Scenarios of export.start and the export lock, against the real processor without a window or an audio
+// Scenarios of export.start and the shared export busy state, against the real processor without a window or an audio
 // device. Contents get a synthetic pitch analysis committed the way OpenTune commits a finished analysis.
 // Without a vocoder model OpenTune cannot render, so the scenarios drive the render cache of a content
 // themselves while OpenTune's render worker is paused: they publish its blocks as a finished render would,
@@ -512,7 +512,7 @@ std::string dryJson(const std::string& contentId, const char* reason)
 
 } // namespace
 
-// ---- export.start: results, checks and the export lock ------------------------------------------
+// ---- export.start: results, checks and the export busy state -------------------------------------
 
 void scenarioExport()
 {
@@ -558,7 +558,7 @@ void scenarioExport()
                              + "}]");
         // Nothing but the file: the temporary file was moved into place.
         CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"wet.wav"});
-        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(!processor->isExportBusy());
     }
     // 2. An unvoiced clip is exported uncorrected and listed.
     {
@@ -712,20 +712,20 @@ void scenarioExport()
         CONTROL_CHECK(failedWith(job, "INVALID_ARGUMENT", "target_is_loaded_media"));
         CONTROL_CHECK(juceFileOf(loop.sourcePath).getSize() == loopSize
                       && juceFileOf((media / "loop.wav").u8string()).loadFileAsString() == "taken");
-        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(!processor->isExportBusy());
     }
 
-    // 8. The export lock that the UI shares: held by the editor's export, export.start and every other write
+    // 8. The export busy state that the UI shares: taken by the editor's export, export.start and every other write
     //    are refused; reads and job.get are not.
     {
-        CONTROL_CHECK(processor->tryAcquireExportLock());
+        CONTROL_CHECK(processor->tryBeginExport());
         CONTROL_CHECK(api.fails("export.start", json(R"({"kind":"master","path":)" + quoted(outPath("busy.wav")) + "}"),
                                 "BUSY", "export_in_progress"));
         CONTROL_CHECK(api.fails("import.start",
                                 json(R"({"items":[{"path":)" + quoted(wet.sourcePath) + R"(}],"layout":"single"})"),
                                 "BUSY", "export_in_progress"));
         CONTROL_CHECK(api.result("project.get").isObject());
-        processor->releaseExportLock();
+        processor->finishExport();
         // The editor's own flag and its other busy conditions.
         bridge.busy.exportRunning = true;
         CONTROL_CHECK(api.fails("export.start", json(R"({"kind":"master","path":)" + quoted(outPath("busy.wav")) + "}"),
@@ -743,7 +743,7 @@ void scenarioExport()
         const auto pending = addClip(*processor, media, "pending", 4, 0.0, 1.0, Analysis::Running);
         const auto params = clipParams(handles.placement(pending.placementId), outPath("pending.wav"));
         const auto jobId = startExport(api, params);
-        CONTROL_CHECK(processor->isExportLockHeld());
+        CONTROL_CHECK(processor->isExportBusy());
         CONTROL_CHECK(pumpMessagesUntil(
             [&] { return memberOf(memberOf(jobOf(service, jobId), "progress"), "phase").text() == "waiting"; },
             kDriveTimeoutMs));
@@ -763,7 +763,7 @@ void scenarioExport()
         CONTROL_CHECK(memberOf(job, "state").text() == "cancelled");
         const auto& data = memberOf(memberOf(job, "error"), "data");
         CONTROL_CHECK(memberOf(data, "kind").text() == "CANCELLED" && !memberOf(data, "executed").asBoolean());
-        CONTROL_CHECK(!juceFileOf(outPath("pending.wav")).exists() && !processor->isExportLockHeld());
+        CONTROL_CHECK(!juceFileOf(outPath("pending.wav")).exists() && !processor->isExportBusy());
         const auto again = exportAndWait(api, clipParams(handles.placement(dry.placementId), outPath("after.wav")));
         CONTROL_CHECK(memberOf(again, "state").text() == "succeeded");
     }
@@ -826,7 +826,7 @@ void scenarioExportFailures()
         CONTROL_CHECK(!memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
         // The first request and the one retry, each with at least one block.
         CONTROL_CHECK(failedBlocks >= 2);
-        CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"failed.wav"} && !processor->isExportLockHeld());
+        CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"failed.wav"} && !processor->isExportBusy());
     }
 
     // A block fails while the other blocks of the content are still pending: the job asks for the failed block again
@@ -874,7 +874,7 @@ void scenarioExportFailures()
              + std::to_string(cache->getChunkStats().pending) + " pending");
         CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
         CONTROL_CHECK(toJsonString(memberOf(resultOf(job), "dryContents")) == "[]");
-        CONTROL_CHECK(cache->isCanonicalSettled() && !processor->isExportLockHeld());
+        CONTROL_CHECK(cache->isCanonicalSettled() && !processor->isExportBusy());
         std::error_code ignored;
         std::filesystem::remove(std::filesystem::u8path(path), ignored);
     }
@@ -900,7 +900,7 @@ void scenarioExportFailures()
         CONTROL_CHECK(failedWith(job, "REVISION_CONFLICT", "changed_during_export"));
         CONTROL_CHECK(juceFileOf(outPath("edited.wav")).loadFileAsString() == "kept");
         CONTROL_CHECK((filesIn(out) == std::vector<std::string>{"edited.wav", "failed.wav"}));
-        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(!processor->isExportBusy());
     }
 
     // NOT_READY: the analysis does not finish within the wait limit.
@@ -910,7 +910,7 @@ void scenarioExportFailures()
         const auto job = exportAndWait(api, clipParams(handles.placement(clip.placementId), outPath("slow.wav")));
         CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
         CONTROL_CHECK(memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
-        CONTROL_CHECK(!juceFileOf(outPath("slow.wav")).exists() && !processor->isExportLockHeld());
+        CONTROL_CHECK(!juceFileOf(outPath("slow.wav")).exists() && !processor->isExportBusy());
     }
 
     // The clip of a clip export is deleted while the job waits.
@@ -920,7 +920,7 @@ void scenarioExportFailures()
         CONTROL_CHECK(processor->getStandaloneArrangement()->deletePlacementById(5, clip.placementId));
         const auto job = waitJob(api, jobId);
         CONTROL_CHECK(failedWith(job, "REVISION_CONFLICT", "changed_during_export"));
-        CONTROL_CHECK(!juceFileOf(outPath("removed.wav")).exists() && !processor->isExportLockHeld());
+        CONTROL_CHECK(!juceFileOf(outPath("removed.wav")).exists() && !processor->isExportBusy());
     }
 
     // Every clip of a track export is deleted while the job waits: nothing is left to export
@@ -933,7 +933,7 @@ void scenarioExportFailures()
         const auto job = waitJob(api, jobId);
         CONTROL_CHECK(failedWith(job, "INVALID_ARGUMENT", "nothing_to_export"));
         CONTROL_CHECK(!memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
-        CONTROL_CHECK(!juceFileOf(outPath("vanishing.wav")).exists() && !processor->isExportLockHeld());
+        CONTROL_CHECK(!juceFileOf(outPath("vanishing.wav")).exists() && !processor->isExportBusy());
     }
 
     // File identity (PROTOCOL.md section 20.3) and the final rename (section 20.4) on their own.
@@ -1140,7 +1140,7 @@ void scenarioExportDeferredRetry()
         CONTROL_CHECK(memberOf(job, "result").isNull());
         CONTROL_CHECK(bytesOf(target) == original);
         CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"target.wav"});
-        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(!processor->isExportBusy());
     }
 
     // 2. The retry goes away while the job waits (the runtime resumed it): the job writes the file.
@@ -1158,7 +1158,7 @@ void scenarioExportDeferredRetry()
         checkFormat(resultOf(job), 1, 1.0, 0.0);
         CONTROL_CHECK(!(bytesOf(target) == original));
         CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"target.wav"});
-        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(!processor->isExportBusy());
     }
 }
 
@@ -1246,10 +1246,10 @@ struct FixtureJob
     std::atomic<bool> release{false};
 };
 
-/** Establishes given.jobs: each job in its state, its id bound to its name. A running export job holds the
-    export lock, as the vectors' README requires; lockHeld tells the caller to release it. */
+/** Establishes given.jobs: each job in its state, its id bound to its name. A running export job takes the
+    shared export busy state, as the vectors' README requires; exportBusy tells the caller to release it. */
 bool establishJobs(OpenTuneAudioProcessor& processor, ControlJobs& jobs, const JsonValue& given, VectorMatcher& matcher,
-                   std::vector<std::shared_ptr<FixtureJob>>& fixtures, bool& lockHeld)
+                   std::vector<std::shared_ptr<FixtureJob>>& fixtures, bool& exportBusy)
 {
     for (std::size_t i = 0; i < given.size(); ++i) {
         const auto& spec = given.at(i);
@@ -1285,8 +1285,8 @@ bool establishJobs(OpenTuneAudioProcessor& processor, ControlJobs& jobs, const J
                 },
                 kReadTimeoutMs))
             return false;
-        if (kind == "export" && state == "running" && !lockHeld)
-            lockHeld = processor.tryAcquireExportLock();
+        if (kind == "export" && state == "running" && !exportBusy)
+            exportBusy = processor.tryBeginExport();
         fixtures.push_back(std::move(fixture));
     }
     return true;
@@ -1358,8 +1358,8 @@ std::string runExportVector(const JsonValue& vector, const std::string& slug)
         created.emplace_back(bind, clip);
     }
     std::vector<std::shared_ptr<FixtureJob>> fixtures;
-    bool lockHeld = false;
-    if (!establishJobs(*processor, *service.jobs(), memberOf(given, "jobs"), matcher, fixtures, lockHeld))
+    bool exportBusy = false;
+    if (!establishJobs(*processor, *service.jobs(), memberOf(given, "jobs"), matcher, fixtures, exportBusy))
         return "given.jobs could not be established";
 
     ApiSession api;
@@ -1429,8 +1429,8 @@ std::string runExportVector(const JsonValue& vector, const std::string& slug)
         kJobExchangeMs);
     for (const auto& fixture : fixtures)
         fixture->release = true;
-    if (lockHeld)
-        processor->releaseExportLock();
+    if (exportBusy)
+        processor->finishExport();
     return failure;
 }
 
@@ -1879,7 +1879,7 @@ void scenarioExportAfterEdit()
             CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
             CONTROL_CHECK(memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
             CONTROL_CHECK(memberOf(job, "result").isNull() && !juceFileOf(early).exists()
-                          && !processor->isExportLockHeld());
+                          && !processor->isExportBusy());
         }
         CONTROL_CHECK(levels.publish(*processor, edited.key) > 0);
         renderService->resumeRenderWorker();
@@ -1930,7 +1930,7 @@ void scenarioExportAfterEdit()
             CONTROL_CHECK(failedWith(job, "REVISION_CONFLICT", "changed_during_export"));
             CONTROL_CHECK(!juceFileOf(path).exists());
         }
-        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(!processor->isExportBusy());
     }
 
     // 3. The user's edit comes while the file is written: the render of the version the job recorded is the one in
@@ -1952,7 +1952,7 @@ void scenarioExportAfterEdit()
         renderService->resumeRenderWorker();
         const auto job = waitJob(api, jobId);
         CONTROL_CHECK(failedWith(job, "REVISION_CONFLICT", "changed_during_export"));
-        CONTROL_CHECK(juceFileOf(path).loadFileAsString() == "kept" && !processor->isExportLockHeld());
+        CONTROL_CHECK(juceFileOf(path).loadFileAsString() == "kept" && !processor->isExportBusy());
         // Only the target is left in the directory: the temporary file was deleted.
         for (const auto& name : filesIn(out))
             CONTROL_CHECK(name.empty() || name[0] != '.');
@@ -2027,7 +2027,7 @@ void scenarioExportCancelOverwrite()
         return json("{\"contentId\":" + quoted(handles.content(steady.key)) + R"(,"key":{"root":0,"scale":"major"}})");
     };
 
-    // While the export waits for the analysis, a write is refused because of the export lock ...
+    // While the export waits for the analysis, a write is refused because of the export busy state ...
     const auto jobId =
         startExport(api, clipParams(handles.placement(pending.placementId), target, R"(,"ifExists":"overwrite")"));
     CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "waiting"; }, kDriveTimeoutMs));
@@ -2038,7 +2038,7 @@ void scenarioExportCancelOverwrite()
     const auto job = waitJob(api, jobId);
     CONTROL_CHECK(memberOf(job, "state").text() == "cancelled");
     CONTROL_CHECK(juceFileOf(target).loadFileAsString() == "original");
-    CONTROL_CHECK((filesIn(out) == std::vector<std::string>{"target.wav"}) && !processor->isExportLockHeld());
+    CONTROL_CHECK((filesIn(out) == std::vector<std::string>{"target.wav"}) && !processor->isExportBusy());
     const auto set = api.result("content.setKey", setKey());
     CONTROL_CHECK(memberOf(set, "applied").asBoolean() && !memberOf(set, "noOp").asBoolean());
 }
@@ -2049,7 +2049,8 @@ void scenarioExportDestroy()
 {
     const auto media = exportDirectory("destroy-media");
 
-    // 1. The job waits for an analysis that never finishes: stopping the service ends it, releases the export lock
+    // 1. The job waits for an analysis that never finishes: stopping the service ends it, releases the export
+    //    busy state
     //    and leaves no file, within the shutdown bound; destroying the processor afterwards is quiet.
     {
         const auto out = exportDirectory("destroy-waiting");
@@ -2065,20 +2066,20 @@ void scenarioExportDestroy()
         const auto jobId =
             startExport(api, clipParams(handles.placement(clip.placementId), (out / "never.wav").u8string()));
         CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "waiting"; }, kDriveTimeoutMs));
-        CONTROL_CHECK(processor->isExportLockHeld());
+        CONTROL_CHECK(processor->isExportBusy());
         const auto started = Clock::now();
         service.stop();
         const auto elapsed = millisecondsSince(started);
         note("the service stopped in " + std::to_string(elapsed) + " ms");
         CONTROL_CHECK(elapsed <= kShutdownBoundMs);
-        CONTROL_CHECK(!processor->isExportLockHeld() && filesIn(out).empty());
+        CONTROL_CHECK(!processor->isExportBusy() && filesIn(out).empty());
         const auto destroyedAt = Clock::now();
         processor.reset();
         CONTROL_CHECK(millisecondsSince(destroyedAt) <= kShutdownBoundMs);
     }
 
     // 2. The job is writing: the writer waits for OpenTune's render worker, which is held back by a queued render.
-    //    The export lock is released and no temporary file is left within the bound once the worker runs again; a
+    //    The export busy state is released and no temporary file is left within the bound once the worker runs again; a
     //    target that the export would have replaced is untouched.
     {
         const auto out = exportDirectory("destroy-writing");
@@ -2103,7 +2104,7 @@ void scenarioExportDestroy()
         const auto jobId =
             startExport(api, clipParams(handles.placement(clip.placementId), target, R"(,"ifExists":"overwrite")"));
         CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "writing"; }, kDriveTimeoutMs));
-        CONTROL_CHECK(processor->isExportLockHeld());
+        CONTROL_CHECK(processor->isExportBusy());
         std::thread resumer([renderService] {
             sleepMs(kQuietPumpMs);
             renderService->resumeRenderWorker();
@@ -2117,7 +2118,7 @@ void scenarioExportDestroy()
         resumer.join();
         note("the service stopped in " + std::to_string(elapsed) + " ms");
         CONTROL_CHECK(elapsed <= kShutdownBoundMs);
-        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(!processor->isExportBusy());
         CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"writing.wav"}
                       && juceFileOf(target).loadFileAsString() == "original");
         processor.reset();
@@ -2349,7 +2350,7 @@ void scenarioExportDryReasons()
         checkFormat(result, 1, 2.0, 0.0);
         CONTROL_CHECK(toJsonString(memberOf(result, "dryContents")) == dryJson(contentId, "nothingToRender"));
         CONTROL_CHECK(recordedRevision(result, contentId) == revisionOf(api, contentId));
-        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(!processor->isExportBusy());
     };
     // 2a. The finished analysis asked for the render, as OpenTune's own does; its blocks end blank.
     {
@@ -2450,7 +2451,7 @@ void scenarioExportDryReasons()
                  + toJsonString(memberOf(memberOf(memberOf(job, "error"), "data"), "kind")));
             CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
             CONTROL_CHECK(memberOf(job, "result").isNull() && !juceFileOf(path).exists());
-            CONTROL_CHECK(!processor->isExportLockHeld());
+            CONTROL_CHECK(!processor->isExportBusy());
         }
     }
     // 2f. As 2e, but the blocks no longer hold that audio: the render of the version without the correction failed in
@@ -2480,7 +2481,7 @@ void scenarioExportDryReasons()
             const auto job = exportWithin(clipParams(handles.placement(clip.placementId), path));
             CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
             CONTROL_CHECK(memberOf(job, "result").isNull() && !juceFileOf(path).exists());
-            CONTROL_CHECK(!processor->isExportLockHeld());
+            CONTROL_CHECK(!processor->isExportBusy());
         }
     }
     const auto dispatcher = service.dispatcher();

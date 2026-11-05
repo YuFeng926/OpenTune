@@ -423,7 +423,7 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
 // ============================================================================
 
 ParameterPanel::ParameterPanel()
-    : contentComponent_(*this)
+    : viewport_(*this), contentComponent_(*this)
 {
     viewport_.setScrollBarsShown(true, false);
     viewport_.setScrollBarThickness(UIColors::scrollBarThickness);
@@ -673,6 +673,72 @@ void ParameterPanel::paint(juce::Graphics& g)
     
     // Draw Frame
     UIColors::drawPanelFrame(g, bounds, style.panelRadius);
+}
+
+void ParameterPanel::paintOverChildren(juce::Graphics& g)
+{
+    // 纵向滚动视口边缘轻微上下渐隐（插件 / standalone 共用同一面板）。
+    // - 绘制在滚动内容之上：仅当对应方向仍有可滚动内容时显示；
+    // - 渐变基色取当前主题面板/视口背景，宽度避开竖向滚动条；
+    // - 深度复用 layoutContent() 的 innerPadding=8 首尾留白，
+    //   滚动到两端时首尾控件不会被渐隐覆盖；
+    // - 滚动中由 FadingViewport::visibleAreaChanged 触发 repaint 跟随。
+    const auto viewportBounds = viewport_.getBounds().toFloat();
+    if (viewportBounds.isEmpty())
+        return;
+
+    const auto& viewed = viewport_.getViewedComponent();
+    if (viewed == nullptr)
+        return;
+
+    const int contentHeight = viewed->getHeight();
+    const int viewHeight = viewport_.getHeight();
+    if (contentHeight <= viewHeight)
+        return;
+
+    const int scrollY = viewport_.getViewPositionY();
+    const int maxScrollY = contentHeight - viewHeight;
+    const bool canScrollUp = scrollY > 0;
+    const bool canScrollDown = scrollY < maxScrollY;
+    if (!canScrollUp && !canScrollDown)
+        return;
+
+    // 深度 = layoutContent() 使用的 innerPadding（首尾留白）
+    const float fadeDepth = static_cast<float>(8);
+    const float fadeWidth = static_cast<float>(viewport_.getMaximumVisibleWidth());
+
+    // 与各主题面板/视口背景协调：BlueBreeze/Overdose 及默认主题用 panel 背景，
+    // Aurora 主题 shell 背景较深，取其底部深色。
+    const auto themeId = UIColors::currentThemeId();
+    const auto fadeColour = (themeId == ThemeId::Aurora)
+        ? UIColors::auroraSidebarShellBottom
+        : UIColors::backgroundDark;
+
+    const auto topRect = juce::Rectangle<float>(viewportBounds.getX(), viewportBounds.getY(), fadeWidth, fadeDepth);
+    const auto bottomRect = juce::Rectangle<float>(viewportBounds.getX(),
+                                                   viewportBounds.getBottom() - fadeDepth,
+                                                   fadeWidth,
+                                                   fadeDepth);
+
+    if (canScrollUp)
+    {
+        juce::ColourGradient fade(fadeColour.withAlpha(0.9f),
+                                  topRect.getCentreX(), topRect.getY(),
+                                  fadeColour.withAlpha(0.0f),
+                                  topRect.getCentreX(), topRect.getBottom(), false);
+        g.setGradientFill(fade);
+        g.fillRect(topRect);
+    }
+
+    if (canScrollDown)
+    {
+        juce::ColourGradient fade(fadeColour.withAlpha(0.0f),
+                                  bottomRect.getCentreX(), bottomRect.getY(),
+                                  fadeColour.withAlpha(0.9f),
+                                  bottomRect.getCentreX(), bottomRect.getBottom(), false);
+        g.setGradientFill(fade);
+        g.fillRect(bottomRect);
+    }
 }
 
 void ParameterPanel::ContentComponent::paint(juce::Graphics& g)

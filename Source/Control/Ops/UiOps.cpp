@@ -274,14 +274,14 @@ Result<JsonValue> runGetState(ControlOpContext& context, const ControlNoParams&)
         return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not report its view or its scale");
 
     // ControlUiBridge::queryBusy(): the editor's flags that controlCheckBusy() refuses writes with. As there, the
-    // processor's export lock counts as an export, whoever holds it.
+    // processor's message-thread export state counts as an export, whoever reports it.
     const auto busyState = bridge->queryBusy().value_or(ControlUiBridge::BusyState{});
     auto busy = JsonValue::object();
     busy.appendMember("pointerDown", JsonValue::boolean(busyState.pointerDown));
     busy.appendMember("modalOpen", JsonValue::boolean(busyState.modalOpen));
     busy.appendMember("importInProgress", JsonValue::boolean(busyState.importRunning));
     busy.appendMember("exportInProgress",
-                      JsonValue::boolean(busyState.exportRunning || context.processor().isExportLockHeld()));
+                      JsonValue::boolean(busyState.exportRunning || context.processor().isExportBusy()));
     busy.appendMember("projectOperation", JsonValue::boolean(busyState.operationRunning));
 
     auto dialogs = JsonValue::array();

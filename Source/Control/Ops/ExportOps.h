@@ -10,8 +10,9 @@ class ControlMethodTable;
  * a job of kind export under the export contract of PROTOCOL.md section 19 (methods/export.start.schema.json).
  * The job waits until every content of the export is analysed and its render has settled, records the
  * revisions, has OpenTune write a temporary file in the target directory, checks the revisions again on the
- * message thread and moves the file into place with one rename. The export lock that the editor's export
- * shares (OpenTuneAudioProcessor::tryAcquireExportLock) is held from export.start to the end of the job.
+ * message thread and moves the file into place with one rename. The message-thread export busy state
+ * that the editor's export shares (OpenTuneAudioProcessor::tryBeginExport) is taken in export.start after
+ * every check and held from there to the end of the job.
  */
 void registerExportOps(ControlMethodTable& table);
 

@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "content/edit-notes-busy-export",
   "type": "request",
-  "description": "While an export holds the export lock, content writes are refused with BUSY(export_in_progress) and nothing changes (PROTOCOL.md section 13.2).",
+  "description": "While an export is in progress, content writes are refused with BUSY(export_in_progress) and nothing changes (PROTOCOL.md section 13.2).",
   "capability": "edit.v1",
   "since": "1.0",
   "method": "content.editNotes",

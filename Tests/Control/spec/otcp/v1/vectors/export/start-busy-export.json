@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "export/start-busy-export",
   "type": "request",
-  "description": "Another export holds the export lock that the UI and this API share: BUSY(export_in_progress), retryable, and no job starts.",
+  "description": "Another export holds the shared export admission state that the UI and this API share: BUSY(export_in_progress), retryable, and no job starts.",
   "capability": "export.v1",
   "since": "1.0",
   "method": "export.start",

@@ -2476,7 +2476,7 @@ std::string editVectorSkipReason(const JsonValue& vector)
         if (name == "dirty" || name == "editingScheme" || name == "clips")
             continue;
         if (name == "jobs") {
-            // A running export holds the export lock; that is what the content writes see of it.
+            // A running export takes the shared export busy admission; that is what the content writes see of it.
             for (std::size_t j = 0; j < given.at(i).size(); ++j)
                 if (memberOf(given.at(i).at(j), "kind").text() != "export"
                     || memberOf(given.at(i).at(j), "state").text() != "running")
@@ -2546,8 +2546,8 @@ bool pushHistoryEntry(EditFixture& f, const JsonValue& entry, const std::map<std
 }
 
 /** Establishes given.jobs, running exports only (editVectorSkipReason): a job of kind export that runs until it
-    is cancelled, its id bound to its name, and the export lock it holds, as the vectors' README requires. */
-bool establishRunningExports(EditFixture& f, const JsonValue& jobs, VectorMatcher& matcher, bool& lockHeld)
+    is cancelled, its id bound to its name, and the export busy state it takes, as the vectors' README requires. */
+bool establishRunningExports(EditFixture& f, const JsonValue& jobs, VectorMatcher& matcher, bool& exportBusy)
 {
     const auto registry = f.service().jobs();
     if (registry == nullptr)
@@ -2570,10 +2570,10 @@ bool establishRunningExports(EditFixture& f, const JsonValue& jobs, VectorMatche
                 },
                 kReadTimeoutMs))
             return false;
-        if (!lockHeld)
-            lockHeld = f.processor->tryAcquireExportLock();
+        if (!exportBusy)
+            exportBusy = f.processor->tryBeginExport();
     }
-    return jobs.size() == 0 || lockHeld;
+    return jobs.size() == 0 || exportBusy;
 }
 
 std::string runEditVector(const JsonValue& vector)
@@ -2641,8 +2641,8 @@ std::string runEditVector(const JsonValue& vector)
         if (f.processor->getUndoManager().undo() == nullptr)
             return "given.history.redo could not be established";
     f.bridge.project.dirty = memberOf(given, "dirty").asBoolean();
-    bool exportLockHeld = false;
-    if (!establishRunningExports(f, memberOf(given, "jobs"), matcher, exportLockHeld))
+    bool exportBusy = false;
+    if (!establishRunningExports(f, memberOf(given, "jobs"), matcher, exportBusy))
         return "given.jobs could not be established";
 
     const auto& discovery = f.api.discovery();
@@ -2699,8 +2699,8 @@ std::string runEditVector(const JsonValue& vector)
             }
         },
         kVectorExchangeMs);
-    if (exportLockHeld)
-        f.processor->releaseExportLock();
+    if (exportBusy)
+        f.processor->finishExport();
     return failure;
 }
 

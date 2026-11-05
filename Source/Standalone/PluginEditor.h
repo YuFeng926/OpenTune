@@ -361,10 +361,12 @@ private:
     bool applyingLoadedProjectUi_{false};
     // Export worker thread management (independent: export may be long-running)
     std::thread exportWorker_;
-    // Export running flag. NOT derivable from exportWorker_.joinable(): a
-    // finished-but-unjoined thread is still joinable, so the atomic is the
-    // only correct "export completed" signal.
-    std::atomic<bool> exportInProgress_{false};
+    // Message-thread lifecycle fact, not a busy state: this editor started the export worker now in
+    // exportWorker_, so its destructor must join it and release the processor's shared export busy
+    // state on its behalf (the worker's own completion callback may already be gone with the editor).
+    // The shared admission itself lives on the processor (tryBeginExport / finishExport / isExportBusy),
+    // so the API and the UI see one busy state and there is no second global source.
+    bool exportWorkerOwnedByEditor_ = false;
 
     // Detached-safe background tasks (import/deferred post-process)
     std::vector<std::future<void>> backgroundTasks_;

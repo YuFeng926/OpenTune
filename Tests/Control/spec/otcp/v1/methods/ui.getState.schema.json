@@ -57,7 +57,7 @@
               "type": "boolean"
             },
             "exportInProgress": {
-              "description": "An export holds the export lock (BUSY reason export_in_progress).",
+              "description": "An export is in progress (BUSY reason export_in_progress).",
               "type": "boolean"
             },
             "projectOperation": {

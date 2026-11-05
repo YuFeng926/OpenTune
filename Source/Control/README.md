@@ -177,8 +177,8 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Standalone/PluginEditor.cpp` (first statement of the destructor) | `controlEditorBridge_.reset()`, which unregisters it | The API never reaches an editor that is being torn down. | Requests could reach a half-destroyed editor. |
 | `Source/Standalone/UI/ArrangementViewComponent.h` (end of the public section; 4 lines: `#if`, marker, declaration, `#endif`) | Public `commitControlSelection(trackId, placementId)` | The editor bridge selects a clip (`ui.setSelection`) as a plain click on it does, so that the view's own selection (the highlight and the target of its keyboard commands, private members) follows. No data member, so the class layout is the same with the option OFF. | A selection through the API would leave the view highlighting, and its Delete, split and nudge keys acting on, the clips selected before. |
 | `Source/Standalone/UI/ArrangementViewComponent.cpp` (after `commitEmptyPlacementSelection()`; 17 lines) | The definition: with a clip, the steps of `mouseDown` for a click on a clip that is not selected (only that clip in the view's selection, the shift anchor, `commitPlacementSelection()`); with 0, `commitEmptyPlacementSelection()`, as a click on an empty area | Calls only the view's own private functions in the order its mouse handler calls them; the listener (the editor) is told as after a click. | As above. |
-| `Source/PluginProcessor.h` (the control block at the end of the class; 5 lines: one marker comment, `tryAcquireExportLock()`, `releaseExportLock()`, `isExportLockHeld()`, member `exportLockHeld_`) | The export lock that the editor's export and `export.start` share (an atomic flag; any thread) | One export at a time, whoever starts it: `export.start` and every other write answer `BUSY(export_in_progress)` while it is held, also without an editor. | The API could export while the UI exports (both write through `OpenTuneAudioProcessor::export*Audio` and its `lastExportError_`), and writes would not see an export of the other side. |
-| `Source/Standalone/PluginEditor.cpp` (`exportAudioRequested`: 11 lines before `exportInProgress_` is set, 4 lines in the export thread before the result is posted) | The editor takes the lock when it starts its export thread, and releases it once the file is written. When the lock is taken (by `export.start`) it shows the message it shows while its own export runs, `LOC(kExportInProgress)` under the title `LOC(kExportAudio)`, so the text is the same in every language | The UI and the API share the lock; the UI shows the same localised message whoever holds it. | As above. |
+| `Source/PluginProcessor.h` (a Standalone block at the end of the class; `tryBeginExport()`, `finishExport()`, `isExportBusy()`, member `exportBusy_`) | The shared export busy state that the editor's export and `export.start` keep (a plain message-thread bool, not gated by `OPENTUNE_ENABLE_CONTROL_API`) | One export at a time, whoever starts it: `export.start` and every other write answer `BUSY(export_in_progress)` while it is held, also without an editor. Message-thread only, with the existing thread-contract asserts. | The API could export while the UI exports (both write through `OpenTuneAudioProcessor::export*Audio` and its `lastExportError_`), and writes would not see an export of the other side. |
+| `Source/Standalone/PluginEditor.cpp` (`exportAudioRequested`: the last admission before the export thread starts, the release in the posted completion callback) | The editor takes the shared state with `tryBeginExport()` only after the file picker and overwrite confirmation, right before its export thread starts, and releases it with `finishExport()` in the message-thread completion callback; its destructor joins the worker and, when it owned the admission (`exportWorkerOwnedByEditor_`), releases it itself. When the state is taken (by `export.start` or the UI) it shows the message it shows while its own export runs, `LOC(kExportInProgress)` under the title `LOC(kExportAudio)`, so the text is the same in every language | The UI and the API share one state; the UI shows the same localised message whoever holds it. | As above. |
 | `Source/Utils/UndoManager.h` (public section; 8 lines: `#if`, marker, five inline functions, `#endif`) | `peekUndo()`, `peekRedo()`, `size()`, `cursor()` and `clearRedo()` | Reads the tops and the counts of OpenTune's history (`edit.getHistory`, the entry checks of `edit.undo` and `edit.redo`); `clearRedo()` discards the redo history after a change without an undo entry (PROTOCOL.md section 15.3 rule 9), as `addAction()` discards it. No data member, so the class layout is the same with the option OFF. | The API cannot tell which entry is on top, so it cannot refuse a step the client did not expect; a change without an undo entry leaves older redo steps that would write over it. |
 | `Source/Standalone/PluginEditor.cpp` (`performUndoRedoAction`; 8 lines, none removed) | The function is split in two after its early `return`: the added lines end the first half with a call to the new `afterUndoRedo()` and begin that function, whose body is the upstream's own last two lines, `projectSession_.markDirty()` and `arrangementView_.requestContentRedraw()`. With the option OFF the preprocessor removes the added lines and the function reads as upstream | The editor bridge runs the same steps after an undo or redo applied through the API (`ControlUiBridge::onUndoRedoApplied()`): mark the project as changed (`markDirty()`) and redraw the arrangement (`requestContentRedraw()`). | After an API undo the editor would not redraw the arrangement until the next user action. |
 | `Source/Standalone/PluginEditor.h` (the control block at the end of the class; 2 lines: marker and declaration) | Private `afterUndoRedo()`, reached by the friend `ControlEditorBridge` | As above. | As above. |
@@ -555,10 +555,10 @@ never applies in this build.
 (section 13.2), in this order: a mouse or pen gesture (`pointer_down`), a modal dialog (`modal_open`;
 not for `ui.dismiss`), an import of the UI (`import_in_progress`), an export (`export_in_progress`), a
 project save, copy or open (`project_operation`). The bridge reports these from the editor's own flags. An
-export is also busy while the processor's export lock is held (`isExportLockHeld()`: an export of the
+export is also busy while the processor's shared export state is held (`isExportBusy()`: an export of the
 editor or of `export.start`), with or without an editor; without an editor nothing else is busy. Reads,
 `session.*` and `job.*` never call it. A job that commits in several steps (`import.start`) checks again
-before each commit and waits while the UI is busy, also while an export holds the lock.
+before each commit and waits while the UI is busy, also while the processor's export state is busy.
 
 ## Editor bridge
 
@@ -673,11 +673,11 @@ master mix with the processor functions of the editor's export (`exportAudioRequ
 clip or track and stereo for the master mix.
 
 - Before the job, in this order: an export job that still runs with the same params (after defaults) is returned;
-  handles; the busy state, with the export lock; the path's text (section 20.1) and its `.wav` extension; that the
+  handles; the busy state, including export admission; the path's text (section 20.1) and its `.wav` extension; that the
   export holds a clip with audio (`INVALID_ARGUMENT(nothing_to_export)` otherwise, not retryable: OpenTune exports
   nothing then; the job returns the same when every clip is deleted while it waits); the loaded media (below); that the
   target's directory exists (`IO_ERROR(write_failed)`); with `ifExists` `error`, that no file exists at the target
-  (`ALREADY_EXISTS(target_exists)`). Then the job takes the export lock until it ends.
+  (`ALREADY_EXISTS(target_exists)`). Then the job takes the processor's export busy state until it ends.
 - Loaded media are the source files of every source OpenTune holds (`SourceStore`, active or retired,
   since an undo step can bring a retired one back). The target is compared with each by file identity
   (`ControlFileIdentity`, section 20.3), not by its spelling: the same file with other letter case, a
@@ -739,7 +739,7 @@ clip or track and stereo for the master mix.
   mix), the recorded revisions (`contents`), `dryContents`, and `processing` (vocoder weight, hybrid
   mode, inference backend and `tuningHz`, as `session.info` reports them).
 
-Hooks: the processor's export lock (`tryAcquireExportLock`, `releaseExportLock`, `isExportLockHeld`) and
+Hooks: the processor's shared export busy state (`tryBeginExport`, `finishExport`, `isExportBusy`) and
 the editor's use of it (see "Hooks"). The clip of a clip export is found by its placement id with
 `StandaloneArrangement::findPlacementIndexById()` right before `exportPlacementAudio()`, so no hook is
 needed for it; the input token catches a change of the clips while the file is written.
@@ -1573,7 +1573,7 @@ had unsaved changes and `discardUnsaved: true` was given; `warnings` then holds 
 2. The editor: `UNSUPPORTED(no_editor_window)` without a bridge (a headless instance), `UNSUPPORTED(capability_missing)`
    when the bridge does not close its window (`ControlUiBridge::canQuit()`) or does not report its project.
 3. `BUSY`: the five reasons of every write (`controlCheckBusy()`: pointer down, modal dialog, import, export, project
-   operation, an export lock held by the UI included), then any job of the control API that has not finished
+   operation, an export busy state held by the UI included), then any job of the control API that has not finished
    (`ControlJobs::activeKinds()`), because the process would end under it. The reason of a job is the one PROTOCOL.md
    section 13.2 names for its kind (`import_in_progress`, `export_in_progress`, `project_operation` for `projectOpen`,
    `projectSave` and `projectCopy`) and `job_in_progress` for any other kind (`prefsApply`, `timeGridSeed`). With several jobs the
@@ -1620,7 +1620,7 @@ the call itself with `UNSUPPORTED`.
 `.AppQuitWithoutWindow`, `.AppQuitResult`, `.AppQuitSequence`, `.AppQuitStopping`, `.AppQuitVectors`):
 
 - `AppQuit`: the capability and its place after `audio.device`, the params, `UNSAVED_CHANGES`, every BUSY reason alone
-  and in the order of the checks (also an export lock held by the UI, and each job kind, several jobs and finished jobs
+  and in the order of the checks (also an export busy state held by the UI, and each job kind, several jobs and finished jobs
   that do not count), and the quit with `discardUnsaved`.
 - `AppQuitWithoutWindow`: no bridge, a bridge that cannot quit, the capability withheld; and the two cases in which
   the client has been told `quitting: true` but the window does not close when the exit step asks: the window refuses
@@ -1833,7 +1833,7 @@ render worker is paused (`pauseRenderWorker`): they publish its blocks as a fini
 fail them as a failing vocoder would, through the cache's public functions. `Export` covers a clip, a
 track and the master mix (format, duration, timeline start, revisions, dry contents), `ifExists`, the
 checks before the job (paths, loaded media by identity: other letter case, a hard link), the name that
-`rename` uses being loaded media, the export lock held by the UI, the busy checks of other writes and a
+`rename` uses being loaded media, the export state held by the UI, the busy checks of other writes and a
 second export while one waits, and cancellation; `ExportFailures` `ANALYSIS_FAILED` (and `allowDry`),
 `RENDER_FAILED` after the retry, `REVISION_CONFLICT` while OpenTune writes the file (the writer waits for
 the paused render worker while the clip's notes change), `NOT_READY` with a short wait limit
@@ -1877,7 +1877,7 @@ hand-computed SNAP of every note, ranges as selections, one undo step for severa
 over corrected notes, `clipKey`, and a note without a base pitch; `EditCapability` that `edit.v1` is reported with its
 four methods; `EditVectors` the specification's vectors of `edit/`, `content/set-key-*`, `content/auto-tune-*`,
 `content/edit-notes-*` and `content/set-pitch-shift-*` (`given.history` is established with the same actions, a running
-export of `given.jobs` holds the export lock; vectors of other methods are listed as skipped, with the reason). The shared
+export of `given.jobs` holds the export busy state; vectors of other methods are listed as skipped, with the reason). The shared
 contents with synthetic F0 are in `ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.
 
 `Tests/Control/ControlTimingTests.cpp` holds the scenarios of the time grid, on contents with synthetic F0 whose

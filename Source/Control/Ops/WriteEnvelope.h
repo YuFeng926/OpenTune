@@ -24,7 +24,8 @@ enum class ControlBusyScope {
  * The busy checks of PROTOCOL.md section 13.2, made on the message thread immediately before a write
  * applies its change: BUSY with pointer_down, modal_open, import_in_progress, export_in_progress or
  * project_operation, in this order, as an error that changed nothing. export_in_progress also while the
- * processor's export lock is held (an export of the editor or of export.start), with or without an editor.
+ * processor's message-thread export state is busy (an export of the editor or of export.start), with or without
+ * an editor.
  * nullopt when the write may go on: without an editor nothing else is busy (no user is working in a
  * window), and the editor's conditions count only when the bridge can tell. Reads, session.* and job.*
  * never call it: they never return BUSY because of the UI (section 13.3).
