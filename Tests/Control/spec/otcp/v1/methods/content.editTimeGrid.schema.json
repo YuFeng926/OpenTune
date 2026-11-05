@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.editTimeGrid.schema.json",
+  "title": "content.editTimeGrid",
+  "description": "Edits the time grid of a content, as OpenTune's time tool does. op seed places the initial handles, as OpenTune does when the time tool is picked; it runs as a job of kind timeGridSeed, does not change how the content sounds, and, as in the UI, cannot be undone or reverted (undo reason ui_parity, revert null, warning IRREVERSIBLE in the job's result). Seeding a grid that already has handles is a no-op; the call still hands the work to a timeGridSeed job, whose result is then a no-op (noOp true), so a client follows every seed in the same way. Where the seeded handles lie, like the minimum spacing that moves keep, is implementation-defined and the same as in OpenTune's time tool; clients do not assume particular positions or spacings and read the handles with content.getDetails (timeGrid.handles, and timeGrid.minHandleSpacingSec when present). The seed job checks again when it runs, before it writes anything, that the content still exists (else the job fails with NOT_FOUND(unknown_handle)), that the UI is not busy (else BUSY, with the reason of PROTOCOL.md section 13.2) and that the analysis is ready (else NOT_READY, with the reason of section 11). It places the handles from OpenTune's timing analysis of the content, which it waits for: when that analysis fails or finds no onset to place a handle at, the job fails with ANALYSIS_FAILED(timing_analysis_failed), and when it does not finish within the job's wait limit, which is implementation-defined, with NOT_READY(timing_analysis_timeout), which is retryable. An implementation of this release candidate may still end these two cases with INTERNAL, or with NOT_READY without a reason. A job that fails writes no handle. OpenTune's UI offers its time tool only while the experimental features are on (session.info processing.experimentalFeatures); this method and content.shiftTiming do not depend on that preference. op moveHandles moves handles to new output positions; each handle may appear in moves only once (else INVALID_ARGUMENT(duplicate_handle), and nothing moves); an unknown handleId gives NOT_FOUND(unknown_handle) and a grid without handles NOT_READY(grid_not_seeded). Moves are limited as in OpenTune's time tool, in two passes, by the minimum spacing to the neighbouring handles; a limited move is applied as far as allowed and reported in clamped and with the warning CLAMPED (subject: the handle; data: {field: outputSec, requested, applied}). One moveHandles call is one undo step and queues rendering again (sideEffects.reRenderQueued).",
+  "x-otcp": {
+    "method": "content.editTimeGrid",
+    "layer": "L5",
+    "capability": "timing.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "timeGridSeed",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "NOT_READY",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": [
+      "NOT_FOUND",
+      "NOT_READY",
+      "BUSY",
+      "ANALYSIS_FAILED",
+      "CANCELLED",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["contentId", "op"],
+          "additionalProperties": false,
+          "properties": {
+            "contentId": {
+              "$ref": "../schemas/common.schema.json#/$defs/contentId"
+            },
+            "op": { "const": "seed" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["contentId", "op", "expectedGridRevision", "moves"],
+          "additionalProperties": false,
+          "properties": {
+            "contentId": {
+              "$ref": "../schemas/common.schema.json#/$defs/contentId"
+            },
+            "op": { "const": "moveHandles" },
+            "expectedGridRevision": {
+              "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+            },
+            "moves": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["handleId", "outputSec"],
+                "additionalProperties": false,
+                "properties": {
+                  "handleId": {
+                    "$ref": "../schemas/common.schema.json#/$defs/handleId"
+                  },
+                  "outputSec": {
+                    "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+                  }
+                }
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "dryRun": { "type": "boolean", "default": false }
+          }
+        }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["clamped"],
+      "properties": {
+        "clamped": {
+          "type": "array",
+          "items": {
+            "$ref": "../schemas/common.schema.json#/$defs/clampedMove"
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "description": "The result of the timeGridSeed job: the write envelope of the seeding, with the members of result.",
+      "$ref": "#/$defs/result"
+    }
+  }
+}

@@ -1,0 +1,244 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-time-grid-job-failures",
+  "type": "scenario",
+  "description": "How job.get reports a timeGridSeed job that failed the checks it makes again when it runs: the content was removed in the meantime (NOT_FOUND(unknown_handle)), a dialog was opened (BUSY(modal_open)), or the analysis is running again (NOT_READY(f0_not_ready)); and the job's own failures: OpenTune's timing analysis failed or found no onset to place a handle at (ANALYSIS_FAILED(timing_analysis_failed)), or it did not finish within the job's wait limit (NOT_READY(timing_analysis_timeout), retryable). Such a job writes no handle (executed false). These states arise from changes between the call and the job, which no request of a vector can time, so the jobs are preconditions and this vector shows the form of the errors.",
+  "capability": "timing.v1",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "contentGone",
+        "kind": "timeGridSeed",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "NOT_FOUND", "reason": "unknown_handle" }
+      },
+      {
+        "bind": "dialogOpen",
+        "kind": "timeGridSeed",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "BUSY", "reason": "modal_open" }
+      },
+      {
+        "bind": "analysisRunning",
+        "kind": "timeGridSeed",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "NOT_READY", "reason": "f0_not_ready" }
+      },
+      {
+        "bind": "timingFailed",
+        "kind": "timeGridSeed",
+        "state": "failed",
+        "cancellable": false,
+        "error": {
+          "kind": "ANALYSIS_FAILED",
+          "reason": "timing_analysis_failed"
+        }
+      },
+      {
+        "bind": "timingTimeout",
+        "kind": "timeGridSeed",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "NOT_READY", "reason": "timing_analysis_timeout" }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "contentGone" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "contentGone" },
+            "kind": "timeGridSeed",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "NOT_FOUND",
+              "data": {
+                "kind": "NOT_FOUND",
+                "reason": "unknown_handle",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "dialogOpen" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "dialogOpen" },
+            "kind": "timeGridSeed",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "BUSY",
+              "data": {
+                "kind": "BUSY",
+                "reason": "modal_open",
+                "retryable": true,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "analysisRunning" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "analysisRunning" },
+            "kind": "timeGridSeed",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "NOT_READY",
+              "data": {
+                "kind": "NOT_READY",
+                "reason": "f0_not_ready",
+                "retryable": true,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "timingFailed" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "timingFailed" },
+            "kind": "timeGridSeed",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "ANALYSIS_FAILED",
+              "data": {
+                "kind": "ANALYSIS_FAILED",
+                "reason": "timing_analysis_failed",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "timingTimeout" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "timingTimeout" },
+            "kind": "timeGridSeed",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "NOT_READY",
+              "data": {
+                "kind": "NOT_READY",
+                "reason": "timing_analysis_timeout",
+                "retryable": true,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

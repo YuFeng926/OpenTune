@@ -1,0 +1,97 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-force-without-id",
+  "type": "request",
+  "description": "The only entry on the undo history is a note edit the user made in the OpenTune UI, and the end user asked to undo it, so the client sends force without expectedUndoId: with force the server applies the top entry whatever it is and does not need an id. The entry gets an undoId now (PROTOCOL.md section 15.3 rule 8), and the revert recipe, edit.redo, names it without force. Which notes change depends on the edit, so changes is matched by type.",
+  "capability": "history.v1",
+  "since": "1.0",
+  "method": "edit.undo",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "history": {
+      "undo": [{ "origin": "ui", "action": "noteEdit", "clip": "clip" }],
+      "redo": []
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "edit.undo",
+    "params": { "force": true }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": { "$any": "array" },
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "changed": {
+              "notes": {
+                "before": { "$any": "string" },
+                "after": { "$any": "string" }
+              }
+            }
+          }
+        ]
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$any": "string" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "edit.redo",
+          "params": { "expectedUndoId": { "$any": "string" } }
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": { "$any": "object" },
+      "warnings": [],
+      "job": null,
+      "entry": {
+        "undoId": { "$any": "string" },
+        "description": { "$any": "string" },
+        "origin": "ui",
+        "possiblyStale": false,
+        "unsafe": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

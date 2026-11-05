@@ -1,0 +1,110 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/set-asio-rate-not-needed",
+  "type": "request",
+  "description": "A change that touches neither the device type nor the output device restores no ASIO sample rate, so a restoration that would fail is never tried: the result carries GLOBAL_PREFERENCE only, as for any other change of the buffer size.",
+  "capability": "audio.device",
+  "since": "1.0",
+  "method": "audio.set",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "audio": {
+      "running": true,
+      "asioRateRestoreFails": true
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "audio.set",
+    "params": {
+      "bufferSizeFrame": 256
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "audioDevice",
+          "ref": {
+            "singleton": "audioDevice"
+          },
+          "label": {
+            "$any": true
+          },
+          "fields": {
+            "bufferSizeFrame": {
+              "before": 512,
+              "after": 256,
+              "unit": "frame"
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": {
+          "$any": "string"
+        },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "audio.set",
+          "params": {
+            "bufferSizeFrame": 512
+          }
+        }
+      },
+      "dirty": {
+        "before": false,
+        "after": false
+      },
+      "ui": {
+        "$any": true
+      },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "GLOBAL_PREFERENCE",
+          "subject": null,
+          "data": {
+            "preferences": [
+              "audioDevice"
+            ]
+          }
+        }
+      ],
+      "job": null,
+      "device": {
+        "running": true,
+        "deviceType": {
+          "$any": "string"
+        },
+        "outputDevice": {
+          "$any": "string"
+        },
+        "sampleRateHz": 44100,
+        "bufferSizeFrame": 256,
+        "outputChannelPair": 0
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

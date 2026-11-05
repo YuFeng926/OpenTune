@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-out-of-range",
+  "type": "request",
+  "description": "A tuning below 400 Hz violates the params schema: INVALID_ARGUMENT(invalid_params).",
+  "capability": "prefs.write",
+  "since": "1.0",
+  "method": "prefs.set",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "prefs.set",
+    "params": { "tuningHz": 380 }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "invalid_params",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

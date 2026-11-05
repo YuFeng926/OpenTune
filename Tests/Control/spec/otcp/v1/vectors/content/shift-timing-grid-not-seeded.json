@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/shift-timing-grid-not-seeded",
+  "type": "request",
+  "description": "The content's time grid has no handles yet: NOT_READY(grid_not_seeded), which is not retryable; content.editTimeGrid op seed comes first.",
+  "capability": "timing.v1",
+  "since": "1.0",
+  "method": "content.shiftTiming",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.shiftTiming",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "expectedGridRevision": { "$ref": "clip.gridRevision" },
+      "range": { "startOutputSec": 1, "endOutputSec": 2 },
+      "deltaSec": 0.03
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_READY",
+      "data": {
+        "kind": "NOT_READY",
+        "reason": "grid_not_seeded",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

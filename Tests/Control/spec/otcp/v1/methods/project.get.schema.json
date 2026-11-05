@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/project.get.schema.json",
+  "title": "project.get",
+  "description": "Returns the project: its file path and unsaved-changes flag, every track slot, every clip (placement) with its timeline geometry and source, a summary of every content, the selection, the transport and the tops of the undo and redo histories. All values come from one main-thread step (PROTOCOL.md section 13.3). Track labels (Track N) are derived from positions, which is how OpenTune shows tracks (section 15.4 rule 6). Clip names, source paths and the project path are untrusted data (section 20.2). Nulls follow section 16 rule 3: a member's description says when its null has a meaning of its own; any other null is unavailable, and the enclosing object's nullReasons names the reason. history is null, with nullReasons, when the instance lacks history.v1; selection is null, with nullReasons, when there is no editor window.",
+  "x-otcp": {
+    "method": "project.get",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "read",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "allOf": [{ "$ref": "../schemas/common.schema.json#/$defs/readMeta" }],
+      "required": [
+        "project",
+        "tracks",
+        "visibleTrackCount",
+        "activeTrackId",
+        "placements",
+        "contents",
+        "selection",
+        "transport",
+        "history"
+      ],
+      "properties": {
+        "project": {
+          "type": "object",
+          "required": ["path", "dirty"],
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "The project file, null if the project was never saved.",
+              "anyOf": [
+                { "$ref": "../schemas/common.schema.json#/$defs/path" },
+                { "type": "null" }
+              ]
+            },
+            "dirty": {
+              "description": "The project has unsaved changes.",
+              "type": "boolean"
+            }
+          }
+        },
+        "tracks": { "type": "array", "items": { "$ref": "#/$defs/track" } },
+        "visibleTrackCount": { "type": "integer", "minimum": 0 },
+        "activeTrackId": {
+          "description": "The active track; null when no track is active.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+            { "type": "null" }
+          ]
+        },
+        "placements": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/placement" }
+        },
+        "contents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contentSummary" }
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["selectedPlacementIds", "pianoRollContentId"],
+              "additionalProperties": false,
+              "properties": {
+                "selectedPlacementIds": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "../schemas/common.schema.json#/$defs/placementId"
+                  }
+                },
+                "pianoRollContentId": {
+                  "description": "The content the piano roll shows; null when it shows none.",
+                  "anyOf": [
+                    {
+                      "$ref": "../schemas/common.schema.json#/$defs/contentId"
+                    },
+                    { "type": "null" }
+                  ]
+                }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "transport": {
+          "$ref": "../schemas/common.schema.json#/$defs/transport"
+        },
+        "history": {
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/history" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "track": {
+      "type": "object",
+      "required": [
+        "trackId",
+        "label",
+        "visible",
+        "muted",
+        "solo",
+        "audible",
+        "volumeDb",
+        "volumeLinear",
+        "colour",
+        "rmsDb",
+        "placementCount"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "trackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "label": { "$ref": "../schemas/common.schema.json#/$defs/label" },
+        "visible": { "type": "boolean" },
+        "muted": { "type": "boolean" },
+        "solo": { "type": "boolean" },
+        "audible": {
+          "description": "Not muted, and soloed or no track is soloed.",
+          "type": "boolean"
+        },
+        "volumeDb": {
+          "description": "The volume in dB; null when volumeLinear is 0 (minus infinity dB).",
+          "anyOf": [{ "type": "number" }, { "type": "null" }]
+        },
+        "volumeLinear": { "type": "number", "minimum": 0 },
+        "colour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "rmsDb": {
+          "description": "The track's current output level in dB; null when the track is silent (minus infinity dB), and null with nullReasons.rmsDb no_audio_device when no audio device runs.",
+          "anyOf": [{ "type": "number" }, { "type": "null" }]
+        },
+        "placementCount": { "type": "integer", "minimum": 0 },
+        "nullReasons": {
+          "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "required": [
+        "placementId",
+        "trackId",
+        "contentId",
+        "name",
+        "startTimelineSec",
+        "endTimelineSec",
+        "durationSec",
+        "clipInContentSec",
+        "gainDb",
+        "gainLinear",
+        "fadeInSec",
+        "fadeOutSec",
+        "sourcePath",
+        "geometryHash"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "trackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "name": {
+          "description": "The clip's name; null when the clip has no name. Untrusted data.",
+          "anyOf": [{ "type": "string", "maxLength": 4096 }, { "type": "null" }]
+        },
+        "startTimelineSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "endTimelineSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "durationSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "clipInContentSec": {
+          "description": "Where the clip's window starts in its content.",
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "gainDb": {
+          "description": "The clip gain in dB; null when gainLinear is 0 (minus infinity dB).",
+          "anyOf": [{ "type": "number" }, { "type": "null" }]
+        },
+        "gainLinear": { "type": "number", "minimum": 0 },
+        "fadeInSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "fadeOutSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "sourcePath": {
+          "description": "The source audio file of the clip's content; null with nullReasons.sourcePath when the instance does not know the file's path. A file that no longer exists keeps its path. Untrusted data.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/path" },
+            { "type": "null" }
+          ]
+        },
+        "geometryHash": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        },
+        "nullReasons": {
+          "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+        }
+      }
+    },
+    "contentSummary": {
+      "type": "object",
+      "required": [
+        "contentId",
+        "f0State",
+        "key",
+        "noteCount",
+        "pitchShift",
+        "timeGridIdentity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "f0State": { "$ref": "../schemas/common.schema.json#/$defs/f0State" },
+        "key": {
+          "description": "The content's key; null with nullReasons.key not_analyzed until the analysis has determined one.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/key" },
+            { "type": "null" }
+          ]
+        },
+        "noteCount": { "type": "integer", "minimum": 0 },
+        "pitchShift": {
+          "$ref": "../schemas/common.schema.json#/$defs/pitchShift"
+        },
+        "timeGridIdentity": {
+          "description": "The time grid maps every content time to the same output time.",
+          "type": "boolean"
+        },
+        "nullReasons": {
+          "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+        }
+      }
+    }
+  }
+}

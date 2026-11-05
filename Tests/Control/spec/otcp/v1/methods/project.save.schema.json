@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/project.save.schema.json",
+  "title": "project.save",
+  "description": "Saves the project to its project file, as Save in OpenTune's file menu does, as a job of kind projectSave (PROTOCOL.md section 12). A project that was never saved has no file, and the call fails with INVALID_ARGUMENT(no_project_path); project.saveAs saves it. The job writes the project through a temporary file in the same directory and the final rename of section 20.4, and writes the project's media next to it as OpenTune does; it cannot be cancelled. Its result (jobResult) is the write envelope with the file that was written (path, sizeBytes). The unsaved-changes flag is cleared, unless the project changed while the job ran. The file's previous content is replaced, and no request of this protocol restores it: the undo reason is no_upstream_undo, revert is null, and the result carries the warning IRREVERSIBLE. Some state is not part of the project file: the result carries the warning NOT_SAVED_IN_PROJECT with data {items}, the names undoHistory and preferences. A write that fails ends the job with IO_ERROR(write_failed) and leaves the file as it was.",
+  "x-otcp": {
+    "method": "project.save",
+    "layer": "L8",
+    "capability": "project.io",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "projectSave",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": ["IO_ERROR", "INTERNAL"]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["path", "sizeBytes"],
+      "properties": {
+        "path": {
+          "description": "The project file that was written.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        },
+        "sizeBytes": { "type": "integer", "minimum": 0 }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

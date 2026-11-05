@@ -1,0 +1,61 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-notes-busy-export",
+  "type": "request",
+  "description": "While an export holds the export lock, content writes are refused with BUSY(export_in_progress) and nothing changes (PROTOCOL.md section 13.2).",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.editNotes",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "exportJob",
+        "kind": "export",
+        "state": "running",
+        "cancellable": true
+      }
+    ],
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.editNotes",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "expectedRevision": { "$ref": "clip.revision" },
+      "ops": [
+        { "op": "shiftCents", "select": { "all": true }, "deltaCents": 10 }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "BUSY",
+      "data": {
+        "kind": "BUSY",
+        "reason": "export_in_progress",
+        "retryable": true,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

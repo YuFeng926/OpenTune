@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/capability-missing",
+  "type": "scenario",
+  "description": "A request for a defined method whose capability the instance does not report is answered with UNSUPPORTED(capability_missing).",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "withoutCapabilities": ["jobs.v1"]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 68,
+        "method": "job.get",
+        "params": {
+          "jobId": "j:00000000:1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 68,
+        "error": {
+          "code": -32000,
+          "message": "UNSUPPORTED",
+          "data": {
+            "kind": "UNSUPPORTED",
+            "reason": "capability_missing",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

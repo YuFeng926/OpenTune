@@ -1,0 +1,109 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-notes-ok",
+  "type": "request",
+  "description": "content.getNotes by contentId returns every note in start-time order with its index, content-clock times and target pitch. The request named no placement, so the timeline members are null; all notes fit on one page, so nextCursor is null.",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "content.getNotes",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 },
+          { "startContentSec": 3.5, "endContentSec": 4.5, "targetMidi": 69.3 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.getNotes",
+    "params": { "contentId": { "$ref": "clip.contentId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "asOf": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$ref": "clip.revision" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ]
+      },
+      "derived": { "$any": "array" },
+      "contentId": { "$ref": "clip.contentId" },
+      "placementId": null,
+      "tuningHz": { "$any": "number" },
+      "totalCount": 3,
+      "notes": [
+        {
+          "index": 0,
+          "label": { "$any": "string" },
+          "startContentSec": { "$approx": 0.5 },
+          "endContentSec": { "$approx": 1.5 },
+          "startTimelineSec": null,
+          "endTimelineSec": null,
+          "detectedMidi": { "$any": true },
+          "targetMidi": { "$approx": 64 },
+          "offsetCents": { "$approx": 0 },
+          "retuneSpeed": { "$any": "number" },
+          "vibratoDepth": { "$any": "number" },
+          "vibratoRateHz": { "$any": "number" },
+          "pitchDriftScale": { "$any": "number" },
+          "voiced": { "$any": "boolean" },
+          "corrected": { "$any": "boolean" }
+        },
+        {
+          "index": 1,
+          "label": { "$any": "string" },
+          "startContentSec": { "$approx": 2 },
+          "endContentSec": { "$approx": 3 },
+          "startTimelineSec": null,
+          "endTimelineSec": null,
+          "detectedMidi": { "$any": true },
+          "targetMidi": { "$approx": 69 },
+          "offsetCents": { "$approx": 0 },
+          "retuneSpeed": { "$any": "number" },
+          "vibratoDepth": { "$any": "number" },
+          "vibratoRateHz": { "$any": "number" },
+          "pitchDriftScale": { "$any": "number" },
+          "voiced": { "$any": "boolean" },
+          "corrected": { "$any": "boolean" }
+        },
+        {
+          "index": 2,
+          "label": { "$any": "string" },
+          "startContentSec": { "$approx": 3.5 },
+          "endContentSec": { "$approx": 4.5 },
+          "startTimelineSec": null,
+          "endTimelineSec": null,
+          "detectedMidi": { "$any": true },
+          "targetMidi": { "$approx": 69.3 },
+          "offsetCents": { "$approx": 0 },
+          "retuneSpeed": { "$any": "number" },
+          "vibratoDepth": { "$any": "number" },
+          "vibratoRateHz": { "$any": "number" },
+          "pitchDriftScale": { "$any": "number" },
+          "voiced": { "$any": "boolean" },
+          "corrected": { "$any": "boolean" }
+        }
+      ],
+      "nextCursor": null
+    }
+  },
+  "connectionAfter": "open"
+}

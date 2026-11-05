@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/app.quit.schema.json",
+  "title": "app.quit",
+  "description": "Quits OpenTune Standalone, as the close button of its window does: the window saves the plugin state it saves whenever it closes (this is not the project file) and ends the application. The window asks nothing when the project has unsaved changes and quits at once; this method does not. It fails with UNSAVED_CHANGES(project_dirty) and does nothing, unless discardUnsaved is true; clients set discardUnsaved only when the end user explicitly agreed to lose those changes (PROTOCOL.md section 20.2 rule 3). The checks run in this order, and the first that fails ends the call with executed false and nothing changed: (1) the server is already stopping, SHUTTING_DOWN; (2) OpenTune is busy, BUSY, with the checks of every write (section 13.2: pointer_down, modal_open, import_in_progress, export_in_progress, project_operation) and, besides them, while any job has not reached a terminal state, with the reason of the job's kind where section 13.2 has one (import, export, projectOpen and projectSave) and job_in_progress for every other kind; (3) the project has unsaved changes and discardUnsaved is not true, UNSAVED_CHANGES(project_dirty). When none fails, the server answers first and quits afterwards: it writes this result to the connection, enters the stopping state, in which every later request is answered with SHUTTING_DOWN and every connection is closed (section 3.6 rule 2), and then, on the main thread, saves the plugin state as the window does and ends the application through the normal shutdown, which closes the listener and deletes the discovery file (section 5.4). exitDeadlineMs is the longest time in which the process ends after it has written the result. The call cannot be undone or reverted: the application is gone, and starting it again is the client's own start-up, outside this protocol. The result is not a write envelope (section 14.1 names this exception): a write envelope reports the world revision vector before and after, tokens to compare with later reads and an undo descriptor, and none of these exists here, because quitting changes no content and nothing can be read from the instance afterwards. discardedUnsavedChanges is true when the project had unsaved changes that this call discarded, and then warnings holds IRREVERSIBLE with the subject {singleton: project}. projectPath is the file of the current project, an untrusted path (section 20.2); null, with nullReasons, when the project was never saved. An instance that has no editor window fails with UNSUPPORTED(no_editor_window), executed false.",
+  "x-otcp": {
+    "method": "app.quit",
+    "layer": "L8",
+    "capability": "app.quit",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSAVED_CHANGES",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "discardUnsaved": {
+          "description": "The end user explicitly agreed to lose the unsaved changes of the current project.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "quitting",
+        "discardedUnsavedChanges",
+        "projectPath",
+        "exitDeadlineMs",
+        "warnings"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "quitting": {
+          "description": "Always true: the application ends after this result.",
+          "const": true
+        },
+        "discardedUnsavedChanges": {
+          "description": "The project had unsaved changes and discardUnsaved made the call lose them.",
+          "type": "boolean"
+        },
+        "projectPath": {
+          "description": "The file of the current project; null if the project was never saved. Untrusted data.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/path" },
+            { "type": "null" }
+          ]
+        },
+        "exitDeadlineMs": {
+          "description": "The longest time, after the server wrote this result, in which the process ends.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000
+        },
+        "warnings": {
+          "description": "IRREVERSIBLE when unsaved changes were discarded, else empty.",
+          "type": "array",
+          "items": { "$ref": "../schemas/common.schema.json#/$defs/warning" }
+        },
+        "nullReasons": {
+          "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+        }
+      }
+    }
+  }
+}

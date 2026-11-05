@@ -1,0 +1,34 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/get-ok",
+  "type": "request",
+  "description": "audio.get reports the running device and the values that it offers.",
+  "capability": "audio.device",
+  "since": "1.0",
+  "method": "audio.get",
+  "session": "authenticated",
+  "given": { "audio": { "running": true } },
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "audio.get", "params": {} },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "device": {
+        "running": true,
+        "deviceType": { "$any": "string" },
+        "outputDevice": { "$any": "string" },
+        "sampleRateHz": 44100,
+        "bufferSizeFrame": 512,
+        "outputChannelPair": 0
+      },
+      "available": {
+        "deviceTypes": { "$any": "array" },
+        "outputDevices": { "$any": "array" },
+        "sampleRatesHz": { "$any": "array" },
+        "bufferSizesFrame": { "$any": "array" },
+        "outputChannelPairCount": { "$any": "integer" }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

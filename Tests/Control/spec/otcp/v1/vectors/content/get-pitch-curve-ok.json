@@ -1,0 +1,64 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-pitch-curve-ok",
+  "type": "request",
+  "description": "content.getPitchCurve over 0.5-0.6 s at full resolution: one original and one corrected value per analysis frame, as MIDI note numbers, starting at startContentSec and spaced hopSec apart. The number of frames depends on the analysis hop and is matched by type.",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "content.getPitchCurve",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.getPitchCurve",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "range": { "startContentSec": 0.5, "endContentSec": 0.6 },
+      "stepFrame": 1
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "asOf": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$ref": "clip.revision" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ]
+      },
+      "derived": { "$any": "array" },
+      "contentId": { "$ref": "clip.contentId" },
+      "f0State": "ready",
+      "tuningHz": { "$any": "number" },
+      "hopSec": { "$any": "number" },
+      "stepFrame": 1,
+      "startContentSec": { "$any": "number" },
+      "pointCount": { "$any": "integer" },
+      "originalMidi": { "$any": "array" },
+      "correctedMidi": { "$any": "array" },
+      "nextCursor": null
+    }
+  },
+  "connectionAfter": "open"
+}

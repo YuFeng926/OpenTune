@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/duplicate-track-hidden",
+  "type": "request",
+  "description": "OpenTune offers Duplicate Track only for a visible track, so a hidden source track cannot be duplicated: INVALID_ARGUMENT(track_hidden), and nothing changes.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.duplicate",
+  "session": "authenticated",
+  "given": { "visibleTrackCount": 2 },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.duplicate",
+    "params": { "trackId": { "$ref": "runner.lastTrackId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "track_hidden",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

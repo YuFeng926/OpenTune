@@ -1,0 +1,125 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/set-output-channel-pair",
+  "type": "scenario",
+  "description": "The output channel pair: the Standalone application of OpenTune offers the pair 0 only (two channels at most), so the pair the device runs with is the only one. Naming it is a no-op that reopens nothing; naming another pair gives INVALID_ARGUMENT(audio_setting_unavailable) and changes nothing, as for any value that audio.get does not list (available.outputChannelPairCount is 1).",
+  "capability": "audio.device",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "audio": {
+      "running": true
+    }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "audio.set",
+        "params": {
+          "outputChannelPair": 0
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "noOp": true,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": {
+            "arrangementRevision": {
+              "$any": "string"
+            },
+            "contents": [],
+            "placements": []
+          },
+          "undo": {
+            "undoable": false,
+            "reason": "no_op",
+            "revert": null
+          },
+          "dirty": {
+            "before": false,
+            "after": false
+          },
+          "ui": {
+            "$any": true
+          },
+          "sideEffects": {},
+          "warnings": [],
+          "job": null,
+          "device": {
+            "running": true,
+            "outputChannelPair": 0
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "audio.set",
+        "params": {
+          "outputChannelPair": 1
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32602,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "audio_setting_unavailable",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "audio.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "device": {
+            "running": true,
+            "outputChannelPair": 0
+          },
+          "available": {
+            "outputChannelPairCount": 1
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,156 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-vocoder-weight",
+  "type": "scenario",
+  "description": "Switching to another vocoder weight that the installation offers. OpenTune reconfigures its vocoder asynchronously, so the call hands the change to a prefsApply job, which ends when the vocoder is ready again (PROTOCOL.md section 12.7); the job result is the write envelope: the change, the warning GLOBAL_PREFERENCE, the side effect reRenderQueued (a new weight makes OpenTune render every content again once the vocoder has loaded it, and the job reports it for every change of the weight, whether or not it waited for the vocoder) and the revert recipe with the previous weight. prefs.get then reports the new weight.",
+  "capability": "prefs.write",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "preferences": {
+      "vocoderWeight": "hifigan.onnx",
+      "options": {
+        "vocoderWeight": ["hifigan.onnx", "hifigan_coulin9.onnx"],
+        "f0Model": ["fcpe"]
+      }
+    },
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "prefs.set",
+        "params": { "vocoderWeight": "hifigan_coulin9.onnx" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "changes": [],
+          "undo": null,
+          "job": {
+            "jobId": { "$capture": "weightJob", "$any": "string" },
+            "kind": "prefsApply",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "weightJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "weightJob" },
+            "kind": "prefsApply",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "dryRun": false,
+              "changes": [
+                {
+                  "entity": "preference",
+                  "ref": { "preference": "vocoderWeight" },
+                  "label": { "$any": true },
+                  "fields": {
+                    "vocoderWeight": {
+                      "before": "hifigan.onnx",
+                      "after": "hifigan_coulin9.onnx",
+                      "unit": null
+                    }
+                  }
+                }
+              ],
+              "created": [],
+              "removed": [],
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": null,
+                "trackState": null,
+                "contents": []
+              },
+              "tokens": {
+                "arrangementRevision": { "$any": "string" },
+                "contents": [],
+                "placements": []
+              },
+              "undo": {
+                "undoable": false,
+                "reason": "ui_parity",
+                "revert": {
+                  "method": "prefs.set",
+                  "params": { "vocoderWeight": "hifigan.onnx" }
+                }
+              },
+              "dirty": { "before": false, "after": false },
+              "ui": { "$any": true },
+              "sideEffects": {
+                "reRenderQueued": {
+                  "contentIds": [{ "$ref": "clip.contentId" }],
+                  "revert": null
+                }
+              },
+              "warnings": [
+                {
+                  "code": "GLOBAL_PREFERENCE",
+                  "subject": null,
+                  "data": { "preferences": ["vocoderWeight"] }
+                }
+              ],
+              "job": null
+            },
+            "error": null
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "prefs.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "processing": { "vocoderWeight": "hifigan_coulin9.onnx" }
+        }
+      }
+    }
+  ]
+}

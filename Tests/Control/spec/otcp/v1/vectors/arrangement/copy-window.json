@@ -1,0 +1,93 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/copy-window",
+  "type": "request",
+  "description": "mode window copies a clip as pasting it does: the copy gets a new content that holds the part of the source content the clip shows. As in OpenTune there is no undo entry (undo reason ui_parity); the revert recipe removes the copy with arrangement.edit, op delete, which needs the end user's consent (requiresConsent true).",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.copy",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "visibleTrackCount": 2,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.copy",
+    "params": {
+      "sources": [{ "placementId": { "$ref": "clip.placementId" } }],
+      "mode": "window",
+      "toTrackId": 1,
+      "startTimelineSec": 10,
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [
+        {
+          "entity": "placement",
+          "ref": { "placementId": { "$any": "string" } },
+          "label": { "$any": true }
+        },
+        {
+          "entity": "content",
+          "ref": { "contentId": { "$any": "string" } },
+          "label": { "$any": true }
+        }
+      ],
+      "removed": [],
+      "idMap": [
+        {
+          "entity": "placement",
+          "relation": "copy",
+          "from": [{ "placementId": { "$ref": "clip.placementId" } }],
+          "to": [{ "placementId": { "$any": "string" } }]
+        }
+      ],
+      "revisionDiff": {
+        "arrangement": {
+          "before": { "$ref": "runner.arrangementRevision" },
+          "after": { "$any": "string" }
+        },
+        "trackState": null,
+        "contents": { "$any": "array" }
+      },
+      "tokens": { "$any": "object" },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "arrangement.edit",
+          "params": {
+            "expectedArrangementRevision": { "$any": "string" },
+            "ops": [{ "op": "delete", "placementIds": [{ "$any": "string" }] }]
+          },
+          "requiresConsent": true
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

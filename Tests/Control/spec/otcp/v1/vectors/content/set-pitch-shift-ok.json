@@ -1,0 +1,109 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/set-pitch-shift-ok",
+  "type": "request",
+  "description": "A pitch shift of +2 semitones is one undo step. The key is not transposed with it (warning KEY_NOT_TRANSPOSED) and rendering is queued again. Only the pitchShift component of the revision vector changes; the tokens stay as they were.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.setPitchShift",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "key": { "root": 9, "scale": "minor" },
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.setPitchShift",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "pitchShift": { "semitones": 2, "cents": 0 }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "pitchShift",
+          "ref": { "contentId": { "$ref": "clip.contentId" } },
+          "label": { "$any": true },
+          "fields": {
+            "semitones": { "before": 0, "after": 2, "unit": "semitones" }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "changed": {
+              "pitchShift": {
+                "before": { "$any": "string" },
+                "after": { "$any": "string" }
+              }
+            }
+          }
+        ]
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$ref": "clip.revision" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ],
+        "placements": []
+      },
+      "undo": {
+        "undoable": true,
+        "undoId": { "$any": "string" },
+        "description": { "$any": "string" },
+        "innerActions": { "$any": "array" },
+        "steps": 1
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {
+        "reRenderQueued": {
+          "contentIds": [{ "$ref": "clip.contentId" }],
+          "revert": null
+        }
+      },
+      "warnings": [
+        {
+          "code": "KEY_NOT_TRANSPOSED",
+          "subject": { "contentId": { "$ref": "clip.contentId" } },
+          "data": null
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

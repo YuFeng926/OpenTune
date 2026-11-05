@@ -1,0 +1,136 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-item-not-found",
+  "type": "scenario",
+  "description": "A file that does not exist does not fail the job: its item has imported false and the error NOT_FOUND(file_not_found). No clip was committed, so the job result is a no-op and the project is not marked as changed.",
+  "capability": "import.v1",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "files": [{ "bind": "missing", "kind": "absent" }]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "import.start",
+        "params": {
+          "items": [{ "path": { "$ref": "missing" } }],
+          "layout": "single",
+          "trackId": 0
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": null,
+          "dirty": { "before": false, "after": false },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [],
+          "job": {
+            "jobId": { "$capture": "importJob", "$any": "string" },
+            "kind": "import",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "importJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "importJob" },
+            "kind": "import",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "applied": true,
+              "noOp": true,
+              "dryRun": false,
+              "changes": [],
+              "created": [],
+              "removed": [],
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": null,
+                "trackState": null,
+                "contents": []
+              },
+              "tokens": { "$any": "object" },
+              "undo": { "undoable": false, "reason": "no_op", "revert": null },
+              "dirty": { "before": false, "after": false },
+              "ui": { "$any": true },
+              "sideEffects": {},
+              "warnings": [],
+              "job": null,
+              "items": [
+                {
+                  "path": { "$ref": "missing" },
+                  "imported": false,
+                  "placementId": null,
+                  "contentId": null,
+                  "trackId": null,
+                  "startTimelineSec": null,
+                  "durationSec": null,
+                  "channelCount": null,
+                  "originalSampleRateHz": null,
+                  "resampled": null,
+                  "f0State": null,
+                  "notesGenerated": false,
+                  "notesGeneratedBy": null,
+                  "error": {
+                    "code": -32000,
+                    "message": "NOT_FOUND",
+                    "data": {
+                      "kind": "NOT_FOUND",
+                      "reason": "file_not_found",
+                      "retryable": false,
+                      "detail": { "$any": "string" },
+                      "executed": false
+                    }
+                  }
+                }
+              ],
+              "counts": { "requested": 1, "imported": 0, "failed": 1 }
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

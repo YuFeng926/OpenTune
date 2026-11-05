@@ -1,0 +1,44 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-as-no-access",
+  "type": "request",
+  "description": "When the identity of the target cannot be determined, the server cannot tell whether saving would replace another file: the call fails with IO_ERROR(read_failed) and starts no job (PROTOCOL.md section 20.3 rule 4).",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.saveAs",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "locked", "kind": "noAccess", "extension": ".otproj" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.saveAs",
+    "params": { "path": { "$ref": "locked" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "IO_ERROR",
+      "data": {
+        "kind": "IO_ERROR",
+        "reason": "read_failed",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

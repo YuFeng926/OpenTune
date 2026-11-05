@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/batch-rejected",
+  "type": "scenario",
+  "description": "After authentication, a JSON-RPC batch (a JSON array) is answered with one error with id null and none of its elements is executed; the session stays open.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "send": [
+        { "jsonrpc": "2.0", "id": 10, "method": "session.info", "params": {} },
+        { "jsonrpc": "2.0", "id": 11, "method": "session.info", "params": {} }
+      ]
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "batch_unsupported",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 12, "result": { "$any": "object" } } }
+  ]
+}

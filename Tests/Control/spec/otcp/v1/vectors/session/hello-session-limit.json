@@ -1,0 +1,151 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-session-limit",
+  "type": "scenario",
+  "description": "With four authenticated sessions (the main connection and s2 to s4), a fifth hello with the right token gets BUSY(session_limit), retryable, and the server closes that connection.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "connect": "s2"
+    },
+    {
+      "connection": "s2",
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "session.hello",
+        "params": {
+          "token": {
+            "$ref": "discovery.token"
+          },
+          "protocol": "1.0",
+          "client": {
+            "name": "otcp-vector-runner",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "connection": "s2",
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "$any": "object"
+        }
+      }
+    },
+    {
+      "connect": "s3"
+    },
+    {
+      "connection": "s3",
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "session.hello",
+        "params": {
+          "token": {
+            "$ref": "discovery.token"
+          },
+          "protocol": "1.0",
+          "client": {
+            "name": "otcp-vector-runner",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "connection": "s3",
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "$any": "object"
+        }
+      }
+    },
+    {
+      "connect": "s4"
+    },
+    {
+      "connection": "s4",
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "session.hello",
+        "params": {
+          "token": {
+            "$ref": "discovery.token"
+          },
+          "protocol": "1.0",
+          "client": {
+            "name": "otcp-vector-runner",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "connection": "s4",
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "$any": "object"
+        }
+      }
+    },
+    {
+      "connect": "s5"
+    },
+    {
+      "connection": "s5",
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "session.hello",
+        "params": {
+          "token": {
+            "$ref": "discovery.token"
+          },
+          "protocol": "1.0",
+          "client": {
+            "name": "otcp-vector-runner",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "connection": "s5",
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "error": {
+          "code": -32000,
+          "message": "BUSY",
+          "data": {
+            "kind": "BUSY",
+            "reason": "session_limit",
+            "retryable": true,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "connection": "s5",
+      "expectClosed": {
+        "noBytes": true
+      }
+    }
+  ]
+}

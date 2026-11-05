@@ -1,0 +1,169 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-focus-generates-notes",
+  "type": "scenario",
+  "description": "In the openDyne scheme, the imported clip is selected (focus defaults to true) and OpenTune generates its notes once the analysis has finished, although the request did not ask for notes. The job result reports notesGeneratedBy focus, the side effect notesGenerated and the warning SELECTION_GENERATED_NOTES. The import has no undo entry, and the instance does not report arrangement.v1, so no request it accepts can delete the clip: revert is null, also for the side effect, and the result carries IRREVERSIBLE.",
+  "capability": "import.v1",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "editingScheme": "openDyne",
+    "dirty": false,
+    "files": [{ "bind": "take1", "kind": "audio", "durationSec": 4 }],
+    "withoutCapabilities": ["arrangement.v1"]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "import.start",
+        "params": {
+          "items": [{ "path": { "$ref": "take1" } }],
+          "layout": "single",
+          "trackId": 0,
+          "startTimelineSec": 0
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": null,
+          "dirty": { "before": false, "after": false },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [],
+          "job": {
+            "jobId": { "$capture": "importJob", "$any": "string" },
+            "kind": "import",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "importJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "importJob" },
+            "kind": "import",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "dryRun": false,
+              "changes": [],
+              "created": [
+                {
+                  "entity": "placement",
+                  "ref": { "placementId": { "$any": "string" } },
+                  "label": { "$any": true }
+                },
+                {
+                  "entity": "content",
+                  "ref": { "contentId": { "$any": "string" } },
+                  "label": { "$any": true }
+                }
+              ],
+              "removed": [],
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": {
+                  "before": { "$any": "string" },
+                  "after": { "$any": "string" }
+                },
+                "trackState": { "$any": true },
+                "contents": [
+                  {
+                    "contentId": { "$any": "string" },
+                    "changed": {
+                      "content": {
+                        "before": null,
+                        "after": { "$any": "string" }
+                      }
+                    }
+                  }
+                ]
+              },
+              "tokens": { "$any": "object" },
+              "undo": {
+                "undoable": false,
+                "reason": "ui_parity",
+                "revert": null
+              },
+              "dirty": { "before": false, "after": true },
+              "ui": { "$any": true },
+              "sideEffects": {
+                "notesGenerated": {
+                  "contentIds": [{ "$any": "string" }],
+                  "revert": null
+                }
+              },
+              "warnings": [
+                {
+                  "code": "SELECTION_GENERATED_NOTES",
+                  "subject": { "contentId": { "$any": "string" } },
+                  "data": null
+                },
+                { "code": "IRREVERSIBLE", "subject": null, "data": null }
+              ],
+              "job": null,
+              "items": [
+                {
+                  "path": { "$ref": "take1" },
+                  "imported": true,
+                  "placementId": { "$any": "string" },
+                  "contentId": { "$any": "string" },
+                  "trackId": 0,
+                  "startTimelineSec": { "$approx": 0 },
+                  "durationSec": { "$approx": 4, "$tol": 0.01 },
+                  "channelCount": 1,
+                  "originalSampleRateHz": { "$any": "number" },
+                  "resampled": { "$any": "boolean" },
+                  "f0State": "ready",
+                  "notesGenerated": true,
+                  "notesGeneratedBy": "focus",
+                  "error": null
+                }
+              ],
+              "counts": { "requested": 1, "imported": 1, "failed": 0 }
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

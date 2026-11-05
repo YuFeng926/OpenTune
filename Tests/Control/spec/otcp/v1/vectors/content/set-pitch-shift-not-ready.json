@@ -1,0 +1,46 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/set-pitch-shift-not-ready",
+  "type": "request",
+  "description": "A content whose pitch analysis failed cannot be edited: NOT_READY(f0_failed), which is not retryable.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.setPitchShift",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "failed"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.setPitchShift",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "pitchShift": { "semitones": 1, "cents": 0 }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_READY",
+      "data": {
+        "kind": "NOT_READY",
+        "reason": "f0_failed",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

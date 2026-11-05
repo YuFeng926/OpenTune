@@ -1,0 +1,106 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-copy-job-failures",
+  "type": "scenario",
+  "description": "How job.get reports the errors of a projectCopy job that no request can bring about: a copy whose write failed (the project file or a media file could not be written), and a copy that found a file at the target before the final rename, which never replaces (PROTOCOL.md section 20.4). Each leaves no file at the target and the project untouched (executed false). The jobs are preconditions, so this vector shows the form of these errors.",
+  "capability": "project.copy",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "writeFailed",
+        "kind": "projectCopy",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "IO_ERROR", "reason": "write_failed" }
+      },
+      {
+        "bind": "appeared",
+        "kind": "projectCopy",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "ALREADY_EXISTS", "reason": "target_exists" }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "writeFailed" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "writeFailed" },
+            "kind": "projectCopy",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "IO_ERROR",
+              "data": {
+                "kind": "IO_ERROR",
+                "reason": "write_failed",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "appeared" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "appeared" },
+            "kind": "projectCopy",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "ALREADY_EXISTS",
+              "data": {
+                "kind": "ALREADY_EXISTS",
+                "reason": "target_exists",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

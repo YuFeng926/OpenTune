@@ -1,0 +1,48 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-identity-unreadable",
+  "type": "request",
+  "description": "The target lies in a directory the server cannot open, so it cannot determine whether the target is loaded media (PROTOCOL.md section 20.3 rule 4): IO_ERROR(read_failed), and nothing is written.",
+  "capability": "export.v1",
+  "since": "1.0",
+  "method": "export.start",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "files": [{ "bind": "locked", "kind": "noAccess" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "export.start",
+    "params": { "kind": "master", "path": { "$ref": "locked" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "IO_ERROR",
+      "data": {
+        "kind": "IO_ERROR",
+        "reason": "read_failed",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

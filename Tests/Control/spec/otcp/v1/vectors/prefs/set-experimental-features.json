@@ -1,0 +1,72 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-experimental-features",
+  "type": "request",
+  "description": "Turning the experimental features on takes effect when the call returns (no job). The preference is user-global (warning GLOBAL_PREFERENCE); there is no undo entry, and the revert recipe sets the previous value.",
+  "capability": "prefs.write",
+  "since": "1.0",
+  "method": "prefs.set",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "preferences": { "experimentalFeatures": false }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "prefs.set",
+    "params": { "experimentalFeatures": true }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "preference",
+          "ref": { "preference": "experimentalFeatures" },
+          "label": { "$any": true },
+          "fields": {
+            "experimentalFeatures": { "before": false, "after": true, "unit": null }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "prefs.set",
+          "params": { "experimentalFeatures": false }
+        }
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "GLOBAL_PREFERENCE",
+          "subject": null,
+          "data": { "preferences": ["experimentalFeatures"] }
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

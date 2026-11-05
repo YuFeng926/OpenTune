@@ -129,6 +129,10 @@ void StandaloneContentRepository::clear()
     juce::ScopedWriteLock wl(lock_);
     clips_.clear();
     nextClipId_ = 1;
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: content epoch, see Source/Control/README.md#hooks
+    contentEpoch_.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 } // namespace OpenTune

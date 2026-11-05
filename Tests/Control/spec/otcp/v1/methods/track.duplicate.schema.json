@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/track.duplicate.schema.json",
+  "title": "track.duplicate",
+  "description": "Duplicates a track, as Duplicate Track in OpenTune's track menu does: the copy goes to the first hidden track slot (newTrackId), not next to the source, and that slot is shown. It takes the source's mute, solo, volume and colour and a copy of every clip on the track. mode clone (the default) gives every copied clip a new content that is a complete copy of its source's content. mode share does what OpenTune's UI does: the copies show the same contents as their sources, so an edit of one shows in the other (warning SHARED_CONTENT). Copied clips keep the gain and the fades of their sources. OpenTune offers Duplicate Track only for a visible track, so a hidden source track fails with INVALID_ARGUMENT(track_hidden). If every track slot is visible the call fails with INVALID_ARGUMENT(track_limit); if the first hidden slot holds clips, for example after a project whose later tracks are hidden was opened, it fails with INVALID_ARGUMENT(target_track_occupied); a trackId that names no track slot gives NOT_FOUND(unknown_handle). changes lists the new track's members, created lists the new placements and, with mode clone, the new contents, and idMap relates every source clip to its copy (relation copy). As in OpenTune there is no undo entry (undo reason ui_parity); the revert recipe deletes the new track with track.delete, which needs the end user's consent (requiresConsent true, PROTOCOL.md section 15.2 rule 4).",
+  "x-otcp": {
+    "method": "track.duplicate",
+    "layer": "L6",
+    "capability": "tracks.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["trackId"],
+      "additionalProperties": false,
+      "properties": {
+        "trackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" },
+        "mode": { "enum": ["clone", "share"], "default": "clone" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["newTrackId"],
+      "properties": {
+        "newTrackId": { "$ref": "../schemas/common.schema.json#/$defs/trackId" }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

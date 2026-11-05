@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/set-pitch-shift-stale-handle",
+  "type": "request",
+  "description": "content.setPitchShift with a contentId of another instance gives NOT_FOUND(stale_handle).",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.setPitchShift",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.setPitchShift",
+    "params": {
+      "contentId": { "$ref": "runner.staleContentId" },
+      "pitchShift": { "semitones": 1, "cents": 0 }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "stale_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

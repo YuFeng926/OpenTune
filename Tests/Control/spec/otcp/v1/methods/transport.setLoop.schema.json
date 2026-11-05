@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/transport.setLoop.schema.json",
+  "title": "transport.setLoop",
+  "description": "Sets the loop flag of OpenTune's transport bar. OpenTune Standalone has no loop range, so the flag has no audible effect: a call that turns the flag on carries the warning LOOP_NO_EFFECT_STANDALONE. The flag is not saved with the project (warning NOT_PERSISTED) and the project is not marked as changed; it is view state (PROTOCOL.md section 15.2 rule 6) with the undo reason not_persisted_state, and the revert recipe sets the previous value. Setting the current value is a no-op. changes lists the transport (entity transport, member loopEnabled), and transport is the transport state after the call.",
+  "x-otcp": {
+    "method": "transport.setLoop",
+    "layer": "L6",
+    "capability": "transport.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["transport"],
+      "properties": {
+        "transport": {
+          "$ref": "../schemas/common.schema.json#/$defs/transport"
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

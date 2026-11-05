@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-target-exists",
+  "type": "request",
+  "description": "A file already exists at the target and ifExists is error (the default): export.start fails at once with ALREADY_EXISTS(target_exists), starts no job and renders nothing (PROTOCOL.md section 19 rule 3).",
+  "capability": "export.v1",
+  "since": "1.0",
+  "method": "export.start",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "files": [{ "bind": "existing", "kind": "existing" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "export.start",
+    "params": {
+      "kind": "clip",
+      "target": { "placementId": { "$ref": "clip.placementId" } },
+      "path": { "$ref": "existing" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "ALREADY_EXISTS",
+      "data": {
+        "kind": "ALREADY_EXISTS",
+        "reason": "target_exists",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

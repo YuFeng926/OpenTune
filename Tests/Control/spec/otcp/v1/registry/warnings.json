@@ -1,0 +1,168 @@
+{
+  "$schema": "../schemas/registry.schema.json",
+  "registry": "warnings",
+  "description": "Warning codes carried in warnings[].code of write results and job results. A warning never means failure. Append-only within protocol major 1; clients must accept codes they do not know. The server sends no prose: clients render warnings from these codes and the warning's subject and data.",
+  "entries": [
+    {
+      "code": "DROPPED_BOUNDARY_NOTES",
+      "since": "1.0",
+      "description": "Notes that touched the edges of the processed range were dropped instead of being regenerated. data.notes lists them."
+    },
+    {
+      "code": "NOT_PERSISTED",
+      "since": "1.0",
+      "description": "The change is applied in the running session but is not stored in the project file."
+    },
+    {
+      "code": "NOT_RETROACTIVE",
+      "since": "1.0",
+      "description": "The change applies to future analysis or rendering only; existing results are not recomputed."
+    },
+    {
+      "code": "GLOBAL_PREFERENCE",
+      "since": "1.0",
+      "description": "The change modified a user-global preference that outlives the project and the session. A revert recipe is provided."
+    },
+    {
+      "code": "FADES_RECLAMPED",
+      "since": "1.0",
+      "description": "Clip fades were shortened to fit the clip's new length."
+    },
+    {
+      "code": "SPLIT_SNAPPED",
+      "since": "1.0",
+      "description": "The split position was moved to the nearest analysis frame. data holds the requested and the applied position."
+    },
+    {
+      "code": "OVERLAPS_CLIP",
+      "since": "1.0",
+      "description": "The clip now overlaps another clip on the same track."
+    },
+    {
+      "code": "STACKED_ON_SOURCE",
+      "since": "1.0",
+      "description": "The copy starts at the same timeline position as its source, so both play at once."
+    },
+    {
+      "code": "TRACK_AUTO_REVEALED",
+      "since": "1.0",
+      "description": "A hidden track was made visible because it now holds a clip."
+    },
+    {
+      "code": "KEY_NOT_TRANSPOSED",
+      "since": "1.0",
+      "description": "The clip's pitch shift changed but its key was not transposed with it."
+    },
+    {
+      "code": "LOOP_NO_EFFECT_STANDALONE",
+      "since": "1.0",
+      "description": "The loop flag was set, but looping has no audible effect in OpenTune Standalone."
+    },
+    {
+      "code": "NO_AUDIO_DEVICE",
+      "since": "1.0",
+      "description": "No audio output device is running, so playback does not advance and nothing is heard."
+    },
+    {
+      "code": "EXPERIMENTAL_FEATURE",
+      "since": "1.0",
+      "description": "The operation uses a feature that OpenTune marks as experimental."
+    },
+    {
+      "code": "MEDIA_MISSING",
+      "since": "1.0",
+      "description": "One or more media files referenced by the project could not be found. data.paths lists them."
+    },
+    {
+      "code": "IRREVERSIBLE",
+      "since": "1.0",
+      "description": "The change can neither be undone nor reverted."
+    },
+    {
+      "code": "CLAMPED",
+      "since": "1.0",
+      "description": "A requested value was outside the allowed range and was limited. data holds the field, the requested and the applied value."
+    },
+    {
+      "code": "REPLACES_ALL_NOTES",
+      "since": "1.0",
+      "description": "The operation replaced every note of the content. data is {removedCount, createdCount}: how many notes it removed and how many it created."
+    },
+    {
+      "code": "UNDO_NO_EFFECT",
+      "since": "1.0",
+      "description": "The undo or redo step was used up but changed nothing (the revision diff is empty)."
+    },
+    {
+      "code": "UNDO_ENTRY_POSSIBLY_STALE",
+      "since": "1.0",
+      "description": "The applied undo or redo entry was recorded before a track was deleted and may have targeted a track that has since moved."
+    },
+    {
+      "code": "UPSTREAM_UNDO_DEFECT",
+      "since": "1.0",
+      "description": "OpenTune pushed an undo entry for this change, but undoing it does not restore the previous state (a known OpenTune defect). Do not rely on undo for this change."
+    },
+    {
+      "code": "SELECTION_GENERATED_NOTES",
+      "since": "1.0",
+      "description": "Selecting or focusing a clip made OpenTune generate notes for it. This has no undo entry; sideEffects.notesGenerated carries a revert recipe where one exists."
+    },
+    {
+      "code": "REFERENCE_ANALYSIS_QUEUED",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. Reference alignment analysis was queued as a side effect."
+    },
+    {
+      "code": "DIALOG_CLOSE_COMMITTED",
+      "since": "1.0",
+      "description": "Closing a dialog committed the value shown in it."
+    },
+    {
+      "code": "OVERWROTE_OTHER_PROJECT",
+      "since": "1.0",
+      "description": "Saving replaced an existing project file other than the current project."
+    },
+    {
+      "code": "RENDER_NOT_CURRENT",
+      "since": "1.0",
+      "description": "The audible render does not yet reflect the latest edit; rendering is still pending."
+    },
+    {
+      "code": "NOT_SAVED_IN_PROJECT",
+      "since": "1.0",
+      "description": "The project was saved, or a copy of it was written, but some session state is not part of the project file. data.items lists it (for example the undo history and preferences)."
+    },
+    {
+      "code": "SCHEME_GENERATED_NOTES",
+      "since": "1.0",
+      "description": "Switching the editing scheme made OpenTune generate notes for the clip open in the piano roll. This has no undo entry; sideEffects.notesGenerated reports it."
+    },
+    {
+      "code": "SHARED_CONTENT",
+      "since": "1.0",
+      "description": "The new clips show the same contents as the clips they were copied from, so an edit of one shows in the other."
+    },
+    {
+      "code": "UNDO_HISTORY_POSSIBLY_STALE",
+      "since": "1.0",
+      "description": "Deleting a track made entries of the undo or redo history possibly stale: they were recorded before the deletion and may address tracks that have moved since. This code describes the whole history after a track deletion; UNDO_ENTRY_POSSIBLY_STALE describes one applied entry. data.undo and data.redo count the possibly stale entries."
+    },
+    {
+      "code": "IMPORT_COMMIT_REPEATED",
+      "since": "1.0",
+      "description": "OpenTune refused to commit an imported clip because the clip id it handed out was already used by a clip of the project (which can happen after a project was opened), so the import committed the clip again until it was accepted. The clip was imported; the same import from the OpenTune UI would have failed. subject: the imported placement; data.repeatCount: how many commits were repeated."
+    },
+    {
+      "code": "BACKEND_FALLBACK",
+      "since": "1.0",
+      "description": "The rendering priority was changed to gpuFirst, but OpenTune runs its inference on the CPU, because the GPU could not be used. The preference is set and the call succeeded; only the backend differs from the request. Sent in the result of the prefsApply job of prefs.set when the call changed renderingPriority to gpuFirst and the backend that OpenTune reports when the job ends is cpu. subject is null; data is {requested, actual}: requested is the rendering priority the call set (gpuFirst), actual is the backend that runs (cpu), the value that session.info reports in processing.backend."
+    },
+    {
+      "code": "ASIO_RATE_NOT_RESTORED",
+      "since": "1.0",
+      "description": "Before it switched the audio device type or the output device, OpenTune tried to restore the sample rate of an ASIO device and could not. The restoration is best effort, as in OpenTune's audio settings page: the switch went on and succeeded, and the ASIO driver may still run at a sample rate other than the one it had before OpenTune changed it. Sent in the result of audio.set when the call changed deviceType or outputDevice. subject is {\"singleton\": \"audioDevice\"}; data is {deviceName, sampleRateHz}: the ASIO device whose rate was to be restored and the rate in Hz that OpenTune tried to restore."
+    }
+  ]
+}

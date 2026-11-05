@@ -1,0 +1,30 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "app/quit-clean",
+  "type": "request",
+  "description": "A project that was never saved and has no unsaved changes: app.quit answers first (quitting true, nothing discarded, projectPath null with its null reason, no warning) and then ends the instance, which closes the connection. The result is not a write envelope (PROTOCOL.md section 14.1). The vector ends the instance (vectors/README.md, \"Vectors that end the instance\").",
+  "capability": "app.quit",
+  "since": "1.0",
+  "method": "app.quit",
+  "session": "authenticated",
+  "endsSession": true,
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "app.quit",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "quitting": true,
+      "discardedUnsavedChanges": false,
+      "projectPath": null,
+      "exitDeadlineMs": { "$any": "integer" },
+      "warnings": [],
+      "nullReasons": { "projectPath": "no_project_path" }
+    }
+  },
+  "connectionAfter": "closed"
+}

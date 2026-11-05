@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-auth-failed",
+  "type": "request",
+  "description": "A hello with a wrong token gets the fixed AUTH_FAILED response and the server closes the connection. runner.wrongToken is a fresh random token of the same length that differs from the discovery token.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.hello",
+  "session": "unauthenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "session.hello",
+    "params": {
+      "token": { "$ref": "runner.wrongToken" },
+      "protocol": "1.0",
+      "client": { "name": "otcp-vector-runner", "version": "1.0.0" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32001,
+      "message": "AUTH_FAILED",
+      "data": {
+        "kind": "AUTH_FAILED",
+        "retryable": false,
+        "detail": "authentication failed",
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "closed"
+}

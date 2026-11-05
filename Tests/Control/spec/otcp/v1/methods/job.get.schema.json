@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/job.get.schema.json",
+  "title": "job.get",
+  "description": "Returns a job. With waitMs > 0 and a job that is not terminal, the response is held until the job becomes terminal or waitMs elapses (long poll, PROTOCOL.md section 12.2). Never waits for the main thread and never returns BUSY because of the UI.",
+  "x-otcp": {
+    "method": "job.get",
+    "layer": "L3",
+    "capability": "jobs.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": false,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSUPPORTED",
+      "BUSY",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["jobId"],
+      "additionalProperties": false,
+      "properties": {
+        "jobId": { "$ref": "../schemas/common.schema.json#/$defs/jobId" },
+        "waitMs": {
+          "description": "Maximum time to hold the response while the job is not terminal. Default 0 (return at once).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000,
+          "default": 0
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["job"],
+      "additionalProperties": false,
+      "properties": {
+        "job": { "$ref": "../schemas/common.schema.json#/$defs/job" }
+      }
+    }
+  }
+}

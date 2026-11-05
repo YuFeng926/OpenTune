@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-auth-failed-malformed",
+  "type": "request",
+  "description": "A hello whose token is malformed (not hexadecimal; client is missing as well) gets the same fixed AUTH_FAILED response as a wrong token, and the server closes the connection. The server compares the token before it looks at any member other than token and protocol.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.hello",
+  "session": "unauthenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": "h1",
+    "method": "session.hello",
+    "params": { "token": "not-a-token", "protocol": "1.0" }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": "h1",
+    "error": {
+      "code": -32001,
+      "message": "AUTH_FAILED",
+      "data": {
+        "kind": "AUTH_FAILED",
+        "retryable": false,
+        "detail": "authentication failed",
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "closed"
+}

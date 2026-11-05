@@ -1,0 +1,50 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/parse-error-invalid-utf8",
+  "type": "scenario",
+  "description": "After authentication, a line that is not valid UTF-8 (bytes FF FE inside a string) is a parse error: INVALID_ARGUMENT(parse_error) with id null, and the session stays open.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendHex": "7b226a736f6e727063223a22322e30222c226964223a33342c226d6574686f64223a2273657373696f6e2e696e666f222c22706172616d73223a7b2278223a22fffe227d7d0a"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32700,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "parse_error",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 35,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 35,
+        "result": {
+          "$any": "object"
+        }
+      }
+    }
+  ]
+}

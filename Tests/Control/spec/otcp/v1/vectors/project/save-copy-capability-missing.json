@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-copy-capability-missing",
+  "type": "request",
+  "description": "An instance that does not report project.copy, such as one of release candidate 7 or earlier, answers project.saveCopy with UNSUPPORTED(capability_missing), executed false, and writes nothing: a client then tells the end user that this OpenTune cannot write copies, and does not fall back to project.saveAs, which would make the copy the project's file.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "project.saveCopy",
+  "session": "authenticated",
+  "given": {
+    "withoutCapabilities": ["project.copy"],
+    "files": [{ "bind": "copy", "kind": "absent", "extension": ".otproj" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.saveCopy",
+    "params": { "path": { "$ref": "copy" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNSUPPORTED",
+      "data": {
+        "kind": "UNSUPPORTED",
+        "reason": "capability_missing",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

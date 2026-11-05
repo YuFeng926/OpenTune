@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-repeated",
+  "type": "request",
+  "description": "A second hello on an authenticated session is refused with INVALID_ARGUMENT(hello_repeated), and the server closes the connection.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.hello",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "session.hello",
+    "params": {
+      "token": { "$ref": "discovery.token" },
+      "protocol": "1.0",
+      "client": { "name": "otcp-vector-runner", "version": "1.0.0" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "hello_repeated",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "closed"
+}

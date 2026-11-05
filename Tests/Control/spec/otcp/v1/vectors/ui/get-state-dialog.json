@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/get-state-dialog",
+  "type": "request",
+  "description": "With the track-colour dialog of track 0 open, ui.getState reports a modal dialog, which makes writes fail with BUSY (reason modal_open), and lists the dialog with closeCommits true, because closing it commits the colour it shows.",
+  "capability": "ui.bridge",
+  "since": "1.0",
+  "method": "ui.getState",
+  "session": "authenticated",
+  "given": {
+    "dialogs": [{ "kind": "trackColour", "trackId": 0, "colour": "#FF8800" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.getState",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "busy": {
+        "pointerDown": false,
+        "modalOpen": true,
+        "importInProgress": false,
+        "exportInProgress": false,
+        "projectOperation": false
+      },
+      "dialogs": [
+        {
+          "kind": "trackColour",
+          "title": { "$any": "string" },
+          "closeCommits": true,
+          "trackId": 0
+        }
+      ],
+      "onboarding": { "shown": { "$any": "boolean" }, "showing": false },
+      "ui": { "$any": "object" },
+      "uiScale": {
+        "root": { "$any": "integer" },
+        "scale": { "$any": "string" }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

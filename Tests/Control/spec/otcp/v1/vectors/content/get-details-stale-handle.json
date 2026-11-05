@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-details-stale-handle",
+  "type": "request",
+  "description": "content.getDetails by a placementId of another instance gives NOT_FOUND(stale_handle).",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "content.getDetails",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.getDetails",
+    "params": { "placementId": { "$ref": "runner.stalePlacementId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "stale_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

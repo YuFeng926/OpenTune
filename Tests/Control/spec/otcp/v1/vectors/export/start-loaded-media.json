@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-loaded-media",
+  "type": "request",
+  "description": "The target is the clip's own source file. Loaded media is never written, whatever ifExists says: INVALID_ARGUMENT(target_is_loaded_media), and no job starts.",
+  "capability": "export.v1",
+  "since": "1.0",
+  "method": "export.start",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "export.start",
+    "params": {
+      "kind": "clip",
+      "target": { "placementId": { "$ref": "clip.placementId" } },
+      "path": { "$ref": "clip.sourcePath" },
+      "ifExists": "overwrite"
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "target_is_loaded_media",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

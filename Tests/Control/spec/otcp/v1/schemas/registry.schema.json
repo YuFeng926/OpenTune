@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/schemas/registry.schema.json",
+  "title": "OTCP registry file",
+  "description": "Shape of the files in registry/. Codes are unique per registry (per scope for reasons); this uniqueness is checked by tooling, not by this schema.",
+  "type": "object",
+  "required": ["registry", "description", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "registry": {
+      "enum": ["errorKinds", "warnings", "reasons", "capabilities"]
+    },
+    "description": { "type": "string" },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "registry": { "const": "errorKinds" } } },
+      "then": {
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["jsonrpcCode", "retryable"],
+              "properties": {
+                "code": { "$ref": "common.schema.json#/$defs/errorKind" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "registry": { "const": "warnings" } } },
+      "then": {
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": { "$ref": "common.schema.json#/$defs/warningCode" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "registry": { "const": "reasons" } } },
+      "then": {
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["scope"],
+              "properties": {
+                "code": { "$ref": "common.schema.json#/$defs/reasonCode" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "registry": { "const": "capabilities" } } },
+      "then": {
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": { "$ref": "common.schema.json#/$defs/capability" }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["code", "since", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string" },
+        "scope": {
+          "description": "Reasons only: an error kind, \"undo\" or \"null\".",
+          "type": "string",
+          "pattern": "^([A-Z][A-Z0-9_]*|undo|null)$"
+        },
+        "since": { "$ref": "common.schema.json#/$defs/protocolVersion" },
+        "retiredIn": {
+          "description": "Optional. The specification release from which no server sends the code any more. The entry stays, because registries only grow and a client must accept the code from a server of an earlier release.",
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[0-9]+)?$"
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "jsonrpcCode": {
+          "type": "integer",
+          "minimum": -32768,
+          "maximum": -32000
+        },
+        "retryable": { "type": "boolean" }
+      }
+    }
+  }
+}

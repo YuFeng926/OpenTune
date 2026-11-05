@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.editNotes.schema.json",
+  "title": "content.editNotes",
+  "description": "Edits existing notes of a content as OpenTune's piano roll does. op setTargetPitch sets the target of the selected notes to targetMidi (offsetCents becomes 0). op shiftCents adds deltaCents to their offsetCents, which moves targetMidi by deltaCents / 100. op snapToScale sets each target to the nearest pitch of the key's scale, an exact tie going up (offsetCents becomes 0); key clipKey uses the content's own key and then needs expectedKeyRevision, and on a content that has no key yet (content.getDetails, key null) the call fails with INVALID_ARGUMENT(content_key_unset) and changes nothing (an implementation of this release candidate may still send this error without a reason). setTargetPitch and snapToScale set the note's base pitch to the new target, so offsetCents is 0 afterwards; OpenTune's own snap, and content.autoTune in mode snapNotes, keep the base pitch and set offsetCents instead; clients compare targetMidi, not how it splits into base pitch and offsetCents. op setParams sets the given note parameters (PROTOCOL.md section 8.3). Selections are always resolved against the notes at expectedRevision, so later ops of a call address the same notes; an index outside them gives NOT_FOUND(unknown_handle). Ops apply in order and the whole call is one undo step. Editing never adds or removes notes. dryRun predicts the changes without applying them. changes lists at most 200 notes; omittedChangeCount counts the rest, which content.getNotes reads at the new revision.",
+  "x-otcp": {
+    "method": "content.editNotes",
+    "layer": "L4",
+    "capability": "edit.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "NOT_READY",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["contentId", "expectedRevision", "ops"],
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "expectedRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        },
+        "expectedKeyRevision": {
+          "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+        },
+        "ops": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/op" },
+          "minItems": 1,
+          "maxItems": 32
+        },
+        "dryRun": { "type": "boolean", "default": false }
+      },
+      "if": {
+        "properties": {
+          "ops": {
+            "type": "array",
+            "contains": {
+              "type": "object",
+              "properties": { "key": { "const": "clipKey" } },
+              "required": ["key"]
+            }
+          }
+        },
+        "required": ["ops"]
+      },
+      "then": { "required": ["expectedKeyRevision"] }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["omittedChangeCount"],
+      "properties": {
+        "omittedChangeCount": { "type": "integer", "minimum": 0 }
+      },
+      "unevaluatedProperties": false
+    },
+    "select": {
+      "description": "Notes by index at expectedRevision, the notes that overlap a content-clock range, or all notes.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "indices": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 },
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true
+        },
+        "range": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentRange"
+        },
+        "all": { "const": true }
+      },
+      "oneOf": [
+        { "required": ["indices"] },
+        { "required": ["range"] },
+        { "required": ["all"] }
+      ]
+    },
+    "op": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["op", "select", "targetMidi"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "setTargetPitch" },
+            "select": { "$ref": "#/$defs/select" },
+            "targetMidi": { "type": "number", "minimum": 0, "maximum": 127 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "select", "deltaCents"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "shiftCents" },
+            "select": { "$ref": "#/$defs/select" },
+            "deltaCents": {
+              "type": "number",
+              "minimum": -1200,
+              "maximum": 1200
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "select", "key"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "snapToScale" },
+            "select": { "$ref": "#/$defs/select" },
+            "key": {
+              "anyOf": [
+                { "$ref": "../schemas/common.schema.json#/$defs/keyInput" },
+                { "const": "clipKey" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "select"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "setParams" },
+            "select": { "$ref": "#/$defs/select" },
+            "retuneSpeed": {
+              "$ref": "../schemas/common.schema.json#/$defs/retuneSpeed"
+            },
+            "vibratoDepth": {
+              "$ref": "../schemas/common.schema.json#/$defs/vibratoDepth"
+            },
+            "vibratoRateHz": {
+              "$ref": "../schemas/common.schema.json#/$defs/vibratoRateHz"
+            },
+            "pitchDriftScale": {
+              "$ref": "../schemas/common.schema.json#/$defs/pitchDriftScale"
+            }
+          },
+          "minProperties": 3
+        }
+      ]
+    }
+  }
+}

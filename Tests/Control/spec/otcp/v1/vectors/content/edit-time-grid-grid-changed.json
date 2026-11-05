@@ -1,0 +1,76 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-time-grid-grid-changed",
+  "type": "scenario",
+  "description": "A second moveHandles with the grid revision from before the first one gets REVISION_CONFLICT(grid_changed).",
+  "capability": "timing.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ],
+        "timeGrid": [
+          { "bind": "h1", "contentSec": 1 },
+          { "bind": "h2", "contentSec": 2 },
+          { "bind": "h3", "contentSec": 3 }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.editTimeGrid",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "op": "moveHandles",
+          "expectedGridRevision": { "$ref": "clip.gridRevision" },
+          "moves": [{ "handleId": { "$ref": "h1" }, "outputSec": 1.1 }]
+        }
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 1, "result": { "$any": "object" } } },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "content.editTimeGrid",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "op": "moveHandles",
+          "expectedGridRevision": { "$ref": "clip.gridRevision" },
+          "moves": [{ "handleId": { "$ref": "h1" }, "outputSec": 1.2 }]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32000,
+          "message": "REVISION_CONFLICT",
+          "data": {
+            "kind": "REVISION_CONFLICT",
+            "reason": "grid_changed",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

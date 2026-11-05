@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/dismiss-commits-on-close",
+  "type": "request",
+  "description": "Closing the track-colour dialog would commit the colour it shows. Without confirm true the call fails with INVALID_ARGUMENT(dialog_commits_on_close) and closes nothing.",
+  "capability": "ui.bridge",
+  "since": "1.0",
+  "method": "ui.dismiss",
+  "session": "authenticated",
+  "given": {
+    "dialogs": [{ "kind": "trackColour", "trackId": 0, "colour": "#FF8800" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.dismiss",
+    "params": { "target": "dialogs" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "dialog_commits_on_close",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

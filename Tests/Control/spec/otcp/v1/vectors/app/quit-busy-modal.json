@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "app/quit-busy-modal",
+  "type": "request",
+  "description": "While a modal dialog is open in OpenTune, app.quit does not quit: BUSY(modal_open), executed false. The project has unsaved changes as well, and the busy check comes first: the call is refused for the dialog, not for UNSAVED_CHANGES, even though discardUnsaved is not set (the order of the checks in the description of app.quit). The instance keeps running.",
+  "capability": "app.quit",
+  "since": "1.0",
+  "method": "app.quit",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "dialogs": [{ "kind": "message" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "app.quit",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "BUSY",
+      "data": {
+        "kind": "BUSY",
+        "reason": "modal_open",
+        "retryable": true,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

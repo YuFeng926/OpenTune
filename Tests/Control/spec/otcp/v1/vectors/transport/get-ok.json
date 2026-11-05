@@ -1,0 +1,38 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/get-ok",
+  "type": "request",
+  "description": "transport.get returns the transport state. It describes no content, so asOf lists no contents; the values depend on the target and are matched by type.",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "transport.get",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "transport.get",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "asOf": { "arrangementRevision": { "$any": "string" }, "contents": [] },
+      "derived": { "$any": "array" },
+      "transport": {
+        "playing": { "$any": "boolean" },
+        "positionTimelineSec": { "$any": "number" },
+        "playStartTimelineSec": { "$any": "number" },
+        "loopEnabled": { "$any": "boolean" },
+        "bpm": { "$any": "number" },
+        "timeSignature": {
+          "numerator": { "$any": "integer" },
+          "denominator": { "$any": "integer" }
+        },
+        "audioDeviceRunning": { "$any": "boolean" },
+        "lastControl": { "$any": true }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

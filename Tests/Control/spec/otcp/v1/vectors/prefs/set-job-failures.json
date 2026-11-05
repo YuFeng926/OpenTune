@@ -1,0 +1,61 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-job-failures",
+  "type": "scenario",
+  "description": "How job.get reports a prefsApply job that failed the busy check it makes again before its first step: a modal dialog opened after prefs.set was accepted (BUSY(modal_open), retryable). The job changed no preference (executed false). The dialog would have to open between the call and the job's first step, which no request of a vector can time, so the job is a precondition and this vector shows the form of the error.",
+  "capability": "prefs.write",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "dialogOpen",
+        "kind": "prefsApply",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "BUSY", "reason": "modal_open" }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "dialogOpen" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "dialogOpen" },
+            "kind": "prefsApply",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "BUSY",
+              "data": {
+                "kind": "BUSY",
+                "reason": "modal_open",
+                "retryable": true,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

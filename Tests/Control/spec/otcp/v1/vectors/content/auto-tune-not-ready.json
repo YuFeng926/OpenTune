@@ -1,0 +1,48 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/auto-tune-not-ready",
+  "type": "request",
+  "description": "Pitch analysis of the content finished without any voiced frame, so AUTO gets NOT_READY(f0_empty), which is not retryable.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.autoTune",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "unvoiced"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.autoTune",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "mode": "regenerate",
+      "expectedRevision": { "$ref": "clip.revision" },
+      "key": { "root": 0, "scale": "major" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_READY",
+      "data": {
+        "kind": "NOT_READY",
+        "reason": "f0_empty",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

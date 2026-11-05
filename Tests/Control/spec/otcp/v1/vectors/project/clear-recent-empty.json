@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/clear-recent-empty",
+  "type": "request",
+  "description": "Clearing an empty list of recent projects is a no-op.",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.clearRecent",
+  "session": "authenticated",
+  "given": { "dirty": false, "preferences": { "recentProjects": [] } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.clearRecent",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": true,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": { "undoable": false, "reason": "no_op", "revert": null },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

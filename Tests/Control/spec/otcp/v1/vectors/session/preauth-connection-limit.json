@@ -1,0 +1,42 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/preauth-connection-limit",
+  "type": "scenario",
+  "description": "With eight connections waiting for authentication (the main connection and p2 to p8, all silent), a ninth connection is closed at once without a byte.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "unauthenticated",
+  "steps": [
+    {
+      "connect": "p2"
+    },
+    {
+      "connect": "p3"
+    },
+    {
+      "connect": "p4"
+    },
+    {
+      "connect": "p5"
+    },
+    {
+      "connect": "p6"
+    },
+    {
+      "connect": "p7"
+    },
+    {
+      "connect": "p8"
+    },
+    {
+      "connect": "p9"
+    },
+    {
+      "connection": "p9",
+      "expectClosed": {
+        "noBytes": true,
+        "withinMs": 1000
+      }
+    }
+  ]
+}

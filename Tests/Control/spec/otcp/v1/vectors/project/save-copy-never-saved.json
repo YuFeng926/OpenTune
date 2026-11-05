@@ -1,0 +1,106 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-copy-never-saved",
+  "type": "scenario",
+  "description": "A project that was never saved can be copied, because project.saveCopy needs no project file (project.save would fail with INVALID_ARGUMENT(no_project_path)). projectPath of the job result is null, with nullReasons.projectPath no_project_path, and the project still has no file afterwards: project.get reports path null and the unsaved changes.",
+  "capability": "project.copy",
+  "extraCapabilities": ["jobs.v1", "read.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "copy", "kind": "absent", "extension": ".otproj" }]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "project.saveCopy",
+        "params": { "path": { "$ref": "copy" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "copyJob", "$any": "string" },
+            "kind": "projectCopy",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "copyJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "copyJob" },
+            "kind": "projectCopy",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "path": { "$ref": "copy" },
+              "sizeBytes": { "$any": "integer" },
+              "projectPath": null,
+              "projectDirty": true,
+              "warnings": [
+                {
+                  "code": "NOT_SAVED_IN_PROJECT",
+                  "subject": null,
+                  "data": {
+                    "items": ["undoHistory", "preferences"]
+                  }
+                }
+              ],
+              "nullReasons": { "projectPath": "no_project_path" }
+            },
+            "error": null
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "project.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "project": { "path": null, "dirty": true }
+        }
+      }
+    }
+  ]
+}

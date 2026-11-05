@@ -1,0 +1,121 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/auto-tune-notes-only",
+  "type": "request",
+  "description": "AUTO notesOnly generates notes for the whole content and replaces all of its notes. As in OpenTune there is no undo entry, and the previous notes cannot be restored by any request, so the result carries REPLACES_ALL_NOTES and IRREVERSIBLE and revert is null.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.autoTune",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.autoTune",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "mode": "notesOnly",
+      "expectedRevision": { "$ref": "clip.revision" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": { "$any": "array" },
+      "removed": [
+        {
+          "entity": "note",
+          "ref": {
+            "contentId": { "$ref": "clip.contentId" },
+            "note": { "index": 0, "atRevision": { "$ref": "clip.revision" } }
+          },
+          "label": { "$any": true }
+        },
+        {
+          "entity": "note",
+          "ref": {
+            "contentId": { "$ref": "clip.contentId" },
+            "note": { "index": 1, "atRevision": { "$ref": "clip.revision" } }
+          },
+          "label": { "$any": true }
+        }
+      ],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "changed": {
+              "notes": {
+                "before": { "$any": "string" },
+                "after": { "$any": "string" }
+              }
+            }
+          }
+        ]
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$any": "string" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ],
+        "placements": []
+      },
+      "undo": { "undoable": false, "reason": "ui_parity", "revert": null },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {
+        "reRenderQueued": {
+          "contentIds": [{ "$ref": "clip.contentId" }],
+          "revert": null
+        }
+      },
+      "warnings": [
+        {
+          "code": "REPLACES_ALL_NOTES",
+          "subject": { "contentId": { "$ref": "clip.contentId" } },
+          "data": { "$any": true }
+        },
+        {
+          "code": "IRREVERSIBLE",
+          "subject": { "contentId": { "$ref": "clip.contentId" } },
+          "data": null
+        }
+      ],
+      "job": null,
+      "omittedCount": { "changes": 0, "created": 0, "removed": 0 },
+      "mode": "notesOnly",
+      "keyUsed": null,
+      "paramsUsed": { "$any": "object" },
+      "noteCount": { "before": 2, "after": { "$any": "integer" } }
+    }
+  },
+  "connectionAfter": "open"
+}

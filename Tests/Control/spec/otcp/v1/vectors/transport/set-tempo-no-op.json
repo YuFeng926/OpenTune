@@ -1,0 +1,51 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/set-tempo-no-op",
+  "type": "request",
+  "description": "Setting the tempo the project already has is a no-op.",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "method": "transport.setTempo",
+  "session": "authenticated",
+  "given": { "dirty": false },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "transport.setTempo",
+    "params": { "bpm": 120 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": true,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": { "undoable": false, "reason": "no_op", "revert": null },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null,
+      "tempo": {
+        "bpm": 120,
+        "timeSignature": { "numerator": 4, "denominator": 4 }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

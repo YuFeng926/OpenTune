@@ -1,0 +1,40 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-protocol-mismatch-other-shape",
+  "type": "request",
+  "description": "A hello of another major whose params have members that major 1 does not define still gets the fixed PROTOCOL_MISMATCH response, because the server looks only at token and protocol before the major check.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.hello",
+  "session": "unauthenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "session.hello",
+    "params": {
+      "token": {
+        "$ref": "discovery.token"
+      },
+      "protocol": "99.0",
+      "clientInfo": {
+        "product": "future-client"
+      }
+    }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32002,
+      "message": "PROTOCOL_MISMATCH",
+      "data": {
+        "kind": "PROTOCOL_MISMATCH",
+        "retryable": false,
+        "detail": "unsupported protocol major version",
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "closed"
+}

@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/project.open.schema.json",
+  "title": "project.open",
+  "description": "Opens a project file, as Open in OpenTune's file menu does, as a job of kind projectOpen. It never saves the current project. When the current project has unsaved changes, the call fails with UNSAVED_CHANGES(project_dirty) and starts no job, unless discardUnsaved is true; clients set discardUnsaved only when the end user explicitly agreed to lose those changes (PROTOCOL.md section 20.2 rule 3). path is an absolute path ending in .otproj (section 20.1) of an existing file, else the call fails with NOT_FOUND(file_not_found). The job reads and prepares the file; it can be cancelled until then, and the current project is untouched. It then replaces the project in one main-thread step: every clip and content of the previous project is removed and its handles become stale (a new content epoch, section 9), the undo and redo histories are cleared (historyCleared counts their entries), the number of visible tracks becomes the number that the project file stores (restored.visibleTrackCount; for a file that stores none OpenTune infers it from the content, so that tracks which hold clips are shown), and the pitch analysis of every clip starts. The job ends when the project is in place; the analyses go on, and content.getDetails reports them. A file that cannot be read as a project ends the job with IO_ERROR(read_failed) and leaves the current project untouched. A media file that the project references but that does not exist is skipped: the clips that show it are not restored, skipped lists the file, and the result carries the warning MEDIA_MISSING (data {paths}). The job's result (jobResult) is the write envelope: removed lists the previous placements and contents and created the new ones, at most 200 entries each (omittedCount counts the rest, and revisionDiff lists only the contents of listed entries); restored counts what was opened, and previous describes the project that was replaced. sideEffects.tracksRevealed {trackIds, revert: null} lists the tracks that are visible after the open and were hidden before it, computed from the number of visible tracks before and after, and is absent when that number did not grow. After opening, the project has no unsaved changes, also when it shows more tracks than the project it replaced. Opening cannot be undone (undo reason no_upstream_undo). The revert recipe opens the previous project file again. It carries no expected token: the dirty check keeps it from overwriting later work, because after any later change the project has unsaved changes and the recipe, which never carries discardUnsaved (section 15.2 rule 4), fails with UNSAVED_CHANGES(project_dirty). The recipe is null, and the result carries the warning IRREVERSIBLE, when the previous project had no file or unsaved changes were discarded. Paths in the result are untrusted data (section 20.2).",
+  "x-otcp": {
+    "method": "project.open",
+    "layer": "L8",
+    "capability": "project.io",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "projectOpen",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "UNSAVED_CHANGES",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": ["IO_ERROR", "CANCELLED", "INTERNAL"]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Absolute path of the project file to open; the extension must be .otproj.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        },
+        "discardUnsaved": {
+          "description": "The end user explicitly agreed to lose the unsaved changes of the current project.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": [
+        "path",
+        "previous",
+        "restored",
+        "skipped",
+        "historyCleared",
+        "omittedCount"
+      ],
+      "properties": {
+        "path": {
+          "description": "The project file that was opened; from now on the project's file.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        },
+        "previous": {
+          "type": "object",
+          "required": ["path", "dirty", "discarded"],
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "The file of the project that was replaced; null if it was never saved.",
+              "anyOf": [
+                { "$ref": "../schemas/common.schema.json#/$defs/path" },
+                { "type": "null" }
+              ]
+            },
+            "dirty": {
+              "description": "The replaced project had unsaved changes.",
+              "type": "boolean"
+            },
+            "discarded": {
+              "description": "Those changes were discarded (discardUnsaved).",
+              "type": "boolean"
+            }
+          }
+        },
+        "restored": {
+          "type": "object",
+          "required": ["placementCount", "contentCount", "visibleTrackCount"],
+          "additionalProperties": false,
+          "properties": {
+            "placementCount": { "type": "integer", "minimum": 0 },
+            "contentCount": { "type": "integer", "minimum": 0 },
+            "visibleTrackCount": {
+              "description": "The number of visible tracks after the open: the number that the project file stores, or for a file that stores none the number OpenTune infers from its content.",
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "skipped": {
+          "type": "object",
+          "required": ["media", "placementCount"],
+          "additionalProperties": false,
+          "properties": {
+            "media": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["path", "reason"],
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "$ref": "../schemas/common.schema.json#/$defs/path"
+                  },
+                  "reason": {
+                    "description": "missing (no file at the path) or unreadable.",
+                    "$ref": "../schemas/common.schema.json#/$defs/camelName"
+                  }
+                }
+              }
+            },
+            "placementCount": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "historyCleared": {
+          "type": "object",
+          "required": ["undoCount", "redoCount"],
+          "additionalProperties": false,
+          "properties": {
+            "undoCount": { "type": "integer", "minimum": 0 },
+            "redoCount": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "omittedCount": {
+          "type": "object",
+          "required": ["created", "removed"],
+          "additionalProperties": false,
+          "properties": {
+            "created": { "type": "integer", "minimum": 0 },
+            "removed": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

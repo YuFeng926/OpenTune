@@ -1,0 +1,42 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "app/quit-busy",
+  "type": "request",
+  "description": "While a job has not finished, app.quit does not quit, because the process would end under the job: BUSY, executed false. A prefsApply job has no busy reason of its own in PROTOCOL.md section 13.2, so the reason is job_in_progress. The connection stays open and answers the runner's probe, which shows that the instance still runs.",
+  "capability": "app.quit",
+  "since": "1.0",
+  "method": "app.quit",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "prefsJob",
+        "kind": "prefsApply",
+        "state": "running",
+        "cancellable": false
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "app.quit",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "BUSY",
+      "data": {
+        "kind": "BUSY",
+        "reason": "job_in_progress",
+        "retryable": true,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

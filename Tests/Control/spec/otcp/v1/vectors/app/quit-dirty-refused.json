@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "app/quit-dirty-refused",
+  "type": "request",
+  "description": "With unsaved changes and without discardUnsaved, app.quit fails with UNSAVED_CHANGES(project_dirty) and does nothing, where the close button of the window would have quit without asking. The connection stays open and answers the runner's probe, which shows that the instance still runs.",
+  "capability": "app.quit",
+  "since": "1.0",
+  "method": "app.quit",
+  "session": "authenticated",
+  "given": {
+    "dirty": true
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "app.quit",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNSAVED_CHANGES",
+      "data": {
+        "kind": "UNSAVED_CHANGES",
+        "reason": "project_dirty",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

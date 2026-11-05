@@ -1,0 +1,73 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/set-workspace-piano-roll",
+  "type": "request",
+  "description": "ui.setWorkspace with pianoRoll switches the window from the arrangement view to the piano roll, as the piano-roll button of the transport bar does. With no clip selected, as in a new project, the piano roll is empty, which the window allows and which is not an error. Only the view changes: revisionDiff is empty and dirty stays false. The revert recipe switches back to the arrangement.",
+  "capability": "ui.workspace",
+  "since": "1.0",
+  "method": "ui.setWorkspace",
+  "session": "authenticated",
+  "given": { "dirty": false },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.setWorkspace",
+    "params": { "workspace": "pianoRoll" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "ui",
+          "ref": { "singleton": "workspace" },
+          "label": { "$any": true },
+          "fields": {
+            "workspace": {
+              "before": "arrangement",
+              "after": "pianoRoll",
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "not_persisted_state",
+        "revert": {
+          "method": "ui.setWorkspace",
+          "params": { "workspace": "arrangement" }
+        }
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "workspace": "pianoRoll" },
+      "sideEffects": {
+        "workspaceSwitched": {
+          "from": "arrangement",
+          "to": "pianoRoll",
+          "revert": null
+        }
+      },
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

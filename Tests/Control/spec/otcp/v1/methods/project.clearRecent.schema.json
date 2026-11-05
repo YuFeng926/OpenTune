@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/project.clearRecent.schema.json",
+  "title": "project.clearRecent",
+  "description": "Clears OpenTune's list of recent projects, as the file menu's command for it does. The list is a user-global preference (prefs.get recentProjects); changes lists it (entity preference, member recentProjects) with its paths before the call, which are untrusted data (PROTOCOL.md section 20.2). No request of this protocol fills the list again: the undo reason is no_upstream_undo, revert is null, and the result carries the warning IRREVERSIBLE. Project files are not touched. An empty list is a no-op.",
+  "x-otcp": {
+    "method": "project.clearRecent",
+    "layer": "L8",
+    "capability": "project.io",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    }
+  }
+}

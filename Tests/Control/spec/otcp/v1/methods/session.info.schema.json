@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/session.info.schema.json",
+  "title": "session.info",
+  "description": "Describes the running instance: build, runtime, audio device, processing settings, capabilities, import and export capabilities, and limits. Read-only. Values that cannot be determined are null and named in the enclosing object's nullReasons.",
+  "x-otcp": {
+    "method": "session.info",
+    "layer": "L2",
+    "capability": "session.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "instanceId",
+        "appVersion",
+        "build",
+        "buildTag",
+        "sourceUrl",
+        "flavor",
+        "runtime",
+        "audioDevice",
+        "processing",
+        "language",
+        "capabilities",
+        "import",
+        "export",
+        "limits"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "$ref": "../schemas/common.schema.json#/$defs/protocolVersion"
+        },
+        "instanceId": {
+          "$ref": "../schemas/common.schema.json#/$defs/instanceId"
+        },
+        "appVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "build": { "$ref": "../schemas/common.schema.json#/$defs/buildInfo" },
+        "buildTag": { "type": ["string", "null"], "maxLength": 200 },
+        "sourceUrl": {
+          "description": "Where the corresponding source code of this build can be obtained.",
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "flavor": { "const": "standalone" },
+        "runtime": {
+          "type": "object",
+          "required": ["os", "arch", "pid"],
+          "additionalProperties": false,
+          "properties": {
+            "os": {
+              "description": "windows or macos.",
+              "$ref": "../schemas/common.schema.json#/$defs/camelName"
+            },
+            "arch": { "type": "string", "pattern": "^[a-z0-9_]{1,16}$" },
+            "pid": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "audioDevice": {
+          "type": "object",
+          "required": ["running", "name", "sampleRateHz", "bufferSizeFrame"],
+          "additionalProperties": false,
+          "properties": {
+            "running": { "type": "boolean" },
+            "name": { "type": ["string", "null"], "maxLength": 256 },
+            "sampleRateHz": {
+              "type": ["number", "null"],
+              "exclusiveMinimum": 0
+            },
+            "bufferSizeFrame": { "type": ["integer", "null"], "minimum": 1 },
+            "nullReasons": {
+              "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+            }
+          }
+        },
+        "processing": {
+          "type": "object",
+          "required": [
+            "tuningHz",
+            "editingScheme",
+            "hybridMode",
+            "vocoderWeight",
+            "f0Model",
+            "renderingPriority",
+            "backend",
+            "vocoderReady",
+            "vocoderReconfiguring",
+            "experimentalFeatures"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "tuningHz": {
+              "description": "Frequency of A4 that all *Midi values refer to.",
+              "type": "number",
+              "minimum": 400,
+              "maximum": 500
+            },
+            "editingScheme": {
+              "$ref": "../schemas/common.schema.json#/$defs/editingScheme"
+            },
+            "hybridMode": {
+              "description": "Whether OpenTune's hybrid mode is on. With it on, OpenTune renders small corrections with a pitch shift of the audio instead of the vocoder, so the corrected pitch that results report can differ from what is heard (informative, PROTOCOL.md section 19, \"Hybrid mode\").",
+              "type": "boolean"
+            },
+            "vocoderWeight": { "type": ["string", "null"], "maxLength": 64 },
+            "f0Model": { "type": ["string", "null"], "maxLength": 64 },
+            "renderingPriority": {
+              "description": "The rendering priority preference: gpuFirst makes OpenTune try the GPU for inference and use the CPU when the GPU cannot be used; cpuFirst makes it use the CPU only. It is the setting, not a report of what runs: backend says what runs, and after a fall back to the CPU the two differ. A new priority takes effect when OpenTune has reconfigured its vocoder, which it does asynchronously after prefs.set (vocoderReconfiguring), and the job of prefs.set ends when that has finished (PROTOCOL.md section 12.7).",
+              "type": ["string", "null"],
+              "maxLength": 64
+            },
+            "backend": {
+              "description": "The inference backend that OpenTune's acceleration detector has chosen at the moment of the read, for example cpu or directml. After a fall back it can differ from renderingPriority: gpuFirst together with the backend cpu means that the GPU could not be used. It reports cpu also while nothing has been detected yet, so cpu alone does not show that a detection ran.",
+              "type": ["string", "null"],
+              "maxLength": 64
+            },
+            "vocoderReady": {
+              "description": "Whether the vocoder is loaded and ready to render. false is normal before the first time a render needs the vocoder, because OpenTune loads it at that first render and not at start. It is also false while the vocoder reloads after a change of the vocoder weight or the rendering priority (vocoderReconfiguring), and it stays false when the vocoder could not load the new weight or backend (PROTOCOL.md section 12.7 rule 5).",
+              "type": "boolean"
+            },
+            "vocoderReconfiguring": {
+              "description": "true while OpenTune loads a new vocoder weight or applies a new rendering priority to its inference backend. OpenTune starts this asynchronously, so right after prefs.set the value can still be false and vocoderReady true (PROTOCOL.md section 12.7 rule 4).",
+              "type": "boolean"
+            },
+            "experimentalFeatures": { "type": "boolean" },
+            "nullReasons": {
+              "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+            }
+          }
+        },
+        "language": {
+          "description": "UI language setting. Read-only through this protocol.",
+          "type": "string",
+          "maxLength": 32
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "contains": { "const": "session.v1" },
+          "items": { "$ref": "../schemas/common.schema.json#/$defs/capability" }
+        },
+        "import": {
+          "type": "object",
+          "required": ["extensions", "maxChannels", "maxAnalysisSec"],
+          "additionalProperties": false,
+          "properties": {
+            "extensions": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^\\.[a-z0-9]{1,8}$" }
+            },
+            "maxChannels": { "type": "integer", "minimum": 1 },
+            "maxAnalysisSec": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        "export": {
+          "type": "object",
+          "required": ["formats", "sampleRateHz", "channels", "sampleFormat"],
+          "additionalProperties": false,
+          "properties": {
+            "formats": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "../schemas/common.schema.json#/$defs/camelName"
+              }
+            },
+            "sampleRateHz": { "type": "number", "exclusiveMinimum": 0 },
+            "channels": {
+              "type": "object",
+              "required": ["clip", "track", "master"],
+              "additionalProperties": false,
+              "properties": {
+                "clip": { "type": "integer", "minimum": 1 },
+                "track": { "type": "integer", "minimum": 1 },
+                "master": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "sampleFormat": {
+              "$ref": "../schemas/common.schema.json#/$defs/camelName"
+            }
+          }
+        },
+        "limits": { "$ref": "../schemas/common.schema.json#/$defs/limits" }
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-notes-unknown-note",
+  "type": "request",
+  "description": "Index 7 does not exist among the two notes at expectedRevision: NOT_FOUND(unknown_handle) (PROTOCOL.md section 9 rule 3).",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.editNotes",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.editNotes",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "expectedRevision": { "$ref": "clip.revision" },
+      "ops": [
+        { "op": "shiftCents", "select": { "indices": [7] }, "deltaCents": 10 }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

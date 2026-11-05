@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/add-limit",
+  "type": "request",
+  "description": "Asking for more tracks than hidden track slots remain gives INVALID_ARGUMENT(track_limit) and shows none.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.add",
+  "session": "authenticated",
+  "given": { "visibleTrackCount": 2 },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.add",
+    "params": { "count": 64 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "track_limit",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

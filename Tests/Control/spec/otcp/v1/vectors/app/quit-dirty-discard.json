@@ -1,0 +1,39 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "app/quit-dirty-discard",
+  "type": "request",
+  "description": "With discardUnsaved true, given only because the end user agreed to lose the changes, app.quit quits a project that has unsaved changes. The result says that they were discarded (discardedUnsavedChanges true) and carries the warning IRREVERSIBLE with the project as its subject. The vector ends the instance (vectors/README.md, \"Vectors that end the instance\").",
+  "capability": "app.quit",
+  "since": "1.0",
+  "method": "app.quit",
+  "session": "authenticated",
+  "endsSession": true,
+  "given": {
+    "dirty": true
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "app.quit",
+    "params": { "discardUnsaved": true }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "quitting": true,
+      "discardedUnsavedChanges": true,
+      "projectPath": null,
+      "exitDeadlineMs": { "$any": "integer" },
+      "warnings": [
+        {
+          "code": "IRREVERSIBLE",
+          "subject": { "singleton": "project" },
+          "data": null
+        }
+      ],
+      "nullReasons": { "projectPath": "no_project_path" }
+    }
+  },
+  "connectionAfter": "closed"
+}

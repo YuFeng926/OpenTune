@@ -1,0 +1,59 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-merge-not-possible",
+  "type": "request",
+  "description": "Two adjacent clips with contents of their own cannot be merged: INVALID_ARGUMENT(merge_not_possible).",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.edit",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      },
+      {
+        "bind": "next",
+        "trackId": 0,
+        "startTimelineSec": 8,
+        "durationSec": 4,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.edit",
+    "params": {
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "ops": [
+        {
+          "op": "merge",
+          "leadingPlacementId": { "$ref": "clip.placementId" },
+          "trailingPlacementId": { "$ref": "next.placementId" }
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "merge_not_possible",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

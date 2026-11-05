@@ -1,0 +1,109 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-notes-cursor-stale",
+  "type": "scenario",
+  "description": "A pagination cursor is bound to the tokens of the read that issued it. After a note edit changes the revision, reading the next page with the old cursor gives REVISION_CONFLICT(cursor_stale).",
+  "capability": "read.v1",
+  "extraCapabilities": ["edit.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 },
+          { "startContentSec": 3.5, "endContentSec": 4.5, "targetMidi": 69.3 }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.getNotes",
+        "params": { "contentId": { "$ref": "clip.contentId" }, "limit": 1 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "asOf": {
+            "arrangementRevision": { "$any": "string" },
+            "contents": [
+              {
+                "contentId": { "$ref": "clip.contentId" },
+                "revision": { "$ref": "clip.revision" },
+                "gridRevision": { "$ref": "clip.gridRevision" },
+                "keyRevision": { "$ref": "clip.keyRevision" }
+              }
+            ]
+          },
+          "derived": { "$any": "array" },
+          "contentId": { "$ref": "clip.contentId" },
+          "placementId": null,
+          "tuningHz": { "$any": "number" },
+          "totalCount": 3,
+          "notes": [{ "$any": "object" }],
+          "nextCursor": { "$capture": "page2", "$any": "string" }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "content.editNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "expectedRevision": { "$ref": "clip.revision" },
+          "ops": [
+            {
+              "op": "shiftCents",
+              "select": { "indices": [0] },
+              "deltaCents": 10
+            }
+          ]
+        }
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 2, "result": { "$any": "object" } } },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "content.getNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "cursor": { "$ref": "page2" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32000,
+          "message": "REVISION_CONFLICT",
+          "data": {
+            "kind": "REVISION_CONFLICT",
+            "reason": "cursor_stale",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

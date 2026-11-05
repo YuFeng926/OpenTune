@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.getNotes.schema.json",
+  "title": "content.getNotes",
+  "description": "Returns the notes of a content in start-time order, each with its index at the current revision (PROTOCOL.md section 9), its times on the content clock, its detected and target pitch and its parameters (section 8.3). Name the content by contentId, or by placementId to read the placement's content and also get timeline times through that placement; only then may range use the timeline clock. range keeps the notes that overlap it. detectedMidi is the detected pitch of the note as a fractional MIDI number, not rounded to a semitone: the pitch OpenTune shows for the note, to 0.01 semitone or finer (section 8.2); it is null for an unvoiced note; the timeline members are null when the request named a contentId. targetMidi includes offsetCents, the part of the target that comes from cent shifts. targetMidi and detectedMidi include the content's pitch shift (content.setPitchShift): OpenTune moves the notes with the shift, which does not change revision (section 10 rule 2), so a note keeps its handle while its pitches move. MIDI numbers and cents are rounded in the same way in every result that reports them (section 8.2), so that the values a write reports equal those read back (section 14.3). Paginated: at most limit notes per page (default 200); nextCursor reads the next page and is bound to the tokens in asOf and to the content's pitch shift (section 10 rule 6).",
+  "x-otcp": {
+    "method": "content.getNotes",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "read",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "REVISION_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "range": {
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/contentRange" },
+            { "$ref": "../schemas/common.schema.json#/$defs/timelineRange" }
+          ]
+        },
+        "cursor": { "$ref": "../schemas/common.schema.json#/$defs/cursor" },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 200
+        }
+      },
+      "oneOf": [{ "required": ["contentId"] }, { "required": ["placementId"] }],
+      "if": { "required": ["contentId"] },
+      "then": {
+        "properties": {
+          "range": {
+            "$ref": "../schemas/common.schema.json#/$defs/contentRange"
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [{ "$ref": "../schemas/common.schema.json#/$defs/readMeta" }],
+      "required": [
+        "contentId",
+        "placementId",
+        "tuningHz",
+        "totalCount",
+        "notes",
+        "nextCursor"
+      ],
+      "properties": {
+        "contentId": {
+          "$ref": "../schemas/common.schema.json#/$defs/contentId"
+        },
+        "placementId": {
+          "description": "The placement named in the request, else null.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/placementId" },
+            { "type": "null" }
+          ]
+        },
+        "tuningHz": { "type": "number" },
+        "totalCount": {
+          "description": "Notes that overlap range (all notes without range), on all pages.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "notes": { "type": "array", "items": { "$ref": "#/$defs/note" } },
+        "nextCursor": {
+          "description": "Reads the next page; null on the last page.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/cursor" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "note": {
+      "type": "object",
+      "required": [
+        "index",
+        "label",
+        "startContentSec",
+        "endContentSec",
+        "startTimelineSec",
+        "endTimelineSec",
+        "detectedMidi",
+        "targetMidi",
+        "offsetCents",
+        "retuneSpeed",
+        "vibratoDepth",
+        "vibratoRateHz",
+        "pitchDriftScale",
+        "voiced",
+        "corrected"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "label": { "$ref": "../schemas/common.schema.json#/$defs/label" },
+        "startContentSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "endContentSec": {
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "startTimelineSec": {
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/secNonNegative" },
+            { "type": "null" }
+          ]
+        },
+        "endTimelineSec": {
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/secNonNegative" },
+            { "type": "null" }
+          ]
+        },
+        "detectedMidi": {
+          "description": "Detected pitch of the note as a fractional MIDI number, not rounded: the pitch OpenTune shows for the note, to 0.01 semitone or finer. null for an unvoiced note.",
+          "anyOf": [{ "type": "number" }, { "type": "null" }]
+        },
+        "targetMidi": { "type": "number" },
+        "offsetCents": { "type": "number" },
+        "retuneSpeed": {
+          "$ref": "../schemas/common.schema.json#/$defs/retuneSpeed"
+        },
+        "vibratoDepth": {
+          "$ref": "../schemas/common.schema.json#/$defs/vibratoDepth"
+        },
+        "vibratoRateHz": {
+          "$ref": "../schemas/common.schema.json#/$defs/vibratoRateHz"
+        },
+        "pitchDriftScale": {
+          "$ref": "../schemas/common.schema.json#/$defs/pitchDriftScale"
+        },
+        "voiced": { "type": "boolean" },
+        "corrected": {
+          "description": "The corrected pitch differs from the original pitch within the note.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

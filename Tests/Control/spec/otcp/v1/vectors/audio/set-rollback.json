@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/set-rollback",
+  "type": "request",
+  "description": "The device fails to open with the new sample rate, so the server restores the previous setup, as OpenTune's audio settings page does, and the call fails with IO_ERROR(device_open_failed) and executed false.",
+  "capability": "audio.device",
+  "since": "1.0",
+  "method": "audio.set",
+  "session": "authenticated",
+  "given": { "audio": { "running": true, "failsToOpen": true } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "audio.set",
+    "params": { "sampleRateHz": 48000 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "IO_ERROR",
+      "data": {
+        "kind": "IO_ERROR",
+        "reason": "device_open_failed",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}
