@@ -1140,6 +1140,13 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     stopTimer();
 #endif
 
+#if JucePlugin_Enable_ARA
+    // Before noteAudition_ goes away: the editor renderer may be another instance.
+    if (isBoundToARA())
+        if (auto* dc = getDocumentController())
+            dc->releaseKeyboardAudition(&noteAudition_, getEditorRenderer());
+#endif
+
     // 析构最前段生命周期动作（此后再无异步任务访问裸 this）：
     // 1) 关闭 completion gate：与持锁进入的 F0 commit / chunkSettled / 模型切换
     //    completion 回调互斥。已进入者完成后才置 closed；此后进入者持锁见
@@ -1611,6 +1618,9 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         // The processor does NOT attach an additional lease: doing so would
         // override the DC's lease and break the ARA2 render path. With a local
         // CRS torn down above, the processor owns no render state at all when bound.
+
+        if (isEditorView())
+            dc->setKeyboardAuditionSource(&noteAudition_);
 
         AppLogger::logNoThrow("ARA: didBindToARA - DC owns its CRS lease; processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
@@ -3087,6 +3097,7 @@ void OpenTuneAudioProcessor::pollReturnedExternalEdit()
         externalEditSessionDir_ = juce::File();
         externalEditContentKey_ = {};
         externalEditCorruptCurveShown_ = false;
+        ++externalEditAppliedCount_;
         AppLogger::log("External edit returned and applied "
                        + completedPath);
     }
@@ -3212,10 +3223,14 @@ void OpenTuneAudioProcessor::mixAuditions(juce::AudioBuffer<float>& buffer, int 
         auto* dc = getDocumentController();
         auto* editorRenderer = getEditorRenderer();
         if (dc != nullptr && editorRenderer != nullptr && !isNonRealtime())
+        {
             dc->mixNotePitchAuditionIfOwner(editorRenderer, buffer, numSamples, sampleRate);
+            dc->mixKeyboardAudition(editorRenderer, buffer, numSamples, sampleRate);
+        }
         return;
     }
 #endif
+    noteAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
     // 音符移调预览仅在实时处理时混入；离线（宿主 bounce/export）渲染静音。
     if (!isNonRealtime())
         notePitchAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);

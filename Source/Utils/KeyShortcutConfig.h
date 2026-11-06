@@ -443,10 +443,11 @@ inline const ShortcutInfo kShortcutInfos[] = {
       kPianoRollOpenDyneScope, { KeyBinding(juce::KeyPress::F1Key, {}) } },
     { ShortcutId::ToolODPitch, "shared.shortcuts.toolODPitch", Loc::Keys::kToolODPitch,
       kPianoRollOpenDyneScope, { KeyBinding(juce::KeyPress::F2Key, {}) } },
+    // F3/F5: free keys next to F2 and F4/F6, so modulation and drift are reachable without the mouse.
     { ShortcutId::ToolODPitchModulation, "shared.shortcuts.toolODPitchModulation", Loc::Keys::kToolODPitchModulation,
-      kPianoRollOpenDyneScope, {} },
+      kPianoRollOpenDyneScope, { KeyBinding(juce::KeyPress::F3Key, {}) } },
     { ShortcutId::ToolODPitchDrift, "shared.shortcuts.toolODPitchDrift", Loc::Keys::kToolODPitchDrift,
-      kPianoRollOpenDyneScope, {} },
+      kPianoRollOpenDyneScope, { KeyBinding(juce::KeyPress::F5Key, {}) } },
     { ShortcutId::ToolODVolumeEnvelope, "shared.shortcuts.toolODVolumeEnvelope", Loc::Keys::kToolODVolumeEnvelope,
       kPianoRollOpenDyneScope, { KeyBinding(juce::KeyPress::F4Key, {}) } },
     { ShortcutId::ToolODScissors, "shared.shortcuts.toolODScissors", Loc::Keys::kToolODScissors,

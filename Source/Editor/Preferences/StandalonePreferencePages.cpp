@@ -6,6 +6,8 @@
 #include "Standalone/StandaloneAudioDeviceSync.h"
 #include "Standalone/UI/UIColors.h"
 #include "Editor/Preferences/SharedPreferencePages.h"
+#include "Utils/AccessibleComboBox.h"
+#include "Utils/AccessibleToggleButton.h"
 #include "Utils/AppLogger.h"
 
 namespace OpenTune {
@@ -299,7 +301,7 @@ private:
             channelToggles_.removeLast();
 
         while (channelToggles_.size() < numPairs) {
-            auto* toggle = channelToggles_.add(new juce::ToggleButton());
+            auto* toggle = channelToggles_.add(new a11y::AccessibleToggleButton());
             initialiseToggleButton(*toggle);
             const int pairIndex = channelToggles_.size() - 1;
             toggle->onClick = [this, pairIndex] { channelPairClicked(pairIndex); };
@@ -508,14 +510,14 @@ private:
 
     juce::AudioDeviceManager& deviceManager_;
     juce::Label typeLabel_;
-    juce::ComboBox typeSelector_;
+    a11y::AccessibleComboBox typeSelector_;
     juce::Label outputLabel_;
-    juce::ComboBox outputDeviceSelector_;
+    a11y::AccessibleComboBox outputDeviceSelector_;
     juce::TextButton testButton_;
     juce::Label sampleRateLabel_;
-    juce::ComboBox sampleRateSelector_;
+    a11y::AccessibleComboBox sampleRateSelector_;
     juce::Label bufferSizeLabel_;
-    juce::ComboBox bufferSizeSelector_;
+    a11y::AccessibleComboBox bufferSizeSelector_;
     juce::Label channelsLabel_;
     juce::OwnedArray<juce::ToggleButton> channelToggles_;
     juce::Label errorLabel_;
@@ -622,7 +624,7 @@ private:
     AppPreferences& appPreferences_;
     std::function<void()> onPreferencesChanged_;
     juce::Label themeLabel_;
-    juce::ComboBox themeSelector_;
+    a11y::AccessibleComboBox themeSelector_;
 };
 
 } // namespace

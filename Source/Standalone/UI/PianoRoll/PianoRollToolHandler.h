@@ -84,6 +84,35 @@ class PianoRollToolHandler
 public:
     using ManualCorrectionOp = OpenTune::ManualCorrectionOp;
 
+    // What happened to a note during keyboard editing - drives speech and audition.
+    enum class KeyboardNoteEvent
+    {
+        Selected,    // moved to a note with an arrow, Home or End
+        PitchMoved,  // pitch moved with Up/Down
+        Info,        // full details requested (I key)
+        NoNotes,     // there are no notes at all
+        NoSelection, // notes exist but none is selected
+        Split,              // X: split at the largest pitch change, index is the left part
+        Merged,             // J: note merged with the next one, index is the result
+        SplitInHalf,        // X: no clear pitch change, split in the middle
+        NoteTooShort,       // X: note shorter than two minimal parts
+        SplitAtCursor,      // Shift+X: index is the left part
+        CursorUnknown,      // Shift+X: the host edit cursor is not known (not REAPER, or playing)
+        CursorOutsideNote,  // Shift+X: the edit cursor is not inside the selected note
+        NoAdjacentNote,     // J: no touching next note
+        AllSelected,        // Ctrl+A: all notes selected
+        ModulationChanged,  // arrows or Enter with the Pitch Modulation tool
+        DriftChanged,       // arrows or Enter with the Pitch Drift tool
+        Removed,            // Delete or Cut: index is the number of removed notes
+        VolumeChanged,      // arrows or Enter with the Volume Envelope tool
+        ArrowHint,          // plain Up/Down: say that Ctrl+Up/Down edits (index unused)
+        PositionInfo,       // Shift+I: say where in the song the cursor actions work (index unused)
+        RangeSelected,      // Shift+Left/Right: index is the note at the moving end
+        NoteResized,        // Ctrl(+Shift)+Left/Right: index is the resized note
+        SingleNoteNeeded,   // the action works on one selected note only
+        EditFailed          // the edit was not committed (e.g. the notes changed meanwhile)
+    };
+
     // PianoRoll 组件提供的回调上下文。
     // 所有数据读写均通过这些 std::function 回调完成，
     // 使 ToolHandler 可独立于具体组件实例进行测试。
@@ -179,8 +208,15 @@ public:
         std::function<void()> notifyPlayPauseToggle;
         std::function<void()> notifyStopPlayback;
         bool transportShortcutsEnabled = true;
-        std::function<void()> notifyEscapeKey;
+        // Returns false when Esc is not used here and should go on to the host.
+        std::function<bool()> notifyEscapeKey;
         std::function<void(size_t, float, float)> notifyNoteOffsetChanged;
+        // notes is the current list (after a move it already holds the new pitch), index is a note or -1.
+        std::function<void(KeyboardNoteEvent, const std::vector<Note>&, int)> notifyKeyboardNote;
+        // Accessibility: REAPER's edit cursor in source seconds while the transport is stopped.
+        std::function<std::optional<double>()> getEditCursorSourceTime;
+        // Tool switched by a key: the screen reader announces the new tool.
+        std::function<void(ToolId)> notifyToolChangedFromKeyboard;
 
         // === Note pitch audition (piano roll trigger/lifecycle) ===
         // startSeconds/endSeconds/targetHz: anchor note range + adjusted pitch.
@@ -191,6 +227,8 @@ public:
         // 打开 EQ 弹窗预览：参数为主音符 index（纯点击 = mouseDown 记录的 pending
         // 主音符；框选 = 完成选择后的 anchor 音符）。只打开弹窗，不改 Note 数据。
         std::function<void(int)> openEqPreview;
+        // Accessibility: Enter with the EQ tool opens the full EQ window with keyboard focus.
+        std::function<void(int)> openEqFromKeyboard;
         // EQ 工具专属光标（组件侧构造一次，值拷贝共享 handle）。
         juce::MouseCursor eqCursor;
 
@@ -308,7 +346,21 @@ private:
     // §8.4: Delete key removes selected handle (non-endpoint).
     bool handleTimeToolDeleteSelected();
     bool handleNoteArrowKey(const juce::KeyPress& key);
-    void moveSelectedNotesPitchByKeyboard(int direction);
+    void moveSelectedNotesPitchByKeyboard(int direction, bool fineCents = false, bool resetToSung = false,
+                                          bool semitoneIgnoringScale = false);
+    void selectNoteFromKeyboard(const std::vector<Note>& notes, int index);
+    void extendSelectionByKeyboard(bool moveRight);
+    void resizeSelectedNoteByKeyboard(bool startEdge, int direction);
+    void notifyKeyboardNote(KeyboardNoteEvent event, const std::vector<Note>& notes, int index);
+    void splitSelectedNoteByKeyboard(bool atEditCursor = false);
+    void mergeSelectedNoteWithNext();
+    void adjustSelectedNotesModDriftByKeyboard(int direction, bool fine);
+    void adjustSelectedNotesVolumeByKeyboard(int direction, bool fine);
+    void resetSelectedNotesVolumeByKeyboard();
+    bool applyNoteDefaultActionByKeyboard();
+    void switchToolFromKeyboard(ToolId tool);
+    bool commitKeyboardNoteEdit(const std::vector<Note>& work, const std::vector<int>& changedIndices,
+                                const juce::String& undoDescription);
     // Hit-test handles within ±5 px of a TimeGrid handle's output_seconds.
     // Returns 0 if no hit.
     uint64_t hitTestTimeGridHandle(const juce::MouseEvent& e) const;
@@ -374,6 +426,8 @@ private:
 
     // Scissors 自定义双击检测：记录上一次点击的时间戳和位置
     // 在 handleScissorsToolUp 中检测：800ms / 30px 内的同位置点击触发合并。
+    // Accessibility: the edit cursor (source seconds) at the last Left/Right press.
+    std::optional<double> lastArrowCursor_;
     std::chrono::steady_clock::time_point scissorsLastClickTime_{};
     juce::Point<int> scissorsLastClickPos_{};
     static constexpr int kScissorsDoubleClickMs = 800;  // 800ms 双击阈值
@@ -390,6 +444,9 @@ private:
     // EQ 工具：mouseDown 命中的 pending 主音符 index（纯点击 mouseUp 时消费一次）。
     // 拖拽超过阈值转为框选时、setTool/cancelActiveMouseGesture 时清理。
     int pendingEqPrimaryIndex_ = -1;
+    // Shift+Left/Right range: the fixed end and the moving end (note indices).
+    int keyboardRangeAnchor_ = -1;
+    int keyboardRangeActive_ = -1;
     double lastDrawTime_ = 0.0;
     float lastDrawF0_ = 0.0f;
     AutomationLane volumeDragBaselineEnvelope_;

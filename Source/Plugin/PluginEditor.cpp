@@ -21,6 +21,8 @@
 #include "Utils/ScaleUiMapping.h"
 #include "Utils/TimeCoordinate.h"
 #include "UI/UiAssets.h"
+#include "Utils/ScreenReaderAnnouncer.h"
+#include "Utils/ContextMenuKey.h"
 
 #if JucePlugin_Enable_ARA
 #include "ARA/OpenTuneDocumentController.h"
@@ -179,49 +181,77 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // Piano key audition
     pianoRoll_.setPianoKeyAudition(&processorRef_.getPianoKeyAudition());
+    pianoRoll_.setNoteAudition(&processorRef_.getNoteAudition());
+    pianoRoll_.setRenderCacheProvider([this](ContentKey key) { return processorRef_.getReadableRenderCache(key); });
 
     // Menu popup callbacks — MenuBarComponent stays hidden, provides menu content
     // via TransportBar icon buttons (File/Edit/View)
     menuBar_.setVisible(false);
 
-    transportBar_.onFileMenuRequested = [this]() {
+    // Accessibility: when a menu closes, Esc included, focus goes back to its button; it used
+    // to be lost and NVDA said nothing. A dialog opened from the menu takes focus after this.
+    const auto showTransportMenu = [this](int menuIndex, juce::Component& button) {
         const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
+        const juce::Component::SafePointer<juce::Component> safeButton(&button);
         auto menuNames = menuBar_.getMenuBarNames();
-        auto menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
-        menu.showMenuAsync(juce::PopupMenu::Options()
-                               .withTargetComponent(&transportBar_.getFileButton())
-                               .withParentComponent(&contentRoot_),
-                           [safeEditor](int result) {
-                               if (result != 0 && safeEditor != nullptr)
-                                   safeEditor->menuBar_.menuItemSelected(result, 0);
+        auto menu = menuBar_.getMenuForIndex(menuIndex, menuIndex < menuNames.size() ? menuNames[menuIndex]
+                                                                                    : juce::String());
+        // Accessibility: open with the first item highlighted, so the first Enter works
+        // (user test: NVDA read "Options" on open, but Enter did nothing until an arrow key).
+        auto options = juce::PopupMenu::Options()
+                           .withTargetComponent(&button)
+                           .withParentComponent(&contentRoot_);
+        if (const int firstId = a11y::firstSelectableItemId(menu); firstId != 0)
+            options = options.withInitiallySelectedItem(firstId);
+        menu.showMenuAsync(options,
+                           [safeEditor, safeButton, menuIndex](int result) {
+                               if (safeEditor == nullptr)
+                                   return;
+                               // The menu lives inside contentRoot_ and is deleted after this
+                               // callback, taking focus with it, so a focus grab here was lost
+                               // (user test: silence after Esc). Do it a moment later.
+                               juce::Timer::callAfterDelay(100, [safeEditor, safeButton, cancelled = result == 0] {
+                                   if (safeEditor == nullptr || safeButton == nullptr || !safeButton->isShowing())
+                                       return;
+                                   auto* focused = juce::Component::getCurrentlyFocusedComponent();
+                                   if (focused == safeButton.getComponent()) {
+                                       // Focus never left the button: there is no focus event, so name it.
+                                       if (cancelled)
+                                           a11y::announce(*safeButton, safeButton->getTitle().isNotEmpty()
+                                                                           ? safeButton->getTitle()
+                                                                           : safeButton->getName());
+                                       return;
+                                   }
+                                   // A dialog opened from the menu has focus now: leave it there.
+                                   if (focused != nullptr && focused != safeEditor.getComponent()
+                                       && focused != &safeEditor->contentRoot_)
+                                       return;
+                                   safeButton->grabKeyboardFocus();
+                               });
+                               if (result != 0)
+                                   safeEditor->menuBar_.menuItemSelected(result, menuIndex);
                            });
     };
 
-    transportBar_.onEditMenuRequested = [this]() {
-        const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
-        auto menuNames = menuBar_.getMenuBarNames();
-        auto menu = menuBar_.getMenuForIndex(1, menuNames.size() > 1 ? menuNames[1] : juce::String());
-        menu.showMenuAsync(juce::PopupMenu::Options()
-                               .withTargetComponent(&transportBar_.getEditButton())
-                               .withParentComponent(&contentRoot_),
-                           [safeEditor](int result) {
-                               if (result != 0 && safeEditor != nullptr)
-                                   safeEditor->menuBar_.menuItemSelected(result, 1);
-                           });
+    transportBar_.onFileMenuRequested = [this, showTransportMenu]() {
+        showTransportMenu(0, transportBar_.getFileButton());
     };
 
-    transportBar_.onViewMenuRequested = [this]() {
-        const auto safeEditor = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
-        auto menuNames = menuBar_.getMenuBarNames();
-        auto menu = menuBar_.getMenuForIndex(2, menuNames.size() > 2 ? menuNames[2] : juce::String());
-        menu.showMenuAsync(juce::PopupMenu::Options()
-                               .withTargetComponent(&transportBar_.getViewButton())
-                               .withParentComponent(&contentRoot_),
-                           [safeEditor](int result) {
-                               if (result != 0 && safeEditor != nullptr)
-                                   safeEditor->menuBar_.menuItemSelected(result, 2);
-                           });
+    transportBar_.onEditMenuRequested = [this, showTransportMenu]() {
+        showTransportMenu(1, transportBar_.getEditButton());
     };
+
+    transportBar_.onViewMenuRequested = [this, showTransportMenu]() {
+        showTransportMenu(2, transportBar_.getViewButton());
+    };
+
+    // Accessibility: the plugin has no track panel and cannot hide the parameter panel, so the
+    // Tracks and Props toggles do nothing here. They stay on screen as in the original, but leave
+    // the Tab order and the screen reader tree, where they read as working "pressed" buttons.
+    topBar_.setSidePanelTogglesAccessible(false);
+
+    // The plugin's piano roll has no use for Esc: REAPER gets it and closes the FX window.
+    pianoRoll_.setEscapePassesToHost(true);
 
     // content root 是 editor 的唯一直接子组件，承载全部主 UI（§7.3）。
     addAndMakeVisible(contentRoot_);
@@ -269,6 +299,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         [this] { pianoRoll_.grabKeyboardFocus(); });
     contentRoot_.addChildComponent(*onboardingOverlay_);
 
+    // Upstream 59387696 dropped the per-tick preference sync and left no call here, so a
+    // new editor stayed in the default scheme: OpenDyne users got the classic mode, F1-F6
+    // went to the host and Read Audio made no notes (user test). Apply the saved state once.
+    syncSharedAppPreferences();
+
     startTimerHz(kHeartbeatHz);
     // Host transport metadata (BPM/time signature): applied on demand from the
     // heartbeat when the processor's RT-safe generation counter moves; also
@@ -285,6 +320,19 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     }
 
     grabKeyboardFocus();
+
+    // Accessibility: focus the piano roll right away so arrow keys work without Tab.
+    // Deferred because the editor is not on screen yet in the constructor. The first-run
+    // onboarding manages focus itself.
+    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+    juce::Timer::callAfterDelay(150, [safeThis] {
+        if (safeThis == nullptr)
+            return;
+        if (safeThis->onboardingOverlay_ != nullptr && safeThis->onboardingOverlay_->isActive())
+            return;
+        if (safeThis->pianoRoll_.isShowing())
+            safeThis->pianoRoll_.grabKeyboardFocus();
+    });
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
@@ -544,6 +592,13 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // 外部编辑会话；损坏曲线的一次性提示也由 Processor 发出（无父组件依赖，
     // 窗口关闭后仍可见）。
 
+    // Accessibility: the notes change without any other sign; say so. The check itself lives
+    // in the processor now, so watch its counter (-1: first tick, nothing to say yet).
+    const int externalEditApplied = processorRef_.getExternalEditAppliedCount();
+    if (lastExternalEditAppliedCount_ >= 0 && externalEditApplied != lastExternalEditAppliedCount_)
+        a11y::announce(pianoRoll_, LOC_RAW("External edit applied"), a11y::SpeechQueue::keepAll);
+    lastExternalEditAppliedCount_ = externalEditApplied;
+
     syncParameterPanelFromSelection();
 
     // Heartbeat ticks first — match Standalone pattern: overview/camera
@@ -754,6 +809,21 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             }
         }
         if (allDone) {
+            // Accessibility: sighted users see the "Processing audio" overlay disappear and notes
+            // appear. Announce the result: how many notes were found or that analysis failed.
+            int noteCount = 0;
+            bool failed = false;
+            for (const auto& key : originalF0OverlayTargetContentKeys_) {
+                if (auto snap = processorRef_.getContentSnapshot(key)) {
+                    failed = failed || snap->originalF0State == OriginalF0State::Failed;
+                    noteCount += static_cast<int>(snap->notes.size());
+                }
+            }
+            a11y::announce(pianoRoll_,
+                           failed ? LOC_RAW("Audio analysis failed")
+                                  : Loc::format(LOC_RAW("Audio read, notes: {0}"), juce::String(noteCount)),
+                           a11y::SpeechQueue::keepAll);
+
             originalF0OverlayLatched_ = false;
             originalF0OverlayTargetContentKeys_.clear();
             // F0 overlay no longer blocks onboarding; modal windows may still be
@@ -775,6 +845,17 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         autoRenderOverlay_.setMessageText(LOC_RAW("Processing audio"));
         shouldShowOverlay = true;
     }
+
+    // Accessibility: sighted users see the "Rendering" badge go away. Say when a render that took
+    // a while is done, so it is clear playback now has the correction. Short renders stay silent
+    // so this does not talk over the note speech after every key press.
+    if (shouldShowBadge && !renderBadgeWasShown_) {
+        renderStartedMs_ = juce::Time::getMillisecondCounter();
+    } else if (!shouldShowBadge && renderBadgeWasShown_ && !shouldShowOverlay
+               && juce::Time::getMillisecondCounter() - renderStartedMs_ >= kRenderDoneSpeechMinMs) {
+        a11y::announce(pianoRoll_, LOC_RAW("Rendering done"), a11y::SpeechQueue::keepAll);
+    }
+    renderBadgeWasShown_ = shouldShowBadge;
 
     if (renderBadge_.isVisible() != shouldShowBadge)
         renderBadge_.setVisible(shouldShowBadge);
@@ -1070,6 +1151,7 @@ void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
     if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
         pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::RetuneSpeed, normalized);
     }
+    announceParameterEdit(AudioEditingScheme::ParameterId::RetuneSpeed, result);
 }
 
 void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
@@ -1078,6 +1160,7 @@ void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
     if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
         pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::VibratoDepth, value);
     }
+    announceParameterEdit(AudioEditingScheme::ParameterId::VibratoDepth, result);
 }
 
 void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
@@ -1086,12 +1169,27 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
     if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
         pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::VibratoRate, value);
     }
+    announceParameterEdit(AudioEditingScheme::ParameterId::VibratoRate, result);
 }
 
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 {
     // NoTarget 时 editParameter 内部已回落更新创建默认值
-    pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
+    const auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
+    announceParameterEdit(AudioEditingScheme::ParameterId::NoteSplit, result);
+}
+
+void OpenTuneAudioProcessorEditor::announceParameterEdit(AudioEditingScheme::ParameterId id,
+                                                          const AudioEditingScheme::ParameterEditResult& result)
+{
+    // Only while a panel control has focus (keyboard use). Arrow changes arrive here once the
+    // keys stop (AccessibleKnob), typed values and Backspace at once.
+    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    if (focused == nullptr || !parameterPanel_.isParentOf(focused))
+        return;
+    const auto text = pianoRoll_.describeParameterEdit(id, result);
+    if (text.isNotEmpty())
+        a11y::announce(*focused, text, a11y::SpeechQueue::keepAll);
 }
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
@@ -1331,14 +1429,23 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
 
 void OpenTuneAudioProcessorEditor::undoRequested()
 {
-    if (processorRef_.getUndoManager().undo() != nullptr)
+    // Accessibility: sighted users see what came back; tell screen readers which action was undone.
+    if (auto* action = processorRef_.getUndoManager().undo()) {
         syncContentProjectionToPianoRoll();
+        a11y::announce(pianoRoll_, Loc::format(LOC_RAW("Undone: {0}"), action->getDescription()));
+    } else {
+        a11y::announce(pianoRoll_, LOC_RAW("Nothing to undo"));
+    }
 }
 
 void OpenTuneAudioProcessorEditor::redoRequested()
 {
-    if (processorRef_.getUndoManager().redo() != nullptr)
+    if (auto* action = processorRef_.getUndoManager().redo()) {
         syncContentProjectionToPianoRoll();
+        a11y::announce(pianoRoll_, Loc::format(LOC_RAW("Redone: {0}"), action->getDescription()));
+    } else {
+        a11y::announce(pianoRoll_, LOC_RAW("Nothing to redo"));
+    }
 }
 
 void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme)
@@ -1496,8 +1603,31 @@ void OpenTuneAudioProcessorEditor::recordRequested()
                 return;
             }
 
-            if (refreshed == 0)
+            if (refreshed == 0) {
+                // The audio is read but OpenDyne has no notes (the auto read ran in the wrong
+                // scheme, or its notes were removed): pressing Read again was a dead end
+                // (user test), so make the notes from the existing pitch, as the first read does.
+                const auto projections = dc->getPlaybackRegionProjectionsFor(
+                    std::vector<juce::ARAPlaybackRegion*>{targetPlaybackRegion});
+                if (pianoRoll_.isOpenDyne() && !projections.empty()
+                    && projections.front().contentKey.isValid()) {
+                    const auto key = projections.front().contentKey;
+                    const auto snap = processorRef_.getContentSnapshot(key);
+                    if (snap != nullptr && snap->originalF0State == OriginalF0State::Ready
+                        && snap->notes.empty()
+                        && contentCommands_->generateNotesOnly(key, pianoRoll_.getCurrentAutoTuneParams())) {
+                        syncContentProjectionToPianoRoll();
+                        const auto after = processorRef_.getContentSnapshot(key);
+                        a11y::announce(pianoRoll_, Loc::format(LOC_RAW("Notes made: {0}"),
+                            juce::String(after != nullptr ? static_cast<int>(after->notes.size()) : 0)));
+                        return;
+                    }
+                }
+                // This audio was already read and is unchanged: nothing visible happens, and without
+                // a message it is unclear whether the button worked.
+                a11y::announce(pianoRoll_, LOC_RAW("Audio already read"));
                 return;
+            }
 
             AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
                 + " AudioModification(s) for scoped playback region");
@@ -1522,6 +1652,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
             else
                 pendingNoteGenerationOnReady_.erase(targetKey);
             originalF0OverlayLatched_ = true;
+            a11y::announce(pianoRoll_, LOC_RAW("Processing audio"), a11y::SpeechQueue::keepAll);
         });
 #endif
 }
@@ -1636,9 +1767,13 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
                 &contentRoot_,
                 LOC(kAutoDialog),
                 result.message());
+        } else {
+            // No dialog by design, but without sight the button seemed to do nothing.
+            a11y::announce(pianoRoll_, LOC_RAW("Already corrected"));
         }
         return;
     }
+    a11y::announce(pianoRoll_, LOC_RAW("AUTO correction applied"));
 
 }
 

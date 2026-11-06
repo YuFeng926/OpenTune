@@ -135,6 +135,50 @@ DigitalTimeDisplay::DigitalTimeDisplay()
     setInterceptsMouseClicks(false, false);
 }
 
+std::unique_ptr<juce::AccessibilityHandler> DigitalTimeDisplay::createAccessibilityHandler()
+{
+    // The title is computed on request, so it is current whenever NVDA reads it.
+    class TimeAccessibilityHandler final : public juce::AccessibilityHandler {
+    public:
+        explicit TimeAccessibilityHandler(DigitalTimeDisplay& owner)
+            : juce::AccessibilityHandler(owner, juce::AccessibilityRole::staticText), owner_(owner) {}
+
+        juce::String getTitle() const override
+        {
+            if (owner_.isBarsMode_)
+                return OpenTune::Loc::format(LOC_RAW("Bar {0}, beat {1}"), juce::String(owner_.bar_),
+                                             juce::String(owner_.beat_));
+            return OpenTune::Loc::format(LOC_RAW("Time {0}"), owner_.timeString_);
+        }
+
+    private:
+        DigitalTimeDisplay& owner_;
+    };
+
+    return std::make_unique<TimeAccessibilityHandler>(*this);
+}
+
+std::unique_ptr<juce::AccessibilityHandler> BpmValueField::createAccessibilityHandler()
+{
+    // In the plugin (ARA) the host owns the tempo and the field is read-only text.
+    class TempoAccessibilityHandler final : public juce::AccessibilityHandler {
+    public:
+        explicit TempoAccessibilityHandler(BpmValueField& owner)
+            : juce::AccessibilityHandler(owner, juce::AccessibilityRole::staticText), owner_(owner) {}
+
+        juce::String getTitle() const override
+        {
+            return OpenTune::Loc::format(LOC_RAW("Tempo {0} BPM, {1}"), owner_.formatBpmText(),
+                                         juce::String(owner_.timeSigNum_) + "/" + juce::String(owner_.timeSigDenom_));
+        }
+
+    private:
+        BpmValueField& owner_;
+    };
+
+    return std::make_unique<TempoAccessibilityHandler>(*this);
+}
+
 void DigitalTimeDisplay::setTimeString(const juce::String& time)
 {
     if (timeString_ != time || isBarsMode_)
@@ -800,7 +844,10 @@ void BpmValueField::cancelEdit()
 UnifiedToolbarButton::UnifiedToolbarButton(const juce::String& name, juce::Path iconPath, juce::Path toggledIconPath)
     : juce::Button(name), iconPath_(iconPath), toggledIconPath_(toggledIconPath)
 {
-    setWantsKeyboardFocus(false);
+    // Accessibility: toolbar buttons (File, Edit, View, Record, ...) must be reachable with Tab.
+    // A mouse click still does not take focus, so keys keep going to the piano roll.
+    setWantsKeyboardFocus(true);
+    setMouseClickGrabsKeyboardFocus(false);
 }
 
 void UnifiedToolbarButton::setIcon(juce::Path iconPath)
@@ -1300,15 +1347,18 @@ TransportBarComponent::TransportBarComponent()
     scaleTypeSelector_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(scaleTypeSelector_);
 
+    // Accessibility: without a title NVDA read only the value ("combo box C").
+    scaleRootSelector_.setTitle(LOC(kRootNote));
+    scaleTypeSelector_.setTitle(LOC(kScale));
+
     externalEditButton_.setButtonText(LOC(kExternalEdit));
-    externalEditButton_.setTooltip(LOC(kExternalEdit));
+    // Accessibility: no tooltip equal to the button text; NVDA read it twice (name + help).
     externalEditButton_.onClick = [this] {
         listeners_.call([](Listener& listener) { listener.externalEditRequested(); });
     };
     addAndMakeVisible(externalEditButton_);
 
     saveAndReturnButton_.setButtonText(LOC(kSaveAndReturn));
-    saveAndReturnButton_.setTooltip(LOC(kSaveAndReturn));
     saveAndReturnButton_.onClick = [this] {
         listeners_.call([](Listener& listener) { listener.saveAndReturnRequested(); });
     };
@@ -1323,6 +1373,9 @@ TransportBarComponent::~TransportBarComponent()
 
 void TransportBarComponent::refreshLocalizedText()
 {
+    scaleRootSelector_.setTitle(LOC(kRootNote));
+    scaleTypeSelector_.setTitle(LOC(kScale));
+
     // 刷新所有按钮的 tooltip
     fileButton_.setTooltip(LOC(kTooltipFile));
     editButton_.setTooltip(LOC(kTooltipEdit));

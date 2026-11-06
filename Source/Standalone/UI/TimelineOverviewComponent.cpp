@@ -142,6 +142,9 @@ TimelineOverviewComponent::TimelineOverviewComponent(
     : waveformMipmapCache_(waveformMipmapCache)
 {
     setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    // Accessibility: a picture of the whole clip for mouse navigation only; NVDA read it
+    // as "unknown". The notes list gives the same information as text.
+    setAccessible(false);
 }
 
 void TimelineOverviewComponent::addListener(Listener* listener)

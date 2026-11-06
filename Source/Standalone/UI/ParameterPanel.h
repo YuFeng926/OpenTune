@@ -16,6 +16,8 @@
 #include "OpenTuneLookAndFeel.h"
 #include "UIColors.h"
 #include "ToolIds.h"
+#include "../../Utils/AccessibleComboBox.h"
+#include "../../Utils/AccessibleKnob.h"
 
 namespace OpenTune {
 
@@ -38,6 +40,13 @@ public:
     {
         auto* label = OpenTuneLookAndFeel::createSliderTextBox(slider);
         label->setFont(UIColors::getLabelFont(14.0f));
+        // Tab focuses the TextEditor that the Label opens, and it has no name
+        // (NVDA: "edit selected 15.00%"). Give it the knob name when it opens.
+        juce::Component::SafePointer<juce::Slider> safeSlider(&slider);
+        label->onEditorShow = [label, safeSlider] {
+            if (auto* editor = label->getCurrentTextEditor())
+                editor->setTitle(safeSlider != nullptr ? safeSlider->getTitle() : juce::String());
+        };
         return label;
     }
 
@@ -46,7 +55,8 @@ public:
                           float rotaryEndAngle, juce::Slider& slider) override;
 };
 
-class ParameterPanel : public juce::Component
+class ParameterPanel : public juce::Component,
+                       private juce::FocusChangeListener
 {
 public:
     struct AutoButtonPresentation {
@@ -152,6 +162,7 @@ private:
     void setupHeader(juce::Label& label, const juce::String& text);
     void setupLabel(juce::Label& label, const juce::String& text);
     void setupLargeKnob(juce::Slider& slider, double min, double max, double defaultVal, const juce::String& suffix);
+    void applyAccessibilityTitles();
 
     /** 以内容组件本地坐标排布全部控件；返回由实际布局 bottom + 底部内边距得出的内容高度。 */
     int layoutContent(int width);
@@ -181,17 +192,21 @@ private:
     FadingViewport viewport_;
     ContentComponent contentComponent_;
 
+    // Tab can land on a control scrolled out of the panel (NVDA reported Pitch snap as
+    // "offscreen"): scroll it into view.
+    void globalFocusChanged(juce::Component* focusedComponent) override;
+
     // Pitch Correction Section
     juce::Label pitchCorrectionHeader_;
     juce::Label retuneSpeedLabel_;
-    juce::Slider retuneSpeedSlider_;
+    a11y::AccessibleKnob retuneSpeedSlider_;
     
     juce::Label vibratoDepthLabel_;
-    juce::Slider vibratoDepthSlider_;
+    a11y::AccessibleKnob vibratoDepthSlider_;
     juce::Label vibratoRateLabel_;
-    juce::Slider vibratoRateSlider_;
+    a11y::AccessibleKnob vibratoRateSlider_;
     juce::Label noteSplitLabel_;
-    juce::Slider noteSplitSlider_;
+    a11y::AccessibleKnob noteSplitSlider_;
 
     // Tools Section
     juce::Label toolsHeader_;
@@ -213,7 +228,7 @@ private:
     AutoButtonPresentation autoButtonPresentation_;
     std::unique_ptr<juce::TextButton> pitchShiftButton_;
     // OpenDyne Pitch Grid 全局开关（No Snap / Chromatic / Key Scale）
-    juce::ComboBox pitchGridSelector_;
+    a11y::AccessibleComboBox pitchGridSelector_;
     int pitchShiftSemitone_ = 0;
     int pitchShiftCents_ = 0;
 

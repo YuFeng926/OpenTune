@@ -26,6 +26,11 @@
 #include "../../Utils/ScaleUiMapping.h"
 #include "../../Utils/PitchUtils.h"
 #include "Utils/PianoKeyAudition.h"
+#include "Utils/NoteAudition.h"
+#include "Utils/NoteSpeech.h"
+#include "Utils/ScreenReaderAnnouncer.h"
+#include "Utils/TimeCoordinate.h"
+#include "Inference/RenderCache.h"
 #include "TimelineViewportPolicy.h"
 #include "TimelineLayerComposer.h"
 #include "PianoRoll/PianoRollTimeMap.h"
@@ -135,6 +140,12 @@ void PianoRollComponent::initializeUIComponents() {
     verticalZoomInButton_.setMouseClickGrabsKeyboardFocus(false);
     verticalZoomInButton_.onClick = [this] { zoomVerticalIn(); };
     addAndMakeVisible(verticalZoomInButton_);
+
+    // Accessibility: zoom is only for the eyes and has keyboard shortcuts; NVDA object
+    // navigation read these as unnamed "+" / "-" buttons inside the notes list.
+    for (auto* button : { &horizontalZoomOutButton_, &horizontalZoomInButton_,
+                          &verticalZoomOutButton_, &verticalZoomInButton_ })
+        button->setAccessible(false);
 
     updateZoomControlColours();
 
@@ -500,6 +511,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.setCurrentTool = [this](ToolId tool) { setCurrentTool(tool); };
     // EQ 工具：主音符 index 由 ToolHandler 唯一判定并直通；EQ cursor 经主题机制应用
     toolCtx.openEqPreview = [this](int primaryIndex) { openEqPopupForSelection(primaryIndex); };
+    toolCtx.openEqFromKeyboard = [this](int primaryIndex) { openEqPopupForSelection(primaryIndex, true); };
+    toolCtx.getEditCursorSourceTime = [this]() { return stoppedEditCursorSourceTime(); };
     toolCtx.eqCursor = eqCursor_;
     toolCtx.showToolSelectionMenu = [this]() {
         // 在当前鼠标屏幕位置弹出纵向图标工具栏
@@ -510,9 +523,34 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.notifyPlayPauseToggle = [this]() { listeners_.call([](Listener& l) { l.playPauseToggleRequested(); }); };
     toolCtx.notifyStopPlayback = [this]() { listeners_.call([](Listener& l) { l.stopPlaybackRequested(); }); };
     toolCtx.transportShortcutsEnabled = transportControlsEnabled_;
-    toolCtx.notifyEscapeKey = [this]() { listeners_.call([](Listener& l) { l.escapeKeyPressed(); }); };
+    toolCtx.notifyEscapeKey = [this]() {
+        // Accessibility: an open EQ window closes first.
+        if (eqPopup_ != nullptr) {
+            closeEqPopup();
+            a11y::announce(*this, LOC_RAW("EQ closed"));
+            return true;
+        }
+        // In the plugin Esc has no job of its own; the host gets it, so it closes the FX
+        // window as in other plugins instead of the key being swallowed silently.
+        if (escapePassesToHost_)
+            return false;
+        listeners_.call([](Listener& l) { l.escapeKeyPressed(); });
+        return true;
+    };
     toolCtx.notifyNoteOffsetChanged = [this](size_t noteIndex, float oldOffset, float newOffset) {
         listeners_.call([noteIndex, oldOffset, newOffset](Listener& l) { l.noteOffsetChanged(noteIndex, oldOffset, newOffset); });
+    };
+    toolCtx.notifyKeyboardNote = [this](PianoRollToolHandler::KeyboardNoteEvent event,
+                                        const std::vector<Note>& notes, int index) {
+        handleKeyboardNote(event, notes, index);
+    };
+    toolCtx.notifyToolChangedFromKeyboard = [this](ToolId tool) {
+        auto name = keyboardToolName(tool);
+        // The EQ tool does nothing by itself from the keyboard; say how to open the window.
+        if (tool == ToolId::Eq && name.isNotEmpty())
+            name << ", " << LOC_RAW("Enter opens it");
+        if (name.isNotEmpty())
+            a11y::announce(*this, name);
     };
     toolCtx.auditionNotePitch = [this](double start, double end, float targetHz) {
         if (processor_ != nullptr) processor_->auditionNotePitch(editedContentKey_, start, end, targetHz);
@@ -671,6 +709,87 @@ juce::Path makeToolIcon(ToolId id) {
 }
 
 } // namespace
+
+bool PianoRollComponent::keyStateChanged(bool isKeyDown)
+{
+    // The Applications (menu) key never reaches keyPressed in JUCE.
+    if (applicationsKey_.pressedNow() && isKeyDown) {
+        showToolMenuFromKeyboard();
+        return true;
+    }
+    return juce::Component::keyStateChanged(isKeyDown);
+}
+
+// Keyboard twin of the right-click tool bar (showToolSelectionBar): a standard PopupMenu,
+// which JUCE makes navigable with arrows and readable by screen readers. The tool list
+// follows showToolSelectionBar; keep both in sync.
+void PianoRollComponent::showToolMenuFromKeyboard()
+{
+    using Id = KeyShortcutConfig::ShortcutId;
+    struct Entry { ToolId tool; juce::String name; Id shortcut; };
+    std::vector<Entry> entries;
+    if (isOpenDyne()) {
+        entries = {
+            { ToolId::Select, LOC(kToolODSelect), Id::ToolODSelect },
+            { ToolId::Pitch, LOC(kToolODPitch), Id::ToolODPitch },
+            { ToolId::PitchModulation, LOC(kToolODPitchModulation), Id::ToolODPitchModulation },
+            { ToolId::PitchDrift, LOC(kToolODPitchDrift), Id::ToolODPitchDrift },
+            { ToolId::HandDraw, LOC(kToolHandDraw), Id::ToolHandDraw },
+            { ToolId::Eraser, LOC(kEraser), Id::Count },
+            { ToolId::VolumeEnvelope, LOC(kToolODVolumeEnvelope), Id::ToolODVolumeEnvelope },
+        };
+        if (experimentalFeaturesEnabled_)
+            entries.push_back({ ToolId::TimeTool, LOC(kTime), Id::ToolTimeTool });
+        entries.push_back({ ToolId::Scissors, LOC(kToolODScissors), Id::ToolODScissors });
+        entries.push_back({ ToolId::Eq, LOC(kToolEq), Id::Eq });
+    } else {
+        entries = {
+            { ToolId::Select, LOC(kToolSelect), Id::ToolSelect },
+            { ToolId::DrawNote, LOC(kToolDrawNote), Id::ToolDrawNote },
+            { ToolId::LineAnchor, LOC(kToolLineAnchor), Id::ToolLineAnchor },
+            { ToolId::HandDraw, LOC(kToolHandDraw), Id::ToolHandDraw },
+            { ToolId::Eraser, LOC(kEraser), Id::Count },
+        };
+        if (experimentalFeaturesEnabled_)
+            entries.push_back({ ToolId::TimeTool, LOC(kTime), Id::ToolTimeTool });
+    }
+
+    juce::PopupMenu menu;
+    for (const auto& entry : entries) {
+        juce::PopupMenu::Item item(entry.name);
+        item.itemID = static_cast<int>(entry.tool) + 1;   // 0 means "cancelled"
+        item.isTicked = currentTool_ == entry.tool;
+        // The real binding, so a user's own shortcut is shown, not the default.
+        if (entry.shortcut != Id::Count)
+            item.shortcutKeyDescription = KeyShortcutConfig::getShortcutBinding(shortcutSettings_, entry.shortcut)
+                                              .getDisplayNames();
+        menu.addItem(std::move(item));
+    }
+
+    // Open on the current tool, highlighted, so Enter works at once (without a highlight JUCE
+    // ignores the first Enter although NVDA already reads an item).
+    auto options = juce::PopupMenu::Options().withTargetComponent(this);
+    const bool currentListed = std::any_of(entries.begin(), entries.end(),
+                                           [this](const Entry& entry) { return entry.tool == currentTool_; });
+    if (currentListed)
+        options = options.withInitiallySelectedItem(static_cast<int>(currentTool_) + 1);
+    else if (const int firstId = a11y::firstSelectableItemId(menu); firstId != 0)
+        options = options.withInitiallySelectedItem(firstId);
+
+    juce::Component::SafePointer<PianoRollComponent> safeThis(this);
+    menu.showMenuAsync(options,
+                       [safeThis](int result) {
+                           if (safeThis == nullptr)
+                               return;
+                           // Bring focus back to the notes whether a tool was chosen or Esc pressed.
+                           safeThis->grabKeyboardFocus();
+                           if (result > 0) {
+                               const auto tool = static_cast<ToolId>(result - 1);
+                               safeThis->setCurrentTool(tool);
+                               a11y::announce(*safeThis, safeThis->keyboardToolName(tool));
+                           }
+                       });
+}
 
 void PianoRollComponent::showToolSelectionBar(juce::Point<int> screenPos)
 {
@@ -1018,6 +1137,10 @@ PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState,
     overlay_ = std::make_unique<PianoRollOverlayComponent>(*this);
     addAndMakeVisible(*overlay_);
     overlay_->setInterceptsMouseClicks(false, false);
+    // The overlay only paints on top of the notes; screen readers do not need it.
+    overlay_->setAccessible(false);
+    // The vertical scroll bar is mouse-only; NVDA read it as "scroll bar 0".
+    verticalScrollBar_.setAccessible(false);
 }
 
 PianoRollComponent::~PianoRollComponent() {
@@ -1205,7 +1328,7 @@ void PianoRollComponent::clearNoteDraft()
 // EQ 工具：预览弹窗（PianoRollComponent 唯一持有）与选中组原子提交
 // ============================================================================
 
-void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
+void PianoRollComponent::openEqPopupForSelection(int primaryIndex, bool fromKeyboard)
 {
     closeEqPopup();
 
@@ -1227,11 +1350,25 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
     if (appPreferences_ != nullptr)
         eqPopup_->setRemoveConfirmationSuppressed(appPreferences_->getState().shared.suppressEqRemoveConfirmation);
     eqPopup_->onCommitSettings = [this](const EqSettings& settings) { applyEqSettingsToSelection(settings); };
+    // Accessibility: closed from the keyboard, focus is back on the notes (closeEqPopup) and the result is said.
+    // closeEqPopup deletes the popup and this lambda with it, so the captured pointer is
+    // copied to the stack first and only the copy is used afterwards.
     eqPopup_->onRemoveEq = [this]() {
-        if (removeEqFromSelection())
-            closeEqPopup();
+        auto* self = this;
+        const bool fromKeyboard = eqPopup_ != nullptr && eqPopup_->hasKeyboardFocus(true);
+        if (!self->removeEqFromSelection())
+            return;
+        self->closeEqPopup();
+        if (fromKeyboard)
+            a11y::announce(*self, LOC_RAW("EQ removed"), a11y::SpeechQueue::keepAll);
     };
-    eqPopup_->onClose = [this]() { closeEqPopup(); };
+    eqPopup_->onClose = [this]() {
+        auto* self = this;
+        const bool fromKeyboard = eqPopup_ != nullptr && eqPopup_->hasKeyboardFocus(true);
+        self->closeEqPopup();
+        if (fromKeyboard)
+            a11y::announce(*self, LOC_RAW("EQ closed"), a11y::SpeechQueue::keepAll);
+    };
     eqPopup_->onReadSpectrum = [this](SpectrumArray& spectrum,
                                       SpectrumArray& peaks) {
         spectrumReader_(spectrum, peaks);
@@ -1251,16 +1388,27 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex)
         anchor = getNoteBounds(primary);
     eqPopup_->setBounds(placeEqPopupBounds(anchor));
     eqPopup_->toFront(false);
+    // Accessibility: from the keyboard the window opens full size with focus on it;
+    // NVDA reads its title ("EQ, Band 1 of 3, Type, Low shelf").
+    if (fromKeyboard)
+        eqPopup_->startKeyboardEditing();
 }
 
 void PianoRollComponent::closeEqPopup()
 {
+    // A keyboard change still waiting to be committed must reach the notes first.
+    if (eqPopup_ != nullptr)
+        eqPopup_->flushPendingCommit();
     eqEditTargetIndices_.clear();
     eqEditRevision_ = 0;
     if (eqPopup_ == nullptr)
         return;
+    // Focus inside the window would be lost with it; give it back to the notes.
+    const bool hadFocus = eqPopup_->hasKeyboardFocus(true);
     removeChildComponent(eqPopup_.get());
     eqPopup_.reset();
+    if (hadFocus && isShowing())
+        grabKeyboardFocus();
 }
 
 void PianoRollComponent::invalidateEqPopup()
@@ -1276,7 +1424,13 @@ void PianoRollComponent::invalidateEqPopup()
     eqPopup_->onRemoveConfirmationSuppressed = {};
     eqPopup_->onReadSpectrum = {};
     eqPopup_->stopTimer();
+    // Accessibility: hiding the window would drop the keyboard focus into nowhere.
+    const bool hadFocus = eqPopup_->hasKeyboardFocus(true);
     eqPopup_->setVisible(false);
+    if (hadFocus && isShowing()) {
+        grabKeyboardFocus();
+        a11y::announce(*this, LOC_RAW("EQ closed"), a11y::SpeechQueue::keepAll);
+    }
     juce::Component::SafePointer<PianoRollComponent> safeThis(this);
     juce::Component::SafePointer<EqPopupComponent> safePopup(eqPopup_.get());
     juce::MessageManager::callAsync([safeThis, safePopup]() {
@@ -3052,6 +3206,26 @@ bool PianoRollComponent::getSingleSelectedNoteParameters(float& retuneSpeedPerce
     return true;
 }
 
+juce::String PianoRollComponent::describeParameterEdit(AudioEditingScheme::ParameterId id,
+                                                       const AudioEditingScheme::ParameterEditResult& result) const
+{
+    using Status = AudioEditingScheme::ParameterEditStatus;
+    if (result.status == Status::NoTarget)
+        return LOC_RAW("Default for new notes");
+    if (result.status == Status::Failed) {
+        if (!currentCurve_ || currentF0Timeline().isEmpty())
+            return LOC_RAW("No pitch data, read the audio first");
+        return LOC_RAW("Could not apply");
+    }
+    // Note Split cuts the notes again, so the new count is what changed.
+    if (id == AudioEditingScheme::ParameterId::NoteSplit)
+        return Loc::format(LOC_RAW("Notes now: {0}"), juce::String(static_cast<int>(getCommittedNotes().size())));
+    const auto count = static_cast<int>(interactionState_.noteSelection.selectedIndices.size());
+    if (count > 0)
+        return Loc::format(LOC_RAW("Applied to notes: {0}"), juce::String(count));
+    return LOC_RAW("Applied to the selection");
+}
+
 AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioEditingScheme::ParameterId id, float value) {
     AudioEditingScheme::ParameterEditResult result;
 
@@ -4210,6 +4384,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         userScrollHold_ = false;
         lastObservedPlayHeadPlaying_ = playingNow;
     }
+    trackReaperTransport();
 
     double playheadTime = playHeadState_.getPresentedPositionSeconds();
     if (pendingSeekTime_ >= 0.0) {
@@ -5580,11 +5755,64 @@ void PianoRollComponent::copySelectedNotes()
         if (idx >= 0 && idx < static_cast<int>(notes.size()))
             notesClipboard_.push_back(notes[static_cast<size_t>(idx)]);
     }
+    a11y::announce(*this, Loc::format(LOC_RAW("Notes copied: {0}"),
+                                      juce::String(static_cast<int>(notesClipboard_.size()))));
+}
+
+// Accessibility: follow REAPER's own transport state, read on every frame, to know the
+// edit cursor at the moment playback paused (so a later cursor move can be noticed).
+void PianoRollComponent::trackReaperTransport()
+{
+    const auto transport = processor_ != nullptr ? processor_->getReaperTransport() : std::nullopt;
+    if (!transport)
+        return;
+
+    if (transport->playState != lastReaperPlayState_) {
+        const bool wasRunning = (lastReaperPlayState_ & (1 | 4)) != 0;
+        if (wasRunning && !transport->isRunning())
+            haltEditCursor_ = transport->editCursor;
+        lastReaperPlayState_ = transport->playState;
+    }
+}
+
+std::optional<PianoRollComponent::SongPosition> PianoRollComponent::currentSongPosition() const
+{
+    const auto transport = processor_ != nullptr ? processor_->getReaperTransport() : std::nullopt;
+    if (!transport || transport->isRunning())
+        return std::nullopt;
+
+    // The same place REAPER announces. Paused: where playback paused, unless the edit cursor
+    // was moved during the pause. Stopped: the edit cursor (REAPER itself decides whether a
+    // stop moves it; the plugin's own guess was a quarter second off in a user test).
+    if (transport->isPaused()) {
+        const bool cursorMoved = haltEditCursor_ && std::abs(transport->editCursor - *haltEditCursor_) > 1.0e-6;
+        return cursorMoved ? SongPosition{ transport->editCursor, SongPosition::Source::EditCursor }
+                           : SongPosition{ transport->playPosition, SongPosition::Source::Paused };
+    }
+    return SongPosition{ transport->editCursor, SongPosition::Source::EditCursor };
+}
+
+std::optional<double> PianoRollComponent::stoppedEditCursorSourceTime() const
+{
+    const auto position = currentSongPosition();
+    if (!position)
+        return std::nullopt;
+    const auto cursor = std::optional<double>(position->seconds);
+    // Project (timeline) seconds to the clip's source seconds, as for the playhead in pasteNotes.
+    const auto projection = activeContentProjection();
+    const auto snap = readEditedSnapshot();
+    if (!projection.isValid() || !snap)
+        return std::nullopt;
+    const PianoRollTimeMap map(projection, *snap->timeGrid, makeViewMapper());
+    return map.timelineToSource(*cursor);
 }
 
 void PianoRollComponent::pasteNotes()
 {
-    if (notesClipboard_.empty()) return;
+    if (notesClipboard_.empty()) {
+        a11y::announce(*this, LOC_RAW("Nothing to paste"));
+        return;
+    }
     if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return;
     if (processor_ == nullptr) return;
 
@@ -5596,7 +5824,10 @@ void PianoRollComponent::pasteNotes()
     //   → PianoRollTimeMap::timelineToSource()
     //   → source seconds
     double pasteStartTime = 0.0;
-    const double playheadTime = playHeadState_.getPresentedPositionSeconds();
+    // Accessibility: with REAPER stopped the plugin's playhead is where playback last
+    // stopped, not where the user moved the edit cursor; ask REAPER for the cursor then.
+    const auto songPosition = currentSongPosition();
+    const double playheadTime = songPosition ? songPosition->seconds : playHeadState_.getPresentedPositionSeconds();
     if (playheadTime > 0.0) {
         const auto projection = activeContentProjection();
         const auto snap = readEditedSnapshot();
@@ -5658,6 +5889,12 @@ void PianoRollComponent::pasteNotes()
     requestContentRedraw();
     overlay_->repaint();
     listeners_.call([](Listener& listener) { listener.contentEdited(); });
+
+    // Paste lands at the plugin's playhead, which goes stale while the host is stopped,
+    // so say where the notes went (project time, as in the host).
+    a11y::announce(*this, Loc::format(LOC_RAW("Notes pasted: {0}, start {1} s"),
+                                      juce::String(static_cast<int>(result.pastedNotes.size())),
+                                      juce::String(sourceTimeToTimelineTime(pasteStartTime), 2)));
 }
 
 void PianoRollComponent::duplicateNotes()
@@ -5753,6 +5990,12 @@ bool PianoRollComponent::handlePointerShortcut(const KeyShortcutConfig::KeyBindi
 }
 
 bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
+    // Shift+F10 opens what the right-click opens: the tool menu.
+    if (a11y::isContextMenuKey(key)) {
+        showToolMenuFromKeyboard();
+        return true;
+    }
+
     if (handleViewportShortcut(key))
         return true;
 
@@ -6331,6 +6574,438 @@ ViewMapper PianoRollComponent::makeViewMapperForView(const ViewportState& view) 
         view.verticalScrollOffset,
         maxMidi_
     };
+}
+
+// ============================================================================
+// Accessibility: piano roll for screen readers, note speech and keyboard audition
+// ============================================================================
+
+std::unique_ptr<juce::AccessibilityHandler> PianoRollComponent::createAccessibilityHandler()
+{
+    // The title is computed on every request so NVDA+Up Arrow reads the current note
+    // without timers or extra events.
+    class NotesAccessibilityHandler final : public juce::AccessibilityHandler {
+    public:
+        explicit NotesAccessibilityHandler(PianoRollComponent& owner)
+            : juce::AccessibilityHandler(owner, juce::AccessibilityRole::list), owner_(owner) {}
+
+        juce::String getTitle() const override
+        {
+            juce::String title = LOC_RAW("Notes");
+            const auto& selected = owner_.interactionState_.noteSelection.selectedIndices;
+            if (selected.size() == 1) {
+                const auto line = owner_.describeKeyboardNote(owner_.getCommittedNotes(), selected.front(),
+                                                              PianoRollComponent::NoteDetail::Navigation);
+                if (line.isNotEmpty())
+                    title << ", " << line;
+            } else if (selected.size() > 1) {
+                title << ", " << Loc::format(LOC_RAW("{0} selected"), juce::String(static_cast<int>(selected.size())));
+            }
+            return title;
+        }
+
+    private:
+        PianoRollComponent& owner_;
+    };
+
+    return std::make_unique<NotesAccessibilityHandler>(*this);
+}
+
+juce::String PianoRollComponent::describeKeyboardNote(const std::vector<Note>& notes, int index,
+                                                      NoteDetail detail) const
+{
+    if (index < 0 || index >= static_cast<int>(notes.size()))
+        return {};
+
+    const auto& note = notes[static_cast<size_t>(index)];
+    // originalPitch is the sung pitch; old projects and drawn notes may not have it.
+    const float sungHz = note.originalPitch > 0.0f ? note.originalPitch : note.pitch;
+    if (sungHz <= 0.0f)
+        return {};
+
+    const float sungMidi = PitchUtils::freqToMidi(sungHz);
+    const float targetMidi = note.pitch > 0.0f ? PitchUtils::freqToMidi(note.pitch) + note.pitchOffset
+                                               : sungMidi;
+    const std::string sharpWord = LOC_RAW("sharp").toStdString();
+    const auto text = [&sharpWord](float midi) {
+        return juce::String::fromUTF8(NoteSpeech::describeMidi(midi, sharpWord).c_str());
+    };
+
+    // When navigating and after a move, speak only how the note sounds now (the target).
+    // The sung pitch and the rest are spoken by the I key (NoteDetail::Full).
+    if (detail == NoteDetail::Target)
+        return text(targetMidi);
+    if (detail == NoteDetail::Navigation) {
+        // With the modulation or drift tool add its value: that is what is being edited.
+        juce::String line = text(targetMidi);
+        if (currentTool_ == ToolId::PitchModulation)
+            line << ", " << Loc::format(LOC_RAW("modulation {0}"), modulationPercentText(note));
+        else if (currentTool_ == ToolId::PitchDrift)
+            line << ", " << Loc::format(LOC_RAW("drift {0}"), driftPercentText(note));
+        else if (currentTool_ == ToolId::VolumeEnvelope)
+            line << ", " << Loc::format(LOC_RAW("volume {0}"), volumeText(note));
+        return line;
+    }
+
+    // Times are on the project timeline, as in the host, not inside the audio file.
+    const double timelineStart = sourceTimeToTimelineTime(note.startTime);
+    const double timelineEnd = sourceTimeToTimelineTime(note.endTime);
+
+    // Ordinal by start time, not by array position.
+    int ordinal = 1;
+    for (const auto& other : notes)
+        if (other.startTime < note.startTime)
+            ++ordinal;
+
+    juce::String line = Loc::format(LOC_RAW("Note {0} of {1}"),
+                                    juce::String(ordinal), juce::String(static_cast<int>(notes.size())));
+    line << ", " << Loc::format(LOC_RAW("sung {0}"), text(sungMidi))
+         << ", " << Loc::format(LOC_RAW("target {0}"), text(targetMidi))
+         << ", " << Loc::format(LOC_RAW("start {0} s, length {1} s"),
+                                juce::String(timelineStart, 2), juce::String(timelineEnd - timelineStart, 2));
+    if (isOpenDyne()) {
+        line << ", " << Loc::format(LOC_RAW("modulation {0}"), modulationPercentText(note))
+             << ", " << Loc::format(LOC_RAW("drift {0}"), driftPercentText(note))
+             << ", " << Loc::format(LOC_RAW("volume {0}"), volumeText(note));
+    }
+    return line;
+}
+
+// Note level from the volume envelope (the same value the Volume Envelope drag edits).
+juce::String PianoRollComponent::volumeText(const Note& note) const
+{
+    const auto snap = readEditedSnapshot();
+    const float db = snap != nullptr ? snap->volumeEnvelope.evalAt(note.startTime) : 0.0f;
+    // Round to 0.1 dB so tiny ramps do not read as "-0.0".
+    const float rounded = std::round(db * 10.0f) / 10.0f;
+    juce::String value = std::abs(rounded) < 0.05f ? juce::String("0")
+                                                   : (rounded > 0.0f ? "+" : "") + juce::String(rounded, 1);
+    return Loc::format(LOC_RAW("{0} dB"), value);
+}
+
+// With several notes selected an edit changes all of them, so name them all, in time order:
+// "Notes: 3, A4, B4, C5", or "Notes: 3, 50%" when the value is the same for each.
+juce::String PianoRollComponent::describeEditedSelection(const std::vector<Note>& notes, int index,
+                                                         const std::function<juce::String(int)>& valueAt) const
+{
+    const int count = static_cast<int>(notes.size());
+    std::vector<int> selected;
+    for (int i : interactionState_.noteSelection.selectedIndices)
+        if (i >= 0 && i < count)
+            selected.push_back(i);
+    if (selected.size() < 2)
+        return index >= 0 && index < count ? valueAt(index) : juce::String();
+
+    std::sort(selected.begin(), selected.end(), [&notes](int a, int b) {
+        return notes[static_cast<size_t>(a)].startTime < notes[static_cast<size_t>(b)].startTime;
+    });
+
+    juce::StringArray values;
+    for (int i : selected)
+        values.add(valueAt(i));
+    juce::StringArray distinct(values);
+    distinct.removeDuplicates(false);
+
+    // A long list is not worth hearing: the first few are enough to tell what happened.
+    constexpr int kMaxSpoken = 5;
+    if (distinct.size() == 1)
+        values = distinct;
+    else if (values.size() > kMaxSpoken)
+        values.removeRange(kMaxSpoken, values.size() - kMaxSpoken);
+
+    return Loc::format(LOC_RAW("Notes: {0}, {1}"), juce::String(static_cast<int>(selected.size())),
+                       values.joinIntoString(", "));
+}
+
+void PianoRollComponent::handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEvent event,
+                                            const std::vector<Note>& notes, int index)
+{
+    using Event = PianoRollToolHandler::KeyboardNoteEvent;
+    switch (event) {
+        case Event::NoNotes:
+            a11y::announce(*this, LOC_RAW("No notes"));
+            return;
+        case Event::NoSelection:
+            a11y::announce(*this, LOC_RAW("No note selected"));
+            return;
+        case Event::Selected:
+            if (pendingAuditionTimer_ != nullptr)
+                pendingAuditionTimer_->stopTimer();
+            a11y::announce(*this, describeKeyboardNote(notes, index, NoteDetail::Navigation));
+            if (index >= 0 && index < static_cast<int>(notes.size()))
+                auditionNote(notes[static_cast<size_t>(index)]);
+            return;
+        case Event::PitchMoved:
+            // After a move only the new pitch matters; audio plays once the correction is re-rendered.
+            a11y::announce(*this, describeEditedSelection(notes, index, [this, &notes](int i) {
+                return describeKeyboardNote(notes, i, NoteDetail::Target);
+            }));
+            scheduleAuditionAfterRender(index);
+            return;
+        case Event::Info:
+            a11y::announce(*this, describeKeyboardNote(notes, index, NoteDetail::Full));
+            return;
+        case Event::Split:
+        case Event::SplitInHalf: {
+            // Name both parts so it is clear whether the cut separated two different notes.
+            const auto parts = describeKeyboardNote(notes, index, NoteDetail::Target) + ", "
+                             + describeKeyboardNote(notes, index + 1, NoteDetail::Target);
+            a11y::announce(*this, Loc::format(event == Event::Split ? LOC_RAW("Note split: {0}")
+                                                                    : LOC_RAW("No clear pitch change, split in half: {0}"),
+                                              parts));
+            return;
+        }
+        case Event::NoteTooShort:
+            a11y::announce(*this, LOC_RAW("Note too short to split"));
+            return;
+        case Event::SplitAtCursor:
+            a11y::announce(*this, Loc::format(LOC_RAW("Note split at the cursor: {0}"),
+                                              describeKeyboardNote(notes, index, NoteDetail::Target) + ", "
+                                                  + describeKeyboardNote(notes, index + 1, NoteDetail::Target)));
+            return;
+        case Event::CursorUnknown:
+            a11y::announce(*this, LOC_RAW("Edit cursor unknown: works in REAPER with playback stopped"));
+            return;
+        case Event::CursorOutsideNote:
+            a11y::announce(*this, LOC_RAW("The edit cursor is not inside the note"));
+            return;
+        case Event::Merged:
+            a11y::announce(*this, LOC_RAW("Notes merged") + ", "
+                                      + describeKeyboardNote(notes, index, NoteDetail::Navigation));
+            return;
+        case Event::NoAdjacentNote:
+            a11y::announce(*this, LOC_RAW("No adjacent next note"));
+            return;
+        case Event::ModulationChanged:
+        case Event::DriftChanged:
+            if (index >= 0 && index < static_cast<int>(notes.size())) {
+                // Only the new value, like the drag tooltip: "40%", "+80%".
+                a11y::announce(*this, describeEditedSelection(notes, index, [this, &notes, event](int i) {
+                    const auto& note = notes[static_cast<size_t>(i)];
+                    return event == Event::ModulationChanged ? modulationPercentText(note)
+                                                             : driftPercentText(note);
+                }));
+                scheduleAuditionAfterRender(index);
+            }
+            return;
+        case Event::AllSelected:
+            a11y::announce(*this, Loc::format(LOC_RAW("All notes selected: {0}"),
+                                              juce::String(static_cast<int>(notes.size()))));
+            return;
+        case Event::NoteResized:
+            if (index >= 0 && index < static_cast<int>(notes.size())) {
+                const auto& note = notes[static_cast<size_t>(index)];
+                const double start = sourceTimeToTimelineTime(note.startTime);
+                const double end = sourceTimeToTimelineTime(note.endTime);
+                a11y::announce(*this, Loc::format(LOC_RAW("start {0} s, length {1} s"),
+                                                  juce::String(start, 2), juce::String(end - start, 2)));
+                scheduleAuditionAfterRender(index);
+            }
+            return;
+        case Event::SingleNoteNeeded:
+            a11y::announce(*this, LOC_RAW("Select a single note"));
+            return;
+        case Event::RangeSelected:
+            // Count first, then the note at the moving end of the range.
+            if (pendingAuditionTimer_ != nullptr)
+                pendingAuditionTimer_->stopTimer();
+            a11y::announce(*this, Loc::format(LOC_RAW("Notes selected: {0}, {1}"),
+                                              juce::String(static_cast<int>(interactionState_.noteSelection.selectedIndices.size())),
+                                              describeKeyboardNote(notes, index, NoteDetail::Navigation)));
+            if (index >= 0 && index < static_cast<int>(notes.size()))
+                auditionNote(notes[static_cast<size_t>(index)]);
+            return;
+        case Event::PositionInfo:
+        {
+            // Shift+I: where the plugin thinks the user is, and where that comes from.
+            if (processor_ == nullptr || !processor_->getReaperTransport()) {
+                a11y::announce(*this, LOC_RAW("Position unknown: works in REAPER"));
+                return;
+            }
+            const auto position = currentSongPosition();
+            if (!position) {
+                a11y::announce(*this, LOC_RAW("Playing: the position is known after a pause or stop"));
+                return;
+            }
+            const auto seconds = juce::String(position->seconds, 2);
+            const char* pattern = position->source == SongPosition::Source::Paused ? "Position {0} s, paused"
+                                                                                   : "Position {0} s, edit cursor";
+            a11y::announce(*this, Loc::format(LOC_RAW(pattern), seconds));
+            return;
+        }
+        case Event::ArrowHint:
+        {
+            // Says what Ctrl+Up/Down edits with the current tool.
+            juce::String hint = LOC_RAW("Ctrl+Up/Down changes the pitch");
+            if (currentTool_ == ToolId::PitchModulation)
+                hint = LOC_RAW("Ctrl+Up/Down changes the modulation");
+            else if (currentTool_ == ToolId::PitchDrift)
+                hint = LOC_RAW("Ctrl+Up/Down changes the drift");
+            else if (currentTool_ == ToolId::VolumeEnvelope)
+                hint = LOC_RAW("Ctrl+Up/Down changes the volume");
+            a11y::announce(*this, hint);
+            return;
+        }
+        case Event::VolumeChanged:
+            if (index >= 0 && index < static_cast<int>(notes.size())) {
+                // Only the new level, like the other value edits.
+                a11y::announce(*this, describeEditedSelection(notes, index, [this, &notes](int i) {
+                    return volumeText(notes[static_cast<size_t>(i)]);
+                }));
+                scheduleAuditionAfterRender(index);
+            }
+            return;
+        case Event::Removed:
+        {
+            // Then the note that took the place of the removed ones, if any.
+            juce::String text = Loc::format(LOC_RAW("Notes removed: {0}"), juce::String(index));
+            const auto& selected = interactionState_.noteSelection.selectedIndices;
+            if (selected.size() == 1) {
+                const auto line = describeKeyboardNote(notes, selected.front(), NoteDetail::Navigation);
+                if (line.isNotEmpty())
+                    text << ", " << line;
+            }
+            a11y::announce(*this, text);
+            return;
+        }
+        case Event::EditFailed:
+            // Sighted users see the note stay put and, when the notes changed meanwhile,
+            // the selection highlight disappear; say both.
+            a11y::announce(*this, interactionState_.noteSelection.selectedIndices.empty()
+                                      ? LOC_RAW("Could not apply, selection cleared")
+                                      : LOC_RAW("Could not apply"),
+                           a11y::SpeechQueue::keepAll);
+            return;
+    }
+}
+
+void PianoRollComponent::auditionNote(const Note& note)
+{
+    if (noteAudition_ == nullptr || audioBuffer_ == nullptr || audioBufferSampleRate_ <= 0.0)
+        return;
+
+    // Note times are in source audio time, so the buffer index is computed directly.
+    const double sampleRate = audioBufferSampleRate_;
+    const int totalSamples = audioBuffer_->getNumSamples();
+    const int startSample = juce::jlimit(0, totalSamples,
+                                         static_cast<int>(std::llround(note.startTime * sampleRate)));
+    int numSamples = juce::jlimit(0, totalSamples - startSample,
+                                  static_cast<int>(std::llround(note.getDuration() * sampleRate)));
+    numSamples = juce::jmin(numSamples, static_cast<int>(NoteAudition::kMaxDurationSeconds * sampleRate));
+    if (numSamples <= 0)
+        return;
+
+    // As in export: the original vocal with the rendered correction overlaid where available.
+    // Rendered audio is stored at the render rate, so overlay only when the rates match.
+    juce::AudioBuffer<float> segment(audioBuffer_->getNumChannels(), numSamples);
+    for (int channel = 0; channel < segment.getNumChannels(); ++channel)
+        segment.copyFrom(channel, 0, *audioBuffer_, channel, startSample, numSamples);
+
+    if (renderCacheProvider_ != nullptr && editedContentKey_.isValid()
+        && std::abs(sampleRate - TimeCoordinate::kRenderSampleRate) < 1.0) {
+        if (const auto cache = renderCacheProvider_(editedContentKey_))
+            cache->overlayCanonicalAudio(segment, 0, numSamples, startSample);
+    }
+
+    // Note volume (Volume Envelope tool) is not in the render: playback applies it
+    // (applyAutomationGain). Apply it here too, or a volume change is not heard.
+    // Segment samples are source time, so no time grid mapping is needed.
+    if (const auto snapshot = readEditedSnapshot(); snapshot != nullptr && !snapshot->volumeEnvelope.empty()) {
+        constexpr float kDbToLinear = 0.11512925465f; // ln(10) / 20
+        for (int s = 0; s < numSamples; ++s) {
+            const double sourceSeconds = static_cast<double>(startSample + s) / sampleRate;
+            const float gain = std::exp(snapshot->volumeEnvelope.evalAt(sourceSeconds) * kDbToLinear);
+            for (int channel = 0; channel < segment.getNumChannels(); ++channel)
+                segment.getWritePointer(channel)[s] *= gain;
+        }
+    }
+
+    noteAudition_->play(segment, sampleRate, 0, numSamples);
+}
+
+// Same names as the tool buttons in the parameter panel (ParameterPanel).
+juce::String PianoRollComponent::keyboardToolName(ToolId tool) const
+{
+    switch (tool) {
+        case ToolId::Select:          return LOC(kToolODSelect);
+        case ToolId::Pitch:           return LOC(kToolODPitch);
+        case ToolId::PitchModulation: return LOC(kToolODPitchModulation);
+        case ToolId::PitchDrift:      return LOC(kToolODPitchDrift);
+        case ToolId::VolumeEnvelope:  return LOC(kToolODVolumeEnvelope);
+        case ToolId::Scissors:        return LOC(kToolODScissors);
+        case ToolId::HandDraw:        return LOC(kTooltipHandDraw);
+        case ToolId::DrawNote:        return LOC(kTooltipDrawNote);
+        case ToolId::LineAnchor:      return LOC(kTooltipLineAnchor);
+        case ToolId::Eraser:          return LOC(kEraser);
+        case ToolId::TimeTool:        return LOC_RAW("Time tool");
+        case ToolId::Eq:              return "EQ";
+        default:                      return {};
+    }
+}
+
+// Same format as the drag tooltip (drawModDriftDragPreview).
+juce::String PianoRollComponent::modulationPercentText(const Note& note) const
+{
+    // A negative value means the note follows the global Retune Speed knob.
+    const float value = note.retuneSpeed >= 0.0f ? note.retuneSpeed : currentRetuneSpeed_;
+    return juce::String::formatted("%.0f%%", value * 100.0f);
+}
+
+juce::String PianoRollComponent::driftPercentText(const Note& note) const
+{
+    return juce::String::formatted("%+.0f%%", note.pitchDriftScale * 100.0f);
+}
+
+namespace {
+// Lambda-driven timer: PianoRollComponent does not inherit from Timer itself.
+class CallbackTimer final : public juce::Timer {
+public:
+    explicit CallbackTimer(std::function<void()> callback) : callback_(std::move(callback)) {}
+    void timerCallback() override { callback_(); }
+
+private:
+    std::function<void()> callback_;
+};
+} // namespace
+
+void PianoRollComponent::scheduleAuditionAfterRender(int noteIndex)
+{
+    // The user can turn this off in Preferences > Editing.
+    if (appPreferences_ != nullptr && !appPreferences_->getNoteTransposePreviewEnabled())
+        return;
+    pendingAuditionNoteIndex_ = noteIndex;
+    pendingAuditionTicks_ = 0;
+    if (pendingAuditionTimer_ == nullptr)
+        pendingAuditionTimer_ = std::make_unique<CallbackTimer>([this] { tickPendingAudition(); });
+    // Each new move restarts the wait, so rapid key presses play only the final result.
+    pendingAuditionTimer_->startTimer(150);
+}
+
+void PianoRollComponent::tickPendingAudition()
+{
+    ++pendingAuditionTicks_;
+
+    bool settled = true;
+    if (renderCacheProvider_ != nullptr && editedContentKey_.isValid()) {
+        if (const auto cache = renderCacheProvider_(editedContentKey_))
+            settled = cache->isCanonicalSettled();
+    }
+
+    // Always wait the first 2 ticks: the render may not have been queued yet.
+    // Do not wait longer than ~5 seconds; play whatever is there.
+    constexpr int kMinTicks = 2;
+    constexpr int kMaxTicks = 35;
+    if (pendingAuditionTicks_ < kMinTicks || (!settled && pendingAuditionTicks_ < kMaxTicks))
+        return;
+
+    pendingAuditionTimer_->stopTimer();
+    // After the wait the render may still be running: the note then plays the old sound,
+    // so say so instead of letting it pass for the result.
+    if (!settled)
+        a11y::announce(*this, LOC_RAW("Not rendered yet"));
+    const auto& notes = getCommittedNotes();
+    if (pendingAuditionNoteIndex_ >= 0 && pendingAuditionNoteIndex_ < static_cast<int>(notes.size()))
+        auditionNote(notes[static_cast<size_t>(pendingAuditionNoteIndex_)]);
 }
 
 } // namespace OpenTune
