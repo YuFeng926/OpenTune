@@ -2137,54 +2137,53 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     detectorNumSamples,
                     snapMode);
 
-                // 目标本身 >75 音分已在分支入口路由到 vocoder，空结果不再
-                // 表示转 vocoder：候选八度修复失败是显式失败。
+                // 轻量移调未满足 ±75 音分合同或输出长度不符时，记录失败
+                // 并沿自然 fall-through 进入 vocoder 全量渲染，不发布空音频。
                 const auto shiftedAudioSamples = repair.audio.size();
                 if (!repair.success
                     || shiftedAudioSamples != static_cast<size_t>(boundaries.publishSampleCount))
                 {
-                    failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
-                              coreJob.targetRevision, coreJob.contentKey,
-                              "AutoTune pitch-shift failed (startSample="
-                                + juce::String(boundaries.trueStartSample)
-                                + ", expectedSamples=" + juce::String(boundaries.publishSampleCount)
-                                + ", bestOctave=" + juce::String(repair.octave)
-                                + ", targetErrorCents=" + juce::String(repair.targetErrorCents, 3)
-                                + ", continuityCents=" + juce::String(repair.continuityCents, 3)
-                                + ", actualSamples=" + juce::String(static_cast<juce::int64>(shiftedAudioSamples))
-                                + ", revision=" + juce::String(static_cast<juce::int64>(coreJob.targetRevision)) + ")");
+                    AppLogger::warn("RenderWorker: AutoTune pitch-shift contract not met, falling through to vocoder (startSample="
+                        + juce::String(boundaries.trueStartSample)
+                        + ", expectedSamples=" + juce::String(boundaries.publishSampleCount)
+                        + ", bestOctave=" + juce::String(repair.octave)
+                        + ", targetErrorCents=" + juce::String(repair.targetErrorCents, 3)
+                        + ", continuityCents=" + juce::String(repair.continuityCents, 3)
+                        + ", actualSamples=" + juce::String(static_cast<juce::int64>(shiftedAudioSamples))
+                        + ", revision=" + juce::String(static_cast<juce::int64>(coreJob.targetRevision)) + ")");
+                }
+                else
+                {
+                    const uint64_t objectId = coreJob.contentKey.objectId;
+                    const auto result = publishChunkWithPerNoteEq(
+                        *coreJob.renderCache, boundaries, std::move(repair.audio),
+                        coreJob.targetRevision, contentSnap->notes);
+
+                    if (result == RenderCache::ChunkRenderResult::InvalidInput
+                        || result == RenderCache::ChunkRenderResult::MemoryLimitExceeded)
+                    {
+                        failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
+                                  coreJob.targetRevision, coreJob.contentKey,
+                                  result == RenderCache::ChunkRenderResult::InvalidInput
+                                      ? "RenderCache rejected AutoTune audio as invalid input (startSample="
+                                          + juce::String(boundaries.trueStartSample) + ", endSampleExclusive="
+                                          + juce::String(boundaries.trueEndSample) + ", expectedSamples="
+                                          + juce::String(boundaries.publishSampleCount) + ", actualSamples="
+                                          + juce::String(static_cast<juce::int64>(shiftedAudioSamples))
+                                          + ", revision=" + juce::String(static_cast<juce::int64>(coreJob.targetRevision)) + ")"
+                                      : "RenderCache could not publish AutoTune audio because its memory limit was exceeded (samples="
+                                          + juce::String(static_cast<juce::int64>(shiftedAudioSamples)) + ")");
+                    }
+                    else if (result == RenderCache::ChunkRenderResult::Published)
+                    {
+                        notifyChunkSettled(completion, coreJob);
+                    }
+
+                    AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk objId="
+                        + juce::String(static_cast<juce::int64>(objectId))
+                        + " start=" + juce::String(relChunkStartSec, 3));
                     return;
                 }
-
-                const uint64_t objectId = coreJob.contentKey.objectId;
-                const auto result = publishChunkWithPerNoteEq(
-                    *coreJob.renderCache, boundaries, std::move(repair.audio),
-                    coreJob.targetRevision, contentSnap->notes);
-
-                if (result == RenderCache::ChunkRenderResult::InvalidInput
-                    || result == RenderCache::ChunkRenderResult::MemoryLimitExceeded)
-                {
-                    failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
-                              coreJob.targetRevision, coreJob.contentKey,
-                              result == RenderCache::ChunkRenderResult::InvalidInput
-                                  ? "RenderCache rejected AutoTune audio as invalid input (startSample="
-                                      + juce::String(boundaries.trueStartSample) + ", endSampleExclusive="
-                                      + juce::String(boundaries.trueEndSample) + ", expectedSamples="
-                                      + juce::String(boundaries.publishSampleCount) + ", actualSamples="
-                                      + juce::String(static_cast<juce::int64>(shiftedAudioSamples))
-                                      + ", revision=" + juce::String(static_cast<juce::int64>(coreJob.targetRevision)) + ")"
-                                  : "RenderCache could not publish AutoTune audio because its memory limit was exceeded (samples="
-                                      + juce::String(static_cast<juce::int64>(shiftedAudioSamples)) + ")");
-                }
-                else if (result == RenderCache::ChunkRenderResult::Published)
-                {
-                    notifyChunkSettled(completion, coreJob);
-                }
-
-                AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk objId="
-                    + juce::String(static_cast<juce::int64>(objectId))
-                    + " start=" + juce::String(relChunkStartSec, 3));
-                return;
             }
         }
     }

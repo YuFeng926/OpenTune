@@ -46,13 +46,25 @@ float AutoTunePitchShifter::processSample(double cyclePeriod,
                                           bool updateResampleRate,
                                           bool snapMode) {
     if (cyclePeriod > 0.0) {
+        // A detector tracking update only replaces the applied rate when the
+        // request stays inside the ±75 cent light contract. The held rate can
+        // absorb a detector transient, but only while the held output stays
+        // inside the same contract relative to the requested target. A larger
+        // gap makes this render unusable: the caller falls back to the
+        // vocoder instead of publishing a target miss.
         if (updateResampleRate) {
-            if (snapMode) {
-                // retuneSpeed=100：直接锁定目标，不走 EMA
-                resampleRate_ = targetResampleRate;
-            } else {
-                resampleRate_ += (targetResampleRate - resampleRate_)
-                    * (1.0 - kDecayPerTrackingUpdate);
+            if (isPitchShiftRateWithinLightContract(targetResampleRate)) {
+                if (snapMode) {
+                    // retuneSpeed=100：直接锁定目标，不走 EMA
+                    resampleRate_ = targetResampleRate;
+                } else {
+                    resampleRate_ += (targetResampleRate - resampleRate_)
+                        * (1.0 - kDecayPerTrackingUpdate);
+                }
+            }
+            else if (!isPitchShiftRateWithinLightContract(
+                         targetResampleRate / resampleRate_)) {
+                rateHoldExceeded_ = true;
             }
         }
     }
@@ -113,6 +125,8 @@ std::vector<float> AutoTunePitchShifter::shiftChunkInternal(
     if (numSamples == 0)
         return {};
 
+    rateHoldExceeded_ = false;
+
     assert(numLookaheadSamples >= 0);
     assert(numLookaheadSamples <= kLookaheadSamples);
     assert(numLookaheadSamples == 0 || lookahead != nullptr);
@@ -153,12 +167,15 @@ std::vector<float> AutoTunePitchShifter::shiftChunkInternal(
             : 1.0;
     };
 
-    // Public entry validates the complete input before rendering. The octave
-    // repair entry renders the measured source first and lets its output
-    // validation identify an octave anomaly, so detector jitter on a few
-    // boundary samples cannot reject the whole chunk.
+    // Public entry validates every rate that actually updates the smoothed
+    // resample rate. Detector hop-held samples report trackingUpdated == false
+    // and keep the held rate, so their stale period never decides the
+    // contract. Without a detector every sample is validated.
     if (enforceRateContract) {
         for (int i = 0; i < numSamples; ++i) {
+            if (detectorPeriods != nullptr
+                && !detectorPeriods[i].trackingUpdated)
+                continue;
             const double cyclePeriod = cyclePeriodAt(i);
             if (!isPitchShiftRateWithinLightContract(
                     targetRateAt(i, cyclePeriod)))
@@ -230,6 +247,9 @@ std::vector<float> AutoTunePitchShifter::shiftChunkInternal(
             processSample(cyclePeriod, targetRate, updateResampleRate, snapMode);
     }
 
+    if (rateHoldExceeded_)
+        return {};
+
     return output;
 }
 
@@ -296,11 +316,6 @@ AutoTunePitchShifter::shiftChunkWithOctaveRepair(
     };
 
     const double threshold = static_cast<double>(kPitchShiftThresholdCents);
-    // The source octave gate is wider than the output contract because a few
-    // detector periods at a UV boundary can sit slightly outside ±75 cents.
-    // The gate only distinguishes a wrong octave; the measured output still
-    // has to pass the ±75 cent target contract below.
-    constexpr double kSourceOctaveGateCents = 120.0;
 
     struct Metrics {
         double targetErrorCents = 0.0;
@@ -426,12 +441,26 @@ AutoTunePitchShifter::shiftChunkWithOctaveRepair(
     const auto baselineAudio = render(detectorPeriods);
     const Metrics baselineMetrics = measure(baselineAudio);
 
+    // Only detector tracking-update samples apply a new rate; hop-held samples
+    // keep the held rate, so their stale period cannot trigger a repair. A
+    // tracking update whose rate leaves the contract triggers octave repair
+    // only when scaling the period by 1/2 or 2 would put the rate back inside
+    // the ±75 cent contract. Every other excursion is a detection glitch: the
+    // applied rate stays held while the held output remains inside the
+    // contract; a larger hold miss invalidates the render.
+    const auto isOctaveRepairableRate = [](double rate) {
+        return isPitchShiftRateWithinLightContract(rate * 0.5)
+            || isPitchShiftRateWithinLightContract(rate * 2.0);
+    };
     bool sourceOctaveAnomaly = false;
     for (int i = 0; i < numSamples; ++i) {
         if (!detectorPeriods[i].valid || !(correctedAt(i) > 0.0))
             continue;
-        if (!isPitchShiftRateWithinCents(
-                rateAt(i, detectorPeriods), kSourceOctaveGateCents)) {
+        if (!detectorPeriods[i].trackingUpdated)
+            continue;
+        const double rate = rateAt(i, detectorPeriods);
+        if (!isPitchShiftRateWithinLightContract(rate)
+            && isOctaveRepairableRate(rate)) {
             sourceOctaveAnomaly = true;
             break;
         }
@@ -456,8 +485,9 @@ AutoTunePitchShifter::shiftChunkWithOctaveRepair(
             continue;
         if (!(correctedAt(i) > 0.0))
             continue;
-        if (!isPitchShiftRateWithinCents(
-                rateAt(i, detectorPeriods), kSourceOctaveGateCents))
+        const double rate = rateAt(i, detectorPeriods);
+        if (!isPitchShiftRateWithinLightContract(rate)
+            && isOctaveRepairableRate(rate))
             anomaly[static_cast<size_t>(i)] = 1;
     }
 
@@ -516,17 +546,22 @@ AutoTunePitchShifter::shiftChunkWithOctaveRepair(
                 periods[static_cast<size_t>(resume)].trackingUpdated = true;
         }
 
+        // Legality follows the requested rate at the forced span-boundary
+        // updates plus the detector's own tracking updates. A rate outside the
+        // contract invalidates the candidate only when an octave scaling is
+        // supposed to repair it; other excursions stay held by the renderer.
         bool legal = true;
         for (int i = 0; i < numSamples; ++i) {
-            if (!periods[static_cast<size_t>(i)].valid)
+            const auto& period = periods[static_cast<size_t>(i)];
+            if (!period.valid)
                 continue;
             if (!(correctedAt(i) > 0.0))
                 continue;
+            if (!period.trackingUpdated)
+                continue;
             const double rate = rateAt(i, periods.data());
-            const bool withinGate = octave == 0
-                ? isPitchShiftRateWithinCents(rate, kSourceOctaveGateCents)
-                : isPitchShiftRateWithinLightContract(rate);
-            if (!withinGate) {
+            if (!isPitchShiftRateWithinLightContract(rate)
+                && isOctaveRepairableRate(rate)) {
                 legal = false;
                 break;
             }
