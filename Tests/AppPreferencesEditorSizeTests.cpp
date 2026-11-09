@@ -237,7 +237,7 @@ bool testLegacyShortcutMigration()
         juce::PropertiesFile migratedSettings(propertiesOptions);
         OpenTune::KeyShortcutConfig::ShortcutBinding persistedHorizontalZoom;
         OpenTune::KeyShortcutConfig::ShortcutBinding persistedVerticalZoomIn;
-        persistedMigration = migratedSettings.getIntValue("shared.shortcuts.schemaVersion", 0) == 3
+        persistedMigration = migratedSettings.getIntValue("shared.shortcuts.schemaVersion", 0) == 4  // 4: F3/F5 for modulation/drift
             && OpenTune::KeyShortcutConfig::parseShortcutBinding(
                 migratedSettings.getValue("shared.shortcuts.zoomHorizontalIn", {}),
                 persistedHorizontalZoom)
@@ -322,7 +322,7 @@ bool testMacShortcutDefaultMigration()
         OpenTune::KeyShortcutConfig::ShortcutBinding verticalZoomIn;
         OpenTune::KeyShortcutConfig::ShortcutBinding verticalZoomOut;
         OpenTune::KeyShortcutConfig::ShortcutBinding customSelect;
-        migrated = migratedSettings.getIntValue("shared.shortcuts.schemaVersion", 0) == 3
+        migrated = migratedSettings.getIntValue("shared.shortcuts.schemaVersion", 0) == 4  // 4: F3/F5 for modulation/drift
             && OpenTune::KeyShortcutConfig::parseShortcutBinding(
                 migratedSettings.getValue("shared.shortcuts.delete", {}), deleteBindings)
             && OpenTune::KeyShortcutConfig::parseShortcutBinding(
@@ -454,7 +454,7 @@ bool testMacShortcutDefaultMigration()
         juce::PropertiesFile restoredSettings(propertiesOptions);
         OpenTune::KeyShortcutConfig::ShortcutBinding playPause;
         OpenTune::KeyShortcutConfig::ShortcutBinding stop;
-        restoredSpacePlay = restoredSettings.getIntValue("shared.shortcuts.schemaVersion", 0) == 3
+        restoredSpacePlay = restoredSettings.getIntValue("shared.shortcuts.schemaVersion", 0) == 4
             && OpenTune::KeyShortcutConfig::parseShortcutBinding(
                 restoredSettings.getValue("shared.shortcuts.playPause", {}), playPause)
             && playPause.bindings.size() == 1

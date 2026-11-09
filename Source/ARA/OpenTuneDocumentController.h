@@ -32,6 +32,7 @@ class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class ResamplingManager;
 class NotePitchAudition;
+class NoteAudition;
 struct RenderJob;
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
@@ -241,6 +242,16 @@ public:
                                      double sampleRate) noexcept;
     void stopNotePitchAudition() noexcept;
 
+    // Keyboard note audition. The editor view owns it, but as an item FX in REAPER that
+    // instance is a playback renderer and gets no audio blocks while stopped, so the
+    // arrows were silent. The realtime editor renderer of the document mixes it instead.
+    void setKeyboardAuditionSource(NoteAudition* source) noexcept;
+    void mixKeyboardAudition(juce::ARAEditorRenderer* renderer,
+                             juce::AudioBuffer<float>& buffer,
+                             int numSamples,
+                             double sampleRate) noexcept;
+    void releaseKeyboardAudition(NoteAudition* source, juce::ARAEditorRenderer* renderer) noexcept;
+
     /** Shared PlayHeadState for all ARA roles bound to this document. The
      *  realtime editor renderer publishes host transport here; UI binds to this. */
     const PlayHeadState& getSharedPlayHeadState() const noexcept { return sharedPlayHeadState_; }
@@ -295,6 +306,12 @@ private:
     std::unique_ptr<NotePitchAudition> notePitchAudition_;
     std::atomic<juce::ARAEditorRenderer*> notePitchAuditionRenderer_{nullptr};
     std::atomic_flag notePitchAuditionMixLock_ = ATOMIC_FLAG_INIT;
+
+    // Guarded by keyboardAuditionLock_: the audio thread only tries it, the message thread
+    // waits for it, so a source is never freed while it is being mixed.
+    NoteAudition* keyboardAuditionSource_ = nullptr;
+    juce::ARAEditorRenderer* keyboardAuditionMixer_ = nullptr;
+    std::atomic_flag keyboardAuditionLock_ = ATOMIC_FLAG_INIT;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)
 };

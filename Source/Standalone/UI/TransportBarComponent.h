@@ -17,6 +17,7 @@
 #include <functional>
 #include "UIColors.h"
 #include "../../Utils/TimelineDisplayMode.h"
+#include "../../Utils/AccessibleComboBox.h"
 
 namespace OpenTune {
 
@@ -64,6 +65,8 @@ public:
 
     juce::String getTooltip() override { return tooltip_; }
     void setTooltip(const juce::String& t) { tooltip_ = t; }
+    // Accessibility: read as text ("Time 00:12.345") instead of an unnamed object.
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
 private:
     void drawChar(juce::Graphics& g, juce::juce_wchar c, juce::Rectangle<float> area);
@@ -96,6 +99,8 @@ public:
 
     std::function<void(double)> onCommit;
     std::function<void(int, int)> onTimeSignatureCommit;  // num, denom
+    // Accessibility: read as text ("Tempo 120 BPM, 4/4") instead of an unnamed object.
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
 private:
     void timerCallback() override;
@@ -300,8 +305,8 @@ private:
     UnifiedToolbarButton tapButton_;
 
     // Scale controls
-    juce::ComboBox scaleRootSelector_;
-    juce::ComboBox scaleTypeSelector_;
+    a11y::AccessibleComboBox scaleRootSelector_;
+    a11y::AccessibleComboBox scaleTypeSelector_;
     juce::TextButton externalEditButton_;
     juce::TextButton saveAndReturnButton_;
 
