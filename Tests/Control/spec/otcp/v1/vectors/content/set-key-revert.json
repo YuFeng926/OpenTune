@@ -1,0 +1,110 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/set-key-revert",
+  "type": "scenario",
+  "description": "The revert recipe of a key change restores the previous key when it is sent unchanged: its expectedKeyRevision is the key revision right after the change, so the recipe succeeds as long as the key has not changed since (PROTOCOL.md section 15.2 rule 3), and its own result shows the key going back from C major to A minor.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "key": { "root": 9, "scale": "minor" },
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.setKey",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "key": { "root": 0, "scale": "major" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "content.setKey",
+              "params": {
+                "contentId": { "$ref": "clip.contentId" },
+                "key": { "root": 9, "scale": "minor" },
+                "expectedKeyRevision": {
+                  "$capture": "keyAfter",
+                  "$any": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "content.setKey",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "key": { "root": 9, "scale": "minor" },
+          "expectedKeyRevision": { "$ref": "keyAfter" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "changes": [
+            {
+              "entity": "key",
+              "ref": { "contentId": { "$ref": "clip.contentId" } },
+              "label": { "$any": true },
+              "fields": {
+                "root": { "before": 0, "after": 9, "unit": null },
+                "scale": { "before": "major", "after": "minor", "unit": null }
+              }
+            }
+          ],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": [
+              {
+                "contentId": { "$ref": "clip.contentId" },
+                "changed": {
+                  "key": {
+                    "before": { "$ref": "keyAfter" },
+                    "after": { "$any": "string" }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

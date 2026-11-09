@@ -1,0 +1,49 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-nothing-to-export",
+  "type": "request",
+  "description": "Exporting track 1, which holds no clip, would write a file without audio: the call fails at once with INVALID_ARGUMENT(nothing_to_export), starts no job and writes nothing (PROTOCOL.md section 19 rule 1).",
+  "capability": "export.v1",
+  "since": "1.0",
+  "method": "export.start",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "out", "kind": "absent" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "export.start",
+    "params": {
+      "kind": "track",
+      "target": { "trackId": 1 },
+      "path": { "$ref": "out" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "nothing_to_export",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

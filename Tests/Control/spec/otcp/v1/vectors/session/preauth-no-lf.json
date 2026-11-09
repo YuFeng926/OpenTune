@@ -1,0 +1,25 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/preauth-no-lf",
+  "type": "scenario",
+  "description": "Before authentication, a first line without an LF within 8192 bytes closes the connection without a byte, well before the hello timeout.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "unauthenticated",
+  "steps": [
+    {
+      "sendFilled": {
+        "head": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"pad\":\"",
+        "fill": "a",
+        "bytes": 8193,
+        "tail": ""
+      }
+    },
+    {
+      "expectClosed": {
+        "noBytes": true,
+        "withinMs": 1500
+      }
+    }
+  ]
+}

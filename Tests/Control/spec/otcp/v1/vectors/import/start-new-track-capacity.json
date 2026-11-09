@@ -1,0 +1,49 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-new-track-capacity",
+  "type": "request",
+  "description": "With newTrack the request asks for a track without clips. When every track holds clips, the call fails with INVALID_ARGUMENT(track_capacity) and imports nothing, instead of placing the file on the active track.",
+  "capability": "import.v1",
+  "since": "1.0",
+  "method": "import.start",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 0,
+        "durationSec": 2,
+        "analysis": "ready"
+      }
+    ],
+    "clipOnEveryTrack": true,
+    "files": [{ "bind": "take", "kind": "audio", "durationSec": 2 }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "import.start",
+    "params": {
+      "items": [{ "path": { "$ref": "take" } }],
+      "layout": "single",
+      "newTrack": true
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "track_capacity",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-notes-not-ready",
+  "type": "request",
+  "description": "A note edit while pitch analysis is still running gets NOT_READY(f0_not_ready).",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.editNotes",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "running"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.editNotes",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "expectedRevision": { "$ref": "clip.revision" },
+      "ops": [
+        { "op": "shiftCents", "select": { "all": true }, "deltaCents": 10 }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_READY",
+      "data": {
+        "kind": "NOT_READY",
+        "reason": "f0_not_ready",
+        "retryable": true,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

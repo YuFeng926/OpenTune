@@ -1,0 +1,15 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/first-line-http",
+  "type": "scenario",
+  "description": "An HTTP request, as a browser would send in a cross-protocol attack, is not a session.hello object; the server closes the connection without sending a single byte.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "unauthenticated",
+  "steps": [
+    {
+      "sendRaw": "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n{}"
+    },
+    { "expectClosed": { "noBytes": true } }
+  ]
+}

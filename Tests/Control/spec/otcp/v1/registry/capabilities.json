@@ -1,0 +1,100 @@
+{
+  "$schema": "../schemas/registry.schema.json",
+  "registry": "capabilities",
+  "description": "Capability strings reported by session.hello and session.info. Every method declares exactly one capability in its schema file; a method may be called only when the instance reports that capability. Append-only within protocol major 1; clients must ignore capabilities they do not know.",
+  "entries": [
+    {
+      "code": "session.v1",
+      "since": "1.0",
+      "description": "session.hello and session.info. Always reported."
+    },
+    {
+      "code": "jobs.v1",
+      "since": "1.0",
+      "description": "job.get and job.cancel."
+    },
+    {
+      "code": "read.v1",
+      "since": "1.0",
+      "description": "Reads of the project, contents, transport, preferences and log."
+    },
+    { "code": "import.v1", "since": "1.0", "description": "import.start." },
+    {
+      "code": "export.v1",
+      "since": "1.0",
+      "description": "export.start and the export contract."
+    },
+    {
+      "code": "edit.v1",
+      "since": "1.0",
+      "description": "Content writes: key, AUTO, note edits and pitch shift."
+    },
+    {
+      "code": "history.v1",
+      "since": "1.0",
+      "description": "edit.getHistory, edit.undo and edit.redo."
+    },
+    {
+      "code": "timing.v1",
+      "since": "1.0",
+      "description": "content.shiftTiming and content.editTimeGrid."
+    },
+    {
+      "code": "ui.bridge",
+      "since": "1.0",
+      "description": "ui.getState, ui.dismiss and ui.setSelection, which need the OpenTune editor window."
+    },
+    {
+      "code": "ui.onboardingClose",
+      "since": "1.0",
+      "description": "ui.dismiss can close a first-run onboarding overlay that is already showing (not only prevent it)."
+    },
+    {
+      "code": "ui.workspace",
+      "since": "1.0",
+      "description": "ui.setWorkspace, which switches the OpenTune window between the arrangement view and the piano roll and needs the OpenTune editor window."
+    },
+    {
+      "code": "transport.v1",
+      "since": "1.0",
+      "description": "transport.control, transport.setTempo and transport.setLoop."
+    },
+    {
+      "code": "arrangement.v1",
+      "since": "1.0",
+      "description": "arrangement.edit and arrangement.copy."
+    },
+    {
+      "code": "tracks.v1",
+      "since": "1.0",
+      "description": "track.set, track.add, track.duplicate and track.delete."
+    },
+    {
+      "code": "reference.v1",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer reported. It named content.analyzeReference and the reference mode of content.autoTune, which were removed. An instance of an earlier release candidate may still list it."
+    },
+    {
+      "code": "project.io",
+      "since": "1.0",
+      "description": "project.save, project.saveAs, project.open and project.clearRecent."
+    },
+    { "code": "prefs.write", "since": "1.0", "description": "prefs.set." },
+    {
+      "code": "audio.device",
+      "since": "1.0",
+      "description": "audio.get and audio.set."
+    },
+    {
+      "code": "app.quit",
+      "since": "1.0",
+      "description": "app.quit, which quits OpenTune as the close button of its window does and needs the OpenTune editor window."
+    },
+    {
+      "code": "project.copy",
+      "since": "1.0",
+      "description": "project.saveCopy, which writes a copy of the project to a new project file and leaves the project file, the unsaved-changes flag and the recent-projects list as they were. It needs the OpenTune editor window. An instance of release candidate 7 or earlier does not report it, and a client then has no way to write a copy that does not become the project file."
+    }
+  ]
+}

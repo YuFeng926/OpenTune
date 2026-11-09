@@ -1,0 +1,163 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/set-workspace-tempo-rounded",
+  "type": "scenario",
+  "description": "ui.setWorkspace changes the view only, with one exception that is OpenTune's own behaviour (PROTOCOL.md section 14.6): the tempo field of the transport bar shows the tempo with one decimal, and when the field holds the keyboard focus, a switch of the view moves the focus out of it, which writes the value it shows back to the project and marks it as changed. The vector depends on that focus, so it names it (given.keyboardFocus tempoField, the state of a window that has just started in the foreground), and a runner that cannot make the field hold the focus skips the vector. transport.setTempo sets a tempo with two decimals, 120.27 (the project is marked as changed by this call, so dirty is true before the switch and stays true). The switch to the piano roll then rounds it to 120.3, and the result says so: changes lists the workspace and the tempo (entity tempo, member bpm, unit bpm, the entry transport.setTempo uses), sideEffects.tempoRounded is {fromBpm, toBpm, revert} next to workspaceSwitched, and the revert recipe is transport.setTempo with the previous bpm. revisionDiff stays empty, the time signature is untouched, and undo describes the switch alone. A request for 120.3 is then a no-op, which shows that the project tempo is 120.3, and sending the revert recipe puts 120.27 back. The value 120.27 is not halfway between two one-decimal values, so it rounds the same way whatever the rounding rule. Without the focus in the field, as in a window in the background, a switch rounds nothing and reports nothing about the tempo (no tempo entry in changes, no tempoRounded), because the instance reports the rounding only when the tempo differs before and after the switch; this vector does not cover that case. With the focus in the field, a real window rounds at every switch of the view that finds a tempo with more than one decimal, in both directions and at the first switch after the start.",
+  "capability": "ui.workspace",
+  "extraCapabilities": ["transport.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": { "dirty": false, "keyboardFocus": "tempoField" },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "transport.setTempo",
+        "params": { "bpm": 120.27 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "dirty": { "before": false, "after": true },
+          "tempo": { "bpm": 120.27 }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "ui.setWorkspace",
+        "params": { "workspace": "pianoRoll" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [
+            {
+              "entity": "ui",
+              "ref": { "singleton": "workspace" },
+              "label": { "$any": true },
+              "fields": {
+                "workspace": {
+                  "before": "arrangement",
+                  "after": "pianoRoll",
+                  "unit": null
+                }
+              }
+            },
+            {
+              "entity": "tempo",
+              "ref": { "singleton": "tempo" },
+              "label": { "$any": true },
+              "fields": {
+                "bpm": { "before": 120.27, "after": 120.3, "unit": "bpm" }
+              }
+            }
+          ],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": {
+            "arrangementRevision": { "$any": "string" },
+            "contents": [],
+            "placements": []
+          },
+          "undo": {
+            "undoable": false,
+            "reason": "not_persisted_state",
+            "revert": {
+              "method": "ui.setWorkspace",
+              "params": { "workspace": "arrangement" }
+            }
+          },
+          "dirty": { "before": true, "after": true },
+          "ui": { "workspace": "pianoRoll" },
+          "sideEffects": {
+            "workspaceSwitched": {
+              "from": "arrangement",
+              "to": "pianoRoll",
+              "revert": null
+            },
+            "tempoRounded": {
+              "fromBpm": 120.27,
+              "toBpm": 120.3,
+              "revert": {
+                "method": "transport.setTempo",
+                "params": { "bpm": 120.27 }
+              }
+            }
+          },
+          "warnings": [],
+          "job": null
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "transport.setTempo",
+        "params": { "bpm": 120.3 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "applied": true,
+          "noOp": true,
+          "changes": [],
+          "tempo": { "bpm": 120.3 }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "transport.setTempo",
+        "params": { "bpm": 120.27 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "changes": [
+            {
+              "entity": "tempo",
+              "ref": { "singleton": "tempo" },
+              "label": { "$any": true },
+              "fields": {
+                "bpm": { "before": 120.3, "after": 120.27, "unit": "bpm" }
+              }
+            }
+          ],
+          "tempo": { "bpm": 120.27 }
+        }
+      }
+    }
+  ]
+}

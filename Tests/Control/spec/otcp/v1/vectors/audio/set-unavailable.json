@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/set-unavailable",
+  "type": "request",
+  "description": "A sample rate the device does not offer gives INVALID_ARGUMENT(audio_setting_unavailable) and changes nothing.",
+  "capability": "audio.device",
+  "since": "1.0",
+  "method": "audio.set",
+  "session": "authenticated",
+  "given": { "audio": { "running": true } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "audio.set",
+    "params": { "sampleRateHz": 12345 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "audio_setting_unavailable",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

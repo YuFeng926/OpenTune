@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/shift-timing-stale-handle",
+  "type": "request",
+  "description": "content.shiftTiming with a contentId of another instance gives NOT_FOUND(stale_handle).",
+  "capability": "timing.v1",
+  "since": "1.0",
+  "method": "content.shiftTiming",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.shiftTiming",
+    "params": {
+      "contentId": { "$ref": "runner.staleContentId" },
+      "expectedGridRevision": "g0",
+      "range": { "startOutputSec": 1, "endOutputSec": 2 },
+      "deltaSec": 0.03
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "stale_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

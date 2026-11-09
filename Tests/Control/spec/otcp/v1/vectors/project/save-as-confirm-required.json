@@ -1,0 +1,45 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-as-confirm-required",
+  "type": "request",
+  "description": "Saving over an existing file that is not the current project file would destroy it: without confirm true the call fails with INVALID_ARGUMENT(confirm_required) and starts no job.",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.saveAs",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "other", "kind": "existing", "extension": ".otproj" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.saveAs",
+    "params": { "path": { "$ref": "other" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "confirm_required",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

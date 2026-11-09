@@ -1,0 +1,154 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-no-effect-after-notes-only",
+  "type": "scenario",
+  "description": "AUTO in mode regenerate records an undo entry; AUTO in mode notesOnly then replaces every note without one (warnings REPLACES_ALL_NOTES, with the counts of removed and created notes, and IRREVERSIBLE). The regenerate entry no longer puts back the notes, which were all it changed, so undoing it changes nothing: the step is used up, noOp is true and the warning UNDO_NO_EFFECT says so (PROTOCOL.md section 15.3 rule 9).",
+  "capability": "history.v1",
+  "extraCapabilities": ["edit.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "history": { "undo": [], "redo": [] }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.autoTune",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "mode": "regenerate",
+          "expectedRevision": { "$ref": "clip.revision" },
+          "key": { "root": 0, "scale": "major" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "undo": {
+            "undoable": true,
+            "undoId": { "$capture": "regenerateEntry", "$any": "string" },
+            "description": { "$any": "string" },
+            "innerActions": { "$any": "array" },
+            "steps": 1
+          },
+          "tokens": {
+            "contents": [
+              {
+                "contentId": { "$ref": "clip.contentId" },
+                "revision": { "$capture": "regenerated", "$any": "string" }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "content.autoTune",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "mode": "notesOnly",
+          "expectedRevision": { "$ref": "regenerated" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "undo": { "undoable": false, "reason": "ui_parity", "revert": null },
+          "warnings": [
+            {
+              "code": "REPLACES_ALL_NOTES",
+              "subject": { "contentId": { "$ref": "clip.contentId" } },
+              "data": {
+                "removedCount": { "$any": "integer" },
+                "createdCount": { "$any": "integer" }
+              }
+            },
+            {
+              "code": "IRREVERSIBLE",
+              "subject": { "contentId": { "$ref": "clip.contentId" } },
+              "data": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "regenerateEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "applied": true,
+          "noOp": true,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "edit.redo",
+              "params": { "expectedUndoId": { "$ref": "regenerateEntry" } }
+            }
+          },
+          "dirty": { "before": true, "after": true },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [
+            { "code": "UNDO_NO_EFFECT", "subject": null, "data": null }
+          ],
+          "job": null,
+          "entry": {
+            "undoId": { "$ref": "regenerateEntry" },
+            "description": { "$any": "string" },
+            "origin": "control",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    }
+  ]
+}

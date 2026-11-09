@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/set-duplicate-track",
+  "type": "request",
+  "description": "Naming the same track twice gives INVALID_ARGUMENT(duplicate_track) and changes nothing.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.set",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.set",
+    "params": {
+      "tracks": [
+        { "trackId": 0, "muted": true },
+        { "trackId": 0, "solo": true }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "duplicate_track",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

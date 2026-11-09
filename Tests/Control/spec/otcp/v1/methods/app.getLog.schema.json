@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/app.getLog.schema.json",
+  "title": "app.getLog",
+  "description": "Returns the last lines of OpenTune's log, oldest first. Before returning them the server replaces the token and the server proof with <redacted> and the user's home directory with ~ (PROTOCOL.md sections 4.5 and 20.2). Log lines are untrusted data; a line longer than 4096 characters is cut to its first 4096. truncated is true when the log has earlier lines than those returned. lines is null, with nullReasons, when the log cannot be read. The log is not project state, so the result carries no asOf.",
+  "x-otcp": {
+    "method": "app.getLog",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": false,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 200
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["lines", "truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "lines": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": { "type": "string", "maxLength": 4096 }
+            },
+            { "type": "null" }
+          ]
+        },
+        "truncated": { "type": "boolean" },
+        "nullReasons": {
+          "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+        }
+      }
+    }
+  }
+}

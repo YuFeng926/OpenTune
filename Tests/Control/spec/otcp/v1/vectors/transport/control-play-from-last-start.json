@@ -1,0 +1,88 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/control-play-from-last-start",
+  "type": "scenario",
+  "description": "playFromLastStart returns to the position of the last play or seek, not to 0, and plays: after a seek to 3 s, playing and pausing, it plays from 3 s again (PROTOCOL.md section 15.4 rule 5).",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": { "audio": { "running": true } },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "transport.control",
+        "params": { "action": "seek", "positionTimelineSec": 3 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "transport": { "playStartTimelineSec": 3 }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "transport.control",
+        "params": { "action": "play" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": { "applied": true, "transport": { "playing": true } }
+      }
+    },
+    { "pauseMs": 300 },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "transport.control",
+        "params": { "action": "pause" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": { "applied": true, "transport": { "playing": false } }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "transport.control",
+        "params": { "action": "playFromLastStart" }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "applied": true,
+          "undo": {
+            "undoable": false,
+            "reason": "not_persisted_state",
+            "revert": null
+          },
+          "transport": {
+            "playing": true,
+            "playStartTimelineSec": 3,
+            "positionTimelineSec": { "$approx": 3, "$tol": 0.25 }
+          }
+        }
+      }
+    }
+  ]
+}

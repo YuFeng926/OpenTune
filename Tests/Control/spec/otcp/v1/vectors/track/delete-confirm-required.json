@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/delete-confirm-required",
+  "type": "request",
+  "description": "Without confirm true, track.delete fails with INVALID_ARGUMENT(confirm_required) and changes nothing.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.delete",
+  "session": "authenticated",
+  "given": {
+    "visibleTrackCount": 2,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.delete",
+    "params": {
+      "trackId": 1,
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "confirm_required",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

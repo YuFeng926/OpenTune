@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-notes-stale-handle",
+  "type": "request",
+  "description": "A contentId of valid form whose instance part names another instance gives NOT_FOUND(stale_handle).",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "content.getNotes",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.getNotes",
+    "params": { "contentId": { "$ref": "runner.staleContentId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "stale_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

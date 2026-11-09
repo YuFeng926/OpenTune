@@ -55,6 +55,9 @@
 #include "Content/ContentEditCommands.h"
 #include "Content/ContentPatchGeometry.h"
 #include "Content/ContentSnapshotProjection.h"
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+#include "Control/ControlService.h"  // OpenTune Control API hook: control service type, see Source/Control/README.md#hooks
+#endif
 
 namespace OpenTune {
 
@@ -600,6 +603,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 #if JucePlugin_Build_Standalone
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
 #endif
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: the service starts after this constructor, guarded by its liveness token, see Source/Control/README.md#hooks
+    controlService_ = std::make_unique<ControlService>(*this);
+    controlService_->scheduleStart();
+#endif
 }
 
 bool OpenTuneAudioProcessor::initializeRuntimeState() noexcept
@@ -1111,6 +1119,10 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: stop the control service before anything else, see Source/Control/README.md#hooks
+    controlService_->stop();
+#endif
     if (!runtimeStateInitialized_.load(std::memory_order_acquire))
         return;
 

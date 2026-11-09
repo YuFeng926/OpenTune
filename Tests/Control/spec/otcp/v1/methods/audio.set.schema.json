@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/audio.set.schema.json",
+  "title": "audio.set",
+  "description": "Changes the audio device setup as OpenTune's audio settings page does: the members given replace those of the current setup, and the device is opened again with the result; playback stops while it reopens. Values that the instance does not offer (audio.get, available) give INVALID_ARGUMENT(audio_setting_unavailable) and change nothing. If the device cannot be opened with the new setup, the server restores the previous setup, as the settings page does, and the call fails with IO_ERROR(device_open_failed) and executed false; if the previous setup cannot be opened either, executed is true and no device runs (audio.get reports it). Before it switches the device type or the output device, OpenTune restores the sample rate of an ASIO device, as the settings page does. That restoration is best effort: when it fails, the switch goes on and is not rolled back, the call does not fail because of it, and the result carries the warning ASIO_RATE_NOT_RESTORED (subject {singleton: audioDevice}, data {deviceName, sampleRateHz}), because the ASIO driver may then keep a sample rate other than the one it had before OpenTune changed it. A call that changes neither the device type nor the output device does not restore a rate and carries no such warning. IO_ERROR(device_open_failed) means only that the device could not be opened with the new setup. The setup is a user-global setting: changes lists it (entity audioDevice) and the result carries the warning GLOBAL_PREFERENCE (data {preferences}, with the name audioDevice). There is no undo entry (undo reason ui_parity), and the revert recipe sets the previous values with audio.set. device is the setup after the call. A setup equal to the current one is a no-op.",
+  "x-otcp": {
+    "method": "audio.set",
+    "layer": "L8",
+    "capability": "audio.device",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "IO_ERROR",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "deviceType": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "outputDevice": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sampleRateHz": { "type": "number", "exclusiveMinimum": 0 },
+        "bufferSizeFrame": { "type": "integer", "minimum": 1 },
+        "outputChannelPair": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["device"],
+      "properties": {
+        "device": { "$ref": "audio.get.schema.json#/$defs/device" }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

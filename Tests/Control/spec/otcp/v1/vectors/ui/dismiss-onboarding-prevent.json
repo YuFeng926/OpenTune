@@ -1,0 +1,66 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/dismiss-onboarding-prevent",
+  "type": "request",
+  "description": "ui.dismiss with target onboarding while the first-run overlay was never shown marks onboarding as shown, so that OpenTune does not start the overlay. This changes a user-global preference that no request of this protocol resets: the result carries the warning IRREVERSIBLE.",
+  "capability": "ui.bridge",
+  "since": "1.0",
+  "method": "ui.dismiss",
+  "session": "authenticated",
+  "given": { "dirty": false, "onboarding": "notShown" },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.dismiss",
+    "params": { "target": "onboarding" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "preference",
+          "ref": { "preference": "onboardingShown" },
+          "label": { "$any": true },
+          "fields": {
+            "onboardingShown": { "before": false, "after": true, "unit": null }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "no_upstream_undo",
+        "revert": null
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "IRREVERSIBLE",
+          "subject": { "preference": "onboardingShown" },
+          "data": null
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

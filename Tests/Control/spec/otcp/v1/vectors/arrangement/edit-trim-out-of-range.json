@@ -1,0 +1,53 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-trim-out-of-range",
+  "type": "request",
+  "description": "Trimming the end of a clip beyond the audio of its content gives INVALID_ARGUMENT(trim_out_of_range).",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.edit",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.edit",
+    "params": {
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "ops": [
+        {
+          "op": "trim",
+          "placementId": { "$ref": "clip.placementId" },
+          "edge": "end",
+          "toTimelineSec": 20
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "trim_out_of_range",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/info-ok",
+  "type": "request",
+  "description": "session.info returns the instance description. Identity fields equal the discovery file; export capabilities are fixed by the export contract.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "session.info",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "session.info",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "protocol": { "$any": "string" },
+      "instanceId": { "$ref": "discovery.instanceId" },
+      "appVersion": { "$ref": "discovery.appVersion" },
+      "build": { "$ref": "discovery.build" },
+      "buildTag": { "$ref": "discovery.buildTag" },
+      "sourceUrl": { "$ref": "discovery.sourceUrl" },
+      "flavor": "standalone",
+      "runtime": {
+        "os": { "$any": "string" },
+        "arch": { "$any": "string" },
+        "pid": { "$ref": "discovery.pid" }
+      },
+      "audioDevice": { "$any": "object" },
+      "processing": { "$any": "object" },
+      "language": { "$any": "string" },
+      "capabilities": { "$any": "array" },
+      "import": { "$any": "object" },
+      "export": {
+        "formats": ["wav"],
+        "sampleRateHz": 44100,
+        "channels": { "clip": 1, "track": 1, "master": 2 },
+        "sampleFormat": "float32"
+      },
+      "limits": { "$any": "object" }
+    }
+  },
+  "connectionAfter": "open"
+}

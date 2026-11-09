@@ -1,0 +1,14 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/hello-timeout",
+  "type": "scenario",
+  "description": "A connection that sends no complete first line within 2 seconds of being accepted is closed without a response.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "unauthenticated",
+  "steps": [
+    { "sendRaw": "{\"jsonrpc\":\"2.0\"," },
+    { "pauseMs": 2500 },
+    { "expectClosed": { "noBytes": true } }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/set-key-no-op",
+  "type": "request",
+  "description": "Setting the key the content already has is a success with noOp true: nothing changes, the tokens are the current ones and the project is not marked as changed.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.setKey",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "key": { "root": 9, "scale": "minor" },
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.setKey",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "key": { "root": 9, "scale": "minor" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": true,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$ref": "clip.revision" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ],
+        "placements": []
+      },
+      "undo": { "undoable": false, "reason": "no_op", "revert": null },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

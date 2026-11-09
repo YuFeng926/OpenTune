@@ -1,0 +1,99 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/copy-full",
+  "type": "request",
+  "description": "mode full copies a clip as duplicating it does: the copy gets a complete copy of the source content. The copy starts where its source starts, so both play at once (warning STACKED_ON_SOURCE). The revert recipe deletes the copy with arrangement.edit, which needs the end user's consent (requiresConsent true).",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.copy",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "visibleTrackCount": 2,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.copy",
+    "params": {
+      "sources": [{ "placementId": { "$ref": "clip.placementId" } }],
+      "mode": "full",
+      "toTrackId": 1,
+      "startTimelineSec": 2,
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [
+        {
+          "entity": "placement",
+          "ref": { "placementId": { "$any": "string" } },
+          "label": { "$any": true }
+        },
+        {
+          "entity": "content",
+          "ref": { "contentId": { "$any": "string" } },
+          "label": { "$any": true }
+        }
+      ],
+      "removed": [],
+      "idMap": [
+        {
+          "entity": "placement",
+          "relation": "copy",
+          "from": [{ "placementId": { "$ref": "clip.placementId" } }],
+          "to": [{ "placementId": { "$any": "string" } }]
+        }
+      ],
+      "revisionDiff": {
+        "arrangement": {
+          "before": { "$ref": "runner.arrangementRevision" },
+          "after": { "$any": "string" }
+        },
+        "trackState": null,
+        "contents": { "$any": "array" }
+      },
+      "tokens": { "$any": "object" },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "arrangement.edit",
+          "params": {
+            "expectedArrangementRevision": { "$any": "string" },
+            "ops": [{ "op": "delete", "placementIds": [{ "$any": "string" }] }]
+          },
+          "requiresConsent": true
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "STACKED_ON_SOURCE",
+          "subject": { "placementId": { "$any": "string" } },
+          "data": null
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

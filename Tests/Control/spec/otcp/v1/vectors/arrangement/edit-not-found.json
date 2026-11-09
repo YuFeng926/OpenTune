@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-not-found",
+  "type": "request",
+  "description": "An op on a placement that does not exist gives NOT_FOUND(unknown_handle) and changes nothing.",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.edit",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.edit",
+    "params": {
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "ops": [
+        {
+          "op": "move",
+          "placementId": { "$ref": "runner.unknownPlacementId" },
+          "startTimelineSec": 1
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

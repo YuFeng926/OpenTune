@@ -1,0 +1,22 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "app/get-log-ok",
+  "type": "request",
+  "description": "app.getLog returns at most maxLines redacted log lines, oldest first. The log's content depends on the target.",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "app.getLog",
+  "session": "authenticated",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "app.getLog",
+    "params": { "maxLines": 20 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "lines": { "$any": true }, "truncated": { "$any": "boolean" } }
+  },
+  "connectionAfter": "open"
+}

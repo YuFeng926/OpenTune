@@ -1,0 +1,51 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-option-unavailable-unchanged",
+  "type": "request",
+  "description": "The check of processing.options comes before the test for a no-op: a vocoder weight that is in use but no longer on offer (its file was removed, for example) is refused with INVALID_ARGUMENT(option_unavailable) when the request names it again, although it equals the current value. The whole call changes nothing (executed false), and there is no job.",
+  "capability": "prefs.write",
+  "since": "1.0",
+  "method": "prefs.set",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "preferences": {
+      "vocoderWeight": "removed.onnx",
+      "options": {
+        "vocoderWeight": [
+          "hifigan.onnx",
+          "hifigan_coulin9.onnx"
+        ],
+        "f0Model": [
+          "fcpe"
+        ]
+      }
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "prefs.set",
+    "params": {
+      "vocoderWeight": "removed.onnx"
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "option_unavailable",
+        "retryable": false,
+        "detail": {
+          "$any": "string"
+        },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

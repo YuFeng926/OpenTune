@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-notes-handle-kind",
+  "type": "request",
+  "description": "A placementId passed where a contentId is expected fails the form check of the contentId handle (type prefix p: instead of c:) and gets INVALID_ARGUMENT(invalid_params) (PROTOCOL.md section 9 rule 1).",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "content.getNotes",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.getNotes",
+    "params": { "contentId": { "$ref": "clip.placementId" } }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "invalid_params",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

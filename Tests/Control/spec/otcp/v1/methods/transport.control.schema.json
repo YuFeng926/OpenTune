@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/transport.control.schema.json",
+  "title": "transport.control",
+  "description": "Controls playback as the transport buttons of OpenTune do. action play starts playback at the current position; pause stops it and keeps the position; stop stops it as the stop button does; seek moves the position to positionTimelineSec, also during playback; playFromLastStart moves to playStartTimelineSec and plays, as the play-from-start button does while playback is stopped; pauseAtLastStart, which the same button does during playback, pauses and returns to playStartTimelineSec. As in OpenTune, playStartTimelineSec is the position of the last play or seek, not 0 (PROTOCOL.md section 15.4 rule 5): play, seek and playFromLastStart set it, and so does a seek made in the UI. An action that leaves the play state, the position and playStartTimelineSec as they are, for example pause or pauseAtLastStart while playback is stopped, is a no-op. changes lists the transport (entity transport) with the members that changed, and transport is the transport state right after the call. Without a running audio device the position does not advance and nothing is heard, so play and playFromLastStart then carry the warning NO_AUDIO_DEVICE. The play state and the position are view state (section 15.2 rule 6): the undo reason is not_persisted_state, revert is null, no IRREVERSIBLE warning is given, and the project is not marked as changed. As with the UI's buttons, each call is recorded as the last transport call (transport.get, lastControl).",
+  "x-otcp": {
+    "method": "transport.control",
+    "layer": "L6",
+    "capability": "transport.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "play",
+            "pause",
+            "stop",
+            "seek",
+            "playFromLastStart",
+            "pauseAtLastStart"
+          ]
+        },
+        "positionTimelineSec": {
+          "description": "The position to seek to. Required with action seek, else not allowed.",
+          "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        }
+      },
+      "if": { "properties": { "action": { "const": "seek" } } },
+      "then": { "required": ["positionTimelineSec"] },
+      "else": { "not": { "required": ["positionTimelineSec"] } }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["transport"],
+      "properties": {
+        "transport": {
+          "$ref": "../schemas/common.schema.json#/$defs/transport"
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

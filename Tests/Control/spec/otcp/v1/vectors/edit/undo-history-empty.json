@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-history-empty",
+  "type": "request",
+  "description": "Nothing to undo: UNDO_CONFLICT(history_empty), also with force. With force the request needs no expectedUndoId.",
+  "capability": "history.v1",
+  "since": "1.0",
+  "method": "edit.undo",
+  "session": "authenticated",
+  "given": { "history": { "undo": [], "redo": [] } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "edit.undo",
+    "params": { "force": true }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNDO_CONFLICT",
+      "data": {
+        "kind": "UNDO_CONFLICT",
+        "reason": "history_empty",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-unknown-track",
+  "type": "request",
+  "description": "trackId names no track slot: it is one past the last slot of the instance. A trackId is a positional handle (PROTOCOL.md section 9), so the call fails with NOT_FOUND(unknown_handle), starts no job and imports nothing.",
+  "capability": "import.v1",
+  "since": "1.0",
+  "method": "import.start",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "files": [{ "bind": "take1", "kind": "audio", "durationSec": 4 }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "import.start",
+    "params": {
+      "items": [{ "path": { "$ref": "take1" } }],
+      "layout": "single",
+      "trackId": { "$ref": "runner.unknownTrackId" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

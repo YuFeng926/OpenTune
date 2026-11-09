@@ -1,0 +1,56 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/dismiss-dialog",
+  "type": "request",
+  "description": "ui.dismiss closes a confirmation dialog as Escape does, which cancels the action it asked about. Dialogs are view state: no project state changes, the undo reason is not_persisted_state, revert is null, and no IRREVERSIBLE warning is given (PROTOCOL.md section 15.2 rule 6). sideEffects.dialogClosed lists the dialog.",
+  "capability": "ui.bridge",
+  "since": "1.0",
+  "method": "ui.dismiss",
+  "session": "authenticated",
+  "given": { "dirty": false, "dialogs": [{ "kind": "confirm" }] },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.dismiss",
+    "params": { "target": "dialogs" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "not_persisted_state",
+        "revert": null
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {
+        "dialogClosed": {
+          "dialogs": [{ "kind": "confirm", "trackId": null }],
+          "revert": null
+        }
+      },
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

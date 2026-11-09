@@ -1,0 +1,51 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/duplicate-target-occupied",
+  "type": "request",
+  "description": "When the first hidden slot already holds a clip, the copy has no free slot: INVALID_ARGUMENT(target_track_occupied). OpenTune reaches this state when it opens a project with clips on tracks beyond those shown, because opening a project keeps the number of shown tracks (two after a start); a runner may establish it that way.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.duplicate",
+  "session": "authenticated",
+  "given": {
+    "visibleTrackCount": 2,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      },
+      {
+        "bind": "hidden",
+        "trackId": 2,
+        "startTimelineSec": 0,
+        "durationSec": 4,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.duplicate",
+    "params": { "trackId": 0 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "target_track_occupied",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

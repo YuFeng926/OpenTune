@@ -1,0 +1,80 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/edit-notes-content-changed",
+  "type": "scenario",
+  "description": "The second edit still sends the revision from before the first one and gets REVISION_CONFLICT(content_changed); nothing changes.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.editNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "expectedRevision": { "$ref": "clip.revision" },
+          "ops": [
+            {
+              "op": "shiftCents",
+              "select": { "indices": [0] },
+              "deltaCents": 10
+            }
+          ]
+        }
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 1, "result": { "$any": "object" } } },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "content.editNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "expectedRevision": { "$ref": "clip.revision" },
+          "ops": [
+            {
+              "op": "shiftCents",
+              "select": { "indices": [0] },
+              "deltaCents": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32000,
+          "message": "REVISION_CONFLICT",
+          "data": {
+            "kind": "REVISION_CONFLICT",
+            "reason": "content_changed",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

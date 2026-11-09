@@ -1,0 +1,56 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-busy-export",
+  "type": "request",
+  "description": "Another export holds the export lock that the UI and this API share: BUSY(export_in_progress), retryable, and no job starts.",
+  "capability": "export.v1",
+  "since": "1.0",
+  "method": "export.start",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "otherExport",
+        "kind": "export",
+        "state": "running",
+        "cancellable": true
+      }
+    ],
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "files": [{ "bind": "out", "kind": "absent" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "export.start",
+    "params": { "kind": "master", "path": { "$ref": "out" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "BUSY",
+      "data": {
+        "kind": "BUSY",
+        "reason": "export_in_progress",
+        "retryable": true,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

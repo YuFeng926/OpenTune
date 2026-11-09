@@ -1,0 +1,53 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-handle-kind",
+  "type": "request",
+  "description": "A contentId passed where a placementId is expected fails the form check of the placementId handle (type prefix c: instead of p:) and gets INVALID_ARGUMENT(invalid_params) (PROTOCOL.md section 9 rule 1).",
+  "capability": "export.v1",
+  "since": "1.0",
+  "method": "export.start",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "files": [{ "bind": "out", "kind": "absent" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "export.start",
+    "params": {
+      "kind": "clip",
+      "target": { "placementId": { "$ref": "clip.contentId" } },
+      "path": { "$ref": "out" }
+    }
+  },
+  "paramsValid": false,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "invalid_params",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

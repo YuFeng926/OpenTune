@@ -1,0 +1,57 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/control-pause-stopped",
+  "type": "request",
+  "description": "action pause while playback is stopped leaves the transport as it is: a no-op.",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "method": "transport.control",
+  "session": "authenticated",
+  "given": { "dirty": false, "audio": { "running": true } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "transport.control",
+    "params": { "action": "pause" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": true,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": { "undoable": false, "reason": "no_op", "revert": null },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null,
+      "transport": {
+        "playing": false,
+        "positionTimelineSec": 0,
+        "playStartTimelineSec": 0,
+        "loopEnabled": false,
+        "bpm": 120,
+        "timeSignature": { "numerator": 4, "denominator": 4 },
+        "audioDeviceRunning": true,
+        "lastControl": { "$any": true }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

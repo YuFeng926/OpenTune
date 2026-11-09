@@ -1,0 +1,256 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/request-limit",
+  "type": "scenario",
+  "description": "With 16 requests in flight on a session (waiting job.get calls), a 17th request is answered at once with BUSY(request_limit), retryable, and is not executed. The waiting calls answer later; the vector does not read them.",
+  "capability": "jobs.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "exportJob",
+        "kind": "export",
+        "state": "running",
+        "cancellable": true
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 50,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 51,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 52,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 53,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 54,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 55,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 56,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 57,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 58,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 59,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 60,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 61,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 62,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 63,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 64,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 65,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 3000
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 66,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 66,
+        "error": {
+          "code": -32000,
+          "message": "BUSY",
+          "data": {
+            "kind": "BUSY",
+            "reason": "request_limit",
+            "retryable": true,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

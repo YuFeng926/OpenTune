@@ -1,0 +1,75 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/delete-arrangement-changed",
+  "type": "scenario",
+  "description": "A track deletion that names the arrangement revision from before another change gets REVISION_CONFLICT(arrangement_changed) and deletes nothing.",
+  "capability": "tracks.v1",
+  "extraCapabilities": ["arrangement.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "visibleTrackCount": 2,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "arrangement.edit",
+        "params": {
+          "expectedArrangementRevision": {
+            "$ref": "runner.arrangementRevision"
+          },
+          "ops": [
+            {
+              "op": "move",
+              "placementId": { "$ref": "clip.placementId" },
+              "startTimelineSec": 4
+            }
+          ]
+        }
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 1, "result": { "applied": true } } },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "track.delete",
+        "params": {
+          "trackId": 1,
+          "expectedArrangementRevision": {
+            "$ref": "runner.arrangementRevision"
+          },
+          "confirm": true
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32000,
+          "message": "REVISION_CONFLICT",
+          "data": {
+            "kind": "REVISION_CONFLICT",
+            "reason": "arrangement_changed",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

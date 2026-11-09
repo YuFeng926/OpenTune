@@ -1,0 +1,88 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-pitch-curve-cursor-stale",
+  "type": "scenario",
+  "description": "content.getPitchCurve with a page limit of 10 values returns a cursor. After a note edit changes the revision (and with it the corrected curve), the old cursor gives REVISION_CONFLICT(cursor_stale).",
+  "capability": "read.v1",
+  "extraCapabilities": ["edit.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.getPitchCurve",
+        "params": { "contentId": { "$ref": "clip.contentId" }, "limit": 10 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "pointCount": 10,
+          "nextCursor": { "$capture": "next", "$any": "string" }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "content.editNotes",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "expectedRevision": { "$ref": "clip.revision" },
+          "ops": [
+            { "op": "shiftCents", "select": { "all": true }, "deltaCents": 20 }
+          ]
+        }
+      }
+    },
+    { "expect": { "jsonrpc": "2.0", "id": 2, "result": { "$any": "object" } } },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "content.getPitchCurve",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "cursor": { "$ref": "next" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32000,
+          "message": "REVISION_CONFLICT",
+          "data": {
+            "kind": "REVISION_CONFLICT",
+            "reason": "cursor_stale",
+            "retryable": false,
+            "detail": { "$any": "string" },
+            "executed": false
+          }
+        }
+      }
+    }
+  ]
+}

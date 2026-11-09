@@ -1,0 +1,140 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-ok",
+  "type": "scenario",
+  "description": "Undo of a pitch shift made through this API. The result describes the effect (semitones back from 2 to 0), creates no undo entry of its own and gives edit.redo with the same undoId as revert recipe.",
+  "capability": "history.v1",
+  "extraCapabilities": ["edit.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "key": { "root": 9, "scale": "minor" },
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ],
+    "history": { "undo": [], "redo": [] }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.setPitchShift",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "pitchShift": { "semitones": 2, "cents": 0 }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "undo": {
+            "undoable": true,
+            "undoId": { "$capture": "shiftUndo", "$any": "string" },
+            "description": { "$any": "string" },
+            "innerActions": { "$any": "array" },
+            "steps": 1
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "shiftUndo" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [
+            {
+              "entity": "pitchShift",
+              "ref": { "contentId": { "$ref": "clip.contentId" } },
+              "label": { "$any": true },
+              "fields": {
+                "semitones": { "before": 2, "after": 0, "unit": "semitones" }
+              }
+            }
+          ],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": [
+              {
+                "contentId": { "$ref": "clip.contentId" },
+                "changed": {
+                  "pitchShift": {
+                    "before": { "$any": "string" },
+                    "after": { "$any": "string" }
+                  }
+                }
+              }
+            ]
+          },
+          "tokens": {
+            "arrangementRevision": { "$any": "string" },
+            "contents": [
+              {
+                "contentId": { "$ref": "clip.contentId" },
+                "revision": { "$ref": "clip.revision" },
+                "gridRevision": { "$ref": "clip.gridRevision" },
+                "keyRevision": { "$ref": "clip.keyRevision" }
+              }
+            ],
+            "placements": []
+          },
+          "undo": {
+            "undoable": false,
+            "reason": "ui_parity",
+            "revert": {
+              "method": "edit.redo",
+              "params": { "expectedUndoId": { "$ref": "shiftUndo" } }
+            }
+          },
+          "dirty": { "before": true, "after": true },
+          "ui": { "$any": true },
+          "sideEffects": {
+            "reRenderQueued": {
+              "contentIds": [{ "$ref": "clip.contentId" }],
+              "revert": null
+            }
+          },
+          "warnings": [],
+          "job": null,
+          "entry": {
+            "undoId": { "$ref": "shiftUndo" },
+            "description": { "$any": "string" },
+            "origin": "control",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    }
+  ]
+}

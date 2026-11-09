@@ -1,0 +1,221 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/id-forms",
+  "type": "scenario",
+  "description": "Valid and invalid request ids. A number id is decided by its value, not by how it is written: 1.0, 1e2, 0 and 2^53-1 are valid integer ids, and every response writes them as plain integer literals (1, 100, 0, 9007199254740991), also the fixed AUTH_FAILED response to a hello with id 1e0. A string id of 128 code points is valid even when it has 256 UTF-16 code units and 512 bytes (128 times U+1D11E). A string of 129 characters, the empty string, 1.5, -1 and 2^53 are not valid ids and get INVALID_ARGUMENT(invalid_request) with id null. The session stays open.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":1.0,\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "$any": "object"
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":1e2,\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 100,
+        "result": {
+          "$any": "object"
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+          "$any": "object"
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":9007199254740991,\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 9007199254740991,
+        "result": {
+          "$any": "object"
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": "\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e",
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": "\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e",
+        "result": {
+          "$any": "object"
+        }
+      }
+    },
+    {
+      "sendFilled": {
+        "head": "{\"jsonrpc\":\"2.0\",\"id\":\"",
+        "fill": "x",
+        "bytes": 152,
+        "tail": "\",\"method\":\"session.info\",\"params\":{}}\n"
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":\"\",\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":1.5,\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":-1,\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":9007199254740992,\"method\":\"session.info\",\"params\":{}}\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "invalid_request",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "connect": "second"
+    },
+    {
+      "connection": "second",
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":1e0,\"method\":\"session.hello\",\"params\":{\"token\":\"not-a-token\",\"protocol\":\"1.0\"}}\n"
+    },
+    {
+      "connection": "second",
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32001,
+          "message": "AUTH_FAILED",
+          "data": {
+            "kind": "AUTH_FAILED",
+            "retryable": false,
+            "detail": "authentication failed",
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "connection": "second",
+      "expectClosed": {
+        "noBytes": true
+      }
+    }
+  ]
+}

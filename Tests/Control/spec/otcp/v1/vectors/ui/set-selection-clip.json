@@ -1,0 +1,83 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/set-selection-clip",
+  "type": "request",
+  "description": "Selecting a clip in the openTune scheme makes its track the active track and changes nothing else that the result has to report. The selection is view state (PROTOCOL.md section 15.2 rule 6); track 0 was already the active track, so the result lists only the clip, and the revert recipe selects track 0 again. Precondition: no clip is selected and track 0 is the active track (OpenTune always has an active track), which is the state of a new project; import.start selects the last imported clip and activates its track, so a client that imported the clips resets the selection first.",
+  "capability": "ui.bridge",
+  "since": "1.0",
+  "method": "ui.setSelection",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "editingScheme": "openTune",
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.setSelection",
+    "params": { "placementId": { "$ref": "clip.placementId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "selection",
+          "ref": { "singleton": "selection" },
+          "label": { "$any": true },
+          "fields": {
+            "selectedPlacementIds": {
+              "before": [],
+              "after": [{ "$ref": "clip.placementId" }],
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "not_persisted_state",
+        "revert": {
+          "method": "ui.setSelection",
+          "params": { "trackId": 0 }
+        }
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

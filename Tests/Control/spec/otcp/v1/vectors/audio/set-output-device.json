@@ -1,0 +1,115 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "audio/set-output-device",
+  "type": "request",
+  "description": "audio.set switches to another output device of the current device type, which OpenTune opens with the default channels of that device. The device type stays. The revert recipe names the previous output device.",
+  "capability": "audio.device",
+  "since": "1.0",
+  "method": "audio.set",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "audio": {
+      "running": true,
+      "alternatives": true
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "audio.set",
+    "params": {
+      "outputDevice": {
+        "$ref": "audio.otherOutputDevice"
+      }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "audioDevice",
+          "ref": {
+            "singleton": "audioDevice"
+          },
+          "label": {
+            "$any": true
+          },
+          "fields": {
+            "outputDevice": {
+              "before": {
+                "$ref": "audio.outputDevice"
+              },
+              "after": {
+                "$ref": "audio.otherOutputDevice"
+              },
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": {
+          "$any": "string"
+        },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "audio.set",
+          "params": {
+            "outputDevice": {
+              "$ref": "audio.outputDevice"
+            }
+          }
+        }
+      },
+      "dirty": {
+        "before": false,
+        "after": false
+      },
+      "ui": {
+        "$any": true
+      },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "GLOBAL_PREFERENCE",
+          "subject": null,
+          "data": {
+            "preferences": [
+              "audioDevice"
+            ]
+          }
+        }
+      ],
+      "job": null,
+      "device": {
+        "running": true,
+        "outputDevice": {
+          "$ref": "audio.otherOutputDevice"
+        },
+        "deviceType": {
+          "$ref": "audio.deviceType"
+        }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

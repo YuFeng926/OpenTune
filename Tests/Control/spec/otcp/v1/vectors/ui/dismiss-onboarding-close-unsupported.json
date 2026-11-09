@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/dismiss-onboarding-close-unsupported",
+  "type": "request",
+  "description": "An instance that does not report ui.onboardingClose can prevent the first-run overlay but not close one that is showing: the call fails with UNSUPPORTED(capability_missing). The runner decides that the vector applies from the capabilities the instance reports before it establishes given, so withoutCapabilities only removes ui.onboardingClose while the vector runs.",
+  "capability": "ui.bridge",
+  "since": "1.0",
+  "method": "ui.dismiss",
+  "session": "authenticated",
+  "given": {
+    "onboarding": "showing",
+    "withoutCapabilities": ["ui.onboardingClose"]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.dismiss",
+    "params": { "target": "onboarding" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNSUPPORTED",
+      "data": {
+        "kind": "UNSUPPORTED",
+        "reason": "capability_missing",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,210 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-rendering-priority-fallback",
+  "type": "scenario",
+  "description": "Switching the rendering priority from cpuFirst to gpuFirst on a machine where OpenTune cannot create its inference session on the GPU. The job succeeds, the preference is set, and the result carries BACKEND_FALLBACK after GLOBAL_PREFERENCE: the GPU was requested (data.requested gpuFirst) and the backend that runs is the CPU (data.actual cpu), which the call alone would not show. session.info then reports the priority gpuFirst together with the backend cpu, which is how the two differ after a fall back. The priority is not audible, so the result reports no reRenderQueued side effect.",
+  "capability": "prefs.write",
+  "extraCapabilities": [
+    "jobs.v1"
+  ],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "gpu": "unavailable",
+    "preferences": {
+      "renderingPriority": "cpuFirst"
+    }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "prefs.set",
+        "params": {
+          "renderingPriority": "gpuFirst"
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "changes": [],
+          "undo": null,
+          "job": {
+            "jobId": {
+              "$capture": "priorityJob",
+              "$any": "string"
+            },
+            "kind": "prefsApply",
+            "state": {
+              "$any": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "priorityJob"
+          },
+          "waitMs": 30000
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": {
+              "$ref": "priorityJob"
+            },
+            "kind": "prefsApply",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": {
+              "$any": "integer"
+            },
+            "updatedAtMs": {
+              "$any": "integer"
+            },
+            "finishedAtMs": {
+              "$any": "integer"
+            },
+            "progress": {
+              "$any": "object"
+            },
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "dryRun": false,
+              "changes": [
+                {
+                  "entity": "preference",
+                  "ref": {
+                    "preference": "renderingPriority"
+                  },
+                  "label": {
+                    "$any": true
+                  },
+                  "fields": {
+                    "renderingPriority": {
+                      "before": "cpuFirst",
+                      "after": "gpuFirst",
+                      "unit": null
+                    }
+                  }
+                }
+              ],
+              "created": [],
+              "removed": [],
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": null,
+                "trackState": null,
+                "contents": []
+              },
+              "tokens": {
+                "arrangementRevision": {
+                  "$any": "string"
+                },
+                "contents": [],
+                "placements": []
+              },
+              "undo": {
+                "undoable": false,
+                "reason": "ui_parity",
+                "revert": {
+                  "method": "prefs.set",
+                  "params": {
+                    "renderingPriority": "cpuFirst"
+                  }
+                }
+              },
+              "dirty": {
+                "before": false,
+                "after": false
+              },
+              "ui": {
+                "$any": true
+              },
+              "sideEffects": {},
+              "warnings": [
+                {
+                  "code": "GLOBAL_PREFERENCE",
+                  "subject": null,
+                  "data": {
+                    "preferences": [
+                      "renderingPriority"
+                    ]
+                  }
+                },
+                {
+                  "code": "BACKEND_FALLBACK",
+                  "subject": null,
+                  "data": {
+                    "requested": "gpuFirst",
+                    "actual": "cpu"
+                  }
+                }
+              ],
+              "job": null
+            },
+            "error": null
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "prefs.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "processing": {
+            "renderingPriority": "gpuFirst"
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "processing": {
+            "renderingPriority": "gpuFirst",
+            "backend": "cpu"
+          }
+        }
+      }
+    }
+  ]
+}

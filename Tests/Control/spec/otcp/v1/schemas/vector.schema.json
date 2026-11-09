@@ -1,0 +1,500 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/schemas/vector.schema.json",
+  "title": "OTCP test vector",
+  "description": "Shape of the files in vectors/ (vectors/README.md). A vector is either a single request with its expected response or a multi-step scenario. Expected values may contain matchers.",
+  "type": "object",
+  "required": ["id", "type", "description", "capability", "since", "session"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": {
+      "description": "<directory>/<file name without .json>.",
+      "type": "string",
+      "pattern": "^[a-z][a-zA-Z0-9.]*/[a-z0-9][a-z0-9-]*$"
+    },
+    "type": { "enum": ["request", "scenario"] },
+    "description": { "type": "string", "minLength": 1 },
+    "capability": { "$ref": "common.schema.json#/$defs/capability" },
+    "extraCapabilities": {
+      "description": "Further capabilities the vector needs, for example those of the methods a scenario calls to prepare state. A runner skips the vector unless the instance reports all of them.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/capability" }
+    },
+    "since": { "$ref": "common.schema.json#/$defs/protocolVersion" },
+    "method": { "$ref": "common.schema.json#/$defs/methodName" },
+    "session": {
+      "description": "authenticated: the runner opens the main connection and completes session.hello with the discovery token before the vector starts. unauthenticated: the runner only opens the main connection.",
+      "enum": ["authenticated", "unauthenticated"]
+    },
+    "given": { "$ref": "#/$defs/given" },
+    "request": { "$ref": "#/$defs/value" },
+    "paramsValid": {
+      "description": "false when request.params deliberately violates the method's params schema. Default true.",
+      "type": "boolean",
+      "default": true
+    },
+    "response": { "$ref": "#/$defs/value" },
+    "connectionAfter": { "enum": ["open", "closed"] },
+    "endsSession": {
+      "description": "true when the vector ends the instance under test: once its last step is done, the instance quits by itself (vectors/README.md, \"Vectors that end the instance\"). Default false.",
+      "type": "boolean",
+      "default": false
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": { "type": { "const": "request" } },
+      "required": ["method", "request", "response", "connectionAfter"],
+      "not": { "required": ["steps"] }
+    },
+    {
+      "properties": { "type": { "const": "scenario" } },
+      "required": ["steps"],
+      "allOf": [
+        { "not": { "required": ["request"] } },
+        { "not": { "required": ["response"] } },
+        { "not": { "required": ["connectionAfter"] } }
+      ]
+    }
+  ],
+  "allOf": [
+    {
+      "description": "A request vector that ends the instance has the connection closed after its response (vectors/README.md, \"Vectors that end the instance\").",
+      "if": {
+        "required": ["endsSession"],
+        "properties": { "endsSession": { "const": true } }
+      },
+      "then": { "properties": { "connectionAfter": { "const": "closed" } } }
+    }
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)?$"
+    },
+    "bindName": {
+      "description": "A name that the runner extends with a dot and a member name, so it has no dot of its own.",
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+    },
+    "givenClip": {
+      "description": "A clip (placement and content) the project contains (vectors/README.md, \"Preconditions\").",
+      "type": "object",
+      "required": [
+        "bind",
+        "trackId",
+        "startTimelineSec",
+        "durationSec",
+        "analysis"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bind": { "$ref": "#/$defs/bindName" },
+        "trackId": { "$ref": "common.schema.json#/$defs/trackId" },
+        "startTimelineSec": {
+          "$ref": "common.schema.json#/$defs/secNonNegative"
+        },
+        "durationSec": { "type": "number", "exclusiveMinimum": 0 },
+        "analysis": { "enum": ["ready", "running", "failed", "unvoiced"] },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["startContentSec", "endContentSec", "targetMidi"],
+            "additionalProperties": false,
+            "properties": {
+              "startContentSec": {
+                "$ref": "common.schema.json#/$defs/secNonNegative"
+              },
+              "endContentSec": {
+                "$ref": "common.schema.json#/$defs/secNonNegative"
+              },
+              "targetMidi": { "type": "number", "minimum": 0, "maximum": 127 }
+            }
+          }
+        },
+        "key": { "$ref": "common.schema.json#/$defs/keyInput" },
+        "pitchShift": { "$ref": "common.schema.json#/$defs/pitchShift" },
+        "timeGrid": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["bind", "contentSec"],
+            "additionalProperties": false,
+            "properties": {
+              "bind": { "$ref": "#/$defs/name" },
+              "contentSec": {
+                "$ref": "common.schema.json#/$defs/secNonNegative"
+              }
+            }
+          }
+        },
+        "fadeInSec": { "$ref": "common.schema.json#/$defs/secNonNegative" },
+        "fadeOutSec": { "$ref": "common.schema.json#/$defs/secNonNegative" }
+      }
+    },
+    "givenFile": {
+      "type": "object",
+      "required": ["bind", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "bind": { "$ref": "#/$defs/name" },
+        "kind": {
+          "enum": [
+            "audio",
+            "absent",
+            "existing",
+            "noAccess",
+            "undecodable",
+            "project",
+            "projectMissingMedia"
+          ]
+        },
+        "extension": {
+          "description": "Default .wav.",
+          "type": "string",
+          "pattern": "^\\.[a-z0-9]{1,8}$"
+        },
+        "durationSec": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "For kind audio, the length of the file; for kind project or projectMissingMedia, the length of the project's clip."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "existing" } } },
+          "then": {
+            "description": "The runner also binds <bind>.next, so bind has no dot of its own.",
+            "properties": { "bind": { "$ref": "#/$defs/bindName" } }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": { "enum": ["project", "projectMissingMedia"] }
+            }
+          },
+          "then": {
+            "description": "A project file has the extension .otproj.",
+            "required": ["extension"],
+            "properties": { "extension": { "const": ".otproj" } }
+          }
+        }
+      ]
+    },
+    "givenHistoryEntry": {
+      "type": "object",
+      "required": ["origin", "action", "clip"],
+      "additionalProperties": false,
+      "properties": {
+        "bind": { "$ref": "#/$defs/name" },
+        "origin": { "enum": ["control", "ui"] },
+        "action": {
+          "enum": ["noteEdit", "pitchShift", "clipMove", "clipSplit"]
+        },
+        "clip": { "$ref": "#/$defs/bindName" },
+        "trackDeletedAfter": { "type": "boolean" },
+        "laterTrackDeletedAfter": { "type": "boolean" }
+      }
+    },
+    "given": {
+      "description": "Preconditions the runner must establish before the vector starts. A runner that cannot establish them reports the vector as skipped with the reason.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["bind", "kind", "state", "cancellable"],
+            "additionalProperties": false,
+            "properties": {
+              "bind": { "$ref": "#/$defs/name" },
+              "kind": { "$ref": "common.schema.json#/$defs/jobKind" },
+              "state": { "$ref": "common.schema.json#/$defs/jobState" },
+              "cancellable": { "type": "boolean" },
+              "error": {
+                "description": "For a failed or cancelled job: the kind and reason of its error.",
+                "type": "object",
+                "required": ["kind"],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": { "$ref": "common.schema.json#/$defs/errorKind" },
+                  "reason": { "$ref": "common.schema.json#/$defs/reasonCode" }
+                }
+              }
+            }
+          }
+        },
+        "editingScheme": { "enum": ["openTune", "openDyne"] },
+        "dirty": { "type": "boolean" },
+        "clips": { "type": "array", "items": { "$ref": "#/$defs/givenClip" } },
+        "clipOnEveryTrack": {
+          "description": "Every track slot that no clip of clips is on holds one more clip (vectors/README.md, Preconditions).",
+          "const": true
+        },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/givenFile" } },
+        "history": {
+          "type": "object",
+          "required": ["undo", "redo"],
+          "additionalProperties": false,
+          "properties": {
+            "undo": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/givenHistoryEntry" }
+            },
+            "redo": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/givenHistoryEntry" }
+            }
+          }
+        },
+        "withoutCapabilities": {
+          "description": "Capabilities the instance does not report while the vector runs.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/capability",
+            "not": { "const": "session.v1" }
+          }
+        },
+        "visibleTrackCount": {
+          "description": "The number of track slots shown, counted from track 0, or all.",
+          "anyOf": [{ "type": "integer", "minimum": 1 }, { "const": "all" }]
+        },
+        "dialogs": {
+          "description": "Dialogs open in OpenTune, from the bottom of the stack to the top.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "trackColour",
+                  "confirm",
+                  "pitchShift",
+                  "preferences",
+                  "message",
+                  "unknown"
+                ]
+              },
+              "trackId": { "$ref": "common.schema.json#/$defs/trackId" },
+              "colour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+            },
+            "if": { "properties": { "kind": { "const": "trackColour" } } },
+            "then": { "required": ["trackId", "colour"] },
+            "else": {
+              "allOf": [
+                { "not": { "required": ["trackId"] } },
+                { "not": { "required": ["colour"] } }
+              ]
+            }
+          }
+        },
+        "onboarding": {
+          "description": "notShown, shown or showing (vectors/README.md, Preconditions).",
+          "enum": ["notShown", "shown", "showing"]
+        },
+        "keyboardFocus": {
+          "description": "Where the keyboard focus of the OpenTune window is: tempoField, the tempo field of the transport bar, as in a window that has just started in the foreground (vectors/README.md, Preconditions).",
+          "enum": ["tempoField"]
+        },
+        "gpu": {
+          "description": "Whether OpenTune can create its inference session on the GPU: available, or unavailable, in which case OpenTune runs on the CPU whatever the rendering priority is and session.info reports processing.backend cpu (vectors/README.md, Preconditions).",
+          "enum": ["available", "unavailable"]
+        },
+        "preferences": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "tuningHz": { "type": "number", "minimum": 400, "maximum": 500 },
+            "hybridMode": { "type": "boolean" },
+            "experimentalFeatures": { "type": "boolean" },
+            "vocoderWeight": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "renderingPriority": { "enum": ["gpuFirst", "cpuFirst"] },
+            "f0Model": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "options": {
+              "description": "The weight files and the pitch models the installation offers (prefs.get, processing.options); vocoderWeight and f0Model name one of them.",
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": false,
+              "properties": {
+                "vocoderWeight": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "f0Model": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+                }
+              }
+            },
+            "recentProjects": {
+              "description": "Binds of given files, the most recent first.",
+              "type": "array",
+              "items": { "$ref": "#/$defs/name" }
+            }
+          }
+        },
+        "projectFile": {
+          "description": "Bind of the given file that is the current project's file.",
+          "$ref": "#/$defs/name"
+        },
+        "audio": {
+          "type": "object",
+          "required": ["running"],
+          "additionalProperties": false,
+          "properties": {
+            "running": { "type": "boolean" },
+            "failsToOpen": { "type": "boolean" },
+            "asioRateRestoreFails": {
+              "description": "With running true: OpenTune cannot restore the sample rate of an ASIO device before a switch of the device type or the output device (vectors/README.md, Preconditions).",
+              "type": "boolean"
+            },
+            "alternatives": {
+              "description": "With running true: the machine also offers another device type and another output device of the current type (vectors/README.md, Preconditions).",
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "matcher": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "$any": {
+          "oneOf": [
+            { "const": true },
+            {
+              "enum": [
+                "string",
+                "number",
+                "integer",
+                "boolean",
+                "object",
+                "array",
+                "null"
+              ]
+            }
+          ]
+        },
+        "$approx": { "type": "number" },
+        "$tol": { "type": "number", "minimum": 0 },
+        "$capture": { "$ref": "#/$defs/name" },
+        "$ref": { "$ref": "#/$defs/name" }
+      },
+      "oneOf": [
+        {
+          "required": ["$any"],
+          "not": {
+            "anyOf": [
+              { "required": ["$approx"] },
+              { "required": ["$tol"] },
+              { "required": ["$ref"] }
+            ]
+          }
+        },
+        {
+          "required": ["$approx"],
+          "not": {
+            "anyOf": [{ "required": ["$any"] }, { "required": ["$ref"] }]
+          }
+        },
+        {
+          "required": ["$capture"],
+          "not": {
+            "anyOf": [
+              { "required": ["$any"] },
+              { "required": ["$approx"] },
+              { "required": ["$tol"] },
+              { "required": ["$ref"] }
+            ]
+          }
+        },
+        { "required": ["$ref"], "maxProperties": 1 }
+      ]
+    },
+    "plainObject": {
+      "type": "object",
+      "propertyNames": { "not": { "pattern": "^\\$" } },
+      "additionalProperties": { "$ref": "#/$defs/value" }
+    },
+    "value": {
+      "anyOf": [
+        { "type": ["string", "number", "boolean", "null"] },
+        { "type": "array", "items": { "$ref": "#/$defs/value" } },
+        { "$ref": "#/$defs/plainObject" },
+        { "$ref": "#/$defs/matcher" }
+      ]
+    },
+    "step": {
+      "type": "object",
+      "properties": {
+        "connection": {
+          "description": "Connection the step applies to. Default \"main\".",
+          "$ref": "#/$defs/name"
+        },
+        "connect": { "$ref": "#/$defs/name" },
+        "send": { "$ref": "#/$defs/value" },
+        "sendRaw": { "type": "string" },
+        "sendHex": {
+          "description": "Bytes to send, as pairs of lowercase hexadecimal digits.",
+          "type": "string",
+          "pattern": "^([0-9a-f]{2})+$"
+        },
+        "sendFilled": {
+          "description": "head, then fill repeated until head and fill together are exactly bytes long, then tail.",
+          "type": "object",
+          "required": ["head", "fill", "bytes", "tail"],
+          "additionalProperties": false,
+          "properties": {
+            "head": { "type": "string" },
+            "fill": { "type": "string", "pattern": "^[\\x20-\\x7E]$" },
+            "bytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+            "tail": { "type": "string" }
+          }
+        },
+        "expect": { "$ref": "#/$defs/value" },
+        "expectClosed": {
+          "type": "object",
+          "required": ["noBytes"],
+          "additionalProperties": false,
+          "properties": {
+            "noBytes": { "type": "boolean" },
+            "withinMs": { "type": "integer", "minimum": 1, "maximum": 60000 }
+          }
+        },
+        "pauseMs": { "type": "integer", "minimum": 0, "maximum": 60000 }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["connect"] },
+        { "required": ["send"] },
+        { "required": ["sendRaw"] },
+        { "required": ["sendHex"] },
+        { "required": ["sendFilled"] },
+        { "required": ["expect"] },
+        { "required": ["expectClosed"] },
+        { "required": ["pauseMs"] }
+      ]
+    }
+  }
+}

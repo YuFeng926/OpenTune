@@ -1,0 +1,365 @@
+{
+  "description": "Every method of OTCP v1 (PROTOCOL.md section 22). schema: defined = methods/<method>.schema.json exists and is normative; pending = the schema is added before the 1.0.0-rc.1 tag; planned = the schema is added in a later 1.0.0 release candidate. Until its schema is defined, a method has no normative shape; an implementation may provide it provisionally for development against a release candidate and must change it to match the schema once the schema is defined (PROTOCOL.md section 22).",
+  "methods": [
+    {
+      "method": "session.hello",
+      "layer": "L2",
+      "capability": "session.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "session.info",
+      "layer": "L2",
+      "capability": "session.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "project.get",
+      "layer": "L2",
+      "capability": "read.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.getNotes",
+      "layer": "L2",
+      "capability": "read.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.getPitchCurve",
+      "layer": "L2",
+      "capability": "read.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.segmentNotes",
+      "layer": "L2",
+      "capability": "read.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.getDetails",
+      "layer": "L2",
+      "capability": "read.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "transport.get",
+      "layer": "L2",
+      "capability": "read.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "prefs.get",
+      "layer": "L2",
+      "capability": "read.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "app.getLog",
+      "layer": "L2",
+      "capability": "read.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "job.get",
+      "layer": "L3",
+      "capability": "jobs.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "job.cancel",
+      "layer": "L3",
+      "capability": "jobs.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "import.start",
+      "layer": "L3",
+      "capability": "import.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "export.start",
+      "layer": "L3",
+      "capability": "export.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "ui.getState",
+      "layer": "L3",
+      "capability": "ui.bridge",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "ui.dismiss",
+      "layer": "L3",
+      "capability": "ui.bridge",
+      "write": "conditional",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.setKey",
+      "layer": "L4",
+      "capability": "edit.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.autoTune",
+      "layer": "L4",
+      "capability": "edit.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.editNotes",
+      "layer": "L4",
+      "capability": "edit.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.setPitchShift",
+      "layer": "L4",
+      "capability": "edit.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "edit.getHistory",
+      "layer": "L4",
+      "capability": "history.v1",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "edit.undo",
+      "layer": "L4",
+      "capability": "history.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "edit.redo",
+      "layer": "L4",
+      "capability": "history.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.shiftTiming",
+      "layer": "L5",
+      "capability": "timing.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "content.editTimeGrid",
+      "layer": "L5",
+      "capability": "timing.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "transport.control",
+      "layer": "L6",
+      "capability": "transport.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "transport.setTempo",
+      "layer": "L6",
+      "capability": "transport.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "transport.setLoop",
+      "layer": "L6",
+      "capability": "transport.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "arrangement.edit",
+      "layer": "L6",
+      "capability": "arrangement.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "arrangement.copy",
+      "layer": "L6",
+      "capability": "arrangement.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "track.set",
+      "layer": "L6",
+      "capability": "tracks.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "track.add",
+      "layer": "L6",
+      "capability": "tracks.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "track.duplicate",
+      "layer": "L6",
+      "capability": "tracks.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "track.delete",
+      "layer": "L6",
+      "capability": "tracks.v1",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "ui.setSelection",
+      "layer": "L6",
+      "capability": "ui.bridge",
+      "write": "conditional",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "ui.setWorkspace",
+      "layer": "L6",
+      "capability": "ui.workspace",
+      "write": "conditional",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "project.save",
+      "layer": "L8",
+      "capability": "project.io",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "project.saveAs",
+      "layer": "L8",
+      "capability": "project.io",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "project.saveCopy",
+      "layer": "L8",
+      "capability": "project.copy",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "project.open",
+      "layer": "L8",
+      "capability": "project.io",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "project.clearRecent",
+      "layer": "L8",
+      "capability": "project.io",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "prefs.set",
+      "layer": "L8",
+      "capability": "prefs.write",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "audio.get",
+      "layer": "L8",
+      "capability": "audio.device",
+      "write": "no",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "audio.set",
+      "layer": "L8",
+      "capability": "audio.device",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "app.quit",
+      "layer": "L8",
+      "capability": "app.quit",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    }
+  ]
+}

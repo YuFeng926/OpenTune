@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "app/quit-capability-missing",
+  "type": "request",
+  "description": "An instance that does not report app.quit, such as one of release candidate 6, answers app.quit with UNSUPPORTED(capability_missing), executed false, and keeps running: a client then tells the end user to save the project and close the OpenTune window.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "method": "app.quit",
+  "session": "authenticated",
+  "given": {
+    "withoutCapabilities": ["app.quit"]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "app.quit",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNSUPPORTED",
+      "data": {
+        "kind": "UNSUPPORTED",
+        "reason": "capability_missing",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

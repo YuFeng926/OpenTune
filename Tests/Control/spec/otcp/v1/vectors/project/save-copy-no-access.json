@@ -1,0 +1,44 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-copy-no-access",
+  "type": "request",
+  "description": "When whether the target exists cannot be determined, because it lies in a directory the server cannot open, project.saveCopy fails with IO_ERROR(read_failed) and starts no job (PROTOCOL.md section 20.3 rule 4).",
+  "capability": "project.copy",
+  "since": "1.0",
+  "method": "project.saveCopy",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "locked", "kind": "noAccess", "extension": ".otproj" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.saveCopy",
+    "params": { "path": { "$ref": "locked" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "IO_ERROR",
+      "data": {
+        "kind": "IO_ERROR",
+        "reason": "read_failed",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

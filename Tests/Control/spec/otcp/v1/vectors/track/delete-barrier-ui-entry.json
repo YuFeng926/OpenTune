@@ -1,0 +1,126 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/delete-barrier-ui-entry",
+  "type": "scenario",
+  "description": "A clip move made in the OpenTune UI, undone with force at the end user's request, has an undoId and sits on the redo history. Deleting a track after the clip's track makes it possibly stale again, because the server cannot inspect UI entries; edit.redo without force then applies it with the warning UNDO_ENTRY_POSSIBLY_STALE (PROTOCOL.md section 15.3 rule 6).",
+  "capability": "tracks.v1",
+  "extraCapabilities": ["history.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "visibleTrackCount": 3,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "history": {
+      "undo": [{ "origin": "ui", "action": "clipMove", "clip": "clip" }],
+      "redo": []
+    }
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "edit.undo",
+        "params": { "force": true }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "tokens": {
+            "arrangementRevision": { "$capture": "afterUndo", "$any": "string" }
+          },
+          "entry": {
+            "undoId": { "$capture": "uiEntry", "$any": "string" },
+            "description": { "$any": "string" },
+            "origin": "ui",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "track.delete",
+        "params": {
+          "trackId": 2,
+          "expectedArrangementRevision": { "$ref": "afterUndo" },
+          "confirm": true
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "possiblyStaleEntries": { "undo": 0, "redo": 1 }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "history": {
+            "redoTop": {
+              "undoId": { "$ref": "uiEntry" },
+              "description": { "$any": "string" },
+              "origin": "ui",
+              "possiblyStale": true,
+              "unsafe": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "edit.redo",
+        "params": { "expectedUndoId": { "$ref": "uiEntry" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "applied": true,
+          "warnings": [
+            {
+              "code": "UNDO_ENTRY_POSSIBLY_STALE",
+              "subject": null,
+              "data": null
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

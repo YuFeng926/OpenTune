@@ -1,0 +1,62 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "import/start-separate-tracks",
+  "type": "request",
+  "description": "layout separateTracks places two files on tracks 1 and 2, generates notes for both once their analysis has finished, and does not select the last clip.",
+  "capability": "import.v1",
+  "since": "1.0",
+  "method": "import.start",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "files": [
+      { "bind": "take1", "kind": "audio", "durationSec": 4 },
+      { "bind": "take2", "kind": "audio", "durationSec": 3 }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "import.start",
+    "params": {
+      "items": [
+        { "path": { "$ref": "take1" } },
+        { "path": { "$ref": "take2" } }
+      ],
+      "layout": "separateTracks",
+      "trackId": 1,
+      "generateNotes": true,
+      "focus": false
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": false,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": { "$any": "object" },
+      "undo": null,
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": {
+        "jobId": { "$any": "string" },
+        "kind": "import",
+        "state": { "$any": "string" }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

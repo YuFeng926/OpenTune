@@ -377,6 +377,14 @@ private:
     static constexpr int PARAMETER_PANEL_WIDTH = 240;  // 右侧 Properties Panel
     static constexpr int OVERVIEW_STRIP_HEIGHT = 60;
 
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: editor bridge, see Source/Control/README.md#hooks
+    friend class ControlEditorBridge;
+    std::unique_ptr<class ControlEditorBridge> controlEditorBridge_;
+    // OpenTune Control API hook: the steps after an undo or redo (performUndoRedoAction), see Source/Control/README.md#hooks
+    void afterUndoRedo();
+#endif
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessorEditor)
 };
 

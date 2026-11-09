@@ -1,0 +1,83 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/set-clamped",
+  "type": "request",
+  "description": "A volume above the range of OpenTune's volume knob (0 to 4, linear) is limited to it: the warning CLAMPED gives the requested and the applied value.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.set",
+  "session": "authenticated",
+  "given": { "dirty": false },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "track.set",
+    "params": { "tracks": [{ "trackId": 0, "volumeLinear": 6 }] }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "track",
+          "ref": { "trackId": 0 },
+          "label": { "$any": true },
+          "fields": {
+            "volumeDb": {
+              "before": { "$any": "number" },
+              "after": { "$approx": 12.0412, "$tol": 0.001 },
+              "unit": "db"
+            },
+            "volumeLinear": {
+              "before": { "$any": "number" },
+              "after": 4,
+              "unit": "linear"
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": {
+          "before": { "$any": "string" },
+          "after": { "$any": "string" }
+        },
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "track.set",
+          "params": {
+            "tracks": [{ "trackId": 0, "volumeDb": { "$any": "number" } }]
+          }
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "CLAMPED",
+          "subject": { "trackId": 0 },
+          "data": { "field": "volumeLinear", "requested": 6, "applied": 4 }
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

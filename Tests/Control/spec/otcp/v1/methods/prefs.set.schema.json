@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/prefs.set.schema.json",
+  "title": "prefs.set",
+  "description": "Changes OpenTune's processing preferences, as its preferences window does: tuningHz, the frequency of A4 that all *Midi values refer to (PROTOCOL.md section 8.2); editingScheme (section 21); hybridMode; experimentalFeatures, which shows or hides OpenTune's experimental features; vocoderWeight, the vocoder weight file; renderingPriority, whether rendering prefers the GPU or the CPU; and f0Model, the pitch model. Preferences are user-global: they apply to every project and outlive the session. The members can be combined freely. vocoderWeight and f0Model must name one of the values that prefs.get lists in processing.options; any other value gives INVALID_ARGUMENT(option_unavailable), detail names the member, nothing is changed and executed is false. The check comes right after the busy check and before the test for a no-op: a value that equals the current one but is not listed (a weight whose file was removed, for example) is refused too, and the whole call changes nothing. The pitch model is applied first: if OpenTune cannot load it, the call (or the job, below) fails with MODEL_UNAVAILABLE(model_missing) and executed false, and no other preference changes. Every changed preference is listed in changes (entity preference, ref {preference}) and named in the warning GLOBAL_PREFERENCE (data {preferences}), in the order tuningHz, editingScheme, hybridMode, experimentalFeatures, vocoderWeight, renderingPriority, f0Model; the revert recipe lists the same members in the same order. As in OpenTune there is no undo entry (undo reason ui_parity), and the revert recipe sets the previous values with prefs.set. A previous vocoder weight whose name cannot be carried (empty, not valid UTF-8 or longer than 64 code points) is reported with before null, and the revert recipe leaves vocoderWeight out (revert is null when that leaves the recipe without a member). Values equal to the current ones are a no-op, and a call whose values all equal the current ones is a no-op as a whole. tuningHz applies to analysis and rendering from now on and does not recompute existing results (warning NOT_RETROACTIVE). hybridMode makes OpenTune render every content again (sideEffects.reRenderQueued {contentIds, revert: null}), and so does vocoderWeight once the vocoder has switched: the job reports reRenderQueued for every change of vocoderWeight, whether or not it waited for the vocoder; when it did not wait, the render starts once the new weight has loaded, and it does not happen if the weight cannot be loaded. renderingPriority only changes the inference backend, which is not audible, so a change of it never reports reRenderQueued. gpuFirst makes OpenTune try the GPU for inference and use the CPU when the GPU cannot be used; cpuFirst makes it use the CPU only. When a call changed renderingPriority to gpuFirst and the backend that runs when the job ends is cpu, the result of the job carries the warning BACKEND_FALLBACK with data {requested, actual} (PROTOCOL.md section 12.7 rule 7); the preference is set all the same, and processing.backend of session.info reports the backend that runs. OpenTune applies a new editing scheme to its editor asynchronously and reconfigures the vocoder asynchronously after a new vocoder weight or rendering priority, so a call that changes editingScheme, vocoderWeight or renderingPriority hands all its changes to a job of kind prefsApply (PROTOCOL.md section 12.7), which ends when the editor has applied the scheme (if the call changed it) and, if the call changed the vocoder weight or the rendering priority and the vocoder was ready before, when the vocoder is ready again, and cannot be cancelled; the job's result (jobResult) is the write envelope. Before its first step the job checks the busy state again (PROTOCOL.md section 13.2): a condition that arose after the call was accepted, for example a modal dialog that opened (BUSY(modal_open)), fails the job with executed false, and no preference changes. When a wait of the job passes its limit (a limit that the implementation defines), the job takes its changes back and fails: INTERNAL when the editor did not apply the scheme, MODEL_UNAVAILABLE(vocoder_not_ready), retryable, when the vocoder was still busy. If the command for the vocoder has finished but the vocoder is not ready (it could not load the new weight or backend, for example because the weight file is corrupt or incompatible), the job does not wait for the limit: it takes its changes back at once and fails with MODEL_UNAVAILABLE(vocoder_load_failed), not retryable. A preference that another write changed while the job waited keeps that write's value, and executed is then true. Switching to openDyne may make OpenTune generate notes for the clip open in the piano roll (section 21 rule 4), with no undo entry: sideEffects.notesGenerated {contentId, noteCount, revert: null} with the warnings SCHEME_GENERATED_NOTES and IRREVERSIBLE, and the project is marked as changed. A job that fails and takes its changes back cannot take these notes back: they stay, the project stays marked as changed, the detail says so and executed is true. The other preferences take effect when the call returns.",
+  "x-otcp": {
+    "method": "prefs.set",
+    "layer": "L8",
+    "capability": "prefs.write",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "prefsApply",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "MODEL_UNAVAILABLE",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": ["BUSY", "MODEL_UNAVAILABLE", "INTERNAL"]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "tuningHz": {
+          "description": "Frequency of A4.",
+          "type": "number",
+          "minimum": 400,
+          "maximum": 500
+        },
+        "editingScheme": { "enum": ["openTune", "openDyne"] },
+        "hybridMode": { "type": "boolean" },
+        "experimentalFeatures": { "type": "boolean" },
+        "vocoderWeight": {
+          "description": "The vocoder weight file, one of processing.options.vocoderWeight of prefs.get. Any other value gives INVALID_ARGUMENT(option_unavailable).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "renderingPriority": {
+          "description": "gpuFirst or cpuFirst: the inference backend rendering prefers.",
+          "enum": ["gpuFirst", "cpuFirst"]
+        },
+        "f0Model": {
+          "description": "The pitch model, one of processing.options.f0Model of prefs.get. Any other value gives INVALID_ARGUMENT(option_unavailable).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "description": "The result of the prefsApply job: the write envelope of the preferences it applied.",
+      "$ref": "#/$defs/result"
+    }
+  }
+}

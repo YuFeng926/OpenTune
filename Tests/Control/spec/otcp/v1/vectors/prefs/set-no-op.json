@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-no-op",
+  "type": "request",
+  "description": "Setting the tuning the instance already has is a no-op.",
+  "capability": "prefs.write",
+  "since": "1.0",
+  "method": "prefs.set",
+  "session": "authenticated",
+  "given": { "dirty": false, "preferences": { "tuningHz": 440 } },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "prefs.set",
+    "params": { "tuningHz": 440 }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": true,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": { "undoable": false, "reason": "no_op", "revert": null },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,105 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/job-analysis-failed",
+  "type": "scenario",
+  "description": "The pitch analysis of the exported clip failed and allowDry is false, so the job fails with ANALYSIS_FAILED(f0_failed) instead of exporting the clip uncorrected (PROTOCOL.md section 19 rule 6), and the target is not touched.",
+  "capability": "export.v1",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "failed"
+      }
+    ],
+    "files": [{ "bind": "out", "kind": "absent" }]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "export.start",
+        "params": {
+          "kind": "clip",
+          "target": { "placementId": { "$ref": "clip.placementId" } },
+          "path": { "$ref": "out" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": false,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": null,
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": { "$any": "object" },
+          "undo": null,
+          "dirty": { "$any": "object" },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [],
+          "job": {
+            "jobId": { "$capture": "exportJob", "$any": "string" },
+            "kind": "export",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "exportJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "exportJob" },
+            "kind": "export",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "ANALYSIS_FAILED",
+              "data": {
+                "kind": "ANALYSIS_FAILED",
+                "reason": "f0_failed",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "transport/set-tempo-ok",
+  "type": "request",
+  "description": "transport.setTempo sets the tempo and the time signature. As in OpenTune there is no undo entry (undo reason ui_parity); the revert recipe sets the previous values, and the project is marked as changed because they are saved with it.",
+  "capability": "transport.v1",
+  "since": "1.0",
+  "method": "transport.setTempo",
+  "session": "authenticated",
+  "given": { "dirty": false },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "transport.setTempo",
+    "params": {
+      "bpm": 96,
+      "timeSignature": { "numerator": 3, "denominator": 4 }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "tempo",
+          "ref": { "singleton": "tempo" },
+          "label": { "$any": true },
+          "fields": {
+            "bpm": { "before": 120, "after": 96, "unit": "bpm" },
+            "timeSignature": {
+              "before": { "numerator": 4, "denominator": 4 },
+              "after": { "numerator": 3, "denominator": 4 },
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "transport.setTempo",
+          "params": {
+            "bpm": 120,
+            "timeSignature": { "numerator": 4, "denominator": 4 }
+          }
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": null,
+      "tempo": {
+        "bpm": 96,
+        "timeSignature": { "numerator": 3, "denominator": 4 }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

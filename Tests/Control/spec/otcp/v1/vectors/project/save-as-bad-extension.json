@@ -1,0 +1,44 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-as-bad-extension",
+  "type": "request",
+  "description": "project.saveAs accepts only .otproj paths: INVALID_ARGUMENT(path_bad_extension).",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.saveAs",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "wave", "kind": "absent" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.saveAs",
+    "params": { "path": { "$ref": "wave" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "path_bad_extension",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

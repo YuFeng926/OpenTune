@@ -1,0 +1,85 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-vocoder-not-ready",
+  "type": "scenario",
+  "description": "How job.get reports a prefsApply job whose wait for the vocoder passed its limit: MODEL_UNAVAILABLE(vocoder_not_ready), retryable. The job took its changes back, so executed is false and prefs.get still reports the previous weight (PROTOCOL.md section 12.7 rule 5). The wait ends after a limit that the implementation chooses, which no vector can wait for, so the job is a precondition and this vector shows the form of the error.",
+  "capability": "prefs.write",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "preferences": {
+      "vocoderWeight": "hifigan.onnx",
+      "options": {
+        "vocoderWeight": ["hifigan.onnx", "hifigan_coulin9.onnx"],
+        "f0Model": ["fcpe"]
+      }
+    },
+    "jobs": [
+      {
+        "bind": "weightTimeout",
+        "kind": "prefsApply",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "MODEL_UNAVAILABLE", "reason": "vocoder_not_ready" }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "weightTimeout" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "weightTimeout" },
+            "kind": "prefsApply",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "MODEL_UNAVAILABLE",
+              "data": {
+                "kind": "MODEL_UNAVAILABLE",
+                "reason": "vocoder_not_ready",
+                "retryable": true,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "prefs.get",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "processing": { "vocoderWeight": "hifigan.onnx" }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-delete-confirm-required",
+  "type": "request",
+  "description": "A call with op delete and without confirm true fails with INVALID_ARGUMENT(confirm_required) and changes nothing, as track.delete does: no request can restore a deleted clip (PROTOCOL.md section 20.2 rule 3).",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.edit",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.edit",
+    "params": {
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "ops": [
+        { "op": "delete", "placementIds": [{ "$ref": "clip.placementId" }] }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "confirm_required",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

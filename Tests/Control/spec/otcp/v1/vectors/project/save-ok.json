@@ -1,0 +1,60 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-ok",
+  "type": "request",
+  "description": "project.save hands the save to a job of kind projectSave and changes nothing itself.",
+  "capability": "project.io",
+  "since": "1.0",
+  "method": "project.save",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "proj", "kind": "existing", "extension": ".otproj" }],
+    "projectFile": "proj"
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project.save",
+    "params": {}
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": false,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": { "$any": "object" },
+      "undo": null,
+      "dirty": { "before": true, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [],
+      "job": {
+        "jobId": { "$any": "string" },
+        "kind": "projectSave",
+        "state": { "$any": "string" }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

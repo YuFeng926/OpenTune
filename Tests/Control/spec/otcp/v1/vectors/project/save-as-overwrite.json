@@ -1,0 +1,131 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "project/save-as-overwrite",
+  "type": "scenario",
+  "description": "With confirm true, given only because the end user agreed, project.saveAs replaces the other project file; the job result carries the warning OVERWROTE_OTHER_PROJECT.",
+  "capability": "project.io",
+  "extraCapabilities": ["jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": true,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "files": [{ "bind": "other", "kind": "existing", "extension": ".otproj" }]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "project.saveAs",
+        "params": { "path": { "$ref": "other" }, "confirm": true }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "overwriteJob", "$any": "string" },
+            "kind": "projectSave",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "overwriteJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "overwriteJob" },
+            "kind": "projectSave",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "dryRun": false,
+              "changes": [
+                {
+                  "entity": "project",
+                  "ref": { "singleton": "project" },
+                  "label": { "$any": true },
+                  "fields": {
+                    "path": {
+                      "before": null,
+                      "after": { "$ref": "other" },
+                      "unit": null
+                    }
+                  }
+                }
+              ],
+              "created": [],
+              "removed": [],
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": null,
+                "trackState": null,
+                "contents": []
+              },
+              "tokens": { "$any": "object" },
+              "undo": {
+                "undoable": false,
+                "reason": "no_upstream_undo",
+                "revert": null
+              },
+              "dirty": { "before": true, "after": false },
+              "ui": { "$any": true },
+              "sideEffects": {},
+              "warnings": [
+                {
+                  "code": "IRREVERSIBLE",
+                  "subject": { "singleton": "project" },
+                  "data": null
+                },
+                {
+                  "code": "OVERWROTE_OTHER_PROJECT",
+                  "subject": { "path": { "$ref": "other" } },
+                  "data": { "path": { "$ref": "other" } }
+                },
+                {
+                  "code": "NOT_SAVED_IN_PROJECT",
+                  "subject": null,
+                  "data": {
+                    "items": ["undoHistory", "preferences"]
+                  }
+                }
+              ],
+              "job": null,
+              "path": { "$ref": "other" },
+              "sizeBytes": { "$any": "integer" }
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

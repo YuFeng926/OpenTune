@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/edit.redo.schema.json",
+  "title": "edit.redo",
+  "description": "Redoes the entry on top of OpenTune's redo history (PROTOCOL.md section 15.3). Without force, expectedUndoId is required and must name that entry, else the call fails with UNDO_CONFLICT(top_mismatch). With force true the server applies the top entry whatever it is and neither parses nor checks expectedUndoId, which may be left out; clients set force only when the end user explicitly asked to redo a change that was not made through the client. An empty history gives UNDO_CONFLICT(history_empty), also with force; a clip split, merge or delete gives UNSUPPORTED(undo_unsafe_build), also with force. An entry is possibly stale (possiblyStale in edit.getHistory) when a track was deleted after it was recorded and no call with force has applied it since. Without force, a possibly stale entry recorded through this API gives UNDO_CONFLICT(stale_entry); such an entry is possibly stale only when a track it addresses has moved or was removed since, so an entry recorded through this API whose tracks did not move is applied as usual, without a warning. Without force, a possibly stale entry recorded in the UI, which the server cannot inspect, is applied with the warning UNDO_ENTRY_POSSIBLY_STALE; with force, a possibly stale entry is applied without that warning. A call with force that applies an entry clears its possiblyStale, because the end user has confirmed the entry. Changes without an undo entry are never taken back: an entry recorded through this API puts back only the aspects of a content that its own change touched, and no longer those that a later change without an undo entry changed; such a change also clears the redo history (section 15.3 rule 9). A step that changes nothing still succeeds, with noOp true and the warning UNDO_NO_EFFECT; as in OpenTune, the step is used up and the project is marked as changed. entry is the applied entry as it is after the step: an entry that had no undoId has the one the server assigned now (section 15.3 rule 8), and after a call with force possiblyStale is false. revisionDiff and changes describe the effect, from snapshots taken before and after the step; a content whose notes or pitch curve changed is listed as an entry of entity content with the field revision. Like the UI, the server then refreshes derived state; work this queues is reported in sideEffects. The step creates no undo entry of its own (undo reason ui_parity); its revert recipe is edit.undo with the entry's undoId and without force, so that, sent unchanged, it takes back exactly this step, also after a step applied with force.",
+  "x-otcp": {
+    "method": "edit.redo",
+    "layer": "L4",
+    "capability": "history.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNDO_CONFLICT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "expectedUndoId": {
+          "description": "The undoId of the entry the client expects on top of the history. Required, and checked, unless force is true; with force true the server ignores it, whatever its value."
+        },
+        "force": { "type": "boolean", "default": false }
+      },
+      "if": {
+        "properties": { "force": { "const": true } },
+        "required": ["force"]
+      },
+      "else": {
+        "required": ["expectedUndoId"],
+        "properties": {
+          "expectedUndoId": {
+            "$ref": "../schemas/common.schema.json#/$defs/undoId"
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["undo", "entry"],
+      "properties": {
+        "undo": {
+          "description": "The step's own undo descriptor: no undo entry (reason ui_parity), and edit.undo with the applied entry's undoId as revert recipe. The recipe's params hold only expectedUndoId: they never carry force (PROTOCOL.md section 15.3 rule 8).",
+          "type": "object",
+          "required": ["undoable", "reason", "revert"],
+          "properties": {
+            "undoable": { "const": false },
+            "reason": { "const": "ui_parity" },
+            "revert": {
+              "type": "object",
+              "required": ["method", "params"],
+              "properties": {
+                "method": { "const": "edit.undo" },
+                "params": {
+                  "type": "object",
+                  "required": ["expectedUndoId"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "expectedUndoId": {
+                      "$ref": "../schemas/common.schema.json#/$defs/undoId"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "entry": { "$ref": "../schemas/common.schema.json#/$defs/historyEntry" }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

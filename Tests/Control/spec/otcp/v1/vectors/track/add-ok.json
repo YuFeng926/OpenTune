@@ -1,0 +1,61 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/add-ok",
+  "type": "request",
+  "description": "track.add shows the next hidden track slot, as the + button does. OpenTune saves the number of visible tracks with the project, so the project is marked as changed. The + button has no undo and no request restores the previous number: undo reason no_upstream_undo, revert null, and the warning IRREVERSIBLE.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.add",
+  "session": "authenticated",
+  "given": { "dirty": false, "visibleTrackCount": 2 },
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "track.add", "params": {} },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "track",
+          "ref": { "trackId": 2 },
+          "label": { "$any": true },
+          "fields": {
+            "visible": { "before": false, "after": true, "unit": null }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": {
+          "before": { "$any": "string" },
+          "after": { "$any": "string" }
+        },
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "no_upstream_undo",
+        "revert": null
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        { "code": "IRREVERSIBLE", "subject": { "trackId": 2 }, "data": null }
+      ],
+      "job": null,
+      "visibleTrackCount": { "before": 2, "after": 3 }
+    }
+  },
+  "connectionAfter": "open"
+}

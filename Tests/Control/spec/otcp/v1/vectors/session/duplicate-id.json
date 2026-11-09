@@ -1,0 +1,89 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/duplicate-id",
+  "type": "scenario",
+  "description": "While a job.get with id 45 is waiting, another request with id 45 is answered at once with INVALID_ARGUMENT(duplicate_id) and id null, and is not executed; the waiting job.get then answers normally.",
+  "capability": "jobs.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "exportJob",
+        "kind": "export",
+        "state": "running",
+        "cancellable": true
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 45,
+        "method": "job.get",
+        "params": {
+          "jobId": {
+            "$ref": "exportJob"
+          },
+          "waitMs": 1500
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 45,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32600,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "duplicate_id",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 45,
+        "result": {
+          "job": {
+            "jobId": {
+              "$ref": "exportJob"
+            },
+            "kind": "export",
+            "state": "running",
+            "cancellable": true,
+            "createdAtMs": {
+              "$any": "integer"
+            },
+            "updatedAtMs": {
+              "$any": "integer"
+            },
+            "finishedAtMs": null,
+            "progress": {
+              "$any": "object"
+            },
+            "result": null,
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

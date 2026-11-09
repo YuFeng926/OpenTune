@@ -1,0 +1,149 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-trim-fades",
+  "type": "scenario",
+  "description": "Trimming the end of a 6 s clip with a 3 s fade-out to 2 s shortens the fade-out to 1.8 s (warning FADES_RECLAMPED). The trim records the fades in its undo step before the trim, so undoing it restores the clip's length and its 3 s fade-out, which undoing a trim in the OpenTune UI does not do (PROTOCOL.md section 15.4 rule 2).",
+  "capability": "arrangement.v1",
+  "extraCapabilities": ["history.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "fadeOutSec": 3
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "arrangement.edit",
+        "params": {
+          "expectedArrangementRevision": {
+            "$ref": "runner.arrangementRevision"
+          },
+          "ops": [
+            {
+              "op": "trim",
+              "placementId": { "$ref": "clip.placementId" },
+              "edge": "end",
+              "toTimelineSec": 4
+            }
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "dryRun": false,
+          "changes": [
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "clip.placementId" } },
+              "label": { "$any": true },
+              "fields": {
+                "endTimelineSec": { "before": 8, "after": 4, "unit": "sec" },
+                "durationSec": { "before": 6, "after": 2, "unit": "sec" },
+                "fadeOutSec": {
+                  "before": 3,
+                  "after": { "$approx": 1.8 },
+                  "unit": "sec"
+                }
+              }
+            }
+          ],
+          "created": [],
+          "removed": [],
+          "idMap": [],
+          "revisionDiff": {
+            "arrangement": {
+              "before": { "$ref": "runner.arrangementRevision" },
+              "after": { "$any": "string" }
+            },
+            "trackState": null,
+            "contents": []
+          },
+          "tokens": {
+            "arrangementRevision": { "$any": "string" },
+            "contents": [],
+            "placements": [
+              {
+                "placementId": { "$ref": "clip.placementId" },
+                "geometryHash": { "$any": "string" }
+              }
+            ]
+          },
+          "undo": {
+            "undoable": true,
+            "undoId": { "$capture": "trimUndo", "$any": "string" },
+            "description": { "$any": "string" },
+            "innerActions": { "$any": "array" },
+            "steps": 1
+          },
+          "dirty": { "before": false, "after": true },
+          "ui": { "$any": true },
+          "sideEffects": {},
+          "warnings": [
+            {
+              "code": "FADES_RECLAMPED",
+              "subject": { "placementId": { "$ref": "clip.placementId" } },
+              "data": {
+                "fadeInSec": null,
+                "fadeOutSec": { "before": 3, "after": { "$approx": 1.8 } }
+              }
+            }
+          ],
+          "job": null
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "trimUndo" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "changes": [
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "clip.placementId" } },
+              "label": { "$any": true },
+              "fields": {
+                "endTimelineSec": { "before": 4, "after": 8, "unit": "sec" },
+                "durationSec": { "before": 2, "after": 6, "unit": "sec" },
+                "fadeOutSec": {
+                  "before": { "$approx": 1.8 },
+                  "after": 3,
+                  "unit": "sec"
+                }
+              }
+            }
+          ],
+          "warnings": []
+        }
+      }
+    }
+  ]
+}

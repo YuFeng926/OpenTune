@@ -1,0 +1,99 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "ui/dismiss-confirm-commit",
+  "type": "request",
+  "description": "With confirm true, ui.dismiss closes the track-colour dialog and its colour is committed, as in OpenTune: changes lists the track's colour, sideEffects.dialogCommitted reports the commit, the project is marked as changed and the warning DIALOG_CLOSE_COMMITTED says so. The colour change has no undo entry (undo reason ui_parity); the revert recipe sets the previous colour with track.set.",
+  "capability": "ui.bridge",
+  "extraCapabilities": ["tracks.v1"],
+  "since": "1.0",
+  "method": "ui.dismiss",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "dialogs": [{ "kind": "trackColour", "trackId": 0, "colour": "#FF8800" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ui.dismiss",
+    "params": { "target": "dialogs", "confirm": true }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "track",
+          "ref": { "trackId": 0 },
+          "label": { "$any": true },
+          "fields": {
+            "colour": {
+              "before": { "$any": "string" },
+              "after": "#FF8800",
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": {
+          "before": { "$any": "string" },
+          "after": { "$any": "string" }
+        },
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "track.set",
+          "params": {
+            "tracks": [{ "trackId": 0, "colour": { "$any": "string" } }]
+          }
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {
+        "dialogClosed": {
+          "dialogs": [{ "kind": "trackColour", "trackId": 0 }],
+          "revert": null
+        },
+        "dialogCommitted": {
+          "kind": "trackColour",
+          "trackId": 0,
+          "colourBefore": { "$any": "string" },
+          "colourAfter": "#FF8800",
+          "revert": {
+            "method": "track.set",
+            "params": {
+              "tracks": [{ "trackId": 0, "colour": { "$any": "string" } }]
+            }
+          }
+        }
+      },
+      "warnings": [
+        {
+          "code": "DIALOG_CLOSE_COMMITTED",
+          "subject": { "trackId": 0 },
+          "data": { "kind": "trackColour" }
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

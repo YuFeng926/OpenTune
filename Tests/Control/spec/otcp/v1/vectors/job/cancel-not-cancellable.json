@@ -1,0 +1,42 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "job/cancel-not-cancellable",
+  "type": "request",
+  "description": "A project save cannot be cancelled. job.cancel fails with UNSUPPORTED(job_not_cancellable) and the job continues unchanged.",
+  "capability": "jobs.v1",
+  "since": "1.0",
+  "method": "job.cancel",
+  "session": "authenticated",
+  "given": {
+    "jobs": [
+      {
+        "bind": "saveJob",
+        "kind": "projectSave",
+        "state": "running",
+        "cancellable": false
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "job.cancel",
+    "params": { "jobId": { "$ref": "saveJob" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "error": {
+      "code": -32000,
+      "message": "UNSUPPORTED",
+      "data": {
+        "kind": "UNSUPPORTED",
+        "reason": "job_not_cancellable",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

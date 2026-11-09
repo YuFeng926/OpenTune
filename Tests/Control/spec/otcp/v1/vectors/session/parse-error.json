@@ -1,0 +1,50 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "session/parse-error",
+  "type": "scenario",
+  "description": "After authentication, a line that is not valid JSON is answered with INVALID_ARGUMENT(parse_error) with id null, and the session stays open.",
+  "capability": "session.v1",
+  "since": "1.0",
+  "session": "authenticated",
+  "steps": [
+    {
+      "sendRaw": "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"session.info\"\n"
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+          "code": -32700,
+          "message": "INVALID_ARGUMENT",
+          "data": {
+            "kind": "INVALID_ARGUMENT",
+            "reason": "parse_error",
+            "retryable": false,
+            "detail": {
+              "$any": "string"
+            },
+            "executed": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 33,
+        "method": "session.info",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 33,
+        "result": {
+          "$any": "object"
+        }
+      }
+    }
+  ]
+}

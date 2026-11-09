@@ -1,0 +1,100 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/auto-tune-snap-notes",
+  "type": "request",
+  "description": "AUTO snapNotes over the whole content moves the targets of the existing notes to C major, as the AUTO button does in the openDyne scheme. Which notes move depends on their pitch, so changes is matched by type; the number of notes stays the same.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.autoTune",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 3.5, "endContentSec": 4.5, "targetMidi": 69.3 },
+          { "startContentSec": 5, "endContentSec": 5.8, "targetMidi": 66.2 }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.autoTune",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "mode": "snapNotes",
+      "expectedRevision": { "$ref": "clip.revision" },
+      "key": { "root": 0, "scale": "major" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": { "$any": "array" },
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "changed": {
+              "notes": {
+                "before": { "$any": "string" },
+                "after": { "$any": "string" }
+              }
+            }
+          }
+        ]
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$any": "string" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ],
+        "placements": []
+      },
+      "undo": {
+        "undoable": true,
+        "undoId": { "$any": "string" },
+        "description": { "$any": "string" },
+        "innerActions": { "$any": "array" },
+        "steps": 1
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {
+        "reRenderQueued": {
+          "contentIds": [{ "$ref": "clip.contentId" }],
+          "revert": null
+        }
+      },
+      "warnings": [],
+      "job": null,
+      "omittedCount": { "changes": 0, "created": 0, "removed": 0 },
+      "mode": "snapNotes",
+      "keyUsed": { "root": 0, "scale": "major" },
+      "paramsUsed": null,
+      "noteCount": { "before": 2, "after": 2 }
+    }
+  },
+  "connectionAfter": "open"
+}

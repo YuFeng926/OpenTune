@@ -1,0 +1,46 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/set-key-not-ready",
+  "type": "request",
+  "description": "A content write while pitch analysis is still running gets NOT_READY(f0_not_ready), which is retryable (PROTOCOL.md section 11).",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.setKey",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "running"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.setKey",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "key": { "root": 0, "scale": "major" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_READY",
+      "data": {
+        "kind": "NOT_READY",
+        "reason": "f0_not_ready",
+        "retryable": true,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

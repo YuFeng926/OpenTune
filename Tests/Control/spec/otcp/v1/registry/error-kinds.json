@@ -1,0 +1,140 @@
+{
+  "$schema": "../schemas/registry.schema.json",
+  "registry": "errorKinds",
+  "description": "Error kinds carried in error.data.kind. Clients branch on the kind only. Append-only within protocol major 1; clients must accept kinds they do not know and treat them like INTERNAL. jsonrpcCode is the default JSON-RPC error code for the kind; PROTOCOL.md section 17.2 lists the reasons that use a different code. retryable is the default; the value in each error instance is authoritative.",
+  "entries": [
+    {
+      "code": "AUTH_FAILED",
+      "since": "1.0",
+      "jsonrpcCode": -32001,
+      "retryable": false,
+      "description": "The session.hello token is wrong, or params has no string token or no protocol of the form MAJOR.MINOR. Sent only as the fixed pre-authentication response; the server closes the connection after sending it."
+    },
+    {
+      "code": "PROTOCOL_MISMATCH",
+      "since": "1.0",
+      "jsonrpcCode": -32002,
+      "retryable": false,
+      "description": "The protocol major version requested in session.hello is not served by this instance. Sent only as the fixed pre-authentication response; the server closes the connection after sending it."
+    },
+    {
+      "code": "SHUTTING_DOWN",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "The control API is stopping. The request was not executed. Pending job.get waits end with this error."
+    },
+    {
+      "code": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "jsonrpcCode": -32602,
+      "retryable": false,
+      "description": "The message or its parameters are invalid, or the request is not allowed in the current state for a reason the caller can fix by changing the request."
+    },
+    {
+      "code": "NOT_FOUND",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "A handle, job or file does not exist, or a handle is stale."
+    },
+    {
+      "code": "NOT_READY",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": true,
+      "description": "The target content is not ready for the request yet, for example because pitch analysis or note generation has not finished."
+    },
+    {
+      "code": "ANALYSIS_FAILED",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "Pitch analysis of the target content failed."
+    },
+    {
+      "code": "RENDER_FAILED",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "Rendering the corrected audio failed, also after the one automatic retry."
+    },
+    {
+      "code": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "A model or inference backend needed by the request is missing or could not be loaded."
+    },
+    {
+      "code": "REVISION_CONFLICT",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "An expected revision token no longer matches, or the state changed while the request was running. The reason names the aspect. Re-read and decide again."
+    },
+    {
+      "code": "UNDO_CONFLICT",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "The undo or redo history does not have the expected entry on top, or the entry must not be applied without force."
+    },
+    {
+      "code": "UNSAVED_CHANGES",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "The request would discard unsaved project changes and the caller did not allow that."
+    },
+    {
+      "code": "ALREADY_EXISTS",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "The target already exists and the request does not allow replacing it."
+    },
+    {
+      "code": "BUSY",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": true,
+      "description": "The request was refused because the user, the UI or another operation is using the resource. Nothing was executed."
+    },
+    {
+      "code": "TIMEOUT",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": true,
+      "description": "The request did not start executing before the dispatch deadline and was abandoned. executed is always false: the request has not run and will never run."
+    },
+    {
+      "code": "CANCELLED",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "The job was cancelled through job.cancel. Used in the error member of a cancelled job."
+    },
+    {
+      "code": "IO_ERROR",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "Reading or writing a file failed."
+    },
+    {
+      "code": "UNSUPPORTED",
+      "since": "1.0",
+      "jsonrpcCode": -32000,
+      "retryable": false,
+      "description": "The method, operation or target is not supported by this instance, this build or OpenTune itself."
+    },
+    {
+      "code": "INTERNAL",
+      "since": "1.0",
+      "jsonrpcCode": -32603,
+      "retryable": false,
+      "description": "An unexpected error inside the server. executed tells whether state may have changed."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-not-found",
+  "type": "request",
+  "description": "A placementId of this instance and epoch that names no placement gives NOT_FOUND(unknown_handle).",
+  "capability": "export.v1",
+  "since": "1.0",
+  "method": "export.start",
+  "session": "authenticated",
+  "given": { "files": [{ "bind": "out", "kind": "absent" }] },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "export.start",
+    "params": {
+      "kind": "clip",
+      "target": { "placementId": { "$ref": "runner.unknownPlacementId" } },
+      "path": { "$ref": "out" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "NOT_FOUND",
+      "data": {
+        "kind": "NOT_FOUND",
+        "reason": "unknown_handle",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,80 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "edit/undo-no-effect",
+  "type": "request",
+  "description": "With force the stale clip move is applied, but it changes nothing (the revision vector difference is empty). As in OpenTune the step is used up and the project is marked as changed: noOp is true and the warning UNDO_NO_EFFECT says so. The call with force clears the entry's possiblyStale (PROTOCOL.md section 15.3 rule 6), so the revert recipe, edit.redo with the entry's undoId and without force, can be sent unchanged (edit/undo-stale-entry-revert).",
+  "capability": "history.v1",
+  "since": "1.0",
+  "method": "edit.undo",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ],
+    "history": {
+      "undo": [
+        {
+          "bind": "moveEntry",
+          "origin": "control",
+          "action": "clipMove",
+          "clip": "clip",
+          "trackDeletedAfter": true
+        }
+      ],
+      "redo": []
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "edit.undo",
+    "params": { "expectedUndoId": { "$ref": "moveEntry" }, "force": true }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": true,
+      "dryRun": false,
+      "changes": [],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": { "$any": "object" },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "edit.redo",
+          "params": { "expectedUndoId": { "$ref": "moveEntry" } }
+        }
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [{ "code": "UNDO_NO_EFFECT", "subject": null, "data": null }],
+      "job": null,
+      "entry": {
+        "undoId": { "$ref": "moveEntry" },
+        "description": { "$any": "string" },
+        "origin": "control",
+        "possiblyStale": false,
+        "unsafe": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

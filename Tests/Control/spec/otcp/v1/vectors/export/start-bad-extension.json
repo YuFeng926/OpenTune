@@ -1,0 +1,35 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "export/start-bad-extension",
+  "type": "request",
+  "description": "Exports write only .wav files: INVALID_ARGUMENT(path_bad_extension).",
+  "capability": "export.v1",
+  "since": "1.0",
+  "method": "export.start",
+  "session": "authenticated",
+  "given": {
+    "files": [{ "bind": "notWav", "kind": "absent", "extension": ".mp3" }]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "export.start",
+    "params": { "kind": "master", "path": { "$ref": "notWav" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "path_bad_extension",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}
