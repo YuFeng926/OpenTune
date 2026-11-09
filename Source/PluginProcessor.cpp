@@ -688,6 +688,28 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 ProcessRenderRuntime::notifyApplicationRenderFailure(
                     job.contentKey, job.contentRevision, job.targetRevision,
                     "Render job has no RenderCache", {}, completionGate_);
+#if !JucePlugin_Build_Standalone
+                const auto gate = completionGate_;
+                const auto failedKey = job.contentKey;
+                const bool posted = juce::MessageManager::callAsync(
+                    [this, gate, failedKey]()
+                    {
+                        ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+                        if (!callbackLease)
+                            return;
+                        notifyRenderTerminal(failedKey, false);
+                    });
+                if (!posted)
+                    AppLogger::error("PluginProcessor: failed to dispatch render error");
+#else
+                const auto gate = completionGate_;
+                const auto failedKey = job.contentKey;
+                juce::MessageManager::callAsync([this, gate, failedKey] {
+                    ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+                    if (callbackLease)
+                        notifyRenderTerminal(failedKey, false);
+                });
+#endif
                 return;
             }
 
@@ -708,6 +730,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                             ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
                             if (!callbackLease)
                                 return;
+                            notifyRenderTerminal(failedKey, false);
 #if !JucePlugin_Build_Standalone
                             if (auto* session = getCaptureSession())
                                 session->onRenderFailed(failedKey, "Render job has no content snapshot");
@@ -715,6 +738,14 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                         });
                     if (!posted)
                         AppLogger::error("PluginProcessor: failed to dispatch render error");
+#else
+                    const auto gate = completionGate_;
+                    const auto failedKey = job.contentKey;
+                    juce::MessageManager::callAsync([this, gate, failedKey] {
+                        ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+                        if (callbackLease)
+                            notifyRenderTerminal(failedKey, false);
+                    });
 #endif
                 }
                 return;
@@ -727,10 +758,11 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 ProcessRenderRuntime::notifyApplicationRenderFailure(
                     key, contentRevision, targetRevision, reason, std::move(renderCache), gate);
             };
-            completion.chunkSettled = [this](ContentKey key,
-                                             std::shared_ptr<const EditableContentSnapshot> snapshot,
-                                             std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-                                             double audioSampleRate) {
+            completion.chunkSettled = [this](
+                                          ContentKey key,
+                                          std::shared_ptr<const EditableContentSnapshot> snapshot,
+                                          std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+                                          double audioSampleRate) {
 #if JucePlugin_Build_Standalone
                 // Stage2 must enter the worker queue before the Runtime callback
                 // returns; export drain() cannot wait for a MessageManager hop
@@ -742,6 +774,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                                          std::move(audioBuffer), audioSampleRate);
             };
             completion.chunkFailed = [this](ContentKey key, const juce::String& reason) {
+                notifyRenderTerminal(key, false);
 #if !JucePlugin_Build_Standalone
                 if (auto* session = getCaptureSession())
                     session->onRenderFailed(key, reason);
@@ -766,11 +799,19 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                     ProcessRenderRuntime::CompletionCallbackLease callbackLease(*renderFailureGate);
                     if (!callbackLease)
                         return;
+                    notifyRenderTerminal(key, false);
                     if (auto* session = getCaptureSession())
                         session->onRenderFailed(key, reason);
                 });
             if (!posted)
                 AppLogger::error("RenderWorker callback failure could not be dispatched to CaptureSession");
+#else
+            juce::MessageManager::callAsync(
+                [this, renderFailureGate, key = job.contentKey]() {
+                    ProcessRenderRuntime::CompletionCallbackLease callbackLease(*renderFailureGate);
+                    if (callbackLease)
+                        notifyRenderTerminal(key, false);
+                });
 #endif
         };
         crs->attachExecutionLease(std::move(lease));
@@ -1141,10 +1182,29 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 #endif
 
 #if JucePlugin_Enable_ARA
-    // Before noteAudition_ goes away: the editor renderer may be another instance.
-    if (isBoundToARA())
-        if (auto* dc = getDocumentController())
-            dc->releaseKeyboardAudition(&noteAudition_, getEditorRenderer());
+    // Before noteAudition_ goes away: clear the routing atomics the audio callback reads.
+    if (auto* route = auditionRoute_.load(std::memory_order_acquire))
+    {
+        auto* expected = noteAudition_.get();
+        route->keyboardAudition.compare_exchange_strong(expected, nullptr,
+                                                        std::memory_order_acq_rel,
+                                                        std::memory_order_relaxed);
+        // Release the mixer claim only when this instance owns it; clearing it
+        // unconditionally would let another renderer claim and mix the same
+        // NoteAudition while the owner's audio callback is still draining.
+        if (auto* editorRenderer = getEditorRenderer())
+        {
+            auto* expectedMixer = editorRenderer;
+            route->keyboardMixer.compare_exchange_strong(expectedMixer, nullptr,
+                                                         std::memory_order_acq_rel,
+                                                         std::memory_order_relaxed);
+        }
+    }
+    auditionRoute_.store(nullptr, std::memory_order_release);
+    sharedPlayHeadStateForAudio_.store(nullptr, std::memory_order_release);
+    if (renderTerminalSink_ != nullptr)
+        renderTerminalSink_->callback = {};
+    renderTerminalSink_.reset();
 #endif
 
     // 析构最前段生命周期动作（此后再无异步任务访问裸 this）：
@@ -1620,7 +1680,20 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         // CRS torn down above, the processor owns no render state at all when bound.
 
         if (isEditorView())
-            dc->setKeyboardAuditionSource(&noteAudition_);
+            dc->setKeyboardAuditionSource(noteAudition_);
+
+        auditionRoute_.store(dc->getAuditionRoute(), std::memory_order_release);
+        sharedPlayHeadStateForAudio_.store(&dc->getSharedPlayHeadStateForAudio(),
+                                           std::memory_order_release);
+        if (isEditorView())
+        {
+            const std::weak_ptr<RenderTerminalSink> weakSink = renderTerminalSink_;
+            dc->setRenderTerminalCallback([weakSink](ContentKey key, bool completed) {
+                if (auto sink = weakSink.lock())
+                    if (sink->callback)
+                        sink->callback(key, completed);
+            });
+        }
 
         AppLogger::logNoThrow("ARA: didBindToARA - DC owns its CRS lease; processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
@@ -1742,11 +1815,24 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // processing threads. The realtime editor renderer is the current transport
     // source; only this role publishes to the shared document-level PlayHeadState.
     if (hostPosOpt.hasValue() && isBoundToARA() && isEditorRenderer())
-        if (auto* dc = getDocumentController())
-            dc->observeHostPlaybackPosition(hostPosOpt,
-                (numSamples > 0)
-                    ? static_cast<double>(numSamples) / currentSampleRate_.load(std::memory_order_relaxed)
-                    : 0.0);
+    {
+        if (auto* sharedState = sharedPlayHeadStateForAudio_.load(std::memory_order_acquire))
+        {
+            const auto updateResult = sharedState->update(hostPosOpt);
+            if (numSamples > 0 && updateResult.timeChanged)
+            {
+                if (const auto timeSec = hostPosOpt->getTimeInSeconds())
+                {
+                    const double blockDuration = static_cast<double>(numSamples)
+                        / currentSampleRate_.load(std::memory_order_relaxed);
+                    const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
+                    if (sharedState->timeInSeconds.load(std::memory_order_relaxed) == *timeSec)
+                        sharedState->presentationProjection.tryPublish(
+                            *timeSec, nowClock, *timeSec + blockDuration, updateResult.epoch);
+                }
+            }
+        }
+    }
 #endif
 
     // 2) Publish presentation projection anchor (before any early return).
@@ -3214,23 +3300,72 @@ const ContentRenderService* OpenTuneAudioProcessor::resolveReadableContentRender
     return nullptr;
 }
 
+void OpenTuneAudioProcessor::setRenderTerminalCallback(RenderTerminalCallback callback)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (renderTerminalSink_ != nullptr)
+        renderTerminalSink_->callback = std::move(callback);
+}
+
+void OpenTuneAudioProcessor::notifyRenderTerminal(ContentKey key, bool completed, uint64_t renderGeneration)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (renderTerminalSink_ == nullptr || !renderTerminalSink_->callback)
+        return;
+    if (completed)
+    {
+        const auto it = lastCompletedRenderGeneration_.find(key);
+        if (it != lastCompletedRenderGeneration_.end()
+            && it->second == renderGeneration)
+            return;
+        lastCompletedRenderGeneration_[key] = renderGeneration;
+    }
+    renderTerminalSink_->callback(key, completed);
+}
+
+void OpenTuneAudioProcessor::mixDocumentAuditions(juce::AudioBuffer<float>& buffer,
+                                                  int numSamples,
+                                                  double sampleRate) noexcept
+{
+#if JucePlugin_Enable_ARA
+    if (isNonRealtime())
+        return;
+
+    auto* route = auditionRoute_.load(std::memory_order_acquire);
+    auto* editorRenderer = getEditorRenderer();
+    if (route == nullptr || editorRenderer == nullptr)
+        return;
+
+    if (auto* audition = route->notePitchAudition.load(std::memory_order_acquire))
+        if (route->notePitchMixer.load(std::memory_order_acquire) == editorRenderer)
+            audition->mixIntoBuffer(buffer, numSamples, sampleRate);
+
+    if (auto* audition = route->keyboardAudition.load(std::memory_order_acquire))
+    {
+        // One mixer per document: a second one would advance the clip twice per block.
+        juce::ARAEditorRenderer* expected = nullptr;
+        route->keyboardMixer.compare_exchange_strong(expected, editorRenderer,
+                                                     std::memory_order_acq_rel,
+                                                     std::memory_order_relaxed);
+        if (route->keyboardMixer.load(std::memory_order_acquire) == editorRenderer)
+            audition->mixIntoBuffer(buffer, numSamples, sampleRate);
+    }
+#else
+    juce::ignoreUnused(buffer, numSamples, sampleRate);
+#endif
+}
+
 void OpenTuneAudioProcessor::mixAuditions(juce::AudioBuffer<float>& buffer, int numSamples, double sampleRate)
 {
     pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
 #if JucePlugin_Enable_ARA
     if (isBoundToARA())
     {
-        auto* dc = getDocumentController();
-        auto* editorRenderer = getEditorRenderer();
-        if (dc != nullptr && editorRenderer != nullptr && !isNonRealtime())
-        {
-            dc->mixNotePitchAuditionIfOwner(editorRenderer, buffer, numSamples, sampleRate);
-            dc->mixKeyboardAudition(editorRenderer, buffer, numSamples, sampleRate);
-        }
+        mixDocumentAuditions(buffer, numSamples, sampleRate);
         return;
     }
 #endif
-    noteAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
+    noteAudition_->mixIntoBuffer(buffer, numSamples, sampleRate);
     // 音符移调预览仅在实时处理时混入；离线（宿主 bounce/export）渲染静音。
     if (!isNonRealtime())
         notePitchAudition_.mixIntoBuffer(buffer, numSamples, sampleRate);
@@ -3267,8 +3402,17 @@ void OpenTuneAudioProcessor::auditionNotePitch(ContentKey key, double startSecon
             return;
         }
 
-        dc->getNotePitchAudition().request(std::move(source), startSeconds, endSeconds, targetHz,
-                                           static_cast<double>(getSampleRate()));
+        auto* route = auditionRoute_.load(std::memory_order_acquire);
+        auto* audition = route != nullptr
+            ? route->notePitchAudition.load(std::memory_order_acquire) : nullptr;
+        if (audition == nullptr)
+        {
+            stopNotePitchAudition();
+            return;
+        }
+
+        audition->request(std::move(source), startSeconds, endSeconds, targetHz,
+                          static_cast<double>(getSampleRate()));
         return;
     }
 #endif
@@ -3281,11 +3425,16 @@ void OpenTuneAudioProcessor::stopNotePitchAudition()
 #if JucePlugin_Enable_ARA
     if (isBoundToARA())
     {
-        if (auto* dc = getDocumentController())
-        {
-            dc->stopNotePitchAudition();
+        auto* route = auditionRoute_.load(std::memory_order_acquire);
+        if (route == nullptr)
             return;
+        route->notePitchMixer.store(nullptr, std::memory_order_release);
+        if (auto* audition = route->notePitchAudition.load(std::memory_order_acquire))
+        {
+            audition->setTargetRegion(nullptr);
+            audition->stop();
         }
+        return;
     }
 #endif
     notePitchAudition_.stop();
@@ -3466,12 +3615,18 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
     double audioSampleRate)
 {
+    const auto cache = contentRenderService_ != nullptr
+        ? contentRenderService_->getRenderCache(key) : nullptr;
+    const auto state = cache != nullptr
+        ? cache->getStateSnapshot() : RenderCache::StateSnapshot{};
+    if (state.canonicalSettled)
+        notifyRenderTerminal(key, true, state.renderGeneration);
+
 #if !JucePlugin_Build_Standalone
     // Only transition to Edited when ALL chunks are canonical settled.
     // Partial completion must not promote the segment prematurely.
     if (auto* session = getCaptureSession()) {
-        auto cache = contentRenderService_->getRenderCache(key);
-        if (cache && cache->isCanonicalSettled())
+        if (state.canonicalSettled)
             session->onRenderComplete(key);
     }
 #endif

@@ -72,6 +72,61 @@ bool isFullyCorrectedInRange(const PitchCurveSnapshot& curve, int startFrame, in
 
 } // namespace
 
+// Per-note UIA child. It is a transparent component so that AccessibilityHandler's
+// component hierarchy exposes each note as a list item when accessibility mode is on.
+class PianoRollComponent::NoteAccessibilityItem final : public juce::Component
+{
+public:
+    NoteAccessibilityItem(PianoRollComponent& owner, int noteIndex)
+        : owner_(owner), noteIndex_(noteIndex)
+    {
+        setInterceptsMouseClicks(false, false);
+        setWantsKeyboardFocus(false);
+        setMouseClickGrabsKeyboardFocus(false);
+    }
+
+    void setNoteIndex(int noteIndex) noexcept { noteIndex_ = noteIndex; }
+
+    juce::String accessibilityTitle() const
+    {
+        const auto& notes = owner_.getCommittedNotes();
+        return owner_.describeKeyboardNote(notes, noteIndex_, PianoRollComponent::NoteDetail::Full);
+    }
+
+    bool isSelected() const
+    {
+        const auto& selected = owner_.interactionState_.noteSelection.selectedIndices;
+        return std::find(selected.begin(), selected.end(), noteIndex_) != selected.end();
+    }
+
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        class Handler final : public juce::AccessibilityHandler
+        {
+        public:
+            explicit Handler(NoteAccessibilityItem& item)
+                : juce::AccessibilityHandler(item, juce::AccessibilityRole::listItem), item_(item) {}
+
+            juce::String getTitle() const override { return item_.accessibilityTitle(); }
+
+            juce::AccessibleState getCurrentState() const override
+            {
+                auto state = juce::AccessibilityHandler::getCurrentState().withSelectable();
+                return item_.isSelected() ? state.withSelected() : state;
+            }
+
+        private:
+            NoteAccessibilityItem& item_;
+        };
+
+        return std::make_unique<Handler>(*this);
+    }
+
+private:
+    PianoRollComponent& owner_;
+    int noteIndex_ = -1;
+};
+
 void PianoRollComponent::initializeUIComponents() {
     setWantsKeyboardFocus(true);
     addAndMakeVisible(verticalScrollBar_);
@@ -527,7 +582,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         // Accessibility: an open EQ window closes first.
         if (eqPopup_ != nullptr) {
             closeEqPopup();
-            a11y::announce(*this, LOC_RAW("EQ closed"));
+            announceForAccessibility(LOC_RAW("EQ closed"));
             return true;
         }
         // In the plugin Esc has no job of its own; the host gets it, so it closes the FX
@@ -544,13 +599,14 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
                                         const std::vector<Note>& notes, int index) {
         handleKeyboardNote(event, notes, index);
     };
+    toolCtx.accessibilityModeEnabled = [this]() { return accessibilityModeEnabled(); };
     toolCtx.notifyToolChangedFromKeyboard = [this](ToolId tool) {
         auto name = keyboardToolName(tool);
         // The EQ tool does nothing by itself from the keyboard; say how to open the window.
         if (tool == ToolId::Eq && name.isNotEmpty())
             name << ", " << LOC_RAW("Enter opens it");
         if (name.isNotEmpty())
-            a11y::announce(*this, name);
+            announceForAccessibility(name);
     };
     toolCtx.auditionNotePitch = [this](double start, double end, float targetHz) {
         if (processor_ != nullptr) processor_->auditionNotePitch(editedContentKey_, start, end, targetHz);
@@ -713,7 +769,7 @@ juce::Path makeToolIcon(ToolId id) {
 bool PianoRollComponent::keyStateChanged(bool isKeyDown)
 {
     // The Applications (menu) key never reaches keyPressed in JUCE.
-    if (applicationsKey_.pressedNow() && isKeyDown) {
+    if (accessibilityModeEnabled() && applicationsKey_.pressedNow() && isKeyDown) {
         showToolMenuFromKeyboard();
         return true;
     }
@@ -786,7 +842,7 @@ void PianoRollComponent::showToolMenuFromKeyboard()
                            if (result > 0) {
                                const auto tool = static_cast<ToolId>(result - 1);
                                safeThis->setCurrentTool(tool);
-                               a11y::announce(*safeThis, safeThis->keyboardToolName(tool));
+                               safeThis->announceForAccessibility(safeThis->keyboardToolName(tool));
                            }
                        });
 }
@@ -1144,9 +1200,57 @@ PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState,
 }
 
 PianoRollComponent::~PianoRollComponent() {
+    if (processor_ != nullptr)
+        processor_->setRenderTerminalCallback({});
+    cancelPendingAudition();
+    if (noteAudition_ != nullptr)
+        noteAudition_->stop();
     stopNotePitchAudition();
     scrollVBlankAttachment_.reset();
     verticalScrollBar_.removeListener(this);
+}
+
+void PianoRollComponent::setProcessor(OpenTuneAudioProcessor* processor)
+{
+    if (processor_ != nullptr)
+        processor_->setRenderTerminalCallback({});
+    processor_ = processor;
+    if (processor_ != nullptr)
+        processor_->setRenderTerminalCallback([this](ContentKey key, bool completed) {
+            handleRenderTerminal(key, completed);
+        });
+}
+
+bool PianoRollComponent::accessibilityModeEnabled() const noexcept
+{
+    return appPreferences_ != nullptr && appPreferences_->getAccessibilityModeEnabled();
+}
+
+void PianoRollComponent::applyAccessibilityMode()
+{
+    const bool enabled = accessibilityModeEnabled();
+    if (enabled == accessibilityModeApplied_)
+        return;
+    accessibilityModeApplied_ = enabled;
+
+    setFocusContainerType(enabled ? juce::Component::FocusContainerType::focusContainer
+                                  : juce::Component::FocusContainerType::none);
+    syncNoteAccessibilityItems();
+
+    if (!enabled) {
+        cancelPendingAudition();
+        if (noteAudition_ != nullptr)
+            noteAudition_->stop();
+    }
+    invalidateAccessibilityHandler();
+}
+
+void PianoRollComponent::announceForAccessibility(const juce::String& text,
+                                                  a11y::SpeechQueue queue)
+{
+    if (!accessibilityModeEnabled())
+        return;
+    a11y::announce(*this, text, queue);
 }
 
 void PianoRollComponent::stopNotePitchAudition() {
@@ -1172,6 +1276,7 @@ std::shared_ptr<const EditableContentSnapshot> PianoRollComponent::refreshEdited
             cachedNotes_ = snapshot->notes;
     }
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
+    syncNoteAccessibilityItems();
     return snapshot;
 }
 
@@ -1360,14 +1465,14 @@ void PianoRollComponent::openEqPopupForSelection(int primaryIndex, bool fromKeyb
             return;
         self->closeEqPopup();
         if (fromKeyboard)
-            a11y::announce(*self, LOC_RAW("EQ removed"), a11y::SpeechQueue::keepAll);
+            self->announceForAccessibility(LOC_RAW("EQ removed"), a11y::SpeechQueue::keepAll);
     };
     eqPopup_->onClose = [this]() {
         auto* self = this;
         const bool fromKeyboard = eqPopup_ != nullptr && eqPopup_->hasKeyboardFocus(true);
         self->closeEqPopup();
         if (fromKeyboard)
-            a11y::announce(*self, LOC_RAW("EQ closed"), a11y::SpeechQueue::keepAll);
+            self->announceForAccessibility(LOC_RAW("EQ closed"), a11y::SpeechQueue::keepAll);
     };
     eqPopup_->onReadSpectrum = [this](SpectrumArray& spectrum,
                                       SpectrumArray& peaks) {
@@ -1429,7 +1534,7 @@ void PianoRollComponent::invalidateEqPopup()
     eqPopup_->setVisible(false);
     if (hadFocus && isShowing()) {
         grabKeyboardFocus();
-        a11y::announce(*this, LOC_RAW("EQ closed"), a11y::SpeechQueue::keepAll);
+        announceForAccessibility(LOC_RAW("EQ closed"), a11y::SpeechQueue::keepAll);
     }
     juce::Component::SafePointer<PianoRollComponent> safeThis(this);
     juce::Component::SafePointer<EqPopupComponent> safePopup(eqPopup_.get());
@@ -3849,6 +3954,7 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
         // 切换编辑目标：EQ 弹窗由选中组驱动，内容切换即失效
         closeEqPopup();
         stopNotePitchAudition();
+        cancelPendingAudition();
         if (!contentKey.isValid())
             pendingInitialF0ViewContentKey_ = ContentKey{};
         editedContentKey_ = contentKey;
@@ -4052,6 +4158,7 @@ void PianoRollComponent::onPitchRevisionChanged()
 }
 
 void PianoRollComponent::requestContentRedraw() {
+    syncNoteAccessibilityItems();
     contentDirty_ = true;
     rasterizeDirtySurfaces();
     repaint();
@@ -5755,7 +5862,7 @@ void PianoRollComponent::copySelectedNotes()
         if (idx >= 0 && idx < static_cast<int>(notes.size()))
             notesClipboard_.push_back(notes[static_cast<size_t>(idx)]);
     }
-    a11y::announce(*this, Loc::format(LOC_RAW("Notes copied: {0}"),
+    announceForAccessibility(Loc::format(LOC_RAW("Notes copied: {0}"),
                                       juce::String(static_cast<int>(notesClipboard_.size()))));
 }
 
@@ -5810,7 +5917,7 @@ std::optional<double> PianoRollComponent::stoppedEditCursorSourceTime() const
 void PianoRollComponent::pasteNotes()
 {
     if (notesClipboard_.empty()) {
-        a11y::announce(*this, LOC_RAW("Nothing to paste"));
+        announceForAccessibility(LOC_RAW("Nothing to paste"));
         return;
     }
     if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return;
@@ -5892,7 +5999,7 @@ void PianoRollComponent::pasteNotes()
 
     // Paste lands at the plugin's playhead, which goes stale while the host is stopped,
     // so say where the notes went (project time, as in the host).
-    a11y::announce(*this, Loc::format(LOC_RAW("Notes pasted: {0}, start {1} s"),
+    announceForAccessibility(Loc::format(LOC_RAW("Notes pasted: {0}, start {1} s"),
                                       juce::String(static_cast<int>(result.pastedNotes.size())),
                                       juce::String(sourceTimeToTimelineTime(pasteStartTime), 2)));
 }
@@ -5991,7 +6098,7 @@ bool PianoRollComponent::handlePointerShortcut(const KeyShortcutConfig::KeyBindi
 
 bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
     // Shift+F10 opens what the right-click opens: the tool menu.
-    if (a11y::isContextMenuKey(key)) {
+    if (accessibilityModeEnabled() && a11y::isContextMenuKey(key)) {
         showToolMenuFromKeyboard();
         return true;
     }
@@ -6537,6 +6644,7 @@ std::vector<Note> PianoRollComponent::getEditedContentNotesCopy() const {
 }
 
 void PianoRollComponent::updateScrollBars() {
+    syncNoteAccessibilityItems();
     // Vertical（水平滚动条已由 TimelineOverview 永久替代）
     float totalHeight = getTotalHeight();
     int visibleHeight = getTimelineContentViewportHeight();
@@ -6580,8 +6688,48 @@ ViewMapper PianoRollComponent::makeViewMapperForView(const ViewportState& view) 
 // Accessibility: piano roll for screen readers, note speech and keyboard audition
 // ============================================================================
 
+void PianoRollComponent::syncNoteAccessibilityItems()
+{
+    if (!accessibilityModeEnabled()) {
+        clearNoteAccessibilityItems();
+        return;
+    }
+
+    const auto& notes = getCommittedNotes();
+    while (noteAccessibilityItems_.size() > notes.size())
+    {
+        removeChildComponent(noteAccessibilityItems_.back().get());
+        noteAccessibilityItems_.pop_back();
+    }
+
+    for (size_t index = noteAccessibilityItems_.size(); index < notes.size(); ++index)
+    {
+        auto item = std::make_unique<NoteAccessibilityItem>(*this, static_cast<int>(index));
+        addChildComponent(*item);
+        noteAccessibilityItems_.push_back(std::move(item));
+    }
+
+    for (size_t index = 0; index < notes.size(); ++index)
+    {
+        auto& item = *noteAccessibilityItems_[index];
+        item.setNoteIndex(static_cast<int>(index));
+        item.setBounds(getNoteBounds(notes[index]));
+        item.setVisible(true);
+    }
+}
+
+void PianoRollComponent::clearNoteAccessibilityItems()
+{
+    for (auto& item : noteAccessibilityItems_)
+        removeChildComponent(item.get());
+    noteAccessibilityItems_.clear();
+}
+
 std::unique_ptr<juce::AccessibilityHandler> PianoRollComponent::createAccessibilityHandler()
 {
+    if (!accessibilityModeEnabled())
+        return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::ignored);
+
     // The title is computed on every request so NVDA+Up Arrow reads the current note
     // without timers or extra events.
     class NotesAccessibilityHandler final : public juce::AccessibilityHandler {
@@ -6720,67 +6868,69 @@ juce::String PianoRollComponent::describeEditedSelection(const std::vector<Note>
 void PianoRollComponent::handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEvent event,
                                             const std::vector<Note>& notes, int index)
 {
+    if (!accessibilityModeEnabled())
+        return;
+
     using Event = PianoRollToolHandler::KeyboardNoteEvent;
     switch (event) {
         case Event::NoNotes:
-            a11y::announce(*this, LOC_RAW("No notes"));
+            announceForAccessibility(LOC_RAW("No notes"));
             return;
         case Event::NoSelection:
-            a11y::announce(*this, LOC_RAW("No note selected"));
+            announceForAccessibility(LOC_RAW("No note selected"));
             return;
         case Event::Selected:
-            if (pendingAuditionTimer_ != nullptr)
-                pendingAuditionTimer_->stopTimer();
-            a11y::announce(*this, describeKeyboardNote(notes, index, NoteDetail::Navigation));
+            cancelPendingAudition();
+            announceForAccessibility(describeKeyboardNote(notes, index, NoteDetail::Navigation));
             if (index >= 0 && index < static_cast<int>(notes.size()))
                 auditionNote(notes[static_cast<size_t>(index)]);
             return;
         case Event::PitchMoved:
             // After a move only the new pitch matters; audio plays once the correction is re-rendered.
-            a11y::announce(*this, describeEditedSelection(notes, index, [this, &notes](int i) {
+            announceForAccessibility(describeEditedSelection(notes, index, [this, &notes](int i) {
                 return describeKeyboardNote(notes, i, NoteDetail::Target);
             }));
             scheduleAuditionAfterRender(index);
             return;
         case Event::Info:
-            a11y::announce(*this, describeKeyboardNote(notes, index, NoteDetail::Full));
+            announceForAccessibility(describeKeyboardNote(notes, index, NoteDetail::Full));
             return;
         case Event::Split:
         case Event::SplitInHalf: {
             // Name both parts so it is clear whether the cut separated two different notes.
             const auto parts = describeKeyboardNote(notes, index, NoteDetail::Target) + ", "
                              + describeKeyboardNote(notes, index + 1, NoteDetail::Target);
-            a11y::announce(*this, Loc::format(event == Event::Split ? LOC_RAW("Note split: {0}")
+            announceForAccessibility(Loc::format(event == Event::Split ? LOC_RAW("Note split: {0}")
                                                                     : LOC_RAW("No clear pitch change, split in half: {0}"),
                                               parts));
             return;
         }
         case Event::NoteTooShort:
-            a11y::announce(*this, LOC_RAW("Note too short to split"));
+            announceForAccessibility(LOC_RAW("Note too short to split"));
             return;
         case Event::SplitAtCursor:
-            a11y::announce(*this, Loc::format(LOC_RAW("Note split at the cursor: {0}"),
+            announceForAccessibility(Loc::format(LOC_RAW("Note split at the cursor: {0}"),
                                               describeKeyboardNote(notes, index, NoteDetail::Target) + ", "
                                                   + describeKeyboardNote(notes, index + 1, NoteDetail::Target)));
             return;
         case Event::CursorUnknown:
-            a11y::announce(*this, LOC_RAW("Edit cursor unknown: works in REAPER with playback stopped"));
+            announceForAccessibility(LOC_RAW("Edit cursor unknown: works in REAPER with playback stopped"));
             return;
         case Event::CursorOutsideNote:
-            a11y::announce(*this, LOC_RAW("The edit cursor is not inside the note"));
+            announceForAccessibility(LOC_RAW("The edit cursor is not inside the note"));
             return;
         case Event::Merged:
-            a11y::announce(*this, LOC_RAW("Notes merged") + ", "
+            announceForAccessibility(LOC_RAW("Notes merged") + ", "
                                       + describeKeyboardNote(notes, index, NoteDetail::Navigation));
             return;
         case Event::NoAdjacentNote:
-            a11y::announce(*this, LOC_RAW("No adjacent next note"));
+            announceForAccessibility(LOC_RAW("No adjacent next note"));
             return;
         case Event::ModulationChanged:
         case Event::DriftChanged:
             if (index >= 0 && index < static_cast<int>(notes.size())) {
                 // Only the new value, like the drag tooltip: "40%", "+80%".
-                a11y::announce(*this, describeEditedSelection(notes, index, [this, &notes, event](int i) {
+                announceForAccessibility(describeEditedSelection(notes, index, [this, &notes, event](int i) {
                     const auto& note = notes[static_cast<size_t>(i)];
                     return event == Event::ModulationChanged ? modulationPercentText(note)
                                                              : driftPercentText(note);
@@ -6789,7 +6939,7 @@ void PianoRollComponent::handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEv
             }
             return;
         case Event::AllSelected:
-            a11y::announce(*this, Loc::format(LOC_RAW("All notes selected: {0}"),
+            announceForAccessibility(Loc::format(LOC_RAW("All notes selected: {0}"),
                                               juce::String(static_cast<int>(notes.size()))));
             return;
         case Event::NoteResized:
@@ -6797,19 +6947,18 @@ void PianoRollComponent::handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEv
                 const auto& note = notes[static_cast<size_t>(index)];
                 const double start = sourceTimeToTimelineTime(note.startTime);
                 const double end = sourceTimeToTimelineTime(note.endTime);
-                a11y::announce(*this, Loc::format(LOC_RAW("start {0} s, length {1} s"),
+                announceForAccessibility(Loc::format(LOC_RAW("start {0} s, length {1} s"),
                                                   juce::String(start, 2), juce::String(end - start, 2)));
                 scheduleAuditionAfterRender(index);
             }
             return;
         case Event::SingleNoteNeeded:
-            a11y::announce(*this, LOC_RAW("Select a single note"));
+            announceForAccessibility(LOC_RAW("Select a single note"));
             return;
         case Event::RangeSelected:
             // Count first, then the note at the moving end of the range.
-            if (pendingAuditionTimer_ != nullptr)
-                pendingAuditionTimer_->stopTimer();
-            a11y::announce(*this, Loc::format(LOC_RAW("Notes selected: {0}, {1}"),
+            cancelPendingAudition();
+            announceForAccessibility(Loc::format(LOC_RAW("Notes selected: {0}, {1}"),
                                               juce::String(static_cast<int>(interactionState_.noteSelection.selectedIndices.size())),
                                               describeKeyboardNote(notes, index, NoteDetail::Navigation)));
             if (index >= 0 && index < static_cast<int>(notes.size()))
@@ -6819,18 +6968,18 @@ void PianoRollComponent::handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEv
         {
             // Shift+I: where the plugin thinks the user is, and where that comes from.
             if (processor_ == nullptr || !processor_->getReaperTransport()) {
-                a11y::announce(*this, LOC_RAW("Position unknown: works in REAPER"));
+                announceForAccessibility(LOC_RAW("Position unknown: works in REAPER"));
                 return;
             }
             const auto position = currentSongPosition();
             if (!position) {
-                a11y::announce(*this, LOC_RAW("Playing: the position is known after a pause or stop"));
+                announceForAccessibility(LOC_RAW("Playing: the position is known after a pause or stop"));
                 return;
             }
             const auto seconds = juce::String(position->seconds, 2);
             const char* pattern = position->source == SongPosition::Source::Paused ? "Position {0} s, paused"
                                                                                    : "Position {0} s, edit cursor";
-            a11y::announce(*this, Loc::format(LOC_RAW(pattern), seconds));
+            announceForAccessibility(Loc::format(LOC_RAW(pattern), seconds));
             return;
         }
         case Event::ArrowHint:
@@ -6843,13 +6992,13 @@ void PianoRollComponent::handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEv
                 hint = LOC_RAW("Ctrl+Up/Down changes the drift");
             else if (currentTool_ == ToolId::VolumeEnvelope)
                 hint = LOC_RAW("Ctrl+Up/Down changes the volume");
-            a11y::announce(*this, hint);
+            announceForAccessibility(hint);
             return;
         }
         case Event::VolumeChanged:
             if (index >= 0 && index < static_cast<int>(notes.size())) {
                 // Only the new level, like the other value edits.
-                a11y::announce(*this, describeEditedSelection(notes, index, [this, &notes](int i) {
+                announceForAccessibility(describeEditedSelection(notes, index, [this, &notes](int i) {
                     return volumeText(notes[static_cast<size_t>(i)]);
                 }));
                 scheduleAuditionAfterRender(index);
@@ -6865,13 +7014,13 @@ void PianoRollComponent::handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEv
                 if (line.isNotEmpty())
                     text << ", " << line;
             }
-            a11y::announce(*this, text);
+            announceForAccessibility(text);
             return;
         }
         case Event::EditFailed:
             // Sighted users see the note stay put and, when the notes changed meanwhile,
             // the selection highlight disappear; say both.
-            a11y::announce(*this, interactionState_.noteSelection.selectedIndices.empty()
+            announceForAccessibility(interactionState_.noteSelection.selectedIndices.empty()
                                       ? LOC_RAW("Could not apply, selection cleared")
                                       : LOC_RAW("Could not apply"),
                            a11y::SpeechQueue::keepAll);
@@ -6879,7 +7028,7 @@ void PianoRollComponent::handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEv
     }
 }
 
-void PianoRollComponent::auditionNote(const Note& note)
+void PianoRollComponent::auditionNote(const Note& note, const RenderCache* renderCacheToOverlay)
 {
     if (noteAudition_ == nullptr || audioBuffer_ == nullptr || audioBufferSampleRate_ <= 0.0)
         return;
@@ -6901,11 +7050,15 @@ void PianoRollComponent::auditionNote(const Note& note)
     for (int channel = 0; channel < segment.getNumChannels(); ++channel)
         segment.copyFrom(channel, 0, *audioBuffer_, channel, startSample, numSamples);
 
-    if (renderCacheProvider_ != nullptr && editedContentKey_.isValid()
+    const RenderCache* renderCache = renderCacheToOverlay;
+    std::shared_ptr<const RenderCache> loadedRenderCache;
+    if (renderCache == nullptr && renderCacheProvider_ != nullptr && editedContentKey_.isValid()
         && std::abs(sampleRate - TimeCoordinate::kRenderSampleRate) < 1.0) {
-        if (const auto cache = renderCacheProvider_(editedContentKey_))
-            cache->overlayCanonicalAudio(segment, 0, numSamples, startSample);
+        loadedRenderCache = renderCacheProvider_(editedContentKey_);
+        renderCache = loadedRenderCache.get();
     }
+    if (renderCache != nullptr)
+        renderCache->overlayCanonicalAudio(segment, 0, numSamples, startSample);
 
     // Note volume (Volume Envelope tool) is not in the render: playback applies it
     // (applyAutomationGain). Apply it here too, or a volume change is not heard.
@@ -6956,56 +7109,96 @@ juce::String PianoRollComponent::driftPercentText(const Note& note) const
     return juce::String::formatted("%+.0f%%", note.pitchDriftScale * 100.0f);
 }
 
-namespace {
-// Lambda-driven timer: PianoRollComponent does not inherit from Timer itself.
-class CallbackTimer final : public juce::Timer {
-public:
-    explicit CallbackTimer(std::function<void()> callback) : callback_(std::move(callback)) {}
-    void timerCallback() override { callback_(); }
-
-private:
-    std::function<void()> callback_;
-};
-} // namespace
-
 void PianoRollComponent::scheduleAuditionAfterRender(int noteIndex)
 {
-    // The user can turn this off in Preferences > Editing.
-    if (appPreferences_ != nullptr && !appPreferences_->getNoteTransposePreviewEnabled())
+    if (!accessibilityModeEnabled())
         return;
-    pendingAuditionNoteIndex_ = noteIndex;
-    pendingAuditionTicks_ = 0;
-    if (pendingAuditionTimer_ == nullptr)
-        pendingAuditionTimer_ = std::make_unique<CallbackTimer>([this] { tickPendingAudition(); });
-    // Each new move restarts the wait, so rapid key presses play only the final result.
-    pendingAuditionTimer_->startTimer(150);
-}
-
-void PianoRollComponent::tickPendingAudition()
-{
-    ++pendingAuditionTicks_;
-
-    bool settled = true;
-    if (renderCacheProvider_ != nullptr && editedContentKey_.isValid()) {
-        if (const auto cache = renderCacheProvider_(editedContentKey_))
-            settled = cache->isCanonicalSettled();
+    // The user can turn this off in Preferences > Editing.
+    if (appPreferences_ != nullptr && !appPreferences_->getNoteTransposePreviewEnabled()) {
+        cancelPendingAudition();
+        return;
     }
 
-    // Always wait the first 2 ticks: the render may not have been queued yet.
-    // Do not wait longer than ~5 seconds; play whatever is there.
-    constexpr int kMinTicks = 2;
-    constexpr int kMaxTicks = 35;
-    if (pendingAuditionTicks_ < kMinTicks || (!settled && pendingAuditionTicks_ < kMaxTicks))
+    pendingAuditionNoteIndex_ = noteIndex;
+    pendingAuditionContentKey_ = editedContentKey_;
+
+    // Edited notes are auditioned from the rendered correction. Without a usable
+    // canonical cache there is no corrected output to play.
+    const bool canonicalAuditionAvailable = renderCacheProvider_ != nullptr
+        && editedContentKey_.isValid()
+        && audioBufferSampleRate_ > 0.0
+        && std::abs(audioBufferSampleRate_ - TimeCoordinate::kRenderSampleRate) < 1.0;
+    if (!canonicalAuditionAvailable) {
+        playPendingAudition(true);
+        return;
+    }
+
+    const auto cache = renderCacheProvider_(editedContentKey_);
+    if (cache == nullptr) {
+        playPendingAudition(true);
+        return;
+    }
+    // Volume-only edits do not invalidate the render. Pitch edits enqueue a render
+    // synchronously before returning, so a settled cache here means there is
+    // nothing to wait for.
+    if (!cache->isCanonicalSettled())
+        return;
+    playPendingAudition(false);
+}
+
+void PianoRollComponent::playPendingAudition(bool renderFailed)
+{
+    if (renderFailed) {
+        cancelPendingAudition();
+        announceForAccessibility(LOC_RAW("Not rendered yet"));
+        return;
+    }
+
+    const int noteIndex = pendingAuditionNoteIndex_;
+    if (noteIndex < 0)
         return;
 
-    pendingAuditionTimer_->stopTimer();
-    // After the wait the render may still be running: the note then plays the old sound,
-    // so say so instead of letting it pass for the result.
-    if (!settled)
-        a11y::announce(*this, LOC_RAW("Not rendered yet"));
     const auto& notes = getCommittedNotes();
-    if (pendingAuditionNoteIndex_ >= 0 && pendingAuditionNoteIndex_ < static_cast<int>(notes.size()))
-        auditionNote(notes[static_cast<size_t>(pendingAuditionNoteIndex_)]);
+    if (noteIndex >= static_cast<int>(notes.size())) {
+        cancelPendingAudition();
+        return;
+    }
+
+    std::shared_ptr<const RenderCache> cache;
+    if (renderCacheProvider_ != nullptr && editedContentKey_.isValid()
+        && audioBufferSampleRate_ > 0.0
+        && std::abs(audioBufferSampleRate_ - TimeCoordinate::kRenderSampleRate) < 1.0)
+        cache = renderCacheProvider_(editedContentKey_);
+
+    if (cache == nullptr) {
+        cancelPendingAudition();
+        announceForAccessibility(LOC_RAW("Not rendered yet"));
+        return;
+    }
+    // A completed terminal event can still belong to an older render while the
+    // cache is rendering a newer revision: keep waiting for the next terminal.
+    if (!cache->isCanonicalSettled())
+        return;
+
+    cancelPendingAudition();
+    auditionNote(notes[static_cast<size_t>(noteIndex)], cache.get());
+}
+
+void PianoRollComponent::cancelPendingAudition()
+{
+    pendingAuditionNoteIndex_ = -1;
+    pendingAuditionContentKey_ = {};
+}
+
+void PianoRollComponent::handleRenderTerminal(ContentKey key, bool completed)
+{
+    if (!accessibilityModeEnabled()) {
+        cancelPendingAudition();
+        return;
+    }
+    if (pendingAuditionNoteIndex_ < 0 || key != pendingAuditionContentKey_)
+        return;
+    playPendingAudition(!completed);
 }
 
 } // namespace OpenTune

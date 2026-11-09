@@ -98,6 +98,73 @@ bool runRenderCacheCompletionContract()
     return checkRenderContract(cache.isCanonicalSettled(), "completion_contract_not_settled");
 }
 
+bool runRenderGenerationContract()
+{
+    OpenTune::RenderCache cache;
+    const std::vector<OpenTune::RenderCache::PlannedChunk> chunks{
+        {0, 256}, {256, 512}
+    };
+    const std::vector<float> audio(256, 1.0f);
+
+    const auto completePending = [&cache, &audio]() {
+        const auto jobs = cache.getPendingJobs();
+        for (const auto& job : jobs)
+        {
+            if (!cache.claimPendingJob(job)
+                || cache.completeChunkRenderWithAudio(
+                       job.startSample, job.endSampleExclusive,
+                       std::vector<float>(audio), job.targetRevision)
+                    != OpenTune::RenderCache::ChunkRenderResult::Published)
+                return false;
+        }
+        return true;
+    };
+
+    cache.reconcileFullPlanAndRequest(chunks, 0, 512, 1);
+    const auto initialJobs = cache.getPendingJobs();
+    if (!checkRenderContract(initialJobs.size() == 2 && completePending(),
+                             "generation_initial_render_failed"))
+        return false;
+
+    uint64_t chunkARevision = 0;
+    for (uint64_t contentRevision = 2; contentRevision <= 7; ++contentRevision)
+    {
+        cache.reconcileFullPlanAndRequest(chunks, 0, 256, contentRevision);
+        const auto jobs = cache.getPendingJobs();
+        if (!checkRenderContract(jobs.size() == 1 && jobs.front().startSample == 0,
+                                 "generation_chunk_a_job_missing"))
+            return false;
+        chunkARevision = jobs.front().targetRevision;
+        if (!completePending())
+            return false;
+    }
+
+    const auto generationBeforeChunkBEdit = cache.getStateSnapshot().renderGeneration;
+    cache.reconcileFullPlanAndRequest(chunks, 256, 512, 8);
+    const auto chunkBJobs = cache.getPendingJobs();
+    if (!checkRenderContract(chunkBJobs.size() == 1
+                                 && chunkBJobs.front().startSample == 256
+                                 && chunkBJobs.front().targetRevision < chunkARevision,
+                             "generation_chunk_local_revision_setup_failed"))
+        return false;
+    if (!checkRenderContract(!cache.getStateSnapshot().canonicalSettled,
+                             "generation_chunk_b_not_pending"))
+        return false;
+    if (!completePending())
+        return false;
+
+    const auto settledState = cache.getStateSnapshot();
+    if (!checkRenderContract(settledState.canonicalSettled
+                                 && settledState.renderGeneration != generationBeforeChunkBEdit,
+                             "generation_chunk_b_success_did_not_advance_cycle"))
+        return false;
+
+    cache.reconcileFullPlanAndRequest(chunks, 256, 512, 8);
+    return checkRenderContract(
+        cache.getStateSnapshot().renderGeneration == settledState.renderGeneration,
+        "generation_advanced_for_noop_reconcile");
+}
+
 bool runHighFrequencyMetadataContract()
 {
     DefaultVocoderCapability defaultVocoder;
@@ -578,6 +645,8 @@ int runChild(int argc, char** argv)
     if (!runTimeStretchCacheInvalidationContract())
         return 1;
     if (! runRenderCacheCompletionContract())
+        return 1;
+    if (!runRenderGenerationContract())
         return 1;
     if (!runVocoderErrorContract())
         return 1;

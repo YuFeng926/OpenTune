@@ -29,8 +29,8 @@ struct NotePitchPreview {
 /// neutral phase context. The result is resampled to @p outputSampleRate.
 /// The returned preview is at least 0.3 s long (or the note duration, whichever
 /// is longer) and clamped to the source buffer duration. Returns an empty
-/// preview on invalid input or when every frame in the preview range is
-/// unvoiced.
+/// preview on invalid input, when every frame in the preview range is unvoiced,
+/// or when @p stopRequested is observed set (cooperative cancellation).
 NotePitchPreview renderNotePitchPreview(
     const juce::AudioBuffer<float>& source,
     double sourceSampleRate,
@@ -40,7 +40,8 @@ NotePitchPreview renderNotePitchPreview(
     double outputSampleRate,
     const float* originalF0,
     int numOriginalF0Frames,
-    double originalF0FrameRate);
+    double originalF0FrameRate,
+    const std::atomic<bool>* stopRequested = nullptr);
 
 /**
  * NotePitchAudition - output-side, non-persistent note transposition audition.

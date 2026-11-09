@@ -113,6 +113,8 @@ public:
         ChunkStats chunkStats;
         bool hasPublishedAudio{false};
         bool hasNonBlankChunks{false};
+        bool canonicalSettled{false};
+        uint64_t renderGeneration{0}; // Content-level cycle; distinct from per-chunk desiredRevision.
     };
     StateSnapshot getStateSnapshot() const;
 
@@ -193,6 +195,7 @@ private:
     mutable juce::SpinLock lock_;
     std::map<int64_t, Chunk> chunks_;
     std::set<int64_t> pendingChunks_;
+    uint64_t renderGeneration_{0};
     uint64_t audioRevisionCounter_{0};
     uint64_t notifiedFailureContentRevision_{0};
     bool hasNotifiedFailureContentRevision_{false};

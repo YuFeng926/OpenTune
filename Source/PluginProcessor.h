@@ -116,6 +116,7 @@ struct DeleteOutcome {
 
 #if JucePlugin_Enable_ARA
 class OpenTuneDocumentController;
+struct AuditionRoute;
 #endif
 
 // ============================================================================
@@ -1012,7 +1013,10 @@ public:
 
     UndoManager& getUndoManager() { return undoManager_; }
     PianoKeyAudition& getPianoKeyAudition() { return pianoKeyAudition_; }
-    NoteAudition& getNoteAudition() { return noteAudition_; }
+    NoteAudition& getNoteAudition() { return *noteAudition_; }
+    /** Message-thread terminal render notification (complete/failure/cancel). */
+    using RenderTerminalCallback = std::function<void(ContentKey, bool)>;
+    void setRenderTerminalCallback(RenderTerminalCallback callback);
 #if !JucePlugin_Build_Standalone
     // Accessibility: REAPER's transport state and positions (see ReaperHostBridge).
     juce::VST3ClientExtensions* getVST3ClientExtensions() override { return &reaperHost_; }
@@ -1039,13 +1043,24 @@ public:
 private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
-    NoteAudition noteAudition_;
+    std::shared_ptr<NoteAudition> noteAudition_ = std::make_shared<NoteAudition>();
     NotePitchAudition notePitchAudition_;
+    struct RenderTerminalSink { RenderTerminalCallback callback; };
+    std::shared_ptr<RenderTerminalSink> renderTerminalSink_ = std::make_shared<RenderTerminalSink>();
+    // Message-thread only: render generation of the last
+    // successful terminal per content. A multi-chunk render settles every
+    // queued chunk callback against the same fully settled cache, so success is
+    // claimed once per key+render generation.
+    std::unordered_map<ContentKey, uint64_t> lastCompletedRenderGeneration_;
+    void notifyRenderTerminal(ContentKey key, bool completed, uint64_t renderGeneration = 0);
+    void mixDocumentAuditions(juce::AudioBuffer<float>& buffer, int numSamples, double sampleRate) noexcept;
 #if !JucePlugin_Build_Standalone
     ReaperHostBridge reaperHost_;
 #endif
 #if JucePlugin_Enable_ARA
     juce::ARAPlaybackRegion* notePitchAuditionTargetRegion_ = nullptr;
+    std::atomic<AuditionRoute*> auditionRoute_{nullptr};
+    std::atomic<PlayHeadState*> sharedPlayHeadStateForAudio_{nullptr};
 #endif
     OutputSpectrumAnalyzer outputSpectrumAnalyzer_;
 

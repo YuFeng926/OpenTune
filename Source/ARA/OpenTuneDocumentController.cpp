@@ -159,7 +159,9 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
         1, 100, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
     , transportRelay_(std::make_shared<HostTransportRelayState>())
     , notePitchAudition_(std::make_unique<NotePitchAudition>())
+    , renderTerminalRelay_(std::make_shared<RenderTerminalRelay>())
 {
+    auditionRoute_.notePitchAudition.store(notePitchAudition_.get(), std::memory_order_release);
     ProcessRenderRuntime::getInstance().retainOwner();
     installDocumentRenderExecution();
     completionSink_->controller = this;
@@ -172,6 +174,12 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
 {
     if (transportRelay_ != nullptr)
         transportRelay_->alive.store(false, std::memory_order_release);
+
+    if (renderTerminalRelay_ != nullptr)
+        renderTerminalRelay_->set({});
+    auditionRoute_.keyboardAudition.store(nullptr, std::memory_order_release);
+    auditionRoute_.keyboardMixer.store(nullptr, std::memory_order_release);
+    auditionRoute_.notePitchMixer.store(nullptr, std::memory_order_release);
 
     // DC/ARA model ownership、F0 completion 和 DC destruction 均在消息线程串行执行。
     auto* messageManager = juce::MessageManager::getInstance();
@@ -1010,6 +1018,7 @@ NotePitchAudition& OpenTuneDocumentController::getNotePitchAudition() noexcept
 bool OpenTuneDocumentController::selectNotePitchAuditionRendererForRegion(
     juce::ARAPlaybackRegion* region) noexcept
 {
+    JUCE_ASSERT_MESSAGE_THREAD
     juce::ARAEditorRenderer* selected = nullptr;
     if (region != nullptr)
     {
@@ -1026,68 +1035,74 @@ bool OpenTuneDocumentController::selectNotePitchAuditionRendererForRegion(
         }
     }
 
-    notePitchAuditionRenderer_.store(selected, std::memory_order_release);
+    auditionRoute_.notePitchMixer.store(selected, std::memory_order_release);
     notePitchAudition_->setTargetRegion(selected != nullptr ? region : nullptr);
 
     return selected != nullptr;
 }
 
-void OpenTuneDocumentController::mixNotePitchAuditionIfOwner(
-    juce::ARAEditorRenderer* renderer,
-    juce::AudioBuffer<float>& buffer,
-    int numSamples,
-    double sampleRate) noexcept
+void OpenTuneDocumentController::setKeyboardAuditionSource(std::shared_ptr<NoteAudition> source)
 {
-    if (notePitchAuditionMixLock_.test_and_set(std::memory_order_acquire))
-        return;
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (source != nullptr)
+        keyboardAuditionSources_.push_back(std::move(source));
 
-    if (notePitchAuditionRenderer_.load(std::memory_order_acquire) == renderer)
-        notePitchAudition_->mixIntoBuffer(buffer, numSamples, sampleRate);
-
-    notePitchAuditionMixLock_.clear(std::memory_order_release);
+    // Retained by keyboardAuditionSources_ for the document lifetime: an audio
+    // callback that already loaded the pointer can finish without a lock.
+    // Ownership of keyboardMixer is never reset here: the first editor renderer
+    // to observe a published source keeps mixing every later source, so two
+    // renderers can never mix the same NoteAudition concurrently. Ownership is
+    // released only by the owning renderer's destructor.
+    auditionRoute_.keyboardAudition.store(
+        keyboardAuditionSources_.empty() ? nullptr : keyboardAuditionSources_.back().get(),
+        std::memory_order_release);
 }
 
-void OpenTuneDocumentController::stopNotePitchAudition() noexcept
+void OpenTuneDocumentController::setRenderTerminalCallback(RenderTerminalCallback callback)
 {
-    notePitchAuditionRenderer_.store(nullptr, std::memory_order_release);
-    notePitchAudition_->setTargetRegion(nullptr);
-    notePitchAudition_->stop();
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (renderTerminalRelay_ != nullptr)
+        renderTerminalRelay_->set(std::move(callback));
 }
 
-void OpenTuneDocumentController::setKeyboardAuditionSource(NoteAudition* source) noexcept
+void OpenTuneDocumentController::RenderTerminalRelay::set(RenderTerminalCallback next)
 {
-    while (keyboardAuditionLock_.test_and_set(std::memory_order_acquire)) {}
-    keyboardAuditionSource_ = source;
-    keyboardAuditionLock_.clear(std::memory_order_release);
+    const std::lock_guard<std::mutex> lock(mutex);
+    callback = std::move(next);
 }
 
-void OpenTuneDocumentController::mixKeyboardAudition(
-    juce::ARAEditorRenderer* renderer,
-    juce::AudioBuffer<float>& buffer,
-    int numSamples,
-    double sampleRate) noexcept
+void OpenTuneDocumentController::RenderTerminalRelay::invoke(ContentKey key, bool completed)
 {
-    if (keyboardAuditionLock_.test_and_set(std::memory_order_acquire))
-        return;
-
-    // One mixer per document: a second one would advance the clip twice per block.
-    if (keyboardAuditionMixer_ == nullptr)
-        keyboardAuditionMixer_ = renderer;
-    if (keyboardAuditionMixer_ == renderer && keyboardAuditionSource_ != nullptr)
-        keyboardAuditionSource_->mixIntoBuffer(buffer, numSamples, sampleRate);
-
-    keyboardAuditionLock_.clear(std::memory_order_release);
+    RenderTerminalCallback current;
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        current = callback;
+    }
+    if (current)
+        current(key, completed);
 }
 
-void OpenTuneDocumentController::releaseKeyboardAudition(
-    NoteAudition* source, juce::ARAEditorRenderer* renderer) noexcept
+void OpenTuneDocumentController::RenderTerminalRelay::invokeCompleted(
+    ContentKey key, uint64_t renderGeneration)
 {
-    while (keyboardAuditionLock_.test_and_set(std::memory_order_acquire)) {}
-    if (keyboardAuditionSource_ == source)
-        keyboardAuditionSource_ = nullptr;
-    if (renderer != nullptr && keyboardAuditionMixer_ == renderer)
-        keyboardAuditionMixer_ = nullptr;
-    keyboardAuditionLock_.clear(std::memory_order_release);
+    RenderTerminalCallback current;
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (!callback)
+            return;
+        // A multi-chunk render queues one settled callback per chunk; every
+        // queued callback observes a fully settled cache by the time it runs.
+        // Claim the success once per key+render generation so only one terminal
+        // notification reaches the editor for the same render generation.
+        const auto it = lastCompletedRenderGeneration.find(key);
+        if (it != lastCompletedRenderGeneration.end()
+            && it->second == renderGeneration)
+            return;
+        lastCompletedRenderGeneration[key] = renderGeneration;
+        current = callback;
+    }
+    if (current)
+        current(key, true);
 }
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable() const noexcept
@@ -2486,16 +2501,26 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
     lease.owner = contentRenderService_.get();
     const std::weak_ptr<ContentRenderService> weakContentRenderService = contentRenderService_;
     const auto renderGate = renderCompletionGate_;
-    lease.renderJobCallback = [weakContentRenderService, renderGate](RenderJob& job)
+    const auto renderTerminalRelay = renderTerminalRelay_;
+    lease.renderJobCallback = [weakContentRenderService, renderGate, renderTerminalRelay](RenderJob& job)
     {
         if (auto contentRenderService = weakContentRenderService.lock())
             OpenTuneDocumentController::processDocumentRenderJob(
-                std::move(contentRenderService), job, renderGate);
+                std::move(contentRenderService), job, renderGate, renderTerminalRelay);
     };
-    lease.renderFailureCallback = [renderGate](const RenderJob& job, const juce::String& reason) {
+    lease.renderFailureCallback = [renderGate, renderTerminalRelay](const RenderJob& job, const juce::String& reason) {
         ProcessRenderRuntime::notifyApplicationRenderFailure(
             job.contentKey, job.contentRevision, job.targetRevision,
             reason, job.renderCache, renderGate);
+        if (renderTerminalRelay != nullptr)
+        {
+            const auto key = job.contentKey;
+            juce::MessageManager::callAsync([renderGate, renderTerminalRelay, key] {
+                const ProcessRenderRuntime::CompletionCallbackLease callbackLease(*renderGate);
+                if (callbackLease)
+                    renderTerminalRelay->invoke(key, false);
+            });
+        }
     };
 
     contentRenderService_->attachExecutionLease(std::move(lease));
@@ -2504,7 +2529,8 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
 void OpenTuneDocumentController::processDocumentRenderJob(
     std::shared_ptr<ContentRenderService> contentRenderService,
     RenderJob& job,
-    std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate)
+    std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate,
+    std::shared_ptr<RenderTerminalRelay> renderTerminalRelay)
 {
     if (job.renderCache == nullptr)
     {
@@ -2512,6 +2538,15 @@ void OpenTuneDocumentController::processDocumentRenderJob(
         ProcessRenderRuntime::notifyApplicationRenderFailure(
             job.contentKey, job.contentRevision, job.targetRevision,
             "ARA render job has no RenderCache", {}, completionGate);
+        if (renderTerminalRelay != nullptr)
+        {
+            const auto key = job.contentKey;
+            juce::MessageManager::callAsync([completionGate, renderTerminalRelay, key] {
+                const ProcessRenderRuntime::CompletionCallbackLease callbackLease(*completionGate);
+                if (callbackLease)
+                    renderTerminalRelay->invoke(key, false);
+            });
+        }
         return;
     }
 
@@ -2523,6 +2558,15 @@ void OpenTuneDocumentController::processDocumentRenderJob(
                 job.contentKey, job.contentRevision, job.targetRevision,
                 "Render job has no content snapshot",
                 job.renderCache, completionGate);
+        if (renderTerminalRelay != nullptr)
+        {
+            const auto key = job.contentKey;
+            juce::MessageManager::callAsync([completionGate, renderTerminalRelay, key] {
+                const ProcessRenderRuntime::CompletionCallbackLease callbackLease(*completionGate);
+                if (callbackLease)
+                    renderTerminalRelay->invoke(key, false);
+            });
+        }
         return;
     }
 
@@ -2534,6 +2578,23 @@ void OpenTuneDocumentController::processDocumentRenderJob(
         ProcessRenderRuntime::notifyApplicationRenderFailure(
             key, contentRevision, targetRevision, reason, std::move(renderCache), gate);
     };
+    const auto renderCache = job.renderCache;
+    const auto contentKey = job.contentKey;
+    if (renderTerminalRelay != nullptr)
+    {
+        completion.chunkSettled = [renderTerminalRelay, renderCache, contentKey](
+            ContentKey, std::shared_ptr<const EditableContentSnapshot>,
+            std::shared_ptr<const juce::AudioBuffer<float>>, double) {
+            if (renderCache == nullptr)
+                return;
+            const auto state = renderCache->getStateSnapshot();
+            if (state.canonicalSettled)
+                renderTerminalRelay->invokeCompleted(contentKey, state.renderGeneration);
+        };
+        completion.chunkFailed = [renderTerminalRelay](ContentKey key, const juce::String&) {
+            renderTerminalRelay->invoke(key, false);
+        };
+    }
     ProcessRenderRuntime::getInstance().processChunkRenderJob(
         std::move(contentRenderService), job,
         false, std::move(completion));
@@ -2818,31 +2879,6 @@ bool OpenTuneDocumentController::requestCommitPlaybackPosition(double timeInSeco
         coalescer.commitSeek(timeInSeconds, restart);
     });
     return true;
-}
-
-void OpenTuneDocumentController::observeHostPlaybackPosition(
-    const juce::Optional<juce::AudioPlayHead::PositionInfo>& positionInfo,
-    double blockDurationSeconds) noexcept
-{
-    // Update document-shared canonical transport truth from a realtime editor
-    // renderer. Playback renderers may be ahead of the current playhead and must
-    // not enter this path.
-    const auto updateResult = sharedPlayHeadState_.update(positionInfo);
-
-    // Publish a projection only when this call advanced canonical time. A
-    // duplicate observation of the same current time is a no-op: it must not
-    // bump the generation or invalidate the existing anchor.
-    if (blockDurationSeconds > 0.0 && updateResult.timeChanged && positionInfo.hasValue())
-    {
-        if (const auto timeSec = positionInfo->getTimeInSeconds())
-        {
-            const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
-            const double horizon = *timeSec + blockDurationSeconds;
-            if (sharedPlayHeadState_.timeInSeconds.load(std::memory_order_relaxed) == *timeSec)
-                sharedPlayHeadState_.presentationProjection.tryPublish(
-                    *timeSec, nowClock, horizon, updateResult.epoch);
-        }
-    }
 }
 
 // -----------------------------------------------------------------------

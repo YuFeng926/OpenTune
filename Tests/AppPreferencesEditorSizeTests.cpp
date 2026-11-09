@@ -36,6 +36,35 @@ bool testSharedPluginEditorSize()
     return sharedInstancesReadLatestSize && hasSize(persistedSize, 1280, 760);
 }
 
+bool testAccessibilityModePreference()
+{
+    const auto temporaryDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("OpenTuneAccessibilityPreference-" + juce::Uuid().toString());
+    OpenTune::AppPreferences::StorageOptions options;
+    options.settingsDirectory = temporaryDirectory;
+
+    bool defaultsDisabled = false;
+    bool persistedEnabled = false;
+    bool persistedDisabled = false;
+    {
+        OpenTune::AppPreferences preferences(options);
+        defaultsDisabled = !preferences.getState().shared.accessibilityModeEnabled;
+        preferences.setAccessibilityModeEnabled(true);
+    }
+    {
+        OpenTune::AppPreferences preferences(options);
+        persistedEnabled = preferences.getState().shared.accessibilityModeEnabled;
+        preferences.setAccessibilityModeEnabled(false);
+    }
+    {
+        OpenTune::AppPreferences preferences(options);
+        persistedDisabled = !preferences.getState().shared.accessibilityModeEnabled;
+    }
+
+    temporaryDirectory.deleteRecursively();
+    return defaultsDisabled && persistedEnabled && persistedDisabled;
+}
+
 bool testShortcutScopesAndConflicts()
 {
     using namespace OpenTune::KeyShortcutConfig;
@@ -476,6 +505,11 @@ int main()
 {
     if (!testSharedPluginEditorSize()) {
         std::fputs("FAIL: shared plugin editor size preferences\n", stderr);
+        return 1;
+    }
+
+    if (!testAccessibilityModePreference()) {
+        std::fputs("FAIL: accessibility mode preference persistence\n", stderr);
         return 1;
     }
 

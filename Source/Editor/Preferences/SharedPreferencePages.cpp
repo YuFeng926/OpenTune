@@ -420,7 +420,7 @@ private:
 class SharedEditingPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 428; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 34 + 10 + 34 + 10 + 34 + 10 + 28 + 20
+    static constexpr int kContentHeight = 472; // Includes the accessibility mode toggle.
 
     SharedEditingPage(AppPreferences& appPreferences,
                       std::function<void()> onPreferencesChanged,
@@ -571,6 +571,17 @@ public:
         };
         initialiseToggleButton(noteTransposePreviewToggle_);
         addAndMakeVisible(noteTransposePreviewToggle_);
+
+        accessibilityModeToggle_.setButtonText(LOC(kAccessibilityMode));
+        accessibilityModeToggle_.setTooltip(LOC(kAccessibilityModeHelp));
+        accessibilityModeToggle_.setToggleState(state.shared.accessibilityModeEnabled,
+                                                juce::dontSendNotification);
+        accessibilityModeToggle_.onClick = [this] {
+            appPreferences_.setAccessibilityModeEnabled(accessibilityModeToggle_.getToggleState());
+            notifyChanged();
+        };
+        initialiseToggleButton(accessibilityModeToggle_);
+        addAndMakeVisible(accessibilityModeToggle_);
     }
 
     void paint(juce::Graphics& g) override
@@ -623,6 +634,10 @@ public:
         noteTransposePreviewToggle_.setBounds(row.removeFromLeft(labelWidth + 300));
 
         bounds.removeFromTop(10);
+        row = bounds.removeFromTop(rowHeight);
+        accessibilityModeToggle_.setBounds(row.removeFromLeft(labelWidth + 300));
+
+        bounds.removeFromTop(10);
         auto resetRow = bounds.removeFromTop(28);
         resetButton_.setBounds(resetRow.removeFromLeft(150));
     }
@@ -661,6 +676,7 @@ private:
     juce::Label wholeNoteMoveSnapLabel_;
     a11y::AccessibleComboBox wholeNoteMoveSnapSelector_;
     a11y::AccessibleToggleButton noteTransposePreviewToggle_;
+    a11y::AccessibleToggleButton accessibilityModeToggle_;
 };
 
 class SharedVisualPage final : public juce::Component

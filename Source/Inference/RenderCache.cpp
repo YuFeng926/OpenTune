@@ -9,6 +9,12 @@ namespace OpenTune {
 
 namespace {
 
+uint64_t nextRenderGeneration() noexcept
+{
+    static std::atomic<uint64_t> generation{0};
+    return generation.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
 double projectRenderSeconds(int64_t sample) {
     return TimeCoordinate::samplesToSeconds(sample, RenderCache::kSampleRate);
 }
@@ -688,6 +694,8 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
 
         chunks_ = std::move(newChunks);
         pendingChunks_ = std::move(newPendingChunks);
+        if (result.stateChanged)
+            renderGeneration_ = nextRenderGeneration();
         pendingChunkCount = pendingChunks_.size();
         // Do NOT publish or rebuild on geometry change: the old snapshot (or empty
         // initial) stays visible to the audio thread until all chunks are settled.
@@ -972,6 +980,8 @@ RenderCache::StateSnapshot RenderCache::getStateSnapshot() const {
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
         pruneRetiredSnapshotsLocked(snapshotReleases);
+        snapshot.renderGeneration = renderGeneration_;
+        snapshot.canonicalSettled = isCanonicalSettledLocked_();
         for (const auto& [key, chunk] : chunks_) {
             juce::ignoreUnused(key);
 

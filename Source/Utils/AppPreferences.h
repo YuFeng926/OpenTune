@@ -79,6 +79,7 @@ struct SharedPreferencesState {
     TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
     WholeNoteMoveSnapMode wholeNoteMoveSnapMode = WholeNoteMoveSnapMode::Scale;
     bool noteTransposePreviewEnabled = false;  ///< 拖动音符移调时试听预览
+    bool accessibilityModeEnabled = false;  ///< 无障碍模式（读屏播报等，默认关闭）
 };
 
 struct StandalonePreferencesState {
@@ -138,6 +139,9 @@ public:
     void setLightPitchCorrectionEnabled(bool enabled);
     void setNoteTransposePreviewEnabled(bool enabled);
     bool getNoteTransposePreviewEnabled() const;
+
+    void setAccessibilityModeEnabled(bool enabled);
+    bool getAccessibilityModeEnabled() const;
 
     void setF0ModelType(F0ModelType type);
     F0ModelType getF0ModelType() const;

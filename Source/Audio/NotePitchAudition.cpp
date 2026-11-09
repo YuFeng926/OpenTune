@@ -1,12 +1,22 @@
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
+#endif
+
 #include "NotePitchAudition.h"
 
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <mutex>
 
+#include "CDSPResampler.h"
 #include "../DSP/PhaseVocoderPitchShifter.h"
-#include "../DSP/ResamplingManager.h"
 #include "../Utils/TimeCoordinate.h"
 
 namespace OpenTune {
@@ -15,18 +25,78 @@ namespace {
 constexpr float kPreviewGain = 0.7f;
 constexpr double kMinPreviewSeconds = 0.3;
 constexpr double kFadeSeconds = 0.01;
+constexpr int kResampleInputBlockSamples = 4096;
 
 std::vector<float> resampleMono(const float* input, size_t inputLength,
-                                int inputSR, int targetSR)
+                                int inputSR, int targetSR,
+                                const std::atomic<bool>* stopRequested)
 {
     if (input == nullptr || inputLength == 0 || inputSR <= 0 || targetSR <= 0)
         return {};
+    const auto cancelled = [stopRequested]() {
+        return stopRequested != nullptr
+            && stopRequested->load(std::memory_order_relaxed);
+    };
+    if (cancelled())
+        return {};
     if (inputSR == targetSR)
         return {input, input + inputLength};
-    ResamplingManager resampler;
-    if (targetSR < inputSR)
-        return resampler.downsampleForInference(input, inputLength, inputSR, targetSR);
-    return resampler.upsampleForHost(input, inputLength, inputSR, targetSR);
+
+    int outputLength = static_cast<int>(std::min<int64_t>(
+        TimeCoordinate::sampleRateProject(static_cast<int64_t>(inputLength),
+                                          static_cast<double>(inputSR),
+                                          static_cast<double>(targetSR)),
+        static_cast<int64_t>(std::numeric_limits<int>::max())));
+    if (outputLength <= 0)
+        outputLength = 1;
+
+    r8b::CDSPResampler24 resampler(
+        static_cast<double>(inputSR), static_cast<double>(targetSR),
+        kResampleInputBlockSamples);
+    std::vector<double> inputBlock(static_cast<size_t>(kResampleInputBlockSamples));
+    std::vector<float> output(static_cast<size_t>(outputLength));
+    size_t inputOffset = 0;
+    int outputOffset = 0;
+
+    while (outputOffset < outputLength)
+    {
+        if (cancelled())
+            return {};
+
+        const int inputCount = inputOffset < inputLength
+            ? static_cast<int>(std::min<size_t>(
+                inputBlock.size(), inputLength - inputOffset))
+            : kResampleInputBlockSamples;
+        if (inputOffset < inputLength)
+        {
+            for (int i = 0; i < inputCount; ++i)
+                inputBlock[static_cast<size_t>(i)] =
+                    static_cast<double>(input[inputOffset + static_cast<size_t>(i)]);
+            inputOffset += static_cast<size_t>(inputCount);
+        }
+        else
+        {
+            std::fill(inputBlock.begin(), inputBlock.end(), 0.0);
+        }
+
+        double* resampled = nullptr;
+        const int resampledCount = resampler.process(
+            inputBlock.data(), inputCount, resampled);
+        if (cancelled())
+            return {};
+
+        const int copyCount = std::min(outputLength - outputOffset, resampledCount);
+        for (int i = 0; i < copyCount; ++i)
+        {
+            if ((i & 0xFFF) == 0 && cancelled())
+                return {};
+            output[static_cast<size_t>(outputOffset + i)] =
+                static_cast<float>(resampled[i]);
+        }
+        outputOffset += copyCount;
+    }
+
+    return output;
 }
 
 } // namespace
@@ -40,9 +110,17 @@ NotePitchPreview renderNotePitchPreview(
     double outputSampleRate,
     const float* originalF0,
     int numOriginalF0Frames,
-    double originalF0FrameRate)
+    double originalF0FrameRate,
+    const std::atomic<bool>* stopRequested)
 {
     NotePitchPreview preview;
+    const auto cancelled = [stopRequested]() {
+        return stopRequested != nullptr
+            && stopRequested->load(std::memory_order_relaxed);
+    };
+
+    if (cancelled())
+        return preview;
     if (targetHz <= 0.0f)
         return preview;
     if (outputSampleRate <= 0.0 || sourceSampleRate <= 0.0)
@@ -79,7 +157,14 @@ NotePitchPreview renderNotePitchPreview(
     // Target curve has the full source F0 length. Frames outside the preview
     // range copy originalF0 (neutral) so phase replay starts close to the
     // window; frames covering the actual start/end control the shifted range.
-    std::vector<float> targetF0(originalF0, originalF0 + numOriginalF0Frames);
+    std::vector<float> targetF0;
+    targetF0.reserve(static_cast<size_t>(numOriginalF0Frames));
+    for (int i = 0; i < numOriginalF0Frames; ++i)
+    {
+        if ((i & 0xFFF) == 0 && cancelled())
+            return preview;
+        targetF0.push_back(originalF0[static_cast<size_t>(i)]);
+    }
     const double shiftStartSeconds = TimeCoordinate::samplesToSeconds(
         startSample, sourceSampleRate);
     const double shiftEndSeconds = TimeCoordinate::samplesToSeconds(
@@ -93,6 +178,8 @@ NotePitchPreview renderNotePitchPreview(
     bool hasVoicedFrame = false;
     for (int i = firstFrame; i < lastFrame; ++i)
     {
+        if (((i - firstFrame) & 0xFFF) == 0 && cancelled())
+            return preview;
         if (originalF0[static_cast<size_t>(i)] > 0.0f)
         {
             targetF0[static_cast<size_t>(i)] = targetHz;
@@ -106,6 +193,9 @@ NotePitchPreview renderNotePitchPreview(
     if (!hasVoicedFrame)
         return preview; // Never play unshifted audio as a "preview".
 
+    if (cancelled())
+        return preview;
+
     PhaseVocoderPitchShifter shifter(sourceSampleRate);
     std::vector<float> shifted = shifter.render(
         source.getReadPointer(0),
@@ -115,8 +205,12 @@ NotePitchPreview renderNotePitchPreview(
         originalF0,
         targetF0.data(),
         numOriginalF0Frames,
-        originalF0FrameRate);
+        originalF0FrameRate,
+        stopRequested);
     if (shifted.size() != static_cast<size_t>(outputCount))
+        return preview;
+
+    if (cancelled())
         return preview;
 
     // Resample only the returned preview to the output rate.
@@ -124,8 +218,8 @@ NotePitchPreview renderNotePitchPreview(
         ? std::move(shifted)
         : resampleMono(shifted.data(), shifted.size(),
             static_cast<int>(sourceSampleRate),
-            static_cast<int>(outputSampleRate));
-    if (output.empty())
+            static_cast<int>(outputSampleRate), stopRequested);
+    if (output.empty() || cancelled())
         return preview;
 
     // Fixed gain + 10 ms half-cosine fade in/out. If the snippet is too short
@@ -136,6 +230,8 @@ NotePitchPreview renderNotePitchPreview(
     const int halfFade = numSamples / 2;
     const int fadeLen = std::max(1, std::min(fadeSamples, halfFade));
     for (int i = 0; i < numSamples; ++i) {
+        if ((i & 0xFFF) == 0 && cancelled())
+            return preview;
         float env = 1.0f;
         if (i < fadeLen) {
             const double t = static_cast<double>(i) / fadeLen; // 0..1
@@ -164,9 +260,18 @@ NotePitchAudition::NotePitchAudition()
 NotePitchAudition::~NotePitchAudition()
 {
     stopRequested_.store(true, std::memory_order_release);
-    hasPending_ = false;
+    {
+        std::lock_guard<std::mutex> lock(requestMutex_);
+        hasPending_ = false;
+        pending_ = Request{};
+    }
+    signalThreadShouldExit();
     wakeup_.signal();
-    stopThread(2000);
+
+    // The worker owns requestMutex_/pending_ and the render call. Wait for it
+    // to reach the exit predicate: the object must not be destroyed while the
+    // thread still touches it.
+    waitForThreadToExit(-1);
 }
 
 void NotePitchAudition::request(PlaybackReadSource source,
@@ -297,7 +402,8 @@ void NotePitchAudition::run()
                 request.endSeconds,
                 request.targetHz,
                 request.outputSampleRate,
-                originalF0, numOriginalF0Frames, originalF0FrameRate);
+                originalF0, numOriginalF0Frames, originalF0FrameRate,
+                &stopRequested_);
         }
 
         // Drop the result if stop was requested or a newer pending request

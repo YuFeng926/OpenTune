@@ -31,6 +31,7 @@
 #include "Utils/PitchControlConfig.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/ContextMenuKey.h"
+#include "Utils/ScreenReaderAnnouncer.h"
 #include "Utils/ZoomSensitivityConfig.h"
 #include <cmath>
 #include <memory>
@@ -186,12 +187,14 @@ public:
     /** 注入 AppPreferences 指针（两个 Editor 构造/同步时直接注入，无中转层）。
      *  用于 EQ popup 和音符整体移动吸附偏好。 */
     void setAppPreferences(AppPreferences* prefs) noexcept { appPreferences_ = prefs; }
+    /** Re-evaluate the accessibility preference; stops audition when it is turned off. */
+    void applyAccessibilityMode();
 
     using ReadContentSnapshotFn = std::function<std::shared_ptr<const EditableContentSnapshot>(ContentKey)>;
     void setReadContentSnapshot(ReadContentSnapshotFn fn) { readContentSnapshot_ = std::move(fn); }
 
     void setContentCommands(std::shared_ptr<ContentEditCommands> commands);
-    void setProcessor(OpenTuneAudioProcessor* processor) noexcept { processor_ = processor; }
+    void setProcessor(OpenTuneAudioProcessor* processor);
 
     ContentKey editedContentKey() const { return editedContentKey_; }
     ContentTimelineProjection activeContentProjection() const noexcept;
@@ -772,11 +775,17 @@ private:
     PianoKeyAudition* pianoKeyAudition_ = nullptr;
     NoteAudition* noteAudition_ = nullptr;
 
-    // Accessibility: speech for the keyboard-selected note and audition of its vocal.
+    // Accessibility: per-note UIA children and speech for the keyboard-selected note.
+    class NoteAccessibilityItem;
+    std::vector<std::unique_ptr<NoteAccessibilityItem>> noteAccessibilityItems_;
+    void syncNoteAccessibilityItems();
+    void clearNoteAccessibilityItems();
     void handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEvent event, const std::vector<Note>& notes, int index);
     enum class NoteDetail { Navigation, Target, Full };
     juce::String describeKeyboardNote(const std::vector<Note>& notes, int index, NoteDetail detail) const;
-    void auditionNote(const Note& note);
+    /** @param renderCacheToOverlay settled canonical render to overlay; when null the
+     *  best available cache is used for navigation audition. */
+    void auditionNote(const Note& note, const RenderCache* renderCacheToOverlay = nullptr);
     juce::String keyboardToolName(ToolId tool) const;
     juce::String modulationPercentText(const Note& note) const;
     juce::String driftPercentText(const Note& note) const;
@@ -784,12 +793,17 @@ private:
     juce::String describeEditedSelection(const std::vector<Note>& notes, int index,
                                          const std::function<juce::String(int)>& valueAt) const;
     void scheduleAuditionAfterRender(int noteIndex);
+    void playPendingAudition(bool renderFailed);
+    void cancelPendingAudition();
+    void handleRenderTerminal(ContentKey key, bool completed);
+    void announceForAccessibility(const juce::String& text,
+                                  a11y::SpeechQueue queue = a11y::SpeechQueue::replacePrevious);
+    bool accessibilityModeEnabled() const noexcept;
     bool escapePassesToHost_ = false;
-    void tickPendingAudition();
     RenderCacheProvider renderCacheProvider_;
-    std::unique_ptr<juce::Timer> pendingAuditionTimer_;
+    ContentKey pendingAuditionContentKey_;
     int pendingAuditionNoteIndex_ = -1;
-    int pendingAuditionTicks_ = 0;
+    bool accessibilityModeApplied_ = false;
     int pressedPianoKey_ = -1;
 
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;

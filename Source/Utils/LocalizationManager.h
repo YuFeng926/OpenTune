@@ -270,6 +270,8 @@ constexpr const char* kWholeNoteMoveSnap = "Move Snap";
 constexpr const char* kWholeNoteMoveSnapScale = "Follow Global Scale";
 constexpr const char* kWholeNoteMoveSnapStandardPitch = "Snap to Semitones";
 constexpr const char* kNoteTransposePreview = "Note Transpose Preview";
+constexpr const char* kAccessibilityMode = "Accessibility mode";
+constexpr const char* kAccessibilityModeHelp = "Enables screen reader announcements and keyboard note editing";
 
 constexpr const char* kHorizontalZoomSensitivity = "Horizontal Zoom Sensitivity";
 constexpr const char* kVerticalZoomSensitivity = "Vertical Zoom Sensitivity";
@@ -620,6 +622,8 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kWholeNoteMoveSnapScale, "Follow Global Scale", "跟随全局调式", "グローバルスケールに従う", "Следовать глобальной гамме", "Seguir escala global" },
         { Keys::kWholeNoteMoveSnapStandardPitch, "Snap to Semitones", "半音吸附", "半音スナップ", "По полутонам", "Por semitonos" },
         { Keys::kNoteTransposePreview, "Preview transposition while dragging notes", "拖动音符时试听移调", "音符ドラッグ時に移調を試聴", "Прослушивание транспонирования при перетаскивании нот", "Escuchar transposición al arrastrar notas" },
+        { Keys::kAccessibilityMode, "Accessibility mode", "无障碍模式", "アクセシビリティモード", "Режим доступности", "Modo de accesibilidad" },
+        { Keys::kAccessibilityModeHelp, "Enables screen reader announcements and keyboard note editing", "启用读屏播报和键盘音符编辑", "スクリーンリーダーの読み上げとキーボードでの音符編集を有効にします", "Включает озвучивание интерфейса и редактирование нот с клавиатуры", "Activa los anuncios del lector de pantalla y la edición de notas con el teclado" },
         
         { Keys::kHorizontalZoomSensitivity, "Horizontal Zoom Sensitivity", "水平缩放灵敏度", "水平ズーム感度", "Чувств. гориз. zoom", "Sensibilidad zoom horizontal" },
         { Keys::kVerticalZoomSensitivity, "Vertical Zoom Sensitivity", "垂直缩放灵敏度", "垂直ズーム感度", "Чувств. верт. zoom", "Sensibilidad zoom vertical" },

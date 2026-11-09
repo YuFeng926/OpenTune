@@ -213,6 +213,8 @@ public:
         std::function<void(size_t, float, float)> notifyNoteOffsetChanged;
         // notes is the current list (after a move it already holds the new pitch), index is a note or -1.
         std::function<void(KeyboardNoteEvent, const std::vector<Note>&, int)> notifyKeyboardNote;
+        // Accessibility mode gate for the PR-added keyboard note navigation/editing.
+        std::function<bool()> accessibilityModeEnabled;
         // Accessibility: REAPER's edit cursor in source seconds while the transport is stopped.
         std::function<std::optional<double>()> getEditCursorSourceTime;
         // Tool switched by a key: the screen reader announces the new tool.
@@ -346,6 +348,7 @@ private:
     // §8.4: Delete key removes selected handle (non-endpoint).
     bool handleTimeToolDeleteSelected();
     bool handleNoteArrowKey(const juce::KeyPress& key);
+    bool handleNoteArrowKeyPreAccessibility(const juce::KeyPress& key);
     void moveSelectedNotesPitchByKeyboard(int direction, bool fineCents = false, bool resetToSung = false,
                                           bool semitoneIgnoringScale = false);
     void selectNoteFromKeyboard(const std::vector<Note>& notes, int index);

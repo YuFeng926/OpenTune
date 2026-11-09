@@ -34,6 +34,20 @@ class ResamplingManager;
 class NotePitchAudition;
 class NoteAudition;
 struct RenderJob;
+
+/**
+ * Document-shared audition routing published for the audio callbacks.
+ * The message thread publishes sources and the note-pitch mixer; processBlock
+ * only loads atomics and claims the single keyboard mixer with a CAS.
+ */
+struct AuditionRoute
+{
+    std::atomic<NotePitchAudition*> notePitchAudition{nullptr};
+    std::atomic<NoteAudition*> keyboardAudition{nullptr};
+    std::atomic<juce::ARAEditorRenderer*> notePitchMixer{nullptr};
+    std::atomic<juce::ARAEditorRenderer*> keyboardMixer{nullptr};
+};
+
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
 public:
@@ -141,12 +155,6 @@ public:
     // flushed as stop, then position, then start. Other hosts get a position
     // request only. Availability is returned immediately; the host call is deferred.
     bool requestCommitPlaybackPosition(double timeInSeconds);
-    // Publish host PositionInfo to document-shared PlayHeadState. Called from
-    // the realtime ARA editor renderer's processBlock. Playback renderers may be
-    // ahead of the current playhead and must not publish here.
-    void observeHostPlaybackPosition(
-        const juce::Optional<juce::AudioPlayHead::PositionInfo>& positionInfo,
-        double blockDurationSeconds) noexcept;
 
 protected:
     bool doRestoreObjectsFromStream(juce::ARAInputStream& input,
@@ -236,25 +244,24 @@ public:
     // 文档级音符移调试听：UI 实例投递请求，拥有当前编辑 region 的 editor renderer 混音。
     NotePitchAudition& getNotePitchAudition() noexcept;
     bool selectNotePitchAuditionRendererForRegion(juce::ARAPlaybackRegion* region) noexcept;
-    void mixNotePitchAuditionIfOwner(juce::ARAEditorRenderer* renderer,
-                                     juce::AudioBuffer<float>& buffer,
-                                     int numSamples,
-                                     double sampleRate) noexcept;
-    void stopNotePitchAudition() noexcept;
 
     // Keyboard note audition. The editor view owns it, but as an item FX in REAPER that
     // instance is a playback renderer and gets no audio blocks while stopped, so the
-    // arrows were silent. The realtime editor renderer of the document mixes it instead.
-    void setKeyboardAuditionSource(NoteAudition* source) noexcept;
-    void mixKeyboardAudition(juce::ARAEditorRenderer* renderer,
-                             juce::AudioBuffer<float>& buffer,
-                             int numSamples,
-                             double sampleRate) noexcept;
-    void releaseKeyboardAudition(NoteAudition* source, juce::ARAEditorRenderer* renderer) noexcept;
+    // realtime editor renderer of the document mixes it instead.
+    void setKeyboardAuditionSource(std::shared_ptr<NoteAudition> source);
+
+    // Message-thread render terminal notification used by the editor for post-edit audition.
+    using RenderTerminalCallback = std::function<void(ContentKey, bool)>;
+    void setRenderTerminalCallback(RenderTerminalCallback callback);
+
+    /** Audio callbacks read this stable route; no controller API is touched there. */
+    AuditionRoute* getAuditionRoute() noexcept { return &auditionRoute_; }
 
     /** Shared PlayHeadState for all ARA roles bound to this document. The
      *  realtime editor renderer publishes host transport here; UI binds to this. */
     const PlayHeadState& getSharedPlayHeadState() const noexcept { return sharedPlayHeadState_; }
+    /** Message thread: stable address handed to the audio callback at bind. */
+    PlayHeadState& getSharedPlayHeadStateForAudio() noexcept { return sharedPlayHeadState_; }
 
     // ARA mutation API — Processor delegates ARA writes here
     bool applyNotesToModification(const ContentKey& key, std::vector<Note> notes);
@@ -298,20 +305,33 @@ private:
     static OriginalF0InputStamp makeF0InputStamp(const AudioSource& source, const AudioModification& modification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void installDocumentRenderExecution();
+    struct RenderTerminalRelay;
     static void processDocumentRenderJob(std::shared_ptr<ContentRenderService> contentRenderService,
                                          RenderJob& job,
-                                         std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate);
+                                         std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate,
+                                         std::shared_ptr<RenderTerminalRelay> renderTerminalRelay);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
 
     std::unique_ptr<NotePitchAudition> notePitchAudition_;
-    std::atomic<juce::ARAEditorRenderer*> notePitchAuditionRenderer_{nullptr};
-    std::atomic_flag notePitchAuditionMixLock_ = ATOMIC_FLAG_INIT;
+    AuditionRoute auditionRoute_;
+    std::vector<std::shared_ptr<NoteAudition>> keyboardAuditionSources_;
 
-    // Guarded by keyboardAuditionLock_: the audio thread only tries it, the message thread
-    // waits for it, so a source is never freed while it is being mixed.
-    NoteAudition* keyboardAuditionSource_ = nullptr;
-    juce::ARAEditorRenderer* keyboardAuditionMixer_ = nullptr;
-    std::atomic_flag keyboardAuditionLock_ = ATOMIC_FLAG_INIT;
+    // Render terminal notifications are built by the render worker and invoked on
+    // the message thread; the relay keeps the callback lifetime independent of
+    // the worker's completion copy.
+    struct RenderTerminalRelay
+    {
+        std::mutex mutex;
+        RenderTerminalCallback callback;
+        // Success notifications are claimed once per key+render generation: a
+        // multi-chunk render delivers one settled callback per chunk and every
+        // queued callback observes the same fully settled cache.
+        std::map<ContentKey, uint64_t> lastCompletedRenderGeneration;
+        void set(RenderTerminalCallback next);
+        void invoke(ContentKey key, bool completed);
+        void invokeCompleted(ContentKey key, uint64_t renderGeneration);
+    };
+    std::shared_ptr<RenderTerminalRelay> renderTerminalRelay_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)
 };

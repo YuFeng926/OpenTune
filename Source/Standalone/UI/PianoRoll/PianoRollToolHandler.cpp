@@ -599,7 +599,10 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
 bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key,
                                       const KeyShortcutConfig::KeyBinding* pointerShortcut)
 {
-    if (handleNoteArrowKey(key))
+    const bool accessibilityMode = ctx_.accessibilityModeEnabled
+        && ctx_.accessibilityModeEnabled();
+    if (accessibilityMode ? handleNoteArrowKey(key)
+                          : handleNoteArrowKeyPreAccessibility(key))
         return true;
 
     const auto& shortcutSettings = ctx_.getShortcutSettings();
@@ -734,6 +737,52 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key,
         return ctx_.notifyEscapeKey == nullptr || ctx_.notifyEscapeKey();
 
     return false;
+}
+
+bool PianoRollToolHandler::handleNoteArrowKeyPreAccessibility(const juce::KeyPress& key)
+{
+    if (key.getModifiers().isAnyModifierKeyDown())
+        return false;
+
+    const int keyCode = key.getKeyCode();
+    if (keyCode == juce::KeyPress::upKey || keyCode == juce::KeyPress::downKey) {
+        moveSelectedNotesPitchByKeyboard(keyCode == juce::KeyPress::upKey ? 1 : -1);
+        return true;
+    }
+    if (keyCode != juce::KeyPress::leftKey && keyCode != juce::KeyPress::rightKey)
+        return false;
+
+    const auto& notes = committedNotes(ctx_);
+    const auto selectedIndices = collectSelectedNoteIndices(notes);
+    if (selectedIndices.empty())
+        return true;
+
+    const bool moveRight = keyCode == juce::KeyPress::rightKey;
+    double boundaryTime = notes[static_cast<size_t>(selectedIndices.front())].startTime;
+    for (int index : selectedIndices) {
+        const double startTime = notes[static_cast<size_t>(index)].startTime;
+        boundaryTime = moveRight ? std::max(boundaryTime, startTime)
+                                 : std::min(boundaryTime, startTime);
+    }
+
+    int adjacentIndex = -1;
+    for (int index = 0; index < static_cast<int>(notes.size()); ++index) {
+        const double startTime = notes[static_cast<size_t>(index)].startTime;
+        if (moveRight && startTime > boundaryTime
+            && (adjacentIndex < 0 || startTime < notes[static_cast<size_t>(adjacentIndex)].startTime)) {
+            adjacentIndex = index;
+        } else if (!moveRight && startTime < boundaryTime
+                   && (adjacentIndex < 0 || startTime > notes[static_cast<size_t>(adjacentIndex)].startTime)) {
+            adjacentIndex = index;
+        }
+    }
+
+    if (adjacentIndex >= 0) {
+        ctx_.getState().noteSelection.setSingle(adjacentIndex, static_cast<int>(notes.size()));
+        if (ctx_.invalidateSelectionFeedback)
+            ctx_.invalidateSelectionFeedback();
+    }
+    return true;
 }
 
 bool PianoRollToolHandler::handleNoteArrowKey(const juce::KeyPress& key)
@@ -1084,6 +1133,8 @@ void PianoRollToolHandler::selectNoteFromKeyboard(const std::vector<Note>& notes
 
 void PianoRollToolHandler::notifyKeyboardNote(KeyboardNoteEvent event, const std::vector<Note>& notes, int index)
 {
+    if (ctx_.accessibilityModeEnabled && !ctx_.accessibilityModeEnabled())
+        return;
     if (ctx_.notifyKeyboardNote)
         ctx_.notifyKeyboardNote(event, notes, index);
 }
@@ -1757,8 +1808,10 @@ void PianoRollToolHandler::handleDeleteKey()
 
     // Accessibility: keep the place in the note list. The note after the removed ones
     // (or the last note) becomes selected, so the arrows go on from here.
+    const bool accessibilityMode = ctx_.accessibilityModeEnabled
+        && ctx_.accessibilityModeEnabled();
     const auto& afterNotes = committedNotes(ctx_);
-    if (!afterNotes.empty()) {
+    if (accessibilityMode && !afterNotes.empty()) {
         const int firstRemoved = *std::min_element(selectedIndices.begin(), selectedIndices.end());
         const int neighbour = juce::jmin(firstRemoved, static_cast<int>(afterNotes.size()) - 1);
         ctx_.getState().noteSelection.setSingle(neighbour, static_cast<int>(afterNotes.size()));
