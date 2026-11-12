@@ -8,6 +8,7 @@
 #include "Standalone/UI/UIColors.h"
 #include "DSP/ResamplingManager.h"
 #include "DSP/MelSpectrogram.h"
+#include "DSP/TimeGridConditioningWarp.h"
 #include "DSP/F0KeyDetector.h"
 #include "Services/F0ExtractionService.h"
 #include "Services/ImportedClipF0Extraction.h"
@@ -5740,16 +5741,32 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             && crs != nullptr
             && snapshot != nullptr)
         {
-            // TimeGrid affects only Stage2. Reuse settled Stage1 when available;
-            // a pending Stage1 completion will enqueue Stage2 after it settles.
-            if (!crs->republishPlaybackSource(key, snapshot))
-                return ok;
-            crs->getTimeStretchCache().invalidate(key);
-            PlaybackReadSource source;
-            if (crs->getPlaybackReadSource(key, source))
-                enqueueStage2WhenCanonicalSettled(
-                    key, std::move(snapshot),
-                    source.audioBuffer, source.audioSampleRate);
+            // Non-identity TimeGrids bake into Stage 1, so re-run Stage 1 via
+            // requestRenderForLocalMutationRange (handles republish and invalidation;
+            // invalidating TimeStretchCache manually here drops playback to silence).
+            const bool needsStage1 = TimeGridConditioningWarp::stage1BakesGrid(
+                                         snapshot->timeGrid.get())
+                                  || crs->hasStage1BakedTimeGrid(key);
+            if (needsStage1)
+            {
+                // Evaluate before std::move(snapshot): MSVC x64 evaluates arguments
+                // right-to-left and would dereference a moved-from shared_ptr.
+                const double bakeRangeEndSeconds = contentDurationSeconds(*snapshot);
+                requestRenderForLocalMutationRange(
+                    key, 0.0, bakeRangeEndSeconds, std::move(snapshot));
+            }
+            else
+            {
+                // Identity grid: keep existing Stage 2-only invalidation path.
+                if (!crs->republishPlaybackSource(key, snapshot))
+                    return ok;
+                crs->getTimeStretchCache().invalidate(key);
+                PlaybackReadSource source;
+                if (crs->getPlaybackReadSource(key, source))
+                    enqueueStage2WhenCanonicalSettled(
+                        key, std::move(snapshot),
+                        source.audioBuffer, source.audioSampleRate);
+            }
         }
         else if (key.domainKind == DomainKind::ARAAudioModification
                  && crs != nullptr

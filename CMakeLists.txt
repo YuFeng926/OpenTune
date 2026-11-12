@@ -709,6 +709,8 @@ set(OPENTUNE_COMMON_SOURCES
         Source/DSP/ResamplingManager.h
         Source/DSP/MelSpectrogram.cpp
         Source/DSP/MelSpectrogram.h
+        Source/DSP/TimeGridConditioningWarp.cpp
+        Source/DSP/TimeGridConditioningWarp.h
         Source/DSP/HybridAperiodicResidual.cpp
         Source/DSP/HybridAperiodicResidual.h
         Source/DSP/F0KeyDetector.cpp
@@ -1736,6 +1738,23 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneHybridAperiodicResidualTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME HybridAperiodicResidualTests COMMAND OpenTuneHybridAperiodicResidualTests)
+
+    # TimeGrid conditioning warp: mel-domain time mapping contract
+    # (replaces Stage 2 WSOLA; see TimeGridConditioningWarp.h for rationale).
+    add_executable(OpenTuneTimeGridConditioningWarpTests
+        Tests/TimeGridConditioningWarpTests.cpp
+        Source/DSP/TimeGridConditioningWarp.cpp
+    )
+    target_include_directories(OpenTuneTimeGridConditioningWarpTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneTimeGridConditioningWarpTests PRIVATE
+        OpenTune
+        juce::juce_core
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneTimeGridConditioningWarpTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME TimeGridConditioningWarpTests COMMAND OpenTuneTimeGridConditioningWarpTests)
 
     # 真实 include 生产 Note/PitchControlConfig/PitchUtils/AudioEditingScheme 的契约测试（纯标准库）：字段/常量漂移即编译失败
     add_executable(OpenTunePitchParameterTests

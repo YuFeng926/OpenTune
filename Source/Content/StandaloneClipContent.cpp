@@ -133,10 +133,19 @@ void StandaloneClipContent::clearHnsepAudio()
 
 void StandaloneClipContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot)
 {
-    if (snapshot == nullptr)
+    if (snapshot == nullptr || content_.timeGrid == snapshot)
         return;
+
+    // Non-identity TimeGrids are baked into Stage 1 conditioning, so contentRevision must
+    // advance or RenderCache reconcile treats the edit as a no-op; identity-to-identity
+    // edits keep the Stage 2-only path.
+    const bool affectsStage1 = !snapshot->isIdentity()
+        || (content_.timeGrid != nullptr && !content_.timeGrid->isIdentity());
+
     content_.timeGrid = std::move(snapshot);
     ++content_.timeGridRevision;
+    if (affectsStage1)
+        bumpContentRevision();
 }
 
 bool StandaloneClipContent::applyPitchShiftState(const PitchShiftEditState& state)

@@ -947,6 +947,53 @@ bool testAutomationLaneMergeSeamAndEmptySides()
         && laneEvalNear(trailingOnly, 3.0, -6.0f);
 }
 
+// Non-identity TimeGrids warp Stage 1 conditioning, so contentRevision must advance;
+// RenderCache::reconcileFullPlanAndRequest checks contentRevision alone and would
+// otherwise treat the request as a no-op.
+bool testNonIdentityTimeGridAdvancesContentRevision()
+{
+    OpenTune::StandaloneClipContent clip(21);
+    const uint64_t beforeContent = clip.content().contentRevision;
+    const uint64_t beforeGrid = clip.content().timeGridRevision;
+
+    auto grid = OpenTune::TimeGridSnapshot::makeFromHandles({
+        {1, 0.0, 0.0, OpenTune::HandleKind::ClipStart, OpenTune::Confidence::Default},
+        {2, 0.5, 0.4, OpenTune::HandleKind::InternalOnset, OpenTune::Confidence::Default},
+        {3, 1.0, 1.0, OpenTune::HandleKind::ClipEnd, OpenTune::Confidence::Default}});
+    if (grid == nullptr || grid->isIdentity())
+        return false;
+
+    clip.applyTimeGrid(grid);
+
+    if (clip.content().timeGridRevision != beforeGrid + 1)
+        return false;
+    if (clip.content().contentRevision == beforeContent)
+    {
+        std::fputs("  contentRevision did not advance for a non-identity grid\n", stderr);
+        return false;
+    }
+
+    // Identity-to-identity edits must not trigger a full Stage 1 re-render.
+    OpenTune::StandaloneClipContent identityClip(22);
+    auto identity = OpenTune::TimeGridSnapshot::makeIdentity(1.0);
+    if (identity == nullptr)
+        return false;
+    identityClip.applyTimeGrid(identity);
+    const uint64_t settledContent = identityClip.content().contentRevision;
+    identityClip.applyTimeGrid(OpenTune::TimeGridSnapshot::makeIdentity(1.0));
+    if (identityClip.content().contentRevision != settledContent)
+    {
+        std::fputs("  identity-to-identity edit advanced contentRevision\n", stderr);
+        return false;
+    }
+
+    // Non-identity to identity must re-render because cached Stage 1 PCM still carries the old warp.
+    identityClip.applyTimeGrid(grid);
+    const uint64_t bakedContent = identityClip.content().contentRevision;
+    identityClip.applyTimeGrid(OpenTune::TimeGridSnapshot::makeIdentity(1.0));
+    return identityClip.content().contentRevision != bakedContent;
+}
+
 } // namespace
 
 int main()
@@ -1134,6 +1181,12 @@ int main()
     if (!testAutomationLaneMergeSeamAndEmptySides())
     {
         std::fputs("FAIL: AutomationLane mergeContiguous seam and empty sides\n", stderr);
+        return 1;
+    }
+
+    if (!testNonIdentityTimeGridAdvancesContentRevision())
+    {
+        std::fputs("FAIL: non-identity TimeGrid must advance contentRevision\n", stderr);
         return 1;
     }
 

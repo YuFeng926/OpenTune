@@ -149,6 +149,9 @@ void ContentRenderService::removeRenderCache(ContentKey key)
         renderWorker_.discardStage1Queue(cache.get());
     }
     renderCaches_.remove(key);
+    // Clear baked-grid tracking with the cache so recreated content with the same key
+    // is not misidentified as already baked.
+    clearStage1BakedTimeGrid(key);
     if (cache != nullptr)
         ProcessRenderRuntime::getInstance().pruneDeferredJobsForCache(cache);
 }
@@ -227,6 +230,31 @@ void ContentRenderService::enqueueRender(RenderJob job)
     });
     ProcessRenderRuntime::getInstance().pruneStaleDeferredJobsForCache(job.renderCache);
     ProcessRenderRuntime::getInstance().renderQueueCapacityAvailable();
+}
+
+void ContentRenderService::markStage1BakedTimeGrid(ContentKey key, uint64_t timeGridRevision)
+{
+    std::lock_guard<std::mutex> lock(bakedTimeGridMutex_);
+    bakedTimeGridRevisions_[key] = timeGridRevision;
+}
+
+bool ContentRenderService::isStage1BakedTimeGrid(ContentKey key, uint64_t timeGridRevision) const
+{
+    std::lock_guard<std::mutex> lock(bakedTimeGridMutex_);
+    const auto it = bakedTimeGridRevisions_.find(key);
+    return it != bakedTimeGridRevisions_.end() && it->second == timeGridRevision;
+}
+
+bool ContentRenderService::hasStage1BakedTimeGrid(ContentKey key) const
+{
+    std::lock_guard<std::mutex> lock(bakedTimeGridMutex_);
+    return bakedTimeGridRevisions_.find(key) != bakedTimeGridRevisions_.end();
+}
+
+void ContentRenderService::clearStage1BakedTimeGrid(ContentKey key)
+{
+    std::lock_guard<std::mutex> lock(bakedTimeGridMutex_);
+    bakedTimeGridRevisions_.erase(key);
 }
 
 RenderWorker::RequeueResult ContentRenderService::requeueRenderChunk(const RenderJob& job)
@@ -329,6 +357,10 @@ void ContentRenderService::clearAll()
     ProcessRenderRuntime::getInstance().pruneDeferredJobsForService(this);
     stretchers_.clear();
     timeStretchCache_.clear();
+    {
+        std::lock_guard<std::mutex> lock(bakedTimeGridMutex_);
+        bakedTimeGridRevisions_.clear();
+    }
 }
 
 void ContentRenderService::preparePlaybackSampleRate(double targetSr)

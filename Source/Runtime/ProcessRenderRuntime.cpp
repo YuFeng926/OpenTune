@@ -5,6 +5,7 @@
 #include "../Services/HnsepAudio.h"
 #include "../Editor/ConfirmDialogContent.h"
 #include "../DSP/MelSpectrogram.h"
+#include "../DSP/TimeGridConditioningWarp.h"
 #include "../DSP/HybridAperiodicResidual.h"
 #include "../DSP/NoteEqProcessor.h"
 #include "../Inference/ChunkRenderStrategy.h"
@@ -1975,7 +1976,22 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                                 static_cast<int>(pitchCurve->getOriginalF0().size()));
     const double f0TimelineEndSeconds = f0Timeline.timeAtFrame(
         static_cast<int>(pitchCurve->getOriginalF0().size()));
-    if (trueEndSeconds <= 0.0 || trueStartSeconds >= f0TimelineEndSeconds)
+
+    // When baking a non-identity TimeGrid into Stage 1, raw-audio fast paths must
+    // be bypassed because unwarped source audio does not reflect the time mapping.
+    const bool bakesTimeGrid = TimeGridConditioningWarp::stage1BakesGrid(
+        contentSnap->timeGrid.get());
+
+    // F0 is indexed in source time while chunk bounds are output time; map via tauInverse when baking.
+    double f0QueryStartSeconds = trueStartSeconds;
+    double f0QueryEndSeconds = trueEndSeconds;
+    if (bakesTimeGrid)
+    {
+        f0QueryStartSeconds = contentSnap->timeGrid->tauInverse(trueStartSeconds);
+        f0QueryEndSeconds = contentSnap->timeGrid->tauInverse(trueEndSeconds);
+    }
+
+    if (f0QueryEndSeconds <= 0.0 || f0QueryStartSeconds >= f0TimelineEndSeconds)
     {
         if (!intersectsActiveEqNote)
             settleBlankChunk();
@@ -1985,7 +2001,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         }
         return;
     }
-    const auto contentF0Range = f0Timeline.rangeForTimes(trueStartSeconds, trueEndSeconds);
+    const auto contentF0Range = f0Timeline.rangeForTimes(f0QueryStartSeconds, f0QueryEndSeconds);
     const int f0StartFrame = contentF0Range.startFrame;
     // One extra frame is operational interpolation context. It is not part of
     // the chunk's absolute content range or published output length.
@@ -1999,7 +2015,10 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     // 合成）且该 chunk 帧范围内无任何 correction segment 时，才 Blank 回退原始
     // 音频缓存播放。非恒等全局移调即使无 correction 也必须进入 vocoder 全量渲染，
     // 否则移调不生效。带 active EQ 的 Note 不得走 Blank：改为发布原始音频并应用 EQ。
-    if (contentSnap->pitchShiftSettings.isIdentity() && !pitchCurve->hasCorrectionInRange(f0StartFrame, f0EndFrame))
+    // Never settle as Blank when baking TimeGrid; source audio is unwarped.
+    if (!bakesTimeGrid
+        && contentSnap->pitchShiftSettings.isIdentity()
+        && !pitchCurve->hasCorrectionInRange(f0StartFrame, f0EndFrame))
     {
         if (!intersectsActiveEqNote)
             settleBlankChunk();
@@ -2033,7 +2052,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         return;
     }
 
-    if (lightPitchEnabled && contentSnap->pitchShiftSettings.isIdentity())
+    // Lightweight AutoTune only resamples pitch periods and cannot apply time warping.
+    if (!bakesTimeGrid && lightPitchEnabled && contentSnap->pitchShiftSettings.isIdentity())
     {
         const auto& originalF0Full = pitchCurve->getOriginalF0();
         const int originalF0Size = static_cast<int>(originalF0Full.size());
@@ -2404,6 +2424,133 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             boundaries.trueStartSample - contextStartSample);
         payload->publishSampleCount = static_cast<size_t>(boundaries.publishSampleCount);
         hybridPayload = std::move(payload);
+    }
+    // Sample conditioning and F0 on the output timeline via tauInverse so Stage 1 renders warped audio directly.
+    if (bakesTimeGrid)
+    {
+        const auto& grid = *contentSnap->timeGrid;
+        const auto& originalF0 = pitchCurve->getOriginalF0();
+        auto vocoderSourceF0 = materializeEffectiveF0Range(
+            *contentSnap, 0, static_cast<int>(originalF0.size()));
+        const auto preFillF0 = vocoderSourceF0;
+        OpenTune::fillF0GapsForVocoder(vocoderSourceF0, pitchCurve->getErasedRanges());
+
+        const double sampleRate = RenderCache::kSampleRate;
+        const int hopSamples = conditioningConfig.hopLength;
+        const int64_t clipSampleCount = coreJob.audioBuffer->getNumSamples();
+
+        // Pad source bounds by half a window plus one hop to avoid reflect-padding artifacts at chunk edges.
+        const double srcLoSeconds = grid.tauInverse(trueStartSeconds);
+        const double srcHiSeconds = grid.tauInverse(trueEndSeconds);
+        const int64_t contextMargin = conditioningConfig.winLength / 2 + hopSamples;
+        const int64_t srcStartSample = std::max<int64_t>(
+            0, static_cast<int64_t>(std::floor(srcLoSeconds * sampleRate)) - contextMargin);
+        const int64_t srcStopSample = std::min<int64_t>(
+            clipSampleCount,
+            static_cast<int64_t>(std::ceil(srcHiSeconds * sampleRate)) + contextMargin);
+
+        if (srcStopSample - srcStartSample < conditioningConfig.winLength)
+        {
+            failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
+                      coreJob.targetRevision, coreJob.contentKey,
+                      "TimeGrid conditioning source range is too short (samples="
+                        + juce::String(static_cast<juce::int64>(srcStopSample - srcStartSample))
+                        + ", window=" + juce::String(conditioningConfig.winLength) + ")");
+            return;
+        }
+
+        const int srcSampleCount = static_cast<int>(srcStopSample - srcStartSample);
+        const int srcFrameCount = juce::jmax(
+            1, (srcSampleCount + hopSamples - 1) / hopSamples);
+        std::vector<float> srcAudio(static_cast<size_t>(srcSampleCount), 0.0f);
+        const float* clipChannel = coreJob.audioBuffer->getReadPointer(0);
+        for (int i = 0; i < srcSampleCount; ++i)
+            srcAudio[static_cast<size_t>(i)] = clipChannel[srcStartSample + i];
+
+        auto srcConditioning = linearSpec
+            ? computeLogLinearSpectrogram(srcAudio.data(), srcSampleCount,
+                                          srcFrameCount, conditioningConfig)
+            : computeLogMelSpectrogram(srcAudio.data(), srcSampleCount,
+                                       srcFrameCount, conditioningConfig);
+        if (!srcConditioning.ok() || srcConditioning.value().empty())
+        {
+            failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
+                      coreJob.targetRevision, coreJob.contentKey,
+                      !srcConditioning.ok()
+                          ? juce::String(srcConditioning.error().fullMessage())
+                          : juce::String("TimeGrid conditioning analysis returned an empty result"));
+            return;
+        }
+
+        // Map output frame centers to fractional source-block frames (center=False convention).
+        const int outFrameCount = numFrames;
+        std::vector<double> sourceFrame(static_cast<size_t>(outFrameCount), 0.0);
+        for (int i = 0; i < outFrameCount; ++i)
+        {
+            const double outputTimeSeconds = trueStartSeconds + (i + 0.5) * hopDuration;
+            const double sourceTimeSeconds = grid.tauInverse(outputTimeSeconds);
+            sourceFrame[static_cast<size_t>(i)] =
+                (sourceTimeSeconds * sampleRate - static_cast<double>(srcStartSample))
+                    / static_cast<double>(hopSamples) - 0.5;
+        }
+
+        conditioning = TimeGridConditioningWarp::resampleToOutputFrames(
+            srcConditioning.value().data(), conditioningConfig.nMels,
+            srcFrameCount, sourceFrame, outFrameCount);
+        if (conditioning.empty())
+        {
+            failChunk(completion, coreJob.renderCache.get(), coreJob.startSample,
+                      coreJob.targetRevision, coreJob.contentKey,
+                      "TimeGrid conditioning warp produced no frames");
+            return;
+        }
+        actualFrames = outFrameCount;
+
+        // Sample F0 and UV at the same output frame centers to stay aligned with conditioning.
+        const auto& erasedRanges = pitchCurve->getErasedRanges();
+        const auto isErasedFrame = [&erasedRanges](int frame) {
+            return std::any_of(erasedRanges.begin(), erasedRanges.end(),
+                [frame](const F0FrameRange& range) {
+                    return frame >= range.startFrame && frame < range.endFrameExclusive;
+                });
+        };
+
+        vocoderF0.assign(static_cast<size_t>(actualFrames), 0.0f);
+        vocoderUv.assign(static_cast<size_t>(actualFrames), 0.0f);
+        const int f0Size = static_cast<int>(vocoderSourceF0.size());
+        for (int i = 0; i < actualFrames; ++i)
+        {
+            const double outputTimeSeconds = trueStartSeconds + (i + 0.5) * hopDuration;
+            const double sourceTimeSeconds = grid.tauInverse(outputTimeSeconds);
+            const double position = sourceTimeSeconds * f0FrameRate;
+            if (position < 0.0)
+                continue;
+            const int index0 = static_cast<int>(position);
+            if (index0 >= f0Size)
+                continue;
+            const int index1 = std::min(index0 + 1, f0Size - 1);
+            const double fraction = position - static_cast<double>(index0);
+            const bool erased = isErasedFrame(index0) || isErasedFrame(index1);
+            if (erased)
+                continue;
+
+            const float f0First = vocoderSourceF0[static_cast<size_t>(index0)];
+            const float f0Second = vocoderSourceF0[static_cast<size_t>(index1)];
+            if (f0First > 0.0f && f0Second > 0.0f)
+                vocoderF0[static_cast<size_t>(i)] = static_cast<float>(std::exp(
+                    std::log(f0First) * (1.0 - fraction) + std::log(f0Second) * fraction));
+            else if (f0First > 0.0f)
+                vocoderF0[static_cast<size_t>(i)] = f0First;
+            else if (f0Second > 0.0f)
+                vocoderF0[static_cast<size_t>(i)] = f0Second;
+
+            const bool voiced0 = preFillF0[static_cast<size_t>(index0)] > 0.0f;
+            const bool voiced1 = preFillF0[static_cast<size_t>(index1)] > 0.0f;
+            vocoderUv[static_cast<size_t>(i)] = (voiced0 || voiced1) ? 1.0f : 0.0f;
+        }
+
+        crs->markStage1BakedTimeGrid(coreJob.contentKey,
+                                     contentSnap->timeGridRevision);
     }
     else
     {

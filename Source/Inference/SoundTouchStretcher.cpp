@@ -15,11 +15,11 @@ namespace {
 // SoundTouch settings chosen per spec §"WSOLA 引擎配置".
 // Vocal-friendly defaults: AA filter on (anti-alias), QUICKSEEK off (quality),
 // SEEKWINDOW=25ms / OVERLAP=8ms (SoundTouch defaults).
-constexpr int kSettingUseAaFilter   = 1;
+constexpr int kSettingUseAaFilter    = 1;
 constexpr int kSettingAaFilterLength = 64;
-constexpr int kSettingUseQuickSeek  = 0;
-constexpr int kSettingSeekWindowMs  = 25;
-constexpr int kSettingOverlapMs     = 8;
+constexpr int kSettingUseQuickSeek   = 0;
+constexpr int kSettingSeekWindowMs   = 25;
+constexpr int kSettingOverlapMs      = 8;
 
 // Sample-positional tolerance for "is at segment boundary" checks (1 render sample).
 constexpr double kBoundaryEpsilonSeconds = 1.0 / TimeCoordinate::kRenderSampleRate;
