@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <vector>
 
 namespace OpenTune {
 
@@ -185,6 +186,119 @@ TimeGridDeleteResult planTimeGridDelete(
 
     result.status = TimeGridDeleteStatus::Deleted;
     return result;
+}
+
+namespace {
+
+// 收集一个快照里 index 两侧相邻锚点的输出位置。
+// 区间 [i-1, i] 与 [i, i+1] 是唯一随锚点 i 移动而改变斜率的段。
+void collectNeighbourOutputs(const std::vector<TimeHandle>& handles,
+                             size_t index,
+                             double& lo,
+                             double& hi)
+{
+    if (index > 0)
+    {
+        const double prev = handles[index - 1].output_seconds;
+        lo = std::min(lo, prev);
+        hi = std::max(hi, prev);
+    }
+    if (index + 1 < handles.size())
+    {
+        const double next = handles[index + 1].output_seconds;
+        lo = std::min(lo, next);
+        hi = std::max(hi, next);
+    }
+}
+
+int indexOfId(const std::vector<TimeHandle>& handles, uint64_t id)
+{
+    for (size_t i = 0; i < handles.size(); ++i)
+    {
+        if (handles[i].id == id)
+            return static_cast<int>(i);
+    }
+    return -1;
+}
+
+} // namespace
+
+bool timeGridAffectedOutputRange(
+    const std::shared_ptr<const TimeGridSnapshot>& before,
+    const std::shared_ptr<const TimeGridSnapshot>& after,
+    double& outStartSeconds,
+    double& outEndSeconds)
+{
+    outStartSeconds = 0.0;
+    outEndSeconds = 0.0;
+
+    if (before == nullptr || after == nullptr || before == after)
+        return false;
+
+    const auto& beforeHandles = before->handles();
+    const auto& afterHandles = after->handles();
+    if (beforeHandles.size() < 2 || afterHandles.size() < 2)
+        return false;
+
+    const double duration = after->totalDurationSeconds();
+    if (!(duration > 0.0) || !std::isfinite(duration))
+        return false;
+
+    double lo = duration;
+    double hi = 0.0;
+    bool anyChange = false;
+
+    // 位置改变、或已删除的锚点：取它在两个快照中各自相邻锚点的输出位置。
+    // handle id 在拖拽与 undo/redo 之间稳定；source_seconds 插入后不可变，
+    // 所以 id 相同而 output_seconds 不同即为被拖动。
+    for (const auto& handle : beforeHandles)
+    {
+        const int afterIndex = indexOfId(afterHandles, handle.id);
+        if (afterIndex < 0)
+        {
+            // 已删除：删除点前后的区间合并成一段，斜率和跨度都变。
+            const int beforeIndex = indexOfId(beforeHandles, handle.id);
+            anyChange = true;
+            lo = std::min(lo, handle.output_seconds);
+            hi = std::max(hi, handle.output_seconds);
+            if (beforeIndex >= 0)
+            {
+                collectNeighbourOutputs(beforeHandles,
+                                        static_cast<size_t>(beforeIndex), lo, hi);
+            }
+            continue;
+        }
+
+        if (std::abs(afterHandles[static_cast<size_t>(afterIndex)].output_seconds
+                     - handle.output_seconds) <= 1.0e-9)
+            continue;
+
+        anyChange = true;
+        const int beforeIndex = indexOfId(beforeHandles, handle.id);
+        if (beforeIndex >= 0)
+        {
+            collectNeighbourOutputs(beforeHandles,
+                                    static_cast<size_t>(beforeIndex), lo, hi);
+        }
+        collectNeighbourOutputs(afterHandles,
+                                static_cast<size_t>(afterIndex), lo, hi);
+    }
+
+    // 新增的锚点：插入把一段拆成两段。
+    for (size_t i = 0; i < afterHandles.size(); ++i)
+    {
+        if (indexOfId(beforeHandles, afterHandles[i].id) >= 0)
+            continue;
+        anyChange = true;
+        collectNeighbourOutputs(afterHandles, i, lo, hi);
+    }
+
+    if (!anyChange)
+        return false;
+
+    outStartSeconds = juce::jlimit(0.0, duration, lo);
+    outEndSeconds = juce::jlimit(0.0, duration, hi);
+    return outEndSeconds > outStartSeconds;
 }
 
 } // namespace OpenTune

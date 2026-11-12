@@ -40,6 +40,7 @@
 #include "Utils/ScissorsUndoAction.h"
 #include "Utils/PitchShiftEditAction.h"
 #include "Utils/TimeGridEditAction.h"
+#include "Utils/TimeGridEdit.h"
 #include "Render/Stage2TimeStretchRebuilder.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
@@ -5703,6 +5704,32 @@ bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(
 bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
                                                   std::shared_ptr<const TimeGridSnapshot> grid)
 {
+    // 编辑前的网格：下面要用它和编辑后的快照做差分，算出这次编辑真正改了哪段
+    // 输出时间。拖一个锚点只影响它相邻两段，但烘焙后 contentRevision 会推进，
+    // RenderCache 按"请求范围"判断哪些 chunk 过期——范围若给成全曲，拖一次手柄
+    // 就要重渲整轨。
+    //
+    // 只在确实会烘焙时读取：getContentSnapshot 会重建整份快照，恒等网格的编辑
+    // 走 Stage 2 路径，不需要付这份拷贝。必须在 apply 之前取，之后旧快照已不可得。
+    //
+    // exceptAlreadyBaked：从烘焙网格退回恒等网格时，新网格不烘焙但 Stage 1 仍要
+    // 重跑（把烘焙产物清掉），同样需要旧快照来做差分。这里只看 crs 的旧状态，
+    // 不额外查一次快照。
+    const bool willBakeTimeGrid = TimeGridConditioningWarp::stage1BakesGrid(grid.get());
+    bool needBeforeSnapshot = willBakeTimeGrid;
+    if (!needBeforeSnapshot)
+    {
+        if (auto* crsBefore = resolveMutableLocalContentRenderService(key))
+            needBeforeSnapshot = crsBefore->hasStage1BakedTimeGrid(key);
+    }
+
+    std::shared_ptr<const TimeGridSnapshot> gridBeforeEdit;
+    if (needBeforeSnapshot)
+    {
+        if (auto snapBefore = getContentSnapshot(key))
+            gridBeforeEdit = snapBefore->timeGrid;
+    }
+
     bool ok = false;
     switch (key.domainKind) {
 #if JucePlugin_Build_Standalone
@@ -5744,16 +5771,31 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             // Non-identity TimeGrids bake into Stage 1, so re-run Stage 1 via
             // requestRenderForLocalMutationRange (handles republish and invalidation;
             // invalidating TimeStretchCache manually here drops playback to silence).
-            const bool needsStage1 = TimeGridConditioningWarp::stage1BakesGrid(
-                                         snapshot->timeGrid.get())
+            // 一旦 Stage 1 烘焙过，退回恒等网格也必须走这条路径才能把烘焙产物清掉，
+            // 所以还要看 crs 记住的旧状态。
+            const bool needsStage1 = willBakeTimeGrid
                                   || crs->hasStage1BakedTimeGrid(key);
             if (needsStage1)
             {
-                // Evaluate before std::move(snapshot): MSVC x64 evaluates arguments
-                // right-to-left and would dereference a moved-from shared_ptr.
-                const double bakeRangeEndSeconds = contentDurationSeconds(*snapshot);
+                // 只重渲这次编辑真正影响的输出区间。拖一个锚点只改变它相邻两段
+                // 的斜率，其余段的映射逐字节相同，Stage 1 在那里已经产出过正确
+                // audio，重跑纯属浪费（整轨 82 个 chunk 全过一遍 vocoder）。
+                //
+                // 差分失败时退回全曲：网格内容不可比（新增/删除锚点、旧快照不可得）
+                // 都比"多渲一段"更值得保守。只有"快照内容相同"才可能返回 false，
+                // 而那种情况 applyTimeGrid 早退、根本不会走到这里。
+                const double durationSeconds = contentDurationSeconds(*snapshot);
+                double rangeStartSeconds = 0.0;
+                double rangeEndSeconds = durationSeconds;
+                if (!timeGridAffectedOutputRange(gridBeforeEdit, snapshot->timeGrid,
+                                                 rangeStartSeconds, rangeEndSeconds))
+                {
+                    rangeStartSeconds = 0.0;
+                    rangeEndSeconds = durationSeconds;
+                }
+
                 requestRenderForLocalMutationRange(
-                    key, 0.0, bakeRangeEndSeconds, std::move(snapshot));
+                    key, rangeStartSeconds, rangeEndSeconds, std::move(snapshot));
             }
             else
             {
