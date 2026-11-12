@@ -19,7 +19,7 @@ namespace OpenTune {
 class SoundTouchStretcher;
 
 /** Domain-neutral owner of derived render artifacts. */
-class ContentRenderService
+class ContentRenderService : public std::enable_shared_from_this<ContentRenderService>
 {
 public:
     using ExecutionLease = RenderExecutionLease;
@@ -61,6 +61,8 @@ public:
 
     void attachExecutionLease(ExecutionLease lease);
     void detachExecutionLease(void* owner);
+    // Message thread: forwards a shared backend change to the attached lease.
+    void notifyBackendChanged();
     // notes/silentGaps 从 job.contentSnapshot 读取，不复制、不额外传参。
     void enqueueRender(RenderJob job);
     // stale-generation 回退：只回退 RenderCache 状态机（Running→Pending）并投递
@@ -96,6 +98,7 @@ private:
     StretcherPool stretchers_;
     TimeStretchCache timeStretchCache_;
     RenderWorker renderWorker_;
+    bool backendListenerRegistered_{false};
 };
 
 } // namespace OpenTune

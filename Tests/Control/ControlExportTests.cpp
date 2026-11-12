@@ -27,6 +27,7 @@
 #include "Utils/Note.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/PitchUtils.h"
+#include "Utils/PlaybackSampleGeometry.h"
 #include "Utils/TimeGrid.h"
 #include "Utils/TuningConfig.h"
 
@@ -191,6 +192,23 @@ std::optional<WavInfo> wavInfo(const std::string& path)
     info.floatingPoint = reader->usesFloatingPointData;
     info.bits = static_cast<int>(reader->bitsPerSample);
     return info;
+}
+
+/** The float samples of a WAV file, channel by channel; empty when it cannot be read. */
+std::vector<float> samplesOf(const std::string& path)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    const std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(juceFileOf(path)));
+    if (reader == nullptr)
+        return {};
+    juce::AudioBuffer<float> audio(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+    reader->read(&audio, 0, audio.getNumSamples(), 0, true, true);
+    std::vector<float> samples(static_cast<std::size_t>(audio.getNumSamples() * audio.getNumChannels()));
+    for (int channel = 0; channel < audio.getNumChannels(); ++channel)
+        std::copy_n(audio.getReadPointer(channel), audio.getNumSamples(),
+                    samples.begin() + static_cast<std::ptrdiff_t>(channel * audio.getNumSamples()));
+    return samples;
 }
 
 /** F0 of a test tone: A3, an unvoiced tail; with silent no frame is voiced. */
@@ -767,6 +785,54 @@ void scenarioExport()
         const auto again = exportAndWait(api, clipParams(handles.placement(dry.placementId), outPath("after.wav")));
         CONTROL_CHECK(memberOf(again, "state").text() == "succeeded");
     }
+
+    // 10. Contiguous export slices keep the parent's fixed geometry: two copied ranges that abut
+    //     on the timeline and in the source produce the same samples as one placement over their
+    //     combined source span. The second slice's independent D would be one frame off.
+    {
+        const auto continuityMedia = exportDirectory("continuity-media");
+        const auto continuityOut = exportDirectory("continuity-out");
+        const auto source = addClip(*processor, continuityMedia, "source", 8, 0.0, 0.4, Analysis::Ready);
+        const auto referenceKey = processor->copyContentRange(source.key, 0.075, 0.25);
+        const auto leadingKey = processor->copyContentRange(source.key, 0.075, 0.125);
+        const auto trailingKey = processor->copyContentRange(source.key, 0.2, 0.125);
+        CONTROL_CHECK(referenceKey.isValid() && leadingKey.isValid() && trailingKey.isValid());
+        const auto insert = [arrangement](int trackId, const ContentKey& key, double start, double duration) {
+            StandaloneArrangement::Placement placement;
+            placement.contentKey = key;
+            placement.timelineStartSeconds = start;
+            placement.durationSeconds = duration;
+            placement.name = "continuity";
+            return arrangement->insertPlacement(trackId, placement) ? placement.placementId : 0;
+        };
+        CONTROL_CHECK(insert(6, referenceKey, 0.1, 0.25) != 0);
+        CONTROL_CHECK(insert(7, leadingKey, 0.1, 0.125) != 0);
+        CONTROL_CHECK(insert(7, trailingKey, 0.225, 0.125) != 0);
+        const auto referencePath = (continuityOut / "reference.wav").u8string();
+        const auto slicesPath = (continuityOut / "slices.wav").u8string();
+        CONTROL_CHECK(processor->exportTrackAudio(6, juceFileOf(referencePath), Language::English));
+        CONTROL_CHECK(processor->exportTrackAudio(7, juceFileOf(slicesPath), Language::English));
+        const auto referenceSamples = samplesOf(referencePath);
+        CONTROL_CHECK(!referenceSamples.empty());
+        CONTROL_CHECK(referenceSamples == samplesOf(slicesPath));
+
+        // The selected trailing slice must keep the D it inherits in its track, not a D rebuilt
+        // from the slice alone. Its samples are the tail of the reference export.
+        const auto clipPath = (continuityOut / "trailing-clip.wav").u8string();
+        CONTROL_CHECK(processor->exportPlacementAudio(7, 1, juceFileOf(clipPath), Language::English));
+        const auto clipSamples = samplesOf(clipPath);
+        const auto referenceStart = static_cast<std::size_t>(
+            PlaybackSampleGeometry::projectToSample(0.225 * kAudioSampleRate));
+        const auto clipSampleCount = static_cast<std::size_t>(
+            PlaybackSampleGeometry::projectToSample(0.35 * kAudioSampleRate)
+            - PlaybackSampleGeometry::projectToSample(0.225 * kAudioSampleRate));
+        CONTROL_CHECK(!clipSamples.empty() && clipSamples.size() >= clipSampleCount);
+        CONTROL_CHECK(referenceSamples.size() == referenceStart + clipSampleCount);
+        CONTROL_CHECK(std::equal(clipSamples.begin(),
+                                 clipSamples.begin() + static_cast<std::ptrdiff_t>(clipSampleCount),
+                                 referenceSamples.begin() + static_cast<std::ptrdiff_t>(referenceStart)));
+    }
+
     const auto dispatcher = service.dispatcher();
     CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
 }
@@ -1028,7 +1094,8 @@ public:
         auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 44100);
         audio->clear();
         service.publishPlaybackSource(
-            key, makePlaybackReadSource(key, snapshot, audio, 44100.0, cache, service.getTimeStretchCache()));
+            key, makePlaybackReadSource(key, snapshot, NativePcmSource{audio, 44100.0, 0, 7},
+                                        audio, 44100.0, 0, cache, service.getTimeStretchCache()));
 
         RenderJob job;
         job.kind = RenderJob::Kind::Stage1Render;
@@ -1554,13 +1621,14 @@ bool stretchOutputCurrent(OpenTuneAudioProcessor& processor, const ContentKey& k
 bool republishWithCopiedAudio(ContentRenderService& service, const ContentKey& key)
 {
     PlaybackReadSource source;
-    if (!service.getPlaybackReadSource(key, source) || source.audioBuffer == nullptr)
+    if (!service.getPlaybackReadSource(key, source) || source.canonicalBuffer == nullptr)
         return false;
-    auto copy = std::make_shared<const juce::AudioBuffer<float>>(*source.audioBuffer);
-    service.publishPlaybackSource(key, makePlaybackReadSource(key, source.contentSnapshot, copy, source.audioSampleRate,
+    auto copy = std::make_shared<const juce::AudioBuffer<float>>(*source.canonicalBuffer);
+    service.publishPlaybackSource(key, makePlaybackReadSource(key, source.contentSnapshot, source.nativeSource,
+        copy, source.canonicalSampleRate, source.firstCanonicalSample,
                                                               source.renderCache, service.getTimeStretchCache()));
     PlaybackReadSource now;
-    return service.getPlaybackReadSource(key, now) && now.audioBuffer == copy;
+    return service.getPlaybackReadSource(key, now) && now.canonicalBuffer == copy;
 }
 
 bool renderWorkerIdle(ContentRenderService& service)

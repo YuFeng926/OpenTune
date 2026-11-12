@@ -289,10 +289,13 @@ std::optional<Error> applyDelta(ControlOpContext& context, const PrefsRequest& r
     if (delta.experimental)
         preferences.setExperimentalFeaturesEnabled(*request.experimentalFeatures);
     if (delta.vocoder) {
-        // vocoderWeightSelector_.onChange: the preference first, then the processor's asynchronous switch (the
-        // runtime's control worker destroys the vocoder session and loads the weight).
-        preferences.setVocoderModelWeight(*request.vocoderWeight);
-        controlSetVocoderWeight(processor, *request.vocoderWeight);
+        // vocoderWeightSelector_.onChange: the processor first, then the stored
+        // preference once the runtime's control queue accepted the switch.
+        if (!controlSetVocoderWeight(processor, *request.vocoderWeight))
+            return controlOpError("MODEL_UNAVAILABLE", "vocoder_weight_rejected",
+                                  "OpenTune could not queue the vocoder weight change");
+        if (preferences.getState().shared.vocoderModelWeight != *request.vocoderWeight)
+            preferences.setVocoderModelWeight(*request.vocoderWeight);
     }
     if (delta.priority) {
         // renderingPrioritySelector_.onChange: the preference first, then the processor's asynchronous reset of the
@@ -338,9 +341,13 @@ void restoreState(ControlOpContext* context, OpenTuneAudioProcessor& processor, 
     if (delta.experimental)
         preferences.setExperimentalFeaturesEnabled(before.experimentalFeatures);
     if (delta.vocoder) {
-        preferences.setVocoderModelWeight(before.vocoderWeight);
-        if (context != nullptr)
-            controlSetVocoderWeight(processor, before.vocoderWeight);
+        if (context != nullptr) {
+            if (controlSetVocoderWeight(processor, before.vocoderWeight)
+                && preferences.getState().shared.vocoderModelWeight != before.vocoderWeight)
+                preferences.setVocoderModelWeight(before.vocoderWeight);
+        } else {
+            preferences.setVocoderModelWeight(before.vocoderWeight);
+        }
     }
     if (delta.priority) {
         preferences.setRenderingPriority(before.cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst);
@@ -467,7 +474,7 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, cons
     }
     if (delta.hybrid || delta.vocoder) {
         // The processor queued a new render of every content: invalidateAllContentCaches() for the hybrid switch; for
-        // the vocoder weight the completion of setVocoderModelWeight() clears every render cache and requests a full
+        // the vocoder weight the shared backend-change notification clears every render cache and requests a full
         // render of every clip once the new weight has loaded. That holds for every change of the weight, whether or
         // not the job waited for the vocoder: a job that did not wait (the vocoder was not ready before the change)
         // ends before the render starts, and a weight that cannot be loaded renders nothing (session.info keeps

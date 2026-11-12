@@ -111,6 +111,76 @@ const juce::AudioBuffer<float>* publishedAudio(const CaptureSegment& segment)
     return segment.content->content().audioBuffer.get();
 }
 
+std::shared_ptr<juce::AudioBuffer<float>> makeAudio(int samples)
+{
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(1, samples);
+    audio->clear();
+    return audio;
+}
+
+// Test stand-in for CRS: stores the published PlaybackReadSource so the view can
+// freeze it together with the replacement geometry.
+struct FrozenSourceStore
+{
+    std::map<ContentKey, OpenTune::PlaybackReadSource> sources;
+
+    void publish(const ContentKey& key,
+                 const std::shared_ptr<const OpenTune::EditableContentSnapshot>& snapshot,
+                 const std::shared_ptr<const juce::AudioBuffer<float>>&,
+                 double)
+    {
+        OpenTune::PlaybackReadSource source;
+        source.contentKey = key;
+        source.contentSnapshot = snapshot;
+        source.nativeSource = snapshot->nativeSource;
+        source.canonicalBuffer = snapshot->audioBuffer;
+        source.canonicalSampleRate = snapshot->audioSampleRate;
+        source.firstCanonicalSample = snapshot->firstCanonicalSample;
+        sources[key] = std::move(source);
+    }
+
+    bool get(ContentKey key, OpenTune::PlaybackReadSource& out) const
+    {
+        const auto it = sources.find(key);
+        if (it == sources.end())
+            return false;
+        out = it->second;
+        return true;
+    }
+};
+
+void publishOwnerSource(FrozenSourceStore& store, const CaptureSession& session, uint64_t id)
+{
+    for (const auto& seg : session.testSegments()) {
+        if (seg->contentKey.objectId != id || !seg->content)
+            continue;
+        const auto snap = seg->content->snapshotContent();
+        store.publish(seg->contentKey, snap, snap->audioBuffer, snap->audioSampleRate);
+        return;
+    }
+}
+
+using ReplaceProbe = std::function<void(juce::AudioBuffer<float>&, int, int,
+                                        const OpenTune::PlaybackReadSource&,
+                                        int64_t, double, double)>;
+
+ProcessorBindings sourceFrozenBindings(FrozenSourceStore& store, ReplaceProbe onReplace = {})
+{
+    ProcessorBindings b;
+    b.publishPlaybackSource =
+        [&store](const ContentKey& key,
+                 const std::shared_ptr<const OpenTune::EditableContentSnapshot>& snapshot,
+                 const std::shared_ptr<const juce::AudioBuffer<float>>& audio,
+                 double sampleRate) {
+            store.publish(key, snapshot, audio, sampleRate);
+        };
+    b.getPlaybackReadSource = [&store](ContentKey key, OpenTune::PlaybackReadSource& out) {
+        return store.get(key, out);
+    };
+    b.replaceWithRendered = std::move(onReplace);
+    return b;
+}
+
 bool testSpanBudgetExhaustionDropsWholeTake()
 {
     TestBindings bindings;
@@ -371,8 +441,11 @@ bool testReclaimWaitsForPublishedViewReaders()
     bool releaseCallback = false;
     std::atomic<int> retiredCount { 0 };
 
+    FrozenSourceStore store;
     ProcessorBindings bindings;
-    bindings.replaceWithRendered = [&](juce::AudioBuffer<float>&, int, int, ContentKey, int64_t, double) {
+    bindings.replaceWithRendered = [&](juce::AudioBuffer<float>&, int, int,
+                                       const OpenTune::PlaybackReadSource&,
+                                       int64_t, double, double) {
         std::unique_lock<std::mutex> lock(gateMutex);
         if (callbackEntered)
             return;
@@ -383,10 +456,23 @@ bool testReclaimWaitsForPublishedViewReaders()
     bindings.retireSegment = [&](ContentKey) {
         retiredCount.fetch_add(1, std::memory_order_relaxed);
     };
+    bindings.publishPlaybackSource =
+        [&store](const ContentKey& key,
+                 const std::shared_ptr<const OpenTune::EditableContentSnapshot>& snapshot,
+                 const std::shared_ptr<const juce::AudioBuffer<float>>& audio,
+                 double sampleRate) {
+            store.publish(key, snapshot, audio, sampleRate);
+        };
+    bindings.getPlaybackReadSource = [&store](ContentKey key,
+                                              OpenTune::PlaybackReadSource& out) {
+        return store.get(key, out);
+    };
 
     CaptureSession session(std::move(bindings));
     session.prepareToPlay(48000.0, 512, 2);
-    session.testInjectEditedSegment(0.0, 1.0, 1, nullptr, 48000.0);
+    session.testInjectEditedSegment(0.0, 1.0, 1, makeAudio(512), 48000.0);
+    publishOwnerSource(store, session, 1);
+    session.refreshPublishedReplacementGeometry();
 
     // An empty take is dropped at finalize and parked for reclaim.
     session.armNewCapture();
@@ -432,15 +518,18 @@ bool testReclaimWaitsForPublishedViewReaders()
 bool testEditedStillReplacesPlaybackWhileProcessingDoesNot()
 {
     int replaceCalls = 0;
-    ProcessorBindings b;
-    b.replaceWithRendered = [&](juce::AudioBuffer<float>&, int, int, ContentKey, int64_t, double) {
-        ++replaceCalls;
-    };
-    CaptureSession session(std::move(b));
+    FrozenSourceStore store;
+    CaptureSession session(sourceFrozenBindings(store,
+        [&](juce::AudioBuffer<float>&, int, int, const OpenTune::PlaybackReadSource&,
+            int64_t, double, double) {
+            ++replaceCalls;
+        }));
     session.prepareToPlay(48000.0, 512, 2);
 
     // Edited segment → replacement playback still happens.
-    session.testInjectEditedSegment(0.0, 1.0, 1, nullptr, 48000.0);
+    session.testInjectEditedSegment(0.0, 1.0, 1, makeAudio(512), 48000.0);
+    publishOwnerSource(store, session, 1);
+    session.refreshPublishedReplacementGeometry();
     juce::AudioBuffer<float> buffer(2, 512);
     buffer.clear();
     session.processBlock(buffer, 0, 48000.0, true);
@@ -1041,6 +1130,237 @@ bool testApplyExternalEditCombinesAllOwners()
     return true;
 }
 
+// ── 阶段 3：冻结来源 + 固定几何同版发布回归 ─────────────────────────────
+
+bool testRestoreBuildsReplacementGeometryAtFirstPrepare()
+{
+    FrozenSourceStore sourceStore;
+    CaptureSession source(sourceFrozenBindings(sourceStore));
+    source.prepareToPlay(48000.0, 512, 1);
+    source.testInjectEditedSegment(0.0, 1.0, 1, makeAudio(48000), 48000.0);
+    publishOwnerSource(sourceStore, source, 1);
+    source.refreshPublishedReplacementGeometry();
+    const auto archive = source.serialize();
+
+    auto makeProbe = [](int& calls, int64_t& readStart, bool& hasSnapshot) {
+        return [&calls, &readStart, &hasSnapshot](
+                   juce::AudioBuffer<float>&, int, int,
+                   const OpenTune::PlaybackReadSource& src,
+                   int64_t start, double, double) {
+            ++calls;
+            readStart = start;
+            hasSnapshot = src.contentSnapshot != nullptr;
+        };
+    };
+
+    // Restore before the first prepare: no rate exists yet, so the first
+    // prepare must publish the geometry.
+    {
+        FrozenSourceStore store;
+        int calls = 0;
+        int64_t readStart = -1;
+        bool hasSnapshot = false;
+        ProcessorBindings bindings =
+            sourceFrozenBindings(store, makeProbe(calls, readStart, hasSnapshot));
+        CaptureSession restored(std::move(bindings));
+        if (!restored.deserialize(archive))
+            return false;
+        juce::AudioBuffer<float> buffer(1, 256);
+        buffer.clear();
+        restored.processBlock(buffer, 0, 48000.0, true);
+        if (calls != 0)
+            return false;
+        restored.prepareToPlay(48000.0, 512, 1);
+        restored.processBlock(buffer, 0, 48000.0, true);
+        if (calls == 0 || readStart != 0 || !hasSnapshot)
+            return false;
+    }
+
+    // Restore after prepare: deserialize publishes sources before the view.
+    {
+        FrozenSourceStore store;
+        int calls = 0;
+        int64_t readStart = -1;
+        bool hasSnapshot = false;
+        ProcessorBindings bindings =
+            sourceFrozenBindings(store, makeProbe(calls, readStart, hasSnapshot));
+        CaptureSession restored(std::move(bindings));
+        restored.prepareToPlay(48000.0, 512, 1);
+        if (!restored.deserialize(archive))
+            return false;
+        juce::AudioBuffer<float> buffer(1, 256);
+        buffer.clear();
+        restored.processBlock(buffer, 0, 48000.0, true);
+        if (calls == 0 || readStart != 0 || !hasSnapshot)
+            return false;
+    }
+
+    return true;
+}
+
+bool testNineSixKSuffixAndRepeatedSliceKeepAbsoluteSourceOrigin()
+{
+    FrozenSourceStore store;
+    int64_t observedReadStart = -1;
+    double observedWindowStart = 0.0;
+    int64_t observedFirstCanonical = -1;
+    CaptureSession session(sourceFrozenBindings(store,
+        [&](juce::AudioBuffer<float>&, int, int,
+            const OpenTune::PlaybackReadSource& src,
+            int64_t start, double, double) {
+            observedReadStart = start;
+            if (src.contentSnapshot != nullptr) {
+                observedWindowStart = src.contentSnapshot->sourceWindow.sourceStartSeconds;
+                observedFirstCanonical = src.contentSnapshot->firstCanonicalSample;
+            }
+        }));
+    // runTake feeds a 1024-sample block; declare it as the prepared max block so
+    // processBlock's scratch window covers the take.
+    session.prepareToPlay(96000.0, 1024, 1);
+
+    // Native 1024-sample suffix at 96k: the canonical origin is 470, but the
+    // source window carries the authoritative 1024 / 96000 seconds.
+    session.testInjectEditedSegment(0.0, 2048.0 / 96000.0, 1, makeAudio(2048), 96000.0);
+    publishOwnerSource(store, session, 1);
+    session.refreshPublishedReplacementGeometry();
+
+    runTake(session, 0, 1024, 0.9f, 96000.0);
+    juce::AudioBuffer<float> buffer(1, 256);
+    buffer.clear();
+    observedReadStart = -1;
+    session.processBlock(buffer, 1024, 96000.0, true);
+    if (observedReadStart != 1024)
+        return false;
+    if (std::abs(observedWindowStart - 1024.0 / 96000.0) > 1e-15)
+        return false;
+    if (observedFirstCanonical != OpenTune::PlaybackSampleGeometry::projectToSample(
+            1024.0 / 96000.0 * OpenTune::TimeCoordinate::kRenderSampleRate))
+        return false;
+
+    // Slice the suffix again: the window advances by absolute seconds, and the
+    // canonical origin is projected once from the new absolute start.
+    runTake(session, 1024, 512, 0.9f, 96000.0);
+    observedReadStart = -1;
+    session.processBlock(buffer, 1536, 96000.0, true);
+    if (observedReadStart != 1536)
+        return false;
+    if (std::abs(observedWindowStart - 1536.0 / 96000.0) > 1e-15)
+        return false;
+    return observedFirstCanonical == 706;
+}
+
+bool testFortyFourOnePrefixCanonicalLengthIsExact()
+{
+    FrozenSourceStore store;
+    int64_t observedReadStart = -1;
+    CaptureSession session(sourceFrozenBindings(store,
+        [&](juce::AudioBuffer<float>&, int, int, const OpenTune::PlaybackReadSource&,
+            int64_t start, double, double) {
+            observedReadStart = start;
+        }));
+    session.prepareToPlay(44100.0, 512, 1);
+    session.testInjectEditedSegment(0.0, 200.0 / 44100.0, 1, makeAudio(200), 44100.0);
+    publishOwnerSource(store, session, 1);
+    session.refreshPublishedReplacementGeometry();
+
+    runTake(session, 4, 196, 0.9f, 44100.0);
+
+    for (const auto& seg : session.testSegments()) {
+        if (seg->getState() != SegmentState::Edited || !seg->content)
+            continue;
+        const auto& state = seg->content->content();
+        const int64_t canonicalBegin = OpenTune::PlaybackSampleGeometry::projectToSample(
+            state.sourceWindow.sourceStartSeconds * OpenTune::TimeCoordinate::kRenderSampleRate);
+        const int64_t canonicalEnd = OpenTune::PlaybackSampleGeometry::projectToSample(
+            state.sourceWindow.sourceEndSeconds * OpenTune::TimeCoordinate::kRenderSampleRate);
+        if (canonicalBegin != 0 || canonicalEnd - canonicalBegin != 4)
+            return false;
+        if (std::abs(state.sourceWindow.sourceEndSeconds - 4.0 / 44100.0) > 1e-15)
+            return false;
+        if (state.firstCanonicalSample != 0)
+            return false;
+        juce::AudioBuffer<float> buffer(1, 64);
+        buffer.clear();
+        observedReadStart = -1;
+        session.processBlock(buffer, 0, 44100.0, true);
+        return observedReadStart == 0;
+    }
+    return false;
+}
+
+bool testTimeGridRefreshFreezesSourceWithGeometry()
+{
+    FrozenSourceStore store;
+    int sourceLookups = 0;
+    OpenTune::PlaybackReadSource observed;
+    int64_t observedReadStart = -1;
+    double observedOutputStart = -1.0;
+    ProcessorBindings bindings;
+    bindings.publishPlaybackSource =
+        [&store](const ContentKey& key,
+                 const std::shared_ptr<const OpenTune::EditableContentSnapshot>& snapshot,
+                 const std::shared_ptr<const juce::AudioBuffer<float>>& audio,
+                 double sampleRate) {
+            store.publish(key, snapshot, audio, sampleRate);
+        };
+    bindings.getPlaybackReadSource = [&](ContentKey key, OpenTune::PlaybackReadSource& out) {
+        ++sourceLookups;
+        return store.get(key, out);
+    };
+    bindings.replaceWithRendered = [&](juce::AudioBuffer<float>&, int, int,
+                                        const OpenTune::PlaybackReadSource& src,
+                                        int64_t readStart, double outputStart, double) {
+        observed = src;
+        observedReadStart = readStart;
+        observedOutputStart = outputStart;
+    };
+
+    CaptureSession session(std::move(bindings));
+    session.prepareToPlay(44100.0, 256, 1);
+    session.testInjectEditedSegment(0.0, 1.0, 1, makeAudio(44100), 44100.0);
+    auto* segment = findById(session, 1);
+    auto state = segment->content->content();
+    state.sourceWindow.sourceStartSeconds = 0.25;
+    state.sourceWindow.sourceEndSeconds = 1.25;
+    segment->content->applyContentState(std::move(state));
+    publishOwnerSource(store, session, 1);
+    session.refreshPublishedReplacementGeometry();
+
+    std::vector<OpenTune::TimeHandle> handles = {
+        {1, 0.0, 0.0, OpenTune::HandleKind::ClipStart, OpenTune::Confidence::Default},
+        {2, 0.5, 0.4, OpenTune::HandleKind::OnsetVoiced, OpenTune::Confidence::Default},
+        {3, 1.0, 1.0, OpenTune::HandleKind::ClipEnd, OpenTune::Confidence::Default}};
+    const auto grid = OpenTune::TimeGridSnapshot::makeFromHandles(handles);
+    if (grid == nullptr)
+        return false;
+    const ContentKey key{DomainKind::RegularVST3Capture, 1, 0};
+    if (!session.applyTimeGrid(key, grid))
+        return false;
+
+    // An owner edit can precede its CRS publication. Rebuilding a view in that
+    // interval must derive geometry from the still-published source snapshot.
+    session.refreshPublishedReplacementGeometry();
+    juce::AudioBuffer<float> buffer(1, 128);
+    buffer.clear();
+    session.processBlock(buffer, 0, 44100.0, true);
+    if (observed.contentSnapshot == nullptr || observed.contentSnapshot->timeGrid == grid
+        || observedReadStart != 11025 || observedOutputStart != 0.0)
+        return false;
+
+    // Production republish path: owner truth -> CRS, then rebuild the view once.
+    publishOwnerSource(store, session, 1);
+    session.refreshPublishedReplacementGeometry();
+
+    const int lookupsBeforeAudio = sourceLookups;
+    buffer.clear();
+    session.processBlock(buffer, 0, 44100.0, true);
+    if (observed.contentSnapshot == nullptr || observed.contentSnapshot->timeGrid != grid
+        || observedReadStart != 0 || observedOutputStart != 0.0)
+        return false;
+    // The audio callback consumes the frozen source; it never re-resolves one.
+    return sourceLookups == lookupsBeforeAudio;
+}
+
 } // namespace
 
 int main()
@@ -1128,6 +1448,22 @@ int main()
     }
     if (!testApplyExternalEditCombinesAllOwners()) {
         std::fputs("FAIL: applyExternalEdit combines all owners in one commit\n", stderr);
+        ++failed;
+    }
+    if (!testRestoreBuildsReplacementGeometryAtFirstPrepare()) {
+        std::fputs("FAIL: restore builds replacement geometry at first prepare\n", stderr);
+        ++failed;
+    }
+    if (!testNineSixKSuffixAndRepeatedSliceKeepAbsoluteSourceOrigin()) {
+        std::fputs("FAIL: 96k suffix and repeated slice keep absolute source origin\n", stderr);
+        ++failed;
+    }
+    if (!testFortyFourOnePrefixCanonicalLengthIsExact()) {
+        std::fputs("FAIL: 44.1k prefix canonical length is exact\n", stderr);
+        ++failed;
+    }
+    if (!testTimeGridRefreshFreezesSourceWithGeometry()) {
+        std::fputs("FAIL: TimeGrid refresh freezes source with geometry\n", stderr);
         ++failed;
     }
     if (failed == 0) {

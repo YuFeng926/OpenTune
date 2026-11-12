@@ -979,6 +979,8 @@ endif()
 # Standalone application files live on the final wrapper; the SharedCode target
 # only defines createOpenTuneEditor which these TUs implement.
 set(OPENTUNE_STANDALONE_APP_SOURCES
+    Source/Standalone/StandaloneApp.cpp
+    Source/Standalone/StandaloneApp.h
     Source/Utils/D3D12AgilityBootstrap.cpp
     Source/Standalone/EditorFactoryStandalone.cpp
     Source/Standalone/PluginEditor.cpp
@@ -996,6 +998,9 @@ set(OPENTUNE_STANDALONE_APP_SOURCES
 )
 
 target_sources(OpenTuneStandalone_Standalone PRIVATE ${OPENTUNE_STANDALONE_APP_SOURCES})
+target_compile_definitions(OpenTuneStandalone_Standalone PRIVATE
+    JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
+)
 
 set(OPENTUNE_VST3_APP_SOURCES
     Source/Utils/D3D12AgilityBootstrap.cpp
@@ -2144,6 +2149,8 @@ if(OPENTUNE_BUILD_TESTS)
     add_executable(OpenTuneCapturePersistenceTests
         Tests/CapturePersistenceTests.cpp
     )
+    target_include_directories(OpenTuneCapturePersistenceTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     target_link_libraries(OpenTuneCapturePersistenceTests PRIVATE
         OpenTune
         juce::juce_audio_basics
@@ -2158,6 +2165,8 @@ if(OPENTUNE_BUILD_TESTS)
     add_executable(OpenTuneCaptureSessionSpanBudgetTests
         Tests/CaptureSessionSpanBudgetTests.cpp
     )
+    target_include_directories(OpenTuneCaptureSessionSpanBudgetTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     target_link_libraries(OpenTuneCaptureSessionSpanBudgetTests PRIVATE
         OpenTune
         juce::juce_audio_basics
@@ -2167,6 +2176,74 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneCaptureSessionSpanBudgetTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME CaptureSessionSpanBudgetTests COMMAND OpenTuneCaptureSessionSpanBudgetTests)
+
+    add_executable(OpenTunePlaybackSampleGeometryTests
+        Tests/PlaybackSampleGeometryTests.cpp
+    )
+    target_include_directories(OpenTunePlaybackSampleGeometryTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(OpenTunePlaybackSampleGeometryTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME PlaybackSampleGeometryTests COMMAND OpenTunePlaybackSampleGeometryTests)
+
+    add_executable(OpenTuneResamplingRangeTests
+        Tests/ResamplingRangeTests.cpp
+        Source/DSP/ResamplingManager.cpp)
+    target_include_directories(OpenTuneResamplingRangeTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master)
+    target_link_libraries(OpenTuneResamplingRangeTests PRIVATE juce::juce_core)
+    if(MSVC)
+        target_compile_options(OpenTuneResamplingRangeTests PRIVATE /utf-8 /EHsc)
+        target_compile_definitions(OpenTuneResamplingRangeTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+    add_test(NAME ResamplingRangeTests COMMAND OpenTuneResamplingRangeTests)
+
+    add_executable(OpenTuneNativePcmPlaybackTests Tests/NativePcmPlaybackTests.cpp)
+    target_include_directories(OpenTuneNativePcmPlaybackTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        ${ARA_SDK_PATH})
+    target_link_libraries(OpenTuneNativePcmPlaybackTests PRIVATE
+        OpenTune juce::juce_audio_basics juce::juce_core)
+    if(MSVC)
+        target_compile_options(OpenTuneNativePcmPlaybackTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME NativePcmPlaybackTests COMMAND OpenTuneNativePcmPlaybackTests)
+
+    # Real OpenTuneAudioProcessor -> CaptureSession publish-binding regression:
+    # trimmed-parent canonical length/native sharing, one-frame 96 kHz publish,
+    # and frozen replacement source refresh after local-mutation republish.
+    add_executable(OpenTuneCaptureProcessorPlaybackTests Tests/CaptureProcessorPlaybackTests.cpp)
+    target_compile_definitions(OpenTuneCaptureProcessorPlaybackTests PRIVATE
+        $<FILTER:$<TARGET_PROPERTY:OpenTune,COMPILE_DEFINITIONS>,EXCLUDE,^JUCE_SHARED_CODE>)
+    target_include_directories(OpenTuneCaptureProcessorPlaybackTests PRIVATE
+        $<TARGET_PROPERTY:OpenTune,INCLUDE_DIRECTORIES>
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        ${ARA_SDK_PATH})
+    target_link_libraries(OpenTuneCaptureProcessorPlaybackTests PRIVATE
+        OpenTune
+        OpenTuneResources
+        juce::juce_audio_basics
+        juce::juce_audio_processors
+        juce::juce_core
+        juce::juce_events)
+    if(MSVC)
+        target_compile_options(OpenTuneCaptureProcessorPlaybackTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME CaptureProcessorPlaybackTests COMMAND OpenTuneCaptureProcessorPlaybackTests)
+
+    add_executable(OpenTunePreparedCacheRangeTests Tests/PreparedCacheRangeTests.cpp)
+    target_include_directories(OpenTunePreparedCacheRangeTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master)
+    target_link_libraries(OpenTunePreparedCacheRangeTests PRIVATE
+        OpenTune juce::juce_audio_basics juce::juce_core)
+    if(MSVC)
+        target_compile_options(OpenTunePreparedCacheRangeTests PRIVATE /utf-8 /EHsc)
+        target_compile_definitions(OpenTunePreparedCacheRangeTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+    add_test(NAME PreparedCacheRangeTests COMMAND OpenTunePreparedCacheRangeTests)
 
     add_executable(OpenTuneContentSnapshotProjectionTests
         Tests/ContentSnapshotProjectionTests.cpp
@@ -2276,6 +2353,8 @@ if(OPENTUNE_BUILD_TESTS)
     # the JUCE ARA model object implementations.  Keep the SDK plug-in side
     # dispatch test-only, just as for the dedicated ARA host harness.
     foreach(_runtime_contract IN ITEMS
+            OpenTuneNativePcmPlaybackTests
+            OpenTuneCaptureProcessorPlaybackTests
             RenderRuntimeLifecycleTests
             RenderRuntimeDeferredRetryTests
             RenderRuntimeStressTests)

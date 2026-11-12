@@ -3,11 +3,27 @@
 #include <juce_core/juce_core.h>
 #include <juce_data_structures/juce_data_structures.h>
 #include <functional>
+#include <limits>
 #include "LocalizationManager.h"
 
 namespace OpenTune {
 
 namespace {
+
+// XML properties are text. Keep all binary64 digits before JUCE's default var
+// formatting reduces the value to sixteen significant decimal digits.
+void encodeDoubleProperties(juce::ValueTree tree)
+{
+    for (int i = 0; i < tree.getNumProperties(); ++i) {
+        const auto name = tree.getPropertyName(i);
+        const auto value = tree.getProperty(name);
+        if (value.isDouble())
+            tree.setProperty(name, juce::String(static_cast<double>(value),
+                std::numeric_limits<double>::max_digits10 - 1, true), nullptr);
+    }
+    for (int i = 0; i < tree.getNumChildren(); ++i)
+        encodeDoubleProperties(tree.getChild(i));
+}
 
 std::vector<AutomationPoint> automationPointsFromValueTree(const juce::ValueTree& tree)
 {
@@ -246,6 +262,7 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
 bool ProjectPersistence::writeProjectFile(const ProjectSnapshot& snapshot, const juce::File& file) const
 {
     const auto vt = toValueTree(snapshot);
+    encodeDoubleProperties(vt);
     auto xml = vt.createXml();
     if (!xml) { return false; }
     return xml->writeTo(file, {});

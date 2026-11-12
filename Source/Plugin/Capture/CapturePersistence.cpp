@@ -524,9 +524,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         if (maxIdSeen > session.idCounter_)
             session.idCounter_ = maxIdSeen;
     }
-    session.publishSegmentsView();
-
-    // Publish restored audio to CRS
+    // Publish restored audio to CRS first: the published view freezes each
+    // replacement source together with its fixed geometry in one entry.
     if (session.bindings_.publishPlaybackSource) {
         for (const ContentKey& key : keysToPublish) {
             auto* seg = session.findSegmentByContentKey(key);
@@ -541,6 +540,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             }
         }
     }
+    session.publishSegmentsView();
 
     // Restore: owner truth (audio + pitch curve + detected key) already persisted.
     // CRS republished above; now immediately rebuild render cache from restored owner truth.

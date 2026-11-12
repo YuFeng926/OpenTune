@@ -532,6 +532,30 @@ void checkDelete(Fixture& f, const Clip& a, const Clip& b)
     CONTROL_CHECK(f.editFails(ids, "NOT_FOUND", "unknown_handle", ",\"confirm\":true"));
 }
 
+/**
+ * splitPlacementAtSeconds() snaps the cut to the nearest analysis frame boundary and maps that boundary to
+ * canonical samples with PlaybackSampleGeometry::projectToSample(); it does not refuse a boundary that lies
+ * between two samples. Frames 100 samples apart at 16 kHz are 0.00625 s (275.625 samples at 44.1 kHz), so the
+ * frame boundary at 0.10625 s lies between two samples: the split goes through.
+ */
+void checkSplitBetweenSamples(Fixture& f)
+{
+    auto clip = f.addClip("between-samples", 3, 0.0, 6.0);
+    auto* owner = f.processor->getStandaloneContentRepository()->findClip(clip.key);
+    if (!CONTROL_CHECK(owner != nullptr))
+        return;
+    auto curve = std::make_shared<PitchCurve>();
+    curve->setHopSize(100);
+    curve->setSampleRate(16000.0);
+    curve->setOriginalF0(std::vector<float>(960, 220.0f));
+    owner->applyOriginalF0(curve);
+    CONTROL_CHECK(f.processor->setContentOriginalF0State(clip.key, OriginalF0State::Ready));
+    CONTROL_CHECK(settleBackgroundWork(*f.processor));
+    const auto result = f.edit(f.op("split", clip, "\"atTimelineSec\":0.10625"));
+    CONTROL_CHECK(entities(result, "created") == "placement,placement"
+                  && warningCodes(result) == "UPSTREAM_UNDO_DEFECT");
+}
+
 void scenarioArrangementImpl()
 {
     Fixture f;
@@ -547,6 +571,7 @@ void scenarioArrangementImpl()
     checkGainAndFades(f, a);
     checkCallRules(f, a, b);
     checkSplitAndMerge(f, a, c, pending);
+    checkSplitBetweenSamples(f);
     checkDelete(f, a, b);
 }
 

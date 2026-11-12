@@ -192,14 +192,14 @@ bool ControlEditorBridge::canQuit() const
 
 bool ControlEditorBridge::requestQuit()
 {
-    // DocumentWindow::closeButtonPressed(), virtual: the window's own close button handler. The stock
-    // StandaloneFilterWindow saves the plug-in state (StandalonePluginHolder::savePluginState()) and ends the
-    // application (JUCEApplicationBase::quit()), which runs the normal shutdown. Calling the window's handler keeps
-    // the behaviour of whatever the window does when its close button is pressed, without a copy of it here.
+    // DocumentWindow::closeButtonPressed(), virtual: the window's own close button handler. The Standalone window
+    // routes that handler into the application's one exit coordinator, which saves the plug-in state once, destroys
+    // the window, holder and processor on the message thread, and ends the application after the process runtime's
+    // final close. Calling the window's handler keeps this side free of a copy of the exit sequence.
     auto* window = standaloneWindowOf(editor_);
     if (window == nullptr)
         return false;
-    static_cast<juce::DocumentWindow*>(window)->closeButtonPressed();
+    window->closeButtonPressed();
     return true;
 }
 

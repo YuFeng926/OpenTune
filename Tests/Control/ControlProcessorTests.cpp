@@ -580,6 +580,7 @@ const Scenario kScenarios[] = {
     {"ProjectSaveCopyChecks", scenarioProjectSaveCopyChecks, false},
     {"ProjectSaveCopyCapability", scenarioProjectSaveCopyCapability, false},
     {"ProjectReopenKeepsTuning", scenarioProjectReopenKeepsTuning, false},
+    {"ProjectOneFrame96kRestore", scenarioProjectOneFrame96kRestore, false},
     {"ProjectVectors", scenarioProjectVectors, false},
     {"Transport", scenarioTransport, false},
     {"Tracks", scenarioTracks, false},

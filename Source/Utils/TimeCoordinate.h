@@ -6,9 +6,9 @@
 namespace OpenTune::TimeCoordinate {
 
 /**
- * kRenderSampleRate - 44.1kHz 渲染采样率（单一真实来源）
+ * kRenderSampleRate - 44.1kHz 编辑/合成渲染率
  * 
- * 所有内部音频存储和渲染处理统一使用 44.1kHz 采样率。
+ * canonical 编辑输入与合成缓存使用此采样率；原始 PCM 保留媒体实际采样率。
  * 其他位置的采样率常量（RenderCache::kSampleRate,
  * SilentGapDetector::kInternalSampleRate）
  * 均引用此常量，确保一致性。

@@ -10,6 +10,7 @@
  */
 
 #include <juce_core/juce_core.h>
+#include "../Utils/PlaybackSampleGeometry.h"
 #include <vector>
 
 namespace OpenTune {
@@ -34,7 +35,7 @@ public:
      */
     std::vector<float> downsampleForInference(
         const float* input, size_t inputLength,
-        int inputSR, int targetSR
+        double inputSR, double targetSR
     );
 
     /**
@@ -47,22 +48,33 @@ public:
      */
     std::vector<float> upsampleForHost(
         const float* input, size_t inputLength,
-        int inputSR, int targetSR
+        double inputSR, double targetSR
     );
 
     /**
-     * 高质量播放重采样 — 精确 outputLength，绝对样本边界。
-     * 调用方负责确保 outputLength = round(inputLength * targetSR / inputSR)，
-     * 相邻 chunk 无 gap/overlap。
+     * 来源零点开始的整段转换。窗口准备使用 resampleRange 的全局网格。
      */
     std::vector<float> resampleExactLength(
         const float* input, size_t inputLength,
-        int inputSR, int targetSR, int outputLength);
+        double inputSR, double targetSR, int outputLength);
+
+    /** Real input support and finite aligned startup for [outputBegin,outputEnd).
+     * The returned addresses are on the original input sample grid. */
+    PlaybackSampleGeometry::SampleSpan requiredInputRange(
+        double inputSR, double targetSR, int64_t outputBegin, int64_t outputEnd);
+
+    /** Convert the requested global output interval. input[0] is at
+     * firstInputSample; only this immutable source extent contains real PCM.
+     * Samples outside that extent use zero extension. Work is bounded by the
+     * requested output and the actual filter support, independent of position. */
+    std::vector<float> resampleRange(
+        const float* input, size_t inputLength, double inputSR, double targetSR,
+        int64_t firstInputSample, int64_t firstOutputSample, int outputLength);
 
 private:
     std::vector<float> resample(
         const float* input, size_t inputLength,
-        int inputSR, int targetSR
+        double inputSR, double targetSR
     );
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ResamplingManager)

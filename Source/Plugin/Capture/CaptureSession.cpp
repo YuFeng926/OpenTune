@@ -82,6 +82,10 @@ CaptureSession::~CaptureSession() = default;
 
 void CaptureSession::prepareToPlay(double sampleRate, int maxBlockSize, int hostInputChannels)
 {
+    // First configuration publishes geometry too: a state restore may have
+    // completed before any playback rate existed, so no earlier view could
+    // freeze replacement geometry.
+    const bool playbackRateChanged = currentSampleRate_ != sampleRate;
     currentSampleRate_ = sampleRate;
     currentMaxBlockSize_ = juce::jmax(0, maxBlockSize);
 
@@ -92,6 +96,12 @@ void CaptureSession::prepareToPlay(double sampleRate, int maxBlockSize, int host
     const int oldChannels = captureChannels_.exchange(clamped, std::memory_order_acq_rel);
 
     dryScratch_.setSize(clamped, juce::jmax(currentMaxBlockSize_, 512), false, true, false);
+
+    // Replacement geometry is frozen at the playback rate; publish it on first
+    // configuration and whenever the device rate changes, so the audio thread
+    // never rebuilds it per block.
+    if (playbackRateChanged)
+        publishSegmentsView();
 
     ChannelLayoutLog::logEntry("vst3-prepare", rawDecl, clamped);
     if (oldChannels != 0 && oldChannels != clamped) {
@@ -238,6 +248,7 @@ void CaptureSession::processBlock(juce::AudioBuffer<float>& buffer,
     // Step 2: replace every overlapping Edited segment in creation order.
     // Later segments run last, so later reads overwrite earlier reads. Each call
     // covers only the intersection and leaves the rest of the host block intact.
+    // The replacement source and its fixed geometry are the same frozen entry.
     if (isPlaying && bindings_.replaceWithRendered) {
         const int64_t blockStart = hostAbsoluteSample;
         const int64_t blockEnd = hostAbsoluteSample + static_cast<int64_t>(numSamples);
@@ -245,19 +256,33 @@ void CaptureSession::processBlock(juce::AudioBuffer<float>& buffer,
             if (seg->getState() != SegmentState::Edited)
                 continue;
 
-            const int64_t segStart = seg->hostStartSample.load(std::memory_order_acquire);
-            const int64_t segCount = seg->hostSampleCount.load(std::memory_order_acquire);
-            const int64_t segEnd = segStart + segCount;
-            const int64_t overlapStart = std::max(blockStart, segStart);
-            const int64_t overlapEnd = std::min(blockEnd, segEnd);
-            if (overlapEnd <= overlapStart)
+            const SegmentsView::Replacement* replacement = nullptr;
+            for (const auto& entry : view->replacements) {
+                if (entry.contentKey == seg->contentKey) {
+                    replacement = &entry;
+                    break;
+                }
+            }
+            if (replacement == nullptr
+                || replacement->placement.playbackRate != hostSampleRate) {
+                continue;
+            }
+
+            const auto overlap = PlaybackSampleGeometry::intersect(
+                PlaybackSampleGeometry::hostPlaybackSpan(replacement->placement),
+                {blockStart, blockEnd});
+            if (overlap.empty())
                 continue;
 
-            const int destStart = static_cast<int>(overlapStart - blockStart);
-            const int overlapNumSamples = static_cast<int>(overlapEnd - overlapStart);
-            const int64_t readStartSample = overlapStart - segStart;
+            const int destStart = static_cast<int>(overlap.begin - blockStart);
+            const int overlapNumSamples = static_cast<int>(overlap.end - overlap.begin);
+            const int64_t readStartSample = overlap.begin - replacement->placement.offsetSamples;
+            const double outputStartSeconds = replacement->outputAnchorSeconds
+                + static_cast<double>(overlap.begin - replacement->placement.playbackBeginSample)
+                    / hostSampleRate;
             bindings_.replaceWithRendered(buffer, destStart, overlapNumSamples,
-                                          seg->contentKey, readStartSample, hostSampleRate);
+                                          replacement->source, readStartSample,
+                                          outputStartSeconds, hostSampleRate);
         }
     }
 
@@ -511,25 +536,34 @@ void CaptureSession::tick()
 void CaptureSession::onRenderComplete(ContentKey segmentContentKey)
 {
     bool edited = false;
+    bool refreshView = false;
     {
         std::lock_guard<std::mutex> lock(mutableMutex_);
         for (auto& seg : mutableSegments_) {
             if (seg->contentKey == segmentContentKey) {
-                // Only transition Processing → Edited; guard against duplicate calls.
-                if (seg->getState() != SegmentState::Processing)
-                    return;
-                seg->setState(SegmentState::Edited);
-                activeDisplaySegmentId_ = seg->contentKey.objectId;
-                edited = true;
+                if (seg->getState() == SegmentState::Processing) {
+                    seg->setState(SegmentState::Edited);
+                    activeDisplaySegmentId_ = seg->contentKey.objectId;
+                    edited = true;
+                    refreshView = true;
+                } else if (seg->getState() == SegmentState::Edited) {
+                    // Render settled for already-Edited content: its snapshot may
+                    // have advanced. Refresh the frozen source with the geometry.
+                    refreshView = true;
+                }
                 break;
             }
         }
     }
-    if (!edited)
+    if (!refreshView)
         return;
 
-    AppLogger::log("CaptureSession: segment render complete -> Edited id=" 
-        + juce::String(static_cast<juce::int64>(segmentContentKey.objectId)));
+    publishSegmentsView();
+
+    if (edited) {
+        AppLogger::log("CaptureSession: segment render complete -> Edited id="
+            + juce::String(static_cast<juce::int64>(segmentContentKey.objectId)));
+    }
 }
 
 void CaptureSession::onRenderFailed(ContentKey segmentContentKey, const juce::String& reason)
@@ -672,6 +706,11 @@ bool CaptureSession::applyTimeGrid(ContentKey segmentContentKey, std::shared_ptr
 
     seg->content->applyTimeGrid(std::move(grid));
     return true;
+}
+
+void CaptureSession::refreshPublishedReplacementGeometry()
+{
+    publishSegmentsView();
 }
 
 bool CaptureSession::applyDetectedKey(ContentKey segmentContentKey, const DetectedKey& detectedKey)
@@ -944,6 +983,43 @@ void CaptureSession::publishSegmentsView()
         pendingRetireKeys_ = std::move(nextPending);
         publishedKeys_ = std::move(nextKeys);
 
+        // Replacement entries freeze the published source and its fixed geometry
+        // into the same view publication. The audio callback reads this entry
+        // directly and never re-resolves a source from another coordinate domain.
+        view->replacements.reserve(mutableSegments_.size());
+        for (const auto& seg : mutableSegments_) {
+            if (!seg->content || seg->captureSampleRate <= 0.0 || currentSampleRate_ <= 0.0)
+                continue;
+            const int64_t start = seg->hostStartSample.load(std::memory_order_acquire);
+            const int64_t count = seg->hostSampleCount.load(std::memory_order_acquire);
+            if (count <= 0)
+                continue;
+
+            SegmentsView::Replacement replacement;
+            replacement.contentKey = seg->contentKey;
+            if (!bindings_.getPlaybackReadSource
+                || !bindings_.getPlaybackReadSource(seg->contentKey, replacement.source)
+                || replacement.source.contentSnapshot == nullptr)
+                continue;
+
+            const auto& state = *replacement.source.contentSnapshot;
+            const bool identity = state.timeGrid == nullptr || state.timeGrid->isIdentity();
+            const double outputAnchorSeconds = identity ? 0.0 : state.timeGrid->tauForward(0.0);
+            // identity 读取使用来源窗口权威起点 M：内容 local 0 在来源网格上的
+            // 全局位置。切片按绝对秒平移窗口，不用 canonical 投影值反算时间。
+            const double sourceStartSeconds = identity
+                ? state.sourceWindow.sourceStartSeconds
+                : outputAnchorSeconds;
+
+            replacement.placement = PlaybackSampleGeometry::makePlacement(
+                currentSampleRate_,
+                static_cast<double>(start) / seg->captureSampleRate,
+                static_cast<double>(start + count) / seg->captureSampleRate,
+                sourceStartSeconds);
+            replacement.outputAnchorSeconds = outputAnchorSeconds;
+            view->replacements.push_back(std::move(replacement));
+        }
+
         // seq_cst ties this store into the same total order as the audio reader
         // counter: a reader that increments after a reclaim check necessarily loads
         // the new pointer, never a view that is about to be destroyed.
@@ -951,6 +1027,7 @@ void CaptureSession::publishSegmentsView()
         if (previous != nullptr)
             retiredViews_.push_back(std::move(currentView_));
         currentView_ = std::move(view);
+
         ++publishedViewCount_;
     }
 }

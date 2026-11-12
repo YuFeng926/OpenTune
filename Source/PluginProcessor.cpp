@@ -27,6 +27,7 @@
 #include "Plugin/StandaloneProcessorStateCodec.h"
 #endif
 #include "Utils/TimeCoordinate.h"
+#include "Utils/PlaybackSampleGeometry.h"
 #include "Utils/CaptureContentSlice.h"
 #include "Utils/LocalizationManager.h"
 #include "Utils/PlacementFade.h"
@@ -123,7 +124,8 @@ void publishStandalonePlaybackSource(ContentRenderService& crs,
 {
     auto snapshot = std::make_shared<const EditableContentSnapshot>(makeContentSnapshot(payload));
     auto readSource = makePlaybackReadSource(
-        key, std::move(snapshot), payload.audioBuffer, payload.sampleRate,
+        key, std::move(snapshot), payload.nativeSource, payload.audioBuffer,
+        payload.sampleRate, payload.firstCanonicalSample,
         crs.getOrCreateRenderCache(key), crs.getTimeStretchCache());
     crs.publishPlaybackSource(key, std::move(readSource));
 }
@@ -139,23 +141,8 @@ ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
         return {};
     }
 
-    // owner bootstrap：真实 source/audio duration 已知时，bootstrap identity 或
-    // 时长不匹配的 grid（如 split 后沿用原 grid）统一覆盖为真实 duration 的 identity。
-    if (payload.timeGrid == nullptr || payload.timeGrid->empty())
-        payload.timeGrid = TimeGridSnapshot::bootstrapIdentity();
-
-    const double contentDuration = payload.sourceWindow.isValid()
-        ? payload.sourceWindow.durationSeconds()
-        : static_cast<double>(payload.audioBuffer != nullptr ? payload.audioBuffer->getNumSamples() : 0) / payload.sampleRate;
-    const bool gridMatchesContent =
-        std::abs(payload.timeGrid->totalDurationSeconds() - contentDuration) <= 1e-6;
-    if (!gridMatchesContent && contentDuration > 0.0) {
-        if (auto realGrid = TimeGridSnapshot::makeIdentity(contentDuration)) {
-            payload.timeGrid = std::move(realGrid);
-            ++payload.timeGridRevision;
-        }
-    }
-
+    // TimeGrid 由各 owner 入口（import/split/merge/copy/restore）按权威
+    // source window duration 显式初始化；这里只提交完整 payload，不再补造或改写。
     clip->content() = std::move(payload);
     publishStandalonePlaybackSource(crs, key, clip->content());
     return key;
@@ -238,6 +225,11 @@ std::shared_ptr<const juce::AudioBuffer<float>> sliceAudioBuffer(const std::shar
     const int64_t clampedEnd = juce::jlimit<int64_t>(clampedStart, audioBuffer->getNumSamples(), endSampleExclusive);
     if (clampedEnd <= clampedStart) {
         return {};
+    }
+
+    // 全覆盖范围直接共享不可变存储，切片入口不复制整段 canonical。
+    if (clampedStart == 0 && clampedEnd == audioBuffer->getNumSamples()) {
+        return audioBuffer;
     }
 
     auto sliced = std::make_shared<juce::AudioBuffer<float>>(audioBuffer->getNumChannels(), static_cast<int>(clampedEnd - clampedStart));
@@ -376,27 +368,32 @@ std::shared_ptr<PitchCurve> mergePitchCurves(
 #if JucePlugin_Build_Standalone
 namespace {
 
-void renderPlacementForExport(OpenTuneAudioProcessor& processor,
-                              const StandaloneArrangement::PlaybackPlacement& placement,
+void renderPlacementForExport(const StandaloneArrangement::PlaybackPlacement& placement,
                               float trackGain,
-                              int64_t placementStartInOutput,
-                              int64_t placementSampleCount,
                               double outputOriginSeconds,
                               juce::AudioBuffer<float>& out,
-                              int64_t totalLen,
-                              const PlaybackReadSource& source)
+                              int64_t totalLen)
 {
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
 
-    if (!placement.contentKey.isValid() || placement.durationSeconds <= 0.0 || placementStartInOutput >= totalLen
-        || !source.hasAudio()
-        || source.contentSnapshot == nullptr) {
+    if (!placement.contentKey.isValid() || placement.durationSeconds <= 0.0
+        || !placement.hasPlayableView()) {
         return;
     }
 
-    const int64_t requestedPlacementSamples = juce::jmax<int64_t>(1, placementSampleCount);
-    const int64_t remainingOutputSamples = totalLen - placementStartInOutput;
-    const int samplesToRender = static_cast<int>(juce::jmin<int64_t>(requestedPlacementSamples, remainingOutputSamples));
+    // 导出与实时播放共用同一批冻结来源和同一份固定映射 (H, D, A, Z)。
+    const auto& geometry = placement.sampleGeometry;
+    const int64_t outputOriginSample = PlaybackSampleGeometry::projectToSample(
+        outputOriginSeconds * kExportSr);
+    const int64_t dstStartSample = geometry.playbackBeginSample - outputOriginSample;
+    if (dstStartSample >= totalLen) {
+        return;
+    }
+
+    const int64_t placementSamples = geometry.playbackEndSample - geometry.playbackBeginSample;
+    const int64_t remainingOutputSamples = totalLen - dstStartSample;
+    const int samplesToRender = static_cast<int>(
+        juce::jmin<int64_t>(placementSamples, remainingOutputSamples));
     if (samplesToRender <= 0) {
         return;
     }
@@ -404,12 +401,10 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     juce::AudioBuffer<float> placementBuffer(out.getNumChannels(), samplesToRender);
     placementBuffer.clear();
 
-    ::OpenTune::PlaybackReadRequest readRequest;
-    readRequest.source = source;
-    readRequest.readStartSample = TimeCoordinate::secondsToSamples(
-        source.contentSnapshot->timeGrid->tauForward(placement.clipInSeconds), kExportSr);
-    readRequest.targetSampleRate = kExportSr;
-    readRequest.numSamples = samplesToRender;
+    const int64_t readStartSample = geometry.playbackBeginSample - geometry.offsetSamples;
+    const ::OpenTune::PlaybackReadRequest readRequest(
+        placement.source, readStartSample, kExportSr, samplesToRender,
+        placement.outputAnchorSeconds);
 
     const int renderedSamples = ::OpenTune::readExportPlaybackAudio(readRequest, placementBuffer, 0);
     if (renderedSamples <= 0) {
@@ -418,14 +413,15 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 
     const float baseGain = trackGain * placement.gain;
     for (int sampleIndex = 0; sampleIndex < renderedSamples; ++sampleIndex) {
-        const int64_t dstIndex = placementStartInOutput + sampleIndex;
+        const int64_t dstIndex = dstStartSample + sampleIndex;
         if (dstIndex < 0 || dstIndex >= totalLen)
             continue;
 
+        // 显式放置锚点 + 相对样本遍历：输出 buffer 起点对应 A，样本 0 是
+        // 放置内容的语义起点。
+        const double placementSeconds = static_cast<double>(sampleIndex) / kExportSr;
         const float fade = placementFadeGain(
-            outputOriginSeconds
-                + static_cast<double>(dstIndex) / kExportSr
-                - placement.timelineStartSeconds,
+            placementSeconds,
             placement.durationSeconds,
             placement.fadeInDuration,
             placement.fadeOutDuration);
@@ -436,6 +432,44 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
             dst[static_cast<size_t>(dstIndex)] += src[sampleIndex] * finalGain;
         }
     }
+}
+
+StandaloneArrangement::PlaybackPlacement exportPlacementFrom(
+    const StandaloneArrangement::Placement& placement)
+{
+    StandaloneArrangement::PlaybackPlacement projected;
+    projected.contentKey = placement.contentKey;
+    projected.timelineStartSeconds = placement.timelineStartSeconds;
+    projected.durationSeconds = placement.durationSeconds;
+    projected.clipInSeconds = placement.clipInSeconds;
+    projected.gain = placement.gain;
+    projected.fadeInDuration = placement.fadeInDuration;
+    projected.fadeOutDuration = placement.fadeOutDuration;
+    return projected;
+}
+
+// 导出开始时冻结每个 placement 的来源视图，并在导出采样率上一次性建立
+// 与实时播放相同的连续几何。
+void freezeExportSources(OpenTuneAudioProcessor& processor,
+                         std::vector<StandaloneArrangement::PlaybackPlacement>& placements)
+{
+    auto* service = processor.getContentRenderService();
+    placements.erase(
+        std::remove_if(placements.begin(), placements.end(),
+            [service](StandaloneArrangement::PlaybackPlacement& placement) {
+                if (placement.hasPlayableSource())
+                    return false;
+                PlaybackReadSource source;
+                if (service == nullptr
+                    || !service->getPlaybackReadSource(placement.contentKey, source)
+                    || !source.hasAudio())
+                    return true;
+                placement.source = std::move(source);
+                return false;
+            }),
+        placements.end());
+    StandaloneArrangement::buildPlaybackGeometry(
+        placements, TimeCoordinate::kRenderSampleRate);
 }
 
 // copyContentRange 的 TimeGrid 截断：与 audio slicing 使用同一
@@ -814,6 +848,12 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 });
 #endif
         };
+        const auto backendChangeGate = completionGate_;
+        lease.backendChangedCallback = [this, backendChangeGate]() {
+            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*backendChangeGate);
+            if (callbackLease)
+                handleSharedBackendChanged();
+        };
         crs->attachExecutionLease(std::move(lease));
     }
     class ProcessorContentCommands final : public ContentEditCommands
@@ -920,23 +960,21 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 
         bindings.replaceWithRendered = [this](juce::AudioBuffer<float>& buffer,
                                                int destStart, int numSamples,
-                                               ContentKey segmentContentKey,
+                                               const PlaybackReadSource& readSource,
                                                int64_t readStartSample,
+                                               double outputStartSeconds,
                                                double targetSampleRate) {
-            // Capture segment contentKey is the CRS content key.
-            jassert(contentRenderService_ != nullptr);
-
-            PlaybackReadSource readSource;
-            if (!contentRenderService_->getPlaybackReadSource(segmentContentKey, readSource)
-                || !readSource.hasAudio()) {
+            // Frozen with the replacement geometry at view publication.
+            if (!readSource.hasAudio())
                 return;
-            }
-            ::OpenTune::PlaybackReadRequest req;
-            req.source = readSource;
-            req.readStartSample = readStartSample;
-            req.targetSampleRate = targetSampleRate;
-            req.numSamples = numSamples;
+            const PlaybackReadRequest req(readSource, readStartSample,
+                                          targetSampleRate, numSamples, outputStartSeconds);
             readPlaybackAudio(req, buffer, destStart);
+        };
+
+        bindings.getPlaybackReadSource = [this](ContentKey key, PlaybackReadSource& out) {
+            return contentRenderService_ != nullptr
+                && contentRenderService_->getPlaybackReadSource(key, out);
         };
 
         bindings.retireSegment = [this](ContentKey segmentContentKey) {
@@ -1080,43 +1118,74 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             }
         };
 
-        // Capture 播放源的唯一汇聚点：CaptureSegmentContent 保留宿主率原始 PCM
-        // （不回写 owner），此处派生 CRS canonical 播放源，统一固定 44.1kHz。
-        // 44.1k 输入直接共享原 audio buffer；非同率经既有 upsampleForHost 重采样，
-        // 时长守恒方式与 prepareImport/ARA 完全一致
-        // （sampleRateProject(originalLen, sampleRate, targetRate)）。
+        // Capture 播放源的唯一汇聚点：CaptureSegmentContent 保留采集时原率 PCM
+        // （不回写 owner），此处以 native 描述派生 CRS canonical 播放源。
+        // canonical 全局原点由 snapshot.sourceWindow 决定；同率时共享原生 PCM，
+        // 异率从 native 到 44.1kHz 一次范围转换。采样率使用实际 double 值。
         bindings.publishPlaybackSource = [this](const ContentKey& key,
                                                  std::shared_ptr<const EditableContentSnapshot> snapshot,
                                                  std::shared_ptr<const juce::AudioBuffer<float>> audio,
                                                  double sampleRate) {
             jassert(contentRenderService_ != nullptr);
-            if (audio == nullptr || snapshot == nullptr || !key.isValid())
+            juce::ignoreUnused(audio, sampleRate);
+            if (snapshot == nullptr || !key.isValid())
                 return;
 
-            const double targetRate = TimeCoordinate::kRenderSampleRate;
-            std::shared_ptr<const juce::AudioBuffer<float>> canonicalAudio = std::move(audio);
-            if (std::abs(sampleRate - targetRate) > 1.0) {
-                const int numChannels = canonicalAudio->getNumChannels();
-                const int originalLen = canonicalAudio->getNumSamples();
-                const int newLen = juce::jmax(
-                    1,
-                    static_cast<int>(TimeCoordinate::sampleRateProject(
-                        originalLen, sampleRate, targetRate)));
-                auto derived = std::make_shared<juce::AudioBuffer<float>>(numChannels, newLen);
-                for (int ch = 0; ch < numChannels; ++ch) {
-                    auto resampledData = resamplingManager_->upsampleForHost(
-                        canonicalAudio->getReadPointer(ch),
-                        originalLen,
-                        static_cast<int>(sampleRate),
-                        static_cast<int>(targetRate));
-                    const int toCopy = juce::jmin(newLen, static_cast<int>(resampledData.size()));
-                    derived->copyFrom(ch, 0, resampledData.data(), toCopy);
+            const auto& native = snapshot->nativeSource;
+            if (native.buffer == nullptr || native.sampleRate <= 0.0)
+                return;
+
+            const double canonicalRate = TimeCoordinate::kRenderSampleRate;
+            // Owner initialization established the authoritative source window:
+            // both canonical boundaries project from its absolute seconds.
+            const int64_t firstCanonicalSample = PlaybackSampleGeometry::projectToSample(
+                snapshot->sourceWindow.sourceStartSeconds * canonicalRate);
+            const int64_t canonicalEndSample = std::max(firstCanonicalSample + 1,
+                PlaybackSampleGeometry::projectToSample(
+                    snapshot->sourceWindow.sourceEndSeconds * canonicalRate));
+
+            const int canonicalLength = static_cast<int>(canonicalEndSample - firstCanonicalSample);
+            int64_t canonicalFirstSample = firstCanonicalSample;
+            std::shared_ptr<const juce::AudioBuffer<float>> canonicalAudio;
+            if (native.sampleRate == canonicalRate) {
+                const int64_t nativeTotal = native.buffer->getNumSamples();
+                const int64_t nativeOffset = firstCanonicalSample - native.firstSourceSample;
+                if (nativeOffset == 0 && static_cast<int64_t>(canonicalLength) == nativeTotal) {
+                    canonicalAudio = native.buffer;
+                    canonicalFirstSample = native.firstSourceSample;
+                } else {
+                    const int64_t begin = juce::jlimit<int64_t>(0, nativeTotal, nativeOffset);
+                    const int64_t end = juce::jlimit<int64_t>(begin, nativeTotal,
+                                                              nativeOffset + canonicalLength);
+                    if (end <= begin)
+                        return;
+                    auto sliced = std::make_shared<juce::AudioBuffer<float>>(
+                        native.buffer->getNumChannels(), static_cast<int>(end - begin));
+                    for (int ch = 0; ch < sliced->getNumChannels(); ++ch) {
+                        sliced->copyFrom(ch, 0, *native.buffer, ch,
+                                         static_cast<int>(begin), sliced->getNumSamples());
+                    }
+                    canonicalAudio = std::move(sliced);
+                    canonicalFirstSample = native.firstSourceSample + begin;
+                }
+            } else {
+                auto derived = std::make_shared<juce::AudioBuffer<float>>(
+                    native.buffer->getNumChannels(), canonicalLength);
+                for (int ch = 0; ch < derived->getNumChannels(); ++ch) {
+                    const auto resampled = resamplingManager_->resampleRange(
+                        native.buffer->getReadPointer(ch),
+                        static_cast<size_t>(native.buffer->getNumSamples()),
+                        native.sampleRate, canonicalRate,
+                        native.firstSourceSample, canonicalFirstSample,
+                        canonicalLength);
+                    derived->copyFrom(ch, 0, resampled.data(), canonicalLength);
                 }
                 canonicalAudio = std::move(derived);
             }
 
             auto readSource = makePlaybackReadSource(
-                key, std::move(snapshot), std::move(canonicalAudio), targetRate,
+                key, std::move(snapshot), std::move(native), std::move(canonicalAudio),
+                canonicalRate, canonicalFirstSample,
                 contentRenderService_->getOrCreateRenderCache(key),
                 contentRenderService_->getTimeStretchCache());
             contentRenderService_->publishPlaybackSource(key, readSource);
@@ -1250,7 +1319,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     // 不等待推理，后续实例直接复用。
 }
 
-void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu, std::function<void()> beforeResume)
+void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
 {
     AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
         + juce::String(forceCpu ? "true" : "false"));
@@ -1259,8 +1328,7 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu, std::function<
     // resetAndDetect）由 ProcessRenderRuntime 的 control worker 串行执行。
     auto gate = completionGate_;
     ProcessRenderRuntime::getInstance().resetInferenceBackend(forceCpu, contentRenderService_,
-        [beforeResume = std::move(beforeResume)](
-            ProcessRenderRuntime::ControlResult result, juce::String errorMessage) mutable {
+        [](ProcessRenderRuntime::ControlResult result, juce::String errorMessage) {
             if (result == ProcessRenderRuntime::ControlResult::Failed)
             {
                 AppLogger::error("[Processor] inference backend control failed: " + errorMessage);
@@ -1271,66 +1339,63 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu, std::function<
                     AppLogger::makeDiagnosticText("Inference backend reset", errorMessage));
                 return;
             }
-            if (beforeResume)
-                beforeResume();
             AppLogger::info("[Processor] Inference backend reset complete");
         }, gate);
 }
 
-void OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& weight)
+bool OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& weight,
+                                                   bool persistPreference)
 {
     auto gate = completionGate_;
-    auto* processor = this;
-    ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight, contentRenderService_,
-        [processor](ProcessRenderRuntime::ControlResult result,
-                          juce::String errorMessage) {
-        if (result == ProcessRenderRuntime::ControlResult::Failed)
-        {
+    const bool accepted = ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight, contentRenderService_,
+        [](ProcessRenderRuntime::ControlResult result, juce::String errorMessage) {
+            if (result != ProcessRenderRuntime::ControlResult::Failed)
+                return;
             AppLogger::error("[Processor] vocoder model control failed: " + errorMessage);
             ConfirmDialogContent::showDiagnostic(
                 nullptr,
                 "Vocoder model initialization failed",
                 errorMessage,
                 AppLogger::makeDiagnosticText("Vocoder initialization", errorMessage));
-            return;
-        }
-        // 3. 模型切换完成后才清 RenderCache/TimeStretchCache 并恢复 render worker
+        }, gate);
+    if (accepted && persistPreference && appPreferences_ != nullptr)
+        appPreferences_->setVocoderModelWeight(weight);
+    return accepted;
+}
+
+void OpenTuneAudioProcessor::handleSharedBackendChanged()
+{
 #if JucePlugin_Build_Standalone
-        if (processor->contentRenderService_ && processor->standaloneContentRepository_) {
-            const auto activeWeight = ProcessRenderRuntime::getInstance().getVocoderModelWeight();
-            const auto keys = processor->standaloneContentRepository_->getAllClips();
-            for (const auto key : keys) {
-                if (auto cache = processor->contentRenderService_->getRenderCache(key))
-                    cache->clear();
-                if (auto* clip = processor->standaloneContentRepository_->findClip(key)) {
-                    if (activeWeight == kVocoderWeightDdspHarmonicGenerator) {
-                        clip->clearHnsepAudio();
-                        OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
-                        refreshRequest.contentKey = key;
-                        processor->requestContentRefresh(refreshRequest);
-                    } else {
-                        clip->clearHnsepAudio();
-                        const auto snapshot = clip->snapshotContent();
-                        if (snapshot != nullptr
-                            && snapshot->originalF0State == OriginalF0State::Extracting)
-                            processor->setContentOriginalF0State(key,
-                                snapshot->hasUsableOriginalF0()
-                                    ? OriginalF0State::Ready
-                                    : OriginalF0State::NotRequested);
-                        processor->requestFullContentRender(key);
-                    }
+    if (contentRenderService_ && standaloneContentRepository_) {
+        const auto activeWeight = ProcessRenderRuntime::getInstance().getVocoderModelWeight();
+        const auto keys = standaloneContentRepository_->getAllClips();
+        for (const auto key : keys) {
+            if (auto cache = contentRenderService_->getRenderCache(key))
+                cache->clear();
+            if (auto* clip = standaloneContentRepository_->findClip(key)) {
+                if (activeWeight == kVocoderWeightDdspHarmonicGenerator) {
+                    clip->clearHnsepAudio();
+                    OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
+                    refreshRequest.contentKey = key;
+                    requestContentRefresh(refreshRequest);
                 } else {
-                    processor->requestFullContentRender(key);
+                    clip->clearHnsepAudio();
+                    const auto snapshot = clip->snapshotContent();
+                    if (snapshot != nullptr
+                        && snapshot->originalF0State == OriginalF0State::Extracting)
+                        setContentOriginalF0State(key,
+                            snapshot->hasUsableOriginalF0()
+                                ? OriginalF0State::Ready
+                                : OriginalF0State::NotRequested);
+                    requestFullContentRender(key);
                 }
+            } else {
+                requestFullContentRender(key);
             }
-            processor->contentRenderService_->getTimeStretchCache().clear();
         }
+        contentRenderService_->getTimeStretchCache().clear();
+    }
 #endif
-#if JucePlugin_Enable_ARA
-        if (auto* dc = processor->getDocumentController())
-            dc->invalidateAllModificationCaches();
-#endif
-    }, gate);
 }
 
 void OpenTuneAudioProcessor::invalidateAllContentCaches()
@@ -1485,6 +1550,14 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
         contentRenderService_->preparePlaybackSampleRate(sampleRate);
         preparedPlaybackSampleRate_ = sampleRate;
     }
+
+#if JucePlugin_Build_Standalone
+    // Bind the arrangement's playback snapshot to the prepared CRS and device
+    // rate. The snapshot freezes source views and fixed geometry per placement.
+    if (standaloneArrangement_ != nullptr) {
+        standaloneArrangement_->configurePlaybackSources(contentRenderService_.get(), sampleRate);
+    }
+#endif
 
     // Sync seqlock sequences so audio thread does not replay stale commands on restart
     appliedControlSequence_ = controlSequence_.load(std::memory_order_acquire);
@@ -2195,52 +2268,35 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 && notePitchAudition_.isContentActive(placement.contentKey))
                 continue;
 
-            PlaybackReadSource readSource;
-            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, readSource)
-                || !readSource.hasAudio()) {
+            // 快照在 prepare/来源/TimeGrid/编排变化时冻结来源视图与固定几何；
+            // 音频线程只做整数半开区间求交与地址平移。
+            if (!placement.hasPlayableView()
+                || placement.sampleGeometry.playbackRate != deviceSampleRate) {
                 continue;
             }
 
-            const int64_t placementStartSample = TimeCoordinate::secondsToSamplesFloor(
-                placement.timelineStartSeconds, deviceSampleRate);
-            const int64_t placementEndSample = TimeCoordinate::secondsToSamplesCeil(
-                placement.timelineStartSeconds + placement.durationSeconds, deviceSampleRate);
-            if (placementEndSample <= placementStartSample)
-                continue;
-
-            if (placementEndSample <= blockStartSample || placementStartSample >= blockEndSample) {
+            const auto& geometry = placement.sampleGeometry;
+            const auto overlap = PlaybackSampleGeometry::intersect(
+                PlaybackSampleGeometry::hostPlaybackSpan(geometry),
+                {blockStartSample, blockEndSample});
+            if (overlap.empty()) {
                 continue;
             }
 
-            const int64_t overlapStartSample = std::max(blockStartSample, placementStartSample);
-            const int64_t overlapEndSample = std::min(blockEndSample, placementEndSample);
-            const int64_t samplesToCopy64 = overlapEndSample - overlapStartSample;
-            if (samplesToCopy64 <= 0) {
-                continue;
-            }
-
-            const double overlapAbsoluteSeconds = TimeCoordinate::samplesToSeconds(
-                overlapStartSample, deviceSampleRate);
-            double timeInPlacement = juce::jlimit(
-                0.0,
-                placement.durationSeconds,
-                overlapAbsoluteSeconds - placement.timelineStartSeconds);
-            const double outputStartSeconds =
-                readSource.contentSnapshot->timeGrid->tauForward(placement.clipInSeconds);
-            const int64_t readStartSample = TimeCoordinate::secondsToSamples(
-                outputStartSeconds + timeInPlacement, deviceSampleRate);
-            const int offsetInBlock = static_cast<int>(overlapStartSample - blockStartSample);
+            const int64_t samplesToCopy64 = overlap.end - overlap.begin;
+            const int64_t readStartSample = overlap.begin - geometry.offsetSamples;
+            const double outputStartSeconds = placement.outputAnchorSeconds
+                + static_cast<double>(overlap.begin - geometry.playbackBeginSample) / deviceSampleRate;
+            const int offsetInBlock = static_cast<int>(overlap.begin - blockStartSample);
             const int samplesToCopy = static_cast<int>(samplesToCopy64);
 
             const float placementGain = placement.gain * trackVolume;
             const double fadeInSeconds = placement.fadeInDuration;
             const double fadeOutSeconds = placement.fadeOutDuration;
 
-            ::OpenTune::PlaybackReadRequest readRequest;
-            readRequest.source = readSource;
-            readRequest.readStartSample = readStartSample;
-            readRequest.targetSampleRate = deviceSampleRate;
-            readRequest.numSamples = samplesToCopy;
+            const ::OpenTune::PlaybackReadRequest readRequest(
+                placement.source, readStartSample, deviceSampleRate,
+                samplesToCopy, outputStartSeconds);
 
             clipReadScratch_.clear();
             const int availableReadSamples = readPlaybackAudio(readRequest, clipReadScratch_, 0);
@@ -2249,17 +2305,16 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 const float* src = clipReadScratch_.getReadPointer(ch);
                 float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
 
-                const double dt = 1.0 / deviceSampleRate;
                 for (int s = 0; s < availableReadSamples; ++s) {
-                    float gain = placementGain;
-
-                    gain *= placementFadeGain(timeInPlacement,
-                                              placement.durationSeconds,
-                                              fadeInSeconds,
-                                              fadeOutSeconds);
-
-                    dst[s] += src[s] * gain;
-                    timeInPlacement += dt;
+                    // 显式放置锚点 A 加相对样本遍历；每个声道独立求值。
+                    const double fadeSeconds =
+                        static_cast<double>(overlap.begin + s - geometry.playbackBeginSample)
+                        / deviceSampleRate;
+                    const float fade = placementFadeGain(fadeSeconds,
+                                                         placement.durationSeconds,
+                                                         fadeInSeconds,
+                                                         fadeOutSeconds);
+                    dst[s] += src[s] * placementGain * fade;
                 }
             }
 
@@ -2767,7 +2822,9 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     }
 
     const auto originalSnapshot = getContentSnapshot(originalPlacement.contentKey);
-    if (!originalSnapshot || originalSnapshot->audioBuffer == nullptr) {
+    if (!originalSnapshot
+        || originalSnapshot->audioBuffer == nullptr
+        || originalSnapshot->nativeSource.buffer == nullptr) {
         return std::nullopt;
     }
 
@@ -2783,9 +2840,9 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         return std::nullopt;
     }
 
-    const double audioSampleRate = originalSnapshot->audioSampleRate;
-    if (!std::isfinite(audioSampleRate) || audioSampleRate <= 0.0) {
-        AppLogger::log("Split rejected: content audio sample rate unavailable");
+    const double canonicalRate = originalSnapshot->audioSampleRate;
+    if (!std::isfinite(canonicalRate) || canonicalRate <= 0.0) {
+        AppLogger::log("Split rejected: content canonical sample rate unavailable");
         return std::nullopt;
     }
 
@@ -2803,20 +2860,6 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
 
     // F0-local frame time 是唯一分割边界；音频侧只把它投影成离散 sample 访问坐标。
     const double splitSourceSeconds = f0Timeline.timeAtFrame(frameBoundary);
-    const int64_t splitSample = TimeCoordinate::secondsToSamplesNearest(splitSourceSeconds, audioSampleRate);
-    // timeAtFrame 是 double 乘法，理论对齐的帧也可能有 ulp 级舍入；容差只吸收浮点噪声，
-    // 任何真实样本非对齐的帧都会被拒绝，绝不把 sample 量化回写到 F0/notes/timeline。
-    constexpr double sampleGridToleranceSeconds = 1.0e-9;
-    if (std::abs(TimeCoordinate::samplesToSeconds(splitSample, audioSampleRate) - splitSourceSeconds)
-        > sampleGridToleranceSeconds) {
-        AppLogger::log("Split rejected: F0 frame boundary does not land on the audio sample grid");
-        return std::nullopt;
-    }
-
-    const int64_t totalSamples = originalSnapshot->audioBuffer->getNumSamples();
-    if (splitSample <= 0 || splitSample >= totalSamples) {
-        return std::nullopt;
-    }
 
     const double splitOffsetSeconds = splitSourceSeconds - originalPlacement.clipInSeconds;
     if (splitOffsetSeconds <= minDurationSeconds
@@ -2826,42 +2869,47 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     }
     const double snappedSplitSeconds = originalPlacement.timelineStartSeconds + splitOffsetSeconds;
 
-    // 两个子窗口共享同一 source-absolute boundary：由父窗口起始 sample + splitSample 合成；
-    // 父窗口两端保持原对齐值不动。前提：父窗口本身已在该 sample 网格上。
-    const auto alignedParentWindow = alignSourceWindowToSampleGrid(
-        originalSnapshot->sourceWindow, audioSampleRate);
-    if (!alignedParentWindow.has_value()
-        || alignedParentWindow->sourceStartSeconds != originalSnapshot->sourceWindow.sourceStartSeconds
-        || alignedParentWindow->sourceEndSeconds != originalSnapshot->sourceWindow.sourceEndSeconds) {
-        AppLogger::log("Split rejected: parent source window is not sample-aligned");
+    // 两个子窗口共享唯一权威边界：父窗口起点 + F0 帧边界对应秒。
+    const double boundarySourceSeconds =
+        originalSnapshot->sourceWindow.sourceStartSeconds + splitSourceSeconds;
+    const double parentDurationSeconds = originalSnapshot->sourceWindow.durationSeconds();
+
+    // canonical 裁剪地址来自全局 source 网格，减去父 buffer 的全局起点。
+    const int64_t boundaryCanonicalSample =
+        PlaybackSampleGeometry::projectToSample(boundarySourceSeconds * canonicalRate);
+    const int64_t leadingCanonicalSamples =
+        boundaryCanonicalSample - originalSnapshot->firstCanonicalSample;
+    const int64_t totalCanonicalSamples = originalSnapshot->audioBuffer->getNumSamples();
+    if (leadingCanonicalSamples <= 0 || leadingCanonicalSamples >= totalCanonicalSamples) {
         return std::nullopt;
     }
-
-    const int64_t parentStartSample = TimeCoordinate::secondsToSamplesNearest(
-        alignedParentWindow->sourceStartSeconds, audioSampleRate);
-    const double boundarySourceSeconds = TimeCoordinate::samplesToSeconds(
-        parentStartSample + splitSample, audioSampleRate);
-    const double parentDurationSeconds = originalSnapshot->sourceWindow.durationSeconds();
 
     ContentState leadingPayload = contentStateFromSnapshot(*originalSnapshot);
     leadingPayload.sourceWindow = originalSnapshot->sourceWindow;
     leadingPayload.sourceWindow.sourceEndSeconds = boundarySourceSeconds;
-    leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, splitSample);
+    leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, leadingCanonicalSamples);
+    leadingPayload.firstCanonicalSample = originalSnapshot->firstCanonicalSample;
+    leadingPayload.timeGrid = TimeGridSnapshot::makeIdentity(leadingPayload.sourceWindow.durationSeconds());
+    ++leadingPayload.timeGridRevision;
     leadingPayload.analysis.hnsepHarmonicAudio.reset();
     leadingPayload.analysis.hnsepResidualAudio.reset();
     leadingPayload.analysis.pitchCurve = slicePitchCurveToFrameRange(originalSnapshot->pitchCurve, 0, frameBoundary);
     leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitSourceSeconds);
     leadingPayload.volumeEnvelope = AutomationLane::sliceToLocalRange(
         originalSnapshot->volumeEnvelope, 0.0, splitSourceSeconds);
-    leadingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
+    leadingPayload.analysis.silentGaps = sliceSilentGaps(
+        originalSnapshot->silentGaps, 0, leadingCanonicalSamples);
     // 派生特征绑定父 content/父绝对窗口，无可靠 slice：清空使其失效并可重新分析。
     leadingPayload.analysis.referenceFeatures.reset();
-    // timeGrid 沿用原 identity grid：时长与 slice 不匹配，owner bootstrap 会覆盖为 slice identity。
 
     ContentState trailingPayload = contentStateFromSnapshot(*originalSnapshot);
     trailingPayload.sourceWindow = originalSnapshot->sourceWindow;
     trailingPayload.sourceWindow.sourceStartSeconds = boundarySourceSeconds;
-    trailingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, splitSample, totalSamples);
+    trailingPayload.audioBuffer = sliceAudioBuffer(
+        originalSnapshot->audioBuffer, leadingCanonicalSamples, totalCanonicalSamples);
+    trailingPayload.firstCanonicalSample = boundaryCanonicalSample;
+    trailingPayload.timeGrid = TimeGridSnapshot::makeIdentity(trailingPayload.sourceWindow.durationSeconds());
+    ++trailingPayload.timeGridRevision;
     trailingPayload.analysis.hnsepHarmonicAudio.reset();
     trailingPayload.analysis.hnsepResidualAudio.reset();
     trailingPayload.analysis.pitchCurve = slicePitchCurveToFrameRange(
@@ -2871,9 +2919,9 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
                                                    parentDurationSeconds);
     trailingPayload.volumeEnvelope = AutomationLane::sliceToLocalRange(
         originalSnapshot->volumeEnvelope, splitSourceSeconds, parentDurationSeconds);
-    trailingPayload.analysis.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, splitSample, totalSamples);
+    trailingPayload.analysis.silentGaps = sliceSilentGaps(
+        originalSnapshot->silentGaps, leadingCanonicalSamples, totalCanonicalSamples);
     trailingPayload.analysis.referenceFeatures.reset();
-    // timeGrid 沿用原 identity grid：时长与 slice 不匹配，owner bootstrap 会覆盖为 slice identity。
 
     const ContentKey leadingKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                             *contentRenderService_,
@@ -2967,26 +3015,24 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     if (!leadingSnapshot || !trailingSnapshot
         || leadingSnapshot->audioBuffer == nullptr
         || trailingSnapshot->audioBuffer == nullptr
+        || leadingSnapshot->nativeSource.buffer == nullptr
+        || trailingSnapshot->nativeSource.buffer == nullptr
         || leadingSnapshot->sourceWindow.sourceId == 0
-        || leadingSnapshot->sourceWindow.sourceId != trailingSnapshot->sourceWindow.sourceId) {
+        || leadingSnapshot->sourceWindow.sourceId != trailingSnapshot->sourceWindow.sourceId
+        || !(leadingSnapshot->nativeSource == trailingSnapshot->nativeSource)) {
         AppLogger::log("Merge rejected: placements do not resolve to the same source lineage");
         return std::nullopt;
     }
 
-    const double leadingAudioSampleRate = leadingSnapshot->audioSampleRate;
-    const double trailingAudioSampleRate = trailingSnapshot->audioSampleRate;
-    if (!std::isfinite(leadingAudioSampleRate) || leadingAudioSampleRate <= 0.0
-        || leadingAudioSampleRate != trailingAudioSampleRate) {
-        AppLogger::log("Merge rejected: content audio sample rates are unavailable or diverged");
+    const double leadingCanonicalRate = leadingSnapshot->audioSampleRate;
+    if (!std::isfinite(leadingCanonicalRate) || leadingCanonicalRate <= 0.0
+        || leadingCanonicalRate != trailingSnapshot->audioSampleRate) {
+        AppLogger::log("Merge rejected: canonical sample rates are unavailable or diverged");
         return std::nullopt;
     }
 
-    // 两个窗口已 sample-aligned；连续性用各自 sample rate 投影到 nearest sample
-    // index 后精确比较，不用整样本秒容差接受真实 gap/overlap。
-    if (TimeCoordinate::secondsToSamplesNearest(leadingSnapshot->sourceWindow.sourceEndSeconds,
-                                                leadingAudioSampleRate)
-        != TimeCoordinate::secondsToSamplesNearest(trailingSnapshot->sourceWindow.sourceStartSeconds,
-                                                    trailingAudioSampleRate)) {
+    // 连续性直接比较权威 source 端点：两个边界值来自同一个编辑边界，不做样本投影验收。
+    if (leadingSnapshot->sourceWindow.sourceEndSeconds != trailingSnapshot->sourceWindow.sourceStartSeconds) {
         AppLogger::log("Merge rejected: clips do not describe one contiguous source provenance window");
         return std::nullopt;
     }
@@ -3015,7 +3061,8 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
 
     const int leadingSamples = leadingSnapshot->audioBuffer->getNumSamples();
     const int trailingSamples = trailingSnapshot->audioBuffer->getNumSamples();
-    const double leadingDurationSeconds = TimeCoordinate::samplesToSeconds(leadingSamples, TimeCoordinate::kRenderSampleRate);
+    // notes/envelope 的合并位移使用 leading 权威窗口时长，不从派生 PCM 长度反推。
+    const double leadingDurationSeconds = leadingSnapshot->sourceWindow.durationSeconds();
     auto mergedBuffer = std::make_shared<juce::AudioBuffer<float>>(juce::jmax(leadingSnapshot->audioBuffer->getNumChannels(),
                                                                               trailingSnapshot->audioBuffer->getNumChannels()),
                                                                    leadingSamples + trailingSamples);
@@ -3038,12 +3085,16 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     mergedNotes = normalizeStoredNotes(mergedNotes);
 
     ContentState mergedPayload;
-    // 合并窗口端点直接取 leading start / trailing end（已 sample-aligned），
-    // 并保留 leading 的 source identity（sourceId/sourcePersistentId）。
+    // 合并窗口端点直接取 leading start / trailing end（权威秒值），
+    // 并保留 leading 的 source identity 与 native 起点。
     mergedPayload.sourceWindow = leadingSnapshot->sourceWindow;
     mergedPayload.sourceWindow.sourceEndSeconds = trailingSnapshot->sourceWindow.sourceEndSeconds;
     mergedPayload.audioBuffer = mergedBuffer;
-    mergedPayload.sampleRate = leadingSnapshot->audioSampleRate > 0.0 ? leadingSnapshot->audioSampleRate : TimeCoordinate::kRenderSampleRate;
+    mergedPayload.sampleRate = leadingCanonicalRate;
+    mergedPayload.nativeSource = leadingSnapshot->nativeSource;
+    mergedPayload.firstCanonicalSample = leadingSnapshot->firstCanonicalSample;
+    mergedPayload.timeGrid = TimeGridSnapshot::makeIdentity(mergedPayload.sourceWindow.durationSeconds());
+    ++mergedPayload.timeGridRevision;
     mergedPayload.analysis.pitchCurve = mergedPitchCurve;
     mergedPayload.analysis.setOriginalF0State(leadingSnapshot->originalF0State);
     mergedPayload.analysis.detectedKey = leadingSnapshot->detectedKey;
@@ -3386,7 +3437,7 @@ void OpenTuneAudioProcessor::auditionNotePitch(ContentKey key, double startSecon
     }
 
     PlaybackReadSource source;
-    if (!crs->getPlaybackReadSource(key, source) || source.audioBuffer == nullptr) {
+    if (!crs->getPlaybackReadSource(key, source) || source.canonicalBuffer == nullptr) {
         stopNotePitchAudition();
         return;
     }
@@ -3555,12 +3606,25 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     PlaybackReadSource readSource;
     if (!crs->getPlaybackReadSource(key, readSource)) return;
 
-    const double crsSampleRate = readSource.audioSampleRate;
-    auto audioBuffer = readSource.audioBuffer;
+    const double crsSampleRate = readSource.canonicalSampleRate;
+    auto audioBuffer = readSource.canonicalBuffer;
     if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
 
     if (!crs->republishPlaybackSource(key, snap))
         return;
+
+#if JucePlugin_Build_Standalone
+    // 内容发布后刷新编排播放快照的冻结来源视图与固定几何。
+    if (standaloneArrangement_ != nullptr)
+        standaloneArrangement_->refreshPlaybackSnapshot();
+#endif
+
+#if !JucePlugin_Build_Standalone
+    if (key.domainKind == DomainKind::RegularVST3Capture) {
+        if (auto* session = getCaptureSession())
+            session->refreshPublishedReplacementGeometry();
+    }
+#endif
 
     if (!snap->hasUsableOriginalF0()) return;
 
@@ -3707,39 +3771,44 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
         return false;
     }
 
-    PlaybackReadSource source;
-    if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
-        lastExportError_ = Loc::get(language, "Placement audio is unavailable");
-        return false;
+    // 选中片段按整轨建立几何：它可能从连续前驱继承固定 D，单片段重算会跳样。
+    std::vector<StandaloneArrangement::PlaybackPlacement> placements;
+    const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
+    placements.reserve(static_cast<size_t>(placementCount));
+    for (int index = 0; index < placementCount; ++index) {
+        StandaloneArrangement::Placement candidate;
+        if (standaloneArrangement_->getPlacementByIndex(trackId, index, candidate)) {
+            placements.push_back(exportPlacementFrom(candidate));
+        }
     }
+    freezeExportSources(*this, placements);
 
+    const auto target = std::find_if(
+        placements.begin(), placements.end(),
+        [&placement](const StandaloneArrangement::PlaybackPlacement& candidate) {
+            return candidate.contentKey == placement.contentKey
+                && candidate.timelineStartSeconds == placement.timelineStartSeconds
+                && candidate.durationSeconds == placement.durationSeconds
+                && candidate.clipInSeconds == placement.clipInSeconds
+                && candidate.gain == placement.gain
+                && candidate.fadeInDuration == placement.fadeInDuration
+                && candidate.fadeOutDuration == placement.fadeOutDuration;
+        });
     const int64_t placementLen = TimeCoordinate::secondsToSamplesCeil(
         placement.durationSeconds, kExportSampleRateHz);
-    if (placementLen <= 0) {
-        lastExportError_ = Loc::get(language, "Clip audio length is zero");
+    if (target == placements.end() || placementLen <= 0) {
+        lastExportError_ = Loc::get(language, "Placement audio is unavailable");
         return false;
     }
     
     juce::AudioBuffer<float> out(kExportNumChannels, static_cast<int>(placementLen));
     out.clear();
     
-    renderPlacementForExport(*this,
-                             StandaloneArrangement::PlaybackPlacement{
-                                 placement.contentKey,
-                                 placement.timelineStartSeconds,
-                                 placement.durationSeconds,
-                                 placement.clipInSeconds,
-                                 placement.gain,
-                                 placement.fadeInDuration,
-                                 placement.fadeOutDuration
-                             },
+    renderPlacementForExport(*target,
                              standaloneArrangement_->getTrackVolume(trackId),
-                             0,
-                             placementLen,
                              placement.timelineStartSeconds,
                              out,
-                             placementLen,
-                             source);
+                             placementLen);
     
     return writeAudioBufferToWavFile(out, file, language, &lastExportError_);
 }
@@ -3767,16 +3836,18 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
     }
 
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
-    int64_t totalLen = 0;
+    std::vector<StandaloneArrangement::PlaybackPlacement> placements;
+    placements.reserve(static_cast<size_t>(placementCount));
     for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
         StandaloneArrangement::Placement placement;
-        if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-            continue;
+        if (standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
+            placements.push_back(exportPlacementFrom(placement));
         }
-        PlaybackReadSource checkSource;
-        if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.hasAudio()) {
-            continue;
-        }
+    }
+    freezeExportSources(*this, placements);
+
+    int64_t totalLen = 0;
+    for (const auto& placement : placements) {
         const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
             placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
         totalLen = std::max(totalLen, placementEnd);
@@ -3790,31 +3861,8 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
     out.clear();
 
     const float trackVolume = standaloneArrangement_->getTrackVolume(trackId);
-    for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
-        StandaloneArrangement::Placement placement;
-        if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-            continue;
-        }
-        PlaybackReadSource source;
-        if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
-            continue;
-        }
-        const int64_t placementStart = TimeCoordinate::secondsToSamplesFloor(
-            placement.timelineStartSeconds, kExportSr);
-        const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
-            placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
-        renderPlacementForExport(*this,
-                                 StandaloneArrangement::PlaybackPlacement{
-                                     placement.contentKey,
-                                     placement.timelineStartSeconds,
-                                     placement.durationSeconds,
-                                     placement.clipInSeconds,
-                                     placement.gain,
-                                     placement.fadeInDuration,
-                                     placement.fadeOutDuration
-                                 },
-                                 trackVolume, placementStart, placementEnd - placementStart,
-                                 0.0, out, totalLen, source);
+    for (const auto& placement : placements) {
+        renderPlacementForExport(placement, trackVolume, 0.0, out, totalLen);
     }
 
     return writeAudioBufferToWavFile(out, file, language, &lastExportError_);
@@ -3836,14 +3884,14 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file, Langua
     }
 
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
+    std::array<std::vector<StandaloneArrangement::PlaybackPlacement>, MAX_TRACKS> trackPlacements;
     int64_t totalLen = 0;
     for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
         const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
-        for (const auto& placement : track.placements) {
-            PlaybackReadSource checkSource;
-            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.hasAudio()) {
-                continue;
-            }
+        auto& placements = trackPlacements[static_cast<size_t>(trackId)];
+        placements = track.placements;
+        freezeExportSources(*this, placements);
+        for (const auto& placement : placements) {
             const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
                 placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
             totalLen = std::max(totalLen, placementEnd);
@@ -3856,28 +3904,14 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file, Langua
 
     for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
         const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
-        
         if (playbackSnapshot->anySoloed) {
             if (!track.isSolo) continue;
         } else {
             if (track.isMuted) continue;
         }
 
-        if (track.placements.empty()) continue;
-
-        for (const auto& placement : track.placements) {
-            PlaybackReadSource source;
-            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
-                continue;
-            }
-            const int64_t placementStart = TimeCoordinate::secondsToSamplesFloor(
-                placement.timelineStartSeconds, kExportSr);
-            const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
-                placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
-            renderPlacementForExport(*this, placement, track.volume, placementStart,
-                                     placementEnd - placementStart,
-                                     0.0,
-                                     mix, totalLen, source);
+        for (const auto& placement : trackPlacements[static_cast<size_t>(trackId)]) {
+            renderPlacementForExport(placement, track.volume, 0.0, mix, totalLen);
         }
     }
 
@@ -4078,74 +4112,65 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
         return false;
     }
 
-    // Storage layout exactly matches the declaration (1 = mono, 2 = stereo).
+    // 存储布局与声明完全一致（1 = mono，2 = stereo）。
     ChannelLayoutLog::logEntry(entrySourceTag, declaredChannels, declaredChannels, displayName);
 
-    const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
-    const bool needsResample = std::abs(inSampleRate - targetSampleRate) > 1.0;
-    // 存储统一为 canonical 44.1kHz：窗口 span 直接取最终 stored buffer 的
-    // canonical sample 数，保证 window duration 与 stored audio 一致。
-    const int64_t storedSampleCount = needsResample
-        ? juce::jmax<int64_t>(1, TimeCoordinate::sampleRateProject(
-              inBuffer.getNumSamples(), inSampleRate, targetSampleRate))
-        : static_cast<int64_t>(inBuffer.getNumSamples());
+    // 权威来源时长只由原始媒体帧数/率取得一次；之后所有派生 buffer 长度只作存储边界。
+    const double sourceDurationSeconds =
+        static_cast<double>(inBuffer.getNumSamples()) / inSampleRate;
+    auto nativeBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(inBuffer));
 
     out.displayName = displayName;
     out.sourceFilePath = sourceFilePath;
-    // 端点由最终 stored buffer 的 canonical sample 数直接生成，本身就在
-    // source sample 网格上，无需再经对齐 round-trip。
-    out.sourceWindow = SourceWindow{
-        0,
-        juce::String(),
-        0.0,
-        TimeCoordinate::samplesToSeconds(storedSampleCount, targetSampleRate)
-    };
+    out.sourceWindow = SourceWindow{0, juce::String(), 0.0, sourceDurationSeconds};
+    out.nativeSource = NativePcmSource{nativeBuffer, inSampleRate, 0, 0};
 
-    if (needsResample) {
-        const int numChannels = inBuffer.getNumChannels();
-        const int originalLen = inBuffer.getNumSamples();
-        const int newLen = static_cast<int>(storedSampleCount);
-
-        out.storedAudioBuffer.setSize(numChannels, newLen);
-        
-        for (int ch = 0; ch < numChannels; ++ch) {
-            auto resampledData = resamplingManager_->upsampleForHost(
-                inBuffer.getReadPointer(ch),
-                originalLen,
-                static_cast<int>(inSampleRate),
-                static_cast<int>(targetSampleRate)
-            );
-            const int toCopy = juce::jmin(newLen, static_cast<int>(resampledData.size()));
-            out.storedAudioBuffer.copyFrom(ch, 0, resampledData.data(), toCopy);
-        }
+    // canonical 从 native 直接派生到 44.1 kHz 全局网格；实际率完全相同时共享存储。
+    const double canonicalRate = TimeCoordinate::kRenderSampleRate;
+    if (inSampleRate == canonicalRate) {
+        out.canonicalAudioBuffer = nativeBuffer;
+        out.canonicalSampleRate = canonicalRate;
+        out.canonicalFirstSample = 0;
     } else {
-        out.storedAudioBuffer = std::move(inBuffer);
+        const int numChannels = nativeBuffer->getNumChannels();
+        const int canonicalLength = static_cast<int>(juce::jmax<int64_t>(
+            1,
+            PlaybackSampleGeometry::projectToSample(sourceDurationSeconds * canonicalRate)));
+        auto canonicalBuffer = std::make_shared<juce::AudioBuffer<float>>(numChannels, canonicalLength);
+        for (int ch = 0; ch < numChannels; ++ch) {
+            const auto resampled = resamplingManager_->resampleRange(
+                nativeBuffer->getReadPointer(ch),
+                static_cast<size_t>(nativeBuffer->getNumSamples()),
+                inSampleRate,
+                canonicalRate,
+                0,
+                0,
+                canonicalLength);
+            canonicalBuffer->copyFrom(ch, 0, resampled.data(), canonicalLength);
+        }
+        out.canonicalAudioBuffer = std::move(canonicalBuffer);
+        out.canonicalSampleRate = canonicalRate;
+        out.canonicalFirstSample = 0;
     }
-    
-    // 计算静默段间隙（同步执行，避免异步竞态）
-    out.silentGaps = SilentGapDetector::detectAllGapsAdaptive(out.storedAudioBuffer);
-    
+
+    // 静默段使用 canonical 离散访问坐标。
+    out.silentGaps = SilentGapDetector::detectAllGapsAdaptive(*out.canonicalAudioBuffer);
+
     return true;
 }
 
-ContentKey OpenTuneAudioProcessor::ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource)
+ContentKey OpenTuneAudioProcessor::ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId)
 {
     jassert(sourceStore_ != nullptr);
 
-    auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(prepared.storedAudioBuffer));
-    createdSource = false;
-    if (sourceId == 0) {
-        SourceStore::CreateSourceRequest sourceRequest;
-        sourceRequest.displayName = prepared.displayName;
-        sourceRequest.sourceFilePath = prepared.sourceFilePath;
-        sourceRequest.audioBuffer = storedAudioBuffer;
-        sourceRequest.sampleRate = TimeCoordinate::kRenderSampleRate;
-        sourceId = sourceStore_->createSource(std::move(sourceRequest));
-        if (sourceId == 0) return {};
-        createdSource = true;
-    } else if (!sourceStore_->containsSource(sourceId)) {
-        return {};
-    }
+    // SourceStore 始终保存原率原始 PCM 与媒体实际采样率。
+    SourceStore::CreateSourceRequest sourceRequest;
+    sourceRequest.displayName = prepared.displayName;
+    sourceRequest.sourceFilePath = prepared.sourceFilePath;
+    sourceRequest.audioBuffer = prepared.nativeSource.buffer;
+    sourceRequest.sampleRate = prepared.nativeSource.sampleRate;
+    sourceId = sourceStore_->createSource(std::move(sourceRequest));
+    if (sourceId == 0) return {};
 
     SourceWindow sw = prepared.sourceWindow;
     sw.sourceId = sourceId;
@@ -4153,29 +4178,34 @@ ContentKey OpenTuneAudioProcessor::ensureSourceAndCreateStandaloneClip(PreparedI
 
     ContentState payload;
     payload.sourceWindow = sw;
-    payload.audioBuffer = storedAudioBuffer;
-    payload.sampleRate = TimeCoordinate::kRenderSampleRate;
+    payload.nativeSource = prepared.nativeSource;
+    payload.audioBuffer = prepared.canonicalAudioBuffer;
+    payload.sampleRate = prepared.canonicalSampleRate;
+    payload.firstCanonicalSample = prepared.canonicalFirstSample;
+    payload.timeGrid = TimeGridSnapshot::makeIdentity(sw.durationSeconds());
+    ++payload.timeGridRevision;
     payload.analysis.setOriginalF0State(OriginalF0State::NotRequested);
     payload.analysis.silentGaps = std::move(prepared.silentGaps);
 
     const ContentKey key = createStandaloneClipOwner(*standaloneContentRepository_,
                                                      *contentRenderService_,
                                                      std::move(payload));
-    if (!key.isValid() && createdSource) {
+    if (!key.isValid()) {
         sourceStore_->deleteSource(sourceId);
+        sourceId = 0;
     }
     return key;
 }
 
 OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPreparedImportAsPlacement(
-    PreparedImport&& prepared, const ImportPlacement& placement, uint64_t sourceId)
+    PreparedImport&& prepared, const ImportPlacement& placement)
 {
     if (!placement.isValid()) return {};
     jassert(standaloneArrangement_ != nullptr);
 
     const juce::String displayName = prepared.displayName;
-    bool createdSource = false;
-    const ContentKey clipKey = ensureSourceAndCreateStandaloneClip(std::move(prepared), sourceId, createdSource);
+    uint64_t sourceId = 0;
+    const ContentKey clipKey = ensureSourceAndCreateStandaloneClip(std::move(prepared), sourceId);
     if (!clipKey.isValid()) return {};
 
     auto durationSnap = getContentSnapshot(clipKey);
@@ -4192,7 +4222,7 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
 
     if (!standaloneArrangement_->insertPlacement(placement.trackId, importedPlacement)) {
         standaloneContentRepository_->releaseClip(clipKey);
-        if (createdSource) sourceStore_->deleteSource(sourceId);
+        sourceStore_->deleteSource(sourceId);
         return {};
     }
     standaloneArrangement_->selectPlacement(placement.trackId, importedPlacement.placementId);
@@ -5806,7 +5836,27 @@ void OpenTuneAudioProcessor::republishPlaybackSource(ContentKey key)
     auto* crs = resolveMutableLocalContentRenderService(key);
     if (crs == nullptr) return;
     crs->republishPlaybackSource(key, std::move(snap));
+#if JucePlugin_Build_Standalone
+    // 内容发布后刷新编排播放快照的冻结来源视图与固定几何。
+    if (standaloneArrangement_ != nullptr)
+        standaloneArrangement_->refreshPlaybackSnapshot();
+#endif
+#if !JucePlugin_Build_Standalone
+    // Capture 替换条目与来源同版冻结：内容发布后重建一次视图。
+    if (key.domainKind == DomainKind::RegularVST3Capture) {
+        if (auto* session = getCaptureSession())
+            session->refreshPublishedReplacementGeometry();
+    }
+#endif
 }
+
+#if JucePlugin_Build_Standalone
+void OpenTuneAudioProcessor::refreshStandalonePlaybackSnapshot()
+{
+    if (standaloneArrangement_ != nullptr)
+        standaloneArrangement_->refreshPlaybackSnapshot();
+}
+#endif
 
 bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
                                                       std::shared_ptr<PitchCurve> curve)
@@ -5926,12 +5976,24 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             // a pending Stage1 completion will enqueue Stage2 after it settles.
             if (!crs->republishPlaybackSource(key, snapshot))
                 return ok;
+#if JucePlugin_Build_Standalone
+            // TimeGrid 改变来源视图映射，刷新快照中的冻结几何。
+            if (standaloneArrangement_ != nullptr)
+                standaloneArrangement_->refreshPlaybackSnapshot();
+#endif
+#if !JucePlugin_Build_Standalone
+            // Capture 替换几何随 TimeGrid 输出域重建，与来源发布同一消息回调内完成。
+            if (key.domainKind == DomainKind::RegularVST3Capture) {
+                if (auto* session = getCaptureSession())
+                    session->refreshPublishedReplacementGeometry();
+            }
+#endif
             crs->getTimeStretchCache().invalidate(key);
             PlaybackReadSource source;
             if (crs->getPlaybackReadSource(key, source))
                 enqueueStage2WhenCanonicalSettled(
                     key, std::move(snapshot),
-                    source.audioBuffer, source.audioSampleRate);
+                    source.canonicalBuffer, source.canonicalSampleRate);
         }
         else if (key.domainKind == DomainKind::ARAAudioModification
                  && crs != nullptr
@@ -6387,52 +6449,53 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
                                                            const juce::String& newName)
 {
     juce::ignoreUnused(newName);
-    if (!sourceContentKey.isValid() || durationSeconds <= 0.0) {
+    if (!sourceContentKey.isValid() || !std::isfinite(offsetSeconds)
+        || !std::isfinite(durationSeconds) || durationSeconds <= 0.0) {
         return ContentKey{};
     }
 
     const auto sourceSnap = getContentSnapshot(sourceContentKey);
-    if (!sourceSnap || sourceSnap->audioBuffer == nullptr || sourceSnap->audioBuffer->getNumSamples() == 0) {
+    if (!sourceSnap
+        || sourceSnap->audioBuffer == nullptr
+        || sourceSnap->audioBuffer->getNumSamples() == 0
+        || sourceSnap->nativeSource.buffer == nullptr) {
         return ContentKey{};
     }
 
-    const int64_t totalSamples = sourceSnap->audioBuffer->getNumSamples();
-    const double sampleRate = sourceSnap->audioSampleRate > 0.0 ? sourceSnap->audioSampleRate : TimeCoordinate::kRenderSampleRate;
-    // offsetSeconds/durationSeconds 是父 content-local 时间；映射到 source-absolute
-    // 坐标只依赖父窗口起点：start = parent.sourceStart + offset，
-    // end = start + duration。父 sourceEndSeconds 不参与派生。
+    const double canonicalRate = sourceSnap->audioSampleRate;
+    if (!std::isfinite(canonicalRate) || canonicalRate <= 0.0) {
+        return ContentKey{};
+    }
+
+    const int64_t totalCanonicalSamples = sourceSnap->audioBuffer->getNumSamples();
+    // offsetSeconds/durationSeconds 是父 content-local 权威时间；只派生
+    // source-absolute 窗口，原始秒值不投影回写。
     SourceWindow requestedWindow = sourceSnap->sourceWindow;
     requestedWindow.sourceStartSeconds += offsetSeconds;
     requestedWindow.sourceEndSeconds = requestedWindow.sourceStartSeconds + durationSeconds;
-    const auto alignedWindow = alignSourceWindowToSampleGrid(requestedWindow, sampleRate);
-    if (!alignedWindow.has_value())
-        return ContentKey{};
 
-    // slice offset 与 local 区间出自同一个 aligned absolute window；local 0 是父
-    // buffer sample 0（父窗口已采样对齐）。
-    const int64_t parentStartSample = TimeCoordinate::secondsToSamplesNearest(
-        sourceSnap->sourceWindow.sourceStartSeconds, sampleRate);
-    const int64_t offsetSamples = TimeCoordinate::secondsToSamplesNearest(
-        alignedWindow->sourceStartSeconds, sampleRate) - parentStartSample;
-    const int64_t endOffsetSamples = TimeCoordinate::secondsToSamplesNearest(
-        alignedWindow->sourceEndSeconds, sampleRate) - parentStartSample;
-    if (offsetSamples < 0 || endOffsetSamples <= offsetSamples || endOffsetSamples > totalSamples) {
+    // canonical 裁剪地址来自全局 source 网格与父 buffer 全局起点的差。
+    const int64_t cropBeginSample =
+        PlaybackSampleGeometry::projectToSample(requestedWindow.sourceStartSeconds * canonicalRate)
+        - sourceSnap->firstCanonicalSample;
+    const int64_t cropEndSample =
+        PlaybackSampleGeometry::projectToSample(requestedWindow.sourceEndSeconds * canonicalRate)
+        - sourceSnap->firstCanonicalSample;
+    if (cropBeginSample < 0 || cropEndSample <= cropBeginSample
+        || cropEndSample > totalCanonicalSamples) {
         return ContentKey{};
     }
 
-    // local seconds 是绝对时间合同：由 aligned absolute window 与父窗口起点之差派生。
-    // offsetSamples/endOffsetSamples 只用于 audio/silentGaps 的离散访问，
-    // 不从样本反算 local seconds。
-    const double localStartSeconds =
-        alignedWindow->sourceStartSeconds - sourceSnap->sourceWindow.sourceStartSeconds;
-    const double localEndSeconds =
-        alignedWindow->sourceEndSeconds - sourceSnap->sourceWindow.sourceStartSeconds;
+    // local seconds 是绝对时间合同；canonical 下标只承担离散访问。
+    const double localStartSeconds = offsetSeconds;
+    const double localEndSeconds = offsetSeconds + durationSeconds;
     ContentState payload;
-    payload.sourceWindow = *alignedWindow;
-    payload.audioBuffer = sliceAudioBuffer(sourceSnap->audioBuffer,
-                                           offsetSamples,
-                                           endOffsetSamples);
-    payload.sampleRate = sampleRate;
+    payload.sourceWindow = requestedWindow;
+    payload.nativeSource = sourceSnap->nativeSource;
+    payload.audioBuffer = sliceAudioBuffer(sourceSnap->audioBuffer, cropBeginSample, cropEndSample);
+    payload.sampleRate = canonicalRate;
+    payload.firstCanonicalSample =
+        PlaybackSampleGeometry::projectToSample(requestedWindow.sourceStartSeconds * canonicalRate);
     payload.analysis.pitchCurve = slicePitchCurveToLocalRange(sourceSnap->pitchCurve,
                                                      localStartSeconds,
                                                      localEndSeconds);
@@ -6440,18 +6503,19 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
     payload.analysis.detectedKey = sourceSnap->detectedKey;
     payload.notes = sliceNotesToLocalRange(sourceSnap->notes, localStartSeconds, localEndSeconds);
     payload.noteTopologyInitialized = sourceSnap->noteTopologyInitialized;
-    payload.analysis.silentGaps = sliceSilentGaps(sourceSnap->silentGaps, offsetSamples, endOffsetSamples);
+    payload.analysis.silentGaps = sliceSilentGaps(sourceSnap->silentGaps, cropBeginSample, cropEndSample);
     payload.pitchShiftSettings = sourceSnap->pitchShiftSettings;
     payload.volumeEnvelope = AutomationLane::sliceToLocalRange(
         sourceSnap->volumeEnvelope, localStartSeconds, localEndSeconds);
 
-    // 截断失败时保留 bootstrap identity，由 createStandaloneClipOwner
-    // 用真实 slice duration 覆盖。
-    if (auto rangeGrid = buildCopiedRangeTimeGrid(*sourceSnap->timeGrid,
-                                                  localStartSeconds,
-                                                  localEndSeconds - localStartSeconds)) {
-        payload.timeGrid = std::move(rangeGrid);
+    // 截断失败时按权威 local duration 建立 identity；owner 不再补造 grid。
+    payload.timeGrid = buildCopiedRangeTimeGrid(*sourceSnap->timeGrid,
+                                                localStartSeconds,
+                                                durationSeconds);
+    if (payload.timeGrid == nullptr) {
+        payload.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
     }
+    ++payload.timeGridRevision;
 
     const ContentKey newKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                         *contentRenderService_,

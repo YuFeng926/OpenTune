@@ -1,6 +1,7 @@
 #include "PlaybackSourcePublisher.h"
 #include "../Inference/RenderCache.h"
 #include "../Utils/TimeCoordinate.h"
+#include "../Utils/PlaybackSampleGeometry.h"
 #include <algorithm>
 #include <set>
 
@@ -31,7 +32,7 @@ void PlaybackSourcePublisher::recomputeActivePreparedBytes()
         for (const auto& pair : *snap) {
             const auto& src = pair.second;
             const auto& dry = src.preparedDry;
-            if (!dry.buffer || dry.buffer == src.audioBuffer) continue;
+            if (!dry.buffer || dry.buffer == src.nativeSource.buffer) continue;
 
             const uintptr_t ptr = reinterpret_cast<uintptr_t>(dry.buffer.get());
             if (!seenPtrs.insert(ptr).second) continue;  // deduplicate by unique buffer pointer
@@ -75,6 +76,14 @@ void PlaybackSourcePublisher::setPlaybackSampleRate(double sr)
     auto next = std::make_shared<std::map<ContentKey, PlaybackReadSource>>(*current);
     for (auto& [key, src] : *next) {
         juce::ignoreUnused(key);
+        for (const auto& [otherKey, other] : *next) {
+            juce::ignoreUnused(otherKey);
+            if (other.preparedDry.buffer && other.preparedDry.sampleRate == sr
+                && other.preparedDry.nativeSource == src.nativeSource) {
+                src.preparedDry = other.preparedDry;
+                break;
+            }
+        }
         prepareSourceDry(src, playbackSampleRate_);
     }
     auto old = std::atomic_exchange(&data_,
@@ -96,10 +105,14 @@ void PlaybackSourcePublisher::publish(ContentKey key, PlaybackReadSource source)
 
     auto current = std::atomic_load(&data_);
     if (current) {
-        const auto existing = current->find(key);
-        if (existing != current->end()
-            && existing->second.audioBuffer == source.audioBuffer) {
-            source.preparedDry = existing->second.preparedDry;
+        for (const auto& [existingKey, existing] : *current) {
+            juce::ignoreUnused(existingKey);
+            if (existing.preparedDry.buffer
+                && existing.preparedDry.sampleRate == playbackSampleRate_
+                && existing.preparedDry.nativeSource == source.nativeSource) {
+                source.preparedDry = existing.preparedDry;
+                break;
+            }
         }
     }
 
@@ -172,50 +185,44 @@ void PlaybackSourcePublisher::clear()
 
 void PlaybackSourcePublisher::prepareSourceDry(PlaybackReadSource& src, double targetSr)
 {
-    if (targetSr <= 0.0) return;
-    if (!src.audioBuffer || src.audioBuffer->getNumSamples() <= 0) return;
-    if (src.audioSampleRate <= 0.0) return;
-
-    // Reuse existing prepared buffer when canonical source buffer and target rate unchanged.
-    if (src.preparedDry.buffer != nullptr
-        && std::abs(src.preparedDry.sampleRate - targetSr) < 1.0
-        && src.preparedDry.canonicalBuffer == src.audioBuffer) {
+    if (src.preparedDry.buffer && src.preparedDry.sampleRate == targetSr
+        && src.preparedDry.nativeSource == src.nativeSource) {
         return;
     }
+    src.preparedDry = prepareDry(src.nativeSource, targetSr);
+}
 
-    // Canonical rate == target → alias canonical buffer
-    if (std::abs(targetSr - src.audioSampleRate) < 1.0) {
-        PlaybackPreparedDry dry;
-        dry.sampleRate = targetSr;
-        dry.buffer = src.audioBuffer;
-        dry.canonicalBuffer = src.audioBuffer;
-        src.preparedDry = dry;
-        return;
-    }
-
-    const int srcLen = src.audioBuffer->getNumSamples();
-    const int srcChs = src.audioBuffer->getNumChannels();
-    const int outputLength = static_cast<int>(TimeCoordinate::sampleRateProject(
-        static_cast<int64_t>(srcLen), src.audioSampleRate, targetSr));
-    if (outputLength <= 0) return;
-
-    auto preparedBuf = std::make_shared<juce::AudioBuffer<float>>(srcChs, outputLength);
-
-    for (int ch = 0; ch < srcChs; ++ch) {
-        std::vector<float> resampled = resampler_.resampleExactLength(
-            src.audioBuffer->getReadPointer(ch),
-            static_cast<size_t>(srcLen),
-            static_cast<int>(src.audioSampleRate),
-            static_cast<int>(targetSr),
-            outputLength);
-        preparedBuf->copyFrom(ch, 0, resampled.data(), outputLength);
-    }
-
+PlaybackPreparedDry PlaybackSourcePublisher::prepareDry(const NativePcmSource& native, double targetSr)
+{
+    jassert(native.buffer != nullptr && native.sampleRate > 0.0 && targetSr > 0.0);
     PlaybackPreparedDry dry;
     dry.sampleRate = targetSr;
+    dry.nativeSource = native;
+    if (targetSr == native.sampleRate) {
+        dry.buffer = native.buffer;
+        dry.firstPreparedSample = native.firstSourceSample;
+        return dry;
+    }
+
+    using PlaybackSampleGeometry::projectToSample;
+    dry.firstPreparedSample = projectToSample(
+        static_cast<double>(native.firstSourceSample) * targetSr / native.sampleRate);
+    const int64_t end = projectToSample(
+        static_cast<double>(native.firstSourceSample + native.buffer->getNumSamples())
+        * targetSr / native.sampleRate);
+    const int outputLength = static_cast<int>(end - dry.firstPreparedSample);
+    auto preparedBuf = std::make_shared<juce::AudioBuffer<float>>(
+        native.buffer->getNumChannels(), outputLength);
+    ResamplingManager resampler;
+    for (int ch = 0; ch < native.buffer->getNumChannels(); ++ch) {
+        const auto resampled = resampler.resampleRange(
+            native.buffer->getReadPointer(ch), native.buffer->getNumSamples(),
+            native.sampleRate, targetSr, native.firstSourceSample,
+            dry.firstPreparedSample, outputLength);
+        preparedBuf->copyFrom(ch, 0, resampled.data(), outputLength);
+    }
     dry.buffer = std::move(preparedBuf);
-    dry.canonicalBuffer = src.audioBuffer;
-    src.preparedDry = dry;
+    return dry;
 }
 
 } // namespace OpenTune

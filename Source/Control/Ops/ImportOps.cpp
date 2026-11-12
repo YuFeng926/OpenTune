@@ -15,6 +15,7 @@
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/NoteGeneratorTypes.h"
+#include "Utils/TimeCoordinate.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -39,10 +40,6 @@ constexpr double kMaxAnalysisSec = 600.0;
 constexpr double kMaxTimelineSec = 1.0e7;
 /** Samples read per block while decoding; the worker checks between blocks whether the job is gone. */
 constexpr int kDecodeBlockSamples = 1 << 18;
-/** Sample rate of OpenTune's stored audio; prepareImport resamples when the file differs by more than
-    kResampleToleranceHz. */
-constexpr double kStoredSampleRateHz = 44100.0;
-constexpr double kResampleToleranceHz = 1.0;
 
 ControlImportAnalysis& analysisOverride()
 {
@@ -568,6 +565,9 @@ private:
                                   + juce::String(static_cast<int>(attempt - 1))
                                   + " time(s) because the clip id was in use (project opened before)");
 
+        // The commit sets the clip's duration from the prepared source window
+        // (commitPreparedImportAsPlacement() -> contentDurationSeconds(), which prefers
+        // sourceWindow.durationSeconds()), the file's authoritative frames / actual rate.
         StandaloneArrangement::Placement committedPlacement;
         const double duration =
             arrangement != nullptr && arrangement->getPlacementById(trackId, committed.placementId, committedPlacement)
@@ -741,9 +741,8 @@ private:
         json.appendMember("originalSampleRateHz",
                           item.imported ? controlJsonNumber(item.sampleRateHz, 3) : JsonValue());
         json.appendMember("resampled", item.imported
-                                           ? JsonValue::boolean(std::abs(item.sampleRateHz - kStoredSampleRateHz)
-                                                                > kResampleToleranceHz)
-                                           : JsonValue());
+            ? JsonValue::boolean(item.sampleRateHz != TimeCoordinate::kRenderSampleRate)
+            : JsonValue());
         json.appendMember("f0State", std::move(f0State));
         const bool generated = item.notesGenerated->load();
         json.appendMember("notesGenerated", JsonValue::boolean(generated));

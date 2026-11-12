@@ -254,9 +254,25 @@ public:
             if (id <= 0 || id > static_cast<int>(vocoderWeights_.size()))
                 return;
             const auto& weight = vocoderWeights_[static_cast<size_t>(id) - 1].fileName;
-            appPreferences_.setVocoderModelWeight(weight);
+            const auto storedWeight = appPreferences_.getState().shared.vocoderModelWeight;
+            // The processor enqueues the switch and writes AppPreferences only
+            // after the control queue accepted it.
             if (onVocoderModelWeightChanged_)
                 onVocoderModelWeightChanged_(weight);
+            else
+                appPreferences_.setVocoderModelWeight(weight);
+
+            if (appPreferences_.getState().shared.vocoderModelWeight != weight) {
+                int storedId = 0;
+                for (size_t i = 0; i < vocoderWeights_.size(); ++i) {
+                    if (vocoderWeights_[i].fileName == storedWeight) {
+                        storedId = static_cast<int>(i) + 1;
+                        break;
+                    }
+                }
+                vocoderWeightSelector_.setSelectedId(storedId, juce::dontSendNotification);
+                return;
+            }
             if (onPreferencesChanged_)
                 onPreferencesChanged_();
         };

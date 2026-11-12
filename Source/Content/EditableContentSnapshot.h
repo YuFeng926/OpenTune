@@ -1,4 +1,5 @@
 #pragma once
+#include "NativePcmSource.h"
 #include "../Utils/SourceWindow.h"
 #include "../Utils/Note.h"
 #include "../Utils/AutomationLane.h"
@@ -21,9 +22,15 @@ struct EditableContentSnapshot
 {
     SourceWindow sourceWindow;
 
+    // canonical 渲染输入（44.1 kHz 编辑域），大量编辑消费者直接使用。
+    // audioBuffer 本地 sample 0 对应全局 source sample 网格上的 firstCanonicalSample。
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
     double audioSampleRate{0.0};  // 与 audioBuffer 绑定
     uint64_t audioRevision{0};
+
+    // 原始采样率 PCM 值元数据与全局 source 网格位置。
+    NativePcmSource nativeSource;
+    int64_t firstCanonicalSample{0};
 
     // ARA2: AudioSource 只读元数据（从 AudioModification.cachedSourceShape_ 委托）
     double sourceSampleRate{0.0};

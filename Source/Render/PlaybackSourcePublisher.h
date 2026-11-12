@@ -28,6 +28,10 @@ public:
     void remove(ContentKey key);
     void clear();
 
+    // Preparation thread / offline export. Native identity and global origin
+    // travel with the immutable result.
+    static PlaybackPreparedDry prepareDry(const NativePcmSource& native, double targetSr);
+
 private:
     void prepareSourceDry(PlaybackReadSource& src, double targetSr);
     void recomputeActivePreparedBytes();
@@ -35,7 +39,6 @@ private:
     mutable std::mutex writerMutex_;
     mutable std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>> data_;
     double playbackSampleRate_{TimeCoordinate::kRenderSampleRate};
-    ResamplingManager resampler_;
 
     // Writer-owned retirement pool: prevents audio thread from being final destructor of map/PCM.
     mutable std::vector<std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>> retiredMaps_;

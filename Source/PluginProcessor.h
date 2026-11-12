@@ -267,11 +267,20 @@ public:
 #if JucePlugin_Build_Standalone
     /**
      * PreparedImport - 导入预处理结果（在后台线程完成）
+     *
+     * nativeSource 保留媒体实际采样率的完整不可变原始 PCM，sourceWindow 的
+     * duration 是唯一权威来源时长（由原始帧数/率一次取得）。
+     * canonicalAudioBuffer 是 44.1 kHz 编辑输入；实际率与渲染率相同时直接
+     * alias nativeSource.buffer。canonicalFirstSample 是 canonical buffer
+     * sample 0 在全局 source sample 网格上的位置。
      */
     struct PreparedImport {
         juce::String displayName;
         juce::String sourceFilePath;  // 原始导入文件路径（空字符串表示无文件来源，如 ARA）
-        juce::AudioBuffer<float> storedAudioBuffer;
+        NativePcmSource nativeSource;
+        std::shared_ptr<const juce::AudioBuffer<float>> canonicalAudioBuffer;
+        double canonicalSampleRate{0.0};
+        int64_t canonicalFirstSample{0};
         std::vector<SilentGap> silentGaps;
         SourceWindow sourceWindow;
     };
@@ -305,8 +314,7 @@ public:
                        const char* entrySourceTag = "standalone-import");
 
     CommittedPlacement commitPreparedImportAsPlacement(PreparedImport&& prepared,
-                                                       const ImportPlacement& placement,
-                                                       uint64_t sourceId = 0);
+                                                       const ImportPlacement& placement);
 
     // Clipboard for arrangement clip copy/paste
     PlacementClipboard& getClipClipboard() { return clipClipboard_; }
@@ -569,7 +577,7 @@ private:
     void replayDeferredState() noexcept;
 
 #if JucePlugin_Build_Standalone
-    ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
+    ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId);
 #endif
 
     ContentRenderService* resolveMutableLocalContentRenderService(ContentKey key) const noexcept;
@@ -592,20 +600,22 @@ public:
 
     /**
      * 重置推理后端（切换 GPU/CPU 时调用，UI 线程）：
-     * 暂停 render worker → 向进程寿命 control worker 投递命令（Session 销毁、
-     * AccelerationDetector reset/detect、重建全部在其上执行）→ 立即返回。
-     * 完成后经消息线程回调：先执行 beforeResume，再恢复 render worker。
+     * 向进程寿命 control worker 投递命令（暂停/恢复 render worker、Session 销毁、
+     * AccelerationDetector reset/detect、重建全部在其上串行执行）→ 立即返回。
+     * worker 完成操作、恢复 render worker 并结算事务后，经消息线程投递 completion。
      * gate 关闭后回调直接丢弃。
      */
-    void resetInferenceBackend(bool forceCpu, std::function<void()> beforeResume = {});
+    void resetInferenceBackend(bool forceCpu);
 
     /**
-     * 切换声码器模型权重（UI 线程）：暂停 render worker → 向进程寿命 control
-     * worker 投递命令（严格先销毁旧 Session 再按当前配置重建）→ 立即返回。
-     * 模型切换完成后才清 RenderCache/TimeStretchCache 并恢复 render worker。
-     * gate 关闭后回调直接丢弃。调用方负责持久化偏好。
+     * 切换声码器模型权重（UI 线程）：向进程寿命 control worker 投递命令
+     * （严格先销毁旧 Session 再按当前配置重建）→ 立即返回。返回 true 表示
+     * control queue 已接受该命令，此时才写入 AppPreferences；false 表示拒绝，
+     * 已持久化偏好保持不变。persistPreference=false 时由调用方在 accepted 后
+     * 写入（Control API 路径）。模型切换完成后由共享 backend 变更通知统一清理
+     * RenderCache/TimeStretchCache。gate 关闭后回调直接丢弃。
      */
-    void setVocoderModelWeight(const VocoderModelWeight& weight);
+    bool setVocoderModelWeight(const VocoderModelWeight& weight, bool persistPreference = true);
 
     bool setF0ModelType(F0ModelType type, juce::String* failureReason = nullptr);
 
@@ -716,6 +726,9 @@ public:
     void onContentFullMutationCompleted(ContentKey key);
 
     void requestFullContentRender(ContentKey key);
+    // Message thread: invalidates owner-derived content after a shared backend
+    // change. Reached once per change through the CRS execution lease.
+    void handleSharedBackendChanged();
 
     void handleStage1ChunkSettled(
         ContentKey key,
@@ -860,6 +873,10 @@ public:
     // 无渲染发布入口：按 content domain 调现有装配函数，只读最新 snapshot、
     // 发布携带该 snapshot（AutomationLane/TimeGrid/revision）的不可变播放源。
     void republishPlaybackSource(ContentKey key);
+#if JucePlugin_Build_Standalone
+    // 来源发布完成后重建 Standalone 编排快照中的冻结来源视图与固定几何。
+    void refreshStandalonePlaybackSnapshot();
+#endif
     bool setContentTimeGrid(ContentKey key,
                             std::shared_ptr<const TimeGridSnapshot> grid);
     bool applyTimeGridEdit(ContentKey key,

@@ -4,6 +4,8 @@
 #include "CaptureSegment.h"
 #include "../../Content/ContentKey.h"
 #include "../../Content/EditableContentSnapshot.h"
+#include "../../Render/PlaybackReadSource.h"
+#include "../../Utils/PlaybackSampleGeometry.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
@@ -42,18 +44,26 @@ struct SegmentInfo
  * Audio-thread-callable: replace a sub-range of buffer with rendered audio
  * from the given segment. Implementation:
  *   - clear [destStart, destStart+numSamples)
- *   - call contentRenderService->getPlaybackReadSource(segment content key, ...)
+ *   - read the frozen PlaybackReadSource carried by the published view
  *
  * readStartSample is the absolute relative sample offset into the segment's
  * rendered content (in targetSampleRate units). CaptureSession computes the
  * block/segment overlap and passes only the intersecting sub-range.
+ * outputStartSeconds is the content-local output-time anchor of the first
+ * replacement sample (fixed geometry), used by automation evaluation.
+ * The source and geometry are frozen together in the same published entry.
  */
 using ReplaceWithRenderedFn = std::function<void(juce::AudioBuffer<float>& buffer,
                                                   int destStart,
                                                   int numSamples,
-                                                  ContentKey segmentContentKey,
+                                                  const PlaybackReadSource& source,
                                                   int64_t readStartSample,
+                                                  double outputStartSeconds,
                                                   double targetSampleRate)>;
+
+/** Message-thread: resolve the current published PlaybackReadSource for freezing
+ *  into the replacement entry. Called while building the published view only. */
+using GetPlaybackReadSourceFn = std::function<bool(ContentKey, PlaybackReadSource&)>;
 
 /** Message-thread compaction sink: tell the processor to retire segment content. */
 using RetireSegmentFn = std::function<void(ContentKey segmentContentKey)>;
@@ -83,6 +93,29 @@ struct ProcessorBindings
     RefreshSegmentFn refreshSegment;
     PublishPlaybackSourceFn publishPlaybackSource;
     RequestFullRenderFn requestFullRender;
+    GetPlaybackReadSourceFn getPlaybackReadSource;
+};
+
+/**
+ * Read-only view of segments published to the audio thread.
+ * The view owns the segment references; audio code only uses the raw pointers.
+ * Replacement entries freeze the PlaybackReadSource and its fixed geometry in
+ * the same publication, so a callback never re-resolves a source from another
+ * coordinate domain.
+ */
+struct SegmentsView
+{
+    struct Replacement
+    {
+        ContentKey contentKey;
+        PlaybackSampleGeometry::Placement placement;
+        double outputAnchorSeconds{0.0};
+        PlaybackReadSource source;
+    };
+
+    std::vector<CaptureSegment*> snapshot;
+    std::vector<std::shared_ptr<CaptureSegment>> owners;
+    std::vector<Replacement> replacements;
 };
 
 /**
@@ -152,7 +185,8 @@ public:
     // ─── Notification injection (message thread) ───────────────────────────
 
     /** Called by render pipeline when CRS render cache is complete and ready for playback.
-     *  Transitions segment from Processing to Edited state. */
+     *  Transitions segment from Processing to Edited and refreshes its frozen replacement
+     *  source/geometry to the settled content revision. */
     void onRenderComplete(ContentKey segmentContentKey);
     /** Called by the render pipeline when the current chunk fails. */
     void onRenderFailed(ContentKey segmentContentKey, const juce::String& reason);
@@ -174,6 +208,8 @@ public:
                                  std::shared_ptr<PitchCurve> pitchCurve);
     bool applyPitchCurve(ContentKey segmentContentKey, std::shared_ptr<PitchCurve> pitchCurve);
     bool applyTimeGrid(ContentKey segmentContentKey, std::shared_ptr<const TimeGridSnapshot> grid);
+    // 内容/TimeGrid 发布后重建已发布替换条目（冻结来源 + 固定几何，消息线程）。
+    void refreshPublishedReplacementGeometry();
     bool applyDetectedKey(ContentKey segmentContentKey, const DetectedKey& detectedKey);
     bool applyPitchShiftState(ContentKey segmentContentKey, const PitchShiftEditState& state);
 

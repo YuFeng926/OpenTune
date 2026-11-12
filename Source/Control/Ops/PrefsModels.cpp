@@ -146,16 +146,17 @@ const char* controlInferenceBackendName()
     return "cpu";
 }
 
-void controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight)
+bool controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight)
 {
     const auto backend = currentBackend();
     if (backend.setVocoderWeight) {
         backend.setVocoderWeight(processor, weight);
-        return;
+        return true;
     }
-    // OpenTuneAudioProcessor::setVocoderModelWeight(): posts the switch to the runtime's control worker; its
-    // completion clears the render caches and queues a render of every clip.
-    processor.setVocoderModelWeight(weight);
+    // OpenTuneAudioProcessor::setVocoderModelWeight(): posts the switch to the runtime's control worker and reports
+    // whether the queue accepted it. The caller stores the preference only after acceptance; the shared
+    // backend-change notification then clears the render caches and queues a render of every clip.
+    return processor.setVocoderModelWeight(weight, false);
 }
 
 void controlResetInferenceBackend(OpenTuneAudioProcessor& processor, bool forceCpu)

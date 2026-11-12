@@ -1,6 +1,6 @@
 // 测试 target 未注入 ARA SDK include 路径，而 juce_audio_processors 在
 // JucePlugin_Enable_ARA=1 时会拉入 <ARA_Library/...>。本文件只使用
-// OpenTunePlaybackRenderer.h 中 ARA 守卫之外的纯逻辑 span 辅助函数，
+// OpenTunePlaybackRenderer.h 中 ARA 守卫之外的实时门控函数，
 // 故在本 TU 内关闭该宏；生产 target 的配置不受影响。
 #undef JucePlugin_Enable_ARA
 
@@ -10,6 +10,7 @@
 #include "../Source/Services/HnsepAudio.h"
 #include "../Source/Inference/TimeStretchCache.h"
 #include "../Source/Utils/PlaybackAudioReader.h"
+#include "../Source/Utils/PlaybackSampleGeometry.h"
 #include "../Source/Render/PlaybackReadSource.h"
 #include "../Source/Render/StretcherPool.h"
 #include "../Source/Inference/SoundTouchStretcher.h"
@@ -83,6 +84,9 @@ bool testCommonFieldsRoundTrip()
     source.sourceWindow = OpenTune::SourceWindow{17, {}, 0.25, 1.5};
     source.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 4);
     source.sampleRate = 48000.0;
+    auto nativePcm = std::make_shared<const juce::AudioBuffer<float>>(2, 6);
+    source.nativeSource = OpenTune::NativePcmSource{nativePcm, 48000.0, 12345, 8};
+    source.firstCanonicalSample = 456;
     source.analysis.hnsepHarmonicAudio =
         std::make_shared<const std::vector<float>>(std::vector<float>{0.1f, 0.2f});
     source.analysis.hnsepResidualAudio =
@@ -114,9 +118,11 @@ bool testCommonFieldsRoundTrip()
     const auto restored = OpenTune::contentStateFromSnapshot(snapshot);
 
     return snapshot.sourceWindow.sourceId == 17
-        && nearlyEqual(snapshot.sourceWindow.sourceStartSeconds, 0.25)
-        && nearlyEqual(snapshot.sourceWindow.sourceEndSeconds, 1.5)
+        && snapshot.sourceWindow.sourceStartSeconds == 0.25
+        && snapshot.sourceWindow.sourceEndSeconds == 1.5
         && snapshot.audioBuffer == source.audioBuffer
+        && snapshot.nativeSource == source.nativeSource
+        && snapshot.firstCanonicalSample == 456
         && snapshot.hnsepHarmonicAudio == source.analysis.hnsepHarmonicAudio
         && snapshot.hnsepResidualAudio == source.analysis.hnsepResidualAudio
         && nearlyEqual(snapshot.audioSampleRate, 48000.0)
@@ -138,7 +144,11 @@ bool testCommonFieldsRoundTrip()
         && snapshot.timeGrid == source.timeGrid
         && restored.timeGrid == snapshot.timeGrid
         && restored.sourceWindow.sourceId == source.sourceWindow.sourceId
+        && restored.sourceWindow.sourceStartSeconds == source.sourceWindow.sourceStartSeconds
+        && restored.sourceWindow.sourceEndSeconds == source.sourceWindow.sourceEndSeconds
         && restored.audioBuffer == source.audioBuffer
+        && restored.nativeSource == source.nativeSource
+        && restored.firstCanonicalSample == 456
         && restored.analysis.hnsepHarmonicAudio == source.analysis.hnsepHarmonicAudio
         && restored.analysis.hnsepResidualAudio == source.analysis.hnsepResidualAudio
         && nearlyEqual(restored.sampleRate, 48000.0)
@@ -215,53 +225,50 @@ bool testContentStateProjectionStartsNewRuntimeRevision()
         && state.timeGrid == snapshot.timeGrid;
 }
 
-bool testNullTimeGridIsNormalizedAtPublicationBoundaries()
+// owner 负责按权威 sourceWindow 建立精确 TimeGrid；投影与发布只传递完整快照，
+// 不补造、不修剪、也不按派生 buffer 长度重写。
+bool testTimeGridIsNotRepairedAtProjectionOrPublicationBoundaries()
 {
     OpenTune::ContentState state;
     state.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 44100);
     state.sampleRate = 44100.0;
     state.timeGrid.reset();
     const auto projected = OpenTune::makeContentSnapshot(state);
-    if (!projected.timeGrid || !projected.timeGrid->isIdentity()
-        || !nearlyEqual(projected.timeGrid->totalDurationSeconds(), 1.0))
+    if (projected.timeGrid != nullptr)
+        return false;
+    if (OpenTune::contentStateFromSnapshot(projected).timeGrid != nullptr)
         return false;
 
-    state.sourceWindow = OpenTune::SourceWindow{7, {}, 2.0, 3.5};
-    state.audioBuffer.reset();
-    state.sampleRate = 0.0;
-    state.timeGrid.reset();
-    const auto windowProjected = OpenTune::makeContentSnapshot(state);
-    if (!windowProjected.timeGrid || !windowProjected.timeGrid->isIdentity()
-        || !nearlyEqual(windowProjected.timeGrid->totalDurationSeconds(), 1.5))
+    state.sourceWindow = OpenTune::SourceWindow{7, "persistent-7", 2.0, 3.25};
+    const auto ownerGrid = OpenTune::TimeGridSnapshot::makeIdentity(0.75);
+    state.timeGrid = ownerGrid;
+    const auto snapshot = std::make_shared<const OpenTune::EditableContentSnapshot>(
+        OpenTune::makeContentSnapshot(state));
+    if (snapshot->timeGrid != ownerGrid
+        || !nearlyEqual(snapshot->timeGrid->totalDurationSeconds(), 0.75)
+        || snapshot->sourceWindow.sourceStartSeconds != 2.0
+        || snapshot->sourceWindow.sourceEndSeconds != 3.25)
         return false;
-
-    OpenTune::EditableContentSnapshot snapshot;
-    const auto sourceAudio = std::make_shared<const juce::AudioBuffer<float>>(1, 44100);
-    snapshot.audioBuffer = sourceAudio;
-    snapshot.audioSampleRate = 44100.0;
-    snapshot.timeGrid.reset();
-    const auto restored = OpenTune::contentStateFromSnapshot(snapshot);
-    if (!restored.timeGrid || !restored.timeGrid->isIdentity()
-        || !nearlyEqual(restored.timeGrid->totalDurationSeconds(), 1.0))
-        return false;
-
-    snapshot.timeGrid = std::make_shared<const OpenTune::TimeGridSnapshot>();
-    snapshot.audioBuffer = sourceAudio;
 
     OpenTune::TimeStretchCache timeStretchCache;
+    const auto native = OpenTune::NativePcmSource{snapshot->audioBuffer, 44100.0, 0, 0};
     const auto source = OpenTune::makePlaybackReadSource(
         OpenTune::ContentKey{OpenTune::DomainKind::StandaloneClip, 1, 0},
-        std::make_shared<const OpenTune::EditableContentSnapshot>(snapshot),
-        sourceAudio,
+        snapshot,
+        native,
+        snapshot->audioBuffer,
         44100.0,
+        snapshot->firstCanonicalSample,
         std::make_shared<OpenTune::RenderCache>(),
         timeStretchCache);
 
     return source.contentSnapshot != nullptr
-        && source.contentSnapshot->timeGrid != nullptr
-        && source.contentSnapshot->timeGrid->isIdentity()
-        && nearlyEqual(source.contentSnapshot->timeGrid->totalDurationSeconds(), 1.0)
-        && source.contentSnapshot->audioBuffer == sourceAudio;
+        && source.contentSnapshot->timeGrid == ownerGrid
+        && nearlyEqual(source.contentSnapshot->timeGrid->totalDurationSeconds(), 0.75)
+        && source.contentSnapshot->sourceWindow.sourceStartSeconds == 2.0
+        && source.contentSnapshot->sourceWindow.sourceEndSeconds == 3.25
+        && source.contentSnapshot->audioBuffer == snapshot->audioBuffer
+        && source.nativeSource == native;
 }
 
 bool testStretcherHandleSurvivesPoolRemoval()
@@ -410,14 +417,19 @@ bool testIdentityTimeGridIsAlwaysPublishedAndNonIdentityMissIsSilent()
 
     OpenTune::PlaybackReadSource source;
     source.contentSnapshot = snapshot;
-    source.audioBuffer = snapshot->audioBuffer;
-    source.audioSampleRate = snapshot->audioSampleRate;
-    source.preparedDry.buffer = snapshot->audioBuffer;
+    const auto audio = snapshot->audioBuffer;
+    const auto native = OpenTune::NativePcmSource{audio, 44100.0, 0, 1};
+    source.nativeSource = native;
+    source.canonicalBuffer = audio;
+    source.canonicalSampleRate = 44100.0;
+    source.firstCanonicalSample = snapshot->firstCanonicalSample;
+    source.preparedDry.buffer = audio;
     source.preparedDry.sampleRate = 44100.0;
-    source.preparedDry.canonicalBuffer = snapshot->audioBuffer;
+    source.preparedDry.firstPreparedSample = 0;
+    source.preparedDry.nativeSource = native;
 
     juce::AudioBuffer<float> destination(1, 4);
-    OpenTune::PlaybackReadRequest request(source, 0, 44100.0, 4);
+    OpenTune::PlaybackReadRequest request(source, 0, 44100.0, 4, 0.0);
     if (OpenTune::readPlaybackAudio(request, destination, 0) != 4)
         return false;
 
@@ -631,160 +643,56 @@ bool testF0TimelineNearestSplitBoundary()
         && singleFrame.nearestFrameBoundary(0.006) == 1;
 }
 
-bool testSourceWindowNearestSampleAlignment()
+// 固定映射建立后，权威窗口秒值保持原值；host 区间与 prepared 区间是同一个
+// 半开整数映射，block 划分、seek 和端点边界只切地址，不移动映射。
+bool testFixedGeometryKeepsAuthoritativeWindowSecondsAndHalfOpenSpans()
 {
-    namespace TC = OpenTune::TimeCoordinate;
-    constexpr double sampleRate = 44100.0;
+    namespace PSG = OpenTune::PlaybackSampleGeometry;
+    constexpr double hostRate = 48000.0;
 
-    const OpenTune::SourceWindow unaligned{17, {}, 0.0011, 0.0015};
-    const auto aligned = OpenTune::alignSourceWindowToSampleGrid(unaligned, sampleRate);
-    if (!aligned.has_value()
-        || aligned->sourceId != unaligned.sourceId
-        || TC::secondsToSamplesNearest(aligned->sourceStartSeconds, sampleRate) != 49
-        || TC::secondsToSamplesNearest(aligned->sourceEndSeconds, sampleRate) != 66
-        || aligned->sourceStartSeconds != TC::samplesToSeconds(49, sampleRate)
-        || aligned->sourceEndSeconds != TC::samplesToSeconds(66, sampleRate))
-        return false;
-
-    // 导入前窗口：identity 未绑定（id/persistentId 都为空）也要按几何对齐。
-    const auto idlessImportWindow = OpenTune::alignSourceWindowToSampleGrid(
-        OpenTune::SourceWindow{0, {}, 0.0, 0.0011}, sampleRate);
-    if (!idlessImportWindow.has_value()
-        || idlessImportWindow->sourceEndSeconds != TC::samplesToSeconds(49, sampleRate))
+    const OpenTune::SourceWindow window{31, "persistent-31", 0.0011, 1.2345};
+    const auto placement = PSG::makePlacement(hostRate,
+                                              window.sourceStartSeconds,
+                                              window.sourceEndSeconds,
+                                              0.0);
+    if (window.sourceStartSeconds != 0.0011
+        || window.sourceEndSeconds != 1.2345
+        || window.durationSeconds() != 1.2345 - 0.0011)
         return false;
 
-    // helper 只规范端点，identity 原样保留。
-    const auto persistentOnlyWindow = OpenTune::alignSourceWindowToSampleGrid(
-        OpenTune::SourceWindow{0, "persistent-1", 0.0, 0.0011}, sampleRate);
-    if (!persistentOnlyWindow.has_value()
-        || persistentOnlyWindow->sourceId != 0
-        || persistentOnlyWindow->sourcePersistentId != "persistent-1")
+    const auto host = PSG::hostPlaybackSpan(placement);
+    const auto prepared = PSG::requiredPreparedSpan(placement);
+    if (host.empty() || prepared.empty()
+        || prepared.end - prepared.begin != host.end - host.begin
+        || prepared.begin != host.begin - placement.offsetSamples
+        || prepared.end != host.end - placement.offsetSamples)
         return false;
 
-    const double sharedBoundary = 0.0015;
-    const auto leading = OpenTune::alignSourceWindowToSampleGrid(
-        OpenTune::SourceWindow{17, {}, 0.0005, sharedBoundary}, sampleRate);
-    const auto trailing = OpenTune::alignSourceWindowToSampleGrid(
-        OpenTune::SourceWindow{17, {}, sharedBoundary, 0.003}, sampleRate);
-    if (!leading.has_value() || !trailing.has_value()
-        || leading->sourceEndSeconds != trailing->sourceStartSeconds
-        || TC::secondsToSamplesNearest(leading->sourceEndSeconds, sampleRate) != 66)
+    // 两个相邻半开 block 公共边界只出现一次；终点 Z 不属于播放区间。
+    const int64_t sharedBoundary = host.begin + (host.end - host.begin) / 2;
+    const auto leading = PSG::intersect(host, {host.begin, sharedBoundary});
+    const auto trailing = PSG::intersect(host, {sharedBoundary, host.end});
+    if (leading.begin != host.begin || leading.end != sharedBoundary
+        || trailing.begin != sharedBoundary || trailing.end != host.end)
+        return false;
+    if (!PSG::intersect({host.end, host.end + 512}, host).empty())
         return false;
 
-    // 已对齐窗口再次对齐必须位等价：split 用它判断父窗口是否已在 sample 网格上；
-    // merge 连续性也以两侧 nearest sample index 是否相等为准。
-    const OpenTune::SourceWindow alignedOnce{17, {}, TC::samplesToSeconds(10, sampleRate),
-                                             TC::samplesToSeconds(20, sampleRate)};
-    const auto realigned = OpenTune::alignSourceWindowToSampleGrid(alignedOnce, sampleRate);
-    if (!realigned.has_value()
-        || realigned->sourceStartSeconds != alignedOnce.sourceStartSeconds
-        || realigned->sourceEndSeconds != alignedOnce.sourceEndSeconds
-        || TC::secondsToSamplesNearest(realigned->sourceStartSeconds, sampleRate)
-            != TC::secondsToSamplesNearest(alignedOnce.sourceStartSeconds, sampleRate)
-        || TC::secondsToSamplesNearest(realigned->sourceEndSeconds, sampleRate)
-            != TC::secondsToSamplesNearest(alignedOnce.sourceEndSeconds, sampleRate))
-        return false;
+    // host 区间内每个样本恰好映射到一个 prepared local 地址。
+    const int64_t length = host.end - host.begin;
+    for (const int64_t offset : {int64_t{0}, length / 3, length - 1})
+    {
+        const auto address = PSG::mapHostSampleToPrepared(
+            placement, host.begin + offset, prepared.begin);
+        if (address.bufferLocalIndex != offset)
+            return false;
+    }
 
-    // 半样本 tie 在 2 的幂次采样率下二进制精确：nearest 取远离 0 一侧（后一 sample）。
-    const auto tieWindow = OpenTune::alignSourceWindowToSampleGrid(
-        OpenTune::SourceWindow{17, {}, 0.5 / 8192.0, 1.5 / 8192.0}, 8192.0);
-    if (!tieWindow.has_value()
-        || tieWindow->sourceStartSeconds != TC::samplesToSeconds(1, 8192.0)
-        || tieWindow->sourceEndSeconds != TC::samplesToSeconds(2, 8192.0))
-        return false;
-
-    // 退化窗口：两端投影到同一 sample、end <= start、非法采样率都按几何拒绝。
-    return !OpenTune::alignSourceWindowToSampleGrid(
-               OpenTune::SourceWindow{0, {}, 0.0011, 0.00111}, sampleRate).has_value()
-        && !OpenTune::alignSourceWindowToSampleGrid(
-               OpenTune::SourceWindow{0, {}, 0.002, 0.002}, sampleRate).has_value()
-        && !OpenTune::alignSourceWindowToSampleGrid(
-               OpenTune::SourceWindow{0, {}, 0.0, 0.001}, 0.0).has_value();
-}
-
-// computeRegionBlockRenderSpan: 部分重叠时 destination 起点 floor、终点 ceil。
-bool testComputeRegionBlockRenderSpanPartialOverlap()
-{
-    // playhead block [0, 1000/44100≈0.02268)s，playback 仅覆盖 [0.0005, 0.015)。
-    const auto partial = OpenTune::computeRegionBlockRenderSpan(
-        /*blockStartSeconds=*/0.0,
-        /*blockSamples=*/1000,
-        /*hostSampleRate=*/44100.0,
-        /*playbackStartSeconds=*/0.0005,
-        /*playbackEndSeconds=*/0.015);
-    if (!partial)
-        return false;
-    if (partial->destinationStartSample != 22)   // floor(0.0005 * 44100 = 22.05)
-        return false;
-    if (partial->samplesToCopy != 640)           // ceil(0.015 * 44100 = 661.5) - 22
-        return false;
-    if (!nearlyEqual(partial->overlapStartSeconds, 0.0005))
-        return false;
-
-    // block 起点晚于 playback 起点：左侧部分重叠，destination 起点 clamp 到 0、终点 ceil。
-    const auto leftPartial = OpenTune::computeRegionBlockRenderSpan(1.0, 512, 48000.0, 0.5, 1.0005);
-    if (!leftPartial)
-        return false;
-    if (leftPartial->destinationStartSample != 0)
-        return false;
-    if (leftPartial->samplesToCopy != 24)        // ceil((1.0005 - 1.0) * 48000)
-        return false;
-
-    return true;
-}
-
-// computeRegionBlockRenderSpan: 完全覆盖时 clamp 到整块；无重叠/仅边界相接返回 nullopt。
-bool testComputeRegionBlockRenderSpanFullAndNoOverlap()
-{
-    // playback 完全覆盖 block：destination 覆盖整块 [0, blockSamples)。
-    const auto full = OpenTune::computeRegionBlockRenderSpan(1.0, 512, 48000.0, 0.5, 2.0);
-    if (!full)
-        return false;
-    if (full->destinationStartSample != 0 || full->samplesToCopy != 512)
-        return false;
-    if (!nearlyEqual(full->overlapStartSeconds, 1.0))
-        return false;
-
-    // 无重叠：playback 完全在 block 之前。
-    if (OpenTune::computeRegionBlockRenderSpan(0.0005, 100, 44100.0, 0.0, 0.0004).has_value())
-        return false;
-    // 无重叠：playback 完全在 block 之后。
-    if (OpenTune::computeRegionBlockRenderSpan(0.0, 100, 44100.0, 0.003, 0.004).has_value())
-        return false;
-    // playhead 与 playback 仅边界相接（零长度重叠）也为 nullopt。
-    return !OpenTune::computeRegionBlockRenderSpan(1.0, 512, 48000.0, 0.5, 1.0).has_value();
-}
-
-// ARA block 起点使用绝对 sample position，再按 host sample rate 转为 overlap 秒坐标。
-bool testComputeRegionBlockRenderSpanFromSamplePosition()
-{
-    const auto span = OpenTune::computeRegionBlockRenderSpanFromSamplePosition(
-        /*blockStartSample=*/48000,
-        /*blockSamples=*/512,
-        /*hostSampleRate=*/48000.0,
-        /*playbackStartSeconds=*/0.9995,
-        /*playbackEndSeconds=*/1.0005);
-    if (!span)
-        return false;
-
-    // 48000 samples @ 48kHz = 1.0s; only the first 24 samples overlap.
-    if (span->destinationStartSample != 0
-        || span->samplesToCopy != 24
-        || !nearlyEqual(span->overlapStartSeconds, 1.0))
-        return false;
-
-    // Region boundaries are projected to host samples before the overlap is
-    // calculated; the returned start is therefore anchored to sample 48000.
-    const auto sampleAnchored = OpenTune::computeRegionBlockRenderSpanFromSamplePosition(
-        /*blockStartSample=*/48000,
-        /*blockSamples=*/512,
-        /*hostSampleRate=*/48000.0,
-        /*playbackStartSeconds=*/1.0 + (0.25 / 48000.0),
-        /*playbackEndSeconds=*/1.0 + (23.5 / 48000.0));
-    return sampleAnchored.has_value()
-        && sampleAnchored->destinationStartSample == 0
-        && sampleAnchored->samplesToCopy == 24
-        && nearlyEqual(sampleAnchored->overlapStartSeconds, 1.0);
+    // 权威终点直接投影，不由起点与时长重建；投影不回写窗口秒值。
+    const auto endProjection = PSG::intersect(
+        {placement.playbackEndSample, placement.playbackEndSample + 1}, host);
+    return endProjection.empty()
+        && window.sourceEndSeconds == 1.2345;
 }
 
 bool testARAPlaybackRendererRealtimeStopGate()
@@ -981,9 +889,9 @@ int main()
         return 1;
     }
 
-    if (!testNullTimeGridIsNormalizedAtPublicationBoundaries())
+    if (!testTimeGridIsNotRepairedAtProjectionOrPublicationBoundaries())
     {
-        std::fputs("FAIL: null TimeGrid publication boundary normalization\n", stderr);
+        std::fputs("FAIL: owner TimeGrid and window preserved at projection/publication\n", stderr);
         return 1;
     }
 
@@ -1065,27 +973,9 @@ int main()
         return 1;
     }
 
-    if (!testSourceWindowNearestSampleAlignment())
+    if (!testFixedGeometryKeepsAuthoritativeWindowSecondsAndHalfOpenSpans())
     {
-        std::fputs("FAIL: SourceWindow nearest sample alignment\n", stderr);
-        return 1;
-    }
-
-    if (!testComputeRegionBlockRenderSpanPartialOverlap())
-    {
-        std::fputs("FAIL: computeRegionBlockRenderSpan partial overlap floor/ceil\n", stderr);
-        return 1;
-    }
-
-    if (!testComputeRegionBlockRenderSpanFullAndNoOverlap())
-    {
-        std::fputs("FAIL: computeRegionBlockRenderSpan full/no overlap\n", stderr);
-        return 1;
-    }
-
-    if (!testComputeRegionBlockRenderSpanFromSamplePosition())
-    {
-        std::fputs("FAIL: computeRegionBlockRenderSpan sample-position mapping\n", stderr);
+        std::fputs("FAIL: fixed geometry authority and half-open identity\n", stderr);
         return 1;
     }
 

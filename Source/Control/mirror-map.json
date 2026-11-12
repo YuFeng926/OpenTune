@@ -66,7 +66,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::startPendingImport",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "ae02087ecae1c23d41a5394f3333d5a342a51adca1e5e5105f1fac7c3ef17e6d"
+        "sha256": "980ad6fa54f70dfb7aa414b592534020994b0f33b56cc720c791e56428400807"
       },
       "control": [
         {
@@ -119,7 +119,7 @@
         "symbol": "OpenTuneAudioProcessor::prepareImport",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "3bef90e530e4ca53a0cb19d840ab2f65fc61d5409ccc4240709c1706ec86537e"
+        "sha256": "fa4e6e95ac237d0f730c8dbe9cc2f369dfd1fa9df535416b5aff99745352c4d6"
       },
       "control": [
         {
@@ -183,13 +183,15 @@
         "symbol": "OpenTuneAudioProcessor::exportPlacementAudio",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "4ce84a3afdfed2959d2f6621a90af64157d44944648c5a7538910102c2570681"
+        "sha256": "04b09782d37432295da4ea99d1b0aae6385c68359f14e984fb912bdd18d9b334"
       },
       "control": [
         {
           "file": "Source/Control/Ops/ExportOps.cpp",
           "symbols": [
             "buildPlan",
+            "buildExportClips",
+            "addClip",
             "hasPlaybackAudio"
           ]
         }
@@ -199,8 +201,8 @@
         "ControlProcessorTests.ExportFailures",
         "ControlProcessorTests.ExportVectors"
       ],
-      "note": "Clip export: the content that is mixed, and the hasAudio() filter.",
-      "noteZh": "片段导出：哪些内容被混入，以及 hasAudio() 过滤。"
+      "note": "Clip export: the whole track is laid out first, so the clip may inherit the fixed D of a continuous clip before it; contents without playback audio are left out, and the clip's mapping (H, D, A, Z) and its track volume enter the token.",
+      "noteZh": "片段导出：先按整轨建立几何，片段因此可能继承前面连续片段的固定 D；没有播放音频的内容被剔除，片段的映射（H、D、A、Z）与轨道音量一并进入 token。"
     },
     {
       "id": "export-track",
@@ -210,13 +212,15 @@
         "symbol": "OpenTuneAudioProcessor::exportTrackAudio",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "83e6804e725d242d1b729436b49e9a6a65d4fb102008946205e3766630c74911"
+        "sha256": "fb31e0e09510c34cb337934cfb99b0ef8df63aeac24c2ce1834383174acdfb25"
       },
       "control": [
         {
           "file": "Source/Control/Ops/ExportOps.cpp",
           "symbols": [
             "buildPlan",
+            "buildExportClips",
+            "addClip",
             "hasPlaybackAudio"
           ]
         }
@@ -226,8 +230,8 @@
         "ControlProcessorTests.ExportFailures",
         "ControlProcessorTests.ExportVectors"
       ],
-      "note": "Track export: the clips of one track with audio.",
-      "noteZh": "轨道导出：该轨道上有音频的片段。"
+      "note": "Track export: the clips of one track with audio, laid out in one pass so a continuous clip's fixed D carries to the clips after it and enters the token.",
+      "noteZh": "轨道导出：该轨道上有音频的片段；按整轨一次建立几何，连续片段的固定 D 传给其后的片段并进入 token。"
     },
     {
       "id": "export-master-mix",
@@ -237,13 +241,15 @@
         "symbol": "OpenTuneAudioProcessor::exportMasterMixAudio",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "50d3d484904682b2b45346e0795c3e6cc5d1afe8299c44257497ae66a8921f4a"
+        "sha256": "886e42d51cd50e83e2ae2a20b4e2e0d279069762272d49e96a318d9948df8f83"
       },
       "control": [
         {
           "file": "Source/Control/Ops/ExportOps.cpp",
           "symbols": [
             "buildPlan",
+            "buildExportClips",
+            "addClip",
             "hasPlaybackAudio"
           ]
         }
@@ -253,8 +259,8 @@
         "ControlProcessorTests.ExportFailures",
         "ControlProcessorTests.ExportVectors"
       ],
-      "note": "Master mix export: solo and mute rules over the tracks of the playback snapshot, and the hasAudio() filter.",
-      "noteZh": "总混导出：对播放快照中的轨道应用独奏与静音规则，以及 hasAudio() 过滤。"
+      "note": "Master mix export: solo and mute rules over the tracks of the playback snapshot, each track laid out whole for the continuous geometry, and the hasAudio() filter.",
+      "noteZh": "总混导出：对播放快照中的轨道应用独奏与静音规则，每条轨道按整轨建立连续几何，以及 hasAudio() 过滤。"
     },
     {
       "id": "time-grid-publish",
@@ -264,7 +270,7 @@
         "symbol": "OpenTuneAudioProcessor::setContentTimeGrid",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "d5a091615e9c238e86fc3e5977d7322cf0deda59b96a29a77a07f49111e808b1"
+        "sha256": "5d9cfe0f9f6f8ee4fe5d819540ad7415d88e51230cb4538783a021d99b3c1805"
       },
       "control": [
         {
@@ -1673,7 +1679,7 @@
         "symbol": "vocoderWeightSelector_.onChange",
         "kind": "statement",
         "normalization": "stmt-v1",
-        "sha256": "1f2e5b5ca8d7619a6b4c32650935861335c6ad239d55a6cdcce43e3a065d797d"
+        "sha256": "ae7d5e87028ea536f7333597ee567c7dc572255de1746f54c93dc369b2d20ca0"
       },
       "control": [
         {
@@ -2361,7 +2367,7 @@
         "symbol": "OpenTuneAudioProcessor::splitPlacementAtSeconds",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "a7c26d679bc8a643adb157416f6dc4a2c3fc8ec5bcaa38a9a03af50f18a80b4c"
+        "sha256": "0b89d785db501928f7c55642399a156ad7d8902b5e85a7468aaef11145824d36"
       },
       "control": [
         {
@@ -2375,8 +2381,8 @@
         "ControlProcessorTests.Arrangement",
         "ControlProcessorTests.ArrangementVectors"
       ],
-      "note": "OpenTune splits only a clip with a ready analysis and an unedited time grid, at the nearest analysis frame boundary, with both parts longer than 0.1 s, and refuses the rest silently; op split checks the same conditions first and names the reason.",
-      "noteZh": "OpenTune 只切分分析已就绪、时间网格未编辑的片段，切点吸附到最近的分析帧边界，且两段都要长于 0.1 秒，其余情况静默拒绝；op split 预先检查同样的条件并给出原因。"
+      "note": "OpenTune splits only a clip with the audio and native PCM available, a ready analysis and an unedited time grid, at the nearest analysis frame boundary, with both parts longer than 0.1 s, and refuses the rest silently; the cut is the frame boundary's time, projected to canonical samples without having to sit on a sample. op split checks the same conditions first and names the reason.",
+      "noteZh": "OpenTune 只切分音频与原生 PCM 可用、分析已就绪、时间网格未编辑的片段，切点取最近的分析帧边界，且两段都要长于 0.1 秒，其余情况静默拒绝；切点就是帧边界对应的秒值，只投影到 canonical 采样，不要求落在采样边界上。op split 预先检查同样的条件并给出原因。"
     },
     {
       "id": "arrangement-merge",
@@ -2386,7 +2392,7 @@
         "symbol": "OpenTuneAudioProcessor::mergePlacements",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "b881a16f7d7c7e60e9e37ad71510080ff5fefc509b700217ea42b9253d70ca97"
+        "sha256": "d2cca54e21c98377ccfbb766505ece42202def59e54d6a5d2af9c795fab2104f"
       },
       "control": [
         {
@@ -2400,8 +2406,8 @@
         "ControlProcessorTests.Arrangement",
         "ControlProcessorTests.ArrangementVectors"
       ],
-      "note": "OpenTune merges two adjacent clips of one track that show adjacent parts of one source with equal gain and name; op merge checks those conditions first (merge_not_possible) and reports a later refusal with the same reason.",
-      "noteZh": "OpenTune 合并同一轨道上相邻、显示同一音源相邻部分且增益与名称相同的两个片段；op merge 预先检查这些条件（merge_not_possible），之后的拒绝也用同一原因报告。"
+      "note": "OpenTune merges two adjacent clips of one track that show adjacent parts of one source with equal gain and name; the clips must share the complete NativePcmSource identity (buffer, sample rate, first sample and audioRevision) and their source window boundary must match exactly. op merge checks those conditions first (merge_not_possible) and reports a later refusal with the same reason.",
+      "noteZh": "OpenTune 合并同一轨道上相邻、显示同一音源相邻部分且增益与名称相同的两个片段；两个内容必须具有完整的 NativePcmSource 身份（buffer、采样率、首采样与 audioRevision），且权威来源窗口边界完全相等。op merge 预先检查这些条件（merge_not_possible），之后的拒绝也用同一原因报告。"
     }
   ]
 }

@@ -13,6 +13,7 @@
 #include "../DSP/F0KeyDetector.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/TimeCoordinate.h"
+#include "../Utils/PlaybackSampleGeometry.h"
 #include "../Utils/SilentGapDetector.h"
 #include "../Utils/PitchCurve.h"
 #include "../Inference/RenderCache.h"
@@ -25,6 +26,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -37,7 +39,6 @@ namespace OpenTune {
 namespace {
 
 constexpr int kContentPayloadArchiveMagic = 0x4F544143;
-constexpr int kContentPayloadArchiveVersion = 8; // v8: PitchCurve erased F0 ranges
 constexpr int kContentPayloadArchiveVersionMin = 3;
 constexpr int kMaxContentPayloadRecords = 4096;
 
@@ -220,17 +221,16 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
 }
 
 namespace {
+juce::String archiveSeconds(double seconds)
+{
+    return juce::String(seconds, std::numeric_limits<double>::max_digits10 - 1, true);
+}
+
 void serializeAudioModificationContent(const AudioModification& mod, juce::XmlElement& el)
 {
     el.setAttribute("birthRevision", juce::String(static_cast<juce::int64>(mod.birthRevision)));
 
-    auto* sw = new juce::XmlElement("SourceWindow");
-    sw->setAttribute("sourcePersistentId", mod.content->sourceWindow.sourcePersistentId);
-    // Note: numeric sourceId is NOT serialized in ARA domain (it's for Capture/Standalone only)
-    // ARA domain uses AudioSource persistentID only
-    sw->setAttribute("startSeconds", mod.content->sourceWindow.sourceStartSeconds);
-    sw->setAttribute("durationSeconds", mod.content->sourceWindow.durationSeconds());
-    el.addChildElement(sw);
+    OpenTuneDocumentController::writeSourceWindowToArchive(mod.content->sourceWindow, el);
 
     auto* editable = new juce::XmlElement("EditableContent");
     editable->setAttribute("notesRevision", juce::String(static_cast<juce::int64>(mod.content->notesRevision)));
@@ -241,8 +241,8 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     for (const auto& note : mod.content->notes)
     {
         auto* n = new juce::XmlElement("Note");
-        n->setAttribute("start", note.startTime);
-        n->setAttribute("end", note.endTime);
+        n->setAttribute("start", archiveSeconds(note.startTime));
+        n->setAttribute("end", archiveSeconds(note.endTime));
         n->setAttribute("pitch", note.pitch);
         n->setAttribute("originalPitch", note.originalPitch);
         n->setAttribute("pitchOffset", note.pitchOffset);
@@ -280,7 +280,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     for (const auto& point : mod.content->volumeEnvelope.points())
     {
         auto* p = new juce::XmlElement("Point");
-        p->setAttribute("time", point.timeSeconds);
+        p->setAttribute("time", archiveSeconds(point.timeSeconds));
         p->setAttribute("gainDb", point.gainDb);
         env->addChildElement(p);
     }
@@ -317,8 +317,8 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         {
             auto* he = new juce::XmlElement("Handle");
             he->setAttribute("id", juce::String(static_cast<juce::int64>(h.id)));
-            he->setAttribute("sourceSeconds", h.source_seconds);
-            he->setAttribute("outputSeconds", h.output_seconds);
+            he->setAttribute("sourceSeconds", archiveSeconds(h.source_seconds));
+            he->setAttribute("outputSeconds", archiveSeconds(h.output_seconds));
             he->setAttribute("kind", static_cast<int>(h.kind));
             // confidence：同步 Confidence 枚举（0=default, 1=high）
             he->setAttribute("confidence", static_cast<int>(h.confidence));
@@ -358,7 +358,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         rf->setAttribute("status", static_cast<int>(mod.content->analysis.referenceFeatures.status));
         rf->setAttribute("producer", static_cast<int>(mod.content->analysis.referenceFeatures.producer));
         rf->setAttribute("inputFingerprint", juce::String(static_cast<juce::int64>(mod.content->analysis.referenceFeatures.inputFingerprint)));
-        rf->setAttribute("sourceDurationSeconds", mod.content->analysis.referenceFeatures.sourceDurationSeconds);
+        rf->setAttribute("sourceDurationSeconds", archiveSeconds(mod.content->analysis.referenceFeatures.sourceDurationSeconds));
         if (mod.content->analysis.referenceFeatures.errorMessage.isNotEmpty())
             rf->setAttribute("errorMessage", mod.content->analysis.referenceFeatures.errorMessage);
         
@@ -366,8 +366,8 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         for (const auto& note : mod.content->analysis.referenceFeatures.pitch.notes)
         {
             auto* n = new juce::XmlElement("PitchNote");
-            n->setAttribute("start", note.startTime);
-            n->setAttribute("end", note.endTime);
+            n->setAttribute("start", archiveSeconds(note.startTime));
+            n->setAttribute("end", archiveSeconds(note.endTime));
             n->setAttribute("pitch", note.pitch);
             n->setAttribute("originalPitch", note.originalPitch);
             n->setAttribute("pitchOffset", note.pitchOffset);
@@ -384,7 +384,7 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         {
             auto* a = new juce::XmlElement("TimingAnchor");
             a->setAttribute("anchorId", juce::String(static_cast<juce::int64>(anchor.anchorId)));
-            a->setAttribute("sourceSeconds", anchor.sourceSeconds);
+            a->setAttribute("sourceSeconds", archiveSeconds(anchor.sourceSeconds));
             a->setAttribute("strength", anchor.strength);
             a->setAttribute("kind", static_cast<int>(anchor.kind));
             a->setAttribute("confidence", anchor.confidence);
@@ -439,58 +439,11 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
     std::vector<PitchCorrectionSegment> restoredCorrectionSegments;
 
     // source window 必须存在
-    if (auto* sw = el.getChildByName("SourceWindow"))
-    {
-        const juce::String archivedSourcePersistentId = sw->getStringAttribute("sourcePersistentId");
-
-        // valid check
-        double startSeconds = sw->getDoubleAttribute("startSeconds");
-        double durationSeconds = sw->getDoubleAttribute("durationSeconds");
-
-        // finite checks (范围/有效性：start=0.0 是有效起点，duration>0)
-        if (!std::isfinite(startSeconds) || !std::isfinite(durationSeconds) || durationSeconds <= 0.0)
-            return std::nullopt;
-        const double endSeconds = startSeconds + durationSeconds;
-        if (!std::isfinite(endSeconds))
-            return std::nullopt;
-
-        // Per ARA2 spec (ARAInterface.h:3092): "Any archived states that are either filtered
-        // explicitly, or for which there is no object with a matching persistent ID in the
-        // current graph are simply ignored."
-        // ARA domain uses sourcePersistentId only (not numeric sourceId from Capture/Standalone).
-        // Filter miss -> entire SourceWindow stays invalid (all fields zero/empty).
-        if (filter == nullptr)
-        {
-            // Full restore: use archived source persistentID and window as-is
-            if (archivedSourcePersistentId.isEmpty())
-                return std::nullopt;
-            content.sourceWindow.sourcePersistentId = archivedSourcePersistentId;
-        }
-        else if (archivedSourcePersistentId.isNotEmpty())
-        {
-            auto* audioSource = filter->getAudioSourceToRestoreStateWithID(
-                archivedSourcePersistentId.toRawUTF8());
-            if (audioSource == nullptr)
-                return std::nullopt;
-
-            const auto& remappedId = audioSource->getPersistentID();
-            if (remappedId.empty())
-                return std::nullopt;
-            content.sourceWindow.sourcePersistentId = juce::String::fromUTF8(remappedId.c_str());
-        }
-        else
-        {
-            return std::nullopt;
-        }
-
-        content.sourceWindow.sourceStartSeconds = startSeconds;
-        content.sourceWindow.sourceEndSeconds = endSeconds;
-        // Note: numeric sourceId is NOT restored in ARA domain (it's for Capture/Standalone only)
-    }
-    else
-    {
+    auto sourceWindow = OpenTuneDocumentController::readSourceWindowFromArchive(
+        el, filter, archiveVersion);
+    if (!sourceWindow.has_value())
         return std::nullopt;
-    }
+    content.sourceWindow = std::move(*sourceWindow);
 
     // EditableContent: 必须存在，缺失立即 nullopt
     auto* editable = el.getChildByName("EditableContent");
@@ -1000,6 +953,90 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
 }
 } // namespace
 
+void OpenTuneDocumentController::writeSourceWindowToArchive(const SourceWindow& window,
+                                                            juce::XmlElement& element)
+{
+    auto* sourceWindow = new juce::XmlElement("SourceWindow");
+    sourceWindow->setAttribute("sourcePersistentId", window.sourcePersistentId);
+    // Note: numeric sourceId is NOT serialized in ARA domain (it's for Capture/Standalone only)
+    // ARA domain uses AudioSource persistentID only
+    // Both authoritative endpoints retain all binary64 significant digits.
+    sourceWindow->setAttribute("startSeconds", archiveSeconds(window.sourceStartSeconds));
+    sourceWindow->setAttribute("endSeconds", archiveSeconds(window.sourceEndSeconds));
+    element.addChildElement(sourceWindow);
+}
+
+std::optional<SourceWindow> OpenTuneDocumentController::readSourceWindowFromArchive(
+    const juce::XmlElement& element,
+    const juce::ARARestoreObjectsFilter* filter,
+    int archiveVersion)
+{
+    const auto* sourceWindow = element.getChildByName("SourceWindow");
+    if (sourceWindow == nullptr)
+        return std::nullopt;
+
+    const double startSeconds = sourceWindow->getDoubleAttribute("startSeconds");
+    double endSeconds = 0.0;
+    if (archiveVersion >= kContentArchiveVersionExplicitSourceEnd)
+    {
+        if (!sourceWindow->hasAttribute("endSeconds"))
+            return std::nullopt;
+        endSeconds = sourceWindow->getDoubleAttribute("endSeconds");
+    }
+    else
+    {
+        // Earlier archives stored duration; end reconstruction stays exclusive
+        // to those versions.
+        const double durationSeconds = sourceWindow->getDoubleAttribute("durationSeconds");
+        if (!std::isfinite(durationSeconds) || durationSeconds <= 0.0)
+            return std::nullopt;
+        endSeconds = startSeconds + durationSeconds;
+    }
+
+    if (!std::isfinite(startSeconds)
+        || !std::isfinite(endSeconds)
+        || endSeconds <= startSeconds)
+        return std::nullopt;
+
+    const juce::String archivedSourcePersistentId =
+        sourceWindow->getStringAttribute("sourcePersistentId");
+
+    // Per ARA2 spec (ARAInterface.h:3092): "Any archived states that are either filtered
+    // explicitly, or for which there is no object with a matching persistent ID in the
+    // current graph are simply ignored."
+    // ARA domain uses sourcePersistentId only (not numeric sourceId from Capture/Standalone).
+    // Filter miss -> entire SourceWindow stays invalid (all fields zero/empty).
+    SourceWindow window;
+    window.sourceStartSeconds = startSeconds;
+    window.sourceEndSeconds = endSeconds;
+
+    if (filter == nullptr)
+    {
+        // Full restore: use archived source persistentID and window as-is
+        if (archivedSourcePersistentId.isEmpty())
+            return std::nullopt;
+        window.sourcePersistentId = archivedSourcePersistentId;
+    }
+    else if (archivedSourcePersistentId.isNotEmpty())
+    {
+        auto* audioSource = filter->getAudioSourceToRestoreStateWithID(
+            archivedSourcePersistentId.toRawUTF8());
+        if (audioSource == nullptr)
+            return std::nullopt;
+
+        const auto& remappedId = audioSource->getPersistentID();
+        if (remappedId.empty())
+            return std::nullopt;
+        window.sourcePersistentId = juce::String::fromUTF8(remappedId.c_str());
+    }
+    else
+    {
+        return std::nullopt;
+    }
+
+    return window;
+}
+
 const ContentRenderService* OpenTuneDocumentController::getContentRenderService() const noexcept
 {
     return contentRenderService_.get();
@@ -1108,8 +1145,8 @@ void OpenTuneDocumentController::RenderTerminalRelay::invokeCompleted(
 bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable() const noexcept
 {
     return contentKey.isValid()
-        && durationInPlaybackTime > 0.0
-        && durationInModificationTime > 0.0
+        && endInPlaybackTime > startInPlaybackTime
+        && endInModificationTime > startInModificationTime
         && durationInPlaybackTime == durationInModificationTime;
 }
 
@@ -1515,7 +1552,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         return false;
 
     const int version = input.readInt();
-    if (version < kContentPayloadArchiveVersionMin || version > kContentPayloadArchiveVersion)
+    if (version < kContentPayloadArchiveVersionMin || version > kContentArchiveVersion)
         return false;
 
     const int bindingCount = input.readInt();
@@ -1563,36 +1600,16 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
             || newContent->sourceWindow.sourceEndSeconds > sourceDuration + 1.0e-6)
             return false;
 
-        // 原始归档秒范围已按 duration 容差校验；对齐后在 source sample 网格上
-        // 用 sample index 验证窗口边界，sample span 不继承 archive 秒容差。
+        // 秒区间是归档授权值；只验证其操作采样跨度可读，不回写窗口或 TimeGrid。
         const double sourceSampleRate = source->getShape().sourceSampleRate;
-        const auto alignedWindow = alignSourceWindowToSampleGrid(
-            newContent->sourceWindow, sourceSampleRate);
-        if (!alignedWindow.has_value())
+        const int64_t windowStartSample = TimeCoordinate::secondsToSamplesNearest(
+            newContent->sourceWindow.sourceStartSeconds, sourceSampleRate);
+        const int64_t windowEndSample = TimeCoordinate::secondsToSamplesNearest(
+            newContent->sourceWindow.sourceEndSeconds, sourceSampleRate);
+        if (windowStartSample < 0
+            || windowStartSample >= windowEndSample
+            || windowEndSample > source->getShape().numSamples)
             return false;
-
-        const int64_t alignedStartSample = TimeCoordinate::secondsToSamplesNearest(
-            alignedWindow->sourceStartSeconds, sourceSampleRate);
-        const int64_t alignedEndSample = TimeCoordinate::secondsToSamplesNearest(
-            alignedWindow->sourceEndSeconds, sourceSampleRate);
-        if (alignedStartSample < 0
-            || alignedStartSample >= alignedEndSample
-            || alignedEndSample > source->getShape().numSamples)
-            return false;
-        newContent->sourceWindow = *alignedWindow;
-
-        // identity TimeGrid 的 endpoint duration 必须与对齐后的窗口一致；
-        // 非 identity archive grid 在 restore 解析处已被拒绝，不做隐式改写。
-        if (newContent->timeGrid->isIdentity())
-        {
-            auto alignedHandles = newContent->timeGrid->handles();
-            alignedHandles.back().source_seconds = alignedWindow->durationSeconds();
-            alignedHandles.back().output_seconds = alignedWindow->durationSeconds();
-            auto alignedTimeGrid = TimeGridSnapshot::makeFromHandles(std::move(alignedHandles));
-            if (alignedTimeGrid == nullptr)
-                return false;
-            newContent->timeGrid = std::move(alignedTimeGrid);
-        }
 
         const auto* targetSource = findAudioSource(targetMod->audioModification->getAudioSource());
         if (targetSource == nullptr || targetSource->getIdentity().persistentId != newContent->sourceWindow.sourcePersistentId)
@@ -1664,7 +1681,7 @@ bool OpenTuneDocumentController::doStoreObjectsToStream(juce::ARAOutputStream& o
         return false;
 
     bool ok = output.writeInt(kContentPayloadArchiveMagic);
-    ok = output.writeInt(kContentPayloadArchiveVersion) && ok;
+    ok = output.writeInt(kContentArchiveVersion) && ok;
     ok = output.writeInt(static_cast<int>(bindings.size())) && ok;
 
     for (const auto* modification : bindings)
@@ -1934,7 +1951,9 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
         ? juce::String(hostModification->getPersistentID())
         : juce::String();
     projection.startInPlaybackTime = playbackRegion->getStartInPlaybackTime();
+    projection.endInPlaybackTime = playbackRegion->getEndInPlaybackTime();
     projection.startInModificationTime = playbackRegion->getStartInAudioModificationTime();
+    projection.endInModificationTime = playbackRegion->getEndInAudioModificationTime();
     projection.durationInPlaybackTime = playbackRegion->getDurationInPlaybackTime();
     projection.durationInModificationTime = playbackRegion->getDurationInAudioModificationTime();
 
@@ -1971,13 +1990,15 @@ void OpenTuneDocumentController::refreshRegisteredRenderers(const std::vector<Op
 
 bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     AudioModification& modification,
-    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer)
+    NativePcmSource nativeSource,
+    std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
+    int64_t firstCanonicalSample)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     if (contentRenderService_ == nullptr)
         return false;
 
-    if (audioBuffer == nullptr)
+    if (nativeSource.buffer == nullptr || canonicalBuffer == nullptr)
         return false;
 
     if (!modification.hasContentState())
@@ -1988,12 +2009,18 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     auto readSource = makePlaybackReadSource(
         key,
         modification.snapshotContent(),
-        std::move(audioBuffer),
+        std::move(nativeSource),
+        std::move(canonicalBuffer),
         TimeCoordinate::kRenderSampleRate,
+        firstCanonicalSample,
         contentRenderService_->getOrCreateRenderCache(key),
         contentRenderService_->getTimeStretchCache());
 
-    contentRenderService_->publishPlaybackSource(key, readSource);
+    contentRenderService_->publishPlaybackSource(key, std::move(readSource));
+
+    // The plan freezes the published source view; a new publication is the
+    // event that refreshes it.
+    refreshRegisteredRenderers(publishModelChange());
     return true;
 }
 
@@ -2126,51 +2153,45 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         && content.analysis.pitchCurve != nullptr
         && content.analysis.pitchCurve->hasOriginalF0Data();
 
-    // 1. Determine source window from AudioSource
+    // 1. Authoritative source window. Seconds stay untouched; sample addresses
+    //    below are derived operation coordinates.
     const auto sourceWindow = content.sourceWindow;
 
-    const double sourceSampleRate = source->getShape().sourceSampleRate;
-    const int numChannels = source->getShape().numChannels;
+    const double sourceSampleRate = sourceShape.sourceSampleRate;
+    const int numChannels = sourceShape.numChannels;
+    const uint64_t audioRevision = source->getSampleContentGeneration();
 
-    // 2. Read ARA source window.
-    //    content.sourceWindow 在 attachSource / archive restore 处已对齐到 source
-    //    sample 网格，seconds 是语义真相；nearest 只恢复读取用的 sample 坐标。
-    //    windowSamples 与该 span 同源，读取/重采样长度/F0 均由此派生。
-    const int64_t sourceStartSample = TimeCoordinate::secondsToSamplesNearest(
-        sourceWindow.sourceStartSeconds, sourceSampleRate);
-    const int64_t sourceEndSample = TimeCoordinate::secondsToSamplesNearest(
-        sourceWindow.sourceEndSeconds, sourceSampleRate);
-    const int64_t windowSamples = sourceEndSample - sourceStartSample;
-
-    if (windowSamples <= 0)
+    // 2. Retain the actual native PCM. A full-source read is reused by every
+    //    modification of the same source identity and sample content generation
+    //    through the already-published CRS views.
+    NativePcmSource nativeSource;
+    nativeSource.buffer = findReusableNativePcm(modification,
+                                                sourceWindow.sourcePersistentId,
+                                                sourceSampleRate,
+                                                audioRevision,
+                                                sourceShape.numSamples);
+    if (nativeSource.buffer == nullptr)
     {
-        return failBirth("ARA source window has no readable samples (startSample="
-            + std::to_string(sourceStartSample) + ", endSample="
-            + std::to_string(sourceEndSample) + ", samples="
-            + std::to_string(windowSamples) + ")");
-    }
+        if (sourceShape.numSamples > static_cast<int64_t>(std::numeric_limits<int>::max()))
+            return failBirth("ARA source is too large for a native PCM buffer (samples="
+                + std::to_string(sourceShape.numSamples) + ")");
 
-    juce::AudioBuffer<float> playableAccum(numChannels, static_cast<int>(windowSamples));
-    playableAccum.clear();
+        juce::AudioBuffer<float> nativePcm(numChannels, static_cast<int>(sourceShape.numSamples));
 
-    constexpr int64_t kChunkSamples = 32768;
-    {
-        int64_t readOffset = sourceStartSample;
-        int64_t accumWriteOffset = 0;
-        int64_t remaining = windowSamples;
-
-        while (remaining > 0)
+        constexpr int64_t kChunkSamples = 32768;
+        int64_t readOffset = 0;
+        while (readOffset < sourceShape.numSamples)
         {
-            const int64_t chunkSamples = std::min(kChunkSamples, remaining);
-            const int accumOffset = static_cast<int>(accumWriteOffset);
+            const int64_t chunkSamples = std::min(kChunkSamples, sourceShape.numSamples - readOffset);
+            const int chunkOffset = static_cast<int>(readOffset);
 
             std::vector<void*> channelPointers(static_cast<size_t>(numChannels));
             for (int ch = 0; ch < numChannels; ++ch)
-                channelPointers[static_cast<size_t>(ch)] = playableAccum.getWritePointer(ch, accumOffset);
+                channelPointers[static_cast<size_t>(ch)] = nativePcm.getWritePointer(ch, chunkOffset);
 
             if (!readerLease->readAudioSamples(readOffset,
-                                                   static_cast<int>(chunkSamples),
-                                                   channelPointers.data()))
+                                               static_cast<int>(chunkSamples),
+                                               channelPointers.data()))
             {
                 return failBirth("ARA host audio reader failed (startSample="
                     + std::to_string(readOffset) + ", samples="
@@ -2179,62 +2200,121 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
             }
 
             readOffset += chunkSamples;
-            accumWriteOffset += chunkSamples;
-            remaining -= chunkSamples;
         }
+
+        nativeSource.buffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(nativePcm));
     }
 
-    // 3. Extract channel 0 (left for stereo) for async F0 (skip if already available)
-    std::vector<float> channel0Data;
-    if (!alreadyHasF0)
+    nativeSource.sampleRate = sourceSampleRate;
+    nativeSource.firstSourceSample = 0;
+    nativeSource.audioRevision = audioRevision;
+    content.nativeSource = nativeSource;
+
+    // 3. Canonical editing input derived directly from the native PCM. Its first
+    //    element is the Q projection of the authoritative window start.
+    const double canonicalRate = TimeCoordinate::kRenderSampleRate;
+    const int64_t firstCanonicalSample = PlaybackSampleGeometry::projectToSample(
+        sourceWindow.sourceStartSeconds * canonicalRate);
+    const int64_t canonicalEndSample = std::max(firstCanonicalSample + 1,
+        PlaybackSampleGeometry::projectToSample(sourceWindow.sourceEndSeconds * canonicalRate));
+    const int64_t canonicalLength = canonicalEndSample - firstCanonicalSample;
+
+    if (canonicalLength > static_cast<int64_t>(std::numeric_limits<int>::max()))
     {
-        channel0Data.resize(static_cast<size_t>(playableAccum.getNumSamples()));
-        const float* ch0Read = playableAccum.getReadPointer(0);
-        std::copy(ch0Read, ch0Read + playableAccum.getNumSamples(), channel0Data.begin());
+        return failBirth("ARA source window exceeds canonical buffer capacity (firstCanonical="
+            + std::to_string(firstCanonicalSample) + ", endCanonical="
+            + std::to_string(canonicalEndSample) + ")");
     }
 
-    // 4. Resample audio to 44.1kHz for derived playback buffer
-    // Per ARA2 spec: AudioSource owns original PCM, AudioModification does not.
-    // This buffer will be published to CRS as derived playback cache.
-    juce::AudioBuffer<float> storedBuffer;
-    const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
-    if (std::abs(sourceSampleRate - targetSampleRate) > 1.0)
+    std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer;
+    if (sourceSampleRate == canonicalRate)
     {
-        // 目标离散 buffer 长度由唯一读取 span 投影到目标采样率。
-        const int storedLen = juce::jmax(1, static_cast<int>(TimeCoordinate::sampleRateProject(
-            windowSamples, sourceSampleRate, targetSampleRate)));
-
-        storedBuffer.setSize(numChannels, storedLen);
-
-        for (int ch = 0; ch < numChannels; ++ch)
+        const int64_t localStart = firstCanonicalSample - nativeSource.firstSourceSample;
+        const int64_t available = nativeSource.buffer->getNumSamples() - localStart;
+        const int64_t copyLength = std::min(canonicalLength, available);
+        if (copyLength <= 0)
         {
-            auto resampledData = resamplingManager_->upsampleForHost(
-                playableAccum.getReadPointer(ch),
-                playableAccum.getNumSamples(),
-                static_cast<int>(sourceSampleRate),
-                static_cast<int>(targetSampleRate));
-            const int toCopy = juce::jmin(storedLen, static_cast<int>(resampledData.size()));
-            storedBuffer.copyFrom(ch, 0, resampledData.data(), toCopy);
+            return failBirth("ARA source window lies outside the native PCM (localStart="
+                + std::to_string(localStart) + ", nativeSamples="
+                + std::to_string(nativeSource.buffer->getNumSamples()) + ")");
+        }
+
+        if (localStart == 0 && copyLength == nativeSource.buffer->getNumSamples())
+        {
+            canonicalBuffer = nativeSource.buffer;
+        }
+        else
+        {
+            juce::AudioBuffer<float> sliced(numChannels, static_cast<int>(copyLength));
+            for (int ch = 0; ch < numChannels; ++ch)
+                sliced.copyFrom(ch, 0, *nativeSource.buffer,
+                                ch % nativeSource.buffer->getNumChannels(),
+                                static_cast<int>(localStart),
+                                static_cast<int>(copyLength));
+            canonicalBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(sliced));
         }
     }
     else
     {
-        storedBuffer = std::move(playableAccum);
+        juce::AudioBuffer<float> converted(numChannels, static_cast<int>(canonicalLength));
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto resampledData = resamplingManager_->resampleRange(
+                nativeSource.buffer->getReadPointer(ch),
+                static_cast<size_t>(nativeSource.buffer->getNumSamples()),
+                sourceSampleRate,
+                canonicalRate,
+                nativeSource.firstSourceSample,
+                firstCanonicalSample,
+                static_cast<int>(canonicalLength));
+            const int toCopy = juce::jmin(static_cast<int>(canonicalLength),
+                                          static_cast<int>(resampledData.size()));
+            converted.copyFrom(ch, 0, resampledData.data(), toCopy);
+        }
+        canonicalBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(converted));
     }
 
-    // 6. Silent gaps 仅在新内容用户 Read 路径（无有效 F0）检测；
-    // archive 恢复路径（alreadyHasF0）保留 restored silentGaps，不递增 analysis/contentRevision。
+    content.audioBuffer = canonicalBuffer;
+    content.sampleRate = canonicalRate;
+    content.firstCanonicalSample = firstCanonicalSample;
+    content.audioRevision = audioRevision;
+
+    // 4. Channel 0 for async F0 uses the window-local original native span.
+    std::vector<float> channel0Data;
     if (!alreadyHasF0)
     {
-        modification.submitSilentGaps(SilentGapDetector::detectAllGapsAdaptive(storedBuffer));
+        const int64_t f0Start = TimeCoordinate::secondsToSamplesNearest(
+            sourceWindow.sourceStartSeconds, sourceSampleRate) - nativeSource.firstSourceSample;
+        const int64_t f0End = TimeCoordinate::secondsToSamplesNearest(
+            sourceWindow.sourceEndSeconds, sourceSampleRate) - nativeSource.firstSourceSample;
+        const int64_t available = nativeSource.buffer->getNumSamples() - f0Start;
+        const int64_t f0Samples = std::min(f0End - f0Start, available);
+        if (f0Start < 0 || f0Samples <= 0)
+        {
+            return failBirth("ARA native window has no readable samples (startSample="
+                + std::to_string(f0Start) + ", samples="
+                + std::to_string(f0Samples) + ")");
+        }
+
+        channel0Data.resize(static_cast<size_t>(f0Samples));
+        const float* ch0Read = nativeSource.buffer->getReadPointer(0)
+            + static_cast<int>(f0Start);
+        std::copy(ch0Read, ch0Read + f0Samples, channel0Data.begin());
+    }
+
+    // 5. Silent gaps are detected on the canonical editing input.
+    if (!alreadyHasF0)
+    {
+        modification.submitSilentGaps(SilentGapDetector::detectAllGapsAdaptive(*canonicalBuffer));
         modification.applyOriginalF0State(OriginalF0State::Extracting);
     }
-    auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(storedBuffer));
 
-    // 7. Publish to CRS (derived playback cache + resampled audio buffer)
-    // Per ARA2 spec: CRS holds derived/cache for renderer fast read,
-    // not source audio truth. Original PCM remains in AudioSource.
-    if (!publishPlaybackReadSourceForModification(modification, storedAudioBuffer))
+    // 6. Publish the complete source view: native PCM, canonical input and the
+    //    immutable editable snapshot in one CRS publication.
+    if (!publishPlaybackReadSourceForModification(modification,
+                                                  nativeSource,
+                                                  canonicalBuffer,
+                                                  firstCanonicalSample))
     {
         return failBirth("ARA playback read source publication failed for contentKey="
             + std::to_string(modification.contentKey().objectId));
@@ -2262,6 +2342,41 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     }
 
     return true;
+}
+
+std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::findReusableNativePcm(
+    const AudioModification& modification,
+    const juce::String& sourcePersistentId,
+    double sourceSampleRate,
+    uint64_t sampleGeneration,
+    int64_t sourceSampleCount) const
+{
+    if (contentRenderService_ == nullptr || sourcePersistentId.isEmpty())
+        return nullptr;
+
+    for (const auto& candidate : audioModifications_)
+    {
+        if (&candidate == &modification
+            || !candidate.hasContentState()
+            || candidate.content->sourceWindow.sourcePersistentId != sourcePersistentId)
+            continue;
+
+        PlaybackReadSource published;
+        if (!contentRenderService_->getPlaybackReadSource(candidate.contentKey(), published))
+            continue;
+
+        const auto& native = published.nativeSource;
+        if (native.buffer == nullptr
+            || native.sampleRate != sourceSampleRate
+            || native.audioRevision != sampleGeneration
+            || native.firstSourceSample != 0
+            || native.buffer->getNumSamples() != sourceSampleCount)
+            continue;
+
+        return native.buffer;
+    }
+
+    return nullptr;
 }
 
 void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioModification& modification)
@@ -2522,6 +2637,11 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
             });
         }
     };
+    lease.backendChangedCallback = [this, renderGate]() {
+        ProcessRenderRuntime::CompletionCallbackLease callbackLease(*renderGate);
+        if (callbackLease)
+            invalidateAllModificationCaches();
+    };
 
     contentRenderService_->attachExecutionLease(std::move(lease));
 }
@@ -2620,15 +2740,15 @@ void OpenTuneDocumentController::requestModificationRender(
     PlaybackReadSource readSource;
     if (contentRenderService_ == nullptr
         || !contentRenderService_->getPlaybackReadSource(key, readSource)
-        || readSource.audioBuffer == nullptr
-        || readSource.audioSampleRate <= 0.0)
+        || readSource.canonicalBuffer == nullptr
+        || readSource.canonicalSampleRate <= 0.0)
         return;
 
-    const int64_t totalSamples = readSource.audioBuffer->getNumSamples();
+    const int64_t totalSamples = readSource.canonicalBuffer->getNumSamples();
     const int64_t startSample = juce::jlimit<int64_t>(
-        0, totalSamples, TimeCoordinate::secondsToSamplesFloor(startSeconds, readSource.audioSampleRate));
+        0, totalSamples, TimeCoordinate::secondsToSamplesFloor(startSeconds, readSource.canonicalSampleRate));
     const int64_t endSample = juce::jlimit<int64_t>(
-        0, totalSamples, TimeCoordinate::secondsToSamplesCeil(endSeconds, readSource.audioSampleRate));
+        0, totalSamples, TimeCoordinate::secondsToSamplesCeil(endSeconds, readSource.canonicalSampleRate));
     requestModificationRenderSamples(key, startSample, endSample, std::move(snapshot));
 }
 
@@ -2643,24 +2763,29 @@ void OpenTuneDocumentController::requestModificationRenderSamples(
 
     PlaybackReadSource readSource;
     if (!contentRenderService_->getPlaybackReadSource(key, readSource)
-        || readSource.audioBuffer == nullptr
-        || readSource.audioSampleRate <= 0.0)
+        || readSource.canonicalBuffer == nullptr
+        || readSource.canonicalSampleRate <= 0.0)
         return;
 
-    const int64_t totalSamples = readSource.audioBuffer->getNumSamples();
+    const int64_t totalSamples = readSource.canonicalBuffer->getNumSamples();
     startSample = juce::jlimit<int64_t>(0, totalSamples, startSample);
     endSampleExclusive = juce::jlimit<int64_t>(0, totalSamples, endSampleExclusive);
     if (endSampleExclusive <= startSample)
         return;
 
-    if (!snapshot || !contentRenderService_->republishPlaybackSource(key, snapshot)
-        || !snapshot->hasUsableOriginalF0())
+    if (!snapshot || !contentRenderService_->republishPlaybackSource(key, snapshot))
+        return;
+
+    // The frozen plan carries the published snapshot; refresh it on publication.
+    refreshRegisteredRenderers(publishModelChange());
+
+    if (!snapshot->hasUsableOriginalF0())
         return;
 
     RenderJob job;
     job.contentKey = key;
-    job.audioBuffer = readSource.audioBuffer;
-    job.audioSampleRate = readSource.audioSampleRate;
+    job.audioBuffer = readSource.canonicalBuffer;
+    job.audioSampleRate = readSource.canonicalSampleRate;
     job.startSample = startSample;
     job.endSampleExclusive = endSampleExclusive;
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
@@ -2686,11 +2811,11 @@ void OpenTuneDocumentController::requestFullModificationRender(
     if (!contentRenderService_->getPlaybackReadSource(key, readSource))
         return;
 
-    if (readSource.audioBuffer == nullptr || readSource.audioSampleRate <= 0.0)
+    if (readSource.canonicalBuffer == nullptr || readSource.canonicalSampleRate <= 0.0)
         return;
 
     requestModificationRenderSamples(
-        key, 0, readSource.audioBuffer->getNumSamples(), std::move(snapshot));
+        key, 0, readSource.canonicalBuffer->getNumSamples(), std::move(snapshot));
 }
 
 void OpenTuneDocumentController::invalidateAllModificationCaches()
@@ -2888,8 +3013,8 @@ bool OpenTuneDocumentController::requestCommitPlaybackPosition(double timeInSeco
 std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::readAudioBuffer(ContentKey key) const
 {
     PlaybackReadSource crsSrc;
-    if (contentRenderService_ != nullptr && contentRenderService_->getPlaybackReadSource(key, crsSrc) && crsSrc.audioBuffer != nullptr)
-        return crsSrc.audioBuffer;
+    if (contentRenderService_ != nullptr && contentRenderService_->getPlaybackReadSource(key, crsSrc) && crsSrc.canonicalBuffer != nullptr)
+        return crsSrc.canonicalBuffer;
     return nullptr;
 }
 
@@ -2983,6 +3108,7 @@ void OpenTuneDocumentController::republishPlaybackSourceForModification(ContentK
         return;
 
     contentRenderService_->republishPlaybackSource(key, mod->snapshotContent());
+    refreshRegisteredRenderers(publishModelChange());
 }
 
 std::string OpenTuneDocumentController::readOriginalF0FailureReason(ContentKey key) const

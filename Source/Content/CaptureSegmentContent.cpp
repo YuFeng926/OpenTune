@@ -1,5 +1,6 @@
 #include "CaptureSegmentContent.h"
 #include "ContentSnapshotProjection.h"
+#include "../Utils/PlaybackSampleGeometry.h"
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -67,6 +68,30 @@ void CaptureSegmentContent::applyContentState(ContentState state)
     content_.pitchRevision = content_.analysis.pitchCurve ? 1 : 0;
     content_.timeGridRevision = 1;
     content_.analysis.analysisRevision = content_.analysis.pitchCurve ? 1 : 0;
+
+    // 内容状态携带原率描述时保留；仅有 local PCM 时以该 PCM 建立 native 描述。
+    if (content_.nativeSource.buffer == nullptr && content_.audioBuffer != nullptr) {
+        const int64_t firstSourceSample = PlaybackSampleGeometry::projectToSample(
+            content_.sourceWindow.sourceStartSeconds * content_.sampleRate);
+        content_.nativeSource = NativePcmSource{
+            content_.audioBuffer, content_.sampleRate, firstSourceSample, content_.audioRevision};
+    }
+    // 来源窗口是切片与播放几何的权威时间契约；owner 初始化按媒体帧数/实际率
+    // 建立一次，已有窗口（切片产物）原样保留。
+    if (!(content_.sourceWindow.sourceEndSeconds > content_.sourceWindow.sourceStartSeconds)) {
+        content_.sourceWindow.sourceStartSeconds = 0.0;
+        content_.sourceWindow.sourceEndSeconds =
+            content_.sampleRate > 0.0 && content_.audioBuffer != nullptr
+                ? static_cast<double>(content_.audioBuffer->getNumSamples()) / content_.sampleRate
+                : 0.0;
+    }
+    if (content_.timeGrid == nullptr || content_.timeGrid->empty()) {
+        const double durationSeconds = content_.sampleRate > 0.0 && content_.audioBuffer != nullptr
+            ? static_cast<double>(content_.audioBuffer->getNumSamples()) / content_.sampleRate
+            : 0.0;
+        if (auto grid = TimeGridSnapshot::makeIdentity(durationSeconds))
+            content_.timeGrid = std::move(grid);
+    }
 }
 
 void CaptureSegmentContent::applyAudioBuffer(const juce::AudioBuffer<float>& buffer, double sampleRate)
@@ -87,6 +112,17 @@ void CaptureSegmentContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBu
     content_.audioBuffer = std::move(buffer);
     content_.sampleRate = sampleRate;
     ++content_.audioRevision;
+
+    // 采集内容保留采集时原率 PCM 作为 native 描述；canonical 在发布时派生。
+    content_.nativeSource = NativePcmSource{
+        content_.audioBuffer, sampleRate, 0, content_.audioRevision};
+    content_.firstCanonicalSample = 0;
+
+    // 媒体帧数/实际率是初始来源窗口的唯一权威入口；已有窗口留给切片路径。
+    if (!(content_.sourceWindow.sourceEndSeconds > content_.sourceWindow.sourceStartSeconds)) {
+        content_.sourceWindow.sourceStartSeconds = 0.0;
+        content_.sourceWindow.sourceEndSeconds = durationSeconds;
+    }
 
     // 非正/非有限 duration 生成 identity 失败时保留已有 bootstrap identity，不写 nullptr。
     if (auto realGrid = TimeGridSnapshot::makeIdentity(durationSeconds))

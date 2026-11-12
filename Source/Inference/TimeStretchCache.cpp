@@ -1,10 +1,12 @@
 #include "TimeStretchCache.h"
 #include "RenderCache.h"
 #include "../DSP/ResamplingManager.h"
+#include "../Utils/PlaybackSampleGeometry.h"
 #include "../Utils/TimeCoordinate.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace OpenTune {
 
@@ -20,6 +22,45 @@ size_t TimeStretchCache::entryTotalBytes(const Entry& e) {
 TimeStretchCache::TimeStretchCache() = default;
 TimeStretchCache::~TimeStretchCache() { clear(); }
 
+// Rebuilds one entry's prepared PCM from the complete Stage2 output with the
+// shared range SRC contract and the explicit output-domain origin.
+void TimeStretchCache::prepareEntry(Entry& entry, double targetSr)
+{
+    entry.preparedAudio.reset();
+    entry.preparedSampleRate = 0.0;
+    entry.firstPreparedOutputSample = entry.firstCanonicalOutputSample;
+    if (!entry.canonicalAudio || entry.canonicalAudio->empty()
+        || entry.sampleRate <= 0.0 || targetSr <= 0.0)
+        return;
+
+    if (targetSr == entry.sampleRate) {
+        entry.preparedAudio = entry.canonicalAudio;
+        entry.preparedSampleRate = targetSr;
+        return;
+    }
+
+    using PlaybackSampleGeometry::projectToSample;
+    const int64_t canonicalLength = static_cast<int64_t>(entry.canonicalAudio->size());
+    const int64_t canonicalEnd = entry.firstCanonicalOutputSample + canonicalLength;
+    const int64_t preparedBegin = projectToSample(
+        static_cast<double>(entry.firstCanonicalOutputSample) * targetSr / entry.sampleRate);
+    const int64_t preparedEnd = projectToSample(
+        static_cast<double>(canonicalEnd) * targetSr / entry.sampleRate);
+    const int64_t outputLength = preparedEnd - preparedBegin;
+    if (outputLength <= 0
+        || outputLength > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return;
+
+    entry.preparedAudio = std::make_shared<const std::vector<float>>(
+        preparedResampler_.resampleRange(
+            entry.canonicalAudio->data(), entry.canonicalAudio->size(),
+            entry.sampleRate, targetSr,
+            entry.firstCanonicalOutputSample, preparedBegin,
+            static_cast<int>(outputLength)));
+    entry.preparedSampleRate = targetSr;
+    entry.firstPreparedOutputSample = preparedBegin;
+}
+
 uint32_t TimeStretchCache::beginBuild(ContentKey key)
 {
     if (!key.isValid()) return 0;
@@ -34,7 +75,8 @@ void TimeStretchCache::store(ContentKey key,
                               uint64_t contentRevision,
                               uint64_t timeGridRevision,
                               double sampleRate,
-                              uint32_t buildGeneration)
+                              uint32_t buildGeneration,
+                              int64_t firstCanonicalOutputSample)
 {
     if (!key.isValid() || sampleRate <= 0.0) return;
 
@@ -50,29 +92,9 @@ void TimeStretchCache::store(ContentKey key,
     entry->contentRevision = contentRevision;
     entry->timeGridRevision = timeGridRevision;
     entry->sampleRate = sampleRate;
+    entry->firstCanonicalOutputSample = firstCanonicalOutputSample;
     entry->published = true;
-
-    // Compute prepared at current target rate (inside mutex)
-    double targetSr = targetSampleRate_;
-    if (targetSr > 0.0) {
-        if (std::abs(targetSr - sampleRate) < 1.0) {
-            entry->preparedAudio = entry->canonicalAudio;
-            entry->preparedSampleRate = targetSr;
-        } else {
-            const int outputLength = static_cast<int>(TimeCoordinate::sampleRateProject(
-                static_cast<int64_t>(entry->canonicalAudio->size()), sampleRate, targetSr));
-            if (outputLength > 0) {
-                std::vector<float> resampled = preparedResampler_.resampleExactLength(
-                    entry->canonicalAudio->data(),
-                    entry->canonicalAudio->size(),
-                    static_cast<int>(sampleRate),
-                    static_cast<int>(targetSr),
-                    outputLength);
-                entry->preparedAudio = std::make_shared<const std::vector<float>>(std::move(resampled));
-                entry->preparedSampleRate = targetSr;
-            }
-        }
-    }
+    prepareEntry(*entry, targetSampleRate_);
 
     const size_t newBytes = entryTotalBytes(*entry);
 
@@ -135,25 +157,9 @@ void TimeStretchCache::prepareForPlaybackSampleRate(double targetSr)
         newEntry->contentRevision = entry->contentRevision;
         newEntry->timeGridRevision = entry->timeGridRevision;
         newEntry->sampleRate = entry->sampleRate;
+        newEntry->firstCanonicalOutputSample = entry->firstCanonicalOutputSample;
         newEntry->published = true;
-
-        if (std::abs(targetSr - entry->sampleRate) < 1.0) {
-            newEntry->preparedAudio = entry->canonicalAudio;
-            newEntry->preparedSampleRate = targetSr;
-        } else {
-            const int outputLength = static_cast<int>(TimeCoordinate::sampleRateProject(
-                static_cast<int64_t>(entry->canonicalAudio->size()), entry->sampleRate, targetSr));
-            if (outputLength > 0) {
-                std::vector<float> resampled = preparedResampler_.resampleExactLength(
-                    entry->canonicalAudio->data(),
-                    entry->canonicalAudio->size(),
-                    static_cast<int>(entry->sampleRate),
-                    static_cast<int>(targetSr),
-                    outputLength);
-                newEntry->preparedAudio = std::make_shared<const std::vector<float>>(std::move(resampled));
-                newEntry->preparedSampleRate = targetSr;
-            }
-        }
+        prepareEntry(*newEntry, targetSr);
 
         entry = std::move(newEntry);
     }
@@ -200,9 +206,9 @@ int TimeStretchCache::sliceForOutputRange(ContentKey key,
                                            juce::AudioBuffer<float>& destination,
                                            int destinationStartSample,
                                            int numSamples,
-                                           int targetSampleRate) const
+                                           double targetSampleRate) const
 {
-    if (numSamples <= 0 || targetSampleRate <= 0) return 0;
+    if (numSamples <= 0 || targetSampleRate <= 0.0) return 0;
     if (destinationStartSample < 0) return 0;
     const int destinationChannels = destination.getNumChannels();
     const int destinationSamples  = destination.getNumSamples();
@@ -224,26 +230,31 @@ int TimeStretchCache::sliceForOutputRange(ContentKey key,
         || e.timeGridRevision != timeGridRevision)
         return 0;
 
-    if (std::abs(e.preparedSampleRate - static_cast<double>(targetSampleRate)) >= 1.0) return 0;
+    if (e.preparedSampleRate != targetSampleRate) return 0;
 
-    const std::vector<float>* srcAudio = e.preparedAudio.get();
+    // Integer intersection on the explicit playback grid: a negative read start
+    // keeps its valid suffix, and the leading clipped offset places the copied
+    // PCM at its correct destination position.
+    const auto span = PlaybackSampleGeometry::intersect(
+        { readStartSample, readStartSample + writableSamples },
+        { e.firstPreparedOutputSample,
+          e.firstPreparedOutputSample
+              + static_cast<int64_t>(e.preparedAudio->size()) });
+    if (span.empty()) return 0;
 
-    const int64_t start = readStartSample;
-    if (start < 0 || start >= static_cast<int64_t>(srcAudio->size())) return 0;
+    const int leading = static_cast<int>(span.begin - readStartSample);
+    const int copied = static_cast<int>(span.end - span.begin);
+    const int sourceOffset = static_cast<int>(span.begin - e.firstPreparedOutputSample);
+    if (copied <= 0 || sourceOffset < 0) return 0;
 
-    const int availableSamples = juce::jmin(
-        writableSamples,
-        static_cast<int>(static_cast<int64_t>(srcAudio->size()) - start));
-    if (availableSamples <= 0) return 0;
-
-    for (int i = 0; i < availableSamples; ++i) {
-        const float v = (*srcAudio)[static_cast<size_t>(start + i)];
-        for (int ch = 0; ch < destinationChannels; ++ch) {
-            destination.setSample(ch, destinationStartSample + i, v);
-        }
+    destination.clear(destinationStartSample, writableSamples);
+    const float* source = e.preparedAudio->data() + sourceOffset;
+    for (int ch = 0; ch < destinationChannels; ++ch) {
+        destination.copyFrom(ch, destinationStartSample + leading, source, copied);
     }
 
-    return availableSamples;
+    // Returned extent includes the clipped leading zero prefix.
+    return leading + copied;
 }
 
 int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
@@ -280,23 +291,28 @@ int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
         || !entry.canonicalAudio || entry.canonicalAudio->empty())
         return 0;
 
-    const int64_t start = readStartSample;
-    if (start < 0 || start >= static_cast<int64_t>(entry.canonicalAudio->size()))
+    // Same integer intersection on the TimeGrid local canonical output grid.
+    const auto span = PlaybackSampleGeometry::intersect(
+        { readStartSample, readStartSample + writableSamples },
+        { entry.firstCanonicalOutputSample,
+          entry.firstCanonicalOutputSample
+              + static_cast<int64_t>(entry.canonicalAudio->size()) });
+    if (span.empty())
         return 0;
 
-    const int availableSamples = juce::jmin(
-        writableSamples,
-        static_cast<int>(static_cast<int64_t>(entry.canonicalAudio->size()) - start));
-    if (availableSamples <= 0)
+    const int leading = static_cast<int>(span.begin - readStartSample);
+    const int copied = static_cast<int>(span.end - span.begin);
+    const int sourceOffset = static_cast<int>(span.begin - entry.firstCanonicalOutputSample);
+    if (copied <= 0 || sourceOffset < 0)
         return 0;
 
-    for (int i = 0; i < availableSamples; ++i) {
-        const float value = (*entry.canonicalAudio)[static_cast<size_t>(start + i)];
-        for (int channel = 0; channel < destinationChannels; ++channel)
-            destination.setSample(channel, destinationStartSample + i, value);
-    }
+    destination.clear(destinationStartSample, writableSamples);
+    const float* source = entry.canonicalAudio->data() + sourceOffset;
+    for (int channel = 0; channel < destinationChannels; ++channel)
+        destination.copyFrom(channel, destinationStartSample + leading, source, copied);
 
-    return availableSamples;
+    // Returned extent includes the clipped leading zero prefix.
+    return leading + copied;
 }
 
 void TimeStretchCache::invalidate(ContentKey key)

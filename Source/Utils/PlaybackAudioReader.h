@@ -1,39 +1,32 @@
 #pragma once
 
 #include "../Render/ContentRenderService.h"
+#include "../DSP/ResamplingManager.h"
+#include "PlaybackSampleGeometry.h"
 #include "TimeCoordinate.h"
-#include "../Inference/TimeStretchCache.h"
-#include "../Inference/RenderCache.h"
-#include <juce_core/juce_core.h>
-#include <juce_audio_basics/juce_audio_basics.h>
+#include <algorithm>
 #include <cmath>
 
 namespace OpenTune {
 
-/**
- * PlaybackReadRequest — 实时读取请求，使用目标采样率下的绝对样本位置。
- *
- * readStartSample 是 output/prepared sample 空间中的绝对样本偏移。
- * 调用方负责保证 readStartSample + numSamples 不越界。
- * 只从 prepared data 读取，无 canonical fallback。
- */
+/** Prepared addresses use the source grid for identity playback and the
+ * TimeGrid output grid for Stage2. outputStartSeconds is the owner's explicit
+ * content-local output-time anchor for the first requested sample. */
 struct PlaybackReadRequest {
     PlaybackReadSource source;
     int64_t readStartSample{0};
     double targetSampleRate{0.0};
     int numSamples{0};
+    double outputStartSeconds{0.0};
 
     PlaybackReadRequest() = default;
-    PlaybackReadRequest(PlaybackReadSource src, int64_t startSample, double rate, int samples)
-        : source(src), readStartSample(startSample), targetSampleRate(rate), numSamples(samples) {}
+    PlaybackReadRequest(PlaybackReadSource src, int64_t startSample, double rate,
+                        int samples, double outputTime)
+        : source(std::move(src)), readStartSample(startSample), targetSampleRate(rate),
+          numSamples(samples), outputStartSeconds(outputTime) {}
 };
 
-/**
- * CanonicalReadRequest — 离线 canonical 读取请求（Stage2 source-domain Stage1 读取）。
- *
- * readStartSample 在 canonical 44.1kHz 样本空间中的绝对偏移。
- * 无 target rate 参数，始终读取 44.1kHz truth。
- */
+/** Stage2 input uses content-local canonical indices, matching Stage1 chunks. */
 struct CanonicalReadRequest {
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
     std::shared_ptr<RenderCache> renderCache;
@@ -42,299 +35,155 @@ struct CanonicalReadRequest {
 
     CanonicalReadRequest() = default;
     CanonicalReadRequest(std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                         std::shared_ptr<RenderCache> cache,
-                         int64_t startSample,
-                         int samples)
-        : audioBuffer(std::move(buffer))
-        , renderCache(std::move(cache))
-        , readStartSample(startSample)
-        , numSamples(samples) {}
+                         std::shared_ptr<RenderCache> cache, int64_t startSample, int samples)
+        : audioBuffer(std::move(buffer)), renderCache(std::move(cache)),
+          readStartSample(startSample), numSamples(samples) {}
 };
 
-/**
- * AutomationLane 增益应用：output seconds 经 snapshot->timeGrid->tauInverse
- * 映射到 source seconds 后逐样本 evalAt。无分配、无锁；包络为空 = 单位增益。
- * snapshot->timeGrid 由发布合同保证非空（identity 用非空 identity grid 表达）。
- */
 inline void applyAutomationGain(juce::AudioBuffer<float>& destination,
-                                int destinationStartSample,
-                                int numSamples,
+                                int destinationStartSample, int numSamples,
                                 const EditableContentSnapshot& snapshot,
-                                int64_t readStartSample,
-                                double targetSampleRate)
+                                double outputStartSeconds, double targetSampleRate)
 {
-    const auto& envelope = snapshot.volumeEnvelope;
-    if (envelope.empty())
+    if (snapshot.volumeEnvelope.empty())
         return;
-
-    constexpr float kDbToLinear = 0.11512925465f; // ln(10) / 20
-    const int channels = destination.getNumChannels();
+    constexpr float kDbToLinear = 0.11512925465f;
     for (int s = 0; s < numSamples; ++s) {
-        const double outputSeconds = static_cast<double>(readStartSample + s) / targetSampleRate;
+        const double outputSeconds = outputStartSeconds + static_cast<double>(s) / targetSampleRate;
         const double sourceSeconds = snapshot.timeGrid->tauInverse(outputSeconds);
-        const float gainLinear = std::exp(envelope.evalAt(sourceSeconds) * kDbToLinear);
-        for (int channel = 0; channel < channels; ++channel) {
-            destination.getWritePointer(channel, destinationStartSample + s)[0] *= gainLinear;
-        }
+        const float gain = std::exp(snapshot.volumeEnvelope.evalAt(sourceSeconds) * kDbToLinear);
+        for (int ch = 0; ch < destination.getNumChannels(); ++ch)
+            destination.getWritePointer(ch, destinationStartSample)[s] *= gain;
     }
 }
 
-/**
- * 实时播放读取 — 纯 direct copy，无插值。
- *
- * 全部 editable 数据（timeGrid/volumeEnvelope/contentRevision）来自
- * request.source.contentSnapshot；contentSnapshot 与 snapshot->timeGrid 由发布
- * 合同保证非空（identity 用非空 identity grid 表达，不用 nullptr 语义）。
- * 无 source snapshot 时返回 0。
- *
- * 合同：readStartSample 是 output/prepared sample 位置。
- * 1. 非恒等 timeGrid：只尝试 TimeStretchCache prepared 切片；cache miss 或
- *    版本不匹配立即返回 0，绝不读 preparedDry。导出在 canonical 44.1kHz
- *    目标率下走独立的 canonical Stage2 output 切片。
- * 2. 恒等 timeGrid：从 preparedDry 直接 copy（已在 prepare 阶段重采样），
- *    再按 snapshot->contentRevision 从 RenderCache prepared chunks overlay。
- * 3. 汇合到 applyAutomationGain() 收尾。
- *
- * 无 canonical fallback。prepared 数据不存在时返回 0。
- *
- * per-note EQ 的唯一处理位置在 Stage1 写入缓存前（ProcessRenderRuntime
- * publishChunkWithPerNoteEq），本读取路径不含任何 EQ 代码。
- */
+namespace PlaybackReaderDetail {
+
+inline int writableSamples(const juce::AudioBuffer<float>& destination, int start, int count)
+{
+    if (start < 0 || start >= destination.getNumSamples() || destination.getNumChannels() == 0)
+        return 0;
+    return std::max(0, std::min(count, destination.getNumSamples() - start));
+}
+
+/** Return the written extent, including a clipped leading zero prefix. */
+inline int copyPcm(const juce::AudioBuffer<float>& source, int64_t firstSourceSample,
+                   int64_t readStartSample, int count,
+                   juce::AudioBuffer<float>& destination, int destinationStartSample)
+{
+    using namespace PlaybackSampleGeometry;
+    const auto span = intersect({readStartSample, readStartSample + count},
+                               {firstSourceSample, firstSourceSample + source.getNumSamples()});
+    if (span.empty())
+        return 0;
+    const int leading = static_cast<int>(span.begin - readStartSample);
+    const int copied = static_cast<int>(span.end - span.begin);
+    destination.clear(destinationStartSample, count);
+    for (int ch = 0; ch < destination.getNumChannels(); ++ch)
+        destination.copyFrom(ch, destinationStartSample + leading,
+            source, ch % source.getNumChannels(),
+            static_cast<int>(span.begin - firstSourceSample), copied);
+    return leading + copied;
+}
+
+} // namespace PlaybackReaderDetail
+
+/** Realtime direct copy plus edited overlay and automation. The returned extent
+ * includes the leading zero prefix so a negative read preserves its valid suffix. */
 inline int readPlaybackAudio(const PlaybackReadRequest& request,
-                             juce::AudioBuffer<float>& destination,
-                             int destinationStartSample)
+                             juce::AudioBuffer<float>& destination, int destinationStartSample)
 {
     const auto& snapshot = request.source.contentSnapshot;
-    if (request.numSamples <= 0
-        || request.targetSampleRate <= 0.0
-        || !request.source.hasAudio()
-        || snapshot == nullptr) {
+    const int count = PlaybackReaderDetail::writableSamples(destination, destinationStartSample, request.numSamples);
+    if (count == 0 || request.targetSampleRate <= 0.0 || !request.source.hasAudio() || !snapshot)
         return 0;
-    }
 
-    const int destinationChannels = destination.getNumChannels();
-    const int destinationSamples = destination.getNumSamples();
-    if (destinationChannels <= 0
-        || destinationSamples <= 0
-        || destinationStartSample < 0
-        || destinationStartSample >= destinationSamples) {
-        return 0;
-    }
-
-    const int writableSamples = juce::jmin(request.numSamples, destinationSamples - destinationStartSample);
-    if (writableSamples <= 0) {
-        return 0;
-    }
-
-    // ============================================================
-    // 非恒等 timeGrid — 只走 TimeStretchCache prepared 切片；
-    // miss/版本不匹配立即返回，不读 preparedDry。
-    // ============================================================
+    int wrote = 0;
     if (!snapshot->timeGrid->isIdentity()) {
-        if (request.source.timeStretchCache == nullptr)
+        if (!request.source.timeStretchCache)
             return 0;
-
-        const int wrote = request.source.timeStretchCache->sliceForOutputRange(
-            request.source.contentKey,
-            snapshot->contentRevision,
-            snapshot->timeGridRevision,
-            request.readStartSample,
-            destination,
-            destinationStartSample,
-            writableSamples,
-            static_cast<int>(request.targetSampleRate));
-        if (wrote <= 0)
+        wrote = request.source.timeStretchCache->sliceForOutputRange(
+            request.source.contentKey, snapshot->contentRevision, snapshot->timeGridRevision,
+            request.readStartSample, destination, destinationStartSample, count, request.targetSampleRate);
+    } else {
+        const auto& dry = request.source.preparedDry;
+        if (!dry.buffer || dry.sampleRate != request.targetSampleRate)
             return 0;
-
-        applyAutomationGain(destination, destinationStartSample, wrote,
-                            *snapshot,
-                            request.readStartSample,
-                            request.targetSampleRate);
-        return wrote;
+        wrote = PlaybackReaderDetail::copyPcm(*dry.buffer, dry.firstPreparedSample,
+            request.readStartSample, count, destination, destinationStartSample);
+        if (wrote > 0 && request.source.renderCache)
+            request.source.renderCache->overlayPreparedAudio(
+                destination, destinationStartSample, wrote, request.readStartSample,
+                request.targetSampleRate, snapshot->contentRevision);
     }
-
-    // ============================================================
-    // 恒等 timeGrid — 从 preparedDry 直接 copy（已在 prepare 阶段重采样）
-    // ============================================================
-    const auto& prepared = request.source.preparedDry;
-    if (!prepared.buffer
-        || std::abs(prepared.sampleRate - request.targetSampleRate) >= 1.0) {
-        return 0;  // No canonical fallback
-    }
-
-    const int preparedLen = prepared.buffer->getNumSamples();
-    const int preparedChannels = prepared.buffer->getNumChannels();
-    if (preparedLen <= 0 || preparedChannels <= 0) {
-        return 0;
-    }
-
-    const int64_t start = request.readStartSample;
-    if (start < 0 || start >= preparedLen) {
-        return 0;
-    }
-
-    const int availableSamples = juce::jmin(writableSamples,
-        static_cast<int>(preparedLen - start));
-    if (availableSamples <= 0) {
-        return 0;
-    }
-
-    for (int channel = 0; channel < destinationChannels; ++channel) {
-        const int srcCh = channel % preparedChannels;
-        destination.copyFrom(channel, destinationStartSample,
-                             *prepared.buffer, srcCh,
-                             static_cast<int>(start), availableSamples);
-    }
-
-    // ============================================================
-    // RenderCache prepared overlay — 只复制匹配 contentRevision 的 chunk
-    // ============================================================
-    if (request.source.renderCache != nullptr) {
-        request.source.renderCache->overlayPreparedAudio(destination,
-                                                          destinationStartSample,
-                                                          availableSamples,
-                                                          request.readStartSample,
-                                                          static_cast<int>(request.targetSampleRate),
-                                                          snapshot->contentRevision);
-    }
-
-    // ============================================================
-    // 统一最终增益收尾
-    // ============================================================
-    applyAutomationGain(destination, destinationStartSample, availableSamples,
-                        *snapshot,
-                        request.readStartSample,
-                        request.targetSampleRate);
-
-    return availableSamples;
+    if (wrote > 0)
+        applyAutomationGain(destination, destinationStartSample, wrote, *snapshot,
+                            request.outputStartSeconds, request.targetSampleRate);
+    return wrote;
 }
 
-/**
- * 离线 canonical 读取 — 只作为 Stage2 source-domain Stage1 canonical 读取。
- *
- * 1. 从 source audioBuffer 直接 copy（canonical 44.1kHz truth）。
- * 2. RenderCache::overlayCanonicalAudio 叠加 Stage1 渲染结果。
- *
- * 不使用 TimeStretchCache（Stage2 必须读 Stage1 原始 PCM，不能读自己的输出），
- * 不要求 snapshot timeGrid 参与。无插值、无 target rate 参数、无 prepared fallback。
- */
+/** Stage2 reads the canonical input plus Stage1 edits in content-local indices. */
 inline int readSourceAudioWithStage1Overlay(const CanonicalReadRequest& request,
-                                            juce::AudioBuffer<float>& destination,
-                                            int destinationStartSample)
+                                            juce::AudioBuffer<float>& destination, int destinationStartSample)
 {
-    if (request.numSamples <= 0
-        || request.audioBuffer == nullptr
-        || request.audioBuffer->getNumSamples() <= 0) {
+    const int count = PlaybackReaderDetail::writableSamples(destination, destinationStartSample, request.numSamples);
+    if (count == 0 || !request.audioBuffer)
         return 0;
-    }
-
-    const int destinationChannels = destination.getNumChannels();
-    const int destinationSamples = destination.getNumSamples();
-    if (destinationChannels <= 0
-        || destinationSamples <= 0
-        || destinationStartSample < 0
-        || destinationStartSample >= destinationSamples) {
-        return 0;
-    }
-
-    const int writableSamples = juce::jmin(request.numSamples, destinationSamples - destinationStartSample);
-    if (writableSamples <= 0) {
-        return 0;
-    }
-
-    // ============================================================
-    // Dry canonical direct copy
-    // ============================================================
-    const auto* srcBuf = request.audioBuffer.get();
-    if (!srcBuf || srcBuf->getNumSamples() <= 0) {
-        return 0;
-    }
-
-    const int srcLen = srcBuf->getNumSamples();
-    const int srcChs = srcBuf->getNumChannels();
-    if (srcChs <= 0) return 0;
-
-    const int64_t start = request.readStartSample;
-    if (start < 0 || start >= srcLen) {
-        return 0;
-    }
-
-    const int availableSamples = juce::jmin(writableSamples,
-        static_cast<int>(srcLen - start));
-    if (availableSamples <= 0) {
-        return 0;
-    }
-
-    for (int channel = 0; channel < destinationChannels; ++channel) {
-        const int srcCh = channel % srcChs;
-        destination.copyFrom(channel, destinationStartSample,
-                             *srcBuf, srcCh,
-                             static_cast<int>(start), availableSamples);
-    }
-
-    // ============================================================
-    // RenderCache canonical overlay
-    // ============================================================
-    if (request.renderCache != nullptr) {
-        request.renderCache->overlayCanonicalAudio(destination,
-                                                    destinationStartSample,
-                                                    availableSamples,
-                                                    request.readStartSample);
-    }
-
-    return availableSamples;
+    const int wrote = PlaybackReaderDetail::copyPcm(*request.audioBuffer, 0,
+        request.readStartSample, count, destination, destinationStartSample);
+    if (wrote > 0 && request.renderCache)
+        request.renderCache->overlayCanonicalAudio(destination, destinationStartSample, wrote, request.readStartSample);
+    return wrote;
 }
 
-/** Stage2 source-domain canonical read entry point. */
 inline int readCanonicalAudio(const CanonicalReadRequest& request,
-                              juce::AudioBuffer<float>& destination,
-                              int destinationStartSample)
+                              juce::AudioBuffer<float>& destination, int destinationStartSample)
 {
     return readSourceAudioWithStage1Overlay(request, destination, destinationStartSample);
 }
 
-/**
- * Offline output playback at the canonical export rate.
- *
- * This path never changes the realtime prepared-rate state. Identity content
- * reads source PCM plus the canonical Stage1 overlay; non-identity content
- * reads the canonical Stage2 output.
- */
+/** Offline export reads native PCM on the export grid and applies canonical edits.
+ * Preparation is confined to this requested range and leaves realtime state intact. */
 inline int readExportPlaybackAudio(const PlaybackReadRequest& request,
-                                   juce::AudioBuffer<float>& destination,
-                                   int destinationStartSample)
+                                   juce::AudioBuffer<float>& destination, int destinationStartSample)
 {
     const auto& snapshot = request.source.contentSnapshot;
-    if (request.targetSampleRate <= 0.0
-        || std::abs(request.targetSampleRate - TimeCoordinate::kRenderSampleRate) >= 1.0
-        || request.numSamples <= 0
-        || snapshot == nullptr)
+    const int count = PlaybackReaderDetail::writableSamples(destination, destinationStartSample, request.numSamples);
+    if (count == 0 || request.targetSampleRate != TimeCoordinate::kRenderSampleRate
+        || !snapshot || !request.source.hasAudio())
         return 0;
 
     int wrote = 0;
-    if (snapshot->timeGrid->isIdentity()) {
-        const CanonicalReadRequest canonicalRequest{
-            request.source.audioBuffer,
-            request.source.renderCache,
-            request.readStartSample,
-            request.numSamples};
-        wrote = readSourceAudioWithStage1Overlay(canonicalRequest, destination, destinationStartSample);
-    } else if (request.source.timeStretchCache != nullptr) {
+    if (!snapshot->timeGrid->isIdentity()) {
+        if (!request.source.timeStretchCache)
+            return 0;
         wrote = request.source.timeStretchCache->sliceCanonicalForOutputRange(
-            request.source.contentKey,
-            snapshot->contentRevision,
-            snapshot->timeGridRevision,
-            request.readStartSample,
-            destination,
-            destinationStartSample,
-            request.numSamples);
+            request.source.contentKey, snapshot->contentRevision, snapshot->timeGridRevision,
+            request.readStartSample, destination, destinationStartSample, count);
+    } else {
+        const auto& native = request.source.nativeSource;
+        if (native.sampleRate == request.targetSampleRate) {
+            wrote = PlaybackReaderDetail::copyPcm(*native.buffer, native.firstSourceSample,
+                request.readStartSample, count, destination, destinationStartSample);
+        } else {
+            ResamplingManager resampler;
+            for (int ch = 0; ch < destination.getNumChannels(); ++ch) {
+                const auto pcm = resampler.resampleRange(
+                    native.buffer->getReadPointer(ch % native.buffer->getNumChannels()),
+                    native.buffer->getNumSamples(), native.sampleRate, request.targetSampleRate,
+                    native.firstSourceSample, request.readStartSample, count);
+                destination.copyFrom(ch, destinationStartSample, pcm.data(), count);
+            }
+            wrote = count;
+        }
+        if (wrote > 0 && request.source.renderCache)
+            request.source.renderCache->overlayCanonicalAudio(
+                destination, destinationStartSample, wrote,
+                request.readStartSample - request.source.firstCanonicalSample);
     }
-
     if (wrote > 0)
-        applyAutomationGain(destination, destinationStartSample, wrote,
-                            *snapshot,
-                            request.readStartSample,
-                            request.targetSampleRate);
+        applyAutomationGain(destination, destinationStartSample, wrote, *snapshot,
+                            request.outputStartSeconds, request.targetSampleRate);
     return wrote;
 }
 

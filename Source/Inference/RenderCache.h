@@ -11,6 +11,8 @@
 #include <memory>
 #include <mutex>
 
+#include "../Content/NativePcmSource.h"
+#include "Utils/PlaybackSampleGeometry.h"
 #include "Utils/TimeCoordinate.h"
 #include "../DSP/ResamplingManager.h"
 
@@ -135,6 +137,13 @@ public:
     // 调用方（ContentRenderService::preparePlaybackSampleRate）在设备/导出切换时调用。
     // ============================================================
     bool prepareForPlaybackSampleRate(double targetSr);
+    // Installs the immutable canonical/native source context used by prepared
+    // range SRC. Chunk start/end stay content-local; firstCanonicalSample maps
+    // them onto the global canonical grid. Called by the parent CRS before the
+    // playback source is published. Serialized by preparedBuildMutex_.
+    void setCanonicalSource(std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
+                            int64_t firstCanonicalSample,
+                            NativePcmSource nativeSource);
     struct PreparedSnapshotRollback
     {
         std::shared_ptr<const void> snapshot;
@@ -147,12 +156,13 @@ public:
 
     // 音频线程直接 copy prepared overlay（无插值）。只能读取已 prepared 的目标率数据。
     // 只复制 sourceRevision == expectedContentRevision 的 chunk：版本不匹配的
-    // prepared 数据不得覆盖当前 dry。
+    // prepared 数据不得覆盖当前 dry。targetSampleRate 与 prepared 率按 double
+    // 精确相等比较。
     void overlayPreparedAudio(juce::AudioBuffer<float>& destination,
                               int destStartSample,
                               int numSamples,
                               int64_t readStartSample,
-                              int targetSampleRate,
+                              double targetSampleRate,
                               uint64_t expectedContentRevision) const;
 
     // 非实时 canonical overlay（仅供 Stage2/export 等 44.1kHz 读取）。
@@ -176,15 +186,35 @@ private:
         std::vector<PublishedChunk> chunks;  // sorted by startSample ascending
     };
 
-    // Prepared chunk — 目标播放采样率下，从 canonical 绝对投影得到；
-    // 相邻 chunk 边界精确连续，无缝隙。
-    // 当目标率 == 44.1kHz 时 audio 别名 canonical chunk audio（shared_ptr copy）。
+    // One canonical edit chunk intersecting a prepared chunk's real SRC
+    // support. Identity plus version decides whether the prepared PCM can be
+    // reused when a neighbour changes.
+    struct PreparedEditDependency {
+        std::shared_ptr<const std::vector<float>> audio;
+        int64_t startSample{0};
+        int64_t endSampleExclusive{0};
+        uint64_t audioRevision{0};
+    };
+
+    // Everything a prepared chunk's PCM values depend on: the canonical input
+    // identity/origin, the native fallback identity used outside cropped
+    // canonical storage, and every intersecting edited chunk.
+    struct PreparedDependencies {
+        std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer;
+        int64_t firstCanonicalSample{0};
+        NativePcmSource nativeSource;
+        std::vector<PreparedEditDependency> edits;
+
+        bool operator==(const PreparedDependencies& other) const noexcept;
+    };
+
     struct PublishedPreparedChunk {
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         std::shared_ptr<const std::vector<float>> audio;
         uint64_t audioRevision{0};
         uint64_t sourceRevision{0};  // 当前 canonical chunk 可见的 contentRevision
+        PreparedDependencies dependencies;
     };
 
     struct PublishedPreparedSnapshot {
@@ -206,6 +236,9 @@ private:
     // Prepared rebuild state: serialized by preparedBuildMutex_ (non-audio thread).
     double preparedSampleRate_{0.0};
     ResamplingManager preparedResampler_;
+    std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer_;
+    int64_t firstCanonicalSample_{0};
+    NativePcmSource nativeSource_;
 
     // Writer mutex serializes prepared rebuild + target rate update.
     mutable std::mutex preparedBuildMutex_;
@@ -216,6 +249,17 @@ private:
 
     void publishLocked(std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases);
     bool rebuildPrepared(double requestedSampleRate = -1.0);
+    // Prepared range SRC helpers. Callable only while preparedBuildMutex_ is held.
+    void fillCanonicalContextFromNative(std::vector<float>& context,
+                                        int64_t globalBegin,
+                                        int64_t globalEnd,
+                                        int64_t contextGlobalBegin);
+    std::vector<float> resampleCanonicalRange(
+        const PublishedRenderSnapshot& canonicalSnapshot,
+        const PlaybackSampleGeometry::SampleSpan& support,
+        int64_t targetBegin,
+        int outputLength,
+        double targetSampleRate);
     void pruneRetiredSnapshotsLocked(
         std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases) const;
     // Settled check callable only when lock_ is already held (avoids recursive lock).

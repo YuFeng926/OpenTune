@@ -1,23 +1,15 @@
 #pragma once
 
-#include "../Utils/TimeCoordinate.h"
 #include "../Content/ContentKey.h"
+#include "../Render/PlaybackReadSource.h"
+#include "../Utils/PlaybackSampleGeometry.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <atomic>
 #include <memory>
-#include <optional>
-#include <utility>
 #include <vector>
 
 namespace OpenTune {
-
-struct RenderBlockSpan
-{
-    int destinationStartSample{0};
-    int samplesToCopy{0};
-    double overlapStartSeconds{0.0};
-};
 
 // JUCE ARA playback semantics: realtime calls render only while the host is
 // playing; offline/non-realtime calls may still render while stopped.
@@ -25,69 +17,6 @@ inline bool shouldRenderPlaybackBlock(juce::AudioProcessor::Realtime realtime,
                                       bool isPlaying) noexcept
 {
     return realtime != juce::AudioProcessor::Realtime::yes || isPlaying;
-}
-
-inline std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockStartSeconds,
-                                                                    int blockSamples,
-                                                                    double hostSampleRate,
-                                                                    double playbackStartSeconds,
-                                                                    double playbackEndSeconds) noexcept
-{
-    if (blockSamples <= 0 || hostSampleRate <= 0.0)
-        return std::nullopt;
-
-    const double blockEndSeconds = blockStartSeconds
-        + (static_cast<double>(blockSamples) / hostSampleRate);
-    const double overlapStartSeconds = juce::jmax(blockStartSeconds, playbackStartSeconds);
-    const double overlapEndSeconds = juce::jmin(blockEndSeconds, playbackEndSeconds);
-    if (!(overlapEndSeconds > overlapStartSeconds))
-        return std::nullopt;
-
-    const int destinationStartSample = juce::jlimit(0,
-                                                     blockSamples,
-                                                     static_cast<int>(TimeCoordinate::secondsToSamplesFloor(overlapStartSeconds - blockStartSeconds,
-                                                                                                            hostSampleRate)));
-    const int destinationEndSample = juce::jlimit(destinationStartSample,
-                                                   blockSamples,
-                                                   static_cast<int>(TimeCoordinate::secondsToSamplesCeil(overlapEndSeconds - blockStartSeconds,
-                                                                                                         hostSampleRate)));
-
-    RenderBlockSpan span;
-    span.destinationStartSample = destinationStartSample;
-    span.samplesToCopy = destinationEndSample - destinationStartSample;
-    span.overlapStartSeconds = overlapStartSeconds;
-    return span.samplesToCopy > 0 ? std::optional<RenderBlockSpan>(span) : std::nullopt;
-}
-
-inline std::optional<RenderBlockSpan> computeRegionBlockRenderSpanFromSamplePosition(
-    int64_t blockStartSample,
-    int blockSamples,
-    double hostSampleRate,
-    double playbackStartSeconds,
-    double playbackEndSeconds) noexcept
-{
-    if (blockSamples <= 0 || hostSampleRate <= 0.0)
-        return std::nullopt;
-
-    // Convert region boundaries once into the host sample domain. The block
-    // anchor is already in that domain, so no sample -> seconds -> sample
-    // round-trip is needed for the overlap or destination bounds.
-    const int64_t playbackStartSample = TimeCoordinate::secondsToSamplesFloor(
-        playbackStartSeconds, hostSampleRate);
-    const int64_t playbackEndSample = TimeCoordinate::secondsToSamplesCeil(
-        playbackEndSeconds, hostSampleRate);
-    const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(blockSamples);
-    const int64_t overlapStartSample = juce::jmax(blockStartSample, playbackStartSample);
-    const int64_t overlapEndSample = juce::jmin(blockEndSample, playbackEndSample);
-    if (!(overlapEndSample > overlapStartSample))
-        return std::nullopt;
-
-    RenderBlockSpan span;
-    span.destinationStartSample = static_cast<int>(overlapStartSample - blockStartSample);
-    span.samplesToCopy = static_cast<int>(overlapEndSample - overlapStartSample);
-    span.overlapStartSeconds = TimeCoordinate::samplesToSeconds(overlapStartSample,
-                                                                hostSampleRate);
-    return span.samplesToCopy > 0 ? std::optional<RenderBlockSpan>(span) : std::nullopt;
 }
 
 #if JucePlugin_Enable_ARA
@@ -101,39 +30,64 @@ public:
                              OpenTuneDocumentController* docController);
     using juce::ARAPlaybackRenderer::ARAPlaybackRenderer;
 
+    // Published projection of one playback region. The semantic time fields are
+    // immutable snapshots of the authoritative owner values; the placement is
+    // the fixed integer mapping derived from them at the plan's target rate.
     struct PlaybackRegionRenderItem
     {
         juce::ARAPlaybackRegion* playbackRegion{nullptr};
         ContentKey contentKey;
         double startInPlaybackTime{0.0};
+        double endInPlaybackTime{0.0};
         double startInModificationTime{0.0};
-        double durationInPlaybackTime{0.0};
-
-        double endInPlaybackTime() const noexcept { return startInPlaybackTime + durationInPlaybackTime; }
+        double endInModificationTime{0.0};
+        // M of the fixed mapping: identity uses the global source time of the
+        // region start; non-identity uses the TimeGrid output-domain anchor.
+        double placementAnchorSeconds{0.0};
+        // Content-local output time at the region's playback start, used as the
+        // automation request anchor. Traversal adds integer sample spacing.
+        double semanticAnchorSeconds{0.0};
+        // Slices with a real predecessor share its fixed D. Predecessors are
+        // resolved by source provenance and exact shared boundaries, not by
+        // adjacency in the sorted plan.
+        uint32_t continuityGroup{0};
+        PlaybackSampleGeometry::Placement placement;
+        PlaybackReadSource source;
     };
 
     struct RenderPlan
     {
+        double targetSampleRate{0.0};
+        // False while CRS source views still belong to another sample rate.
+        // The plan carries the region topology but must not render.
+        bool sourceViewsPrepared{true};
         std::vector<juce::ARAPlaybackRegion*> playbackRegions;
         std::vector<PlaybackRegionRenderItem> items;
     };
-    
-~OpenTunePlaybackRenderer() override;
+
+    ~OpenTunePlaybackRenderer() override;
 
     // Owner-driven detach: clears documentController_ for matching owner and publishes empty render plan.
     // Called by OpenTuneDocumentController before clearing playbackRenderers_ in destructor.
     void detachDocumentController(OpenTuneDocumentController& owner);
 
     void refreshRenderPlanFromDocument();
-    
+
+    // Message-thread pure projection: orders items by playback position,
+    // resolves each item's actual predecessor, assigns continuity groups, and
+    // derives the fixed mapping at targetSampleRate. Exposed for contract tests.
+    static void assignContinuityAndPlacements(
+        std::vector<PlaybackRegionRenderItem>& items,
+        double targetSampleRate);
+
     void prepareToPlay(double sampleRate,
                        int maximumSamplesPerBlock,
                        int numChannels,
                        juce::AudioProcessor::ProcessingPrecision precision,
                        AlwaysNonRealtime alwaysNonRealtime) override;
-    
+
     void releaseResources() override;
-    
+
     bool processBlock(juce::AudioBuffer<float>& buffer,
                       juce::AudioProcessor::Realtime realtime,
                       const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept override;
@@ -141,9 +95,9 @@ public:
 protected:
     void didAddPlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept override;
     void willRemovePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept override;
-    
+
 private:
-    double hostSampleRate_ = 0.0;
+    std::atomic<double> hostSampleRate_{0.0};
     int numChannels_ = 2;
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;
@@ -166,18 +120,28 @@ private:
         {
             std::atomic_store_explicit(&value, std::move(next), order);
         }
+
+        bool compareExchange(std::shared_ptr<const RenderPlan> next,
+                             std::shared_ptr<const RenderPlan>& expected) noexcept
+        {
+            return std::atomic_compare_exchange_strong_explicit(
+                &value, &expected, std::move(next),
+                std::memory_order_acq_rel, std::memory_order_acquire);
+        }
     };
 
     AtomicRenderPlan currentPlan_;
 
-    // 临时诊断：定位 Cubase 12 播放静音后整体删除。
-    std::atomic<bool> gateDiagnosticLogged_{false};
-    std::atomic<bool> blockDiagnosticLogged_{false};
-    std::atomic<bool> inRangeDiagnosticLogged_{false};
-
-    std::shared_ptr<const RenderPlan> buildRenderPlan(
-        std::vector<juce::ARAPlaybackRegion*> playbackRegions) const;
+    // Message thread: reads DC projections and source views into an immutable plan.
+    std::shared_ptr<RenderPlan> buildRenderPlan(
+        std::vector<juce::ARAPlaybackRegion*> playbackRegions,
+        double targetSampleRate) const;
     void publishRenderPlanFor(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
+
+    // Non-message caller: reprojects only the frozen plan semantics at a new
+    // target rate and reacquires the prepared source view from CRS.
+    void reprojectRenderPlanForSampleRate(double sampleRate,
+                                          const std::shared_ptr<ContentRenderService>& crs);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTunePlaybackRenderer)
 };

@@ -38,6 +38,7 @@
 #include "Editor/AboutDialogContent.h"
 #include "Editor/ComponentListenerSubscription.h"
 #include "StandaloneAudioDeviceSync.h"
+#include "StandaloneApp.h"
 #include "Utils/TimeCoordinate.h"
 #include "Content/StandaloneClipContent.h"
 #include "Utils/KeyShortcutConfig.h"
@@ -956,26 +957,22 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     syncSharedAppPreferences();
 
-    // Backend reset is asynchronous; F0 model setup must follow its completion
-    // while the render worker is still paused.
+    // Select the F0 model on the message thread before the backend reset can
+    // resume rendering with the newly selected backend.
     const auto sharedPreferences = appPreferences_.getState().shared;
     const auto f0Type = sharedPreferences.f0ModelType;
-    auto applyF0Model = [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this), f0Type]() {
-        if (safeThis == nullptr)
-            return;
+    {
         juce::String reason;
-        if (!safeThis->processorRef_.setF0ModelType(f0Type, &reason)) {
-            safeThis->appPreferences_.setF0ModelType(F0ModelType::FCPE);
+        if (!processorRef_.setF0ModelType(f0Type, &reason)) {
+            appPreferences_.setF0ModelType(F0ModelType::FCPE);
             ConfirmDialogContent::showDiagnostic(
-                &safeThis->contentRoot_, LOC_RAW("OriginalF0 model initialization failed"), reason,
+                &contentRoot_, LOC_RAW("OriginalF0 model initialization failed"), reason,
                 AppLogger::makeDiagnosticText("OriginalF0 model initialization", reason));
         }
-    };
+    }
 
     if (sharedPreferences.renderingPriority == RenderingPriority::CpuFirst)
-        processorRef_.resetInferenceBackend(true, std::move(applyF0Model));
-    else
-        applyF0Model();
+        processorRef_.resetInferenceBackend(true);
 
     beginExternalEditSession();
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
@@ -2529,8 +2526,10 @@ void OpenTuneAudioProcessorEditor::saveAndReturnRequested()
         return;
     }
 
-    if (auto* app = juce::JUCEApplicationBase::getInstance())
-        app->quit();
+    // The one Standalone exit coordinator saves the plug-in state once, destroys the window, holder and processor
+    // on the message thread, and ends the application after the process runtime's final close. It defers its work
+    // to the next message, so this editor stays alive until this handler returns.
+    StandaloneApp::requestQuit();
 }
 
 void OpenTuneAudioProcessorEditor::importAudioRequested()
@@ -2768,7 +2767,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     }
                 }
 
-                const double preparedImportDurationSeconds = TimeCoordinate::samplesToSeconds(preparedImport.storedAudioBuffer.getNumSamples(), TimeCoordinate::kRenderSampleRate);
+                const double preparedImportDurationSeconds = preparedImport.sourceWindow.durationSeconds();
 
                 juce::MessageManager::callAsync([safeThis,
                                                 pendingImport,

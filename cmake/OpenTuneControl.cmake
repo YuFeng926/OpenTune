@@ -429,6 +429,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ProjectSaveCopyChecks|--control-api"
             "ProjectSaveCopyCapability|--control-api"
             "ProjectReopenKeepsTuning|--control-api"
+            "ProjectOneFrame96kRestore|--control-api"
             "ProjectVectors|--control-api"
         )
         # Transport and tracks (Tests/Control/ControlTracksTests.cpp).

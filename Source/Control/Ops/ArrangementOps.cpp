@@ -14,6 +14,7 @@
 #include "PluginProcessor.h"
 #include "Utils/F0Timeline.h"
 #include "Utils/PlacementActions.h"
+#include "Utils/PlaybackSampleGeometry.h"
 #include "Utils/TimeCoordinate.h"
 
 #include <algorithm>
@@ -43,10 +44,12 @@ constexpr double kMinSplitPartSec = 0.1;
 /** Timeline positions this close are one: one sample at OpenTune's render rate, the tolerance of
     OpenTuneAudioProcessor::mergePlacements() and of the arrangement's timeline setters. */
 constexpr double kTimelineEpsilon = 1.0 / TimeCoordinate::kRenderSampleRate;
-/** splitPlacementAtSeconds(): an analysis frame boundary this close to a sample lies on the sample grid. */
-constexpr double kSampleGridTolerance = 1.0e-9;
+/** Precision of the split warning and of the merge's revert recipe comparison. */
+constexpr double kSplitComparisonTolerance = 1.0e-9;
 /** mergePlacements(): gains this close are equal. */
 constexpr float kGainTolerance = 1.0e-6f;
+/** detectedKeysMatch(): confidences this close are equal. */
+constexpr float kKeyConfidenceTolerance = 1.0e-6f;
 /** The largest clip gain OpenTune's interface offers, as a linear factor. The interface's one bounded gain range is the
     volume knob (Source/Standalone/UI/TrackPanelComponent.h, setRange(0.0, 4.0, 0.001)); the clip-gain drag
     (ArrangementViewComponent.cpp, mouseDrag) has no bound of its own, so the API applies the interface's
@@ -565,10 +568,12 @@ void warnClamped(ControlWriteEnvelope& envelope, const ControlPlacementRef& clip
 /**
  * Where OpenTuneAudioProcessor::splitPlacementAtSeconds() cuts the clip, in timeline seconds, or why it would not:
  * its checks in its order, before anything changes. The position must lie inside the clip with both parts longer than
- * 0.1 s (split_out_of_range), the content's pitch analysis must be ready (NOT_READY), its time grid unedited, and the
- * nearest analysis frame boundary (F0Timeline::nearestFrameBoundary(), where the cut snaps to) must fall on an audio
- * sample and leave both parts longer than 0.1 s. OpenTune refuses the other cases without a word; the API names them
- * UNSUPPORTED(upstream_absent).
+ * 0.1 s (split_out_of_range), the content's audio and native PCM must be available, its time grid unedited, and its
+ * pitch analysis ready (NOT_READY). The nearest analysis frame boundary (F0Timeline::nearestFrameBoundary(), where
+ * the cut snaps to) must leave both parts longer than 0.1 s and its canonical sample address must lie inside the
+ * clip's audio. The cut is the frame boundary itself: OpenTune maps it to canonical samples with
+ * PlaybackSampleGeometry::projectToSample() and does not require the boundary to sit on a sample. OpenTune refuses
+ * the other cases without a word; the API names them UNSUPPORTED(upstream_absent).
  */
 Result<double> checkSplit(ControlOpContext& context, const ControlPlacementRef& clip, double atTimelineSec)
 {
@@ -580,19 +585,17 @@ Result<double> checkSplit(ControlOpContext& context, const ControlPlacementRef& 
     if (offset <= kMinSplitPartSec || offset >= p.durationSeconds - kMinSplitPartSec)
         return outOfRange("atTimelineSec must lie inside the clip, more than 0.1 s from both edges");
     const auto snapshot = controlLiveSnapshot(context, p.contentKey);
-    if (snapshot == nullptr || snapshot->audioBuffer == nullptr)
+    if (snapshot == nullptr || snapshot->audioBuffer == nullptr || snapshot->nativeSource.buffer == nullptr)
         return controlOpError("INTERNAL", "", "the content of the clip is not available");
-    const ControlContentRef content{p.contentKey, controlContentId(context, p.contentKey), snapshot};
-    if (auto notReady = controlCheckContentReady(context, content))
-        return *notReady;
     if (snapshot->timeGrid != nullptr && !snapshot->timeGrid->isIdentity())
         return controlOpError("UNSUPPORTED", "upstream_absent",
                               "OpenTune does not split a clip whose time grid was edited");
+    const ControlContentRef content{p.contentKey, controlContentId(context, p.contentKey), snapshot};
+    if (auto notReady = controlCheckContentReady(context, content))
+        return *notReady;
     const double sampleRate = snapshot->audioSampleRate;
     if (!std::isfinite(sampleRate) || sampleRate <= 0.0)
         return controlOpError("UNSUPPORTED", "upstream_absent", "the audio of the clip has no sample rate");
-    if (snapshot->pitchCurve == nullptr)
-        return controlOpError("NOT_READY", "f0_not_ready", "the clip has no pitch analysis yet");
     const auto& curve = *snapshot->pitchCurve;
     const int frames = static_cast<int>(curve.getOriginalF0().size());
     const F0Timeline timeline(curve.getHopSize(), curve.getSampleRate(), frames);
@@ -600,24 +603,26 @@ Result<double> checkSplit(ControlOpContext& context, const ControlPlacementRef& 
     if (boundary <= 0 || boundary >= frames)
         return outOfRange("no analysis frame boundary inside the clip lies near atTimelineSec");
     const double splitSourceSeconds = timeline.timeAtFrame(boundary);
-    const auto splitSample = TimeCoordinate::secondsToSamplesNearest(splitSourceSeconds, sampleRate);
-    if (std::abs(TimeCoordinate::samplesToSeconds(splitSample, sampleRate) - splitSourceSeconds) > kSampleGridTolerance)
-        return controlOpError("UNSUPPORTED", "upstream_absent",
-                              "the analysis frame nearest to atTimelineSec does not fall on an audio sample, where "
-                              "OpenTune cuts");
-    if (splitSample <= 0 || splitSample >= snapshot->audioBuffer->getNumSamples())
-        return outOfRange("the nearest analysis frame lies outside the audio of the clip");
     const double splitOffset = splitSourceSeconds - p.clipInSeconds;
     if (splitOffset <= kMinSplitPartSec || splitOffset >= p.durationSeconds - kMinSplitPartSec)
         return outOfRange("the nearest analysis frame lies within 0.1 s of an edge of the clip");
+    // The cut address on the canonical samples of the content: the boundary in the source's own
+    // window, minus the first sample the content's audio buffer holds.
+    const double boundarySourceSeconds = snapshot->sourceWindow.sourceStartSeconds + splitSourceSeconds;
+    const auto boundarySample = PlaybackSampleGeometry::projectToSample(boundarySourceSeconds * sampleRate);
+    const auto leadingSamples = boundarySample - snapshot->firstCanonicalSample;
+    const auto totalSamples = snapshot->audioBuffer->getNumSamples();
+    if (leadingSamples <= 0 || leadingSamples >= totalSamples)
+        return outOfRange("the analysis frame nearest to atTimelineSec lies outside the audio of the clip");
     return p.timelineStartSeconds + splitOffset;
 }
 
 /**
  * The conditions of OpenTuneAudioProcessor::mergePlacements() that the API can check before anything changes, in its
- * order: one track, the trailing clip starting where the leading clip ends, equal gain and name, one source, equal
- * sample rates, adjacent source windows to the sample, and no analysis running. mergePlacements() also refuses
- * contents with different keys and pitch curves it cannot join; the call reports its refusal with the same reason.
+ * order: one track, the trailing clip starting where the leading clip ends, equal gain and name, one source lineage
+ * (the same sourceId and shared native PCM), equal canonical sample rates, the same authoritative source-window
+ * boundary, equal detected keys, and no analysis running. mergePlacements() also refuses pitch curves it cannot
+ * join; the call reports its refusal with the same reason.
  */
 std::optional<Error> checkMerge(ControlOpContext& context, const ControlPlacementRef& leading,
                                 const ControlPlacementRef& trailing)
@@ -638,14 +643,20 @@ std::optional<Error> checkMerge(ControlOpContext& context, const ControlPlacemen
     const auto first = controlLiveSnapshot(context, a.contentKey);
     const auto second = controlLiveSnapshot(context, b.contentKey);
     if (first == nullptr || second == nullptr || first->audioBuffer == nullptr || second->audioBuffer == nullptr
-        || first->sourceWindow.sourceId == 0 || first->sourceWindow.sourceId != second->sourceWindow.sourceId)
+        || first->nativeSource.buffer == nullptr || second->nativeSource.buffer == nullptr
+        || first->sourceWindow.sourceId == 0 || first->sourceWindow.sourceId != second->sourceWindow.sourceId
+        || !(first->nativeSource == second->nativeSource))
         return fail("the clips do not show parts of one source");
     if (!std::isfinite(first->audioSampleRate) || first->audioSampleRate <= 0.0
         || first->audioSampleRate != second->audioSampleRate)
         return fail("the audio of the clips has different sample rates");
-    if (TimeCoordinate::secondsToSamplesNearest(first->sourceWindow.sourceEndSeconds, first->audioSampleRate)
-        != TimeCoordinate::secondsToSamplesNearest(second->sourceWindow.sourceStartSeconds, second->audioSampleRate))
+    if (first->sourceWindow.sourceEndSeconds != second->sourceWindow.sourceStartSeconds)
         return fail("the clips do not show adjacent parts of their source");
+    if (first->detectedKey.root != second->detectedKey.root
+        || first->detectedKey.scale != second->detectedKey.scale
+        || first->detectedKey.origin != second->detectedKey.origin
+        || std::abs(first->detectedKey.confidence - second->detectedKey.confidence) > kKeyConfidenceTolerance)
+        return fail("the clips differ in their detected key");
     if (first->originalF0State == OriginalF0State::Extracting || second->originalF0State == OriginalF0State::Extracting)
         return controlOpError("NOT_READY", "f0_not_ready", "the pitch analysis of a clip is running");
     return std::nullopt;
@@ -668,7 +679,7 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     ControlWriteEnvelope envelope(context);
     const auto label = placementLabel(clip);
     const auto addWarnings = [&] {
-        if (std::abs(point.value() - at) > kSampleGridTolerance) {
+        if (std::abs(point.value() - at) > kSplitComparisonTolerance) {
             auto data = JsonValue::object();
             data.appendMember("requestedTimelineSec", controlJsonSeconds(at));
             data.appendMember("appliedTimelineSec", controlJsonSeconds(point.value()));
@@ -784,7 +795,7 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     if (mergedClip != nullptr) {
         const auto cut = checkSplit(context, *mergedClip, boundary);
         if (cut.ok()) {
-            giveRecipe = std::abs(cut.value() - boundary) <= kSampleGridTolerance;
+            giveRecipe = std::abs(cut.value() - boundary) <= kSplitComparisonTolerance;
         } else {
             const auto reply = controlMapError(cut.error());
             cutKind = reply.kind;

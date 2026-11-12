@@ -395,9 +395,10 @@ void NotePitchAudition::run()
                 }
             }
 
+            // 音高试听 DSP 以内容本地请求时间读取 canonical 编辑输入。
             preview = renderNotePitchPreview(
-                *source.audioBuffer,
-                source.audioSampleRate,
+                *source.canonicalBuffer,
+                source.canonicalSampleRate,
                 request.startSeconds,
                 request.endSeconds,
                 request.targetHz,

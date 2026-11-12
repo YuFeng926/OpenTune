@@ -18,6 +18,7 @@
 #include "SourceStore.h"
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
+#include "Utils/TimeCoordinate.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -280,37 +281,114 @@ struct ExportPlan
     /** Each content of the export once, in the order of the clips. */
     std::vector<ContentKey> contents;
     /** A token of everything besides the contents that the file is made of: each clip's track, position,
-        length, source window, gain and fades, and the volume of its track. */
+        length, source window, gain and fades, the volume of its track, and the fixed (H, D, A, Z) mapping the
+        shared builder gives it (which may carry the D of a continuous clip before it). */
     std::string mixToken;
 };
 
-bool hasPlaybackAudio(OpenTuneAudioProcessor& processor, const ContentKey& key)
+bool hasPlaybackAudio(OpenTuneAudioProcessor& processor, const ContentKey& key, PlaybackReadSource* source = nullptr)
 {
     // ContentRenderService::getPlaybackReadSource(): what OpenTune's export reads; a clip without one is
     // left out of the file.
     const auto* service = processor.getContentRenderService();
-    PlaybackReadSource source;
-    return service != nullptr && service->getPlaybackReadSource(key, source) && source.hasAudio();
+    PlaybackReadSource read;
+    if (service == nullptr || !service->getPlaybackReadSource(key, read) || !read.hasAudio())
+        return false;
+    if (source != nullptr)
+        *source = std::move(read);
+    return true;
 }
 
-void addClip(ExportPlan& plan, ControlTokenHasher& hasher, int trackId, std::uint64_t placementId,
-             const ContentKey& key, double startSec, double durationSec, double clipInSec, float gain, double fadeInSec,
-             double fadeOutSec, float trackVolume)
+/** A clip of the export with its source view and the fixed (H, D, A, Z) mapping it is rendered with. */
+struct ExportClip
 {
-    if (std::find(plan.contents.begin(), plan.contents.end(), key) == plan.contents.end())
-        plan.contents.push_back(key);
+    std::uint64_t placementId = 0;
+    StandaloneArrangement::PlaybackPlacement playback;
+};
+
+/**
+ * The clips of one track as OpenTune's export lays them out (freezeExportSources() in Source/PluginProcessor.cpp):
+ * clips whose source holds no audio leave the list, and StandaloneArrangement::buildPlaybackGeometry() gives each
+ * remaining clip the mapping built from the whole track. A clip after a continuous one shares that clip's D, so its
+ * samples depend on the clip before it.
+ */
+void buildExportClips(OpenTuneAudioProcessor& processor, std::vector<ExportClip>& clips)
+{
+    clips.erase(
+        std::remove_if(
+            clips.begin(), clips.end(),
+            [&processor](ExportClip& clip) {
+                if (clip.playback.hasPlayableSource())
+                    return false;
+                PlaybackReadSource source;
+                if (!hasPlaybackAudio(processor, clip.playback.contentKey, &source))
+                    return true;
+                clip.playback.source = std::move(source);
+                return false;
+            }),
+        clips.end());
+    std::vector<StandaloneArrangement::PlaybackPlacement> playback;
+    playback.reserve(clips.size());
+    for (const auto& clip : clips)
+        playback.push_back(clip.playback);
+    StandaloneArrangement::buildPlaybackGeometry(playback, TimeCoordinate::kRenderSampleRate);
+    for (std::size_t i = 0; i < clips.size(); ++i)
+        clips[i].playback = std::move(playback[i]);
+}
+
+/** The playback placement of a clip of the arrangement, as exportPlacementFrom() builds it. */
+ExportClip exportClipOf(const StandaloneArrangement::Placement& placement)
+{
+    ExportClip clip;
+    clip.placementId = placement.placementId;
+    clip.playback.contentKey = placement.contentKey;
+    clip.playback.timelineStartSeconds = placement.timelineStartSeconds;
+    clip.playback.durationSeconds = placement.durationSeconds;
+    clip.playback.clipInSeconds = placement.clipInSeconds;
+    clip.playback.gain = placement.gain;
+    clip.playback.fadeInDuration = placement.fadeInDuration;
+    clip.playback.fadeOutDuration = placement.fadeOutDuration;
+    return clip;
+}
+
+/** Every clip of a track of the arrangement, in the track's order. */
+std::vector<ExportClip> trackExportClips(const StandaloneArrangement& arrangement, int trackId)
+{
+    std::vector<ExportClip> clips;
+    const int count = arrangement.getNumPlacements(trackId);
+    clips.reserve(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        StandaloneArrangement::Placement placement;
+        if (arrangement.getPlacementByIndex(trackId, index, placement))
+            clips.push_back(exportClipOf(placement));
+    }
+    return clips;
+}
+
+void addClip(ExportPlan& plan, ControlTokenHasher& hasher, int trackId, const ExportClip& clip, float trackVolume)
+{
+    const auto& playback = clip.playback;
+    if (std::find(plan.contents.begin(), plan.contents.end(), playback.contentKey) == plan.contents.end())
+        plan.contents.push_back(playback.contentKey);
     hasher.add(trackId)
-        .add(placementId)
-        .add(static_cast<int>(key.domainKind))
-        .add(key.objectId)
-        .add(key.sourceWindowDiscriminator)
-        .add(startSec)
-        .add(durationSec)
-        .add(clipInSec)
-        .add(static_cast<double>(gain))
-        .add(fadeInSec)
-        .add(fadeOutSec)
-        .add(static_cast<double>(trackVolume));
+        .add(clip.placementId)
+        .add(static_cast<int>(playback.contentKey.domainKind))
+        .add(playback.contentKey.objectId)
+        .add(playback.contentKey.sourceWindowDiscriminator)
+        .add(playback.timelineStartSeconds)
+        .add(playback.durationSeconds)
+        .add(playback.clipInSeconds)
+        .add(static_cast<double>(playback.gain))
+        .add(playback.fadeInDuration)
+        .add(playback.fadeOutDuration)
+        .add(static_cast<double>(trackVolume))
+        // The fixed mapping the export renders with: a clip that follows a continuous one inherits its D, so
+        // these samples cover the clips before it as well.
+        .add(playback.sampleGeometry.playbackRate)
+        .add(playback.sampleGeometry.offsetSamples)
+        .add(playback.sampleGeometry.playbackBeginSample)
+        .add(playback.sampleGeometry.playbackEndSample)
+        .add(playback.outputAnchorSeconds);
 }
 
 ExportPlan buildPlan(ControlOpContext& context, const ExportTarget& target)
@@ -339,25 +417,29 @@ ExportPlan buildPlan(ControlOpContext& context, const ExportTarget& target)
             }
             plan.clipTrackId = trackId;
             plan.clipStartSec = placement.timelineStartSeconds;
-            if (hasPlaybackAudio(processor, placement.contentKey))
-                addClip(plan, hasher, trackId, placement.placementId, placement.contentKey,
-                        placement.timelineStartSeconds, placement.durationSeconds, placement.clipInSeconds,
-                        placement.gain, placement.fadeInDuration, placement.fadeOutDuration,
-                        arrangement->getTrackVolume(trackId));
+            // exportPlacementAudio() lays out the whole track, so the selected clip may inherit the fixed D of
+            // a continuous clip before it; its geometry is part of what the file is made of.
+            auto clips = trackExportClips(*arrangement, trackId);
+            buildExportClips(processor, clips);
+            const auto targetClip = std::find_if(clips.begin(), clips.end(), [&placement](const ExportClip& clip) {
+                const auto& p = clip.playback;
+                return p.contentKey == placement.contentKey
+                       && p.timelineStartSeconds == placement.timelineStartSeconds
+                       && p.durationSeconds == placement.durationSeconds
+                       && p.clipInSeconds == placement.clipInSeconds && p.gain == placement.gain
+                       && p.fadeInDuration == placement.fadeInDuration
+                       && p.fadeOutDuration == placement.fadeOutDuration;
+            });
+            if (targetClip != clips.end())
+                addClip(plan, hasher, trackId, *targetClip, arrangement->getTrackVolume(trackId));
             break;
         }
         case ExportKind::Track: {
             const float volume = arrangement->getTrackVolume(target.trackId);
-            const int count = arrangement->getNumPlacements(target.trackId);
-            for (int index = 0; index < count; ++index) {
-                StandaloneArrangement::Placement placement;
-                if (!arrangement->getPlacementByIndex(target.trackId, index, placement)
-                    || !hasPlaybackAudio(processor, placement.contentKey))
-                    continue;
-                addClip(plan, hasher, target.trackId, placement.placementId, placement.contentKey,
-                        placement.timelineStartSeconds, placement.durationSeconds, placement.clipInSeconds,
-                        placement.gain, placement.fadeInDuration, placement.fadeOutDuration, volume);
-            }
+            auto clips = trackExportClips(*arrangement, target.trackId);
+            buildExportClips(processor, clips);
+            for (const auto& clip : clips)
+                addClip(plan, hasher, target.trackId, clip, volume);
             break;
         }
         case ExportKind::Master: {
@@ -368,11 +450,16 @@ ExportPlan buildPlan(ControlOpContext& context, const ExportTarget& target)
                 const auto& track = snapshot->tracks[static_cast<std::size_t>(trackId)];
                 if (snapshot->anySoloed ? !track.isSolo : track.isMuted)
                     continue;
-                for (const auto& placement : track.placements)
-                    if (hasPlaybackAudio(processor, placement.contentKey))
-                        addClip(plan, hasher, trackId, 0, placement.contentKey, placement.timelineStartSeconds,
-                                placement.durationSeconds, placement.clipInSeconds, placement.gain,
-                                placement.fadeInDuration, placement.fadeOutDuration, track.volume);
+                std::vector<ExportClip> clips;
+                clips.reserve(track.placements.size());
+                for (const auto& placement : track.placements) {
+                    ExportClip clip;
+                    clip.playback = placement;
+                    clips.push_back(std::move(clip));
+                }
+                buildExportClips(processor, clips);
+                for (const auto& clip : clips)
+                    addClip(plan, hasher, trackId, clip, track.volume);
             }
             break;
         }
@@ -813,8 +900,8 @@ private:
         }
         PlaybackReadSource source;
         if (service->getPlaybackReadSource(key, source)
-            && service->enqueueStage2RebuildWhenCanonicalSettled(key, snapshot, source.audioBuffer,
-                                                                 source.audioSampleRate)) {
+            && service->enqueueStage2RebuildWhenCanonicalSettled(key, snapshot, source.canonicalBuffer,
+                                                                 source.canonicalSampleRate)) {
             progress.stretchRequestedFor = revisions;
             ++progress.stretchRequests;
             progress.stretchIdleSince.reset();
@@ -887,9 +974,9 @@ private:
                                         const RenderCache& cache)
     {
         PlaybackReadSource source;
-        if (!service.getPlaybackReadSource(key, source) || source.audioBuffer == nullptr)
+        if (!service.getPlaybackReadSource(key, source) || source.canonicalBuffer == nullptr)
             return true;
-        const std::int64_t sampleCount = source.audioBuffer->getNumSamples();
+        const std::int64_t sampleCount = source.canonicalBuffer->getNumSamples();
         juce::AudioBuffer<float> probe(1, kPublishedAudioProbeSamples);
         for (std::int64_t start = 0; start < sampleCount; start += kPublishedAudioProbeSamples) {
             const int count =

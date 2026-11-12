@@ -719,6 +719,9 @@ void scenarioProjectSaveCopyCapability();
     parameters right after the open, then, once the analysis is done again, the corrected flags of the notes and the
     corrected pitch line on the voiced frames. */
 void scenarioProjectReopenKeepsTuning();
+/** A one-frame 96 kHz source saved and opened again: the canonical of one sample, the native PCM, the source window
+    seconds, the time grid and the clip's placement come back. */
+void scenarioProjectOneFrame96kRestore();
 /** The specification's vectors of project.save, project.saveAs, project.open and project.clearRecent, against the
     real dispatcher with a real project session and a worker pool. */
 void scenarioProjectVectors();

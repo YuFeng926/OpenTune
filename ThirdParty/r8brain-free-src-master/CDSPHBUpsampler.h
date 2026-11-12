@@ -651,6 +651,16 @@ public:
 		return( MaxInLen * 2 );
 	}
 
+	int getFilterLeftLen() const
+	{
+		return( fll );
+	}
+
+	int getFilterRightLen() const
+	{
+		return( fl2 );
+	}
+
 	virtual void clear()
 	{
 		if( DoConsumeLatency )

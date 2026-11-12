@@ -725,13 +725,15 @@ clip or track and stereo for the master mix.
   everything ready ends the write with the same `NOT_READY(export_wait_timeout)` (not executed, no file) instead of
   `IO_ERROR(write_failed)`.
 - In the tick that finds every content ready, the job records a token of the inputs (each clip's track,
-  position, length, source window, gain and fades, its track's volume, and per content the revision, time
-  grid and pitch shift) and the revisions it reports, and starts the writer on a thread of its own with a
+  position, length, source window, gain and fades, its track's volume, its fixed sample mapping and output
+  anchor, and per content the revision, time grid and pitch shift) and the revisions it reports, and starts the writer on a thread of its own with a
   temporary file in the target directory. Once the file is written: a changed input token is
   `REVISION_CONFLICT(changed_during_export)`; then cancellability ends, loaded media are checked again,
   and the file is moved into place with one rename (`ifExists` `error` and `rename` with a rename that
   never replaces, trying `<stem> (2).wav` to `<stem> (999).wav` for `rename`; `overwrite` with one that
   replaces).
+- Clip exports build the selected clip's sample mapping from the whole track, including the offset inherited
+  from continuous predecessors. Readiness and dry-content reporting cover the selected clip's content.
 - Every failure and every cancellation deletes the temporary file, leaves the target untouched
   (`executed` false) and releases the lock. A cancellation while the file is written waits for the write.
 - The result reports what the file holds: path, sample rate, channel count and sample format read back
@@ -1064,9 +1066,10 @@ the trailing clip of a merge, the slot of `toTrackId`), then busy, then `expecte
   `TRACK_AUTO_REVEALED`, side effect `tracksRevealed`); a clip that ends up overlapping another on its track carries
   `OVERLAPS_CLIP`.
 - `split` checks what `splitPlacementAtSeconds()` checks, in its order (mirror `arrangement-split`): a position more
-  than 0.1 s inside the clip (`split_out_of_range`), a ready analysis (`NOT_READY`), an unedited time grid and an
-  analysis frame boundary on the sample grid (OpenTune refuses the other cases silently: `UNSUPPORTED(upstream_absent)`).
-  The cut snaps to the nearest frame boundary (`SPLIT_SNAPPED`). `merge` checks what `mergePlacements()` checks before
+  than 0.1 s inside the clip (`split_out_of_range`), available native PCM, an unedited time grid, and a ready analysis
+  (`NOT_READY`). The cut snaps to the nearest analysis frame boundary (`SPLIT_SNAPPED`), retains its seconds value,
+  and projects that value to a canonical sample address inside the audio buffer. Both parts remain longer than 0.1 s.
+  `merge` requires a shared native source identity and exactly adjacent authoritative source windows. It checks what `mergePlacements()` checks before
   it changes anything (`merge_not_possible`, `NOT_READY` while an analysis runs) and reports its later refusals the same
   way. `delete` needs `confirm` (`confirm_required`) and removes the clips with `deletePlacement()`, in one undo entry.
 - `dryRun` predicts the changes and warnings without changing anything; a split or merge prediction names the clips it

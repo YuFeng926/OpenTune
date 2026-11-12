@@ -119,7 +119,6 @@ public:
         std::mutex mutex;
         std::condition_variable cv;
         std::atomic<bool> finishing{false};
-        std::atomic<bool> closeRequested{false};
         std::atomic<bool> acked{false};
         std::atomic<bool> paused{false};
     };
@@ -137,6 +136,38 @@ public:
     void retainOwner();
     void releaseOwner() noexcept;
 
+    /**
+     * Final close. Standalone and VST3 call these from their exit lanes and
+     * never reopen the runtime afterwards.
+     *
+     * shutdownAsync closes command acceptance, appends the single Stop behind
+     * every accepted command, and returns. The control worker executes all
+     * accepted commands, tears down Domain/Scheduler/DML, then posts one
+     * message completion; that callback waits for the worker exit predicate,
+     * unlocks, joins and cleans up before invoking completion.
+     *
+     * shutdownAndJoin uses the same Stop path without a message completion;
+     * it waits on the mutex-paired worker-exit predicate, unlocks, joins, then
+     * drains every accepted async delivery while the module is still loaded.
+     * Callers may invoke it from the message thread or from any other thread:
+     * all runtime deliveries queued before the final shutdown are executed
+     * before it returns, and later deliveries are rejected, so no runtime
+     * message-thread callback remains queued after module unload.
+     */
+    void shutdownAsync(std::function<void()> completion);
+    void shutdownAndJoin();
+
+    // Single entry for process-runtime message-thread deliveries. Normal
+    // operation preserves juce::MessageManager::callAsync ordering; the final
+    // shutdown observes every accepted delivery through this fence.
+    static bool postAsyncCallback(std::function<void()> callback);
+
+    // Registered by ContentRenderService along its execution lease attach and
+    // detach. A successful shared backend change notifies every registered
+    // service once on the message thread.
+    void registerBackendChangeListener(std::weak_ptr<ContentRenderService> service);
+    void unregisterBackendChangeListener(ContentRenderService* service);
+
     void processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
                                RenderJob& job,
                                bool lightPitchEnabled,
@@ -146,10 +177,11 @@ public:
      * 异步模型切换 / 后端重置 API（UI 线程调用）：
      * 只投递命令到进程寿命 control worker 并立即返回。control worker 串行执行
      * 耗时 Session 销毁、按当前配置重建、AccelerationDetector resetAndDetect。
-     * completion 经 MessageManager::callAsync 投递回消息线程；调用方在其
-     * completion gate 关闭后直接丢弃（不访问 owner）。
+     * setVocoderModelWeight 返回 true 表示命令已在 control queue 锁内接受；
+     * false 表示拒绝且不执行、不持久化。completion 经 MessageManager::callAsync
+     * 投递回消息线程；调用方在其 completion gate 关闭后直接丢弃（不访问 owner）。
      */
-    void setVocoderModelWeight(const VocoderModelWeight& weight,
+    bool setVocoderModelWeight(const VocoderModelWeight& weight,
                                std::shared_ptr<ContentRenderService> crs,
                                ControlCompletion completion,
                                std::shared_ptr<CompletionGate> completionGate);
@@ -242,6 +274,8 @@ private:
         std::shared_ptr<ControlTransaction> transaction;
         ControlCompletion completion;
         std::shared_ptr<CompletionGate> completionGate;
+        bool shutdownPostCompletion{false};
+        uint64_t shutdownGeneration{0};
     };
 
     struct DeferredFailureNotification
@@ -263,13 +297,23 @@ private:
 
     void controlWorkerLoop();
     bool postControlCommand(ControlCommand command);
+    void startControlWorker();
+    // Requires shutdownMutex_. Closes acceptance, appends the single Stop
+    // behind every accepted command and starts the worker when needed.
+    void beginShutdownLocked(bool postCompletion);
+    void completeAsyncShutdown(uint64_t generation);
+    bool postAsyncDelivery(std::function<void()> callback);
+    void drainAsyncDeliveries();
     void finishShutdown(uint64_t generation);
     void shutdownLocked(std::unique_lock<std::mutex>& shutdownLock);
+    void postBackendChangeNotification();
+    void notifyBackendChangeListeners();
     static bool claimControlTransaction(const std::shared_ptr<ControlTransaction>& transaction) noexcept;
     static void completeClaimedControlTransaction(const std::shared_ptr<ControlTransaction>& transaction,
                                                   const char* reason) noexcept;
     static void finishControlTransaction(const std::shared_ptr<ControlTransaction>& transaction,
                                          const char* reason) noexcept;
+    static void waitForControlTransactionAck(const std::shared_ptr<ControlTransaction>& transaction);
 
     std::thread controlWorker_;
     mutable std::mutex controlMutex_;
@@ -278,13 +322,25 @@ private:
     std::deque<ControlCommand> controlQueue_;
     mutable std::mutex shutdownMutex_;
     bool ensureVocoderQueued_{false}; // controlMutex_ protected
+    bool acceptingCommands_{true}; // controlMutex_ protected
+    bool stopQueued_{false}; // controlMutex_ protected
     std::atomic<bool> deferredEnsureRetryPending_{false};
-    std::atomic<bool> shuttingDown_{false}; // shutdownMutex_ serializes transitions
+    std::atomic<bool> shuttingDown_{false};
     std::atomic<uint64_t> shutdownGeneration_{0};
-    std::atomic<bool> workerExitDispatchAttempted_{false};
-    std::atomic<bool> workerExitDispatchPosted_{false};
+    bool workerExited_{false}; // shutdownMutex_ protected
+    bool workerExitDispatchPosted_{false}; // shutdownMutex_ protected
+    bool shutdownFinishStarted_{false}; // shutdownMutex_ protected
+    bool shutdownFinished_{false}; // shutdownMutex_ protected
+    std::function<void()> shutdownCompletion_; // shutdownMutex_ protected
+    std::mutex asyncDeliveryMutex_;
+    std::condition_variable asyncDeliveryCv_;
+    bool asyncDeliveryClosed_{false}; // asyncDeliveryMutex_ protected
+    int asyncPostingCount_{0}; // asyncDeliveryMutex_ protected
+    int asyncOutstandingCount_{0}; // asyncDeliveryMutex_ protected
     int ownerCount_{0}; // shutdownMutex_ protected
-    std::shared_ptr<ControlTransaction> activeTransaction_;
+    std::shared_ptr<ControlTransaction> activeTransaction_; // controlMutex_ protected
+    std::mutex backendListenersMutex_;
+    std::vector<std::weak_ptr<ContentRenderService>> backendListeners_; // backendListenersMutex_ protected
 
     std::unique_ptr<VocoderDomain> vocoderDomain_;
     VocoderModelWeight currentVocoderModelWeight_{kDefaultVocoderWeight};

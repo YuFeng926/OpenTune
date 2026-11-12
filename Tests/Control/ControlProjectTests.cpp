@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -94,6 +95,24 @@ std::filesystem::path projectDirectory(const std::string& name)
     std::filesystem::remove_all(directory, ignored);
     std::filesystem::create_directories(directory, ignored);
     return directory;
+}
+
+/** Writes one 96 kHz frame as a 16-bit WAV; returns its absolute path (UTF-8). */
+std::string writeOneFrame96kWav(const std::filesystem::path& path)
+{
+    juce::AudioBuffer<float> audio(1, 1);
+    audio.setSample(0, 0, 0.25f);
+    const auto file = juceFileOf(path.u8string());
+    file.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream(file.createOutputStream().release());
+    juce::WavAudioFormat wav;
+    const auto options = juce::AudioFormatWriterOptions{}
+                             .withSampleRate(96000.0)
+                             .withNumChannels(1)
+                             .withBitsPerSample(16);
+    auto writer = stream != nullptr ? wav.createWriterFor(stream, options) : nullptr;
+    CONTROL_CHECK(writer != nullptr && writer->writeFromAudioSampleBuffer(audio, 0, 1));
+    return path.u8string();
 }
 
 /** Registers a bridge with the service for the life of this object. */
@@ -1547,6 +1566,103 @@ void scenarioProjectReopenKeepsTuning()
     CONTROL_CHECK(settleBackgroundWork(*processor));
     const auto dispatcher = service.dispatcher();
     CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+/**
+ * Imports one 96 kHz frame, saves the project and opens it again. The import derives a canonical of one sample
+ * (max(1, Q(...))); open uses the same minimum storage length and shares the full prepared canonical buffer.
+ * The authoritative window end projects to sample 0 while the positive-duration content is retained. The clip, its
+ * placement, the native 96 kHz PCM and the same source window seconds come back.
+ */
+void scenarioProjectOneFrame96kRestore()
+{
+    auto processor = startedProcessor();
+    // The playback snapshot freezes each placement's geometry at the prepared playback rate
+    // (StandaloneArrangement::configurePlaybackSources from prepareToPlay). This headless fixture has no audio
+    // device, so prepare the rate the standalone host would before checking the restored playback view.
+    constexpr double kPreparedPlaybackRate = 48000.0;
+    constexpr int kPreparedBlockSize = 512;
+    processor->prepareToPlay(kPreparedPlaybackRate, kPreparedBlockSize);
+    const auto directory = projectDirectory("one-frame-96k");
+    const auto media = writeOneFrame96kWav(directory / "frame.wav");
+    const auto projectFile = juceFileOf((directory / "one-frame.otproj").u8string());
+
+    juce::AudioBuffer<float> audio(1, 1);
+    audio.setSample(0, 0, 0.25f);
+    OpenTuneAudioProcessor::PreparedImport prepared;
+    if (!CONTROL_CHECK(processor->prepareImport(std::move(audio), 96000.0, "frame",
+                                                 juce::String::fromUTF8(media.c_str()), prepared)))
+        return;
+    OpenTuneAudioProcessor::ImportPlacement placement;
+    placement.trackId = 0;
+    placement.timelineStartSeconds = 1.0;
+    const auto committed = processor->commitPreparedImportAsPlacement(std::move(prepared), placement);
+    if (!CONTROL_CHECK(committed.isValid()))
+        return;
+
+    const double frameSeconds = 1.0 / 96000.0;
+    const auto imported = processor->getContentSnapshot(committed.contentKey);
+    if (!CONTROL_CHECK(imported != nullptr && imported->audioBuffer != nullptr
+                       && imported->nativeSource.buffer != nullptr))
+        return;
+    CONTROL_CHECK(imported->audioBuffer->getNumSamples() == 1);
+    CONTROL_CHECK(imported->audioSampleRate == TimeCoordinate::kRenderSampleRate);
+    CONTROL_CHECK(imported->nativeSource.buffer->getNumSamples() == 1);
+    CONTROL_CHECK(imported->nativeSource.sampleRate == 96000.0);
+    CONTROL_CHECK(imported->sourceWindow.sourceStartSeconds == 0.0);
+    CONTROL_CHECK(imported->sourceWindow.sourceEndSeconds == frameSeconds);
+    CONTROL_CHECK(imported->firstCanonicalSample == 0);
+
+    SourceStore::SourceSnapshot importedSource;
+    CONTROL_CHECK(processor->getSourceStore()->getSnapshot(committed.sourceId, importedSource)
+                  && importedSource.numSamples == 1 && importedSource.sampleRate == 96000.0);
+
+    ProjectSession session(*processor, processor->getAppPreferences());
+    auto saveTask = session.prepareSave(projectFile);
+    if (!CONTROL_CHECK(ProjectSession::executeSaveToFile(saveTask).ok()))
+        return;
+    auto opened = session.prepareOpen(projectFile, Language::English);
+    if (!CONTROL_CHECK(opened.ok()))
+        return;
+    if (!CONTROL_CHECK(session.commitPreparedOpen(std::move(opened).value()).ok()))
+        return;
+
+    CONTROL_CHECK(processor->getStandaloneContentRepository()->getAllClips().size() == 1);
+    CONTROL_CHECK(processor->getStandaloneArrangement()->getNumPlacements(0) == 1);
+    StandaloneArrangement::Placement restoredPlacement;
+    if (!CONTROL_CHECK(
+            processor->getStandaloneArrangement()->getPlacementByIndex(0, 0, restoredPlacement)))
+        return;
+    CONTROL_CHECK(restoredPlacement.timelineStartSeconds == 1.0);
+
+    const auto restored = processor->getContentSnapshot(restoredPlacement.contentKey);
+    if (!CONTROL_CHECK(restored != nullptr && restored->audioBuffer != nullptr
+                       && restored->nativeSource.buffer != nullptr))
+        return;
+    CONTROL_CHECK(restored->audioBuffer->getNumSamples() == 1);
+    CONTROL_CHECK(restored->audioSampleRate == TimeCoordinate::kRenderSampleRate);
+    CONTROL_CHECK(restored->nativeSource.buffer->getNumSamples() == 1);
+    CONTROL_CHECK(restored->nativeSource.sampleRate == 96000.0);
+    CONTROL_CHECK(restored->sourceWindow.sourceId != 0);
+    CONTROL_CHECK(restored->sourceWindow.sourceStartSeconds == 0.0);
+    CONTROL_CHECK(restored->sourceWindow.sourceEndSeconds == frameSeconds);
+    CONTROL_CHECK(restored->firstCanonicalSample == 0);
+    CONTROL_CHECK(restored->timeGrid != nullptr
+                  && restored->timeGrid->totalDurationSeconds() == frameSeconds);
+
+    const auto playback = processor->getStandaloneArrangement()->loadPlaybackSnapshot();
+    if (!CONTROL_CHECK(playback != nullptr && playback->tracks[0].placements.size() == 1))
+        return;
+    const auto& restoredPlayback = playback->tracks[0].placements.front();
+    if (!CONTROL_CHECK(restoredPlayback.hasPlayableView()))
+        return;
+    CONTROL_CHECK(restoredPlayback.source.nativeSource == restored->nativeSource);
+    CONTROL_CHECK(restoredPlayback.source.contentSnapshot->timeGrid == restored->timeGrid);
+
+    SourceStore::SourceSnapshot restoredSource;
+    CONTROL_CHECK(processor->getSourceStore()->getSnapshot(restored->sourceWindow.sourceId, restoredSource)
+                  && restoredSource.numSamples == 1 && restoredSource.sampleRate == 96000.0);
+    CONTROL_CHECK(settleBackgroundWork(*processor));
 }
 
 // ---- The specification's vectors -------------------------------------------------------------------

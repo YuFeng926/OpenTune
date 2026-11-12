@@ -30,17 +30,23 @@ namespace OpenTune {
 class TimeStretchCache {
 public:
     struct Entry {
-        // Canonical (44.1kHz) Stage 2 output — immutable after publish
+        // Canonical Stage 2 output on the TimeGrid local output grid —
+        // immutable after publish. firstCanonicalOutputSample is the explicit
+        // output-grid index of canonicalAudio[0].
         std::shared_ptr<const std::vector<float>> canonicalAudio;
         uint64_t contentRevision = 0;
         uint64_t timeGridRevision = 0;
         double sampleRate = TimeCoordinate::kRenderSampleRate;
+        int64_t firstCanonicalOutputSample = 0;
         bool published = false;
 
         // Prepared at target playback rate — immutable after publish.
-        // When target rate == canonical rate, preparedAudio aliases canonicalAudio.
+        // firstPreparedOutputSample is the explicit playback-grid index of
+        // preparedAudio[0]; when target rate == canonical rate the prepared
+        // audio aliases the canonical audio.
         std::shared_ptr<const std::vector<float>> preparedAudio;
         double preparedSampleRate = 0.0;
+        int64_t firstPreparedOutputSample = 0;
     };
 
     TimeStretchCache();
@@ -51,7 +57,8 @@ public:
                uint64_t contentRevision,
                uint64_t timeGridRevision,
                double sampleRate,
-               uint32_t buildGeneration);
+               uint32_t buildGeneration,
+               int64_t firstCanonicalOutputSample = 0);
 
     uint32_t beginBuild(ContentKey key);
 
@@ -62,7 +69,7 @@ public:
                             juce::AudioBuffer<float>& destination,
                             int destinationStartSample,
                             int numSamples,
-                            int targetSampleRate) const;
+                            double targetSampleRate) const;
 
     /** Read the canonical Stage2 output for offline output-rate playback. */
     int sliceCanonicalForOutputRange(ContentKey key,
@@ -93,6 +100,9 @@ private:
     // Prepared state: serialized by writer mutex_ only.
     double targetSampleRate_{TimeCoordinate::kRenderSampleRate};
     ResamplingManager preparedResampler_;
+
+    // Range SRC from the complete Stage2 output. mutex_ must be held.
+    void prepareEntry(Entry& entry, double targetSr);
 
     static size_t entryTotalBytes(const Entry& e);
 };

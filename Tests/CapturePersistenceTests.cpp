@@ -1,6 +1,7 @@
 #include "../Source/Plugin/Capture/CaptureSession.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -63,10 +64,57 @@ bool testReplaceRetireSemantics()
         && containsObjectId(retired, 7);
 }
 
+// Restore owns the media source window: the initial capture frame count / actual
+// rate defines it once; persistence does not rewrite absolute seconds.
+bool testRestoreEstablishesAuthoritativeSourceWindow()
+{
+    CaptureSession archiveSource({});
+    archiveSource.testInjectEditedSegment(0.0, 256.0 / 44100.0, 9, makeAudio(256), 44100.0);
+    const auto archive = archiveSource.serialize();
+
+    CaptureSession restored({});
+    restored.prepareToPlay(96000.0, 512, 1);
+    if (!restored.deserialize(archive))
+        return false;
+
+    for (const auto& seg : restored.testSegments()) {
+        if (seg->contentKey.objectId != 9 || !seg->content)
+            continue;
+        const auto& state = seg->content->content();
+        return state.sourceWindow.sourceStartSeconds == 0.0
+            && std::abs(state.sourceWindow.sourceEndSeconds - 256.0 / 44100.0) <= 1e-15
+            && state.firstCanonicalSample == 0
+            && state.nativeSource.buffer == state.audioBuffer
+            && state.nativeSource.sampleRate == 44100.0
+            && state.nativeSource.firstSourceSample == 0;
+    }
+    return false;
+}
+
+bool testOwnerInitializesNativeOriginFromSourceWindow()
+{
+    OpenTune::ContentState state;
+    state.audioBuffer = makeAudio(1024);
+    state.sampleRate = 96000.0;
+    state.sourceWindow.sourceStartSeconds = 1024.0 / 96000.0;
+    state.sourceWindow.sourceEndSeconds = 2048.0 / 96000.0;
+    state.firstCanonicalSample = 470;
+    OpenTune::CaptureSegmentContent owner(10);
+    owner.applyContentState(std::move(state));
+    return owner.content().nativeSource.firstSourceSample == 1024
+        && owner.content().sourceWindow.sourceStartSeconds == 1024.0 / 96000.0
+        && owner.content().firstCanonicalSample == 470;
+}
+
 } // namespace
 
 int main()
 {
+    if (!testOwnerInitializesNativeOriginFromSourceWindow())
+    {
+        std::fputs("FAIL: native origin follows the authoritative source window\n", stderr);
+        return 1;
+    }
     if (!testEmptyArchive())
     {
         std::fputs("FAIL: empty capture archive\n", stderr);
@@ -76,6 +124,12 @@ int main()
     if (!testReplaceRetireSemantics())
     {
         std::fputs("FAIL: capture replace retire semantics\n", stderr);
+        return 1;
+    }
+
+    if (!testRestoreEstablishesAuthoritativeSourceWindow())
+    {
+        std::fputs("FAIL: capture restore establishes authoritative source window\n", stderr);
         return 1;
     }
 

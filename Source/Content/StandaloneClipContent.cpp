@@ -176,7 +176,8 @@ void StandaloneClipContent::applyOriginalF0FailureReason(std::string reason)
 
 void StandaloneClipContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, double sampleRate)
 {
-    const double durationSeconds = static_cast<double>(buffer->getNumSamples()) / sampleRate;
+    // TimeGrid 由 owner 按权威 source window duration 初始化；派生 PCM 长度只作存储边界。
+    const double durationSeconds = content_.sourceWindow.durationSeconds();
 
     content_.audioBuffer = std::move(buffer);
     content_.sampleRate = sampleRate;

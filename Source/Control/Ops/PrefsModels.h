@@ -97,8 +97,9 @@ ControlVocoderState controlVocoderState();
 const char* controlInferenceBackendName();
 
 /** The call the preferences window makes when the vocoder weight changes: processor.setVocoderModelWeight(). The
-    switch runs on the runtime's control worker; the call returns at once. */
-void controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight);
+    switch runs on the runtime's control worker; the call returns at once. False when the control queue rejected the
+    command; the caller must then leave the stored preference unchanged. */
+bool controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight);
 
 /** The call the preferences window makes when the rendering priority changes: processor.resetInferenceBackend(). The
     reset runs on the runtime's control worker; the call returns at once. */

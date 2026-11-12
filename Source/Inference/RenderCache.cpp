@@ -1,8 +1,10 @@
 #include "RenderCache.h"
 #include "../DSP/ResamplingManager.h"
 #include "Utils/AppLogger.h"
+#include "Utils/PlaybackSampleGeometry.h"
 #include <algorithm>
 #include <atomic>
+#include <limits>
 #include <memory>
 
 namespace OpenTune {
@@ -207,6 +209,131 @@ void RenderCache::pruneRetiredSnapshotsLocked(
 }
 
 // ============================================================================
+// Prepared range SRC — non-audio thread, preparedBuildMutex_ already held.
+// ============================================================================
+
+bool RenderCache::PreparedDependencies::operator==(const PreparedDependencies& other) const noexcept
+{
+    if (canonicalBuffer != other.canonicalBuffer
+        || firstCanonicalSample != other.firstCanonicalSample
+        || !(nativeSource == other.nativeSource)
+        || edits.size() != other.edits.size())
+        return false;
+    for (size_t i = 0; i < edits.size(); ++i) {
+        const auto& lhs = edits[i];
+        const auto& rhs = other.edits[i];
+        if (lhs.audio != rhs.audio
+            || lhs.startSample != rhs.startSample
+            || lhs.endSampleExclusive != rhs.endSampleExclusive
+            || lhs.audioRevision != rhs.audioRevision)
+            return false;
+    }
+    return true;
+}
+
+void RenderCache::setCanonicalSource(
+    std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
+    int64_t firstCanonicalSample,
+    NativePcmSource nativeSource)
+{
+    std::lock_guard<std::mutex> lg(preparedBuildMutex_);
+    canonicalBuffer_ = std::move(canonicalBuffer);
+    firstCanonicalSample_ = firstCanonicalSample;
+    nativeSource_ = std::move(nativeSource);
+}
+
+// Fetches canonical-rate PCM for a global canonical range that lies outside the
+// cropped canonical storage by resampling the retained native source. Only the
+// actual native source boundaries zero-extend; the canonical crop boundary
+// itself is filled with real PCM.
+void RenderCache::fillCanonicalContextFromNative(std::vector<float>& context,
+                                                 int64_t globalBegin,
+                                                 int64_t globalEnd,
+                                                 int64_t contextGlobalBegin)
+{
+    if (globalEnd <= globalBegin)
+        return;
+    const auto* nativeBuffer = nativeSource_.buffer.get();
+    if (nativeBuffer == nullptr
+        || nativeSource_.sampleRate <= 0.0
+        || nativeBuffer->getNumChannels() <= 0
+        || nativeBuffer->getNumSamples() <= 0)
+        return;
+
+    const int64_t outputLength = globalEnd - globalBegin;
+    if (outputLength > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return;
+
+    auto halo = preparedResampler_.resampleRange(
+        nativeBuffer->getReadPointer(0), nativeBuffer->getNumSamples(),
+        nativeSource_.sampleRate, kSampleRate,
+        nativeSource_.firstSourceSample, globalBegin, static_cast<int>(outputLength));
+    std::copy(halo.begin(), halo.end(),
+                context.begin() + static_cast<size_t>(globalBegin - contextGlobalBegin));
+}
+
+// Builds one continuous canonical input context for the exact filter support of
+// a target chunk: canonical PCM base, native halo across canonical crop
+// boundaries, then every intersecting published edited chunk overlaid.
+std::vector<float> RenderCache::resampleCanonicalRange(
+    const PublishedRenderSnapshot& canonicalSnapshot,
+    const PlaybackSampleGeometry::SampleSpan& support,
+    int64_t targetBegin,
+    int outputLength,
+    double targetSampleRate)
+{
+    const int64_t inputLength = support.end - support.begin;
+    std::vector<float> context(static_cast<size_t>(inputLength), 0.0f);
+
+    const int64_t canonicalSamples = canonicalBuffer_ != nullptr
+        ? static_cast<int64_t>(canonicalBuffer_->getNumSamples()) : 0;
+    const int64_t canonicalGlobalEnd = firstCanonicalSample_ + canonicalSamples;
+    const int64_t localBegin = support.begin - firstCanonicalSample_;
+    const int64_t copyBegin = std::max<int64_t>(localBegin, 0);
+    const int64_t copyEnd = std::min<int64_t>(localBegin + inputLength, canonicalSamples);
+    if (canonicalBuffer_ != nullptr
+        && canonicalBuffer_->getNumChannels() > 0
+        && copyEnd > copyBegin)
+    {
+        std::copy_n(canonicalBuffer_->getReadPointer(0) + copyBegin,
+                    static_cast<size_t>(copyEnd - copyBegin),
+                    context.data() + (copyBegin - localBegin));
+    }
+
+    if (support.begin < firstCanonicalSample_) {
+        fillCanonicalContextFromNative(context, support.begin,
+            std::min(support.end, firstCanonicalSample_), support.begin);
+    }
+    if (support.end > canonicalGlobalEnd) {
+        fillCanonicalContextFromNative(context, std::max(support.begin, canonicalGlobalEnd),
+            support.end, support.begin);
+    }
+
+    for (const auto& edit : canonicalSnapshot.chunks) {
+        if (!edit.audio || edit.audio->empty())
+            continue;
+        const int64_t editGlobalBegin = firstCanonicalSample_ + edit.startSample;
+        const int64_t editGlobalEnd = firstCanonicalSample_ + edit.endSampleExclusive;
+        const int64_t overlapBegin = std::max(editGlobalBegin, support.begin);
+        const int64_t overlapEnd = std::min(editGlobalEnd, support.end);
+        if (overlapEnd <= overlapBegin)
+            continue;
+        const int64_t sourceOffset = overlapBegin - editGlobalBegin;
+        const int64_t sourceLength = static_cast<int64_t>(edit.audio->size());
+        if (sourceOffset < 0 || sourceOffset >= sourceLength)
+            continue;
+        const size_t copyCount = static_cast<size_t>(std::min(
+            overlapEnd - overlapBegin, sourceLength - sourceOffset));
+        std::copy_n(edit.audio->data() + sourceOffset, copyCount,
+                    context.data() + static_cast<size_t>(overlapBegin - support.begin));
+    }
+
+    return preparedResampler_.resampleRange(
+        context.data(), context.size(), kSampleRate, targetSampleRate,
+        support.begin, targetBegin, outputLength);
+}
+
+// ============================================================================
 // rebuildPrepared — non-audio thread, serialized by preparedBuildMutex_
 // ============================================================================
 
@@ -220,9 +347,8 @@ bool RenderCache::rebuildPrepared(double requestedSampleRate)
     auto canonicalSnap = std::atomic_load(&publishedSnapshot_);
     auto oldPrep = std::atomic_load(&preparedSnapshot_);
 
-    // 增量复用仅当目标率与旧 prepared 快照一致时成立；换率必须全量重建。
-    const bool rateUnchanged =
-        oldPrep != nullptr && std::abs(oldPrep->sampleRate - targetSr) < 1.0;
+    // 增量复用仅当目标率与旧 prepared 快照精确相等时成立；换率必须全量重建。
+    const bool rateUnchanged = oldPrep != nullptr && oldPrep->sampleRate == targetSr;
     std::map<int64_t, const PublishedPreparedChunk*> previous;
     if (rateUnchanged) {
         for (const auto& pc : oldPrep->chunks)
@@ -234,67 +360,103 @@ bool RenderCache::rebuildPrepared(double requestedSampleRate)
     prepSnap->sampleRate = targetSr;
 
     if (targetSr > 0.0 && canonicalSnap && !canonicalSnap->chunks.empty()) {
+        using PlaybackSampleGeometry::projectToSample;
+        const bool aliasCanonical = targetSr == kSampleRate;
         prepSnap->chunks.reserve(canonicalSnap->chunks.size());
+
         for (const auto& chunk : canonicalSnap->chunks) {
             if (!chunk.audio || chunk.audio->empty()) continue;
 
-            const int64_t prepStart = TimeCoordinate::sampleRateProject(
-                chunk.startSample, kSampleRate, targetSr);
-            const int64_t prepEnd = TimeCoordinate::sampleRateProject(
-                chunk.endSampleExclusive, kSampleRate, targetSr);
-            const bool aliasCanonical = std::abs(targetSr - kSampleRate) < 1.0;
+            // Canonical chunk indices stay content-local; the global canonical
+            // origin maps them onto the playback grid with one fixed phase.
+            const int64_t globalBegin = firstCanonicalSample_ + chunk.startSample;
+            const int64_t globalEnd = firstCanonicalSample_ + chunk.endSampleExclusive;
 
             PublishedPreparedChunk pc;
-            pc.startSample = prepStart;
-            pc.endSampleExclusive = prepEnd;
+            if (aliasCanonical) {
+                pc.startSample = globalBegin;
+                pc.endSampleExclusive = globalEnd;
+            } else {
+                pc.startSample = projectToSample(
+                    static_cast<double>(globalBegin) * targetSr / kSampleRate);
+                pc.endSampleExclusive = projectToSample(
+                    static_cast<double>(globalEnd) * targetSr / kSampleRate);
+            }
+            if (pc.endSampleExclusive <= pc.startSample)
+                continue;
 
-            // 增量复用：canonical PCM 未变（同 span、同 audioRevision）时直接共享
-            // 旧 prepared PCM，跳过 r8brain 重采样。条件从严：任何不匹配都重采样，
-            // 宁可重做不可复用过期音频。
-            auto prevIt = previous.find(prepStart);
-            if (!aliasCanonical
-                && prevIt != previous.end()
-                && prevIt->second->endSampleExclusive == prepEnd
-                && prevIt->second->audioRevision == chunk.audioRevision)
-            {
-                pc.audio = prevIt->second->audio;
+            if (aliasCanonical) {
+                pc.audio = chunk.audio;
                 pc.audioRevision = chunk.audioRevision;
                 pc.sourceRevision = chunk.contentRevision;
                 prepSnap->chunks.push_back(std::move(pc));
                 continue;
             }
 
-            if (aliasCanonical) {
-                pc.audio = chunk.audio;
-                pc.audioRevision = chunk.audioRevision;
-                pc.sourceRevision = chunk.contentRevision;
-            } else {
-                const int outputLength = static_cast<int>(prepEnd - prepStart);
-                if (outputLength <= 0) continue;
+            const int64_t outputLength64 = pc.endSampleExclusive - pc.startSample;
+            if (outputLength64 > static_cast<int64_t>(std::numeric_limits<int>::max()))
+                continue;
+            const int outputLength = static_cast<int>(outputLength64);
 
-                const size_t reservedBytes = static_cast<size_t>(outputLength) * sizeof(float);
-                if (!reserveRenderCacheBytes(reservedBytes))
-                    return false;
+            // Real FIR support of the continuous canonical signal for this
+            // target chunk. Performance depends on the chunk and its filter
+            // support, never on the total source length.
+            const auto support = preparedResampler_.requiredInputRange(
+                kSampleRate, targetSr, pc.startSample, pc.endSampleExclusive);
+            if (support.empty())
+                continue;
 
-                std::vector<float> resampled;
-                try {
-                    resampled = preparedResampler_.resampleExactLength(
-                        chunk.audio->data(),
-                        chunk.audio->size(),
-                        static_cast<int>(kSampleRate),
-                        static_cast<int>(targetSr),
-                        outputLength);
-                } catch (...) {
-                    releaseRenderCacheBytes(reservedBytes);
-                    throw;
-                }
-
-                pc.audio = makeTrackedPcm(std::move(resampled), reservedBytes);
-                if (!pc.audio)
-                    return false;
-                pc.audioRevision = chunk.audioRevision;
-                pc.sourceRevision = chunk.contentRevision;
+            PreparedDependencies dependencies;
+            dependencies.canonicalBuffer = canonicalBuffer_;
+            dependencies.firstCanonicalSample = firstCanonicalSample_;
+            dependencies.nativeSource = nativeSource_;
+            for (const auto& edit : canonicalSnap->chunks) {
+                if (!edit.audio || edit.audio->empty())
+                    continue;
+                const int64_t editGlobalBegin = firstCanonicalSample_ + edit.startSample;
+                const int64_t editGlobalEnd = firstCanonicalSample_ + edit.endSampleExclusive;
+                if (editGlobalEnd <= support.begin || editGlobalBegin >= support.end)
+                    continue;
+                dependencies.edits.push_back(
+                    { edit.audio, edit.startSample, edit.endSampleExclusive, edit.audioRevision });
             }
+
+            // Reuse only when every value dependency of this target chunk is
+            // unchanged: canonical input identity/origin, native halo
+            // identity, and each intersecting edited chunk's PCM/range/version.
+            auto prevIt = previous.find(pc.startSample);
+            if (prevIt != previous.end()
+                && prevIt->second->endSampleExclusive == pc.endSampleExclusive
+                && prevIt->second->audio
+                && prevIt->second->dependencies == dependencies)
+            {
+                pc.audio = prevIt->second->audio;
+                pc.audioRevision = chunk.audioRevision;
+                pc.sourceRevision = chunk.contentRevision;
+                pc.dependencies = std::move(dependencies);
+                prepSnap->chunks.push_back(std::move(pc));
+                continue;
+            }
+
+            const size_t reservedBytes = static_cast<size_t>(outputLength) * sizeof(float);
+            if (!reserveRenderCacheBytes(reservedBytes))
+                return false;
+
+            std::vector<float> resampled;
+            try {
+                resampled = resampleCanonicalRange(
+                    *canonicalSnap, support, pc.startSample, outputLength, targetSr);
+            } catch (...) {
+                releaseRenderCacheBytes(reservedBytes);
+                throw;
+            }
+
+            pc.audio = makeTrackedPcm(std::move(resampled), reservedBytes);
+            if (!pc.audio)
+                return false;
+            pc.audioRevision = chunk.audioRevision;
+            pc.sourceRevision = chunk.contentRevision;
+            pc.dependencies = std::move(dependencies);
 
             prepSnap->chunks.push_back(std::move(pc));
         }
@@ -390,9 +552,9 @@ void RenderCache::overlayPreparedAudio(juce::AudioBuffer<float>& destination,
                                        int destStartSample,
                                        int numSamples,
                                        int64_t readStartSample,
-                                       int targetSampleRate,
+                                       double targetSampleRate,
                                        uint64_t expectedContentRevision) const {
-    if (targetSampleRate <= 0 || numSamples <= 0) return;
+    if (targetSampleRate <= 0.0 || numSamples <= 0) return;
 
     const int destinationChannels = destination.getNumChannels();
     const int destinationSamples = destination.getNumSamples();
@@ -405,8 +567,8 @@ void RenderCache::overlayPreparedAudio(juce::AudioBuffer<float>& destination,
     auto snap = std::atomic_load(&preparedSnapshot_);
     if (!snap || snap->chunks.empty()) return;
 
-    // Prepared rate must match target rate
-    if (std::abs(snap->sampleRate - static_cast<double>(targetSampleRate)) > 1.0) return;
+    // Prepared rate must match target rate exactly.
+    if (snap->sampleRate != targetSampleRate) return;
 
     const int64_t requestStart = readStartSample;
     const int64_t requestEnd = requestStart + writableSamples;

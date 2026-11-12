@@ -56,13 +56,14 @@ public:
         juce::ARAPlaybackRegion* playbackRegion{nullptr};
         std::optional<juce::Colour> displayColour;
         double startInPlaybackTime{0.0};
+        double endInPlaybackTime{0.0};
         double startInModificationTime{0.0};
+        double endInModificationTime{0.0};
         double durationInPlaybackTime{0.0};
         double durationInModificationTime{0.0};
 
         ContentKey contentKey;
 
-        double endInPlaybackTime() const noexcept { return startInPlaybackTime + durationInPlaybackTime; }
         bool isPlaybackRenderable() const noexcept;
     };
 
@@ -73,6 +74,19 @@ public:
 
     // Per ARA2 spec: ARA object persistence uses doStoreObjectsToStream/doRestoreObjectsFromStream,
     // NOT VST3 processor state. Legacy getContentSnapshot/restoreContentPayloadInto removed.
+
+    // Content archive version. Version 9 stores the source window's exclusive
+    // end directly; earlier versions stored duration and are decoded only
+    // through those earlier version numbers.
+    static constexpr int kContentArchiveVersion = 9;
+    static constexpr int kContentArchiveVersionExplicitSourceEnd = 9;
+
+    // Source-window archive codec shared by store/restore and contract tests.
+    static void writeSourceWindowToArchive(const SourceWindow& window, juce::XmlElement& element);
+    static std::optional<SourceWindow> readSourceWindowFromArchive(
+        const juce::XmlElement& element,
+        const juce::ARARestoreObjectsFilter* filter,
+        int archiveVersion);
 
     const ContentRenderService* getContentRenderService() const noexcept;
     std::shared_ptr<ContentRenderService> getContentRenderServiceShared() const noexcept;
@@ -291,9 +305,19 @@ private:
     static void refreshRegisteredRenderers(const std::vector<OpenTunePlaybackRenderer*>& renderers);
     bool publishPlaybackReadSourceForModification(
         AudioModification& modification,
-        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer);
+        NativePcmSource nativeSource,
+        std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
+        int64_t firstCanonicalSample);
     void readRestoredAudio(const AudioSource* enabledSource);
     bool birthContentForModification(AudioModification& modification);
+    // Reuses a full native PCM already published for the same source identity and
+    // sample content generation. Returns null when a fresh read is required.
+    std::shared_ptr<const juce::AudioBuffer<float>> findReusableNativePcm(
+        const AudioModification& modification,
+        const juce::String& sourcePersistentId,
+        double sourceSampleRate,
+        uint64_t sampleGeneration,
+        int64_t sourceSampleCount) const;
     void removeCRSArtifactsForModification(const AudioModification& modification);
     bool scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,

@@ -9,7 +9,11 @@
 namespace OpenTune {
 
 ContentRenderService::ContentRenderService() = default;
-ContentRenderService::~ContentRenderService() = default;
+ContentRenderService::~ContentRenderService()
+{
+    if (backendListenerRegistered_)
+        ProcessRenderRuntime::getInstance().unregisterBackendChangeListener(this);
+}
 
 bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(
     ContentKey contentKey,
@@ -46,6 +50,8 @@ void ContentRenderService::publishPlaybackSource(ContentKey key, PlaybackReadSou
         || source.contentSnapshot->timeGrid == nullptr
         || source.contentSnapshot->timeGrid->empty())
         return;
+    source.renderCache->setCanonicalSource(
+        source.canonicalBuffer, source.firstCanonicalSample, source.nativeSource);
     playbackSources_.publish(key, source);
     ProcessRenderRuntime::getInstance().renderQueueCapacityAvailable();
 }
@@ -59,19 +65,12 @@ bool ContentRenderService::republishPlaybackSource(
 
     PlaybackReadSource current;
     if (!getPlaybackReadSource(key, current)
-        || !current.audioBuffer
-        || current.audioSampleRate <= 0.0)
+        || !current.canonicalBuffer
+        || current.canonicalSampleRate <= 0.0)
         return false;
 
-    publishPlaybackSource(
-        key,
-        makePlaybackReadSource(
-            key,
-            std::move(contentSnapshot),
-            current.audioBuffer,
-            current.audioSampleRate,
-            getOrCreateRenderCache(key),
-            getTimeStretchCache()));
+    current.contentSnapshot = std::move(contentSnapshot);
+    publishPlaybackSource(key, std::move(current));
     return true;
 }
 
@@ -103,19 +102,19 @@ ContentRenderService::DeferredSourceStatus ContentRenderService::restoreDeferred
         return DeferredSourceStatus::SourceUnavailable;
     if (running.lastRequestedContentRevision != source.contentSnapshot->contentRevision)
         return DeferredSourceStatus::PlanNotSynchronized;
-    if (source.audioBuffer == nullptr
+    if (source.canonicalBuffer == nullptr
         || source.contentSnapshot->audioRevision != expectedAudioRevision
-        || source.audioSampleRate != job.audioSampleRate
-        || source.audioBuffer->getNumSamples() != expectedAudioSamples
-        || source.audioBuffer->getNumChannels() != expectedAudioChannels
+        || source.canonicalSampleRate != job.audioSampleRate
+        || source.canonicalBuffer->getNumSamples() != expectedAudioSamples
+        || source.canonicalBuffer->getNumChannels() != expectedAudioChannels
         || job.startSample < 0
-        || job.endSampleExclusive > source.audioBuffer->getNumSamples()
+        || job.endSampleExclusive > source.canonicalBuffer->getNumSamples()
         || job.endSampleExclusive <= job.startSample)
         return DeferredSourceStatus::Stale;
 
     job.contentSnapshot = std::move(source.contentSnapshot);
-    job.audioBuffer = std::move(source.audioBuffer);
-    job.audioSampleRate = source.audioSampleRate;
+    job.audioBuffer = std::move(source.canonicalBuffer);
+    job.audioSampleRate = source.canonicalSampleRate;
     job.contentRevision = job.contentSnapshot->contentRevision;
     return DeferredSourceStatus::Ready;
 }
@@ -156,11 +155,26 @@ void ContentRenderService::removeRenderCache(ContentKey key)
 void ContentRenderService::attachExecutionLease(ExecutionLease lease)
 {
     renderWorker_.attachExecutionLease(std::move(lease));
+    if (auto service = weak_from_this().lock())
+    {
+        ProcessRenderRuntime::getInstance().registerBackendChangeListener(service);
+        backendListenerRegistered_ = true;
+    }
 }
 
 void ContentRenderService::detachExecutionLease(void* owner)
 {
+    if (backendListenerRegistered_)
+    {
+        ProcessRenderRuntime::getInstance().unregisterBackendChangeListener(this);
+        backendListenerRegistered_ = false;
+    }
     renderWorker_.detachExecutionLease(owner);
+}
+
+void ContentRenderService::notifyBackendChanged()
+{
+    renderWorker_.notifyBackendChanged();
 }
 
 void ContentRenderService::enqueueRender(RenderJob job)

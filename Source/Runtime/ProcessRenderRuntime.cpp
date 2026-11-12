@@ -26,6 +26,16 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#elif JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD
+namespace juce::detail {
+// Pinned JUCE 8.0.12 dispatcher used to drain the plugin's own message queue
+// when final shutdown runs on the message thread.
+bool dispatchNextMessageOnSystemQueue(bool returnIfNoPendingMessages);
+}
+#endif
+
 namespace OpenTune {
 
 void ProcessRenderRuntime::notifyApplicationRenderFailure(ContentKey key,
@@ -37,7 +47,7 @@ void ProcessRenderRuntime::notifyApplicationRenderFailure(ContentKey key,
                                                            std::shared_ptr<std::atomic<bool>> reconfigurationNotificationClaim)
 {
     const auto failureReason = reason;
-    const bool posted = juce::MessageManager::callAsync(
+    const bool posted = postAsyncCallback(
         [key, contentRevision, targetRevision, failureReason,
          renderCache = std::move(renderCache), gate,
          reconfigurationNotificationClaim = std::move(reconfigurationNotificationClaim)]()
@@ -74,6 +84,10 @@ void ProcessRenderRuntime::notifyApplicationRenderFailure(ContentKey key,
 namespace {
 
 using PayloadFootprint = std::vector<std::pair<const void*, std::size_t>>;
+
+// Tracks whether the current thread is executing a process-runtime delivery.
+// Final shutdown must never run inside the message batch it has to drain.
+thread_local int t_activeAsyncDeliveries = 0;
 
 template <typename T>
 void addVectorPayload(const std::vector<T>& values,
@@ -276,7 +290,7 @@ void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completio
         return;
     const auto gate = completion.gate;
     auto callback = completion.chunkSettled;
-    const bool posted = juce::MessageManager::callAsync(
+    const bool posted = ProcessRenderRuntime::postAsyncCallback(
         [gate, callback = std::move(callback), key,
          contentSnapshot = std::move(contentSnapshot), audioBuffer = std::move(audioBuffer), audioSampleRate]() mutable {
             ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
@@ -311,7 +325,7 @@ void notifyChunkFailed(const ProcessRenderRuntime::CompletionContext& completion
     const auto gate = completion.gate;
     auto callback = completion.chunkFailed;
     const auto failureReason = reason;
-    const bool posted = juce::MessageManager::callAsync(
+    const bool posted = ProcessRenderRuntime::postAsyncCallback(
         [gate, callback = std::move(callback), key, failureReason]() mutable {
             ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
             if (!callbackLease)
@@ -461,17 +475,173 @@ ProcessRenderRuntime& ProcessRenderRuntime::getInstance()
     return *instance;
 }
 
+bool ProcessRenderRuntime::postAsyncCallback(std::function<void()> callback)
+{
+    return getInstance().postAsyncDelivery(std::move(callback));
+}
+
+bool ProcessRenderRuntime::postAsyncDelivery(std::function<void()> callback)
+{
+    {
+        std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
+        if (asyncDeliveryClosed_)
+            return false;
+        // The post is counted before enqueue so drainAsyncDeliveries observes
+        // it even when the posting thread is preempted after callAsync returns.
+        ++asyncPostingCount_;
+        ++asyncOutstandingCount_;
+    }
+
+    const bool posted = juce::MessageManager::callAsync(
+        [this, callback = std::move(callback)]() mutable {
+            struct DeliveryCompletion
+            {
+                explicit DeliveryCompletion(ProcessRenderRuntime& runtimeToNotify) noexcept
+                    : runtime(runtimeToNotify)
+                {
+                    ++t_activeAsyncDeliveries;
+                }
+
+                ~DeliveryCompletion()
+                {
+                    --t_activeAsyncDeliveries;
+                    std::lock_guard<std::mutex> lock(runtime.asyncDeliveryMutex_);
+                    --runtime.asyncOutstandingCount_;
+                    runtime.asyncDeliveryCv_.notify_all();
+                }
+
+                ProcessRenderRuntime& runtime;
+            } completion(*this);
+            callback();
+        });
+
+    {
+        std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
+        --asyncPostingCount_;
+        if (!posted)
+            --asyncOutstandingCount_;
+        asyncDeliveryCv_.notify_all();
+    }
+    return posted;
+}
+
+void ProcessRenderRuntime::drainAsyncDeliveries()
+{
+    {
+        std::unique_lock<std::mutex> lock(asyncDeliveryMutex_);
+        asyncDeliveryClosed_ = true;
+        asyncDeliveryCv_.wait(lock, [this] { return asyncPostingCount_ == 0; });
+        if (asyncOutstandingCount_ == 0)
+            return;
+    }
+
+    auto* manager = juce::MessageManager::getInstanceWithoutCreating();
+    if (manager == nullptr)
+    {
+        // The queue is owned by the message manager; without it no accepted
+        // delivery can be dispatched later.
+        std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
+        asyncOutstandingCount_ = 0;
+        return;
+    }
+
+    if (manager->isThisTheMessageThread())
+    {
+        if (t_activeAsyncDeliveries != 0)
+        {
+            AppLogger::emergencyError(
+                "[ProcessRenderRuntime] final shutdown started inside an async delivery; hard lifecycle failure");
+            std::terminate();
+        }
+
+        const auto failUndrainable = [] {
+            AppLogger::emergencyError(
+                "[ProcessRenderRuntime] queued async deliveries cannot be dispatched before module unload; hard lifecycle failure");
+            std::terminate();
+        };
+
+        // The JUCE message queue is dispatched only by this thread, so drain it
+        // directly: the internal dispatcher runs the plugin's own message queue
+        // on Windows/Linux, and the nested run loop delivers the plugin's
+        // CoreFoundation source on Apple platforms.
+        while (true)
+        {
+            {
+                std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
+                if (asyncOutstandingCount_ == 0)
+                    return;
+            }
+            if (juce::MessageManager::getInstanceWithoutCreating() == nullptr)
+            {
+                std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
+                asyncOutstandingCount_ = 0;
+                return;
+            }
+
+           #if JUCE_MAC || JUCE_IOS
+            const auto runResult = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true);
+            if (runResult == kCFRunLoopRunTimedOut || runResult == kCFRunLoopRunFinished)
+                failUndrainable();
+           #elif JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD
+            if (!juce::detail::dispatchNextMessageOnSystemQueue(true))
+                failUndrainable();
+           #else
+            failUndrainable();
+           #endif
+        }
+    }
+
+    // Off the message thread: the barrier is queued after every accepted
+    // delivery and admission is already closed, so reaching it proves the
+    // runtime's delivery queue is empty when shutdownAndJoin returns.
+    struct DrainBarrier
+    {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool reached{false};
+    };
+    auto barrier = std::make_shared<DrainBarrier>();
+    const bool posted = juce::MessageManager::callAsync([barrier]() {
+        {
+            std::lock_guard<std::mutex> lock(barrier->mutex);
+            barrier->reached = true;
+        }
+        barrier->cv.notify_all();
+    });
+
+    if (!posted)
+    {
+        manager = juce::MessageManager::getInstanceWithoutCreating();
+        if (manager == nullptr)
+        {
+            std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
+            asyncOutstandingCount_ = 0;
+            return;
+        }
+
+        // A live manager rejects messages only after stopDispatchLoop. The
+        // host event loop still dispatches the accepted deliveries.
+        std::unique_lock<std::mutex> lock(asyncDeliveryMutex_);
+        asyncDeliveryCv_.wait(lock, [this] { return asyncOutstandingCount_ == 0; });
+        return;
+    }
+
+    std::unique_lock<std::mutex> barrierLock(barrier->mutex);
+    barrier->cv.wait(barrierLock, [&barrier] { return barrier->reached; });
+}
+
 void ProcessRenderRuntime::retainOwner()
 {
+#if defined(JucePlugin_Build_AU) && JucePlugin_Build_AU
     std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
     if (ownerCount_ == 0 && shuttingDown_.load(std::memory_order_acquire))
     {
         // A new host instance may appear after the previous last instance was
-        // destroyed.  Complete the already-requested one-shot shutdown before
-        // reopening the process runtime; this prevents a new owner from
-        // inheriting a joined worker and a permanently closed command queue.
+        // destroyed. Complete the already-requested shutdown before reopening
+        // the process runtime; this prevents a new owner from inheriting a
+        // joined worker and a permanently closed command queue.
         workerExitCv_.wait(lifecycleLock, [this]() {
-            return workerExitDispatchAttempted_.load(std::memory_order_acquire);
+            return workerExited_;
         });
         const auto generation = shutdownGeneration_.load(std::memory_order_acquire);
         lifecycleLock.unlock();
@@ -483,23 +653,34 @@ void ProcessRenderRuntime::retainOwner()
             ensureVocoderQueued_ = false;
             deferredEnsureRetryPending_.store(false, std::memory_order_release);
             activeTransaction_.reset();
-            controlQueue_.clear();
+            acceptingCommands_ = true;
+            stopQueued_ = false;
         }
-        workerExitDispatchAttempted_.store(false, std::memory_order_release);
-        workerExitDispatchPosted_.store(false, std::memory_order_release);
+        workerExitDispatchPosted_ = false;
+        workerExited_ = false;
+        shutdownFinishStarted_ = false;
+        shutdownFinished_ = false;
         shuttingDown_.store(false, std::memory_order_release);
         shutdownGeneration_.fetch_add(1, std::memory_order_acq_rel);
-        controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
+        if (!controlWorker_.joinable())
+            controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
+        workerExitCv_.notify_all();
     }
     ++ownerCount_;
+#else
+    std::lock_guard<std::mutex> lifecycleLock(shutdownMutex_);
+    ++ownerCount_;
+#endif
 }
 
 void ProcessRenderRuntime::releaseOwner() noexcept
 {
     std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
     --ownerCount_;
+#if defined(JucePlugin_Build_AU) && JucePlugin_Build_AU
     if (ownerCount_ == 0)
         shutdownLocked(lifecycleLock);
+#endif
 }
 
 ProcessRenderRuntime::ProcessRenderRuntime()
@@ -527,61 +708,173 @@ ProcessRenderRuntime::ProcessRenderRuntime()
         }
     }
 
+#if defined(JucePlugin_Build_AU) && JucePlugin_Build_AU
+    // AU keeps the eager worker that its owner-count teardown/reopen contract
+    // depends on. Standalone and VST3 start the worker on the first accepted
+    // control operation.
     controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
+#endif
+}
+
+void ProcessRenderRuntime::startControlWorker()
+{
+    std::lock_guard<std::mutex> lifecycleLock(shutdownMutex_);
+    if (shuttingDown_.load(std::memory_order_acquire))
+        return;
+    if (!controlWorker_.joinable())
+        controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
+}
+
+void ProcessRenderRuntime::beginShutdownLocked(bool postCompletion)
+{
+    if (shuttingDown_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    const auto generation = shutdownGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    {
+        std::lock_guard<std::mutex> controlLock(controlMutex_);
+        acceptingCommands_ = false;
+        if (!stopQueued_)
+        {
+            ControlCommand stop;
+            stop.type = ControlCommand::Type::Stop;
+            stop.shutdownPostCompletion = postCompletion;
+            stop.shutdownGeneration = generation;
+            controlQueue_.push_back(std::move(stop));
+            stopQueued_ = true;
+        }
+    }
+    if (!controlWorker_.joinable())
+        controlWorker_ = std::thread([this]() { controlWorkerLoop(); });
+    controlCv_.notify_all();
 }
 
 void ProcessRenderRuntime::shutdownLocked(std::unique_lock<std::mutex>& shutdownLock)
 {
-    if (shuttingDown_.load(std::memory_order_acquire))
-        return;
-    shuttingDown_.store(true, std::memory_order_release);
-    const auto generation = shutdownGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
+#if defined(JucePlugin_Build_AU) && JucePlugin_Build_AU
+    if (!shuttingDown_.load(std::memory_order_acquire))
+        beginShutdownLocked(true);
 
-    std::shared_ptr<ControlTransaction> activeTransaction;
-    std::vector<std::shared_ptr<ControlTransaction>> queuedTransactions;
-    {
-        std::lock_guard<std::mutex> lock(controlMutex_);
-        ControlCommand stop;
-        stop.type = ControlCommand::Type::Stop;
-        for (auto& command : controlQueue_)
-        {
-            if (command.transaction)
-                queuedTransactions.push_back(std::move(command.transaction));
-        }
-        controlQueue_.clear();
-        controlQueue_.push_back(std::move(stop));
-        activeTransaction = activeTransaction_;
-    }
-    for (const auto& transaction : queuedTransactions)
-    {
-        transaction->closeRequested.store(true, std::memory_order_release);
-        finishControlTransaction(transaction, "shutdown queued transaction");
-    }
-    // A command already taken by the worker may be waiting for a
-    // message-thread ack.  Request its close; the control worker performs the
-    // one pause/resume and CRS release itself after it has stopped using the
-    // transaction.  shutdown() must not race that shared_ptr or resume CRS
-    // while the worker is still inside the command.
-    if (activeTransaction)
-    {
-        activeTransaction->closeRequested.store(true, std::memory_order_release);
-        activeTransaction->cv.notify_all();
-    }
-    controlCv_.notify_all();
-
-    // The worker posts finishShutdown() only after it has consumed Stop and
-    // released the Domain.  Every caller waits until that dispatch attempt is
-    // published.  A successful post is the join handoff, including for the
-    // message thread; waiting for its completion there would deadlock.
-    workerExitCv_.wait(shutdownLock, [this]() {
-        return workerExitDispatchAttempted_.load(std::memory_order_acquire);
+    const auto generation = shutdownGeneration_.load(std::memory_order_acquire);
+    workerExitCv_.wait(shutdownLock, [this, generation]() {
+        return workerExited_
+            || generation != shutdownGeneration_.load(std::memory_order_acquire);
     });
-    if (!workerExitDispatchPosted_.load(std::memory_order_acquire))
+    if (generation != shutdownGeneration_.load(std::memory_order_acquire))
+        return;
+    if (!workerExitDispatchPosted_)
     {
         AppLogger::error("[ProcessRenderRuntime] worker-exit dispatcher rejected; synchronously joining");
         shutdownLock.unlock();
         finishShutdown(generation);
     }
+#else
+    juce::ignoreUnused(shutdownLock);
+#endif
+}
+
+void ProcessRenderRuntime::shutdownAsync(std::function<void()> completion)
+{
+    std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
+    if (shuttingDown_.load(std::memory_order_acquire))
+        return;
+    shutdownCompletion_ = std::move(completion);
+    beginShutdownLocked(true);
+}
+
+void ProcessRenderRuntime::shutdownAndJoin()
+{
+    std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
+    if (!shuttingDown_.load(std::memory_order_acquire))
+        beginShutdownLocked(false);
+
+    const auto generation = shutdownGeneration_.load(std::memory_order_acquire);
+    workerExitCv_.wait(lifecycleLock, [this, generation]() {
+        return workerExited_
+            || generation != shutdownGeneration_.load(std::memory_order_acquire);
+    });
+    if (generation != shutdownGeneration_.load(std::memory_order_acquire))
+        return;
+    lifecycleLock.unlock();
+    finishShutdown(generation);
+    drainAsyncDeliveries();
+}
+
+void ProcessRenderRuntime::completeAsyncShutdown(uint64_t generation)
+{
+    {
+        std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
+        workerExitCv_.wait(lifecycleLock, [this, generation]() {
+            return workerExited_
+                || generation != shutdownGeneration_.load(std::memory_order_acquire);
+        });
+        if (generation != shutdownGeneration_.load(std::memory_order_acquire))
+            return;
+    }
+    finishShutdown(generation);
+
+    std::function<void()> completion;
+    {
+        std::lock_guard<std::mutex> lifecycleLock(shutdownMutex_);
+        completion = std::move(shutdownCompletion_);
+    }
+    if (completion)
+        completion();
+}
+
+void ProcessRenderRuntime::registerBackendChangeListener(std::weak_ptr<ContentRenderService> service)
+{
+    const auto retained = service.lock();
+    if (retained == nullptr)
+        return;
+    std::lock_guard<std::mutex> lock(backendListenersMutex_);
+    const auto it = std::find_if(backendListeners_.begin(), backendListeners_.end(),
+        [&retained](const auto& listener) { return listener.lock() == retained; });
+    if (it == backendListeners_.end())
+        backendListeners_.push_back(service);
+}
+
+void ProcessRenderRuntime::unregisterBackendChangeListener(ContentRenderService* service)
+{
+    std::lock_guard<std::mutex> lock(backendListenersMutex_);
+    backendListeners_.erase(
+        std::remove_if(backendListeners_.begin(), backendListeners_.end(),
+            [service](const auto& listener) {
+                const auto retained = listener.lock();
+                return retained == nullptr || retained.get() == service;
+            }),
+        backendListeners_.end());
+}
+
+void ProcessRenderRuntime::postBackendChangeNotification()
+{
+    const bool posted = postAsyncCallback([this]() {
+        notifyBackendChangeListeners();
+    });
+    if (!posted)
+        AppLogger::error("[ProcessRenderRuntime] backend change notification dispatcher rejected");
+}
+
+void ProcessRenderRuntime::notifyBackendChangeListeners()
+{
+    std::vector<std::shared_ptr<ContentRenderService>> listeners;
+    {
+        std::lock_guard<std::mutex> lock(backendListenersMutex_);
+        for (auto it = backendListeners_.begin(); it != backendListeners_.end();)
+        {
+            if (auto service = it->lock())
+            {
+                listeners.push_back(std::move(service));
+                ++it;
+            }
+            else
+            {
+                it = backendListeners_.erase(it);
+            }
+        }
+    }
+    for (const auto& service : listeners)
+        service->notifyBackendChanged();
 }
 
 void ProcessRenderRuntime::finishControlTransaction(
@@ -603,9 +896,12 @@ void ProcessRenderRuntime::completeClaimedControlTransaction(
         && transaction->paused.exchange(false, std::memory_order_acq_rel))
         transaction->crs->resumeRenderWorker();
     transaction->crs.reset();
-    transaction->acked.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> ackLock(transaction->mutex);
+        transaction->acked.store(true, std::memory_order_release);
+        transaction->cv.notify_all();
+    }
     AppLogger::info("[ProcessRenderRuntime] control transaction ack: " + juce::String(reason));
-    transaction->cv.notify_all();
 }
 
 bool ProcessRenderRuntime::claimControlTransaction(
@@ -615,19 +911,52 @@ bool ProcessRenderRuntime::claimControlTransaction(
         && !transaction->finishing.exchange(true, std::memory_order_acq_rel);
 }
 
+void ProcessRenderRuntime::waitForControlTransactionAck(
+    const std::shared_ptr<ControlTransaction>& transaction)
+{
+    if (!transaction)
+        return;
+    std::unique_lock<std::mutex> ackLock(transaction->mutex);
+    transaction->cv.wait(ackLock, [&transaction]() {
+        return transaction->acked.load(std::memory_order_acquire);
+    });
+}
+
 void ProcessRenderRuntime::finishShutdown(uint64_t generation)
 {
-    std::lock_guard<std::mutex> lifecycleLock(shutdownMutex_);
-    if (generation != shutdownGeneration_.load(std::memory_order_acquire))
-        return;
-    if (controlWorker_.joinable()
-        && controlWorker_.get_id() == std::this_thread::get_id())
+    std::thread worker;
+    bool ownsFinish = false;
     {
-        AppLogger::error("[ProcessRenderRuntime] control worker self-join rejected; hard failure");
-        std::terminate();
+        std::lock_guard<std::mutex> lifecycleLock(shutdownMutex_);
+        if (generation != shutdownGeneration_.load(std::memory_order_acquire))
+            return;
+        if (shutdownFinished_)
+            return;
+        if (!shutdownFinishStarted_)
+        {
+            shutdownFinishStarted_ = true;
+            ownsFinish = true;
+            worker = std::move(controlWorker_);
+        }
     }
-    if (controlWorker_.joinable())
-        controlWorker_.join();
+    if (!ownsFinish)
+    {
+        std::unique_lock<std::mutex> lifecycleLock(shutdownMutex_);
+        workerExitCv_.wait(lifecycleLock, [this, generation]() {
+            return shutdownFinished_
+                || generation != shutdownGeneration_.load(std::memory_order_acquire);
+        });
+        return;
+    }
+    if (worker.joinable())
+    {
+        if (worker.get_id() == std::this_thread::get_id())
+        {
+            AppLogger::error("[ProcessRenderRuntime] control worker self-join rejected; hard failure");
+            std::terminate();
+        }
+        worker.join();
+    }
     std::vector<DeferredRetry> deferred;
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
@@ -647,6 +976,19 @@ void ProcessRenderRuntime::finishShutdown(uint64_t generation)
         std::lock_guard<std::mutex> lock(controlMutex_);
         controlStateClear = controlQueue_.empty() && activeTransaction_ == nullptr;
     }
+    if (!controlStateClear)
+    {
+        std::shared_ptr<ControlTransaction> activeTransaction;
+        {
+            std::lock_guard<std::mutex> lock(controlMutex_);
+            activeTransaction = activeTransaction_;
+        }
+        waitForControlTransactionAck(activeTransaction);
+        {
+            std::lock_guard<std::mutex> lock(controlMutex_);
+            controlStateClear = controlQueue_.empty() && activeTransaction_ == nullptr;
+        }
+    }
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
         if (vocoderDomain_ != nullptr || domainSubmitInFlight_ != 0 || !controlStateClear)
@@ -655,6 +997,11 @@ void ProcessRenderRuntime::finishShutdown(uint64_t generation)
             std::terminate();
         }
     }
+    {
+        std::lock_guard<std::mutex> lifecycleLock(shutdownMutex_);
+        shutdownFinished_ = true;
+    }
+    workerExitCv_.notify_all();
 }
 
 std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight)
@@ -719,9 +1066,6 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
     {
         std::unique_lock<std::mutex> lock(vocoderMutex_);
 
-        if (shuttingDown_.load(std::memory_order_acquire))
-            return ControlResult::Failed;
-
         if (command.type == ControlCommand::Type::SetVocoderWeight
             && currentVocoderModelWeight_ == command.weight)
             return ControlResult::Unchanged;
@@ -747,20 +1091,6 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
     }
     retiredDomain.reset();
 
-    if (shuttingDown_.load(std::memory_order_acquire))
-    {
-        std::vector<DeferredRetry> releasedRetries;
-        {
-            std::lock_guard<std::mutex> lock(vocoderMutex_);
-            vocoderReconfiguring_ = false;
-            for (const auto& retry : deferredRetries_)
-                releaseDeferredPayloadsLocked(retry);
-            releasedRetries = std::move(deferredRetries_);
-        }
-        releasedRetries.clear();
-        return ControlResult::Failed;
-    }
-
     if (command.type == ControlCommand::Type::ResetInferenceBackend)
     {
         auto& detector = AccelerationDetector::getInstance();
@@ -772,8 +1102,7 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
 
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
-        if (!shuttingDown_.load(std::memory_order_acquire)
-            && currentVocoderModelWeight_ == targetWeight)
+        if (currentVocoderModelWeight_ == targetWeight)
         {
             vocoderDomain_ = std::move(newDomain);
             if (vocoderDomain_ != nullptr)
@@ -784,12 +1113,11 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
     bool domainAvailable = false;
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
-        domainAvailable = !shuttingDown_.load(std::memory_order_acquire)
-            && vocoderDomain_ != nullptr;
+        domainAvailable = vocoderDomain_ != nullptr;
     }
     if (domainAvailable)
         resumeDeferredRetries();
-    else if (!shuttingDown_.load(std::memory_order_acquire))
+    else
     {
         std::vector<DeferredRetry> failedRetries;
         {
@@ -830,7 +1158,9 @@ bool ProcessRenderRuntime::postControlCommand(ControlCommand command)
     bool lifecycleRejected = false;
     {
         std::lock_guard<std::mutex> lock(controlMutex_);
-        if (shuttingDown_.load(std::memory_order_acquire))
+        // A successful push under controlMutex_ is the acceptance point. Once
+        // accepted, the command executes to completion behind the Stop.
+        if (!acceptingCommands_)
         {
             AppLogger::error("[ProcessRenderRuntime] rejected control command during shutdown; Failed");
             rejected = true;
@@ -862,44 +1192,43 @@ bool ProcessRenderRuntime::postControlCommand(ControlCommand command)
         auto transaction = std::move(command.transaction);
         auto completion = std::move(command.completion);
         auto completionGate = std::move(command.completionGate);
-        auto finish = [transaction](const char* reason) mutable noexcept {
-            finishControlTransaction(transaction, reason);
-        };
-        const bool posted = juce::MessageManager::callAsync(
-            [completion = std::move(completion), completionGate, finish, transaction,
-             lifecycleRejected]() mutable {
-                if (!claimControlTransaction(transaction))
-                    return;
-                const auto invokeCompletion = [&]() {
-                    try
-                    {
-                        if (completion)
+        // No backend operation ran, so the rejection settles its transaction
+        // here. The owner callback remains an independent message completion.
+        finishControlTransaction(transaction, "rejected control command");
+        if (completion)
+        {
+            const bool posted = postAsyncCallback(
+                [completion = std::move(completion), completionGate, lifecycleRejected]() mutable {
+                    const auto invokeCompletion = [&]() {
+                        try
+                        {
                             completion(lifecycleRejected ? ControlResult::Unchanged : ControlResult::Failed,
                                 lifecycleRejected
                                     ? juce::String{}
                                     : juce::String("Vocoder control queue is full"));
-                    }
-                    catch (...)
+                        }
+                        catch (...)
+                        {
+                            AppLogger::error("[ProcessRenderRuntime] rejected control completion threw");
+                        }
+                    };
+                    if (completionGate != nullptr)
                     {
-                        AppLogger::error("[ProcessRenderRuntime] rejected control completion threw");
+                        CompletionCallbackLease callbackLease(*completionGate);
+                        if (callbackLease)
+                            invokeCompletion();
                     }
-                };
-                if (completionGate != nullptr)
-                {
-                    CompletionCallbackLease callbackLease(*completionGate);
-                    if (callbackLease)
+                    else
+                    {
                         invokeCompletion();
-                }
-                else
-                {
-                    invokeCompletion();
-                }
-                completeClaimedControlTransaction(transaction, "shutdown rejection");
-            });
-        if (!posted)
-            finish("shutdown rejection dispatcher failure");
+                    }
+                });
+            if (!posted)
+                AppLogger::error("[ProcessRenderRuntime] rejected control completion dispatcher rejected");
+        }
         return false;
     }
+    startControlWorker();
     controlCv_.notify_one();
     return true;
 }
@@ -916,7 +1245,8 @@ void ProcessRenderRuntime::controlWorkerLoop()
             controlQueue_.pop_front();
             if (command.type == ControlCommand::Type::EnsureVocoder)
                 ensureVocoderQueued_ = false;
-            activeTransaction_ = command.transaction;
+            if (command.type != ControlCommand::Type::Stop)
+                activeTransaction_ = command.transaction;
         }
         if (command.type == ControlCommand::Type::Stop)
         {
@@ -942,14 +1272,29 @@ void ProcessRenderRuntime::controlWorkerLoop()
             }
             domain.reset();
 
-            const auto generation = shutdownGeneration_.load(std::memory_order_acquire);
-            const bool posted = juce::MessageManager::callAsync(
-                [this, generation]() { finishShutdown(generation); });
-            workerExitDispatchPosted_.store(posted, std::memory_order_release);
-            workerExitDispatchAttempted_.store(true, std::memory_order_release);
+            bool posted = false;
+            if (command.shutdownPostCompletion)
+            {
+                const auto generation = command.shutdownGeneration;
+                posted = postAsyncDelivery(
+                    [this, generation]() { completeAsyncShutdown(generation); });
+            }
+            {
+                std::lock_guard<std::mutex> lock(shutdownMutex_);
+                workerExitDispatchPosted_ = posted;
+                workerExited_ = true;
+            }
             workerExitCv_.notify_all();
-            if (!posted)
-                AppLogger::error("[ProcessRenderRuntime] worker-exit dispatcher rejected; hard lifecycle failure");
+            if (command.shutdownPostCompletion && !posted)
+            {
+#if defined(JucePlugin_Build_AU) && JucePlugin_Build_AU
+                AppLogger::error("[ProcessRenderRuntime] worker-exit dispatcher rejected; synchronously joining");
+#else
+                AppLogger::emergencyError(
+                    "[ProcessRenderRuntime] worker-exit dispatcher rejected; hard lifecycle failure");
+                std::terminate();
+#endif
+            }
             return;
         }
 
@@ -982,11 +1327,6 @@ void ProcessRenderRuntime::controlWorkerLoop()
         }
 
         if (command.type == ControlCommand::Type::EnsureVocoder)
-        {
-            std::lock_guard<std::mutex> lock(controlMutex_);
-            ensureVocoderQueued_ = false;
-        }
-        if (command.type == ControlCommand::Type::EnsureVocoder)
             deferredEnsureRetryPending_.store(false, std::memory_order_release);
         else if (deferredEnsureRetryPending_.exchange(false, std::memory_order_acq_rel))
             postDeferredRetryEvent();
@@ -994,42 +1334,53 @@ void ProcessRenderRuntime::controlWorkerLoop()
         auto transaction = std::move(command.transaction);
         auto completion = std::move(command.completion);
         auto completionGate = std::move(command.completionGate);
-        const auto notifyDeferredFailures = [&]() {
-            if (shuttingDown_.load(std::memory_order_acquire)
-                || deferredFailureNotifications.empty())
+        const bool rootCompletionCanNotify = result == ControlResult::Failed
+            && (command.type == ControlCommand::Type::SetVocoderWeight
+                || command.type == ControlCommand::Type::ResetInferenceBackend)
+            && static_cast<bool>(completion);
+
+        // The worker owns pause/resume, the CRS strong reference release and the
+        // single ack. Settlement happens before any message completion.
+        finishControlTransaction(transaction, result == ControlResult::Changed
+            ? "worker changed backend"
+            : "worker completed command");
+        {
+            std::lock_guard<std::mutex> lock(controlMutex_);
+            if (activeTransaction_ == transaction)
+                activeTransaction_.reset();
+        }
+
+        if (result == ControlResult::Changed)
+            postBackendChangeNotification();
+
+        const auto notifyDeferredFailures = [](std::vector<DeferredFailureNotification>& failures) {
+            if (failures.empty())
                 return;
             auto notificationClaim = std::make_shared<std::atomic<bool>>(false);
-            for (auto& failure : deferredFailureNotifications)
+            for (auto& failure : failures)
                 notifyApplicationRenderFailure(
                     failure.contentKey, failure.contentRevision, failure.targetRevision,
                     failure.reason, std::move(failure.renderCache), std::move(failure.gate),
                     notificationClaim);
         };
-        const bool rootCompletionCanNotify = result == ControlResult::Failed
-            && (command.type == ControlCommand::Type::SetVocoderWeight
-                || command.type == ControlCommand::Type::ResetInferenceBackend)
-            && static_cast<bool>(completion);
-        auto rootCompletionDisplayed = std::make_shared<std::atomic<bool>>(false);
-        if (!transaction && !completion)
+
+        if (!completion)
         {
-            notifyDeferredFailures();
+            notifyDeferredFailures(deferredFailureNotifications);
             continue;
         }
-        auto waitTransaction = transaction;
-        const bool posted = juce::MessageManager::callAsync(
-            [completion = std::move(completion), result, errorMessage, transaction,
-             completionGate, rootCompletionCanNotify, rootCompletionDisplayed]() mutable {
-                if (transaction && !claimControlTransaction(transaction))
-                    return;
+
+        auto deferredFailures = std::make_shared<std::vector<DeferredFailureNotification>>(
+            std::move(deferredFailureNotifications));
+        const bool posted = postAsyncCallback(
+            [completion = std::move(completion), result, errorMessage,
+             completionGate, rootCompletionCanNotify, deferredFailures]() mutable {
+                bool rootCompletionDisplayed = false;
                 const auto invokeCompletion = [&]() {
                     try
                     {
-                        if (completion)
-                        {
-                            completion(result, errorMessage);
-                            if (rootCompletionCanNotify)
-                                rootCompletionDisplayed->store(true, std::memory_order_release);
-                        }
+                        completion(result, errorMessage);
+                        rootCompletionDisplayed = rootCompletionCanNotify;
                     }
                     catch (const std::exception& e)
                     {
@@ -1051,44 +1402,30 @@ void ProcessRenderRuntime::controlWorkerLoop()
                 {
                     invokeCompletion();
                 }
-                completeClaimedControlTransaction(transaction, "message completion");
+                if (rootCompletionDisplayed || deferredFailures->empty())
+                    return;
+                auto notificationClaim = std::make_shared<std::atomic<bool>>(false);
+                for (auto& failure : *deferredFailures)
+                    notifyApplicationRenderFailure(
+                        failure.contentKey, failure.contentRevision, failure.targetRevision,
+                        failure.reason, std::move(failure.renderCache), std::move(failure.gate),
+                        notificationClaim);
             });
         if (!posted)
         {
-            AppLogger::error("[ProcessRenderRuntime] control completion dispatcher rejected; Failed close fallback");
-            if (claimControlTransaction(transaction))
-                completeClaimedControlTransaction(transaction, "dispatcher rejected / Failed");
+            AppLogger::error("[ProcessRenderRuntime] control completion dispatcher rejected");
+            notifyDeferredFailures(*deferredFailures);
         }
-        else if (waitTransaction)
-        {
-            std::unique_lock<std::mutex> lock(waitTransaction->mutex);
-            waitTransaction->cv.wait(lock, [this, &waitTransaction] {
-                return waitTransaction->acked.load(std::memory_order_acquire)
-                    || waitTransaction->closeRequested.load(std::memory_order_acquire);
-            });
-            const bool needsCloseFallback = !waitTransaction->acked.load(std::memory_order_acquire);
-            lock.unlock();
-            if (needsCloseFallback)
-                finishControlTransaction(waitTransaction, "shutdown close fallback");
-        }
-        {
-            std::lock_guard<std::mutex> lock(controlMutex_);
-            if (activeTransaction_ == waitTransaction)
-                activeTransaction_.reset();
-        }
-        const bool rootCompletionDisplayedSuccessfully = posted
-            && rootCompletionDisplayed->load(std::memory_order_acquire);
-        if (!posted || (waitTransaction != nullptr && !rootCompletionDisplayedSuccessfully))
-            notifyDeferredFailures();
     }
 }
 
-void ProcessRenderRuntime::setVocoderModelWeight(const VocoderModelWeight& weight,
+bool ProcessRenderRuntime::setVocoderModelWeight(const VocoderModelWeight& weight,
                                                  std::shared_ptr<ContentRenderService> crs,
                                                  ControlCompletion completion,
                                                  std::shared_ptr<CompletionGate> completionGate)
 {
     // UI 线程只投递命令并立即返回；Session 销毁与重建由 control worker 串行执行。
+    // 返回 true 表示命令已在 control queue 锁内接受，false 表示拒绝。
     ControlCommand command;
     command.type = ControlCommand::Type::SetVocoderWeight;
     command.weight = weight;
@@ -1096,7 +1433,7 @@ void ProcessRenderRuntime::setVocoderModelWeight(const VocoderModelWeight& weigh
     command.transaction->crs = std::move(crs);
     command.completion = std::move(completion);
     command.completionGate = std::move(completionGate);
-    postControlCommand(std::move(command));
+    return postControlCommand(std::move(command));
 }
 
 void ProcessRenderRuntime::resetVocoder(std::shared_ptr<ContentRenderService> crs,
@@ -1345,7 +1682,7 @@ void ProcessRenderRuntime::postDeferredRetryEvent()
     }
     if (deferredRetryEventPosted_.exchange(true, std::memory_order_acq_rel))
         return;
-    const bool posted = juce::MessageManager::callAsync([this]() {
+    const bool posted = postAsyncCallback([this]() {
         deferredRetryEventPosted_.store(false, std::memory_order_release);
         resumeDeferredRetries();
     });

@@ -107,6 +107,17 @@ void RenderWorker::detachExecutionLease(void* owner)
     });
 }
 
+void RenderWorker::notifyBackendChanged()
+{
+    std::function<void()> callback;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        callback = lease_.backendChangedCallback;
+    }
+    if (callback)
+        callback();
+}
+
 // ============================================================
 // 渲染队列
 // ============================================================

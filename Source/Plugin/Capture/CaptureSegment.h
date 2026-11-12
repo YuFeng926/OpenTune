@@ -50,7 +50,7 @@ struct CapturedSpan
 /**
  * One captured take, explicitly recorded into a host-addressed window
  * (anchorHostSample + capacitySamples, indexed with floorMod). Owned by
- * CaptureSession's mutableSegments_ and by every published SegmentsView.
+ * CaptureSession's mutableSegments_ and by the published audio-thread views.
  *
  * stateWord is a single atomic word: bits 0-3 hold the SegmentState, bit 4
  * holds the writer-active claim. The audio thread holds the writer bit while
@@ -212,16 +212,6 @@ struct CaptureSegment
         const double start = T_start.load(std::memory_order_acquire);
         return host_t >= start && host_t < start + durationSeconds;
     }
-};
-
-/**
- * Read-only view of segments published to the audio thread.
- * The view owns the segment references; audio code only uses the raw pointers.
- */
-struct SegmentsView
-{
-    std::vector<CaptureSegment*> snapshot;
-    std::vector<std::shared_ptr<CaptureSegment>> owners;
 };
 
 }  // namespace OpenTune::Capture

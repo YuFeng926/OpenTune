@@ -1,123 +1,146 @@
-# ProcessRenderRuntime 共享后端生命周期收敛计划
+# ProcessRenderRuntime 共享后端生命周期计划
 
-日期：2026-11-06
-状态：架构修订，待实施
-范围：Standalone、VST3、AU 及其各自编译的 SharedCode runtime
+日期：2026-11-06（2026-11-09 修订）
+状态：当前契约，待实施
+范围：Standalone、Windows VST3、macOS VST3；AU 保留现状
 
-本文是 `ProcessRenderRuntime`、`VocoderDomain` 和 DML Session 生命周期的当前契约。它更新并覆盖 [2026-09-29 渲染生命周期计划](2026-09-29-render-runtime-lifecycle-refactor-plan.md) 中与 runtime owner shutdown/reopen 相冲突的条款，尤其是 §2.5、§6.5、§10.2、§10.11。RenderCache、Scheduler、ARA、线程安全与测试条款继续有效，除非本文明确调整。
+本文是 `ProcessRenderRuntime`、`VocoderDomain` 和 DML Session 生命周期的当前契约。与 [2026-09-29 渲染生命周期计划](2026-09-29-render-runtime-lifecycle-refactor-plan.md) 冲突的条款以本文为准：owner 数归零保留共享后端，最终关闭只由应用/模块退出路径完成。
 
-## 1. 目标
+## 1. 目标与范围
 
-`VocoderDomain` 与其中的 DML Session 属于其 `ProcessRenderRuntime` 所在二进制/插件模块的共享后端。Processor 或 ARA DocumentController 析构只清理自身任务和回调；活跃 owner 数归零不停止 control worker，不销毁 Domain，不触发 shutdown/reopen。runtime 尚在其规定宿主边界内时，后续实例复用同一 Domain/Session。
+`VocoderDomain` 与其中的 DML Session 属于其 `ProcessRenderRuntime` 所在二进制/插件模块的共享后端。Processor 或 ARA DocumentController 析构只清理自身任务、回调和事务完成通知；活跃 owner 数归零不停止 control worker、不销毁 Domain、不触发 shutdown/reopen。同一模块内的后续实例复用同一个 Domain/Session。
 
-本契约不要求不同插件格式之间共享同一个 Session。Standalone、VST3、AU 等目标分别编译 SharedCode，各自拥有目标内 runtime。
+Standalone、Windows VST3、macOS VST3 分别编译 SharedCode，各自拥有目标内 runtime；不同插件格式不共享 Session。
+
+AU 模块寿命策略未定，本次 AU 保留现有 owner-count shutdown/reopen 行为。共享 transaction 正确性修复适用于所有格式；owner-count 移除只适用于 Standalone/VST3。
 
 ## 2. 生命周期边界
 
 | 目标 | owner 数归零 | 最终关闭边界 |
 | --- | --- | --- |
-| Standalone | runtime、control worker、Domain、DML Session 保持可复用 | Standalone 应用关闭前，由应用级退出协调器关闭 runtime，并在 MessageManager 停止前完成 worker/scheduler 收敛与 join |
-| Windows VST3 | runtime、control worker、Domain、DML Session 保持可复用 | 确认 `Vst3ModulePin` 成功后，保持至宿主进程终止；不在 Processor 析构或 loader detach 中关闭 DML |
-| 未 pin 的插件模块 | owner 析构不关闭 backend；同一模块仍加载时后续实例复用 | 插件模块卸载前，经宿主支持的模块级退出路径关闭 runtime；该路径在 module code unload 前完成 join |
+| Standalone | runtime、control worker、Domain、DML Session 保持可复用 | 自定义 Standalone 应用/窗口的退出协调器：保存插件状态，在消息线程销毁 Processor/owner，异步完成 runtime 最终关闭后 quit |
+| Windows VST3 | 保持可复用 | `Vst3ModulePin` 成功后模块驻留至进程终止；不在 `ExitDll` 或 loader detach 中关闭 backend |
+| macOS VST3 | 保持可复用 | 最后一个 `bundleExit` 引用退出时同步关闭 backend，返回前完成 join |
+| macOS AU | 保留现有 owner-count 生命周期 | 本次不改变 AU backend 最终关闭边界 |
 
-Windows VST3 的 pin 返回值必须可检查。未验证 pin 成功的构建按“未 pin 模块”执行。模块退出不得依赖 loader lock 内执行耗时 DML 析构；模块级退出入口必须能在代码映像卸载前协调完成异步 shutdown。
+JUCE 8.0.12 的 VST3 client 导出同步 `ExitDll` 和 `bundleExit`。macOS `bundleExit` 可因多个 bundle 引用而多次调用，只有最后一个引用退出时关闭 backend；关闭不依赖消息线程回调或调用线程。Windows VST3 必须先成功 pin；pin 失败则模块初始化失败。宿主不提供异步 pre-unload hook。
 
-模块级单例不是跨模块进程级单例。不得以本计划推导 VST3、AU 和 Standalone 在同一宿主进程共享同一个 C++ 对象。
+Windows 进程终止路径不执行阻塞 DML teardown，不在 loader detach 中等待 worker。
+
+ARA 的寿命对象是 DocumentController 和模型图；二进制模块寿命与 ARA 对象寿命独立，ARA 不提供模块 pre-unload 回调。DC 创建/销毁、模型访问和模型通知只在消息线程执行；宿主决定 Processor 与 DC 的销毁顺序，两种顺序都支持。
+
+模块级单例只属于单一模块；VST3、AU 和 Standalone 不在同一宿主进程共享 C++ 对象。
 
 ## 3. 所有权合同
 
-### 3.1 Shared backend
+### 3.1 共享后端
 
-`ProcessRenderRuntime` 持有唯一 control queue、control worker 与 `VocoderDomain`。`VocoderDomain` 持有 Scheduler 和 DML Session。Ensure 去重、模型权重切换、backend reset 和 Domain 重配继续由 control worker 串行处理。
+`ProcessRenderRuntime` 持有唯一 control queue、control worker 和 `VocoderDomain`；`VocoderDomain` 持有 Scheduler 与 DML Session。Ensure 去重、权重切换、backend reset 和 Domain 重配由 control worker 串行执行。
 
-Backend 在 owner 数归零时保持 idle：control worker 阻塞等待已有 control queue，不轮询、不使用 timer。真正的最终关闭只由 §2 的 Standalone app 或 plugin module 生命周期入口发起。
+Runtime 初始化保持惰性：构造只建立初始状态；首次实际 backend/control 操作启动唯一 control worker。Processor 构造、插件扫描和 ARA wrapper 构造不启动 worker、不加载模型。
 
-Runtime 初始化保持惰性。构造 Processor、插件扫描对象或 ARA wrapper 不得仅为计 owner 而启动 worker 或加载模型。worker 在首次实际 backend/control 操作时启动。
+owner 数归零后 Standalone/VST3 backend 保持 idle：worker 阻塞在 control queue，不使用 timer 或轮询。`retainOwner()`/`releaseOwner()` 与 `ownerCount_` 驱动的 shutdown/reopen 仅在 Standalone/VST3 编译路径删除；AU 保留现有行为。
 
 ### 3.2 Processor / DocumentController owner
 
-owner 析构保留现有自身清理顺序：
+owner 析构按以下顺序执行：
 
-1. 在消息线程关闭 completion gate；ARA DocumentController 构造、析构、模型访问和通知继续遵守消息线程单线程所有权。
-2. 停止并 join owner 自己的 F0 extraction worker。
-3. detach 自己的 CRS execution lease，收敛同步和异步 in-flight render；owner 级 deferred retry 从共享 runtime 路由中移除。
-4. 收敛该 owner 提交的 control transaction，释放其 CRS pause/引用并完成 ack；gate 关闭后不访问该 owner 或其 cache。
-5. 析构 owner 对象。
+1. 在消息线程关闭 completion gate；ARA DC 构造、析构、模型访问和通知保持消息线程单线程所有权。Processor 先于 DC 销毁和 DC 先于 Processor 销毁都是合法顺序。
+2. 停止并 join 该 owner 的 F0 extraction worker，关闭该 owner 的 F0 completion 路由。
+3. detach 自己的 CRS execution lease，等待同步和异步 in-flight render 收敛。
+4. 移除该 owner 的 deferred retries。
+5. 该 owner 已接受的 control transaction 由 worker-owned completion 收敛：worker 执行 pause/resume、释放 CRS strong reference、完成一次 ack；owner 不取消、不代完成。completion gate 只控制 owner-specific UI 回调；cache invalidation 由共享 CRS 通知统一处理。
+6. 清除 owner 状态并析构 owner 对象。
 
-owner teardown 不发送 backend Stop，不 join `ProcessRenderRuntime` control worker，不销毁共享 Domain/DML Session。当前 `detachExecutionLease()` 等待 owner 的在途推理完成；本阶段保留该等待语义，不增加 DML job 的 owner 级强制取消协议。
+owner teardown 不发送 Stop，不 join control worker，不销毁 Domain/DML Session，不执行 owner 级 DML 取消。
 
-### 3.3 全局 control transaction
+### 3.3 Control transaction
 
-权重、vocoder 和 inference backend 设置作用于共享 runtime，不能以发起命令的 owner 作为其最终状态所有者。
-
-- 已被 control worker 接受的全局 Domain 操作完成后更新 runtime 状态，即使来源 owner 已析构。
-- 仍在 queue 中且来源 owner 已关闭的 owner-bound command 在执行 Domain 操作前取消，并通过现有 transaction 完成路径释放引用、按 paused 状态收敛 CRS、完成一次 ack。
-- 已进入 Domain 操作的 command 完成当前原子操作；来源 owner 关闭后不执行 owner/cache completion，仍完成 CRS resume、引用释放和 ack。
-- 来源 owner 的 UI/cache completion 受该 owner gate 控制；gate 关闭后只完成 transaction 收尾、CRS resume、引用释放和 ack。
-- 改变共享 backend 后，对仍注册的活跃 CRS 在消息线程执行 cache 失效/重渲染通知。该路由按当前活跃 owner 注册集工作；不保留已经关闭的 owner。注册/注销绑定 CRS lease 生命周期，不参与 backend 创建或销毁。
-- 每条 transaction 只 pause/resume 一次并 ack 一次。control worker 在 ack 前不执行下一条命令。
-
-不得因移除 owner-driven shutdown 而删除 transaction 的 ack、paused、one-shot completion 或 gate 约束。
+- 成功入队是唯一线性化/接受点：在 control queue 锁内 push 成功即 accepted。入队被拒绝时没有 Domain 操作，不持久化这次选择，提交以拒绝结果完成。
+- 每条 accepted 的共享 backend 设置执行到完成，不受来源 owner 生命周期影响。accepted 的 queued 设置不取消。
+- worker 拥有 pause、resume、CRS strong reference 释放和一次 ack。ack 与消息回调独立；worker 在 transaction mutex 下发布 ack 谓词并 notify，等待者在同一 mutex 下检查谓词，无丢失唤醒。
+- message completion 独立投递；执行前检查 owner completion gate，gate 关闭后跳过 owner-specific UI 回调，不访问 owner 或 DocumentController。worker 不等待 message completion 才处理下一条命令。
+- 活跃 CRS 注册跟随现有 execution lease 的 attach/detach。成功且有效的 backend/generation 改变在消息线程通知每个当前注册的活跃 CRS 一次；该通知是 cache invalidation 与重渲染的唯一入口。Unchanged、Failed 和拒绝不通知。注册与通知复用现有 CRS/RenderWorker 路由，不新增全局框架。
+- 每条需要 pause 的 accepted transaction 恰好一次 pause/resume 和一次 ack。
+- 偏好写入只在 enqueue 返回 accepted 后发生；入队拒绝保持已持久化偏好不变。
 
 ## 4. 最终关闭协议
 
-最终关闭入口属于 Standalone 应用生命周期或未 pin 插件模块生命周期，不属于 `releaseOwner()`。
-
-最终关闭按以下顺序执行：
-
 ```text
-应用/module 生命周期停止接收新 backend 命令和 render job
-    -> 等待 owner 自身 gate、CRS lease 和 owner transaction 收敛
-    -> control queue 排入唯一 Stop
-    -> control worker 完成已接受事务并停止 Domain/Scheduler
-    -> DML active Run 收到 terminate，Scheduler worker 退出并 join
-    -> control worker 发布退出/dispatch 结果并退出
-    -> message thread 处理最终 completion 并 join control worker
-    -> runtime final shutdown 完成
-    -> MessageManager 停止或 plugin module unload
+所有 owner 已析构
+    -> control queue 锁内停止接收新命令
+    -> 在已接受命令之后追加唯一 Stop
+    -> worker 执行完所有已接受命令
+    -> 销毁 Domain/Scheduler，终止并 join active DML Run
+    -> worker 在 shutdown mutex 下发布退出谓词，释放锁后通知
+    -> macOS VST3 不投递消息；bundleExit 等待谓词、解锁并 join 后返回
+    -> Standalone worker 投递消息 completion；消息线程 join 后 quit
 ```
 
-消息线程不得同步等待一个尚需消息线程 ack 的 transaction。Standalone 退出协调器在最终 completion 到达前保持 message dispatcher 可用，并在完成后继续应用退出。未 pin 插件模块使用宿主提供的 pre-unload 生命周期入口；shutdown/join 不运行在 loader lock 内。
+最终关闭入口属于 Standalone 应用或 VST3 模块，不属于 Standalone/VST3 owner 析构。关闭开始后不再接受命令；已接受命令全部执行，不取消。AU 仍由最后 owner 触发现有 shutdown。
 
-Issue #43 的 worker-exit 丢失唤醒随最终关闭协议一并修复：worker 在与 waiter 相同的 mutex 下发布退出谓词，解锁后通知；每个等待都检查对应 predicate；需要 join 的 message callback 先完成退出等待并释放 mutex，再 join 已退出的 worker。最终关闭只有一代，不保留 owner reopen 所需的 generation 状态。
+Stop 是唯一的队列终止命令；worker 消费 Stop 后销毁 Domain/Scheduler 和 active DML Run，发布退出谓词。最终关闭只有一代；不重建 worker、不保留 owner reopen 所需的 generation 状态。
 
-Standalone 应用级关闭和未 pin module unload 均为一次性关闭，不重新创建 worker。Windows VST3 process termination 路径不执行 DML teardown。
+macOS VST3 最后一个 bundle 引用退出时同步 join：关闭路径不投递消息，`bundleExit` 等待 worker 退出并直接 join，不依赖消息回调。Windows VST3 pin 成功后不执行模块级 backend shutdown。Standalone 用异步关闭：请求后消息循环继续运行，worker 投递 completion，消息线程 join 并 quit。
 
-## 5. 代码迁移范围
+### 4.1 Standalone
 
-### 阶段 A：建立宿主最终关闭入口
+现有默认窗口 `closeButtonPressed()` 先 `savePluginState()` 再 `JUCEApplicationBase::quit()`；Control API 通过 `ControlEditorBridge::requestQuit()` 调用这个虚方法。新 Standalone 应用/窗口使用 `JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP`，OS quit、窗口关闭和 Control API 关闭进入同一个退出协调器。
 
-- 为 JUCE Standalone 增加应用级退出协调器，在 MessageManager teardown 前请求异步 runtime final shutdown，并在 shutdown completion 后继续退出。
-- 为未 pin 的 plugin targets 确认并接入 module pre-unload shutdown 路径；覆盖 AU、macOS VST3 和其他未 pin 格式。
-- 检查 Windows VST3 module pin 的实际成功状态，并验证宿主卸载请求后模块保持加载至进程终止。
+协调器顺序：保存插件状态一次（保持现有保存语义）→ 在消息线程销毁 Processor/owner → 请求 runtime 最终关闭并立即返回 → 消息循环处理最终 completion（join worker）→ 调用 `quit()`。`shutdown()` 只清空已经关闭的应用对象。
 
-验收：三类宿主边界均有可观测入口；没有 owner destructor 或 loader-lock callback 承担全局 backend shutdown。
+Control API 保持 after-reply 语义：`app.quit` 结果先写回连接，退出步骤由 dispatcher 在消息线程执行；先停 control service，再关闭窗口。协调器不改变这个顺序。退出路径不新增 timer。
 
-### 阶段 B：分离 owner 清理与 backend 生命周期
+### 4.2 VST3 模块退出
 
-- 移除 `ownerCount_` 驱动的 `shutdownLocked()`、Stop、control worker join 和 `retainOwner()` reopen。
-- Processor 和 DocumentController 删除仅用于 backend refcount 的 retain/release 调用；保留 owner/CRS 注册、completion gate、F0 worker shutdown、CRS detach、deferred-job 清理。
-- `ProcessRenderRuntime` 构造只建立惰性状态；首次实际 backend/control 操作启动唯一 control worker。
-- 删除只服务于 owner shutdown/reopen 的 `shutdownGeneration_` 和旧 worker dispatch 状态；保留最终关闭所需的 Stop、worker-exit handoff 与 join 机制，并按 §4 修复通知协议。
+macOS `bundleExit` 是同步 pre-unload 路径，但每个 bundle 引用退出都会调用 JUCE `shutdownModule()`。通过现有 JUCE patch 只在最后一个 bundle 引用退出时调用 OpenTune 同步最终关闭：停止接受、追加 Stop、等待 worker 退出并 join，然后返回。关闭不依赖消息分发器存活。
 
-验收：owner 数归零后 Domain/Session live count 不变、worker 仍可接收命令；后续 owner 使用同一个 Domain；扫描路径不启动 backend。
+Windows VST3 的 `GetModuleHandleExW(... PIN)` 结果必须验证成功；失败则模块初始化失败。成功后模块驻留至进程终止，owner 数归零后的 backend 继续复用。`ExitDll` 和进程终止路径不执行阻塞 DML teardown，不在 loader detach 中等待 worker。
 
-### 阶段 C：闭合 owner transaction 与共享状态通知
+VST3 client 不提供宿主异步 pre-unload hook。AU 的 owner-count backend 生命周期保持不变。
 
-- 让已接受的全局 backend 命令与来源 owner completion 解耦。
-- owner detach 能收敛其 queued/active transaction，保证 CRS 恢复和 ack；已执行的 runtime-global 设置继续发布。
-- 将共享 backend 改变通知当前活跃 CRS，保证多个 owner 的 cache 与 runtime generation 一致。
+### 4.3 Issue #43 丢失唤醒
 
-验收：来源 owner 在 queued、Domain operation、message completion、ack 各阶段析构，control worker 均继续处理后续命令；其他活跃 owner 收到且只收到一次 backend-change 通知。
+worker 在 `shutdownMutex_` 下发布 worker-exit 谓词，释放锁后 notify；等待者在同一 `shutdownMutex_` 下检查谓词。Standalone worker 在发布谓词前记录 message completion 投递结果，投递失败形成显式硬失败；macOS VST3 worker 不投递消息，`bundleExit` 等待谓词后解锁并直接 join。`finishShutdown()`/join 在谓词等待返回并释放 mutex 后执行。
 
-### 阶段 D：测试迁移
+## 5. 实施阶段
 
-- 将 `RenderRuntimeLifecycleTests` 从 last-owner shutdown/reopen 改为 zero-owner persistence、后续实例复用与多 owner 隔离。
-- 增加 owner A 在途 DML 推理期间 teardown、owner B 继续提交的真实 Scheduler/CRS 测试。
-- 增加来源 owner 退出时 queued/active transaction 收敛和共享状态广播测试。
-- 增加 Standalone app final shutdown 测试：message dispatcher 保持运行至 worker、Scheduler、DML Run 全部收敛，再继续 app quit。
-- 增加未 pin module pre-unload 测试和 Windows VST3 pin 成功/驻留验证。测试覆盖分别按构建目标执行，不以一个 SharedCode test target 代替 module pin 验收。
-- 移除 `ControlProcessorSupport.h` 中永久 retain owner 以绕过 shutdown 的 workaround。
+### 阶段 A：建立退出契约
+
+- 用 `JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP` 建立 Standalone 应用/窗口退出协调器，覆盖 OS quit、窗口关闭和 Control API 关闭。
+- 在 macOS VST3 `shutdownModule()` 接入同步最终关闭，通过现有 `scripts/github_actions/patch-juce-ara.py` 的 needle patch 落地；验证 Windows pin 成功并让 pin 失败时模块初始化失败。
+- 验收：Standalone 和 macOS VST3 有最终关闭入口，Windows VST3 验证进程寿命驻留；owner 析构和 loader-detach 路径不承担全局 backend shutdown。
+
+### 阶段 B：worker-owned transaction 与活跃 CRS 通知
+
+- control command 入队返回 accepted/rejected；偏好写入使用 accepted 结果。
+- worker-owned transaction settlement：pause/resume、CRS 引用释放、一次 ack；message completion 独立并检查 gate。
+- 活跃 CRS 注册跟随 execution lease；有效 backend/generation 改变在消息线程通知一次。
+- 验收：来源 owner 在 queued、running、completion 阶段析构时设置仍完成；拒绝不改持久化偏好；另一活跃 CRS 恰好一次通知。
+
+### 阶段 C：连接应用/模块最终关闭
+
+- Standalone 异步最终关闭；macOS VST3 同步最终关闭。
+- worker-exit 谓词与等待 mutex 配对；`finishShutdown`/join 在等待之外执行。
+- 验收：Standalone 在 completion 后 quit；macOS VST3 `bundleExit` 返回前 join；Windows VST3 pin 驻留；无丢失唤醒。
+
+### 阶段 D：移除 ownerCount shutdown/reopen
+
+- Standalone/VST3 删除 owner-count shutdown/reopen 与 owner reopen 状态；AU 保留 `retainOwner()`/`releaseOwner()` 路径。worker 在首次实际操作时启动。
+- owner 析构删除 Stop、全局 join、Domain/DML 销毁和 owner 级 DML 取消。
+- 验收：owner 归零后 Domain/Session 保持 live；后续实例复用同一 Domain；扫描路径不启动 backend。
+
+### 阶段 E：替换生命周期测试
+
+- zero-owner same Domain+Session reuse；断言 Session 生命周期计数/身份，不以 runtime 地址或 generation 代替。
+- queued 与 running accepted operation 在来源 owner teardown 下完成；零 dead-owner callback；恰好一次 worker resume/ack；另一活跃 CRS 恰好一次通知。
+- Standalone OS quit、窗口关闭、Control API 三条退出路径、保存语义、final close 先于 quit。
+- VST3 pin 成功；macOS 最后一个 `bundleExit` 引用退出时 pre-unload 同步关闭。
+- AU owner-count shutdown/reopen 行为保持现状。
+- ARA harness：消息线程 DC teardown，DC/Processor 两种合法销毁顺序；不测试模块卸载。
+- 移除 `ControlProcessorSupport.h` 的永久 retain workaround。
+
+测试按构建目标执行；不建立一个跨目标 SharedCode 测试替代模块 pin 验收。
 
 ## 6. 必须保持的运行时不变量
 
@@ -125,18 +148,32 @@ Standalone 应用级关闭和未 pin module unload 均为一次性关闭，不�
 Domain 创建、重配、最终销毁由唯一 control worker 执行；
 旧 Scheduler shutdown/join 后才替换或销毁 Domain；
 domainSubmitInFlight_ 归零后才释放 Domain；
-owner gate 关闭后不访问 Processor、DocumentController 或其 cache；
-ARA model access、F0 completion 和 DocumentController 析构保持 message-thread-only；
-每条 ControlTransaction 恰好一次 resume 和 ack；
-最终关闭中所有实际关闭的 worker/Scheduler 均 join 后再卸载其代码模块；
-owner 数归零不改变共享 Domain/DML Session 的存活状态。
+owner gate 关闭后不访问 Processor、DocumentController 或 cache；
+ARA 模型访问、F0 completion、DC 构造/析构保持 message-thread-only；
+每条需要 pause 的 accepted transaction 恰好一次 pause/resume 和一次 ack；
+accepted 设置不因来源 owner 析构而取消；
+最终关闭中的 worker/Scheduler/DML Run 全部 join 后才卸载模块；
+owner 数归零不改变 Domain/DML Session 的存活状态。
 ```
 
-不得增加 timer、忙等、后台心跳、每 owner 的 DML Session 或跨插件格式共享层。
+不增加 timer、忙等、后台心跳、每 owner 的 DML Session 或跨插件格式共享层。
 
 ## 7. 范围外
 
+- AU 的模块寿命策略；本次保留现有 owner-count 行为，不扩展 AU 最终关闭边界。
 - 不重写 DML inference queue、Ensure 去重、Domain generation 或 render-cache 算法。
-- 不新增 owner 级 DML 强制取消；析构继续等待该 owner 的已接受 render work 收敛。
-- 不要求 AU、VST3、Standalone 共享一个跨模块 Session。
-- 不执行源码实现、构建或提交；这些工作在用户确认计划后按阶段进行。
+- 不做广泛重构；不新增 owner 级 DML 强制取消。
+- 不改变退出与状态保存之外的 user-facing 行为。
+- 不添加 timer。
+- 本计划定义契约；实现按阶段另行执行。
+
+## 8. 依据
+
+- Standalone：`JUCE-master/modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h:796-804`（close 保存插件状态后 `JUCEApplicationBase::quit()`）；`JUCE-master/modules/juce_audio_plugin_client/juce_audio_plugin_client_Standalone.cpp:148-175,222-230`（`shutdown()`、`systemRequestedQuit()`、custom app macro）；`JUCE-master/modules/juce_events/messages/juce_ApplicationBase.h:151-163,174-186`（dispatch loop 停止后 `shutdown()`；OS quit 进入 `systemRequestedQuit()`）。
+- OpenTune Standalone/Control：`Source/Standalone/ControlEditorBridge.cpp:193-203`；`Source/Control/Ops/AppQuitOps.h:33-38`。
+- VST3 模块退出：`JUCE-master/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp:4015-4048,4058-4098`（同步 `ExitDll`、`ModuleExit`、`bundleExit`；macOS 只在最后 bundle ref 退出时关闭）。
+- Runtime 现状：`Source/Runtime/ProcessRenderRuntime.cpp:945-952`（worker 发布 shutdown 谓词）；`:1064-1073`（worker 等待投递到消息线程的 ack）；`Tests/Control/ControlProcessorSupport.h:192-217`（永远 retain owner 的 workaround）；`Tests/RenderRuntimeLifecycleTests.cpp:734-769`（shutdown/reopen 测试）。
+- 偏好：`Source/Editor/Preferences/SharedPreferencePages.cpp:252-260`（先写偏好再投递 control command）。
+- Windows pin：`Source/Utils/Vst3ModulePin.cpp:35-50`（`GetModuleHandleExW` 返回值当前未检查）。
+- ARA：[`ARAInterface.h`](https://github.com/Celemony/ARA_API/blob/main/ARAInterface.h)（Document 与 DocumentController 1:1；模型编辑由 `beginEditing()`/`endEditing()` 编辑周期保护，用于渲染同步）；[`ARAVST3.h`](https://github.com/Celemony/ARA_API/blob/main/ARAVST3.h)（DC 在 plug-in in use 期间有效；Processor 与 DC 销毁顺序未定义，两种顺序都必须支持）。
+- 本地 JUCE checkout 为 8.0.12（`JUCE-master/modules/juce_core/juce_core.h:47`），本文引用的行号与该 checkout 一致。

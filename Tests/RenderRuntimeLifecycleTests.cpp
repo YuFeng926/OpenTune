@@ -9,10 +9,52 @@
 #include "LifecycleWatchdog.h"
 #include "../Source/Utils/TimeCoordinate.h"
 #include <juce_events/juce_events.h>
+#include <atomic>
 #include <cstdio>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
+
+namespace OpenTune
+{
+struct ProcessRenderRuntimeTestAccess
+{
+    static std::thread::id controlWorkerIdentity(ProcessRenderRuntime& runtime)
+    {
+        std::lock_guard<std::mutex> lock(runtime.shutdownMutex_);
+        return runtime.controlWorker_.get_id();
+    }
+
+    /** The transaction the control worker is currently settling, or null once it published its ack. */
+    static std::shared_ptr<ProcessRenderRuntime::ControlTransaction> activeControlTransaction(
+        ProcessRenderRuntime& runtime)
+    {
+        std::lock_guard<std::mutex> lock(runtime.controlMutex_);
+        return runtime.activeTransaction_;
+    }
+
+    /** A runtime instance that is independent of the process singleton. */
+    static std::shared_ptr<ProcessRenderRuntime> createRuntime()
+    {
+        return std::shared_ptr<ProcessRenderRuntime>(new ProcessRenderRuntime(), &destroyRuntime);
+    }
+
+    static bool postAsyncDelivery(ProcessRenderRuntime& runtime, std::function<void()> delivery)
+    {
+        return runtime.postAsyncDelivery(std::move(delivery));
+    }
+
+private:
+    static void destroyRuntime(ProcessRenderRuntime* runtime)
+    {
+        delete runtime;
+    }
+};
+}
 
 namespace
 {
@@ -38,6 +80,116 @@ bool checkRenderContract(bool value, const char* reason)
         std::fprintf(stderr, "{\"event\":\"render_cache_contract\",\"result\":\"failure\",\"reason\":\"%s\"}\n", reason);
     return value;
 }
+
+bool checkLifecycle(bool value, const char* reason)
+{
+    if (! value)
+        std::fprintf(stderr, "{\"event\":\"lifecycle_contract\",\"result\":\"failure\",\"reason\":\"%s\"}\n", reason);
+    return value;
+}
+
+/**
+ * Sends accepted control commands to the shared runtime and records their worker-owned outcomes.
+ *
+ * The first command is posted while the caller still owns the runtime. The two follow-up commands
+ * are posted after the caller released its last owner: the first one closes its completion gate
+ * before it is enqueued, the second one is the open-gate barrier. After the barrier's message
+ * completion returned, the settlement check reads the worker-owned transaction ack. No timer or
+ * state polling is involved.
+ */
+class AcceptedCommandProbe
+{
+public:
+    AcceptedCommandProbe(OpenTune::ProcessRenderRuntime& runtime,
+                         std::shared_ptr<OpenTune::ContentRenderService> sourceOwner,
+                         std::string weight)
+        : runtime_(runtime),
+          sourceOwner_(std::move(sourceOwner)),
+          weight_(std::move(weight)),
+          closedGate_(std::make_shared<OpenTune::ProcessRenderRuntime::CompletionGate>())
+    {
+    }
+
+    void postFirstCommand()
+    {
+        runtime_.setVocoderModelWeight(
+            weight_, nullptr,
+            [this](OpenTune::ProcessRenderRuntime::ControlResult result, juce::String) {
+                firstResult_.store(static_cast<int>(result), std::memory_order_release);
+                firstCalls_.fetch_add(1, std::memory_order_acq_rel);
+            },
+            std::make_shared<OpenTune::ProcessRenderRuntime::CompletionGate>());
+    }
+
+    void postSubsequentCommands()
+    {
+        zeroOwnerObserved_ = runtime_.ownerCount() == 0;
+        workerJoinableAtZeroOwner_ = runtime_.isControlWorkerJoinable();
+        workerIdentityAtZeroOwner_ =
+            OpenTune::ProcessRenderRuntimeTestAccess::controlWorkerIdentity(runtime_);
+
+        closedGate_->closeAndWait();
+        runtime_.setVocoderModelWeight(
+            weight_, sourceOwner_,
+            [this](OpenTune::ProcessRenderRuntime::ControlResult result, juce::String) {
+                juce::ignoreUnused(result);
+                closedCalls_.fetch_add(1, std::memory_order_acq_rel);
+            },
+            closedGate_);
+        runtime_.setVocoderModelWeight(
+            weight_, nullptr,
+            [this](OpenTune::ProcessRenderRuntime::ControlResult result, juce::String) {
+                barrierResult_.store(static_cast<int>(result), std::memory_order_release);
+                barrierCalls_.fetch_add(1, std::memory_order_acq_rel);
+                postSettlementCheck();
+            },
+            std::make_shared<OpenTune::ProcessRenderRuntime::CompletionGate>());
+    }
+
+    int firstCalls() const noexcept { return firstCalls_.load(std::memory_order_acquire); }
+    int closedCalls() const noexcept { return closedCalls_.load(std::memory_order_acquire); }
+    int barrierCalls() const noexcept { return barrierCalls_.load(std::memory_order_acquire); }
+    int firstResult() const noexcept { return firstResult_.load(std::memory_order_acquire); }
+    int barrierResult() const noexcept { return barrierResult_.load(std::memory_order_acquire); }
+    bool settled() const noexcept { return settled_.load(std::memory_order_acquire); }
+    bool zeroOwnerObserved() const noexcept { return zeroOwnerObserved_; }
+    bool workerJoinableAtZeroOwner() const noexcept { return workerJoinableAtZeroOwner_; }
+    std::thread::id workerIdentityAtZeroOwner() const noexcept { return workerIdentityAtZeroOwner_; }
+    void releaseSourceOwner() { sourceOwner_.reset(); }
+
+private:
+    void postSettlementCheck()
+    {
+        juce::MessageManager::callAsync([this] {
+            auto transaction = OpenTune::ProcessRenderRuntimeTestAccess::activeControlTransaction(runtime_);
+            bool settled = true;
+            if (transaction != nullptr)
+            {
+                std::unique_lock<std::mutex> lock(transaction->mutex);
+                transaction->cv.wait(lock, [&transaction] {
+                    return transaction->acked.load(std::memory_order_acquire);
+                });
+                settled = transaction->acked.load(std::memory_order_acquire);
+            }
+            settled_.store(settled, std::memory_order_release);
+            juce::MessageManager::getInstance()->stopDispatchLoop();
+        });
+    }
+
+    OpenTune::ProcessRenderRuntime& runtime_;
+    std::shared_ptr<OpenTune::ContentRenderService> sourceOwner_;
+    std::string weight_;
+    std::shared_ptr<OpenTune::ProcessRenderRuntime::CompletionGate> closedGate_;
+    std::atomic<int> firstCalls_{0};
+    std::atomic<int> closedCalls_{0};
+    std::atomic<int> barrierCalls_{0};
+    std::atomic<int> firstResult_{static_cast<int>(OpenTune::ProcessRenderRuntime::ControlResult::Failed)};
+    std::atomic<int> barrierResult_{static_cast<int>(OpenTune::ProcessRenderRuntime::ControlResult::Failed)};
+    std::atomic<bool> settled_{false};
+    bool zeroOwnerObserved_{false};
+    bool workerJoinableAtZeroOwner_{false};
+    std::thread::id workerIdentityAtZeroOwner_;
+};
 
 bool runRenderCacheCompletionContract()
 {
@@ -444,13 +596,22 @@ bool runRenderCacheCapacityContract()
         {
             const size_t bytesBeforeEdit =
                 OpenTune::RenderCache::renderCacheCurrentBytes().load(std::memory_order_acquire);
-            const int64_t preparedChunkStart = OpenTune::TimeCoordinate::sampleRateProject(
-                256, OpenTune::RenderCache::kSampleRate, 48000.0);
+            using OpenTune::PlaybackSampleGeometry::projectToSample;
+            const int64_t preparedFirstEnd = projectToSample(
+                static_cast<double>(256) * 48000.0 / OpenTune::RenderCache::kSampleRate);
+            const int64_t preparedPlanEnd = projectToSample(
+                static_cast<double>(512) * 48000.0 / OpenTune::RenderCache::kSampleRate);
+            const int64_t preparedChunkStart = preparedFirstEnd;
+            // Both adjacent canonical chunks intersect the other chunk's real
+            // FIR support, so the local edit invalidates and rebuilds both
+            // prepared chunks. Their output lengths are Q(globalEnd) spans.
             const size_t changedChunkPcmBytes =
-                static_cast<size_t>(OpenTune::TimeCoordinate::sampleRateProject(
-                    256, OpenTune::RenderCache::kSampleRate, 48000.0)) * sizeof(float);
-            limit.store(bytesBeforeEdit + 256 * sizeof(float) + changedChunkPcmBytes,
-                        std::memory_order_release);
+                static_cast<size_t>(preparedFirstEnd) * sizeof(float);
+            const size_t neighborChunkPcmBytes =
+                static_cast<size_t>(preparedPlanEnd - preparedFirstEnd) * sizeof(float);
+            const size_t expectedCurrentBytes = bytesBeforeEdit + 256 * sizeof(float)
+                + changedChunkPcmBytes + neighborChunkPcmBytes;
+            limit.store(expectedCurrentBytes, std::memory_order_release);
 
             cache.reconcileFullPlanAndRequest(plan, 0, 256, 2);
             jobs = cache.getPendingJobs();
@@ -462,8 +623,8 @@ bool runRenderCacheCapacityContract()
                     0, 256, std::vector<float>(256, 3.0f), jobs.front().targetRevision)
                     == OpenTune::RenderCache::ChunkRenderResult::Published;
             }
-            passed = checkRenderContract(edited, "local_edit_reallocated_unchanged_prepared_pcm")
-                && passed;
+            passed = checkRenderContract(
+                edited, "local_edit_neighbor_prepared_rebuild_exceeded_budget") && passed;
 
             if (edited)
             {
@@ -473,11 +634,11 @@ bool runRenderCacheCapacityContract()
                     unchangedChunk, 0, 64, preparedChunkStart + 32, 48000, 2);
                 passed = checkRenderContract(
                     unchangedChunk.getSample(0, 0) != 0.0f,
-                    "unchanged_prepared_chunk_rejected_current_revision") && passed;
+                    "neighbor_prepared_chunk_rejected_current_revision") && passed;
                 passed = checkRenderContract(
                     OpenTune::RenderCache::renderCacheCurrentBytes().load(std::memory_order_acquire)
-                        == bytesBeforeEdit + 256 * sizeof(float) + changedChunkPcmBytes,
-                    "local_edit_pcm_budget_used_for_unchanged_chunk") && passed;
+                        == expectedCurrentBytes,
+                    "local_edit_neighbor_prepared_pcm_not_accounted") && passed;
             }
         }
         cache.clear();
@@ -615,6 +776,56 @@ bool runRenderWorkerStage1QueueCapacityContract()
     return checkRenderContract(passed, "stage1_queue_capacity_regressed");
 }
 
+/**
+ * Final shutdown returns only after every accepted async delivery has run on
+ * the message thread. The shutdown call below executes on the JUCE message
+ * thread while no dispatch loop is running, so the three queued deliveries
+ * remain in the message manager and must be dispatched by shutdownAndJoin
+ * itself before it returns.
+ */
+bool runAsyncDeliveryShutdownContract()
+{
+    auto runtime = OpenTune::ProcessRenderRuntimeTestAccess::createRuntime();
+    std::atomic<int> delivered{0};
+    std::atomic<int> deliveredAtShutdownReturn{-1};
+    std::atomic<bool> rejectedAfterShutdown{false};
+
+    for (int i = 0; i < 3; ++i)
+    {
+        const bool accepted = OpenTune::ProcessRenderRuntimeTestAccess::postAsyncDelivery(
+            *runtime, [&delivered] {
+                delivered.fetch_add(1, std::memory_order_acq_rel);
+            });
+        if (!checkLifecycle(accepted, "async_delivery_not_accepted"))
+        {
+            runtime->shutdownAndJoin();
+            return false;
+        }
+    }
+
+    runtime->shutdownAndJoin();
+    deliveredAtShutdownReturn.store(delivered.load(std::memory_order_acquire),
+                                    std::memory_order_release);
+    rejectedAfterShutdown.store(
+        !OpenTune::ProcessRenderRuntimeTestAccess::postAsyncDelivery(*runtime, [] {}),
+        std::memory_order_release);
+
+    const auto deliveredAtReturn = deliveredAtShutdownReturn.load(std::memory_order_acquire);
+    const bool passed = checkLifecycle(
+            deliveredAtReturn == 3,
+            "async_deliveries_not_drained_before_shutdown_return")
+        && checkLifecycle(delivered.load(std::memory_order_acquire) == 3,
+                          "async_deliveries_lost")
+        && checkLifecycle(rejectedAfterShutdown.load(std::memory_order_acquire),
+                          "async_delivery_accepted_after_shutdown");
+    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "async_delivery_shutdown_contract", {
+        {"delivered", OpenTuneTest::jsonNumber(delivered.load(std::memory_order_acquire))},
+        {"deliveredAtShutdownReturn", OpenTuneTest::jsonNumber(deliveredAtReturn)},
+        {"lateDeliveryRejected", rejectedAfterShutdown.load(std::memory_order_acquire) ? "true" : "false"}
+    });
+    return passed;
+}
+
 int runChild(int argc, char** argv)
 {
     juce::ignoreUnused(argc, argv);
@@ -731,42 +942,95 @@ int runChild(int argc, char** argv)
     service->detachExecutionLease(&owner);
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "lease_detached");
 
-    runtime.resetVocoder(nullptr, [](OpenTune::ProcessRenderRuntime::ControlResult,
-                                     juce::String) {});
-    std::thread firstShutdown([&runtime] {
-        runtime.releaseOwner();
-        juce::MessageManager::callAsync([] {
-            juce::MessageManager::getInstance()->stopDispatchLoop();
-        });
-    });
+    if (!runAsyncDeliveryShutdownContract())
+        return 1;
+
+    const auto commandWeight = runtime.getVocoderModelWeight();
+    auto pauseTarget = std::make_shared<OpenTune::ContentRenderService>();
+    std::atomic<int> pauseTargetJobs{0};
+    int pauseTargetLeaseOwner = 0;
+    pauseTarget->attachExecutionLease({&pauseTargetLeaseOwner, [&pauseTargetJobs](OpenTune::RenderJob& job) {
+        pauseTargetJobs.fetch_add(1, std::memory_order_relaxed);
+        if (job.renderCache != nullptr)
+        {
+            const auto sampleCount = static_cast<std::size_t>(job.endSampleExclusive - job.startSample);
+            job.renderCache->completeChunkRenderWithAudio(
+                job.startSample, job.endSampleExclusive,
+                std::vector<float>(sampleCount, 1.0f), job.targetRevision);
+        }
+    }});
+
+    AcceptedCommandProbe probe(runtime, pauseTarget, commandWeight);
+    probe.postFirstCommand();
+    runtime.releaseOwner();
+    probe.postSubsequentCommands();
     juce::MessageManager::getInstance()->runDispatchLoop();
-    firstShutdown.join();
-    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "first_runtime_shutdown_complete", {
+
+    const auto workerIdentityAfterCommands =
+        OpenTune::ProcessRenderRuntimeTestAccess::controlWorkerIdentity(runtime);
+    const auto unchanged = static_cast<int>(OpenTune::ProcessRenderRuntime::ControlResult::Unchanged);
+    bool lifecyclePassed = true;
+    lifecyclePassed = checkLifecycle(probe.firstCalls() == 1,
+                                     "accepted_command_before_zero_owner_not_settled") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(probe.firstResult() == unchanged,
+                                     "accepted_command_before_zero_owner_changed_backend") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(probe.zeroOwnerObserved(),
+                                     "owner_count_not_zero_after_release") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(probe.workerJoinableAtZeroOwner(),
+                                     "control_worker_joined_at_zero_owners") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(probe.closedCalls() == 0,
+                                     "closed_owner_completion_called") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(probe.barrierCalls() == 1,
+                                     "post_zero_owner_command_not_settled_once") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(probe.barrierResult() == unchanged,
+                                     "post_zero_owner_command_changed_backend") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(probe.settled(),
+                                     "post_zero_owner_transaction_not_acked") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(runtime.isControlWorkerJoinable(),
+                                     "control_worker_not_joinable_after_zero_owner_commands") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(workerIdentityAfterCommands != std::thread::id{}
+                                         && probe.workerIdentityAtZeroOwner() != std::thread::id{}
+                                         && workerIdentityAfterCommands == probe.workerIdentityAtZeroOwner(),
+                                     "control_worker_identity_changed") && lifecyclePassed;
+    lifecyclePassed = checkLifecycle(runtime.controlQueueDepth() == 0,
+                                     "control_queue_not_drained") && lifecyclePassed;
+
+    const OpenTune::ContentKey pauseKey{OpenTune::DomainKind::StandaloneClip, 905, 0};
+    auto pauseCache = pauseTarget->getOrCreateRenderCache(pauseKey);
+    auto pauseSnapshot = std::make_shared<OpenTune::EditableContentSnapshot>();
+    auto pauseAudio = std::make_shared<juce::AudioBuffer<float>>(1, 256);
+    pauseAudio->clear();
+    pauseTarget->enqueueRender(OpenTune::RenderJob{
+        OpenTune::RenderJob::Kind::Stage1Render, pauseKey, pauseSnapshot, pauseCache,
+        pauseAudio, 44100.0, 0, pauseAudio->getNumSamples(), -1, 1});
+    pauseTarget->drainRenderWorker();
+    lifecyclePassed = checkLifecycle(pauseTargetJobs.load(std::memory_order_acquire) == 1,
+                                     "accepted_transaction_left_source_owner_paused") && lifecyclePassed;
+    pauseTarget->detachExecutionLease(&pauseTargetLeaseOwner);
+    probe.releaseSourceOwner();
+    pauseTarget.reset();
+
+    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "zero_owner_runtime_persisted", {
         {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
+        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"},
+        {"firstCommandCompletions", OpenTuneTest::jsonNumber(probe.firstCalls())},
+        {"closedOwnerCallbacks", OpenTuneTest::jsonNumber(probe.closedCalls())},
+        {"barrierCompletions", OpenTuneTest::jsonNumber(probe.barrierCalls())},
+        {"transactionSettled", probe.settled() ? "true" : "false"},
         {"controlQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.controlQueueDepth()))},
         {"deferredRetryCount", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.deferredRetryCount()))},
-        {"activeTransaction", runtime.hasActiveTransaction() ? "true" : "false"},
-        {"domainSubmitInFlight", OpenTuneTest::jsonNumber(runtime.domainSubmitInFlight())},
-        {"domainGeneration", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.vocoderGeneration()))},
+        {"vocoderReady", runtime.isVocoderReady() ? "true" : "false"},
+        {"vocoderGeneration", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.vocoderGeneration()))},
         {"renderQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(service->renderQueueDepth()))},
         {"renderInFlight", OpenTuneTest::jsonNumber(service->renderInFlight())},
-        {"renderAsyncInFlight", OpenTuneTest::jsonNumber(service->renderAsyncInFlight())},
-        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
+        {"renderAsyncInFlight", OpenTuneTest::jsonNumber(service->renderAsyncInFlight())}
+    });
+    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "backend_readiness_assertion_skipped", {
+        {"reason", OpenTuneTest::jsonString("no real Domain factory injection or test model seam")}
     });
 
-    // A host may create a new instance after the previous last instance was
-    // released.  The process singleton must reopen its control worker rather
-    // than inherit the prior shutdown state.
-    runtime.retainOwner();
-    std::thread secondShutdown([&runtime] {
-        runtime.releaseOwner();
-        juce::MessageManager::callAsync([] {
-            juce::MessageManager::getInstance()->stopDispatchLoop();
-        });
-    });
-    juce::MessageManager::getInstance()->runDispatchLoop();
-    secondShutdown.join();
-    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "second_runtime_shutdown_complete");
+    if (! lifecyclePassed)
+        return 1;
 
     service.reset();
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "owner_destructor_complete");
