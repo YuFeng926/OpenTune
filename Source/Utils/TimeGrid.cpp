@@ -110,8 +110,12 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
                        + ", curr=" + juce::String(curr.output_seconds, 9) + ")";
             return false;
         }
-        // Internal handle spacing: require 150 ms minimum source-time spacing
-        if (!isEndpointOnly && !hasMinimumSourceSpacing(prev.source_seconds, curr.source_seconds)) {
+        // Require 150 ms source spacing for editing UX; dense anchors are allowed
+        // when either handle is a High-confidence externally imported fact.
+        const bool denseImportedPair = prev.confidence == Confidence::High
+            || curr.confidence == Confidence::High;
+        if (!isEndpointOnly && !denseImportedPair
+            && !hasMinimumSourceSpacing(prev.source_seconds, curr.source_seconds)) {
             const double srcGapMs = (curr.source_seconds - prev.source_seconds) * 1000.0;
             outError = "Handles must have source_seconds spacing >= "
                        + juce::String(static_cast<int>(kMinSourceSpacingSeconds * 1000.0))

@@ -25,6 +25,7 @@
 #include "ProjectModel.h"
 #include "Error.h"
 #include "LocalizationManager.h"
+#include "PitchCurve.h"
 
 namespace OpenTune {
 
@@ -108,15 +109,27 @@ public:
         OpenTuneAudioProcessor::PreparedImport preparedImport;
     };
 
+    /// Analysis provided by an importer instead of OpenTune's F0 extractor;
+    /// commitPreparedOpen installs it as Ready and skips initial F0 re-analysis.
+    struct ProvidedContentF0 {
+        ContentKey contentKey;
+        std::shared_ptr<PitchCurve> pitchCurve;
+    };
+
     struct PreparedOpen {
         ProjectSnapshot snapshot;
         juce::File projectFile;
         std::vector<PreparedProjectSource> sources;
+        std::vector<ProvidedContentF0> providedF0;
         Language language = Language::Chinese;
     };
 
     /** 在后台线程读取工程媒体并执行 canonical import 预处理。 */
     Result<PreparedOpen> prepareOpen(const juce::File& file, Language language);
+
+    /// Load a CopyVocal .cvf on a worker thread, fitting student audio to
+    /// projectSourceSeconds and injecting original/target F0 without extraction.
+    Result<PreparedOpen> prepareCopyVocalBundle(const juce::File& file, Language language);
 
     /** 在消息线程一次性提交已预处理的工程数据。 */
     Result<void> commitPreparedOpen(PreparedOpen&& preparedOpen);

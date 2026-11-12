@@ -101,6 +101,7 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
         {
             if (profile_ == Profile::Standalone) {
                 menu.addItem(ImportAudio, LOC(kImportAudio));
+                menu.addItem(ImportCopyVocalBundle, LOC(kImportCopyVocalBundle));
 
                 juce::PopupMenu exportMenu;
                 exportMenu.addItem(ExportSelectedClip, LOC(kExportSelectedClip));
@@ -220,6 +221,10 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
         case ImportAudio:
             // 触发导入音频，由PluginEditor处理文件选择、多选支持和导入模式询问
             listeners_.call([](Listener& l) { l.importAudioRequested(); });
+            break;
+
+        case ImportCopyVocalBundle:
+            listeners_.call([](Listener& l) { l.importCopyVocalBundleRequested(); });
             break;
 
         // 导出选项 - 使用ExportType枚举

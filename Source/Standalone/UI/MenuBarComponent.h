@@ -46,6 +46,7 @@ public:
     public:
         virtual ~Listener() = default;
         virtual void importAudioRequested() = 0;
+        virtual void importCopyVocalBundleRequested() {}
         virtual void exportAudioRequested(ExportType exportType) = 0;
         virtual void openProjectRequested() = 0;
         virtual void saveProjectRequested() = 0;
@@ -114,6 +115,7 @@ private:
     enum MenuItemIDs
     {
         ImportAudio = 1,
+        ImportCopyVocalBundle,
         ExportSelectedClip,
         ExportTrack,
         ExportBus,

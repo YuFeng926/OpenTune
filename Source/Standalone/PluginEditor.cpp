@@ -19,6 +19,7 @@
 #include "Audio/AsyncAudioLoader.h"
 #include "StandaloneArrangementHelpers.h"
 #include "Utils/ProjectSession.h"
+#include "Utils/CopyVocalBundle.h"
 #include "Utils/PlatformFileDialogs.h"
 #include "Utils/DemoProject.h"
 #include "Utils/DemoTourGate.h"
@@ -1507,7 +1508,8 @@ bool OpenTuneAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArra
     for (const auto& path : files)
     {
         const juce::File f(path);
-        if (f.hasFileExtension(kImportExtensionSpec))
+        if (f.hasFileExtension(CopyVocalBundle::kFileExtension)
+            || f.hasFileExtension(kImportExtensionSpec))
             return true;
     }
     return false;
@@ -1538,6 +1540,13 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     const juce::File file(files[0]);
     if (!file.existsAsFile())
         return;
+
+    if (file.hasFileExtension(CopyVocalBundle::kFileExtension))
+    {
+        clearImportDropPreview();
+        importCopyVocalBundleFile(file);
+        return;
+    }
 
     static const juce::String kImportExtensionSpec = getImportExtensionSpec();
     if (!file.hasFileExtension(kImportExtensionSpec))
@@ -2506,6 +2515,110 @@ void OpenTuneAudioProcessorEditor::saveAndReturnRequested()
 
     if (auto* app = juce::JUCEApplicationBase::getInstance())
         app->quit();
+}
+
+void OpenTuneAudioProcessorEditor::importCopyVocalBundleRequested()
+{
+    if (externalEditActive_)
+        return;
+    if (rejectProjectOperationIfBusy())
+        return;
+
+    if (projectSession_.isDirty())
+    {
+        juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+        ConfirmDialogContent::launch(
+            new ConfirmDialogContent(
+                LOC_RAW("Current project has unsaved changes"),
+                LOC_RAW("Importing a CopyVocal bundle replaces the current project. Save changes first?"),
+                { { LOC_RAW("Save"), [safeThis] {
+                        if (safeThis == nullptr) return;
+                        if (!safeThis->projectSession_.hasProjectPath()) {
+                            safeThis->saveProjectAsThenOpenProject();
+                            return;
+                        }
+                        safeThis->saveProject(juce::File(), true);
+                    }, true },
+                  { LOC_RAW("Do Not Save"), [safeThis] {
+                        if (safeThis == nullptr) return;
+                        safeThis->launchImportCopyVocalBundleChooser();
+                    }, false },
+                  { LOC(kCancel), nullptr, false } }),
+            &contentRoot_);
+        return;
+    }
+
+    launchImportCopyVocalBundleChooser();
+}
+
+void OpenTuneAudioProcessorEditor::launchImportCopyVocalBundleChooser()
+{
+    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+    const juce::String wildcard = "*.cvf";
+    PlatformFileDialogs::chooseFilesToOpen(
+        LOC(kImportCopyVocalDialog), juce::File(), wildcard, false, false, &contentRoot_,
+        [safeThis](const juce::Array<juce::File>& files) {
+            if (safeThis == nullptr) return;
+            safeThis->importCopyVocalBundleFile(files.getFirst());
+        });
+}
+
+void OpenTuneAudioProcessorEditor::importCopyVocalBundleFile(const juce::File& file)
+{
+    if (rejectProjectOperationIfBusy())
+        return;
+
+    projectOperationBusy_ = true;
+    startImportCopyVocalBundle(file);
+}
+
+void OpenTuneAudioProcessorEditor::startImportCopyVocalBundle(const juce::File& file)
+{
+    const auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
+    const auto openLanguage = LocalizationManager::getInstance().resolveLanguage();
+    projectWorkerPool_.addJob(
+        [this, safeThis, file, openLanguage]() {
+        auto preparedResult = std::make_shared<Result<ProjectSession::PreparedOpen>>(
+            projectSession_.prepareCopyVocalBundle(file, openLanguage));
+        juce::MessageManager::callAsync([safeThis, preparedResult]() mutable {
+            if (safeThis == nullptr)
+                return;
+
+            if (!preparedResult->ok()) {
+                ConfirmDialogContent::launch(
+                    new ConfirmDialogContent(
+                        LOC(kImportCopyVocalFailed),
+                        projectErrorMessage(preparedResult->error()),
+                        { { LOC(kOK), nullptr, true } }),
+                    &safeThis->contentRoot_);
+                safeThis->projectOperationBusy_ = false;
+                return;
+            }
+
+            auto commitResult = safeThis->projectSession_.commitPreparedOpen(
+                std::move(*preparedResult).value());
+            if (!commitResult.ok()) {
+                ConfirmDialogContent::launch(
+                    new ConfirmDialogContent(
+                        LOC(kImportCopyVocalFailed),
+                        projectErrorMessage(commitResult.error()),
+                        { { LOC(kOK), nullptr, true } }),
+                    &safeThis->contentRoot_);
+                safeThis->projectOperationBusy_ = false;
+                return;
+            }
+
+            // The bundle is a starting point, not a saved project: opening it
+            // must not look like an already-persisted .otproj.
+            safeThis->projectSession_.markDirty();
+            safeThis->syncRecentProjectsToMenu();
+            safeThis->updateTitleWithProjectPath();
+            safeThis->refreshAllUIFromProject();
+            safeThis->projectOperationBusy_ = false;
+            safeThis->maybeStartOnboarding();
+            safeThis->updateDemoTour();
+        });
+    });
 }
 
 void OpenTuneAudioProcessorEditor::importAudioRequested()
