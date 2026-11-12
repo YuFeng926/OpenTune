@@ -1147,7 +1147,7 @@
         "symbol": "showDiagnostic",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "7609e9f6a7966d92096c234b96b3bdf8fc74b41eaa121e1b7880753c43b74b10"
+        "sha256": "0076e057802eadc6e75bea6fb88903f17e1d0784313474244d02362d23c8503d"
       },
       "control": [
         {
@@ -1541,10 +1541,10 @@
       "group": "prefs",
       "upstream": {
         "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
-        "symbol": "tuningSlider_.onValueChange",
+        "symbol": "tuningSlider_.onCommit",
         "kind": "statement",
         "normalization": "stmt-v1",
-        "sha256": "66f9e08b43190d050b10b42dfe24b9cbf3f56b3e85e6c08e76e52007c0ee96a6"
+        "sha256": "78ef8ac6ad13ecbe747f056c6ac4ad4f9959462e1aadadccfb81d4371cc78f18"
       },
       "control": [
         {
@@ -1560,8 +1560,8 @@
         "ControlProcessorTests.PrefsSchemeJob",
         "ControlProcessorTests.PrefsVectors"
       ],
-      "note": "The tuning slider of the preferences window stores the frequency of A4 (AppPreferences::setTuning) and has the editor apply the preferences; prefs.set tuningHz does the same.",
-      "noteZh": "偏好设置窗口的调音滑块用 AppPreferences::setTuning 保存 A4 频率，并让编辑器应用偏好；prefs.set 的 tuningHz 做同样的事。"
+      "note": "The tuning slider commits through onCommit, stores the frequency of A4 (AppPreferences::setTuning) and has the editor apply the preferences. The UI coalesces consecutive keyboard value changes and commits other value changes immediately; each prefs.set tuningHz request submits one value through the same save and notification steps.",
+      "noteZh": "偏好设置窗口的调音滑块通过 onCommit 用 AppPreferences::setTuning 保存 A4 频率，并让编辑器应用偏好。UI 合并连续键盘值变化后提交，其他值变化立即提交；每次 prefs.set tuningHz 请求提交一个确定值，复用相同的保存和通知步骤。"
     },
     {
       "id": "prefs-editing-scheme",
@@ -1928,7 +1928,7 @@
         "symbol": "refreshChannelToggles",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "47efbf0baf66c797357648d785f392ba826a1ad51bcf2eeda835e36f90346682"
+        "sha256": "3833e9ecc3a68df7df9cac1bcd4ebcad63dd6580b050e38aef03481cc66c54c6"
       },
       "control": [
         {
