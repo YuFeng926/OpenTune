@@ -8,10 +8,12 @@
 #include "../Standalone/StandaloneArrangementHelpers.h"
 #include "AppLogger.h"
 #include "AppPreferences.h"
+#include "CopyVocalBundle.h"
 #include "ProjectPersistence.h"
 #include "LocalizationManager.h"
 #include "TimeCoordinate.h"
 #include "VisibleTrackCount.h"
+#include <map>
 #include <set>
 
 namespace OpenTune {
@@ -371,6 +373,133 @@ Result<ProjectSession::PreparedOpen> ProjectSession::prepareOpen(const juce::Fil
     return Result<PreparedOpen>::success(std::move(preparedOpen));
 }
 
+namespace {
+
+std::shared_ptr<juce::AudioBuffer<float>> fitAudioBufferToDuration(
+    const std::shared_ptr<juce::AudioBuffer<float>>& source,
+    double sourceSampleRate,
+    double targetDurationSeconds)
+{
+    if (source == nullptr || sourceSampleRate <= 0.0 || targetDurationSeconds <= 0.0)
+        return nullptr;
+    const auto targetSamples64 = static_cast<int64_t>(
+        std::llround(targetDurationSeconds * sourceSampleRate));
+    if (targetSamples64 <= 0 || targetSamples64 > std::numeric_limits<int>::max() - 1)
+        return nullptr;
+    const int targetSamples = static_cast<int>(targetSamples64);
+    if (source->getNumSamples() == targetSamples)
+        return source;
+
+    auto fitted = std::make_shared<juce::AudioBuffer<float>>(
+        source->getNumChannels(), targetSamples);
+    fitted->clear();
+    const int copySamples = std::min(source->getNumSamples(), targetSamples);
+    if (copySamples > 0)
+    {
+        for (int channel = 0; channel < source->getNumChannels(); ++channel)
+            fitted->copyFrom(channel, 0, *source, channel, 0, copySamples);
+    }
+    return fitted;
+}
+
+} // namespace
+
+Result<ProjectSession::PreparedOpen> ProjectSession::prepareCopyVocalBundle(
+    const juce::File& file, Language language)
+{
+    using namespace CopyVocalBundle;
+
+    const auto bundleResult = Bundle::loadFromFile(file);
+    if (!bundleResult.ok())
+        return Result<PreparedOpen>::failure(bundleResult.error());
+    const auto& bundle = bundleResult.value();
+
+    double loadedSampleRate = 0.0;
+    auto audioBuffer = loadAudioFile(bundle.studentMedia.file, loadedSampleRate);
+    if (audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0)
+    {
+        return Result<PreparedOpen>::failure(
+            Error(ErrorCode::InvalidAudioInput,
+                  "Cannot decode CopyVocal student media: "
+                      + bundle.studentMedia.file.getFullPathName().toStdString(),
+                  "CopyVocal bundle"));
+    }
+    if (audioBuffer->getNumChannels() <= 0 || audioBuffer->getNumChannels() > 2)
+    {
+        return Result<PreparedOpen>::failure(
+            Error(ErrorCode::InvalidAudioInput,
+                  "CopyVocal student media must be mono or stereo",
+                  "CopyVocal bundle"));
+    }
+
+    auto fittedBuffer = fitAudioBufferToDuration(
+        audioBuffer, loadedSampleRate, bundle.projectSourceSeconds);
+    if (fittedBuffer == nullptr)
+    {
+        return Result<PreparedOpen>::failure(
+            Error(ErrorCode::InvalidParameter,
+                  "Cannot fit CopyVocal student media to the bundle duration",
+                  "CopyVocal bundle"));
+    }
+
+    OpenTuneAudioProcessor::PreparedImport preparedImport;
+    if (!processorRef_.prepareImport(
+            juce::AudioBuffer<float>(*fittedBuffer),
+            loadedSampleRate,
+            bundle.projectName.isNotEmpty() ? bundle.projectName : juce::String("CopyVocal"),
+            bundle.studentMedia.file.getFullPathName(),
+            preparedImport,
+            "copyvocal-file"))
+    {
+        return Result<PreparedOpen>::failure(
+            Error(ErrorCode::InvalidAudioInput,
+                  "OpenTune rejected the CopyVocal student media",
+                  "CopyVocal bundle"));
+    }
+
+    const int64_t storedSamples = preparedImport.storedAudioBuffer.getNumSamples();
+    const auto projectResult = buildProject(
+        bundle,
+        storedSamples,
+        preparedImport.storedAudioBuffer.getNumChannels(),
+        TimeCoordinate::kRenderSampleRate,
+        preparedImport.silentGaps,
+        ProjectPersistence::kCurrentProjectFormatVersion,
+        "1.8.2",
+        preparedImport.storedAudioBuffer.getReadPointer(0));
+    if (!projectResult.ok())
+        return Result<PreparedOpen>::failure(projectResult.error());
+    auto prepared = std::move(projectResult).value();
+
+    // A provisional .otproj path lets Ctrl+S save next to the bundle without
+    // silently overwriting an existing project. If the name is taken, leave the
+    // path empty so Save routes through Save As.
+    const auto legalBase = juce::File::createLegalFileName(prepared.snapshot.header.projectName);
+    const auto parentDirectory = file.getParentDirectory();
+    auto proposedProject = parentDirectory.getChildFile(legalBase + ".otproj");
+    if (proposedProject.existsAsFile())
+        proposedProject = juce::File();
+    if (proposedProject == juce::File() && legalBase.isNotEmpty())
+    {
+        auto alternative = parentDirectory.getChildFile(legalBase + " (CopyVocal).otproj");
+        if (!alternative.existsAsFile())
+            proposedProject = alternative;
+    }
+
+    PreparedOpen preparedOpen;
+    preparedOpen.snapshot = std::move(prepared.snapshot);
+    preparedOpen.projectFile = proposedProject;
+    preparedOpen.language = language;
+
+    PreparedProjectSource preparedSource;
+    preparedSource.sourceId = 1;
+    preparedSource.preparedImport = std::move(preparedImport);
+    preparedOpen.sources.push_back(std::move(preparedSource));
+    preparedOpen.providedF0.push_back({prepared.contentKey, std::move(prepared.pitchCurve)});
+
+    return Result<PreparedOpen>::success(std::move(preparedOpen));
+}
+
 Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
 {
     const auto& snapshot = preparedOpen.snapshot;
@@ -401,6 +530,12 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
     // time stretch cache) to prevent cross-project key collisions.
     if (auto* crs = processorRef_.getContentRenderService())
         crs->clearAll();
+
+    std::map<ContentKey, std::shared_ptr<PitchCurve>> providedCurves;
+    for (const auto& provided : preparedOpen.providedF0)
+        if (provided.pitchCurve != nullptr)
+            providedCurves[provided.contentKey] = provided.pitchCurve;
+    std::set<ContentKey> providedKeys;
 
     // 1. 重建 Sources
     for (auto& preparedSource : preparedOpen.sources) {
@@ -508,6 +643,18 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         }
         clip->applyPitchCurve(pitchCurve);
 
+        const auto providedIt = providedCurves.find(contentEntry.contentKey);
+        const bool hasProvidedF0 = providedIt != providedCurves.end()
+            && providedIt->second != nullptr;
+        if (hasProvidedF0)
+        {
+            // Importer-supplied analysis: install the whole curve and mark F0
+            // Ready. The normal project path deliberately re-extracts F0, but a
+            // CopyVocal bundle already carries the student's RMVPE curve.
+            clip->applyOriginalF0(providedIt->second);
+            providedKeys.insert(contentEntry.contentKey);
+        }
+
         // 恢复 TimeGrid
         if (!contentEntry.timeGrid.handles.empty()) {
             std::vector<TimeHandle> handles;
@@ -552,13 +699,16 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
             }
         }
 
-        // 恢复 Original F0 state — Ready 和 Extracting 都归一化为 NotRequested，
-        // 让 F0 提取流程重新分析。
-        auto restoredF0State = static_cast<OriginalF0State>(contentEntry.originalF0State);
-        if (restoredF0State == OriginalF0State::Ready
-            || restoredF0State == OriginalF0State::Extracting)
-            restoredF0State = OriginalF0State::NotRequested;
-        clip->applyOriginalF0State(restoredF0State);
+        // Normalize Ready/Extracting to NotRequested so F0 is re-extracted, except for
+        // importer-provided F0 which was already installed as Ready above.
+        if (!hasProvidedF0)
+        {
+            auto restoredF0State = static_cast<OriginalF0State>(contentEntry.originalF0State);
+            if (restoredF0State == OriginalF0State::Ready
+                || restoredF0State == OriginalF0State::Extracting)
+                restoredF0State = OriginalF0State::NotRequested;
+            clip->applyOriginalF0State(restoredF0State);
+        }
 
         // 恢复 Pitch shift settings
         PitchShiftSettings pitchShift;
@@ -680,10 +830,19 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
 
             if (uniqueKeys.insert(key).second)
             {
-                OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
-                refreshRequest.contentKey = key;
-                refreshRequest.preserveCorrectionsOutsideChangedRange = true;
-                processorRef_.requestContentRefresh(refreshRequest);
+                if (providedKeys.count(key) > 0)
+                {
+                    // The curve is already complete; skip F0 inference and go
+                    // straight to the Stage 1 render.
+                    processorRef_.requestFullContentRender(key);
+                }
+                else
+                {
+                    OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
+                    refreshRequest.contentKey = key;
+                    refreshRequest.preserveCorrectionsOutsideChangedRange = true;
+                    processorRef_.requestContentRefresh(refreshRequest);
+                }
             }
         }
     }
@@ -692,7 +851,8 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
     cachedProjectId_ = snapshot.header.projectId;
     cachedCreatedAt_ = snapshot.header.createdAt;
     clearDirty();
-    pushRecentProject(preparedOpen.projectFile);
+    if (preparedOpen.projectFile.existsAsFile())
+        pushRecentProject(preparedOpen.projectFile);
 
     return Result<void>::success();
 }

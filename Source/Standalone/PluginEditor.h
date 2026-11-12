@@ -103,6 +103,7 @@ public:
 
     // MenuBarComponent::Listener
     void importAudioRequested() override;  // 新版本：不再需要trackId参数
+    void importCopyVocalBundleRequested() override;
     void exportAudioRequested(MenuBarComponent::ExportType exportType) override;  // 使用ExportType枚举
     void openProjectRequested() override;
     void saveProjectRequested() override;
@@ -234,6 +235,11 @@ private:
     /// 异步打开工程：worker 预处理，消息线程提交运行时状态。
     void openProjectFile(const juce::File& file);
     void startOpenProject(const juce::File& file);
+
+    /// CopyVocal .cvf: replace the current project with an editable view of the bundle.
+    void launchImportCopyVocalBundleChooser();
+    void importCopyVocalBundleFile(const juce::File& file);
+    void startImportCopyVocalBundle(const juce::File& file);
 
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences& appPreferences_;

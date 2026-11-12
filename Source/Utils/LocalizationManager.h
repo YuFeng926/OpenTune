@@ -177,6 +177,9 @@ constexpr const char* kEdit = "Edit";
 constexpr const char* kView = "View";
 
 constexpr const char* kImportAudio = "Import Audio...";
+constexpr const char* kImportCopyVocalBundle = "Import CopyVocal Bundle...";
+constexpr const char* kImportCopyVocalDialog = "Import CopyVocal Bundle";
+constexpr const char* kImportCopyVocalFailed = "CopyVocal import failed";
 constexpr const char* kExportAudio = "Export Audio";
 constexpr const char* kExportSelectedClip = "Export Selected Clip";
 constexpr const char* kExportTrack = "Export Track";
@@ -528,6 +531,9 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kView, "View", "视图", "表示", "Вид", "Ver" },
         
         { Keys::kImportAudio, "Import Audio...", "导入音频...", "オーディオをインポート...", "Импорт аудио...", "Importar audio..." },
+        { Keys::kImportCopyVocalBundle, "Import CopyVocal Bundle...", "导入 CopyVocal 工程包...", "CopyVocal バンドルをインポート...", "Импорт пакета CopyVocal...", "Importar paquete CopyVocal..." },
+        { Keys::kImportCopyVocalDialog, "Import CopyVocal Bundle", "导入 CopyVocal 工程包", "CopyVocal バンドルのインポート", "Импорт пакета CopyVocal", "Importar paquete CopyVocal" },
+        { Keys::kImportCopyVocalFailed, "CopyVocal import failed", "CopyVocal 导入失败", "CopyVocal のインポートに失敗しました", "Ошибка импорта CopyVocal", "Error al importar CopyVocal" },
         { Keys::kExportAudio, "Export Audio", "导出音频", "オーディオをエクスポート", "Экспорт аудио", "Exportar audio" },
         { Keys::kExportSelectedClip, "Export Selected Clip", "导出选中的片段", "選択したクリップをエクスポート", "Экспорт клипа", "Exportar clip seleccionado" },
         { Keys::kExportTrack, "Export Track", "导出轨道", "トラックをエクスポート", "Экспорт дорожки", "Exportar pista" },

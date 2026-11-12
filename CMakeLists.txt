@@ -917,6 +917,8 @@ set(OPENTUNE_STANDALONE_SOURCES
         Source/Utils/ProjectPersistence.h
         Source/Utils/ProjectSession.cpp
         Source/Utils/ProjectSession.h
+        Source/Utils/CopyVocalBundle.cpp
+        Source/Utils/CopyVocalBundle.h
         Source/Utils/PlacementActions.cpp
         Source/Utils/PlacementActions.h
 
@@ -2026,6 +2028,28 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME VisibleTrackCountTests COMMAND OpenTuneVisibleTrackCountTests)
 
+    # CopyVocal .cvf parser + editable-domain builders (JUCE core only).
+    add_executable(OpenTuneCopyVocalBundleTests
+        Tests/CopyVocalBundleTests.cpp
+        Source/Utils/CopyVocalBundle.cpp
+        Source/Utils/PitchCurve.cpp
+        Source/Utils/TimeGrid.cpp
+        Source/Utils/ProjectModel.cpp
+        Source/Utils/AppLogger.cpp
+    )
+    target_include_directories(OpenTuneCopyVocalBundleTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneCopyVocalBundleTests PRIVATE
+        juce::juce_audio_basics
+        juce::juce_core
+        juce::juce_graphics
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneCopyVocalBundleTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME CopyVocalBundleTests COMMAND OpenTuneCopyVocalBundleTests)
+
+
     # Demo-tour load gate: a not-yet-started open is not a failed open.
     add_executable(OpenTuneDemoTourGateTests
         Tests/DemoTourGateTests.cpp
@@ -2177,6 +2201,45 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneStandaloneArrangementMoveTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME StandaloneArrangementMoveTests COMMAND OpenTuneStandaloneArrangementMoveTests)
+
+    # CopyVocal .cvf -> PreparedOpen (audio fit, F0 injection, snapshot wiring).
+    # Links the real Standalone shared code; no inference is started.
+    add_executable(OpenTuneCopyVocalImportTests
+        Tests/CopyVocalImportTests.cpp
+    )
+    target_include_directories(OpenTuneCopyVocalImportTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${ONNXRUNTIME_INCLUDE_DIR}
+            ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
+            ${ARA_SDK_PATH})
+    target_compile_definitions(OpenTuneCopyVocalImportTests PRIVATE
+        JucePlugin_Build_Standalone=1)
+    target_link_libraries(OpenTuneCopyVocalImportTests PRIVATE
+        OpenTuneStandalone
+        OpenTuneResources
+        juce::juce_audio_basics
+        juce::juce_audio_formats
+        juce::juce_core
+        juce::juce_events
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneCopyVocalImportTests PRIVATE /utf-8 /EHsc)
+    endif()
+    # The Standalone shared code delay-loads ONNX Runtime; the test executable
+    # needs the same runtime DLLs next to it as the app does.
+    if(WIN32)
+        add_custom_command(TARGET OpenTuneCopyVocalImportTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneCopyVocalImportTests>/${OPENTUNE_ORT_DLL_NAME}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DIRECTML_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneCopyVocalImportTests>/DirectML.dll"
+            COMMENT "Copying inference runtime DLLs to OpenTuneCopyVocalImportTests..."
+            VERBATIM)
+    endif()
+    add_test(NAME CopyVocalImportTests COMMAND OpenTuneCopyVocalImportTests)
 
     # Render/ARA contract tests use the production objects and their real worker
     # threads.  They intentionally link the application target instead of

@@ -76,6 +76,7 @@ public:
     TimeGridSnapshot() = default;
 
     static constexpr double kMinOutputSpacingSeconds = 0.030;
+    // Editing-UX minimum; bypassed for pairs involving a High-confidence imported anchor.
     static constexpr double kMinSourceSpacingSeconds = 0.150;
 
     static bool hasMinimumSourceSpacing(double previousSourceSeconds,
