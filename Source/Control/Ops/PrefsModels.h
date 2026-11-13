@@ -49,8 +49,8 @@ struct ControlPrefsBackend
     std::function<std::vector<F0ModelInfo>()> f0Models;
     /** The vocoder of the process-wide render runtime. */
     std::function<ControlVocoderState()> vocoderState;
-    /** OpenTuneAudioProcessor::setVocoderModelWeight(): the asynchronous switch of the vocoder weight. */
-    std::function<void(OpenTuneAudioProcessor&, const std::string&)> setVocoderWeight;
+    /** OpenTuneAudioProcessor::setVocoderModelWeight(): the asynchronous switch; false when its control queue rejects. */
+    std::function<bool(OpenTuneAudioProcessor&, const std::string&)> setVocoderWeight;
     /** OpenTuneAudioProcessor::resetInferenceBackend(): the asynchronous reset of the inference backend. */
     std::function<void(OpenTuneAudioProcessor&, bool)> resetInferenceBackend;
     /** OpenTuneAudioProcessor::setF0ModelType(): true when the processor switched the pitch model. */

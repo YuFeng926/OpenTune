@@ -253,26 +253,34 @@ std::optional<F0ModelType> f0TypeOf(const std::string& name)
 }
 
 /**
- * Makes the changes of a request, as OpenTune's preferences window does for each control (SharedEditingPage's tuning
- * slider and scheme selector, SharedAudioPage's experimental toggle, hybrid toggle with its processor callback in
- * showPreferencesDialog, rendering priority, vocoder weight and pitch model selectors with their processor callbacks),
- * and then lets the editor apply the preferences. The pitch model comes first, as the
- * window asks the processor before it stores the model: when the processor refuses, nothing changes and the error is
- * returned. Message thread.
+ * Admits runtime changes before storing any preferences: the pitch model first, then the vocoder queue. If the vocoder
+ * rejects a request after switching the pitch model, restores the previous runtime model. Message thread.
  */
 std::optional<Error> applyDelta(ControlOpContext& context, const PrefsRequest& request, const PrefsDelta& delta)
 {
     auto& processor = context.processor();
-    // AppPreferences setters: each stores the value, persists the preferences file and, for the tuning, updates the
-    // process-wide A4 frequency.
     auto& preferences = processor.getAppPreferences();
+    const auto previousF0Type = preferences.getState().shared.f0ModelType;
     if (delta.f0) {
         // f0ModelSelector_.onChange: the processor switches the model first (setF0ModelType); a refusal leaves the
         // window's preference as it is, and only an accepted model is stored.
         if (!request.f0Type || !controlSetF0Model(processor, *request.f0Type))
             return controlOpError("MODEL_UNAVAILABLE", "model_missing", "OpenTune could not switch the pitch model");
-        preferences.setF0ModelType(*request.f0Type);
     }
+    if (delta.vocoder && !controlSetVocoderWeight(processor, *request.vocoderWeight)) {
+        if (delta.f0 && !controlSetF0Model(processor, previousF0Type))
+            return controlOpErrorAfterChange(
+                "MODEL_UNAVAILABLE", "vocoder_weight_rejected",
+                "OpenTune could not queue the vocoder weight change; the pitch model remains changed because its "
+                "previous selection could not be restored");
+        return controlOpError("MODEL_UNAVAILABLE", "vocoder_weight_rejected",
+                              "OpenTune could not queue the vocoder weight change");
+    }
+
+    // AppPreferences setters: each stores the value, persists the preferences file and, for the tuning, updates the
+    // process-wide A4 frequency. All runtime admissions above succeeded before this commit begins.
+    if (delta.f0)
+        preferences.setF0ModelType(*request.f0Type);
     if (delta.tuning) {
         TuningConfig::TuningSettings tuning;
         tuning.tuningHz = *request.tuningHz;
@@ -289,11 +297,6 @@ std::optional<Error> applyDelta(ControlOpContext& context, const PrefsRequest& r
     if (delta.experimental)
         preferences.setExperimentalFeaturesEnabled(*request.experimentalFeatures);
     if (delta.vocoder) {
-        // vocoderWeightSelector_.onChange: the processor first, then the stored
-        // preference once the runtime's control queue accepted the switch.
-        if (!controlSetVocoderWeight(processor, *request.vocoderWeight))
-            return controlOpError("MODEL_UNAVAILABLE", "vocoder_weight_rejected",
-                                  "OpenTune could not queue the vocoder weight change");
         if (preferences.getState().shared.vocoderModelWeight != *request.vocoderWeight)
             preferences.setVocoderModelWeight(*request.vocoderWeight);
     }
@@ -630,9 +633,8 @@ public:
                 return;
             }
             if (const auto refused = begin(context)) {
-                // The processor could not switch the pitch model, which is applied first: nothing was changed.
                 const auto reply = controlMapError(*refused);
-                jobStep.fail(ControlJobError{reply.kind, reply.reason, reply.detail, false});
+                jobStep.fail(ControlJobError{reply.kind, reply.reason, reply.detail, reply.executed.value_or(false)});
                 finished_ = true;
                 return;
             }
@@ -684,8 +686,7 @@ private:
         jobs.erase(std::remove(jobs.begin(), jobs.end(), this), jobs.end());
     }
 
-    /** The envelope starts immediately before the change; the change is made and handed to the editor. Returns the
-       error of the pitch model that the processor refused, in which case nothing was changed. */
+    /** The envelope starts immediately before the change; the runtime admissions precede preference setters. */
     std::optional<Error> begin(ControlOpContext& context)
     {
         before_ = readState(context.processor());

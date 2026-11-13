@@ -149,10 +149,8 @@ const char* controlInferenceBackendName()
 bool controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight)
 {
     const auto backend = currentBackend();
-    if (backend.setVocoderWeight) {
-        backend.setVocoderWeight(processor, weight);
-        return true;
-    }
+    if (backend.setVocoderWeight)
+        return backend.setVocoderWeight(processor, weight);
     // OpenTuneAudioProcessor::setVocoderModelWeight(): posts the switch to the runtime's control worker and reports
     // whether the queue accepted it. The caller stores the preference only after acceptance; the shared
     // backend-change notification then clears the render caches and queues a render of every clip.

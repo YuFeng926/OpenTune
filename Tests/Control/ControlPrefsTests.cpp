@@ -1019,8 +1019,11 @@ public:
         backend.modelsDirectory = [dir = models.u8string()] { return dir; };
         backend.vocoderState = [this] { return state(); };
         backend.setVocoderWeight = [this](OpenTuneAudioProcessor&, const std::string& weight) {
-            command();
             calls.push_back("weight:" + weight);
+            if (!vocoderAccepts)
+                return false;
+            command();
+            return true;
         };
         backend.resetInferenceBackend = [this](OpenTuneAudioProcessor&, bool forceCpu) {
             command();
@@ -1030,7 +1033,10 @@ public:
         backend.inferenceBackend = [this] { return inferenceBackend(); };
         backend.setF0Model = [this](OpenTuneAudioProcessor&, F0ModelType type) {
             calls.push_back("f0:" + std::to_string(static_cast<int>(type)));
-            return f0Accepts;
+            if (!f0Accepts || (f0RefusedType && type == *f0RefusedType))
+                return false;
+            runtimeF0Model = type;
+            return true;
         };
         if (fakePitchModels)
             backend.f0Models = [] {
@@ -1111,7 +1117,10 @@ public:
     bool failNextLoad = false;
     std::uint32_t queuedMs = 300;
     std::uint32_t loadingMs = 300;
+    bool vocoderAccepts = true;
     bool f0Accepts = true;
+    std::optional<F0ModelType> f0RefusedType;
+    F0ModelType runtimeF0Model = F0ModelType::FCPE;
     std::vector<std::string> calls;
     /** How often the backend was asked for (session.info and a prefsApply job that changed the priority to gpuFirst).
      */
@@ -1673,6 +1682,129 @@ void checkPitchModel(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBr
     runtime.calls.clear();
 }
 
+/** A rejected vocoder admission commits no preferences; an F0 switch made first is restored before the job fails. */
+void checkVocoderAdmissionRejection(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                                    FakeRuntime& runtime, const Clip& clip)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    const auto before = preferences.getState().shared;
+    const auto tuningBefore = TuningConfig::currentTuningHz();
+    const int notifications = bridge.preferenceNotifications;
+    const bool dirtyBefore = bridge.project.dirty;
+    const int dirtyMarksBefore = bridge.dirtyMarks;
+    const bool appliedNotesPrimaryBefore = bridge.appliedNotesPrimary;
+    const auto noteSnapshotBefore = processor.getContentSnapshot(clip.key);
+    const bool notesInitializedBefore = noteSnapshotBefore->noteTopologyInitialized;
+    const auto noteCountBefore = noteSnapshotBefore->notes.size();
+    AppPreferences persistedBefore;
+    persistedBefore.load();
+    const auto persistedStateBefore = persistedBefore.getState().shared;
+    const auto samePreferences = [](const auto& left, const auto& right) {
+        return left.tuning.tuningHz == right.tuning.tuningHz
+               && left.audioEditingScheme == right.audioEditingScheme
+               && left.lightPitchCorrectionEnabled == right.lightPitchCorrectionEnabled
+               && left.experimentalFeaturesEnabled == right.experimentalFeaturesEnabled
+               && left.vocoderModelWeight == right.vocoderModelWeight
+               && left.renderingPriority == right.renderingPriority && left.f0ModelType == right.f0ModelType;
+    };
+    const auto unchanged = [&] {
+        const auto memoryState = preferences.getState().shared;
+        const auto memoryTuning = TuningConfig::currentTuningHz();
+        const auto memoryPrefs = api.result("prefs.get");
+        const int memoryNotifications = bridge.preferenceNotifications;
+        const bool memoryDirty = bridge.project.dirty;
+        const int memoryDirtyMarks = bridge.dirtyMarks;
+        const bool memoryAppliedNotesPrimary = bridge.appliedNotesPrimary;
+        const auto noteSnapshot = processor.getContentSnapshot(clip.key);
+        const bool memoryNotesUnchanged = noteSnapshot->noteTopologyInitialized == notesInitializedBefore
+                                          && noteSnapshot->notes.size() == noteCountBefore;
+        const bool memoryUnchanged = samePreferences(memoryState, before) && memoryTuning == tuningBefore
+                                     && processingEqual(memoryPrefs, baseline)
+                                     && memoryNotifications == notifications && memoryDirty == dirtyBefore
+                                     && memoryDirtyMarks == dirtyMarksBefore
+                                     && memoryAppliedNotesPrimary == appliedNotesPrimaryBefore
+                                     && memoryNotesUnchanged;
+        AppPreferences persisted;
+        persisted.load();
+        return memoryUnchanged && samePreferences(persisted.getState().shared, persistedStateBefore);
+    };
+    const auto f0Request =
+        json(R"({"tuningHz":433,"editingScheme":"openDyne","hybridMode":false,"experimentalFeatures":true,"vocoderWeight":"aa-custom.onnx","renderingPriority":"cpuFirst","f0Model":"other"})");
+
+    runtime.vocoderAccepts = false;
+    runtime.calls.clear();
+    const auto tuningRejected =
+        runAsJob(api, "prefs.set", json(R"({"tuningHz":433,"vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+    CONTROL_CHECK(jobFailedWith(tuningRejected, "MODEL_UNAVAILABLE", "vocoder_weight_rejected", false, false));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"weight:aa-custom.onnx"}));
+    CONTROL_CHECK(unchanged());
+
+    runtime.calls.clear();
+    const auto f0Restored = runAsJob(api, "prefs.set", f0Request, "prefsApply");
+    CONTROL_CHECK(jobFailedWith(f0Restored, "MODEL_UNAVAILABLE", "vocoder_weight_rejected", false, false));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:2", "weight:aa-custom.onnx", "f0:1"}));
+    CONTROL_CHECK(runtime.runtimeF0Model == F0ModelType::FCPE && unchanged());
+
+    runtime.calls.clear();
+    runtime.f0RefusedType = F0ModelType::FCPE;
+    const auto f0RestoreRefused = runAsJob(api, "prefs.set", f0Request, "prefsApply");
+    CONTROL_CHECK(jobFailedWith(f0RestoreRefused, "MODEL_UNAVAILABLE", "vocoder_weight_rejected", true, false));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:2", "weight:aa-custom.onnx", "f0:1"}));
+    const auto detail = memberOf(memberOf(memberOf(f0RestoreRefused, "error"), "data"), "detail").text();
+    CONTROL_CHECK(detail.find("pitch model remains changed") != std::string::npos);
+    CONTROL_CHECK(runtime.runtimeF0Model == kOtherPitchModel && unchanged());
+
+    // A changed tuning with the current weight is applied synchronously, without asking for admission.
+    runtime.vocoderAccepts = false;
+    runtime.calls.clear();
+    const int sameWeightNotifications = bridge.preferenceNotifications;
+    const auto sameWeightTuning = api.result("prefs.set", json(R"({"tuningHz":433,"vocoderWeight":"hifigan.onnx"})"));
+    CONTROL_CHECK(memberOf(sameWeightTuning, "applied").asBoolean() && memberOf(sameWeightTuning, "job").isNull());
+    CONTROL_CHECK(changedPreferences(sameWeightTuning) == std::vector<std::string>{"tuningHz"});
+    const auto& tuningField = fieldOf(changeAt(sameWeightTuning, 0), "tuningHz");
+    CONTROL_CHECK(numberIs(memberOf(tuningField, "before"), tuningBefore)
+                  && numberIs(memberOf(tuningField, "after"), 433.0));
+    const auto sameWeightState = preferences.getState().shared;
+    CONTROL_CHECK(sameWeightState.tuning.tuningHz == 433.0f
+                  && sameWeightState.vocoderModelWeight == kDefaultVocoderWeight);
+    CONTROL_CHECK(runtime.calls.empty() && bridge.preferenceNotifications == sameWeightNotifications + 1);
+    const auto sameWeightReverted = replayRevert(api, sameWeightTuning);
+    CONTROL_CHECK(memberOf(sameWeightReverted, "applied").asBoolean()
+                  && memberOf(sameWeightReverted, "changes").size() == 1
+                  && processingEqual(api.result("prefs.get"), baseline)
+                  && TuningConfig::currentTuningHz() == tuningBefore);
+    CONTROL_CHECK(runtime.calls.empty() && bridge.preferenceNotifications == sameWeightNotifications + 2);
+
+    // The rejected tuning+weight request succeeds once admission is available; its revert takes both values back.
+    runtime.f0RefusedType.reset();
+    runtime.runtimeF0Model = F0ModelType::FCPE;
+    runtime.vocoderAccepts = true;
+    runtime.calls.clear();
+    const int retryNotifications = bridge.preferenceNotifications;
+    const auto retried = runAsJob(api, "prefs.set", json(R"({"tuningHz":433,"vocoderWeight":"aa-custom.onnx"})"),
+                                  "prefsApply");
+    CONTROL_CHECK(jobSucceeded(retried));
+    const auto& result = memberOf(retried, "result");
+    CONTROL_CHECK(changedPreferences(result) == (std::vector<std::string>{"tuningHz", "vocoderWeight"}));
+    CONTROL_CHECK(numberIs(memberOf(fieldOf(changeAt(result, 0), "tuningHz"), "before"), tuningBefore)
+                  && numberIs(memberOf(fieldOf(changeAt(result, 0), "tuningHz"), "after"), 433.0));
+    CONTROL_CHECK(changeIs(result, 1, "vocoderWeight", "Vocoder weight", JsonValue::string(kDefaultVocoderWeight),
+                           JsonValue::string(kWeightA)));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"weight:aa-custom.onnx"}));
+    CONTROL_CHECK(bridge.preferenceNotifications == retryNotifications + 1);
+    const auto& revertParams = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+    CONTROL_CHECK(revertParams.size() == 2 && numberIs(memberOf(revertParams, "tuningHz"), tuningBefore)
+                  && memberOf(revertParams, "vocoderWeight").text() == kDefaultVocoderWeight);
+    const auto reverted = replayRevertAsJob(api, result);
+    CONTROL_CHECK(jobSucceeded(reverted) && processingEqual(api.result("prefs.get"), baseline)
+                  && TuningConfig::currentTuningHz() == tuningBefore);
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"weight:aa-custom.onnx", "weight:hifigan.onnx"}));
+    CONTROL_CHECK(bridge.preferenceNotifications == retryNotifications + 2);
+    runtime.settle();
+    runtime.calls.clear();
+}
+
 /** All seven members in one call: the order of the changes, of GLOBAL_PREFERENCE and of the revert recipe, the order of
     the calls (the pitch model first), one reRenderQueued, and the revert recipe taking all seven back. */
 void checkAllMembers(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge, FakeRuntime& runtime,
@@ -1740,7 +1872,7 @@ void scenarioPrefsOptions()
     bridge.processor = processor.get();
     bridge.preferences = &processor->getAppPreferences();
     ScopedBridge registered(service, bridge);
-    fixtureAddClip(*processor, readyClip("options"));
+    const auto clip = fixtureAddClip(*processor, readyClip("options"));
     ApiSession api;
     if (!api.open(service))
         return;
@@ -1757,6 +1889,7 @@ void scenarioPrefsOptions()
     // From here the pitch models are a fake list of three: fcpe, other and gone (not available).
     runtime.install(models, true);
     checkPitchModel(api, *processor, bridge, runtime);
+    checkVocoderAdmissionRejection(api, *processor, bridge, runtime, clip);
     checkAllMembers(api, *processor, bridge, runtime, *handles);
     resetPreferences(*processor);
     const auto dispatcher = service.dispatcher();
@@ -2118,6 +2251,71 @@ void checkWriteDuringVocoderWait(ApiSession& api, OpenTuneAudioProcessor& proces
     settleVocoderScenario(processor, runtime);
 }
 
+/** A rejected admission does not disturb another prefs job while it waits for the editor. */
+void checkRejectedAdmissionDuringPrefsWait(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                                           FakeRuntime& runtime, const std::shared_ptr<ControlJobs>& jobs)
+{
+    if (!CONTROL_CHECK(jobs != nullptr))
+        return;
+    settleVocoderScenario(processor, runtime);
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    const auto baselineState = preferences.getState().shared;
+    const auto tuningBefore = TuningConfig::currentTuningHz();
+    const int notifications = bridge.preferenceNotifications;
+
+    bridge.apply = PrefsBridge::Apply::Never;
+    controlSetPrefsApplyTimeoutForTesting(kWaitingJobTimeoutMs);
+    runtime.vocoderAccepts = true;
+    const auto firstId = jobIdOf(api.result(
+        "prefs.set", json(R"({"editingScheme":"openDyne","tuningHz":433,"vocoderWeight":"aa-custom.onnx"})")));
+    CONTROL_CHECK(!firstId.empty());
+    CONTROL_CHECK(pumpMessagesUntil(
+        [&] {
+            const auto& state = preferences.getState().shared;
+            return TuningConfig::currentTuningHz() == 433.0f
+                   && AudioEditingScheme::usesNotesPrimaryScheme(state.audioEditingScheme)
+                   && state.vocoderModelWeight == kWeightA;
+        },
+        kJobChangeMs));
+    CONTROL_CHECK(jobIsActive(api, firstId) && !bridge.appliedNotesPrimary);
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"weight:aa-custom.onnx"}));
+
+    runtime.calls.clear();
+    runtime.vocoderAccepts = false;
+    const auto rejectedId = jobIdOf(
+        api.result("prefs.set", json(R"({"tuningHz":435,"vocoderWeight":"zz-custom.onnx"})")));
+    CONTROL_CHECK(!rejectedId.empty());
+    CONTROL_CHECK(pumpMessagesUntil(
+        [&] { return runtime.calls == std::vector<std::string>{"weight:zz-custom.onnx"}; }, kJobChangeMs));
+    runtime.vocoderAccepts = true;
+    const auto rejected = waitJob(api, rejectedId);
+    CONTROL_CHECK(jobFailedWith(rejected, "MODEL_UNAVAILABLE", "vocoder_weight_rejected", false, false));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"weight:zz-custom.onnx"}));
+    const auto& written = preferences.getState().shared;
+    CONTROL_CHECK(TuningConfig::currentTuningHz() == 433.0f && written.tuning.tuningHz == 433.0f
+                  && AudioEditingScheme::usesNotesPrimaryScheme(written.audioEditingScheme)
+                  && written.vocoderModelWeight == kWeightA);
+    CONTROL_CHECK(jobIsActive(api, firstId) && bridge.preferenceNotifications == notifications + 1);
+
+    // The waiting job must be able to admit its rollback weight.
+    const auto first = waitJob(api, firstId);
+    controlSetPrefsApplyTimeoutForTesting(0);
+    bridge.apply = PrefsBridge::Apply::Immediate;
+    CONTROL_CHECK(jobFailedInternal(first, false));
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    const auto& restored = preferences.getState().shared;
+    CONTROL_CHECK(TuningConfig::currentTuningHz() == tuningBefore
+                  && restored.tuning.tuningHz == baselineState.tuning.tuningHz
+                  && restored.audioEditingScheme == baselineState.audioEditingScheme
+                  && restored.vocoderModelWeight == baselineState.vocoderModelWeight);
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 2);
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"weight:zz-custom.onnx", "weight:hifigan.onnx"}));
+    CONTROL_CHECK(pumpMessagesUntil([&jobs] { return jobs->activeCount() == 0; }, kJobWaitMs));
+    settleVocoderScenario(processor, runtime);
+    bridge.apply = PrefsBridge::Apply::Immediate;
+}
+
 /** A modal dialog opens before the job's first step: BUSY, nothing executed, the runtime was not asked anything. */
 void checkModalBeforeVocoderChange(ApiSession& api, PrefsBridge& bridge, FakeRuntime& runtime,
                                    const std::shared_ptr<ControlJobs>& jobs)
@@ -2276,6 +2474,7 @@ void scenarioPrefsVocoderOverlap()
     checkVocoderTimesOutWhileSchemeIsApplied(api, *processor, bridge, runtime);
     checkWriteDuringVocoderWait(api, *processor, runtime);
     checkModalBeforeVocoderChange(api, bridge, runtime, service.jobs());
+    checkRejectedAdmissionDuringPrefsWait(api, *processor, bridge, runtime, service.jobs());
     {
         const auto project = api.result("project.get");
         const auto waitHandles = fixtureHandlesOf(project, 1, 2.0);
