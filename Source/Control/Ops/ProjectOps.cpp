@@ -232,9 +232,10 @@ struct SaveSpec
  * taken on the message thread when the request came (ProjectSession::prepareSave), a worker of the editor's pool wrote
  * the project and copied its media (ProjectSession::executeSaveToFile), and the message thread then makes the project
  * file the current one, clears the unsaved-changes flag if the project did not change meanwhile, pushes the file to the
- * recent projects and lets the editor update its menu and title. The one difference is where the project is written:
- * to a temporary file in the target directory, which the job moves into place with the final rename of PROTOCOL.md
- * section 20.4 once the identity of the target was checked again.
+ * recent projects and lets the editor update its menu and title. API saves capture committed model state; UI saves
+ * additionally finish the current parameter gesture before taking their snapshot. The API writes to a temporary file
+ * in the target directory, which the job moves into place with the final rename of PROTOCOL.md section 20.4 once the
+ * identity of the target was checked again.
  */
 class SaveJob
 {

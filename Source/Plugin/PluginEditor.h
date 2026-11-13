@@ -120,6 +120,8 @@ public:
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void escapeKeyPressed() override;
     void currentToolChanged(ToolId tool) override;
+    void parameterTargetWillChange(PianoRollComponent::Listener::ParameterTargetChangePolicy policy) override;
+    void parameterTargetDidChange() override;
 
 private:
     struct PianoRollContentSync
@@ -160,7 +162,7 @@ private:
     PianoRollContentSync resolveCurrentContentSync();
     std::vector<juce::ARAPlaybackRegion*> resolveContentScopeRegions() const;
     void readScopeAudio();
-    void syncParameterPanelFromSelection();
+    void syncParameterPanelFromSelection(bool forceClipParameterProjection = false);
     PianoRollContentSync syncContentProjectionToPianoRoll();
     void rememberPresentedPianoRollViewport();
     void showPreferencesDialog();

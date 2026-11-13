@@ -303,6 +303,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // new editor stayed in the default scheme: OpenDyne users got the classic mode, F1-F6
     // went to the host and Read Audio made no notes (user test). Apply the saved state once.
     syncSharedAppPreferences();
+    syncParameterPanelFromSelection(true);
 
     startTimerHz(kHeartbeatHz);
     // Host transport metadata (BPM/time signature): applied on demand from the
@@ -345,6 +346,7 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
     rememberPresentedPianoRollViewport();
     setLookAndFeel(nullptr);
     stopTimer();
+    parameterPanel_.commitPendingEdits();
     overviewStrip_.removeListener(this);
     LocalizationManager::getInstance().removeListener(this);
     menuBar_.removeListener(this);
@@ -599,8 +601,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (lastExternalEditAppliedCount_ >= 0 && externalEditApplied != lastExternalEditAppliedCount_)
         a11y::announce(pianoRoll_, LOC_RAW("External edit applied"), a11y::SpeechQueue::keepAll);
     lastExternalEditAppliedCount_ = externalEditApplied;
-
-    syncParameterPanelFromSelection();
 
     // Heartbeat ticks first — match Standalone pattern: overview/camera
     // state is stable before any content projection runs.
@@ -921,13 +921,14 @@ void OpenTuneAudioProcessorEditor::syncHostTransportMetadata()
 // syncParameterPanelFromSelection
 // =========================================================================
 
-void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
+void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection(bool forceClipParameterProjection)
 {
     ParameterPanelSyncContext context;
     context.clipRetuneSpeedPercent = pianoRoll_.getCurrentRetuneSpeed() * 100.0f;
     context.clipVibratoDepth = pianoRoll_.getCurrentVibratoDepth();
     context.clipVibratoRate = pianoRoll_.getCurrentVibratoRate();
     context.wasShowingSelectionParameters = showingSingleNoteParams_;
+    context.forceClipParameterProjection = forceClipParameterProjection;
 
     context.hasSelectedNoteParameters = pianoRoll_.getSingleSelectedNoteParameters(
         context.selectedNoteRetuneSpeedPercent,
@@ -1152,6 +1153,7 @@ void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
     if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
         pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::RetuneSpeed, normalized);
     }
+    syncParameterPanelFromSelection(result.status == AudioEditingScheme::ParameterEditStatus::Failed);
     announceParameterEdit(AudioEditingScheme::ParameterId::RetuneSpeed, result);
 }
 
@@ -1161,6 +1163,7 @@ void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
     if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
         pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::VibratoDepth, value);
     }
+    syncParameterPanelFromSelection(result.status == AudioEditingScheme::ParameterEditStatus::Failed);
     announceParameterEdit(AudioEditingScheme::ParameterId::VibratoDepth, result);
 }
 
@@ -1170,6 +1173,7 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
     if (result.status == AudioEditingScheme::ParameterEditStatus::NoTarget) {
         pianoRoll_.setCreationDefault(AudioEditingScheme::ParameterId::VibratoRate, value);
     }
+    syncParameterPanelFromSelection(result.status == AudioEditingScheme::ParameterEditStatus::Failed);
     announceParameterEdit(AudioEditingScheme::ParameterId::VibratoRate, result);
 }
 
@@ -1177,6 +1181,7 @@ void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 {
     // NoTarget 时 editParameter 内部已回落更新创建默认值
     const auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
+    syncParameterPanelFromSelection(result.status == AudioEditingScheme::ParameterEditStatus::Failed);
     announceParameterEdit(AudioEditingScheme::ParameterId::NoteSplit, result);
 }
 
@@ -1430,9 +1435,11 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
 
 void OpenTuneAudioProcessorEditor::undoRequested()
 {
+    parameterPanel_.commitPendingEdits();
     // Accessibility: sighted users see what came back; tell screen readers which action was undone.
     if (auto* action = processorRef_.getUndoManager().undo()) {
         syncContentProjectionToPianoRoll();
+        pianoRoll_.onNotesRevisionChanged();
         a11y::announce(pianoRoll_, Loc::format(LOC_RAW("Undone: {0}"), action->getDescription()));
     } else {
         a11y::announce(pianoRoll_, LOC_RAW("Nothing to undo"));
@@ -1441,8 +1448,10 @@ void OpenTuneAudioProcessorEditor::undoRequested()
 
 void OpenTuneAudioProcessorEditor::redoRequested()
 {
+    parameterPanel_.commitPendingEdits();
     if (auto* action = processorRef_.getUndoManager().redo()) {
         syncContentProjectionToPianoRoll();
+        pianoRoll_.onNotesRevisionChanged();
         a11y::announce(pianoRoll_, Loc::format(LOC_RAW("Redone: {0}"), action->getDescription()));
     } else {
         a11y::announce(pianoRoll_, LOC_RAW("Nothing to redo"));
@@ -1839,6 +1848,20 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
 void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 {
     parameterPanel_.setActiveTool(static_cast<int>(tool));
+}
+
+void OpenTuneAudioProcessorEditor::parameterTargetWillChange(
+    PianoRollComponent::Listener::ParameterTargetChangePolicy policy)
+{
+    if (policy == PianoRollComponent::Listener::ParameterTargetChangePolicy::Commit)
+        parameterPanel_.commitPendingEdits();
+    else
+        parameterPanel_.cancelPendingEdits();
+}
+
+void OpenTuneAudioProcessorEditor::parameterTargetDidChange()
+{
+    syncParameterPanelFromSelection();
 }
 
 void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame)

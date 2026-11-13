@@ -821,6 +821,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         const uint64_t placementId = (placementIndex >= 0) ? processorRef_.getPlacementId(activeTrack, placementIndex) : 0;
         applyPlacementSelectionContext(activeTrack, placementId);
     }
+    syncParameterPanelFromSelection(true);
     pianoRoll_.setBpm(processorRef_.getBpm());
     pianoRoll_.setTimeSignature(processorRef_.getTimeSigNumerator(), processorRef_.getTimeSigDenominator());
     pianoRoll_.setShowWaveform(processorRef_.getShowWaveform());
@@ -993,6 +994,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    parameterPanel_.commitPendingEdits();
     processorRef_.setContentChangedCallback({});
     cancelPendingUpdate();
     pendingContentChangedKey_ = {};
@@ -1152,6 +1154,7 @@ void OpenTuneAudioProcessorEditor::saveProject(juce::File targetFile,
     if (rejectProjectOperationIfBusy())
         return;
 
+    parameterPanel_.commitPendingEdits();
     projectOperationBusy_ = true;
     const auto path = targetFile != juce::File{}
         ? targetFile
@@ -1874,13 +1877,14 @@ void OpenTuneAudioProcessorEditor::resized()
         updateDemoTour();
 }
 
-void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
+void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection(bool forceClipParameterProjection)
 {
     ParameterPanelSyncContext context;
     context.clipRetuneSpeedPercent = pianoRoll_.getCurrentRetuneSpeed() * 100.0f;
     context.clipVibratoDepth = pianoRoll_.getCurrentVibratoDepth();
     context.clipVibratoRate = pianoRoll_.getCurrentVibratoRate();
     context.wasShowingSelectionParameters = showingSingleNoteParams_;
+    context.forceClipParameterProjection = forceClipParameterProjection;
 
     context.hasSelectedNoteParameters = pianoRoll_.getSingleSelectedNoteParameters(
         context.selectedNoteRetuneSpeedPercent,
@@ -1975,8 +1979,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     restoreStandaloneWindowGeometryOnce();
 
     const bool vocoderReady = processorRef_.isVocoderReady();
-
-    syncParameterPanelFromSelection();
 
     if (arrangementView_.isShowing()) {
         arrangementView_.onHeartbeatTick();
@@ -2356,6 +2358,8 @@ void OpenTuneAudioProcessorEditor::syncActiveSelectionFromProcessor()
 
 void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, uint64_t placementId)
 {
+    parameterPanel_.commitPendingEdits();
+
     if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS)
     {
         syncActiveContentFromProcessor(trackId, -1, false);
@@ -2407,6 +2411,7 @@ void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
     }
     if (result.changed)
         projectSession_.markDirty();
+    syncParameterPanelFromSelection(result.status == AudioEditingScheme::ParameterEditStatus::Failed);
 }
 
 void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
@@ -2417,6 +2422,7 @@ void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
     }
     if (result.changed)
         projectSession_.markDirty();
+    syncParameterPanelFromSelection(result.status == AudioEditingScheme::ParameterEditStatus::Failed);
 }
 
 void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
@@ -2427,6 +2433,7 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
     }
     if (result.changed)
         projectSession_.markDirty();
+    syncParameterPanelFromSelection(result.status == AudioEditingScheme::ParameterEditStatus::Failed);
 }
 
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
@@ -2435,6 +2442,7 @@ void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
     auto result = pianoRoll_.editParameter(AudioEditingScheme::ParameterId::NoteSplit, value);
     if (result.changed)
         projectSession_.markDirty();
+    syncParameterPanelFromSelection(result.status == AudioEditingScheme::ParameterEditStatus::Failed);
 }
 
 // ============================================================================
@@ -2478,6 +2486,7 @@ void OpenTuneAudioProcessorEditor::saveAndReturnRequested()
     if (!externalEditActive_ || !externalEditSessionDir_.isDirectory())
         return;
 
+    parameterPanel_.commitPendingEdits();
     ContentKey key;
     if (auto* arrangement = processorRef_.getStandaloneArrangement()) {
         StandaloneArrangement::Placement placement;
@@ -2930,6 +2939,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
         {
             if (safeThis == nullptr)
                 return;
+
+            safeThis->parameterPanel_.commitPendingEdits();
 
             struct ExportRequest final
             {
@@ -3414,6 +3425,7 @@ void OpenTuneAudioProcessorEditor::trackColorModeChanged(TrackColorMode mode)
 
 void OpenTuneAudioProcessorEditor::performUndoRedoAction(bool isUndo)
 {
+    parameterPanel_.commitPendingEdits();
     auto* action = isUndo
         ? processorRef_.getUndoManager().undo()
         : processorRef_.getUndoManager().redo();
@@ -4150,6 +4162,20 @@ void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 {
     parameterPanel_.setActiveTool(static_cast<int>(tool));
+}
+
+void OpenTuneAudioProcessorEditor::parameterTargetWillChange(
+    PianoRollComponent::Listener::ParameterTargetChangePolicy policy)
+{
+    if (policy == PianoRollComponent::Listener::ParameterTargetChangePolicy::Commit)
+        parameterPanel_.commitPendingEdits();
+    else
+        parameterPanel_.cancelPendingEdits();
+}
+
+void OpenTuneAudioProcessorEditor::parameterTargetDidChange()
+{
+    syncParameterPanelFromSelection();
 }
 
 void OpenTuneAudioProcessorEditor::saveProjectAsRequested()

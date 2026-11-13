@@ -277,11 +277,13 @@ void PianoRollComponent::handleVolumeEnvelopeRegionEditResult(
 {
     if (result.status == VolumeEnvelopeRegionEditStatus::StaleRevision) {
         closeEqPopup();
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
         if (result.contentSnapshot != nullptr) {
             cachedNotes_ = result.contentSnapshot->notes;
             lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
         }
         interactionState_.noteSelection.clear();
+        parameterTargetDidChange();
     }
 
     const bool applied = result.status == VolumeEnvelopeRegionEditStatus::Applied
@@ -290,6 +292,7 @@ void PianoRollComponent::handleVolumeEnvelopeRegionEditResult(
         cachedNotes_ = result.contentSnapshot->notes;
         interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
         lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
+        parameterTargetDidChange();
     }
 
     // Drag preview was rasterized during mouseDrag. Rebuild after every result so
@@ -364,7 +367,9 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             return;
         }
 
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
         interactionState_.noteSelection.clear();
+        parameterTargetDidChange();
         if (result.status == DrawNoteCommitStatus::StaleRevision)
             closeEqPopup();
         requestContentRedraw();
@@ -394,6 +399,10 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             expectedNotesRevision, segments, affectedRange, std::move(description));
         pendingUndoDescription_ = {};
         undoSnapshotCaptured_ = false;
+        if (result.status == OpenTuneAudioProcessor::NoteResizeCommitStatus::StaleRevision) {
+            closeEqPopup();
+            parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
+        }
         if (result.contentSnapshot != nullptr) {
             cachedNotes_ = result.contentSnapshot->notes;
             lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
@@ -402,10 +411,11 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         }
 
         if (result.status == OpenTuneAudioProcessor::NoteResizeCommitStatus::StaleRevision) {
-            closeEqPopup();
             interactionState_.noteSelection.clear();
+            parameterTargetDidChange();
         } else if (result.status == OpenTuneAudioProcessor::NoteResizeCommitStatus::Applied) {
             interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
+            parameterTargetDidChange();
         }
         if (result.status != OpenTuneAudioProcessor::NoteResizeCommitStatus::Applied)
             interactionState_.noteDraft.clear();
@@ -465,10 +475,12 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             && result.contentSnapshot != nullptr) {
             // 旧 index 不再对应新 notes：关旧 EQ popup、清旧选区，避免旧 index 误编辑
             closeEqPopup();
+            parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
             interactionState_.noteSelection.clear();
             interactionState_.noteDraft.clear();
             cachedNotes_ = result.contentSnapshot->notes;
             lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
+            parameterTargetDidChange();
             requestContentRedraw();
         }
         return false;
@@ -495,6 +507,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             std::move(description));
         if (result.status == EraserStrokeEditStatus::StaleRevision) {
             closeEqPopup();
+            parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
             interactionState_.noteSelection.clear();
             if (result.contentSnapshot != nullptr) {
                 cachedNotes_ = result.contentSnapshot->notes;
@@ -502,6 +515,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
                 lastKnownPitchRevision_ = result.contentSnapshot->pitchRevision;
                 applyEditedContentCurve(result.contentSnapshot->pitchCurve);
             }
+            parameterTargetDidChange();
             requestContentRedraw();
             overlay_->repaint();
             return result;
@@ -531,6 +545,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             || result.status == SelectedNoteDeleteStatus::StaleRevision) {
             if (result.status == SelectedNoteDeleteStatus::StaleRevision)
                 closeEqPopup();
+            if (result.status == SelectedNoteDeleteStatus::StaleRevision)
+                parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
             interactionState_.noteSelection.clear();
             interactionState_.selection.isSelectingF0 = false;
             interactionState_.selection.f0SelectionAnchorFrame = -1;
@@ -539,6 +555,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             cachedNotes_ = result.contentSnapshot->notes;
             lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
             lastKnownPitchRevision_ = result.contentSnapshot->pitchRevision;
+            if (result.status == SelectedNoteDeleteStatus::StaleRevision)
+                parameterTargetDidChange();
             applyEditedContentCurve(result.contentSnapshot->pitchCurve);
             requestContentRedraw();
             if (result.status == SelectedNoteDeleteStatus::Applied) {
@@ -640,6 +658,10 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.invalidateSelectionFeedback = [this]() {
         invalidateSelectionFeedback();
     };
+    toolCtx.parameterTargetWillChange = [this]() {
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Commit);
+    };
+    toolCtx.parameterTargetDidChange = [this]() { parameterTargetDidChange(); };
     toolCtx.invalidateInteractionPreview = [this](const juce::Rectangle<int>& bounds) {
         invalidateInteractionPreview(bounds);
     };
@@ -1421,6 +1443,7 @@ bool PianoRollComponent::commitNoteDraft()
 
     // 提交成功后沿用 Listener::contentEdited 标记 Standalone dirty
     listeners_.call([](Listener& listener) { listener.contentEdited(); });
+    parameterTargetDidChange();
     return true;
 }
 
@@ -1576,12 +1599,14 @@ void PianoRollComponent::applyEqSettingsToSelection(const EqSettings& settings)
         editedContentKey_, eqEditTargetIndices_, eqEditRevision_,
         std::optional<EqSettings>{ settings }, LOC_RAW("Edit EQ"));
     if (result.status == SelectedNoteEqEditStatus::StaleRevision) {
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
         if (result.contentSnapshot != nullptr) {
             cachedNotes_ = result.contentSnapshot->notes;
             lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
             interactionState_.noteSelection.clear();
             requestContentRedraw();
         }
+        parameterTargetDidChange();
         invalidateEqPopup();
         return;
     }
@@ -1603,12 +1628,14 @@ bool PianoRollComponent::removeEqFromSelection()
         editedContentKey_, eqEditTargetIndices_, eqEditRevision_,
         std::nullopt, LOC_RAW("Remove EQ"));
     if (result.status == SelectedNoteEqEditStatus::StaleRevision) {
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
         if (result.contentSnapshot != nullptr) {
             cachedNotes_ = result.contentSnapshot->notes;
             lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
             interactionState_.noteSelection.clear();
             requestContentRedraw();
         }
+        parameterTargetDidChange();
         invalidateEqPopup();
         return false;
     }
@@ -1731,6 +1758,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     {
         requestContentRedraw();
     }
+    parameterTargetDidChange();
     return committedSnap;
 }
 
@@ -1832,12 +1860,18 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
     const auto& notes = getCommittedNotes();
     const auto f0tl = currentF0Timeline();
     if (notes.empty() || f0tl.isEmpty()) {
+        const bool targetChanged = !interactionState_.noteSelection.selectedIndices.empty()
+            || !interactionState_.frameSelection.ranges.empty();
+        if (targetChanged)
+            parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Commit);
         interactionState_.noteSelection.clear();
         interactionState_.frameSelection.clear();
         interactionState_.selection.isSelectingArea = false;
         interactionState_.selection.isSelectingF0 = false;
         interactionState_.selection.f0SelectionAnchorFrame = -1;
         interactionState_.selection.f0SelectionCurrentFrame = -1;
+        if (targetChanged)
+            parameterTargetDidChange();
         overlay_->repaint();
         return false;
     }
@@ -1858,10 +1892,18 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
         }
     }
 
+    const int noteCount = static_cast<int>(notes.size());
+    const bool targetChanged = selectedIndices != interactionState_.noteSelection.selectedIndices
+        || !interactionState_.frameSelection.ranges.empty();
+    if (targetChanged)
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Commit);
     interactionState_.noteSelection.setFromIndices(std::move(selectedIndices),
-                                                   static_cast<int>(notes.size()));
+                                                   noteCount);
+    interactionState_.frameSelection.clear();
     interactionState_.selection.isSelectingArea = false;
     // 帧选择由 collectSelectedFrameRanges 从 noteSelection 按需派生
+    if (targetChanged)
+        parameterTargetDidChange();
     overlay_->repaint();
 
     return anyOverlap;
@@ -3467,6 +3509,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
         result.changed = edit.changed;
         if (edit.status != AudioEditingScheme::ParameterEditStatus::Applied || !edit.changed) {
             if (edit.contentSnapshot != nullptr) {
+                parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
                 cachedNotes_ = edit.contentSnapshot->notes;
                 interactionState_.noteSelection.clear();
                 if (edit.contentSnapshot->pitchCurve != nullptr)
@@ -3474,6 +3517,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
                 lastKnownNotesRevision_ = edit.contentSnapshot->notesRevision;
                 lastKnownPitchRevision_ = edit.contentSnapshot->pitchRevision;
                 requestContentRedraw();
+                parameterTargetDidChange();
             }
             return result;
         }
@@ -3941,6 +3985,13 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
         return;
     }
 
+    const auto incomingSnapshot = contentChanged ? nullptr : readEditedSnapshot();
+    const bool externalRevisionChanged = incomingSnapshot != nullptr
+        && (incomingSnapshot->notesRevision != lastKnownNotesRevision_
+            || incomingSnapshot->pitchRevision != lastKnownPitchRevision_);
+    if (contentChanged || externalRevisionChanged)
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
+
     if (activePlacementChanged) {
         // Pending seeks belong to the active placement, not just its content.
         pendingSeekTime_ = -1.0;
@@ -4019,6 +4070,9 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
 
     if (!deferRedraw)
         ensureOpenDyneNotesIfNeeded();
+
+    if (contentChanged || externalRevisionChanged)
+        parameterTargetDidChange();
 }
 
 
@@ -4141,9 +4195,11 @@ void PianoRollComponent::onNotesRevisionChanged()
     if (rev == lastKnownNotesRevision_) return;
     lastKnownNotesRevision_ = rev;
     closeEqPopup();
+    parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
     interactionState_.noteSelection.clear();
     refreshEditedContentNotes();
     requestContentRedraw();
+    parameterTargetDidChange();
 }
 
 void PianoRollComponent::onPitchRevisionChanged()
@@ -4151,8 +4207,10 @@ void PianoRollComponent::onPitchRevisionChanged()
     auto snap = readEditedSnapshot();
     uint64_t rev = snap ? snap->pitchRevision : 0;
     if (rev == lastKnownPitchRevision_) return;
+    parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
     lastKnownPitchRevision_ = rev;
     requestContentRedraw();
+    parameterTargetDidChange();
 }
 
 void PianoRollComponent::requestContentRedraw() {
@@ -4708,6 +4766,10 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
 
     const bool toolChanged = currentTool_ != tool;
     const ToolId previousTool = currentTool_;
+    const bool clearsFrameSelection = toolChanged && tool == ToolId::TimeTool
+        && !interactionState_.frameSelection.ranges.empty();
+    if (clearsFrameSelection)
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Commit);
     bool clearedAnchorPreview = false;
     if (interactionState_.drawing.isPlacingAnchors && tool != ToolId::LineAnchor) {
         interactionState_.drawing.isPlacingAnchors = false;
@@ -4744,6 +4806,8 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             interactionState_.timeTool.clear();
         }
     }
+    if (clearsFrameSelection)
+        parameterTargetDidChange();
 
     currentTool_ = tool;
     if (toolHandler_) {
@@ -4963,6 +5027,16 @@ void PianoRollComponent::addListener(Listener* listener) {
 
 void PianoRollComponent::removeListener(Listener* listener) {
     listeners_.remove(listener);
+}
+
+void PianoRollComponent::parameterTargetWillChange(Listener::ParameterTargetChangePolicy policy)
+{
+    listeners_.call([policy](Listener& listener) { listener.parameterTargetWillChange(policy); });
+}
+
+void PianoRollComponent::parameterTargetDidChange()
+{
+    listeners_.call([](Listener& listener) { listener.parameterTargetDidChange(); });
 }
 
 void PianoRollComponent::mouseMove(const juce::MouseEvent& e) {
@@ -5923,6 +5997,7 @@ void PianoRollComponent::pasteNotes()
     if (contentCommands_ == nullptr || !editedContentKey_.isValid()) return;
     if (processor_ == nullptr) return;
 
+    parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Commit);
     const auto& notes = getCommittedNotes();
     const auto& sel = interactionState_.noteSelection;
 
@@ -5961,12 +6036,14 @@ void PianoRollComponent::pasteNotes()
         pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : LOC(kPaste));
 
     if (result.status == PasteNotesStatus::StaleRevision) {
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
         if (result.contentSnapshot != nullptr) {
             cachedNotes_ = result.contentSnapshot->notes;
             lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
             interactionState_.noteSelection.clear();
             requestContentRedraw();
         }
+        parameterTargetDidChange();
         pendingUndoDescription_ = {};
         undoSnapshotCaptured_ = false;
         return;
@@ -5993,6 +6070,7 @@ void PianoRollComponent::pasteNotes()
         }
     }
 
+    parameterTargetDidChange();
     requestContentRedraw();
     overlay_->repaint();
     listeners_.call([](Listener& listener) { listener.contentEdited(); });
@@ -6130,6 +6208,7 @@ bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
         return true;
     }
     if (matchesShortcut(KeyShortcutConfig::ShortcutId::Cut, key)) {
+        parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Commit);
         copySelectedNotes();
         toolHandler_->handleDeleteKey();  // 剪切语义：复制到剪贴板 + 删除选中
         return true;

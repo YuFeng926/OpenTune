@@ -100,6 +100,8 @@ public:
     class Listener
     {
     public:
+        enum class ParameterTargetChangePolicy { Commit, Cancel };
+
         virtual ~Listener() = default;
         virtual bool playheadPositionChangeRequested(double timeSeconds) = 0;
         // Drag preview. The default commits immediately so standalone keeps a live seek.
@@ -119,6 +121,8 @@ public:
         virtual bool pointerShortcutRequested(KeyShortcutConfig::ShortcutId /*id*/) { return false; }
         virtual void currentToolChanged(ToolId tool) { (void)tool; }
         virtual void timelineDisplayModeChanged(TimelineDisplayMode mode) { (void)mode; }
+        virtual void parameterTargetWillChange(ParameterTargetChangePolicy policy) { (void)policy; }
+        virtual void parameterTargetDidChange() {}
     };
 
     enum class ScrollMode
@@ -573,6 +577,8 @@ private:
     void invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes);
     void invalidateSelectionFeedback();
     void invalidateInteractionPreview(const juce::Rectangle<int>& bounds);
+    void parameterTargetWillChange(Listener::ParameterTargetChangePolicy policy);
+    void parameterTargetDidChange();
 
     float getTotalHeight() const;
 

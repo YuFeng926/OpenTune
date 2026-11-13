@@ -800,6 +800,7 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Utils/ScreenReaderAnnouncer.h
         Source/Utils/AccessibleComboBox.h
         Source/Utils/AccessibleKnob.h
+        Source/Utils/AccessibleKnob.cpp
         Source/Utils/AccessibleToggleButton.h
         Source/Utils/ContextMenuKey.cpp
         Source/Utils/ContextMenuKey.h
@@ -1718,6 +1719,19 @@ if(OPENTUNE_BUILD_TESTS)
     add_test(NAME ComponentListenerSubscriptionTests
         COMMAND OpenTuneComponentListenerSubscriptionTests)
 
+    add_executable(OpenTuneAccessibleKnobTests
+        Tests/AccessibleKnobTests.cpp
+        Source/Utils/AccessibleKnob.cpp
+    )
+    target_include_directories(OpenTuneAccessibleKnobTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneAccessibleKnobTests PRIVATE
+        juce::juce_gui_basics)
+    if(MSVC)
+        target_compile_options(OpenTuneAccessibleKnobTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME AccessibleKnobTests COMMAND OpenTuneAccessibleKnobTests)
+
     add_executable(OpenTuneAutoTuneTests
         Tests/AutoTunePitchShifterTests.cpp
         Source/DSP/AutoTunePitchShifter.cpp
@@ -1779,6 +1793,24 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneSelectedNoteParameterEditTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME SelectedNoteParameterEditTests COMMAND OpenTuneSelectedNoteParameterEditTests)
+
+    add_executable(OpenTunePianoRollParameterContextTests
+        Tests/PianoRollParameterContextTests.cpp
+    )
+    target_include_directories(OpenTunePianoRollParameterContextTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone)
+    target_link_libraries(OpenTunePianoRollParameterContextTests PRIVATE
+        OpenTune
+        juce::juce_audio_basics
+        juce::juce_core
+        juce::juce_gui_basics
+    )
+    if(MSVC)
+        target_compile_options(OpenTunePianoRollParameterContextTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME PianoRollParameterContextTests COMMAND OpenTunePianoRollParameterContextTests)
 
     add_executable(OpenTuneSelectedNoteEqEditTests
         Tests/SelectedNoteEqEditTests.cpp

@@ -172,6 +172,8 @@ public:
     void contentEdited() override;
     void escapeKeyPressed() override;
     void currentToolChanged(ToolId tool) override;
+    void parameterTargetWillChange(PianoRollComponent::Listener::ParameterTargetChangePolicy policy) override;
+    void parameterTargetDidChange() override;
 
     // Keyboard handling
     bool keyPressed(const juce::KeyPress& key) override;
@@ -208,7 +210,7 @@ private:
                                    double pixelsPerSecond) override;
     void applyThemeToEditor(ThemeId themeId);
     RenderStatusSnapshot getRenderStatusSnapshot() const;
-    void syncParameterPanelFromSelection();
+    void syncParameterPanelFromSelection(bool forceClipParameterProjection = false);
     void updateTitleWithProjectPath();
     void syncRecentProjectsToMenu();
     void refreshAllUIFromProject();

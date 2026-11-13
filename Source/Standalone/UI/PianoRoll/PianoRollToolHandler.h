@@ -195,6 +195,8 @@ public:
         std::function<void(const std::vector<Note>&, const std::vector<Note>&)> invalidateLiveNotes;
         // 仅选择变化（Ctrl+A、点击选择、框选），不涉及 note 内容变化
         std::function<void()> invalidateSelectionFeedback;
+        std::function<void()> parameterTargetWillChange;
+        std::function<void()> parameterTargetDidChange;
         // 交互预览区域变化（hand draw、line anchor、draw note cursor preview）
         std::function<void(const juce::Rectangle<int>&)> invalidateInteractionPreview;
         std::function<void(const juce::MouseCursor&)> setMouseCursor;
@@ -288,6 +290,17 @@ public:
     FrameSelection collectSelectedFrameRanges() const;
 
 private:
+    struct ParameterTargetSelection
+    {
+        std::vector<int> noteIndices;
+        std::vector<std::pair<int, int>> frameRanges;
+    };
+
+    ParameterTargetSelection beginParameterTargetChange();
+    void finishParameterTargetChange(const ParameterTargetSelection& before, bool forceSync = false);
+    void beginMouseParameterTargetChange();
+    void finishMouseParameterTargetChange();
+
     // === 各工具的 mouseDown/mouseDrag/mouseUp 分派 ===
     void handleSelectTool(const juce::MouseEvent& e);
     void beginAreaSelection(const juce::MouseEvent& e);
@@ -455,6 +468,7 @@ private:
     AutomationLane volumeDragBaselineEnvelope_;
     std::vector<int> volumeDragSelectedIndices_;
     uint64_t volumeDragExpectedNotesRevision_ = 0;
+    std::optional<ParameterTargetSelection> mouseParameterTargetBefore_;
 };
 
 } // namespace OpenTune

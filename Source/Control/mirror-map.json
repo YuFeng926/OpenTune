@@ -578,7 +578,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::saveProject",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "7b1b24d878527c27f1485e3038a618431c99f3c9f334eeede3d706b334d51dfc"
+        "sha256": "6f3df2c8844f061ad8fb5d4f9fb1705d6963413856d1f0c41f0496bd3fef7b14"
       },
       "control": [
         {
@@ -596,8 +596,8 @@
         "ControlProcessorTests.ProjectVectors",
         "ControlProcessorTests.ProjectSaveCopy"
       ],
-      "note": "What the editor does around a save: the snapshot on the message thread, the write on the project worker, then the new project file, the flag cleared unless the project changed meanwhile, the recent project and the menu and title. The API writes through a temporary file and a final rename, and reports failures instead of showing a dialog. project.saveCopy (CopyJob) repeats the first half, the snapshot and the worker write, and stops where the editor takes the file as the project's own: it calls neither setCurrentProjectFile, clearDirty nor pushRecentProject and updates neither menu nor title, so a change in these steps has to be weighed for both ports.",
-      "noteZh": "编辑器保存时的步骤：消息线程取快照、工程 worker 写盘，之后设置新的工程文件、在工程期间没有再改动时清除脏标记、推入最近工程并更新菜单与标题。接口经临时文件和最终改名写入，失败时报告错误而不弹对话框。project.saveCopy（CopyJob）照抄前半段：取快照、worker 写盘，在编辑器把文件当作工程自己的文件之前停下：不调用 setCurrentProjectFile、clearDirty 和 pushRecentProject，也不更新菜单与标题，所以这些步骤有改动时两个移植都要权衡。"
+      "note": "What the editor does around a save: the snapshot on the message thread, the write on the project worker, then the new project file, the flag cleared unless the project changed meanwhile, the recent project and the menu and title. The API writes through a temporary file and a final rename, and reports failures instead of showing a dialog. project.saveCopy (CopyJob) repeats the first half, the snapshot and the worker write, and stops where the editor takes the file as the project's own: it calls neither setCurrentProjectFile, clearDirty nor pushRecentProject and updates neither menu nor title, so a change in these steps has to be weighed for both ports. UI saves first finish pending parameter gestures; API saves and copies capture committed model state without adding a UI edit to history.",
+      "noteZh": "编辑器保存时的步骤：消息线程取快照、工程 worker 写盘，之后设置新的工程文件、在工程期间没有再改动时清除脏标记、推入最近工程并更新菜单与标题。接口经临时文件和最终改名写入，失败时报告错误而不弹对话框。project.saveCopy（CopyJob）照抄前半段：取快照、worker 写盘，在编辑器把文件当作工程自己的文件之前停下：不调用 setCurrentProjectFile、clearDirty 和 pushRecentProject，也不更新菜单与标题，所以这些步骤有改动时两个移植都要权衡。UI 保存先结束参数手势；API 保存及副本捕获已提交模型，保持现有编辑历史边界。"
     },
     {
       "id": "project-open-flow",
@@ -790,7 +790,7 @@
         "symbol": "PianoRollComponent::editParameter",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "7f3874f5cde273adb3d6833e01b47c09e313aa22ae92a6ea2925973a6d4cebbe"
+        "sha256": "35839a7f048f440974dbcee2735d0627d6473103399315558be522cd0ef21eeb"
       },
       "control": [
         {
@@ -805,8 +805,8 @@
         "ControlProcessorTests.EditNotes",
         "ControlProcessorTests.EditVectors"
       ],
-      "note": "The parameter knobs on selected notes: the note fields they set and the undo description Edit note. OpenTune moved the selected-notes target into planSelectedNoteParameterEdit() and editSelectedNoteParameter(), which set one parameter per call and push their own undo entry; the API sets several parameters (and the pitch drift scale) in one op, derives the range from the notes that changed and keeps the undo entry inside its ControlOriginAction, so it keeps its own plan. The fields and the description are the same.",
-      "noteZh": "选中音符上的参数旋钮：设置哪些音符字段，以及撤销描述 Edit note。OpenTune 把选中音符的分支移进了 planSelectedNoteParameterEdit() 与 editSelectedNoteParameter()，它们一次只设一个参数并自己压撤销条目；接口一个操作里设多个参数（含音高漂移比例），范围按实际变化的音符算，撤销条目放进 ControlOriginAction，所以保留自己的计划。设置的字段与描述一致。"
+      "note": "The parameter knobs on selected notes: the note fields they set and the undo description Edit note. OpenTune moved the selected-notes target into planSelectedNoteParameterEdit() and editSelectedNoteParameter(), which set one parameter per call and push their own undo entry; the API sets several parameters (and the pitch drift scale) in one op, derives the range from the notes that changed and keeps the undo entry inside its ControlOriginAction, so it keeps its own plan. The fields and the description are the same. Stale-revision gesture cancellation and parameter-panel reprojection belong to the UI; API revision checks and transaction aggregation remain unchanged.",
+      "noteZh": "选中音符上的参数旋钮：设置哪些音符字段，以及撤销描述 Edit note。OpenTune 把选中音符的分支移进了 planSelectedNoteParameterEdit() 与 editSelectedNoteParameter()，它们一次只设一个参数并自己压撤销条目；接口一个操作里设多个参数（含音高漂移比例），范围按实际变化的音符算，撤销条目放进 ControlOriginAction，所以保留自己的计划。设置的字段与描述一致。过期 revision 的手势取消和参数面板回投归属 UI，API 保持既有 revision 校验与事务聚合。"
     },
     {
       "id": "notes-commit-range",
@@ -816,7 +816,7 @@
         "symbol": "PianoRollComponent::commitEditedContentNotesAndSegments(const EditableContentSnapshot&, const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "30e1ede4ebb6d5cddef9693659f29f9168dba0c25d694303ec0a5693f90177f5"
+        "sha256": "7439081b9e03ed2c12948b90e7a28838b886796416457101ea133527f58cbb71"
       },
       "control": [
         {
@@ -830,8 +830,8 @@
         "ControlProcessorTests.EditNotes",
         "ControlProcessorTests.SnapNotes"
       ],
-      "note": "The range commit of the piano roll: the notes and segments cut to the affected range, then commitNotesAndSegments().",
-      "noteZh": "钢琴卷帘的范围提交：音符与修正段按受影响范围裁剪，再调用 commitNotesAndSegments()。"
+      "note": "The range commit of the piano roll: the notes and segments cut to the affected range, then commitNotesAndSegments(). Successful UI commits also notify parameter-context projection; the mirrored range commit and undo capture remain unchanged.",
+      "noteZh": "钢琴卷帘的范围提交：音符与修正段按受影响范围裁剪，再调用 commitNotesAndSegments()。UI 成功提交后另行通知参数上下文投影，镜像的范围提交与撤销捕获保持一致。"
     },
     {
       "id": "auto-snap-notes",
@@ -1042,7 +1042,7 @@
         "symbol": "PianoRollComponent::setCurrentTool",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "ac01710bdd40401d844ac1736f762ce4ac83a84f77d4508069972ad83f5b4b08"
+        "sha256": "e788148e5f9758b414cc3d7a833159a84664933e5e6ac749b99af86ec0367160"
       },
       "control": [
         {
@@ -1055,8 +1055,8 @@
       "tests": [
         "ControlProcessorTests.TimeGridSeed"
       ],
-      "note": "Picking the time tool seeds the grid of the edited content with ensureTimeToolAnchorSeed(); op seed makes the same call from a job.",
-      "noteZh": "选中时间工具时用 ensureTimeToolAnchorSeed() 为正在编辑的内容种子网格；op seed 在 job 里做同一调用。"
+      "note": "Picking the time tool seeds the grid of the edited content with ensureTimeToolAnchorSeed(); op seed makes the same call from a job. Finishing parameter gestures and clearing frame selection during a tool switch belong to the UI; the API mirrors only the grid-seeding operation.",
+      "noteZh": "选中时间工具时用 ensureTimeToolAnchorSeed() 为正在编辑的内容种子网格；op seed 在 job 里做同一调用。工具切换时结束参数手势及清除帧选区归属 UI，API 镜像覆盖网格种子操作。"
     },
     {
       "id": "time-seed-anchors",
@@ -1428,7 +1428,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::applyPlacementSelectionContext",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "f8cff4496e516de5da2fc37d894ce0e0f3959e394d69f65d860f842867140e4e"
+        "sha256": "e45702990fd487e3ebfd1ae1758ad1d8b53d3f7f6d0a8529d75811aacb0e8b76"
       },
       "control": [
         {
@@ -1450,8 +1450,8 @@
         "ControlProcessorTests.SelectionMatrix",
         "ControlProcessorTests.SelectionVectors"
       ],
-      "note": "What selecting a clip or a track sets: the active track, the selected clip (none for a track), the piano roll's content and the scale of the transport bar (only for a clip). The prediction of the selection, the scale and the piano roll follows it.",
-      "noteZh": "选中片段或轨道会设置什么：活动轨道、所选片段（选轨道时为无）、钢琴卷帘的内容与走带栏的调式（只在选片段时）。对选择、调式与钢琴卷帘的预测照此进行。"
+      "note": "What selecting a clip or a track sets: the active track, the selected clip (none for a track), the piano roll's content and the scale of the transport bar (only for a clip). The prediction of the selection, the scale and the piano roll follows it. Local selection finishes a pending parameter gesture first. The Control bridge cancels that draft before shared selection callbacks and reprojects committed values afterward, keeping API selection free of implicit parameter commits.",
+      "noteZh": "选中片段或轨道会设置什么：活动轨道、所选片段（选轨道时为无）、钢琴卷帘的内容与走带栏的调式（只在选片段时）。对选择、调式与钢琴卷帘的预测照此进行。本地选择先结束参数手势；Control 桥接在共享选择回调前取消草稿，完成后回投已提交值，API 选择保持原有模型副作用边界。"
     },
     {
       "id": "selection-piano-roll-sync",

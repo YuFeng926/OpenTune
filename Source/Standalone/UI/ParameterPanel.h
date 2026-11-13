@@ -108,6 +108,8 @@ public:
     void setVibratoDepth(float value);
     void setVibratoRate(float value);
     void setPitchShiftIndicator(int semitone, int cents);
+    void commitPendingEdits();
+    void cancelPendingEdits();
 
     void applyTheme();
     void refreshLocalizedText();  // 刷新本地化文本

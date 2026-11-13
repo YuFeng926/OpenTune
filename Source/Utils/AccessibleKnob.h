@@ -15,7 +15,7 @@ namespace OpenTune::a11y {
 //
 // Changes from the arrow keys reach onCommit once the keys stop, so a held arrow is one
 // undo step and one render; other changes reach it at once. Use onCommit, not onValueChange.
-class AccessibleKnob : public juce::Slider, private juce::Timer
+class AccessibleKnob : public juce::Slider
 {
 public:
     AccessibleKnob()
@@ -26,8 +26,6 @@ public:
         // out of the Tab order; Enter opens the field and the mouse can still click it.
         setFocusContainerType(FocusContainerType::keyboardFocusContainer);
     }
-
-    ~AccessibleKnob() override { stopTimer(); }
 
     void setKeySteps(double normal, double fine, double big)
     {
@@ -40,6 +38,21 @@ public:
     void setResetValue(double value) { resetValue_ = value; }
 
     std::function<void()> onCommit;
+
+    void commitPending()
+    {
+        if (!pending_)
+            return;
+
+        pending_ = false;
+        if (onCommit)
+            onCommit();
+    }
+
+    void cancelPending()
+    {
+        pending_ = false;
+    }
 
     bool keyPressed(const juce::KeyPress& key) override
     {
@@ -96,13 +109,21 @@ public:
         target = juce::jlimit(getMinimum(), getMaximum(), target);
         // At the edge the value does not change and NVDA says nothing.
         if (target != getValue())
-        {
-            keyboardChange_ = true;
-            // NVDA speaks the new value of the focused slider itself (JUCE value change event).
-            setValue(target, juce::sendNotificationSync);
-            keyboardChange_ = false;
-        }
+            setKeyboardDraft(target);
         return true;
+    }
+
+    bool keyStateChanged(bool isKeyDown) override
+    {
+        if (!isKeyDown && pending_ && !isAdjustmentKeyDown())
+            commitPending();
+        return juce::Slider::keyStateChanged(isKeyDown);
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        commitPending();
+        juce::Slider::mouseDown(event);
     }
 
     void focusLost(FocusChangeType cause) override
@@ -112,6 +133,16 @@ public:
     }
 
 private:
+    static bool isAdjustmentKeyDown();
+
+    void setKeyboardDraft(double value)
+    {
+        keyboardChange_ = true;
+        // NVDA speaks the new value of the focused slider itself (JUCE value change event).
+        setValue(value, juce::sendNotificationSync);
+        keyboardChange_ = false;
+    }
+
     juce::Label* valueBox() const
     {
         for (auto* child : getChildren())
@@ -167,34 +198,22 @@ private:
             return false;
 
         const double value = juce::jlimit(getMinimum(), getMaximum(), *target);
-        if (value != getValue())
-            setValue(value, juce::sendNotificationSync);
+        setValue(value, juce::sendNotificationSync);
+        commitPending();
         return true;
     }
 
     void valueChanged() override
     {
-        if (keyboardChange_)
+        if (std::exchange(keyboardChange_, false))
         {
-            startTimer(400);
+            pending_ = true;
             return;
         }
-        stopTimer();
+
+        pending_ = false;
         if (onCommit)
             onCommit();
-    }
-
-    void timerCallback() override
-    {
-        stopTimer();
-        if (onCommit)
-            onCommit();
-    }
-
-    void commitPending()
-    {
-        if (isTimerRunning())
-            timerCallback();
     }
 
     double step_ = 1.0;
@@ -202,6 +221,7 @@ private:
     double bigStep_ = 10.0;
     std::optional<double> resetValue_;
     bool keyboardChange_ = false;
+    bool pending_ = false;
     bool editorJustClosed_ = false;
     int tabAfterEditor_ = 0; // after Tab in the field: +1 next control, -1 previous
 };

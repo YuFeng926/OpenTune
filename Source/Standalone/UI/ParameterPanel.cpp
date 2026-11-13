@@ -1210,6 +1210,22 @@ void ParameterPanel::setVibratoRate(float value)
     vibratoRateSlider_.setValue(value, juce::dontSendNotification);
 }
 
+void ParameterPanel::commitPendingEdits()
+{
+    retuneSpeedSlider_.commitPending();
+    vibratoDepthSlider_.commitPending();
+    vibratoRateSlider_.commitPending();
+    noteSplitSlider_.commitPending();
+}
+
+void ParameterPanel::cancelPendingEdits()
+{
+    retuneSpeedSlider_.cancelPending();
+    vibratoDepthSlider_.cancelPending();
+    vibratoRateSlider_.cancelPending();
+    noteSplitSlider_.cancelPending();
+}
+
 float ParameterPanel::getVibratoRate() const
 {
     return static_cast<float>(vibratoRateSlider_.getValue());
