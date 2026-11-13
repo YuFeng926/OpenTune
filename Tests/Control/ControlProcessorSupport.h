@@ -546,6 +546,9 @@ private:
 
 // Scenarios of the dispatcher and the read methods (ControlDispatcherTests.cpp).
 
+/** Content mutation notifications: committed snapshots, failed writes, undo/redo and deferred editor refresh. */
+void scenarioContentChanged();
+
 /** session.info, project.get and the content reads through the dispatcher, with and without an editor
     bridge, including pagination, cursors, analysis states, errors and a reopened project. */
 void scenarioReads();

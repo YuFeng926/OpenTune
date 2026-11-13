@@ -1034,6 +1034,11 @@ public:
     /** Message-thread terminal render notification (complete/failure/cancel). */
     using RenderTerminalCallback = std::function<void(ContentKey, bool)>;
     void setRenderTerminalCallback(RenderTerminalCallback callback);
+#if JucePlugin_Build_Standalone
+    /** Invalidation hint only; consumers must read the latest state after the current commit stack returns. */
+    using ContentChangedCallback = std::function<void(ContentKey)>;
+    void setContentChangedCallback(ContentChangedCallback callback);
+#endif
 #if !JucePlugin_Build_Standalone
     // Accessibility: REAPER's transport state and positions (see ReaperHostBridge).
     juce::VST3ClientExtensions* getVST3ClientExtensions() override { return &reaperHost_; }
@@ -1058,10 +1063,14 @@ public:
     void stopNotePitchAudition();
 
 private:
+    void notifyContentChanged(ContentKey key);
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
     std::shared_ptr<NoteAudition> noteAudition_ = std::make_shared<NoteAudition>();
     NotePitchAudition notePitchAudition_;
+#if JucePlugin_Build_Standalone
+    ContentChangedCallback contentChangedCallback_;
+#endif
     struct RenderTerminalSink { RenderTerminalCallback callback; };
     std::shared_ptr<RenderTerminalSink> renderTerminalSink_ = std::make_shared<RenderTerminalSink>();
     // Message-thread only: render generation of the last

@@ -311,8 +311,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
         # export.start and the export lock.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlExportTests.cpp)
-        # Undo and redo, key, AUTO, note edits and the pitch shift, with the contents they share with the reads.
+        # Content-change notification regression and the edits, with the contents they share with the reads.
         target_sources(OpenTuneControlProcessorTests PRIVATE
+            Tests/Control/ControlContentChangedTests.cpp
             Tests/Control/ControlEditTests.cpp
             Tests/Control/ControlContentFixtures.h
         )
@@ -362,6 +363,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "RepeatedStop|--control-api"
             "Shutdown|--control-api"
             "Reads|--control-api"
+            "ContentChanged|--control-api"
             "ThreadProbe|--control-api"
             "DispatchShutdown|--control-api"
             "DispatchTimeout|--control-api"

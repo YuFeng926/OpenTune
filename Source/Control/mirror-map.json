@@ -270,7 +270,7 @@
         "symbol": "OpenTuneAudioProcessor::setContentTimeGrid",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "5d9cfe0f9f6f8ee4fe5d819540ad7415d88e51230cb4538783a021d99b3c1805"
+        "sha256": "492f452b3114c6a30cd61e04183849137f9d09d6f102fbbf1f15941858be65fa"
       },
       "control": [
         {
@@ -348,7 +348,7 @@
         "symbol": "PianoRollComponent::applyAutoTuneToSelection",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "f8884f028aeba305cd16ed65885a44cb0df68c7d61fba41e7393348a8b745f56"
+        "sha256": "9c457623d5b29db241a7fa2571beb8738c2f0f5a9ee0fc49a56738e8b41daaaf"
       },
       "control": [
         {
@@ -399,7 +399,7 @@
         "symbol": "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "f1d15057d62041ce4dd09c5171e67510e9c4c3f07e46f7578c5ba517f7ca71d3"
+        "sha256": "bb97d6f2aa0aa55516257e8b6e1e8ec771935301d0aef8d430d4465ab098e811"
       },
       "control": [
         {
@@ -790,7 +790,7 @@
         "symbol": "PianoRollComponent::editParameter",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "9f90063dd4d283cdfe031243e475041bceb8775918b38594db8032025637494c"
+        "sha256": "7f3874f5cde273adb3d6833e01b47c09e313aa22ae92a6ea2925973a6d4cebbe"
       },
       "control": [
         {
@@ -1115,7 +1115,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::trackColorChangeRequested",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "fb0944bed69c177009381f79597d93d0c68e8ee2a7ffc4063689721cae60c7e7"
+        "sha256": "b5a01ff313373f2561d5394bf615b2ed88e548eda6d12549a6314bb7f95ad80d"
       },
       "control": [
         {
@@ -1136,8 +1136,8 @@
         "ControlProcessorTests.UiDismiss",
         "ControlProcessorTests.UiVectors"
       ],
-      "note": "The track colour picker is a juce::CallOutBox around a ColourSelector (it has no title and names no track); the content's destructor sets the track's colour, the track panel's colour, redraws the arrangement and marks the project dirty however the call-out closes, when the modal manager deletes it. The bridge learns the track from the track panel's colour request (ControlTrackColourWatch, a listener), classifies the call-out as trackColour with closeCommits, and on ui.dismiss runs the same four steps at once so that the result reports the commit.",
-      "noteZh": "轨道颜色选择器是包着 ColourSelector 的 juce::CallOutBox（没有标题，也不带轨道号）；无论怎样关闭，内容的析构（在 modal manager 删除它时运行）都会设置轨道颜色与轨道面板颜色、重绘编排视图并把工程标为已修改。bridge 从轨道面板的颜色请求（监听器 ControlTrackColourWatch）得知轨道，把它归为 closeCommits 为真的 trackColour，ui.dismiss 时立即做同样的四步，让结果报告这次提交。"
+      "note": "The track colour picker is a juce::CallOutBox around a ColourSelector. Its content's destructor updates the arrangement and track panel colours, immediately updates the piano roll for the active track, redraws the arrangement and marks the project dirty. The bridge identifies the track through ControlTrackColourWatch and performs the same commit during ui.dismiss so that the result reports it.",
+      "noteZh": "轨道颜色选择器是包着 ColourSelector 的 juce::CallOutBox。内容析构时更新编排模型与轨道面板的颜色，为活动轨道即时更新钢琴卷帘颜色，重绘编排并标脏。bridge 通过 ControlTrackColourWatch 识别轨道，在 ui.dismiss 中执行相同提交，使结果包含这次变更。"
     },
     {
       "id": "ui-confirm-dialog-buttons",
@@ -1274,10 +1274,10 @@
       "group": "ui",
       "upstream": {
         "file": "Source/Standalone/PluginEditor.cpp",
-        "symbol": "OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent",
+        "symbol": "OpenTuneAudioProcessorEditor::applyResolvedScaleToUi",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "1a44cea413389d578bb28e542e65913ae31a870d22e628a08b59fae4f1da0822"
+        "sha256": "c9c03ae5d26cb77c5ebaf58b068a639c73d1b997ce1e8d09828375db24ce8baa"
       },
       "control": [
         {
@@ -1428,7 +1428,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::applyPlacementSelectionContext",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "984647e426604e7052cc472ce2cbb5571efc08e7f1e17879344f69732cff4680"
+        "sha256": "f8cff4496e516de5da2fc37d894ce0e0f3959e394d69f65d860f842867140e4e"
       },
       "control": [
         {
@@ -1461,7 +1461,7 @@
         "symbol": "PianoRollComponent::setEditedContentAndProjection",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "5f98d0d64ccbb32d9a187b41aab028b0fca72adbdb5ba78d2b57054c309ee299"
+        "sha256": "2aac94e2f2778770e6aaf86adac478a89a0a2c48e6c390731c0e21bed9e4f805"
       },
       "control": [
         {
@@ -2207,7 +2207,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::trackDeleteRequested",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "26a5e4725c859bdd4d1a41a5322c0b1d405b30423f62265a9e714242107a10ac"
+        "sha256": "054ec734f3299d990764b3f1ba20ebb16ea3f9daf60fe087d39322d7da6ee3f0"
       },
       "control": [
         {
@@ -2222,8 +2222,8 @@
         "ControlProcessorTests.TrackBarrier",
         "ControlProcessorTests.TrackVectors"
       ],
-      "note": "Delete Track: only a shown track and never the last one; removeTrackAndShift moves the later tracks up, then the panel shows their mix and one track fewer.",
-      "noteZh": "删除轨道：只删可见轨道且不删最后一条；removeTrackAndShift 把后面的轨道上移，随后面板显示它们的混音并少一条轨道。"
+      "note": "Delete Track: only a shown track and never the last one; removeTrackAndShift moves the later tracks up, then the panel shows their mix and one track fewer. The structure-change completion rebinds the piano roll to the current selection.",
+      "noteZh": "删除轨道：只删可见轨道且不删最后一条；removeTrackAndShift 把后面的轨道上移，随后面板显示它们的混音并少一条轨道。结构变更完成入口按当前选择重新绑定钢琴卷帘。"
     },
     {
       "id": "transport-play-from-start",

@@ -1229,6 +1229,9 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
+#if JucePlugin_Build_Standalone
+    contentChangedCallback_ = {};
+#endif
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
     // OpenTune Control API hook: stop the control service before anything else, see Source/Control/README.md#hooks
     controlService_->stop();
@@ -3358,6 +3361,25 @@ void OpenTuneAudioProcessor::setRenderTerminalCallback(RenderTerminalCallback ca
         renderTerminalSink_->callback = std::move(callback);
 }
 
+#if JucePlugin_Build_Standalone
+void OpenTuneAudioProcessor::setContentChangedCallback(ContentChangedCallback callback)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    contentChangedCallback_ = std::move(callback);
+}
+#endif
+
+void OpenTuneAudioProcessor::notifyContentChanged(ContentKey key)
+{
+#if JucePlugin_Build_Standalone
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (contentChangedCallback_)
+        contentChangedCallback_(key);
+#else
+    juce::ignoreUnused(key);
+#endif
+}
+
 void OpenTuneAudioProcessor::notifyRenderTerminal(ContentKey key, bool completed, uint64_t renderGeneration)
 {
     JUCE_ASSERT_MESSAGE_THREAD
@@ -4301,7 +4323,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             if (clip) {
                 if (capturedHnsepEnabled)
                     clip->clearHnsepAudio();
-                clip->applyOriginalF0State(OriginalF0State::Extracting);
+                setContentOriginalF0State(request.contentKey, OriginalF0State::Extracting);
             }
             break;
         }
@@ -4577,7 +4599,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 }
             }
 
-            processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Ready);
             processor->f0RequestTokens_.erase(capturedRequest.contentKey);
             if (processor->pendingTimeToolSeedKeys_.count(capturedRequest.contentKey) != 0)
                 processor->ensureTimeToolAnchorSeed(capturedRequest.contentKey);
@@ -4910,6 +4931,8 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
     }
     if (!ok)
         return false;
+
+    notifyContentChanged(key);
 
     // 发布由调用方统一负责：Scissors 提交事务（applyScissorsNotes）内
     // republishPlaybackSource；requestContentRefresh 经 onContentFullMutationCompleted
@@ -5644,6 +5667,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInter
             break;
     }
     if (ok) {
+        notifyContentChanged(key);
         onContentLocalMutationCompleted(key, affectedRange);
         auto committedSnap = getContentSnapshot(key);
         jassert(committedSnap != nullptr);
@@ -5691,6 +5715,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
     }
 
     if (ok) {
+        notifyContentChanged(key);
         // 根因修复：拓扑 patch 提交后按 patch.affectedRange（秒域）调度局部重渲染，
         // Undo/Redo 经同一 command（PianoRollNotePatchAction）自动重渲染。
         // onContentLocalMutationCompletedSeconds 内部刷新/发布 playback source 并调度 Stage1。
@@ -5741,6 +5766,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitVolumeEnvelope(ContentKey ke
 
     if (!ok) return {};
 
+    notifyContentChanged(key);
     republishPlaybackSource(key);
     return getContentSnapshot(key);
 }
@@ -5861,20 +5887,23 @@ void OpenTuneAudioProcessor::refreshStandalonePlaybackSnapshot()
 bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
                                                       std::shared_ptr<PitchCurve> curve)
 {
+    bool ok = false;
     switch (key.domainKind) {
 #if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyPitchCurve(std::move(curve));
-            return true;
+            ok = true;
+            break;
         }
 #endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            return dc->applyPitchCurveToModification(key, std::move(curve));
+            ok = dc->applyPitchCurveToModification(key, std::move(curve));
+            break;
         }
 #endif
 #if !JucePlugin_Build_Standalone
@@ -5882,13 +5911,16 @@ bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
             auto* session = getCaptureSession();
             if (session == nullptr || !session->applyPitchCurve(key, std::move(curve)))
                 return false;
-            return true;
+            ok = true;
+            break;
         }
 #endif
         default:
             break;
     }
-    return false;
+    if (ok)
+        notifyContentChanged(key);
+    return ok;
 }
 
 bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(
@@ -5897,6 +5929,7 @@ bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(
     std::shared_ptr<const std::vector<float>> hnsepHarmonicAudio,
     std::shared_ptr<const std::vector<float>> hnsepResidualAudio)
 {
+    bool ok = false;
     switch (key.domainKind) {
 #if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
@@ -5905,14 +5938,16 @@ bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(
             clip->applyOriginalF0(std::move(curve),
                                   std::move(hnsepHarmonicAudio),
                                   std::move(hnsepResidualAudio));
-            return true;
+            ok = true;
+            break;
         }
 #endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            return dc->applyOriginalF0ToModification(key, std::move(curve));
+            ok = dc->applyOriginalF0ToModification(key, std::move(curve));
+            break;
         }
 #endif
 #if !JucePlugin_Build_Standalone
@@ -5922,13 +5957,16 @@ bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(
             auto* seg = session->findSegmentByContentKey(key);
             if (!seg || !seg->content) return false;
             seg->content->applyOriginalF0(std::move(curve));
-            return true;
+            ok = true;
+            break;
         }
 #endif
         default:
             break;
     }
-    return false;
+    if (ok)
+        notifyContentChanged(key);
+    return ok;
 }
 
 bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
@@ -5966,6 +6004,7 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             break;
     }
     if (ok) {
+        notifyContentChanged(key);
         auto snapshot = getContentSnapshot(key);
         auto* crs = resolveMutableLocalContentRenderService(key);
         if (key.domainKind != DomainKind::ARAAudioModification
@@ -6029,32 +6068,38 @@ bool OpenTuneAudioProcessor::applyTimeGridEdit(
 
 bool OpenTuneAudioProcessor::setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey)
 {
+    bool ok = false;
     switch (key.domainKind) {
 #if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyDetectedKey(detectedKey);
-            return true;
+            ok = true;
+            break;
         }
 #endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            return dc->applyDetectedKeyToModification(key, detectedKey);
+            ok = dc->applyDetectedKeyToModification(key, detectedKey);
+            break;
         }
 #endif
 #if !JucePlugin_Build_Standalone
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
-            return session != nullptr && session->applyDetectedKey(key, detectedKey);
+            ok = session != nullptr && session->applyDetectedKey(key, detectedKey);
+            break;
         }
 #endif
         default:
             break;
     }
-    return false;
+    if (ok)
+        notifyContentChanged(key);
+    return ok;
 }
 
 bool OpenTuneAudioProcessor::setContentReferenceFeatures(ContentKey key,
@@ -6093,20 +6138,23 @@ bool OpenTuneAudioProcessor::setContentReferenceFeatures(ContentKey key,
 
 bool OpenTuneAudioProcessor::setContentOriginalF0State(ContentKey key, OriginalF0State state)
 {
+    bool ok = false;
     switch (key.domainKind) {
 #if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyOriginalF0State(state);
-            return true;
+            ok = true;
+            break;
         }
 #endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            return dc->applyOriginalF0StateToModification(key, state);
+            ok = dc->applyOriginalF0StateToModification(key, state);
+            break;
         }
 #endif
 #if !JucePlugin_Build_Standalone
@@ -6115,13 +6163,16 @@ bool OpenTuneAudioProcessor::setContentOriginalF0State(ContentKey key, OriginalF
             auto* seg = session ? session->findSegmentByContentKey(key) : nullptr;
             if (!seg || !seg->content) return false;
             seg->content->applyOriginalF0State(state);
-            return true;
+            ok = true;
+            break;
         }
 #endif
         default:
             break;
     }
-    return false;
+    if (ok)
+        notifyContentChanged(key);
+    return ok;
 }
 
 bool OpenTuneAudioProcessor::setContentOriginalF0FailureReason(ContentKey key, std::string reason)
@@ -6129,6 +6180,7 @@ bool OpenTuneAudioProcessor::setContentOriginalF0FailureReason(ContentKey key, s
 #if JucePlugin_Build_Standalone
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
 #endif
+    bool ok = false;
     switch (key.domainKind) {
 #if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
@@ -6136,14 +6188,16 @@ bool OpenTuneAudioProcessor::setContentOriginalF0FailureReason(ContentKey key, s
             if (!clip) return false;
             recordOriginalF0FailureEvent(key, juce::String(reason));
             clip->applyOriginalF0FailureReason(std::move(reason));
-            return true;
+            ok = true;
+            break;
         }
 #endif
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            return dc->applyOriginalF0FailureReasonToModification(key, std::move(reason));
+            ok = dc->applyOriginalF0FailureReasonToModification(key, std::move(reason));
+            break;
         }
 #endif
 #if !JucePlugin_Build_Standalone
@@ -6153,13 +6207,16 @@ bool OpenTuneAudioProcessor::setContentOriginalF0FailureReason(ContentKey key, s
             if (!seg || !seg->content) return false;
             recordOriginalF0FailureEvent(key, juce::String(reason));
             seg->content->applyOriginalF0FailureReason(std::move(reason));
-            return true;
+            ok = true;
+            break;
         }
 #endif
         default:
             break;
     }
-    return false;
+    if (ok)
+        notifyContentChanged(key);
+    return ok;
 }
 
 void OpenTuneAudioProcessor::recordOriginalF0FailureEvent(
@@ -6211,6 +6268,7 @@ bool OpenTuneAudioProcessor::applyContentPitchShiftState(ContentKey key,
             break;
     }
     if (ok) {
+        notifyContentChanged(key);
         onContentFullMutationCompleted(key);
     }
     return ok;
@@ -6427,6 +6485,8 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     }
 
     if (!ok) return false;
+
+    notifyContentChanged(key);
 
     // render range 必须覆盖 applyCorrectionToRange 的 calculationRange（两侧各
     // expand getCorrectedF0BoundaryContextFrames 帧），否则边界处 chunk 保留旧

@@ -640,6 +640,17 @@ void scenarioSelectionImpl()
     CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(idA, true), "INTERNAL", ""));
     CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3));
     f.bridge->breaksOffAfterFocusMove = false;
+
+    // Clearing a keyed clip keeps its displayed scale in both prediction and execution.
+    f.api.result("ui.setSelection", selectClip(idA));
+    const auto clearPrediction = f.api.result("ui.setSelection", jsonOf(R"({"trackId":0,"dryRun":true})"));
+    const auto cleared = f.api.result("ui.setSelection", selectTrack(0));
+    checkEqual(memberOf(clearPrediction, "sideEffects"), memberOf(cleared, "sideEffects"),
+               "clearing D minor selection preserves its scale");
+    CONTROL_CHECK(memberOf(cleared, "sideEffects").size() == 0);
+    checkEqual(jsonOf(R"({"root":2,"scale":"minor"})"),
+               memberOf(f.api.result("ui.getState"), "uiScale"), "scale after clearing selection");
+
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 

@@ -859,9 +859,11 @@ void checkTrackDelete(Fixture& f)
     CONTROL_CHECK(f.arrangementRevision() == revision && f.bridge.visibleTracks == 3);
 
     const int marks = f.bridge.dirtyMarks;
+    const int structureChanges = f.bridge.structureChanges;
     const auto deleted = f.deleteTrack(1);
     CONTROL_CHECK(memberOf(deleted, "applied").asBoolean() && !memberOf(deleted, "noOp").asBoolean());
     CONTROL_CHECK(f.bridge.visibleTracks == 2 && f.bridge.dirtyMarks == marks + 1 && f.bridge.mixChanges > 0);
+    CONTROL_CHECK(f.bridge.structureChanges == structureChanges + 1);
     // The clip of track 2 moved to track 1 with its mix; the last slot was cleared.
     const auto project = f.project();
     CONTROL_CHECK(placementsOn(project, 1).size() == 1 && placementsOn(project, 2).empty());

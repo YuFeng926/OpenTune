@@ -3434,7 +3434,7 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
 
         auto committedCurve = readEditedSnapshot();
         if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
-            setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
+            setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, audioBufferSampleRate_);
         }
 
         const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
@@ -3706,10 +3706,10 @@ void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<const PitchCurv
 }
 
 void PianoRollComponent::applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                                                       int sampleRate)
+                                                       double sampleRate)
 {
     audioBuffer_ = std::move(buffer);
-    audioBufferSampleRate_ = static_cast<double>(sampleRate);
+    audioBufferSampleRate_ = sampleRate;
 
     if (editedContentKey_.isValid() && audioBuffer_ != nullptr && audioBuffer_->getNumSamples() > 0) {
         waveformMipmapCache_.setAudioSource(editedContentKey_, audioBuffer_);
@@ -3883,7 +3883,7 @@ void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineConten
 void PianoRollComponent::setEditedContent(ContentKey contentKey,
                                            std::shared_ptr<const PitchCurveSnapshot> curve,
                                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                                           int sampleRate,
+                                           double sampleRate,
                                            bool activePlacementChanged)
 {
     applyEditedContent(contentKey, std::move(curve), std::move(buffer), sampleRate,
@@ -3893,7 +3893,7 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 bool PianoRollComponent::setEditedContentAndProjection(ContentKey contentKey,
                                                         std::shared_ptr<const PitchCurveSnapshot> curve,
                                                         std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                                                        int sampleRate,
+                                                        double sampleRate,
                                                         const ContentTimelineProjection& projection,
                                                         bool activePlacementChanged)
 {
@@ -3901,10 +3901,9 @@ bool PianoRollComponent::setEditedContentAndProjection(ContentKey contentKey,
         || std::abs(pendingSingleContentProjection_.timelineDurationSeconds - projection.timelineDurationSeconds) > 1.0e-9
         || std::abs(pendingSingleContentProjection_.contentStartSeconds - projection.contentStartSeconds) > 1.0e-9
         || std::abs(pendingSingleContentProjection_.contentDurationSeconds - projection.contentDurationSeconds) > 1.0e-9;
-    const double normalizedSampleRate = static_cast<double>(sampleRate);
     const bool contentChanged = editedContentKey_ != contentKey;
     const bool curveChanged = currentCurve_ != curve;
-    const bool bufferChanged = audioBuffer_ != buffer || audioBufferSampleRate_ != normalizedSampleRate;
+    const bool bufferChanged = audioBuffer_ != buffer || audioBufferSampleRate_ != sampleRate;
 
     if (!projectionChanged && !contentChanged && !activePlacementChanged && !curveChanged && !bufferChanged)
         return false;
@@ -3930,14 +3929,13 @@ bool PianoRollComponent::setEditedContentAndProjection(ContentKey contentKey,
 void PianoRollComponent::applyEditedContent(ContentKey contentKey,
                                              std::shared_ptr<const PitchCurveSnapshot> curve,
                                              std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                                             int sampleRate,
+                                             double sampleRate,
                                              bool activePlacementChanged,
                                              bool deferRedraw)
 {
-    const double normalizedSampleRate = static_cast<double>(sampleRate);
     const bool contentChanged = editedContentKey_ != contentKey;
     const bool curveChanged = currentCurve_ != curve;
-    const bool bufferChanged = audioBuffer_ != buffer || audioBufferSampleRate_ != normalizedSampleRate;
+    const bool bufferChanged = audioBuffer_ != buffer || audioBufferSampleRate_ != sampleRate;
 
     if (!contentChanged && !activePlacementChanged && !curveChanged && !bufferChanged) {
         return;
@@ -4337,9 +4335,11 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
 
 void PianoRollComponent::onHeartbeatTick()
 {
+#if !JucePlugin_Build_Standalone
     // 终态收束先于可见性 guard：隐藏 PianoRoll 也能在 viewToggled 计算 preserve 前
     // 结算 Failed/Ready-无目标 的 pending；正常 Ready 定位仍需 isShowing/isVisible。
     tryConsumeInitialF0View(editedContentKey_);
+#endif
 
     // 波形缓存增量构建在可见性 guard 之前：导入音频后即使钢琴卷帘尚未显示也预先构建
     if (showWaveform_ || isOpenDyne()) {
@@ -6436,7 +6436,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
 
     auto committedCurve = readEditedSnapshot();
     if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
-        setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
+        setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, audioBufferSampleRate_);
     }
 
     const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(

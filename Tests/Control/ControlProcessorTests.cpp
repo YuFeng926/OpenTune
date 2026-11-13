@@ -528,6 +528,7 @@ const Scenario kScenarios[] = {
     {"RepeatedStop", scenarioRepeatedStop, true},
     {"Shutdown", scenarioShutdown, true},
     {"Reads", scenarioReads, false},
+    {"ContentChanged", scenarioContentChanged, false},
     {"ThreadProbe", scenarioThreadProbe, false},
     {"DispatchShutdown", scenarioDispatchShutdown, true},
     // Waits longer than dispatchTimeoutMs, beyond the watchdog's bound.

@@ -146,12 +146,12 @@ public:
     void setEditedContent(ContentKey contentKey,
                            std::shared_ptr<const PitchCurveSnapshot> curve,
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                           int sampleRate,
+                           double sampleRate,
                            bool activePlacementChanged = false);
     bool setEditedContentAndProjection(ContentKey contentKey,
                                        std::shared_ptr<const PitchCurveSnapshot> curve,
                                        std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                                       int sampleRate,
+                                       double sampleRate,
                                        const ContentTimelineProjection& projection,
                                        bool activePlacementChanged = false);
     void requestInitialF0View(ContentKey contentKey);
@@ -197,6 +197,7 @@ public:
     void setProcessor(OpenTuneAudioProcessor* processor);
 
     ContentKey editedContentKey() const { return editedContentKey_; }
+    double audioSampleRate() const noexcept { return audioBufferSampleRate_; }
     ContentTimelineProjection activeContentProjection() const noexcept;
     WaveformMipmapCache& getWaveformMipmapCache() noexcept { return waveformMipmapCache_; }
 
@@ -541,11 +542,11 @@ private:
     PianoRollToolHandler::Context buildToolHandlerContext();
     void initializeToolHandler();
     void applyEditedContentCurve(std::shared_ptr<const PitchCurveSnapshot> curve);
-    void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
+    void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, double sampleRate);
     void applyEditedContent(ContentKey contentKey,
                             std::shared_ptr<const PitchCurveSnapshot> curve,
                             std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                            int sampleRate,
+                            double sampleRate,
                             bool activePlacementChanged,
                             bool deferRedraw);
     std::optional<PianoRollRenderer::ContentRenderItem> buildContentRenderItem(

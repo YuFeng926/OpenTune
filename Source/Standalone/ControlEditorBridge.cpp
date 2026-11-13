@@ -71,24 +71,19 @@ std::optional<ControlUiBridge::BusyState> ControlEditorBridge::queryBusy() const
 
 void ControlEditorBridge::onStructureChanged()
 {
-    editor_.arrangementView_.requestContentRedraw();
+    // The operation has already marked the project dirty; sync selection and redraw without marking it again.
+    editor_.syncActiveSelectionFromProcessor();
 }
 
 void ControlEditorBridge::onUndoRedoApplied()
 {
-    // The editor's own steps after its undo and redo (performUndoRedoAction): mark the project as changed and
-    // redraw the arrangement. The piano roll follows the new revisions on the editor's next heartbeat, as after
-    // the UI's own undo.
+    // The editor's own steps after its undo and redo (performUndoRedoAction).
     editor_.afterUndoRedo();
 }
 
 void ControlEditorBridge::onTimeGridChanged()
 {
-    // PianoRollComponent::onTimeGridRevisionChanged(): what the piano roll's own commit of a time-grid edit does
-    // (its commitTimeGrid takes the new grid revision of the content it shows and redraws); it does nothing when
-    // the piano roll shows another content. The arrangement draws clips through their time grids, so it is
-    // redrawn as after an undo of a time-grid edit (afterUndoRedo).
-    editor_.pianoRoll_.onTimeGridRevisionChanged();
+    // PianoRoll consumes the processor's content-change event; the arrangement also draws through the time grid.
     editor_.arrangementView_.requestContentRedraw();
 }
 
@@ -136,7 +131,7 @@ std::optional<ControlUiBridge::ViewState> ControlEditorBridge::viewState() const
     ViewState view;
     view.workspace = editor_.isWorkspaceView_ ? "arrangement" : "pianoRoll";
     // The piano roll shows the selected clip of the active track once the editor synced it.
-    view.pianoRollPlacementId = editor_.lastPianoRollContentKey_.isValid() ? activeSelection() : 0;
+    view.pianoRollPlacementId = editor_.pianoRoll_.editedContentKey().isValid() ? activeSelection() : 0;
     return view;
 }
 

@@ -169,6 +169,8 @@ bool ControlEditorBridge::closeTopDialog()
             const auto selected = selector->getCurrentColour();
             setStandaloneTrackColour(editor_.processorRef_, trackId, selected);
             editor_.trackPanel_.setTrackColour(trackId, selected);
+            if (trackId == getStandaloneActiveTrack(editor_.processorRef_))
+                editor_.pianoRoll_.setTrackDisplayColour(selected);
             editor_.arrangementView_.requestContentRedraw();
             editor_.projectSession_.markDirty();
         }

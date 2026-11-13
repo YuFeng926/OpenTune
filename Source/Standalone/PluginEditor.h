@@ -78,7 +78,8 @@ class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public PianoRollComponent::Listener,
                                       public juce::FileDragAndDropTarget,
                                       public LanguageChangeListener,  // 语言变化监听
-                                      private juce::Timer
+                                      private juce::Timer,
+                                      private juce::AsyncUpdater
 {
 public:
     explicit OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor&);
@@ -187,11 +188,15 @@ private:
     // 调式状态辅助
     DetectedKey resolveScaleForPlacementContent(int trackId, int placementIndex, juce::String* sourceOut = nullptr) const;
     void applyScaleToUi(int rootNote, int scaleType);
+    void applyResolvedScaleToUi(const DetectedKey& key);
     void applyResolvedScaleForPlacementContent(int trackId, int placementIndex);
     void syncPianoRollFromPlacementSelection(int trackId, int placementIndex);
+    void syncActiveContentFromProcessor(int trackId, int placementIndex, bool initializeSelection);
+    void syncActiveSelectionFromProcessor();
     void applyPlacementSelectionContext(int trackId, uint64_t placementId);
 
     void timerCallback() override;
+    void handleAsyncUpdate() override;
     // §7.3：心跳对比 Processor uiZoom（唯一真相），不同则重设 transform 与 resize limits。
     void applyUiZoomIfNeeded();
     // §5.1：挂入默认 StandaloneFilterWindow 且 peer 可用后，按 OpenTune.settings 恢复外层窗口几何（仅一次）。
@@ -320,17 +325,8 @@ private:
 
     ThemeId appliedThemeId_ = ThemeId::Aurora;
     Language appliedLanguage_ = Language::Chinese;
-    ContentKey lastPianoRollContentKey_;
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
-    int lastPianoRollSampleRate_ = 0;
-    std::shared_ptr<const PitchCurveSnapshot> lastPianoRollCurve_;
-    std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
-    // Notes-revision tracking so the timer can pull fresh notes when an
-    // async note generator commits to the active content
-    // without changing ContentKey / curve / buffer.
-    uint64_t lastPianoRollNotesRevision_ = 0;
-    uint64_t lastPianoRollTimeGridRevision_ = 0;
-    uint64_t lastPianoRollPitchRevision_ = 0;
+    ContentKey pendingContentChangedKey_;
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;
     int lastSyncedTimeSigDenom_ = 0;

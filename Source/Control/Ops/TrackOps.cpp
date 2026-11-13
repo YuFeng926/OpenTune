@@ -653,6 +653,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     bridge->onTrackMixChanged();
     bridge->setVisibleTrackCount(visible - 1);
     controlMarkDirty(context);
+    bridge->onStructureChanged();
 
     const auto clipsAfter = controlLivePlacements(context);
 

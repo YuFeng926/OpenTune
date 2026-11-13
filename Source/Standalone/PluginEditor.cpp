@@ -579,16 +579,20 @@ void OpenTuneAudioProcessorEditor::applyScaleToUi(int rootNote, int scaleType)
     pianoRoll_.setScale(clampedRoot, clampedType);
 }
 
+void OpenTuneAudioProcessorEditor::applyResolvedScaleToUi(const DetectedKey& key)
+{
+    const int rootNote = static_cast<int>(key.root);
+    const int scaleType = OpenTune::scaleToUiScaleType(key.scale);
+    applyScaleToUi(rootNote, scaleType);
+    lastResolvedScaleRootNote_ = rootNote;
+    lastResolvedScaleType_ = scaleType;
+}
+
 void OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent(int trackId, int placementIndex)
 {
     juce::String source;
     const DetectedKey key = resolveScaleForPlacementContent(trackId, placementIndex, &source);
-    const int rootNote = static_cast<int>(key.root);
-    const int scaleType = OpenTune::scaleToUiScaleType(key.scale);
-    applyScaleToUi(rootNote, scaleType);
-    // content→UI 回显的唯一入口：同步观察基线，timer 轮询以此为比较基准
-    lastResolvedScaleRootNote_ = rootNote;
-    lastResolvedScaleType_ = scaleType;
+    applyResolvedScaleToUi(key);
 
     const ContentKey contentKey = (trackId >= 0 && placementIndex >= 0)
         ? getStandaloneContentKey(processorRef_, trackId, placementIndex)
@@ -598,8 +602,8 @@ void OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent(int tra
         + " trackId=" + juce::String(trackId)
         + " placementIndex=" + juce::String(placementIndex)
         + " contentKey=" + juce::String(static_cast<juce::int64>(contentKey.objectId))
-        + " root=" + juce::String(rootNote)
-        + " scale=" + juce::String(scaleType));
+        + " root=" + juce::String(lastResolvedScaleRootNote_)
+        + " scale=" + juce::String(lastResolvedScaleType_));
 }
 
 OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& p)
@@ -805,6 +809,12 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setPianoKeyAudition(&processorRef_.getPianoKeyAudition());
     pianoRoll_.setNoteAudition(&processorRef_.getNoteAudition());
     pianoRoll_.setRenderCacheProvider([this](ContentKey key) { return processorRef_.getReadableRenderCache(key); });
+    processorRef_.setContentChangedCallback([this](ContentKey key) {
+        if (key == pianoRoll_.editedContentKey()) {
+            pendingContentChangedKey_ = key;
+            triggerAsyncUpdate();
+        }
+    });
     {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
         const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
@@ -983,6 +993,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    processorRef_.setContentChangedCallback({});
+    cancelPendingUpdate();
+    pendingContentChangedKey_ = {};
+
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
     // OpenTune Control API hook: unregister the editor bridge before anything is torn down, see Source/Control/README.md#hooks
     controlEditorBridge_.reset();
@@ -1971,20 +1985,15 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     pianoRoll_.onHeartbeatTick();
 
     if (pianoRoll_.isShowing()) {
-        double overviewSampleRate = 0.0;
-        if (const auto snap = processorRef_.getContentSnapshot(pianoRoll_.editedContentKey()))
-            overviewSampleRate = snap->audioSampleRate;
         overviewStrip_.onHeartbeatTick(pianoRoll_.editedContentKey(),
                                        pianoRoll_.activeContentProjection(),
                                        pianoRoll_.timelineCamera(),
                                        pianoRoll_.timelinePolicyViewportWidth(),
-                                       overviewSampleRate);
+                                       pianoRoll_.audioSampleRate());
     }
 
-    constexpr bool allowSecondaryRefresh = true;
 // Update playhead position from processor (presented position via local PlayHeadState projection)
     double currentPositionSeconds = processorRef_.getPosition();
-    double sampleRate = processorRef_.getSampleRate();
 
     const double bpm = processorRef_.getBpm();
     const int timeSigNum = processorRef_.getTimeSigNumerator();
@@ -2015,82 +2024,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         arrangementView_.setTimelineDisplayMode(timelineDisplayMode_);
     }
     
-    if (allowSecondaryRefresh && sampleRate > 0.0) {
-        const int sr = static_cast<int>(sampleRate);
-        const int activeTrack = getStandaloneActiveTrack(processorRef_);
-        const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
-        const ContentKey activeKey = (activeTrack >= 0 && activePlacementIndex >= 0)
-            ? getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex)
-            : ContentKey{};
-        auto snap = processorRef_.getContentSnapshot(activeKey);
-        auto curve = snap ? snap->pitchCurve : nullptr;
-        std::shared_ptr<const juce::AudioBuffer<float>> contentBuffer =
-            snap ? snap->audioBuffer : nullptr;
-        const uint64_t currentNotesRevision = activeKey.isValid() && snap
-            ? snap->notesRevision
-            : 0;
-        const uint64_t currentTimeGridRevision = activeKey.isValid() && snap
-            ? snap->timeGridRevision
-            : 0;
-        const uint64_t currentPitchRevision = activeKey.isValid() && snap
-            ? snap->pitchRevision
-            : 0;
-        const bool contentKeyChanged = activeKey != lastPianoRollContentKey_;
-        const bool contentChanged =
-            contentKeyChanged
-            || sr != lastPianoRollSampleRate_
-            || curve != lastPianoRollCurve_
-            || contentBuffer != lastPianoRollBuffer_;
-        if (contentChanged) {
-            pianoRoll_.setEditedContent(activeKey, curve, contentBuffer, sr);
-            lastPianoRollContentKey_ = activeKey;
-            lastPianoRollSampleRate_ = sr;
-            lastPianoRollCurve_ = curve;
-            lastPianoRollBuffer_ = contentBuffer;
-        }
-        const auto revisionPulse = resolveContentRevisionPulse(currentNotesRevision,
-                                                               currentTimeGridRevision,
-                                                               currentPitchRevision,
-                                                               lastPianoRollNotesRevision_,
-                                                               lastPianoRollTimeGridRevision_,
-                                                               lastPianoRollPitchRevision_);
-        if (revisionPulse.notesChanged) {
-            // Same content, fresh notes - async note generator commit.
-            pianoRoll_.onNotesRevisionChanged();
-        }
-        if (revisionPulse.timeGridChanged) {
-            pianoRoll_.onTimeGridRevisionChanged();
-        }
-        if (revisionPulse.pitchChanged) {
-            pianoRoll_.onPitchRevisionChanged();
-        }
-        if (activeTrack >= 0 && activePlacementIndex >= 0) {
-            pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, activeTrack));
-            // 仅当 content 的 detectedKey 与上次观察值不同才回显（导入检测写入/手动设置写入/切换 content）。
-            // 比较基准是 content 观察值而非 UI 显示值：手动设置未持久化时不会被回读覆盖。
-            const DetectedKey resolvedKey =
-                resolveScaleForPlacementContent(activeTrack, activePlacementIndex, nullptr);
-            const int resolvedRootNote = static_cast<int>(resolvedKey.root);
-            const int resolvedScaleType = OpenTune::scaleToUiScaleType(resolvedKey.scale);
-            if (resolvedRootNote != lastResolvedScaleRootNote_ || resolvedScaleType != lastResolvedScaleType_) {
-                applyResolvedScaleForPlacementContent(activeTrack, activePlacementIndex);
-            }
-        }
-
-        // Pitch shift indicator: project from active snapshot
-        {
-            const PitchShiftSettings currentPitchShift = snap ? snap->pitchShiftSettings : PitchShiftSettings::identity();
-            if (currentPitchShift != lastPitchShiftIndicatorSettings_) {
-                parameterPanel_.setPitchShiftIndicator(currentPitchShift.semitone, currentPitchShift.cents);
-                lastPitchShiftIndicatorSettings_ = currentPitchShift;
-            }
-        }
-
-        lastPianoRollNotesRevision_ = revisionPulse.nextNotesRevision;
-        lastPianoRollTimeGridRevision_ = revisionPulse.nextTimeGridRevision;
-        lastPianoRollPitchRevision_ = revisionPulse.nextPitchRevision;
-    }
-
 // Playhead position: each component reads presented position from PlayHeadState projection
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
@@ -2230,12 +2163,27 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         transportBar_.setPlaying(processorRef_.isPlaying());
     }
 
-    if (allowSecondaryRefresh) {
-        for (int i = 0; i < OpenTuneAudioProcessor::MAX_TRACKS; ++i) {
-            const float rmsDb = getStandaloneTrackRms(processorRef_, i);
-            trackPanel_.setTrackLevel(i, rmsDb);
-        }
+    for (int i = 0; i < OpenTuneAudioProcessor::MAX_TRACKS; ++i) {
+        const float rmsDb = getStandaloneTrackRms(processorRef_, i);
+        trackPanel_.setTrackLevel(i, rmsDb);
     }
+}
+
+void OpenTuneAudioProcessorEditor::handleAsyncUpdate()
+{
+    const ContentKey changedKey = pendingContentChangedKey_;
+    pendingContentChangedKey_ = {};
+
+    const int activeTrack = getStandaloneActiveTrack(processorRef_);
+    const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
+    if (placementIndex < 0)
+        return;
+
+    const ContentKey activeKey = getStandaloneContentKey(processorRef_, activeTrack, placementIndex);
+    if (changedKey != activeKey)
+        return;
+
+    syncActiveContentFromProcessor(activeTrack, placementIndex, false);
 }
 
 void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
@@ -2343,48 +2291,74 @@ RenderStatusSnapshot OpenTuneAudioProcessorEditor::getRenderStatusSnapshot() con
 
 void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int trackId, int placementIndex)
 {
+    syncActiveContentFromProcessor(trackId, placementIndex, true);
+}
+
+void OpenTuneAudioProcessorEditor::syncActiveContentFromProcessor(int trackId,
+                                                                  int placementIndex,
+                                                                  bool initializeSelection)
+{
     StandaloneArrangement::Placement placement;
     const bool hasPlacement = (placementIndex >= 0)
         && getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement);
     const ContentKey contentKey = hasPlacement ? placement.contentKey : ContentKey{};
 
-    const int sr = static_cast<int>(processorRef_.getSampleRate());
     auto snap = processorRef_.getContentSnapshot(contentKey);
+    const double sr = snap ? snap->audioSampleRate : 0.0;
     std::shared_ptr<const juce::AudioBuffer<float>> contentBuffer =
         snap ? snap->audioBuffer : nullptr;
     auto curve = snap ? snap->pitchCurve : nullptr;
-    const bool contentChanged = contentKey != lastPianoRollContentKey_;
-
+    const bool contentChanged = contentKey != pianoRoll_.editedContentKey();
     const bool projectionChanged = pianoRoll_.setEditedContentAndProjection(
         contentKey, curve, contentBuffer, sr,
         hasPlacement ? makePianoRollProjection(placement, processorRef_)
                      : ContentTimelineProjection{});
-    pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, trackId));
 
-    lastPianoRollContentKey_ = contentKey;
-    lastPianoRollSampleRate_ = sr;
-    lastPianoRollCurve_ = curve;
-    lastPianoRollBuffer_ = contentBuffer;
-    lastPianoRollNotesRevision_ = snap ? snap->notesRevision : 0;
-    lastPianoRollTimeGridRevision_ = snap ? snap->timeGridRevision : 0;
-    lastPianoRollPitchRevision_ = snap ? snap->pitchRevision : 0;
+    if (trackId >= 0 && trackId < OpenTuneAudioProcessor::MAX_TRACKS)
+        pianoRoll_.setTrackDisplayColour(getStandaloneTrackColour(processorRef_, trackId));
 
-    if (hasPlacement && (contentChanged || projectionChanged))
+    pianoRoll_.onNotesRevisionChanged();
+    pianoRoll_.onTimeGridRevisionChanged();
+    pianoRoll_.onPitchRevisionChanged();
+
+    if (hasPlacement
+        && (contentChanged || projectionChanged || pianoRoll_.hasPendingInitialF0View()))
         pianoRoll_.requestInitialF0View(contentKey);
 
-    applyResolvedScaleForPlacementContent(trackId, placementIndex);
+    if (hasPlacement) {
+        const DetectedKey resolvedKey = snap && snap->detectedKey.origin != Origin::Unset
+            ? snap->detectedKey
+            : DetectedKey{};
+        const int resolvedRootNote = static_cast<int>(resolvedKey.root);
+        const int resolvedScaleType = OpenTune::scaleToUiScaleType(resolvedKey.scale);
+        if (initializeSelection || resolvedRootNote != lastResolvedScaleRootNote_
+            || resolvedScaleType != lastResolvedScaleType_)
+            applyResolvedScaleToUi(resolvedKey);
+    }
 
+    const PitchShiftSettings pitchShift = snap
+        ? snap->pitchShiftSettings
+        : PitchShiftSettings::identity();
+    if (pitchShift != lastPitchShiftIndicatorSettings_) {
+        parameterPanel_.setPitchShiftIndicator(pitchShift.semitone, pitchShift.cents);
+        lastPitchShiftIndicatorSettings_ = pitchShift;
+    }
+}
+
+void OpenTuneAudioProcessorEditor::syncActiveSelectionFromProcessor()
+{
+    const int activeTrack = getStandaloneActiveTrack(processorRef_);
+    const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
+    trackPanel_.setActiveTrack(activeTrack);
+    syncActiveContentFromProcessor(activeTrack, placementIndex, false);
+    arrangementView_.requestContentRedraw();
 }
 
 void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, uint64_t placementId)
 {
     if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS)
     {
-        pianoRoll_.setEditedContentAndProjection(ContentKey{}, nullptr, nullptr,
-                                                  static_cast<int>(processorRef_.getSampleRate()), {});
-        lastPianoRollContentKey_ = ContentKey{};
-        lastPianoRollCurve_.reset();
-        lastPianoRollBuffer_.reset();
+        syncActiveContentFromProcessor(trackId, -1, false);
         return;
     }
 
@@ -2394,11 +2368,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     if (placementId == 0)
     {
         setStandaloneSelectedPlacementIndex(processorRef_, trackId, -1);
-        pianoRoll_.setEditedContentAndProjection(ContentKey{}, nullptr, nullptr,
-                                                  static_cast<int>(processorRef_.getSampleRate()), {});
-        lastPianoRollContentKey_ = ContentKey{};
-        lastPianoRollCurve_.reset();
-        lastPianoRollBuffer_.reset();
+        syncActiveContentFromProcessor(trackId, -1, false);
         return;
     }
 
@@ -2406,11 +2376,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     if (placementIndex < 0)
     {
         setStandaloneSelectedPlacementIndex(processorRef_, trackId, -1);
-        pianoRoll_.setEditedContentAndProjection(ContentKey{}, nullptr, nullptr,
-                                                  static_cast<int>(processorRef_.getSampleRate()), {});
-        lastPianoRollContentKey_ = ContentKey{};
-        lastPianoRollCurve_.reset();
-        lastPianoRollBuffer_.reset();
+        syncActiveContentFromProcessor(trackId, -1, false);
         return;
     }
 
@@ -3463,7 +3429,7 @@ void OpenTuneAudioProcessorEditor::afterUndoRedo()
 {
 #endif
     projectSession_.markDirty();
-    arrangementView_.requestContentRedraw();
+    syncActiveSelectionFromProcessor();
 }
 
 void OpenTuneAudioProcessorEditor::undoRequested() { performUndoRedoAction(true); }
@@ -3809,6 +3775,8 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
                 juce::Colour selected = selector_->getCurrentColour();
                 setStandaloneTrackColour(editor->processorRef_, trackId_, selected);
                 editor->trackPanel_.setTrackColour(trackId_, selected);
+                if (getStandaloneActiveTrack(editor->processorRef_) == trackId_)
+                    editor->pianoRoll_.setTrackDisplayColour(selected);
                 editor->arrangementView_.requestContentRedraw();
                 editor->projectSession_.markDirty();
             }
@@ -3920,6 +3888,7 @@ void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
     trackPanel_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.setVisibleTrackCount(newVisibleCount);
     projectSession_.markDirty();
+    syncActiveSelectionFromProcessor();
 }
 
 void OpenTuneAudioProcessorEditor::trackColorRandomizeRequested(int trackId)
@@ -3934,6 +3903,8 @@ void OpenTuneAudioProcessorEditor::trackColorRandomizeRequested(int trackId)
 
     arrangement->setTrackColour(trackId, newColour);
     trackPanel_.setTrackColour(trackId, newColour);
+    if (getStandaloneActiveTrack(processorRef_) == trackId)
+        pianoRoll_.setTrackDisplayColour(newColour);
     arrangementView_.requestContentRedraw();
     projectSession_.markDirty();
 }
@@ -4293,6 +4264,10 @@ void OpenTuneAudioProcessorEditor::syncRecentProjectsToMenu()
 void OpenTuneAudioProcessorEditor::refreshAllUIFromProject()
 {
     juce::ScopedValueSetter<bool> applyingProjectUi(applyingLoadedProjectUi_, true);
+
+    cancelPendingUpdate();
+    pendingContentChangedKey_ = {};
+    pianoRoll_.setEditedContentAndProjection(ContentKey{}, nullptr, nullptr, 0.0, {});
 
     // Sync track panel with restored arrangement
     syncTrackColorsToPanel();

@@ -36,6 +36,7 @@ void ControlEditorBridge::onTrackMixChanged()
         editor_.trackPanel_.setTrackVolume(trackId, arrangement->getTrackVolume(trackId));
         editor_.trackPanel_.setTrackColour(trackId, arrangement->getTrackColour(trackId));
     }
+    editor_.pianoRoll_.setTrackDisplayColour(arrangement->getTrackColour(arrangement->getActiveTrackId()));
     editor_.arrangementView_.requestContentRedraw();
 }
 
