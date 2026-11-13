@@ -12,7 +12,9 @@
 #include "../Inference/TimeStretchCache.h"
 #include <juce_core/juce_core.h>
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <mutex>
 
 namespace OpenTune {
 
@@ -87,6 +89,16 @@ public:
     TimeStretchCache& getTimeStretchCache() noexcept { return timeStretchCache_; }
     const TimeStretchCache& getTimeStretchCache() const noexcept { return timeStretchCache_; }
 
+    /// Tracks revisions where Stage 1 baked the TimeGrid into conditioning so Stage 2
+    /// publishes canonical PCM verbatim instead of stretching; keyed by (key, timeGridRevision).
+    void markStage1BakedTimeGrid(ContentKey key, uint64_t timeGridRevision);
+    bool isStage1BakedTimeGrid(ContentKey key, uint64_t timeGridRevision) const;
+    /// True when this content has ever been rendered with a baked TimeGrid, at any
+    /// revision. Used to decide that a grid edit must re-run Stage 1 even when the
+    /// new grid is identity (the settled PCM still carries the old mapping).
+    bool hasStage1BakedTimeGrid(ContentKey key) const;
+    void clearStage1BakedTimeGrid(ContentKey key);
+
     void clearAll();
     void preparePlaybackSampleRate(double targetSr);
 
@@ -96,6 +108,9 @@ private:
     StretcherPool stretchers_;
     TimeStretchCache timeStretchCache_;
     RenderWorker renderWorker_;
+
+    mutable std::mutex bakedTimeGridMutex_;
+    std::map<ContentKey, uint64_t> bakedTimeGridRevisions_;
 };
 
 } // namespace OpenTune

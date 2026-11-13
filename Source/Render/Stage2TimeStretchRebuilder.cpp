@@ -57,6 +57,55 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
         return true;
     }
 
+    // Stage 1 already baked the TimeGrid into canonical PCM, so publish verbatim without stretching.
+    if (crs.isStage1BakedTimeGrid(contentKey, snapshot.timeGridRevision)) {
+        const auto stage1RenderCache = crs.getRenderCache(contentKey);
+        const int totalSamples = request.audioBuffer->getNumSamples();
+        if (totalSamples <= 0) return false;
+
+        const uint32_t buildGen = crs.getTimeStretchCache().beginBuild(contentKey);
+
+        std::vector<float> output;
+        output.reserve(static_cast<size_t>(totalSamples));
+
+        juce::AudioBuffer<float> readBuf(1, 4096);
+        for (int offset = 0; offset < totalSamples; offset += 4096) {
+            const int n = std::min(4096, totalSamples - offset);
+            readBuf.clear(0, 0, n);
+
+            ::OpenTune::CanonicalReadRequest req(request.audioBuffer,
+                                                  stage1RenderCache,
+                                                  static_cast<int64_t>(offset),
+                                                  n);
+            const int wrote = readCanonicalAudio(req, readBuf, 0);
+            if (wrote < n) {
+                AppLogger::warn("Stage2: canonical read insufficient at offset="
+                                + juce::String(offset) + " wanted=" + juce::String(n)
+                                + " got=" + juce::String(wrote));
+                return false;
+            }
+            output.insert(output.end(),
+                          readBuf.getReadPointer(0),
+                          readBuf.getReadPointer(0) + n);
+        }
+
+        if (!isCurrentPublishedRequest())
+            return false;
+
+        crs.getTimeStretchCache().store(contentKey,
+                                        std::move(output),
+                                        snapshot.contentRevision,
+                                        snapshot.timeGridRevision,
+                                        request.audioSampleRate,
+                                        buildGen);
+
+        AppLogger::log("Stage2Worker: published Stage-1 baked output (no stretch) objectId="
+                       + juce::String(static_cast<juce::int64>(contentKey.objectId))
+                       + " timeGridRev=" + juce::String(static_cast<juce::int64>(snapshot.timeGridRevision))
+                       + " samples=" + juce::String(totalSamples));
+        return true;
+    }
+
     const double sampleRate = request.audioSampleRate;
     auto stretcher = crs.getStretcher(contentKey, sampleRate, 1);
     if (stretcher == nullptr) return false;
@@ -142,7 +191,7 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
                    + " contentRev=" + juce::String(static_cast<juce::int64>(contentRev))
                    + " timeGridRev=" + juce::String(static_cast<juce::int64>(timeGridRev))
                    + " stage1InputSamples=" + juce::String(totalSamples)
-                   + " stage2OutputSamples=" + juce::String(static_cast<int>(stretcher->expectedOutputSamples()))
+                   + " stage2OutputSamples=" + juce::String(static_cast<int>(expectedSamples))
                    + " (SoundTouch WSOLA, Stage 1 via readCanonicalAudio)");
     return true;
 }

@@ -76,6 +76,12 @@ public:
     /** 将所有已 publish 的 canonical entry 重采样到目标率（writer mutex 内完成）。 */
     void prepareForPlaybackSampleRate(double targetSr);
 
+    /** Aligns published entry revision tags with the current snapshot, leaving
+        PCM untouched. Returns false when no published entry can be reused. */
+    bool rebaseRevisions(ContentKey key,
+                         uint64_t contentRevision,
+                         uint64_t timeGridRevision);
+
     void invalidate(ContentKey key);
     void clear();
 

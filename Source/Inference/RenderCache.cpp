@@ -496,6 +496,56 @@ void RenderCache::overlayCanonicalAudio(juce::AudioBuffer<float>& destination,
     }
 }
 
+void RenderCache::rebaseContentRevision(uint64_t contentRevision)
+{
+    if (contentRevision == 0)
+        return;
+
+    // Match rebuildPrepared's lock order to avoid deadlocking the chunk path.
+    std::lock_guard<std::mutex> preparedGuard(preparedBuildMutex_);
+
+    {
+        const juce::SpinLock::ScopedLockType guard(lock_);
+        auto canonical = std::atomic_load(&publishedSnapshot_);
+        if (canonical && !canonical->chunks.empty())
+        {
+            auto next = std::make_shared<PublishedRenderSnapshot>(*canonical);
+            bool changed = false;
+            for (auto& chunk : next->chunks)
+            {
+                if (chunk.contentRevision == contentRevision)
+                    continue;
+                chunk.contentRevision = contentRevision;
+                changed = true;
+            }
+            if (changed)
+            {
+                std::atomic_store(&publishedSnapshot_,
+                    std::shared_ptr<const PublishedRenderSnapshot>(std::move(next)));
+            }
+        }
+    }
+
+    auto prepared = std::atomic_load(&preparedSnapshot_);
+    if (prepared && !prepared->chunks.empty())
+    {
+        auto next = std::make_shared<PublishedPreparedSnapshot>(*prepared);
+        bool changed = false;
+        for (auto& chunk : next->chunks)
+        {
+            if (chunk.sourceRevision == contentRevision)
+                continue;
+            chunk.sourceRevision = contentRevision;
+            changed = true;
+        }
+        if (changed)
+        {
+            std::atomic_store(&preparedSnapshot_,
+                std::shared_ptr<const PublishedPreparedSnapshot>(std::move(next)));
+        }
+    }
+}
+
 void RenderCache::clear() {
     std::map<int64_t, Chunk> chunksToRelease;
     std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;

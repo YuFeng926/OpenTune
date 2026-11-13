@@ -157,10 +157,18 @@ void CaptureSegmentContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 
 void CaptureSegmentContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot)
 {
-    if (snapshot == nullptr)
+    if (snapshot == nullptr || content_.timeGrid == snapshot)
         return;
+
+    // Stage 1 bakes non-identity TimeGrids into conditioning, so contentRevision must
+    // advance to trigger re-render.
+    const bool affectsStage1 = !snapshot->isIdentity()
+        || (content_.timeGrid != nullptr && !content_.timeGrid->isIdentity());
+
     content_.timeGrid = std::move(snapshot);
     ++content_.timeGridRevision;
+    if (affectsStage1)
+        ++content_.contentRevision;
 }
 
 bool CaptureSegmentContent::applyPitchShiftState(const PitchShiftEditState& state)

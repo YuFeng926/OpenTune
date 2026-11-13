@@ -141,6 +141,191 @@ bool checkDeleteSelectedHandleAndEndpoints()
         && missing.snapshot == nullptr;
 }
 
+// ── 受影响输出区间（决定拖一次手柄重渲多少）────────────────────
+
+// 5 个锚点、总长 4.0s。拖中间那个只应影响它相邻两段，
+// 外侧两段斜率不变，重渲范围必须收窄。
+std::shared_ptr<const TimeGridSnapshot> fiveAnchorGrid(double midOutput)
+{
+    return grid({
+        handle(41, 0.0, 0.0, HandleKind::ClipStart),
+        handle(42, 1.0, 1.0),
+        handle(43, 2.0, midOutput),
+        handle(44, 3.0, 3.0),
+        handle(45, 4.0, 4.0, HandleKind::ClipEnd)
+    });
+}
+
+bool checkAffectedRangeNarrowsToNeighbourSpan()
+{
+    const auto before = fiveAnchorGrid(2.0);
+    const auto after = fiveAnchorGrid(2.5);
+    if (before == nullptr || after == nullptr)
+        return false;
+
+    double lo = -1.0;
+    double hi = -1.0;
+    if (!timeGridAffectedOutputRange(before, after, lo, hi))
+        return false;
+
+    // 拖的是 2.0→2.5：相邻锚点在 1.0 和 3.0，受影响区间就是 [1.0, 3.0]。
+    // 外侧 [0,1] 与 [3,4] 的映射没变，不应进入重渲范围。
+    return std::abs(lo - 1.0) < 1e-9
+        && std::abs(hi - 3.0) < 1e-9;
+}
+
+bool checkAffectedRangeIgnoresUnchangedSnapshots()
+{
+    const auto before = fiveAnchorGrid(2.0);
+    const auto after = fiveAnchorGrid(2.0);
+    if (before == nullptr || after == nullptr)
+        return false;
+
+    double lo = 123.0;
+    double hi = 456.0;
+    // 内容相同（但分配不同）→ 无改动，调用方应跳过重渲。
+    if (timeGridAffectedOutputRange(before, after, lo, hi))
+        return false;
+    // 同一指针也必须判为无改动。
+    return !timeGridAffectedOutputRange(before, before, lo, hi);
+}
+
+bool checkAffectedRangeCoversFirstAndLastDrag()
+{
+    const auto before = fiveAnchorGrid(2.0);
+
+    // 拖第二个锚点（索引 1，相邻 0.0 与 2.0）。
+    auto afterSecond = grid({
+        handle(41, 0.0, 0.0, HandleKind::ClipStart),
+        handle(42, 1.0, 1.4),
+        handle(43, 2.0, 2.0),
+        handle(44, 3.0, 3.0),
+        handle(45, 4.0, 4.0, HandleKind::ClipEnd)
+    });
+    double lo = -1.0;
+    double hi = -1.0;
+    if (!timeGridAffectedOutputRange(before, afterSecond, lo, hi))
+        return false;
+    if (!(std::abs(lo - 0.0) < 1e-9 && std::abs(hi - 2.0) < 1e-9))
+        return false;
+
+    // 拖第四个锚点（索引 3，相邻 2.0 与 4.0）。
+    auto afterFourth = grid({
+        handle(41, 0.0, 0.0, HandleKind::ClipStart),
+        handle(42, 1.0, 1.0),
+        handle(43, 2.0, 2.0),
+        handle(44, 3.0, 2.6),
+        handle(45, 4.0, 4.0, HandleKind::ClipEnd)
+    });
+    if (!timeGridAffectedOutputRange(before, afterFourth, lo, hi))
+        return false;
+    return std::abs(lo - 2.0) < 1e-9 && std::abs(hi - 4.0) < 1e-9;
+}
+
+bool checkAffectedRangeCoversInsertAndDelete()
+{
+    const auto before = fiveAnchorGrid(2.0);
+
+    // 插入：新锚点把一段拆成两段，两侧相邻锚点都受影响。
+    auto inserted = grid({
+        handle(41, 0.0, 0.0, HandleKind::ClipStart),
+        handle(42, 1.0, 1.0),
+        handle(46, 1.5, 1.5),
+        handle(43, 2.0, 2.0),
+        handle(44, 3.0, 3.0),
+        handle(45, 4.0, 4.0, HandleKind::ClipEnd)
+    });
+    double lo = -1.0;
+    double hi = -1.0;
+    if (!timeGridAffectedOutputRange(before, inserted, lo, hi))
+        return false;
+    if (!(lo <= 1.0 + 1e-9 && hi >= 2.0 - 1e-9))
+        return false;
+
+    // 删除：去掉 43，原来 [1,2] 与 [2,3] 两段并成一段。
+    auto deleted = grid({
+        handle(41, 0.0, 0.0, HandleKind::ClipStart),
+        handle(42, 1.0, 1.0),
+        handle(44, 3.0, 3.0),
+        handle(45, 4.0, 4.0, HandleKind::ClipEnd)
+    });
+    if (!timeGridAffectedOutputRange(before, deleted, lo, hi))
+        return false;
+    return lo <= 1.0 + 1e-9 && hi >= 3.0 - 1e-9;
+}
+
+// 0..1s compressed to 0..0.5s, 1..2s stretched to 0.5..2s, 2..4s identity.
+std::shared_ptr<const TimeGridSnapshot> bakedGrid()
+{
+    return grid({
+        handle(51, 0.0, 0.0, HandleKind::ClipStart),
+        handle(52, 1.0, 0.5),
+        handle(53, 2.0, 2.0),
+        handle(54, 4.0, 4.0, HandleKind::ClipEnd)
+    });
+}
+
+bool checkIdentityMutationRangeIsUnchanged()
+{
+    const auto identity = TimeGridSnapshot::makeIdentity(4.0);
+    if (identity == nullptr)
+        return false;
+    const auto range = mapContentMutationRangeToOutput(identity, 0.5, 1.5, 4.0);
+    return std::abs(range.startSeconds - 0.5) < 1e-12
+        && std::abs(range.endSeconds - 1.5) < 1e-12;
+}
+
+bool checkBakedMutationRangeMapsToOutputTimeline()
+{
+    const auto g = bakedGrid();
+    if (g == nullptr)
+        return false;
+
+    // Source [0.5, 1.5) maps to output [0.25, 1.25).
+    const auto range = mapContentMutationRangeToOutput(g, 0.5, 1.5, 4.0);
+    const double tauStart = g->tauForward(0.5);
+    const double tauEnd = g->tauForward(1.5);
+    if (!(range.startSeconds <= tauStart + 1e-9
+          && range.endSeconds >= tauEnd - 1e-9))
+        return false;
+    if (!(range.startSeconds >= 0.0 && range.endSeconds <= 4.0))
+        return false;
+
+    // The mapped start must move ahead of the source start.
+    return range.startSeconds < 0.5 - 0.2;
+}
+
+bool checkBakedMutationRangeSpansMultipleSegments()
+{
+    const auto g = bakedGrid();
+    if (g == nullptr)
+        return false;
+
+    const auto range = mapContentMutationRangeToOutput(g, 0.9, 2.1, 4.0);
+    return range.startSeconds <= g->tauForward(0.9) + 1e-9
+        && range.endSeconds >= g->tauForward(2.1) - 1e-9
+        && range.startSeconds >= 0.0
+        && range.endSeconds <= 4.0;
+}
+
+bool checkBakedMutationRangeFallsBackToFullTrack()
+{
+    const auto g = bakedGrid();
+    if (g == nullptr)
+        return false;
+
+    const auto inverted = mapContentMutationRangeToOutput(g, 2.0, 1.0, 4.0);
+    const auto outside = mapContentMutationRangeToOutput(g, 10.0, 11.0, 4.0);
+    const auto noGrid = mapContentMutationRangeToOutput(nullptr, 0.5, 1.5, 4.0);
+
+    return std::abs(inverted.startSeconds) < 1e-12
+        && std::abs(inverted.endSeconds - 4.0) < 1e-12
+        && std::abs(outside.startSeconds) < 1e-12
+        && std::abs(outside.endSeconds - 4.0) < 1e-12
+        && std::abs(noGrid.startSeconds - 0.5) < 1e-12
+        && std::abs(noGrid.endSeconds - 1.5) < 1e-12;
+}
+
 } // namespace
 
 int main()
@@ -171,6 +356,38 @@ int main()
     }
     if (!checkDeleteSelectedHandleAndEndpoints()) {
         std::cerr << "TimeGrid selected-handle delete failed\n";
+        return 1;
+    }
+    if (!checkAffectedRangeNarrowsToNeighbourSpan()) {
+        std::cerr << "TimeGrid affected range must narrow to the neighbour span\n";
+        return 1;
+    }
+    if (!checkAffectedRangeIgnoresUnchangedSnapshots()) {
+        std::cerr << "TimeGrid affected range must report no change for equal grids\n";
+        return 1;
+    }
+    if (!checkAffectedRangeCoversFirstAndLastDrag()) {
+        std::cerr << "TimeGrid affected range must cover edge-anchor drags\n";
+        return 1;
+    }
+    if (!checkAffectedRangeCoversInsertAndDelete()) {
+        std::cerr << "TimeGrid affected range must cover insert and delete\n";
+        return 1;
+    }
+    if (!checkIdentityMutationRangeIsUnchanged()) {
+        std::cerr << "Identity grid must keep the source-domain mutation range\n";
+        return 1;
+    }
+    if (!checkBakedMutationRangeMapsToOutputTimeline()) {
+        std::cerr << "Baked grid must map pitch/note edit ranges onto the output timeline\n";
+        return 1;
+    }
+    if (!checkBakedMutationRangeSpansMultipleSegments()) {
+        std::cerr << "Baked grid mutation range must span multiple grid segments\n";
+        return 1;
+    }
+    if (!checkBakedMutationRangeFallsBackToFullTrack()) {
+        std::cerr << "Degenerate baked-grid mutation range must fall back to the full track\n";
         return 1;
     }
     return 0;
