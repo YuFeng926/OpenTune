@@ -3315,6 +3315,23 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey k
                                                                      double endSeconds,
                                                                      std::shared_ptr<const EditableContentSnapshot> snapshot)
 {
+    if (snapshot == nullptr)
+        return;
+
+    // Warped grids put chunk boundaries on the output timeline while edit
+    // ranges stay on the source timeline. Evaluate all arguments before
+    // std::move(snapshot) (MSVC evaluates call arguments right-to-left).
+    const double durationSeconds = contentDurationSeconds(*snapshot);
+    const auto renderRange = mapContentMutationRangeToOutput(
+        snapshot->timeGrid, startSeconds, endSeconds, durationSeconds);
+
+    AppLogger::log("ContentMutationRange source=[" + juce::String(startSeconds, 3)
+                   + "," + juce::String(endSeconds, 3) + "] output=["
+                   + juce::String(renderRange.startSeconds, 3) + ","
+                   + juce::String(renderRange.endSeconds, 3) + "] grid="
+                   + (snapshot->timeGrid != nullptr && !snapshot->timeGrid->empty()
+                      && !snapshot->timeGrid->isIdentity() ? "warped" : "identity"));
+
 #if JucePlugin_Enable_ARA
     if (key.domainKind == DomainKind::ARAAudioModification)
     {
@@ -3322,7 +3339,7 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey k
         if (dc != nullptr)
         {
             dc->requestModificationRender(
-                key, startSeconds, endSeconds, std::move(snapshot));
+                key, renderRange.startSeconds, renderRange.endSeconds, std::move(snapshot));
         }
         return;
     }
@@ -3330,8 +3347,8 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey k
 
     // Non-ARA path: processor-local CRS
     requestRenderForLocalMutationRange(key,
-                                       startSeconds,
-                                       endSeconds,
+                                       renderRange.startSeconds,
+                                       renderRange.endSeconds,
                                        std::move(snapshot));
 }
 
@@ -5625,7 +5642,33 @@ void OpenTuneAudioProcessor::republishPlaybackSource(ContentKey key)
     if (!snap) return;
     auto* crs = resolveMutableLocalContentRenderService(key);
     if (crs == nullptr) return;
-    crs->republishPlaybackSource(key, std::move(snap));
+
+    PlaybackReadSource previous;
+    const bool hadPublishedSource = crs->getPlaybackReadSource(key, previous)
+        && previous.contentSnapshot != nullptr;
+    const uint64_t previousRevision = hadPublishedSource
+        ? previous.contentSnapshot->contentRevision
+        : 0;
+
+    if (!crs->republishPlaybackSource(key, snap))
+        return;
+
+    // A republish advances contentRevision without producing new PCM; align
+    // cached revision tags so reads still match.
+    if (hadPublishedSource && previousRevision != snap->contentRevision)
+    {
+        if (auto cache = crs->getRenderCache(key))
+            cache->rebaseContentRevision(snap->contentRevision);
+        crs->getTimeStretchCache().rebaseRevisions(
+            key, snap->contentRevision, snap->timeGridRevision);
+
+        AppLogger::log("RepublishRebase contentRevision "
+                       + juce::String(static_cast<juce::int64>(previousRevision))
+                       + " -> " + juce::String(static_cast<juce::int64>(snap->contentRevision))
+                       + " grid="
+                       + (snap->timeGrid != nullptr && !snap->timeGrid->empty()
+                          && !snap->timeGrid->isIdentity() ? "warped" : "identity"));
+    }
 }
 
 bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,

@@ -299,6 +299,41 @@ int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
     return availableSamples;
 }
 
+bool TimeStretchCache::rebaseRevisions(ContentKey key,
+                                       uint64_t contentRevision,
+                                       uint64_t timeGridRevision)
+{
+    if (!key.isValid() || contentRevision == 0)
+        return false;
+
+    std::lock_guard<std::mutex> lg(mutex_);
+
+    auto it = entries_.find(key);
+    if (it == entries_.end() || it->second == nullptr || !it->second->published)
+        return false;
+
+    const auto& current = *it->second;
+    if (current.contentRevision == contentRevision
+        && current.timeGridRevision == timeGridRevision)
+        return false;
+
+    auto rebased = std::make_shared<Entry>(current);
+    rebased->contentRevision = contentRevision;
+    rebased->timeGridRevision = timeGridRevision;
+    it->second = rebased;
+
+    // PCM buffers are shared, so only the reader map needs republishing.
+    auto snapshot = std::make_shared<const std::map<ContentKey, std::shared_ptr<const Entry>>>(entries_);
+    auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
+    if (old)
+        retiredSnapshots_.push_back(std::move(old));
+    retiredSnapshots_.erase(
+        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
+            [](const auto& p) { return p.use_count() <= 1; }),
+        retiredSnapshots_.end());
+    return true;
+}
+
 void TimeStretchCache::invalidate(ContentKey key)
 {
     std::lock_guard<std::mutex> lg(mutex_);

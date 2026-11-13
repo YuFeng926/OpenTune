@@ -78,4 +78,20 @@ bool timeGridAffectedOutputRange(
     double& outStartSeconds,
     double& outEndSeconds);
 
+/** Render range on the output timeline, aligned with chunk boundaries. */
+struct ContentMutationRenderRange
+{
+    double startSeconds{0.0};
+    double endSeconds{0.0};
+};
+
+/** Maps a source-timeline edit range onto the output timeline used by Stage 1
+    chunks. Identity grids return the range unchanged; degenerate or invalid
+    input falls back to the full track. */
+ContentMutationRenderRange mapContentMutationRangeToOutput(
+    const std::shared_ptr<const TimeGridSnapshot>& grid,
+    double sourceStartSeconds,
+    double sourceEndSeconds,
+    double durationSeconds);
+
 } // namespace OpenTune

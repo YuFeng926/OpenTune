@@ -159,6 +159,10 @@ public:
                                 int numSamples,
                                 int64_t readStartSample) const;
 
+    /** Aligns published chunk revision tags with the current snapshot without
+        touching PCM or the last requested revision. */
+    void rebaseContentRevision(uint64_t contentRevision);
+
     void clear();
 
 private:

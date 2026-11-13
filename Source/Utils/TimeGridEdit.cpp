@@ -301,4 +301,41 @@ bool timeGridAffectedOutputRange(
     return outEndSeconds > outStartSeconds;
 }
 
+ContentMutationRenderRange mapContentMutationRangeToOutput(
+    const std::shared_ptr<const TimeGridSnapshot>& grid,
+    double sourceStartSeconds,
+    double sourceEndSeconds,
+    double durationSeconds)
+{
+    // Only warped grids bake the time mapping into Stage 1, creating two timelines.
+    const bool bakesGrid = grid != nullptr && !grid->empty() && !grid->isIdentity();
+    if (!bakesGrid)
+        return { sourceStartSeconds, sourceEndSeconds };
+
+    const bool durationValid = std::isfinite(durationSeconds) && durationSeconds > 0.0;
+    if (!durationValid
+        || !std::isfinite(sourceStartSeconds)
+        || !std::isfinite(sourceEndSeconds)
+        || sourceEndSeconds <= sourceStartSeconds)
+    {
+        // Without a trustworthy range, re-render the whole track.
+        if (durationValid)
+            return { 0.0, durationSeconds };
+        return { sourceStartSeconds, sourceEndSeconds };
+    }
+
+    // Guard for adjacent F0 frames and conditioning context, applied on the
+    // source axis so it scales with each segment's slope.
+    constexpr double kEdgeGuardSeconds = 0.025;
+    const double start = juce::jlimit(0.0, durationSeconds,
+        grid->tauForward(sourceStartSeconds - kEdgeGuardSeconds));
+    const double end = juce::jlimit(0.0, durationSeconds,
+        grid->tauForward(sourceEndSeconds + kEdgeGuardSeconds));
+
+    if (!(end > start))
+        return { 0.0, durationSeconds };
+
+    return { start, end };
+}
+
 } // namespace OpenTune

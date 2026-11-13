@@ -1314,6 +1314,14 @@ if(NOT OPENTUNE_DEMO_AUDIO_COUNT EQUAL 1 OR NOT EXISTS "${CMAKE_CURRENT_SOURCE_D
     message(FATAL_ERROR "assets/ must contain Demo.otproj and exactly one demo .wav")
 endif()
 
+# cmd.exe reads POST_BUILD scripts using the ANSI code page, so stage an
+# ASCII-named copy of the demo audio for the Windows copy step.
+if(WIN32)
+    set(OPENTUNE_DEMO_AUDIO_WIN_STAGED "${CMAKE_CURRENT_BINARY_DIR}/DemoAudioStaged.wav")
+    configure_file("${OPENTUNE_DEMO_AUDIO}"
+                   "${OPENTUNE_DEMO_AUDIO_WIN_STAGED}" COPYONLY)
+endif()
+
 # --- ONNX Runtime library copying ---
 if(WIN32)
     add_custom_command(TARGET OpenTuneStandalone_Standalone POST_BUILD
@@ -1366,7 +1374,7 @@ if(WIN32)
             "${CMAKE_CURRENT_SOURCE_DIR}/assets/Demo.otproj"
             "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/Demo/Demo.otproj"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${OPENTUNE_DEMO_AUDIO}"
+            "${OPENTUNE_DEMO_AUDIO_WIN_STAGED}"
             "$<TARGET_FILE_DIR:OpenTuneStandalone_Standalone>/Demo/Demo.wav"
         COMMENT "Copying the demo project to Standalone directory..."
     )
@@ -1913,6 +1921,22 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneTimeGridEditTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME TimeGridEditTests COMMAND OpenTuneTimeGridEditTests)
+
+    # Verifies revision rebasing keeps published audio readable.
+    add_executable(OpenTuneTimeStretchCacheRebaseTests
+        Tests/TimeStretchCacheRebaseTests.cpp
+    )
+    target_include_directories(OpenTuneTimeStretchCacheRebaseTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneTimeStretchCacheRebaseTests PRIVATE
+        OpenTune
+        juce::juce_audio_basics
+        juce::juce_core
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneTimeStretchCacheRebaseTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME TimeStretchCacheRebaseTests COMMAND OpenTuneTimeStretchCacheRebaseTests)
 
     # Scissors topology planner + undo action tests — pure planner, no plugin runtime
     add_executable(OpenTuneScissorsTopologyEditTests
