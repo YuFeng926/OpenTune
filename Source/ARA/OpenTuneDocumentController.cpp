@@ -177,7 +177,7 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
         transportRelay_->alive.store(false, std::memory_order_release);
 
     if (renderTerminalRelay_ != nullptr)
-        renderTerminalRelay_->set({});
+        renderTerminalRelay_->clear();
     auditionRoute_.keyboardAudition.store(nullptr, std::memory_order_release);
     auditionRoute_.keyboardMixer.store(nullptr, std::memory_order_release);
     auditionRoute_.notePitchMixer.store(nullptr, std::memory_order_release);
@@ -1095,37 +1095,64 @@ void OpenTuneDocumentController::setKeyboardAuditionSource(std::shared_ptr<NoteA
         std::memory_order_release);
 }
 
-void OpenTuneDocumentController::setRenderTerminalCallback(RenderTerminalCallback callback)
+OpenTuneDocumentController::RenderTerminalSubscription
+OpenTuneDocumentController::subscribeRenderTerminalCallback(RenderTerminalCallback callback)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    return renderTerminalRelay_ != nullptr
+        ? renderTerminalRelay_->subscribe(std::move(callback))
+        : 0;
+}
+
+void OpenTuneDocumentController::unsubscribeRenderTerminalCallback(RenderTerminalSubscription subscription)
 {
     JUCE_ASSERT_MESSAGE_THREAD
     if (renderTerminalRelay_ != nullptr)
-        renderTerminalRelay_->set(std::move(callback));
+        renderTerminalRelay_->unsubscribe(subscription);
 }
 
-void OpenTuneDocumentController::RenderTerminalRelay::set(RenderTerminalCallback next)
+OpenTuneDocumentController::RenderTerminalRelay::Subscription
+OpenTuneDocumentController::RenderTerminalRelay::subscribe(RenderTerminalCallback next)
 {
     const std::lock_guard<std::mutex> lock(mutex);
-    callback = std::move(next);
+    const auto subscription = nextSubscription++;
+    callbacks.emplace(subscription, std::move(next));
+    return subscription;
+}
+
+void OpenTuneDocumentController::RenderTerminalRelay::unsubscribe(Subscription subscription)
+{
+    const std::lock_guard<std::mutex> lock(mutex);
+    callbacks.erase(subscription);
+}
+
+void OpenTuneDocumentController::RenderTerminalRelay::clear()
+{
+    const std::lock_guard<std::mutex> lock(mutex);
+    callbacks.clear();
 }
 
 void OpenTuneDocumentController::RenderTerminalRelay::invoke(ContentKey key, bool completed)
 {
-    RenderTerminalCallback current;
+    std::vector<RenderTerminalCallback> current;
     {
         const std::lock_guard<std::mutex> lock(mutex);
-        current = callback;
+        current.reserve(callbacks.size());
+        for (const auto& subscription : callbacks)
+            current.push_back(subscription.second);
     }
-    if (current)
-        current(key, completed);
+    for (const auto& callback : current)
+        if (callback)
+            callback(key, completed);
 }
 
 void OpenTuneDocumentController::RenderTerminalRelay::invokeCompleted(
     ContentKey key, uint64_t renderGeneration)
 {
-    RenderTerminalCallback current;
+    std::vector<RenderTerminalCallback> current;
     {
         const std::lock_guard<std::mutex> lock(mutex);
-        if (!callback)
+        if (callbacks.empty())
             return;
         // A multi-chunk render queues one settled callback per chunk; every
         // queued callback observes a fully settled cache by the time it runs.
@@ -1136,10 +1163,13 @@ void OpenTuneDocumentController::RenderTerminalRelay::invokeCompleted(
             && it->second == renderGeneration)
             return;
         lastCompletedRenderGeneration[key] = renderGeneration;
-        current = callback;
+        current.reserve(callbacks.size());
+        for (const auto& subscription : callbacks)
+            current.push_back(subscription.second);
     }
-    if (current)
-        current(key, true);
+    for (const auto& callback : current)
+        if (callback)
+            callback(key, true);
 }
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable() const noexcept

@@ -2,6 +2,7 @@
 #include <juce_events/juce_events.h>
 #include <ARA_Library/Dispatch/ARAHostDispatch.h>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <type_traits>
@@ -11,7 +12,62 @@
 #include "LifecycleTestTrace.h"
 #include "LifecycleWatchdog.h"
 
+#if JUCE_MAC
+#include <CoreFoundation/CoreFoundation.h>
+#else
+namespace juce {
+namespace detail {
+bool dispatchNextMessageOnSystemQueue(bool returnIfNoPendingMessages);
+} // namespace detail
+} // namespace juce
+#endif
+
 extern const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory();
+
+namespace OpenTune
+{
+struct RenderTerminalRelayTestAccess
+{
+    static bool run()
+    {
+        using Relay = OpenTuneDocumentController::RenderTerminalRelay;
+        const ContentKey key{DomainKind::ARAAudioModification, 701, 0};
+        Relay relay;
+        int firstCount = 0;
+        int secondCount = 0;
+        const auto first = relay.subscribe([&](ContentKey, bool) { ++firstCount; });
+        const auto second = relay.subscribe([&](ContentKey, bool) { ++secondCount; });
+        if (first == 0 || second == 0 || first == second)
+            return false;
+
+        relay.invokeCompleted(key, 7);
+        relay.invokeCompleted(key, 7);
+        relay.invokeCompleted(key, 8);
+        if (firstCount != 2 || secondCount != 2)
+            return false;
+
+        relay.unsubscribe(first);
+        relay.invoke(key, false);
+        if (firstCount != 2 || secondCount != 3)
+            return false;
+
+        Relay reentrantRelay;
+        Relay::Subscription removed = 0;
+        int reentrantFirstCount = 0;
+        int reentrantSecondCount = 0;
+        reentrantRelay.subscribe([&](ContentKey, bool) {
+            ++reentrantFirstCount;
+            reentrantRelay.unsubscribe(removed);
+        });
+        removed = reentrantRelay.subscribe([&](ContentKey, bool) {
+            ++reentrantSecondCount;
+        });
+        reentrantRelay.invoke(key, false);
+        reentrantRelay.invoke(key, false);
+        return reentrantFirstCount == 2 && reentrantSecondCount == 1;
+    }
+};
+}
 
 namespace
 {
@@ -379,6 +435,8 @@ int runChild(int argc, char** argv)
         {"queueLimit", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleQueueApprovalLimit)}
     });
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
+    if (! check(OpenTune::RenderTerminalRelayTestAccess::run(), "render_terminal_relay_contract_failed"))
+        return 1;
     if (! runPlaybackContinuityContracts())
         return 1;
     if (! runArchiveSourceWindowContracts())
@@ -500,10 +558,20 @@ int runChild(int argc, char** argv)
     if (! check (juce::MessageManager::callAsync ([&dispatcherRan]
         {
             dispatcherRan.store(true, std::memory_order_release);
-            juce::MessageManager::getInstance()->stopDispatchLoop();
         }), "message_dispatch_post_failed"))
         return 1;
-    juce::MessageManager::getInstance()->runDispatchLoop();
+    const auto dispatchDeadline = std::chrono::steady_clock::now()
+        + std::chrono::milliseconds(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs);
+    while (!dispatcherRan.load(std::memory_order_acquire)
+           && std::chrono::steady_clock::now() < dispatchDeadline)
+    {
+#if JUCE_MAC
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.002, true);
+#else
+        if (!juce::detail::dispatchNextMessageOnSystemQueue(true))
+            juce::Thread::sleep(1);
+#endif
+    }
     if (! check (dispatcherRan.load(std::memory_order_acquire), "message_dispatch_not_run"))
         return 1;
     OpenTuneTest::trace("ARALifecycleContractTests", "message_dispatch_complete");

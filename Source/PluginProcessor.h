@@ -1087,6 +1087,7 @@ private:
     juce::ARAPlaybackRegion* notePitchAuditionTargetRegion_ = nullptr;
     std::atomic<AuditionRoute*> auditionRoute_{nullptr};
     std::atomic<PlayHeadState*> sharedPlayHeadStateForAudio_{nullptr};
+    uint64_t renderTerminalSubscription_{0};
 #endif
     OutputSpectrumAnalyzer outputSpectrumAnalyzer_;
 

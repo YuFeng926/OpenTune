@@ -306,7 +306,7 @@ public:
         return events_;
     }
 
-    /** The reply was written by a connection thread, and only after it the exit step started on the message thread. */
+    /** The reply was written by a completion thread, and only after it the exit step started on the message thread. */
     bool inOrder() const
     {
         const auto seen = events();
@@ -370,7 +370,7 @@ void windowNotClosed(bool editorGone)
         bool discoveryGone = false;
     } asked;
     if (editorGone) {
-        // The registration goes on the message thread before the exit step: both are queued from the connection thread,
+        // The registration goes on the message thread before the exit step: both are queued from the completion thread,
         // the first by this observer (ReplyWritten comes before runAfterReply() posts the step), and the queue is FIFO.
         dispatcher->setAfterReplyObserverForTesting([&f](ControlDispatcher::AfterReplyEvent event) {
             if (event == ControlDispatcher::AfterReplyEvent::ReplyWritten)
@@ -505,7 +505,7 @@ void exitStepRefusedByQueue()
     const auto messageThread = service.messageThread();
     const auto discoveryFile = std::filesystem::u8path(service.discoveryFilePath());
     CONTROL_CHECK(messageThread->isAlive());
-    // Here the connection thread that writes the result calls stopDispatchLoop() and waits (bounded, no lease held)
+    // Here the completion thread that writes the result calls stopDispatchLoop() and waits (bounded, no lease held)
     // until the flag is set; whether it was is checked below, on this thread.
     dispatcher->setAfterReplyObserverForTesting([](ControlDispatcher::AfterReplyEvent event) {
         if (event != ControlDispatcher::AfterReplyEvent::ReplyWritten)

@@ -29,10 +29,10 @@ class OpenTuneAudioProcessor;
  *    implement gets UNSUPPORTED(capability_missing);
  * 3. checks params on the network thread (shape and ranges only, never OpenTune state):
  *    INVALID_ARGUMENT(invalid_params);
- * 4. runs the method on the message thread through ControlMessageThread::call(), with the dispatch
- *    timeout of the limits. A request that has not started within it is abandoned and answered with
- *    TIMEOUT(dispatch_timeout), executed false, and never runs later (the liveness token and the
- *    abandon mark of call()). A request that stop() overtakes before it started gets SHUTTING_DOWN.
+ * 4. submits the method asynchronously to the message thread, with the dispatch timeout of the limits.
+ *    A request that has not started within it is abandoned and answered with TIMEOUT(dispatch_timeout),
+ *    executed false, and never runs later. Started work reports its actual result; stop() resolves work
+ *    that has not started with SHUTTING_DOWN.
  *    A method whose schema says x-otcp.mainThread false (ControlMethod::runOffMainThread, app.getLog)
  *    runs on the connection thread instead, with the immutable facts snapshot only: it never waits for
  *    the message thread, so it never answers TIMEOUT (PROTOCOL.md section 13.3 rule 2);
@@ -55,10 +55,9 @@ class OpenTuneAudioProcessor;
  * message thread, always (not only in debug builds); the refusals are counted in threadProbe(). Methods
  * that run off the message thread get no ControlOpContext at all.
  *
- * A request occupies its connection thread while it waits for the message thread: at most the dispatch
- * timeout before it starts, then until it returns (reads return within one main-thread step). The
- * requests of one session therefore start in the order they arrived (PROTOCOL.md section 3.3 rule 6),
- * and different sessions do not wait for each other.
+ * Main-thread requests leave the connection reader available after submission. Submissions from one
+ * session reach the message thread in arrival order (PROTOCOL.md section 3.3 rule 6); different sessions
+ * do not wait for each other.
  *
  * Threading: handleRequest() on connection threads, concurrently; serverStopping() and setInstanceId() on
  * the thread that starts and stops the listener (the message thread in OpenTune); the accessors from any
@@ -122,7 +121,7 @@ public:
 
     /** The two steps that follow the result of a method that ends the instance, in the order they happen. */
     enum class AfterReplyEvent {
-        /** The result was written to the connection (ControlCompletion::respondResult() returned): the connection
+        /** The result was written to the connection (ControlCompletion::respondResult() returned): a non-message
             thread, once, before the exit step is queued. */
         ReplyWritten,
         /** The exit step starts, before it does anything: the message thread. */
@@ -139,7 +138,7 @@ private:
     void execute(const ControlMethod& method, const void* parsed, Outcome& outcome);
     void executeOffMainThread(const ControlMethod& method, const void* parsed, Outcome& outcome);
     static void respond(const Outcome& outcome, const ControlCompletion& completion);
-    /** Posts the exit step of a method that ended the instance, after respond() returned. Connection thread. */
+    /** Posts the exit step of a method that ended the instance, after respond() returned. Non-message thread. */
     void runAfterReply(Outcome& outcome);
     /** Sets the stopping flag and wakes the waiters of the facts; idempotent, any thread. */
     void enterStopping();

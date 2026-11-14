@@ -1620,7 +1620,7 @@ void scenarioDispatchShutdown()
     if (!CONTROL_CHECK(dispatcher != nullptr) || !api.open(service))
         return;
 
-    // This thread does not pump messages, so the request waits in ControlMessageThread::call().
+    // This thread does not pump messages, so the request remains queued for asynchronous dispatch.
     std::optional<std::string> response;
     std::thread client([&api, &response] {
         if (api.client().sendLine(R"({"jsonrpc":"2.0","id":7,"method":"project.get","params":{}})"))
@@ -1661,25 +1661,68 @@ void scenarioDispatchTimeout()
     if (!CONTROL_CHECK(dispatcher != nullptr) || !api.open(service))
         return;
 
-    // This thread does not pump messages for longer than dispatchTimeoutMs.
+    // This thread does not pump messages while one main-thread request waits. The same connection
+    // must still reject its duplicate id and serve an off-main request before the dispatch deadline.
     const int dispatchTimeoutMs = ControlLimits{}.dispatchTimeoutMs;
-    std::optional<std::string> response;
+    const auto messageThread = service.messageThread();
+    std::optional<std::string> duplicateResponse;
+    std::optional<std::string> jobGetResponse;
+    std::optional<std::string> jobCancelResponse;
+    std::optional<std::string> logResponse;
+    std::optional<std::string> timeoutResponse;
+    bool firstRequestPending = false;
+    bool secondRequestSent = false;
+    long long logResponseMs = -1;
     std::atomic<bool> answered{false};
+    const auto started = Clock::now();
     std::thread client([&] {
-        if (api.client().sendLine(R"({"jsonrpc":"2.0","id":8,"method":"project.get","params":{}})"))
-            response = api.client().readLine(dispatchTimeoutMs + kReadTimeoutMs);
+        const bool firstSent = api.client().sendLine(R"({"jsonrpc":"2.0","id":8,"method":"project.get","params":{}})");
+        firstRequestPending = firstSent && waitUntil([&] { return messageThread->waitingCalls() == 1; },
+                                                      kWaiterSettleMs);
+        if (firstRequestPending) {
+            secondRequestSent = api.client().sendRaw(
+                R"({"jsonrpc":"2.0","id":8,"method":"session.info","params":{}})"
+                "\n"
+                R"({"jsonrpc":"2.0","id":81,"method":"job.get","params":{"jobId":"j:deadbeef:1"}})"
+                "\n"
+                R"({"jsonrpc":"2.0","id":82,"method":"job.cancel","params":{"jobId":"j:deadbeef:1"}})"
+                "\n"
+                R"({"jsonrpc":"2.0","id":80,"method":"app.getLog","params":{"maxLines":50}})"
+                "\n");
+            for (int i = 0; i < 4; ++i) {
+                auto line = api.client().readLine(dispatchTimeoutMs + kReadTimeoutMs);
+                const auto responseId = responseIdText(line);
+                if (responseId == "null")
+                    duplicateResponse = std::move(line);
+                else if (responseId == "81")
+                    jobGetResponse = std::move(line);
+                else if (responseId == "82")
+                    jobCancelResponse = std::move(line);
+                else if (responseId == "80")
+                    logResponse = std::move(line);
+            }
+            logResponseMs = millisecondsSince(started);
+            timeoutResponse = api.client().readLine(dispatchTimeoutMs + kReadTimeoutMs);
+        }
         answered = true;
     });
-    const auto started = Clock::now();
     CONTROL_CHECK(
         waitUntil([&answered] { return answered.load(); }, dispatchTimeoutMs + kReadTimeoutMs + kCloseSeenMs));
     client.join();
     const auto elapsed = millisecondsSince(started);
     note("answered after " + std::to_string(elapsed) + " ms");
+    CONTROL_CHECK(firstRequestPending && secondRequestSent);
     CONTROL_CHECK(elapsed >= dispatchTimeoutMs);
-    if (CONTROL_CHECK(response.has_value())) {
-        CONTROL_CHECK(isError(response, "TIMEOUT", "dispatch_timeout"));
-        const auto parsed = parseJson(*response);
+    CONTROL_CHECK(isError(duplicateResponse, "INVALID_ARGUMENT", "duplicate_id")
+                  && responseIdText(duplicateResponse) == "null");
+    CONTROL_CHECK(isError(jobGetResponse, "NOT_FOUND", "job_not_found") && responseIdText(jobGetResponse) == "81");
+    CONTROL_CHECK(isError(jobCancelResponse, "NOT_FOUND", "job_not_found")
+                  && responseIdText(jobCancelResponse) == "82");
+    CONTROL_CHECK(responseIdText(logResponse) == "80" && logResponseMs < dispatchTimeoutMs);
+    if (CONTROL_CHECK(timeoutResponse.has_value())) {
+        CONTROL_CHECK(responseIdText(timeoutResponse) == "8");
+        CONTROL_CHECK(isError(timeoutResponse, "TIMEOUT", "dispatch_timeout"));
+        const auto parsed = parseJson(*timeoutResponse);
         const JsonValue* data = errorData(parsed.value);
         CONTROL_CHECK(data != nullptr && !memberOf(*data, "executed").asBoolean()
                       && memberOf(*data, "retryable").asBoolean());
@@ -1731,6 +1774,27 @@ void scenarioDispatchTimeout()
         "content.setKey", json("{\"contentId\":\"" + handles->contentId + R"(","key":{"root":0,"scale":"major"}})"));
     CONTROL_CHECK(memberOf(set, "applied").asBoolean() && !memberOf(set, "noOp").asBoolean());
     CONTROL_CHECK(processor->getContentSnapshot(clip.key)->detectedKey.root == Key::C);
+
+    // Two main-thread requests on the same connection are submitted and executed in arrival order.
+    const std::string setTempo =
+        R"({"jsonrpc":"2.0","id":11,"method":"transport.setTempo","params":{"bpm":101.5}})";
+    const std::string readTempo = R"({"jsonrpc":"2.0","id":12,"method":"transport.get","params":{}})";
+    std::optional<std::string> setTempoResponse;
+    std::optional<std::string> readTempoResponse;
+    bool sequenceSent = false;
+    const bool sequenceFinished = runWhilePumping([&] {
+        sequenceSent = api.client().sendRaw(setTempo + "\n" + readTempo + "\n");
+        if (sequenceSent) {
+            setTempoResponse = api.client().readLine();
+            readTempoResponse = api.client().readLine();
+        }
+    });
+    CONTROL_CHECK(sequenceFinished && sequenceSent);
+    CONTROL_CHECK(responseIdText(setTempoResponse) == "11" && responseIdText(readTempoResponse) == "12");
+    const auto tempoRead = readTempoResponse ? parseJson(*readTempoResponse) : JsonParseResult{};
+    const JsonValue* tempoResult = tempoRead.ok ? tempoRead.value.find("result") : nullptr;
+    const JsonValue* transport = tempoResult != nullptr ? tempoResult->find("transport") : nullptr;
+    CONTROL_CHECK(transport != nullptr && memberOf(*transport, "bpm").asDouble() == 101.5);
 }
 
 void scenarioDetails()

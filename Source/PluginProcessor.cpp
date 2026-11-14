@@ -1229,6 +1229,14 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
+#if JucePlugin_Enable_ARA
+    if (renderTerminalSubscription_ != 0)
+    {
+        if (auto* dc = getDocumentController())
+            dc->unsubscribeRenderTerminalCallback(renderTerminalSubscription_);
+        renderTerminalSubscription_ = 0;
+    }
+#endif
 #if JucePlugin_Build_Standalone
     contentChangedCallback_ = {};
 #endif
@@ -1764,11 +1772,15 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         if (isEditorView())
         {
             const std::weak_ptr<RenderTerminalSink> weakSink = renderTerminalSink_;
-            dc->setRenderTerminalCallback([weakSink](ContentKey key, bool completed) {
-                if (auto sink = weakSink.lock())
-                    if (sink->callback)
-                        sink->callback(key, completed);
-            });
+            renderTerminalSubscription_ = dc->subscribeRenderTerminalCallback(
+                [weakSink](ContentKey key, bool completed) {
+                    if (auto sink = weakSink.lock())
+                    {
+                        const auto callback = sink->callback;
+                        if (callback)
+                            callback(key, completed);
+                    }
+                });
         }
 
         AppLogger::logNoThrow("ARA: didBindToARA - DC owns its CRS lease; processor="

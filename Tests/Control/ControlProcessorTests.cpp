@@ -444,10 +444,12 @@ void scenarioRepeatedStop()
     const auto messageThread = service.messageThread();
     CONTROL_CHECK(!messageThread->isAlive() && !messageThread->post([] {}));
     std::atomic<int> executed{0};
-    auto result = ControlMessageThread::CallResult::Done;
-    std::thread caller([&] { result = messageThread->call([&executed] { ++executed; }, kLongCallTimeoutMs); });
-    caller.join();
-    CONTROL_CHECK(result == ControlMessageThread::CallResult::Stopped && executed == 0);
+    auto result = static_cast<int>(ControlMessageThread::CallResult::Done);
+    messageThread->submit([&executed] { ++executed; }, kLongCallTimeoutMs,
+                          [&result](ControlMessageThread::CallResult callResult) {
+                              result = static_cast<int>(callResult);
+                          });
+    CONTROL_CHECK(result == static_cast<int>(ControlMessageThread::CallResult::Stopped) && executed == 0);
 
     processor.reset(); // the destructor's stop() and the service's own are no-ops now
     pumpMessagesFor(kQuietPumpMs);
@@ -455,9 +457,8 @@ void scenarioRepeatedStop()
     CONTROL_CHECK(occurrences(logText(), "control API: stopped") == 1);
 }
 
-/** Destroying the processor while an authenticated session, a silent connection and a half-sent line
-    are open, a thread waits for the message thread, and functions are queued for it: done within
-    kShutdownBoundMs, the waiter returns Stopped, and the queued functions never run. */
+/** Destroying the processor while a session and queued message-thread work exist resolves submissions
+    as Stopped and prevents queued functions from running. */
 void scenarioShutdown()
 {
     auto processor = startedProcessor();
@@ -480,10 +481,10 @@ void scenarioShutdown()
     const auto messageThread = service.messageThread();
     std::atomic<int> executed{0};
     std::atomic<int> waiterResult{-1};
-    std::thread waiter([messageThread, &executed, &waiterResult] {
-        const auto result = messageThread->call([&executed] { ++executed; }, kLongCallTimeoutMs);
-        waiterResult = static_cast<int>(result);
-    });
+    messageThread->submit([&executed] { ++executed; }, kLongCallTimeoutMs,
+                          [&waiterResult](ControlMessageThread::CallResult result) {
+                              waiterResult = static_cast<int>(result);
+                          });
     CONTROL_CHECK(waitUntil([&messageThread] { return messageThread->waitingCalls() == 1; }, kWaiterSettleMs));
     for (int i = 0; i < kQueuedFunctions; ++i)
         CONTROL_CHECK(messageThread->post([&executed] { ++executed; }));
@@ -495,7 +496,6 @@ void scenarioShutdown()
     CONTROL_CHECK(elapsed <= kShutdownBoundMs);
 
     CONTROL_CHECK(waitUntil([&waiterResult] { return waiterResult.load() >= 0; }, kCloseSeenMs));
-    waiter.join();
     CONTROL_CHECK(waiterResult.load() == static_cast<int>(ControlMessageThread::CallResult::Stopped));
     CONTROL_CHECK(messageThread->waitingCalls() == 0);
     CONTROL_CHECK(!std::filesystem::exists(discoveryPath));
@@ -504,9 +504,26 @@ void scenarioShutdown()
     CONTROL_CHECK(silent.waitClosed(kCloseSeenMs, bytes) && bytes == 0);
     CONTROL_CHECK(partial.waitClosed(kCloseSeenMs, bytes) && bytes == 0);
 
-    // The waiter's function and the posted ones reach the message loop now and find the token dead.
+    // The queued function reaches the message loop now and finds the token dead.
     pumpMessagesFor(kQuietPumpMs);
     CONTROL_CHECK(executed.load() == 0);
+
+    // A running submission still reports its result when stop() ends the completion worker during a nested loop.
+    ControlMessageThread messageQueue;
+    std::atomic<int> runningResult{-1};
+    std::atomic<int> runningCalls{0};
+    messageQueue.submit(
+        [&messageQueue, &runningCalls] {
+            ++runningCalls;
+            juce::MessageManager::callAsync([&messageQueue] { messageQueue.stop(); });
+            CONTROL_CHECK(pumpMessagesUntil([&messageQueue] { return messageQueue.isStopped(); }, kWaiterSettleMs));
+        },
+        kLongCallTimeoutMs, [&runningResult](ControlMessageThread::CallResult result) {
+            runningResult = static_cast<int>(result);
+        });
+    CONTROL_CHECK(pumpMessagesUntil([&runningResult] { return runningResult.load() >= 0; }, kCloseSeenMs));
+    CONTROL_CHECK(runningResult.load() == static_cast<int>(ControlMessageThread::CallResult::Done));
+    CONTROL_CHECK(runningCalls.load() == 1 && messageQueue.waitingCalls() == 0);
 }
 
 struct Scenario

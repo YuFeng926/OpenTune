@@ -16,8 +16,7 @@
 
 namespace OpenTune {
 
-/** What execute() produced on the message thread, read by the waiting connection thread after call()
-    returned Done. */
+/** What execute() produced on the message thread, read by its asynchronous completion. */
 struct ControlDispatcher::Outcome
 {
     std::optional<JsonValue> result;
@@ -97,9 +96,9 @@ void ControlDispatcher::enterStopping()
 {
     // Requests that reach handleRequest() from now on answer themselves with SHUTTING_DOWN (they may have
     // passed the listener's stop check just before its flag was set). Functions already queued for the
-    // message thread check the flag before they start; ControlService::stop() has woken their waiters
-    // already by stopping the message-thread marshalling. A method off the message thread that waits for
-    // the redaction secrets is woken here.
+    // message thread check the flag before they start; ControlService::stop() resolves their submissions
+    // by stopping the message-thread marshalling. A method off the message thread that waits for the
+    // redaction secrets is woken here.
     {
         std::lock_guard<std::mutex> lock(factsMutex_);
         stopping_ = true;
@@ -158,40 +157,37 @@ void ControlDispatcher::handleRequest(ControlRequest request, ControlCompletion 
         respond(*outcome, completion);
         return;
     }
-    // `this` and `method` stay valid: call() returns only after the function finished or once it can no
-    // longer start (TimedOut, Stopped), and the dispatcher outlives the request it is handling. The
-    // waiting thread holds no lock and no lease of the processor.
-    const auto callResult = setup_.messageThread->call(
-        [this, method, parsed, outcome] { execute(*method, parsed.get(), *outcome); }, setup_.limits.dispatchTimeoutMs);
-    switch (callResult) {
-        case ControlMessageThread::CallResult::Done:
-            respond(*outcome, completion);
-            // Only now, with the result written to the connection (or discarded because the peer is gone): a method
-            // that ended the instance gets its exit step, which stops the service and quits (PROTOCOL.md section 14.1).
-            if (outcome->afterReply)
-                notifyAfterReply(AfterReplyEvent::ReplyWritten);
-            runAfterReply(*outcome);
-            return;
-        case ControlMessageThread::CallResult::Failed:
-            logFailure(method->name, "failed on the message thread");
-            completion.respondError("INTERNAL", {}, "the method failed", method->write);
-            return;
-        case ControlMessageThread::CallResult::TimedOut:
-            // Abandoned before it started: it never runs (ControlMessageThread::call()).
-            completion.respondError("TIMEOUT", "dispatch_timeout",
-                                    "the request did not start on the main thread within dispatchTimeoutMs", false);
-            return;
-        case ControlMessageThread::CallResult::Stopped:
-        case ControlMessageThread::CallResult::NotPosted:
-            // The marshalling stopped, or the message loop accepts no more work (OpenTune quits).
-            completion.respondError("SHUTTING_DOWN", {}, "the control API is stopping", false);
-            return;
-    }
+    setup_.messageThread->submit(
+        [this, method, parsed, outcome] { execute(*method, parsed.get(), *outcome); }, setup_.limits.dispatchTimeoutMs,
+        [this, method, outcome, completion](ControlMessageThread::CallResult callResult) {
+            switch (callResult) {
+                case ControlMessageThread::CallResult::Done:
+                    respond(*outcome, completion);
+                    // A method that ends the instance posts its exit step only after its reply was delivered.
+                    if (outcome->afterReply)
+                        notifyAfterReply(AfterReplyEvent::ReplyWritten);
+                    runAfterReply(*outcome);
+                    return;
+                case ControlMessageThread::CallResult::Failed:
+                    logFailure(method->name, "failed on the message thread");
+                    completion.respondError("INTERNAL", {}, "the method failed", method->write);
+                    return;
+                case ControlMessageThread::CallResult::TimedOut:
+                    completion.respondError("TIMEOUT", "dispatch_timeout",
+                                            "the request did not start on the main thread within dispatchTimeoutMs",
+                                            false);
+                    return;
+                case ControlMessageThread::CallResult::Stopped:
+                case ControlMessageThread::CallResult::NotPosted:
+                    completion.respondError("SHUTTING_DOWN", {}, "the control API is stopping", false);
+                    return;
+            }
+        });
 }
 
 void ControlDispatcher::execute(const ControlMethod& method, const void* parsed, Outcome& outcome)
 {
-    // Always on: only the message thread may run methods (call() guarantees it; this check proves it).
+    // Always on: only the message thread may run methods (submit() guarantees it; this check proves it).
     if (!juce::MessageManager::existsAndIsCurrentThread()) {
         ++probe_.otherThreadAccesses;
         jassertfalse;
@@ -289,8 +285,7 @@ void ControlDispatcher::runAfterReply(Outcome& outcome)
     if (!outcome.afterReply)
         return;
     // ControlMessageThread::post(): the action runs on the message thread, in the message loop, and never inside the
-    // call() that this connection thread has finished (the thread rules of Source/Control/README.md: a method run by
-    // call() must not stop the service itself). It does nothing when the service has stopped meanwhile: the
+    // method that produced the reply. It does nothing when the service has stopped meanwhile: the
     // application is then ending anyway.
     auto step = [this, action = std::move(outcome.afterReply)] {
         notifyAfterReply(AfterReplyEvent::ExitStepStarted);
@@ -315,10 +310,9 @@ void ControlDispatcher::runAfterReply(Outcome& outcome)
         // already stopping. That is still true when it is written (the service is stopping and there is nothing left to
         // stop), so the line is harmless; only the reason that post() failed may have been the queue's refusal.
         //
-        // There is no cleanup that this thread can do. ControlService::stop() runs on the message thread, which is the
-        // thread that has just refused to take work, and calling it here would make the service join this very
-        // connection thread (ControlMessageThread::call() describes the same rule). So the case is only logged, in
-        // words that say what the client was told and what is left running.
+        // There is no cleanup this completion thread can do. ControlService::stop() is owned by the message thread,
+        // which has just refused to take work, so the case is only logged with what the client was told and what is
+        // left running.
         if (setup_.messageThread->isAlive())
             AppLogger::logNoThrow(
                 "control API: the exit step of a method that ends the instance was refused by the message queue: the "

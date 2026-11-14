@@ -59,9 +59,9 @@ private:
  * session.hello with UNSUPPORTED(capability_missing).
  *
  * Threading: called on connection threads, concurrently for different sessions; implementations
- * must be thread-safe and must not block a connection thread for long. ControlDispatcher waits at most
- * dispatchTimeoutMs for a method to start on the message thread and then for that method only, which
- * returns quickly; longer work is queued instead.
+ * must be thread-safe and must not block a connection thread for long. ControlDispatcher submits
+ * message-thread work asynchronously; dispatchTimeoutMs bounds only the time before that work starts,
+ * and longer work is queued instead.
  */
 class ControlRequestHandler
 {

@@ -266,7 +266,9 @@ public:
 
     // Message-thread render terminal notification used by the editor for post-edit audition.
     using RenderTerminalCallback = std::function<void(ContentKey, bool)>;
-    void setRenderTerminalCallback(RenderTerminalCallback callback);
+    using RenderTerminalSubscription = uint64_t;
+    RenderTerminalSubscription subscribeRenderTerminalCallback(RenderTerminalCallback callback);
+    void unsubscribeRenderTerminalCallback(RenderTerminalSubscription subscription);
 
     /** Audio callbacks read this stable route; no controller API is touched there. */
     AuditionRoute* getAuditionRoute() noexcept { return &auditionRoute_; }
@@ -335,23 +337,28 @@ private:
                                          std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate,
                                          std::shared_ptr<RenderTerminalRelay> renderTerminalRelay);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+    friend struct RenderTerminalRelayTestAccess;
 
     std::unique_ptr<NotePitchAudition> notePitchAudition_;
     AuditionRoute auditionRoute_;
     std::vector<std::shared_ptr<NoteAudition>> keyboardAuditionSources_;
 
-    // Render terminal notifications are built by the render worker and invoked on
-    // the message thread; the relay keeps the callback lifetime independent of
-    // the worker's completion copy.
+    // Render terminal notifications are invoked on the message thread; the relay
+    // snapshots editor subscriptions independently of worker completion copies.
     struct RenderTerminalRelay
     {
+        using Subscription = RenderTerminalSubscription;
+
         std::mutex mutex;
-        RenderTerminalCallback callback;
+        std::map<Subscription, RenderTerminalCallback> callbacks;
+        Subscription nextSubscription{1};
         // Success notifications are claimed once per key+render generation: a
         // multi-chunk render delivers one settled callback per chunk and every
         // queued callback observes the same fully settled cache.
         std::map<ContentKey, uint64_t> lastCompletedRenderGeneration;
-        void set(RenderTerminalCallback next);
+        Subscription subscribe(RenderTerminalCallback next);
+        void unsubscribe(Subscription subscription);
+        void clear();
         void invoke(ContentKey key, bool completed);
         void invokeCompleted(ContentKey key, uint64_t renderGeneration);
     };

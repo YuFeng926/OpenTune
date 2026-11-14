@@ -10,28 +10,23 @@ namespace OpenTune {
  * Message-thread marshalling of the control API, guarded by a liveness token.
  *
  * OpenTune changes content only on the message thread. The control API reaches the message thread
- * only through this class: post() queues a function with juce::MessageManager::callAsync, call() does
- * the same from another thread and waits for it. Every queued function captures the liveness token of
- * this object (a flag in state shared with the queued functions, not the object itself) and runs only
- * while the token is alive. stop() kills the token: functions still in the queue then return without
- * doing anything when the message loop reaches them, even after this object and its owner are gone.
+ * only through this class: post() and submit() queue functions with juce::MessageManager::callAsync.
+ * submit() uses one shared deadline and completion worker for asynchronous calls. Every queued function
+ * captures the liveness token of this object (a flag in state shared with the queued functions, not the
+ * object itself) and runs only while the token is alive. stop() kills the token: functions still in the
+ * queue then return without doing anything when the message loop reaches them. The owner is destroyed on
+ * the message thread, so a queued function that observes a live token keeps the owner alive until it returns.
  *
- * Why the check is enough: queued functions run on the message thread, and stop() and the destruction
- * of the owner happen on the message thread too, so a function that found the token alive keeps its
- * owner alive until it returns (unless the function itself destroys the owner).
+ * Why the check is enough: queued functions and owner destruction both run on the message thread, so a function that
+ * found the token alive keeps its owner alive until it returns (unless it destroys the owner).
  *
- * A thread waiting in call() waits on this object's own mutex and condition variable. It must not hold
- * any lock or lease of the processor while it waits (in particular no
- * ProcessRenderRuntime::CompletionCallbackLease): the message thread may need them to make progress.
- * stop() wakes every waiting call().
- *
- * Threading: post(), call(), isStopped(), isAlive() and waitingCalls() from any thread; stop() and destruction on
- * the message thread.
+ * Threading: post(), submit(), stop(), isStopped(), isAlive() and waitingCalls() from any thread;
+ * destruction on the message thread.
  */
 class ControlMessageThread
 {
 public:
-    /** How call() ended. */
+    /** How an asynchronous submission ended. */
     enum class CallResult {
         /** The function ran and returned. */
         Done,
@@ -42,7 +37,7 @@ public:
         /** stop() was called before the function started. It never runs. */
         Stopped,
         /** Nothing was queued: no function, the message queue refused it (for example while the
-            application quits), or call() was used on the message thread itself. */
+            application quits). */
         NotPosted
     };
 
@@ -60,24 +55,13 @@ public:
      */
     bool post(std::function<void()> fn);
 
-    /**
-     * From a thread other than the message thread: runs fn on the message thread and waits until it
-     * returned, timeoutMs passed or stop() was called.
-     *
-     * TimedOut and Stopped guarantee that fn has not run and never will run: the call is abandoned
-     * under the same mutex that fn's start takes. If fn has already started when the timeout passes or
-     * stop() is called, call() waits until it returns and reports Done or Failed, so that a caller
-     * never reports "not executed" for work that was executed.
-     *
-     * fn must not stop the control service synchronously (for example an operation that closes the
-     * application or destroys the processor): ControlService::stop() joins the connection thread that
-     * waits here for fn, so the join would only end at its bounded timeout and detach the thread. Such
-     * an operation posts the stop with post() from fn and returns.
-     */
-    CallResult call(std::function<void()> fn, int timeoutMs);
+    /** Queues fn for the message thread. A queued function that has not started by timeoutMs never runs; a started
+        function reports its actual result. Accepted work completes on the shared worker, or on the message thread
+        when stop() has ended that worker. Rejected and stopped queued work completes on the calling thread. The timeout
+        starts after the message queue accepts the function. */
+    void submit(std::function<void()> fn, int timeoutMs, std::function<void(CallResult)> completion);
 
-    /** Kills the token (queued functions become no-ops) and wakes every waiting call(), which then
-        returns Stopped unless its function already started. Message thread; idempotent. */
+    /** Kills the token (queued functions become no-ops) and completes queued submissions with Stopped. Idempotent. */
     void stop();
 
     /** True after stop(). */
@@ -89,11 +73,12 @@ public:
         the application quits) and the service is still up. */
     bool isAlive() const;
 
-    /** Number of call()s currently waiting; for diagnostics and tests. */
+    /** Number of asynchronous submissions awaiting a terminal result. */
     int waitingCalls() const;
 
 private:
     struct Shared;
+    static void timeoutLoop(std::shared_ptr<Shared> shared);
     std::shared_ptr<Shared> shared_;
 };
 

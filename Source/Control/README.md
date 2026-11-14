@@ -26,7 +26,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 1. If you change an upstream function that is listed in `MIRRORS.md`, you must run `ControlMirrorDriftTests` and bring the mirrored code in `Source/Control` in line as `MIRRORS.md` says before you update the hash. The test exists only in a build configured with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` (both are OFF by default): configure the way you usually do (a preset from `CMakePresets.json` or your own command) with those two options added, build, then run `ctest --test-dir <build directory> -C <config> -R ControlMirrorDrift --no-tests=error` (`<config>` is the configuration you built, for example `Release`; a multi-config generator needs `-C`). In a build without the two options `ctest -R Control` finds no test, and without `--no-tests=error` that still exits 0. / 改了 `MIRRORS.md` 里列出的上游函数，必须运行 `ControlMirrorDriftTests`，并按 `MIRRORS.md` 同步 `Source/Control` 里的镜像代码，然后才能更新哈希。这个测试只存在于用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` configure 的构建里（两者默认都是 OFF）：用你平常的 configure（`CMakePresets.json` 里的 preset 或自己的命令），加上这两个选项，构建后运行 `ctest --test-dir <构建目录> -C <配置> -R ControlMirrorDrift --no-tests=error`（`<配置>` 是你构建的配置，例如 `Release`；多配置生成器必须带 `-C`）。没有这两个选项的构建里 `ctest -R Control` 找不到任何测试，不加 `--no-tests=error` 时退出码仍是 0。
 2. Do not delete or move code marked `// OpenTune Control API hook`; the list is in "Hooks". / 不要删除或挪动标有 `// OpenTune Control API hook` 的代码，清单见「Hooks」。
 3. With `OPENTUNE_ENABLE_CONTROL_API` OFF, or ON but not enabled at run time, OpenTune must behave as before. / 选项关闭，或开启但运行时未启用时，OpenTune 的行为必须与原来一致。
-4. The control API reads and writes content only on the message thread, through `ControlMessageThread`: `post()` queues a function for the message thread and returns at once, `call()` runs it there and waits for it to return (the dispatcher uses `call()`); never from the network thread. / 控制接口只在消息线程、经 `ControlMessageThread` 读写内容：`post()` 把函数排到消息线程上就返回，`call()` 在那里执行它并等它返回（dispatcher 用的是 `call()`）；绝不在网络线程。
+4. The control API reads and writes content only on the message thread, through `ControlMessageThread`: `post()` queues fire-and-forget work, and `submit()` queues work with a timeout and completion callback; the dispatcher never waits on a connection thread for message-thread work. / 控制接口只在消息线程、经 `ControlMessageThread` 读写内容：`post()` 投递无需结果的任务，`submit()` 投递带超时和完成回调的任务；dispatcher 不会让连接线程等待消息线程任务。
 
 ## File map
 
@@ -40,7 +40,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `ControlSocket.*` | Non-blocking loopback sockets, not inherited by child processes. |
 | `ControlDiscovery.*` | Discovery directory and file, ready file, private file writes. |
 | `ControlServer.*` | The listener: rules before authentication, sessions, limits, the stop sequence. |
-| `ControlMessageThread.*` | The only way to the message thread: `post()` and `call()`, guarded by a liveness token. |
+| `ControlMessageThread.*` | The only way to the message thread: `post()` and asynchronous `submit()`, guarded by a liveness token. |
 | `ControlService.*` | Facade owned by the processor: options, start and stop, listener, marshalling, editor bridge pointer. |
 | `ControlUiBridge.h` | Interface to what only the editor owns; every function defaults to "not supported". |
 | `ControlDataDirectory.*` | `OPENTUNE_DATA_DIR` for the preference and log hooks. |
@@ -78,17 +78,13 @@ use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all files in ord
 ## Threading rules
 
 - Project content is read and changed only on the message thread. The control API reaches it only
-  through `ControlMessageThread` (`post()`, or `call()` from a network thread).
-- A network thread that waits for the message thread holds no lock or lease of the processor
-  (in particular no `ProcessRenderRuntime::CompletionCallbackLease`) while it waits.
+  through `ControlMessageThread` (`post()` or asynchronous `submit()`).
+- A submitted function holds no lock or lease of the processor across its completion callback
+  (in particular no `ProcessRenderRuntime::CompletionCallbackLease`).
 - Everything posted to the message thread captures the liveness token of the marshalling and does
-  nothing once the service has stopped or is destroyed. `stop()` wakes every waiting thread.
-- A function run through `ControlMessageThread::call()` must not stop the control service
-  synchronously (for example an operation that closes the application or destroys the processor):
-  `ControlService::stop()` joins the connection thread that waits for that function, so the join would
-  only end at its bounded timeout. Such an operation posts the stop with `post()` from the function and
-  returns; `app.quit` hands it to the dispatcher (`ControlOpContext::endInstanceAfterReply()`), which posts it
-  only after the response is written (see "Quit").
+  nothing once the service has stopped or is destroyed. `stop()` completes queued submissions as stopped.
+- An operation that ends the instance (`app.quit`) hands its exit step to the dispatcher
+  (`ControlOpContext::endInstanceAfterReply()`), which posts it only after the response is written (see "Quit").
 - Methods run only through `ControlDispatcher`: every access of an operation to the processor or the
   editor bridge goes through `ControlOpContext`, which refuses any other thread than the message thread,
   in every build type.
@@ -198,11 +194,11 @@ hello). For each request the dispatcher then:
 3. checks `params` on the connection thread against the method's params schema: shape and ranges only,
    never OpenTune state (case 12, `INVALID_ARGUMENT(invalid_params)`). Handles get their form check
    here; whether they name something is decided on the message thread.
-4. runs the method on the message thread through `ControlMessageThread::call()` with
+4. submits the method to the message thread through `ControlMessageThread::submit()` with
    `limits.dispatchTimeoutMs` (10 s). A request that has not started by then is abandoned under the
    mutex that its start takes and is answered with `TIMEOUT(dispatch_timeout)`, `executed` false; it
    never runs later (section 13.1 rule 2). A request that `stop()` overtakes before it started gets
-   `SHUTTING_DOWN`. The waiting connection thread holds no lock or lease of the processor. A read with
+   `SHUTTING_DOWN`. A read with
    `mainThread` false in its schema (`ControlMethod::runOffMainThread`, `app.getLog`) instead runs right
    here on the connection thread with the facts snapshot (section 13.3 rule 2): no dispatch timeout, no
    `TIMEOUT`. The redaction secrets are set right after the listener started; such a method waits for
@@ -217,9 +213,9 @@ hello). For each request the dispatcher then:
    when the method's result is decided, before the response is written, so that no request of another session
    executes between the decision and the exit (see "Quit").
 
-A request occupies its connection thread while it waits, so the requests of one session start on the
-message thread in the order they arrived (section 3.3 rule 6), and sessions do not wait for each other.
-Reads finish within one message-thread step.
+The connection reader returns to reading after submitting message-thread work. Requests of one session
+reach the message thread in arrival order (section 3.3 rule 6), and sessions do not wait for each other.
+The response is written when the submitted work completes or its dispatch deadline expires.
 
 The jobs methods, whose schema says `mainThread: false` too (`job.get`, `job.cancel`), skip step 4:
 they run on the connection thread with the jobs registry (`ControlMethod::runWithoutMessageThread`), never return
