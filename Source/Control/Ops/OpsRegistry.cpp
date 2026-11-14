@@ -29,7 +29,6 @@
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
-#include <mutex>
 
 namespace OpenTune {
 
@@ -38,25 +37,6 @@ namespace {
 /** Context of an error that changed nothing, and of one after a change (executed true). Same length. */
 constexpr std::string_view kErrorContextPrefix = "otcp:";
 constexpr std::string_view kErrorAfterChangePrefix = "otcp!";
-
-std::atomic<bool>& reportIncompleteCapabilities()
-{
-    static std::atomic<bool> report{false};
-    return report;
-}
-
-/** The capabilities controlSetWithheldCapabilitiesForTesting() leaves out, under their mutex. */
-struct WithheldCapabilities
-{
-    std::mutex mutex;
-    std::vector<std::string> names;
-};
-
-WithheldCapabilities& withheldCapabilities()
-{
-    static WithheldCapabilities withheld;
-    return withheld;
-}
 
 /** A capability without methods of its own, which an instance reports together with the capability it extends
     (PROTOCOL.md section 22): ui.onboardingClose says that ui.dismiss can close an onboarding overlay that is already
@@ -115,13 +95,12 @@ void registerControlMethods(ControlMethodTable& table)
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,
-                                   const ControlInstanceFacts& facts, ControlThreadProbe& probe, ControlJobs* jobs,
+                                   const ControlInstanceFacts& facts, ControlJobs* jobs,
                                    std::function<ControlUiBridge*()> bridgeAccessor,
                                    std::shared_ptr<ControlHistory> history)
     : processor_(processor)
     , bridge_(bridge)
     , facts_(facts)
-    , probe_(probe)
     , jobs_(jobs)
     , bridgeAccessor_(std::move(bridgeAccessor))
     , history_(std::move(history))
@@ -130,7 +109,7 @@ ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiB
 
 ControlOpContext::ControlOpContext(const ControlOpEnvironment& environment)
     : ControlOpContext(*environment.processor, environment.bridge ? environment.bridge() : nullptr, environment.facts,
-                       *environment.probe, environment.jobs, environment.bridge, environment.history)
+                       environment.jobs, environment.bridge, environment.history)
 {}
 
 std::shared_ptr<ControlHistory> ControlOpContext::history()
@@ -157,7 +136,6 @@ ControlOpEnvironment ControlOpContext::environment()
         environment.bridge = [bridge] { return bridge; };
     }
     environment.facts = facts_;
-    environment.probe = &probe_;
     environment.jobs = jobs_;
     environment.history = history_;
     return environment;
@@ -172,11 +150,8 @@ void ControlOpContext::endInstanceAfterReply(std::function<void()> action)
 void ControlOpContext::requireMessageThread()
 {
     // Always on, also in release builds: content is read and changed only on the message thread.
-    if (juce::MessageManager::existsAndIsCurrentThread()) {
-        ++probe_.messageThreadAccesses;
+    if (juce::MessageManager::existsAndIsCurrentThread())
         return;
-    }
-    ++probe_.otherThreadAccesses;
     jassertfalse;
     throw ControlThreadViolation();
 }
@@ -271,11 +246,10 @@ const ControlMethod* ControlMethodTable::find(std::string_view name) const
 std::vector<std::string> ControlMethodTable::capabilities() const
 {
     std::vector<std::string> out{"session.v1"};
-    const bool reportIncomplete = reportIncompleteCapabilities().load();
     for (const auto& method : methods_) {
         const char* capability = controlMethodCapability(method.name);
         if (capability != nullptr && std::find(out.begin(), out.end(), capability) == out.end()
-            && (reportIncomplete || !controlCapabilityIsIncomplete(capability)))
+            && !controlCapabilityIsIncomplete(capability))
             out.emplace_back(capability);
     }
     for (const auto& feature : kFeatureCapabilities) {
@@ -283,10 +257,6 @@ std::vector<std::string> ControlMethodTable::capabilities() const
         if (extended != out.end())
             out.insert(extended + 1, feature.capability);
     }
-    auto& withheld = withheldCapabilities();
-    const std::lock_guard<std::mutex> lock(withheld.mutex);
-    for (const auto& name : withheld.names)
-        out.erase(std::remove(out.begin(), out.end(), name), out.end());
     return out;
 }
 
@@ -296,18 +266,6 @@ bool controlCapabilityIsIncomplete(std::string_view capability)
     // whose methods are registered in several steps names itself here until the last step.
     juce::ignoreUnused(capability);
     return false;
-}
-
-void controlSetReportIncompleteCapabilitiesForTesting(bool report)
-{
-    reportIncompleteCapabilities() = report;
-}
-
-void controlSetWithheldCapabilitiesForTesting(std::vector<std::string> capabilities)
-{
-    auto& withheld = withheldCapabilities();
-    const std::lock_guard<std::mutex> lock(withheld.mutex);
-    withheld.names = std::move(capabilities);
 }
 
 } // namespace OpenTune

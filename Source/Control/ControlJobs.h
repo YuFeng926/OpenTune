@@ -139,9 +139,6 @@ public:
         std::string jobId;
         std::string refusal;
     };
-    /** Milliseconds: since the Unix epoch for the wall clock, from any fixed point for the monotonic one. */
-    using Clock = std::function<std::int64_t()>;
-
     explicit ControlJobs(const ControlLimits& limits);
     /** Calls stop() when it was not called; see the class threading rules. Never inside the nested
         message loop of a step (see Re-entrancy). */
@@ -202,18 +199,9 @@ public:
 
     /** True once stop() was called. Any thread. */
     bool isStopped() const;
-    /** Number of retained jobs, and of those that are not terminal. Any thread; for tests. */
-    std::size_t retainedCount() const;
-    std::size_t activeCount() const;
     /** The kinds of the jobs that are not terminal (queued or running), one entry per job, in the order the jobs were
         started. app.quit refuses while there is one. Any thread. */
     std::vector<std::string> activeKinds() const;
-    /** Number of job.get requests waiting. Any thread; for tests. */
-    std::size_t waitingCount() const;
-
-    /** Test seam: the wall clock of the timestamps and the monotonic clock of retention; without
-        steadyClock, clock drives both. Message thread, before the first job. */
-    void setClockForTesting(Clock clock, Clock steadyClock = {});
 
 private:
     friend class ControlJobStep;
@@ -239,8 +227,6 @@ private:
     void handleAsyncUpdate() override;
 
     ControlLimits limits_;
-    Clock clock_;
-    Clock steadyClock_;
     mutable std::mutex mutex_;
     std::condition_variable changed_;
     std::string instanceShort_ = "00000000";

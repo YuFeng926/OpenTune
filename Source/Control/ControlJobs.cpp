@@ -250,11 +250,6 @@ std::function<void()> ControlJobStep::wakeCallback() const
 
 ControlJobs::ControlJobs(const ControlLimits& limits)
     : limits_(limits)
-    , clock_([] { return static_cast<std::int64_t>(juce::Time::currentTimeMillis()); })
-    , steadyClock_([] {
-        return static_cast<std::int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count());
-    })
     , wakeState_(std::make_shared<WakeState>(*this))
 {}
 
@@ -263,8 +258,7 @@ ControlJobs::~ControlJobs()
     // Never inside a step's nested message loop: the interrupted tick would return into a destroyed
     // registry (see the class comment).
     jassert(tickDepth_ == 0);
-    // ControlService stops the registry on the message thread first; this only covers a registry that a
-    // test creates and destroys on the message thread.
+    // ControlService stops the registry on the message thread first.
     stop();
     std::lock_guard<std::mutex> lock(wakeState_->mutex);
     wakeState_->jobs = nullptr;
@@ -276,25 +270,15 @@ void ControlJobs::setInstanceShort(std::string instanceShort)
     instanceShort_ = std::move(instanceShort);
 }
 
-void ControlJobs::setClockForTesting(Clock clock, Clock steadyClock)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!steadyClock)
-        steadyClock = clock;
-    if (clock)
-        clock_ = std::move(clock);
-    if (steadyClock)
-        steadyClock_ = std::move(steadyClock);
-}
-
 std::int64_t ControlJobs::now() const
 {
-    return clock_();
+    return static_cast<std::int64_t>(juce::Time::currentTimeMillis());
 }
 
 std::int64_t ControlJobs::steadyNow() const
 {
-    return steadyClock_();
+    return static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count());
 }
 
 bool ControlJobs::expiredLocked(const Job& job, std::int64_t steadyNowMs) const
@@ -702,19 +686,6 @@ bool ControlJobs::isStopped() const
     return stopped_;
 }
 
-std::size_t ControlJobs::retainedCount() const
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    return jobs_.size();
-}
-
-std::size_t ControlJobs::activeCount() const
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    return static_cast<std::size_t>(
-        std::count_if(jobs_.begin(), jobs_.end(), [](const auto& entry) { return !entry.second->terminal(); }));
-}
-
 std::vector<std::string> ControlJobs::activeKinds() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -724,12 +695,6 @@ std::vector<std::string> ControlJobs::activeKinds() const
         if (!entry.second->terminal())
             kinds.push_back(entry.second->kind);
     return kinds;
-}
-
-std::size_t ControlJobs::waitingCount() const
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    return waiters_.size();
 }
 
 } // namespace OpenTune

@@ -35,12 +35,6 @@ namespace OpenTune {
 
 namespace {
 
-ControlService::RuntimeInitialiser& runtimeInitialiserOverride()
-{
-    static ControlService::RuntimeInitialiser initialiser;
-    return initialiser;
-}
-
 /** The process's command-line arguments (UTF-8, without the executable) as JUCE reads them:
     juce::JUCEApplicationBase::getCommandLineParameterArray(), on Windows parsed from GetCommandLineW(). */
 std::vector<std::string> commandLineArguments()
@@ -134,9 +128,7 @@ bool ControlService::startListening()
     // OpenTuneAudioProcessor::ensureRuntimeInitialized(): the same sequence as the host entry points
     // (createEditor, prepareToPlay), so that the services and preferences the API reads exist before
     // the first request. It works without an audio device and without a window.
-    const auto& initialiser = runtimeInitialiserOverride();
-    const bool runtimeReady = initialiser ? initialiser(processor_) : processor_.ensureRuntimeInitialized();
-    if (!runtimeReady) {
+    if (!processor_.ensureRuntimeInitialized()) {
         log("control API: not started: the OpenTune runtime could not be initialised");
         return false;
     }
@@ -204,7 +196,6 @@ void ControlService::stop() noexcept
     stopCalled_ = true;
     try {
         // 1. Stop flag: from now on requests are answered with SHUTTING_DOWN.
-        stopping_ = true;
         // 2. Wake every thread waiting for the message thread; queued functions become no-ops.
         messageThread_->stop();
         // 3. The jobs: waiting job.get requests are answered with SHUTTING_DOWN, no job work runs again,
@@ -264,16 +255,6 @@ ControlBuildIdentity ControlService::buildIdentity()
     identity.buildTag = nonEmpty(OPENTUNE_CONTROL_BUILD_TAG);
     identity.sourceUrl = OPENTUNE_CONTROL_SOURCE_URL;
     return identity;
-}
-
-void ControlService::setRuntimeInitialiserForTesting(RuntimeInitialiser initialiser)
-{
-    runtimeInitialiserOverride() = std::move(initialiser);
-}
-
-std::size_t ControlService::processorClassSizeForTesting() noexcept
-{
-    return sizeof(OpenTuneAudioProcessor);
 }
 
 } // namespace OpenTune

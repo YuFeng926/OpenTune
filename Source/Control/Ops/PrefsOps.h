@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #pragma once
 
-#include <cstdint>
-
 namespace OpenTune {
 
 class ControlMethodTable;
@@ -51,13 +49,5 @@ class ControlMethodTable;
  * Threading: parse on the connection thread; run, the job and everything it touches on the message thread.
  */
 void registerPrefsOps(ControlMethodTable& table);
-
-/** Test seam: the time that a prefsApply job waits for the editor to apply the editing scheme, in milliseconds; 0
-    restores the default. Any thread. */
-void controlSetPrefsApplyTimeoutForTesting(std::uint32_t milliseconds);
-
-/** Test seam: the time that a prefsApply job waits for the vocoder to be ready again after a new vocoder weight or
-    rendering priority, in milliseconds; 0 restores the default (60 s). Any thread. */
-void controlSetPrefsVocoderWaitForTesting(std::uint32_t milliseconds);
 
 } // namespace OpenTune

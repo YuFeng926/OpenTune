@@ -21,12 +21,9 @@ Current version: `1.0.0` (see [CHANGELOG.md](CHANGELOG.md)).
 | `schemas/discovery-file.schema.json`   | Discovery file and ready file: closed forms that servers write, open forms (`knownMembers`) that clients validate against.                                                                                      | yes            |
 | `schemas/registry.schema.json`         | Shape of the registry files.                                                                                                                                                                                    | yes            |
 | `schemas/method-file.schema.json`      | Shape of the method schema files.                                                                                                                                                                               | yes            |
-| `schemas/vector.schema.json`           | Shape of the test vectors.                                                                                                                                                                                      | yes            |
 | [methods/README.md](methods/README.md) | Format of the method schema files.                                                                                                                                                                              | yes            |
 | `methods/index.json`                   | Every method of major 1 with layer, capability, write classification, `since` and schema status.                                                                                                                | yes            |
 | `methods/<method>.schema.json`         | Params, result and metadata of one method.                                                                                                                                                                      | yes            |
-| [vectors/README.md](vectors/README.md) | Format of the test vectors, matchers and reproducibility rules.                                                                                                                                                 | yes            |
-| `vectors/<area>/<slug>.json`           | Test vectors.                                                                                                                                                                                                   | yes (examples) |
 
 All schemas use JSON Schema 2020-12. Their `$id` values start with `https://otcp.invalid/v1/`, which mirrors this directory: `https://otcp.invalid/v1/schemas/common.schema.json` is `schemas/common.schema.json`. The `.invalid` top-level domain never resolves; the ids are identifiers, and tools load the files from this directory.
 
@@ -36,9 +33,9 @@ All schemas use JSON Schema 2020-12. Their `$id` values start with `https://otcp
 2. PROTOCOL.md sections 5 and 6 and SECURITY.md: discovery, enabling and the threat model.
 3. PROTOCOL.md sections 8 to 16: clocks, handles, tokens, readiness, jobs, concurrency, write results, undo and reads.
 4. PROTOCOL.md sections 17 to 21 and the registries: errors, warnings, the export contract, paths and editing schemes.
-5. PROTOCOL.md section 22, `methods/README.md` and the method files; then `vectors/README.md` and the vectors.
+5. PROTOCOL.md section 22, `methods/README.md` and the method files.
 
-Implementers of a server read all of it. Implementers of a client can skip section 6. Authors of mocks and contract tests need sections 2, 3, 4, 12, 14 and 17 and the vector format.
+Implementers of a server read all of it. Implementers of a client can skip section 6.
 
 ## Versions
 
@@ -46,7 +43,7 @@ Implementers of a server read all of it. Implementers of a client can skip secti
 2. On the wire only `MAJOR.MINOR` is exchanged, in `session.hello`.
 3. A minor version only adds (methods, members, codes, capabilities); removing, renaming or changing the meaning or unit of anything needs a new major version, which lives in a new directory (`v2/`).
 4. Registries are append-only within a major version, and clients accept codes they do not know.
-5. Every method and every vector states the capability it needs and the version that introduced it (`since`).
+5. Every method states its capability and the version that introduced it (`since`).
 
 ## How to cite
 

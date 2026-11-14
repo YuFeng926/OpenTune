@@ -22,12 +22,6 @@ namespace {
 /** How long a seed job waits for OpenTune's timing analysis of the content before it gives up. */
 constexpr int kSeedWaitLimitMs = 120000;
 
-/** The wait limit that the tests set (controlSetSeedWaitLimitForTesting); 0 for kSeedWaitLimitMs. */
-int& seedWaitLimitOverrideMs()
-{
-    static int milliseconds = 0;
-    return milliseconds;
-}
 /** moveHandles takes at most this many moves (methods/content.editTimeGrid.schema.json). */
 constexpr std::size_t kMaxMoves = 64;
 /** content.shiftTiming moves by at most this many seconds either way. */
@@ -456,8 +450,7 @@ public:
 private:
     void wait(ControlJobStep& step)
     {
-        const int limitMs = seedWaitLimitOverrideMs() > 0 ? seedWaitLimitOverrideMs() : kSeedWaitLimitMs;
-        const auto deadline = started_ + std::chrono::milliseconds(limitMs);
+        const auto deadline = started_ + std::chrono::milliseconds(kSeedWaitLimitMs);
         if (std::chrono::steady_clock::now() >= deadline) {
             step.fail({"NOT_READY", "timing_analysis_timeout",
                        "OpenTune's timing analysis of the content did not finish within the wait limit", false});
@@ -557,11 +550,6 @@ void registerTimingOps(ControlMethodTable& table)
 {
     table.add(controlWriteMethod<ShiftParams>("content.shiftTiming", parseShift, runShift));
     table.add(controlWriteMethod<EditGridParams>("content.editTimeGrid", parseEditGrid, runEditGrid));
-}
-
-void controlSetSeedWaitLimitForTesting(int milliseconds)
-{
-    seedWaitLimitOverrideMs() = milliseconds > 0 ? milliseconds : 0;
 }
 
 } // namespace OpenTune

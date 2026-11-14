@@ -63,7 +63,7 @@ Shared types are referenced as `../schemas/common.schema.json#/$defs/<name>`. Ot
 
 `x-otcp` is an annotation keyword. Validators that reject unknown keywords (for example Ajv in strict mode) need it registered, for instance with `ajv.addKeyword({ keyword: "x-otcp" })`; its content is validated against `../schemas/method-file.schema.json`.
 
-`x-otcp.errors` lists every kind explicitly, so that mocks and coverage tests can read it without knowing the generic rules:
+`x-otcp.errors` lists every kind explicitly, so consumers can read it without duplicating the generic rules:
 
 | Kind               | Listed when                                                                                                |
 | ------------------ | ---------------------------------------------------------------------------------------------------------- |
@@ -81,7 +81,6 @@ Shared types are referenced as `../schemas/common.schema.json#/$defs/<name>`. Ot
 
 1. Adding a method file, or a member to one, follows the versioning rules of PROTOCOL.md section 2.2. A method file is never deleted or renamed within a major version.
 2. `index.json` and the table in PROTOCOL.md section 22 list the same methods with the same layer, capability, write classification, `since` and schema status; a method file exists exactly for the methods marked `defined`.
-3. Every method file has at least one success vector in `../vectors/`.
-4. `x-otcp.errors` and `x-otcp.jobErrors` follow the rules above.
-5. Codes used in descriptions (error kinds, reasons, warnings) come from `../registry/`.
-6. In params, a member whose values select what the method does (`op`, `mode`, `kind`, `layout`, `action`, `target`) lists them with `enum` or `const`, and each value has a success vector (`../vectors/README.md`, "Coverage"). Results use open forms such as `camelName` for enumerated strings, because clients accept values they do not know (PROTOCOL.md section 2.3).
+3. `x-otcp.errors` and `x-otcp.jobErrors` follow the rules above.
+4. Codes used in descriptions (error kinds, reasons, warnings) come from `../registry/`.
+5. In params, a member whose values select what the method does (`op`, `mode`, `kind`, `layout`, `action`, `target`) lists them with `enum` or `const`. Results use open forms such as `camelName` for enumerated strings, because clients accept values they do not know (PROTOCOL.md section 2.3).

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://otcp.invalid/v1/schemas/common.schema.json",
   "title": "OTCP v1 common definitions",
-  "description": "Shared types referenced by method schemas as common.schema.json#/$defs/<name>. Schemas are closed (no undefined members) so that conformance tests catch mistakes; clients must still ignore members they do not know (PROTOCOL.md section 2.3).",
+  "description": "Shared types referenced by method schemas as common.schema.json#/$defs/<name>. Schemas are closed and define the members a server may send; clients must still ignore members they do not know (PROTOCOL.md section 2.3).",
   "$defs": {
     "protocolVersion": {
       "description": "MAJOR.MINOR, as carried on the wire.",

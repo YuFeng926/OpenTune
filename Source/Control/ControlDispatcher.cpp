@@ -164,8 +164,6 @@ void ControlDispatcher::handleRequest(ControlRequest request, ControlCompletion 
                 case ControlMessageThread::CallResult::Done:
                     respond(*outcome, completion);
                     // A method that ends the instance posts its exit step only after its reply was delivered.
-                    if (outcome->afterReply)
-                        notifyAfterReply(AfterReplyEvent::ReplyWritten);
                     runAfterReply(*outcome);
                     return;
                 case ControlMessageThread::CallResult::Failed:
@@ -189,7 +187,6 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
 {
     // Always on: only the message thread may run methods (submit() guarantees it; this check proves it).
     if (!juce::MessageManager::existsAndIsCurrentThread()) {
-        ++probe_.otherThreadAccesses;
         jassertfalse;
         outcome.error = {"INTERNAL", "", "the method was not run on the main thread"};
         return;
@@ -198,10 +195,9 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
         outcome.error = {"SHUTTING_DOWN", "", "the control API is stopping"};
         return;
     }
-    ++executed_;
     const auto facts = currentFacts();
     try {
-        ControlOpContext context(*setup_.processor, setup_.uiBridge ? setup_.uiBridge() : nullptr, *facts, probe_,
+        ControlOpContext context(*setup_.processor, setup_.uiBridge ? setup_.uiBridge() : nullptr, *facts,
                                  setup_.jobs.get(), setup_.uiBridge, setup_.history);
         auto result = method.run(context, parsed);
         if (result.ok()) {
@@ -256,7 +252,6 @@ void ControlDispatcher::executeOffMainThread(const ControlMethod& method, const 
         outcome.error = {"INTERNAL", "", "the instance is not ready"};
         return;
     }
-    ++offMainThread_;
     try {
         auto result = method.runOffMainThread(*facts, parsed);
         if (result.ok()) {
@@ -287,11 +282,7 @@ void ControlDispatcher::runAfterReply(Outcome& outcome)
     // ControlMessageThread::post(): the action runs on the message thread, in the message loop, and never inside the
     // method that produced the reply. It does nothing when the service has stopped meanwhile: the
     // application is then ending anyway.
-    auto step = [this, action = std::move(outcome.afterReply)] {
-        notifyAfterReply(AfterReplyEvent::ExitStepStarted);
-        action();
-    };
-    if (!setup_.messageThread->post(std::move(step))) {
+    if (!setup_.messageThread->post(std::move(outcome.afterReply))) {
         // The state this leaves behind: the dispatcher is in its stopping state (enterStopping() ran when the method
         // returned) and the client has the result with `quitting: true`, but the exit step never runs. post() fails
         // for one of two reasons, which isAlive() tells apart:
@@ -325,23 +316,6 @@ void ControlDispatcher::runAfterReply(Outcome& outcome)
                 "service is already stopping: the client was told that the instance quits and every request now gets "
                 "SHUTTING_DOWN, and there is nothing left to stop");
     }
-}
-
-void ControlDispatcher::setAfterReplyObserverForTesting(std::function<void(AfterReplyEvent)> observer)
-{
-    std::lock_guard<std::mutex> lock(observerMutex_);
-    afterReplyObserver_ = std::make_shared<const std::function<void(AfterReplyEvent)>>(std::move(observer));
-}
-
-void ControlDispatcher::notifyAfterReply(AfterReplyEvent event)
-{
-    std::shared_ptr<const std::function<void(AfterReplyEvent)>> observer;
-    {
-        std::lock_guard<std::mutex> lock(observerMutex_);
-        observer = afterReplyObserver_;
-    }
-    if (observer != nullptr && *observer)
-        (*observer)(event);
 }
 
 } // namespace OpenTune

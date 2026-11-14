@@ -6,7 +6,6 @@
 #include "ControlMessageThread.h"
 
 #include <atomic>
-#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -87,8 +86,6 @@ public:
 
     /** True while the listener runs (between a successful start() and stop()). Thread-safe. */
     bool isRunning() const noexcept { return running_.load(); }
-    /** True once stop() began. Thread-safe. */
-    bool isStopping() const noexcept { return stopping_.load(); }
     /** The run-time options read at construction. */
     const ControlApiOptions& options() const noexcept { return options_; }
     /** The listening port while running, otherwise 0. Thread-safe. */
@@ -96,21 +93,10 @@ public:
     /** Path of the discovery file written by start(); empty when the API never started. stop() deletes
         the file but the path stays available. */
     const std::string& discoveryFilePath() const noexcept { return discoveryFile_; }
-    /** The message-thread marshalling. Holders may keep it beyond the service; it is stopped with it. */
-    std::shared_ptr<ControlMessageThread> messageThread() const noexcept { return messageThread_; }
-    /** The dispatcher once the API started (it stays after stop()); nullptr when it never started.
-        Holders may keep it beyond the service, for its counters; it never runs a method after stop(). */
-    std::shared_ptr<ControlDispatcher> dispatcher() const noexcept { return dispatcher_; }
-    /** The jobs once the API started (they stay after stop(), stopped); nullptr when it never started. */
-    std::shared_ptr<ControlJobs> jobs() const noexcept { return jobs_; }
     /** Wake active jobs after a processor or editor state event. Message thread or worker thread. */
     void wakeJobs() const noexcept;
     /** A callback safe to retain beyond the jobs registry's lifetime. */
     std::function<void()> jobWakeCallback() const;
-    /** What the instance knows about OpenTune's undo history (Edit/ControlOriginAction.h) once the API
-        started; nullptr before. Message thread. */
-    std::shared_ptr<ControlHistory> history() const noexcept { return history_; }
-
     /** Registers the editor's bridge, or unregisters it with nullptr. Message thread. */
     void setUiBridge(ControlUiBridge* bridge) noexcept { uiBridge_ = bridge; }
     /** The registered bridge, or nullptr. Message thread. */
@@ -119,15 +105,6 @@ public:
     /** The identity this binary publishes in the discovery file: OPENTUNE_VERSION and the values
         cmake/OpenTuneControl.cmake records when it configures the build. */
     static ControlBuildIdentity buildIdentity();
-
-    /** How start() initialises the runtime: OpenTuneAudioProcessor::ensureRuntimeInitialized(). */
-    using RuntimeInitialiser = std::function<bool(OpenTuneAudioProcessor&)>;
-    /** Test seam for the headless tests: replaces the runtime initialisation of every later start(), or
-        restores it with an empty function. Never used by OpenTune itself. Message thread. */
-    static void setRuntimeInitialiserForTesting(RuntimeInitialiser initialiser);
-    /** sizeof(OpenTuneAudioProcessor) as compiled into the Standalone SharedCode, so that a test can
-        detect a class-layout mismatch caused by missing compile definitions. */
-    static std::size_t processorClassSizeForTesting() noexcept;
 
 private:
     struct LogGate;
@@ -152,7 +129,6 @@ private:
     bool startAttempted_ = false;
     bool stopCalled_ = false;
     std::atomic<bool> running_{false};
-    std::atomic<bool> stopping_{false};
     std::atomic<int> port_{0};
 };
 

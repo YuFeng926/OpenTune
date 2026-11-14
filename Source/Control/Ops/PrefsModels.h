@@ -5,7 +5,6 @@
 #include "Inference/IF0Extractor.h"
 
 #include <cstddef>
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -19,8 +18,7 @@ class OpenTuneAudioProcessor;
  * for, and the processor functions the window calls when the vocoder weight, the rendering priority or the pitch
  * model changes.
  *
- * Every function below uses the real OpenTune function unless a test replaced the part with
- * controlSetPrefsBackendForTesting(). Threading: message thread (prefs.get, prefs.set and its job).
+ * Every function below uses the real OpenTune function. Threading: message thread (prefs.get, prefs.set and its job).
  */
 
 /** The longest text of processing.options (prefs.get.schema.json), in code points. */
@@ -37,27 +35,6 @@ struct ControlVocoderState
     bool reconfiguring = false;
     /** The runtime's control worker has no queued command and none in progress. */
     bool controlIdle = true;
-};
-
-/** The parts of the models and the inference runtime that prefs.get and prefs.set reach. An empty member means the
-    real OpenTune function. Used only by tests. */
-struct ControlPrefsBackend
-{
-    /** The models directory: the real one is ModelPathResolver::getModelsDirectory(). */
-    std::function<std::string()> modelsDirectory;
-    /** All pitch models, available or not: the real list is ModelFactory::getAvailableF0Models(). */
-    std::function<std::vector<F0ModelInfo>()> f0Models;
-    /** The vocoder of the process-wide render runtime. */
-    std::function<ControlVocoderState()> vocoderState;
-    /** OpenTuneAudioProcessor::setVocoderModelWeight(): the asynchronous switch; false when its control queue rejects. */
-    std::function<bool(OpenTuneAudioProcessor&, const std::string&)> setVocoderWeight;
-    /** OpenTuneAudioProcessor::resetInferenceBackend(): the asynchronous reset of the inference backend. */
-    std::function<void(OpenTuneAudioProcessor&, bool)> resetInferenceBackend;
-    /** OpenTuneAudioProcessor::setF0ModelType(): true when the processor switched the pitch model. */
-    std::function<bool(OpenTuneAudioProcessor&, F0ModelType)> setF0Model;
-    /** The inference backend in use by its wire name (cpu, directml, coreml); a pointer to a string literal. The real
-        one is the selection of AccelerationDetector. */
-    std::function<const char*()> inferenceBackend;
 };
 
 /**
@@ -108,8 +85,5 @@ void controlResetInferenceBackend(OpenTuneAudioProcessor& processor, bool forceC
 /** The call the preferences window makes when the pitch model changes: processor.setF0ModelType(); false when the
     processor could not switch. */
 bool controlSetF0Model(OpenTuneAudioProcessor& processor, F0ModelType type);
-
-/** Test seam: replaces parts of the backend; a default-constructed backend restores the real functions. Any thread. */
-void controlSetPrefsBackendForTesting(ControlPrefsBackend backend);
 
 } // namespace OpenTune

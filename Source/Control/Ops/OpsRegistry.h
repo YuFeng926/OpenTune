@@ -6,7 +6,6 @@
 #include "Control/ControlProtocol.h"
 #include "Utils/Error.h"
 
-#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -22,18 +21,6 @@ class ControlHistory;
 class ControlJobs;
 class ControlUiBridge;
 class OpenTuneAudioProcessor;
-
-/**
- * Counts accesses to OpenTune state made through ControlOpContext, by thread. The control API reads
- * and changes project content only on the message thread; an access from any other thread is refused
- * (always, also in release builds) and counted here, so that tests can assert that it never happens.
- * Thread-safe.
- */
-struct ControlThreadProbe
-{
-    std::atomic<int> messageThreadAccesses{0};
-    std::atomic<int> otherThreadAccesses{0};
-};
 
 /** Thrown by ControlOpContext when OpenTune state is reached from a thread other than the message
     thread. ControlDispatcher answers the request with INTERNAL; nothing was read or changed. */
@@ -67,15 +54,14 @@ struct ControlInstanceFacts
 /**
  * What an operation needs to make a ControlOpContext again on a later message-thread step, for the steps
  * of a job it started: the processor, the accessor of the editor's bridge (the bridge can come and go
- * between steps), the facts of the instance, the thread probe and the jobs. Valid while the job's work
- * exists: ControlJobs::stop() destroys every work before the dispatcher and the processor go away.
+ * between steps), the facts of the instance and the jobs. Valid while the job's work exists:
+ * ControlJobs::stop() destroys every work before the dispatcher and the processor go away.
  */
 struct ControlOpEnvironment
 {
     OpenTuneAudioProcessor* processor = nullptr;
     std::function<ControlUiBridge*()> bridge;
     ControlInstanceFacts facts;
-    ControlThreadProbe* probe = nullptr;
     ControlJobs* jobs = nullptr;
     std::shared_ptr<ControlHistory> history;
 };
@@ -93,7 +79,7 @@ public:
     /** jobs and bridgeAccessor may be empty: such a context cannot start jobs. history may be null: such a
         context cannot run the methods that read or record undo entries. */
     ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge, const ControlInstanceFacts& facts,
-                     ControlThreadProbe& probe, ControlJobs* jobs = nullptr,
+                     ControlJobs* jobs = nullptr,
                      std::function<ControlUiBridge*()> bridgeAccessor = {},
                      std::shared_ptr<ControlHistory> history = nullptr);
     /** A context for one step of a job, from the environment that the operation which started it kept;
@@ -138,7 +124,6 @@ private:
     OpenTuneAudioProcessor& processor_;
     ControlUiBridge* bridge_;
     const ControlInstanceFacts& facts_;
-    ControlThreadProbe& probe_;
     ControlJobs* jobs_;
     std::function<ControlUiBridge*()> bridgeAccessor_;
     std::shared_ptr<ControlHistory> history_;
@@ -320,15 +305,6 @@ private:
  * last method is registered, so that the instance never reports a capability it implements only in part.
  */
 bool controlCapabilityIsIncomplete(std::string_view capability);
-
-/** Test seam: dispatchers created from now on report the incomplete capabilities as well, so that the
-    headless tests can call their methods. Never used by OpenTune itself. Any thread. */
-void controlSetReportIncompleteCapabilitiesForTesting(bool report);
-
-/** Test seam: dispatchers created from now on leave these capabilities out of what they report, as the
-    precondition withoutCapabilities of the specification's vectors asks (an instance that does not report
-    ui.onboardingClose). Empty by default; never used by OpenTune itself. Any thread. */
-void controlSetWithheldCapabilitiesForTesting(std::vector<std::string> capabilities);
 
 /**
  * Registers every method this build implements, one group per line (Ops/OpsRegistry.cpp).

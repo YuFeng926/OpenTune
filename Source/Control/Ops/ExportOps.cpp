@@ -43,6 +43,10 @@ namespace {
 constexpr std::size_t kMaxPathCodePoints = 4096;
 /** PROTOCOL.md section 19 rule 7: the longest wait for analysis and rendering. */
 constexpr int kWaitLimitMs = 120000;
+/** Retry a dropped time-stretch rebuild this many times at the same content and time-grid revisions. */
+constexpr int kMaxStretchRequests = 3;
+/** Pending render blocks must remain out of reach of the render worker this long to be considered stuck. */
+constexpr int kStuckBlocksMs = 500;
 /** How long the render worker must be seen idle, with the render settled and no current time-stretch output, before
     the job asks for the time-stretch rebuild of a content again (the rebuild it asked for was dropped). */
 constexpr int kStretchRetryIdleMs = 500;
@@ -52,12 +56,6 @@ constexpr int kPublishedAudioProbeSamples = 1 << 16;
 constexpr int kLastRenameNumber = 999;
 /** The extension an export writes (section 20.1), compared without regard to case. */
 constexpr std::string_view kWavExtension = ".wav";
-
-int& waitLimitOverrideMs()
-{
-    static int milliseconds = 0;
-    return milliseconds;
-}
 
 /**
  * Whether OpenTune's render runtime holds a deferred render retry of the processor's render service: a render
@@ -739,7 +737,7 @@ public:
         , target_(target)
         , busyAdmission_(std::move(busyAdmission))
         , started_(std::chrono::steady_clock::now())
-        , waitLimit_(std::chrono::milliseconds(waitLimitOverrideMs() > 0 ? waitLimitOverrideMs() : kWaitLimitMs))
+        , waitLimit_(std::chrono::milliseconds(kWaitLimitMs))
     {}
 
     ~ExportJob()
@@ -788,7 +786,7 @@ private:
         Pending,
         /** The content has no render to stretch and none will come. */
         NoRender,
-        /** The job asked for the rebuild kControlExportMaxStretchRequests times and the output is still not current. */
+        /** The job asked for the rebuild kMaxStretchRequests times and the output is still not current. */
         GaveUp
     };
 
@@ -809,7 +807,7 @@ private:
                 failed.state = Readiness::State::Fail;
                 failed.error = {"NOT_READY", "export_stretch_dropped",
                                 "the time-stretch rebuild of a content of the export was asked for "
-                                    + std::to_string(kControlExportMaxStretchRequests) + " times and did not complete",
+                                    + std::to_string(kMaxStretchRequests) + " times and did not complete",
                                 false};
                 return failed;
             }
@@ -858,7 +856,7 @@ private:
      * nothing queued or running, the job queues the rebuild as setContentTimeGrid does (with the published playback
      * source). The worker may drop a rebuild (Stage2TimeStretchRebuilder::rebuild gives up when the published source
      * changed meanwhile, without a new revision), so when the worker has been seen idle for kStretchRetryIdleMs with
-     * still no current output, the job asks again, up to kControlExportMaxStretchRequests times for the same
+     * still no current output, the job asks again, up to kMaxStretchRequests times for the same
      * revisions: GaveUp after that. New revisions start the count again.
      */
     Stretch stretchState(ControlOpContext& context, const ContentKey& key)
@@ -902,7 +900,7 @@ private:
                 noteWakeAt(retryAt);
                 return Stretch::Pending;
             }
-            if (progress.stretchRequests >= kControlExportMaxStretchRequests)
+            if (progress.stretchRequests >= kMaxStretchRequests)
                 return Stretch::GaveUp;
         }
         PlaybackReadSource source;
@@ -948,7 +946,7 @@ private:
     /**
      * Whether the pending render blocks of a content are out of reach of OpenTune's render worker: blocks are pending,
      * none is running and none is in the cache's set of blocks to claim (RenderCache::getPendingJobs, the set that
-     * RenderCache::claimPendingJob takes from), seen so for kControlExportStuckBlocksMs. Upstream
+     * RenderCache::claimPendingJob takes from), seen so for kStuckBlocksMs. Upstream
      * RenderCache::reconcileFullPlanAndRequest leaves blocks so when a render is asked for again at a revision for
      * which they are still pending: it keeps them pending but out of that set, and the worker's queue drops them
      * (RenderWorker::syncStage1QueueLocked); only a new revision of the content queues them again. The set is read
@@ -966,7 +964,7 @@ private:
         const auto now = std::chrono::steady_clock::now();
         if (!progress.stuckSince)
             progress.stuckSince = now;
-        const auto stuckAt = *progress.stuckSince + std::chrono::milliseconds(kControlExportStuckBlocksMs);
+        const auto stuckAt = *progress.stuckSince + std::chrono::milliseconds(kStuckBlocksMs);
         if (now < stuckAt) {
             noteWakeAt(stuckAt);
             return false;
@@ -1461,11 +1459,6 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
 void registerExportOps(ControlMethodTable& table)
 {
     table.add(controlWriteMethod<ExportParams>("export.start", parseExport, runExportStart));
-}
-
-void controlSetExportWaitLimitForTesting(int milliseconds)
-{
-    waitLimitOverrideMs() = milliseconds > 0 ? milliseconds : 0;
 }
 
 } // namespace OpenTune

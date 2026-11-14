@@ -15,9 +15,9 @@
 #include <juce_core/juce_core.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -39,30 +39,6 @@ constexpr std::uint32_t kDefaultApplyTimeoutMs = 10000;
     again, which takes seconds on a slow disk or a cold GPU. The specification names no number (an implementation
     defined limit). */
 constexpr std::uint32_t kDefaultVocoderWaitMs = 60000;
-
-std::atomic<std::uint32_t>& applyTimeoutOverrideMs()
-{
-    static std::atomic<std::uint32_t> overrideMs{0};
-    return overrideMs;
-}
-
-std::atomic<std::uint32_t>& vocoderWaitOverrideMs()
-{
-    static std::atomic<std::uint32_t> overrideMs{0};
-    return overrideMs;
-}
-
-std::uint32_t applyTimeoutMs()
-{
-    const auto overrideMs = applyTimeoutOverrideMs().load();
-    return overrideMs != 0 ? overrideMs : kDefaultApplyTimeoutMs;
-}
-
-std::uint32_t vocoderWaitMs()
-{
-    const auto overrideMs = vocoderWaitOverrideMs().load();
-    return overrideMs != 0 ? overrideMs : kDefaultVocoderWaitMs;
-}
 
 // ---- Params ---------------------------------------------------------------------------------------
 
@@ -603,8 +579,8 @@ void recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envel
  * makes every change of the request (so the call that started it changed nothing), the following steps wait, and the
  * last step ends the job with the write envelope. What the job waits for:
  *
- * - The editing scheme: until the editor reports the scheme as applied. If it does not within applyTimeoutMs(), the job
- *   takes its changes back (withdraw()) and fails with INTERNAL.
+ * - The editing scheme: until the editor reports the scheme as applied. If it does not within
+ *   kDefaultApplyTimeoutMs, the job takes its changes back (withdraw()) and fails with INTERNAL.
  * - The vocoder weight and the rendering priority, when the vocoder was ready before the first step: until the vocoder
  *   is ready again, is not reconfiguring and the runtime's control worker has nothing left to do. The flag
  *   "reconfiguring" cannot be the only sign: OpenTuneAudioProcessor::setVocoderModelWeight() and
@@ -613,7 +589,7 @@ void recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envel
  * reconfiguring" until then. The command stays in the worker's queue or is the worker's active transaction until its
  * completion callback ran on the message thread, so an idle worker proves that the command was executed, whatever it
  * did (a weight the runtime already holds is answered without any flag). If the vocoder is not back within
- * vocoderWaitMs(), the job takes its changes back and fails with MODEL_UNAVAILABLE(vocoder_not_ready), which can
+ * kDefaultVocoderWaitMs, the job takes its changes back and fails with MODEL_UNAVAILABLE(vocoder_not_ready), which can
  * succeed when asked again. If the worker is idle, no reconfiguration is running and the vocoder is not there, the
  * command ran and could not load a vocoder (a damaged or incompatible weight file; the runtime keeps asking for the
  * same weight, so the vocoder never recovers by itself): the job takes its changes back at once and fails with
@@ -688,7 +664,7 @@ public:
         const auto now = std::chrono::steady_clock::now();
         std::optional<std::chrono::steady_clock::time_point> deadline;
         if (!applied) {
-            const auto applyDeadline = startedAt_ + std::chrono::milliseconds(applyTimeoutMs());
+            const auto applyDeadline = startedAt_ + std::chrono::milliseconds(kDefaultApplyTimeoutMs);
             if (now >= applyDeadline) {
                 abandon(context, jobStep, "INTERNAL", "", "the editor did not apply the editing scheme in time");
                 return;
@@ -696,7 +672,7 @@ public:
             deadline = applyDeadline;
         }
         if (!vocoderBack) {
-            const auto vocoderDeadline = startedAt_ + std::chrono::milliseconds(vocoderWaitMs());
+            const auto vocoderDeadline = startedAt_ + std::chrono::milliseconds(kDefaultVocoderWaitMs);
             if (now >= vocoderDeadline) {
                 abandon(context, jobStep, "MODEL_UNAVAILABLE", "vocoder_not_ready",
                         "the vocoder was not ready again in time after the vocoder weight or the rendering priority "
@@ -936,16 +912,6 @@ Result<JsonValue> runPrefsSet(ControlOpContext& context, const PrefsRequest& par
 void registerPrefsOps(ControlMethodTable& table)
 {
     table.add(controlWriteMethod<PrefsRequest>("prefs.set", parsePrefsSet, runPrefsSet));
-}
-
-void controlSetPrefsApplyTimeoutForTesting(std::uint32_t milliseconds)
-{
-    applyTimeoutOverrideMs() = milliseconds;
-}
-
-void controlSetPrefsVocoderWaitForTesting(std::uint32_t milliseconds)
-{
-    vocoderWaitOverrideMs() = milliseconds;
 }
 
 } // namespace OpenTune

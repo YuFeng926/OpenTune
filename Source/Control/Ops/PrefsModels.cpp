@@ -8,38 +8,10 @@
 #include "Utils/ModelPathResolver.h"
 
 #include <algorithm>
-#include <mutex>
-#include <utility>
 
 namespace OpenTune {
 
 namespace {
-
-std::mutex& backendMutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
-
-ControlPrefsBackend& backendStorage()
-{
-    static ControlPrefsBackend backend;
-    return backend;
-}
-
-/** A copy of the current backend: the functions run outside the lock. */
-ControlPrefsBackend currentBackend()
-{
-    const std::lock_guard<std::mutex> lock(backendMutex());
-    return backendStorage();
-}
-
-std::string modelsDirectory()
-{
-    const auto backend = currentBackend();
-    // ModelPathResolver::getModelsDirectory(): the directory the preferences window scans for models.
-    return backend.modelsDirectory ? backend.modelsDirectory() : ModelPathResolver::getModelsDirectory();
-}
 
 /** Keeps the names that the wire can carry and cuts the list at kControlOptionCount. */
 std::vector<std::string> limitedNames(const std::vector<std::string>& names)
@@ -70,18 +42,15 @@ std::vector<std::string> controlVocoderWeightOptions()
     // ModelFactory::getAvailableVocoderWeights(): the built-in weights of the models directory and the files of its
     // vocoder_weights folder, which is what the preferences window lists (SharedAudioPage).
     std::vector<std::string> names;
-    for (const auto& weight : ModelFactory::getAvailableVocoderWeights(modelsDirectory()))
+    for (const auto& weight : ModelFactory::getAvailableVocoderWeights(ModelPathResolver::getModelsDirectory()))
         names.push_back(weight.fileName);
     return limitedNames(names);
 }
 
 std::vector<F0ModelInfo> controlF0Models()
 {
-    const auto backend = currentBackend();
-    if (backend.f0Models)
-        return backend.f0Models();
     // ModelFactory::getAvailableF0Models(): the pitch models, each with whether its file exists.
-    return ModelFactory::getAvailableF0Models(modelsDirectory());
+    return ModelFactory::getAvailableF0Models(ModelPathResolver::getModelsDirectory());
 }
 
 std::vector<std::string> controlF0ModelOptions()
@@ -112,9 +81,6 @@ JsonValue controlPrefsOptionsJson()
 
 ControlVocoderState controlVocoderState()
 {
-    const auto backend = currentBackend();
-    if (backend.vocoderState)
-        return backend.vocoderState();
     // ProcessRenderRuntime: the process-wide vocoder and its control worker, polled without a hook. The worker's
     // queue and active transaction are read first: a command is queued before the vocoder is flagged as
     // reconfiguring, and the active transaction ends only after the completion ran on the message thread, so a worker
@@ -131,9 +97,6 @@ ControlVocoderState controlVocoderState()
 
 const char* controlInferenceBackendName()
 {
-    const auto backend = currentBackend();
-    if (backend.inferenceBackend)
-        return backend.inferenceBackend();
     // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected).
     switch (AccelerationDetector::getInstance().getSelection().backend) {
         case AccelerationDetector::AccelBackend::DirectML:
@@ -148,9 +111,6 @@ const char* controlInferenceBackendName()
 
 bool controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight)
 {
-    const auto backend = currentBackend();
-    if (backend.setVocoderWeight)
-        return backend.setVocoderWeight(processor, weight);
     // OpenTuneAudioProcessor::setVocoderModelWeight(): posts the switch to the runtime's control worker and reports
     // whether the queue accepted it. The caller stores the preference only after acceptance; the shared
     // backend-change notification then clears the render caches and queues a render of every clip.
@@ -159,11 +119,6 @@ bool controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::strin
 
 void controlResetInferenceBackend(OpenTuneAudioProcessor& processor, bool forceCpu)
 {
-    const auto backend = currentBackend();
-    if (backend.resetInferenceBackend) {
-        backend.resetInferenceBackend(processor, forceCpu);
-        return;
-    }
     // OpenTuneAudioProcessor::resetInferenceBackend(): posts the reset to the runtime's control worker; nothing
     // clears a render cache.
     processor.resetInferenceBackend(forceCpu);
@@ -171,17 +126,8 @@ void controlResetInferenceBackend(OpenTuneAudioProcessor& processor, bool forceC
 
 bool controlSetF0Model(OpenTuneAudioProcessor& processor, F0ModelType type)
 {
-    const auto backend = currentBackend();
-    if (backend.setF0Model)
-        return backend.setF0Model(processor, type);
     // OpenTuneAudioProcessor::setF0ModelType(): switches the process-wide pitch model; false when it cannot.
     return processor.setF0ModelType(type);
-}
-
-void controlSetPrefsBackendForTesting(ControlPrefsBackend backend)
-{
-    const std::lock_guard<std::mutex> lock(backendMutex());
-    backendStorage() = std::move(backend);
 }
 
 } // namespace OpenTune

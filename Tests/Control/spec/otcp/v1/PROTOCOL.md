@@ -31,7 +31,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 ### 0.3 Normative sources
 
-This document, the schemas in `schemas/` and `methods/`, and the registries in `registry/` are normative. Vectors in `vectors/` are normative examples: a conforming server MUST produce responses that match them. Where a schema and this document disagree about the shape of a message, the schema is authoritative; where they disagree about behaviour, this document is authoritative. Either disagreement is a defect of the specification and SHOULD be reported.
+This document, the schemas in `schemas/` and `methods/`, and the registries in `registry/` are normative. Where a schema and this document disagree about the shape of a message, the schema is authoritative; where they disagree about behaviour, this document is authoritative. Either disagreement is a defect of the specification and SHOULD be reported.
 
 Notation: `KIND(reason)` names an error with `data.kind` = KIND and `data.reason` = reason. JSON member names are written in `code` style.
 
@@ -50,7 +50,7 @@ Notation: `KIND(reason)` names an error with `data.kind` = KIND and `data.reason
 ### 2.1 Version numbers
 
 1. The specification is versioned `MAJOR.MINOR.PATCH`, released as tags `spec-vMAJOR.MINOR.PATCH`; release candidates carry the suffix `-rc.N` (for example `spec-v1.0.0-rc.1`).
-2. On the wire only `MAJOR.MINOR` is carried (section 4). PATCH releases change wording, examples and vectors only, never behaviour or shapes.
+2. On the wire only `MAJOR.MINOR` is carried (section 4). PATCH releases change wording and examples only, never behaviour or shapes.
 3. This document is protocol major 1. All files of major 1 live in one directory named `v1`, which is copied unchanged into every repository that implements the protocol; a new major version gets a new directory.
 
 ### 2.2 Minor versions
@@ -65,7 +65,7 @@ A minor version MAY only add: methods, optional params members, result members, 
 1. Clients MUST ignore result members, discovery-file and ready-file members, side-effect names and capabilities they do not know.
 2. Clients MUST accept error kinds, reasons, warning codes, entity names and enumerated string values they do not know. An unknown error kind MUST be handled like `INTERNAL`.
 3. Servers MUST reject unknown params members with `INVALID_ARGUMENT(invalid_params)`; they MUST NOT ignore an option that the client may believe was applied.
-4. The schemas in this directory are closed (they forbid undefined members) so that conformance tests detect mistakes in what a server sends. Rule 1 still applies to clients, because a newer minor version may add members; clients MUST NOT reject a message or a file only because it has members they do not know. Where a client validates input, it uses the open form of the schema where one is defined (for example `schemas/discovery-file.schema.json#/$defs/knownMembers`).
+4. The schemas in this directory are closed (they forbid undefined members) and define exactly which members a server may send. Rule 1 still applies to clients, because a newer minor version may add members; clients MUST NOT reject a message or a file only because it has members they do not know. Where a client validates input, it uses the open form of the schema where one is defined (for example `schemas/discovery-file.schema.json#/$defs/knownMembers`).
 5. A client discovers what an instance supports from its capabilities (section 7), not from the minor version.
 
 ## 3. Transport and framing
@@ -272,7 +272,7 @@ If an option value is invalid, the discovery directory fails its checks, the lis
 ## 7. Capabilities and registries
 
 1. Every method belongs to exactly one capability, declared in its schema file and in `methods/index.json`. `session.hello` and `session.info` report the instance's capabilities; a client MUST NOT call a method whose capability is not reported.
-2. Every method schema file and every vector states `since`, the protocol version (`MAJOR.MINOR`) that introduced it.
+2. Every method schema file states `since`, the protocol version (`MAJOR.MINOR`) that introduced it.
 3. Codes are registered in `registry/`:
 
 | File                         | Codes                                                              | Used in                                                  |
@@ -280,7 +280,7 @@ If an option value is invalid, the discovery directory fails its checks, the lis
 | `registry/error-kinds.json`  | error kinds, with default JSON-RPC code and retryability           | `error.data.kind`                                        |
 | `registry/reasons.json`      | reason codes, each scoped to an error kind, to `undo` or to `null` | `error.data.reason`, `undo.reason`, `nullReasons` values |
 | `registry/warnings.json`     | warning codes                                                      | `warnings[].code`                                        |
-| `registry/capabilities.json` | capability strings                                                 | `capabilities`, method schemas, vectors                  |
+| `registry/capabilities.json` | capability strings                                                 | `capabilities`, method schemas                            |
 
 4. Each entry has `code`, `since` and `description`; registries are append-only within a major version (section 2.2). Every code a server sends MUST be registered for the protocol version of the session.
 5. Clients MUST accept codes they do not know (section 2.3).
@@ -400,7 +400,7 @@ The job object is `common.schema.json#/$defs/job`:
 
 Jobs belong to the instance, not to a session: every session can read and cancel every job, and closing a connection never cancels a job.
 
-The shape of `result` is defined by the method that started the job (`$defs.jobResult` of its schema), not by `kind`. A client knows the starting method from the request whose result gave it the `jobId`; a method that returns a job that is already running (section 12.5) returns only jobs that the same method started. A client or a test runner that reads a job without knowing which method started it, for example a job another session started, accepts a result that is valid for one of the methods that start jobs of that kind.
+The shape of `result` is defined by the method that started the job (`$defs.jobResult` of its schema), not by `kind`. A client knows the starting method from the request whose result gave it the `jobId`; a method that returns a job that is already running (section 12.5) returns only jobs that the same method started. A client that reads a job without knowing which method started it, for example a job another session started, accepts a result that is valid for one of the methods that start jobs of that kind.
 
 ### 12.2 job.get
 
@@ -603,7 +603,7 @@ The tempo field of the transport bar shows the tempo with one decimal. When the 
 2. `sideEffects.tempoRounded` is `{fromBpm, toBpm, revert}`: the tempo before and after the switch, in bpm, and `revert`, the recipe `transport.setTempo {bpm: fromBpm}` that sets the tempo back. `revert` is null when the instance does not report the capability of `transport.setTempo` (section 15.2 rule 2).
 3. `dirty.after` is true. `revisionDiff` stays empty, as it does for `transport.setTempo`. `undo` describes the switch alone (view state: the undo reason is `not_persisted_state`, and the revert recipe of `ui.setWorkspace` switches back); the tempo has its own recipe, in the side effect.
 
-Nothing of this happens when the window does not switch view (the workspace asked for is the one shown, so that `ui.setWorkspace` is a no-op; or `ui.setSelection` has no `openEditor`, or has it while the window already shows the piano roll), when the tempo has at most one decimal (120, 120.3), or when the tempo field does not hold the keyboard focus (a window in the background may be like that): the tempo and `dirty` stay as they were, and the result reports nothing about the tempo. The vector `ui/set-workspace-tempo-rounded` depends on the focus, so it has the precondition `keyboardFocus` `tempoField` (vectors/README.md, Preconditions); a runner that cannot make the field hold the focus skips it.
+Nothing of this happens when the window does not switch view (the workspace asked for is the one shown, so that `ui.setWorkspace` is a no-op; or `ui.setSelection` has no `openEditor`, or has it while the window already shows the piano roll), when the tempo has at most one decimal (120, 120.3), or when the tempo field does not hold the keyboard focus (a window in the background may be like that): the tempo and `dirty` stay as they were, and the result reports nothing about the tempo.
 
 ### 14.7 Method-specific members
 
@@ -904,10 +904,9 @@ Every method of version 1 (also in `methods/index.json`). Write: `yes` changes s
 | `audio.set`                | L8    | `audio.device`   | yes         | 1.0   | defined | Change the audio device, with rollback on failure.                                         |
 | `app.quit`                 | L8    | `app.quit`       | yes         | 1.0   | defined | Quit OpenTune; refused with unsaved changes (the one write without an envelope, 14.1).     |
 
-## 23. Method schema files and test vectors
+## 23. Method schema files
 
-1. Each method has one file `methods/<method>.schema.json`, a JSON Schema 2020-12 document with the params and result schemas (and, for a method that starts a job, the job's result) in `$defs` and the method's metadata (layer, capability, `since`, write, result kind, job kind, whether it runs on the main thread, possible error kinds of the method and of its job) in the annotation `x-otcp`. The format is defined in `methods/README.md` and `schemas/method-file.schema.json`.
-2. Test vectors in `vectors/` describe requests with expected responses and multi-step scenarios, with preconditions and with matchers for values that differ between runs. The format is defined in `vectors/README.md` and `schemas/vector.schema.json`. Every method with a defined schema has at least one success vector, and the behaviours listed in `vectors/README.md` ("Coverage") each have a vector.
+Each method has one file `methods/<method>.schema.json`, a JSON Schema 2020-12 document with the params and result schemas (and, for a method that starts a job, the job's result) in `$defs` and the method's metadata (layer, capability, `since`, write, result kind, job kind, whether it runs on the main thread, possible error kinds of the method and of its job) in the annotation `x-otcp`. The format is defined in `methods/README.md` and `schemas/method-file.schema.json`.
 
 ## Appendix A. Fixed responses
 

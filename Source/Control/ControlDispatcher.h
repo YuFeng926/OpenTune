@@ -10,7 +10,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace OpenTune {
@@ -52,8 +51,8 @@ class OpenTuneAudioProcessor;
  * serving the session's other requests meanwhile.
  *
  * Every access to OpenTune state goes through ControlOpContext, which refuses any thread other than the
- * message thread, always (not only in debug builds); the refusals are counted in threadProbe(). Methods
- * that run off the message thread get no ControlOpContext at all.
+ * message thread, always (not only in debug builds). Methods that run off the message thread get no
+ * ControlOpContext at all.
  *
  * Main-thread requests leave the connection reader available after submission. Submissions from one
  * session reach the message thread in arrival order (PROTOCOL.md section 3.3 rule 6); different sessions
@@ -106,32 +105,6 @@ public:
         ControlServer::start() and this call. */
     void setRedactionSecrets(std::vector<std::string> secrets);
 
-    /** True once serverStopping() was called. Thread-safe. */
-    bool isStopping() const noexcept { return stopping_.load(); }
-    /** True when this build implements the method. Thread-safe. */
-    bool implements(std::string_view method) const { return methods_.find(method) != nullptr; }
-    /** Accesses to OpenTune state through the operations, by thread. Thread-safe. */
-    const ControlThreadProbe& threadProbe() const noexcept { return probe_; }
-    /** Number of methods that started on the message thread. Thread-safe. */
-    int executedCount() const noexcept { return executed_.load(); }
-    /** Number of methods that ran on a connection thread (x-otcp.mainThread false). Thread-safe. */
-    int offMainThreadCount() const noexcept { return offMainThread_.load(); }
-    /** The method of this name, or nullptr when this build does not implement it. Thread-safe. */
-    const ControlMethod* method(std::string_view name) const { return methods_.find(name); }
-
-    /** The two steps that follow the result of a method that ends the instance, in the order they happen. */
-    enum class AfterReplyEvent {
-        /** The result was written to the connection (ControlCompletion::respondResult() returned): a non-message
-            thread, once, before the exit step is queued. */
-        ReplyWritten,
-        /** The exit step starts, before it does anything: the message thread. */
-        ExitStepStarted
-    };
-
-    /** Test seam: observer is called with each AfterReplyEvent of every method that ends the instance, on the thread
-        that the event names, so that a test can state the order. Set before the first request; any thread. */
-    void setAfterReplyObserverForTesting(std::function<void(AfterReplyEvent)> observer);
-
 private:
     struct Outcome;
 
@@ -142,8 +115,6 @@ private:
     void runAfterReply(Outcome& outcome);
     /** Sets the stopping flag and wakes the waiters of the facts; idempotent, any thread. */
     void enterStopping();
-    /** Calls the observer of the test seam, if there is one. Any thread. */
-    void notifyAfterReply(AfterReplyEvent event);
     std::shared_ptr<const ControlInstanceFacts> currentFacts() const;
 
     Setup setup_;
@@ -155,12 +126,7 @@ private:
     /** Replaced, never changed in place: a reader keeps the copy it got. Guarded by factsMutex_. */
     std::shared_ptr<const ControlInstanceFacts> facts_;
     bool redactionSecretsSet_ = false;
-    ControlThreadProbe probe_;
     std::atomic<bool> stopping_{false};
-    std::mutex observerMutex_;
-    std::shared_ptr<const std::function<void(AfterReplyEvent)>> afterReplyObserver_;
-    std::atomic<int> executed_{0};
-    std::atomic<int> offMainThread_{0};
 };
 
 } // namespace OpenTune

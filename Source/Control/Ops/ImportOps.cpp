@@ -12,6 +12,7 @@
 #include "Control/ControlJobs.h"
 #include "Control/ControlPathPolicy.h"
 #include "Control/ControlUiBridge.h"
+#include "PluginProcessor.h"
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/NoteGeneratorTypes.h"
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <thread>
@@ -41,19 +43,6 @@ constexpr double kMaxAnalysisSec = 600.0;
 constexpr double kMaxTimelineSec = 1.0e7;
 /** Samples read per block while decoding; the worker checks between blocks whether the job is gone. */
 constexpr int kDecodeBlockSamples = 1 << 18;
-
-ControlImportAnalysis& analysisOverride()
-{
-    static ControlImportAnalysis analysis;
-    return analysis;
-}
-
-/** Message thread only. */
-std::uint64_t& commitCopies()
-{
-    static std::uint64_t copies = 0;
-    return copies;
-}
 
 /**
  * The arrangement's selection before a commit: the active track and the selected clip of the track that the commit
@@ -434,7 +423,6 @@ public:
         , targetTrack_(targetTrack)
         , envelope_(std::move(envelope))
         , wake_(std::move(wake))
-        , analysis_(analysisOverride())
     {
         for (const auto& path : params_.paths) {
             ImportItem item;
@@ -561,7 +549,6 @@ private:
             OpenTuneAudioProcessor::PreparedImport prepared;
             if (attempt < attempts) {
                 prepared = file.prepared;
-                ++commitCopies();
             } else {
                 prepared = std::move(file.prepared);
             }
@@ -684,8 +671,7 @@ private:
             }
             // OpenTuneAudioProcessor::requestContentRefresh(): the editor's analysis request after an
             // import, which also runs the requested note generation once the analysis is ready.
-            item.analysisRequested =
-                analysis_ ? analysis_(processor, request) : processor.requestContentRefresh(request);
+            item.analysisRequested = processor.requestContentRefresh(request);
         }
     }
 
@@ -868,7 +854,6 @@ private:
     int targetTrack_;
     std::unique_ptr<ControlWriteEnvelope> envelope_;
     std::function<void()> wake_;
-    ControlImportAnalysis analysis_;
     std::vector<ImportItem> items_;
     std::size_t next_ = 0;
     std::unique_ptr<PreparedFile> file_;
@@ -963,16 +948,6 @@ Result<JsonValue> runImportStart(ControlOpContext& context, const ImportParams& 
 void registerImportOps(ControlMethodTable& table)
 {
     table.add(controlWriteMethod<ImportParams>("import.start", parseImport, runImportStart));
-}
-
-void controlSetImportAnalysisForTesting(ControlImportAnalysis analysis)
-{
-    analysisOverride() = std::move(analysis);
-}
-
-std::uint64_t controlImportCommitCopiesForTesting()
-{
-    return commitCopies();
 }
 
 } // namespace OpenTune
