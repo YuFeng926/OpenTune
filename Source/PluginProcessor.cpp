@@ -2,6 +2,7 @@
 #if JucePlugin_Build_Standalone
 #include "SourceStore.h"
 #include "StandaloneArrangement.h"
+#include "Utils/PlacementActions.h"
 #endif
 #include "Editor/EditorFactory.h"
 #include "Editor/ConfirmDialogContent.h"
@@ -35,6 +36,7 @@
 #include "Utils/PitchControlConfig.h"
 #include "Utils/ScaleUiMapping.h"
 #include "Utils/PianoRollEditAction.h"
+#include "Utils/PitchUtils.h"
 #include "Utils/VolumeEnvelopeEditAction.h"
 #include "Utils/PianoRollNotePatchAction.h"
 #include "Utils/ScissorsUndoAction.h"
@@ -50,6 +52,7 @@
 #include <cstring>
 #include <functional>
 #include <mutex>
+#include <numeric>
 
 #if JucePlugin_Enable_ARA
 #include "ARA/OpenTuneDocumentController.h"
@@ -58,20 +61,12 @@
 #include "Content/ContentPatchGeometry.h"
 #include "Content/ContentSnapshotProjection.h"
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-#include "Control/ControlService.h"  // OpenTune Control API hook: control service type, see Source/Control/README.md#hooks
+#include "Control/ControlService.h"
 #endif
 
 namespace OpenTune {
 
-// ============================================================================
-// Export Helper Functions (Anonymous Namespace)
-// ============================================================================
 namespace {
-
-constexpr double kExportSampleRateHz = TimeCoordinate::kRenderSampleRate;
-constexpr int kExportNumChannels = 1;
-constexpr int kExportMasterNumChannels = 2;
-constexpr int kExportBitsPerSample = static_cast<int>(sizeof(float) * 8);
 
 ReferenceFeatureSet makeReferenceFeatureSetFromNotes(
     ReferenceFeatureProducer producer,
@@ -266,14 +261,6 @@ std::vector<SilentGap> sliceSilentGaps(const std::vector<SilentGap>& silentGaps,
     return slicedGaps;
 }
 
-bool detectedKeysMatch(const DetectedKey& lhs, const DetectedKey& rhs)
-{
-    return lhs.root == rhs.root
-        && lhs.scale == rhs.scale
-        && lhs.origin == rhs.origin
-        && std::abs(lhs.confidence - rhs.confidence) <= 1.0e-6f;
-}
-
 std::vector<SilentGap> mergeSilentGaps(const std::vector<SilentGap>& leadingGaps,
                                        const std::vector<SilentGap>& trailingGaps,
                                        int64_t trailingOffsetSamples)
@@ -295,21 +282,15 @@ std::shared_ptr<PitchCurve> mergePitchCurves(
                                              OriginalF0State leadingState,
                                              OriginalF0State trailingState)
 {
-    if (leadingState != trailingState) {
+    if (!canMergePlacementPitchCurves(leadingCurve, leadingState, trailingCurve, trailingState)) {
         return nullptr;
     }
 
-    if (leadingCurve == nullptr || trailingCurve == nullptr) {
-        return (leadingCurve == nullptr && trailingCurve == nullptr) ? std::shared_ptr<PitchCurve>{} : nullptr;
-    }
+    if (leadingCurve == nullptr)
+        return {};
 
     const auto& leadingSnapshot = *leadingCurve;
     const auto& trailingSnapshot = *trailingCurve;
-    if (leadingSnapshot.getHopSize() <= 0
-        || leadingSnapshot.getHopSize() != trailingSnapshot.getHopSize()
-        || std::abs(leadingSnapshot.getSampleRate() - trailingSnapshot.getSampleRate()) > 1.0e-6) {
-        return nullptr;
-    }
 
     std::vector<float> mergedOriginalF0 = leadingSnapshot.getOriginalF0();
     const auto& trailingOriginalF0 = trailingSnapshot.getOriginalF0();
@@ -368,110 +349,6 @@ std::shared_ptr<PitchCurve> mergePitchCurves(
 
 #if JucePlugin_Build_Standalone
 namespace {
-
-void renderPlacementForExport(const StandaloneArrangement::PlaybackPlacement& placement,
-                              float trackGain,
-                              double outputOriginSeconds,
-                              juce::AudioBuffer<float>& out,
-                              int64_t totalLen)
-{
-    constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
-
-    if (!placement.contentKey.isValid() || placement.durationSeconds <= 0.0
-        || !placement.hasPlayableView()) {
-        return;
-    }
-
-    // 导出与实时播放共用同一批冻结来源和同一份固定映射 (H, D, A, Z)。
-    const auto& geometry = placement.sampleGeometry;
-    const int64_t outputOriginSample = PlaybackSampleGeometry::projectToSample(
-        outputOriginSeconds * kExportSr);
-    const int64_t dstStartSample = geometry.playbackBeginSample - outputOriginSample;
-    if (dstStartSample >= totalLen) {
-        return;
-    }
-
-    const int64_t placementSamples = geometry.playbackEndSample - geometry.playbackBeginSample;
-    const int64_t remainingOutputSamples = totalLen - dstStartSample;
-    const int samplesToRender = static_cast<int>(
-        juce::jmin<int64_t>(placementSamples, remainingOutputSamples));
-    if (samplesToRender <= 0) {
-        return;
-    }
-
-    juce::AudioBuffer<float> placementBuffer(out.getNumChannels(), samplesToRender);
-    placementBuffer.clear();
-
-    const int64_t readStartSample = geometry.playbackBeginSample - geometry.offsetSamples;
-    const ::OpenTune::PlaybackReadRequest readRequest(
-        placement.source, readStartSample, kExportSr, samplesToRender,
-        placement.outputAnchorSeconds);
-
-    const int renderedSamples = ::OpenTune::readExportPlaybackAudio(readRequest, placementBuffer, 0);
-    if (renderedSamples <= 0) {
-        return;
-    }
-
-    const float baseGain = trackGain * placement.gain;
-    for (int sampleIndex = 0; sampleIndex < renderedSamples; ++sampleIndex) {
-        const int64_t dstIndex = dstStartSample + sampleIndex;
-        if (dstIndex < 0 || dstIndex >= totalLen)
-            continue;
-
-        // 显式放置锚点 + 相对样本遍历：输出 buffer 起点对应 A，样本 0 是
-        // 放置内容的语义起点。
-        const double placementSeconds = static_cast<double>(sampleIndex) / kExportSr;
-        const float fade = placementFadeGain(
-            placementSeconds,
-            placement.durationSeconds,
-            placement.fadeInDuration,
-            placement.fadeOutDuration);
-        const float finalGain = baseGain * fade;
-        for (int ch = 0; ch < out.getNumChannels(); ++ch) {
-            const float* src = placementBuffer.getReadPointer(ch);
-            float* dst = out.getWritePointer(ch);
-            dst[static_cast<size_t>(dstIndex)] += src[sampleIndex] * finalGain;
-        }
-    }
-}
-
-StandaloneArrangement::PlaybackPlacement exportPlacementFrom(
-    const StandaloneArrangement::Placement& placement)
-{
-    StandaloneArrangement::PlaybackPlacement projected;
-    projected.contentKey = placement.contentKey;
-    projected.timelineStartSeconds = placement.timelineStartSeconds;
-    projected.durationSeconds = placement.durationSeconds;
-    projected.clipInSeconds = placement.clipInSeconds;
-    projected.gain = placement.gain;
-    projected.fadeInDuration = placement.fadeInDuration;
-    projected.fadeOutDuration = placement.fadeOutDuration;
-    return projected;
-}
-
-// 导出开始时冻结每个 placement 的来源视图，并在导出采样率上一次性建立
-// 与实时播放相同的连续几何。
-void freezeExportSources(OpenTuneAudioProcessor& processor,
-                         std::vector<StandaloneArrangement::PlaybackPlacement>& placements)
-{
-    auto* service = processor.getContentRenderService();
-    placements.erase(
-        std::remove_if(placements.begin(), placements.end(),
-            [service](StandaloneArrangement::PlaybackPlacement& placement) {
-                if (placement.hasPlayableSource())
-                    return false;
-                PlaybackReadSource source;
-                if (service == nullptr
-                    || !service->getPlaybackReadSource(placement.contentKey, source)
-                    || !source.hasAudio())
-                    return true;
-                placement.source = std::move(source);
-                return false;
-            }),
-        placements.end());
-    StandaloneArrangement::buildPlaybackGeometry(
-        placements, TimeCoordinate::kRenderSampleRate);
-}
 
 // copyContentRange 的 TimeGrid 截断：与 audio slicing 使用同一
 // [sourceStartSeconds, sourceStartSeconds + newDurationSeconds] 区间。
@@ -643,7 +520,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     undoManager_.setHistoryPrunedCallback([this] { scheduleReclaimSweep(); });
 #endif
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-    // OpenTune Control API hook: the service starts after this constructor, guarded by its liveness token, see Source/Control/README.md#hooks
+    // Start the external service after construction, guarded by its liveness token.
     controlService_ = std::make_unique<ControlService>(*this);
     controlService_->scheduleStart();
 #endif
@@ -866,9 +743,27 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     public:
         explicit ProcessorContentCommands(OpenTuneAudioProcessor& proc) noexcept : proc_(proc) {}
 
-        bool setDetectedKey(ContentKey key, const DetectedKey& detectedKey) override
+        std::optional<ContentDetectedKeyEditResult> setDetectedKey(
+            ContentKey key, const DetectedKey& detectedKey) override
         {
-            return proc_.setContentDetectedKey(key, detectedKey);
+            const auto snapshot = proc_.getContentSnapshot(key);
+            if (snapshot == nullptr)
+                return std::nullopt;
+            ContentDetectedKeyEditResult result{snapshot->detectedKey, false};
+            if (!proc_.setContentDetectedKey(key, detectedKey))
+                return std::nullopt;
+            const auto after = proc_.getContentSnapshot(key);
+            if (after == nullptr)
+                return std::nullopt;
+            result.changed = result.before.root != after->detectedKey.root
+                             || result.before.scale != after->detectedKey.scale
+                             || result.before.origin != after->detectedKey.origin
+                             || result.before.confidence != after->detectedKey.confidence;
+            if (result.changed) {
+                proc_.getUndoManager().clearRedo();
+                proc_.notifyContentEditCompleted(key);
+            }
+            return result;
         }
 
         bool applyPitchShiftState(ContentKey key, const PitchShiftEditState& state) override
@@ -876,25 +771,49 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             return proc_.applyContentPitchShiftState(key, state);
         }
 
-        std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
+        PitchShiftEditAction* commitPitchShiftEdit(
             ContentKey key,
             const PitchShiftSettings& newSettings) override
         {
             return proc_.commitPitchShiftEdit(key, newSettings);
         }
 
-        bool autoTuneContentRange(ContentKey key,
-                                   int startFrame, int endFrameExclusive,
-                                   const NoteGeneratorParams& params,
-                                   const std::optional<ScaleSnapConfig>& scaleSnap) override
+        ContentEditCommitResult commitAutoTuneContentRangeUndoable(
+            ContentKey key,
+            int startFrame,
+            int endFrameExclusive,
+            const NoteGeneratorParams& params,
+            const std::optional<ScaleSnapConfig>& scaleSnap,
+            const juce::String& description) override
         {
-            return proc_.autoTuneContentRangeByContentKey(
-                key, startFrame, endFrameExclusive, params, scaleSnap);
+            const auto before = proc_.getContentSnapshot(key);
+            if (before == nullptr || before->pitchCurve == nullptr
+                || !proc_.autoTuneContentRangeByContentKey(key, startFrame, endFrameExclusive, params, scaleSnap))
+                return {};
+
+            const auto after = proc_.getContentSnapshot(key);
+            if (after == nullptr || after->pitchCurve == nullptr)
+                return {};
+            const auto affected = PitchCurve::expandNoteBasedCorrectionRange(
+                startFrame, endFrameExclusive, static_cast<int>(before->pitchCurve->size()));
+            auto action = createPianoRollEditAction(
+                key, before->notes, before->pitchCurve->getCorrectionSegments(), after,
+                ContentEditRangeFrames{affected.startFrame, affected.endFrameExclusive}, description);
+            if (action == nullptr)
+                return {};
+            auto* actionPtr = action.get();
+            proc_.getUndoManager().addAction(std::move(action));
+            proc_.notifyContentEditCompleted(key);
+            return {after, actionPtr};
         }
 
         bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) override
         {
-            return proc_.generateNotesOnlyByContentKey(key, params);
+            if (!proc_.generateNotesOnlyByContentKey(key, params))
+                return false;
+            proc_.getUndoManager().clearRedo();
+            proc_.notifyContentEditCompleted(key);
+            return true;
         }
 
         bool ensureTimeToolAnchorSeed(ContentKey key) override
@@ -943,13 +862,417 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 std::move(originalF0InRange), std::move(erasedRanges));
         }
 
+        ContentEditCommitResult commitNotesAndSegmentsUndoable(
+            ContentKey key,
+            std::vector<Note> notes,
+            std::vector<PitchCorrectionSegment> segments,
+            ContentEditRangeFrames affectedRange,
+            const juce::String& description) override
+        {
+            const auto before = proc_.getContentSnapshot(key);
+            if (before == nullptr || before->pitchCurve == nullptr)
+                return {};
+
+            const auto range = secondsRange(*before->pitchCurve, affectedRange);
+            auto scopedNotes = notesInRange(notes, range.first, range.second);
+            auto scopedSegments = segmentsInRange(
+                segments, affectedRange.startFrame, affectedRange.endFrameExclusive);
+            auto committed = proc_.commitContentNotesAndSegments(
+                key, std::move(scopedNotes), std::move(scopedSegments), affectedRange);
+            if (committed == nullptr)
+                return {};
+
+            auto action = createPianoRollEditAction(
+                key, before->notes, before->pitchCurve->getCorrectionSegments(), committed,
+                affectedRange, description);
+            if (action == nullptr)
+                return {};
+            auto* actionPtr = action.get();
+            proc_.getUndoManager().addAction(std::move(action));
+            proc_.notifyContentEditCompleted(key);
+            return {std::move(committed), actionPtr};
+        }
+
+        std::unique_ptr<PianoRollEditAction> createPianoRollEditAction(
+            ContentKey key,
+            const std::vector<Note>& beforeNotes,
+            const std::vector<PitchCorrectionSegment>& beforeSegments,
+            ContentCommitSnapshot after,
+            ContentEditRangeFrames affectedRange,
+            const juce::String& description) const override
+        {
+            if (after == nullptr || after->pitchCurve == nullptr)
+                return {};
+            const auto range = secondsRange(*after->pitchCurve, affectedRange);
+            return std::make_unique<PianoRollEditAction>(
+                proc_.getContentCommands(), key,
+                description.isNotEmpty() ? description : LOC_RAW("Edit"),
+                notesInRange(beforeNotes, range.first, range.second),
+                notesInRange(after->notes, range.first, range.second),
+                segmentsInRange(beforeSegments, affectedRange.startFrame, affectedRange.endFrameExclusive),
+                segmentsInRange(after->pitchCurve->getCorrectionSegments(),
+                                affectedRange.startFrame, affectedRange.endFrameExclusive),
+                affectedRange);
+        }
+
+        std::optional<ContentNoteCorrectionPlan> planNoteCorrection(
+            const EditableContentSnapshot& snapshot,
+            const std::vector<Note>& notes,
+            F0FrameRange editRange,
+            const NoteGeneratorParams& params) const override
+        {
+            if (snapshot.pitchCurve == nullptr || editRange.isEmpty())
+                return std::nullopt;
+            const auto& curve = *snapshot.pitchCurve;
+            const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())};
+            auto scratch = PitchCurve::fromSnapshot(snapshot.pitchCurve);
+            auto corrected = scratch->applyCorrectionToRange(
+                notes, editRange.startFrame, editRange.endFrameExclusive,
+                static_cast<float>(snapshot.pitchShiftSettings.getPitchRatio()),
+                params.retuneSpeed, params.vibratoDepth, params.vibratoRate);
+            const auto affected = PitchCurve::expandNoteBasedCorrectionRange(
+                editRange.startFrame, editRange.endFrameExclusive, timeline.endFrameExclusive());
+            if (affected.isEmpty() || corrected == nullptr)
+                return std::nullopt;
+
+            ContentNoteCorrectionPlan plan;
+            plan.affectedRange = affected;
+            plan.notes = notes;
+            plan.correctedCurve = corrected;
+            for (const auto& segment : corrected->getCorrectionSegments())
+                if (segment.startFrame < affected.endFrameExclusive && segment.endFrame > affected.startFrame)
+                    plan.segments.push_back(segment);
+            return plan;
+        }
+
+        F0FrameRange noteFrameRange(
+            const PitchCurveSnapshot& curve,
+            const std::vector<Note>& notes,
+            const std::vector<std::size_t>& positions) const override
+        {
+            double start = 1e30;
+            double end = -1e30;
+            for (const auto position : positions) {
+                if (position >= notes.size())
+                    continue;
+                start = std::min(start, notes[position].startTime);
+                end = std::max(end, notes[position].endTime);
+            }
+            if (end <= start)
+                return {};
+            return F0Timeline{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())}
+                .rangeForTimes(start, end);
+        }
+
+        ContentAutoSnapPlan planAutoSnap(
+            const EditableContentSnapshot& snapshot,
+            const std::optional<std::vector<std::size_t>>& targets,
+            const ScaleSnapConfig& scaleSnap,
+            const NoteGeneratorParams& params) const override
+        {
+            ContentAutoSnapPlan plan;
+            plan.notes = snapshot.notes;
+            if (snapshot.pitchCurve == nullptr)
+                return plan;
+
+            const auto& curve = *snapshot.pitchCurve;
+            const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())};
+            if (timeline.isEmpty()) {
+                plan.status = ContentAutoSnapPlan::Status::EmptyRange;
+                return plan;
+            }
+
+            const bool selectionActive = targets.has_value();
+            std::vector<std::size_t> indices;
+            if (selectionActive) {
+                for (const auto index : *targets)
+                    if (index < plan.notes.size())
+                        indices.push_back(index);
+            } else {
+                indices.resize(plan.notes.size());
+                std::iota(indices.begin(), indices.end(), std::size_t{0});
+            }
+            if (indices.empty())
+                return plan;
+
+            double dirtyStart = 1e30;
+            double dirtyEnd = -1e30;
+            bool pitchChanged = false;
+            for (const auto index : indices) {
+                auto& note = plan.notes[index];
+                const float baseMidi = PitchUtils::freqToMidi(note.pitch);
+                const float offset = scaleSnap.quantizeMidiToActiveScale(baseMidi) - baseMidi;
+                if (std::abs(offset - note.pitchOffset) < 0.001f)
+                    continue;
+                note.pitchOffset = offset;
+                note.dirty = true;
+                pitchChanged = true;
+                dirtyStart = std::min(dirtyStart, note.startTime);
+                dirtyEnd = std::max(dirtyEnd, note.endTime);
+            }
+
+            std::vector<Note> targetNotes;
+            double targetStart = 1e30;
+            double targetEnd = -1e30;
+            targetNotes.reserve(indices.size());
+            for (const auto index : indices) {
+                const auto& note = plan.notes[index];
+                targetStart = std::min(targetStart, note.startTime);
+                targetEnd = std::max(targetEnd, note.endTime);
+                targetNotes.push_back(note);
+            }
+            const auto noteFrames = timeline.rangeForTimes(targetStart, targetEnd);
+            if (!pitchChanged && fullyCorrected(curve, noteFrames.startFrame, noteFrames.endFrameExclusive))
+                return plan;
+
+            if (pitchChanged) {
+                dirtyStart = std::min(dirtyStart, targetStart);
+                dirtyEnd = std::max(dirtyEnd, targetEnd);
+            } else {
+                dirtyStart = targetStart;
+                dirtyEnd = targetEnd;
+            }
+            const auto editRange = timeline.rangeForTimes(dirtyStart, dirtyEnd);
+            if (editRange.isEmpty()) {
+                plan.status = ContentAutoSnapPlan::Status::EmptyRange;
+                return plan;
+            }
+
+            auto scratch = PitchCurve::fromSnapshot(snapshot.pitchCurve);
+            const auto corrected = scratch->applyCorrectionToRange(
+                targetNotes, editRange.startFrame, editRange.endFrameExclusive,
+                static_cast<float>(snapshot.pitchShiftSettings.getPitchRatio()),
+                params.retuneSpeed, params.vibratoDepth, params.vibratoRate);
+            const auto affected = PitchCurve::expandNoteBasedCorrectionRange(
+                editRange.startFrame, editRange.endFrameExclusive, timeline.endFrameExclusive());
+
+            std::vector<PitchCorrectionSegment> segments;
+            if (!selectionActive) {
+                for (const auto& segment : corrected->getCorrectionSegments())
+                    if (segment.startFrame < affected.endFrameExclusive && segment.endFrame > affected.startFrame)
+                        segments.push_back(segment);
+            } else {
+                std::vector<F0FrameRange> noteFrames;
+                for (const auto& note : targetNotes) {
+                    const int start = timeline.exclusiveFrameAt(note.startTime);
+                    const int end = timeline.exclusiveFrameAt(note.endTime);
+                    if (end > start)
+                        noteFrames.push_back({start, end});
+                }
+                std::sort(noteFrames.begin(), noteFrames.end(),
+                          [](const F0FrameRange& a, const F0FrameRange& b) {
+                              return a.startFrame < b.startFrame;
+                          });
+                std::vector<F0FrameRange> targetFrames;
+                for (const auto& frames : noteFrames) {
+                    if (targetFrames.empty() || targetFrames.back().endFrameExclusive < frames.startFrame)
+                        targetFrames.push_back(frames);
+                    else
+                        targetFrames.back().endFrameExclusive =
+                            std::max(targetFrames.back().endFrameExclusive, frames.endFrameExclusive);
+                }
+
+                for (const auto& segment : corrected->getCorrectionSegments())
+                    for (const auto& frames : targetFrames)
+                        if (auto cut = cutSegment(segment, frames.startFrame, frames.endFrameExclusive))
+                            segments.push_back(std::move(*cut));
+
+                for (const auto& segment : curve.getCorrectionSegments()) {
+                    if (segment.endFrame <= affected.startFrame || segment.startFrame >= affected.endFrameExclusive)
+                        continue;
+                    std::vector<F0FrameRange> spans{{segment.startFrame, segment.endFrame}};
+                    for (const auto& frames : targetFrames) {
+                        std::vector<F0FrameRange> remainder;
+                        for (const auto& span : spans) {
+                            if (frames.startFrame >= span.endFrameExclusive || frames.endFrameExclusive <= span.startFrame) {
+                                remainder.push_back(span);
+                                continue;
+                            }
+                            if (span.startFrame < frames.startFrame)
+                                remainder.push_back({span.startFrame, std::min(span.endFrameExclusive, frames.startFrame)});
+                            if (frames.endFrameExclusive < span.endFrameExclusive)
+                                remainder.push_back({std::max(span.startFrame, frames.endFrameExclusive), span.endFrameExclusive});
+                        }
+                        spans = std::move(remainder);
+                        if (spans.empty())
+                            break;
+                    }
+                    for (const auto& span : spans)
+                        if (auto kept = cutSegment(segment, span.startFrame, span.endFrameExclusive))
+                            segments.push_back(std::move(*kept));
+                }
+            }
+
+            plan.status = ContentAutoSnapPlan::Status::Commit;
+            plan.correction.affectedRange = affected;
+            plan.correction.notes = plan.notes;
+            plan.correction.segments = std::move(segments);
+            plan.correction.correctedCurve = corrected;
+            return plan;
+        }
+
+        std::optional<std::vector<Note>> planAutoTuneContentRange(
+            const EditableContentSnapshot& snapshot,
+            int startFrame,
+            int endFrameExclusive,
+            const NoteGeneratorParams& params,
+            const std::optional<ScaleSnapConfig>& scaleSnap) const override
+        {
+            if (snapshot.pitchCurve == nullptr || endFrameExclusive <= startFrame)
+                return std::nullopt;
+            const auto& curve = *snapshot.pitchCurve;
+            const auto& f0 = curve.getOriginalF0();
+            const int count = static_cast<int>(f0.size());
+            if (startFrame < 0 || endFrameExclusive > count || count == 0)
+                return std::nullopt;
+            auto generated = LegacyNoteGenerator::generate(
+                f0.data(), count, nullptr, startFrame, endFrameExclusive,
+                curve.getHopSize(), curve.getSampleRate(), params);
+            if (!LegacyNoteGenerator::validate(generated))
+                return std::nullopt;
+            if (scaleSnap)
+                scaleSnap->applyToNotes(generated);
+            auto normalized = normalizeStoredNotes(std::move(generated));
+            if (normalized.empty())
+                return std::nullopt;
+
+            const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), count};
+            const double rangeStart = timeline.timeAtFrame(startFrame);
+            const double rangeEnd = timeline.timeAtFrame(endFrameExclusive);
+            std::vector<Note> merged;
+            merged.reserve(snapshot.notes.size() + normalized.size());
+            for (const auto& note : snapshot.notes)
+                if (note.endTime <= rangeStart || note.startTime >= rangeEnd)
+                    merged.push_back(note);
+            merged.insert(merged.end(), normalized.begin(), normalized.end());
+            std::sort(merged.begin(), merged.end(),
+                      [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
+            return normalizeStoredNotes(std::move(merged));
+        }
+
+        std::optional<ContentNoteRangePatch> planGenerateNotesOnly(
+            const EditableContentSnapshot& snapshot,
+            const NoteGeneratorParams& params) const override
+        {
+            if (snapshot.pitchCurve == nullptr)
+                return std::nullopt;
+            const auto& curve = *snapshot.pitchCurve;
+            const auto& f0 = curve.getOriginalF0();
+            const int count = static_cast<int>(f0.size());
+            if (count == 0)
+                return std::nullopt;
+            auto generated = LegacyNoteGenerator::generate(
+                f0.data(), count, nullptr, 0, count, curve.getHopSize(), curve.getSampleRate(), params);
+            if (!LegacyNoteGenerator::validate(generated))
+                return std::nullopt;
+            for (auto& note : generated)
+                if (note.originalPitch > 0.0f)
+                    note.pitch = note.originalPitch;
+
+            const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), count};
+            ContentNoteRangePatch patch;
+            patch.affectedRange = {0.0, timeline.timeAtFrame(count)};
+            for (const auto& note : generated) {
+                patch.affectedRange.startSeconds = std::min(patch.affectedRange.startSeconds, note.startTime);
+                patch.affectedRange.endSeconds = std::max(patch.affectedRange.endSeconds, note.endTime);
+            }
+            patch.afterNotesInRange = std::move(generated);
+            return patch;
+        }
+
         bool setTimeGrid(ContentKey key,
                           std::shared_ptr<const TimeGridSnapshot> grid) override
         {
             return proc_.setContentTimeGrid(key, std::move(grid));
         }
 
+        TimeGridEditAction* commitTimeGridEdit(
+            ContentKey key,
+            std::shared_ptr<const TimeGridSnapshot> before,
+            std::shared_ptr<const TimeGridSnapshot> after,
+            const juce::String& description) override
+        {
+            if (!key.isValid() || before == nullptr || after == nullptr)
+                return {};
+            auto action = std::make_unique<TimeGridEditAction>(
+                proc_.getContentCommands(), key,
+                description.isNotEmpty() ? description : LOC_RAW("Edit time grid"), before, after);
+            if (!proc_.setContentTimeGrid(key, std::move(after)))
+                return nullptr;
+            auto* actionPtr = action.get();
+            proc_.getUndoManager().addAction(std::move(action));
+            proc_.notifyContentEditCompleted(key);
+            return actionPtr;
+        }
+
     private:
+        static std::pair<double, double> secondsRange(
+            const PitchCurveSnapshot& curve, ContentEditRangeFrames range)
+        {
+            const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())};
+            return {timeline.isEmpty() ? 0.0 : timeline.timeAtFrame(range.startFrame),
+                    timeline.isEmpty() ? 0.0 : timeline.timeAtFrame(range.endFrameExclusive)};
+        }
+
+        static std::vector<Note> notesInRange(const std::vector<Note>& notes, double start, double end)
+        {
+            std::vector<Note> result;
+            for (const auto& note : notes)
+                if (note.startTime < end && note.endTime > start)
+                    result.push_back(note);
+            return result;
+        }
+
+        static std::vector<PitchCorrectionSegment> segmentsInRange(
+            const std::vector<PitchCorrectionSegment>& segments, int start, int end)
+        {
+            std::vector<PitchCorrectionSegment> result;
+            for (const auto& segment : segments) {
+                if (segment.endFrame <= start || segment.startFrame >= end)
+                    continue;
+                const int clipStart = std::max(segment.startFrame, start);
+                const int clipEnd = std::min(segment.endFrame, end);
+                const int offset = clipStart - segment.startFrame;
+                if (clipEnd <= clipStart || offset + clipEnd - clipStart > static_cast<int>(segment.f0Data.size()))
+                    continue;
+                auto clipped = segment;
+                clipped.startFrame = clipStart;
+                clipped.endFrame = clipEnd;
+                clipped.f0Data.assign(segment.f0Data.begin() + offset,
+                                      segment.f0Data.begin() + offset + clipEnd - clipStart);
+                result.push_back(std::move(clipped));
+            }
+            return result;
+        }
+
+        static bool fullyCorrected(const PitchCurveSnapshot& curve, int start, int end)
+        {
+            if (start < 0 || end > static_cast<int>(curve.size()) || end <= start)
+                return false;
+            bool covered = true;
+            curve.forEachCorrectionF0Span(start, end, [&](int, const float* values, int) {
+                if (values == nullptr)
+                    covered = false;
+            });
+            return covered;
+        }
+
+        static std::optional<PitchCorrectionSegment> cutSegment(
+            const PitchCorrectionSegment& segment, int start, int end)
+        {
+            const int clipStart = std::max(segment.startFrame, start);
+            const int clipEnd = std::min(segment.endFrame, end);
+            const int offset = clipStart - segment.startFrame;
+            if (clipEnd <= clipStart || offset + clipEnd - clipStart > static_cast<int>(segment.f0Data.size()))
+                return std::nullopt;
+            auto clipped = segment;
+            clipped.startFrame = clipStart;
+            clipped.endFrame = clipEnd;
+            clipped.f0Data.assign(segment.f0Data.begin() + offset,
+                                  segment.f0Data.begin() + offset + clipEnd - clipStart);
+            return clipped;
+        }
+
         OpenTuneAudioProcessor& proc_;
     };
     auto commands = std::make_shared<ProcessorContentCommands>(*this);
@@ -1246,7 +1569,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     contentChangedCallback_ = {};
 #endif
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-    // OpenTune Control API hook: stop the control service before anything else, see Source/Control/README.md#hooks
+    // Stop external requests before releasing processor state.
     controlService_->stop();
 #endif
     if (!runtimeStateInitialized_.load(std::memory_order_acquire))
@@ -1335,7 +1658,8 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     // 不等待推理，后续实例直接复用。
 }
 
-void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
+bool OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu,
+                                                   ProcessingPreferenceRuntimeCallback completion)
 {
     AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
         + juce::String(forceCpu ? "true" : "false"));
@@ -1343,40 +1667,55 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     // 耗时 reset（Session 销毁、按当前配置重建、AccelerationDetector
     // resetAndDetect）由 ProcessRenderRuntime 的 control worker 串行执行。
     auto gate = completionGate_;
-    ProcessRenderRuntime::getInstance().resetInferenceBackend(forceCpu, contentRenderService_,
-        [](ProcessRenderRuntime::ControlResult result, juce::String errorMessage) {
-            if (result == ProcessRenderRuntime::ControlResult::Failed)
-            {
+    return ProcessRenderRuntime::getInstance().resetInferenceBackend(forceCpu, contentRenderService_,
+        [completion = std::move(completion)](ProcessRenderRuntime::ControlResult result,
+                                            juce::String errorMessage) mutable {
+            if (result == ProcessRenderRuntime::ControlResult::Failed) {
                 AppLogger::error("[Processor] inference backend control failed: " + errorMessage);
                 ConfirmDialogContent::showDiagnostic(
                     nullptr,
                     "Vocoder initialization failed",
                     errorMessage,
                     AppLogger::makeDiagnosticText("Inference backend reset", errorMessage));
-                return;
+            } else {
+                AppLogger::info("[Processor] Inference backend reset complete");
             }
-            AppLogger::info("[Processor] Inference backend reset complete");
+            if (completion) {
+                const auto status = result == ProcessRenderRuntime::ControlResult::Changed
+                    ? ProcessingPreferenceRuntimeStatus::Changed
+                    : result == ProcessRenderRuntime::ControlResult::Unchanged
+                        ? ProcessingPreferenceRuntimeStatus::Unchanged
+                        : ProcessingPreferenceRuntimeStatus::Failed;
+                completion(status, errorMessage);
+            }
         }, gate);
 }
 
 bool OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& weight,
-                                                   bool persistPreference)
+                                                   ProcessingPreferenceRuntimeCallback completion,
+                                                   std::optional<bool> forceCpu)
 {
     auto gate = completionGate_;
-    const bool accepted = ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight, contentRenderService_,
-        [](ProcessRenderRuntime::ControlResult result, juce::String errorMessage) {
-            if (result != ProcessRenderRuntime::ControlResult::Failed)
-                return;
-            AppLogger::error("[Processor] vocoder model control failed: " + errorMessage);
-            ConfirmDialogContent::showDiagnostic(
-                nullptr,
-                "Vocoder model initialization failed",
-                errorMessage,
-                AppLogger::makeDiagnosticText("Vocoder initialization", errorMessage));
-        }, gate);
-    if (accepted && persistPreference && appPreferences_ != nullptr)
-        appPreferences_->setVocoderModelWeight(weight);
-    return accepted;
+    return ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight, contentRenderService_,
+        [completion = std::move(completion)](ProcessRenderRuntime::ControlResult result,
+                                            juce::String errorMessage) mutable {
+            if (result == ProcessRenderRuntime::ControlResult::Failed) {
+                AppLogger::error("[Processor] vocoder model control failed: " + errorMessage);
+                ConfirmDialogContent::showDiagnostic(
+                    nullptr,
+                    "Vocoder model initialization failed",
+                    errorMessage,
+                    AppLogger::makeDiagnosticText("Vocoder initialization", errorMessage));
+            }
+            if (completion) {
+                const auto status = result == ProcessRenderRuntime::ControlResult::Changed
+                    ? ProcessingPreferenceRuntimeStatus::Changed
+                    : result == ProcessRenderRuntime::ControlResult::Unchanged
+                        ? ProcessingPreferenceRuntimeStatus::Unchanged
+                        : ProcessingPreferenceRuntimeStatus::Failed;
+                completion(status, errorMessage);
+            }
+        }, gate, forceCpu.has_value(), forceCpu.value_or(false));
 }
 
 void OpenTuneAudioProcessor::handleSharedBackendChanged()
@@ -1464,6 +1803,28 @@ bool OpenTuneAudioProcessor::setF0ModelType(F0ModelType type, juce::String* fail
         return false;
     }
     return true;
+}
+
+ProcessingPreferenceRuntimeOperations
+OpenTuneAudioProcessor::getProcessingPreferenceRuntimeOperations()
+{
+    ProcessingPreferenceRuntimeOperations operations;
+    operations.setF0ModelType = [this](F0ModelType type, juce::String& failureReason) {
+        return setF0ModelType(type, &failureReason);
+    };
+    operations.setVocoderModelWeight = [this](const VocoderModelWeight& weight,
+                                              std::optional<bool> forceCpu,
+                                              ProcessingPreferenceRuntimeCallback completion) {
+        return setVocoderModelWeight(weight, std::move(completion), forceCpu);
+    };
+    operations.resetInferenceBackend = [this](bool forceCpu,
+                                               ProcessingPreferenceRuntimeCallback completion) {
+        return resetInferenceBackend(forceCpu, std::move(completion));
+    };
+    operations.invalidateAllContentCaches = [this] {
+        invalidateAllContentCaches();
+    };
+    return operations;
 }
 
 // ============================================================================
@@ -2832,6 +3193,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
                        + " for trackId=" + juce::String(trackId));
         return std::nullopt;
     }
+    const auto selectionBefore = standaloneArrangement_->getSelectionState();
 
     const double requestedOffsetSeconds = splitSeconds - originalPlacement.timelineStartSeconds;
     constexpr double minDurationSeconds = 0.1;
@@ -2985,7 +3347,15 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     standaloneArrangement_->retirePlacement(trackId, originalPlacement.placementId);
     standaloneContentRepository_->retireClip(originalPlacement.contentKey);
 
-    standaloneArrangement_->selectPlacement(trackId, trailingPlacement.placementId);
+    auto selectionAfter = selectionBefore;
+    selectionAfter.placements.erase({trackId, originalPlacement.placementId});
+    selectionAfter.placements.insert({trackId, trailingPlacement.placementId});
+    for (auto& selectedId : selectionAfter.selectedPlacementIds)
+        if (selectedId == originalPlacement.placementId)
+            selectedId = trailingPlacement.placementId;
+    selectionAfter.activeTrackId = trackId;
+    selectionAfter.selectedPlacementIds[static_cast<size_t>(trackId)] = trailingPlacement.placementId;
+    standaloneArrangement_->setSelectionState(selectionAfter);
     scheduleReclaimSweep();
 
     SplitOutcome outcome;
@@ -2997,6 +3367,9 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     outcome.trailingPlacementId = trailingPlacement.placementId;
     outcome.leadingContentKey = leadingKey;
     outcome.trailingContentKey = trailingKey;
+    outcome.selectionBefore = selectionBefore;
+    outcome.selectionAfter = selectionAfter;
+    notifyPlacementChanged();
     return outcome;
 }
 
@@ -3018,55 +3391,22 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
         return std::nullopt;
     }
 
-    constexpr double epsilonSeconds = 1.0 / TimeCoordinate::kRenderSampleRate;
-    if (std::abs(leadingPlacement.timelineEndSeconds() - trailingPlacement.timelineStartSeconds) > epsilonSeconds) {
-        AppLogger::log("Merge rejected: placements do not form one continuous placement span");
-        return std::nullopt;
-    }
-
-    if (std::abs(leadingPlacement.gain - trailingPlacement.gain) > 1.0e-6f
-        || leadingPlacement.name != trailingPlacement.name) {
-        AppLogger::log("Merge rejected: placement metadata diverged");
-        return std::nullopt;
-    }
-
     const auto leadingSnapshot = getContentSnapshot(leadingPlacement.contentKey);
     const auto trailingSnapshot = getContentSnapshot(trailingPlacement.contentKey);
-    if (!leadingSnapshot || !trailingSnapshot
-        || leadingSnapshot->audioBuffer == nullptr
-        || trailingSnapshot->audioBuffer == nullptr
-        || leadingSnapshot->nativeSource.buffer == nullptr
-        || trailingSnapshot->nativeSource.buffer == nullptr
-        || leadingSnapshot->sourceWindow.sourceId == 0
-        || leadingSnapshot->sourceWindow.sourceId != trailingSnapshot->sourceWindow.sourceId
-        || !(leadingSnapshot->nativeSource == trailingSnapshot->nativeSource)) {
-        AppLogger::log("Merge rejected: placements do not resolve to the same source lineage");
+    if (!leadingSnapshot || !trailingSnapshot) {
+        AppLogger::log("Merge rejected: content snapshot unavailable");
+        return std::nullopt;
+    }
+
+    const auto mergePlan = planPlacementMerge(trackId, leadingPlacement, *leadingSnapshot,
+                                              trackId, trailingPlacement, *trailingSnapshot);
+    if (mergePlan.issue != PlacementMergeIssue::None) {
+        AppLogger::log("Merge rejected: shared placement merge plan refused the inputs");
         return std::nullopt;
     }
 
     const double leadingCanonicalRate = leadingSnapshot->audioSampleRate;
-    if (!std::isfinite(leadingCanonicalRate) || leadingCanonicalRate <= 0.0
-        || leadingCanonicalRate != trailingSnapshot->audioSampleRate) {
-        AppLogger::log("Merge rejected: canonical sample rates are unavailable or diverged");
-        return std::nullopt;
-    }
-
-    // 连续性直接比较权威 source 端点：两个边界值来自同一个编辑边界，不做样本投影验收。
-    if (leadingSnapshot->sourceWindow.sourceEndSeconds != trailingSnapshot->sourceWindow.sourceStartSeconds) {
-        AppLogger::log("Merge rejected: clips do not describe one contiguous source provenance window");
-        return std::nullopt;
-    }
-
-    if (!detectedKeysMatch(leadingSnapshot->detectedKey, trailingSnapshot->detectedKey)) {
-        AppLogger::log("Merge rejected: content metadata diverged");
-        return std::nullopt;
-    }
-
-    if (leadingSnapshot->originalF0State == OriginalF0State::Extracting
-        || trailingSnapshot->originalF0State == OriginalF0State::Extracting) {
-        AppLogger::log("Merge rejected: content payload is still being refreshed");
-        return std::nullopt;
-    }
+    const auto selectionBefore = standaloneArrangement_->getSelectionState();
 
     const auto mergedPitchCurve = mergePitchCurves(leadingSnapshot->pitchCurve,
                                                    trailingSnapshot->pitchCurve,
@@ -3151,11 +3491,16 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     standaloneContentRepository_->retireClip(leadingPlacement.contentKey);
     standaloneContentRepository_->retireClip(trailingPlacement.contentKey);
 
-    if (targetPlacementIndex >= 0) {
-        standaloneArrangement_->setSelectedPlacementIndex(trackId, targetPlacementIndex);
-    } else {
-        standaloneArrangement_->selectPlacement(trackId, mergedPlacement.placementId);
-    }
+    auto selectionAfter = selectionBefore;
+    selectionAfter.placements.erase({trackId, leadingPlacementId});
+    selectionAfter.placements.erase({trackId, trailingPlacementId});
+    selectionAfter.placements.insert({trackId, mergedPlacement.placementId});
+    for (auto& selectedId : selectionAfter.selectedPlacementIds)
+        if (selectedId == leadingPlacementId || selectedId == trailingPlacementId)
+            selectedId = mergedPlacement.placementId;
+    selectionAfter.activeTrackId = trackId;
+    selectionAfter.selectedPlacementIds[static_cast<size_t>(trackId)] = mergedPlacement.placementId;
+    standaloneArrangement_->setSelectionState(selectionAfter);
 
     scheduleReclaimSweep();
 
@@ -3168,6 +3513,9 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     outcome.trailingContentKey = trailingPlacement.contentKey;
     outcome.mergedPlacementId = mergedPlacement.placementId;
     outcome.mergedContentKey = mergedKey;
+    outcome.selectionBefore = selectionBefore;
+    outcome.selectionAfter = selectionAfter;
+    notifyPlacementChanged();
     return outcome;
 }
 
@@ -3192,6 +3540,7 @@ std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId
     outcome.sourceId = sourceId;
     outcome.placementId = placement.placementId;
     outcome.contentKey = placement.contentKey;
+    notifyPlacementChanged();
     return outcome;
 }
 
@@ -3381,11 +3730,58 @@ void OpenTuneAudioProcessor::setRenderTerminalCallback(RenderTerminalCallback ca
         renderTerminalSink_->callback = std::move(callback);
 }
 
+void OpenTuneAudioProcessor::setPlacementChangedCallback(PlacementChangedCallback callback)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    placementChangedCallback_ = std::move(callback);
+}
+
+void OpenTuneAudioProcessor::notifyPlacementChanged()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (placementChangedCallback_)
+        placementChangedCallback_();
+}
+
 #if JucePlugin_Build_Standalone
 void OpenTuneAudioProcessor::setContentChangedCallback(ContentChangedCallback callback)
 {
     JUCE_ASSERT_MESSAGE_THREAD
     contentChangedCallback_ = std::move(callback);
+}
+
+void OpenTuneAudioProcessor::setContentEditCompletedCallback(ContentEditCompletedCallback callback)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    contentEditCompletedCallback_ = std::move(callback);
+}
+
+void OpenTuneAudioProcessor::setExportReadinessChangedCallback(ExportReadinessChangedCallback callback)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    exportReadinessChangedCallback_ = std::move(callback);
+    updateContentRenderStateChangedCallback();
+}
+
+void OpenTuneAudioProcessor::updateContentRenderStateChangedCallback()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (contentRenderService_ == nullptr)
+        return;
+
+    auto exportCallback = exportReadinessChangedCallback_;
+#if defined(OPENTUNE_ENABLE_CONTROL_API)
+    auto controlCallback = controlJobWakeCallback_;
+    contentRenderService_->setStateChangedCallback(
+        [exportCallback = std::move(exportCallback), controlCallback = std::move(controlCallback)] {
+            if (exportCallback)
+                exportCallback();
+            if (controlCallback)
+                controlCallback();
+        });
+#else
+    contentRenderService_->setStateChangedCallback(std::move(exportCallback));
+#endif
 }
 #endif
 
@@ -3393,8 +3789,8 @@ void OpenTuneAudioProcessor::setContentChangedCallback(ContentChangedCallback ca
 void OpenTuneAudioProcessor::setControlJobWakeCallback(std::function<void()> callback)
 {
     JUCE_ASSERT_MESSAGE_THREAD
-    if (contentRenderService_ != nullptr)
-        contentRenderService_->setStateChangedCallback(std::move(callback));
+    controlJobWakeCallback_ = std::move(callback);
+    updateContentRenderStateChangedCallback();
 }
 #endif
 
@@ -3404,6 +3800,8 @@ void OpenTuneAudioProcessor::notifyContentChanged(ContentKey key)
     JUCE_ASSERT_MESSAGE_THREAD
     if (contentChangedCallback_)
         contentChangedCallback_(key);
+    if (exportReadinessChangedCallback_)
+        exportReadinessChangedCallback_();
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
     controlService_->wakeJobs();
 #endif
@@ -3763,215 +4161,6 @@ void OpenTuneAudioProcessor::handleStage1ChunkSettled(
 }
 
 #if JucePlugin_Build_Standalone
-// WAV文件写入辅助函数
-static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
-                                       const juce::File& file,
-                                       Language language,
-                                       juce::String* errorOut = nullptr)
-{
-    auto outFile = file;
-    if (!outFile.hasFileExtension(".wav")) {
-        outFile = outFile.withFileExtension(".wav");
-    }
-    outFile.deleteFile();
-
-    juce::WavAudioFormat wav;
-    std::unique_ptr<juce::FileOutputStream> stream(outFile.createOutputStream());
-    if (!stream) {
-        if (errorOut) *errorOut = Loc::get(language, "Create output file failed");
-        return false;
-    }
-
-    std::unique_ptr<juce::OutputStream> outStream(stream.release());
-
-    auto options = juce::AudioFormatWriterOptions{}
-        .withSampleRate(kExportSampleRateHz)
-        .withNumChannels(buffer.getNumChannels())
-        .withBitsPerSample(kExportBitsPerSample);
-
-    auto writer = wav.createWriterFor(outStream, options);
-    if (!writer) {
-        if (errorOut) *errorOut = Loc::get(language, "Unable to create WAV writer");
-        return false;
-    }
-
-    return writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
-}
-
-// 导出单个 placement 的音频
-// ============================================================================
-// 音频导出
-// ============================================================================
-
-bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementIndex, const juce::File& file, Language language) {
-    lastExportError_.clear();
-    
-    if (trackId < 0 || trackId >= MAX_TRACKS) {
-        lastExportError_ = Loc::get(language, "Invalid track ID: ") + juce::String(trackId);
-        return false;
-    }
-
-    jassert(standaloneArrangement_ != nullptr);
-
-    StandaloneArrangement::Placement placement;
-    if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-        lastExportError_ = Loc::get(language, "Invalid clip index ") + juce::String(placementIndex);
-        return false;
-    }
-
-    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
-    if (!contentRenderService_->drainRenderWorkerForExport()) {
-        lastExportError_ = Loc::get(language, "Render is not ready for export");
-        return false;
-    }
-
-    // 选中片段按整轨建立几何：它可能从连续前驱继承固定 D，单片段重算会跳样。
-    std::vector<StandaloneArrangement::PlaybackPlacement> placements;
-    const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
-    placements.reserve(static_cast<size_t>(placementCount));
-    for (int index = 0; index < placementCount; ++index) {
-        StandaloneArrangement::Placement candidate;
-        if (standaloneArrangement_->getPlacementByIndex(trackId, index, candidate)) {
-            placements.push_back(exportPlacementFrom(candidate));
-        }
-    }
-    freezeExportSources(*this, placements);
-
-    const auto target = std::find_if(
-        placements.begin(), placements.end(),
-        [&placement](const StandaloneArrangement::PlaybackPlacement& candidate) {
-            return candidate.contentKey == placement.contentKey
-                && candidate.timelineStartSeconds == placement.timelineStartSeconds
-                && candidate.durationSeconds == placement.durationSeconds
-                && candidate.clipInSeconds == placement.clipInSeconds
-                && candidate.gain == placement.gain
-                && candidate.fadeInDuration == placement.fadeInDuration
-                && candidate.fadeOutDuration == placement.fadeOutDuration;
-        });
-    const int64_t placementLen = TimeCoordinate::secondsToSamplesCeil(
-        placement.durationSeconds, kExportSampleRateHz);
-    if (target == placements.end() || placementLen <= 0) {
-        lastExportError_ = Loc::get(language, "Placement audio is unavailable");
-        return false;
-    }
-    
-    juce::AudioBuffer<float> out(kExportNumChannels, static_cast<int>(placementLen));
-    out.clear();
-    
-    renderPlacementForExport(*target,
-                             standaloneArrangement_->getTrackVolume(trackId),
-                             placement.timelineStartSeconds,
-                             out,
-                             placementLen);
-    
-    return writeAudioBufferToWavFile(out, file, language, &lastExportError_);
-}
-
-bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& file, Language language) {
-    lastExportError_.clear();
-    
-    if (trackId < 0 || trackId >= MAX_TRACKS) {
-        lastExportError_ = Loc::get(language, "Invalid track ID: ") + juce::String(trackId);
-        return false;
-    }
-
-    jassert(standaloneArrangement_ != nullptr);
-
-    const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
-    if (placementCount <= 0) {
-        lastExportError_ = Loc::get(language, "Track ") + juce::String(trackId + 1) + Loc::get(language, " has no audio clips");
-        return false;
-    }
-
-    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
-    if (!contentRenderService_->drainRenderWorkerForExport()) {
-        lastExportError_ = Loc::get(language, "Render is not ready for export");
-        return false;
-    }
-
-    constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
-    std::vector<StandaloneArrangement::PlaybackPlacement> placements;
-    placements.reserve(static_cast<size_t>(placementCount));
-    for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
-        StandaloneArrangement::Placement placement;
-        if (standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-            placements.push_back(exportPlacementFrom(placement));
-        }
-    }
-    freezeExportSources(*this, placements);
-
-    int64_t totalLen = 0;
-    for (const auto& placement : placements) {
-        const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
-            placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
-        totalLen = std::max(totalLen, placementEnd);
-    }
-    if (totalLen <= 0) {
-        lastExportError_ = Loc::get(language, "Total audio length is zero or invalid");
-        return false;
-    }
-
-    juce::AudioBuffer<float> out(kExportNumChannels, static_cast<int>(totalLen));
-    out.clear();
-
-    const float trackVolume = standaloneArrangement_->getTrackVolume(trackId);
-    for (const auto& placement : placements) {
-        renderPlacementForExport(placement, trackVolume, 0.0, out, totalLen);
-    }
-
-    return writeAudioBufferToWavFile(out, file, language, &lastExportError_);
-}
-
-bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file, Language language) {
-    lastExportError_.clear();
-    jassert(standaloneArrangement_ != nullptr);
-
-    const auto playbackSnapshot = standaloneArrangement_->loadPlaybackSnapshot();
-    if (playbackSnapshot == nullptr) {
-        return false;
-    }
-
-    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
-    if (!contentRenderService_->drainRenderWorkerForExport()) {
-        lastExportError_ = Loc::get(language, "Render is not ready for export");
-        return false;
-    }
-
-    constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
-    std::array<std::vector<StandaloneArrangement::PlaybackPlacement>, MAX_TRACKS> trackPlacements;
-    int64_t totalLen = 0;
-    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
-        const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
-        auto& placements = trackPlacements[static_cast<size_t>(trackId)];
-        placements = track.placements;
-        freezeExportSources(*this, placements);
-        for (const auto& placement : placements) {
-            const int64_t placementEnd = TimeCoordinate::secondsToSamplesCeil(
-                placement.timelineStartSeconds + placement.durationSeconds, kExportSr);
-            totalLen = std::max(totalLen, placementEnd);
-        }
-    }
-    if (totalLen <= 0) return false;
-
-    juce::AudioBuffer<float> mix(kExportMasterNumChannels, static_cast<int>(totalLen));
-    mix.clear();
-
-    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
-        const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
-        if (playbackSnapshot->anySoloed) {
-            if (!track.isSolo) continue;
-        } else {
-            if (track.isMuted) continue;
-        }
-
-        for (const auto& placement : trackPlacements[static_cast<size_t>(trackId)]) {
-            renderPlacementForExport(placement, track.volume, 0.0, mix, totalLen);
-        }
-    }
-
-    return writeAudioBufferToWavFile(mix, file, language);
-}
-
 // ============================================================================
 // 播放控制 (Standalone writes only) — control thread posts atomic commands;
 // audio thread executes the state machine in processBlock.
@@ -4186,13 +4375,14 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
         out.canonicalSampleRate = canonicalRate;
         out.canonicalFirstSample = 0;
     } else {
+        ResamplingManager resampler;
         const int numChannels = nativeBuffer->getNumChannels();
         const int canonicalLength = static_cast<int>(juce::jmax<int64_t>(
             1,
             PlaybackSampleGeometry::projectToSample(sourceDurationSeconds * canonicalRate)));
         auto canonicalBuffer = std::make_shared<juce::AudioBuffer<float>>(numChannels, canonicalLength);
         for (int ch = 0; ch < numChannels; ++ch) {
-            const auto resampled = resamplingManager_->resampleRange(
+            const auto resampled = resampler.resampleRange(
                 nativeBuffer->getReadPointer(ch),
                 static_cast<size_t>(nativeBuffer->getNumSamples()),
                 inSampleRate,
@@ -4252,7 +4442,7 @@ ContentKey OpenTuneAudioProcessor::ensureSourceAndCreateStandaloneClip(PreparedI
 }
 
 OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPreparedImportAsPlacement(
-    PreparedImport&& prepared, const ImportPlacement& placement)
+    PreparedImport&& prepared, const ImportPlacement& placement, bool selectPlacement)
 {
     if (!placement.isValid()) return {};
     jassert(standaloneArrangement_ != nullptr);
@@ -4279,7 +4469,8 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
         sourceStore_->deleteSource(sourceId);
         return {};
     }
-    standaloneArrangement_->selectPlacement(placement.trackId, importedPlacement.placementId);
+    if (selectPlacement)
+        standaloneArrangement_->selectPlacement(placement.trackId, importedPlacement.placementId);
 
     return { sourceId, clipKey, importedPlacement.placementId };
 }
@@ -6087,19 +6278,23 @@ bool OpenTuneAudioProcessor::applyTimeGridEdit(
     if (!key.isValid() || before == nullptr || after == nullptr || contentCommands_ == nullptr)
         return false;
 
-    auto action = std::make_unique<TimeGridEditAction>(
-        contentCommands_, key,
-        description.isNotEmpty() ? description : LOC_RAW("Edit time grid"),
-        std::move(before), after);
-    if (!setContentTimeGrid(key, after))
+    auto action = contentCommands_->commitTimeGridEdit(key, std::move(before), std::move(after), description);
+    if (action == nullptr)
         return false;
 
-    undoManager_.addAction(std::move(action));
     return true;
 }
 
 bool OpenTuneAudioProcessor::setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey)
 {
+    const auto current = getContentSnapshot(key);
+    if (current == nullptr)
+        return false;
+    const auto& previous = current->detectedKey;
+    if (previous.origin == Origin::Manual && previous.root == detectedKey.root
+        && previous.scale == detectedKey.scale)
+        return true;
+
     bool ok = false;
     switch (key.domainKind) {
 #if JucePlugin_Build_Standalone
@@ -6306,7 +6501,7 @@ bool OpenTuneAudioProcessor::applyContentPitchShiftState(ContentKey key,
     return ok;
 }
 
-std::unique_ptr<PitchShiftEditAction> OpenTuneAudioProcessor::commitPitchShiftEdit(
+PitchShiftEditAction* OpenTuneAudioProcessor::commitPitchShiftEdit(
     ContentKey key,
     const PitchShiftSettings& newSettings)
 {
@@ -6344,68 +6539,35 @@ std::unique_ptr<PitchShiftEditAction> OpenTuneAudioProcessor::commitPitchShiftEd
     if (!applyContentPitchShiftState(key, after))
         return {};
 
-    return std::make_unique<PitchShiftEditAction>(
+    auto action = std::make_unique<PitchShiftEditAction>(
         contentCommands_, key, std::move(before), std::move(after));
-}
-
-std::optional<std::vector<Note>> OpenTuneAudioProcessor::generateNotesFromOriginalF0(
-    const std::shared_ptr<const PitchCurveSnapshot>& curveSnapshot,
-    int startFrame, int endFrameExclusive, const NoteGeneratorParams& params)
-{
-    if (curveSnapshot == nullptr) return std::nullopt;
-    const auto& originalF0 = curveSnapshot->getOriginalF0();
-    const int f0Count = static_cast<int>(originalF0.size());
-    if (f0Count == 0) return std::nullopt;
-    if (startFrame < 0 || endFrameExclusive <= startFrame || endFrameExclusive > f0Count) return std::nullopt;
-    const int hopSize = curveSnapshot->getHopSize();
-    const double sampleRate = curveSnapshot->getSampleRate();
-    if (hopSize <= 0 || sampleRate <= 0.0) return std::nullopt;
-    auto generatedNotes = LegacyNoteGenerator::generate(
-        originalF0.data(), f0Count, nullptr, startFrame, endFrameExclusive,
-        hopSize, sampleRate, params);
-    if (!LegacyNoteGenerator::validate(generatedNotes)) return std::nullopt;
-    return generatedNotes;   // 空 vector 通过验证，作为合法结果返回
+    auto* actionPtr = action.get();
+    undoManager_.addAction(std::move(action));
+    notifyContentEditCompleted(key);
+    return actionPtr;
 }
 
 bool OpenTuneAudioProcessor::generateNotesOnlyByContentKey(
     ContentKey key, const NoteGeneratorParams& params)
 {
-    // 单一快照：读取一次，curveSnapshot 贯穿生成、秒域范围、拓扑提交
     auto snap = getContentSnapshot(key);
-    if (snap == nullptr || snap->pitchCurve == nullptr) return false;
-    const auto curveSnapshot = snap->pitchCurve;
+    if (snap == nullptr || contentCommands_ == nullptr)
+        return false;
+    auto patch = contentCommands_->planGenerateNotesOnly(*snap, params);
+    if (!patch)
+        return false;
+    return commitContentNoteTopologyPatch(key, std::move(*patch)) != nullptr;
+}
 
-    auto generatedNotes = generateNotesFromOriginalF0(curveSnapshot, 0,
-        curveSnapshot ? static_cast<int>(curveSnapshot->getOriginalF0().size()) : 0, params);
-    if (!generatedNotes.has_value()) return false;
-
-    // 初始状态不量化：保持 originalPitch，用户点击 SNAP 时再吸附到音阶。
-    // Melodyne 工作流：导入后 only note creation, no pitch shift.
-    for (auto& note : *generatedNotes) {
-        if (note.originalPitch > 0.0f)
-            note.pitch = note.originalPitch;
-    }
-
-    const double secondsPerFrame = static_cast<double>(curveSnapshot->getHopSize())
-                                 / curveSnapshot->getSampleRate();
-    // 生成音符可能因 tailExtendMs 超出 f0Count 秒域范围：
-    // affected range 必须覆盖生成音符实际范围，mergeNotesRange 不做范围过滤
-    const int f0Count = static_cast<int>(curveSnapshot->getOriginalF0().size());
-    double rangeStartSec = 0.0;
-    double rangeEndSec = static_cast<double>(f0Count) * secondsPerFrame;
-    for (const auto& n : *generatedNotes) {
-        rangeStartSec = std::min(rangeStartSec, n.startTime);
-        rangeEndSec = std::max(rangeEndSec, n.endTime);
-    }
-
-    ContentNoteRangePatch patch;
-    patch.affectedRange.startSeconds = rangeStartSec;
-    patch.affectedRange.endSeconds = rangeEndSec;
-    patch.afterNotesInRange = std::move(*generatedNotes);   // 空 vector 也提交（清除该 range 音符）
-
-    // 拓扑提交：merge notes + 推进 notes/content revision + republish，
-    // 不推进 pitchRevision、不请求 render（ContentEditCommands.h 契约）
-    return commitContentNoteTopologyPatch(key, std::move(patch)) != nullptr;
+void OpenTuneAudioProcessor::notifyContentEditCompleted(ContentKey key)
+{
+#if JucePlugin_Build_Standalone
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (contentEditCompletedCallback_)
+        contentEditCompletedCallback_(key);
+#else
+    juce::ignoreUnused(key);
+#endif
 }
 
 bool OpenTuneAudioProcessor::autoTuneContentRangeByContentKey(
@@ -6416,59 +6578,29 @@ bool OpenTuneAudioProcessor::autoTuneContentRangeByContentKey(
     const std::optional<ScaleSnapConfig>& scaleSnap)
 {
     auto snap = getContentSnapshot(key);
-    if (snap == nullptr || snap->pitchCurve == nullptr) return false;
-
-    const auto curveSnapshot = snap->pitchCurve;
-
-    auto generatedNotes = generateNotesFromOriginalF0(
-        curveSnapshot, startFrame, endFrameExclusive, params);
-    if (!generatedNotes.has_value()) return false;
-
-    if (scaleSnap.has_value()) {
-        scaleSnap->applyToNotes(*generatedNotes);
-    }
-
-    return commitAutoTuneGeneratedNotesByContentKey(
-        key,
-        std::move(*generatedNotes),
-        startFrame,
-        endFrameExclusive,
-        params.retuneSpeed,
-        params.vibratoDepth,
-        params.vibratoRate);
+    if (snap == nullptr || snap->pitchCurve == nullptr || contentCommands_ == nullptr)
+        return false;
+    auto plannedNotes = contentCommands_->planAutoTuneContentRange(
+        *snap, startFrame, endFrameExclusive, params, scaleSnap);
+    if (!plannedNotes)
+        return false;
+    return commitAutoTunePlanByContentKey(
+        key, std::move(*plannedNotes), startFrame, endFrameExclusive,
+        params.retuneSpeed, params.vibratoDepth, params.vibratoRate);
 }
 
-bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
-                                                                        std::vector<Note> generatedNotes,
-                                                                        int startFrame,
-                                                                        int endFrameExclusive,
-                                                                        float retuneSpeed,
-                                                                        float vibratoDepth,
-                                                                        float vibratoRate)
+bool OpenTuneAudioProcessor::commitAutoTunePlanByContentKey(ContentKey key,
+                                                             std::vector<Note> mergedNotes,
+                                                             int startFrame,
+                                                             int endFrameExclusive,
+                                                             float retuneSpeed,
+                                                             float vibratoDepth,
+                                                             float vibratoRate)
 {
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return false;
 
-    if (endFrameExclusive <= startFrame) return false;
-    auto normalizedNotes = normalizeStoredNotes(std::move(generatedNotes));
-    if (normalizedNotes.empty()) return false;
-
-    const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
-                                 / snap->pitchCurve->getSampleRate();
-    const double rangeStartTime = static_cast<double>(startFrame) * secondsPerFrame;
-    const double rangeEndTime = static_cast<double>(endFrameExclusive) * secondsPerFrame;
-
-    auto existingNotes = snap->notes;
-    std::vector<Note> mergedNotes;
-    mergedNotes.reserve(existingNotes.size() + normalizedNotes.size());
-    for (const auto& note : existingNotes)
-        if (note.endTime <= rangeStartTime || note.startTime >= rangeEndTime)
-            mergedNotes.push_back(note);
-    for (auto& note : normalizedNotes) {
-        mergedNotes.push_back(note);
-    }
-    std::sort(mergedNotes.begin(), mergedNotes.end(),
-        [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
+    if (endFrameExclusive <= startFrame || mergedNotes.empty()) return false;
 
     auto derivedCurve = PitchCurve::fromSnapshot(snap->pitchCurve);
     derivedCurve->applyCorrectionToRange(mergedNotes,

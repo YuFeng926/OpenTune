@@ -192,9 +192,8 @@ int controlVisibleTrackCount(ControlOpContext& context, bool& derived);
 /**
  * The components of the world revision vector of one content, as opaque
  * tokens read from the content's current snapshot:
- * - notes: the notes and their parameters (the content's notes revision, without the steps of its pitch
- *   shifts: ControlPitchShiftLedger);
- * - pitch: the corrected pitch curve (pitch revision, likewise without the pitch-shift steps);
+ * - notes: the notes and their parameters (the owner's notes revision);
+ * - pitch: the corrected pitch curve (the owner's pitch revision);
  * - content: the audio and the analysis data (audio and analysis revisions and the pitch-analysis state);
  * - grid: the time grid (time-grid revision);
  * - key: the key (root, scale, origin and confidence);
@@ -224,12 +223,7 @@ struct ControlWorldVersions
     std::vector<ControlContentVersions> contents;
 };
 
-/**
- * The versions of one content from its snapshot. A pitch shift must not change `revision`, but OpenTune's
- * applyPitchShiftState() advances the notes and pitch counters: the instance's
- * ControlPitchShiftLedger (ControlOpContext::history()) observes the snapshot and leaves those steps out.
- * Without a history the counters are used as they are.
- */
+/** The versions of one content from the owner's current snapshot, including pitch-shift edits. */
 ControlContentVersions controlContentVersions(ControlOpContext& context, const std::string& contentId,
                                               const EditableContentSnapshot& snapshot);
 /** The arrangementRevision token: every live placement with all its properties, and the content epoch. */

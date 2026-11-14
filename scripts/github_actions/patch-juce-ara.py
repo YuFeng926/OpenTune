@@ -14,7 +14,8 @@ The patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
    - the existing setAudioDeviceSetup(setup, treatAsChosenDevice) becomes a thin
      wrapper over a new private setAudioDeviceSetupInternal(setup,
      treatAsChosenDevice, updateLastDeviceTypeConfigs).
-   - a JUCE_UNIT_TESTS case covering the temporary-setup semantics.
+   - empty-device setups retain every requested configuration field.
+   - JUCE_UNIT_TESTS cases covering temporary and empty-device setups.
 3. The StandaloneFilterWindow title bar gains the maximise button, so the
    standalone app shows minimise/maximise/close instead of the upstream
    minimise/close pair
@@ -136,7 +137,23 @@ ADM_CPP_CACHE_NEW = b'''        updateCurrentSetup();
         if (updateLastDeviceTypeConfigs)
             for (int i = 0; i < availableDeviceTypes.size(); ++i)'''
 
-# 3) Unit test for the temporary-setup semantics, inserted after the
+# 3) Keep the complete requested configuration when closing the device.
+ADM_CPP_EMPTY_SETUP_OLD = b'''        deleteCurrentDevice();
+
+        if (treatAsChosenDevice)
+            updateXml();
+
+        return {};'''
+
+ADM_CPP_EMPTY_SETUP_NEW = b'''        deleteCurrentDevice();
+        currentSetup = newSetup;
+
+        if (treatAsChosenDevice)
+            updateXml();
+
+        return {};'''
+
+# 4) Unit tests for temporary and empty-device setups, inserted after the
 #    "long sequence of configuration changes" test.
 ADM_CPP_TEST_ANCHOR = b'''            closeDeviceByRequestingEmptyNames       (manager);
         }
@@ -222,6 +239,45 @@ ADM_CPP_TEST_NEW = b'''            closeDeviceByRequestingEmptyNames       (mana
             manager.setCurrentAudioDeviceType (mockAName, true);
             current = manager.getAudioDeviceSetup();
             expectEquals (current.sampleRate, 48000.0);
+        }
+
+        beginTest ("An empty-device setup retains the complete requested configuration");
+        {
+            AudioDeviceManager manager;
+            initialiseManager (manager);
+            manager.setCurrentAudioDeviceType (mockAName, true);
+            expect (manager.getCurrentAudioDevice() != nullptr);
+            const auto savedState = manager.createStateXml();
+            expect (savedState != nullptr);
+
+            auto closedSetup = manager.getAudioDeviceSetup();
+            closedSetup.inputDeviceName.clear();
+            closedSetup.outputDeviceName.clear();
+            closedSetup.sampleRate = 48000.0;
+            closedSetup.bufferSize = 512;
+            closedSetup.inputChannels.clear();
+            closedSetup.outputChannels.clear();
+            closedSetup.useDefaultInputChannels = false;
+            closedSetup.useDefaultOutputChannels = false;
+
+            expect (manager.setAudioDeviceSetupTemporarily (closedSetup).isEmpty());
+            expect (manager.getCurrentAudioDevice() == nullptr);
+            expect (manager.getAudioDeviceSetup() == closedSetup);
+            const auto savedAfterTemporary = manager.createStateXml();
+            expect (savedAfterTemporary != nullptr);
+            if (savedState != nullptr && savedAfterTemporary != nullptr)
+                expectEquals (savedAfterTemporary->toString(), savedState->toString());
+
+            expect (manager.setAudioDeviceSetup (closedSetup, true).isEmpty());
+            expect (manager.getCurrentAudioDevice() == nullptr);
+            expect (manager.getAudioDeviceSetup() == closedSetup);
+            const auto savedAfterClose = manager.createStateXml();
+            expect (savedAfterClose != nullptr);
+            if (savedAfterClose != nullptr)
+            {
+                expectEquals (savedAfterClose->getStringAttribute ("audioInputDeviceName"), String());
+                expectEquals (savedAfterClose->getStringAttribute ("audioOutputDeviceName"), String());
+            }
         }
 
         beginTest ("AudioDeviceManager updates its current settings before notifying callbacks when device restarts itself");'''
@@ -395,6 +451,7 @@ def main() -> None:
         ADM_CPP_RELATIVE: [
             (ADM_CPP_WRAPPER_OLD, ADM_CPP_WRAPPER_NEW, "setup wrapper split"),
             (ADM_CPP_CACHE_OLD, ADM_CPP_CACHE_NEW, "per-device-type cache guard"),
+            (ADM_CPP_EMPTY_SETUP_OLD, ADM_CPP_EMPTY_SETUP_NEW, "complete empty-device setup"),
             (ADM_CPP_TEST_ANCHOR, ADM_CPP_TEST_NEW, "temporary setup unit test"),
         ],
         STANDALONE_RELATIVE: [

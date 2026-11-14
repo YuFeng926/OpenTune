@@ -566,8 +566,8 @@ private:
                                              const std::vector<Note>& notes,
                                              const std::vector<PitchCorrectionSegment>& segments,
                                              F0FrameRange affectedRange);
-    AutoTuneApplyResult applyAutoSnapToAllNotes(const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot,
-                                                const F0Timeline& f0tl);
+    AutoTuneApplyResult applyAutoSnapToAllNotes(
+        const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot);
     bool selectNotesOverlappingFrames(int startFrame, int endFrameExclusive);
     juce::Rectangle<int> getNoteBounds(const Note& note) const;
     juce::Rectangle<int> getNotesBounds(const std::vector<Note>& notes) const;

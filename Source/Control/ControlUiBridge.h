@@ -7,6 +7,12 @@
 #include <string>
 #include <vector>
 
+#include "Utils/ProjectSession.h"
+
+#if JucePlugin_Build_Standalone
+#include "Standalone/StandaloneMediaOperations.h"
+#endif
+
 namespace juce {
 class AudioDeviceManager;
 class ThreadPool;
@@ -15,7 +21,19 @@ class ThreadPool;
 namespace OpenTune {
 
 class ProjectSession;
+class UndoAction;
 struct NoteGeneratorParams;
+
+enum class ControlTrackCommandResult
+{
+    Applied,
+    InvalidTrack,
+    HiddenTrack,
+    TrackLimit,
+    TargetOccupied,
+    LastTrack,
+    Failed
+};
 
 /**
  * Narrow interface through which the control API reaches what only the Standalone editor owns: the
@@ -78,19 +96,16 @@ public:
     /** Tracks or placements were added, removed or moved. Default: nothing. */
     virtual void onStructureChanged() {}
 
-    /** An undo or redo step was applied through the control API: the editor does what it does after its own
-        undo or redo (marks the project as changed and redraws the arrangement).
-        Default: nothing. */
-    virtual void onUndoRedoApplied() {}
+    /** Settles pending editor edits, validates the resulting history top, then runs the editor's complete command. */
+    virtual UndoAction* performUndoRedo(bool /*undo*/, const std::function<bool(UndoAction*)>& /*validateTop*/)
+    {
+        return nullptr;
+    }
 
     /** A project was opened or the project was reloaded: the editor does what it does after its own open (updates the
         recent-projects menu and the title, refreshes the track panel, the arrangement and the piano roll from the
         new project). Default: nothing. */
     virtual void onProjectReloaded() {}
-
-    /** The project was saved to its file (project.save, project.saveAs): the editor does what it does after its own
-        save (updates the recent-projects menu and the window title). Default: nothing. */
-    virtual void onProjectSaved() {}
 
     /** The list of recent projects changed through the control API (project.clearRecent): the editor refreshes its
         recent-projects menu. Default: nothing. */
@@ -126,6 +141,19 @@ public:
         right now. Returns false, leaving out unchanged, when not supported. */
     virtual bool currentNoteGenerationParams(NoteGeneratorParams& /*out*/) const { return false; }
 
+#if JucePlugin_Build_Standalone
+    /** Commits imported media through the Standalone editor's complete product operation. */
+    virtual StandaloneMediaOperations::ImportCommitResult commitImportedAudio(
+        OpenTuneAudioProcessor::PreparedImport&&,
+        const StandaloneMediaOperations::ImportPlacementRequest&,
+        bool /*focus*/,
+        bool /*generateNotes*/,
+        std::function<void()> /*onNotesGenerated*/ = {})
+    {
+        return {};
+    }
+#endif
+
     // ---- View ---------------------------------------------------------------------------------
 
     /** The parts of the view that results report. */
@@ -154,6 +182,23 @@ public:
     /** The worker pool the editor uses for project operations; nullptr when not supported. */
     virtual juce::ThreadPool* projectWorkerPool() { return nullptr; }
 
+    /** Captures a save snapshot after the editor settles its pending project edits. */
+    virtual std::optional<ProjectSession::SaveTask> prepareProjectSave(
+        const juce::File& /*file*/, ProjectSession::SaveTask::Mode /*mode*/)
+    {
+        return std::nullopt;
+    }
+
+    /** Captures the open conflict policy after the editor settles its pending project edits. */
+    virtual std::optional<ProjectSession::OpenCommitPolicy> prepareProjectOpen(bool /*discardUnsaved*/)
+    {
+        return std::nullopt;
+    }
+
+    /** Commits the saved file and refreshes the editor's recent-project menu and title. */
+    virtual void commitProjectSave(const juce::File& /*file*/, ProjectSession::SaveTask::Mode /*mode*/,
+                                   std::uint64_t /*snapshotGeneration*/) {}
+
     // ---- Audio device -------------------------------------------------------------------------
 
     /** The Standalone application's audio device manager; nullptr when not supported. */
@@ -161,25 +206,28 @@ public:
 
     // ---- Tracks and transport -----------------------------------------------------------------
 
-    /** Sets the number of track slots the editor shows, as its + button, Duplicate Track and Delete Track do:
-        the track panel and the arrangement show the same count. A count outside 1 to the number of slots is
-        limited to it. Returns false when not supported. */
-    virtual bool setVisibleTrackCount(int /*count*/) { return false; }
+    /** Runs the track panel's product commands, including project state and UI synchronization. */
+    virtual ControlTrackCommandResult addTracks(int /*count*/) { return ControlTrackCommandResult::Failed; }
+    virtual ControlTrackCommandResult duplicateTrack(int /*trackId*/, bool /*shareContent*/)
+    {
+        return ControlTrackCommandResult::Failed;
+    }
+    virtual ControlTrackCommandResult deleteTrack(int /*trackId*/) { return ControlTrackCommandResult::Failed; }
+    virtual bool setTrackMix(int /*trackId*/, std::optional<bool> /*muted*/, std::optional<bool> /*solo*/,
+                             std::optional<float> /*volumeLinear*/, std::optional<std::uint32_t> /*colourRgb*/)
+    {
+        return false;
+    }
 
-    /** The mute, solo, volume or colour of tracks, or the clips of a track, were changed through the control
-        API: the editor shows the arrangement's values in its track panel for the tracks it shows, as after its
-        own Delete Track, and redraws the arrangement. Default: nothing. */
-    virtual void onTrackMixChanged() {}
-
-    /** The play state, the position or the loop flag was changed through the control API: the editor shows the
-        processor's play state and loop flag in its transport bar, as after its own play, pause, stop and loop
-        buttons. Default: nothing. */
-    virtual void onTransportChanged() {}
-
-    /** The tempo or the time signature was changed through the control API: the editor shows the processor's
-        values in its transport bar and its piano roll, as after its own tempo and time-signature fields.
-        Default: nothing. */
-    virtual void onTempoChanged() {}
+    virtual bool transportPlay() { return false; }
+    virtual bool transportPause() { return false; }
+    virtual bool transportStop() { return false; }
+    virtual bool transportSeek(double /*positionSeconds*/) { return false; }
+    virtual bool transportPlayFromLastStart() { return false; }
+    virtual bool transportPauseAtLastStart() { return false; }
+    virtual bool setLoopEnabled(bool /*enabled*/) { return false; }
+    virtual bool setBpm(double /*bpm*/) { return false; }
+    virtual bool setTimeSignature(int /*numerator*/, int /*denominator*/) { return false; }
 
     // ---- Dialogs and onboarding ---------------------------------------------------------------
 
@@ -212,9 +260,8 @@ public:
     /** True while the first-run onboarding overlay is on screen; nullopt when not supported. */
     virtual std::optional<bool> onboardingShowing() const { return std::nullopt; }
 
-    /** Closes the onboarding overlay as Escape does (the overlay finishes, as its exit button finishes it). The
-        caller closes the dialogs above it first. Returns false when no overlay is showing or when not supported. */
-    virtual bool closeOnboarding() { return false; }
+    /** Dismisses onboarding and records its preference through the editor's product entry. */
+    virtual bool dismissOnboarding() { return false; }
 
     /** The scale that the AUTO button, SNAP and the pitch tool of the UI use: the scale the transport bar shows. */
     struct UiScale

@@ -7,15 +7,10 @@
 #include "TransportOps.h"
 #include "WriteEnvelope.h"
 
+#include "Content/ContentEditCommands.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Control/ControlUiBridge.h"
 #include "PluginProcessor.h"
-#include "Utils/AppLogger.h"
-#include "Utils/AppPreferences.h"
-#include "Utils/AudioEditingScheme.h"
-#include "Utils/LegacyNoteGenerator.h"
-#include "Utils/Note.h"
-#include "Utils/NoteGeneratorTypes.h"
 #include "Utils/ScaleUiMapping.h"
 
 #include <juce_core/juce_core.h>
@@ -24,6 +19,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -111,10 +107,10 @@ struct Before
 {
     SelectionState selection;
     std::string workspace;
-    std::uint64_t pianoRollPlacementId = 0;
     std::optional<UiScale> scale;
     /** Whether the notes of the clip's content were ever generated or edited (noteTopologyInitialized). */
     bool topologyInitialized = true;
+    std::shared_ptr<const EditableContentSnapshot> snapshot;
     /** The project's tempo: the view switch of openEditor can rewrite it (see record()). */
     double bpm = 0.0;
 };
@@ -149,66 +145,18 @@ Before captureBefore(ControlOpContext& context, ControlUiBridge& bridge, const T
     before.selection = captureSelection(context, bridge);
     if (const auto view = bridge.viewState()) {
         before.workspace = view->workspace;
-        before.pianoRollPlacementId = view->pianoRollPlacementId;
     }
     before.scale = bridge.uiScale();
     before.bpm = context.processor().getBpm();
-    if (target.placementId != 0)
-        if (const auto snapshot = controlLiveSnapshot(context, target.key))
-            before.topologyInitialized = snapshot->noteTopologyInitialized;
+    if (target.placementId != 0) {
+        before.snapshot = controlLiveSnapshot(context, target.key);
+        if (before.snapshot != nullptr)
+            before.topologyInitialized = before.snapshot->noteTopologyInitialized;
+    }
     return before;
 }
 
 // ---- The prediction --------------------------------------------------------------------------------
-
-/** Whether the editor shows the openDyne scheme (ControlUiBridge::editingSchemeApplied(); the preference when the
-    bridge cannot tell). */
-bool openDyneApplied(ControlOpContext& context, ControlUiBridge& bridge)
-{
-    const bool preference = AudioEditingScheme::usesNotesPrimaryScheme(
-        context.processor().getAppPreferences().getState().shared.audioEditingScheme);
-    return bridge.editingSchemeApplied(true).value_or(preference);
-}
-
-/**
- * The notes the piano roll would generate when it gets the clip, mirrored from PianoRollComponent::
- * ensureOpenDyneNotesIfNeeded(): the openDyne scheme, notes never generated (noteTopologyInitialized false) and a
- * ready pitch analysis; setEditedContentAndProjection() calls it only when the piano roll gets another clip. The
- * count is that of OpenTuneAudioProcessor::generateNotesOnlyByContentKey() with the editor's parameters
- * (getCurrentAutoTuneParams): LegacyNoteGenerator over the whole analysis, merged into the content's notes.
- *
- * Known approximation: whether the piano roll returns early is judged by the placementId it shows alone, which is
- * coarser than setEditedContentAndProjection() (it compares the content key, the projection, the curve pointer and the
- * audio buffer). In the narrow window where the clip's F0 has just become ready and the piano roll still shows the clip
- * without the new curve, a dryRun can under-report notesGenerated; the committed path reports what it observed.
- */
-std::optional<std::size_t> predictNotes(ControlOpContext& context, ControlUiBridge& bridge, const Target& target,
-                                        const Before& before)
-{
-    if (target.placementId == 0 || before.topologyInitialized || before.pianoRollPlacementId == target.placementId
-        || !openDyneApplied(context, bridge))
-        return std::nullopt;
-    const auto snapshot = controlLiveSnapshot(context, target.key);
-    if (snapshot == nullptr || snapshot->pitchCurve == nullptr || snapshot->pitchCurve->getOriginalF0().empty())
-        return std::nullopt;
-    const auto& curve = *snapshot->pitchCurve;
-    const auto& f0 = curve.getOriginalF0();
-    const int count = static_cast<int>(f0.size());
-    if (curve.getHopSize() <= 0 || curve.getSampleRate() <= 0.0)
-        return std::nullopt;
-    NoteGeneratorParams params;
-    bridge.currentNoteGenerationParams(params);
-    auto generated = LegacyNoteGenerator::generate(f0.data(), count, nullptr, 0, count, curve.getHopSize(),
-                                                   curve.getSampleRate(), params);
-    if (!LegacyNoteGenerator::validate(generated))
-        return std::nullopt;
-    NoteRangeSeconds range{0.0, count * curve.getHopSize() / curve.getSampleRate()};
-    for (const auto& note : generated) {
-        range.startSeconds = std::min(range.startSeconds, note.startTime);
-        range.endSeconds = std::max(range.endSeconds, note.endTime);
-    }
-    return mergeNotesRange(snapshot->notes, range, generated).size();
-}
 
 Outcome predict(ControlOpContext& context, ControlUiBridge& bridge, const Target& target, const Before& before,
                 bool openEditor)
@@ -217,7 +165,6 @@ Outcome predict(ControlOpContext& context, ControlUiBridge& bridge, const Target
     outcome.selection.activeTrack = target.trackId;
     if (target.placementId != 0)
         outcome.selection.selected.push_back(target.placementId);
-    outcome.noteCount = predictNotes(context, bridge, target, before);
     // The scale the editor resolves for the clip (resolveScaleForPlacementContent); selecting a track leaves it.
     outcome.scale = before.scale;
     if (target.placementId != 0 && before.scale.has_value())
@@ -228,6 +175,15 @@ Outcome predict(ControlOpContext& context, ControlUiBridge& bridge, const Target
     // Not predicted: whether the switch rewrites the tempo depends on where the keyboard focus is (the transport bar's
     // BPM field), which the call does not know before it switches. A committed call reports what it observed.
     outcome.bpm = before.bpm;
+    if (target.placementId != 0 && before.snapshot != nullptr && !before.topologyInitialized
+        && bridge.editingSchemeApplied(true).value_or(false)) {
+        NoteGeneratorParams params;
+        if (bridge.currentNoteGenerationParams(params)) {
+            const auto commands = context.processor().getContentCommands();
+            if (const auto patch = commands->planGenerateNotesOnly(*before.snapshot, params))
+                outcome.noteCount = patch->afterNotesInRange.size();
+        }
+    }
     return outcome;
 }
 
@@ -367,18 +323,6 @@ JsonValue revertRecipe(ControlOpContext& context, const SelectionState& before)
     return controlRevertRecipe("ui.setSelection", std::move(params));
 }
 
-/** A short description of the effects, for the log when the observed ones differ from the prediction. */
-std::string describe(const Outcome& outcome)
-{
-    std::string text = "active track " + std::to_string(outcome.selection.activeTrack) + ", "
-                       + std::to_string(outcome.selection.selected.size()) + " selected";
-    if (outcome.noteCount)
-        text += ", " + std::to_string(*outcome.noteCount) + " notes generated";
-    if (outcome.scale)
-        text += ", scale " + std::to_string(outcome.scale->rootNote) + "/" + std::to_string(outcome.scale->scaleType);
-    return text + ", " + outcome.workspace;
-}
-
 // ---- ui.setSelection -------------------------------------------------------------------------------
 
 Error noEditor()
@@ -412,8 +356,8 @@ Result<JsonValue> runSetSelection(ControlOpContext& context, const SelectionPara
         return *busy;
 
     const auto before = captureBefore(context, *bridge, target);
-    const auto predicted = predict(context, *bridge, target, before, params.openEditor);
     if (params.dryRun) {
+        const auto predicted = predict(context, *bridge, target, before, params.openEditor);
         ControlWriteEnvelope envelope(context);
         record(context, envelope, target, before, predicted);
         return envelope.predicted(context);
@@ -425,18 +369,8 @@ Result<JsonValue> runSetSelection(ControlOpContext& context, const SelectionPara
     if (!bridge->select(target.trackId, target.placementId, params.openEditor))
         return controlViewSwitchError(context, before.bpm, "INTERNAL", "", "the editor did not take the selection");
     const auto observed = observe(context, *bridge, target, before);
-    if (observed.noteCount.has_value())
-        // As the editor's piano roll does after it generated the notes (its contentEdited listener).
-        controlMarkDirty(context);
     if (record(context, envelope, target, before, observed))
         envelope.setNotUndoable("not_persisted_state", revertRecipe(context, before.selection));
-    // The result reports what happened; a prediction that missed is logged, so that a drift of the mirrored steps
-    // shows.
-    const auto expected = describe(predicted);
-    const auto actual = describe(observed);
-    if (expected != actual)
-        AppLogger::logNoThrow("control API: ui.setSelection: the effects differ from the prediction (predicted "
-                              + expected + "; observed " + actual + ")");
     return envelope.committed(context);
 }
 

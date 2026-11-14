@@ -8,7 +8,6 @@
 #include "PluginEditor.h"
 
 #include "ControlEditorBridgeColour.h"
-#include "StandaloneArrangementHelpers.h"
 
 #include "Editor/ConfirmDialogContent.h"
 #include "Editor/OnboardingOverlayComponent.h"
@@ -94,9 +93,8 @@ DialogInfo classify(juce::Component& modal, int colourTrack)
         return info;
     }
     if (colourPickerOf(&modal) != nullptr) {
-        // The content of the call-out commits the colour of its ColourSelector to the track in its destructor, however
-        // the call-out closes. The track is the one of the last request for the picker (ControlTrackColourWatch); a
-        // picker that was not asked for through the track panel stays unknown, with closeCommits true.
+        // The editor commits the selector when the modal call-out finishes. The track is the one of the last request
+        // for the picker (ControlTrackColourWatch); a picker without a track stays unknown, with closeCommits true.
         if (isTrackId(colourTrack)) {
             info.kind = "trackColour";
             info.trackId = colourTrack;
@@ -159,20 +157,11 @@ bool ControlEditorBridge::closeTopDialog()
     juce::Component::SafePointer<juce::Component> top(manager->getModalComponent(0));
     if (top == nullptr || isFileChooser(*top))
         return false;
-    // The colour picker commits the colour it shows when it closes, with the destructor of its content, which the modal
-    // manager runs later when it deletes the call-out box. The result of ui.dismiss reports that commit, so the same
-    // steps run now (UiOps.cpp closeDialogs reads the track's colour after this returns); the destructor then sets the
-    // colour it shows once more, which is the same.
     if (auto* picker = colourPickerOf(top.getComponent()); picker != nullptr && colourWatch_ != nullptr) {
         const int trackId = colourWatch_->lastRequestedTrack();
         if (auto* selector = findColourSelector(*picker); selector != nullptr && isTrackId(trackId)) {
-            const auto selected = selector->getCurrentColour();
-            setStandaloneTrackColour(editor_.processorRef_, trackId, selected);
-            editor_.trackPanel_.setTrackColour(trackId, selected);
-            if (trackId == getStandaloneActiveTrack(editor_.processorRef_))
-                editor_.pianoRoll_.setTrackDisplayColour(selected);
-            editor_.arrangementView_.requestContentRedraw();
-            editor_.projectSession_.markDirty();
+            editor_.closeTrackColourPicker(picker, trackId, selector->getCurrentColour(), false);
+            return !stillModal(top);
         }
     }
     const juce::KeyPress escape(juce::KeyPress::escapeKey);
@@ -196,9 +185,8 @@ bool ControlEditorBridge::closeTopDialog()
         top->exitModalState(0);
     if (stillModal(top))
         return false;
-    // The window is deleted later, by the modal manager. Its content goes now, while the window is whole, so that what
-    // the dialog does when it closes has happened when this returns: the track-colour dialog commits its colour in its
-    // destructor. It also lets the content stop listening to its window before the window is deleted.
+    // The window is deleted later, by the modal manager. Its content goes now, while the window is whole, so that the
+    // content can stop listening to its window before the window is deleted.
     if (auto* closed = dynamic_cast<juce::ResizableWindow*>(top.getComponent()))
         closed->clearContentComponent();
     return true;
@@ -209,15 +197,9 @@ std::optional<bool> ControlEditorBridge::onboardingShowing() const
     return editor_.onboardingOverlay_ != nullptr && editor_.onboardingOverlay_->isActive();
 }
 
-bool ControlEditorBridge::closeOnboarding()
+bool ControlEditorBridge::dismissOnboarding()
 {
-    auto* overlay = editor_.onboardingOverlay_.get();
-    if (overlay == nullptr || !overlay->isActive())
-        return false;
-    // OnboardingOverlayComponent::keyPressed(): Escape finishes the overlay (its private finish(), which its exit
-    // button calls as well, and which restores the editor's view through the editor's callback).
-    overlay->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
-    return !overlay->isActive();
+    return editor_.dismissOnboarding();
 }
 
 std::optional<ControlUiBridge::UiScale> ControlEditorBridge::uiScale() const

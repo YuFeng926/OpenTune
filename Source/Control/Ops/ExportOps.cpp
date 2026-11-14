@@ -6,29 +6,21 @@
 #include "SessionOps.h"
 #include "WriteEnvelope.h"
 
-#include "Content/EditableContentSnapshot.h"
 #include "Control/ControlFileIdentity.h"
 #include "Control/ControlJobs.h"
 #include "Control/ControlPathPolicy.h"
-#include "Inference/RenderCache.h"
 #include "PluginProcessor.h"
-#include "Render/ContentRenderService.h"
-#include "Render/PlaybackReadSource.h"
-#include "Runtime/ProcessRenderRuntime.h"
 #include "SourceStore.h"
+#include "Standalone/StandaloneMediaOperations.h"
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
-#include "Utils/TimeCoordinate.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
-#include <cmath>
 #include <functional>
 #include <limits>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,41 +33,16 @@ namespace OpenTune {
 namespace {
 
 constexpr std::size_t kMaxPathCodePoints = 4096;
-/** The longest wait for analysis and rendering. */
-constexpr int kWaitLimitMs = 120000;
-/** Retry a dropped time-stretch rebuild this many times at the same content and time-grid revisions. */
-constexpr int kMaxStretchRequests = 3;
-/** Pending render blocks must remain out of reach of the render worker this long to be considered stuck. */
-constexpr int kStuckBlocksMs = 500;
-/** How long the render worker must be seen idle, with the render settled and no current time-stretch output, before
-    the job asks for the time-stretch rebuild of a content again (the rebuild it asked for was dropped). */
-constexpr int kStretchRetryIdleMs = 500;
-/** Samples per slice of the probe of a published render for rendered audio (publishedRenderHasAudio). */
-constexpr int kPublishedAudioProbeSamples = 1 << 16;
 /** The last name that ifExists rename tries is "<stem> (999).wav". */
 constexpr int kLastRenameNumber = 999;
 /** The extension an export writes, compared without regard to case. */
 constexpr std::string_view kWavExtension = ".wav";
 
-/**
- * Whether OpenTune's render runtime holds a deferred render retry of the processor's render service: a render
- * block that could not be handed to the render worker (the vocoder is being reconfigured or not loaded) and is
- * kept until it can. ProcessRenderRuntime::hasDeferredRetriesForService, the test that
- * ContentRenderService::drainRenderWorkerForExport makes before it lets an export read the render: while one
- * exists, that drain gives up and the export functions report "Render is not ready for export". The runtime
- * resumes such retries on its own on the message thread (postDeferredRetryEvent), so the job only waits for
- * them; it never flushes them itself. Message thread.
- */
-bool renderRetriesDeferred(OpenTuneAudioProcessor& processor)
-{
-    const auto* service = processor.getContentRenderService();
-    return service != nullptr && ProcessRenderRuntime::getInstance().hasDeferredRetriesForService(service);
-}
+using ExportKind = StandaloneMediaOperations::ExportKind;
+using ExportTarget = StandaloneMediaOperations::ExportTarget;
 
-enum class ExportKind {
-    Clip,
-    Track,
-    Master
+struct ExportPlan : StandaloneMediaOperations::ExportPlan {
+    std::string mixToken;
 };
 
 enum class IfExists {
@@ -255,212 +222,32 @@ std::string numberedPath(const std::string& path, int number)
 
 // ---- What the file is made of --------------------------------------------------------------------
 
-/** What export.start resolved: the kind, the track and, for a clip, its placement id. */
-struct ExportTarget
-{
-    ExportKind kind = ExportKind::Master;
-    int trackId = 0;
-    std::uint64_t placementId = 0;
-};
-
-/**
- * The clips and contents that OpenTune's export of the target mixes, now. It mirrors the selection of
- * OpenTuneAudioProcessor::exportPlacementAudio, exportTrackAudio and exportMasterMixAudio (Source/
- * PluginProcessor.cpp): the clips whose content has a playback source with audio; for the master mix the
- * tracks of the playback snapshot, only the soloed ones while a track is soloed, else those not muted.
- */
-struct ExportPlan
-{
-    /** The clip of a clip export no longer exists. */
-    bool targetGone = false;
-    /** Where the clip of a clip export is now. */
-    int clipTrackId = 0;
-    double clipStartSec = 0.0;
-    /** Each content of the export once, in the order of the clips. */
-    std::vector<ContentKey> contents;
-    /** A token of everything besides the contents that the file is made of: each clip's track, position,
-        length, source window, gain and fades, the volume of its track, and the fixed (H, D, A, Z) mapping the
-        shared builder gives it (which may carry the D of a continuous clip before it). */
-    std::string mixToken;
-};
-
-bool hasPlaybackAudio(OpenTuneAudioProcessor& processor, const ContentKey& key, PlaybackReadSource* source = nullptr)
-{
-    // ContentRenderService::getPlaybackReadSource(): what OpenTune's export reads; a clip without one is
-    // left out of the file.
-    const auto* service = processor.getContentRenderService();
-    PlaybackReadSource read;
-    if (service == nullptr || !service->getPlaybackReadSource(key, read) || !read.hasAudio())
-        return false;
-    if (source != nullptr)
-        *source = std::move(read);
-    return true;
-}
-
-/** A clip of the export with its source view and the fixed (H, D, A, Z) mapping it is rendered with. */
-struct ExportClip
-{
-    std::uint64_t placementId = 0;
-    StandaloneArrangement::PlaybackPlacement playback;
-};
-
-/**
- * The clips of one track as OpenTune's export lays them out (freezeExportSources() in Source/PluginProcessor.cpp):
- * clips whose source holds no audio leave the list, and StandaloneArrangement::buildPlaybackGeometry() gives each
- * remaining clip the mapping built from the whole track. A clip after a continuous one shares that clip's D, so its
- * samples depend on the clip before it.
- */
-void buildExportClips(OpenTuneAudioProcessor& processor, std::vector<ExportClip>& clips)
-{
-    clips.erase(
-        std::remove_if(
-            clips.begin(), clips.end(),
-            [&processor](ExportClip& clip) {
-                if (clip.playback.hasPlayableSource())
-                    return false;
-                PlaybackReadSource source;
-                if (!hasPlaybackAudio(processor, clip.playback.contentKey, &source))
-                    return true;
-                clip.playback.source = std::move(source);
-                return false;
-            }),
-        clips.end());
-    std::vector<StandaloneArrangement::PlaybackPlacement> playback;
-    playback.reserve(clips.size());
-    for (const auto& clip : clips)
-        playback.push_back(clip.playback);
-    StandaloneArrangement::buildPlaybackGeometry(playback, TimeCoordinate::kRenderSampleRate);
-    for (std::size_t i = 0; i < clips.size(); ++i)
-        clips[i].playback = std::move(playback[i]);
-}
-
-/** The playback placement of a clip of the arrangement, as exportPlacementFrom() builds it. */
-ExportClip exportClipOf(const StandaloneArrangement::Placement& placement)
-{
-    ExportClip clip;
-    clip.placementId = placement.placementId;
-    clip.playback.contentKey = placement.contentKey;
-    clip.playback.timelineStartSeconds = placement.timelineStartSeconds;
-    clip.playback.durationSeconds = placement.durationSeconds;
-    clip.playback.clipInSeconds = placement.clipInSeconds;
-    clip.playback.gain = placement.gain;
-    clip.playback.fadeInDuration = placement.fadeInDuration;
-    clip.playback.fadeOutDuration = placement.fadeOutDuration;
-    return clip;
-}
-
-/** Every clip of a track of the arrangement, in the track's order. */
-std::vector<ExportClip> trackExportClips(const StandaloneArrangement& arrangement, int trackId)
-{
-    std::vector<ExportClip> clips;
-    const int count = arrangement.getNumPlacements(trackId);
-    clips.reserve(static_cast<std::size_t>(count));
-    for (int index = 0; index < count; ++index) {
-        StandaloneArrangement::Placement placement;
-        if (arrangement.getPlacementByIndex(trackId, index, placement))
-            clips.push_back(exportClipOf(placement));
-    }
-    return clips;
-}
-
-void addClip(ExportPlan& plan, ControlTokenHasher& hasher, int trackId, const ExportClip& clip, float trackVolume)
-{
-    const auto& playback = clip.playback;
-    if (std::find(plan.contents.begin(), plan.contents.end(), playback.contentKey) == plan.contents.end())
-        plan.contents.push_back(playback.contentKey);
-    hasher.add(trackId)
-        .add(clip.placementId)
-        .add(static_cast<int>(playback.contentKey.domainKind))
-        .add(playback.contentKey.objectId)
-        .add(playback.contentKey.sourceWindowDiscriminator)
-        .add(playback.timelineStartSeconds)
-        .add(playback.durationSeconds)
-        .add(playback.clipInSeconds)
-        .add(static_cast<double>(playback.gain))
-        .add(playback.fadeInDuration)
-        .add(playback.fadeOutDuration)
-        .add(static_cast<double>(trackVolume))
-        // The fixed mapping the export renders with: a clip that follows a continuous one inherits its D, so
-        // these samples cover the clips before it as well.
-        .add(playback.sampleGeometry.playbackRate)
-        .add(playback.sampleGeometry.offsetSamples)
-        .add(playback.sampleGeometry.playbackBeginSample)
-        .add(playback.sampleGeometry.playbackEndSample)
-        .add(playback.outputAnchorSeconds);
-}
-
 ExportPlan buildPlan(ControlOpContext& context, const ExportTarget& target)
 {
     ExportPlan plan;
-    auto& processor = context.processor();
-    const auto* arrangement = processor.getStandaloneArrangement();
+    static_cast<StandaloneMediaOperations::ExportPlan&>(plan) =
+        StandaloneMediaOperations::buildExportPlan(context.processor(), target);
     ControlTokenHasher hasher('x');
-    hasher.add(static_cast<int>(target.kind));
-    if (arrangement == nullptr) {
-        plan.targetGone = target.kind == ExportKind::Clip;
-        plan.mixToken = hasher.token();
-        return plan;
-    }
-    switch (target.kind) {
-        case ExportKind::Clip: {
-            // The clip by its id, on whichever track it is now.
-            StandaloneArrangement::Placement placement;
-            int trackId = -1;
-            for (int t = 0; t < arrangement->getNumTracks() && trackId < 0; ++t)
-                if (arrangement->getPlacementById(t, target.placementId, placement) && !placement.isRetired)
-                    trackId = t;
-            if (trackId < 0) {
-                plan.targetGone = true;
-                break;
-            }
-            plan.clipTrackId = trackId;
-            plan.clipStartSec = placement.timelineStartSeconds;
-            // exportPlacementAudio() lays out the whole track, so the selected clip may inherit the fixed D of
-            // a continuous clip before it; its geometry is part of what the file is made of.
-            auto clips = trackExportClips(*arrangement, trackId);
-            buildExportClips(processor, clips);
-            const auto targetClip = std::find_if(clips.begin(), clips.end(), [&placement](const ExportClip& clip) {
-                const auto& p = clip.playback;
-                return p.contentKey == placement.contentKey
-                       && p.timelineStartSeconds == placement.timelineStartSeconds
-                       && p.durationSeconds == placement.durationSeconds
-                       && p.clipInSeconds == placement.clipInSeconds && p.gain == placement.gain
-                       && p.fadeInDuration == placement.fadeInDuration
-                       && p.fadeOutDuration == placement.fadeOutDuration;
-            });
-            if (targetClip != clips.end())
-                addClip(plan, hasher, trackId, *targetClip, arrangement->getTrackVolume(trackId));
-            break;
-        }
-        case ExportKind::Track: {
-            const float volume = arrangement->getTrackVolume(target.trackId);
-            auto clips = trackExportClips(*arrangement, target.trackId);
-            buildExportClips(processor, clips);
-            for (const auto& clip : clips)
-                addClip(plan, hasher, target.trackId, clip, volume);
-            break;
-        }
-        case ExportKind::Master: {
-            const auto snapshot = arrangement->loadPlaybackSnapshot();
-            if (snapshot == nullptr)
-                break;
-            for (int trackId = 0; trackId < arrangement->getNumTracks(); ++trackId) {
-                const auto& track = snapshot->tracks[static_cast<std::size_t>(trackId)];
-                if (snapshot->anySoloed ? !track.isSolo : track.isMuted)
-                    continue;
-                std::vector<ExportClip> clips;
-                clips.reserve(track.placements.size());
-                for (const auto& placement : track.placements) {
-                    ExportClip clip;
-                    clip.playback = placement;
-                    clips.push_back(std::move(clip));
-                }
-                buildExportClips(processor, clips);
-                for (const auto& clip : clips)
-                    addClip(plan, hasher, trackId, clip, track.volume);
-            }
-            break;
-        }
+    hasher.add(static_cast<int>(target.kind)).add(plan.outputEndSec);
+    for (const auto& clip : plan.clips) {
+        const auto& playback = clip.playback;
+        hasher.add(clip.trackId)
+            .add(clip.placementId)
+            .add(static_cast<int>(playback.contentKey.domainKind))
+            .add(playback.contentKey.objectId)
+            .add(playback.contentKey.sourceWindowDiscriminator)
+            .add(playback.timelineStartSeconds)
+            .add(playback.durationSeconds)
+            .add(playback.clipInSeconds)
+            .add(static_cast<double>(playback.gain))
+            .add(playback.fadeInDuration)
+            .add(playback.fadeOutDuration)
+            .add(static_cast<double>(clip.trackVolume))
+            .add(playback.sampleGeometry.playbackRate)
+            .add(playback.sampleGeometry.offsetSamples)
+            .add(playback.sampleGeometry.playbackBeginSample)
+            .add(playback.sampleGeometry.playbackEndSample)
+            .add(playback.outputAnchorSeconds);
     }
     plan.mixToken = hasher.token();
     return plan;
@@ -562,11 +349,7 @@ private:
 
 // ---- The file, written on a thread of its own ------------------------------------------------------
 
-/**
- * Has OpenTune write the export into a file on a thread of its own, as the editor's export does on its
- * export thread (exportAudioRequested in Source/Standalone/PluginEditor.cpp): exportPlacementAudio,
- * exportTrackAudio or exportMasterMixAudio of OpenTuneAudioProcessor, which wait for the render worker
- * (drainRenderWorker) and write 44.1 kHz 32-bit float WAV. Then it reads the header of the file back.
+/** Writes the shared export plan to a file on a worker thread, then reads the resulting WAV header.
  * The destructor joins the thread; OpenTune's export cannot be interrupted, so that waits for the write.
  * This is the one known exception to bounded joins during shutdown; the editor's own export thread is joined the same
  * way. The worst case is the time that the render worker
@@ -576,16 +359,13 @@ private:
 class ExportWriter
 {
 public:
-    ExportWriter(OpenTuneAudioProcessor& processor, ExportKind kind, int trackId, std::uint64_t placementId,
-                 juce::File file, std::function<void()> wake)
-        : kind_(kind)
-        , trackId_(trackId)
-        , placementId_(placementId)
+    ExportWriter(StandaloneMediaOperations::ExportPlan plan, juce::File file, std::function<void()> wake)
+        : plan_(std::move(plan))
         , file_(std::move(file))
         , wake_(std::move(wake))
     {
-        thread_ = std::thread([this, &processor] {
-            run(processor);
+        thread_ = std::thread([this] {
+            run();
             done_ = true;
             wake_();
         });
@@ -604,45 +384,19 @@ public:
 
     // Valid once done() is true.
     bool written = false;
-    /** The export function refused because the render was not ready (a deferred render retry stayed, see
-        renderRetriesDeferred): nothing was written, and a later attempt may succeed. */
-    bool renderNotReady = false;
     int channelCount = 0;
     double sampleRateHz = 0.0;
     std::int64_t frameCount = 0;
     std::string sampleFormat;
 
 private:
-    void run(OpenTuneAudioProcessor& processor) noexcept
+    void run() noexcept
     {
         try {
-            bool ok = false;
-            bool called = true;
-            switch (kind_) {
-                case ExportKind::Clip: {
-                    // exportPlacementAudio() takes the clip's index on its track, which
-                    // StandaloneArrangement::findPlacementIndexById() gives for its id right before.
-                    const auto* arrangement = processor.getStandaloneArrangement();
-                    const int index =
-                        arrangement != nullptr ? arrangement->findPlacementIndexById(trackId_, placementId_) : -1;
-                    called = index >= 0;
-                    ok = called && processor.exportPlacementAudio(trackId_, index, file_, kErrorTextLanguage);
-                    break;
-                }
-                case ExportKind::Track:
-                    ok = processor.exportTrackAudio(trackId_, file_, kErrorTextLanguage);
-                    break;
-                case ExportKind::Master:
-                    ok = processor.exportMasterMixAudio(file_, kErrorTextLanguage);
-                    break;
-            }
-            if (ok)
+            juce::String error;
+            written = StandaloneMediaOperations::writeExportWav(plan_, file_, kErrorTextLanguage, error);
+            if (written)
                 readBack();
-            else if (called)
-                // The one failure of the export functions that the job reports differently: their only text for it
-                // (OpenTuneAudioProcessor::getLastExportError, cleared at the start of every export) is the key itself
-                // in every language, so it is compared in the language that was passed.
-                renderNotReady = processor.getLastExportError() == Loc::get(kErrorTextLanguage, kRenderNotReadyText);
         } catch (...) {
             written = false;
         }
@@ -650,6 +404,7 @@ private:
 
     void readBack()
     {
+        written = false;
         juce::AudioFormatManager formats;
         formats.registerBasicFormats();
         const std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file_));
@@ -662,18 +417,10 @@ private:
         written = channelCount > 0 && sampleRateHz > 0.0 && frameCount >= 0;
     }
 
-    // The export functions take the language of the error text they leave in getLastExportError(). The
-    // editor passes the language of its window; this writer never reads that text (a failed export is
-    // reported with a fixed detail), and a headless process has no window whose language could be asked
-    // (LocalizationManager::resolveLanguage() needs a bound language), so a fixed language is passed.
+    // The owner uses this language only for its write error text; API failures are encoded separately.
     static constexpr Language kErrorTextLanguage = Language::English;
-    /** What OpenTuneAudioProcessor::exportPlacementAudio / exportTrackAudio / exportMasterMixAudio leave in
-        getLastExportError() when ContentRenderService::drainRenderWorkerForExport() fails. */
-    static constexpr const char* kRenderNotReadyText = "Render is not ready for export";
 
-    ExportKind kind_;
-    int trackId_;
-    std::uint64_t placementId_;
+    StandaloneMediaOperations::ExportPlan plan_;
     juce::File file_;
     std::function<void()> wake_;
     std::atomic<bool> done_{false};
@@ -682,50 +429,36 @@ private:
 
 // ---- The job --------------------------------------------------------------------------------------
 
-/** How one content of the export stands. */
-struct Readiness
-{
-    enum class State {
-        Wait,
-        Ready,
-        Dry,
-        Fail
-    };
-    State state = State::Wait;
-    /** dryContents[].reason: unvoiced, nothingToRender or analysisFailed. */
-    const char* dryReason = "";
-    ControlJobError error;
-};
+using Readiness = StandaloneMediaOperations::ExportReadiness;
 
-/**
- * The work of one export job, on the message thread.
- *
- * - While it waits, each event rebuilds the plan (the user may change the project meanwhile) and
- *   decides for every content: analysis not finished: wait; no voiced audio or nothing to render: export it
- *   uncorrected and list it in dryContents; analysis failed otherwise: ANALYSIS_FAILED(f0_failed), or dry
- *   with allowDry; render work pending: wait (a content with nothing to render does not wait for blocks out
- *   of the render worker's reach, pendingBlocksStuck); then a render block failed: request the render once
- *   more (OpenTuneAudioProcessor::requestFullContentRender, whose reconcile retries a failed block of the
- *   same revision), then RENDER_FAILED(render_chunk_failed); else ready once the render cache is settled at
- *   its current revision (RenderCache::isCanonicalSettled). A content without
- *   render blocks is dry at once when it has nothing to render (no correction, identity pitch shift, no
- *   active note EQ) and an identity time grid; otherwise it gets one render request. A content whose time
- *   grid is not the identity is exported from its time-stretch output, so it is ready (or exported dry) only
- *   once that output was rebuilt at its current revisions (stretchState); a content to export dry without a
- *   render to stretch fails at once. Even when every content is ready the job keeps waiting while the render
- *   runtime holds a deferred render retry of the render service (renderRetriesDeferred): the export functions
- *   of OpenTune refuse to read the render then ("Render is not ready for export"). If they refuse anyway
- *   (a retry deferred after the check), the job ends the same way.
- *   NOT_READY(export_wait_timeout) after the wait limit, or when the writer found the render not ready; no
- *   file is written then.
- * - In the tick that finds every content ready it records the inputs and the revisions and starts the
- *   writer on a temporary file in the target directory.
- * - Once the file is written: the inputs are compared with the recorded ones (REVISION_CONFLICT
- *   (changed_during_export) when they changed), cancellability ends, loaded media are checked again for
- *   the name used, and the final rename moves the file into place.
- * - Every failure and cancellation deletes the temporary file and leaves the target untouched (executed
- *   false). The processor's message-thread export state is released when the job ends or its work is destroyed.
- */
+ControlJobError readinessError(const Readiness& readiness)
+{
+    switch (readiness.failure) {
+        case StandaloneMediaOperations::ExportFailure::AnalysisFailed:
+            return {"ANALYSIS_FAILED", "f0_failed",
+                    "the pitch analysis of a content of the export failed; allowDry exports it uncorrected", false};
+        case StandaloneMediaOperations::ExportFailure::ContentUnavailable:
+            return {"NOT_FOUND", "content_unavailable", "a content of the export is no longer available", false};
+        case StandaloneMediaOperations::ExportFailure::RenderChunkFailed:
+            return {"RENDER_FAILED", "render_chunk_failed", "a render block of a content of the export failed twice",
+                    false};
+        case StandaloneMediaOperations::ExportFailure::RenderUnavailable:
+            return {"NOT_READY", "render_unavailable", "the render of a content of the export is unavailable", false};
+        case StandaloneMediaOperations::ExportFailure::StretchFailed:
+            return {"RENDER_FAILED", "stretch_failed", "the time-stretch rebuild of a content of the export failed",
+                    false};
+        case StandaloneMediaOperations::ExportFailure::DryStretched:
+            return {"NOT_READY", "export_dry_stretched",
+                    "a content of the export would be exported uncorrected, but its time grid is stretched and "
+                    "OpenTune has no render to build stretched audio from",
+                    false};
+        case StandaloneMediaOperations::ExportFailure::None:
+            break;
+    }
+    return {"INTERNAL", "", "export readiness failed without a reason", false};
+}
+
+/** API job coordination, file policy and result encoding; media selection, readiness and WAV output live in the owner. */
 class ExportJob
 {
 public:
@@ -733,10 +466,9 @@ public:
               ExportBusyGuard busyAdmission)
         : environment_(std::move(environment))
         , params_(params)
+        , readiness_(params.allowDry)
         , target_(target)
         , busyAdmission_(std::move(busyAdmission))
-        , started_(std::chrono::steady_clock::now())
-        , waitLimit_(std::chrono::milliseconds(kWaitLimitMs))
     {}
 
     ~ExportJob()
@@ -759,369 +491,8 @@ public:
     }
 
 private:
-    struct ContentProgress
-    {
-        bool renderRequested = false;
-        bool renderRetried = false;
-        /** The content and time-grid revisions of the job's requests for the time-stretch rebuild, how many it made
-            for them, and since when the render worker has been seen idle without a current output after the last. */
-        std::optional<std::pair<std::uint64_t, std::uint64_t>> stretchRequestedFor;
-        int stretchRequests = 0;
-        std::optional<std::chrono::steady_clock::time_point> stretchIdleSince;
-        /** Since when the pending render blocks of the content have been seen out of reach of the render worker
-            (pendingBlocksStuck), and whether the log said so. */
-        std::optional<std::chrono::steady_clock::time_point> stuckSince;
-        /** Whether rendered audio of the content was found while its blocks have been out of reach (once per such
-            time; publishedRenderHasAudio). */
-        std::optional<bool> stuckRenderedAudio;
-        bool stuckLogged = false;
-    };
-
-    /** Where the time-stretch output of a content stands (stretchState). */
-    enum class Stretch {
-        /** Identity grid, or the output was built at the current revisions. */
-        Current,
-        /** The output is not current yet; the job waits. */
-        Pending,
-        /** The content has no render to stretch and none will come. */
-        NoRender,
-        /** The job asked for the rebuild kMaxStretchRequests times and the output is still not current. */
-        GaveUp
-    };
-
-    Readiness classify(ControlOpContext& context, const ContentKey& key)
-    {
-        auto readiness = classifyRender(context, key);
-        if (readiness.state != Readiness::State::Ready && readiness.state != Readiness::State::Dry)
-            return readiness;
-        switch (stretchState(context, key)) {
-            case Stretch::Current:
-                return readiness;
-            case Stretch::Pending:
-                return Readiness{};
-            case Stretch::NoRender:
-                return unstretchable();
-            case Stretch::GaveUp: {
-                Readiness failed;
-                failed.state = Readiness::State::Fail;
-                failed.error = {"NOT_READY", "export_stretch_dropped",
-                                "the time-stretch rebuild of a content of the export was asked for "
-                                    + std::to_string(kMaxStretchRequests) + " times and did not complete",
-                                false};
-                return failed;
-            }
-        }
-        return readiness;
-    }
-
-    /**
-     * A content exported uncorrected (dry), whose time grid is not the identity and that has no
-     * render to stretch (classify, Stretch::NoRender): OpenTune builds the stretched audio only from a settled render
-     * (ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled), so it has no uncorrected audio of the content
-     * for the file, and waiting does not change that. The job ends at once instead of at the wait limit, whatever made
-     * the content dry (unvoiced, nothing to render, or a failed analysis with allowDry), with
-     * NOT_READY(export_dry_stretched): not retryable, it succeeds again once the grid is the identity.
-     */
-    static Readiness unstretchable()
-    {
-        Readiness failed;
-        failed.state = Readiness::State::Fail;
-        failed.error = {"NOT_READY", "export_dry_stretched",
-                        "a content of the export would be exported uncorrected, but its time grid is stretched and "
-                        "OpenTune has no render to build stretched audio from",
-                        false};
-        return failed;
-    }
-
-    /**
-     * For a content whose time grid is not the identity, OpenTune plays and exports it from its time-stretch output
-     * (the Stage2 rebuild, Stage2TimeStretchRebuilder), not from its render,
-     * and its export reads that output only when it was built at the content's current content and time-grid
-     * revisions (readExportPlaybackAudio in Utils/PlaybackAudioReader.h); otherwise the content would be silent or
-     * old in the file. The content is ready only once that output is current, which the export's own read
-     * (TimeStretchCache::sliceCanonicalForOutputRange) tells.
-     *
-     * The revisions come from the live snapshot (controlLiveSnapshot), while the export reads with the snapshot of
-     * the published playback source (request.source.contentSnapshot). They agree here: setContentTimeGrid()
-     * republishes the playback source before it returns, on the message thread this runs on, and the rebuild stores
-     * its output only while the published source carries the revisions it was built for
-     * (Stage2TimeStretchRebuilder::rebuild checks it before and after), so an output that is current for the live
-     * revisions is current for the published source.
-     *
-     * The rebuild needs a settled render (enqueueStage2RebuildWhenCanonicalSettled). A content without one that the
-     * job would export dry and that has no render work pending will never get one: NoRender. OpenTune queues the
-     * rebuild itself when the grid changes while the render is settled (OpenTuneAudioProcessor::setContentTimeGrid)
-     * and when a render block settles. When the render is settled, no output is current and the render worker has
-     * nothing queued or running, the job queues the rebuild as setContentTimeGrid does (with the published playback
-     * source). The worker may drop a rebuild (Stage2TimeStretchRebuilder::rebuild gives up when the published source
-     * changed meanwhile, without a new revision), so when the worker has been seen idle for kStretchRetryIdleMs with
-     * still no current output, the job asks again, up to kMaxStretchRequests times for the same
-     * revisions: GaveUp after that. New revisions start the count again.
-     */
-    Stretch stretchState(ControlOpContext& context, const ContentKey& key)
-    {
-        const auto snapshot = controlLiveSnapshot(context, key);
-        if (snapshot == nullptr || snapshot->timeGrid == nullptr || snapshot->timeGrid->isIdentity())
-            return Stretch::Current;
-        auto* service = context.processor().getContentRenderService();
-        if (service == nullptr)
-            return Stretch::Current;
-        juce::AudioBuffer<float> probe(1, 1);
-        if (service->getTimeStretchCache().sliceCanonicalForOutputRange(key, snapshot->contentRevision,
-                                                                        snapshot->timeGridRevision, 0, probe, 0, 1)
-            > 0)
-            return Stretch::Current;
-        auto& progress = contentProgress_[key];
-        const std::pair<std::uint64_t, std::uint64_t> revisions{snapshot->contentRevision, snapshot->timeGridRevision};
-        if (progress.stretchRequestedFor != revisions) {
-            progress.stretchRequestedFor.reset();
-            progress.stretchRequests = 0;
-            progress.stretchIdleSince.reset();
-        }
-        const auto cache = service->getRenderCache(key);
-        if (cache == nullptr || !cache->isCanonicalSettled()) {
-            // classifyRender returns Ready only for a settled render, so this is a content to export dry.
-            const bool renderPending = cache != nullptr && cache->getChunkStats().hasActiveWork();
-            return renderPending ? Stretch::Pending : Stretch::NoRender;
-        }
-        if (service->renderQueueDepth() != 0 || service->renderInFlight() != 0
-            || renderRetriesDeferred(context.processor())) {
-            progress.stretchIdleSince.reset();
-            return Stretch::Pending;
-        }
-        const auto now = std::chrono::steady_clock::now();
-        if (progress.stretchRequests > 0) {
-            // The worker finished the rebuild the job asked for, and the output is still not current.
-            if (!progress.stretchIdleSince)
-                progress.stretchIdleSince = now;
-            const auto retryAt = *progress.stretchIdleSince + std::chrono::milliseconds(kStretchRetryIdleMs);
-            if (now < retryAt) {
-                noteWakeAt(retryAt);
-                return Stretch::Pending;
-            }
-            if (progress.stretchRequests >= kMaxStretchRequests)
-                return Stretch::GaveUp;
-        }
-        PlaybackReadSource source;
-        if (service->getPlaybackReadSource(key, source)
-            && service->enqueueStage2RebuildWhenCanonicalSettled(key, snapshot, source.canonicalBuffer,
-                                                                 source.canonicalSampleRate)) {
-            progress.stretchRequestedFor = revisions;
-            ++progress.stretchRequests;
-            progress.stretchIdleSince.reset();
-        }
-        return Stretch::Pending;
-    }
-
-    /**
-     * "Analysis found no voiced audio": the analysis has F0 frames and at least one of them is
-     * above 0 Hz. An analysis that ended Ready without any (what a silent file gives) has none. The same test as the
-     * readiness gate of the other writes (controlCheckContentReady, NOT_READY(f0_empty)).
-     */
-    static bool hasVoicedFrame(const EditableContentSnapshot& snapshot)
-    {
-        if (!snapshot.hasUsableOriginalF0())
-            return false;
-        const auto& f0 = snapshot.pitchCurve->getOriginalF0();
-        return std::any_of(f0.begin(), f0.end(), [](float hz) { return hz > 0.0f; });
-    }
-
-    /**
-     * Whether the current version of a content has anything to render. OpenTune's render marks a block blank, and
-     * plays the content's own audio for it, when the global pitch shift is the identity, no correction segment covers
-     * the block and no note with an active EQ intersects it (ProcessRenderRuntime::processChunkRenderJob). Without a
-     * correction segment, with the identity pitch shift and no active note EQ, every block of the content is blank.
-     */
-    static bool needsRender(const EditableContentSnapshot& snapshot)
-    {
-        if (!snapshot.pitchShiftSettings.isIdentity())
-            return true;
-        if (snapshot.pitchCurve != nullptr && snapshot.pitchCurve->hasCorrectionLayer())
-            return true;
-        return std::any_of(snapshot.notes.begin(), snapshot.notes.end(),
-                           [](const Note& note) { return note.eq.has_value() && note.eq->active; });
-    }
-
-    /**
-     * Whether the pending render blocks of a content are out of reach of OpenTune's render worker: blocks are pending,
-     * none is running and none is in the cache's set of blocks to claim (RenderCache::getPendingJobs, the set that
-     * RenderCache::claimPendingJob takes from), seen so for kStuckBlocksMs. Upstream
-     * RenderCache::reconcileFullPlanAndRequest leaves blocks so when a render is asked for again at a revision for
-     * which they are still pending: it keeps them pending but out of that set, and the worker's queue drops them
-     * (RenderWorker::syncStage1QueueLocked); only a new revision of the content queues them again. The set is read
-     * before the counts, so a block the worker claims meanwhile is never taken for one out of reach.
-     */
-    bool pendingBlocksStuck(ContentProgress& progress, const RenderCache& cache)
-    {
-        const bool noneToClaim = cache.getPendingJobs().empty();
-        const auto stats = cache.getChunkStats();
-        if (!noneToClaim || stats.pending == 0 || stats.running != 0) {
-            progress.stuckSince.reset();
-            progress.stuckRenderedAudio.reset();
-            return false;
-        }
-        const auto now = std::chrono::steady_clock::now();
-        if (!progress.stuckSince)
-            progress.stuckSince = now;
-        const auto stuckAt = *progress.stuckSince + std::chrono::milliseconds(kStuckBlocksMs);
-        if (now < stuckAt) {
-            noteWakeAt(stuckAt);
-            return false;
-        }
-        return true;
-    }
-
-    /**
-     * Whether the published render of a content holds rendered audio: the audio that the export lays over the
-     * content's own when its time grid is the identity (readExportPlaybackAudio, through
-     * RenderCache::overlayCanonicalAudio). The blocks in the cache do not tell that on their own: a failed block, or
-     * a block whose span changed, no longer holds its audio, while the published render, which changes only once every
-     * block has settled, still does. Probes the whole content in slices with a value no render produces (NaN); without
-     * the playback source of the content it answers true, so that the content keeps waiting.
-     */
-    static bool publishedRenderHasAudio(const ContentRenderService& service, const ContentKey& key,
-                                        const RenderCache& cache)
-    {
-        PlaybackReadSource source;
-        if (!service.getPlaybackReadSource(key, source) || source.canonicalBuffer == nullptr)
-            return true;
-        const std::int64_t sampleCount = source.canonicalBuffer->getNumSamples();
-        juce::AudioBuffer<float> probe(1, kPublishedAudioProbeSamples);
-        for (std::int64_t start = 0; start < sampleCount; start += kPublishedAudioProbeSamples) {
-            const int count =
-                static_cast<int>(std::min<std::int64_t>(kPublishedAudioProbeSamples, sampleCount - start));
-            juce::FloatVectorOperations::fill(probe.getWritePointer(0), std::numeric_limits<float>::quiet_NaN(), count);
-            cache.overlayCanonicalAudio(probe, 0, count, start);
-            const float* samples = probe.getReadPointer(0);
-            if (std::any_of(samples, samples + count, [](float value) { return !std::isnan(value); }))
-                return true;
-        }
-        return false;
-    }
-
-    Readiness classifyRender(ControlOpContext& context, const ContentKey& key)
-    {
-        auto& processor = context.processor();
-        Readiness readiness;
-        const auto snapshot = controlLiveSnapshot(context, key);
-        if (snapshot == nullptr)
-            return readiness;
-        switch (snapshot->originalF0State) {
-            case OriginalF0State::NotRequested:
-            case OriginalF0State::Extracting:
-                return readiness;
-            case OriginalF0State::Failed: {
-                // The failure message OpenTune keeps with the content: f0_empty for an analysis that found no
-                // voiced frame. A failure without a message counts as a failure.
-                if (std::string_view(controlF0FailureCode(*snapshot)) == "f0_empty") {
-                    readiness.state = Readiness::State::Dry;
-                    readiness.dryReason = "unvoiced";
-                } else if (params_.allowDry) {
-                    readiness.state = Readiness::State::Dry;
-                    readiness.dryReason = "analysisFailed";
-                } else {
-                    readiness.state = Readiness::State::Fail;
-                    readiness.error = {"ANALYSIS_FAILED", "f0_failed",
-                                       "the pitch analysis of a content of the export failed; allowDry exports it "
-                                       "uncorrected",
-                                       false};
-                }
-                return readiness;
-            }
-            case OriginalF0State::Ready:
-                break;
-        }
-        // "Analysis found no voiced audio": decided before anything about the render, whose blocks would all end
-        // blank for such a content and list it as nothingToRender.
-        if (!hasVoicedFrame(*snapshot)) {
-            readiness.state = Readiness::State::Dry;
-            readiness.dryReason = "unvoiced";
-            return readiness;
-        }
-        auto& progress = contentProgress_[key];
-        const auto* service = processor.getContentRenderService();
-        const auto cache = service != nullptr ? service->getRenderCache(key) : nullptr;
-        const auto stats = cache != nullptr ? cache->getChunkStats() : RenderCache::ChunkStats{};
-        // A content with nothing to render whose export reads its own audio: every block of its render would end
-        // blank, so the job does not ask for that render or wait for it.
-        const bool identityGrid = snapshot->timeGrid == nullptr || snapshot->timeGrid->isIdentity();
-        const bool dryWithoutRender = !needsRender(*snapshot) && identityGrid;
-        if (stats.total() == 0) {
-            // No render block: no render was requested for the content (or its render cache was cleared), so the
-            // export reads the content's own audio; such a content with nothing to render is dry at once. Otherwise
-            // the job asks for the render once (a stretched grid needs a settled render for its time-stretch output,
-            // stretchState); a content that still has no block after that has nothing to render either.
-            if (!progress.renderRequested && !dryWithoutRender) {
-                progress.renderRequested = true;
-                processor.requestFullContentRender(key);
-                return readiness;
-            }
-            readiness.state = Readiness::State::Dry;
-            readiness.dryReason = "nothingToRender";
-            return readiness;
-        }
-        // Render work pending or running: wait, also before asking again for a block that failed. A request at a
-        // revision for which blocks are still pending leaves them pending without queueing them (upstream
-        // RenderCache::reconcileFullPlanAndRequest; pendingBlocksStuck), so asking while they are pending would
-        // keep them from ever being rendered. Pending blocks that will not be rendered do not hold back a content
-        // with nothing to render, as long as no failed block waits and the export would read the content's own
-        // audio: neither a block nor the published render holds rendered audio of an earlier version
-        // (publishedRenderHasAudio, probed once while the blocks stay out of reach; the published render cannot
-        // change before they settle). Any other content waits for them until the wait limit.
-        if (stats.hasActiveWork()) {
-            if (pendingBlocksStuck(progress, *cache)) {
-                if (dryWithoutRender && stats.failed == 0) {
-                    if (!progress.stuckRenderedAudio)
-                        progress.stuckRenderedAudio = cache->getStateSnapshot().hasPublishedAudio
-                                                      || publishedRenderHasAudio(*service, key, *cache);
-                    if (!*progress.stuckRenderedAudio) {
-                        readiness.state = Readiness::State::Dry;
-                        readiness.dryReason = "nothingToRender";
-                        return readiness;
-                    }
-                }
-                if (!progress.stuckLogged) {
-                    progress.stuckLogged = true;
-                    AppLogger::logNoThrow("control API: export.start: render blocks of a content of the export are "
-                                          "pending but not queued; they are rendered only after the content changes");
-                }
-            }
-            return readiness;
-        }
-        progress.stuckSince.reset();
-        progress.stuckRenderedAudio.reset();
-        if (stats.failed > 0) {
-            if (progress.renderRetried) {
-                readiness.state = Readiness::State::Fail;
-                readiness.error = {"RENDER_FAILED", "render_chunk_failed",
-                                   "a render block of a content of the export failed twice", false};
-                return readiness;
-            }
-            progress.renderRetried = true;
-            progress.renderRequested = true;
-            processor.requestFullContentRender(key);
-            return readiness;
-        }
-        if (stats.blank == stats.total()) {
-            readiness.state = Readiness::State::Dry;
-            readiness.dryReason = "nothingToRender";
-            return readiness;
-        }
-        if (cache->isCanonicalSettled()) {
-            readiness.state = Readiness::State::Ready;
-            return readiness;
-        }
-        // Blocks that are neither pending nor published at their revision: ask for the render once.
-        if (!progress.renderRequested) {
-            progress.renderRequested = true;
-            processor.requestFullContentRender(key);
-        }
-        return readiness;
-    }
-
     void stepWaiting(ControlOpContext& context, ControlJobStep& step)
     {
-        nextWakeAt_.reset();
         if (step.cancelRequested()) {
             finishCancelled(step);
             return;
@@ -1138,9 +509,9 @@ private:
         int ready = 0;
         auto dry = JsonValue::array();
         for (const auto& key : plan.contents) {
-            const auto readiness = classify(context, key);
+            const auto readiness = readiness_.classify(context.processor(), key);
             if (readiness.state == Readiness::State::Fail) {
-                fail(step, readiness.error);
+                fail(step, readinessError(readiness));
                 return;
             }
             if (readiness.state == Readiness::State::Wait)
@@ -1154,21 +525,12 @@ private:
             }
         }
         const int total = static_cast<int>(plan.contents.size());
-        // Every content is ready, but the export functions refuse to read the render while a render retry of the
-        // service is deferred (renderRetriesDeferred): the file would not be written. Keep waiting, up to the
-        // wait limit, for the runtime to resume it.
-        if (ready == total && !renderRetriesDeferred(context.processor())) {
+        if (ready == total) {
             startWriting(context, plan, std::move(dry), step.wakeCallback());
             if (writer_ != nullptr)
                 setProgress(step, std::nullopt, "writing", std::nullopt, std::nullopt);
             else
                 fail(step, {"IO_ERROR", "write_failed", "the target directory cannot be written", false});
-            return;
-        }
-        scheduleWaitWake(step);
-        if (std::chrono::steady_clock::now() - started_ >= waitLimit_) {
-            fail(step, {"NOT_READY", "export_wait_timeout",
-                        "analysis and rendering of the export did not settle within the wait limit", false});
             return;
         }
         setProgress(step, static_cast<double>(ready) / total, "waiting", ready, total);
@@ -1198,24 +560,8 @@ private:
         // volumes; OpenTune's export writes .wav files only.
         temporary_ =
             directory.getNonexistentChildFile("." + target.getFileNameWithoutExtension() + ".export", ".wav", false);
-        auto& processor = context.processor();
-        writer_ = std::make_unique<ExportWriter>(processor, target_.kind,
-                                                 target_.kind == ExportKind::Clip ? plan.clipTrackId : target_.trackId,
-                                                 target_.placementId, temporary_, std::move(wake));
-    }
-
-    void scheduleWaitWake(ControlJobStep& step)
-    {
-        auto deadline = started_ + waitLimit_;
-        if (nextWakeAt_ && *nextWakeAt_ < deadline)
-            deadline = *nextWakeAt_;
-        step.wakeAt(deadline);
-    }
-
-    void noteWakeAt(std::chrono::steady_clock::time_point deadline)
-    {
-        if (!nextWakeAt_ || deadline < *nextWakeAt_)
-            nextWakeAt_ = deadline;
+        writer_ = std::make_unique<ExportWriter>(
+            static_cast<StandaloneMediaOperations::ExportPlan>(plan), temporary_, std::move(wake));
     }
 
     void stepWriting(ControlOpContext& context, ControlJobStep& step)
@@ -1224,21 +570,12 @@ private:
         if (!writer_->done())
             return;
         const bool written = writer_->written;
-        const bool renderNotReady = writer_->renderNotReady;
         const int channelCount = writer_->channelCount;
         const double sampleRateHz = writer_->sampleRateHz;
         const std::int64_t frameCount = writer_->frameCount;
         const std::string sampleFormat = writer_->sampleFormat;
         if (step.cancelRequested()) {
             finishCancelled(step);
-            return;
-        }
-        if (!written && renderNotReady) {
-            // A deferred render retry appeared after the job found every content ready, and the export function
-            // could not get the render worker to settle (drainRenderWorkerForExport). Not a write failure: nothing
-            // was written, and the export succeeds once the render is ready.
-            fail(step, {"NOT_READY", "export_wait_timeout",
-                        "the render of the export was not ready when OpenTune wrote the file", false});
             return;
         }
         if (!written) {
@@ -1367,12 +704,9 @@ private:
 
     ControlOpEnvironment environment_;
     ExportParams params_;
+    StandaloneMediaOperations::ExportReadinessTracker readiness_;
     ExportTarget target_;
     ExportBusyGuard busyAdmission_;
-    std::chrono::steady_clock::time_point started_;
-    std::chrono::milliseconds waitLimit_;
-    std::optional<std::chrono::steady_clock::time_point> nextWakeAt_;
-    std::map<ContentKey, ContentProgress> contentProgress_;
     std::unique_ptr<ExportWriter> writer_;
     juce::File temporary_;
     std::string recordedInputs_;

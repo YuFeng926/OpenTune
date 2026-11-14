@@ -1,8 +1,7 @@
-#include "Content/ContentEditCommands.h"
+#include "ContentEditCommandsStub.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PianoRollNotePatchAction.h"
-#include "Utils/PitchShiftEditAction.h"
 #include "Utils/SelectedNoteDeleteEdit.h"
 #include <iostream>
 #include <memory>
@@ -13,6 +12,7 @@
 namespace {
 
 using namespace OpenTune;
+using namespace OpenTune::TestSupport;
 
 Note makeNote(const F0Timeline& timeline, int startFrame, int endFrameExclusive, float pitch)
 {
@@ -173,7 +173,7 @@ bool checkNoTargetAndInvalidInput()
                == SelectedNoteDeleteStatus::InvalidSelection;
 }
 
-class RecordingCommands final : public ContentEditCommands
+class RecordingCommands final : public ContentEditCommandsStub
 {
 public:
     struct SegmentCommit
@@ -207,16 +207,7 @@ public:
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames,
         std::vector<float>, std::optional<std::vector<F0FrameRange>>) override { return {}; }
     bool setTimeGrid(ContentKey, std::shared_ptr<const TimeGridSnapshot>) override { return false; }
-    bool setDetectedKey(ContentKey, const DetectedKey&) override { return false; }
     bool applyPitchShiftState(ContentKey, const PitchShiftEditState&) override { return false; }
-    std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
-        ContentKey, const PitchShiftSettings&) override { return {}; }
-    bool autoTuneContentRange(ContentKey, int, int, const NoteGeneratorParams&,
-                              const std::optional<ScaleSnapConfig>&) override { return false; }
-    bool generateNotesOnly(ContentKey, const NoteGeneratorParams&) override { return false; }
-    bool ensureTimeToolAnchorSeed(ContentKey) override { return false; }
-    ContentCommitSnapshot commitVolumeEnvelope(ContentKey, AutomationLane) override { return {}; }
-    void republishPlaybackSource(ContentKey) override {}
 };
 
 bool checkUndoActionsUseBoundKey()

@@ -25,6 +25,7 @@
 #include "TimelineViewportCamera.h"
 #include "TimelineViewportPolicy.h"
 #include "TimelineCompositeCache.h"
+#include "../../StandaloneArrangement.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../Utils/KeyShortcutConfig.h"
 #include "../../Utils/TimelineDisplayMode.h"
@@ -326,16 +327,7 @@ private:
 
 
     // === 多选支持 ===
-    struct PlacementSelectionKey {
-        int trackId;
-        uint64_t placementId;
-        bool operator<(const PlacementSelectionKey& other) const {
-            return std::tie(trackId, placementId) < std::tie(other.trackId, other.placementId);
-        }
-        bool operator==(const PlacementSelectionKey& other) const {
-            return trackId == other.trackId && placementId == other.placementId;
-        }
-    };
+    using PlacementSelectionKey = StandaloneArrangement::PlacementSelectionKey;
     std::set<PlacementSelectionKey> selectedPlacements_;
     bool isMultiSelectMode_{false};
     PlacementSelectionKey shiftAnchor_;
@@ -407,6 +399,7 @@ private:
     DragOperation currentDragOp_{DragOperation::None};
     double trimStartClipInSeconds_{0.0};
     double trimStartDurationSeconds_{0.0};
+    StandaloneArrangement::Placement dragStartPlacement_;
     double fadeStartInDuration_{0.0};
     double fadeStartOutDuration_{0.0};
     uint64_t dragOperationPlacementId_{0};

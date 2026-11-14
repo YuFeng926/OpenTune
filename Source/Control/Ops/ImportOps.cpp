@@ -1,21 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ImportOps.h"
 
-#include "ClipIds.h"
 #include "OpsSupport.h"
 #include "WriteEnvelope.h"
 
 #include "Audio/AudioFormatRegistry.h"
 #include "Content/EditableContentSnapshot.h"
-#include "Content/StandaloneClipContent.h"
-#include "Content/StandaloneContentRepository.h"
 #include "Control/ControlJobs.h"
 #include "Control/ControlPathPolicy.h"
 #include "Control/ControlUiBridge.h"
 #include "PluginProcessor.h"
-#include "Utils/AppLogger.h"
-#include "Utils/AppPreferences.h"
-#include "Utils/NoteGeneratorTypes.h"
+#include "Standalone/StandaloneMediaOperations.h"
 #include "Utils/TimeCoordinate.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -43,41 +38,6 @@ constexpr double kMaxAnalysisSec = 600.0;
 constexpr double kMaxTimelineSec = 1.0e7;
 /** Samples read per block while decoding; the worker checks between blocks whether the job is gone. */
 constexpr int kDecodeBlockSamples = 1 << 18;
-
-/**
- * The arrangement's selection before a commit: the active track and the selected clip of the track that the commit
- * inserts into. OpenTuneAudioProcessor::commitPreparedImportAsPlacement() selects every clip it commits and makes its
- * track active (in PluginProcessor.cpp, and insertPlacement() selects the first clip of an empty track); that is
- * view state the request did not ask for unless it focuses the clip. The editor's heartbeat would then load the
- * selected clip into the piano roll, which in the openDyne scheme generates its notes
- * (PianoRollComponent::ensureOpenDyneNotesIfNeeded()), so an import with focus false would generate notes it does
- * not report. The import job restores the selection the commit found (see ImportJob::commit()). Message thread.
- */
-struct CommitSelection
-{
-    int activeTrack = 0;
-    std::uint64_t selectedPlacementId = 0;
-    bool valid = false;
-};
-
-CommitSelection captureCommitSelection(const StandaloneArrangement* arrangement, int trackId)
-{
-    if (arrangement == nullptr)
-        return {};
-    return {arrangement->getActiveTrackId(), arrangement->getSelectedPlacementId(trackId), true};
-}
-
-void restoreCommitSelection(StandaloneArrangement* arrangement, int trackId, const CommitSelection& selection)
-{
-    if (arrangement == nullptr || !selection.valid)
-        return;
-    // selectPlacement() makes the track active as well, so the active track is set afterwards. The selection of
-    // another track was not touched by the commit and is left as it is. A saved clip that is gone (it should not) is
-    // cleared rather than left at the clip the commit selected.
-    if (!arrangement->selectPlacement(trackId, selection.selectedPlacementId))
-        arrangement->setSelectedPlacementIndex(trackId, -1);
-    arrangement->setActiveTrack(selection.activeTrack);
-}
 
 enum class Layout {
     Single,
@@ -254,12 +214,12 @@ std::string labelSeconds(double seconds)
 class PreparedFile
 {
 public:
-    PreparedFile(OpenTuneAudioProcessor& processor, std::string path, std::function<void()> wake)
+    PreparedFile(std::string path, std::function<void()> wake)
         : path_(std::move(path))
         , wake_(std::move(wake))
     {
-        thread_ = std::thread([this, &processor] {
-            run(processor);
+        thread_ = std::thread([this] {
+            run();
             done_ = true;
             wake_();
         });
@@ -289,7 +249,7 @@ private:
         return ControlJobError{kind, reason, detail, false};
     }
 
-    void run(OpenTuneAudioProcessor& processor)
+    void run()
     {
         const juce::File file(juce::String::fromUTF8(path_.c_str()));
         if (!file.existsAsFile()) {
@@ -337,8 +297,8 @@ private:
             return;
         channelCount = channels;
         sampleRateHz = rate;
-        if (!processor.prepareImport(std::move(audio), rate, file.getFileName(), juce::String::fromUTF8(path_.c_str()),
-                                     prepared))
+        if (!OpenTuneAudioProcessor::prepareImport(std::move(audio), rate, file.getFileName(),
+                                                   juce::String::fromUTF8(path_.c_str()), prepared))
             error = itemError("UNSUPPORTED", "unsupported_format", "OpenTune did not accept the audio");
     }
 
@@ -368,51 +328,11 @@ struct ImportItem
     bool analysisRequested = false;
     /** "request" (generateNotes) or "focus" (openDyne scheme), empty when no generation was requested. */
     std::string notesBy;
-    /** Set on the message thread by the processor's note generation callback. */
+    /** Set on the message thread by the content completion event. */
     std::shared_ptr<std::atomic<bool>> notesGenerated = std::make_shared<std::atomic<bool>>(false);
-    bool notesMarkedDirty = false;
 };
 
-/**
- * The work of one import job, on the message thread. It decodes and commits the files one after another,
- * as the editor's import queue does (startPendingImport, processNextImportInQueue in
- * Source/Standalone/PluginEditor.cpp), then focuses the last clip and requests the pitch analysis of every
- * committed clip, and ends when every analysis has finished.
- *
- * - The commit waits while the editor is busy (UI priority), then resumes on the UI's release event. Cancellation stops
- *   before the next commit without waiting for the UI; clips committed before stay, and the result reports them.
- * - OpenTuneAudioProcessor::commitPreparedImportAsPlacement() is the editor's commit. After a project was
- *   opened, OpenTune gives a new clip an id that a clip of the project may already have, and the commit
- *   fails; each failed attempt uses up that id. The job therefore repeats the commit, at most once per
- *   clip whose id can still be handed out, so the import succeeds where the UI would fail. Only then does
- *   it commit a copy of the prepared audio, which a further attempt needs; otherwise (no project opened, or
- *   every clip id behind OpenTune's counter) it commits once, as the editor does, without a copy.
- * - OpenTune's import creates no undo entry and the editor does not mark the project as changed after it;
- *   the job marks it.
- * - The result has no undo entry (ui_parity). While the instance reports arrangement.v1, its revert recipe deletes the
- *   committed clips with one arrangement.edit op delete, and carries requiresConsent true because deleting clips needs
- *   the end user's consent; the recipe lists only the clips that were committed, so
- *   a cancelled job names the clips it got through. Without arrangement.v1 no request can remove them: revert is null
- *   and the envelope adds IRREVERSIBLE. The recipe carries the arrangement revision right after the last commit, so
- *   that it fails with REVISION_CONFLICT where the clips were changed since. sideEffects.notesGenerated has the same
- *   recipe for the focused clips whose notes were generated.
- * - commitPreparedImportAsPlacement() selects every clip it commits and makes its track the active track, also with
- *   focus false. A selected clip is what the editor's heartbeat loads into the piano roll, and the openDyne scheme
- *   generates the notes of a content it shows, so the clip would get notes the request did not ask for. The job
- *   therefore restores the selection that the commit found (captureCommitSelection()), and focus alone decides the
- *   selection: with focus false it does not change, and with focus true the job selects the last clip after the
- *   commits. With focus true and several target tracks, only the track of the last
- *   clip ends up with its new clip selected; the other tracks keep the clip that was selected before, where the
- *   editor's import leaves each of them on its new clip. This is deliberate: the selection is decided by focus alone.
- * - The clip id collision after a project was opened is only logged: the protocol has no warning code
- *   for it, so the result carries none.
- *
- * Where it differs from the editor's import:
- * - In the openDyne scheme the editor generates notes for every clip it commits; the job generates them
- *   only for the focused clip (without generateNotes).
- * - The editor's import into separate tracks places every file at 0 s on its track; the job appends
- *   each file after the last clip on its track (or places it at startTimelineSec).
- */
+/** API job coordination around the shared import placement, commit and content-refresh operations. */
 class ImportJob
 {
 public:
@@ -446,32 +366,6 @@ private:
         Analysis
     };
 
-    int trackOf(std::size_t index) const
-    {
-        return params_.layout == Layout::SeparateTracks ? targetTrack_ + static_cast<int>(index) : targetTrack_;
-    }
-
-    /** Mirrors OpenTuneAudioProcessorEditor::computeTrackAppendStartSeconds (Source/Standalone/
-        PluginEditor.cpp): the end of the last clip with audio on the track, or 0. */
-    static double appendStart(ControlOpContext& context, int trackId)
-    {
-        auto& processor = context.processor();
-        const auto* arrangement = processor.getStandaloneArrangement();
-        const auto* repository = processor.getStandaloneContentRepository();
-        double end = 0.0;
-        const int count = arrangement != nullptr ? arrangement->getNumPlacements(trackId) : 0;
-        for (int index = 0; index < count; ++index) {
-            StandaloneArrangement::Placement placement;
-            if (!arrangement->getPlacementByIndex(trackId, index, placement) || !placement.contentKey.isValid())
-                continue;
-            const auto* clip = repository != nullptr ? repository->findClip(placement.contentKey) : nullptr;
-            if (clip == nullptr || clip->content().audioBuffer == nullptr)
-                continue;
-            end = std::max(end, placement.timelineEndSeconds());
-        }
-        return end;
-    }
-
     void stepImport(ControlOpContext& context, ControlJobStep& step)
     {
         if (file_ != nullptr) {
@@ -484,7 +378,7 @@ private:
                 // Cancellation commits nothing, so it does not wait for the UI.
                 if (step.cancelRequested()) {
                     cancelled_ = true;
-                    enterAnalysis(context);
+                    enterAnalysis();
                     return;
                 }
                 // UI priority: nothing is committed under the user's hands; the next tick tries again.
@@ -508,99 +402,68 @@ private:
         step.setProgress(static_cast<double>(next_) / total, "importing", static_cast<int>(next_), total);
         if (next_ >= items_.size() || step.cancelRequested()) {
             cancelled_ = next_ < items_.size();
-            enterAnalysis(context);
+            enterAnalysis();
             return;
         }
-        file_ = std::make_unique<PreparedFile>(context.processor(), items_[next_].path, wake_);
+        file_ = std::make_unique<PreparedFile>(items_[next_].path, wake_);
     }
 
     void commit(ControlOpContext& context, ImportItem& item, PreparedFile& file)
     {
-        auto& processor = context.processor();
-        const int trackId = trackOf(next_);
-        double start = 0.0;
-        if (params_.layout == Layout::Sequential) {
-            if (!sequentialCursor_)
-                sequentialCursor_ =
-                    params_.startTimelineSec ? *params_.startTimelineSec : appendStart(context, trackId);
-            start = *sequentialCursor_;
-        } else {
-            start = params_.startTimelineSec ? *params_.startTimelineSec : appendStart(context, trackId);
+        StandaloneMediaOperations::ImportPlacementRequest layoutRequest;
+        layoutRequest.layout = params_.layout == Layout::Sequential
+                                   ? StandaloneMediaOperations::ImportLayout::Sequential
+                               : params_.layout == Layout::SeparateTracks
+                                   ? StandaloneMediaOperations::ImportLayout::SeparateTracks
+                                   : StandaloneMediaOperations::ImportLayout::Single;
+        layoutRequest.firstTrackId = targetTrack_;
+        layoutRequest.itemIndex = next_;
+        layoutRequest.startTimelineSec = params_.startTimelineSec;
+        layoutRequest.sequentialCursorSec = sequentialCursor_;
+        auto* bridge = context.bridge();
+        if (bridge == nullptr) {
+            item.error = ControlJobError{"INTERNAL", "editor_unavailable", "the Standalone editor is unavailable", false};
+            return;
         }
-        OpenTuneAudioProcessor::ImportPlacement placement;
-        placement.trackId = trackId;
-        placement.timelineStartSeconds = start;
-
-        // OpenTuneAudioProcessor::commitPreparedImportAsPlacement(): the editor's commit. A failed attempt
-        // releases what it created and uses up one clip id; see the class comment for why it is repeated.
-        // The commit consumes the prepared audio, so an attempt that may be followed by another one commits
-        // a copy. Attempts are repeated only while the clip id can be the cause of the failure: for a file
-        // that prepareImport() accepted, at a placement that ImportPlacement::isValid() accepts, the commit
-        // has no other reason to fail, and any other failure would repeat on every attempt.
-        const std::size_t attempts = (placement.isValid() ? controlPossibleClipIdCollisions(context) : 0) + 1;
-        OpenTuneAudioProcessor::CommittedPlacement committed;
-        std::size_t attempt = 0;
-        auto* arrangement = processor.getStandaloneArrangement();
-        // The commit selects the clip and makes its track active; the selection the job found is put back below,
-        // so that the editor is not shown a clip the request did not focus (see the class comment).
-        const auto selectionBefore = captureCommitSelection(arrangement, trackId);
-        while (attempt < attempts && !committed.isValid()) {
-            ++attempt;
-            OpenTuneAudioProcessor::PreparedImport prepared;
-            if (attempt < attempts) {
-                prepared = file.prepared;
-            } else {
-                prepared = std::move(file.prepared);
-            }
-            committed = processor.commitPreparedImportAsPlacement(std::move(prepared), placement);
-        }
-        // On every path, a failed commit included: OpenTune does not touch the selection when it fails, so the
-        // restore is then a no-op, and it keeps the selection from depending on that.
-        restoreCommitSelection(arrangement, trackId, selectionBefore);
-        if (!committed.isValid()) {
+        auto generated = item.notesGenerated;
+        const auto result = bridge->commitImportedAudio(
+            std::move(file.prepared), layoutRequest, params_.focus, params_.generateNotes,
+            [generated, wake = wake_] {
+                generated->store(true);
+                wake();
+            });
+        if (!result.isValid()) {
             item.error = ControlJobError{"INTERNAL", "", "OpenTune did not accept the clip", false};
             return;
         }
-        controlRecordCommittedClipId(context, committed.contentKey);
-        if (attempt > 1)
-            AppLogger::logNoThrow("control API: import.start: the commit of a clip was repeated "
-                                  + juce::String(static_cast<int>(attempt - 1))
-                                  + " time(s) because the clip id was in use (project opened before)");
-
-        // The commit sets the clip's duration from the prepared source window
-        // (commitPreparedImportAsPlacement() -> contentDurationSeconds(), which prefers
-        // sourceWindow.durationSeconds()), the file's authoritative frames / actual rate.
-        StandaloneArrangement::Placement committedPlacement;
-        const double duration =
-            arrangement != nullptr && arrangement->getPlacementById(trackId, committed.placementId, committedPlacement)
-                ? committedPlacement.durationSeconds
-                : 0.0;
+        const auto& committed = result.committed;
+        const double duration = result.durationSeconds;
         item.imported = true;
-        item.trackId = trackId;
+        item.trackId = result.placement.trackId;
         item.placementId = committed.placementId;
         item.contentKey = committed.contentKey;
         item.placementHandle = controlPlacementId(context, committed.placementId);
         item.contentHandle = controlContentId(context, committed.contentKey);
-        item.startSec = start;
+        item.startSec = result.placement.timelineStartSeconds;
         item.durationSec = duration;
         item.channelCount = file.channelCount;
         item.sampleRateHz = file.sampleRateHz;
-        if (sequentialCursor_)
-            sequentialCursor_ = start + duration;
-        // The arrangement right after this commit: the revert recipe expects it (see the class comment).
+        item.analysisRequested = result.analysisRequested;
+        if (result.notesGenerationSource == StandaloneMediaOperations::NotesGenerationSource::ExplicitRequest)
+            item.notesBy = "request";
+        else if (result.notesGenerationSource == StandaloneMediaOperations::NotesGenerationSource::EditingScheme)
+            item.notesBy = "focus";
+        revealedTracks_.insert(revealedTracks_.end(), result.revealedTracks.begin(), result.revealedTracks.end());
+        if (params_.layout == Layout::Sequential)
+            sequentialCursor_ = result.placement.timelineStartSeconds + duration;
+        // The arrangement right after this commit: the revert recipe expects it.
         arrangementRevision_ = controlArrangementRevision(context);
 
-        const std::string label =
-            "Track " + std::to_string(trackId + 1) + " " + labelSeconds(start) + "-" + labelSeconds(start + duration);
+        const std::string label = "Track " + std::to_string(item.trackId + 1) + " "
+                                  + labelSeconds(item.startSec) + "-"
+                                  + labelSeconds(item.startSec + item.durationSec);
         auto placementRef = JsonValue::object();
         placementRef.appendMember("placementId", JsonValue::string(item.placementHandle));
-        if (attempt > 1) {
-            // The editor's import would have failed here: the result tells the client that the job committed the
-            // clip again; the result includes IMPORT_COMMIT_REPEATED.
-            auto data = JsonValue::object();
-            data.appendMember("repeatCount", JsonValue::integer(static_cast<std::int64_t>(attempt - 1)));
-            envelope_->addWarning("IMPORT_COMMIT_REPEATED", placementRef, std::move(data));
-        }
         envelope_->addCreated("placement", std::move(placementRef), JsonValue::string(label));
         auto contentRef = JsonValue::object();
         contentRef.appendMember("contentId", JsonValue::string(item.contentHandle));
@@ -608,71 +471,13 @@ private:
         envelope_->touchPlacement(committed.placementId);
         envelope_->touchContent(item.contentHandle);
 
-        controlMarkDirty(context);
-        if (auto* bridge = context.bridge()) {
-            bridge->onStructureChanged();
-            // As the editor's import into separate tracks: hidden tracks that now hold a clip are shown.
-            const auto visible = bridge->visibleTrackCount();
-            if (visible && trackId >= *visible && bridge->revealTracks(trackId + 1))
-                for (int revealed = *visible; revealed <= trackId; ++revealed)
-                    revealedTracks_.push_back(revealed);
-        }
     }
 
-    /** After the last commit (or cancellation): focus the last clip, request every analysis. A cancelled
-        job, which does not wait for the UI, focuses no clip while the UI is busy, so that the view does
-        not change under the user's hands. */
-    void enterAnalysis(ControlOpContext& context)
+    /** After the last commit or cancellation, request analysis for every committed content. */
+    void enterAnalysis()
     {
         phase_ = Phase::Analysis;
         file_.reset();
-        auto& processor = context.processor();
-        ImportItem* focus = nullptr;
-        if (params_.focus && !(cancelled_ && controlCheckBusy(context).has_value()))
-            for (auto it = items_.rbegin(); it != items_.rend() && focus == nullptr; ++it)
-                if (it->imported)
-                    focus = &*it;
-        auto* bridge = context.bridge();
-        if (focus != nullptr) {
-            // As the editor after its import (applyPlacementSelectionContext): the clip becomes the
-            // selected clip of the active track, and the editor shows it.
-            if (auto* arrangement = processor.getStandaloneArrangement())
-                arrangement->selectPlacement(focus->trackId, focus->placementId);
-            if (bridge != nullptr)
-                bridge->focusPlacement(focus->trackId, focus->placementId);
-        }
-        // In the openDyne scheme notes are generated for the focused clip once its analysis finishes, with
-        // the parameters the editor would use
-        // for AUTO. The editor's own import generates them for every clip it commits; see the class comment.
-        const bool openDyne = processor.getAppPreferences().getState().shared.audioEditingScheme
-                              == AudioEditingScheme::Scheme::NotesPrimary;
-        NoteGeneratorParams editorParams;
-        const bool haveEditorParams = bridge != nullptr && bridge->currentNoteGenerationParams(editorParams);
-        for (auto& item : items_) {
-            if (!item.imported)
-                continue;
-            OpenTuneAudioProcessor::ContentRefreshRequest request;
-            request.contentKey = item.contentKey;
-            if (params_.generateNotes) {
-                // Explicit generation never inherits the editor's knobs: OpenTune's default parameters.
-                item.notesBy = "request";
-                request.noteGenerationParams = NoteGeneratorParams{};
-            } else if (&item == focus && openDyne) {
-                item.notesBy = "focus";
-                request.noteGenerationParams = haveEditorParams ? editorParams : NoteGeneratorParams{};
-            }
-            if (!item.notesBy.empty()) {
-                request.generateNotesWholeContentOnReady = true;
-                auto generated = item.notesGenerated;
-                request.onNotesGenerated = [generated, wake = wake_] {
-                    generated->store(true);
-                    wake();
-                };
-            }
-            // OpenTuneAudioProcessor::requestContentRefresh(): the editor's analysis request after an
-            // import, which also runs the requested note generation once the analysis is ready.
-            item.analysisRequested = processor.requestContentRefresh(request);
-        }
     }
 
     std::optional<OriginalF0State> analysisState(ControlOpContext& context, const ImportItem& item) const
@@ -683,19 +488,8 @@ private:
         return snapshot->originalF0State;
     }
 
-    void markGeneratedNotesDirty(ControlOpContext& context)
-    {
-        for (auto& item : items_)
-            if (item.notesGenerated->load() && !item.notesMarkedDirty) {
-                // The editor's callback of the import's note generation marks the project as changed.
-                controlMarkDirty(context);
-                item.notesMarkedDirty = true;
-            }
-    }
-
     void stepAnalysis(ControlOpContext& context, ControlJobStep& step)
     {
-        markGeneratedNotesDirty(context);
         if (cancelled_ || step.cancelRequested()) {
             finish(context, step, true);
             return;
@@ -779,7 +573,6 @@ private:
 
     void finish(ControlOpContext& context, ControlJobStep& step, bool cancelled)
     {
-        markGeneratedNotesDirty(context);
         auto items = JsonValue::array();
         int imported = 0;
         // Files that could not be imported; items that a cancellation left out are neither.

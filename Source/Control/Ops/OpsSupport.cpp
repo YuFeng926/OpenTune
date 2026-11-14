@@ -453,17 +453,13 @@ JsonValue ControlContentVersions::tokensJson() const
     return json;
 }
 
-ControlContentVersions controlContentVersions(ControlOpContext& context, const std::string& contentId,
+ControlContentVersions controlContentVersions(ControlOpContext&, const std::string& contentId,
                                               const EditableContentSnapshot& snapshot)
 {
     ControlContentVersions versions;
     versions.contentId = contentId;
-    // The counters without the steps of OpenTune's pitch shifts, which advance both (applyPitchShiftState()).
-    ControlPitchShiftLedger::Counters counters{snapshot.notesRevision, snapshot.pitchRevision};
-    if (const auto history = context.history())
-        counters = history->pitchShiftLedger().observe(contentId, controlContentEpoch(context), snapshot);
-    versions.notes = ControlTokenHasher('n').add(counters.notes).token();
-    versions.pitch = ControlTokenHasher('p').add(counters.pitch).token();
+    versions.notes = ControlTokenHasher('n').add(snapshot.notesRevision).token();
+    versions.pitch = ControlTokenHasher('p').add(snapshot.pitchRevision).token();
     const auto& curve = snapshot.pitchCurve;
     versions.content = ControlTokenHasher('c')
                            .add(snapshot.audioRevision)

@@ -292,8 +292,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
             ? OnboardingOverlayComponent::Environment::Capture
             : OnboardingOverlayComponent::Environment::Ara,
         [this](AudioEditingScheme::Scheme scheme) {
-            appPreferences_.setAudioEditingScheme(scheme);
-            syncSharedAppPreferences();
+            ProcessingPreferencePatch patch;
+            patch.audioEditingScheme = scheme;
+            applyProcessingPreferencePatch(appPreferences_, patch,
+                processorRef_.getProcessingPreferenceRuntimeOperations(),
+                [this] { syncSharedAppPreferences(); });
         },
         [this](bool) { resized(); },
         [this] { pianoRoll_.grabKeyboardFocus(); });
@@ -1280,27 +1283,15 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         appPreferences_, [this] { syncSharedAppPreferences(); }, true);
 
     // Insert Audio page (with rendering priority) at the beginning
-    auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
-        processorRef_.setVocoderModelWeight(weight);
-    };
-    auto onF0ModelChanged = [this](F0ModelType type) {
-        juce::String reason;
-        if (processorRef_.setF0ModelType(type, &reason))
-            return true;
+    auto onF0ModelChangeFailed = [this](const juce::String& reason) {
         ConfirmDialogContent::showDiagnostic(
             &contentRoot_, LOC_RAW("OriginalF0 model initialization failed"), reason,
             AppLogger::makeDiagnosticText("OriginalF0 model initialization", reason));
-        return false;
-    };
-    auto onLightPitchCorrectionChanged = [this](bool) {
-        processorRef_.invalidateAllContentCaches();
     };
     auto audioPage = SharedPreferencePages::createRenderingPriorityComponent(
-        appPreferences_, [this] { syncSharedAppPreferences(); },
-        [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
-        std::move(onVocoderModelWeightChanged),
-        std::move(onF0ModelChanged),
-        std::move(onLightPitchCorrectionChanged),
+        appPreferences_, processorRef_.getProcessingPreferenceRuntimeOperations(),
+        [this] { syncSharedAppPreferences(); },
+        std::move(onF0ModelChangeFailed),
         [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)] {
             if (safeThis != nullptr)
                 safeThis->onboardingRequested();
@@ -1809,28 +1800,16 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     content->setOnConfirm([safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
                            activeKey, currentSettings, commands](const OpenTune::PitchShiftSettings& newSettings) {
         if (safeThis == nullptr) return;
-        if (newSettings != currentSettings) {
-            auto action = commands != nullptr
-                ? commands->commitPitchShiftEdit(activeKey, newSettings)
-                : nullptr;
-            if (action != nullptr) {
-                safeThis->processorRef_.getUndoManager().addAction(std::move(action));
-            }
-        }
+        if (newSettings != currentSettings && commands != nullptr)
+            commands->commitPitchShiftEdit(activeKey, newSettings);
     });
 
     content->setOnReset([safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
                          activeKey, currentSettings, commands]() {
         if (safeThis == nullptr) return;
         const auto identity = OpenTune::PitchShiftSettings::identity();
-        if (identity != currentSettings) {
-            auto action = commands != nullptr
-                ? commands->commitPitchShiftEdit(activeKey, identity)
-                : nullptr;
-            if (action != nullptr) {
-                safeThis->processorRef_.getUndoManager().addAction(std::move(action));
-            }
-        }
+        if (identity != currentSettings && commands != nullptr)
+            commands->commitPitchShiftEdit(activeKey, identity);
     });
 
     auto options = juce::DialogWindow::LaunchOptions();

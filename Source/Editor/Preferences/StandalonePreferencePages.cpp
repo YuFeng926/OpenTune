@@ -1,14 +1,12 @@
 #include "StandalonePreferencePages.h"
 
-#include <cmath>
-
 #include "Inference/IF0Extractor.h"
 #include "Standalone/StandaloneAudioDeviceSync.h"
 #include "Standalone/UI/UIColors.h"
 #include "Editor/Preferences/SharedPreferencePages.h"
 #include "Utils/AccessibleComboBox.h"
 #include "Utils/AccessibleToggleButton.h"
-#include "Utils/AppLogger.h"
+#include "Utils/AudioDeviceSettings.h"
 
 namespace OpenTune {
 
@@ -169,20 +167,18 @@ private:
             return;
         const juce::ScopedValueSetter<bool> guard(refreshing_, true);
 
-        if (auto* currentType = deviceManager_.getCurrentDeviceTypeObject())
-            currentType->scanForDevices();
-
-        refreshTypeSelector();
-        refreshDeviceSelector();
-        refreshSampleRateSelector();
-        refreshBufferSizeSelector();
-        refreshChannelToggles();
+        const auto snapshot = AudioDeviceSettings::scanAndRead(deviceManager_);
+        refreshTypeSelector(snapshot);
+        refreshDeviceSelector(snapshot);
+        refreshSampleRateSelector(snapshot);
+        refreshBufferSizeSelector(snapshot);
+        refreshChannelToggles(snapshot);
         resized();
     }
 
-    void refreshTypeSelector()
+    void refreshTypeSelector(const AudioDeviceSettings::Snapshot& snapshot)
     {
-        const auto& types = deviceManager_.getAvailableDeviceTypes();
+        const auto& types = snapshot.available.deviceTypes;
         const bool showTypes = types.size() > 1;
 
         typeLabel_.setVisible(showTypes);
@@ -190,46 +186,39 @@ private:
         typeSelector_.clear(juce::dontSendNotification);
         availableTypeNames_.clear();
 
-        for (auto* type : types) {
-            if (type == nullptr)
-                continue;
-            availableTypeNames_.add(type->getTypeName());
-            typeSelector_.addItem(type->getTypeName(), availableTypeNames_.size());
+        for (int i = 0; i < types.size(); ++i) {
+            availableTypeNames_.add(types[i]);
+            typeSelector_.addItem(types[i], availableTypeNames_.size());
         }
 
-        const int currentIndex = availableTypeNames_.indexOf(deviceManager_.getCurrentAudioDeviceType());
+        const int currentIndex = availableTypeNames_.indexOf(snapshot.device.deviceType);
         typeSelector_.setSelectedId(currentIndex >= 0 ? currentIndex + 1 : 0, juce::dontSendNotification);
     }
 
-    void refreshDeviceSelector()
+    void refreshDeviceSelector(const AudioDeviceSettings::Snapshot& snapshot)
     {
-        availableDeviceNames_.clear();
+        availableDeviceNames_ = snapshot.available.outputDevices;
         outputDeviceSelector_.clear(juce::dontSendNotification);
-
-        auto* type = deviceManager_.getCurrentDeviceTypeObject();
-        if (type != nullptr)
-            availableDeviceNames_ = type->getDeviceNames(false);
 
         outputDeviceSelector_.addItem(LOC(kAudioNoDevice), 1);
         for (int i = 0; i < availableDeviceNames_.size(); ++i)
             outputDeviceSelector_.addItem(availableDeviceNames_[i], i + 2);
 
-        const int currentIndex = availableDeviceNames_.indexOf(deviceManager_.getAudioDeviceSetup().outputDeviceName);
+        const int currentIndex = availableDeviceNames_.indexOf(snapshot.device.configuredOutputDevice);
         outputDeviceSelector_.setSelectedId(currentIndex >= 0 ? currentIndex + 2 : 1, juce::dontSendNotification);
-        outputDeviceSelector_.setEnabled(type != nullptr);
+        outputDeviceSelector_.setEnabled(deviceManager_.getCurrentDeviceTypeObject() != nullptr);
     }
 
-    void refreshSampleRateSelector()
+    void refreshSampleRateSelector(const AudioDeviceSettings::Snapshot& snapshot)
     {
         availableSampleRates_.clear();
         sampleRateSelector_.clear(juce::dontSendNotification);
 
-        auto* device = deviceManager_.getCurrentAudioDevice();
-        sampleRateSelector_.setEnabled(device != nullptr);
-        if (device == nullptr)
+        availableSampleRates_ = snapshot.available.sampleRatesHz;
+        sampleRateSelector_.setEnabled(snapshot.device.open);
+        if (!snapshot.device.open)
             return;
 
-        availableSampleRates_ = device->getAvailableSampleRates();
         for (int i = 0; i < availableSampleRates_.size(); ++i) {
             const double rate = availableSampleRates_[i];
             const auto text = rate >= 1000.0
@@ -238,29 +227,22 @@ private:
             sampleRateSelector_.addItem(text, i + 1);
         }
 
-        const double currentRate = device->getCurrentSampleRate();
-        int selectedIndex = -1;
-        for (int i = 0; i < availableSampleRates_.size(); ++i) {
-            if (std::abs(availableSampleRates_[i] - currentRate) < 0.01) {
-                selectedIndex = i;
-                break;
-            }
-        }
+        const int selectedIndex = AudioDeviceSettings::findSampleRateIndex(availableSampleRates_,
+                                                                          snapshot.device.sampleRateHz);
         sampleRateSelector_.setSelectedId(selectedIndex >= 0 ? selectedIndex + 1 : 0, juce::dontSendNotification);
     }
 
-    void refreshBufferSizeSelector()
+    void refreshBufferSizeSelector(const AudioDeviceSettings::Snapshot& snapshot)
     {
         availableBufferSizes_.clear();
         bufferSizeSelector_.clear(juce::dontSendNotification);
 
-        auto* device = deviceManager_.getCurrentAudioDevice();
-        bufferSizeSelector_.setEnabled(device != nullptr);
-        if (device == nullptr)
+        availableBufferSizes_ = snapshot.available.bufferSizesFrame;
+        bufferSizeSelector_.setEnabled(snapshot.device.open);
+        if (!snapshot.device.open)
             return;
 
-        availableBufferSizes_ = device->getAvailableBufferSizes();
-        const double sampleRate = device->getCurrentSampleRate();
+        const double sampleRate = snapshot.device.sampleRateHz;
         for (int i = 0; i < availableBufferSizes_.size(); ++i) {
             const int bufferSize = availableBufferSizes_[i];
             const double milliseconds = sampleRate > 0.0
@@ -272,23 +254,15 @@ private:
                                         i + 1);
         }
 
-        const int selectedIndex = availableBufferSizes_.indexOf(device->getCurrentBufferSizeSamples());
+        const int selectedIndex = availableBufferSizes_.indexOf(snapshot.device.bufferSizeFrame);
         bufferSizeSelector_.setSelectedId(selectedIndex >= 0 ? selectedIndex + 1 : 0, juce::dontSendNotification);
     }
 
-    void refreshChannelToggles()
+    void refreshChannelToggles(const AudioDeviceSettings::Snapshot& snapshot)
     {
-        auto* device = deviceManager_.getCurrentAudioDevice();
-        juce::StringArray channelNames;
-        juce::BigInteger activeChannels;
-        if (device != nullptr) {
-            channelNames = device->getOutputChannelNames();
-            activeChannels = device->getActiveOutputChannels();
-        }
-
-        // Standalone is configured for at most two output channels.
-        const int numChannels = juce::jmin(2, juce::jmax(channelNames.size(), activeChannels.getHighestBit() + 1));
-        if (device == nullptr || numChannels <= 0) {
+        const auto& state = snapshot.device;
+        const int numChannels = state.outputChannelCount;
+        if (!state.open || numChannels <= 0) {
             channelToggles_.clear();
             channelsLabel_.setText(LOC(kAudioNoOutputChannels), juce::dontSendNotification);
             return;
@@ -296,7 +270,7 @@ private:
 
         channelsLabel_.setText(LOC(kAudioActiveOutputChannels), juce::dontSendNotification);
 
-        const int numPairs = (numChannels + 1) / 2;
+        const int numPairs = snapshot.available.outputChannelPairCount;
         while (channelToggles_.size() > numPairs)
             channelToggles_.removeLast();
 
@@ -310,49 +284,52 @@ private:
 
         for (int i = 0; i < numPairs; ++i) {
             const int firstChannel = i * 2;
-            juce::String text = channelNames.size() > firstChannel
-                ? channelNames[firstChannel]
+            juce::String text = state.outputChannelNames.size() > firstChannel
+                ? state.outputChannelNames[firstChannel]
                 : Loc::format(LOC(kAudioChannel), juce::String(firstChannel + 1));
             if (firstChannel + 1 < numChannels) {
                 text += " + ";
-                text += channelNames.size() > firstChannel + 1
-                    ? channelNames[firstChannel + 1]
+                text += state.outputChannelNames.size() > firstChannel + 1
+                    ? state.outputChannelNames[firstChannel + 1]
                     : Loc::format(LOC(kAudioChannel), juce::String(firstChannel + 2));
             }
 
             auto& toggle = *channelToggles_[i];
             toggle.setButtonText(text);
-            const bool pairActive = activeChannels[firstChannel]
-                || (firstChannel + 1 < numChannels && activeChannels[firstChannel + 1]);
+            const bool pairActive = state.activeOutputChannels[firstChannel]
+                || (firstChannel + 1 < numChannels && state.activeOutputChannels[firstChannel + 1]);
             toggle.setToggleState(pairActive, juce::dontSendNotification);
         }
     }
 
-    void applySetup(const juce::AudioDeviceManager::AudioDeviceSetup& setup,
-                    const juce::AudioDeviceManager::AudioDeviceSetup* rollbackSetup = nullptr)
+    void applyRequest(const AudioDeviceSettings::Request& request)
     {
-        auto error = deviceManager_.setAudioDeviceSetup(setup, true);
-        if (error.isNotEmpty() && rollbackSetup != nullptr) {
-            const auto rollbackError = deviceManager_.setAudioDeviceSetup(*rollbackSetup, true);
-            if (rollbackError.isNotEmpty()) {
-                AppLogger::error("[AudioDevice] setup rollback failed: " + rollbackError);
-                error += "; rollback failed: " + rollbackError;
+        const auto result = AudioDeviceSettings::apply(
+            deviceManager_, request, [this](const juce::String& reason) {
+                return restoreAsioSampleRateToSystem(deviceManager_, reason);
+            });
+
+        juce::String error;
+        if (result.kind != AudioDeviceSettings::ApplyKind::applied) {
+            if (result.rejectedSetting == AudioDeviceSettings::RejectedSetting::deviceType) {
+                error = LOC(kAudioDeviceSwitchFailed);
+            } else if (result.cause == AudioDeviceSettings::ApplyKind::unavailable) {
+                error = LOC(kAudioDeviceError);
+            } else {
+                error = result.deviceError.isNotEmpty()
+                    ? LOC(kAudioDeviceError) + ": " + result.deviceError
+                    : LOC(kAudioDeviceSwitchFailed);
             }
         }
+        if (result.recovery == AudioDeviceSettings::Recovery::failed)
+            error += "; rollback failed: " + result.recoveryError;
+        if (result.asioRateRestoreFailed) {
+            if (error.isNotEmpty())
+                error += "; ";
+            error += LOC(kAudioDeviceRestoreWarning);
+        }
 
-        errorLabel_.setText(error.isNotEmpty()
-                                ? LOC(kAudioDeviceError) + ": " + error
-                                : juce::String(),
-                            juce::dontSendNotification);
-
-        const auto actualSetup = deviceManager_.getAudioDeviceSetup();
-        AppLogger::log("[AudioDevice] setup type=" + deviceManager_.getCurrentAudioDeviceType()
-                       + " requestedRate=" + juce::String(setup.sampleRate, 1)
-                       + " actualRate=" + juce::String(actualSetup.sampleRate, 1)
-                       + " requestedBuffer=" + juce::String(setup.bufferSize)
-                       + " actualBuffer=" + juce::String(actualSetup.bufferSize)
-                       + (error.isNotEmpty() ? " error=" + error : juce::String()));
-
+        errorLabel_.setText(error, juce::dontSendNotification);
         refresh();
     }
 
@@ -365,44 +342,9 @@ private:
         if (! juce::isPositiveAndBelow(index, availableTypeNames_.size()))
             return;
 
-        const auto requestedType = availableTypeNames_[index];
-        const auto currentType = deviceManager_.getCurrentAudioDeviceType();
-        const auto previousSetup = deviceManager_.getAudioDeviceSetup();
-        const bool hadDevice = deviceManager_.getCurrentAudioDevice() != nullptr;
-
-        // Best-effort close-time rate restore. A failure is reported to the
-        // user but never blocks the requested transition.
-        const bool leavingAsio = currentType == "ASIO" && requestedType != currentType;
-        const bool restoreOk = ! leavingAsio
-            || restoreAsioSampleRateToSystem(deviceManager_, "audio type switch");
-
-        deviceManager_.setCurrentAudioDeviceType(requestedType, true);
-        const bool typeMismatch = deviceManager_.getCurrentAudioDeviceType() != requestedType;
-        auto* targetType = deviceManager_.getCurrentDeviceTypeObject();
-        const bool targetHasDevices = targetType != nullptr
-            && (!targetType->getDeviceNames(false).isEmpty()
-                || !targetType->getDeviceNames(true).isEmpty());
-        const bool openFailed = deviceManager_.getCurrentAudioDevice() == nullptr
-            && (hadDevice || targetHasDevices);
-
-        if (typeMismatch || openFailed) {
-            if (requestedType == "ASIO" && openFailed)
-                AppLogger::error("[AudioDevice] ASIO switch failed before actual sample rate could be verified");
-
-            if (deviceManager_.getCurrentAudioDeviceType() != currentType)
-                deviceManager_.setCurrentAudioDeviceType(currentType, true);
-
-            const auto rollbackError = deviceManager_.setAudioDeviceSetup(previousSetup, true);
-            if (rollbackError.isNotEmpty())
-                AppLogger::error("[AudioDevice] type-switch rollback failed: " + rollbackError);
-
-            errorLabel_.setText(LOC(kAudioDeviceSwitchFailed), juce::dontSendNotification);
-        } else {
-            errorLabel_.setText(restoreOk ? juce::String() : LOC(kAudioDeviceRestoreWarning),
-                                juce::dontSendNotification);
-        }
-
-        refresh();
+        AudioDeviceSettings::Request request;
+        request.deviceType = availableTypeNames_[index];
+        applyRequest(request);
     }
 
     void outputDeviceChanged()
@@ -414,39 +356,16 @@ private:
         if (selectedId <= 0)
             return;
 
-        const auto currentSetup = deviceManager_.getAudioDeviceSetup();
-        auto setup = currentSetup;
-        auto* type = deviceManager_.getCurrentDeviceTypeObject();
-
-        // The selected device may expose a different channel layout. Re-open
-        // it with the device default before the user explicitly chooses a pair.
-        setup.outputChannels.clear();
-        setup.useDefaultOutputChannels = true;
-
+        AudioDeviceSettings::Request request;
         if (selectedId == 1) {
-            setup.outputDeviceName.clear();
-            if (type == nullptr || ! type->hasSeparateInputsAndOutputs())
-                setup.inputDeviceName.clear();
+            request.outputDevice = juce::String();
         } else {
             const int deviceIndex = selectedId - 2;
             if (! juce::isPositiveAndBelow(deviceIndex, availableDeviceNames_.size()))
                 return;
-
-            setup.outputDeviceName = availableDeviceNames_[deviceIndex];
-            if (type == nullptr || ! type->hasSeparateInputsAndOutputs())
-                setup.inputDeviceName = setup.outputDeviceName;
+            request.outputDevice = availableDeviceNames_[deviceIndex];
         }
-
-        // Best-effort close-time rate restore. A failure is reported to the
-        // user but never blocks the requested transition.
-        const bool changingAsioOutput = deviceManager_.getCurrentAudioDeviceType() == "ASIO"
-            && setup.outputDeviceName != currentSetup.outputDeviceName;
-        const bool restoreOk = ! changingAsioOutput
-            || restoreAsioSampleRateToSystem(deviceManager_, "audio output switch");
-
-        applySetup(setup, &currentSetup);
-        if (! restoreOk && errorLabel_.getText().isEmpty())
-            errorLabel_.setText(LOC(kAudioDeviceRestoreWarning), juce::dontSendNotification);
+        applyRequest(request);
     }
 
     void sampleRateChanged()
@@ -458,10 +377,9 @@ private:
         if (! juce::isPositiveAndBelow(index, availableSampleRates_.size()))
             return;
 
-        const auto previousSetup = deviceManager_.getAudioDeviceSetup();
-        auto setup = previousSetup;
-        setup.sampleRate = availableSampleRates_[index];
-        applySetup(setup, &previousSetup);
+        AudioDeviceSettings::Request request;
+        request.sampleRateHz = availableSampleRates_[index];
+        applyRequest(request);
     }
 
     void bufferSizeChanged()
@@ -473,10 +391,9 @@ private:
         if (! juce::isPositiveAndBelow(index, availableBufferSizes_.size()))
             return;
 
-        const auto previousSetup = deviceManager_.getAudioDeviceSetup();
-        auto setup = previousSetup;
-        setup.bufferSize = availableBufferSizes_[index];
-        applySetup(setup, &previousSetup);
+        AudioDeviceSettings::Request request;
+        request.bufferSizeFrame = availableBufferSizes_[index];
+        applyRequest(request);
     }
 
     void channelPairClicked(int pairIndex)
@@ -486,26 +403,9 @@ private:
         if (! juce::isPositiveAndBelow(pairIndex, channelToggles_.size()))
             return;
 
-        auto* device = deviceManager_.getCurrentAudioDevice();
-        if (device == nullptr)
-            return;
-
-        const int numChannels = juce::jmin(2, juce::jmax(device->getOutputChannelNames().size(),
-                                                         device->getActiveOutputChannels().getHighestBit() + 1));
-
-        // 最多 2 个输出通道：按 stereo pair 互斥选择，只启用当前这一对。
-        juce::BigInteger channels;
-        if (channelToggles_[pairIndex]->getToggleState()) {
-            channels.setBit(pairIndex * 2);
-            if (pairIndex * 2 + 1 < numChannels)
-                channels.setBit(pairIndex * 2 + 1);
-        }
-
-        const auto previousSetup = deviceManager_.getAudioDeviceSetup();
-        auto setup = previousSetup;
-        setup.outputChannels = channels;
-        setup.useDefaultOutputChannels = false;
-        applySetup(setup, &previousSetup);
+        AudioDeviceSettings::Request request;
+        request.outputChannelPair = channelToggles_[pairIndex]->getToggleState() ? pairIndex : -1;
+        applyRequest(request);
     }
 
     juce::AudioDeviceManager& deviceManager_;
@@ -632,21 +532,16 @@ private:
 std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::createAudioPages(
     juce::AudioDeviceManager* audioDeviceManager,
     AppPreferences& appPreferences,
+    ProcessingPreferenceRuntimeOperations runtimeOperations,
     std::function<void()> onPreferencesChanged,
-    std::function<void(bool forceCpu)> onRenderingPriorityChanged,
-    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
-    std::function<bool(F0ModelType)> onF0ModelChanged,
-    std::function<void(bool)> onLightPitchCorrectionChanged,
+    std::function<void(const juce::String&)> onF0ModelChangeFailed,
     std::function<void()> onReplayOnboarding)
 {
     std::vector<TabbedPreferencesDialog::PageSpec> pages;
     if (audioDeviceManager != nullptr) {
         auto renderingPriorityPage = SharedPreferencePages::createRenderingPriorityComponent(
-            appPreferences, onPreferencesChanged,
-            std::move(onRenderingPriorityChanged),
-            std::move(onVocoderModelWeightChanged),
-            std::move(onF0ModelChanged),
-            std::move(onLightPitchCorrectionChanged),
+            appPreferences, std::move(runtimeOperations), std::move(onPreferencesChanged),
+            std::move(onF0ModelChangeFailed),
             std::move(onReplayOnboarding),
             false);
         auto audioContent = std::make_unique<AudioDeviceSettingsContent>(*audioDeviceManager);

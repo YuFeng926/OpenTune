@@ -1,6 +1,6 @@
 #include "AppPreferences.h"
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-#include "Control/ControlDataDirectory.h"  // OpenTune Control API hook: OPENTUNE_DATA_DIR, see Source/Control/README.md#hooks
+#if JucePlugin_Build_Standalone
+#include "Control/ControlDataDirectory.h"
 #endif
 
 #include <algorithm>
@@ -59,8 +59,8 @@ juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storag
     if (storageOptions.settingsDirectory != juce::File{}) {
         return storageOptions.settingsDirectory;
     }
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-    // OpenTune Control API hook: OPENTUNE_DATA_DIR replaces the per-user OpenTune folder, see Source/Control/README.md#hooks
+#if JucePlugin_Build_Standalone
+    // OPENTUNE_DATA_DIR replaces the per-user OpenTune folder in Standalone.
     if (const auto dataDirectory = controlDataDirectory(); dataDirectory != juce::File{})
         return dataDirectory;
 #endif
@@ -570,6 +570,154 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
 }
 
 } // namespace
+
+bool ProcessingPreferenceDelta::any() const noexcept
+{
+    return tuning || scheme || hybrid || experimental || vocoder || priority || f0 || accessibilityMode;
+}
+
+bool ProcessingPreferenceDelta::needsJob() const noexcept
+{
+    return scheme || needsRuntimeCompletion();
+}
+
+bool ProcessingPreferenceDelta::needsRuntimeCompletion() const noexcept
+{
+    return vocoder || priority;
+}
+
+ProcessingPreferenceState readProcessingPreferenceState(const AppPreferences& preferences)
+{
+    const auto shared = preferences.getState().shared;
+    ProcessingPreferenceState state;
+    state.tuningHz = static_cast<float>(std::round(TuningConfig::currentTuningHz() * 1000.0) / 1000.0);
+    state.audioEditingScheme = shared.audioEditingScheme;
+    state.lightPitchCorrectionEnabled = shared.lightPitchCorrectionEnabled;
+    state.experimentalFeaturesEnabled = shared.experimentalFeaturesEnabled;
+    state.vocoderModelWeight = shared.vocoderModelWeight;
+    state.renderingPriority = shared.renderingPriority;
+    state.f0ModelType = shared.f0ModelType;
+    state.accessibilityModeEnabled = shared.accessibilityModeEnabled;
+    return state;
+}
+
+ProcessingPreferenceDelta computeProcessingPreferenceDelta(const ProcessingPreferenceState& state,
+                                                            const ProcessingPreferencePatch& patch)
+{
+    ProcessingPreferenceDelta delta;
+    delta.tuning = patch.tuningHz && *patch.tuningHz != state.tuningHz;
+    delta.scheme = patch.audioEditingScheme && *patch.audioEditingScheme != state.audioEditingScheme;
+    delta.hybrid = patch.lightPitchCorrectionEnabled
+                   && *patch.lightPitchCorrectionEnabled != state.lightPitchCorrectionEnabled;
+    delta.experimental = patch.experimentalFeaturesEnabled
+                         && *patch.experimentalFeaturesEnabled != state.experimentalFeaturesEnabled;
+    delta.vocoder = patch.vocoderModelWeight && *patch.vocoderModelWeight != state.vocoderModelWeight;
+    delta.priority = patch.renderingPriority && *patch.renderingPriority != state.renderingPriority;
+    delta.f0 = patch.f0ModelType && *patch.f0ModelType != state.f0ModelType;
+    delta.accessibilityMode = patch.accessibilityModeEnabled
+                              && *patch.accessibilityModeEnabled != state.accessibilityModeEnabled;
+    return delta;
+}
+
+ProcessingPreferenceDelta diffProcessingPreferenceStates(const ProcessingPreferenceState& before,
+                                                          const ProcessingPreferenceState& after)
+{
+    ProcessingPreferenceDelta delta;
+    delta.tuning = before.tuningHz != after.tuningHz;
+    delta.scheme = before.audioEditingScheme != after.audioEditingScheme;
+    delta.hybrid = before.lightPitchCorrectionEnabled != after.lightPitchCorrectionEnabled;
+    delta.experimental = before.experimentalFeaturesEnabled != after.experimentalFeaturesEnabled;
+    delta.vocoder = before.vocoderModelWeight != after.vocoderModelWeight;
+    delta.priority = before.renderingPriority != after.renderingPriority;
+    delta.f0 = before.f0ModelType != after.f0ModelType;
+    delta.accessibilityMode = before.accessibilityModeEnabled != after.accessibilityModeEnabled;
+    return delta;
+}
+
+ProcessingPreferenceApplyResult applyProcessingPreferencePatch(
+    AppPreferences& preferences,
+    const ProcessingPreferencePatch& patch,
+    const ProcessingPreferenceRuntimeOperations& runtimeOperations,
+    std::function<void()> onPreferencesChanged,
+    std::function<void(ProcessingPreferenceRuntimeCompletion)> onRuntimeCompletion)
+{
+    ProcessingPreferenceApplyResult result;
+    result.before = readProcessingPreferenceState(preferences);
+    result.delta = computeProcessingPreferenceDelta(result.before, patch);
+    if (!result.delta.any())
+        return result;
+
+    if (result.delta.f0
+        && !runtimeOperations.setF0ModelType(*patch.f0ModelType, result.failureReason)) {
+        result.status = ProcessingPreferenceApplyResult::Status::F0ModelRejected;
+        return result;
+    }
+
+    ProcessingPreferenceRuntimeCallback runtimeCallback;
+    if (onRuntimeCompletion) {
+        runtimeCallback = [completion = std::move(onRuntimeCompletion)](
+            ProcessingPreferenceRuntimeStatus status, const juce::String& reason) {
+            ProcessingPreferenceRuntimeCompletion result;
+            result.failed = status == ProcessingPreferenceRuntimeStatus::Failed;
+            result.backendChanged = status == ProcessingPreferenceRuntimeStatus::Changed;
+            if (result.failed)
+                result.failureReason = reason;
+            completion(std::move(result));
+        };
+    }
+
+    bool runtimeCommandAccepted = true;
+    if (result.delta.vocoder) {
+        const std::optional<bool> forceCpu = result.delta.priority
+            ? std::optional<bool>(*patch.renderingPriority == RenderingPriority::CpuFirst)
+            : std::nullopt;
+        runtimeCommandAccepted = runtimeOperations.setVocoderModelWeight(
+            *patch.vocoderModelWeight, forceCpu, std::move(runtimeCallback));
+    } else if (result.delta.priority) {
+        runtimeCommandAccepted = runtimeOperations.resetInferenceBackend(
+            *patch.renderingPriority == RenderingPriority::CpuFirst, std::move(runtimeCallback));
+    }
+
+    if (!runtimeCommandAccepted) {
+        if (result.delta.f0) {
+            juce::String restoreFailure;
+            if (!runtimeOperations.setF0ModelType(result.before.f0ModelType, restoreFailure)) {
+                result.status = ProcessingPreferenceApplyResult::Status::F0RestoreRejected;
+                result.failureReason = std::move(restoreFailure);
+                return result;
+            }
+        }
+        result.status = ProcessingPreferenceApplyResult::Status::RuntimeCommandRejected;
+        return result;
+    }
+
+    if (result.delta.tuning) {
+        TuningConfig::TuningSettings tuning;
+        tuning.tuningHz = *patch.tuningHz;
+        preferences.setTuning(tuning);
+    }
+    if (result.delta.scheme)
+        preferences.setAudioEditingScheme(*patch.audioEditingScheme);
+    if (result.delta.hybrid) {
+        preferences.setLightPitchCorrectionEnabled(*patch.lightPitchCorrectionEnabled);
+        runtimeOperations.invalidateAllContentCaches();
+    }
+    if (result.delta.experimental)
+        preferences.setExperimentalFeaturesEnabled(*patch.experimentalFeaturesEnabled);
+    if (result.delta.vocoder)
+        preferences.setVocoderModelWeight(*patch.vocoderModelWeight);
+    if (result.delta.priority)
+        preferences.setRenderingPriority(*patch.renderingPriority);
+    if (result.delta.f0)
+        preferences.setF0ModelType(*patch.f0ModelType);
+    if (result.delta.accessibilityMode)
+        preferences.setAccessibilityModeEnabled(*patch.accessibilityModeEnabled);
+
+    if (onPreferencesChanged)
+        onPreferencesChanged();
+    result.status = ProcessingPreferenceApplyResult::Status::Applied;
+    return result;
+}
 
 AppPreferences::AppPreferences()
     : AppPreferences(StorageOptions{})

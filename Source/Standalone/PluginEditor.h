@@ -45,6 +45,8 @@
 #include "Utils/ScaleUiMapping.h"
 #include "Audio/AsyncAudioLoader.h"
 #include "Editor/OnboardingOverlayComponent.h"
+#include "Control/ControlUiBridge.h"
+#include "StandaloneMediaOperations.h"
 
 namespace OpenTune {
 
@@ -62,7 +64,7 @@ struct ImportDropTarget {
 
     Kind kind = Kind::FallbackActiveTrack;
     int trackId = 0;
-    double timelineStartSeconds = 0.0;
+    std::optional<double> timelineStartSeconds;
     juce::String rejectReason;  // Only for Kind::Reject
 
     bool isActionable() const { return kind != Kind::Reject; }
@@ -186,9 +188,11 @@ public:
 
 private:
     struct PendingImport;
+    struct PendingExport;
 
     bool shouldAcceptUndoRedoShortcut();
-    void performUndoRedoAction(bool isUndo);
+    UndoAction* performUndoRedoAction(bool isUndo,
+                                      const std::function<bool(UndoAction*)>& validateTop = {});
 
     // 调式状态辅助
     DetectedKey resolveScaleForPlacementContent(int trackId, int placementIndex, juce::String* sourceOut = nullptr) const;
@@ -199,6 +203,26 @@ private:
     void syncActiveContentFromProcessor(int trackId, int placementIndex, bool initializeSelection);
     void syncActiveSelectionFromProcessor();
     void applyPlacementSelectionContext(int trackId, uint64_t placementId);
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    bool selectPlacementContext(int trackId, uint64_t placementId, bool openEditor);
+#endif
+    bool setWorkspaceFromCommand(bool arrangement);
+    ControlTrackCommandResult addTrackSlots(int count);
+    ControlTrackCommandResult duplicateTrack(int trackId, bool shareContent);
+    ControlTrackCommandResult deleteTrack(int trackId);
+    bool setTrackMix(int trackId, std::optional<bool> muted, std::optional<bool> solo,
+                     std::optional<float> volumeLinear, std::optional<std::uint32_t> colourRgb);
+    void syncTrackMixToPanel();
+    void applyTransportPlay();
+    void applyTransportPause();
+    void applyTransportStop();
+    void applyTransportSeek(double timeSeconds);
+    void applyTransportPlayFromLastStart();
+    void applyTransportPauseAtLastStart();
+    void applyLoopEnabled(bool enabled);
+    void applyBpm(double bpm);
+    void applyTimeSignature(int numerator, int denominator);
+    bool dismissOnboarding();
 
     void timerCallback() override;
     void handleAsyncUpdate() override;
@@ -217,11 +241,21 @@ private:
     void updateTitleWithProjectPath();
     void syncRecentProjectsToMenu();
     void refreshAllUIFromProject();
-    void launchOpenProjectChooser();
+    void finishProjectSave();
+    void finishProjectOpen();
+    void launchOpenProjectChooser(bool discardUnsaved = false);
     void saveProjectAsThenOpenProject();
     void playFromStartToggleRequested();  // 播放/暂停并回到起始位置
     void importAudioFileToTrack(int trackId, const juce::File& file,
-                                double timelineStartSeconds = -1.0);  // -1 = auto-append
+                                std::optional<double> timelineStartSeconds = std::nullopt);
+    StandaloneMediaOperations::ImportCommitResult commitImportedAudio(
+        OpenTuneAudioProcessor::PreparedImport&& prepared,
+        const StandaloneMediaOperations::ImportPlacementRequest& request,
+        bool focus,
+        bool generateNotes,
+        std::function<void()> onNotesGenerated = {});
+    void advancePendingExport();
+    void finishPendingExport(bool succeeded, const juce::String& error);
     ImportDropTarget resolveImportDropTarget(int globalX, int globalY) const;
     void applyImportDropTarget(ImportDropTarget target, const juce::File& file);
     void updateImportDropPreview(ImportDropTarget target);
@@ -232,10 +266,13 @@ private:
     void notifyControlBusyStateChanged();
     void launchBackgroundUiTask(std::function<void()> task);
     void waitForBackgroundUiTasks();
-    double computeTrackAppendStartSeconds(int trackId) const;
     void releaseImportBatchSlot(int batchId);
 
     bool rejectProjectOperationIfBusy();
+    ProjectSession::SaveTask prepareProjectSave(const juce::File& file, ProjectSession::SaveTask::Mode mode);
+    void commitProjectSave(const juce::File& file, ProjectSession::SaveTask::Mode mode,
+                           uint64_t snapshotGeneration);
+    ProjectSession::OpenCommitPolicy prepareProjectOpen(bool discardUnsaved);
 
     /// 异步保存工程。消息线程捕获目标快照，单线程池执行 I/O。
     void saveProject(juce::File targetFile,
@@ -244,8 +281,8 @@ private:
                      std::function<void()> onSaved = {});
 
     /// 异步打开工程：worker 预处理，消息线程提交运行时状态。
-    void openProjectFile(const juce::File& file);
-    void startOpenProject(const juce::File& file);
+    void openProjectFile(const juce::File& file, bool discardUnsaved = false);
+    void startOpenProject(const juce::File& file, bool discardUnsaved = false);
 
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences& appPreferences_;
@@ -287,10 +324,9 @@ private:
     
     // 多文件导入队列（解决并发导入问题）
     struct PendingImport {
-        OpenTuneAudioProcessor::ImportPlacement placement;
+        StandaloneMediaOperations::ImportPlacementRequest placementRequest;
         juce::File file;
         int batchId{0};
-        bool appendSequentially{false};
     };
     std::vector<PendingImport> importQueue_;
     std::unordered_map<int, double> importBatchNextStartSeconds_;
@@ -370,6 +406,7 @@ private:
     // The shared admission itself lives on the processor (tryBeginExport / finishExport / isExportBusy),
     // so the API and the UI see one busy state and there is no second global source.
     bool exportWorkerOwnedByEditor_ = false;
+    std::unique_ptr<PendingExport> pendingExport_;
 
     // Detached-safe background tasks (import/deferred post-process)
     std::vector<std::future<void>> backgroundTasks_;
@@ -382,12 +419,13 @@ private:
     static constexpr int PARAMETER_PANEL_WIDTH = 240;  // 右侧 Properties Panel
     static constexpr int OVERVIEW_STRIP_HEIGHT = 60;
 
+    void afterUndoRedo();
+    void closeTrackColourPicker(juce::CallOutBox* picker, int trackId, juce::Colour selected, bool modalFinished);
+    std::vector<juce::CallOutBox*> committedTrackColourPickers_;
+
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-    // OpenTune Control API hook: editor bridge, see Source/Control/README.md#hooks
     friend class ControlEditorBridge;
     std::unique_ptr<class ControlEditorBridge> controlEditorBridge_;
-    // OpenTune Control API hook: the steps after an undo or redo (performUndoRedoAction), see Source/Control/README.md#hooks
-    void afterUndoRedo();
 #endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessorEditor)

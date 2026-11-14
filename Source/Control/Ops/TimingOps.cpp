@@ -11,6 +11,7 @@
 #include "Control/Edit/ControlOriginAction.h"
 #include "Control/Edit/TimeGridOps.h"
 #include "PluginProcessor.h"
+#include "Utils/TimeGridEditAction.h"
 
 #include <chrono>
 #include <cmath>
@@ -125,8 +126,8 @@ Result<ControlContentRef> checkGridEdit(ControlOpContext& context, const Control
 
 /**
  * The result of a handle edit, for both methods: the changed handles, clamped and CLAMPED for each limited move,
- * and for a commit the undo entry (a TimeGridEditAction in a ControlOriginAction, as the piano roll pushes it), the
- * dirty flag, reRenderQueued and the editor's notification. A plan without a grid after it is a no-op, as
+ * and for a commit the owner-pushed TimeGridEditAction, reRenderQueued and the editor's notification. A plan without
+ * a grid after it is a no-op, as
  * PianoRollToolHandler::handleTimeToolMouseUp commits a drag only when it changed the grid, once, with the drag's
  * description.
  */
@@ -176,19 +177,14 @@ Result<JsonValue> applyPlan(ControlOpContext& context, const ControlContentRef& 
         result = envelope.predicted(context);
     } else if (plan.after != nullptr) {
         const auto description = TimeGridOps::moveDescription();
-        auto inner = TimeGridOps::commit(processor, ref.key, plan, description);
-        if (!inner)
+        auto* action = TimeGridOps::commit(processor, ref.key, plan, description);
+        if (action == nullptr)
             return controlOpError("INTERNAL", "", "OpenTune did not accept the time grid");
-        std::vector<ControlOriginAction::Inner> actions;
-        actions.push_back(std::move(*inner));
-        const auto undoId = history->nextUndoId(context.instanceShort());
-        auto action = std::make_unique<ControlOriginAction>(history, undoId, description, std::move(actions));
-        const auto names = action->innerActionNames();
-        // UndoManager::addAction(), as the piano roll's commitTimeGrid pushes its entry; it discards the redo history.
-        history->record(processor.getUndoManager(), std::move(action));
+        auto& manager = processor.getUndoManager();
+        const auto undoId = history->assignUndoId(
+            manager, *action, manager.cursor() - 1, controlContentEpoch(context), context.instanceShort());
+        const std::vector<std::string> names{controlUndoActionName(*action)};
         envelope.setUndoable(undoId, description.toStdString(), names);
-        // The time grid is saved with the project; the UI does not mark the project after a time-grid edit.
-        controlMarkDirty(context);
         if (auto* bridge = context.bridge())
             bridge->onTimeGridChanged();
         controlAddReRenderQueued(envelope, beforeWorld, controlCaptureWorldVersions(context));
@@ -467,6 +463,7 @@ private:
             return;
         }
         auto& processor = context.processor();
+        auto commands = processor.getContentCommands();
         auto history = context.history();
         const auto gridBefore = ref.snapshot->timeGridRevision;
         ControlWriteEnvelope envelope(context);
@@ -474,7 +471,7 @@ private:
         envelope.limitDiffToTouchedContents();
         // OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(): what PianoRollComponent::setCurrentTool() calls when
         // the time tool is picked. With the analysis ready it places the handles at once (setContentTimeGrid).
-        const bool seeded = processor.ensureTimeToolAnchorSeed(key_);
+        const bool seeded = commands->ensureTimeToolAnchorSeed(key_);
         const auto after = controlLiveSnapshot(context, key_);
         if (!seeded || after == nullptr || !TimeGridOps::isSeeded(after->timeGrid.get())) {
             const bool changed = after != nullptr && after->timeGridRevision != gridBefore;

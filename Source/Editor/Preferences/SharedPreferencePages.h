@@ -1,8 +1,7 @@
 #pragma once
 
 #include "TabbedPreferencesDialog.h"
-#include "../Utils/AppPreferences.h"
-#include "../Utils/VocoderModelWeight.h"
+#include "Utils/AppPreferences.h"
 
 namespace OpenTune {
 
@@ -19,11 +18,9 @@ struct SharedPreferencePages {
 
     static RenderingPriorityPage createRenderingPriorityComponent(
         AppPreferences& appPreferences,
+        ProcessingPreferenceRuntimeOperations runtimeOperations,
         std::function<void()> onPreferencesChanged,
-        std::function<void(bool forceCpu)> onRenderingPriorityChanged,
-        std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
-        std::function<bool(F0ModelType)> onF0ModelChanged,
-        std::function<void(bool)> onLightPitchCorrectionChanged,
+        std::function<void(const juce::String&)> onF0ModelChangeFailed,
         std::function<void()> onReplayOnboarding,
         bool isVst3Plugin);
 };

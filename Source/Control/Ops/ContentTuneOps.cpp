@@ -6,15 +6,15 @@
 #include "OpsSupport.h"
 #include "WriteEnvelope.h"
 
+#include "Content/ContentEditCommands.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Control/ControlUiBridge.h"
-#include "Control/Edit/ContentEditTransaction.h"
 #include "Control/Edit/ControlOriginAction.h"
-#include "Control/Edit/NoteCorrection.h"
 #include "PluginProcessor.h"
-#include "Utils/LegacyNoteGenerator.h"
+#include "Utils/F0Timeline.h"
 #include "Utils/LocalizationManager.h"
 #include "Utils/NoteGeneratorTypes.h"
+#include "Utils/PianoRollEditAction.h"
 #include "Utils/ScaleUiMapping.h"
 
 #include <algorithm>
@@ -147,19 +147,16 @@ Result<JsonValue> runSetKey(ControlOpContext& context, const SetKeyParams& param
     if (!history.ok())
         return history.error();
 
-    const DetectedKey previous = ref.snapshot->detectedKey;
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
-    // PluginEditor::scaleChanged(): a manual key that the choice does not change is only shown again, not
-    // written; an automatic key chosen again becomes manual.
-    if (previous.origin == Origin::Manual && previous.root == params.key.root && previous.scale == params.key.scale)
+    auto commands = context.processor().getContentCommands();
+    const auto keyEdit = commands->setDetectedKey(ref.key, params.key);
+    if (!keyEdit)
+        return controlOpError("INTERNAL", "", "OpenTune did not accept the key");
+    const DetectedKey previous = keyEdit->before;
+    if (!keyEdit->changed)
         return envelope.committed(context);
 
-    // OpenTuneAudioProcessor::setContentDetectedKey(): the call PluginEditor::scaleChanged() makes for the
-    // selected clip; then the project is marked as changed, as there.
-    if (!context.processor().setContentDetectedKey(ref.key, params.key))
-        return controlOpError("INTERNAL", "", "OpenTune did not accept the key");
-    controlMarkDirty(context);
     history.value()->onChangeWithoutEntry(context.processor().getUndoManager(), ref.key, ControlContentAspect::Key);
 
     auto fields = JsonValue::object();
@@ -371,7 +368,7 @@ bool sameNote(const Note& a, const Note& b)
            && a.pitchDriftScale == b.pitchDriftScale && a.isVoiced == b.isVoiced;
 }
 
-/** A committed range of regenerate, in content seconds as commitAutoTuneGeneratedNotesByContentKey() merges. */
+/** A committed range of regenerate, in content seconds as the shared content command merges. */
 struct CommittedRange
 {
     double startSec = 0.0;
@@ -380,7 +377,7 @@ struct CommittedRange
 
 /**
  * The notes before the call that regenerate replaced (removed) and the notes after it that are new (created):
- * commitAutoTuneGeneratedNotesByContentKey() removes every note that overlaps a committed range and copies the
+ * the shared regenerate command removes every note that overlaps a committed range and copies the
  * others unchanged, so a note after the call is new unless it equals one of the notes kept. A note inside a
  * range is replaced even when the generator happens to make an equal one.
  */
@@ -407,60 +404,6 @@ void diffNotes(const std::vector<Note>& before, const std::vector<Note>& after,
         else
             created.push_back(j);
     }
-}
-
-/**
- * What OpenTuneAudioProcessor::autoTuneContentRangeByContentKey() and commitAutoTuneGeneratedNotesByContentKey()
- * would do to the notes, without committing (dryRun): generate in the frame range from the original pitch,
- * snap to the scale, normalise, then keep the notes that do not overlap the range and add the new ones,
- * sorted by start. nullopt when it would commit nothing (no notes generated).
- */
-std::optional<std::vector<Note>> predictRegenerate(const PitchCurveSnapshot& curve, const std::vector<Note>& notes,
-                                                   F0FrameRange range, const NoteGeneratorParams& generator,
-                                                   const std::optional<ScaleSnapConfig>& scaleSnap)
-{
-    const auto& f0 = curve.getOriginalF0();
-    auto generated =
-        LegacyNoteGenerator::generate(f0.data(), static_cast<int>(f0.size()), nullptr, range.startFrame,
-                                      range.endFrameExclusive, curve.getHopSize(), curve.getSampleRate(), generator);
-    if (!LegacyNoteGenerator::validate(generated))
-        return std::nullopt;
-    if (scaleSnap)
-        scaleSnap->applyToNotes(generated);
-    auto normalized = normalizeStoredNotes(generated);
-    if (normalized.empty())
-        return std::nullopt;
-    const double secondsPerFrame = curve.getHopSize() / curve.getSampleRate();
-    const double rangeStart = range.startFrame * secondsPerFrame;
-    const double rangeEnd = range.endFrameExclusive * secondsPerFrame;
-    std::vector<Note> merged;
-    for (const auto& note : notes)
-        if (note.endTime <= rangeStart || note.startTime >= rangeEnd)
-            merged.push_back(note);
-    merged.insert(merged.end(), normalized.begin(), normalized.end());
-    std::sort(merged.begin(), merged.end(), [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
-    return merged;
-}
-
-/** What OpenTuneAudioProcessor::generateNotesOnlyByContentKey() would make of the notes (dryRun). */
-std::optional<std::vector<Note>> predictNotesOnly(const PitchCurveSnapshot& curve, const std::vector<Note>& notes,
-                                                  const NoteGeneratorParams& generator)
-{
-    const auto& f0 = curve.getOriginalF0();
-    const int count = static_cast<int>(f0.size());
-    auto generated = LegacyNoteGenerator::generate(f0.data(), count, nullptr, 0, count, curve.getHopSize(),
-                                                   curve.getSampleRate(), generator);
-    if (!LegacyNoteGenerator::validate(generated))
-        return std::nullopt;
-    for (auto& note : generated)
-        if (note.originalPitch > 0.0f)
-            note.pitch = note.originalPitch;
-    NoteRangeSeconds range{0.0, count * curve.getHopSize() / curve.getSampleRate()};
-    for (const auto& note : generated) {
-        range.startSeconds = std::min(range.startSeconds, note.startTime);
-        range.endSeconds = std::max(range.endSeconds, note.endTime);
-    }
-    return mergeNotesRange(notes, range, generated);
 }
 
 /** The position of every note in start-time order, as content.getNotes counts them (controlNoteIndexOrder):
@@ -549,12 +492,13 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     if (!history.ok())
         return history.error();
     auto& processor = context.processor();
+    auto commands = processor.getContentCommands();
     const auto generator = generatorParams(params);
     // makeScaleSnapConfig(): the key's scale for the snap, none for chromatic, as the UI maps its scale.
     const auto scaleSnap = makeScaleSnapConfig(key);
     const auto& curve = *ref.snapshot->pitchCurve;
     const auto ranges = frameRanges(curve, params);
-    const double secondsPerFrame = curve.getHopSize() / curve.getSampleRate();
+    const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())};
     const auto beforeNotes = ref.snapshot->notes;
     const auto beforeWorld = controlCaptureWorldVersions(context);
 
@@ -563,28 +507,52 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     std::vector<CommittedRange> committed;
     std::vector<Note> afterNotes = beforeNotes;
     const juce::String description = autoTuneDescription();
-    ContentEditTransaction transaction(processor, ref.key);
+    EditableContentSnapshot planning = *ref.snapshot;
+    F0FrameRange editRange;
     for (const auto& range : ranges) {
-        if (params.dryRun) {
-            auto predicted = predictRegenerate(curve, afterNotes, range, generator, scaleSnap);
-            if (!predicted)
-                continue;
-            afterNotes = std::move(*predicted);
-        } else {
-            // PianoRollComponent::applyAutoTuneToSelection(): capture, commit the range through the AUTO command,
-            // record the undo action over the range the correction recomputed (expandNoteBasedCorrectionRange).
-            transaction.captureBefore();
-            if (!processor.autoTuneContentRangeByContentKey(ref.key, range.startFrame, range.endFrameExclusive,
-                                                            generator, scaleSnap))
-                continue;
-            transaction.recordRange(
-                description, PitchCurve::expandNoteBasedCorrectionRange(range.startFrame, range.endFrameExclusive,
-                                                                        static_cast<int>(curve.size())));
+        planning.notes = afterNotes;
+        auto predicted = commands->planAutoTuneContentRange(
+            planning, range.startFrame, range.endFrameExclusive, generator, scaleSnap);
+        if (!predicted)
+            continue;
+        afterNotes = std::move(*predicted);
+        if (committed.empty())
+            editRange = range;
+        else {
+            editRange.startFrame = std::min(editRange.startFrame, range.startFrame);
+            editRange.endFrameExclusive = std::max(editRange.endFrameExclusive, range.endFrameExclusive);
         }
-        committed.push_back({range.startFrame * secondsPerFrame, range.endFrameExclusive * secondsPerFrame});
+        committed.push_back({timeline.timeAtFrame(range.startFrame), timeline.timeAtFrame(range.endFrameExclusive)});
     }
-    // A commit reports the notes as OpenTune stored them, read back; one that cannot be read back fails once its
-    // undo entry is pushed below.
+    std::string revisionAfter = versions.revision();
+    if (!committed.empty()) {
+        planning.notes = afterNotes;
+        const auto correction = commands->planNoteCorrection(planning, afterNotes, editRange, generator);
+        if (!correction)
+            return controlOpError("INTERNAL", "", "OpenTune did not plan the generated notes");
+        afterNotes = correction->notes;
+        planning.pitchCurve = correction->correctedCurve;
+        if (!params.dryRun) {
+            auto edit = commands->commitNotesAndSegmentsUndoable(
+                ref.key, correction->notes, correction->segments,
+                ContentEditRangeFrames{correction->affectedRange.startFrame,
+                                       correction->affectedRange.endFrameExclusive},
+                description);
+            if (edit.snapshot == nullptr || edit.undoAction == nullptr)
+                return controlOpError("INTERNAL", "", "OpenTune did not commit the generated notes");
+            afterNotes = edit.snapshot->notes;
+            auto& manager = processor.getUndoManager();
+            const auto undoId = history.value()->assignUndoId(
+                manager, *edit.undoAction, manager.cursor() - 1, controlContentEpoch(context),
+                context.instanceShort());
+            const std::vector<std::string> names{controlUndoActionName(*edit.undoAction)};
+            envelope.setUndoable(undoId, description.toStdString(), names);
+            if (const auto now = controlLiveSnapshot(context, ref.key))
+                revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
+        }
+    }
+
+    // Read a committed result back from the content owner for the response.
     std::optional<Error> unreadable;
     if (!params.dryRun && !committed.empty()) {
         auto read = controlReadCommittedNotes(context, ref, std::nullopt);
@@ -621,20 +589,6 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
         dropped.append(std::move(entry));
     }
 
-    std::string revisionAfter = versions.revision();
-    auto inner = transaction.takeActions();
-    if (!inner.empty()) {
-        auto& manager = processor.getUndoManager();
-        const auto undoId = history.value()->nextUndoId(context.instanceShort());
-        auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
-        const auto names = action->innerActionNames();
-        // UndoManager::addAction(), as the piano roll pushes its entry; it discards the redo history.
-        history.value()->record(manager, std::move(action));
-        envelope.setUndoable(undoId, description.toStdString(), names);
-        controlMarkDirty(context);
-        if (const auto now = controlLiveSnapshot(context, ref.key))
-            revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
-    }
     if (unreadable)
         return *unreadable;
     const auto omitted = listNotes(envelope, ref.contentId, beforeNotes, versions.revision(), afterNotes, revisionAfter,
@@ -664,25 +618,25 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
     if (!history.ok())
         return history.error();
     auto& processor = context.processor();
+    auto commands = processor.getContentCommands();
     const auto generator = generatorParams(params);
     const auto beforeNotes = ref.snapshot->notes;
     const auto beforeWorld = controlCaptureWorldVersions(context);
     std::vector<Note> afterNotes;
     if (params.dryRun) {
-        auto predicted = predictNotesOnly(*ref.snapshot->pitchCurve, beforeNotes, generator);
-        if (!predicted)
+        auto patch = commands->planGenerateNotesOnly(*ref.snapshot, generator);
+        if (!patch)
             return controlOpError("INTERNAL", "", "OpenTune's note generator returned no valid result");
-        afterNotes = std::move(*predicted);
+        afterNotes = mergeNotesRange(beforeNotes, patch->affectedRange, patch->afterNotesInRange);
     }
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
     std::string revisionAfter = versions.revision();
     if (!params.dryRun) {
-        // OpenTuneAudioProcessor::generateNotesOnlyByContentKey(): replaces all notes, no undo entry, as OpenTune
-        // generates the notes of a clip. A generator that returns no valid result changes nothing.
-        if (!processor.generateNotesOnlyByContentKey(ref.key, generator))
+        // Replaces all notes through the same command as OpenTune's note-generation entry. A generator that returns
+        // no valid result changes nothing.
+        if (!commands->generateNotesOnly(ref.key, generator))
             return controlOpError("INTERNAL", "", "OpenTune's note generator returned no valid result");
-        controlMarkDirty(context);
         history.value()->onChangeWithoutEntry(processor.getUndoManager(), ref.key, ControlContentAspect::NotesAndPitch);
         auto committed = controlReadCommittedNotes(context, ref, std::nullopt);
         if (!committed.ok())
@@ -691,7 +645,7 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
         afterNotes = std::move(read.notes);
         revisionAfter = std::move(read.revision);
     }
-    // generateNotesOnlyByContentKey() replaces the notes of a range that covers the whole content: every note
+    // The note-generation command replaces the notes of a range that covers the whole content: every note
     // before is removed, every note after is new.
     std::vector<std::size_t> removed(beforeNotes.size());
     std::vector<std::size_t> created(afterNotes.size());
@@ -705,7 +659,7 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
     envelope.addWarning("REPLACES_ALL_NOTES", contentRef(ref.contentId), std::move(counts));
     JsonValue result;
     if (params.dryRun) {
-        // The topology commit of generateNotesOnlyByContentKey() always advances the notes revision, so the
+        // The topology commit always advances the notes revision, so the
         // commit reports the content in reRenderQueued: the prediction lists the side effects the commit would have.
         controlAddPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
@@ -722,11 +676,10 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
 }
 
 /**
- * Mode snapNotes: SNAP, the AUTO button in the openDyne scheme (PianoRollComponent::applyAutoSnapToAllNotes(),
- * ported in controlPlanAutoSnap()), with the explicit key. Without ranges it snaps every note, as the button does
- * without a note selection; with ranges, each range is one pass over the notes that overlap it (resolved to frames
- * as for regenerate), as the button does with those notes selected. Every pass that changes something is one
- * commit and one PianoRollEditAction ("Pitch snap"); the call is one ControlOriginAction.
+ * Mode snapNotes: SNAP, the AUTO button in the openDyne scheme (PianoRollComponent::applyAutoSnapToAllNotes()),
+ * through the shared content planner, with the explicit key. Without ranges it snaps every note, as the button does
+ * without a note selection; ranges select the union of notes that overlap them. The complete edit is committed once
+ * through the same owner as the button.
  */
 Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& params, const ControlContentRef& ref,
                                const ControlContentVersions& versions, const DetectedKey& key)
@@ -735,75 +688,50 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
     if (!history.ok())
         return history.error();
     auto& processor = context.processor();
+    auto commands = processor.getContentCommands();
     // makeScaleSnapConfig(); chromatic (no scale snap) quantizes to semitones, as the button's ScaleSnapConfig{}.
     const auto scaleSnap = makeScaleSnapConfig(key).value_or(ScaleSnapConfig{});
     const auto& curve = *ref.snapshot->pitchCurve;
-    const double secondsPerFrame = curve.getHopSize() / curve.getSampleRate();
+    const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())};
     const auto beforeNotes = ref.snapshot->notes;
-    // The passes: every note, or per range the notes that overlap its frames. A range is kept as seconds and
-    // resolved to notes on the notes as they are at that pass: the first commit stores the notes sorted, so a
-    // position found on the notes before it names another note afterwards.
-    std::vector<std::optional<std::pair<double, double>>> passes;
-    if (params.ranges.empty()) {
-        passes.emplace_back(std::nullopt);
-    } else {
-        for (const auto& range : frameRanges(curve, params))
-            passes.emplace_back(
-                std::make_pair(range.startFrame * secondsPerFrame, range.endFrameExclusive * secondsPerFrame));
+    std::optional<std::vector<std::size_t>> targets;
+    if (!params.ranges.empty()) {
+        targets.emplace();
+        const auto ranges = frameRanges(curve, params);
+        for (std::size_t index = 0; index < beforeNotes.size(); ++index) {
+            const auto& note = beforeNotes[index];
+            if (std::any_of(ranges.begin(), ranges.end(), [&](const F0FrameRange& range) {
+                    const double start = timeline.timeAtFrame(range.startFrame);
+                    const double end = timeline.timeAtFrame(range.endFrameExclusive);
+                    return note.endTime > start && note.startTime < end;
+                }))
+                targets->push_back(index);
+        }
     }
     const auto beforeWorld = controlCaptureWorldVersions(context);
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
     const juce::String description = snapDescription();
-    ContentEditTransaction transaction(processor, ref.key);
-    auto planning = std::make_shared<EditableContentSnapshot>(*ref.snapshot);
-    std::size_t commits = 0;
-    std::optional<Error> failure;
-    for (const auto& pass : passes) {
-        // A prediction plans every pass on the notes it predicted so far; a commit on the content as it is now.
-        if (!params.dryRun)
-            if (const auto live = controlLiveSnapshot(context, ref.key))
-                planning = std::make_shared<EditableContentSnapshot>(*live);
-        std::optional<std::vector<std::size_t>> targets;
-        if (pass) {
-            targets.emplace();
-            for (std::size_t i = 0; i < planning->notes.size(); ++i)
-                if (planning->notes[i].endTime > pass->first && planning->notes[i].startTime < pass->second)
-                    targets->push_back(i);
-        }
-        const auto plan = controlPlanAutoSnap(*planning, targets, scaleSnap);
-        if (plan.status != ControlAutoSnapPlan::Status::Commit)
-            continue;
-        if (params.dryRun) {
-            planning->notes = plan.notes;
-        } else if (!controlCommitCorrection(processor, transaction, ref.key, plan.commit, description)) {
-            const char* detail = "OpenTune did not commit the snap";
-            if (commits == 0)
-                return controlOpError("INTERNAL", "", detail);
-            failure = controlOpErrorAfterChange("INTERNAL", "", detail);
-            break;
-        }
-        ++commits;
-    }
-
-    std::vector<Note> afterNotes = planning->notes;
+    const auto plan = commands->planAutoSnap(
+        *ref.snapshot, targets, scaleSnap, generatorParams(params));
+    const bool changed = plan.status == ContentAutoSnapPlan::Status::Commit;
+    std::vector<Note> afterNotes = plan.notes;
     std::string revisionAfter = versions.revision();
-    auto inner = transaction.takeActions();
-    if (!params.dryRun && !inner.empty()) {
+    if (!params.dryRun && changed) {
+        auto edit = commands->commitNotesAndSegmentsUndoable(
+            ref.key, plan.correction.notes, plan.correction.segments,
+            ContentEditRangeFrames{plan.correction.affectedRange.startFrame,
+                                   plan.correction.affectedRange.endFrameExclusive},
+            description);
+        if (edit.snapshot == nullptr || edit.undoAction == nullptr)
+            return controlOpError("INTERNAL", "", "OpenTune did not commit the snap");
+        afterNotes = edit.snapshot->notes;
         auto& manager = processor.getUndoManager();
-        const auto undoId = history.value()->nextUndoId(context.instanceShort());
-        auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
-        const auto names = action->innerActionNames();
-        // UndoManager::addAction(), as the piano roll pushes its entry; it discards the redo history.
-        history.value()->record(manager, std::move(action));
+        const auto undoId = history.value()->assignUndoId(
+            manager, *edit.undoAction, manager.cursor() - 1, controlContentEpoch(context),
+            context.instanceShort());
+        const std::vector<std::string> names{controlUndoActionName(*edit.undoAction)};
         envelope.setUndoable(undoId, description.toStdString(), names);
-        // PluginEditor::autoTuneRequested() marks the project as changed after the button's SNAP.
-        controlMarkDirty(context);
-    }
-    if (failure)
-        return *failure;
-    if (!params.dryRun && commits != 0) {
-        // The result reports the notes as OpenTune stored them, read back, not the plan of the last pass.
         auto committed = controlReadCommittedNotes(context, ref, beforeNotes.size());
         if (!committed.ok())
             return committed.error();
@@ -815,7 +743,7 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
         controlListNoteChanges(envelope, ref.contentId, beforeNotes, afterNotes, revisionAfter, kMaxListedEntries);
     JsonValue result;
     if (params.dryRun) {
-        if (commits != 0)
+        if (changed)
             controlAddPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
     } else {

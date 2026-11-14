@@ -155,6 +155,10 @@ public:
         std::function<bool()> shouldSnapWholeNoteMoveToStandardPitch;
 
         std::function<std::shared_ptr<const EditableContentSnapshot>()> getEditableContentSnapshot;
+        std::function<std::optional<ContentNoteCorrectionPlan>(const std::vector<Note>&, F0FrameRange)>
+            planNoteCorrection;
+        std::function<bool(const std::vector<std::size_t>&, const ScaleSnapConfig&, const juce::String&)>
+            applyAutoSnap;
         std::function<uint64_t()> getNotesRevision;
         std::function<SelectedNoteDeleteResult(const std::vector<int>&, uint64_t, juce::String)>
             deleteSelectedPianoRollNotes;

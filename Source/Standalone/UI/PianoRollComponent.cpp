@@ -53,23 +53,6 @@ private:
     PianoRollComponent& owner_;
 };
 
-// 检查 [startFrame, endFrameExclusive) 内每帧都被 correction 覆盖（无空洞）。
-// 与播放路径一致：基于 forEachCorrectionF0Span 的 span 遍历，
-// f0Data 长度不足的 segment 视为无覆盖。合法范围：0 <= startFrame <= endFrameExclusive <= size()。
-bool isFullyCorrectedInRange(const PitchCurveSnapshot& curve, int startFrame, int endFrameExclusive)
-{
-    if (startFrame < 0 || endFrameExclusive > static_cast<int>(curve.size())
-        || endFrameExclusive <= startFrame)
-        return false;
-    bool fullyCorrected = true;
-    curve.forEachCorrectionF0Span(startFrame, endFrameExclusive,
-        [&](int, const float* values, int) {
-            if (values == nullptr)
-                fullyCorrected = false;
-        });
-    return fullyCorrected;
-}
-
 } // namespace
 
 // Per-note UIA child. It is a transparent component so that AccessibilityHandler's
@@ -494,6 +477,36 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             && appPreferences_->getWholeNoteMoveSnapMode() == WholeNoteMoveSnapMode::StandardPitch;
     };
     toolCtx.getEditableContentSnapshot = [this]() { return readEditedSnapshot(); };
+    toolCtx.planNoteCorrection = [this](const std::vector<Note>& notes, F0FrameRange editRange) {
+        const auto snapshot = readEditedSnapshot();
+        if (contentCommands_ == nullptr || snapshot == nullptr)
+            return std::optional<ContentNoteCorrectionPlan>{};
+        NoteGeneratorParams params;
+        params.retuneSpeed = currentRetuneSpeed_;
+        params.vibratoDepth = currentVibratoDepth_;
+        params.vibratoRate = currentVibratoRate_;
+        return contentCommands_->planNoteCorrection(*snapshot, notes, editRange, params);
+    };
+    toolCtx.applyAutoSnap = [this](const std::vector<std::size_t>& targets,
+                                   const ScaleSnapConfig& scaleSnap,
+                                   const juce::String& description) {
+        if (contentCommands_ == nullptr || !editedContentKey_.isValid())
+            return false;
+        const auto snapshot = readEditedSnapshot();
+        if (snapshot == nullptr)
+            return false;
+        const auto plan = contentCommands_->planAutoSnap(
+            *snapshot, targets, scaleSnap, getCurrentAutoTuneParams());
+        if (plan.status != ContentAutoSnapPlan::Status::Commit)
+            return false;
+        pendingUndoDescription_ = description;
+        if (commitEditedContentNotesAndSegments(
+                *snapshot, plan.correction.notes, plan.correction.segments,
+                plan.correction.affectedRange))
+            return true;
+        pendingUndoDescription_ = {};
+        return false;
+    };
     toolCtx.getNotesRevision = [this]() { return lastKnownNotesRevision_; };
     toolCtx.editEraserStroke = [this](F0FrameRange brushRange,
                                       const std::vector<int>& noteIndices,
@@ -1655,111 +1668,32 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
                                                                const std::vector<PitchCorrectionSegment>& segments,
                                                                F0FrameRange affectedRange)
 {
-    if (contentCommands_ == nullptr || !editedContentKey_.isValid() || snapshot.pitchCurve == nullptr) {
+    if (contentCommands_ == nullptr || !editedContentKey_.isValid() || snapshot.pitchCurve == nullptr)
         return {};
-    }
 
-    // Capture range-scoped before data directly from the single snapshot (no full re-read).
-    const auto curveSnapshot = snapshot.pitchCurve;
-    if (curveSnapshot == nullptr) {
+    auto edit = contentCommands_->commitNotesAndSegmentsUndoable(
+        editedContentKey_, notes, segments,
+        ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive},
+        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : LOC(kEdit));
+    if (edit.snapshot == nullptr)
         return {};
-    }
-    const F0Timeline f0tl{ curveSnapshot->getHopSize(), curveSnapshot->getSampleRate(),
-                           static_cast<int>(curveSnapshot->size()) };
-    const double rangeStartSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.startFrame);
-    const double rangeEndSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.endFrameExclusive);
-
-    auto extractNotesInRange = [](const std::vector<Note>& notes, double startSec, double endSec) {
-        std::vector<Note> result;
-        for (const auto& note : notes) {
-            if (note.startTime < endSec && note.endTime > startSec)
-                result.push_back(note);
-        }
-        return result;
-    };
-
-    auto extractSegmentsInRange = [](const std::vector<PitchCorrectionSegment>& segs, int startFrame, int endFrame) {
-        std::vector<PitchCorrectionSegment> result;
-        for (const auto& seg : segs) {
-            if (seg.endFrame <= startFrame || seg.startFrame >= endFrame)
-                continue;  // Outside range
-            
-            // Clip to range boundaries (split-preserve for boundary-crossing segments)
-            const int clipStart = std::max(seg.startFrame, startFrame);
-            const int clipEnd = std::min(seg.endFrame, endFrame);
-            if (clipEnd <= clipStart)
-                continue;  // Empty after clip
-            
-            PitchCorrectionSegment clipped = seg;
-            const int startOffset = clipStart - seg.startFrame;
-            const int clipLen = clipEnd - clipStart;
-            if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
-                clipped.startFrame = clipStart;
-                clipped.endFrame = clipEnd;
-                clipped.f0Data.assign(seg.f0Data.begin() + startOffset, seg.f0Data.begin() + startOffset + clipLen);
-                result.push_back(std::move(clipped));
-            }
-        }
-        return result;
-    };
-
-    auto beforeNotes = extractNotesInRange(snapshot.notes, rangeStartSec, rangeEndSec);
-    auto beforeSegments = extractSegmentsInRange(curveSnapshot->getCorrectionSegments(), affectedRange.startFrame, affectedRange.endFrameExclusive);
-
-    // Enforce range-scoped contract: filter incoming data so sink never
-    // receives notes/segments outside the affected range.
-    auto scopedNotes = extractNotesInRange(notes, rangeStartSec, rangeEndSec);
-    auto scopedSegments = extractSegmentsInRange(segments, affectedRange.startFrame, affectedRange.endFrameExclusive);
-
-    ContentEditRangeFrames editRange;
-    editRange.startFrame = affectedRange.startFrame;
-    editRange.endFrameExclusive = affectedRange.endFrameExclusive;
-
-    const auto committedSnap =
-        contentCommands_->commitNotesAndSegments(editedContentKey_,
-                                                 std::move(scopedNotes),
-                                                 std::move(scopedSegments),
-                                                 editRange);
-    if (!committedSnap) {
-        return {};
-    }
 
     // Update local caches from committed state
-    cachedNotes_ = committedSnap->notes;
+    cachedNotes_ = edit.snapshot->notes;
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
 
-    if (committedSnap->pitchCurve) {
-        applyEditedContentCurve(committedSnap->pitchCurve);
+    if (edit.snapshot->pitchCurve) {
+        applyEditedContentCurve(edit.snapshot->pitchCurve);
     }
-
-    // Capture range-scoped after data from committed snapshot
-    auto afterNotes = extractNotesInRange(committedSnap->notes, rangeStartSec, rangeEndSec);
-    const auto committedPitchSnapshot = committedSnap->pitchCurve;
-    auto afterSegments = extractSegmentsInRange(
-        committedPitchSnapshot->getCorrectionSegments(),
-        affectedRange.startFrame,
-        affectedRange.endFrameExclusive);
-
-    auto action = std::make_unique<PianoRollEditAction>(
-        contentCommands_,
-        editedContentKey_,
-        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : LOC(kEdit),
-        std::move(beforeNotes),
-        std::move(afterNotes),
-        std::move(beforeSegments),
-        std::move(afterSegments),
-        ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive});
-
-    undoManager_.addAction(std::move(action));
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
-    lastKnownNotesRevision_ = committedSnap->notesRevision;
-    lastKnownPitchRevision_ = committedSnap->pitchRevision;
+    lastKnownNotesRevision_ = edit.snapshot->notesRevision;
+    lastKnownPitchRevision_ = edit.snapshot->pitchRevision;
     {
         requestContentRedraw();
     }
     parameterTargetDidChange();
-    return committedSnap;
+    return edit.snapshot;
 }
 
 std::vector<PitchCorrectionSegment> PianoRollComponent::getCurrentSegments() const
@@ -1779,76 +1713,14 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
 {
     if (contentCommands_ == nullptr || !editedContentKey_.isValid() || !undoSnapshotCaptured_)
         return;
-
-    AppLogger::log("AutoTune: recordUndoAction entry beforeNotes=" + juce::String(static_cast<int>(beforeUndoNotes_.size()))
-        + " beforeSegments=" + juce::String(static_cast<int>(beforeUndoSegments_.size()))
-        + " cachedNotes=" + juce::String(static_cast<int>(cachedNotes_.size()))
-        + " affectedRange=[" + juce::String(affectedRange.startFrame)
-        + "," + juce::String(affectedRange.endFrameExclusive) + ")");
-
-    // Extract range-scoped notes and segments for memory-efficient undo.
-    // Notes use seconds; segments use frames. Convert frame range to seconds.
-    const auto f0tl = currentF0Timeline();
-    const double rangeStartSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.startFrame);
-    const double rangeEndSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.endFrameExclusive);
-
-    auto notesInRange = [](const std::vector<Note>& notes, double startSec, double endSec) {
-        std::vector<Note> result;
-        for (const auto& note : notes) {
-            if (note.startTime < endSec && note.endTime > startSec)
-                result.push_back(note);
-        }
-        return result;
-    };
-
-    auto segmentsInRange = [](const std::vector<PitchCorrectionSegment>& segments, int startFrame, int endFrameExclusive) {
-        std::vector<PitchCorrectionSegment> result;
-        for (const auto& seg : segments) {
-            if (seg.endFrame <= startFrame || seg.startFrame >= endFrameExclusive)
-                continue;  // Outside range
-            
-            // Clip to range boundaries (split-preserve for boundary-crossing segments)
-            const int clipStart = std::max(seg.startFrame, startFrame);
-            const int clipEnd = std::min(seg.endFrame, endFrameExclusive);
-            if (clipEnd <= clipStart)
-                continue;  // Empty after clip
-            
-            PitchCorrectionSegment clipped = seg;
-            const int startOffset = clipStart - seg.startFrame;
-            const int clipLen = clipEnd - clipStart;
-            if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
-                clipped.startFrame = clipStart;
-                clipped.endFrame = clipEnd;
-                clipped.f0Data.assign(seg.f0Data.begin() + startOffset, seg.f0Data.begin() + startOffset + clipLen);
-                result.push_back(std::move(clipped));
-            }
-        }
-        return result;
-    };
-
-    auto beforeNotes = notesInRange(beforeUndoNotes_, rangeStartSec, rangeEndSec);
-    auto afterNotes = notesInRange(cachedNotes_, rangeStartSec, rangeEndSec);
-    auto beforeSegments = segmentsInRange(beforeUndoSegments_, affectedRange.startFrame, affectedRange.endFrameExclusive);
-    auto afterSegments = segmentsInRange(getCurrentSegments(), affectedRange.startFrame, affectedRange.endFrameExclusive);
-
-    AppLogger::log("AutoTune: recordUndoAction range-scoped beforeNotes=" + juce::String(static_cast<int>(beforeNotes.size()))
-        + " afterNotes=" + juce::String(static_cast<int>(afterNotes.size()))
-        + " beforeSegments=" + juce::String(static_cast<int>(beforeSegments.size()))
-        + " afterSegments=" + juce::String(static_cast<int>(afterSegments.size())));
-
-    auto action = std::make_unique<PianoRollEditAction>(
-        contentCommands_,
-        editedContentKey_,
-        description.isNotEmpty() ? description : LOC(kEdit),
-        std::move(beforeNotes),
-        std::move(afterNotes),
-        std::move(beforeSegments),
-        std::move(afterSegments),
-        ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive});
-
-    AppLogger::log("AutoTune: recordUndoAction before addAction");
+    const auto after = readEditedSnapshot();
+    auto action = contentCommands_->createPianoRollEditAction(
+        editedContentKey_, beforeUndoNotes_, beforeUndoSegments_, after,
+        ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive},
+        description.isNotEmpty() ? description : LOC(kEdit));
+    if (action == nullptr)
+        return;
     undoManager_.addAction(std::move(action));
-    AppLogger::log("AutoTune: recordUndoAction after addAction");
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
     beforeUndoNotes_.clear();
@@ -3449,39 +3321,21 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
         }
 
         const auto postSnapCfg = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
-        captureBeforeUndoSnapshot();
-        pendingUndoDescription_ = LOC_RAW("Split note");
-
-        if (!contentCommands_->autoTuneContentRange(
-                editedContentKey_,
-                requestedRange.startFrame,
-                requestedRange.endFrameExclusive,
-                getCurrentAutoTuneParams(),
-                postSnapCfg)) {
-            // 提交失败：废弃本次 undo 临时快照，避免污染后续编辑的事务状态
-            undoSnapshotCaptured_ = false;
+        auto edit = contentCommands_->commitAutoTuneContentRangeUndoable(
+            editedContentKey_, requestedRange.startFrame, requestedRange.endFrameExclusive,
+            getCurrentAutoTuneParams(), postSnapCfg, LOC_RAW("Split note"));
+        if (edit.snapshot == nullptr) {
             result.status = AudioEditingScheme::ParameterEditStatus::Failed;
             return result;
         }
 
-        {
-            auto autoSnap = readEditedSnapshot();
-            if (autoSnap) {
-                lastKnownNotesRevision_ = autoSnap->notesRevision;
-                lastKnownPitchRevision_ = autoSnap->pitchRevision;
-            }
-        }
-
-        refreshEditedContentNotes();
-
-        auto committedCurve = readEditedSnapshot();
-        if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
-            setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, audioBufferSampleRate_);
-        }
-
-        const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
-            requestedRange.startFrame, requestedRange.endFrameExclusive, f0tl.endFrameExclusive());
-        recordUndoAction(pendingUndoDescription_, affectedRange);
+        lastKnownNotesRevision_ = edit.snapshot->notesRevision;
+        lastKnownPitchRevision_ = edit.snapshot->pitchRevision;
+        setEditedContent(editedContentKey_, edit.snapshot->pitchCurve, audioBuffer_, audioBufferSampleRate_);
+        pendingUndoDescription_ = {};
+        undoSnapshotCaptured_ = false;
+        beforeUndoNotes_.clear();
+        beforeUndoSegments_.clear();
 
         result.status = AudioEditingScheme::ParameterEditStatus::Applied;
         result.changed = true;
@@ -6466,7 +6320,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     // 有选中音符时只吸附选中音符；未选中任何音符时才对全量吸附。
     // 分流位于选区解析（collectSelectedFrameRanges）之前，目标集合由 applyAutoSnapToAllNotes 内部决定
     if (AudioEditingScheme::usesNotesPrimaryScheme(audioEditingScheme_)) {
-        return applyAutoSnapToAllNotes(snap, f0tl);
+        return applyAutoSnapToAllNotes(snap);
     }
 
     // ── OpenTune：选区解析 + autoTuneContentRange 逻辑 ──
@@ -6491,217 +6345,50 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
 
     const std::optional<ScaleSnapConfig> postSnapCfg = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
 
-    captureBeforeUndoSnapshot();
-    pendingUndoDescription_ = LOC_RAW("AUTO correction");
-
-    if (!contentCommands_->autoTuneContentRange(
-            editedContentKey_,
-            startFrame,
-            endFrame + 1,
-            getCurrentAutoTuneParams(),
-            postSnapCfg)) {
+    auto edit = contentCommands_->commitAutoTuneContentRangeUndoable(
+        editedContentKey_, startFrame, endFrame + 1, getCurrentAutoTuneParams(), postSnapCfg,
+        LOC_RAW("AUTO correction"));
+    if (edit.snapshot == nullptr) {
         return { AutoTuneApplyStatus::NoContent };
     }
 
-    {
-        auto autoSnap = readEditedSnapshot();
-        if (autoSnap) {
-            lastKnownNotesRevision_ = autoSnap->notesRevision;
-            lastKnownPitchRevision_ = autoSnap->pitchRevision;
-        }
-    }
-
-    refreshEditedContentNotes();
-
-    auto committedCurve = readEditedSnapshot();
-    if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
-        setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, audioBufferSampleRate_);
-    }
-
-    const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(
-        startFrame, endFrame + 1, f0tl.endFrameExclusive());
-    recordUndoAction(pendingUndoDescription_, autoTuneRange);
+    lastKnownNotesRevision_ = edit.snapshot->notesRevision;
+    lastKnownPitchRevision_ = edit.snapshot->pitchRevision;
+    setEditedContent(editedContentKey_, edit.snapshot->pitchCurve, audioBuffer_, audioBufferSampleRate_);
+    pendingUndoDescription_ = {};
+    undoSnapshotCaptured_ = false;
+    beforeUndoNotes_.clear();
+    beforeUndoSegments_.clear();
 
     return { AutoTuneApplyStatus::Applied };
 }
 
 PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNotes(
-    const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot,
-    const F0Timeline& f0tl)
+    const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot)
 {
-    // 量化目标：有音阶配置时按音阶吸附；Chromatic（无音阶配置）时吸附到最近半音
-    // （ScaleSnapConfig 默认 mode=Chromatic，quantizeMidiToActiveScale = round，
-    //   与 AUTO 生成器 quantisePitch 一致）
-    auto scaleSnap = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_);
-    if (!scaleSnap.has_value())
-        scaleSnap = ScaleSnapConfig{};
+    if (contentCommands_ == nullptr || contentSnapshot == nullptr)
+        return { AutoTuneApplyStatus::NoContent };
 
-    // 单一快照来源：notes/curve 全部从 contentSnapshot 派生
-    auto notes = contentSnapshot->notes;
-    const auto curveSnap = contentSnapshot->pitchCurve;
-
-    // 吸附目标 = 选中音符子集；未选中任何音符时才全量吸附
-    const bool selectionActive = !interactionState_.noteSelection.empty();
-    std::vector<int> targetIndices;
-    if (selectionActive) {
-        targetIndices = interactionState_.noteSelection.selectedIndices;
-    } else {
-        targetIndices.resize(notes.size());
-        for (size_t i = 0; i < notes.size(); ++i)
-            targetIndices[i] = static_cast<int>(i);
+    const auto scaleSnap = makeScaleSnapConfigFromUi(scaleRootNote_, scaleType_).value_or(ScaleSnapConfig{});
+    std::optional<std::vector<std::size_t>> targets;
+    if (!interactionState_.noteSelection.empty()) {
+        targets.emplace();
+        for (const int index : interactionState_.noteSelection.selectedIndices)
+            if (index >= 0)
+                targets->push_back(static_cast<std::size_t>(index));
     }
-    if (targetIndices.empty())
+    const auto plan = contentCommands_->planAutoSnap(
+        *contentSnapshot, targets, scaleSnap, getCurrentAutoTuneParams());
+    if (plan.status == ContentAutoSnapPlan::Status::NoChange)
         return { AutoTuneApplyStatus::NoChange };
-
-    // 吸附：修改目标音符 pitchOffset（修正曲线将基于修改后的值计算）
-    double dirtyStartTime = 1e30, dirtyEndTime = -1e30;
-    bool anyPitchChanged = false;
-    for (int noteIndex : targetIndices) {
-        auto& note = notes[static_cast<size_t>(noteIndex)];
-        // SNAP 按基准音高重投影：pitchOffset 不进入量化输入
-        const float baseMidi = PitchUtils::freqToMidi(note.pitch);
-        const float snappedOffset = scaleSnap->quantizeMidiToActiveScale(baseMidi) - baseMidi;
-        if (std::abs(snappedOffset - note.pitchOffset) < 0.001f)
-            continue;
-        note.pitchOffset = snappedOffset;
-        note.dirty = true;
-        anyPitchChanged = true;
-        dirtyStartTime = std::min(dirtyStartTime, note.startTime);
-        dirtyEndTime = std::max(dirtyEndTime, note.endTime);
-    }
-
-    // 目标音符集合（修改后取值）：修正曲线只对目标音符重写，未选中音符的修正保持原样
-    std::vector<Note> targetNotes;
-    targetNotes.reserve(targetIndices.size());
-    double targetMinStartTime = 1e30, targetMaxEndTime = -1e30;
-    for (int noteIndex : targetIndices) {
-        const auto& note = notes[static_cast<size_t>(noteIndex)];
-        targetMinStartTime = std::min(targetMinStartTime, note.startTime);
-        targetMaxEndTime = std::max(targetMaxEndTime, note.endTime);
-        targetNotes.push_back(note);
-    }
-
-    // 目标音符帧范围
-    const auto notesRange = f0tl.rangeForTimes(targetMinStartTime, targetMaxEndTime);
-
-    // NoChange 判据 = 最终修正结果已达成（无覆盖空洞）：
-    // 目标音符帧范围被 correction 完全覆盖（无空洞）且 pitchOffset 无变化。
-    const bool fullyCorrected = isFullyCorrectedInRange(
-        *curveSnap, notesRange.startFrame, notesRange.endFrameExclusive);
-    if (!anyPitchChanged && fullyCorrected)
-        return { AutoTuneApplyStatus::NoChange };
-
-    if (anyPitchChanged) {
-        dirtyStartTime = std::min(dirtyStartTime, targetMinStartTime);
-        dirtyEndTime = std::max(dirtyEndTime, targetMaxEndTime);
-    } else {
-        dirtyStartTime = targetMinStartTime;
-        dirtyEndTime = targetMaxEndTime;
-    }
-    const auto editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
-    if (editRange.isEmpty())
+    if (plan.status == ContentAutoSnapPlan::Status::EmptyRange)
         return { AutoTuneApplyStatus::EmptyTargetRange };
 
-    // 一次性保存全局参数（音符自身参数优先，PitchCurve.cpp:335-346）
-    const auto params = getCurrentAutoTuneParams();
-    auto scratchCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
-    const auto snap = scratchCurve->applyCorrectionToRange(
-        targetNotes, editRange.startFrame, editRange.endFrameExclusive,
-        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-        params.retuneSpeed, params.vibratoDepth, params.vibratoRate);
-
-    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
-        editRange.startFrame, editRange.endFrameExclusive, f0tl.endFrameExclusive());
-
-    // 修正段 = 目标音符帧的新段 + affectedRange 内非目标帧的既有段。两者帧域互补、
-    // 无重叠（渲染端 forEachCorrectionF0Span 先出现的段优先，重叠段会被遮蔽）。
-    std::vector<PitchCorrectionSegment> segmentsInRange;
-    if (!selectionActive) {
-        // 全量吸附：新段覆盖整个 affectedRange，与历史实现一致（间隙帧 = 原始 F0×pitchRatio）
-        for (const auto& seg : snap->getCorrectionSegments()) {
-            if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
-                segmentsInRange.push_back(seg);
-        }
-    } else {
-        // 目标音符帧区间并集（帧 i 属于音符 ⟺ i*spf ∈ [startTime, endTime)，
-        // 与 PitchCurve.cpp 逐帧归属一致），排序后合并相邻/重叠区间
-        std::vector<F0FrameRange> noteFrames;
-        for (const auto& note : targetNotes) {
-            const int noteStart = f0tl.exclusiveFrameAt(note.startTime);
-            const int noteEnd = f0tl.exclusiveFrameAt(note.endTime);
-            if (noteEnd > noteStart)
-                noteFrames.push_back(F0FrameRange{noteStart, noteEnd});
-        }
-        std::sort(noteFrames.begin(), noteFrames.end(),
-                  [](const F0FrameRange& a, const F0FrameRange& b) { return a.startFrame < b.startFrame; });
-        std::vector<F0FrameRange> targetFrames;
-        for (const auto& nf : noteFrames) {
-            if (targetFrames.empty() || targetFrames.back().endFrameExclusive < nf.startFrame)
-                targetFrames.push_back(nf);
-            else
-                targetFrames.back().endFrameExclusive = std::max(targetFrames.back().endFrameExclusive, nf.endFrameExclusive);
-        }
-
-        // 新段裁剪到目标音符帧（交集）
-        for (const auto& seg : snap->getCorrectionSegments()) {
-            if (seg.endFrame <= affectedRange.startFrame || seg.startFrame >= affectedRange.endFrameExclusive)
-                continue;
-            for (const auto& tf : targetFrames) {
-                const int clipStart = std::max(seg.startFrame, tf.startFrame);
-                const int clipEnd = std::min(seg.endFrame, tf.endFrameExclusive);
-                if (clipEnd <= clipStart)
-                    continue;
-                const int offset = clipStart - seg.startFrame;
-                if (offset + (clipEnd - clipStart) > static_cast<int>(seg.f0Data.size()))
-                    continue;   // 与系统段裁剪契约一致（extractSegmentsInRange）
-                PitchCorrectionSegment clipped = seg;
-                clipped.startFrame = clipStart;
-                clipped.endFrame = clipEnd;
-                clipped.f0Data.assign(seg.f0Data.begin() + offset,
-                                      seg.f0Data.begin() + offset + (clipEnd - clipStart));
-                segmentsInRange.push_back(std::move(clipped));
-            }
-        }
-
-        // 非目标帧的既有段原样保留（帧域区间差）
-        for (const auto& seg : curveSnap->getCorrectionSegments()) {
-            if (seg.endFrame <= affectedRange.startFrame || seg.startFrame >= affectedRange.endFrameExclusive)
-                continue;
-            std::vector<F0FrameRange> spans{ F0FrameRange{seg.startFrame, seg.endFrame} };
-            for (const auto& tf : targetFrames) {
-                std::vector<F0FrameRange> remainder;
-                for (const auto& span : spans) {
-                    if (tf.startFrame >= span.endFrameExclusive || tf.endFrameExclusive <= span.startFrame) {
-                        remainder.push_back(span);
-                        continue;
-                    }
-                    if (span.startFrame < tf.startFrame)
-                        remainder.push_back(F0FrameRange{span.startFrame, std::min(span.endFrameExclusive, tf.startFrame)});
-                    if (tf.endFrameExclusive < span.endFrameExclusive)
-                        remainder.push_back(F0FrameRange{std::max(span.startFrame, tf.endFrameExclusive), span.endFrameExclusive});
-                }
-                spans = std::move(remainder);
-                if (spans.empty())
-                    break;
-            }
-            for (const auto& span : spans) {
-                const int offset = span.startFrame - seg.startFrame;
-                const int len = span.endFrameExclusive - span.startFrame;
-                if (len <= 0 || offset + len > static_cast<int>(seg.f0Data.size()))
-                    continue;   // 与系统段裁剪契约一致（extractSegmentsInRange）
-                PitchCorrectionSegment kept = seg;
-                kept.startFrame = span.startFrame;
-                kept.endFrame = span.endFrameExclusive;
-                kept.f0Data.assign(seg.f0Data.begin() + offset, seg.f0Data.begin() + offset + len);
-                segmentsInRange.push_back(std::move(kept));
-            }
-        }
-    }
-
-    pendingUndoDescription_ = LOC_RAW("Pitch snap");   // 与双击吸附语义一致
-    // 提交全量 notes：affectedRange 内未选中音符以原样保留，range-scoped merge 不丢音符
-    if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, segmentsInRange, affectedRange)) {
-        pendingUndoDescription_ = {};   // 提交失败清理本次事务的临时 undo 状态
+    pendingUndoDescription_ = LOC_RAW("Pitch snap");
+    if (!commitEditedContentNotesAndSegments(
+            *contentSnapshot, plan.correction.notes, plan.correction.segments,
+            plan.correction.affectedRange)) {
+        pendingUndoDescription_ = {};
         return { AutoTuneApplyStatus::NoContent };
     }
     return { AutoTuneApplyStatus::Applied };

@@ -124,69 +124,87 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     auto history = historyOf(context);
     if (!history.ok())
         return history.error();
-    auto& manager = context.processor().getUndoManager();
-    const auto epoch = controlContentEpoch(context);
-    UndoAction* top = undo ? manager.peekUndo() : manager.peekRedo();
-    if (top == nullptr)
-        return controlOpError("UNDO_CONFLICT", "history_empty", std::string("there is nothing to ") + what);
-    // The entry keeps its position in the history: after an undo it is the top of the redo history.
-    const int index = undo ? manager.cursor() - 1 : manager.cursor();
-    const auto entry = history.value()->describe(manager, *top, index, epoch);
-    if (!params.force && (!entry.undoId || *entry.undoId != *params.expectedUndoId))
-        return controlOpError("UNDO_CONFLICT", "top_mismatch",
-                              std::string("the top of the ") + what
-                                  + " history is not the expected entry; the history changed since it was read");
-    if (entry.unsafe)
-        return controlOpError("UNSUPPORTED", "undo_unsafe_build",
-                              std::string("the top entry deletes a clip, which OpenTune cannot ")
-                                  + what + " correctly");
-    // An entry the API recorded before a track deletion that moved a track it addresses is applied only with
-    // force. An entry of the UI (which has an undoId here only because a call with force applied it before) is
-    // applied with a warning instead, since the server cannot tell whether it addresses a moved track.
-    const bool stale = entry.possiblyStale && !params.force;
-    if (stale && entry.control)
-        return controlOpError("UNDO_CONFLICT", "stale_entry",
-                              std::string("the top entry of the ") + what
-                                  + " history addresses a track that a track deletion moved or removed; apply it "
-                                    "with force only if the end user asked for it");
+    auto* bridge = context.bridge();
+    if (bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window", "undo and redo run through the editor command");
 
-    ControlWriteEnvelope envelope(context);
-    const auto before = controlCaptureEditState(context);
-    // UndoManager::undo() / redo(): the step exactly as the UI's undo and redo apply it.
-    UndoAction* applied = undo ? manager.undo() : manager.redo();
-    jassert(applied == top);
-    juce::ignoreUnused(applied);
+    auto& manager = context.processor().getUndoManager();
+    std::optional<ControlHistory::Entry> entry;
+    std::optional<ControlEditState> before;
+    std::optional<ControlWriteEnvelope> envelope;
+    std::optional<Error> refusal;
+    int index = 0;
+    std::uint64_t epoch = 0;
+    bool stale = false;
+    UndoAction* selectedTop = nullptr;
+    auto* applied = bridge->performUndoRedo(undo, [&](UndoAction* top) {
+        if (top == nullptr) {
+            refusal = controlOpError("UNDO_CONFLICT", "history_empty", std::string("there is nothing to ") + what);
+            return false;
+        }
+        epoch = controlContentEpoch(context);
+        // The entry keeps its position in the history: after an undo it is the top of the redo history.
+        index = undo ? manager.cursor() - 1 : manager.cursor();
+        entry.emplace(history.value()->describe(manager, *top, index, epoch));
+        if (!params.force && (!entry->undoId || *entry->undoId != *params.expectedUndoId)) {
+            refusal = controlOpError("UNDO_CONFLICT", "top_mismatch",
+                                     std::string("the top of the ") + what
+                                         + " history is not the expected entry; the history changed since it was read");
+            return false;
+        }
+        if (entry->unsafe) {
+            refusal = controlOpError("UNSUPPORTED", "undo_unsafe_build",
+                                     std::string("the top entry deletes a clip, which OpenTune cannot ")
+                                         + what + " correctly");
+            return false;
+        }
+        // API entries affected by a track deletion require force; UI entries retain the warning unless forced.
+        stale = entry->possiblyStale && !params.force;
+        if (stale && entry->control) {
+            refusal = controlOpError("UNDO_CONFLICT", "stale_entry",
+                                     std::string("the top entry of the ") + what
+                                         + " history addresses a track that a track deletion moved or removed; apply it "
+                                           "with force only if the end user asked for it");
+            return false;
+        }
+        selectedTop = top;
+        before.emplace(controlCaptureEditState(context));
+        envelope.emplace(context);
+        return true;
+    });
+    if (applied == nullptr) {
+        if (refusal)
+            return *refusal;
+        return controlOpError("UNDO_CONFLICT", "history_empty", std::string("there is nothing to ") + what);
+    }
+    jassert(applied == selectedTop);
+    jassert((undo ? manager.peekRedo() : manager.peekUndo()) == applied);
     // The step moved the cursor, no entry: the history as it is now is the one describe() checked.
     history.value()->noteOwnStep(manager);
     // An entry of the UI applied with force gets an undoId now.
     const std::string undoId =
-        entry.undoId ? *entry.undoId
-                     : history.value()->assignUndoId(manager, *top, index, epoch, context.instanceShort());
+        entry->undoId ? *entry->undoId
+                      : history.value()->assignUndoId(manager, *applied, index, epoch, context.instanceShort());
     // The end user asked for this step after seeing possiblyStale, which confirms the entry.
     if (params.force)
-        history.value()->confirmStale(manager, *top, index, epoch, context.instanceShort());
-    // As after the UI's own undo: the project is marked as changed (also when the step changed nothing), and
-    // the editor runs its afterUndoRedo() (it marks the project as changed and redraws the arrangement).
-    controlMarkDirty(context);
-    if (auto* bridge = context.bridge())
-        bridge->onUndoRedoApplied();
+        history.value()->confirmStale(manager, *applied, index, epoch, context.instanceShort());
     const auto after = controlCaptureEditState(context);
-    controlDescribeEffect(context, before, after, envelope);
+    controlDescribeEffect(context, *before, after, *envelope);
     // A step that changed nothing. An entry of the API also knows it from its own step (every inner
     // action masked, or a pitch shift that commitPitchShiftEdit() did not apply); then nothing changed.
-    const auto* origin = dynamic_cast<const ControlOriginAction*>(top);
-    const bool emptyDiff = isEmptyDiff(before.versions, after.versions);
+    const auto* origin = dynamic_cast<const ControlOriginAction*>(applied);
+    const bool emptyDiff = isEmptyDiff(before->versions, after.versions);
     jassert(origin == nullptr || origin->lastStepTookEffect() || emptyDiff);
     if (stale)
-        envelope.addWarning("UNDO_ENTRY_POSSIBLY_STALE");
+        envelope->addWarning("UNDO_ENTRY_POSSIBLY_STALE");
     if (emptyDiff || (origin != nullptr && !origin->lastStepTookEffect()))
-        envelope.addWarning("UNDO_NO_EFFECT");
+        envelope->addWarning("UNDO_NO_EFFECT");
     auto revertParams = JsonValue::object();
     revertParams.appendMember("expectedUndoId", JsonValue::string(undoId));
-    envelope.setNotUndoable("ui_parity",
-                            controlRevertRecipe(undo ? "edit.redo" : "edit.undo", std::move(revertParams)));
-    auto result = envelope.committed(context);
-    result.appendMember("entry", entryJson(history.value()->describe(manager, *top, index, epoch)));
+    envelope->setNotUndoable("ui_parity",
+                             controlRevertRecipe(undo ? "edit.redo" : "edit.undo", std::move(revertParams)));
+    auto result = envelope->committed(context);
+    result.appendMember("entry", entryJson(history.value()->describe(manager, *applied, index, epoch)));
     return result;
 }
 

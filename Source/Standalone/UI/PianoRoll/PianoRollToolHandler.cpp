@@ -47,34 +47,20 @@ void resetDraftNotesToBaseline(PianoRollToolHandler::Context& ctx)
     ctx.getNoteDraft().workingNotes = ctx.getNoteDraft().baselineNotes;
 }
 
-// ============================================================================
-// buildNoteBasedCorrectionState — note-based correction 唯一状态构建器
-//
-// 实时预览（updateNoteBasedCorrectionPreview）与提交（commitNoteBasedCorrection）
-// 共用：复制当前 EditableContentSnapshot，替换 notes 与 scratch curve 后经权威
-// applyCorrectionToRange（含全局 pitch-shift 比例）烘焙的 pitchCurve。
-// ============================================================================
 std::shared_ptr<const EditableContentSnapshot> buildNoteBasedCorrectionState(
     PianoRollToolHandler::Context& ctx,
     const std::vector<Note>& notes,
     F0FrameRange editRange)
 {
     const auto contentSnapshot = ctx.getEditableContentSnapshot();
-    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr)
+    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr || !ctx.planNoteCorrection)
         return nullptr;
-
+    const auto plan = ctx.planNoteCorrection(notes, editRange);
+    if (!plan)
+        return nullptr;
     auto snap = std::make_shared<EditableContentSnapshot>(*contentSnapshot);
-    snap->notes = notes;
-
-    auto scratchCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
-    snap->pitchCurve = scratchCurve->applyCorrectionToRange(
-        notes,
-        editRange.startFrame,
-        editRange.endFrameExclusive,
-        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-        ctx.getRetuneSpeed(),
-        ctx.getVibratoDepth(),
-        ctx.getVibratoRate());
+    snap->notes = plan->notes;
+    snap->pitchCurve = plan->correctedCurve;
     return snap;
 }
 
@@ -84,31 +70,17 @@ bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
                                const std::function<bool(const std::vector<PitchCorrectionSegment>&,
                                                         F0FrameRange)>& commit = {})
 {
-    const auto f0tl = ctx.getF0Timeline();
-    const auto snap = buildNoteBasedCorrectionState(ctx, notes, editRange);
-    if (snap == nullptr)
+    const auto plan = ctx.planNoteCorrection ? ctx.planNoteCorrection(notes, editRange) : std::nullopt;
+    if (!plan)
         return false;
 
-    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(editRange.startFrame,
-                                                                          editRange.endFrameExclusive,
-                                                                          f0tl.endFrameExclusive());
-
-    // Extract segments overlapping the affected range (range-scoped, not full)
-    auto allSegments = snap->pitchCurve->getCorrectionSegments();
-    std::vector<PitchCorrectionSegment> segmentsInRange;
-    for (const auto& seg : allSegments) {
-        if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
-            segmentsInRange.push_back(seg);
-    }
-
     const bool committed = commit
-        ? commit(segmentsInRange, affectedRange)
-        : ctx.commitNotesAndSegments(notes, segmentsInRange, affectedRange) != nullptr;
+        ? commit(plan->segments, plan->affectedRange)
+        : ctx.commitNotesAndSegments(plan->notes, plan->segments, plan->affectedRange) != nullptr;
     if (!committed) {
         return false;
     }
 
-    ctx.notifyPitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
     return true;
 }
 
@@ -1505,10 +1477,9 @@ bool PianoRollToolHandler::applyNoteDefaultActionByKeyboard()
         return true;
     }
 
-    std::vector<Note> work = notes;
-    std::vector<int> changed;
-
     if (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift) {
+        std::vector<Note> work = notes;
+        std::vector<int> changed;
         const bool modulation = currentTool_ == ToolId::PitchModulation;
         for (int index : selected) {
             auto& note = work[static_cast<size_t>(index)];
@@ -1526,36 +1497,22 @@ bool PianoRollToolHandler::applyNoteDefaultActionByKeyboard()
 
     // Other tools: snap the note to the pitch grid (Pitch Snap). As with the double-click,
     // snapping starts from the note's base pitch, ignoring the current offset.
-    const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-    for (int index : selected) {
-        auto& note = work[static_cast<size_t>(index)];
-        const float baseMidi = PitchUtils::freqToMidi(note.pitch);
-        float snappedMidi = baseMidi;
-        switch (pitchGridMode_) {
-            case PitchGridMode::NoSnap:
-                continue;   // nothing to snap to without a grid
-            case PitchGridMode::Chromatic:
-                snappedMidi = std::round(baseMidi);
-                break;
-            case PitchGridMode::KeyScale:
-                snappedMidi = scaleSnap.value_or(ScaleSnapConfig{}).quantizeMidiToActiveScale(baseMidi);
-                break;
-        }
-        const float snappedOffset = snappedMidi - baseMidi;
-        if (std::abs(snappedOffset - note.pitchOffset) < 0.001f)
-            continue;
-        note.pitchOffset = snappedOffset;
-        note.dirty = true;
-        changed.push_back(index);
-    }
-
-    if (changed.empty()) {
-        // Already on the grid (or snapping is off): announce the current pitch.
+    if (pitchGridMode_ == PitchGridMode::NoSnap) {
         notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, notes, selected.front());
         return true;
     }
-    if (commitKeyboardNoteEdit(work, changed, LOC_RAW("Pitch snap")))
-        notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, work, changed.front());
+    const auto activeScale = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    const ScaleSnapConfig snap = pitchGridMode_ == PitchGridMode::KeyScale
+        ? activeScale.value_or(ScaleSnapConfig{})
+        : ScaleSnapConfig{};
+    std::vector<std::size_t> targets;
+    targets.reserve(selected.size());
+    for (const int index : selected)
+        targets.push_back(static_cast<std::size_t>(index));
+    if (ctx_.applyAutoSnap && ctx_.applyAutoSnap(targets, snap, LOC_RAW("Pitch snap")))
+        notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, committedNotes(ctx_), selected.front());
+    else
+        notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, notes, selected.front());
     return true;
 }
 
@@ -3047,46 +3004,14 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
 
     // Pitch Tool (F2×1) 双击：按 Pitch Grid 模式吸附（与拖拽吸附同一三态语义）
     // NoSnap：不吸附；Chromatic：吸附到最近半音；KeyScale：吸附到活动音阶（无配置时按半音）
-    auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-
-    const Note& original = notes[static_cast<size_t>(clickedNoteIndex)];
-    // SNAP 按基准音高重投影：pitchOffset 不进入量化输入（与按钮入口一致）
-    const float baseMidi = PitchUtils::freqToMidi(original.pitch);
-    float snappedMidi = baseMidi;
-    switch (pitchGridMode_) {
-        case PitchGridMode::NoSnap:
-            return;   // 自由模式：不吸附
-        case PitchGridMode::Chromatic:
-            snappedMidi = std::round(baseMidi);  // 吸附到最近半音
-            break;
-        case PitchGridMode::KeyScale: {
-            // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
-            const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-            snappedMidi = snap.quantizeMidiToActiveScale(baseMidi);
-            break;
-        }
-    }
-    const float snappedOffset = snappedMidi - baseMidi;
-    if (std::abs(snappedOffset - original.pitchOffset) < 0.001f)
+    if (pitchGridMode_ == PitchGridMode::NoSnap)
         return;
-
-    ctx_.beginNoteDraft();
-    auto& draft = ctx_.getNoteDraft();
-    draft.contentDirty = true;
-    auto work = draft.workingNotes;
-    work[static_cast<size_t>(clickedNoteIndex)].pitchOffset = snappedOffset;
-    work[static_cast<size_t>(clickedNoteIndex)].dirty = true;
-    draft.workingNotes = work;
-    ctx_.setUndoDescription(LOC_RAW("Pitch snap"));
-
-    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
-    const auto f0tl = ctx_.getF0Timeline();
-    const F0FrameRange noteRange = f0tl.rangeForTimes(original.startTime, original.endTime);
-    if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !noteRange.isEmpty()) {
-        commitNoteBasedCorrection(ctx_, work, noteRange);
-    } else {
-        ctx_.clearNoteDraft();   // 音高编辑失败不退化提交
-    }
+    const auto activeScale = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    const ScaleSnapConfig snap = pitchGridMode_ == PitchGridMode::KeyScale
+        ? activeScale.value_or(ScaleSnapConfig{})
+        : ScaleSnapConfig{};
+    if (ctx_.applyAutoSnap)
+        ctx_.applyAutoSnap({static_cast<std::size_t>(clickedNoteIndex)}, snap, LOC_RAW("Pitch snap"));
 }
 
 void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEvent& e)

@@ -1069,7 +1069,9 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
         std::unique_lock<std::mutex> lock(vocoderMutex_);
 
         if (command.type == ControlCommand::Type::SetVocoderWeight
-            && currentVocoderModelWeight_ == command.weight)
+            && currentVocoderModelWeight_ == command.weight
+            && vocoderDomain_ != nullptr
+            && !command.resetInferenceBackend)
             return ControlResult::Unchanged;
 
         if (command.type == ControlCommand::Type::EnsureVocoder
@@ -1093,7 +1095,8 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
     }
     retiredDomain.reset();
 
-    if (command.type == ControlCommand::Type::ResetInferenceBackend)
+    if (command.type == ControlCommand::Type::ResetInferenceBackend
+        || command.resetInferenceBackend)
     {
         auto& detector = AccelerationDetector::getInstance();
         detector.resetAndDetect(command.forceCpu);
@@ -1424,13 +1427,17 @@ void ProcessRenderRuntime::controlWorkerLoop()
 bool ProcessRenderRuntime::setVocoderModelWeight(const VocoderModelWeight& weight,
                                                  std::shared_ptr<ContentRenderService> crs,
                                                  ControlCompletion completion,
-                                                 std::shared_ptr<CompletionGate> completionGate)
+                                                 std::shared_ptr<CompletionGate> completionGate,
+                                                 bool resetInferenceBackend,
+                                                 bool forceCpu)
 {
     // UI 线程只投递命令并立即返回；Session 销毁与重建由 control worker 串行执行。
     // 返回 true 表示命令已在 control queue 锁内接受，false 表示拒绝。
     ControlCommand command;
     command.type = ControlCommand::Type::SetVocoderWeight;
     command.weight = weight;
+    command.resetInferenceBackend = resetInferenceBackend;
+    command.forceCpu = forceCpu;
     command.transaction = std::make_shared<ControlTransaction>();
     command.transaction->crs = std::move(crs);
     command.completion = std::move(completion);
@@ -1449,7 +1456,7 @@ void ProcessRenderRuntime::resetVocoder(std::shared_ptr<ContentRenderService> cr
     postControlCommand(std::move(command));
 }
 
-void ProcessRenderRuntime::resetInferenceBackend(bool forceCpu,
+bool ProcessRenderRuntime::resetInferenceBackend(bool forceCpu,
                                                  std::shared_ptr<ContentRenderService> crs,
                                                  ControlCompletion completion,
                                                  std::shared_ptr<CompletionGate> completionGate)
@@ -1461,7 +1468,7 @@ void ProcessRenderRuntime::resetInferenceBackend(bool forceCpu,
     command.transaction->crs = std::move(crs);
     command.completion = std::move(completion);
     command.completionGate = std::move(completionGate);
-    postControlCommand(std::move(command));
+    return postControlCommand(std::move(command));
 }
 
 void ProcessRenderRuntime::detachDeferredJobs(

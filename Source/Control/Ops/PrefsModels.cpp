@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "PrefsModels.h"
 
-#include "PluginProcessor.h"
 #include "Inference/ModelFactory.h"
 #include "Runtime/ProcessRenderRuntime.h"
 #include "Utils/AccelerationDetector.h"
@@ -107,27 +106,6 @@ const char* controlInferenceBackendName()
             break;
     }
     return "cpu";
-}
-
-bool controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight)
-{
-    // OpenTuneAudioProcessor::setVocoderModelWeight(): posts the switch to the runtime's control worker and reports
-    // whether the queue accepted it. The caller stores the preference only after acceptance; the shared
-    // backend-change notification then clears the render caches and queues a render of every clip.
-    return processor.setVocoderModelWeight(weight, false);
-}
-
-void controlResetInferenceBackend(OpenTuneAudioProcessor& processor, bool forceCpu)
-{
-    // OpenTuneAudioProcessor::resetInferenceBackend(): posts the reset to the runtime's control worker; nothing
-    // clears a render cache.
-    processor.resetInferenceBackend(forceCpu);
-}
-
-bool controlSetF0Model(OpenTuneAudioProcessor& processor, F0ModelType type)
-{
-    // OpenTuneAudioProcessor::setF0ModelType(): switches the process-wide pitch model; false when it cannot.
-    return processor.setF0ModelType(type);
 }
 
 } // namespace OpenTune

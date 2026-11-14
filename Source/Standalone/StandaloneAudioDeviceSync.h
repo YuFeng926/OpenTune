@@ -9,7 +9,9 @@ namespace OpenTune {
 // Returns false when the restore could not be verified. Callers continue the
 // user's transition and report the failure; this is never a precondition.
 // Does not overwrite the user's saved device settings.
+// attemptedSampleRate receives the requested rate; an unavailable system rate leaves the current device rate.
 bool restoreAsioSampleRateToSystem(juce::AudioDeviceManager& deviceManager,
-                                   const juce::String& reason = {});
+                                   const juce::String& reason = {},
+                                   double* attemptedSampleRate = nullptr);
 
 } // namespace OpenTune

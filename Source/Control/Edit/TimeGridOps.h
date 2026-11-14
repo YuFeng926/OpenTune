@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #pragma once
 
-#include "ControlOriginAction.h"
-
 #include "Content/ContentKey.h"
 #include "Utils/TimeGrid.h"
 
@@ -15,29 +13,11 @@
 namespace OpenTune {
 
 class OpenTuneAudioProcessor;
+class TimeGridEditAction;
 
 /**
- * The time-grid edits of the control API, computed as OpenTune's time tool computes them, without the piano roll
- * (PianoRollToolHandler and PianoRollComponent stay untouched): moving handles to new output times, and moving the
- * handles of a section by the same distance.
- *
- * A handle moves between its neighbours as the time tool lets it, by the function that the time tool calls for
- * each step of a drag (planTimeGridDrag(), Source/Utils/TimeGridEdit.h), in two passes:
- * 1. the moved handle is limited to its neighbours plus and minus the minimum spacing (kMinSpacingSec, the
- *    TimeGridSnapshot::kMinOutputSpacingSeconds the time tool keeps unless Alt is held, which the API has no
- *    equivalent of);
- * 2. when several handles move together, every inner handle is limited, from left to right, to its already
- *    limited left neighbour plus the spacing and its right neighbour minus the spacing (the time tool's group
- *    drag). When a handle has no room between its neighbours, nothing moves, as the time tool keeps the grid as it
- *    was. The test for that room before the first limit is ours (planTimeGridDrag() limits with juce::jlimit(),
- *    which asserts on a lower bound above the upper); the moves of several handles to times of their own
- *    (content.editTimeGrid moveHandles with several moves) are planned here, with the same limits, because
- *    planTimeGridDrag() moves a selection by one distance only.
- *
- * A move that was limited is applied as far as it was allowed. The new grid is validated by
- * TimeGridSnapshot::makeFromHandles(), like every grid the time tool makes; a grid it rejects is not applied.
- *
- * commit() applies the planned moves through OpenTune's time-grid edit operation.
+ * API request composition and result mapping for shared time-grid edit plans. Handle spacing and validation live in
+ * Utils/TimeGridEdit; commits use ContentEditCommands, the same owner used by the piano roll.
  *
  * Threading: the planning functions are pure; commit() runs on the message thread.
  */
@@ -119,14 +99,12 @@ public:
     static juce::String moveDescription();
 
     /**
-     * Applies a plan with a grid after it, as the piano roll commits a time-grid edit (PianoRollComponent's
-     * commitTimeGrid): a TimeGridEditAction with the grid before and after, then ContentEditCommands::setTimeGrid()
-     * (OpenTuneAudioProcessor::setContentTimeGrid(), which publishes the grid for playback and queues the time-stretch
-     * rebuild). Returns the action for the caller's undo entry (aspect TimeGrid), or nullopt when OpenTune did not
-     * accept the grid (nothing changed then).
+     * Applies a plan through ContentEditCommands::commitTimeGridEdit(), the same owner entry used by the piano roll.
+     * The owner publishes the grid and pushes the native action; the returned pointer is non-owning and is used by the
+     * API to assign its history identity.
      */
-    static std::optional<ControlOriginAction::Inner> commit(OpenTuneAudioProcessor& processor, const ContentKey& key,
-                                                            const Plan& plan, const juce::String& description);
+    static TimeGridEditAction* commit(OpenTuneAudioProcessor& processor, const ContentKey& key,
+                                      const Plan& plan, const juce::String& description);
 };
 
 } // namespace OpenTune

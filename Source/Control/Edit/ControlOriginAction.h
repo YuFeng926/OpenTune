@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #pragma once
 
-#include "PitchShiftLedger.h"
-
 #include "Content/ContentKey.h"
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/UndoManager.h"
@@ -238,9 +236,6 @@ public:
     void add(ControlOriginAction* action);
     void remove(ControlOriginAction* action);
 
-    /** The pitch-shift steps that the revision tokens leave out (controlContentVersions()). */
-    ControlPitchShiftLedger& pitchShiftLedger() noexcept { return pitchShiftLedger_; }
-
     // ---- The barrier of a track deletion ------------------------------------------------------------
 
     /** How many entries of each side of the history a track deletion made possibly stale. */
@@ -336,7 +331,6 @@ private:
     std::optional<Observation> lastObserved_;
     std::vector<UiEntry> uiEntries_;
     std::vector<ControlOriginAction*> actions_;
-    ControlPitchShiftLedger pitchShiftLedger_;
 };
 
 /** True for the undo action OpenTune cannot undo correctly: DeletePlacementAction. */

@@ -66,7 +66,7 @@ uint64_t ProjectSession::getDirtyGeneration() const noexcept { return dirtyGener
 // 快照抓取
 // ============================================================================
 
-ProjectSnapshot ProjectSession::captureSnapshot() const
+ProjectSnapshot ProjectSession::captureSnapshot(SaveTask::Mode mode) const
 {
     ProjectSnapshot snap;
 
@@ -75,13 +75,19 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
     snap.header.appVersion = OPENTUNE_VERSION;
     snap.header.projectName = getProjectName();
 
-    // 工程身份固化：首次保存时生成，后续保存复用
-    if (cachedProjectId_.isEmpty()) {
-        cachedProjectId_ = ProjectSnapshot::generateProjectId();
-        cachedCreatedAt_ = ProjectSnapshot::generateTimestamp();
+    // SaveCopy gets a complete identity in its file without initializing the active session's identity.
+    auto projectId = cachedProjectId_;
+    auto createdAt = cachedCreatedAt_;
+    if (projectId.isEmpty()) {
+        projectId = ProjectSnapshot::generateProjectId();
+        createdAt = ProjectSnapshot::generateTimestamp();
+        if (mode == SaveTask::Mode::Save) {
+            cachedProjectId_ = projectId;
+            cachedCreatedAt_ = createdAt;
+        }
     }
-    snap.header.projectId = cachedProjectId_;
-    snap.header.createdAt = cachedCreatedAt_;
+    snap.header.projectId = projectId;
+    snap.header.createdAt = createdAt;
     snap.header.lastSavedAt = ProjectSnapshot::generateTimestamp();
 
     // Core stores
@@ -354,27 +360,33 @@ Result<ProjectSession::PreparedOpen> ProjectSession::prepareOpen(const juce::Fil
             continue;
         }
 
-        OpenTuneAudioProcessor::PreparedImport preparedImport;
-        if (!processorRef_.prepareImport(std::move(*audioBuffer), loadedSampleRate,
-                                         sourceEntry.displayName, audioFile.getFullPathName(),
-                                         preparedImport, "project-open")) {
-            AppLogger::log("ProjectSession: prepareImport rejected source "
-                + juce::String(sourceEntry.sourceId) + " (" + sourceEntry.displayName + "), skipping");
-            continue;
-        }
-
         PreparedProjectSource preparedSource;
         preparedSource.sourceId = sourceEntry.sourceId;
-        preparedSource.preparedImport = std::move(preparedImport);
+        preparedSource.displayName = sourceEntry.displayName;
+        preparedSource.sourceFilePath = audioFile.getFullPathName();
+        preparedSource.audioBuffer = std::move(audioBuffer);
+        preparedSource.sampleRate = loadedSampleRate;
         preparedOpen.sources.push_back(std::move(preparedSource));
     }
 
     return Result<PreparedOpen>::success(std::move(preparedOpen));
 }
 
-Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
+ProjectSession::OpenCommitPolicy ProjectSession::captureOpenCommitPolicy(bool discardUnsaved) const noexcept
+{
+    return { dirtyGeneration_, dirty_, discardUnsaved };
+}
+
+Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen, const OpenCommitPolicy& policy)
 {
     const auto& snapshot = preparedOpen.snapshot;
+
+    if (dirtyGeneration_ != policy.dirtyGeneration
+        || (policy.wasDirty && !policy.discardUnsaved)
+        || (dirty_ && !policy.discardUnsaved)) {
+        return Result<void>::failure(
+            Error(ErrorCode::OperationCancelled, "The project changed while it was opening", "project_dirty"));
+    }
 
     // 清空当前状态
     auto* sourceStore = processorRef_.getSourceStore();
@@ -387,6 +399,17 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         return Result<void>::failure(
             Error::fromCode(ErrorCode::InvalidParameter,
                 Loc::get(preparedOpen.language, Loc::Keys::kProjectCoreStoresUnavailable).toStdString()));
+    }
+
+    for (auto& preparedSource : preparedOpen.sources) {
+        preparedSource.importPrepared = processorRef_.prepareImport(
+            std::move(*preparedSource.audioBuffer), preparedSource.sampleRate,
+            preparedSource.displayName, preparedSource.sourceFilePath,
+            preparedSource.preparedImport, "project-open");
+        if (!preparedSource.importPrepared) {
+            AppLogger::log("ProjectSession: prepareImport rejected source "
+                + juce::String(preparedSource.sourceId) + " (" + preparedSource.displayName + "), skipping");
+        }
     }
 
     if (auto* crs = processorRef_.getContentRenderService())
@@ -405,6 +428,8 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
 
     // 1. 重建 Sources（SourceStore 始终保存原率原始 PCM 与实际采样率）
     for (auto& preparedSource : preparedOpen.sources) {
+        if (!preparedSource.importPrepared)
+            continue;
         auto& prepared = preparedSource.preparedImport;
 
         SourceStore::CreateSourceRequest req;
@@ -441,7 +466,7 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         const auto preparedIt = std::find_if(
             preparedOpen.sources.begin(), preparedOpen.sources.end(),
             [&contentEntry](const PreparedProjectSource& source) {
-                return source.sourceId == contentEntry.sourceId;
+                return source.sourceId == contentEntry.sourceId && source.importPrepared;
             });
         if (preparedIt == preparedOpen.sources.end()
             || preparedIt->preparedImport.canonicalAudioBuffer == nullptr
@@ -696,25 +721,33 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
     return Result<void>::success();
 }
 
-void ProjectSession::setCurrentProjectFile(const juce::File& file)
-{
-    currentProjectFile_ = file;
-}
-
 // ============================================================================
 // 分步保存
 // ============================================================================
 
-ProjectSession::SaveTask ProjectSession::prepareSave(const juce::File& targetFile)
+ProjectSession::SaveTask ProjectSession::prepareSave(const juce::File& targetFile, SaveTask::Mode mode)
 {
     SaveTask task;
-    task.snapshot = captureSnapshot();
+    task.snapshot = captureSnapshot(mode);
     task.snapshot.header.projectName = targetFile.getFileNameWithoutExtension();
     task.targetFile = targetFile;
     task.mediaDirectory = targetFile.getParentDirectory().getChildFile(
         targetFile.getFileNameWithoutExtension() + "_Media");
     task.language = LocalizationManager::getInstance().resolveLanguage();
+    task.mode = mode;
+    task.dirtyGeneration = dirtyGeneration_;
     return task;
+}
+
+void ProjectSession::commitSave(const juce::File& file, SaveTask::Mode mode, uint64_t snapshotGeneration)
+{
+    if (mode == SaveTask::Mode::Copy)
+        return;
+
+    currentProjectFile_ = file;
+    if (dirtyGeneration_ == snapshotGeneration)
+        clearDirty();
+    pushRecentProject(file);
 }
 
 Result<void> ProjectSession::executeSaveToFile(SaveTask& task)

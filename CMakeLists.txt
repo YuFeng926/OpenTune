@@ -915,11 +915,23 @@ set(OPENTUNE_STANDALONE_SOURCES
 
         Source/Audio/AudioFormatRegistry.cpp
         Source/Audio/AudioFormatRegistry.h
+        Source/Control/ControlApiOptions.cpp
+        Source/Control/ControlApiOptions.h
+        Source/Control/ControlDataDirectory.cpp
+        Source/Control/ControlDataDirectory.h
+        Source/Control/ControlJson.cpp
+        Source/Control/ControlJson.h
+        Source/Control/ControlPathPolicy.cpp
+        Source/Control/ControlPathPolicy.h
+        Source/Utils/AudioDeviceSettings.cpp
+        Source/Utils/AudioDeviceSettings.h
 
         Source/SourceStore.cpp
         Source/SourceStore.h
         Source/StandaloneArrangement.cpp
         Source/StandaloneArrangement.h
+        Source/Standalone/StandaloneMediaOperations.cpp
+        Source/Standalone/StandaloneMediaOperations.h
 
 
         Source/Utils/ProjectModel.cpp
@@ -2312,6 +2324,6 @@ if(OPENTUNE_BUILD_TESTS)
     )
 endif()
 
-# OpenTune Control API hook: build option and control sources, see Source/Control/README.md#hooks
+# Optional local Control API entry point for Standalone.
 option(OPENTUNE_ENABLE_CONTROL_API "Build the local control API (OTCP v1) into OpenTune Standalone" OFF)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneControl.cmake")

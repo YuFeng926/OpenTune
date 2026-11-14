@@ -18,17 +18,11 @@ if(OPENTUNE_ENABLE_CONTROL_API)
     endif()
 
     # Explicit, ordered source list, in blocks by topic.
-    # Channel: run-time options, path rules, CSPRNG, JSON, protocol framing, sockets, discovery file and
-    # the listener with authentication and limits. Standard library and operating system only.
+    # Channel: CSPRNG, protocol framing, sockets, discovery file and the listener with authentication
+    # and limits. Standalone also uses the option, path and JSON utilities without the external API.
     set(OPENTUNE_CONTROL_CHANNEL_SOURCES
-        Source/Control/ControlApiOptions.cpp
-        Source/Control/ControlApiOptions.h
-        Source/Control/ControlPathPolicy.cpp
-        Source/Control/ControlPathPolicy.h
         Source/Control/SecureRandom.cpp
         Source/Control/SecureRandom.h
-        Source/Control/ControlJson.cpp
-        Source/Control/ControlJson.h
         Source/Control/ControlProtocol.cpp
         Source/Control/ControlProtocol.h
         Source/Control/ControlSocket.cpp
@@ -40,11 +34,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
     )
     set(OPENTUNE_CONTROL_SOURCES
         ${OPENTUNE_CONTROL_CHANNEL_SOURCES}
-        # Service, processor start/stop and data-directory redirection: the service facade, the
-        # message-thread marshalling with its liveness token, the editor bridge interface and
-        # OPENTUNE_DATA_DIR. These and all the files below use JUCE and the processor.
-        Source/Control/ControlDataDirectory.cpp
-        Source/Control/ControlDataDirectory.h
+        # Service, processor start/stop and message-thread marshalling: the service facade and
+        # the editor bridge interface. These and all the files below use JUCE and the processor.
         Source/Control/ControlMessageThread.cpp
         Source/Control/ControlMessageThread.h
         Source/Control/ControlUiBridge.h
@@ -94,31 +85,20 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/ControlFileIdentity.h
         Source/Control/Ops/ExportOps.cpp
         Source/Control/Ops/ExportOps.h
-        # Undo and redo, key and AUTO: the undo entries of the API (ControlOriginAction) and what the instance
-        # knows about OpenTune's history (ControlHistory), undo entries built from snapshots as the piano roll
-        # builds them (ContentEditTransaction), what content edits share, edit.getHistory, edit.undo,
-        # edit.redo, content.setKey and content.autoTune.
+        # Undo and redo metadata, content wire validation and shared product-command adapters:
+        # edit.getHistory, edit.undo, edit.redo, content.setKey and content.autoTune.
         Source/Control/Edit/ControlOriginAction.cpp
         Source/Control/Edit/ControlOriginAction.h
-        Source/Control/Edit/ContentEditTransaction.cpp
-        Source/Control/Edit/ContentEditTransaction.h
         Source/Control/Ops/EditSupport.cpp
         Source/Control/Ops/EditSupport.h
         Source/Control/Ops/UndoOps.cpp
         Source/Control/Ops/UndoOps.h
         Source/Control/Ops/ContentTuneOps.cpp
         Source/Control/Ops/ContentTuneOps.h
-        # Note edits and the pitch shift: the steps of OpenTune's pitch shifts that the revision tokens leave
-        # out, the correction rebuild of the piano roll and its SNAP, content.editNotes and
-        # content.setPitchShift.
-        Source/Control/Edit/PitchShiftLedger.cpp
-        Source/Control/Edit/PitchShiftLedger.h
-        Source/Control/Edit/NoteCorrection.cpp
-        Source/Control/Edit/NoteCorrection.h
+        # Content edit and pitch-shift protocol adapters.
         Source/Control/Ops/ContentEditOps.cpp
         Source/Control/Ops/ContentEditOps.h
-        # Time grid: the handle moves of OpenTune's time tool without the piano roll (TimeGridOps),
-        # content.shiftTiming and content.editTimeGrid (seed as a job, moveHandles).
+        # Time-grid wire validation and shared-command adapters: content.shiftTiming and content.editTimeGrid.
         Source/Control/Edit/TimeGridOps.cpp
         Source/Control/Edit/TimeGridOps.h
         Source/Control/Ops/TimingOps.cpp
@@ -139,14 +119,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # on the editor's modal windows and onboarding overlay reached through the bridge.
         Source/Control/Ops/UiOps.cpp
         Source/Control/Ops/UiOps.h
-        # Preferences and audio device: prefs.set (a job of kind prefsApply for a change of the editing scheme) and
-        # audio.get / audio.set (the steps of the audio settings page on the editor's device manager, with rollback).
+        # Preferences and audio-device adapters to the shared product operations.
         Source/Control/Ops/PrefsOps.cpp
         Source/Control/Ops/PrefsOps.h
         Source/Control/Ops/AudioDeviceOps.cpp
         Source/Control/Ops/AudioDeviceOps.h
-        # Arrangement: arrangement.edit (move, trim, gain, fades, split, merge, delete) and
-        # arrangement.copy, through the arrangement view's setters, processor functions and undo actions.
+        # Arrangement wire operations delegated to the shared placement commands.
         Source/Control/Ops/ArrangementOps.cpp
         Source/Control/Ops/ArrangementOps.h
         # Selection: ui.setSelection, through the editor's bridge, with the effects it predicts and observes.
@@ -164,8 +142,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/PrefsModels.h
         # Clip ids: how the methods that make clips (import, split, merge, copy, track duplicate) get past the ids that
         # a project that was opened leaves in use ahead of OpenTune's clip id counter.
-        Source/Control/Ops/ClipIds.cpp
-        Source/Control/Ops/ClipIds.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})

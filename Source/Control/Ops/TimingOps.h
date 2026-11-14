@@ -22,10 +22,9 @@ namespace OpenTune {
  *
  * Moves are limited as the time tool limits them, in two passes, by the minimum spacing to the neighbouring
  * handles; a limited move is applied as far as allowed and reported in clamped and with the warning CLAMPED. One
- * call is one undo step: a TimeGridEditAction, as the piano roll pushes it, in a ControlOriginAction (aspect
- * TimeGrid). The project is marked as changed (the UI does not mark it after a time-grid edit), rendering is
- * queued again (reRenderQueued), and the editor is told through ControlUiBridge::onTimeGridChanged(). A grid change
- * never changes the content's revision, only its gridRevision.
+ * call is one undo step: the content owner pushes a TimeGridEditAction and the API assigns its history identity.
+ * The owner marks the project as changed; rendering is queued again (reRenderQueued), and the editor is told through
+ * ControlUiBridge::onTimeGridChanged(). A grid change never changes the content's revision, only its gridRevision.
  *
  * Every write checks, in order: the handle, the busy state, the readiness gate,
  * expectedGridRevision (REVISION_CONFLICT(grid_changed)), that the grid has handles (NOT_READY(grid_not_seeded)),

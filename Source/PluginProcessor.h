@@ -92,6 +92,10 @@ struct SplitOutcome {
     uint64_t trailingPlacementId{0};
     ContentKey leadingContentKey;
     ContentKey trailingContentKey;
+#if JucePlugin_Build_Standalone
+    StandaloneArrangement::SelectionState selectionBefore;
+    StandaloneArrangement::SelectionState selectionAfter;
+#endif
 };
 
 struct MergeOutcome {
@@ -103,6 +107,10 @@ struct MergeOutcome {
     ContentKey trailingContentKey;
     uint64_t mergedPlacementId{0};
     ContentKey mergedContentKey;
+#if JucePlugin_Build_Standalone
+    StandaloneArrangement::SelectionState selectionBefore;
+    StandaloneArrangement::SelectionState selectionAfter;
+#endif
 };
 
 struct DeleteOutcome {
@@ -165,7 +173,7 @@ struct PluginPianoRollSessionState
 struct PluginProcessorTransportTestAccessor;  // forward decl for test access to transport fields
 
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-class ControlService;  // OpenTune Control API hook: control service type, see Source/Control/README.md#hooks
+class ControlService;
 #endif
 
 #if !JucePlugin_Build_Standalone
@@ -306,15 +314,16 @@ public:
         }
     };
 
-    bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
-                       double inSampleRate,
-                       const juce::String& displayName,
-                       const juce::String& sourceFilePath,
-                       PreparedImport& out,
-                       const char* entrySourceTag = "standalone-import");
+    static bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
+                              double inSampleRate,
+                              const juce::String& displayName,
+                              const juce::String& sourceFilePath,
+                              PreparedImport& out,
+                              const char* entrySourceTag = "standalone-import");
 
     CommittedPlacement commitPreparedImportAsPlacement(PreparedImport&& prepared,
-                                                       const ImportPlacement& placement);
+                                                       const ImportPlacement& placement,
+                                                       bool selectPlacement);
 
     // Clipboard for arrangement clip copy/paste
     PlacementClipboard& getClipClipboard() { return clipClipboard_; }
@@ -340,7 +349,7 @@ public:
         // 仅生成音符（不写修正曲线、不吸附），不请求 render。
         bool generateNotesWholeContentOnReady{false};
         NoteGeneratorParams noteGenerationParams;
-        // 音符生成成功后的回调（message-thread，导入派生事务的 dirty 推进）。
+        // 音符生成成功后的 message-thread completion event.
         std::function<void()> onNotesGenerated;
     };
 
@@ -551,11 +560,6 @@ private:
     // observes via relaxed load. Persisted in OTST v11 / OTSS v3.
     std::atomic<int> uiZoomPercent_{100};
     int trackHeight_{120};
-    
-#if JucePlugin_Build_Standalone
-    // 导出错误信息
-    juce::String lastExportError_;
-#endif
 
     // 由宿主生命周期入口（prepareToPlay / createEditor / didBindToARA）调用，
     // 绝不从 processBlock 调用；并发由 call_once 协调。
@@ -605,19 +609,21 @@ public:
      * worker 完成操作、恢复 render worker 并结算事务后，经消息线程投递 completion。
      * gate 关闭后回调直接丢弃。
      */
-    void resetInferenceBackend(bool forceCpu);
+    bool resetInferenceBackend(bool forceCpu, ProcessingPreferenceRuntimeCallback completion = {});
 
     /**
      * 切换声码器模型权重（UI 线程）：向进程寿命 control worker 投递命令
      * （严格先销毁旧 Session 再按当前配置重建）→ 立即返回。返回 true 表示
-     * control queue 已接受该命令，此时才写入 AppPreferences；false 表示拒绝，
-     * 已持久化偏好保持不变。persistPreference=false 时由调用方在 accepted 后
-     * 写入（Control API 路径）。模型切换完成后由共享 backend 变更通知统一清理
+     * control queue 已接受该命令，共享偏好命令在接受后完成持久化。
+     * 模型切换完成后由共享 backend 变更通知统一清理
      * RenderCache/TimeStretchCache。gate 关闭后回调直接丢弃。
      */
-    bool setVocoderModelWeight(const VocoderModelWeight& weight, bool persistPreference = true);
+    bool setVocoderModelWeight(const VocoderModelWeight& weight,
+                               ProcessingPreferenceRuntimeCallback completion = {},
+                               std::optional<bool> forceCpu = std::nullopt);
 
     bool setF0ModelType(F0ModelType type, juce::String* failureReason = nullptr);
+    ProcessingPreferenceRuntimeOperations getProcessingPreferenceRuntimeOperations();
 
     /** 清除缓存并重新渲染所有 clip（UI 线程调用）。 */
     void invalidateAllContentCaches();
@@ -724,6 +730,7 @@ public:
     void onContentLocalMutationCompleted(ContentKey key,
                                          ContentEditRangeFrames affectedRange);
     void onContentFullMutationCompleted(ContentKey key);
+    void notifyContentEditCompleted(ContentKey key);
 
     void requestFullContentRender(ContentKey key);
     // Message thread: invalidates owner-derived content after a shared backend
@@ -889,7 +896,7 @@ public:
     void recordOriginalF0FailureEvent(ContentKey key, const juce::String& reason);
     std::deque<OriginalF0FailureEvent> takeOriginalF0FailureEvents();
     bool applyContentPitchShiftState(ContentKey key, const PitchShiftEditState& state);
-    std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
+    PitchShiftEditAction* commitPitchShiftEdit(
         ContentKey key,
         const PitchShiftSettings& newSettings);
 private:
@@ -907,26 +914,18 @@ private:
         std::optional<std::vector<F0FrameRange>> erasedRanges);
     // 调式检测唯一入口（F0 提交成功链调用）：origin==Manual 的内容永不自动覆盖
     void updateContentKeyFromOriginalF0(ContentKey key);
-    // AUTO 提交底层：合并/吸附后的音符 + 派生曲线一次性写回。
+    // AUTO 提交底层：计划后的完整音符 + 派生曲线一次性写回。
     // 唯一核心调用方是 autoTuneContentRangeByContentKey；不创建 undo、不 mark dirty。
-    bool commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
-                                                   std::vector<Note> generatedNotes,
-                                                   int startFrame,
-                                                   int endFrameExclusive,
-                                                   float retuneSpeed,
-                                                   float vibratoDepth,
-                                                   float vibratoRate);
+    bool commitAutoTunePlanByContentKey(ContentKey key,
+                                        std::vector<Note> mergedNotes,
+                                        int startFrame,
+                                        int endFrameExclusive,
+                                        float retuneSpeed,
+                                        float vibratoDepth,
+                                        float vibratoRate);
 
-    // 从不可变 PitchCurveSnapshot 的 OriginalF0 生成音符（generate + validate）。
-    // nullopt = 输入无效/生成失败；空 vector = 生成成功但无音符（全静音是合法结果）。
-    // 不写 correction segments、不吸附、不请求 render。
-    std::optional<std::vector<Note>> generateNotesFromOriginalF0(
-        const std::shared_ptr<const PitchCurveSnapshot>& curveSnapshot,
-        int startFrame, int endFrameExclusive, const NoteGeneratorParams& params);
 public:
-    // 普通 AUTO 唯一核心：读 snapshot OriginalF0 → generateNotesFromOriginalF0
-    // (energy=nullptr，与现有手动 AUTO 行为一致；nullopt/空 → 返回 false) →
-    // scaleSnap apply → commitAutoTuneGeneratedNotesByContentKey。
+    // 普通 AUTO 唯一核心：ContentEditCommands 统一计划生成、吸附与范围合并，再提交完整结果。
     // 不创建 undo、不 mark dirty——事务与 dirty 归属调用方。scaleSnap 为空表示不做音阶吸附。
     bool autoTuneContentRangeByContentKey(
         ContentKey key,
@@ -935,8 +934,7 @@ public:
         const NoteGeneratorParams& params,
         const std::optional<ScaleSnapConfig>& scaleSnap);
 
-    // 仅生成音符唯一入口（单一快照）：读一次 getContentSnapshot →
-    // generateNotesFromOriginalF0(0..f0Count) → 拓扑提交（commitContentNoteTopologyPatch）。
+    // 仅生成音符唯一入口：ContentEditCommands 统一计划后拓扑提交。
     // 不写 correction segments、不吸附、不请求 render。不创建 undo、不 mark dirty。
     // 空音符（全静音）是合法结果：仍提交拓扑 patch 清除该 range 音符。
     bool generateNotesOnlyByContentKey(ContentKey key, const NoteGeneratorParams& params);
@@ -950,15 +948,6 @@ public:
     std::optional<DeleteOutcome> deletePlacement(int trackId, int placementIndex);
     void runReclaimSweepOnMessageThread();   // public for test synchronous invocation
     void scheduleReclaimSweep();
-
-    bool exportPlacementAudio(int trackId, int placementIndex, const juce::File& file, Language language);
-    // 导出整个轨道的音频（时长以最晚Clip结束为准）
-    bool exportTrackAudio(int trackId, const juce::File& file, Language language);
-    // 导出总线混音（所有轨道）
-    bool exportMasterMixAudio(const juce::File& file, Language language);
-    
-    // 导出错误信息
-    juce::String getLastExportError() const { return lastExportError_; }
 #endif
 
     // Rendering & Buffering
@@ -1034,10 +1023,17 @@ public:
     /** Message-thread terminal render notification (complete/failure/cancel). */
     using RenderTerminalCallback = std::function<void(ContentKey, bool)>;
     void setRenderTerminalCallback(RenderTerminalCallback callback);
+    using PlacementChangedCallback = std::function<void()>;
+    void setPlacementChangedCallback(PlacementChangedCallback callback);
+    void notifyPlacementChanged();
 #if JucePlugin_Build_Standalone
     /** Invalidation hint only; consumers must read the latest state after the current commit stack returns. */
     using ContentChangedCallback = std::function<void(ContentKey)>;
     void setContentChangedCallback(ContentChangedCallback callback);
+    using ContentEditCompletedCallback = std::function<void(ContentKey)>;
+    void setContentEditCompletedCallback(ContentEditCompletedCallback callback);
+    using ExportReadinessChangedCallback = std::function<void()>;
+    void setExportReadinessChangedCallback(ExportReadinessChangedCallback callback);
 #endif
 #if !JucePlugin_Build_Standalone
     // Accessibility: REAPER's transport state and positions (see ReaperHostBridge).
@@ -1068,8 +1064,12 @@ private:
     PianoKeyAudition pianoKeyAudition_;
     std::shared_ptr<NoteAudition> noteAudition_ = std::make_shared<NoteAudition>();
     NotePitchAudition notePitchAudition_;
+    PlacementChangedCallback placementChangedCallback_;
 #if JucePlugin_Build_Standalone
     ContentChangedCallback contentChangedCallback_;
+    ContentEditCompletedCallback contentEditCompletedCallback_;
+    ExportReadinessChangedCallback exportReadinessChangedCallback_;
+    void updateContentRenderStateChangedCallback();
 #endif
     struct RenderTerminalSink { RenderTerminalCallback callback; };
     std::shared_ptr<RenderTerminalSink> renderTerminalSink_ = std::make_shared<RenderTerminalSink>();
@@ -1123,7 +1123,7 @@ private:
 
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
 public:
-    // OpenTune Control API hook: public runtime initialisation and the control service, see Source/Control/README.md#hooks
+    // External Control API lifecycle.
     // Message thread. The sequence of the host entry points: initialise, then replay the deferred state.
     bool ensureRuntimeInitialized() noexcept
     {
@@ -1136,6 +1136,7 @@ public:
     void setControlJobWakeCallback(std::function<void()> callback);
 
 private:
+    std::function<void()> controlJobWakeCallback_;
     std::unique_ptr<ControlService> controlService_;
 #endif
 

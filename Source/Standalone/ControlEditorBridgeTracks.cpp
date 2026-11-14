@@ -1,67 +1,84 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The track and transport parts of the editor's side of ControlUiBridge: what the editor shows after the control API
-// changed the number of tracks, the mix of tracks, the play state or the tempo (Control/Ops/TrackOps.cpp and
-// Control/Ops/TransportOps.cpp change the processor and the arrangement themselves).
+// Track and transport API calls enter the same complete editor commands as the UI listeners.
 #include "ControlEditorBridge.h"
 
 #include "PluginEditor.h"
 
-#include <algorithm>
-
 namespace OpenTune {
 
-bool ControlEditorBridge::setVisibleTrackCount(int count)
+ControlTrackCommandResult ControlEditorBridge::addTracks(int count)
 {
-    // The editor's own steps when it shows more or fewer tracks (trackAddRequested, trackDeleteRequested): the track
-    // panel and the arrangement show the same count. The panel keeps 1 to MAX_TRACKS tracks. The panel's change also
-    // reaches visibleTrackCountChanged(), which saves the count in the arrangement (project state) and marks the
-    // project.
-    count = std::clamp(count, 1, OpenTuneAudioProcessor::MAX_TRACKS);
-    editor_.trackPanel_.setVisibleTrackCount(count);
-    editor_.arrangementView_.setVisibleTrackCount(count);
+    return editor_.addTrackSlots(count);
+}
+
+ControlTrackCommandResult ControlEditorBridge::duplicateTrack(int trackId, bool shareContent)
+{
+    return editor_.duplicateTrack(trackId, shareContent);
+}
+
+ControlTrackCommandResult ControlEditorBridge::deleteTrack(int trackId)
+{
+    return editor_.deleteTrack(trackId);
+}
+
+bool ControlEditorBridge::setTrackMix(int trackId, std::optional<bool> muted, std::optional<bool> solo,
+                                      std::optional<float> volumeLinear, std::optional<std::uint32_t> colourRgb)
+{
+    return editor_.setTrackMix(trackId, muted, solo, volumeLinear, colourRgb);
+}
+
+bool ControlEditorBridge::transportPlay()
+{
+    editor_.applyTransportPlay();
     return true;
 }
 
-void ControlEditorBridge::onTrackMixChanged()
+bool ControlEditorBridge::transportPause()
 {
-    // What trackDeleteRequested() does after the arrangement changed: the panel shows the mute, solo, volume and
-    // colour of the arrangement for every track (a hidden track too, so that it is right when it is shown), and
-    // the arrangement is redrawn with the colours and clips.
-    auto* arrangement = editor_.processorRef_.getStandaloneArrangement();
-    if (arrangement == nullptr)
-        return;
-    for (int trackId = 0; trackId < arrangement->getNumTracks(); ++trackId) {
-        editor_.trackPanel_.setTrackMuted(trackId, arrangement->isTrackMuted(trackId));
-        editor_.trackPanel_.setTrackSolo(trackId, arrangement->isTrackSolo(trackId));
-        editor_.trackPanel_.setTrackVolume(trackId, arrangement->getTrackVolume(trackId));
-        editor_.trackPanel_.setTrackColour(trackId, arrangement->getTrackColour(trackId));
-    }
-    editor_.pianoRoll_.setTrackDisplayColour(arrangement->getTrackColour(arrangement->getActiveTrackId()));
-    editor_.arrangementView_.requestContentRedraw();
+    editor_.applyTransportPause();
+    return true;
 }
 
-void ControlEditorBridge::onTransportChanged()
+bool ControlEditorBridge::transportStop()
 {
-    // The editor's playRequested(), pauseRequested(), stopRequested() and loopToggled() show the processor's state in
-    // the transport bar. The playhead and the arrangement read the processor's play head state directly.
-    editor_.transportBar_.setPlaying(editor_.processorRef_.isPlaying());
-    editor_.transportBar_.setLoopEnabled(editor_.processorRef_.isLoopEnabled());
+    editor_.applyTransportStop();
+    return true;
 }
 
-void ControlEditorBridge::onTempoChanged()
+bool ControlEditorBridge::transportSeek(double positionSeconds)
 {
-    // The editor's bpmChanged() and timeSignatureChanged(): the transport bar and the piano roll show the processor's
-    // canonical values, and the editor's heartbeat does not set them again.
-    const double bpm = editor_.processorRef_.getBpm();
-    editor_.lastSyncedBpm_ = bpm;
-    editor_.transportBar_.setBpm(bpm);
-    editor_.pianoRoll_.setBpm(bpm);
-    const int numerator = editor_.processorRef_.getTimeSigNumerator();
-    const int denominator = editor_.processorRef_.getTimeSigDenominator();
-    editor_.lastSyncedTimeSigNum_ = numerator;
-    editor_.lastSyncedTimeSigDenom_ = denominator;
-    editor_.transportBar_.setTimeSignature(numerator, denominator);
-    editor_.pianoRoll_.setTimeSignature(numerator, denominator);
+    editor_.applyTransportSeek(positionSeconds);
+    return true;
+}
+
+bool ControlEditorBridge::transportPlayFromLastStart()
+{
+    editor_.applyTransportPlayFromLastStart();
+    return true;
+}
+
+bool ControlEditorBridge::transportPauseAtLastStart()
+{
+    editor_.applyTransportPauseAtLastStart();
+    return true;
+}
+
+bool ControlEditorBridge::setLoopEnabled(bool enabled)
+{
+    editor_.applyLoopEnabled(enabled);
+    return true;
+}
+
+bool ControlEditorBridge::setBpm(double bpm)
+{
+    editor_.applyBpm(bpm);
+    return true;
+}
+
+bool ControlEditorBridge::setTimeSignature(int numerator, int denominator)
+{
+    editor_.applyTimeSignature(numerator, denominator);
+    return true;
 }
 
 } // namespace OpenTune

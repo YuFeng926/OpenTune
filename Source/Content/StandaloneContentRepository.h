@@ -54,7 +54,7 @@ private:
     StandaloneClipId nextClipId_{1};
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
 public:
-    // OpenTune Control API hook: content epoch and its getter, see Source/Control/README.md#hooks
+    // Content epoch distinguishes handles from different project sessions.
     uint64_t getContentEpoch() const noexcept { return contentEpoch_.load(std::memory_order_relaxed); }
 private:
     std::atomic<uint64_t> contentEpoch_{0};

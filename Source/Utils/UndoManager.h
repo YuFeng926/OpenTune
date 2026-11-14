@@ -52,8 +52,7 @@ public:
     }
     bool retainsRetiredPlacement(int trackId, uint64_t placementId) const;
     bool retainsRetiredContent(ContentKey key) const;
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-    // OpenTune Control API hook: read the history and clear the redo history, see Source/Control/README.md#hooks
+    // Product commands inspect the settled history before applying an undo or redo.
     UndoAction* peekUndo() const { return canUndo() ? actions_[static_cast<std::size_t>(cursor_ - 1)].get() : nullptr; }
     UndoAction* peekRedo() const { return canRedo() ? actions_[static_cast<std::size_t>(cursor_)].get() : nullptr; }
     int size() const { return static_cast<int>(actions_.size()); }
@@ -66,7 +65,6 @@ public:
                 historyPrunedCallback_();
         }
     }
-#endif
 
 private:
     std::vector<std::unique_ptr<UndoAction>> actions_;

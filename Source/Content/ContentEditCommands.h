@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ContentKey.h"
+#include "../Utils/F0Timeline.h"
 #include "../Utils/Note.h"
 #include "../Utils/AutomationLane.h"
 #include "../Utils/PitchCurve.h"
@@ -17,6 +18,8 @@
 namespace OpenTune {
 
 class PitchShiftEditAction;
+class PianoRollEditAction;
+class TimeGridEditAction;
 struct EditableContentSnapshot;
 
 using ContentCommitSnapshot = std::shared_ptr<const EditableContentSnapshot>;
@@ -31,6 +34,31 @@ using ContentEditRangeSeconds = NoteRangeSeconds;
 struct ContentNoteRangePatch {
     ContentEditRangeSeconds affectedRange;
     std::vector<Note> afterNotesInRange;
+};
+
+struct ContentNoteCorrectionPlan {
+    F0FrameRange affectedRange;
+    std::vector<Note> notes;
+    std::vector<PitchCorrectionSegment> segments;
+    std::shared_ptr<const PitchCurveSnapshot> correctedCurve;
+};
+
+struct ContentAutoSnapPlan {
+    enum class Status { NoChange, EmptyRange, Commit };
+    Status status = Status::NoChange;
+    std::vector<Note> notes;
+    ContentNoteCorrectionPlan correction;
+};
+
+struct ContentEditCommitResult {
+    ContentCommitSnapshot snapshot;
+    // Non-owning: the content owner has already pushed this action into UndoManager.
+    PianoRollEditAction* undoAction = nullptr;
+};
+
+struct ContentDetectedKeyEditResult {
+    DetectedKey before;
+    bool changed = false;
 };
 
 class ContentEditCommands
@@ -61,28 +89,78 @@ public:
         std::vector<float> originalF0InRange,
         std::optional<std::vector<F0FrameRange>> erasedRanges = std::nullopt) = 0;
 
+    virtual ContentEditCommitResult commitNotesAndSegmentsUndoable(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        ContentEditRangeFrames affectedRange,
+        const juce::String& description) = 0;
+
+    virtual std::unique_ptr<PianoRollEditAction> createPianoRollEditAction(
+        ContentKey key,
+        const std::vector<Note>& beforeNotes,
+        const std::vector<PitchCorrectionSegment>& beforeSegments,
+        ContentCommitSnapshot after,
+        ContentEditRangeFrames affectedRange,
+        const juce::String& description) const = 0;
+
+    virtual std::optional<ContentNoteCorrectionPlan> planNoteCorrection(
+        const EditableContentSnapshot& snapshot,
+        const std::vector<Note>& notes,
+        F0FrameRange editRange,
+        const NoteGeneratorParams& params) const = 0;
+
+    virtual F0FrameRange noteFrameRange(
+        const PitchCurveSnapshot& curve,
+        const std::vector<Note>& notes,
+        const std::vector<std::size_t>& positions) const = 0;
+
+    virtual ContentAutoSnapPlan planAutoSnap(
+        const EditableContentSnapshot& snapshot,
+        const std::optional<std::vector<std::size_t>>& targets,
+        const ScaleSnapConfig& scaleSnap,
+        const NoteGeneratorParams& params) const = 0;
+
+    virtual std::optional<std::vector<Note>> planAutoTuneContentRange(
+        const EditableContentSnapshot& snapshot,
+        int startFrame,
+        int endFrameExclusive,
+        const NoteGeneratorParams& params,
+        const std::optional<ScaleSnapConfig>& scaleSnap) const = 0;
+
+    virtual std::optional<ContentNoteRangePatch> planGenerateNotesOnly(
+        const EditableContentSnapshot& snapshot,
+        const NoteGeneratorParams& params) const = 0;
+
     virtual bool setTimeGrid(ContentKey key,
                              std::shared_ptr<const TimeGridSnapshot> grid) = 0;
 
-    virtual bool setDetectedKey(ContentKey key,
-                                const DetectedKey& detectedKey) = 0;
+    // Commits the grid and pushes the action; the returned pointer is non-owning.
+    virtual TimeGridEditAction* commitTimeGridEdit(
+        ContentKey key,
+        std::shared_ptr<const TimeGridSnapshot> before,
+        std::shared_ptr<const TimeGridSnapshot> after,
+        const juce::String& description) = 0;
+
+    virtual std::optional<ContentDetectedKeyEditResult> setDetectedKey(
+        ContentKey key, const DetectedKey& detectedKey) = 0;
 
     virtual bool applyPitchShiftState(ContentKey key,
                                       const PitchShiftEditState& state) = 0;
 
-    virtual std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
+    // Commits the shift and pushes the action; the returned pointer is non-owning.
+    virtual PitchShiftEditAction* commitPitchShiftEdit(
         ContentKey key,
         const PitchShiftSettings& newSettings) = 0;
 
-    // 普通 AUTO 唯一入口：生成并提交 startFrame..endFrameExclusive 范围音符。
-    // 底层执行 LegacyNoteGenerator::generate → scaleSnap apply → validate → commit。
-    // 不创建 undo、不 mark dirty——事务与 dirty 归属调用方。
-    virtual bool autoTuneContentRange(
+    // AUTO regenerate 的完整内容提交、owner 入栈原生 action 与编辑完成通知。
+    virtual ContentEditCommitResult commitAutoTuneContentRangeUndoable(
         ContentKey key,
         int startFrame,
         int endFrameExclusive,
         const NoteGeneratorParams& params,
-        const std::optional<ScaleSnapConfig>& scaleSnap) = 0;
+        const std::optional<ScaleSnapConfig>& scaleSnap,
+        const juce::String& description) = 0;
 
     // 仅生成音符唯一入口：generate → validate → 拓扑提交。
     // 全内容范围（0..f0Count，内部从同一 snapshot 派生）。不写 correction segments、

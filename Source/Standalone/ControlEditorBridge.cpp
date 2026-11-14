@@ -25,11 +25,6 @@ ControlEditorBridge::ControlEditorBridge(OpenTuneAudioProcessorEditor& editor)
     // through the bridge it has registered.
     editor_.processorRef_.getControlService().setUiBridge(this);
     editor_.addMouseListener(this, true);
-    // OpenTuneAudioProcessorEditor::startDemoTourIfFirstRun(): the first-run demo project would replace the project the
-    // client starts from, and it writes outside OPENTUNE_DATA_DIR. The flag stops it for this run only; the preference
-    // stays as it is, so a later run without the API still shows the tour.
-    if (editor_.processorRef_.getControlService().options().enabled)
-        editor_.demoTourSettled_ = true;
 }
 
 ControlEditorBridge::~ControlEditorBridge()
@@ -38,6 +33,7 @@ ControlEditorBridge::~ControlEditorBridge()
     auto& service = editor_.processorRef_.getControlService();
     if (service.uiBridge() == this)
         service.setUiBridge(nullptr);
+    service.wakeJobs();
 }
 
 std::optional<ControlUiBridge::ProjectInfo> ControlEditorBridge::projectInfo() const
@@ -77,10 +73,9 @@ void ControlEditorBridge::onStructureChanged()
     editor_.syncActiveSelectionFromProcessor();
 }
 
-void ControlEditorBridge::onUndoRedoApplied()
+UndoAction* ControlEditorBridge::performUndoRedo(bool undo, const std::function<bool(UndoAction*)>& validateTop)
 {
-    // The editor's own steps after its undo and redo (performUndoRedoAction).
-    editor_.afterUndoRedo();
+    return editor_.performUndoRedoAction(undo, validateTop);
 }
 
 void ControlEditorBridge::onTimeGridChanged()
@@ -107,7 +102,6 @@ bool ControlEditorBridge::revealTracks(int count)
     if (editor_.trackPanel_.getVisibleTrackCount() >= count)
         return true;
     editor_.trackPanel_.setVisibleTrackCount(count);
-    editor_.arrangementView_.setVisibleTrackCount(count);
     return true;
 }
 
@@ -117,6 +111,17 @@ bool ControlEditorBridge::currentNoteGenerationParams(NoteGeneratorParams& out) 
     // its own import in the openDyne scheme.
     out = editor_.pianoRoll_.getCurrentAutoTuneParams();
     return true;
+}
+
+StandaloneMediaOperations::ImportCommitResult ControlEditorBridge::commitImportedAudio(
+    OpenTuneAudioProcessor::PreparedImport&& prepared,
+    const StandaloneMediaOperations::ImportPlacementRequest& request,
+    bool focus,
+    bool generateNotes,
+    std::function<void()> onNotesGenerated)
+{
+    return editor_.commitImportedAudio(std::move(prepared), request, focus, generateNotes,
+                                       std::move(onNotesGenerated));
 }
 
 std::uint64_t ControlEditorBridge::activeSelection() const

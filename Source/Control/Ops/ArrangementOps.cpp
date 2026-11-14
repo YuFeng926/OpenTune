@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ArrangementOps.h"
 
-#include "ClipIds.h"
 #include "EditSupport.h"
 #include "OpsSupport.h"
 #include "TrackSupport.h"
 #include "WriteEnvelope.h"
 
 #include "Content/EditableContentSnapshot.h"
-#include "Content/StandaloneContentRepository.h"
 #include "Control/ControlUiBridge.h"
 #include "Control/Edit/ControlOriginAction.h"
 #include "PluginProcessor.h"
-#include "Utils/F0Timeline.h"
 #include "Utils/PlacementActions.h"
-#include "Utils/PlaybackSampleGeometry.h"
 #include "Utils/TimeCoordinate.h"
 
 #include <algorithm>
@@ -33,31 +29,9 @@ namespace {
 
 /** The longest list of ops, of clips in one op delete and of sources in one arrangement.copy that the schemas allow. */
 constexpr std::size_t kMaxItems = 64;
-/** The shortest clip OpenTune keeps: StandaloneArrangement::setPlacementTrim() and the arrangement view's edge drag
-    (ArrangementViewComponent::mouseDrag) limit a clip to 0.01 s. */
-constexpr double kMinClipSec = 0.01;
-/** The fades of a clip cover at most this share of its length (StandaloneArrangement::setPlacementFade() and
-    setPlacementTrim(): durationSeconds * 0.9). */
-constexpr double kMaxFadeShare = 0.9;
-/** OpenTuneAudioProcessor::splitPlacementAtSeconds() keeps both parts longer than this (its minDurationSeconds). */
-constexpr double kMinSplitPartSec = 0.1;
 /** Timeline positions this close are one: one sample at OpenTune's render rate, the tolerance of
     OpenTuneAudioProcessor::mergePlacements() and of the arrangement's timeline setters. */
 constexpr double kTimelineEpsilon = 1.0 / TimeCoordinate::kRenderSampleRate;
-/** Precision of the split warning and of the merge's revert recipe comparison. */
-constexpr double kSplitComparisonTolerance = 1.0e-9;
-/** mergePlacements(): gains this close are equal. */
-constexpr float kGainTolerance = 1.0e-6f;
-/** detectedKeysMatch(): confidences this close are equal. */
-constexpr float kKeyConfidenceTolerance = 1.0e-6f;
-/** The largest clip gain OpenTune's interface offers, as a linear factor. The interface's one bounded gain range is the
-    volume knob (Source/Standalone/UI/TrackPanelComponent.h, setRange(0.0, 4.0, 0.001)); the clip-gain drag
-    (ArrangementViewComponent.cpp, mouseDrag) has no bound of its own, so the API applies the interface's
-    bounded range here. Zero is the lower end: the params
-    schema keeps gainLinear at 0 or more and StandaloneArrangement::setPlacementGain() floors the stored value
-    at 0. */
-constexpr double kMaxClipGainLinear = 4.0;
-
 // ---- Shared pieces ------------------------------------------------------------------------------
 
 std::string fixed2(double value)
@@ -499,52 +473,6 @@ struct ResolvedOp
     std::vector<ControlPlacementRef> clips;
 };
 
-/** The output length of a content: its time grid's, or the length of its audio. */
-double contentOutputSeconds(const EditableContentSnapshot& snapshot)
-{
-    if (snapshot.timeGrid != nullptr && snapshot.timeGrid->totalDurationSeconds() > 0.0)
-        return snapshot.timeGrid->totalDurationSeconds();
-    if (snapshot.audioBuffer != nullptr && snapshot.audioSampleRate > 0.0)
-        return static_cast<double>(snapshot.audioBuffer->getNumSamples()) / snapshot.audioSampleRate;
-    return 0.0;
-}
-
-/**
- * op trim on a copy of the clip, as the arrangement view's edge drag computes it (ArrangementViewComponent::mouseDrag,
- * TrimLeft and TrimRight): the start edge cuts the content window by the same output time through the content's time
- * grid (tauForward of clipIn, plus the cut, through tauInverse), the end edge changes the length only. Unlike the drag,
- * an edge beyond the audio of the content or past the other edge is refused (trim_out_of_range). The fades are limited
- * to the new length as StandaloneArrangement::setPlacementTrim() limits them.
- */
-std::optional<Error> planTrim(const EditOp& op, const EditableContentSnapshot& snapshot,
-                              StandaloneArrangement::Placement& p)
-{
-    const auto outOfRange = [] {
-        return controlOpError("INVALID_ARGUMENT", "trim_out_of_range",
-                              "the edge would leave the audio of the clip's content or pass the clip's other edge");
-    };
-    const auto& grid = snapshot.timeGrid;
-    const double outputStart = grid != nullptr ? grid->tauForward(p.clipInSeconds) : p.clipInSeconds;
-    if (op.trimStart) {
-        const double newDuration = p.timelineEndSeconds() - op.timelineSec;
-        const double outputCut = outputStart + (p.durationSeconds - newDuration);
-        if (newDuration < kMinClipSec || outputCut < -kTimelineEpsilon)
-            return outOfRange();
-        p.clipInSeconds = grid != nullptr ? grid->tauInverse(std::max(0.0, outputCut)) : std::max(0.0, outputCut);
-        p.durationSeconds = newDuration;
-        p.timelineStartSeconds = op.timelineSec;
-    } else {
-        const double newDuration = op.timelineSec - p.timelineStartSeconds;
-        if (newDuration < kMinClipSec || outputStart + newDuration > contentOutputSeconds(snapshot) + kTimelineEpsilon)
-            return outOfRange();
-        p.durationSeconds = newDuration;
-    }
-    const double maxFade = p.durationSeconds * kMaxFadeShare;
-    p.fadeInDuration = std::min(p.fadeInDuration, maxFade);
-    p.fadeOutDuration = std::min(p.fadeOutDuration, maxFade);
-    return std::nullopt;
-}
-
 JsonValue fadeChange(double before, double after)
 {
     if (before == after)
@@ -565,101 +493,73 @@ void warnClamped(ControlWriteEnvelope& envelope, const ControlPlacementRef& clip
     envelope.addWarning("CLAMPED", placementRef(clip.placementId), std::move(data));
 }
 
-/**
- * Where OpenTuneAudioProcessor::splitPlacementAtSeconds() cuts the clip, in timeline seconds, or why it would not:
- * its checks in its order, before anything changes. The position must lie inside the clip with both parts longer than
- * 0.1 s (split_out_of_range), the content's audio and native PCM must be available, its time grid unedited, and its
- * pitch analysis ready (NOT_READY). The nearest analysis frame boundary (F0Timeline::nearestFrameBoundary(), where
- * the cut snaps to) must leave both parts longer than 0.1 s and its canonical sample address must lie inside the
- * clip's audio. The cut is the frame boundary itself: OpenTune maps it to canonical samples with
- * PlaybackSampleGeometry::projectToSample() and does not require the boundary to sit on a sample. OpenTune refuses
- * the other cases without a word; the API names them UNSUPPORTED(upstream_absent).
- */
-Result<double> checkSplit(ControlOpContext& context, const ControlPlacementRef& clip, double atTimelineSec)
+Error splitIssueError(ControlOpContext& context, const ControlPlacementRef& clip,
+                      const std::shared_ptr<const EditableContentSnapshot>& snapshot, PlacementSplitIssue issue)
 {
-    const auto outOfRange = [](const char* detail) {
-        return controlOpError("INVALID_ARGUMENT", "split_out_of_range", detail);
-    };
-    const auto& p = clip.placement;
-    const double offset = atTimelineSec - p.timelineStartSeconds;
-    if (offset <= kMinSplitPartSec || offset >= p.durationSeconds - kMinSplitPartSec)
-        return outOfRange("atTimelineSec must lie inside the clip, more than 0.1 s from both edges");
-    const auto snapshot = controlLiveSnapshot(context, p.contentKey);
-    if (snapshot == nullptr || snapshot->audioBuffer == nullptr || snapshot->nativeSource.buffer == nullptr)
-        return controlOpError("INTERNAL", "", "the content of the clip is not available");
-    if (snapshot->timeGrid != nullptr && !snapshot->timeGrid->isIdentity())
-        return controlOpError("UNSUPPORTED", "upstream_absent",
-                              "OpenTune does not split a clip whose time grid was edited");
-    const ControlContentRef content{p.contentKey, controlContentId(context, p.contentKey), snapshot};
-    if (auto notReady = controlCheckContentReady(context, content))
-        return *notReady;
-    const double sampleRate = snapshot->audioSampleRate;
-    if (!std::isfinite(sampleRate) || sampleRate <= 0.0)
-        return controlOpError("UNSUPPORTED", "upstream_absent", "the audio of the clip has no sample rate");
-    const auto& curve = *snapshot->pitchCurve;
-    const int frames = static_cast<int>(curve.getOriginalF0().size());
-    const F0Timeline timeline(curve.getHopSize(), curve.getSampleRate(), frames);
-    const int boundary = timeline.nearestFrameBoundary(p.clipInSeconds + offset);
-    if (boundary <= 0 || boundary >= frames)
-        return outOfRange("no analysis frame boundary inside the clip lies near atTimelineSec");
-    const double splitSourceSeconds = timeline.timeAtFrame(boundary);
-    const double splitOffset = splitSourceSeconds - p.clipInSeconds;
-    if (splitOffset <= kMinSplitPartSec || splitOffset >= p.durationSeconds - kMinSplitPartSec)
-        return outOfRange("the nearest analysis frame lies within 0.1 s of an edge of the clip");
-    // The cut address on the canonical samples of the content: the boundary in the source's own
-    // window, minus the first sample the content's audio buffer holds.
-    const double boundarySourceSeconds = snapshot->sourceWindow.sourceStartSeconds + splitSourceSeconds;
-    const auto boundarySample = PlaybackSampleGeometry::projectToSample(boundarySourceSeconds * sampleRate);
-    const auto leadingSamples = boundarySample - snapshot->firstCanonicalSample;
-    const auto totalSamples = snapshot->audioBuffer->getNumSamples();
-    if (leadingSamples <= 0 || leadingSamples >= totalSamples)
-        return outOfRange("the analysis frame nearest to atTimelineSec lies outside the audio of the clip");
-    return p.timelineStartSeconds + splitOffset;
+    switch (issue) {
+        case PlacementSplitIssue::OutOfRange:
+            return controlOpError("INVALID_ARGUMENT", "split_out_of_range",
+                                  "the split point must leave both parts longer than 0.1 s");
+        case PlacementSplitIssue::ContentUnavailable:
+            return controlOpError("INTERNAL", "", "the content of the clip is not available");
+        case PlacementSplitIssue::TimeGridEdited:
+            return controlOpError("UNSUPPORTED", "upstream_absent",
+                                  "OpenTune does not split a clip whose time grid was edited");
+        case PlacementSplitIssue::F0NotReady: {
+            const ControlContentRef content{clip.placement.contentKey, controlContentId(context, clip.placement.contentKey),
+                                            snapshot};
+            if (auto notReady = controlCheckContentReady(context, content))
+                return *notReady;
+            return controlOpError("UNSUPPORTED", "upstream_absent", "the clip has no usable pitch analysis");
+        }
+        case PlacementSplitIssue::InvalidSampleRate:
+            return controlOpError("UNSUPPORTED", "upstream_absent", "the audio of the clip has no sample rate");
+        case PlacementSplitIssue::BoundaryOutsideAudio:
+            return controlOpError("INVALID_ARGUMENT", "split_out_of_range",
+                                  "the nearest analysis frame lies outside the audio of the clip");
+        case PlacementSplitIssue::None:
+            break;
+    }
+    return controlOpError("INTERNAL", "", "the split plan is invalid");
 }
 
-/**
- * The conditions of OpenTuneAudioProcessor::mergePlacements() that the API can check before anything changes, in its
- * order: one track, the trailing clip starting where the leading clip ends, equal gain and name, one source lineage
- * (the same sourceId and shared native PCM), equal canonical sample rates, the same authoritative source-window
- * boundary, equal detected keys, and no analysis running. mergePlacements() also refuses pitch curves it cannot
- * join; the call reports its refusal with the same reason.
- */
-std::optional<Error> checkMerge(ControlOpContext& context, const ControlPlacementRef& leading,
-                                const ControlPlacementRef& trailing)
+std::optional<Error> mergeIssueError(PlacementMergeIssue issue)
 {
-    const auto fail = [](const char* detail) {
-        return controlOpError("INVALID_ARGUMENT", "merge_not_possible", detail);
-    };
-    const auto& a = leading.placement;
-    const auto& b = trailing.placement;
-    if (a.placementId == b.placementId)
-        return fail("the leading and the trailing clip are the same clip");
-    if (leading.trackId != trailing.trackId)
-        return fail("the clips are on different tracks");
-    if (std::abs(a.timelineEndSeconds() - b.timelineStartSeconds) > kTimelineEpsilon)
-        return fail("the trailing clip does not start where the leading clip ends");
-    if (std::abs(a.gain - b.gain) > kGainTolerance || a.name != b.name)
-        return fail("the clips differ in gain or in name");
-    const auto first = controlLiveSnapshot(context, a.contentKey);
-    const auto second = controlLiveSnapshot(context, b.contentKey);
-    if (first == nullptr || second == nullptr || first->audioBuffer == nullptr || second->audioBuffer == nullptr
-        || first->nativeSource.buffer == nullptr || second->nativeSource.buffer == nullptr
-        || first->sourceWindow.sourceId == 0 || first->sourceWindow.sourceId != second->sourceWindow.sourceId
-        || !(first->nativeSource == second->nativeSource))
-        return fail("the clips do not show parts of one source");
-    if (!std::isfinite(first->audioSampleRate) || first->audioSampleRate <= 0.0
-        || first->audioSampleRate != second->audioSampleRate)
-        return fail("the audio of the clips has different sample rates");
-    if (first->sourceWindow.sourceEndSeconds != second->sourceWindow.sourceStartSeconds)
-        return fail("the clips do not show adjacent parts of their source");
-    if (first->detectedKey.root != second->detectedKey.root
-        || first->detectedKey.scale != second->detectedKey.scale
-        || first->detectedKey.origin != second->detectedKey.origin
-        || std::abs(first->detectedKey.confidence - second->detectedKey.confidence) > kKeyConfidenceTolerance)
-        return fail("the clips differ in their detected key");
-    if (first->originalF0State == OriginalF0State::Extracting || second->originalF0State == OriginalF0State::Extracting)
-        return controlOpError("NOT_READY", "f0_not_ready", "the pitch analysis of a clip is running");
-    return std::nullopt;
+    switch (issue) {
+        case PlacementMergeIssue::SamePlacement:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible", "the leading and trailing clips are the same clip");
+        case PlacementMergeIssue::DifferentTracks:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible", "the clips are on different tracks");
+        case PlacementMergeIssue::NotAdjacent:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
+                                  "the trailing clip does not start where the leading clip ends");
+        case PlacementMergeIssue::MetadataMismatch:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible", "the clips differ in gain or in name");
+        case PlacementMergeIssue::DifferentSource:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible", "the clips do not show parts of one source");
+        case PlacementMergeIssue::SampleRateMismatch:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
+                                  "the audio of the clips has different sample rates");
+        case PlacementMergeIssue::SourceBoundaryMismatch:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
+                                  "the clips do not show adjacent parts of their source");
+        case PlacementMergeIssue::KeyMismatch:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible", "the clips differ in their detected key");
+        case PlacementMergeIssue::F0NotReady:
+            return controlOpError("NOT_READY", "f0_not_ready", "the pitch analysis of a clip is running");
+        case PlacementMergeIssue::TimeGridUnsupported:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
+                                  "clips with edited time grids cannot be merged");
+        case PlacementMergeIssue::AudibleWindowMismatch:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
+                                  "the clips' audible source windows or seam fades do not join");
+        case PlacementMergeIssue::PitchCurveMismatch:
+            return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
+                                  "the clips' pitch analyses cannot be merged without data loss");
+        case PlacementMergeIssue::None:
+            return std::nullopt;
+    }
+    return controlOpError("INTERNAL", "", "the merge plan is invalid");
 }
 
 // ---- arrangement.edit: split, merge, delete ------------------------------------------------------------
@@ -668,9 +568,12 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
 {
     const auto& clip = item.clip;
     const double at = item.op->timelineSec;
-    const auto point = checkSplit(context, clip, at);
-    if (!point.ok())
-        return point.error();
+    const auto snapshot = controlLiveSnapshot(context, clip.placement.contentKey);
+    if (snapshot == nullptr)
+        return controlOpError("INTERNAL", "", "the content of the clip is not available");
+    const auto plan = planPlacementSplit(clip.placement, *snapshot, at);
+    if (plan.issue != PlacementSplitIssue::None)
+        return splitIssueError(context, clip, snapshot, plan.issue);
     auto& processor = context.processor();
     const auto history = context.history();
     if (history == nullptr)
@@ -679,10 +582,10 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     ControlWriteEnvelope envelope(context);
     const auto label = placementLabel(clip);
     const auto addWarnings = [&] {
-        if (std::abs(point.value() - at) > kSplitComparisonTolerance) {
+        if (std::abs(plan.timelineSeconds - at) > 1.0e-9) {
             auto data = JsonValue::object();
             data.appendMember("requestedTimelineSec", controlJsonSeconds(at));
-            data.appendMember("appliedTimelineSec", controlJsonSeconds(point.value()));
+            data.appendMember("appliedTimelineSec", controlJsonSeconds(plan.timelineSeconds));
             envelope.addWarning("SPLIT_SNAPPED", placementRef(clip.placementId), std::move(data));
         }
     };
@@ -693,30 +596,20 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
         return envelope.predicted(context);
     }
 
-    // The split key of the arrangement view: splitPlacementAtSeconds() at the clip's position on its track, then
-    // SplitPlacementAction on the undo history. The call makes two clips; after a project was opened OpenTune's clip
-    // id counter can stand on the ids of the opened clips, so the counter is moved to where the next two ids are free
-    // first (ClipIds.h): the call would refuse the split without a word, and when only one of its two ids is in use,
-    // it would leave the other new clip behind as a content that no clip shows.
-    controlSkipUsedClipIds(context, "arrangement.edit split", 2);
-    const int index = processor.findPlacementIndexById(clip.trackId, clip.placement.placementId);
-    const auto outcome = processor.splitPlacementAtSeconds(clip.trackId, index, at);
-    if (!outcome)
+    auto committed = commitPlacementSplit(processor, clip.trackId, clip.placement.placementId, plan);
+    if (!committed)
         return controlOpError("UNSUPPORTED", "upstream_absent", "OpenTune did not split the clip at this position");
-    controlRecordCommittedClipId(context, outcome->leadingContentKey);
-    controlRecordCommittedClipId(context, outcome->trailingContentKey);
     std::vector<ControlOriginAction::Inner> inner;
-    inner.push_back(
-        innerOf(std::make_unique<SplitPlacementAction>(processor, *outcome), "SplitPlacementAction", {clip.trackId}));
+    inner.push_back(innerOf(std::move(committed->undoAction), "SplitPlacementAction", {clip.trackId}));
     const auto pushed = pushEntry(context, history, std::move(inner));
     afterChange(context);
 
     const auto after = controlLivePlacements(context);
     envelope.addRemoved("placement", placementRef(clip.placementId), JsonValue::string(label));
-    addCreatedClip(envelope, after, outcome->leadingPlacementId);
-    addCreatedClip(envelope, after, outcome->trailingPlacementId);
-    const auto leading = controlPlacementId(context, outcome->leadingPlacementId);
-    const auto trailing = controlPlacementId(context, outcome->trailingPlacementId);
+    addCreatedClip(envelope, after, committed->outcome.leadingPlacementId);
+    addCreatedClip(envelope, after, committed->outcome.trailingPlacementId);
+    const auto leading = controlPlacementId(context, committed->outcome.leadingPlacementId);
+    const auto trailing = controlPlacementId(context, committed->outcome.trailingPlacementId);
     addIdMapEntry(envelope, "split", {clip.placementId}, {leading, trailing});
     addWarnings();
     envelope.setUndoable(pushed.undoId, pushed.description, pushed.names);
@@ -727,13 +620,18 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
 {
     const auto& leading = item.clip;
     const auto& trailing = *item.other;
-    if (auto refused = checkMerge(context, leading, trailing))
+    const auto first = controlLiveSnapshot(context, leading.placement.contentKey);
+    const auto second = controlLiveSnapshot(context, trailing.placement.contentKey);
+    if (first == nullptr || second == nullptr)
+        return controlOpError("INVALID_ARGUMENT", "merge_not_possible", "the clips do not show parts of one source");
+    const auto plan = planPlacementMerge(leading.trackId, leading.placement, *first,
+                                         trailing.trackId, trailing.placement, *second);
+    if (auto refused = mergeIssueError(plan.issue))
         return *refused;
     auto& processor = context.processor();
-    auto* arrangement = processor.getStandaloneArrangement();
     const auto history = context.history();
-    if (arrangement == nullptr || history == nullptr)
-        return controlOpError("INTERNAL", "", "the arrangement or the undo history is not available");
+    if (history == nullptr)
+        return controlOpError("INTERNAL", "", "the undo history is not available");
 
     ControlWriteEnvelope envelope(context);
     const auto addRemoved = [&] {
@@ -746,27 +644,19 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
         return envelope.predicted(context);
     }
 
-    // The merge key of the arrangement view: mergePlacements() with the leading clip's position on its track, then
-    // MergePlacementAction on the undo history. The call makes one clip, so the clip id counter is moved to where the
-    // next id is free first, as for a split (ClipIds.h).
-    controlSkipUsedClipIds(context, "arrangement.edit merge", 1);
-    const int index = arrangement->findPlacementIndexById(leading.trackId, leading.placement.placementId);
-    const auto outcome = processor.mergePlacements(leading.trackId, leading.placement.placementId,
-                                                   trailing.placement.placementId, index);
-    if (!outcome)
+    auto committed = commitPlacementMerge(processor, plan);
+    if (!committed)
         return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
                               "OpenTune did not merge the clips: their keys or their pitch analyses do not join");
-    controlRecordCommittedClipId(context, outcome->mergedContentKey);
     std::vector<ControlOriginAction::Inner> inner;
-    inner.push_back(innerOf(std::make_unique<MergePlacementAction>(processor, *outcome), "MergePlacementAction",
-                            {leading.trackId}));
+    inner.push_back(innerOf(std::move(committed->undoAction), "MergePlacementAction", {leading.trackId}));
     const auto pushed = pushEntry(context, history, std::move(inner));
     afterChange(context);
 
     const auto after = controlLivePlacements(context);
     addRemoved();
-    addCreatedClip(envelope, after, outcome->mergedPlacementId);
-    const auto merged = controlPlacementId(context, outcome->mergedPlacementId);
+    addCreatedClip(envelope, after, committed->outcome.mergedPlacementId);
+    const auto merged = controlPlacementId(context, committed->outcome.mergedPlacementId);
     addIdMapEntry(envelope, "merge", {leading.placementId, trailing.placementId}, {merged});
     envelope.setUndoable(pushed.undoId, pushed.description, pushed.names);
     return envelope.committed(context);
@@ -776,34 +666,34 @@ Result<JsonValue> runDelete(ControlOpContext& context, const EditParams& params,
 {
     if (!params.dryRun && !params.confirm)
         return controlOpError("INVALID_ARGUMENT", "confirm_required",
-                              "deleting clips cannot be undone; the end user must agree, and confirm must be true");
+                              "deleting clips requires explicit confirmation, and confirm must be true");
     auto& processor = context.processor();
     const auto history = context.history();
     if (history == nullptr)
         return controlOpError("INTERNAL", "", "the undo history of the control API is not available");
 
     ControlWriteEnvelope envelope(context);
-    std::vector<std::size_t> deleted;
-    std::vector<ControlOriginAction::Inner> inner;
+    PushedEntry pushed;
+    PlacementDeleteCommit deletion;
     if (!params.dryRun) {
-        // The delete key of the arrangement view: deletePlacement() for every clip, each with a DeletePlacementAction;
-        // the API puts them in one undo entry.
-        for (std::size_t i = 0; i < item.clips.size(); ++i) {
-            const auto& clip = item.clips[i];
-            const int index = processor.findPlacementIndexById(clip.trackId, clip.placement.placementId);
-            const auto outcome = processor.deletePlacement(clip.trackId, index);
-            if (!outcome)
-                break;
-            inner.push_back(innerOf(std::make_unique<DeletePlacementAction>(processor, *outcome),
-                                    "DeletePlacementAction", {clip.trackId}));
-            deleted.push_back(i);
-        }
-        if (!inner.empty()) {
-            pushEntry(context, history, std::move(inner));
+        std::vector<PlacementKey> keys;
+        keys.reserve(item.clips.size());
+        for (const auto& clip : item.clips)
+            keys.push_back({clip.trackId, clip.placement.placementId});
+        deletion = commitPlacementDelete(processor, keys);
+
+        if (deletion.undoAction != nullptr) {
+            std::vector<int> tracks;
+            for (const auto& outcome : deletion.outcomes)
+                if (std::find(tracks.begin(), tracks.end(), outcome.trackId) == tracks.end())
+                    tracks.push_back(outcome.trackId);
+            std::vector<ControlOriginAction::Inner> inner;
+            inner.push_back(innerOf(std::move(deletion.undoAction), "DeletePlacementAction", std::move(tracks)));
+            pushed = pushEntry(context, history, std::move(inner));
             afterChange(context);
         }
-        if (deleted.size() != item.clips.size()) {
-            if (deleted.empty())
+        if (pushed.undoId.empty() || item.clips.size() != deletion.outcomes.size()) {
+            if (pushed.undoId.empty())
                 return controlOpError("INTERNAL", "", "OpenTune did not delete the clip");
             return controlOpErrorAfterChange("INTERNAL", "",
                                              "OpenTune did not delete every clip; read the project again");
@@ -827,111 +717,13 @@ Result<JsonValue> runDelete(ControlOpContext& context, const EditParams& params,
         envelope.addRemoved("content", contentRef(controlContentId(context, key)),
                             JsonValue::string("Content of " + placementLabel(*clip)));
     }
-    for (const auto& clip : item.clips) {
-        envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(clip.placementId));
-        envelope.addWarning("IRREVERSIBLE", placementRef(clip.placementId));
-    }
     if (params.dryRun)
         return envelope.predicted(context);
-    envelope.setNotUndoable("upstream_undo_defect");
+    envelope.setUndoable(pushed.undoId, pushed.description, pushed.names);
     return envelope.committed(context);
 }
 
 // ---- arrangement.edit: the ops that change clips in place ----------------------------------------------
-
-/** One in-place op as planned on the model: the clip before and after it. */
-struct Planned
-{
-    OpKind kind = OpKind::Move;
-    bool trimStart = false;
-    int trackBefore = 0;
-    int trackAfter = 0;
-    StandaloneArrangement::Placement before;
-    StandaloneArrangement::Placement after;
-};
-
-/** Applies one planned op through the arrangement's setter the arrangement view calls and records the undo action it
-    pushes. False when OpenTune refused the change. */
-bool applyPlanned(OpenTuneAudioProcessor& processor, StandaloneArrangement& arrangement, const Planned& step,
-                  std::vector<ControlOriginAction::Inner>& inner)
-{
-    const auto& was = step.before;
-    const auto& now = step.after;
-    const auto id = was.placementId;
-    const int track = step.trackAfter;
-    switch (step.kind) {
-        case OpKind::Move: {
-            if (step.trackBefore == step.trackAfter && was.timelineStartSeconds == now.timelineStartSeconds)
-                return true;
-            // The clip drag: applyPlacementMoves(), recorded as MultiMovePlacementAction.
-            const auto result = arrangement.applyPlacementMoves({StandaloneArrangement::PlacementMove{
-                step.trackBefore, step.trackAfter, id, now.timelineStartSeconds}});
-            if (result == StandaloneArrangement::PlacementMoveResult::Rejected)
-                return false;
-            if (result == StandaloneArrangement::PlacementMoveResult::Unchanged)
-                return true;
-            MultiMovePlacementAction::Entry entry;
-            entry.sourceTrackId = step.trackBefore;
-            entry.targetTrackId = step.trackAfter;
-            entry.placementId = id;
-            entry.oldStartSeconds = was.timelineStartSeconds;
-            entry.newStartSeconds = now.timelineStartSeconds;
-            inner.push_back(innerOf(std::make_unique<MultiMovePlacementAction>(
-                                        processor, std::vector<MultiMovePlacementAction::Entry>{entry},
-                                        PlacementKey{step.trackBefore, id}, PlacementKey{step.trackAfter, id}),
-                                    "MultiMovePlacementAction", {step.trackBefore, step.trackAfter}));
-            return true;
-        }
-        case OpKind::Trim: {
-            if (was.clipInSeconds == now.clipInSeconds && was.durationSeconds == now.durationSeconds
-                && was.timelineStartSeconds == now.timelineStartSeconds)
-                return true;
-            // The edge drag: setPlacementTrimAndTimelineStart() for the start edge, setPlacementTrim() for the end.
-            const bool applied = step.trimStart
-                                     ? arrangement.setPlacementTrimAndTimelineStart(
-                                           track, id, now.clipInSeconds, now.durationSeconds, now.timelineStartSeconds)
-                                     : arrangement.setPlacementTrim(track, id, now.clipInSeconds, now.durationSeconds);
-            StandaloneArrangement::Placement result;
-            if (!applied || !arrangement.getPlacementById(track, id, result))
-                return false;
-            // The fades the trim shortened, recorded before the trim, so that undoing the entry restores them.
-            if (result.fadeInDuration != was.fadeInDuration || result.fadeOutDuration != was.fadeOutDuration)
-                inner.push_back(innerOf(std::make_unique<FadeChangeAction>(processor, track, id, was.fadeInDuration,
-                                                                           was.fadeOutDuration, result.fadeInDuration,
-                                                                           result.fadeOutDuration),
-                                        "FadeChangeAction", {track}));
-            inner.push_back(innerOf(
-                std::make_unique<TrimPlacementAction>(processor, track, id, was.clipInSeconds, was.durationSeconds,
-                                                      result.clipInSeconds, result.durationSeconds,
-                                                      was.timelineStartSeconds, result.timelineStartSeconds),
-                "TrimPlacementAction", {track}));
-            return true;
-        }
-        case OpKind::SetGain:
-            if (was.gain == now.gain)
-                return true;
-            if (!arrangement.setPlacementGain(track, id, now.gain))
-                return false;
-            inner.push_back(innerOf(std::make_unique<GainChangeAction>(processor, track, id, was.gain, now.gain),
-                                    "GainChangeAction", {track}));
-            return true;
-        case OpKind::SetFade:
-            if (was.fadeInDuration == now.fadeInDuration && was.fadeOutDuration == now.fadeOutDuration)
-                return true;
-            if (!arrangement.setPlacementFade(track, id, now.fadeInDuration, now.fadeOutDuration))
-                return false;
-            inner.push_back(innerOf(std::make_unique<FadeChangeAction>(processor, track, id, was.fadeInDuration,
-                                                                       was.fadeOutDuration, now.fadeInDuration,
-                                                                       now.fadeOutDuration),
-                                    "FadeChangeAction", {track}));
-            return true;
-        case OpKind::Split:
-        case OpKind::Merge:
-        case OpKind::Delete:
-            break;
-    }
-    return false;
-}
 
 Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params, const std::vector<ResolvedOp>& ops)
 {
@@ -945,7 +737,7 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
     const auto before = controlLivePlacements(context);
     // Every op is planned on a model of the arrangement first, in order, so that a call that fails changes nothing.
     auto model = before;
-    std::vector<Planned> plan;
+    std::vector<PlacementEditPlan> plan;
     std::vector<std::uint64_t> reshaped;
     // The tracks that clips move to: all of the plan for a prediction, only the steps OpenTune applied for a commit.
     std::vector<int> plannedReceiving;
@@ -955,25 +747,33 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
         auto* clip = findIn(model, item.clip.placement.placementId);
         if (clip == nullptr)
             return controlOpError("INTERNAL", "", "a clip of the call is not in the arrangement");
-        Planned step;
-        step.kind = op.kind;
-        step.trimStart = op.trimStart;
+        PlacementEditPlan step;
         step.trackBefore = clip->trackId;
         step.before = clip->placement;
-        auto& p = clip->placement;
+        step.trackAfter = clip->trackId;
+        step.after = clip->placement;
+        auto& p = step.after;
         switch (op.kind) {
-            case OpKind::Move:
-                clip->trackId = op.toTrackId.value_or(clip->trackId);
-                p.timelineStartSeconds = op.startTimelineSec.value_or(p.timelineStartSeconds);
+            case OpKind::Move: {
+                const int targetTrack = op.toTrackId.value_or(clip->trackId);
+                const double targetStart = op.startTimelineSec.value_or(p.timelineStartSeconds);
+                step = *planPlacementMove(p, clip->trackId, targetTrack, targetStart);
+                clip->trackId = step.trackAfter;
+                clip->placement = step.after;
                 break;
+            }
             case OpKind::Trim: {
                 const auto snapshot = controlLiveSnapshot(context, p.contentKey);
                 if (snapshot == nullptr)
                     return controlOpError("INTERNAL", "", "the content of the clip is not available");
-                if (auto error = planTrim(op, *snapshot, p))
-                    return *error;
-                auto fadeIn = fadeChange(step.before.fadeInDuration, p.fadeInDuration);
-                auto fadeOut = fadeChange(step.before.fadeOutDuration, p.fadeOutDuration);
+                auto trimmed = planPlacementTrim(step.before, *snapshot, clip->trackId, op.trimStart, op.timelineSec);
+                if (!trimmed)
+                    return controlOpError("INVALID_ARGUMENT", "trim_out_of_range",
+                                          "the edge would leave the audio of the clip's content or pass the clip's other edge");
+                step = std::move(*trimmed);
+                clip->placement = step.after;
+                auto fadeIn = fadeChange(step.before.fadeInDuration, step.after.fadeInDuration);
+                auto fadeOut = fadeChange(step.before.fadeOutDuration, step.after.fadeOutDuration);
                 if (!fadeIn.isNull() || !fadeOut.isNull()) {
                     auto data = JsonValue::object();
                     data.appendMember("fadeInSec", std::move(fadeIn));
@@ -983,35 +783,23 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
                 break;
             }
             case OpKind::SetGain: {
-                // OpenTune's interface offers the gain range 0 to 4 linear (the volume knob, TrackPanelComponent.h);
-                // the clip-gain drag itself has no bound (ArrangementViewComponent.cpp, mouseDrag), so the
-                // API applies the interface's bounded range and reports CLAMPED in the unit the caller named. The
-                // lower end 0 is kept by the params schema (gainLinear minimum 0) and setPlacementGain()'s floor.
-                double linear = op.gainLinear ? *op.gainLinear : std::pow(10.0, *op.gainDb / 20.0);
-                // The negated test also clamps NaN (a JSON number cannot be NaN; this only guards the arithmetic).
-                if (!(linear <= kMaxClipGainLinear)) {
-                    linear = kMaxClipGainLinear;
-                    if (op.gainDb)
-                        warnClamped(envelope, *clip, "gainDb", controlJsonNumber(*op.gainDb, 3),
-                                    controlJsonNumber(*controlLinearToDb(linear), 3));
-                    else
-                        warnClamped(envelope, *clip, "gainLinear", controlJsonNumber(*op.gainLinear, 6),
-                                    controlJsonNumber(linear, 6));
-                }
-                p.gain = static_cast<float>(linear);
+                const double linear = op.gainLinear ? *op.gainLinear : placementGainFromDb(*op.gainDb);
+                auto gainPlan = planPlacementGain(step.before, clip->trackId, linear);
+                if (!gainPlan)
+                    return controlOpError("INVALID_ARGUMENT", "invalid_gain", "gain must be finite");
+                step = std::move(*gainPlan);
+                clip->placement = step.after;
                 break;
             }
             case OpKind::SetFade: {
-                const double maxFade = p.durationSeconds * kMaxFadeShare;
-                const auto limit = [&](const char* field, const std::optional<double>& requested, double& value) {
-                    if (!requested)
-                        return;
-                    value = std::min(*requested, maxFade);
-                    if (value < *requested)
-                        warnClamped(envelope, *clip, field, controlJsonSeconds(*requested), controlJsonSeconds(value));
-                };
-                limit("fadeInSec", op.fadeInSec, p.fadeInDuration);
-                limit("fadeOutSec", op.fadeOutSec, p.fadeOutDuration);
+                step = planPlacementFade(step.before, clip->trackId, op.fadeInSec, op.fadeOutSec);
+                clip->placement = step.after;
+                if (op.fadeInSec && step.after.fadeInDuration < *op.fadeInSec)
+                    warnClamped(envelope, *clip, "fadeInSec", controlJsonSeconds(*op.fadeInSec),
+                                controlJsonSeconds(step.after.fadeInDuration));
+                if (op.fadeOutSec && step.after.fadeOutDuration < *op.fadeOutSec)
+                    warnClamped(envelope, *clip, "fadeOutSec", controlJsonSeconds(*op.fadeOutSec),
+                                controlJsonSeconds(step.after.fadeOutDuration));
                 break;
             }
             case OpKind::Split:
@@ -1020,12 +808,11 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
                 return controlOpError("INTERNAL", "", "op not planned in place");
         }
         step.trackAfter = clip->trackId;
-        step.after = p;
         const bool geometryChanged = step.trackBefore != step.trackAfter
-                                     || step.before.timelineStartSeconds != p.timelineStartSeconds
-                                     || step.before.durationSeconds != p.durationSeconds;
-        if (geometryChanged && std::find(reshaped.begin(), reshaped.end(), p.placementId) == reshaped.end())
-            reshaped.push_back(p.placementId);
+                                     || step.before.timelineStartSeconds != step.after.timelineStartSeconds
+                                     || step.before.durationSeconds != step.after.durationSeconds;
+        if (geometryChanged && std::find(reshaped.begin(), reshaped.end(), step.after.placementId) == reshaped.end())
+            reshaped.push_back(step.after.placementId);
         if (step.trackBefore != step.trackAfter)
             plannedReceiving.push_back(step.trackAfter);
         plan.push_back(step);
@@ -1045,9 +832,14 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
     bool refused = false;
     for (const auto& step : plan) {
         const auto count = inner.size();
-        if (!applyPlanned(processor, *arrangement, step, inner)) {
+        std::vector<std::unique_ptr<UndoAction>> undoActions;
+        if (!commitPlacementEdit(processor, step, undoActions)) {
             refused = true;
             break;
+        }
+        for (auto& action : undoActions) {
+            const auto name = controlUndoActionName(*action);
+            inner.push_back(innerOf(std::move(action), name, {step.trackBefore, step.trackAfter}));
         }
         if (step.trackBefore != step.trackAfter)
             receivingTracks.push_back(step.trackAfter);
@@ -1198,9 +990,7 @@ Result<JsonValue> runCopy(ControlOpContext& context, const CopyParams& params)
     if (controlArrangementRevision(context) != params.expectedArrangementRevision)
         return revisionConflict();
     auto& processor = context.processor();
-    auto* arrangement = processor.getStandaloneArrangement();
-    auto* repository = processor.getStandaloneContentRepository();
-    if (arrangement == nullptr || repository == nullptr)
+    if (processor.getStandaloneArrangement() == nullptr || processor.getStandaloneContentRepository() == nullptr)
         return controlOpError("INTERNAL", "", "the arrangement is not available");
 
     ControlWriteEnvelope envelope(context);
@@ -1208,55 +998,17 @@ Result<JsonValue> runCopy(ControlOpContext& context, const CopyParams& params)
     for (const auto& source : sources)
         earliest = std::min(earliest, source.placement.timelineStartSeconds);
 
-    // The contents first, so that a failure leaves the arrangement as it was: paste copies the part of the content the
-    // clip shows (copyContentRange()), duplicate the whole content (cloneContent()), as the arrangement view's keys do.
-    // Each of the two makes a clip per source; the clip id counter is moved to where that many ids are free first, so
-    // that none of the calls meets an id in use (ClipIds.h).
-    controlSkipUsedClipIds(context, params.full ? "arrangement.copy full" : "arrangement.copy window", sources.size());
-    std::vector<ContentKey> contents;
+    std::vector<PlacementCopyRequest> requests;
+    requests.reserve(sources.size());
     for (const auto& source : sources) {
-        const auto& p = source.placement;
-        const auto key = params.full ? processor.cloneContent(p.contentKey, p.name + " Copy")
-                                     : processor.copyContentRange(p.contentKey, p.clipInSeconds, p.durationSeconds);
-        if (!key.isValid()) {
-            for (const auto& made : contents)
-                repository->retireClip(made);
-            return controlOpError("INTERNAL", "", "OpenTune could not copy the content of a clip");
-        }
-        controlRecordCommittedClipId(context, key);
-        contents.push_back(key);
+        requests.push_back({source.placement, params.toTrackId,
+                            params.startTimelineSec + (source.placement.timelineStartSeconds - earliest), params.full});
     }
-    std::vector<std::uint64_t> made;
-    std::vector<double> starts;
-    for (std::size_t i = 0; i < sources.size(); ++i) {
-        const auto& source = sources[i].placement;
-        StandaloneArrangement::Placement placement;
-        if (params.full) {
-            placement = source;
-        } else {
-            // Paste: a clip that shows its whole new content, with the gain, fades and name of the source.
-            placement.durationSeconds = source.durationSeconds;
-            placement.gain = source.gain;
-            placement.fadeInDuration = source.fadeInDuration;
-            placement.fadeOutDuration = source.fadeOutDuration;
-            placement.name = source.name;
-            placement.clipInSeconds = 0.0;
-        }
-        placement.placementId = 0;
-        placement.contentKey = contents[i];
-        placement.timelineStartSeconds = params.startTimelineSec + (source.timelineStartSeconds - earliest);
-        if (!arrangement->insertPlacement(params.toTrackId, placement)) {
-            for (std::size_t j = i; j < contents.size(); ++j)
-                repository->retireClip(contents[j]);
-            if (made.empty())
-                return controlOpError("INTERNAL", "", "OpenTune could not insert a copied clip");
-            afterChange(context);
-            return controlOpErrorAfterChange("INTERNAL", "",
-                                             "OpenTune could not insert a copied clip; read the project again");
-        }
-        made.push_back(placement.placementId);
-        starts.push_back(placement.timelineStartSeconds);
-    }
+    auto copies = commitPlacementCopies(processor, requests);
+    if (copies.failure == PlacementCopyCommit::Failure::ContentCopy)
+        return controlOpError("INTERNAL", "", "OpenTune could not copy the content of a clip");
+    if (copies.failure == PlacementCopyCommit::Failure::PlacementInsert)
+        return controlOpError("INTERNAL", "", "OpenTune could not insert a copied clip");
     afterChange(context);
 
     // created: the new clips, then their contents; idMap relates every source to its copy.
@@ -1264,10 +1016,15 @@ Result<JsonValue> runCopy(ControlOpContext& context, const CopyParams& params)
     std::vector<std::string> labels;
     std::vector<std::string> from;
     std::vector<std::string> to;
-    for (std::size_t i = 0; i < made.size(); ++i) {
-        labels.push_back(addCreatedClip(envelope, after, made[i]));
+    std::vector<ContentKey> contents;
+    std::vector<std::uint64_t> made;
+    for (std::size_t i = 0; i < copies.copies.size(); ++i) {
+        const auto placementId = copies.copies[i].placement.placementId;
+        made.push_back(placementId);
+        contents.push_back(copies.copies[i].contentKey);
+        labels.push_back(addCreatedClip(envelope, after, placementId));
         from.push_back(sources[i].placementId);
-        to.push_back(controlPlacementId(context, made[i]));
+        to.push_back(controlPlacementId(context, placementId));
     }
     for (std::size_t i = 0; i < contents.size(); ++i) {
         const auto contentId = controlContentId(context, contents[i]);
@@ -1276,7 +1033,8 @@ Result<JsonValue> runCopy(ControlOpContext& context, const CopyParams& params)
     }
     addIdMapEntry(envelope, "copy", from, to);
     for (std::size_t i = 0; i < made.size(); ++i)
-        if (std::abs(starts[i] - sources[i].placement.timelineStartSeconds) <= kTimelineEpsilon)
+        if (std::abs(copies.copies[i].placement.timelineStartSeconds - sources[i].placement.timelineStartSeconds)
+            <= kTimelineEpsilon)
             envelope.addWarning("STACKED_ON_SOURCE", placementRef(to[i]));
     warnOverlaps(envelope, after, made);
     revealTracks(context, envelope, {params.toTrackId}, false);

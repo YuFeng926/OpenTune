@@ -10,15 +10,10 @@
 
 namespace OpenTune {
 
-class OpenTuneAudioProcessor;
-
 /**
- * What prefs.get and prefs.set need from the models on disk and from the inference runtime: the lists that the
- * preferences window offers (processing.options of prefs.get), the state of the vocoder that a prefsApply job waits
- * for, and the processor functions the window calls when the vocoder weight, the rendering priority or the pitch
- * model changes.
+ * Protocol options shared with prefs.get and prefs.set, plus the process-wide vocoder snapshot used by session.info.
  *
- * Every function below uses the real OpenTune function. Threading: message thread (prefs.get, prefs.set and its job).
+ * Threading: model options on the message thread; the vocoder state is safe from any thread.
  */
 
 /** The longest text of a processing option, in code points. */
@@ -26,7 +21,7 @@ constexpr std::size_t kControlOptionTextCodePoints = 64;
 /** The most members of one array of processing.options. */
 constexpr std::size_t kControlOptionCount = 64;
 
-/** The vocoder as the prefsApply job sees it. */
+/** The vocoder state reported by session.info. */
 struct ControlVocoderState
 {
     /** A vocoder is loaded (session.info vocoderReady). */
@@ -72,18 +67,5 @@ ControlVocoderState controlVocoderState();
     processing.backend and what a prefsApply job reads once, when it ends, to tell whether a request for gpuFirst fell
     back to the CPU (warning BACKEND_FALLBACK). Any thread. */
 const char* controlInferenceBackendName();
-
-/** The call the preferences window makes when the vocoder weight changes: processor.setVocoderModelWeight(). The
-    switch runs on the runtime's control worker; the call returns at once. False when the control queue rejected the
-    command; the caller must then leave the stored preference unchanged. */
-bool controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight);
-
-/** The call the preferences window makes when the rendering priority changes: processor.resetInferenceBackend(). The
-    reset runs on the runtime's control worker; the call returns at once. */
-void controlResetInferenceBackend(OpenTuneAudioProcessor& processor, bool forceCpu);
-
-/** The call the preferences window makes when the pitch model changes: processor.setF0ModelType(); false when the
-    processor could not switch. */
-bool controlSetF0Model(OpenTuneAudioProcessor& processor, F0ModelType type);
 
 } // namespace OpenTune

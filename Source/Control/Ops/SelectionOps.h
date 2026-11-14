@@ -28,8 +28,8 @@ class ControlMethodTable;
  *   after. dryRun does not predict it, because it depends on where the keyboard focus is.
  *
  * The call predicts these effects from the same state first; dryRun returns the prediction and changes nothing, the
- * selection included. A committed call reports what happened; a difference from the prediction is logged. The
- * selection is view state: the undo reason is not_persisted_state, and the revert recipe selects the active track and
+ * selection included. A committed call reports what happened. Selection is view state: the undo reason is
+ * not_persisted_state, and the revert recipe selects the active track and
  * its selected clip from before the call with ui.setSelection (never taking back notes or switching the window back).
  * Selecting what is already selected, with no other effect, is a no-op. The busy checks also apply to dryRun.
  */

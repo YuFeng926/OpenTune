@@ -184,10 +184,12 @@ public:
     bool setVocoderModelWeight(const VocoderModelWeight& weight,
                                std::shared_ptr<ContentRenderService> crs,
                                ControlCompletion completion,
-                               std::shared_ptr<CompletionGate> completionGate);
+                               std::shared_ptr<CompletionGate> completionGate,
+                               bool resetInferenceBackend = false,
+                               bool forceCpu = false);
     void resetVocoder(std::shared_ptr<ContentRenderService> crs,
                       ControlCompletion completion);
-    void resetInferenceBackend(bool forceCpu,
+    bool resetInferenceBackend(bool forceCpu,
                                std::shared_ptr<ContentRenderService> crs,
                                ControlCompletion completion,
                                std::shared_ptr<CompletionGate> completionGate);
@@ -271,6 +273,7 @@ private:
         Type type{Type::ResetVocoder};
         VocoderModelWeight weight{kDefaultVocoderWeight};
         bool forceCpu{false};
+        bool resetInferenceBackend{false};
         std::shared_ptr<ControlTransaction> transaction;
         ControlCompletion completion;
         std::shared_ptr<CompletionGate> completionGate;

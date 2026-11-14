@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include <juce_core/juce_core.h>
@@ -73,6 +74,27 @@ public:
         juce::String name;
         juce::Colour colour;
         std::atomic<float> currentRmsDb{-100.0f};
+    };
+
+    struct PlacementSelectionKey {
+        int trackId = -1;
+        uint64_t placementId = 0;
+
+        bool operator<(const PlacementSelectionKey& other) const noexcept
+        {
+            return trackId != other.trackId ? trackId < other.trackId : placementId < other.placementId;
+        }
+
+        bool operator==(const PlacementSelectionKey& other) const noexcept
+        {
+            return trackId == other.trackId && placementId == other.placementId;
+        }
+    };
+
+    struct SelectionState {
+        int activeTrackId = 0;
+        std::array<uint64_t, kTrackCount> selectedPlacementIds{};
+        std::set<PlacementSelectionKey> placements;
     };
 
     // 音频线程消费的放置投影。source/geometry 在内容发布或编排变更时冻结，
@@ -177,11 +199,16 @@ public:
     int getSelectedPlacementIndex(int trackId) const;
     bool selectPlacement(int trackId, uint64_t placementId);
     bool setSelectedPlacementIndex(int trackId, int placementIndex);
+    std::set<PlacementSelectionKey> getSelectedPlacements() const;
+    bool setSelectedPlacements(std::set<PlacementSelectionKey> placements);
+    SelectionState getSelectionState() const;
+    bool setSelectionState(const SelectionState& state);
     void clear();
 
     bool insertPlacement(int trackId, Placement& placement);
     /** Inserts at a zero-based index in the active (non-retired) placement sequence. */
     bool insertPlacement(int trackId, int insertIndex, Placement& placement);
+    bool insertPlacements(int trackId, std::vector<Placement>& placements);
     bool deletePlacementById(int trackId, uint64_t placementId, Placement* deletedOut = nullptr, int* deletedIndexOut = nullptr);
     struct PlacementMove {
         int sourceTrackId = -1;
@@ -200,6 +227,9 @@ public:
     bool setPlacementTrimAndTimelineStart(int trackId, uint64_t placementId,
                                           double clipInSeconds, double durationSeconds,
                                           double timelineStartSeconds);
+    bool setPlacementTrimState(int trackId, uint64_t placementId,
+                               double clipInSeconds, double durationSeconds, double timelineStartSeconds,
+                               double fadeInDuration, double fadeOutDuration);
 
     // 软删除/恢复接口，供 UndoAction 和垃圾回收使用
     bool retirePlacement(int trackId, uint64_t placementId);
@@ -225,6 +255,7 @@ private:
 
     mutable juce::ReadWriteLock stateLock_;
     std::array<Track, kTrackCount> tracks_;
+    std::set<PlacementSelectionKey> selectedPlacements_;
     Language language_ = Language::Chinese;
     int activeTrackId_{0};
     int visibleTrackCount_{kDefaultVisibleTracks};

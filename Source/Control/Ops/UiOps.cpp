@@ -229,9 +229,6 @@ std::optional<Error> closeDialogs(ControlOpContext& context, ControlUiBridge& br
         envelope.addWarning("DIALOG_CLOSE_COMMITTED", trackRef(dialog.trackId), std::move(data));
         if (revert.isNull())
             envelope.addWarning("IRREVERSIBLE", trackRef(dialog.trackId));
-        // The dialog's content marks the project as changed itself; the API marks it as well, so the colour stored in
-        // the project never stays unsaved without the flag.
-        controlMarkDirty(context);
     }
     return std::nullopt;
 }
@@ -336,12 +333,11 @@ Result<JsonValue> dismissDialogs(ControlOpContext& context, ControlUiBridge& bri
 }
 
 /**
- * target onboarding. Not showing: marks onboarding as shown, the preference the editor checks before it starts the
- * overlay, which prevents it (a user-global preference that no request resets: no_upstream_undo, IRREVERSIBLE).
+ * target onboarding. Not showing: asks the editor to mark onboarding as shown, the preference it checks before it
+ * starts the overlay (a user-global preference that no request resets: no_upstream_undo, IRREVERSIBLE).
  * Showing: closes the overlay as pressing Escape until it is gone does, which needs ui.onboardingClose: each Escape
  * closes the dialog on top, the overlay's own choice dialog finishes the overlay when it closes (its dismiss callback),
- * and with no dialog left the overlay takes the key itself. Then marks onboarding as shown where the overlay has not
- * (OpenTune marks it when the overlay shows its choice dialog).
+ * and with no dialog left the overlay takes the key itself; the editor's onboarding command records the preference.
  */
 Result<JsonValue> dismissOnboarding(ControlOpContext& context, ControlUiBridge& bridge)
 {
@@ -368,19 +364,16 @@ Result<JsonValue> dismissOnboarding(ControlOpContext& context, ControlUiBridge& 
             if (auto failed = closeDialogs(context, bridge, one, *envelope, closed))
                 return *failed;
         }
-        if (bridge.onboardingShowing().value_or(false) && !bridge.closeOnboarding()) {
-            const std::string detail = "the onboarding overlay did not close";
-            return closed.count == 0 ? controlOpError("INTERNAL", "", detail)
-                                     : controlOpErrorAfterChange("INTERNAL", "", detail);
-        }
-        // The overlay closed: an effect on the view even when no dialog closed and the preference was already set.
-        envelope->markEffective();
     } else {
         envelope.emplace(context);
     }
-    // AppPreferences::setOnboardingShown(), as OpenTuneAudioProcessorEditor's overlay calls it when it shows.
-    if (!preferences.getState().shared.onboardingShown)
-        preferences.setOnboardingShown(true);
+    if (!bridge.dismissOnboarding()) {
+        const std::string detail = "the onboarding overlay did not close";
+        return closed.count == 0 ? controlOpError("INTERNAL", "", detail)
+                                 : controlOpErrorAfterChange("INTERNAL", "", detail);
+    }
+    if (showing)
+        envelope->markEffective();
     const bool shownAfter = preferences.getState().shared.onboardingShown;
     const bool preferenceChanged = shownAfter != shownBefore;
     if (preferenceChanged) {

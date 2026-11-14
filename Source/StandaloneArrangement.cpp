@@ -415,12 +415,75 @@ bool StandaloneArrangement::setSelectedPlacementIndex(int trackId, int placement
     return true;
 }
 
+std::set<StandaloneArrangement::PlacementSelectionKey> StandaloneArrangement::getSelectedPlacements() const
+{
+    const juce::ScopedReadLock lock(stateLock_);
+    return selectedPlacements_;
+}
+
+bool StandaloneArrangement::setSelectedPlacements(std::set<PlacementSelectionKey> placements)
+{
+    const juce::ScopedWriteLock lock(stateLock_);
+    for (const auto& key : placements) {
+        if (!isValidTrackId(key.trackId) || key.placementId == 0)
+            return false;
+        const int index = findPlacementIndexUnlocked(key.trackId, key.placementId);
+        if (index < 0 || tracks_[static_cast<size_t>(key.trackId)].placements[static_cast<size_t>(index)].isRetired)
+            return false;
+    }
+    selectedPlacements_ = std::move(placements);
+    return true;
+}
+
+StandaloneArrangement::SelectionState StandaloneArrangement::getSelectionState() const
+{
+    const juce::ScopedReadLock lock(stateLock_);
+    SelectionState state;
+    state.activeTrackId = activeTrackId_;
+    state.placements = selectedPlacements_;
+    for (int trackId = 0; trackId < kTrackCount; ++trackId)
+        state.selectedPlacementIds[static_cast<size_t>(trackId)] =
+            tracks_[static_cast<size_t>(trackId)].selectedPlacementId;
+    return state;
+}
+
+bool StandaloneArrangement::setSelectionState(const SelectionState& state)
+{
+    if (!isValidTrackId(state.activeTrackId))
+        return false;
+
+    const juce::ScopedWriteLock lock(stateLock_);
+    for (int trackId = 0; trackId < kTrackCount; ++trackId) {
+        const auto placementId = state.selectedPlacementIds[static_cast<size_t>(trackId)];
+        if (placementId == 0)
+            continue;
+        const int index = findPlacementIndexUnlocked(trackId, placementId);
+        if (index < 0 || tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)].isRetired)
+            return false;
+    }
+    for (const auto& key : state.placements) {
+        if (!isValidTrackId(key.trackId) || key.placementId == 0)
+            return false;
+        const int index = findPlacementIndexUnlocked(key.trackId, key.placementId);
+        if (index < 0 || tracks_[static_cast<size_t>(key.trackId)].placements[static_cast<size_t>(index)].isRetired)
+            return false;
+    }
+
+    activeTrackId_ = state.activeTrackId;
+    selectedPlacements_ = state.placements;
+    for (int trackId = 0; trackId < kTrackCount; ++trackId)
+        tracks_[static_cast<size_t>(trackId)].selectedPlacementId =
+            state.selectedPlacementIds[static_cast<size_t>(trackId)];
+    return true;
+}
+
 void StandaloneArrangement::clear()
 {
     const juce::ScopedWriteLock lock(stateLock_);
     activeTrackId_ = 0;
     visibleTrackCount_ = kDefaultVisibleTracks;
     nextPlacementId_ = 1;
+    selectedPlacements_.clear();
 
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
         auto& track = tracks_[static_cast<size_t>(trackId)];
@@ -488,6 +551,42 @@ bool StandaloneArrangement::insertPlacement(int trackId, int insertIndex, Placem
     return true;
 }
 
+bool StandaloneArrangement::insertPlacements(int trackId, std::vector<Placement>& placements)
+{
+    if (!isValidTrackId(trackId) || placements.empty())
+        return false;
+
+    const juce::ScopedWriteLock lock(stateLock_);
+    std::set<uint64_t> ids;
+    for (const auto& placement : placements) {
+        if (!placement.contentKey.isValid() || !std::isfinite(placement.timelineStartSeconds)
+            || !std::isfinite(placement.durationSeconds) || placement.timelineStartSeconds < 0.0
+            || placement.durationSeconds <= 0.0)
+            return false;
+        if (placement.placementId != 0
+            && (placementIdExistsUnlocked(placement.placementId) || !ids.insert(placement.placementId).second))
+            return false;
+    }
+
+    auto& track = tracks_[static_cast<size_t>(trackId)];
+    track.placements.reserve(track.placements.size() + placements.size());
+    for (auto& placement : placements) {
+        if (placement.placementId == 0) {
+            while (nextPlacementId_ == 0 || placementIdExistsUnlocked(nextPlacementId_))
+                ++nextPlacementId_;
+            placement.placementId = nextPlacementId_++;
+        } else {
+            nextPlacementId_ = juce::jmax(nextPlacementId_, placement.placementId + 1);
+        }
+        placement.isRetired = false;
+        track.placements.push_back(placement);
+    }
+    if (track.selectedPlacementId == 0)
+        track.selectedPlacementId = track.placements[track.placements.size() - placements.size()].placementId;
+    publishPlaybackSnapshotLocked();
+    return true;
+}
+
 bool StandaloneArrangement::deletePlacementById(int trackId,
                                                 uint64_t placementId,
                                                 Placement* deletedOut,
@@ -514,6 +613,7 @@ bool StandaloneArrangement::deletePlacementById(int trackId,
     const int currentSelectedIndex = track.selectedPlacementId == 0
         ? -1
         : findPlacementIndexUnlocked(trackId, track.selectedPlacementId);
+    selectedPlacements_.erase(PlacementSelectionKey{trackId, placementId});
     track.placements.erase(track.placements.begin() + deletedIndex);
 
 
@@ -549,6 +649,13 @@ StandaloneArrangement::PlacementMoveResult StandaloneArrangement::applyPlacement
             if (moves[j].placementId == move.placementId)
                 return PlacementMoveResult::Rejected;
         }
+    }
+
+    auto movedSelection = selectedPlacements_;
+    for (const auto& move : moves) {
+        const PlacementSelectionKey sourceKey{move.sourceTrackId, move.placementId};
+        if (movedSelection.erase(sourceKey) != 0)
+            movedSelection.insert({move.targetTrackId, move.placementId});
     }
 
     bool changed = false;
@@ -601,6 +708,7 @@ StandaloneArrangement::PlacementMoveResult StandaloneArrangement::applyPlacement
             activeTrackId_ = move.targetTrackId;
         }
     }
+    selectedPlacements_ = std::move(movedSelection);
     publishPlaybackSnapshotLocked();
     return PlacementMoveResult::Applied;
 }
@@ -633,7 +741,7 @@ bool StandaloneArrangement::setPlacementTimelineStartSeconds(int trackId,
 
 bool StandaloneArrangement::setPlacementGain(int trackId, uint64_t placementId, float gain)
 {
-    if (!isValidTrackId(trackId) || placementId == 0) {
+    if (!isValidTrackId(trackId) || placementId == 0 || !std::isfinite(gain)) {
         return false;
     }
 
@@ -739,6 +847,43 @@ bool StandaloneArrangement::setPlacementTrimAndTimelineStart(int trackId,
 
     placement.timelineStartSeconds = clampedTimelineStartSeconds;
 
+    publishPlaybackSnapshotLocked();
+    return true;
+}
+
+bool StandaloneArrangement::setPlacementTrimState(int trackId, uint64_t placementId,
+                                                  double clipInSeconds, double durationSeconds,
+                                                  double timelineStartSeconds,
+                                                  double fadeInDuration, double fadeOutDuration)
+{
+    if (!isValidTrackId(trackId) || placementId == 0
+        || !std::isfinite(clipInSeconds) || !std::isfinite(durationSeconds)
+        || !std::isfinite(timelineStartSeconds) || !std::isfinite(fadeInDuration)
+        || !std::isfinite(fadeOutDuration))
+        return false;
+
+    const juce::ScopedWriteLock lock(stateLock_);
+    const int index = findPlacementIndexUnlocked(trackId, placementId);
+    if (index < 0)
+        return false;
+
+    auto& placement = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)];
+    const double newClipIn = std::max(0.0, clipInSeconds);
+    const double newDuration = std::max(0.01, durationSeconds);
+    const double newTimelineStart = std::max(0.0, timelineStartSeconds);
+    const double maxFade = newDuration * 0.9;
+    const double newFadeIn = std::clamp(fadeInDuration, 0.0, maxFade);
+    const double newFadeOut = std::clamp(fadeOutDuration, 0.0, maxFade);
+    if (placement.clipInSeconds == newClipIn && placement.durationSeconds == newDuration
+        && placement.timelineStartSeconds == newTimelineStart
+        && placement.fadeInDuration == newFadeIn && placement.fadeOutDuration == newFadeOut)
+        return true;
+
+    placement.clipInSeconds = newClipIn;
+    placement.durationSeconds = newDuration;
+    placement.timelineStartSeconds = newTimelineStart;
+    placement.fadeInDuration = newFadeIn;
+    placement.fadeOutDuration = newFadeOut;
     publishPlaybackSnapshotLocked();
     return true;
 }
@@ -937,6 +1082,10 @@ bool StandaloneArrangement::retirePlacement(int trackId, uint64_t placementId)
     auto& placement = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)];
     if (placement.isRetired) return false;
     placement.isRetired = true;
+    selectedPlacements_.erase(PlacementSelectionKey{trackId, placementId});
+    auto& track = tracks_[static_cast<size_t>(trackId)];
+    if (track.selectedPlacementId == placementId)
+        track.selectedPlacementId = 0;
     publishPlaybackSnapshotLocked();
     return true;
 }

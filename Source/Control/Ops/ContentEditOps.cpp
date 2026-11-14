@@ -7,11 +7,10 @@
 
 #include "Content/ContentEditCommands.h"
 #include "Content/EditableContentSnapshot.h"
-#include "Control/Edit/ContentEditTransaction.h"
 #include "Control/Edit/ControlOriginAction.h"
-#include "Control/Edit/NoteCorrection.h"
 #include "PluginProcessor.h"
 #include "Utils/LocalizationManager.h"
+#include "Utils/PianoRollEditAction.h"
 #include "Utils/PitchShiftEditAction.h"
 #include "Utils/PitchUtils.h"
 #include "Utils/ScaleUiMapping.h"
@@ -408,6 +407,7 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
                               "explicitly");
     // Note indexes count in start-time order, as content.getNotes counts them (controlNoteIndexOrder).
     const auto& before = snapshot.notes;
+    EditableContentSnapshot planning = snapshot;
     const auto order = controlNoteIndexOrder(before);
     std::vector<std::vector<std::size_t>> selections;
     for (const auto& op : params.ops) {
@@ -421,16 +421,16 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
         return history.error();
 
     auto& processor = context.processor();
+    auto commands = processor.getContentCommands();
     const float tuningHz = TuningConfig::currentTuningHz();
     const auto beforeWorld = controlCaptureWorldVersions(context);
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
-    ContentEditTransaction transaction(processor, ref.key);
     std::vector<Note> working = before;
     juce::String description;
-    std::size_t committedOps = 0;
-    std::optional<Error> failure;
-    for (std::size_t i = 0; i < params.ops.size() && !failure; ++i) {
+    std::size_t plannedOps = 0;
+    F0FrameRange affectedRange;
+    for (std::size_t i = 0; i < params.ops.size(); ++i) {
         const auto& op = params.ops[i];
         std::array<bool, 12> scale{};
         if (op.kind == NoteOpKind::SnapToScale)
@@ -443,47 +443,59 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
         if (changed.empty())
             continue;
         // The frame range of the notes that changed; where it is empty the piano roll commits nothing.
-        const auto editRange = controlNotesFrameRange(*snapshot.pitchCurve, working, changed);
+        const auto editRange = commands->noteFrameRange(*planning.pitchCurve, working, changed);
         if (editRange.isEmpty()) {
             working = previous;
             continue;
         }
-        if (!params.dryRun) {
-            const auto live = controlLiveSnapshot(context, ref.key);
-            const auto commit = live != nullptr ? controlNoteBasedCorrection(*live, working, editRange) : std::nullopt;
-            if (!commit || !controlCommitCorrection(processor, transaction, ref.key, *commit, descriptionOf(op))) {
-                const char* detail = "OpenTune did not commit the note edit";
-                failure = committedOps == 0 ? controlOpError("INTERNAL", "", detail)
-                                            : controlOpErrorAfterChange("INTERNAL", "", detail);
-                working = previous;
-                break;
-            }
+        const auto correction = commands->planNoteCorrection(
+            planning, working, editRange, NoteGeneratorParams{});
+        if (!correction) {
+            working = previous;
+            continue;
         }
-        if (committedOps++ == 0)
+        planning.notes = correction->notes;
+        planning.pitchCurve = correction->correctedCurve;
+        if (plannedOps == 0)
             description = descriptionOf(op);
+        if (plannedOps++ == 0) {
+            affectedRange = correction->affectedRange;
+        } else {
+            affectedRange.startFrame = std::min(affectedRange.startFrame, correction->affectedRange.startFrame);
+            affectedRange.endFrameExclusive =
+                std::max(affectedRange.endFrameExclusive, correction->affectedRange.endFrameExclusive);
+        }
     }
-    if (failure && committedOps == 0)
-        return *failure;
 
-    std::vector<Note> after = working;
+    std::vector<Note> after = planning.notes;
     std::string revisionAfter = versions.revision();
-    if (!params.dryRun && committedOps != 0) {
-        // One undo step for the call: the PianoRollEditActions of its commits in one entry, pushed as the piano
-        // roll pushes its own (UndoManager::addAction(), which discards the redo history).
-        auto& manager = processor.getUndoManager();
-        const auto undoId = history.value()->nextUndoId(context.instanceShort());
-        auto action =
-            std::make_unique<ControlOriginAction>(history.value(), undoId, description, transaction.takeActions());
-        const auto names = action->innerActionNames();
-        history.value()->record(manager, std::move(action));
-        envelope.setUndoable(undoId, description.toStdString(), names);
-        // As the editor after an edit of the piano roll (pitchCurveEdited(), contentEdited()).
-        controlMarkDirty(context);
+    if (plannedOps != 0) {
+        const auto correction = commands->planNoteCorrection(
+            planning, planning.notes, affectedRange, NoteGeneratorParams{});
+        if (!correction)
+            return controlOpError("INTERNAL", "", "OpenTune did not plan the note edit");
+        after = correction->notes;
+        planning.notes = after;
+        planning.pitchCurve = correction->correctedCurve;
+        if (!params.dryRun) {
+            auto edit = commands->commitNotesAndSegmentsUndoable(
+                ref.key, correction->notes, correction->segments,
+                ContentEditRangeFrames{correction->affectedRange.startFrame,
+                                       correction->affectedRange.endFrameExclusive},
+                description);
+            if (edit.snapshot == nullptr || edit.undoAction == nullptr)
+                return controlOpError("INTERNAL", "", "OpenTune did not commit the note edit");
+
+            auto& manager = processor.getUndoManager();
+            const auto undoId = history.value()->assignUndoId(
+                manager, *edit.undoAction, manager.cursor() - 1, controlContentEpoch(context),
+                context.instanceShort());
+            const std::vector<std::string> names{controlUndoActionName(*edit.undoAction)};
+            envelope.setUndoable(undoId, description.toStdString(), names);
+        }
     }
-    if (failure)
-        return *failure;
-    if (!params.dryRun && committedOps != 0) {
-        // The result reports the notes as OpenTune stored them, read back, not the prediction in working.
+    if (!params.dryRun && plannedOps != 0) {
+        // Read the state committed by the shared content command.
         auto committed = controlReadCommittedNotes(context, ref, before.size());
         if (!committed.ok())
             return committed.error();
@@ -496,7 +508,7 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
     if (params.dryRun) {
         // A commit of the predicted changes advances the notes revision, so it would report the content in
         // reRenderQueued: the prediction lists the commit's side effects.
-        if (committedOps != 0)
+        if (plannedOps != 0)
             controlAddPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
     } else {
@@ -559,31 +571,17 @@ Result<JsonValue> runSetPitchShift(ControlOpContext& context, const SetPitchShif
     auto& processor = context.processor();
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
-    const auto current = ref.snapshot->pitchShiftSettings;
-    // PluginEditor::pitchShiftRequested(): the dialog commits only a shift other than the current one.
-    if (params.shift == current)
-        return envelope.committed(context);
     const auto before = controlCaptureEditState(context);
-    // ContentEditCommands::commitPitchShiftEdit(), the call of the dialog's confirm: it scales the notes and the
-    // correction segments and returns the PitchShiftEditAction, or nothing for the same total cents.
+    // The shared command applies the shift and pushes its action; its non-owning result identifies that history entry.
     auto commands = processor.getContentCommands();
-    auto shift = commands->commitPitchShiftEdit(ref.key, params.shift);
+    auto* shift = commands->commitPitchShiftEdit(ref.key, params.shift);
     if (shift == nullptr)
         return envelope.committed(context);
-    // The dialog pushes the action and marks the project as changed; here it goes into a ControlOriginAction.
     const auto description = shift->getDescription();
-    std::vector<ControlOriginAction::Inner> inner(1);
-    inner[0].action = std::move(shift);
-    inner[0].name = "PitchShiftEditAction";
-    inner[0].content = ref.key;
-    inner[0].aspect = ControlContentAspect::PitchShift;
-    inner[0].pitchShift = std::make_pair(current, params.shift);
-    inner[0].commands = commands;
-    const auto undoId = history.value()->nextUndoId(context.instanceShort());
-    auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
-    const auto names = action->innerActionNames();
-    history.value()->record(processor.getUndoManager(), std::move(action));
-    controlMarkDirty(context);
+    auto& manager = processor.getUndoManager();
+    const auto undoId = history.value()->assignUndoId(
+        manager, *shift, manager.cursor() - 1, controlContentEpoch(context), context.instanceShort());
+    const std::vector<std::string> names{controlUndoActionName(*shift)};
 
     // The effect from two captures, as for an undo step: the pitchShift change and reRenderQueued; `revision`
     // stays (ControlPitchShiftLedger).

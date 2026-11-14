@@ -64,7 +64,8 @@ juce::String reasonSuffix(const juce::String& reason)
 } // namespace
 
 bool restoreAsioSampleRateToSystem(juce::AudioDeviceManager& deviceManager,
-                                   const juce::String& reason)
+                                   const juce::String& reason,
+                                   double* attemptedSampleRate)
 {
 #if JUCE_WINDOWS
     if (deviceManager.getCurrentAudioDeviceType() != "ASIO")
@@ -74,6 +75,8 @@ bool restoreAsioSampleRateToSystem(juce::AudioDeviceManager& deviceManager,
     if (device == nullptr)
         return true;
 
+    if (attemptedSampleRate != nullptr)
+        *attemptedSampleRate = device->getCurrentSampleRate();
     const auto suffix = reasonSuffix(reason);
     const double systemRate = getSystemDefaultRenderSampleRate();
     if (systemRate <= 0.0)
@@ -82,6 +85,8 @@ bool restoreAsioSampleRateToSystem(juce::AudioDeviceManager& deviceManager,
         return false;
     }
 
+    if (attemptedSampleRate != nullptr)
+        *attemptedSampleRate = systemRate;
     const double currentRate = device->getCurrentSampleRate();
     if (currentRate > 0.0 && std::abs(systemRate - currentRate) < 1.0)
         return true;
@@ -130,7 +135,7 @@ bool restoreAsioSampleRateToSystem(juce::AudioDeviceManager& deviceManager,
                    + juce::String(actualRate, 1) + " Hz" + suffix);
     return true;
 #else
-    juce::ignoreUnused(deviceManager, reason);
+    juce::ignoreUnused(deviceManager, reason, attemptedSampleRate);
     return true;
 #endif
 }

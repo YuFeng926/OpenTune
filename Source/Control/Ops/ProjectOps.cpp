@@ -225,6 +225,7 @@ struct SaveSpec
     juce::File target;
     /** The dirty generation of the snapshot: the unsaved-changes flag is cleared only if it is still current. */
     std::uint64_t generation = 0;
+    ProjectSession::SaveTask::Mode mode = ProjectSession::SaveTask::Mode::Save;
 };
 
 /**
@@ -232,8 +233,8 @@ struct SaveSpec
  * taken on the message thread when the request came (ProjectSession::prepareSave), a worker of the editor's pool wrote
  * the project and copied its media (ProjectSession::executeSaveToFile), and the message thread then makes the project
  * file the current one, clears the unsaved-changes flag if the project did not change meanwhile, pushes the file to the
- * recent projects and lets the editor update its menu and title. API saves capture committed model state; UI saves
- * additionally finish the current parameter gesture before taking their snapshot. The API writes to a temporary file
+ * recent projects and lets the editor update its menu and title. GUI and API share editor-owned preparation and commit.
+ * The API writes to a temporary file
  * in the target directory, which the job moves into place with a final rename once the
  * identity of the target was checked again.
  */
@@ -324,14 +325,7 @@ public:
         ControlWriteEnvelope envelope(context);
         const auto previousPath =
             session->hasProjectPath() ? utf8PathOf(session->getCurrentProjectFile()) : std::string();
-        // The editor's steps after a successful write (saveProject): the project's file is the target, the flag is
-        // cleared unless the project changed while the job ran, the file is the newest recent project, and the menu
-        // and the title follow.
-        session->setCurrentProjectFile(spec_.target);
-        if (session->getDirtyGeneration() == spec_.generation)
-            session->clearDirty();
-        session->pushRecentProject(spec_.target);
-        bridge->onProjectSaved();
+        bridge->commitProjectSave(spec_.target, spec_.mode, spec_.generation);
         if (spec_.saveAs && !sameCurrent)
             envelope.addChange("project", projectRef(), JsonValue::string("Project file"),
                                pathFields(previousPath, target));
@@ -391,10 +385,12 @@ Result<JsonValue> startSave(ControlOpContext& context, const ProjectParts& parts
     if (jobs == nullptr)
         return controlOpError("INTERNAL", "", "the jobs registry is not available");
     SaveSpec spec = requested;
-    // ProjectSession::prepareSave(): captures the snapshot of the target on the message thread, as the editor's
-    // saveProject does before it hands the write to its worker. The dirty generation belongs to this snapshot.
-    auto task = std::make_shared<ProjectSession::SaveTask>(parts.session->prepareSave(spec.target));
-    spec.generation = parts.session->getDirtyGeneration();
+    auto preparedTask = parts.bridge->prepareProjectSave(spec.target, ProjectSession::SaveTask::Mode::Save);
+    if (!preparedTask)
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor cannot prepare a project save");
+    auto task = std::make_shared<ProjectSession::SaveTask>(std::move(*preparedTask));
+    spec.generation = task->dirtyGeneration;
+    spec.mode = task->mode;
     auto shared = std::make_shared<SaveShared>();
     // The write goes to a name of its own in the target directory, so that the final rename never moves data between
     // volumes; the media directory stays next to the target (prepareSave derived it from the target).
@@ -488,14 +484,12 @@ Result<JsonValue> runSaveAs(ControlOpContext& context, const PathParams& params)
 // ---- project.saveCopy: the job -------------------------------------------------------------------
 
 /**
- * The job of project.saveCopy. It runs the first half of OpenTuneAudioProcessorEditor::saveProject and stops where the
- * editor takes the written file as the project's own: the snapshot was taken on the message thread when the request
- * came (ProjectSession::prepareSave), a worker of the editor's pool wrote the project and copied its media
+ * The job of project.saveCopy. It uses the same save preparation and file writer as project.save, with Copy mode so the
+ * snapshot does not initialize or change the active session. The snapshot is taken on the message thread;
+ * a worker of the editor's pool writes the project and copies its media
  * (ProjectSession::executeSaveToFile) into a temporary file in the target directory, and the job moves that file into
- * place with a final rename, which never replaces. It does not call
- * setCurrentProjectFile, clearDirty or pushRecentProject, and it does not ask the editor to update its menu or title:
- * the project keeps its file, its unsaved-changes flag, its recent projects and its undo history, and the result
- * reports the file and the flag so that a client can see it. The worker's state is that of SaveJob (SaveShared).
+ * place with a final rename, which never replaces. The result reports the written file and unchanged project state.
+ * The worker's state is that of SaveJob (SaveShared).
  */
 class CopyJob
 {
@@ -635,10 +629,10 @@ Result<JsonValue> startCopy(ControlOpContext& context, const ProjectParts& parts
     auto* jobs = context.jobs();
     if (jobs == nullptr)
         return controlOpError("INTERNAL", "", "the jobs registry is not available");
-    // ProjectSession::prepareSave(): captures the snapshot of the target on the message thread, as the editor's
-    // saveProject does before it hands the write to its worker. The dirty generation of the snapshot, which the
-    // editor keeps to clear the flag after its save, is not needed: a copy never clears the flag.
-    auto task = std::make_shared<ProjectSession::SaveTask>(parts.session->prepareSave(target));
+    auto preparedTask = parts.bridge->prepareProjectSave(target, ProjectSession::SaveTask::Mode::Copy);
+    if (!preparedTask)
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor cannot prepare a project copy");
+    auto task = std::make_shared<ProjectSession::SaveTask>(std::move(*preparedTask));
     auto shared = std::make_shared<SaveShared>();
     // A name of its own in the target directory, so that the final rename never moves data between volumes; the media
     // directory stays next to the target (prepareSave derived it from the target).
@@ -763,7 +757,8 @@ OpenedFileFacts factsOf(const ProjectSession::PreparedOpen& prepared)
     OpenedFileFacts facts;
     std::set<std::uint64_t> loaded;
     for (const auto& source : prepared.sources)
-        loaded.insert(source.sourceId);
+        if (source.importPrepared)
+            loaded.insert(source.sourceId);
     const auto directory = prepared.projectFile.getParentDirectory();
     for (const auto& source : prepared.snapshot.sources) {
         if (loaded.count(source.sourceId) != 0)
@@ -787,16 +782,18 @@ OpenedFileFacts factsOf(const ProjectSession::PreparedOpen& prepared)
 /**
  * The job of project.open. It follows OpenTuneAudioProcessorEditor::startOpenProject: a worker of the editor's pool
  * reads the file and prepares its media (ProjectSession::prepareOpen), and the message thread then replaces the project
- * in one step (ProjectSession::commitPreparedOpen) and lets the editor refresh from it. Until the file is prepared the
+ * in one step (ProjectSession::commitPreparedOpen) and lets the editor refresh from it. The worker performs file I/O;
+ * media preparation and the project commit stay on the message thread. Until the file is prepared the
  * job can be cancelled and the open project is untouched. The editor shows a dialog when an open fails; the job reports
  * the failure instead.
  */
 class OpenJob
 {
 public:
-    OpenJob(ControlOpEnvironment environment, bool discardUnsaved, std::shared_ptr<OpenShared> shared)
+    OpenJob(ControlOpEnvironment environment, ProjectSession::OpenCommitPolicy policy,
+            std::shared_ptr<OpenShared> shared)
         : environment_(std::move(environment))
-        , discardUnsaved_(discardUnsaved)
+        , policy_(policy)
         , shared_(std::move(shared))
     {}
 
@@ -836,19 +833,11 @@ public:
             step.cancel();
             return;
         }
-        // Changes made while the file was being read count as unsaved changes the caller never agreed to lose.
-        const bool wasDirty = session->isDirty();
-        if (wasDirty && !discardUnsaved_) {
-            fail(step, jobError("UNSAVED_CHANGES", "project_dirty",
-                                "the project changed while the file was read, and discardUnsaved was not given"));
-            return;
-        }
-        commit(context, step, *bridge, *session, wasDirty);
+        commit(context, step, *bridge, *session);
     }
 
 private:
-    void commit(ControlOpContext& context, ControlJobStep& step, ControlUiBridge& bridge, ProjectSession& session,
-                bool wasDirty)
+    void commit(ControlOpContext& context, ControlJobStep& step, ControlUiBridge& bridge, ProjectSession& session)
     {
         // The envelope starts immediately before the project is replaced.
         ControlWriteEnvelope envelope(context);
@@ -865,18 +854,20 @@ private:
         const auto removed = listWorld(context);
 
         auto prepared = std::move(*shared_->prepared).value();
-        const auto facts = factsOf(prepared);
         const auto openedFile = utf8PathOf(prepared.projectFile);
-        // ProjectSession::commitPreparedOpen(): the editor's own replacement of the project, in one message-thread
-        // step, as startOpenProject does it. It clears the undo history, the contents (a new content epoch), the
-        // arrangement and the render state, restores the project, makes the file the project's file and clears the
-        // flag.
-        const auto committed = session.commitPreparedOpen(std::move(prepared));
+        const auto committed = session.commitPreparedOpen(std::move(prepared), policy_);
         if (!committed.ok()) {
+            if (committed.error().context == "project_dirty") {
+                fail(step, jobError("UNSAVED_CHANGES", "project_dirty",
+                                    "the project changed while the file was read"));
+                return;
+            }
             AppLogger::logNoThrow("control API: project open: OpenTune could not commit the project");
             fail(step, jobError("INTERNAL", "", "OpenTune could not commit the project"));
             return;
         }
+        const auto facts = factsOf(prepared);
+        const bool wasDirty = policy_.wasDirty;
 
         // The track count is project state: commitPreparedOpen() restored it into the arrangement (the saved count,
         // or more when clips, mix settings or the selected track need more: resolveLoadedVisibleTrackCount()), and
@@ -913,7 +904,7 @@ private:
         // The revert recipe opens the previous file again; it carries no consent member, so after any later change the
         // dirty check keeps it from overwriting work. Nothing restores a project that had no file or whose changes
         // were discarded.
-        const bool discarded = wasDirty && discardUnsaved_;
+        const bool discarded = wasDirty && policy_.discardUnsaved;
         JsonValue revert;
         if (hadPath && !wasDirty && controlReportsCapability(context, "project.io")) {
             auto params = JsonValue::object();
@@ -1016,7 +1007,7 @@ private:
     }
 
     ControlOpEnvironment environment_;
-    bool discardUnsaved_;
+    ProjectSession::OpenCommitPolicy policy_;
     std::shared_ptr<OpenShared> shared_;
     bool finished_ = false;
     bool operationEnded_ = false;
@@ -1043,25 +1034,26 @@ Result<JsonValue> runOpen(ControlOpContext& context, const PathParams& params)
     const auto file = fileOf(params.path);
     if (!file.existsAsFile())
         return controlOpError("NOT_FOUND", "file_not_found", "no file exists at the path");
+    const auto openPolicy = parts.value().bridge->prepareProjectOpen(params.consent);
+    if (!openPolicy)
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor cannot prepare a project open");
     // Opening never saves and never discards changes the caller did not give up.
-    if (parts.value().session->isDirty() && !params.consent)
+    if (openPolicy->wasDirty && !params.consent)
         return controlOpError("UNSAVED_CHANGES", "project_dirty",
                               "the project has unsaved changes, and discardUnsaved was not given");
 
     auto shared = std::make_shared<OpenShared>();
-    auto job = std::make_shared<OpenJob>(context.environment(), params.consent, shared);
+    auto job = std::make_shared<OpenJob>(context.environment(), *openPolicy, shared);
     auto wake = jobs->wakeCallback();
     const auto started = jobs->start(kJobKindOpen, true, [job](ControlJobStep& step) { job->step(step); });
     if (started.jobId.empty())
         return startRefusal(started.refusal);
     parts.value().bridge->setProjectOperationRunning(true);
-    // ProjectSession::prepareOpen(): reads the project file and the media it references on the editor's worker, as
-    // startOpenProject does; the session pointer stays valid while the editor, which owns the pool, exists. The
-    // language of its error texts is resolved here, on the message thread, as startOpenProject resolves it.
-    auto* session = parts.value().session;
+    // ProjectSession::prepareOpen() is pure file I/O on the editor's worker; runtime preparation and commit stay on
+    // the message thread.
     const auto openLanguage = LocalizationManager::getInstance().resolveLanguage();
-    parts.value().pool->addJob([shared, session, file, openLanguage, wake = std::move(wake)] {
-        shared->prepared.emplace(session->prepareOpen(file, openLanguage));
+    parts.value().pool->addJob([shared, file, openLanguage, wake = std::move(wake)] {
+        shared->prepared.emplace(ProjectSession::prepareOpen(file, openLanguage));
         shared->done = true;
         wake();
     });

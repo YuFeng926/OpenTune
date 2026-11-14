@@ -142,77 +142,50 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
 {
     if (auto busy = controlCheckBusy(context))
         return *busy;
+    auto* bridge = context.bridge();
+    if (bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window", "transport commands run through the editor");
     auto& processor = context.processor();
     ControlWriteEnvelope envelope(context);
     const auto device = controlAudioDeviceState(context);
     const auto before = readPlayState(processor);
-    // Where the audio callback will put the position when it carries pauseAtLastStart out; the other actions report
-    // the position the processor presents right after the call (nullopt: report the read at `after` below).
-    std::optional<double> positionAfter;
     bool warnsNoDevice = false;
 
-    // The processor's transport functions and recordControlCall(), as the editor's listener functions call them.
-    using Call = OpenTuneAudioProcessor::DiagnosticControlCall;
     switch (params.action) {
         case Action::Play:
-            // playRequested(). The transport bar's play button is the pause button while playing, so a play during
-            // playback is not issued again (it would only move the play start position).
-            if (!before.playing)
-                processor.play();
-            processor.recordControlCall(Call::Play);
+            if (!bridge->transportPlay())
+                return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer play");
             warnsNoDevice = true;
             break;
         case Action::Pause:
-            // pauseRequested().
-            processor.pause();
-            processor.recordControlCall(Call::Pause);
+            if (!bridge->transportPause())
+                return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer pause");
             break;
         case Action::Stop:
-            // stopRequested(): OpenTuneAudioProcessor::stop() freezes the presented position and asks the audio
-            // callback to fade the running transport out and land it on 0 (processBlock's Stop case; stop() sets
-            // pendingCompletionTime_ to 0). The landing happens on the audio thread when that fade-out completes
-            // (kTransportRampDurationSeconds, 0.2 s on the audio thread), so a read right after the call still
-            // returns the frozen presented position. The result reports that read, exactly as transport.get does
-            // now; after the fade a read returns 0. There is no earlier value to wait for on this thread.
-            processor.stop();
-            processor.recordControlCall(Call::Stop);
+            if (!bridge->transportStop())
+                return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer stop");
             break;
         case Action::Seek:
-            // playheadPositionChangeRequested(): also the play start position of the next play-from-start.
-            processor.setPosition(params.positionTimelineSec);
-            processor.recordControlCall(Call::Seek);
+            if (!bridge->transportSeek(params.positionTimelineSec))
+                return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer seeking");
             break;
         case Action::PlayFromLastStart:
-            // playFromStartToggleRequested(), the branch of a stopped transport. While playing, the button pauses
-            // instead; the schema defines this action as "move to the last start and play", so a running transport is
-            // moved and plays on.
-            processor.setPosition(before.playStartSec);
-            if (!before.playing)
-                processor.play();
-            processor.recordControlCall(Call::Play);
+            if (!bridge->transportPlayFromLastStart())
+                return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer play from start");
             warnsNoDevice = true;
             break;
         case Action::PauseAtLastStart:
-            // playFromStartToggleRequested(), the branch of a running transport. A stopped transport has nothing to
-            // pause and stays where it is: a no-op.
-            if (before.playing) {
-                processor.pauseAtPosition(before.playStartSec);
-                if (device.running)
-                    positionAfter = before.playStartSec;
-            }
-            processor.recordControlCall(Call::Pause);
+            if (!bridge->transportPauseAtLastStart())
+                return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer pause at start");
             break;
     }
     if (warnsNoDevice && !device.running)
         envelope.addWarning("NO_AUDIO_DEVICE");
 
-    if (auto* bridge = context.bridge())
-        bridge->onTransportChanged();
-
     const auto after = readPlayState(processor);
     // play and pause keep the position; what the clock moved between the two reads is not a change.
     const bool keepsPosition = params.action == Action::Play || params.action == Action::Pause;
-    const double afterPosition = positionAfter ? *positionAfter : after.positionSec;
+    const double afterPosition = after.positionSec;
     auto fields = JsonValue::object();
     if (before.playing != after.playing)
         fields.appendMember(
@@ -306,27 +279,18 @@ Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& para
 {
     if (auto busy = controlCheckBusy(context))
         return *busy;
+    auto* bridge = context.bridge();
+    if (bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window", "tempo commands run through the editor");
     auto& processor = context.processor();
     ControlWriteEnvelope envelope(context);
     const double bpmBefore = processor.getBpm();
     const int numeratorBefore = processor.getTimeSigNumerator();
     const int denominatorBefore = processor.getTimeSigDenominator();
-    // The values equal to the current ones are not set again: the editor's fields set the processor only on an
-    // edit, and the call is a no-op.
-    const bool bpmChanges = params.bpm && controlBpmDiffers(*params.bpm, bpmBefore);
-    const bool signatureChanges =
-        params.numerator && (*params.numerator != numeratorBefore || *params.denominator != denominatorBefore);
-    if (bpmChanges || signatureChanges) {
-        // OpenTuneAudioProcessor::setBpm() and setTimeSignature(), the canonical setters bpmChanged() and
-        // timeSignatureChanged() call; then the project is marked as changed, as they do.
-        if (bpmChanges)
-            processor.setBpm(*params.bpm);
-        if (signatureChanges)
-            processor.setTimeSignature(*params.numerator, *params.denominator);
-        controlMarkDirty(context);
-        if (auto* bridge = context.bridge())
-            bridge->onTempoChanged();
-    }
+    if (params.bpm && !bridge->setBpm(*params.bpm))
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer tempo changes");
+    if (params.numerator && !bridge->setTimeSignature(*params.numerator, *params.denominator))
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer time signatures");
     const double bpmAfter = processor.getBpm();
     const int numeratorAfter = processor.getTimeSigNumerator();
     const int denominatorAfter = processor.getTimeSigDenominator();
@@ -390,23 +354,24 @@ Result<JsonValue> runSetLoop(ControlOpContext& context, const LoopParams& params
 {
     if (auto busy = controlCheckBusy(context))
         return *busy;
+    auto* bridge = context.bridge();
+    if (bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window", "loop commands run through the editor");
     auto& processor = context.processor();
     ControlWriteEnvelope envelope(context);
     const bool before = processor.isLoopEnabled();
-    if (before != params.enabled) {
-        // OpenTuneAudioProcessor::setLoopEnabled(), the function loopToggled() calls. The flag is not saved with the
-        // project, which the editor does not mark as changed either.
-        processor.setLoopEnabled(params.enabled);
-        if (auto* bridge = context.bridge())
-            bridge->onTransportChanged();
+    if (!bridge->setLoopEnabled(params.enabled))
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer loop changes");
+    const bool after = processor.isLoopEnabled();
+    if (before != after) {
         auto fields = JsonValue::object();
         fields.appendMember("loopEnabled",
-                            fieldChange(JsonValue::boolean(before), JsonValue::boolean(params.enabled), nullptr));
+                            fieldChange(JsonValue::boolean(before), JsonValue::boolean(after), nullptr));
         envelope.addChange("transport", singletonRef("transport"), JsonValue::string("Transport"), std::move(fields));
         auto revert = JsonValue::object();
         revert.appendMember("enabled", JsonValue::boolean(before));
         envelope.setNotUndoable("not_persisted_state", controlRevertRecipe("transport.setLoop", std::move(revert)));
-        if (params.enabled)
+        if (after)
             envelope.addWarning("LOOP_NO_EFFECT_STANDALONE");
         envelope.addWarning("NOT_PERSISTED", singletonRef("transport"));
     }
@@ -419,7 +384,7 @@ Result<JsonValue> runSetLoop(ControlOpContext& context, const LoopParams& params
 
 bool controlBpmDiffers(double a, double b)
 {
-    return std::abs(a - b) > 1e-9;
+    return a != b;
 }
 
 void controlReportTempoRounded(ControlOpContext& context, ControlWriteEnvelope& envelope, double fromBpm, double toBpm)

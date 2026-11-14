@@ -2,7 +2,7 @@
 #pragma once
 
 #include "Control/ControlUiBridge.h"
-#include "ControlEditorBridgeViewSwitch.h"
+#include "Standalone/StandaloneMediaOperations.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -16,8 +16,7 @@ class ControlTrackColourWatch;
 /**
  * The Standalone editor's side of ControlUiBridge: a thin adapter that reads the editor's own state and
  * calls the editor's own functions, and adds no behaviour of its own. It is a friend of
- * OpenTuneAudioProcessorEditor (the editor's hook in Source/Standalone/PluginEditor.h, see
- * Source/Control/README.md#hooks), so that the editor keeps its members private.
+ * OpenTuneAudioProcessorEditor, so that the editor keeps its members private.
  *
  * Lifecycle: the editor creates it at the end of its constructor, which registers it with the processor's
  * ControlService, and destroys it first in its destructor, which unregisters it; the control API therefore
@@ -46,15 +45,25 @@ public:
     void markDirty() override;
     std::optional<BusyState> queryBusy() const override;
     void onStructureChanged() override;
-    void onUndoRedoApplied() override;
+    UndoAction* performUndoRedo(bool undo, const std::function<bool(UndoAction*)>& validateTop) override;
     void onTimeGridChanged() override;
     void onProjectReloaded() override;
-    void onProjectSaved() override;
     void onRecentProjectsChanged() override;
     void setProjectOperationRunning(bool running) override;
+    std::optional<ProjectSession::SaveTask> prepareProjectSave(
+        const juce::File& file, ProjectSession::SaveTask::Mode mode) override;
+    std::optional<ProjectSession::OpenCommitPolicy> prepareProjectOpen(bool discardUnsaved) override;
+    void commitProjectSave(const juce::File& file, ProjectSession::SaveTask::Mode mode,
+                           uint64_t snapshotGeneration) override;
     bool focusPlacement(int trackId, std::uint64_t placementId) override;
     bool revealTracks(int count) override;
     bool currentNoteGenerationParams(NoteGeneratorParams& out) const override;
+    StandaloneMediaOperations::ImportCommitResult commitImportedAudio(
+        OpenTuneAudioProcessor::PreparedImport&& prepared,
+        const StandaloneMediaOperations::ImportPlacementRequest& request,
+        bool focus,
+        bool generateNotes,
+        std::function<void()> onNotesGenerated = {}) override;
     std::optional<ViewState> viewState() const override;
     std::optional<std::vector<std::uint64_t>> selectedPlacementIds() const override;
     std::optional<int> visibleTrackCount() const override;
@@ -66,15 +75,25 @@ public:
     void busyStateChanged();
 
     // ---- Tracks and transport (ControlEditorBridgeTracks.cpp) ----
-    bool setVisibleTrackCount(int count) override;
-    void onTrackMixChanged() override;
-    void onTransportChanged() override;
-    void onTempoChanged() override;
+    ControlTrackCommandResult addTracks(int count) override;
+    ControlTrackCommandResult duplicateTrack(int trackId, bool shareContent) override;
+    ControlTrackCommandResult deleteTrack(int trackId) override;
+    bool setTrackMix(int trackId, std::optional<bool> muted, std::optional<bool> solo,
+                     std::optional<float> volumeLinear, std::optional<std::uint32_t> colourRgb) override;
+    bool transportPlay() override;
+    bool transportPause() override;
+    bool transportStop() override;
+    bool transportSeek(double positionSeconds) override;
+    bool transportPlayFromLastStart() override;
+    bool transportPauseAtLastStart() override;
+    bool setLoopEnabled(bool enabled) override;
+    bool setBpm(double bpm) override;
+    bool setTimeSignature(int numerator, int denominator) override;
     // ---- Dialogs and onboarding (ControlEditorBridgeModals.cpp) ----
     std::optional<std::vector<DialogInfo>> openDialogs() const override;
     bool closeTopDialog() override;
     std::optional<bool> onboardingShowing() const override;
-    bool closeOnboarding() override;
+    bool dismissOnboarding() override;
     std::optional<UiScale> uiScale() const override;
 
     // ---- Selection (ControlEditorBridgeSelection.cpp) ----
@@ -94,17 +113,6 @@ public:
 
 private:
     void mouseUp(const juce::MouseEvent& event) override;
-
-    /** What a view switch must leave as it was: the project's changed mark and how often it was set, the tempo and time
-        signature of the transport bar, and where the keyboard focus was (ControlEditorBridgeViewSwitch.h). */
-    using ViewSwitchBaseline = ControlViewSwitchBaseline;
-
-    /** Reads the baseline before a view switch, from the view that is shown now. Message thread. */
-    ViewSwitchBaseline viewSwitchBaseline() const;
-
-    /** After a view switch: takes back the project's changed mark when only the commit of the transport bar's BPM
-        field set it (see ControlEditorBridgeWorkspace.cpp). Message thread. */
-    void settleViewSwitch(const ViewSwitchBaseline& baseline);
 
     /** The placement the arrangement selects on its active track, or 0. */
     std::uint64_t activeSelection() const;

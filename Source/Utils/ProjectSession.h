@@ -21,6 +21,8 @@
 
 #include <juce_core/juce_core.h>
 
+#include <memory>
+
 #include "../PluginProcessor.h"
 #include "ProjectModel.h"
 #include "Error.h"
@@ -89,10 +91,15 @@ public:
         juce::File targetFile;
         juce::File mediaDirectory;
         Language language = Language::Chinese;
+        enum class Mode { Save, Copy } mode = Mode::Save;
+        uint64_t dirtyGeneration = 0;
     };
 
     /** 在消息线程调用：捕获目标文件快照。返回的 SaveTask 供后台线程使用。 */
-    SaveTask prepareSave(const juce::File& targetFile);
+    SaveTask prepareSave(const juce::File& targetFile, SaveTask::Mode mode = SaveTask::Mode::Save);
+
+    /** 保存写入成功后在消息线程提交工程状态；Copy 只写文件，不改变当前工程。 */
+    void commitSave(const juce::File& file, SaveTask::Mode mode, uint64_t snapshotGeneration);
 
     /**
      * 在后台线程调用：纯文件 I/O。
@@ -100,12 +107,14 @@ public:
      */
     static Result<void> executeSaveToFile(SaveTask& task);
 
-    /** 保存成功后在消息线程提交当前工程文件路径。 */
-    void setCurrentProjectFile(const juce::File& file);
-
     struct PreparedProjectSource {
         uint64_t sourceId{0};
+        juce::String displayName;
+        juce::String sourceFilePath;
+        std::shared_ptr<juce::AudioBuffer<float>> audioBuffer;
+        double sampleRate{0.0};
         OpenTuneAudioProcessor::PreparedImport preparedImport;
+        bool importPrepared{false};
     };
 
     struct PreparedOpen {
@@ -115,14 +124,23 @@ public:
         Language language = Language::Chinese;
     };
 
-    /** 在后台线程读取工程媒体并执行 canonical import 预处理。 */
-    Result<PreparedOpen> prepareOpen(const juce::File& file, Language language);
+    /** 在后台线程读取工程文件和媒体；运行时 import 准备在消息线程提交时执行。 */
+    static Result<PreparedOpen> prepareOpen(const juce::File& file, Language language);
 
-    /** 在消息线程一次性提交已预处理的工程数据。 */
-    Result<void> commitPreparedOpen(PreparedOpen&& preparedOpen);
+    struct OpenCommitPolicy {
+        uint64_t dirtyGeneration{0};
+        bool wasDirty{false};
+        bool discardUnsaved{false};
+    };
+
+    /** 在开始异步打开时的消息线程捕获，用于保留读取期间产生的新编辑。 */
+    OpenCommitPolicy captureOpenCommitPolicy(bool discardUnsaved) const noexcept;
+
+    /** 在消息线程一次性提交已读取的工程数据。 */
+    Result<void> commitPreparedOpen(PreparedOpen&& preparedOpen, const OpenCommitPolicy& policy);
 
     /** 从当前运行时状态抓取完整工程快照 */
-    ProjectSnapshot captureSnapshot() const;
+    ProjectSnapshot captureSnapshot(SaveTask::Mode mode = SaveTask::Mode::Save) const;
 
     // ============================================================================
     // 最近工程列表管理

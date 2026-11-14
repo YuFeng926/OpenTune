@@ -1,10 +1,16 @@
 #pragma once
 
 #include "TimeGrid.h"
+#include <cstdint>
 #include <memory>
 #include <vector>
 
 namespace OpenTune {
+
+struct TimeGridHandleMove {
+    std::uint64_t handleId = 0;
+    double outputSeconds = 0.0;
+};
 
 std::shared_ptr<const TimeGridSnapshot> planTimeGridDrag(
     const std::shared_ptr<const TimeGridSnapshot>& original,
@@ -15,6 +21,10 @@ std::shared_ptr<const TimeGridSnapshot> planTimeGridDrag(
     const std::vector<uint64_t>& additionalSelectedIds,
     bool snapDisabled,
     bool& validationRejected);
+
+std::shared_ptr<const TimeGridSnapshot> planTimeGridMoves(
+    const std::shared_ptr<const TimeGridSnapshot>& original,
+    const std::vector<TimeGridHandleMove>& moves);
 
 enum class TimeGridInsertStatus {
     Inserted,

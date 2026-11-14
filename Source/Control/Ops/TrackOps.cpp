@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "TrackOps.h"
 
-#include "ClipIds.h"
 #include "EditSupport.h"
 #include "OpsSupport.h"
 #include "TrackSupport.h"
 #include "WriteEnvelope.h"
 
-#include "Content/StandaloneContentRepository.h"
 #include "Control/ControlUiBridge.h"
 #include "Control/Edit/ControlOriginAction.h"
 #include "PluginProcessor.h"
@@ -118,6 +116,24 @@ int shownTracks(ControlOpContext& context)
 {
     bool derived = false;
     return controlVisibleTrackCount(context, derived);
+}
+
+Error trackCommandError(ControlTrackCommandResult result)
+{
+    switch (result) {
+        case ControlTrackCommandResult::InvalidTrack:
+            return controlOpError("NOT_FOUND", "track_not_found", "the track slot does not exist");
+        case ControlTrackCommandResult::HiddenTrack:
+            return controlOpError("INVALID_ARGUMENT", "track_hidden", "the command needs a shown track");
+        case ControlTrackCommandResult::TrackLimit:
+            return controlOpError("INVALID_ARGUMENT", "track_limit", "the command exceeds the available track slots");
+        case ControlTrackCommandResult::TargetOccupied:
+            return controlOpError("INVALID_ARGUMENT", "target_track_occupied", "the first hidden track already holds clips");
+        case ControlTrackCommandResult::LastTrack:
+            return controlOpError("INVALID_ARGUMENT", "last_track", "the only shown track cannot be deleted");
+        default:
+            return controlOpError("INTERNAL", "", "the editor could not complete the track command");
+    }
 }
 
 // ---- track.set ------------------------------------------------------------------------------------
@@ -311,21 +327,18 @@ Result<JsonValue> runSet(ControlOpContext& context, const SetParams& params)
     auto* arrangement = context.processor().getStandaloneArrangement();
     if (arrangement == nullptr)
         return controlOpError("INTERNAL", "", "the arrangement is not available");
+    auto* bridge = context.bridge();
+    if (bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window", "track commands run through the editor");
     ControlWriteEnvelope envelope(context);
     const int visible = shownTracks(context);
     const auto before = controlCaptureTracks(context, visible);
 
-    // The setters of the track panel's controls (setStandaloneTrackMuted, setStandaloneTrackSolo,
-    // setStandaloneTrackVolume), which the editor calls from trackMuteToggled(), trackSoloToggled() and
-    // trackVolumeChanged(); the colour is the one the colour dialog sets (setStandaloneTrackColour), set directly.
     for (const auto& setting : params.tracks) {
-        if (setting.muted)
-            arrangement->setTrackMuted(setting.trackId, *setting.muted);
-        if (setting.solo)
-            arrangement->setTrackSolo(setting.trackId, *setting.solo);
+        std::optional<float> volumeLinear;
         if (setting.volumeDb || setting.volumeLinear) {
             const auto volume = requestedVolume(setting);
-            arrangement->setTrackVolume(setting.trackId, static_cast<float>(volume.linear));
+            volumeLinear = static_cast<float>(volume.linear);
             if (volume.clamped) {
                 auto data = JsonValue::object();
                 data.appendMember("field", JsonValue::string(volume.field));
@@ -334,11 +347,8 @@ Result<JsonValue> runSet(ControlOpContext& context, const SetParams& params)
                 envelope.addWarning("CLAMPED", controlTrackRef(setting.trackId), std::move(data));
             }
         }
-        if (setting.colourRgb)
-            arrangement->setTrackColour(setting.trackId,
-                                        juce::Colour(static_cast<juce::uint8>(*setting.colourRgb >> 16),
-                                                     static_cast<juce::uint8>(*setting.colourRgb >> 8),
-                                                     static_cast<juce::uint8>(*setting.colourRgb)));
+        if (!bridge->setTrackMix(setting.trackId, setting.muted, setting.solo, volumeLinear, setting.colourRgb))
+            return controlOpError("INTERNAL", "", "the editor did not apply the track settings");
     }
     const auto after = controlCaptureTracks(context, visible);
 
@@ -356,10 +366,6 @@ Result<JsonValue> runSet(ControlOpContext& context, const SetParams& params)
     }
     describeTracks(before, after, envelope, named);
     if (changed) {
-        // The settings are saved with the project, which the UI marks as changed after each of them.
-        controlMarkDirty(context);
-        if (auto* bridge = context.bridge())
-            bridge->onTrackMixChanged();
         auto revert = JsonValue::object();
         revert.appendMember("tracks", std::move(revertTracks));
         envelope.setNotUndoable("ui_parity", controlRevertRecipe("track.set", std::move(revert)));
@@ -393,28 +399,16 @@ Result<JsonValue> runAdd(ControlOpContext& context, const AddParams& params)
     const auto visible = controlEditorVisibleTrackCount(context);
     if (!visible.ok())
         return visible.error();
-    const int slots = controlTrackSlotCount(context);
-    const int target = visible.value() + params.count;
-    if (target > slots)
-        return controlOpError("INVALID_ARGUMENT", "track_limit",
-                              "fewer hidden track slots remain than the request needs; none was shown");
-
     ControlWriteEnvelope envelope(context);
     const auto before = controlCaptureTracks(context, visible.value());
-    // TrackPanelComponent::showMoreTracks(), the + button, repeated count times: the track panel and the arrangement
-    // show the same, larger count. A shown track keeps the clips it holds.
     auto* bridge = context.bridge();
-    if (bridge == nullptr || !bridge->setVisibleTrackCount(target))
-        return controlOpError("UNSUPPORTED", "capability_missing", "the editor cannot show more tracks");
+    if (bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window", "track commands run through the editor");
+    const auto command = bridge->addTracks(params.count);
+    if (command != ControlTrackCommandResult::Applied)
+        return trackCommandError(command);
     const auto after = controlCaptureTracks(context, shownTracks(context));
     describeTracks(before, after, envelope);
-    // No undo entry and nothing to revert: the + button has no undo, and no request
-    // restores the previous count (track.delete removes the track with its clips, one track per request, and needs the
-    // end user's consent, so it is no revert recipe). The count is project state (saved with the project since upstream
-    // 2c01847): the editor's panel writes it to the arrangement and marks the project when it changes
-    // (visibleTrackCountChanged, reached through the bridge's setVisibleTrackCount()), as the + button does, so the
-    // result's dirty flag turns true without this operation marking the project itself. Hence IRREVERSIBLE, with the
-    // first track shown as its subject.
     envelope.setNotUndoable("no_upstream_undo");
     envelope.addWarning("IRREVERSIBLE", controlTrackRef(visible.value()));
     auto result = envelope.committed(context);
@@ -459,105 +453,55 @@ Result<JsonValue> runDuplicate(ControlOpContext& context, const DuplicateParams&
     const auto visible = controlEditorVisibleTrackCount(context);
     if (!visible.ok())
         return visible.error();
-    // OpenTune's Duplicate Track is offered on a shown track only, so a hidden source is refused with track_hidden
-    // (registry: the reason covers duplication as well as deletion).
-    if (params.trackId >= visible.value())
-        return controlOpError("INVALID_ARGUMENT", "track_hidden", "a hidden track cannot be duplicated");
-    if (visible.value() >= controlTrackSlotCount(context))
-        return controlOpError("INVALID_ARGUMENT", "track_limit",
-                              "every track slot is shown; there is no slot for the copy");
-    // The copy goes to the first hidden slot, which a project that was opened can already fill with clips.
     const int target = visible.value();
-    if (!controlPlacementsOnTrack(context, target).empty())
-        return controlOpError("INVALID_ARGUMENT", "target_track_occupied",
-                              "the first hidden track slot already holds clips");
 
     auto& processor = context.processor();
     auto* arrangement = processor.getStandaloneArrangement();
-    auto* repository = processor.getStandaloneContentRepository();
     auto* bridge = context.bridge();
-    if (arrangement == nullptr || repository == nullptr || bridge == nullptr)
+    if (arrangement == nullptr || bridge == nullptr)
         return controlOpError("INTERNAL", "", "the arrangement is not available");
     const auto sources = controlPlacementsOnTrack(context, params.trackId);
 
     ControlWriteEnvelope envelope(context);
     const auto before = controlCaptureTracks(context, visible.value());
 
-    // Mode clone: every copied clip gets a content of its own first (OpenTuneAudioProcessor::cloneContent()), so
-    // that a failure leaves the arrangement as it was; the contents made so far are retired again, as the
-    // arrangement's clip duplicate does when its insert fails. Every clone makes a clip, so the clip id counter is
-    // moved to where that many ids are free first, once for all of them (ClipIds.h); mode share makes none.
-    if (!params.share && !sources.empty())
-        controlSkipUsedClipIds(context, "track.duplicate", sources.size());
-    std::vector<ContentKey> contents;
-    for (const auto& source : sources) {
-        if (params.share) {
-            contents.push_back(source.placement.contentKey);
-            continue;
+    const auto command = bridge->duplicateTrack(params.trackId, params.share);
+    if (command != ControlTrackCommandResult::Applied) {
+        if (command != ControlTrackCommandResult::Failed)
+            return trackCommandError(command);
+        const auto visibleAfter = shownTracks(context);
+        const auto targetAfter = controlPlacementsOnTrack(context, target);
+        if (visibleAfter != visible.value() || !targetAfter.empty()) {
+            return controlOpErrorAfterChange("INTERNAL", "",
+                                             "the editor partially duplicated the track; read the project again");
         }
-        const auto clone = processor.cloneContent(source.placement.contentKey);
-        if (!clone.isValid()) {
-            for (const auto& made : contents)
-                repository->retireClip(made);
-            return controlOpError("INTERNAL", "", "OpenTune could not copy the content of a clip");
-        }
-        controlRecordCommittedClipId(context, clone);
-        contents.push_back(clone);
+        return controlOpError("INTERNAL", "", "the editor did not duplicate the track");
     }
 
-    // trackDuplicateRequested(): the mix state of the track, then a copy of every clip with a new placement id.
-    arrangement->setTrackMuted(target, arrangement->isTrackMuted(params.trackId));
-    arrangement->setTrackSolo(target, arrangement->isTrackSolo(params.trackId));
-    arrangement->setTrackVolume(target, arrangement->getTrackVolume(params.trackId));
-    arrangement->setTrackColour(target, arrangement->getTrackColour(params.trackId));
+    const auto targetPlacements = controlPlacementsOnTrack(context, target);
     std::vector<std::pair<std::string, std::string>> copies;
-    std::vector<std::uint64_t> copiedIds;
-    std::vector<std::string> madeLabels;
-    for (std::size_t i = 0; i < sources.size(); ++i) {
-        StandaloneArrangement::Placement placement = sources[i].placement;
-        placement.placementId = 0;
-        placement.contentKey = contents[i];
-        if (!arrangement->insertPlacement(target, placement)) {
-            // The copy stops here; what was inserted stays and is reported, so that the client reads the state.
-            if (!params.share)
-                for (std::size_t j = i; j < contents.size(); ++j)
-                    repository->retireClip(contents[j]);
-            bridge->setVisibleTrackCount(visible.value() + 1);
-            bridge->onTrackMixChanged();
-            controlMarkDirty(context);
-            return controlOpErrorAfterChange("INTERNAL", "",
-                                             "OpenTune could not insert a copied clip; read the project again");
-        }
-        copies.emplace_back(sources[i].placementId, controlPlacementId(context, placement.placementId));
-        copiedIds.push_back(placement.placementId);
+    copies.reserve(targetPlacements.size());
+    for (std::size_t i = 0; i < targetPlacements.size(); ++i) {
+        const auto& placement = targetPlacements[i];
+        copies.emplace_back(sources[i].placementId, placement.placementId);
     }
-    // The track panel and the arrangement show the new track, with its colour and mix.
-    bridge->setVisibleTrackCount(visible.value() + 1);
-    bridge->onTrackMixChanged();
-    controlMarkDirty(context);
 
     // The result: the new track's members, the new clips and, with mode clone, their contents.
     const auto after = controlCaptureTracks(context, shownTracks(context));
     describeTracks(before, after, envelope);
-    const auto placements = controlLivePlacements(context);
-    for (const auto id : copiedIds) {
-        const auto found = std::find_if(placements.begin(), placements.end(), [id](const ControlPlacementRef& ref) {
-            return ref.placement.placementId == id;
-        });
-        if (found == placements.end())
-            continue;
-        envelope.addCreated("placement", placementRef(found->placementId), JsonValue::string(placementLabel(*found)));
+    for (const auto& placement : targetPlacements) {
+        const auto id = placement.placement.placementId;
+        envelope.addCreated("placement", placementRef(placement.placementId),
+                            JsonValue::string(placementLabel(placement)));
         envelope.touchPlacement(id);
-        madeLabels.push_back(placementLabel(*found));
-    }
-    if (!params.share)
-        for (std::size_t i = 0; i < contents.size(); ++i) {
-            const auto contentId = controlContentId(context, contents[i]);
-            envelope.addCreated(
-                "content", contentRef(contentId),
-                JsonValue::string("Content of " + (i < madeLabels.size() ? madeLabels[i] : std::string("a clip"))));
+        if (!params.share) {
+            const auto contentId = controlContentId(context, placement.placement.contentKey);
+            envelope.addCreated("content", contentRef(contentId),
+                                JsonValue::string("Content of " + placementLabel(placement)));
             envelope.touchContent(contentId);
         }
+    }
+
     if (!copies.empty()) {
         auto from = JsonValue::array();
         auto to = JsonValue::array();
@@ -622,11 +566,6 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     if (!visibleResult.ok())
         return visibleResult.error();
     const int visible = visibleResult.value();
-    // OpenTune deletes only a shown track, and never the last one (trackDeleteRequested() returns without a word).
-    if (params.trackId >= visible)
-        return controlOpError("INVALID_ARGUMENT", "track_hidden", "a hidden track cannot be deleted");
-    if (visible <= 1)
-        return controlOpError("INVALID_ARGUMENT", "last_track", "the only shown track cannot be deleted");
     if (!params.confirm)
         return controlOpError("INVALID_ARGUMENT", "confirm_required",
                               "deleting a track cannot be undone; the end user must agree, and confirm must be true");
@@ -645,15 +584,9 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         if (ref.trackId == params.trackId)
             removed.push_back(ref);
 
-    // trackDeleteRequested(): the arrangement removes the track and moves only the later shown tracks down by one
-    // position (their clips and mix); a hidden slot keeps its position, its clips and its mix. Then the panel shows
-    // the mix of the arrangement for the tracks that remain and one track fewer.
-    if (!arrangement->removeTrackAndShift(params.trackId, visible))
-        return controlOpError("INTERNAL", "", "OpenTune did not delete the track");
-    bridge->onTrackMixChanged();
-    bridge->setVisibleTrackCount(visible - 1);
-    controlMarkDirty(context);
-    bridge->onStructureChanged();
+    const auto command = bridge->deleteTrack(params.trackId);
+    if (command != ControlTrackCommandResult::Applied)
+        return trackCommandError(command);
 
     const auto clipsAfter = controlLivePlacements(context);
 
