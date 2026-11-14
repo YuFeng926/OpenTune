@@ -9,10 +9,10 @@ namespace OpenTune {
 
 namespace {
 
-/** The longest hold of job.get (methods/job.get.schema.json, limits.jobWaitMaxMs). */
+/** The longest wait accepted by job.get. */
 constexpr std::int64_t kJobWaitMaxMs = 30000;
 
-/** common.schema.json#/$defs/jobId: j:<8 lowercase hex>:<seq without leading zero>. */
+/** A jobId has the form j:<8 lowercase hex>:<seq without leading zero>. */
 bool isJobId(const std::string& text)
 {
     if (text.size() < 12 || text.compare(0, 2, "j:") != 0 || text[10] != ':')
@@ -111,8 +111,7 @@ bool parseJobCancel(const JsonValue& params, JobCancelParams& out, std::string& 
 
 void runJobCancel(ControlJobs& jobs, const JobCancelParams& params, ControlMethod::Reply reply)
 {
-    // PROTOCOL.md section 12.3 rules 1 to 5: the registry decides under its mutex; the job's work sees a
-    // request at its next step on the message thread.
+    // The registry decides under its mutex; the job's work sees a request at its next step on the message thread.
     JsonValue job;
     bool requested = false;
     switch (jobs.cancel(params.jobId, job)) {

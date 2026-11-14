@@ -55,8 +55,7 @@ public:
 
     // ---- Busy state ---------------------------------------------------------------------------
 
-    /** Why the UI must not be changed under the user's hands right now (UI priority, PROTOCOL.md section
-        13.2): each member is one reason of BUSY. */
+    /** Why the UI must not be changed under the user's hands right now: each member is one reason of BUSY. */
     struct BusyState
     {
         /** A mouse or pen gesture is in progress in the editor (pointer_down). */
@@ -115,7 +114,7 @@ public:
 
     /** Focuses a placement the way the editor does after its own import: it becomes the active track's
         selected placement and the piano roll loads its content. The view is not switched: the workspace that the
-        window shows stays as it was, so no switch and no tempo rounding follow (PROTOCOL.md section 21 rule 2).
+        window shows stays as it was, so no switch and no tempo rounding follow.
         Returns false when not supported. */
     virtual bool focusPlacement(int /*trackId*/, std::uint64_t /*placementId*/) { return false; }
 
@@ -184,7 +183,7 @@ public:
 
     // ---- Dialogs and onboarding ---------------------------------------------------------------
 
-    /** One modal window of the editor (methods/ui.getState.schema.json $defs.dialog). */
+    /** One modal window of the editor. */
     struct DialogInfo
     {
         /** trackColour, confirm, pitchShift, preferences, message or unknown. */
@@ -287,7 +286,7 @@ public:
     virtual std::optional<bool> editingSchemeApplied(bool /*notesPrimary*/) const { return std::nullopt; }
 
     /** The sample rate restore of an ASIO device that failed (prepareAudioDeviceSwitch()): the data of the warning
-        ASIO_RATE_NOT_RESTORED (registry/warnings.json). */
+        ASIO_RATE_NOT_RESTORED. */
     struct AsioRateRestoreFailure
     {
         /** The ASIO device whose sample rate was to be restored (the name its driver reports). */

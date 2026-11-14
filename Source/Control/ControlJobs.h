@@ -20,7 +20,7 @@
 
 namespace OpenTune {
 
-/** The error of a failed or cancelled job, or of an item of a job result (PROTOCOL.md section 17.1):
+/** The error of a failed or cancelled job, or of an item of a job result:
     the kind, reason and detail as ControlDispatcher would send them, and executed. detail is printable
     ASCII and never contains text taken from files or projects. */
 struct ControlJobError
@@ -31,8 +31,7 @@ struct ControlJobError
     bool executed = true;
 };
 
-/** The error object of the protocol (common.schema.json#/$defs/errorObject) of a job error: the
-    JSON-RPC code and the retryability of the kind (registry/error-kinds.json). */
+/** The error object of a job error: the JSON-RPC code and the retryability of the kind. */
 JsonValue controlErrorObjectJson(const ControlJobError& error);
 
 class ControlJobs;
@@ -47,7 +46,7 @@ class ControlJobs;
 class ControlJobStep
 {
 public:
-    /** True once job.cancel requested cancellation (PROTOCOL.md section 12.3). */
+    /** True once job.cancel requested cancellation. */
     bool cancelRequested() const;
     /** Ends the job's cancellability, for a job that passed the point after which it can no longer be
         cancelled. Returns false, and changes nothing, when cancellation was already requested. */
@@ -86,7 +85,7 @@ private:
 using ControlJobWork = std::function<void(ControlJobStep& step)>;
 
 /**
- * The jobs of one instance (PROTOCOL.md section 12): the registry that job.get and job.cancel read, event-driven
+ * The jobs of one instance: the registry that job.get and job.cancel read, event-driven
  * job work on the message thread, retention and the long poll of job.get.
  *
  * - Ids are j:<instanceIdShort>:<seq>, seq from 1. A job is created queued, becomes running at its first
@@ -100,7 +99,7 @@ using ControlJobWork = std::function<void(ControlJobStep& step)>;
  *   never on the connection thread: the response comes when the job becomes terminal, or when waitMs
  *   passes, or with SHUTTING_DOWN when the registry stops. The waiting holds no lock or lease of the
  *   processor.
- * - Cancellation (section 12.3): a job created cancellable stays so until it ends, until its work calls
+ * - Cancellation: a job created cancellable stays so until it ends, until its work calls
  *   ControlJobStep::endCancellability(), or until job.cancel requests cancellation; the work sees the
  *   request at its next step and stops there.
  *
@@ -124,7 +123,7 @@ public:
         NotFound,
         Stopped
     };
-    /** How job.cancel ended (section 12.3 rules 1 to 5). */
+    /** How job.cancel ended. */
     enum class Cancel {
         Requested,
         AlreadyRequested,
@@ -151,7 +150,7 @@ public:
     void setInstanceShort(std::string instanceShort);
 
     /**
-     * Creates a job of the kind (a camelName of section 12.3) and queues its first step. idempotencyKey and
+     * Creates a job of the given kind and queues its first step. idempotencyKey and
      * paramsDigest, when given, let findByKey() find the job while it is retained. Message thread.
      */
     Started start(const std::string& kind, bool cancellable, ControlJobWork work,
@@ -163,25 +162,25 @@ public:
 
     /** The job of that kind that is not terminal and was started with that params digest; empty when none.
         For methods whose repeated call with the same params returns the job that still runs
-        (export.start, PROTOCOL.md section 12.5). Message thread. */
+        (export.start). Message thread. */
     std::string findActiveByDigest(const std::string& kind, const std::string& paramsDigest) const;
 
-    /** The job object (common.schema.json#/$defs/job). Any thread. */
+    /** The job object. Any thread. */
     Lookup get(const std::string& jobId, JsonValue& job) const;
-    /** {jobId, kind, state} of a job (common.schema.json#/$defs/jobRef), or null. Any thread. */
+    /** {jobId, kind, state} of a job, or null. Any thread. */
     JsonValue jobRef(const std::string& jobId) const;
 
     /** Responder of waitAsync(): called exactly once, from the calling thread or the registry's waiter
         thread, with the lookup result and the job object. */
     using WaitResponder = std::function<void(Lookup, JsonValue job)>;
     /**
-     * job.get (section 12.2): responds at once when waitMs is 0, the job is terminal or unknown;
+     * job.get responds at once when waitMs is 0, the job is terminal or unknown;
      * otherwise when the job becomes terminal or waitMs passed, whichever comes first, and with Stopped
      * when stop() is called meanwhile. Any thread; never blocks.
      */
     void waitAsync(const std::string& jobId, int waitMs, WaitResponder respond);
 
-    /** job.cancel (section 12.3); job is the job right after the request. Any thread. */
+    /** Cancels a job and returns its state right after the request. Any thread. */
     Cancel cancel(const std::string& jobId, JsonValue& job);
 
     /**
@@ -215,7 +214,7 @@ private:
     std::int64_t steadyNow() const;
     /** Advances every active job once. Message thread. */
     void tick();
-    /** A terminal job retained beyond its time, which every reader treats as gone (section 12.4). */
+    /** A terminal job retained beyond its time, which every reader treats as gone. */
     bool expiredLocked(const Job& job, std::int64_t steadyNowMs) const;
     void evictLocked(std::int64_t steadyNowMs);
     Job* findLocked(const std::string& jobId) const;

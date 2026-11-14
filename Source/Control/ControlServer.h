@@ -26,7 +26,7 @@ struct ControlSessionChannel;
  * Copies share one state. The first respond call sends the response and ends the request's in-flight
  * slot; later calls are ignored. If the last copy is destroyed without a response, the server sends
  * INTERNAL (executed true), so that a lost request never occupies a slot forever. When the connection
- * has closed meanwhile, the response is discarded (PROTOCOL.md section 3.6 rule 1). A response
+ * has closed meanwhile, the response is discarded. A response
  * longer than maxLineBytes is replaced by INTERNAL, because the server never sends such a line.
  *
  * Threading: usable from any thread; never blocks on the network.
@@ -74,8 +74,7 @@ public:
 
     /**
      * Handles a request whose method is defined by the protocol, whose capability is reported and
-     * which is not session.hello (PROTOCOL.md section 3.3 rule 5 cases 1 to 11 are already applied):
-     * validates params (case 12) and runs the method (case 13). Must eventually use the completion,
+     * which is not session.hello: validates params and runs the method. Must eventually use the completion,
      * from any thread. Exceptions are caught and answered with INTERNAL.
      */
     virtual void handleRequest(ControlRequest request, ControlCompletion completion) = 0;
@@ -92,7 +91,7 @@ public:
 /** Configuration of a ControlServer. */
 struct ControlServerConfig
 {
-    /** Discovery directory D (PROTOCOL.md section 5.1), resolved by controlResolveDiscoveryDirectory. */
+    /** Discovery directory, resolved by controlResolveDiscoveryDirectory. */
     std::string discoveryDirectory;
     /** Path of the ready file (--control-api-ready-file=), if requested. */
     std::optional<std::string> readyFile;
@@ -100,7 +99,7 @@ struct ControlServerConfig
     std::optional<std::string> launchNonce;
     /** Build identity for the discovery file and session.hello; must pass controlValidateBuildIdentity. */
     ControlBuildIdentity build;
-    /** Protocol limits; the defaults are the values PROTOCOL.md section 3.4 fixes. */
+    /** Protocol limits and their defaults. */
     ControlLimits limits;
     /** Request handler; nullptr selects the built-in one that implements only session.hello. */
     std::shared_ptr<ControlRequestHandler> handler;
@@ -114,9 +113,8 @@ struct ControlServerConfig
 
 /**
  * The OTCP listener of one OpenTune instance: binds the literal address 127.0.0.1 on a port chosen
- * by the operating system, applies the rules before authentication (PROTOCOL.md section 3.5), the
- * session.hello checks (section 4), the NDJSON framing and the order of section 3.3 rule 5, the
- * limits of section 3.4, and writes and deletes the discovery file (section 5).
+ * by the operating system, applies the checks before authentication and validates session.hello,
+ * enforces NDJSON framing, request order and connection limits, and writes and deletes the discovery file.
  *
  * One accepting thread and one thread per connection. Every network wait is a poll of at most 250 ms
  * that also checks the stop flag, and all sockets are non-blocking, so stop() finishes within a
@@ -139,12 +137,12 @@ public:
      * Generates the token, the server proof and the instance id from the system CSPRNG, checks the
      * discovery directory, starts listening and accepting, then writes the discovery file and, when
      * requested, the ready file (a ready-file failure is only logged). On any other failure nothing
-     * stays open, no discovery file remains and error says why (PROTOCOL.md section 6.4). Call once.
+     * stays open, no discovery file remains and error says why. Call once.
      */
     bool start(std::string& error);
 
     /**
-     * PROTOCOL.md section 3.6 rule 2: sets the stop flag (new requests are answered with SHUTTING_DOWN
+     * Sets the stop flag (new requests are answered with SHUTTING_DOWN
      * and nothing new is accepted), tells the handler (serverStopping()), then lets every session
      * answer the lines that already arrived, send its pending output for a bounded time and close
      * (responses of requests still in flight after that are discarded). Joins the threads with a

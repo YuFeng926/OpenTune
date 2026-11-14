@@ -21,7 +21,7 @@ namespace {
 
 using DialogInfo = ControlUiBridge::DialogInfo;
 
-/** Longest dialog title reported (methods/ui.getState.schema.json $defs.dialog.title). */
+/** Longest dialog title reported. */
 constexpr std::size_t kMaxTitleCodePoints = 256;
 /** The preference that the first-run overlay was shown (prefs.get onboardingShown). */
 constexpr const char* kOnboardingPreference = "onboardingShown";
@@ -35,7 +35,7 @@ struct DismissParams
     bool confirm = false;
 };
 
-/** methods/ui.dismiss.schema.json $defs.params, on the connection thread. */
+/** Parses ui.dismiss params on the connection thread. */
 bool parseDismiss(const JsonValue& params, DismissParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -165,8 +165,8 @@ struct ClosedDialogs
 /**
  * Closes the dialogs from the top as Escape does (ControlUiBridge::closeTopDialog()), and records in the envelope what
  * closing a track-colour dialog committed: the change of the track's colour, which has no undo entry in OpenTune
- * (ui_parity) and whose revert recipe is track.set where the instance reports tracks.v1 (PROTOCOL.md section 15.2
- * rule 2), and the warning DIALOG_CLOSE_COMMITTED. It stops early when the dialog on top is no longer the one the
+ * (ui_parity) and whose revert recipe is track.set where the instance reports tracks.v1, and the warning
+ * DIALOG_CLOSE_COMMITTED. It stops early when the dialog on top is no longer the one the
  * checks saw, which only the reaction of a dialog it closed can bring about: the dialogs left open then are open in
  * the result's view, unchecked and untouched.
  */
@@ -193,8 +193,8 @@ std::optional<Error> closeDialogs(ControlOpContext& context, ControlUiBridge& br
         out.dialogs.append(std::move(closed));
         if (!colourDialog || !before)
             continue;
-        // The track-colour dialog commits the colour it shows when it closes, also with Escape (PROTOCOL.md section
-        // 15.4 rule 4): its content sets the track's colour and marks the project as changed.
+        // The track-colour dialog commits the colour it shows when it closes, also with Escape: its content sets the
+        // track's colour and marks the project as changed.
         const auto after = trackColour(context, dialog.trackId).value_or(*before);
         auto revertParams = JsonValue::object();
         auto tracks = JsonValue::array();
@@ -229,15 +229,15 @@ std::optional<Error> closeDialogs(ControlOpContext& context, ControlUiBridge& br
         envelope.addWarning("DIALOG_CLOSE_COMMITTED", trackRef(dialog.trackId), std::move(data));
         if (revert.isNull())
             envelope.addWarning("IRREVERSIBLE", trackRef(dialog.trackId));
-        // The dialog's content marks the project as changed itself; the API marks it as well, so that the colour,
-        // which the project file stores, never stays unsaved without the flag (section 15.5).
+        // The dialog's content marks the project as changed itself; the API marks it as well, so the colour stored in
+        // the project never stays unsaved without the flag.
         controlMarkDirty(context);
     }
     return std::nullopt;
 }
 
 /** Records the dialogs closed in sideEffects (dialogClosed; dialogCommitted when a colour was committed). Dialogs are
-    view state (section 15.2 rule 6): closing one that commits nothing is not_persisted_state with revert null. */
+    view state: closing one that commits nothing is not_persisted_state with revert null. */
 void recordClosed(ControlWriteEnvelope& envelope, ClosedDialogs& closed, bool otherUndoSet)
 {
     if (closed.count == 0)
@@ -291,7 +291,7 @@ Result<JsonValue> runGetState(ControlOpContext& context, const ControlNoParams&)
             continue;
         auto dialog = JsonValue::object();
         dialog.appendMember("kind", JsonValue::string(window.kind));
-        // Titles come from OpenTune and may name files and projects: untrusted data (section 20.2).
+        // Titles come from OpenTune and may name files and projects, so they are untrusted data.
         dialog.appendMember("title", controlJsonText(window.title, kMaxTitleCodePoints));
         dialog.appendMember("closeCommits", JsonValue::boolean(window.closeCommits));
         dialog.appendMember("trackId", validTrack(window.trackId) ? JsonValue::integer(window.trackId) : JsonValue());
@@ -394,7 +394,7 @@ Result<JsonValue> dismissOnboarding(ControlOpContext& context, ControlUiBridge& 
         envelope->setNotUndoable("no_upstream_undo");
         envelope->addWarning("IRREVERSIBLE", preferenceRef());
     } else if (showing) {
-        // Only the view changed: the overlay and the dialogs above it are view state (section 15.2 rule 6).
+        // Only the view changed: the overlay and the dialogs above it are view state.
         envelope->setNotUndoable("not_persisted_state");
     }
     recordClosed(*envelope, closed, true);
@@ -407,7 +407,7 @@ Result<JsonValue> runDismiss(ControlOpContext& context, const DismissParams& par
         return *error;
     auto* bridge = context.bridge();
     // Closing dialogs is the purpose of this method, so an open dialog does not refuse it; every other busy condition
-    // does, as for every write (PROTOCOL.md section 13.2).
+    // does, as for every write.
     if (auto busy = controlCheckBusy(context, ControlBusyScope::DialogDismiss))
         return *busy;
     return params.onboarding ? dismissOnboarding(context, *bridge) : dismissDialogs(context, *bridge, params.confirm);

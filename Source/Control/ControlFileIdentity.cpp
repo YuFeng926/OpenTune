@@ -171,7 +171,7 @@ ControlSameFileProbe::ControlSameFileProbe(std::string utf8Target)
 
 std::optional<bool> ControlSameFileProbe::sameAs(const std::string& utf8Other)
 {
-    // The target must be readable whatever the other path is (rule 4).
+    // The target identity must be readable before comparing paths.
     if (targetStatus_ == ControlFileIdStatus::Failed || targetStatus_ == ControlFileIdStatus::Unavailable)
         return std::nullopt;
     ControlFileId otherId;
@@ -182,7 +182,7 @@ std::optional<bool> ControlSameFileProbe::sameAs(const std::string& utf8Other)
         return targetId_ == otherId;
     if (targetStatus_ != otherStatus)
         return false; // an existing file is never the file of a path where nothing exists
-    // Neither exists (rule 3): the same file when both parents exist and are the same directory and the
+    // Neither exists: they name the same file when both parents exist and are the same directory and the
     // last segments are equal.
     std::string parentTarget;
     std::string nameTarget;

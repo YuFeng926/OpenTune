@@ -21,7 +21,7 @@ struct StepParams
     bool force = false;
 };
 
-/** common.schema.json#/$defs/undoId: u:<8 lowercase hexadecimal digits>:<seq from 1>. */
+/** An undoId has the form u:<8 lowercase hexadecimal digits>:<seq from 1>. */
 bool isUndoId(const std::string& text)
 {
     if (text.size() < 12 || text.compare(0, 2, "u:") != 0 || text[10] != ':' || text[11] == '0')
@@ -31,8 +31,7 @@ bool isUndoId(const std::string& text)
     return std::all_of(text.begin() + 2, text.begin() + 10, hex) && std::all_of(text.begin() + 11, text.end(), digit);
 }
 
-/** methods/edit.undo.schema.json and edit.redo.schema.json $defs.params: with force true expectedUndoId is
-    neither parsed nor checked (PROTOCOL.md section 15.3 rule 1); without it, it is required. */
+/** With force true expectedUndoId is neither parsed nor checked; without it, it is required. */
 bool parseStepParams(const JsonValue& params, StepParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -58,7 +57,7 @@ bool parseStepParams(const JsonValue& params, StepParams& out, std::string& why)
     return true;
 }
 
-/** common.schema.json#/$defs/historyEntry. possiblyStale is the barrier of a track deletion (section 15.3 rule 6). */
+/** possiblyStale marks an entry affected by the track-deletion barrier. */
 JsonValue entryJson(const ControlHistory::Entry& entry)
 {
     auto json = JsonValue::object();
@@ -116,7 +115,7 @@ bool isEmptyDiff(const ControlWorldVersions& before, const ControlWorldVersions&
            && contents != nullptr && contents->size() == 0;
 }
 
-/** edit.undo (undo true) and edit.redo, PROTOCOL.md section 15.3. */
+/** Runs edit.undo (undo true) or edit.redo. */
 Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, bool undo)
 {
     const char* const what = undo ? "undo" : "redo";
@@ -141,7 +140,7 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
         return controlOpError("UNSUPPORTED", "undo_unsafe_build",
                               std::string("the top entry deletes a clip, which OpenTune cannot ")
                                   + what + " correctly");
-    // Rule 6: an entry the API recorded before a track deletion that moved a track it addresses is applied only with
+    // An entry the API recorded before a track deletion that moved a track it addresses is applied only with
     // force. An entry of the UI (which has an undoId here only because a call with force applied it before) is
     // applied with a warning instead, since the server cannot tell whether it addresses a moved track.
     const bool stale = entry.possiblyStale && !params.force;
@@ -159,11 +158,11 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     juce::ignoreUnused(applied);
     // The step moved the cursor, no entry: the history as it is now is the one describe() checked.
     history.value()->noteOwnStep(manager);
-    // Rule 8: an entry of the UI applied with force gets an undoId now.
+    // An entry of the UI applied with force gets an undoId now.
     const std::string undoId =
         entry.undoId ? *entry.undoId
                      : history.value()->assignUndoId(manager, *top, index, epoch, context.instanceShort());
-    // Rule 6: the end user asked for this step after seeing possiblyStale, which confirms the entry.
+    // The end user asked for this step after seeing possiblyStale, which confirms the entry.
     if (params.force)
         history.value()->confirmStale(manager, *top, index, epoch, context.instanceShort());
     // As after the UI's own undo: the project is marked as changed (also when the step changed nothing), and
@@ -173,7 +172,7 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
         bridge->onUndoRedoApplied();
     const auto after = controlCaptureEditState(context);
     controlDescribeEffect(context, before, after, envelope);
-    // Rule 5: a step that changed nothing. An entry of the API also knows it from its own step (every inner
+    // A step that changed nothing. An entry of the API also knows it from its own step (every inner
     // action masked, or a pitch shift that commitPitchShiftEdit() did not apply); then nothing changed.
     const auto* origin = dynamic_cast<const ControlOriginAction*>(top);
     const bool emptyDiff = isEmptyDiff(before.versions, after.versions);

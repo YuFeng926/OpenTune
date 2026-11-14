@@ -21,11 +21,10 @@ class OpenTuneAudioProcessor;
 /**
  * The correction segments that the piano roll rebuilds after an edit of notes, computed the way the piano roll
  * computes them but without it (PianoRollComponent and PianoRollToolHandler stay untouched), and committed with
- * OpenTune's content commands into a ContentEditTransaction. The mirrored upstream functions are listed in
- * Source/Control/README.md (Note edits).
+ * OpenTune's content commands into a ContentEditTransaction.
  *
  * The fallback parameters of PitchCurve::applyCorrectionToRange() are NoteGeneratorParams{}: the piano roll passes
- * its knob positions there, which the API never uses (PROTOCOL.md section 21 rule 1). Every note brings its own
+ * its knob positions there, which the API never uses. Every note brings its own
  * retune speed, vibrato and drift; the fallback values only end up in the segments' parameter snapshot.
  *
  * Threading: message thread only (the commit); the planning functions are pure.

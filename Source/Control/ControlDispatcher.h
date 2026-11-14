@@ -34,7 +34,7 @@ class OpenTuneAudioProcessor;
  *    that has not started with SHUTTING_DOWN.
  *    A method whose schema says x-otcp.mainThread false (ControlMethod::runOffMainThread, app.getLog)
  *    runs on the connection thread instead, with the immutable facts snapshot only: it never waits for
- *    the message thread, so it never answers TIMEOUT (PROTOCOL.md section 13.3 rule 2);
+ *    the message thread, so it never answers TIMEOUT;
  * 5. maps the method's Result to the response: the result object, or the error that controlMapError
  *    gives (the only place where OpenTune errors become protocol errors). `executed` is what the
  *    operation stated (controlOpError or controlOpErrorAfterChange); for any other failure of a write
@@ -55,7 +55,7 @@ class OpenTuneAudioProcessor;
  * ControlOpContext at all.
  *
  * Main-thread requests leave the connection reader available after submission. Submissions from one
- * session reach the message thread in arrival order (PROTOCOL.md section 3.3 rule 6); different sessions
+ * session reach the message thread in arrival order; different sessions
  * do not wait for each other.
  *
  * Threading: handleRequest() on connection threads, concurrently; serverStopping() and setInstanceId() on

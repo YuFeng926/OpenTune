@@ -30,7 +30,7 @@ JsonValue singletonRef(const char* name)
     return ref;
 }
 
-/** {before, after, unit} of one changed member (PROTOCOL.md section 14.3). */
+/** {before, after, unit} of one changed member. */
 JsonValue fieldChange(JsonValue before, JsonValue after, const char* unit)
 {
     auto field = JsonValue::object();
@@ -225,7 +225,7 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
                                                                 controlJsonSeconds(after.playStartSec), "sec"));
     if (fields.size() != 0) {
         envelope.addChange("transport", singletonRef("transport"), JsonValue::string("Transport"), std::move(fields));
-        // View state (PROTOCOL.md section 15.2 rule 6): not saved with the project, no undo, nothing to revert.
+        // View state: not saved with the project, no undo, nothing to revert.
         envelope.setNotUndoable("not_persisted_state");
     }
     auto result = envelope.committed(context);
@@ -432,7 +432,7 @@ void controlReportTempoRounded(ControlOpContext& context, ControlWriteEnvelope& 
     effect.appendMember("fromBpm", controlJsonNumber(fromBpm, 3));
     effect.appendMember("toBpm", controlJsonNumber(toBpm, 3));
     // transport.setTempo back to the tempo from before; the instance that does not report transport.v1 has no such
-    // method, so there is nothing that could restore it (PROTOCOL.md section 15.2 rule 2).
+    // method, so there is nothing that could restore it.
     JsonValue revert;
     if (controlReportsCapability(context, "transport.v1")) {
         auto params = JsonValue::object();

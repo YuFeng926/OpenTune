@@ -25,9 +25,9 @@ class OpenTuneAudioProcessor;
  * message-thread marshalling (ControlMessageThread), the dispatcher (ControlDispatcher, the listener's
  * request handler) and the jobs (ControlJobs); it keeps the editor's ControlUiBridge pointer.
  *
- * Lifecycle (see Source/Control/README.md#lifecycle):
+ * Lifecycle:
  * - The processor constructor creates the service and calls scheduleStart(). Creating it only reads
- *   the run-time options (PROTOCOL.md section 6); it starts no thread and touches no file. When the
+ *   the run-time options; it starts no thread and touches no file. When the
  *   API is not enabled at run time, scheduleStart() does nothing either, so OpenTune behaves exactly
  *   as without the control API.
  * - When the API is enabled, scheduleStart() posts start() to the message thread, guarded by the
@@ -72,7 +72,7 @@ public:
     bool start();
 
     /**
-     * PROTOCOL.md section 3.6 rule 2, in this order: sets the stop flag (requests are answered with
+     * Stops the service in this order: sets the stop flag (requests are answered with
      * SHUTTING_DOWN from now on); kills the liveness token, which wakes every thread waiting for the
      * message thread and turns every function still queued for it into a no-op; stops the jobs (waiting
      * job.get requests are answered with SHUTTING_DOWN, no job work runs again, and the work of every job

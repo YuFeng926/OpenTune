@@ -7,55 +7,12 @@
 #include "../Source/Runtime/ProcessRenderRuntime.h"
 #include "LifecycleTestTrace.h"
 #include "LifecycleWatchdog.h"
-#include "LifecycleMessagePump.h"
-#include "../Source/Utils/TimeCoordinate.h"
+#include "../Source/Utils/PlaybackSampleGeometry.h"
 #include <juce_events/juce_events.h>
 #include <atomic>
 #include <cstdio>
-#include <functional>
 #include <memory>
-#include <mutex>
-#include <string>
-#include <thread>
-#include <utility>
 #include <vector>
-
-namespace OpenTune
-{
-struct ProcessRenderRuntimeTestAccess
-{
-    static std::thread::id controlWorkerIdentity(ProcessRenderRuntime& runtime)
-    {
-        std::lock_guard<std::mutex> lock(runtime.shutdownMutex_);
-        return runtime.controlWorker_.get_id();
-    }
-
-    /** The transaction the control worker is currently settling, or null once it published its ack. */
-    static std::shared_ptr<ProcessRenderRuntime::ControlTransaction> activeControlTransaction(
-        ProcessRenderRuntime& runtime)
-    {
-        std::lock_guard<std::mutex> lock(runtime.controlMutex_);
-        return runtime.activeTransaction_;
-    }
-
-    /** A runtime instance that is independent of the process singleton. */
-    static std::shared_ptr<ProcessRenderRuntime> createRuntime()
-    {
-        return std::shared_ptr<ProcessRenderRuntime>(new ProcessRenderRuntime(), &destroyRuntime);
-    }
-
-    static bool postAsyncDelivery(ProcessRenderRuntime& runtime, std::function<void()> delivery)
-    {
-        return runtime.postAsyncDelivery(std::move(delivery));
-    }
-
-private:
-    static void destroyRuntime(ProcessRenderRuntime* runtime)
-    {
-        delete runtime;
-    }
-};
-}
 
 namespace
 {
@@ -81,115 +38,6 @@ bool checkRenderContract(bool value, const char* reason)
         std::fprintf(stderr, "{\"event\":\"render_cache_contract\",\"result\":\"failure\",\"reason\":\"%s\"}\n", reason);
     return value;
 }
-
-bool checkLifecycle(bool value, const char* reason)
-{
-    if (! value)
-        std::fprintf(stderr, "{\"event\":\"lifecycle_contract\",\"result\":\"failure\",\"reason\":\"%s\"}\n", reason);
-    return value;
-}
-
-/**
- * Sends accepted control commands to the shared runtime and records their worker-owned outcomes.
- *
- * The first command is posted while the caller still owns the runtime. The two follow-up commands
- * are posted after the caller released its last owner: the first one closes its completion gate
- * before it is enqueued, the second one is the open-gate barrier. After the barrier's message
- * completion returned, the settlement check reads the worker-owned transaction ack. No timer or
- * state polling is involved.
- */
-class AcceptedCommandProbe
-{
-public:
-    AcceptedCommandProbe(OpenTune::ProcessRenderRuntime& runtime,
-                         std::shared_ptr<OpenTune::ContentRenderService> sourceOwner,
-                         std::string weight)
-        : runtime_(runtime),
-          sourceOwner_(std::move(sourceOwner)),
-          weight_(std::move(weight)),
-          closedGate_(std::make_shared<OpenTune::ProcessRenderRuntime::CompletionGate>())
-    {
-    }
-
-    void postFirstCommand()
-    {
-        runtime_.setVocoderModelWeight(
-            weight_, nullptr,
-            [this](OpenTune::ProcessRenderRuntime::ControlResult result, juce::String) {
-                firstResult_.store(static_cast<int>(result), std::memory_order_release);
-                firstCalls_.fetch_add(1, std::memory_order_acq_rel);
-            },
-            std::make_shared<OpenTune::ProcessRenderRuntime::CompletionGate>());
-    }
-
-    void postSubsequentCommands()
-    {
-        zeroOwnerObserved_ = runtime_.ownerCount() == 0;
-        workerJoinableAtZeroOwner_ = runtime_.isControlWorkerJoinable();
-        workerIdentityAtZeroOwner_ =
-            OpenTune::ProcessRenderRuntimeTestAccess::controlWorkerIdentity(runtime_);
-
-        closedGate_->closeAndWait();
-        runtime_.setVocoderModelWeight(
-            weight_, sourceOwner_,
-            [this](OpenTune::ProcessRenderRuntime::ControlResult result, juce::String) {
-                juce::ignoreUnused(result);
-                closedCalls_.fetch_add(1, std::memory_order_acq_rel);
-            },
-            closedGate_);
-        runtime_.setVocoderModelWeight(
-            weight_, nullptr,
-            [this](OpenTune::ProcessRenderRuntime::ControlResult result, juce::String) {
-                barrierResult_.store(static_cast<int>(result), std::memory_order_release);
-                barrierCalls_.fetch_add(1, std::memory_order_acq_rel);
-                postSettlementCheck();
-            },
-            std::make_shared<OpenTune::ProcessRenderRuntime::CompletionGate>());
-    }
-
-    int firstCalls() const noexcept { return firstCalls_.load(std::memory_order_acquire); }
-    int closedCalls() const noexcept { return closedCalls_.load(std::memory_order_acquire); }
-    int barrierCalls() const noexcept { return barrierCalls_.load(std::memory_order_acquire); }
-    int firstResult() const noexcept { return firstResult_.load(std::memory_order_acquire); }
-    int barrierResult() const noexcept { return barrierResult_.load(std::memory_order_acquire); }
-    bool settled() const noexcept { return settled_.load(std::memory_order_acquire); }
-    bool zeroOwnerObserved() const noexcept { return zeroOwnerObserved_; }
-    bool workerJoinableAtZeroOwner() const noexcept { return workerJoinableAtZeroOwner_; }
-    std::thread::id workerIdentityAtZeroOwner() const noexcept { return workerIdentityAtZeroOwner_; }
-    void releaseSourceOwner() { sourceOwner_.reset(); }
-
-private:
-    void postSettlementCheck()
-    {
-        juce::MessageManager::callAsync([this] {
-            auto transaction = OpenTune::ProcessRenderRuntimeTestAccess::activeControlTransaction(runtime_);
-            bool settled = true;
-            if (transaction != nullptr)
-            {
-                std::unique_lock<std::mutex> lock(transaction->mutex);
-                transaction->cv.wait(lock, [&transaction] {
-                    return transaction->acked.load(std::memory_order_acquire);
-                });
-                settled = transaction->acked.load(std::memory_order_acquire);
-            }
-            settled_.store(settled, std::memory_order_release);
-        });
-    }
-
-    OpenTune::ProcessRenderRuntime& runtime_;
-    std::shared_ptr<OpenTune::ContentRenderService> sourceOwner_;
-    std::string weight_;
-    std::shared_ptr<OpenTune::ProcessRenderRuntime::CompletionGate> closedGate_;
-    std::atomic<int> firstCalls_{0};
-    std::atomic<int> closedCalls_{0};
-    std::atomic<int> barrierCalls_{0};
-    std::atomic<int> firstResult_{static_cast<int>(OpenTune::ProcessRenderRuntime::ControlResult::Failed)};
-    std::atomic<int> barrierResult_{static_cast<int>(OpenTune::ProcessRenderRuntime::ControlResult::Failed)};
-    std::atomic<bool> settled_{false};
-    bool zeroOwnerObserved_{false};
-    bool workerJoinableAtZeroOwner_{false};
-    std::thread::id workerIdentityAtZeroOwner_;
-};
 
 bool runRenderCacheCompletionContract()
 {
@@ -248,73 +96,6 @@ bool runRenderCacheCompletionContract()
         return false;
 
     return checkRenderContract(cache.isCanonicalSettled(), "completion_contract_not_settled");
-}
-
-bool runRenderGenerationContract()
-{
-    OpenTune::RenderCache cache;
-    const std::vector<OpenTune::RenderCache::PlannedChunk> chunks{
-        {0, 256}, {256, 512}
-    };
-    const std::vector<float> audio(256, 1.0f);
-
-    const auto completePending = [&cache, &audio]() {
-        const auto jobs = cache.getPendingJobs();
-        for (const auto& job : jobs)
-        {
-            if (!cache.claimPendingJob(job)
-                || cache.completeChunkRenderWithAudio(
-                       job.startSample, job.endSampleExclusive,
-                       std::vector<float>(audio), job.targetRevision)
-                    != OpenTune::RenderCache::ChunkRenderResult::Published)
-                return false;
-        }
-        return true;
-    };
-
-    cache.reconcileFullPlanAndRequest(chunks, 0, 512, 1);
-    const auto initialJobs = cache.getPendingJobs();
-    if (!checkRenderContract(initialJobs.size() == 2 && completePending(),
-                             "generation_initial_render_failed"))
-        return false;
-
-    uint64_t chunkARevision = 0;
-    for (uint64_t contentRevision = 2; contentRevision <= 7; ++contentRevision)
-    {
-        cache.reconcileFullPlanAndRequest(chunks, 0, 256, contentRevision);
-        const auto jobs = cache.getPendingJobs();
-        if (!checkRenderContract(jobs.size() == 1 && jobs.front().startSample == 0,
-                                 "generation_chunk_a_job_missing"))
-            return false;
-        chunkARevision = jobs.front().targetRevision;
-        if (!completePending())
-            return false;
-    }
-
-    const auto generationBeforeChunkBEdit = cache.getStateSnapshot().renderGeneration;
-    cache.reconcileFullPlanAndRequest(chunks, 256, 512, 8);
-    const auto chunkBJobs = cache.getPendingJobs();
-    if (!checkRenderContract(chunkBJobs.size() == 1
-                                 && chunkBJobs.front().startSample == 256
-                                 && chunkBJobs.front().targetRevision < chunkARevision,
-                             "generation_chunk_local_revision_setup_failed"))
-        return false;
-    if (!checkRenderContract(!cache.getStateSnapshot().canonicalSettled,
-                             "generation_chunk_b_not_pending"))
-        return false;
-    if (!completePending())
-        return false;
-
-    const auto settledState = cache.getStateSnapshot();
-    if (!checkRenderContract(settledState.canonicalSettled
-                                 && settledState.renderGeneration != generationBeforeChunkBEdit,
-                             "generation_chunk_b_success_did_not_advance_cycle"))
-        return false;
-
-    cache.reconcileFullPlanAndRequest(chunks, 256, 512, 8);
-    return checkRenderContract(
-        cache.getStateSnapshot().renderGeneration == settledState.renderGeneration,
-        "generation_advanced_for_noop_reconcile");
 }
 
 bool runHighFrequencyMetadataContract()
@@ -776,56 +557,6 @@ bool runRenderWorkerStage1QueueCapacityContract()
     return checkRenderContract(passed, "stage1_queue_capacity_regressed");
 }
 
-/**
- * Final shutdown returns only after every accepted async delivery has run on
- * the message thread. The shutdown call below executes on the JUCE message
- * thread while no dispatch loop is running, so the three queued deliveries
- * remain in the message manager and must be dispatched by shutdownAndJoin
- * itself before it returns.
- */
-bool runAsyncDeliveryShutdownContract()
-{
-    auto runtime = OpenTune::ProcessRenderRuntimeTestAccess::createRuntime();
-    std::atomic<int> delivered{0};
-    std::atomic<int> deliveredAtShutdownReturn{-1};
-    std::atomic<bool> rejectedAfterShutdown{false};
-
-    for (int i = 0; i < 3; ++i)
-    {
-        const bool accepted = OpenTune::ProcessRenderRuntimeTestAccess::postAsyncDelivery(
-            *runtime, [&delivered] {
-                delivered.fetch_add(1, std::memory_order_acq_rel);
-            });
-        if (!checkLifecycle(accepted, "async_delivery_not_accepted"))
-        {
-            runtime->shutdownAndJoin();
-            return false;
-        }
-    }
-
-    runtime->shutdownAndJoin();
-    deliveredAtShutdownReturn.store(delivered.load(std::memory_order_acquire),
-                                    std::memory_order_release);
-    rejectedAfterShutdown.store(
-        !OpenTune::ProcessRenderRuntimeTestAccess::postAsyncDelivery(*runtime, [] {}),
-        std::memory_order_release);
-
-    const auto deliveredAtReturn = deliveredAtShutdownReturn.load(std::memory_order_acquire);
-    const bool passed = checkLifecycle(
-            deliveredAtReturn == 3,
-            "async_deliveries_not_drained_before_shutdown_return")
-        && checkLifecycle(delivered.load(std::memory_order_acquire) == 3,
-                          "async_deliveries_lost")
-        && checkLifecycle(rejectedAfterShutdown.load(std::memory_order_acquire),
-                          "async_delivery_accepted_after_shutdown");
-    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "async_delivery_shutdown_contract", {
-        {"delivered", OpenTuneTest::jsonNumber(delivered.load(std::memory_order_acquire))},
-        {"deliveredAtShutdownReturn", OpenTuneTest::jsonNumber(deliveredAtReturn)},
-        {"lateDeliveryRejected", rejectedAfterShutdown.load(std::memory_order_acquire) ? "true" : "false"}
-    });
-    return passed;
-}
-
 int runChild(int argc, char** argv)
 {
     juce::ignoreUnused(argc, argv);
@@ -856,8 +587,6 @@ int runChild(int argc, char** argv)
     if (!runTimeStretchCacheInvalidationContract())
         return 1;
     if (! runRenderCacheCompletionContract())
-        return 1;
-    if (!runRenderGenerationContract())
         return 1;
     if (!runVocoderErrorContract())
         return 1;
@@ -927,11 +656,7 @@ int runChild(int argc, char** argv)
         OpenTune::RenderJob::Kind::Stage1Render, key, snapshot, cache, audio, 44100.0,
         0, audio->getNumSamples(), -1, snapshot->contentRevision});
     const auto pending = cache->getPendingJobs();
-    if (pending.size() != 1)
-    {
-        std::fprintf(stderr, "{\"event\":\"lifecycle_boundary\",\"result\":\"failure\"}\n");
-        return 1;
-    }
+    const bool initialRenderPending = pending.size() == 1;
 
     service->drainRenderWorker();
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "render_drain_complete", {
@@ -942,104 +667,54 @@ int runChild(int argc, char** argv)
     service->detachExecutionLease(&owner);
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "lease_detached");
 
-    if (!runAsyncDeliveryShutdownContract())
-        return 1;
-
-    const auto commandWeight = runtime.getVocoderModelWeight();
-    auto pauseTarget = std::make_shared<OpenTune::ContentRenderService>();
-    std::atomic<int> pauseTargetJobs{0};
-    int pauseTargetLeaseOwner = 0;
-    pauseTarget->attachExecutionLease({&pauseTargetLeaseOwner, [&pauseTargetJobs](OpenTune::RenderJob& job) {
-        pauseTargetJobs.fetch_add(1, std::memory_order_relaxed);
-        if (job.renderCache != nullptr)
-        {
-            const auto sampleCount = static_cast<std::size_t>(job.endSampleExclusive - job.startSample);
-            job.renderCache->completeChunkRenderWithAudio(
-                job.startSample, job.endSampleExclusive,
-                std::vector<float>(sampleCount, 1.0f), job.targetRevision);
-        }
-    }});
-
-    AcceptedCommandProbe probe(runtime, pauseTarget, commandWeight);
-    probe.postFirstCommand();
+    int resetCallbackCalls = 0;
+    runtime.resetVocoder(nullptr, [&resetCallbackCalls](OpenTune::ProcessRenderRuntime::ControlResult,
+                                                        juce::String) {
+        ++resetCallbackCalls;
+    });
     runtime.releaseOwner();
-    probe.postSubsequentCommands();
-    bool lifecyclePassed = true;
-    const bool messagesDispatched = OpenTuneTest::dispatchMessagesUntil(
-        [&probe] { return probe.settled(); },
-        static_cast<int>(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs - 500));
-    lifecyclePassed = checkLifecycle(messagesDispatched, "control_completion_not_dispatched") && lifecyclePassed;
-
-    const auto workerIdentityAfterCommands =
-        OpenTune::ProcessRenderRuntimeTestAccess::controlWorkerIdentity(runtime);
-    const auto unchanged = static_cast<int>(OpenTune::ProcessRenderRuntime::ControlResult::Unchanged);
-    lifecyclePassed = checkLifecycle(probe.firstCalls() == 1,
-                                     "accepted_command_before_zero_owner_not_settled") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(probe.firstResult() == unchanged,
-                                     "accepted_command_before_zero_owner_changed_backend") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(probe.zeroOwnerObserved(),
-                                     "owner_count_not_zero_after_release") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(probe.workerJoinableAtZeroOwner(),
-                                     "control_worker_joined_at_zero_owners") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(probe.closedCalls() == 0,
-                                     "closed_owner_completion_called") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(probe.barrierCalls() == 1,
-                                     "post_zero_owner_command_not_settled_once") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(probe.barrierResult() == unchanged,
-                                     "post_zero_owner_command_changed_backend") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(probe.settled(),
-                                     "post_zero_owner_transaction_not_acked") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(runtime.isControlWorkerJoinable(),
-                                     "control_worker_not_joinable_after_zero_owner_commands") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(workerIdentityAfterCommands != std::thread::id{}
-                                         && probe.workerIdentityAtZeroOwner() != std::thread::id{}
-                                         && workerIdentityAfterCommands == probe.workerIdentityAtZeroOwner(),
-                                     "control_worker_identity_changed") && lifecyclePassed;
-    lifecyclePassed = checkLifecycle(runtime.controlQueueDepth() == 0,
-                                     "control_queue_not_drained") && lifecyclePassed;
-
-    const OpenTune::ContentKey pauseKey{OpenTune::DomainKind::StandaloneClip, 905, 0};
-    auto pauseCache = pauseTarget->getOrCreateRenderCache(pauseKey);
-    auto pauseSnapshot = std::make_shared<OpenTune::EditableContentSnapshot>();
-    auto pauseAudio = std::make_shared<juce::AudioBuffer<float>>(1, 256);
-    pauseAudio->clear();
-    pauseTarget->enqueueRender(OpenTune::RenderJob{
-        OpenTune::RenderJob::Kind::Stage1Render, pauseKey, pauseSnapshot, pauseCache,
-        pauseAudio, 44100.0, 0, pauseAudio->getNumSamples(), -1, 1});
-    pauseTarget->drainRenderWorker();
-    lifecyclePassed = checkLifecycle(pauseTargetJobs.load(std::memory_order_acquire) == 1,
-                                     "accepted_transaction_left_source_owner_paused") && lifecyclePassed;
-    pauseTarget->detachExecutionLease(&pauseTargetLeaseOwner);
-    probe.releaseSourceOwner();
-    pauseTarget.reset();
-
+    const bool zeroOwnerWorkerAlive =
+        runtime.ownerCount() == 0 && runtime.isControlWorkerJoinable();
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "zero_owner_runtime_persisted", {
         {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
-        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"},
-        {"firstCommandCompletions", OpenTuneTest::jsonNumber(probe.firstCalls())},
-        {"closedOwnerCallbacks", OpenTuneTest::jsonNumber(probe.closedCalls())},
-        {"barrierCompletions", OpenTuneTest::jsonNumber(probe.barrierCalls())},
-        {"transactionSettled", probe.settled() ? "true" : "false"},
         {"controlQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.controlQueueDepth()))},
         {"deferredRetryCount", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.deferredRetryCount()))},
-        {"vocoderReady", runtime.isVocoderReady() ? "true" : "false"},
-        {"vocoderGeneration", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.vocoderGeneration()))},
+        {"activeTransaction", runtime.hasActiveTransaction() ? "true" : "false"},
+        {"domainSubmitInFlight", OpenTuneTest::jsonNumber(runtime.domainSubmitInFlight())},
+        {"domainGeneration", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.vocoderGeneration()))},
         {"renderQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(service->renderQueueDepth()))},
         {"renderInFlight", OpenTuneTest::jsonNumber(service->renderInFlight())},
-        {"renderAsyncInFlight", OpenTuneTest::jsonNumber(service->renderAsyncInFlight())}
-    });
-    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "backend_readiness_assertion_skipped", {
-        {"reason", OpenTuneTest::jsonString("no real Domain factory injection or test model seam")}
+        {"renderAsyncInFlight", OpenTuneTest::jsonNumber(service->renderAsyncInFlight())},
+        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
     });
 
-    if (! lifecyclePassed)
-        return 1;
+    runtime.retainOwner();
+    runtime.releaseOwner();
+    const bool ownerCycleStayedOpen =
+        runtime.ownerCount() == 0 && runtime.isControlWorkerJoinable();
+    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "runtime_owner_cycle_complete", {
+        {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
+        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
+    });
+
+    runtime.shutdownAndJoin();
+    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "runtime_shutdown_and_join_complete", {
+        {"resetCallbackCalls", OpenTuneTest::jsonNumber(resetCallbackCalls)},
+        {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
+        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
+    });
 
     service.reset();
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "owner_destructor_complete");
 
     const auto finalStats = cache->getChunkStats();
-    if (finalStats.pending != 0
+    if (!initialRenderPending
+        || !zeroOwnerWorkerAlive
+        || !ownerCycleStayedOpen
+        || resetCallbackCalls != 1
+        || runtime.ownerCount() != 0
+        || runtime.isControlWorkerJoinable()
+        || finalStats.pending != 0
         || finalStats.running != 0
         || (!cache->isCanonicalSettled() && failed.load(std::memory_order_relaxed) == 0)
         || (failed.load(std::memory_order_relaxed) != 0

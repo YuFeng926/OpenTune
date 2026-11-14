@@ -37,7 +37,7 @@ std::vector<std::string> controlHomeDirectorySpellings(std::string_view homeDire
 
 /**
  * Redacts one log line: every secret (the session token and the server proof) is replaced by
- * "<redacted>", then every home-directory spelling by "~" (PROTOCOL.md sections 4.5 and 20.2). ASCII
+ * "<redacted>", then every home-directory spelling by "~". ASCII
  * letters match without regard to case. Bytes that are not valid UTF-8 become '?', and the line is cut
  * to kControlLogLineMaxCodePoints code points after the replacement, so that a cut can never leave the
  * start of a secret behind. Secrets shorter than 8 bytes are ignored (they would match ordinary text).

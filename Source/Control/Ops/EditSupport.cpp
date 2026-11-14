@@ -67,7 +67,7 @@ JsonValue placementRef(const std::string& placementId)
     return ref;
 }
 
-/** The origin of a key as common.schema.json#/$defs/key names it; null for a content without a key. */
+/** The origin of a key; null for a content without a key. */
 JsonValue originJson(const DetectedKey& key)
 {
     if (key.origin == Origin::Unset)

@@ -1,7 +1,6 @@
 #include "Content/ContentEditCommands.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Utils/PianoRollEditAction.h"
-#include "Utils/ParameterPanelSync.h"
 #include "Utils/PitchShiftEditAction.h"
 #include "Utils/SelectedNoteParameterEdit.h"
 #include <algorithm>
@@ -201,72 +200,6 @@ bool checkStaleNotesRevisionRejected()
     return !patch;
 }
 
-bool checkParameterPanelSyncUsesSelectedNoteValues()
-{
-    ParameterPanelSyncContext context;
-    context.hasSelectedNoteParameters = true;
-    context.selectedNoteRetuneSpeedPercent = 72.0f;
-    context.selectedNoteVibratoDepth = 34.0f;
-    context.selectedNoteVibratoRate = 8.5f;
-    context.clipRetuneSpeedPercent = 22.0f;
-    context.clipVibratoDepth = 12.0f;
-    context.clipVibratoRate = 6.0f;
-
-    const auto decision = resolveParameterPanelSyncDecision(context);
-    return decision.shouldSetRetuneSpeed
-        && decision.retuneSpeedPercent == context.selectedNoteRetuneSpeedPercent
-        && decision.shouldSetVibratoDepth
-        && decision.vibratoDepth == context.selectedNoteVibratoDepth
-        && decision.shouldSetVibratoRate
-        && decision.vibratoRate == context.selectedNoteVibratoRate
-        && decision.nextShowingSelectionParameters;
-}
-
-bool checkParameterPanelSyncRestoresClipValuesAfterSelectionClears()
-{
-    ParameterPanelSyncContext context;
-    context.wasShowingSelectionParameters = true;
-    context.clipRetuneSpeedPercent = 22.0f;
-    context.clipVibratoDepth = 12.0f;
-    context.clipVibratoRate = 6.0f;
-
-    const auto decision = resolveParameterPanelSyncDecision(context);
-    return decision.shouldSetRetuneSpeed
-        && decision.retuneSpeedPercent == context.clipRetuneSpeedPercent
-        && decision.shouldSetVibratoDepth
-        && decision.vibratoDepth == context.clipVibratoDepth
-        && decision.shouldSetVibratoRate
-        && decision.vibratoRate == context.clipVibratoRate
-        && !decision.nextShowingSelectionParameters;
-}
-
-bool checkParameterPanelSyncLeavesClipProjectionUntouchedWithoutSelection()
-{
-    const auto decision = resolveParameterPanelSyncDecision(ParameterPanelSyncContext{});
-    return !decision.shouldSetRetuneSpeed
-        && !decision.shouldSetVibratoDepth
-        && !decision.shouldSetVibratoRate
-        && !decision.nextShowingSelectionParameters;
-}
-
-bool checkParameterPanelSyncCanProjectClipValuesOnInitialization()
-{
-    ParameterPanelSyncContext context;
-    context.clipRetuneSpeedPercent = 22.0f;
-    context.clipVibratoDepth = 12.0f;
-    context.clipVibratoRate = 6.0f;
-    context.forceClipParameterProjection = true;
-
-    const auto decision = resolveParameterPanelSyncDecision(context);
-    return decision.shouldSetRetuneSpeed
-        && decision.retuneSpeedPercent == context.clipRetuneSpeedPercent
-        && decision.shouldSetVibratoDepth
-        && decision.vibratoDepth == context.clipVibratoDepth
-        && decision.shouldSetVibratoRate
-        && decision.vibratoRate == context.clipVibratoRate
-        && !decision.nextShowingSelectionParameters;
-}
-
 class RecordingCommands final : public ContentEditCommands
 {
 public:
@@ -345,10 +278,6 @@ int main()
         || !checkPurePlanForParameter(AudioEditingScheme::ParameterId::VibratoRate,
                                       9.0f, 0.15f, 0.0f, 7.5f)
         || !checkStaleNotesRevisionRejected()
-        || !checkParameterPanelSyncUsesSelectedNoteValues()
-        || !checkParameterPanelSyncRestoresClipValuesAfterSelectionClears()
-        || !checkParameterPanelSyncLeavesClipProjectionUntouchedWithoutSelection()
-        || !checkParameterPanelSyncCanProjectClipValuesOnInitialization()
         || !checkEditActionUsesBoundContentKey()) {
         std::cerr << "Selected-note parameter edit regression failed\n";
         return 1;

@@ -15,7 +15,7 @@ namespace {
 
 using SteadyClock = std::chrono::steady_clock;
 
-/** Longest detail of an error object (PROTOCOL.md section 17.1). */
+/** Longest detail of an error object. */
 constexpr std::size_t kMaxDetailBytes = 1024;
 
 constexpr const char* kQueued = "queued";
@@ -120,7 +120,7 @@ struct ControlJobs::Job
     bool terminal() const { return isTerminalState(state); }
 };
 
-/** A job.get that waits for its job (section 12.2). */
+/** A job.get request waiting for its job. */
 struct ControlJobs::Waiter
 {
     std::uint64_t seq = 0;
@@ -395,7 +395,7 @@ ControlJobs::Job* ControlJobs::findLocked(const std::string& jobId) const
     const auto it = jobs_.find(sequenceOf(jobId));
     if (it == jobs_.end() || it->second->jobId != jobId)
         return nullptr;
-    // A job retained beyond its time is gone for every reader (section 12.4).
+    // A job retained beyond its time is gone for every reader.
     if (expiredLocked(*it->second, steadyNow()))
         return nullptr;
     return it->second.get();

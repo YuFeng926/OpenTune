@@ -112,7 +112,7 @@ struct ImportParams
     bool focus = true;
 
     /** The params other than idempotencyKey after defaults, as one string: equal strings mean equal
-        params (section 12.5). Numbers compare by value. */
+        params. Numbers compare by value. */
     std::string digest() const
     {
         auto json = JsonValue::object();
@@ -187,8 +187,8 @@ bool readKey(ControlParamReader& reader, std::string& out)
     return true;
 }
 
-/** methods/import.start.schema.json $defs.params, on the connection thread. Paths get their checks of
-    PROTOCOL.md section 20.1 on the message thread, as method-specific validation with their own reasons. */
+/** Parses import.start params on the connection thread. Paths are checked on the message thread with
+    method-specific validation and errors. */
 bool parseImport(const JsonValue& params, ImportParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -245,7 +245,7 @@ std::string labelSeconds(double seconds)
  * Decodes one file and prepares it for the commit on a thread of its own, as the editor does with
  * AsyncAudioLoader::run() and its background task: AudioFormatRegistry::registerImportFormats(), the
  * format's reader, then OpenTuneAudioProcessor::prepareImport(), which the editor also calls off the
- * message thread. The errors are classified for the item (methods/import.start.schema.json).
+ * message thread. Errors are classified for the item.
  *
  * The destructor marks the work abandoned and joins the thread; the thread checks the mark between blocks
  * of the decode and before prepareImport(), so destroying an unfinished file waits for at most one block or
@@ -388,26 +388,26 @@ struct ImportItem
  *   it commit a copy of the prepared audio, which a further attempt needs; otherwise (no project opened, or
  *   every clip id behind OpenTune's counter) it commits once, as the editor does, without a copy.
  * - OpenTune's import creates no undo entry and the editor does not mark the project as changed after it;
- *   the job marks it (PROTOCOL.md section 15.5).
+ *   the job marks it.
  * - The result has no undo entry (ui_parity). While the instance reports arrangement.v1, its revert recipe deletes the
  *   committed clips with one arrangement.edit op delete, and carries requiresConsent true because deleting clips needs
- *   the end user's consent (PROTOCOL.md section 15.2 rule 4); the recipe lists only the clips that were committed, so
+ *   the end user's consent; the recipe lists only the clips that were committed, so
  *   a cancelled job names the clips it got through. Without arrangement.v1 no request can remove them: revert is null
  *   and the envelope adds IRREVERSIBLE. The recipe carries the arrangement revision right after the last commit, so
- *   that it fails with REVISION_CONFLICT where the clips were changed since (rule 3). sideEffects.notesGenerated
- *   has the same recipe for the focused clips whose notes were generated (rule 5).
+ *   that it fails with REVISION_CONFLICT where the clips were changed since. sideEffects.notesGenerated has the same
+ *   recipe for the focused clips whose notes were generated.
  * - commitPreparedImportAsPlacement() selects every clip it commits and makes its track the active track, also with
  *   focus false. A selected clip is what the editor's heartbeat loads into the piano roll, and the openDyne scheme
  *   generates the notes of a content it shows, so the clip would get notes the request did not ask for. The job
  *   therefore restores the selection that the commit found (captureCommitSelection()), and focus alone decides the
  *   selection: with focus false it does not change, and with focus true the job selects the last clip after the
- *   commits (PROTOCOL.md section 21 rule 2). With focus true and several target tracks, only the track of the last
+ *   commits. With focus true and several target tracks, only the track of the last
  *   clip ends up with its new clip selected; the other tracks keep the clip that was selected before, where the
  *   editor's import leaves each of them on its new clip. This is deliberate: the selection is decided by focus alone.
  * - The clip id collision after a project was opened is only logged: the protocol has no warning code
  *   for it, so the result carries none.
  *
- * Where it differs from the editor's import, it follows methods/import.start.schema.json:
+ * Where it differs from the editor's import:
  * - In the openDyne scheme the editor generates notes for every clip it commits; the job generates them
  *   only for the focused clip (without generateNotes).
  * - The editor's import into separate tracks places every file at 0 s on its track; the job appends
@@ -596,7 +596,7 @@ private:
         placementRef.appendMember("placementId", JsonValue::string(item.placementHandle));
         if (attempt > 1) {
             // The editor's import would have failed here: the result tells the client that the job committed the
-            // clip again (registry/warnings.json IMPORT_COMMIT_REPEATED).
+            // clip again; the result includes IMPORT_COMMIT_REPEATED.
             auto data = JsonValue::object();
             data.appendMember("repeatCount", JsonValue::integer(static_cast<std::int64_t>(attempt - 1)));
             envelope_->addWarning("IMPORT_COMMIT_REPEATED", placementRef, std::move(data));
@@ -641,8 +641,8 @@ private:
             if (bridge != nullptr)
                 bridge->focusPlacement(focus->trackId, focus->placementId);
         }
-        // In the openDyne scheme notes are generated for the focused clip once its analysis finished, as
-        // import.start specifies (PROTOCOL.md section 21 rule 2), with the parameters the editor would use
+        // In the openDyne scheme notes are generated for the focused clip once its analysis finishes, with
+        // the parameters the editor would use
         // for AUTO. The editor's own import generates them for every clip it commits; see the class comment.
         const bool openDyne = processor.getAppPreferences().getState().shared.audioEditingScheme
                               == AudioEditingScheme::Scheme::NotesPrimary;
@@ -757,7 +757,7 @@ private:
 
     /** The revert recipe that deletes the given clips: one arrangement.edit op delete at the arrangement as the last
         commit left it, with requiresConsent (the end user's consent to delete clips is the client's to add). Null
-        without arrangement.v1 (PROTOCOL.md section 15.2 rule 2). At most kMaxItems clips, which one op delete accepts.
+        without arrangement.v1. At most kMaxItems clips, which one op delete accepts.
      */
     JsonValue deleteClipsRecipe(ControlOpContext& context, const std::vector<std::string>& placementHandles) const
     {
@@ -807,7 +807,7 @@ private:
             envelope_->addWarning("TRACK_AUTO_REVEALED", std::move(subject));
         }
         if (!revealedTracks_.empty()) {
-            // View state: no revert recipe and no IRREVERSIBLE for it (section 15.2 rule 6).
+            // View state: no revert recipe and no IRREVERSIBLE warning.
             auto trackIds = JsonValue::array();
             for (const int trackId : revealedTracks_)
                 trackIds.append(JsonValue::integer(trackId));
@@ -875,7 +875,7 @@ Result<JsonValue> runImportStart(ControlOpContext& context, const ImportParams& 
         return controlOpError("INTERNAL", "", "the jobs registry is not available");
     const auto digest = params.digest();
 
-    // Section 12.5: a retained import job started with this key answers before any check of state.
+    // A retained import job started with this key answers before any check of state.
     if (!params.idempotencyKey.empty()) {
         std::string existingDigest;
         const auto existing = jobs->findByKey("import", params.idempotencyKey, existingDigest);
@@ -888,7 +888,7 @@ Result<JsonValue> runImportStart(ControlOpContext& context, const ImportParams& 
         }
     }
 
-    // Handles, then busy state, then the method's own checks (PROTOCOL.md section 13.1 rule 4).
+    // Handles, then busy state, then the method's own checks.
     auto& processor = context.processor();
     const auto* arrangement = processor.getStandaloneArrangement();
     if (arrangement == nullptr)
@@ -899,7 +899,7 @@ Result<JsonValue> runImportStart(ControlOpContext& context, const ImportParams& 
     if (auto busy = controlCheckBusy(context))
         return *busy;
     for (const auto& path : params.paths) {
-        // Section 20.1: the raw text, before any file-system access.
+        // Check the raw path text before any file-system access.
         const auto reason = controlCheckAbsolutePath(path, controlNativePathStyle());
         if (!reason.empty())
             return controlOpError("INVALID_ARGUMENT", reason, "a path is not an absolute path in the accepted form");

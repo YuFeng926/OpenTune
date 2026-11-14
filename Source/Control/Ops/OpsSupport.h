@@ -26,7 +26,7 @@ struct Note;
 /** A JSON number rounded to the given number of decimals, written without exponent and without
     trailing zeros, independent of the C locale. Non-finite values are written as 0. */
 JsonValue controlJsonNumber(double value, int decimals);
-/** Seconds, rounded to 6 decimals as PROTOCOL.md section 8.2 recommends. */
+/** Seconds as JSON, rounded to 6 decimals. */
 inline JsonValue controlJsonSeconds(double value)
 {
     return controlJsonNumber(value, 6);
@@ -52,8 +52,7 @@ JsonValue controlNoteOffsetCentsJson(const Note& note);
     the notes in this order (normalizeStoredNotes()), but not every store sorts them: a project is opened with its
     notes applied as the file holds them (StandaloneClipContent::applyNotes()). Pure. */
 std::vector<std::size_t> controlNoteIndexOrder(const std::vector<Note>& notes);
-/** A JSON string from UTF-8 text, at most maxCodePoints code points (text from projects is untrusted
-    data: it is returned as a string value only, PROTOCOL.md section 20.2). */
+/** A JSON string from UTF-8 text, at most maxCodePoints code points. Project text is returned as data only. */
 JsonValue controlJsonText(const std::string& utf8, std::size_t maxCodePoints);
 /** Gain in dB of a linear factor; nullopt for 0 (minus infinity dB). */
 std::optional<double> controlLinearToDb(double linear);
@@ -62,7 +61,7 @@ std::optional<double> controlLinearToDb(double linear);
 const char* controlF0StateName(OriginalF0State state);
 
 /** The display label of a note, for example "#12 A4 41.20-41.85s" (index, the target's name at the instance's
-    tuning or "rest", content seconds). Display only (PROTOCOL.md section 9). */
+    tuning or "rest", content seconds). Display only. */
 std::string controlNoteLabel(std::size_t index, std::optional<double> targetMidi, double startSec, double endSec);
 
 // ---- Checking params on the network thread --------------------------------------------------------
@@ -76,7 +75,7 @@ class ControlParamReader
 public:
     explicit ControlParamReader(const JsonValue& params) : params_(params) {}
 
-    /** Fails when params has a member that is not in names (closed schemas, PROTOCOL.md section 2.3). */
+    /** Fails when params has a member that is not in names. */
     bool onlyMembers(std::initializer_list<std::string_view> names);
     /** The member, or nullptr when absent. */
     const JsonValue* member(std::string_view name) const { return params_.find(name); }
@@ -87,7 +86,7 @@ public:
     bool optionalNumber(std::string_view name, double min, double max, std::optional<double>& out);
     /** An optional handle member of the given kind (form check only). */
     bool optionalHandle(std::string_view name, ControlHandleKind kind, std::optional<ControlHandle>& out);
-    /** An optional cursor member (common.schema.json#/$defs/cursor) issued by the method of that kind. */
+    /** An optional cursor member issued by the method of that kind. */
     bool optionalCursor(std::string_view name, char kind, std::optional<ControlCursor>& out);
 
     /** Records a failure; returns false. */
@@ -106,7 +105,7 @@ struct ControlNoParams
 /** Checks that params is empty. */
 bool controlParseNoParams(const JsonValue& params, ControlNoParams& out, std::string& why);
 
-/** A time range with the clock its member names state (common.schema.json#/$defs/timeRange). */
+/** A time range with the clock its member names state. */
 struct ControlTimeRange
 {
     enum class Clock {
@@ -148,8 +147,8 @@ std::string controlContentId(ControlOpContext& context, const ContentKey& key);
 std::string controlPlacementId(ControlOpContext& context, std::uint64_t placementId);
 
 /**
- * PROTOCOL.md section 9 rule 1 after the form check: a handle of another instance or of an earlier
- * epoch gives NOT_FOUND(stale_handle), a current handle that names no live content gives
+ * After the form check, a handle of another instance or of an earlier epoch gives
+ * NOT_FOUND(stale_handle); a current handle that names no live content gives
  * NOT_FOUND(unknown_handle). A retired content (its clip was deleted) is not live.
  */
 Result<ControlContentRef> controlResolveContent(ControlOpContext& context, const ControlHandle& handle);
@@ -159,7 +158,7 @@ Result<ControlPlacementRef> controlResolvePlacement(ControlOpContext& context, c
 std::shared_ptr<const EditableContentSnapshot> controlLiveSnapshot(ControlOpContext& context, const ContentKey& key);
 
 /**
- * The reason code of a failed pitch analysis (common.schema.json reasonCode), from the failure message that OpenTune
+ * The reason code of a failed pitch analysis, from the failure message that OpenTune
  * keeps with the content (EditableContentSnapshot::originalF0FailureReason, set by
  * OpenTuneAudioProcessor::setContentOriginalF0FailureReason when the analysis fails): "f0_empty" when the F0
  * extraction found no voiced frame (it fails with the message "f0_empty_or_unvoiced"), "f0_failed" for every other
@@ -191,7 +190,7 @@ int controlVisibleTrackCount(ControlOpContext& context, bool& derived);
 // ---- Revision tokens and the world revision vector ------------------------------------------------
 
 /**
- * The components of the world revision vector of one content (PROTOCOL.md section 14.4), as opaque
+ * The components of the world revision vector of one content, as opaque
  * tokens read from the content's current snapshot:
  * - notes: the notes and their parameters (the content's notes revision, without the steps of its pitch
  *   shifts: ControlPitchShiftLedger);
@@ -213,7 +212,7 @@ struct ControlContentVersions
 
     /** The content's `revision` token: changes exactly when notes, pitch or content changes. */
     std::string revision() const;
-    /** {contentId, revision, gridRevision, keyRevision} (common.schema.json#/$defs/contentTokens). */
+    /** {contentId, revision, gridRevision, keyRevision}. */
     JsonValue tokensJson() const;
 };
 
@@ -226,10 +225,10 @@ struct ControlWorldVersions
 };
 
 /**
- * The versions of one content from its snapshot. A pitch shift must not change `revision` (PROTOCOL.md section
- * 10 rule 2), but OpenTune's applyPitchShiftState() advances the notes and pitch counters: the instance's
+ * The versions of one content from its snapshot. A pitch shift must not change `revision`, but OpenTune's
+ * applyPitchShiftState() advances the notes and pitch counters: the instance's
  * ControlPitchShiftLedger (ControlOpContext::history()) observes the snapshot and leaves those steps out.
- * Without a history (a context of the unit tests) the counters are used as they are.
+ * Without a history the counters are used as they are.
  */
 ControlContentVersions controlContentVersions(ControlOpContext& context, const std::string& contentId,
                                               const EditableContentSnapshot& snapshot);
@@ -243,7 +242,7 @@ std::string controlGeometryHash(const ControlPlacementRef& placement);
     by the reads (asOf) and the write envelopes (revisionDiff). */
 ControlWorldVersions controlCaptureWorldVersions(ControlOpContext& context);
 
-/** The asOf member of a read result (common.schema.json#/$defs/asOf). */
+/** The asOf member of a read result. */
 JsonValue controlAsOf(const std::string& arrangementRevision, const std::vector<ControlContentVersions>& contents);
 
 /** A hash of a JSON value as a token, for cursors (selection params and the asOf of a read). */
@@ -260,7 +259,7 @@ struct ControlAudioDeviceState
     std::optional<std::string> name;
     std::optional<double> sampleRateHz;
     std::optional<int> bufferSizeFrame;
-    /** Reason of the nulls (registry/reasons.json, scope null): no_editor without a bridge, unavailable
+    /** Reason of the nulls: no_editor without a bridge, unavailable
         when the bridge gives no device manager or the device does not report a value, no_audio_device
         when no device is open. */
     std::string nullReason;
@@ -270,7 +269,7 @@ struct ControlAudioDeviceState
     known: running is false and the other members are null. Message thread. */
 ControlAudioDeviceState controlAudioDeviceState(ControlOpContext& context);
 
-/** The transport object (common.schema.json#/$defs/transport) from the processor's transport state. With
+/** The transport object from the processor's transport state. With
     positionOverrideSec the position member is that value instead of the processor's: transport.control reports
     the position that a command it has just issued is about to give the audio thread (OpenTune's transport
     commands are carried out by the audio callback, a block later). */

@@ -18,7 +18,7 @@ namespace OpenTune {
  * Message thread.
  */
 
-/** One track slot as the protocol reports it (common.schema.json#/$defs/track). */
+/** One track slot as the protocol reports it. */
 struct ControlTrackState
 {
     int trackId = 0;
@@ -36,8 +36,7 @@ struct ControlTrackState
 /** The number of track slots, visible or not; 0 without an arrangement. */
 int controlTrackSlotCount(ControlOpContext& context);
 
-/** NOT_FOUND(unknown_handle) unless trackId names a track slot (PROTOCOL.md section 9: the handle check of a
-    method that takes a trackId). nullopt when it does. */
+/** Returns NOT_FOUND(unknown_handle) when trackId does not name a track slot, and nullopt otherwise. */
 std::optional<Error> controlCheckTrackSlot(ControlOpContext& context, int trackId);
 
 /** Every slot in order, with visibility from the first visibleCount slots and audibility from the solo flags. */
@@ -45,17 +44,17 @@ std::vector<ControlTrackState> controlCaptureTracks(ControlOpContext& context, i
 
 /**
  * The number of track slots the editor shows, for a method that changes it (track.add, track.duplicate,
- * track.delete). Without an editor the method fails with UNSUPPORTED(no_editor_window) (PROTOCOL.md section 7 rule 6);
- * with an editor that cannot tell, the number is not known and cannot be changed: UNSUPPORTED(capability_missing).
+ * track.delete). Without an editor, the method fails with UNSUPPORTED(no_editor_window). With an editor that cannot
+ * report the count, it fails with UNSUPPORTED(capability_missing).
  */
 Result<int> controlEditorVisibleTrackCount(ControlOpContext& context);
 
 /** The live clips on one track, in the order of the track. */
 std::vector<ControlPlacementRef> controlPlacementsOnTrack(ControlOpContext& context, int trackId);
 
-/** {trackId} (common.schema.json#/$defs/entityRef). */
+/** {trackId}. */
 JsonValue controlTrackRef(int trackId);
-/** "Track N", the label OpenTune gives a track and the protocol reports (PROTOCOL.md section 15.4 rule 6). */
+/** "Track N", the label OpenTune gives a track and the protocol reports. */
 JsonValue controlTrackLabel(int trackId);
 /** "#RRGGBB" in upper case. */
 std::string controlColourText(std::uint32_t colourRgb);

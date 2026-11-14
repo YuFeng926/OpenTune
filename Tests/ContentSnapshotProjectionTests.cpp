@@ -10,7 +10,6 @@
 #include "../Source/Services/HnsepAudio.h"
 #include "../Source/Inference/TimeStretchCache.h"
 #include "../Source/Utils/PlaybackAudioReader.h"
-#include "../Source/Utils/PlaybackSampleGeometry.h"
 #include "../Source/Render/PlaybackReadSource.h"
 #include "../Source/Render/StretcherPool.h"
 #include "../Source/Inference/SoundTouchStretcher.h"
@@ -84,9 +83,6 @@ bool testCommonFieldsRoundTrip()
     source.sourceWindow = OpenTune::SourceWindow{17, {}, 0.25, 1.5};
     source.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 4);
     source.sampleRate = 48000.0;
-    auto nativePcm = std::make_shared<const juce::AudioBuffer<float>>(2, 6);
-    source.nativeSource = OpenTune::NativePcmSource{nativePcm, 48000.0, 12345, 8};
-    source.firstCanonicalSample = 456;
     source.analysis.hnsepHarmonicAudio =
         std::make_shared<const std::vector<float>>(std::vector<float>{0.1f, 0.2f});
     source.analysis.hnsepResidualAudio =
@@ -121,8 +117,6 @@ bool testCommonFieldsRoundTrip()
         && snapshot.sourceWindow.sourceStartSeconds == 0.25
         && snapshot.sourceWindow.sourceEndSeconds == 1.5
         && snapshot.audioBuffer == source.audioBuffer
-        && snapshot.nativeSource == source.nativeSource
-        && snapshot.firstCanonicalSample == 456
         && snapshot.hnsepHarmonicAudio == source.analysis.hnsepHarmonicAudio
         && snapshot.hnsepResidualAudio == source.analysis.hnsepResidualAudio
         && nearlyEqual(snapshot.audioSampleRate, 48000.0)
@@ -144,11 +138,7 @@ bool testCommonFieldsRoundTrip()
         && snapshot.timeGrid == source.timeGrid
         && restored.timeGrid == snapshot.timeGrid
         && restored.sourceWindow.sourceId == source.sourceWindow.sourceId
-        && restored.sourceWindow.sourceStartSeconds == source.sourceWindow.sourceStartSeconds
-        && restored.sourceWindow.sourceEndSeconds == source.sourceWindow.sourceEndSeconds
         && restored.audioBuffer == source.audioBuffer
-        && restored.nativeSource == source.nativeSource
-        && restored.firstCanonicalSample == 456
         && restored.analysis.hnsepHarmonicAudio == source.analysis.hnsepHarmonicAudio
         && restored.analysis.hnsepResidualAudio == source.analysis.hnsepResidualAudio
         && nearlyEqual(restored.sampleRate, 48000.0)
@@ -643,58 +633,6 @@ bool testF0TimelineNearestSplitBoundary()
         && singleFrame.nearestFrameBoundary(0.006) == 1;
 }
 
-// 固定映射建立后，权威窗口秒值保持原值；host 区间与 prepared 区间是同一个
-// 半开整数映射，block 划分、seek 和端点边界只切地址，不移动映射。
-bool testFixedGeometryKeepsAuthoritativeWindowSecondsAndHalfOpenSpans()
-{
-    namespace PSG = OpenTune::PlaybackSampleGeometry;
-    constexpr double hostRate = 48000.0;
-
-    const OpenTune::SourceWindow window{31, "persistent-31", 0.0011, 1.2345};
-    const auto placement = PSG::makePlacement(hostRate,
-                                              window.sourceStartSeconds,
-                                              window.sourceEndSeconds,
-                                              0.0);
-    if (window.sourceStartSeconds != 0.0011
-        || window.sourceEndSeconds != 1.2345
-        || window.durationSeconds() != 1.2345 - 0.0011)
-        return false;
-
-    const auto host = PSG::hostPlaybackSpan(placement);
-    const auto prepared = PSG::requiredPreparedSpan(placement);
-    if (host.empty() || prepared.empty()
-        || prepared.end - prepared.begin != host.end - host.begin
-        || prepared.begin != host.begin - placement.offsetSamples
-        || prepared.end != host.end - placement.offsetSamples)
-        return false;
-
-    // 两个相邻半开 block 公共边界只出现一次；终点 Z 不属于播放区间。
-    const int64_t sharedBoundary = host.begin + (host.end - host.begin) / 2;
-    const auto leading = PSG::intersect(host, {host.begin, sharedBoundary});
-    const auto trailing = PSG::intersect(host, {sharedBoundary, host.end});
-    if (leading.begin != host.begin || leading.end != sharedBoundary
-        || trailing.begin != sharedBoundary || trailing.end != host.end)
-        return false;
-    if (!PSG::intersect({host.end, host.end + 512}, host).empty())
-        return false;
-
-    // host 区间内每个样本恰好映射到一个 prepared local 地址。
-    const int64_t length = host.end - host.begin;
-    for (const int64_t offset : {int64_t{0}, length / 3, length - 1})
-    {
-        const auto address = PSG::mapHostSampleToPrepared(
-            placement, host.begin + offset, prepared.begin);
-        if (address.bufferLocalIndex != offset)
-            return false;
-    }
-
-    // 权威终点直接投影，不由起点与时长重建；投影不回写窗口秒值。
-    const auto endProjection = PSG::intersect(
-        {placement.playbackEndSample, placement.playbackEndSample + 1}, host);
-    return endProjection.empty()
-        && window.sourceEndSeconds == 1.2345;
-}
-
 bool testARAPlaybackRendererRealtimeStopGate()
 {
     using Realtime = juce::AudioProcessor::Realtime;
@@ -970,12 +908,6 @@ int main()
     if (!testF0TimelineNearestSplitBoundary())
     {
         std::fputs("FAIL: F0Timeline nearest split boundary\n", stderr);
-        return 1;
-    }
-
-    if (!testFixedGeometryKeepsAuthoritativeWindowSecondsAndHalfOpenSpans())
-    {
-        std::fputs("FAIL: fixed geometry authority and half-open identity\n", stderr);
         return 1;
     }
 

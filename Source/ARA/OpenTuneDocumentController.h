@@ -337,8 +337,6 @@ private:
                                          std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate,
                                          std::shared_ptr<RenderTerminalRelay> renderTerminalRelay);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
-    friend struct RenderTerminalRelayTestAccess;
-
     std::unique_ptr<NotePitchAudition> notePitchAudition_;
     AuditionRoute auditionRoute_;
     std::vector<std::shared_ptr<NoteAudition>> keyboardAuditionSources_;

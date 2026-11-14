@@ -26,7 +26,7 @@ struct WorkspaceParams
     bool arrangement = true;
 };
 
-/** methods/ui.setWorkspace.schema.json $defs.params, on the connection thread: workspace is required and the only
+/** Parses ui.setWorkspace params on the connection thread: workspace is required and the only
     member. */
 bool parseSetWorkspace(const JsonValue& params, WorkspaceParams& out, std::string& why)
 {
@@ -61,7 +61,7 @@ const char* workspaceName(const std::string& reported)
 }
 
 /** ui.setWorkspace back to the workspace the window showed before the call, only where the instance reports
-    ui.workspace (PROTOCOL.md section 15.2 rule 2). */
+    ui.workspace. */
 JsonValue revertRecipe(ControlOpContext& context, const char* before)
 {
     if (!controlReportsCapability(context, "ui.workspace"))

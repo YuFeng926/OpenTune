@@ -150,7 +150,7 @@ JsonValue availableJson(const Available& available)
     return json;
 }
 
-/** The device member of audio.get and audio.set (audio.get.schema.json $defs.device). nullReason says why the members
+/** The device member of audio.get and audio.set. nullReason says why the members
     are null when no device runs: no_audio_device, no_editor or unavailable. */
 JsonValue deviceJson(const DeviceView& view, const std::string& nullReason)
 {
@@ -197,7 +197,7 @@ Result<JsonValue> runAudioGet(ControlOpContext& context, const ControlNoParams&)
 
 // ---- audio.set: params -----------------------------------------------------------------------------------
 
-/** methods/audio.set.schema.json $defs.params: the members that are present. */
+/** Parses audio.set params, retaining only the members that are present. */
 struct AudioSetRequest
 {
     std::optional<std::string> deviceType;
@@ -539,7 +539,7 @@ Result<JsonValue> runAudioSet(ControlOpContext& context, const AudioSetRequest& 
     if (auto busy = controlCheckBusy(context))
         return *busy;
     auto* bridge = context.bridge();
-    // PROTOCOL.md section 7 rule 6: without an editor window the method fails with no_editor_window.
+    // Without an editor window the method fails with no_editor_window.
     if (bridge == nullptr)
         return controlOpError("UNSUPPORTED", "no_editor_window",
                               "audio.set acts through the editor window, and no editor exists");
@@ -605,7 +605,7 @@ Result<JsonValue> runAudioSet(ControlOpContext& context, const AudioSetRequest& 
     const auto after = readDevice(*manager);
     recordChange(context, envelope, prior.view, after);
     // The sample rate of the ASIO device that was left stays where the device had put it; the switch itself went on.
-    // registry/warnings.json: subject {singleton: audioDevice}, data {deviceName, sampleRateHz}.
+    // The warning reports the device name and sample rate for audioDevice.
     if (asioRateNotRestored) {
         auto subject = JsonValue::object();
         subject.appendMember("singleton", JsonValue::string("audioDevice"));

@@ -15,8 +15,7 @@ struct EditableContentSnapshot;
 
 /**
  * Takes the steps of OpenTune's pitch shifts out of the notes and pitch counters from which the control API
- * derives the `revision` token, because a pitch shift must not change `revision` (PROTOCOL.md section 10
- * rule 2).
+ * derives the `revision` token, because a pitch shift must not change `revision`.
  *
  * OpenTune applies a pitch shift with applyPitchShiftState() (OpenTuneAudioProcessor::commitPitchShiftEdit(),
  * and the undo and redo of PitchShiftEditAction): it scales the notes and the correction segments and

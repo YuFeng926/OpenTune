@@ -5,8 +5,7 @@ namespace OpenTune {
 
 class ControlMethodTable;
 
-/** Registers import.start (capability import.v1): imports audio files as new clips, as a job of kind
-    import (PROTOCOL.md section 12, methods/import.start.schema.json). */
+/** Registers import.start (capability import.v1): imports audio files as new clips in a job of kind import. */
 void registerImportOps(ControlMethodTable& table);
 
 } // namespace OpenTune

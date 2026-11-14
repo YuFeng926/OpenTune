@@ -7,10 +7,10 @@ namespace OpenTune {
 
 /**
  * The time-grid methods of capability timing.v1, on the message thread:
- * - content.shiftTiming (methods/content.shiftTiming.schema.json): moves the handles of a section (a content or an
+ * - content.shiftTiming moves the handles of a section (a content or an
  *   output range; a content range is mapped through the current grid) by deltaSec, as a group drag of OpenTune's
  *   time tool (Edit/TimeGridOps.h).
- * - content.editTimeGrid (methods/content.editTimeGrid.schema.json):
+ * - content.editTimeGrid:
  *   - op moveHandles moves named handles to output times, as drags of the time tool;
  *   - op seed places the initial handles, as OpenTune does when the time tool is picked
  *     (OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()). It runs as a job of kind timeGridSeed: the job asks
@@ -27,7 +27,7 @@ namespace OpenTune {
  * queued again (reRenderQueued), and the editor is told through ControlUiBridge::onTimeGridChanged(). A grid change
  * never changes the content's revision, only its gridRevision.
  *
- * Every write checks, in order: the handle, the busy state, the readiness gate (PROTOCOL.md section 11),
+ * Every write checks, in order: the handle, the busy state, the readiness gate,
  * expectedGridRevision (REVISION_CONFLICT(grid_changed)), that the grid has handles (NOT_READY(grid_not_seeded)),
  * then its handles (INVALID_ARGUMENT(duplicate_handle), NOT_FOUND(unknown_handle)).
  */

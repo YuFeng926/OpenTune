@@ -61,7 +61,7 @@ void ControlEditorBridge::settleViewSwitch(const ViewSwitchBaseline& baseline)
     // viewToggled() moves the keyboard focus, and the focus that the transport bar's BPM field loses then commits the
     // field (BpmValueField::commit -> TransportBarComponent::onBpmChanged -> OpenTuneAudioProcessorEditor::bpmChanged),
     // which sets the tempo the field shows (the processor's tempo with one decimal) and marks the project as changed
-    // even when nothing was typed. A view switch leaves the project as it was (PROTOCOL.md section 15.2 rule 6), so the
+    // even when nothing was typed. A view switch leaves the project as it was, so the
     // mark is taken back when the project was unchanged before and the tempo and the time signature are what they were:
     // then the mark came from that commit, with nothing to save. A tempo or time signature that did change (a tempo
     // with more decimals that the field rewrote, or a value typed into the field and not committed yet) is a real

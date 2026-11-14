@@ -26,7 +26,7 @@ namespace OpenTune {
 
 namespace {
 
-/** changes lists at most this many notes (methods/content.editNotes.schema.json). */
+/** Changes lists at most this many notes. */
 constexpr std::size_t kMaxListedNotes = 200;
 /** A target that moves by less than this many semitones does not change (the reads round to 4 decimals). */
 constexpr double kPitchTolerance = 1e-4;
@@ -207,7 +207,7 @@ bool parseOp(const JsonValue& value, NoteOp& out, std::string& why)
     return true;
 }
 
-/** methods/content.editNotes.schema.json $defs.params. */
+/** Parses content.editNotes params. */
 bool parseEditNotes(const JsonValue& params, EditNotesParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -247,8 +247,7 @@ bool parseEditNotes(const JsonValue& params, EditNotesParams& out, std::string& 
 
 // ---- content.editNotes: the ops --------------------------------------------------------------------------
 
-/** The nearest pitch of the scale to midi, an exact tie going up (methods/content.editNotes.schema.json op
-    snapToScale). */
+/** The nearest pitch of the scale to midi, an exact tie going up. */
 double nearestScalePitch(double midi, const std::array<bool, 12>& inScale)
 {
     const double base = std::floor(midi);
@@ -359,7 +358,7 @@ juce::String descriptionOf(const NoteOp& op)
 
 /** The positions of the selected notes in storage, at the notes of expectedRevision. order maps a note index
     (start-time order, as content.getNotes counts) to its position. An index beyond the notes gives
-    NOT_FOUND(unknown_handle) (PROTOCOL.md section 9 rule 3). */
+    NOT_FOUND(unknown_handle). */
 Result<std::vector<std::size_t>> resolveSelection(const NoteSelection& select, const std::vector<Note>& notes,
                                                   const std::vector<std::size_t>& order)
 {
@@ -496,7 +495,7 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
     JsonValue result;
     if (params.dryRun) {
         // A commit of the predicted changes advances the notes revision, so it would report the content in
-        // reRenderQueued (PROTOCOL.md section 14.2 rule 2: the prediction lists the commit's side effects).
+        // reRenderQueued: the prediction lists the commit's side effects.
         if (committedOps != 0)
             controlAddPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
@@ -516,7 +515,7 @@ struct SetPitchShiftParams
     PitchShiftSettings shift;
 };
 
-/** methods/content.setPitchShift.schema.json $defs.params; pitchShift is common.schema.json#/$defs/pitchShift. */
+/** Parses content.setPitchShift params, including pitchShift. */
 bool parseSetPitchShift(const JsonValue& params, SetPitchShiftParams& out, std::string& why)
 {
     ControlParamReader reader(params);

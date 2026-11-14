@@ -78,9 +78,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/AppReadOps.h
         Source/Control/ControlLogTail.cpp
         Source/Control/ControlLogTail.h
-        # Jobs, import, export and the editor bridge: the jobs registry (tick on the message thread, long
-        # poll on a thread of its own, retention), the write envelope and the busy checks that every write
-        # shares, job.get and job.cancel, and import.start. The editor's side of the bridge is below.
+        # Jobs, import, export and the editor bridge: the event-driven jobs registry (work steps on the
+        # message thread, long poll on a thread of its own, retention), the shared write envelope and busy
+        # checks, job.get and job.cancel, and import.start. The editor's side of the bridge is below.
         Source/Control/ControlJobs.cpp
         Source/Control/ControlJobs.h
         Source/Control/Ops/WriteEnvelope.cpp
@@ -193,7 +193,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_link_libraries(OpenTuneStandalone PRIVATE ws2_32 bcrypt)
     endif()
 
-    # Build identity published in the discovery file (PROTOCOL.md section 5.3). By default the commit
+    # Build identity published in the discovery file. By default the commit
     # and its exact tag are read from git each time CMake configures; builds that are distributed pass
     # the values explicitly. Only ControlService.cpp sees them, so a new commit recompiles one file.
     set(OPENTUNE_CONTROL_BUILD_COMMIT "" CACHE STRING

@@ -29,8 +29,6 @@ class OpenTuneAudioProcessor;
  * Several commits of one call give several PianoRollEditActions; the caller wraps them in one
  * ControlOriginAction, so that one call is one undo step. The entries use the processor's own
  * ContentEditCommands, the instance the UI's piano roll uses, so undoing them in the UI behaves the same.
- * The mirrored upstream functions are listed in Source/Control/README.md (ContentEditTransaction).
- *
  * Threading: message thread only.
  */
 class ContentEditTransaction

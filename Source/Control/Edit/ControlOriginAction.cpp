@@ -200,8 +200,7 @@ void ControlHistory::prune(const UndoManager& manager, std::uint64_t epoch)
     if (epoch_ != epoch) {
         uiEntries_.clear();
         lastObserved_.reset();
-        // The history is empty, so no entry is left to be possibly stale (section 15.3 rule 6: opening a project
-        // clears both histories, and with them every barrier).
+        // Opening a project clears both histories, so no entry is left to be possibly stale.
         staleBelow_ = 0;
     }
     epoch_ = epoch;

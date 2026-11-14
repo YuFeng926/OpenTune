@@ -7,7 +7,7 @@ class ControlMethodTable;
 
 /**
  * Registers export.start (capability export.v1): writes a WAV file of a clip, a track or the master mix as
- * a job of kind export under the export contract of PROTOCOL.md section 19 (methods/export.start.schema.json).
+ * a job of kind export. It writes WAV at 44100 Hz as float32, with mono clips and tracks and a stereo master.
  * The job waits until every content of the export is analysed and its render has settled, records the
  * revisions, has OpenTune write a temporary file in the target directory, checks the revisions again on the
  * message thread and moves the file into place with one rename. The message-thread export busy state

@@ -18,7 +18,7 @@ JsonValue revisionPair(const std::string* before, const std::string* after)
     return pair;
 }
 
-/** The components of a content's versions (section 14.4), by protocol name. */
+/** The components of a content's versions, by protocol name. */
 // clang-format off
 const std::pair<const char*, std::string ControlContentVersions::*> kContentComponents[] = {
     {"notes", &ControlContentVersions::notes},
@@ -331,7 +331,7 @@ JsonValue ControlWriteEnvelope::tokensJson(ControlOpContext& context, const Cont
 
 JsonValue ControlWriteEnvelope::build(ControlOpContext& context, State state, JsonValue jobRef)
 {
-    // The state after the call, read back from the instance (section 10 rule 5).
+    // The state after the call, read back from the instance.
     const auto after = controlCaptureWorldVersions(context);
     // A side effect is a change as well: a write that only had side effects is no no-op.
     const bool recorded = changes_.size() != 0 || created_.size() != 0 || removed_.size() != 0 || idMap_.size() != 0
@@ -339,7 +339,7 @@ JsonValue ControlWriteEnvelope::build(ControlOpContext& context, State state, Js
     JsonValue diff = state == State::Predicted
                          ? emptyDiff()
                          : controlRevisionDiff(before_, after, limitDiff_ ? &touchedContents_ : nullptr);
-    // Section 14.2 rule 3: a method hands its work to a job before it changes anything.
+    // A method hands its work to a job before it changes anything.
     jassert(state != State::HandedToJob || isEmptyDiff(diff));
     const bool noOp = state == State::Committed && !recorded && isEmptyDiff(diff);
 
@@ -351,13 +351,13 @@ JsonValue ControlWriteEnvelope::build(ControlOpContext& context, State state, Js
             undo.appendMember("reason", JsonValue::string("no_op"));
             undo.appendMember("revert", JsonValue());
         } else {
-            // With changes, or a no-op whose method set its own descriptor (section 15.3 rule 5).
+            // With changes, or a no-op whose method set its own descriptor.
             jassert(undo_.isObject());
             if (!undo_.isObject())
                 setNotUndoable("no_upstream_undo");
             undo = undo_;
-            // Neither undoable nor revertible: the client states it first (section 15.2 rule 2, section 18
-            // rule 4); view state is exempt (section 15.2 rule 6), and so is a call that changed nothing.
+            // Changes that are neither undoable nor revertible are marked IRREVERSIBLE, except view state
+            // and calls that changed nothing.
             if (!noOp && !undoable_ && revertNull_ && undoReason_ != "not_persisted_state" && undoReason_ != "no_op"
                 && !hasWarning(warnings_, "IRREVERSIBLE"))
                 addWarning("IRREVERSIBLE");

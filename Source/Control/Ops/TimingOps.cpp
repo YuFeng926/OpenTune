@@ -22,11 +22,11 @@ namespace {
 /** How long a seed job waits for OpenTune's timing analysis of the content before it gives up. */
 constexpr int kSeedWaitLimitMs = 120000;
 
-/** moveHandles takes at most this many moves (methods/content.editTimeGrid.schema.json). */
+/** The maximum number of moves accepted by moveHandles. */
 constexpr std::size_t kMaxMoves = 64;
 /** content.shiftTiming moves by at most this many seconds either way. */
 constexpr double kMaxShiftSec = 10.0;
-/** A handleId has 1 to 64 characters (common.schema.json#/$defs/handleId). */
+/** A handleId has 1 to 64 characters. */
 constexpr std::size_t kMaxHandleIdLength = 64;
 
 bool failWith(ControlParamReader& reader, std::string& why)
@@ -92,7 +92,7 @@ JsonValue secondsField(double before, double after)
     return field;
 }
 
-/** REVISION_CONFLICT(grid_changed) when the grid is not the one the client read (PROTOCOL.md section 10). */
+/** REVISION_CONFLICT(grid_changed) when the grid is not the one the client read. */
 std::optional<Error> checkGridRevision(const ControlContentVersions& versions, const std::string& expected)
 {
     if (versions.grid != expected)
@@ -101,7 +101,7 @@ std::optional<Error> checkGridRevision(const ControlContentVersions& versions, c
     return std::nullopt;
 }
 
-/** The checks of a handle edit before its own validation, in the order of PROTOCOL.md section 13.1 rule 4: the
+/** The checks of a handle edit before its own validation: the
     handle, the busy state, the readiness gate, expectedGridRevision, then that the grid has handles. */
 Result<ControlContentRef> checkGridEdit(ControlOpContext& context, const ControlHandle& contentId,
                                         const std::string& expectedGridRevision)
@@ -236,7 +236,7 @@ bool readShiftRange(ControlParamReader& reader, ShiftParams& out)
                        "non-negative seconds");
 }
 
-/** methods/content.shiftTiming.schema.json $defs.params. */
+/** Parses content.shiftTiming params. */
 bool parseShift(const JsonValue& params, ShiftParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -301,7 +301,7 @@ bool readMoves(ControlParamReader& reader, EditGridParams& out)
     return true;
 }
 
-/** methods/content.editTimeGrid.schema.json $defs.params: op seed or op moveHandles, each closed. */
+/** Parses content.editTimeGrid params: op seed or op moveHandles, each closed. */
 bool parseEditGrid(const JsonValue& params, EditGridParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -410,7 +410,7 @@ public:
             return;
         }
         if (firstStep_) {
-            // The checks the call made, made again when the job runs (methods/content.editTimeGrid.schema.json).
+            // The checks the call made, made again when the job runs.
             firstStep_ = false;
             if (const auto busy = controlCheckBusy(context)) {
                 step.fail(jobErrorOf(*busy));
@@ -482,7 +482,7 @@ private:
                        "OpenTune placed no handle in the content's time grid", changed});
             return;
         }
-        // A change without an undo entry (PROTOCOL.md section 15.3 rule 9): earlier entries of the API no longer put
+        // A change without an undo entry: earlier entries of the API no longer put
         // the grid back, and the redo history is cleared.
         if (history != nullptr)
             history->onChangeWithoutEntry(processor.getUndoManager(), key_, ControlContentAspect::TimeGrid);

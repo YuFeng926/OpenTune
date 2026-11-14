@@ -9,8 +9,7 @@ namespace OpenTune {
 
 /**
  * Minimal non-blocking TCP socket for the control API, restricted to the IPv4 loopback address.
- * The server uses it for its listener and its connections; tests and local clients use it to
- * connect.
+ * The server uses it for its listener and accepted connections.
  *
  * Every socket is created non-blocking and is never inherited by child processes. Listeners use
  * exclusive address use on Windows, so no other socket can bind the same port.
@@ -47,9 +46,6 @@ public:
     /** Creates a listener bound to the literal address 127.0.0.1 on a port chosen by the operating
         system. On failure returns an invalid socket and sets error (no secrets, no paths). */
     static ControlSocket listenOnLoopback(std::string& error);
-
-    /** Connects to 127.0.0.1:port, waiting at most timeoutMs. Invalid socket on failure. */
-    static ControlSocket connectToLoopback(int port, int timeoutMs);
 
     /** Accepts one pending connection of a listener; an invalid socket when none is pending. */
     ControlSocket accept();

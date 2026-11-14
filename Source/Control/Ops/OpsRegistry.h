@@ -108,8 +108,8 @@ public:
      * For a method that ends the instance (app.quit), called once, when the method is about to return its result:
      * the dispatcher answers every other request with SHUTTING_DOWN from the moment the method returns, so that
      * nothing can change what the caller has just checked, and, once it has written the result to the connection,
-     * posts action to the message thread, where it runs at most once (PROTOCOL.md section 14.1: the server answers
-     * first and quits afterwards). Without effect when the method returns an error, and in the context of a job's
+     * posts action to the message thread, where it runs at most once after the response is written. Without effect
+     * when the method returns an error, and in the context of a job's
      * step. Throws ControlThreadViolation off the message thread.
      */
     void endInstanceAfterReply(std::function<void()> action);
@@ -137,7 +137,7 @@ private:
  * Error::message. Only ControlDispatcher maps errors to the protocol (controlMapError). detail must be
  * printable ASCII and must never contain secrets or text taken from files or projects.
  *
- * The error states that nothing changed (`executed` false, PROTOCOL.md section 17.4 rule 1): a write
+ * The error states that nothing changed (`executed` false): a write
  * returns it only from its checks, before its first change. An error after the first change is made with
  * controlOpErrorAfterChange.
  */
@@ -145,7 +145,7 @@ Error controlOpError(std::string_view kind, std::string_view reason, std::string
 
 /**
  * As controlOpError, for an error of a write after it began to change state and did not take the change
- * back completely: `executed` true (section 17.4 rule 3), so that the client reads the state again
+ * back completely: `executed` true, so that the client reads the state again
  * before it decides what to do. The context is "otcp!<KIND>:<reason>".
  */
 Error controlOpErrorAfterChange(std::string_view kind, std::string_view reason, std::string detail);
@@ -299,8 +299,8 @@ private:
 
 /**
  * True for a capability of which this build registers some methods but not all. The instance does not
- * report it, because an instance implements every method of a capability it reports (PROTOCOL.md section 3.3
- * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). No capability
+ * report it, because an instance implements every method of a capability it reports; the listener therefore
+ * answers its methods with UNSUPPORTED(capability_missing). No capability
  * is incomplete in this build. A capability whose methods are registered in several steps is listed here until its
  * last method is registered, so that the instance never reports a capability it implements only in part.
  */

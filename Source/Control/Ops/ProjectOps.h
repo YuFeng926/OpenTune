@@ -7,13 +7,13 @@ class ControlMethodTable;
 
 /**
  * Registers project.save, project.saveAs, project.open and project.clearRecent (capability project.io) and
- * project.saveCopy (capability project.copy; methods/project.*.schema.json).
+ * project.saveCopy (capability project.copy).
  *
  * - project.save and project.saveAs hand the save to a job of kind projectSave, as the editor's Save and Save As do
  *   (OpenTuneAudioProcessorEditor::saveProject): the message thread takes the snapshot (ProjectSession::prepareSave),
  *   a worker of the editor's project pool writes the project and its media next to a temporary file in the target
- *   directory, and the job moves that file into place on the message thread with the final rename of PROTOCOL.md
- *   section 20.4, which replaces another project file only when the caller confirmed it. The job cannot be cancelled.
+ *   directory, and the job moves that file into place on the message thread with a final rename, replacing another
+ *   project file only when the caller confirmed it. The job cannot be cancelled.
  * - project.open hands the opening to a job of kind projectOpen (OpenTuneAudioProcessorEditor::startOpenProject): a
  *   worker reads and prepares the file (ProjectSession::prepareOpen), the job commits it on the message thread
  *   (ProjectSession::commitPreparedOpen). It can be cancelled until the file is prepared, never saves the project

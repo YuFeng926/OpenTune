@@ -50,7 +50,7 @@ struct ContentReadState
  * the stored notes and correction segments with it (commitPitchShiftEdit()), which moves every target of
  * content.getNotes, and renders the original F0 with its gain (EditableContentSnapshot::forEachEffectiveF0Span()),
  * which moves every correctedMidi of content.getPitchCurve. So a page read after a shift (or after its undo) must
- * not continue one read before it (PROTOCOL.md section 10 rule 6).
+ * not continue a read issued against an earlier state.
  */
 ContentReadState readState(ControlOpContext& context, const std::string& contentId,
                            const EditableContentSnapshot& snapshot)

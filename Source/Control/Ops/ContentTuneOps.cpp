@@ -25,7 +25,7 @@ namespace OpenTune {
 
 namespace {
 
-/** changes, created and removed list at most this many entries each (methods/content.autoTune.schema.json). */
+/** Changes, created and removed list at most this many entries each. */
 constexpr std::size_t kMaxListedEntries = 200;
 
 Result<std::shared_ptr<ControlHistory>> historyOf(ControlOpContext& context)
@@ -112,7 +112,7 @@ struct SetKeyParams
     std::optional<std::string> expectedKeyRevision;
 };
 
-/** methods/content.setKey.schema.json $defs.params. */
+/** Parses content.setKey params. */
 bool parseSetKey(const JsonValue& params, SetKeyParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -179,7 +179,7 @@ Result<JsonValue> runSetKey(ControlOpContext& context, const SetKeyParams& param
                                   JsonValue::string("manual")));
     envelope.addChange("key", contentRef(ref.contentId), JsonValue(), std::move(fields));
 
-    // The previous root and scale, with the key revision right after the change (section 15.2 rule 3). A
+    // The previous root and scale, with the key revision right after the change. A
     // content without a key before cannot get "no key" back; nor can an instance without edit.v1.
     JsonValue revert;
     const auto now = controlLiveSnapshot(context, ref.key);
@@ -275,7 +275,7 @@ bool readGeneratorParams(ControlParamReader& reader, AutoTuneParams& out)
     return true;
 }
 
-/** methods/content.autoTune.schema.json $defs.params, including the conditions per mode. */
+/** Parses content.autoTune params, including the conditions per mode. */
 bool parseAutoTune(const JsonValue& params, AutoTuneParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -337,8 +337,8 @@ bool parseAutoTune(const JsonValue& params, AutoTuneParams& out, std::string& wh
     return true;
 }
 
-/** NoteGeneratorParams{} with the given params: never the positions of the UI's knobs (PROTOCOL.md section 21
-    rule 1). noteSplitCents is the segmentation threshold that the UI's Note Split knob sets. */
+/** NoteGeneratorParams{} with the given params: never the positions of the UI's knobs.
+    noteSplitCents is the segmentation threshold that the UI's Note Split knob sets. */
 NoteGeneratorParams generatorParams(const AutoTuneParams& params)
 {
     NoteGeneratorParams generator;
@@ -502,7 +502,7 @@ std::pair<std::size_t, std::size_t> listNotes(ControlWriteEnvelope& envelope, co
             created.size() > kMaxListedEntries ? created.size() - kMaxListedEntries : 0};
 }
 
-/** The members of the result besides the envelope (methods/content.autoTune.schema.json result). omitted is
+/** The members of the result besides the envelope. omitted is
     {removed, created}; generator is null for snapNotes, which takes no generator params. */
 void appendAutoTuneMembers(JsonValue& result, TuneMode mode, const std::optional<DetectedKey>& keyUsed,
                            const std::optional<NoteGeneratorParams>& generator, std::size_t before, std::size_t after,
@@ -706,8 +706,7 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
     JsonValue result;
     if (params.dryRun) {
         // The topology commit of generateNotesOnlyByContentKey() always advances the notes revision, so the
-        // commit reports the content in reRenderQueued (PROTOCOL.md section 14.4 rule 2: the prediction lists
-        // the side effects the commit would have).
+        // commit reports the content in reRenderQueued: the prediction lists the side effects the commit would have.
         controlAddPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
     } else {

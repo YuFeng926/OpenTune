@@ -21,23 +21,14 @@ namespace OpenTune {
 
 namespace {
 
-/** The longest path the result carries (common.schema.json#/$defs/path). */
+/** The longest path the result carries. */
 constexpr std::size_t kMaxPathCodePoints = 4096;
 
-/**
- * The longest time, in milliseconds, in which the process ends after app.quit wrote its result (exitDeadlineMs of the
- * result). The steps behind it are the stop of the control service (open connections get at most 500 ms to flush and
- * the joins of their threads at most 2 s, ControlServer::stop()), the window's save of the plug-in state and the
- * normal shutdown of the application (the processor, the audio device, the model sessions). Measured on the Standalone
- * build with the control API on, from the request to the end of the process (the reply came within 30 ms): 0.50 to 0.58
- * s in six runs, with an empty project, with a dirty one and with an analysed clip while the models were loaded (the
- * connection itself closed after about 0.25 s). The value leaves about eighteen times that for a slow disk or a busy
- * machine, and stays below the 15 s that the specification's runners wait (vectors/README.md) and the 60 s that the
- * result schema allows.
- */
+/** Exit deadline reported by app.quit, in milliseconds, covering control-service shutdown,
+    state persistence and application teardown. */
 constexpr int kExitDeadlineMs = 10000;
 
-/** What the job kinds of this instance mean for BUSY (PROTOCOL.md section 13.2): import, export, projectOpen and
+/** What the job kinds of this instance mean for BUSY: import, export, projectOpen and
     projectSave have a reason of their own, and so has projectCopy (project.saveCopy runs under the same
    project-operation flag as a save), every other kind (prefsApply, timeGridSeed, ...) is job_in_progress. */
 const char* busyReasonOfJobKind(std::string_view kind)
@@ -52,7 +43,7 @@ const char* busyReasonOfJobKind(std::string_view kind)
 }
 
 /** The reason of BUSY for the jobs that have not finished, or nullptr when there is none. With several jobs the reasons
-    of section 13.2 come first, in the order that section lists them (import_in_progress, export_in_progress,
+    come first in this order (import_in_progress, export_in_progress,
     project_operation), and job_in_progress last, whichever job started first: the answer does not depend on the
     order in which the jobs happened to start. */
 const char* busyReasonOfJobs(const std::vector<std::string>& kinds)
@@ -72,7 +63,7 @@ struct QuitParams
     bool discardUnsaved = false;
 };
 
-/** methods/app.quit.schema.json $defs.params, on the connection thread: the one optional member discardUnsaved. */
+/** Parses app.quit params on the connection thread; discardUnsaved is optional. */
 bool parseQuit(const JsonValue& params, QuitParams& out, std::string& why)
 {
     ControlParamReader reader(params);

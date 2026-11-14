@@ -6,7 +6,7 @@ namespace OpenTune {
 class ControlMethodTable;
 
 /**
- * Registers ui.setSelection (capability ui.bridge; methods/ui.setSelection.schema.json), the third method of ui.bridge
+ * Registers ui.setSelection (capability ui.bridge), the third method of ui.bridge
  * after ui.getState and ui.dismiss (UiOps.h).
  *
  * The call selects through the editor (ControlUiBridge::select()) as the arrangement view does when the user clicks: a
@@ -31,8 +31,7 @@ class ControlMethodTable;
  * selection included. A committed call reports what happened; a difference from the prediction is logged. The
  * selection is view state: the undo reason is not_persisted_state, and the revert recipe selects the active track and
  * its selected clip from before the call with ui.setSelection (never taking back notes or switching the window back).
- * Selecting what is already selected, with no other effect, is a no-op. The busy checks of PROTOCOL.md section 13.2
- * apply, also to dryRun.
+ * Selecting what is already selected, with no other effect, is a no-op. The busy checks also apply to dryRun.
  */
 void registerSelectionOps(ControlMethodTable& table);
 

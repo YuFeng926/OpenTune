@@ -20,8 +20,7 @@ constexpr int kImportMaxChannels = 2;
 /** Longest audio the pitch analysis accepts, in seconds: the F0 extractor's limit (10 minutes, the
     private FCPEExtractor::kMaxAudioDurationSec). */
 constexpr double kImportMaxAnalysisSec = 600.0;
-/** The export contract (PROTOCOL.md section 19): WAV, 44100 Hz, float32, mono clips and tracks, a stereo
-    master. */
+/** Export format: WAV, 44100 Hz, float32, mono clips and tracks, a stereo master. */
 constexpr double kExportSampleRateHz = 44100.0;
 
 const char* osName()
@@ -100,13 +99,11 @@ JsonValue audioDeviceJson(ControlOpContext& context)
 ControlProcessingRuntime processingRuntime()
 {
     ControlProcessingRuntime runtime;
-    // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected). Read through
-    // controlInferenceBackendName(), which asks the detector unless a test replaced it, so that the tests of prefs.set
-    // see in session.info the backend their fake runtime ends up with.
+    // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected).
+    // Read through controlInferenceBackendName() to report the active backend.
     runtime.backend = controlInferenceBackendName();
-    // ProcessRenderRuntime::isVocoderReady() / isVocoderReconfiguring(): the process-wide vocoder, polled without a
-    // hook. Read through controlVocoderState(), which asks the runtime unless a test replaced it, so that the tests of
-    // prefs.set see what session.info reports while their fake runtime reloads the vocoder.
+    // ProcessRenderRuntime::isVocoderReady() / isVocoderReconfiguring(): the process-wide vocoder state.
+    // Read through controlVocoderState().
     const auto vocoder = controlVocoderState();
     runtime.vocoderReady = vocoder.ready;
     runtime.vocoderReconfiguring = vocoder.reconfiguring;

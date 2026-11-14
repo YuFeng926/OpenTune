@@ -53,7 +53,7 @@ constexpr float kKeyConfidenceTolerance = 1.0e-6f;
 /** The largest clip gain OpenTune's interface offers, as a linear factor. The interface's one bounded gain range is the
     volume knob (Source/Standalone/UI/TrackPanelComponent.h, setRange(0.0, 4.0, 0.001)); the clip-gain drag
     (ArrangementViewComponent.cpp, mouseDrag) has no bound of its own, so the API applies the interface's
-    bounded range here, mirrored by the mirror entry `track-volume-range`. Zero is the lower end: the params
+    bounded range here. Zero is the lower end: the params
     schema keeps gainLinear at 0 or more and StandaloneArrangement::setPlacementGain() floors the stored value
     at 0. */
 constexpr double kMaxClipGainLinear = 4.0;
@@ -99,7 +99,7 @@ auto findIn(Placements& placements, std::uint64_t placementId) -> decltype(&plac
     return nullptr;
 }
 
-/** Records one change of entity placement for every clip that is in both lists and differs (PROTOCOL.md section 14.3),
+/** Records one change of entity placement for every clip that is in both lists and differs,
     in the order of after, and touches it so that the result reports its geometryHash. */
 void describeChanges(ControlWriteEnvelope& envelope, const std::vector<ControlPlacementRef>& before,
                      const std::vector<ControlPlacementRef>& after)
@@ -248,7 +248,7 @@ void afterChange(ControlOpContext& context)
 }
 
 /** A revert recipe using one arrangement.edit op at the current arrangement revision. null
-    when the instance does not report arrangement.v1 (PROTOCOL.md section 15.2 rule 2). */
+    when the instance does not report arrangement.v1. */
 JsonValue editRecipe(ControlOpContext& context, JsonValue op, bool requiresConsent)
 {
     if (!controlReportsCapability(context, "arrangement.v1"))
@@ -280,7 +280,7 @@ bool readBoolean(ControlParamReader& reader, const char* name, std::optional<boo
     return true;
 }
 
-/** A track position (common.schema.json#/$defs/trackId): an integer of 0 or more. A position beyond the slots is a
+/** A track position: an integer of 0 or more. A position beyond the slots is a
     NOT_FOUND of the run; the bound keeps the conversion defined. */
 bool readTrackId(ControlParamReader& reader, const char* name, std::optional<int>& out)
 {
@@ -323,7 +323,7 @@ enum class OpKind {
     Delete
 };
 
-/** One op of arrangement.edit (methods/arrangement.edit.schema.json $defs.op*). */
+/** One op of arrangement.edit. */
 struct EditOp
 {
     OpKind kind = OpKind::Move;
@@ -810,7 +810,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const EditParams& params,
         }
     }
 
-    // Removed: the clips, then the contents that left with them (PROTOCOL.md section 14.4 rule 6). deletePlacement()
+    // Removed: the clips, then the contents that left with them. deletePlacement()
     // retires the content of a deleted clip even when another clip shows it.
     std::vector<ContentKey> contents;
     for (const auto& clip : item.clips) {

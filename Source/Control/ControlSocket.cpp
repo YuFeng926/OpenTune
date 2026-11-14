@@ -226,51 +226,6 @@ ControlSocket ControlSocket::listenOnLoopback(std::string& error)
     return listener;
 }
 
-ControlSocket ControlSocket::connectToLoopback(int port, int timeoutMs)
-{
-    const NativeSocket socket = createStreamSocket();
-    if (socket == INVALID_SOCKET)
-        return {};
-    ControlSocket connection(fromNative(socket));
-    sockaddr_in address{};
-    if (!loopbackAddress(address, port) || !makeNonBlocking(socket))
-        return {};
-    if (::connect(socket, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
-#if defined(_WIN32)
-        if (WSAGetLastError() != WSAEWOULDBLOCK)
-            return {};
-        // select() rather than WSAPoll(): WSAPoll does not report failed connection attempts on every
-        // Windows version.
-        fd_set writable;
-        fd_set failedSet;
-        FD_ZERO(&writable);
-        FD_ZERO(&failedSet);
-        FD_SET(socket, &writable);
-        FD_SET(socket, &failedSet);
-        timeval timeout{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
-        if (select(0, nullptr, &writable, &failedSet, &timeout) <= 0 || !FD_ISSET(socket, &writable))
-            return {};
-#else
-        if (errno != EINPROGRESS)
-            return {};
-        pollfd entry{socket, POLLOUT, 0};
-        if (::poll(&entry, 1, timeoutMs) <= 0)
-            return {};
-#endif
-        int socketError = 0;
-#if defined(_WIN32)
-        int length = sizeof(socketError);
-#else
-        socklen_t length = sizeof(socketError);
-#endif
-        if (getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&socketError), &length) != 0
-            || socketError != 0)
-            return {};
-    }
-    configureConnection(socket);
-    return connection;
-}
-
 ControlSocket ControlSocket::accept()
 {
     if (!isValid())

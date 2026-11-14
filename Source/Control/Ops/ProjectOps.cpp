@@ -33,7 +33,7 @@ namespace {
 constexpr std::size_t kMaxPathCodePoints = 4096;
 /** The most entries that the created and removed lists of an open report (the rest is counted in omittedCount). */
 constexpr std::size_t kMaxListedEntries = 200;
-/** The extension that saving and opening projects accept (PROTOCOL.md section 20.1), compared without regard to case.
+/** The extension that saving and opening projects accept, compared without regard to case.
  */
 constexpr std::string_view kProjectExtension = ".otproj";
 /** The state that a project file does not hold (warning NOT_SAVED_IN_PROJECT, data.items). The number of visible tracks
@@ -101,7 +101,7 @@ bool readConsent(ControlParamReader& reader, const char* name, bool& out)
     return true;
 }
 
-/** methods/project.saveAs.schema.json $defs.params, on the connection thread. */
+/** Parses project.saveAs params on the connection thread. */
 bool parseSaveAs(const JsonValue& params, PathParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -112,7 +112,7 @@ bool parseSaveAs(const JsonValue& params, PathParams& out, std::string& why)
     return false;
 }
 
-/** methods/project.saveCopy.schema.json $defs.params, on the connection thread: the path, and no other member. */
+/** Parses project.saveCopy params on the connection thread: the path, and no other member. */
 bool parseSaveCopy(const JsonValue& params, PathParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -122,7 +122,7 @@ bool parseSaveCopy(const JsonValue& params, PathParams& out, std::string& why)
     return false;
 }
 
-/** methods/project.open.schema.json $defs.params, on the connection thread. */
+/** Parses project.open params on the connection thread. */
 bool parseOpen(const JsonValue& params, PathParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -153,7 +153,7 @@ Result<ProjectParts> projectParts(ControlOpContext& context, const char* capabil
         parts.session = parts.bridge->projectSession();
         parts.pool = parts.bridge->projectWorkerPool();
     }
-    // PROTOCOL.md section 7 rule 6: without an editor window the method fails with no_editor_window.
+    // Without an editor window the method fails with no_editor_window.
     if (parts.bridge == nullptr)
         return controlOpError("UNSUPPORTED", "no_editor_window",
                               std::string(capability) + " acts through the editor window, and no editor exists");
@@ -195,7 +195,7 @@ ControlJobError jobError(const char* kind, const char* reason, const char* detai
     return ControlJobError{kind, reason, detail, false};
 }
 
-/** Why a start of a job failed, as the error of the method (PROTOCOL.md section 12). */
+/** Error returned when starting a job is refused. */
 Error startRefusal(const std::string& refusal)
 {
     return refusal == "job_limit" ? controlOpError("BUSY", "job_limit", "every retained job is still active")
@@ -234,7 +234,7 @@ struct SaveSpec
  * file the current one, clears the unsaved-changes flag if the project did not change meanwhile, pushes the file to the
  * recent projects and lets the editor update its menu and title. API saves capture committed model state; UI saves
  * additionally finish the current parameter gesture before taking their snapshot. The API writes to a temporary file
- * in the target directory, which the job moves into place with the final rename of PROTOCOL.md section 20.4 once the
+ * in the target directory, which the job moves into place with a final rename once the
  * identity of the target was checked again.
  */
 class SaveJob
@@ -276,8 +276,8 @@ public:
         }
         const auto target = utf8PathOf(spec_.target);
 
-        // PROTOCOL.md section 20.2 rule 4 and section 20.3 rule 5: whether the target is the project's file, another
-        // file or none is decided again on the message thread right before the final rename.
+        // Whether the target is the project's file, another file or none is decided again on the message thread
+        // right before the final rename.
         bool sameCurrent = !spec_.saveAs;
         bool targetExists = true;
         if (spec_.saveAs) {
@@ -446,15 +446,15 @@ Result<JsonValue> runSaveAs(ControlOpContext& context, const PathParams& params)
         return parts.error();
     if (auto busy = controlCheckBusy(context))
         return *busy;
-    // Section 20.1: the raw text, before any file-system access.
+    // Check the raw path text before any file-system access.
     const auto reason = controlCheckAbsolutePath(params.path, controlNativePathStyle());
     if (!reason.empty())
         return controlOpError("INVALID_ARGUMENT", reason, "the path is not an absolute path in the accepted form");
     if (!hasProjectExtension(params.path))
         return controlOpError("INVALID_ARGUMENT", "path_bad_extension", "a project file ends in .otproj");
 
-    // Section 20.2 rule 4 and section 20.3: the target is the project's file, another existing file or no file,
-    // decided by file identity; the job decides again right before the rename.
+    // Determine by file identity whether the target is the project's file, another existing file or no file;
+    // the job checks again right before the rename.
     ControlFileId id;
     const auto status = controlFileIdentity(params.path, id);
     if (status != ControlFileIdStatus::Found && status != ControlFileIdStatus::Missing)
@@ -492,7 +492,7 @@ Result<JsonValue> runSaveAs(ControlOpContext& context, const PathParams& params)
  * editor takes the written file as the project's own: the snapshot was taken on the message thread when the request
  * came (ProjectSession::prepareSave), a worker of the editor's pool wrote the project and copied its media
  * (ProjectSession::executeSaveToFile) into a temporary file in the target directory, and the job moves that file into
- * place with the final rename of PROTOCOL.md section 20.4, which never replaces. It does not call
+ * place with a final rename, which never replaces. It does not call
  * setCurrentProjectFile, clearDirty or pushRecentProject, and it does not ask the editor to update its menu or title:
  * the project keeps its file, its unsaved-changes flag, its recent projects and its undo history, and the result
  * reports the file and the flag so that a client can see it. The worker's state is that of SaveJob (SaveShared).
@@ -538,7 +538,7 @@ public:
         const auto target = utf8PathOf(target_);
 
         // The copy never replaces a file. Whether the target names the project's own file is decided again right
-        // before the rename (PROTOCOL.md section 20.3 rule 5): a project file that was deleted meanwhile would
+        // before the rename: a project file that was deleted meanwhile would
         // otherwise be created again by the rename, which is a save and not a copy.
         if (session->hasProjectPath()) {
             const auto same = controlSameFile(target, utf8PathOf(session->getCurrentProjectFile()));
@@ -674,7 +674,7 @@ Result<JsonValue> runSaveCopy(ControlOpContext& context, const PathParams& param
         return parts.error();
     if (auto busy = controlCheckBusy(context))
         return *busy;
-    // Section 20.1: the raw text, before any file-system access.
+    // Check the raw path text before any file-system access.
     const auto reason = controlCheckAbsolutePath(params.path, controlNativePathStyle());
     if (!reason.empty())
         return controlOpError("INVALID_ARGUMENT", reason, "the path is not an absolute path in the accepted form");
@@ -829,7 +829,7 @@ public:
             fail(step, jobError("IO_ERROR", "read_failed", "OpenTune could not read the file as a project"));
             return;
         }
-        // Section 12.3: cancellable until the file was read and prepared; from here the project is replaced.
+        // Cancellable until the file was read and prepared; from here the project is replaced.
         if (!step.endCancellability()) {
             finished_ = true;
             endOperation();
@@ -899,8 +899,8 @@ private:
         const auto omittedRemoved = removed.size() > kMaxListedEntries ? removed.size() - kMaxListedEntries : 0;
         envelope.limitDiffToTouchedContents();
         if (!revealed.empty()) {
-            // The tracks the opened project adds to the view: no revert recipe of its own and no IRREVERSIBLE for it
-            // (section 15.2 rule 6); the open as a whole carries its revert recipe or IRREVERSIBLE below.
+            // The tracks the opened project adds to the view have no revert recipe or IRREVERSIBLE warning of their
+            // own; the open as a whole carries its revert recipe or IRREVERSIBLE warning below.
             auto trackIds = JsonValue::array();
             for (const int track : revealed)
                 trackIds.append(JsonValue::integer(track));
@@ -1034,7 +1034,7 @@ Result<JsonValue> runOpen(ControlOpContext& context, const PathParams& params)
         return controlOpError("INTERNAL", "", "the jobs registry is not available");
     if (auto busy = controlCheckBusy(context))
         return *busy;
-    // Section 20.1: the raw text, before any file-system access.
+    // Check the raw path text before any file-system access.
     const auto reason = controlCheckAbsolutePath(params.path, controlNativePathStyle());
     if (!reason.empty())
         return controlOpError("INVALID_ARGUMENT", reason, "the path is not an absolute path in the accepted form");
@@ -1043,7 +1043,7 @@ Result<JsonValue> runOpen(ControlOpContext& context, const PathParams& params)
     const auto file = fileOf(params.path);
     if (!file.existsAsFile())
         return controlOpError("NOT_FOUND", "file_not_found", "no file exists at the path");
-    // Section 20.2 rule 3: opening never saves and never discards changes the caller did not give up.
+    // Opening never saves and never discards changes the caller did not give up.
     if (parts.value().session->isDirty() && !params.consent)
         return controlOpError("UNSAVED_CHANGES", "project_dirty",
                               "the project has unsaved changes, and discardUnsaved was not given");

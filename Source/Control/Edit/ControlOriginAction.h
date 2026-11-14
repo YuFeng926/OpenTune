@@ -20,8 +20,7 @@ namespace OpenTune {
 class ContentEditCommands;
 class ControlHistory;
 
-/** The aspects of a content that an undo entry recorded through the control API puts back (PROTOCOL.md
-    section 15.3 rule 9). */
+/** The aspects of a content that an undo entry recorded through the control API puts back. */
 enum class ControlContentAspect {
     /** The notes with the corrected pitch curve (PianoRollEditAction). */
     NotesAndPitch,
@@ -39,7 +38,7 @@ enum class ControlContentAspect {
  * undo() runs the inner actions in reverse order and redo() in order, as OpenTune would run them one by one.
  * An inner action is skipped once a later change without an undo entry (content.setKey, content.autoTune in
  * mode notesOnly) changed the aspect of the content it puts back: such a change is never taken back, so the
- * entry leaves that aspect as the later change set it (section 15.3 rule 9).
+ * entry leaves that aspect as the later change set it.
  *
  * A pitch shift is the exception: OpenTune's PitchShiftEditAction puts back the notes and correction segments
  * it saved together with the settings. Once a change without an undo entry replaced the notes of its content,
@@ -79,8 +78,8 @@ public:
             made, renumbered by the barrier of every track deletion for the shown tracks that moved down
             (removeTrackAndShift()). After an undo() or redo() in which the action was executed (not blocked by a mask)
             the slots of tracks are merged into it (without duplicates), so followed covers tracks from then on, and a
-            deletion that hits one of them reports the entry possibly stale (section 15.3 rule 6: too often rather than
-            too rarely). "Executed" is all that is known: the value apply() returns does not reflect an upstream action
+            deletion that hits one of them reports the entry possibly stale: too often rather than
+            too rarely. "Executed" is all that is known: the value apply() returns does not reflect an upstream action
             that rejects the change on its own (for example because its clip is gone), which only makes followed cover
             more tracks than needed. The real protection comes from tracks: the action reads and writes only those
             slots. Filled by the constructor when left empty. */
@@ -107,7 +106,7 @@ public:
     bool unsafe() const;
     /** False when the last undo() or redo() applied none of the inner actions: every one was masked, or the
         pitch shift it puts back through commitPitchShiftEdit() applied nothing (see the class comment). The step
-        then changed nothing, and edit.undo / edit.redo report UNDO_NO_EFFECT (section 15.3 rules 5 and 9). An
+        then changed nothing, and edit.undo / edit.redo report UNDO_NO_EFFECT. An
         action that was executed counts even if the upstream action rejected the change on its own: apply() cannot
         tell. True before the first step. */
     bool lastStepTookEffect() const noexcept { return lastStepTookEffect_; }
@@ -115,7 +114,7 @@ public:
         puts it back. Called by ControlHistory. */
     void mask(const ContentKey& content, ControlContentAspect aspect);
 
-    /** A track was deleted (section 15.3 rule 6); visibleCount is the number of shown tracks before the deletion.
+    /** A track was deleted; visibleCount is the number of shown tracks before the deletion.
         The entry becomes possibly stale when a track it is keyed by (Inner::tracks) or a position its clips are at
         (Inner::followed) is the deleted one or one of the shown tracks after it (removeTrackAndShift() moves only the
         shown tracks after the deleted one down; a hidden track keeps its position and its clips). Only the followed
@@ -163,10 +162,9 @@ private:
 };
 
 /**
- * What the control API knows about OpenTune's undo history beyond the UndoManager (PROTOCOL.md section
- * 15.3): the undoIds it hands out, the entries it recorded (each ControlOriginAction registers itself), and
+ * What the control API knows about OpenTune's undo history beyond the UndoManager: the undoIds it hands out,
+ * the entries it recorded (each ControlOriginAction registers itself), and
  * the undoIds it assigned to entries created in the OpenTune UI when edit.undo or edit.redo applied them
- * (rule 8).
  *
  * An entry of the UI is recognised by its object, its class, its description and its position in the
  * history. OpenTune's history has no identity of its own for entries; if the user discards such an entry
@@ -190,7 +188,7 @@ public:
         entry beyond it. */
     static constexpr int kUndoHistoryCapacity = 500;
 
-    /** An entry of the history as the protocol describes it (common.schema.json#/$defs/historyEntry). */
+    /** An entry of the history. */
     struct Entry
     {
         /** nullopt for an entry created in the UI that no edit.undo or edit.redo has applied. */
@@ -198,28 +196,28 @@ public:
         /** Recorded through the control API (origin control) or in the UI (origin ui). */
         bool control = false;
         bool unsafe = false;
-        /** Recorded before a track deletion that may have moved a track the entry addresses (section 15.3 rule 6):
+        /** Recorded before a track deletion that may have moved a track the entry addresses:
             an entry made through the API when the deletion removed or moved a track it addresses, an entry of the
             UI when it was recorded before the deletion, since the server cannot inspect it. */
         bool possiblyStale = false;
         juce::String description;
     };
 
-    /** A new undoId of the instance: u:<instanceShort>:<seq>, seq from 1 (PROTOCOL.md section 9). */
+    /** A new undoId of the instance: u:<instanceShort>:<seq>, seq from 1. */
     std::string nextUndoId(const std::string& instanceShort);
 
     /** The entry at position index of the manager's history (0 is the oldest). epoch is the current content
         epoch: undoIds of UI entries do not survive opening a project. */
     Entry describe(const UndoManager& manager, const UndoAction& action, int index, std::uint64_t epoch);
 
-    /** Gives a UI entry the next undoId (rule 8) and returns it; an entry that has one keeps it. */
+    /** Gives a UI entry the next undoId and returns it; an entry that has one keeps it. */
     std::string assignUndoId(const UndoManager& manager, const UndoAction& action, int index, std::uint64_t epoch,
                              const std::string& instanceShort);
 
     /**
      * A change without an undo entry changed this aspect of the content: entries recorded through the API no
      * longer put it back, and the redo history is cleared, so that no redo step writes older values over the
-     * change (section 15.3 rule 9). UndoManager::clearRedo() is the hook that clears it.
+     * change. UndoManager::clearRedo() is the hook that clears it.
      */
     void onChangeWithoutEntry(UndoManager& manager, const ContentKey& content, ControlContentAspect aspect);
 
@@ -243,7 +241,7 @@ public:
     /** The pitch-shift steps that the revision tokens leave out (controlContentVersions()). */
     ControlPitchShiftLedger& pitchShiftLedger() noexcept { return pitchShiftLedger_; }
 
-    // ---- The barrier of a track deletion (section 15.3 rule 6) ----------------------------------------
+    // ---- The barrier of a track deletion ------------------------------------------------------------
 
     /** How many entries of each side of the history a track deletion made possibly stale. */
     struct StaleCounts
@@ -273,7 +271,7 @@ public:
     StaleCounts onTrackDeleted(const UndoManager& manager, int deletedTrack, int visibleCount, std::uint64_t epoch);
 
     /** The end user asked for the step of this entry with force: it is no longer possibly stale, until another
-        track deletion makes it so again (section 15.3 rule 6). An entry of the UI gets its undoId first
+        track deletion makes it so again. An entry of the UI gets its undoId first
         (assignUndoId), so that it can be told apart. */
     void confirmStale(const UndoManager& manager, const UndoAction& action, int index, std::uint64_t epoch,
                       const std::string& instanceShort);
@@ -341,7 +339,7 @@ private:
     ControlPitchShiftLedger pitchShiftLedger_;
 };
 
-/** True for the undo action OpenTune cannot undo correctly: DeletePlacementAction (section 15.4 rule 1). */
+/** True for the undo action OpenTune cannot undo correctly: DeletePlacementAction. */
 bool controlIsUnsafeUndoAction(const UndoAction& action);
 
 /** The OpenTune class name of an upstream undo action, for innerActions ("UndoAction" when unknown). */

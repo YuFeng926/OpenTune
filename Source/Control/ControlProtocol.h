@@ -10,13 +10,12 @@
 
 namespace OpenTune {
 
-/** Protocol version served by this implementation (PROTOCOL.md section 2). */
+/** Protocol version served by this implementation. */
 inline constexpr int kControlProtocolMajor = 1;
 inline constexpr const char* kControlProtocolVersion = "1.0";
 
 /**
- * Limits of PROTOCOL.md section 3.4. The defaults are the values the protocol fixes and that
- * session.hello reports; tests may shorten the timeouts of a server instance.
+ * Limits of the control protocol, reported by session.hello.
  */
 struct ControlLimits
 {
@@ -37,12 +36,11 @@ struct ControlLimits
 /** The limits object of session.hello and session.info. */
 JsonValue controlLimitsToJson(const ControlLimits& limits);
 
-/** Capability of a method defined by protocol version 1 (PROTOCOL.md section 22, including methods
-    whose schema is still planned), or nullptr when the name is not a defined method. */
+/** Capability of a method defined by protocol version 1, or nullptr when the name is not a defined method. */
 const char* controlMethodCapability(std::string_view method);
 
 /**
- * A request id (PROTOCOL.md section 3.3 rule 3): a string of 1 to 128 code points, or a number whose
+ * A request id: a string of 1 to 128 code points, or a number whose
  * binary64 value is an integer from 0 to 2^53-1. The default-constructed id is the null id of
  * responses that cannot carry the request's id.
  */
@@ -79,7 +77,7 @@ private:
     std::string text_;
 };
 
-/** A request that passed PROTOCOL.md section 3.3 rule 3. params is always an object ({} when the
+/** A valid request. params is always an object ({} when the
     request had none). */
 struct ControlRequest
 {
@@ -88,29 +86,28 @@ struct ControlRequest
     JsonValue params = JsonValue::object();
 };
 
-/** True when the value is a notification (section 3.3 rule 4): an object without an id member
+/** True when the value is a notification: an object without an id member
     whose jsonrpc is "2.0" and whose method is a string. */
 bool controlIsNotification(const JsonValue& value);
 
 /**
- * Checks section 3.3 rule 3. On success fills request and returns true. On failure returns false,
+ * Validates a request. On success fills request and returns true. On failure returns false,
  * sets errorId to the value's id when the value is an object with a valid id (otherwise null) and
  * sets why to a fixed ASCII explanation.
  */
 bool controlParseRequest(const JsonValue& value, ControlRequest& request, ControlRequestId& errorId, std::string& why);
 
-/** JSON-RPC error code of an error kind and reason (section 17.2). */
+/** JSON-RPC error code of an error kind and reason. */
 int controlErrorCode(std::string_view kind, std::string_view reason);
-/** Default retryability of an error kind (registry/error-kinds.json). */
+/** Default retryability of an error kind. */
 bool controlErrorRetryableByDefault(std::string_view kind);
-/** Retryability of an error kind and reason: the kind's default, except the NOT_READY reasons that waiting
-    never ends (f0_failed, f0_empty, grid_not_seeded, export_dry_stretched;
-    registry/reasons.json, PROTOCOL.md section 11) and MODEL_UNAVAILABLE(vocoder_not_ready), which can succeed
-    when asked again (MODEL_UNAVAILABLE(vocoder_load_failed) cannot: the same weight fails again). */
+/** Retryability of an error kind and reason: the kind's default, except NOT_READY reasons that waiting never ends
+    (f0_failed, f0_empty, grid_not_seeded and export_dry_stretched) and MODEL_UNAVAILABLE(vocoder_not_ready), which can
+    succeed when asked again (MODEL_UNAVAILABLE(vocoder_load_failed) cannot: the same weight fails again). */
 bool controlErrorRetryable(std::string_view kind, std::string_view reason);
 
 /**
- * One error response line, without the LF (section 17.1). reason may be empty. detail is reduced to
+ * One error response line, without the LF. reason may be empty. detail is reduced to
  * printable ASCII and at most 1024 characters; callers must never put secrets or text taken from
  * files or projects into it. retryable defaults to the kind's default.
  */
@@ -124,7 +121,7 @@ std::string controlResultResponse(const ControlRequestId& id, const JsonValue& r
 std::string controlAuthFailedResponse(const ControlRequestId& id);
 std::string controlProtocolMismatchResponse(const ControlRequestId& id);
 
-/** Outcome of the session.hello checks 1 to 3 of section 4.2. */
+/** Outcome of validating session.hello credentials and request parameters. */
 enum class ControlHelloVerdict {
     AuthFailed,
     ProtocolMismatch,
@@ -133,7 +130,7 @@ enum class ControlHelloVerdict {
 };
 
 /**
- * Applies the checks 1 to 3 of section 4.2 to the params of a session.hello request (nullptr when
+ * Validates the params of a session.hello request (nullptr when
  * the request has none). The token is compared in constant time whenever params.token is a string,
  * whatever the other members are. For InvalidParams, detail says what is wrong; it never quotes the
  * token.

@@ -76,7 +76,7 @@ bool readSelection(ControlParamReader& reader, SelectionParams& out)
     return readBoolean(reader, "openEditor", out.openEditor) && readBoolean(reader, "dryRun", out.dryRun);
 }
 
-/** methods/ui.setSelection.schema.json $defs.params, on the connection thread. */
+/** Parses ui.setSelection params on the connection thread. */
 bool parseSetSelection(const JsonValue& params, SelectionParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -354,7 +354,7 @@ bool record(ControlOpContext& context, ControlWriteEnvelope& envelope, const Tar
 }
 
 /** ui.setSelection of the active track and its selected clip from before the call; null when no track was active or
-    the instance does not report ui.bridge (PROTOCOL.md section 15.2 rule 2). */
+    the instance does not report ui.bridge. */
 JsonValue revertRecipe(ControlOpContext& context, const SelectionState& before)
 {
     if (before.activeTrack < 0 || !controlReportsCapability(context, "ui.bridge"))

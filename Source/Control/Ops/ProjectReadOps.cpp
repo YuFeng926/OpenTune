@@ -16,7 +16,7 @@ namespace {
 
 /** OpenTune stores a track's level as -100 dB while the track is silent. */
 constexpr float kSilentRmsDb = -99.9f;
-/** Longest path and clip name returned (common.schema.json#/$defs/path, placement.name). */
+/** Longest path and clip name returned. */
 constexpr std::size_t kMaxTextCodePoints = 4096;
 
 JsonValue optionalNumber(const std::optional<double>& value, int decimals)
@@ -33,7 +33,7 @@ JsonValue trackJson(const StandaloneArrangement& arrangement, int trackId, bool 
     const bool solo = arrangement.isTrackSolo(trackId);
     const double volume = arrangement.getTrackVolume(trackId);
     json.appendMember("trackId", JsonValue::integer(trackId));
-    // OpenTune identifies tracks by position only and labels them "Track N" (PROTOCOL.md section 15.4).
+    // OpenTune identifies tracks by position only and labels them "Track N".
     json.appendMember("label", JsonValue::string("Track " + std::to_string(trackId + 1)));
     json.appendMember("visible", JsonValue::boolean(visible));
     json.appendMember("muted", JsonValue::boolean(muted));

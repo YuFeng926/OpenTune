@@ -80,7 +80,7 @@ struct ControlServer::Shared
     /** Set first by stop(): new requests are answered with SHUTTING_DOWN, nothing new is accepted. */
     std::atomic<bool> stopping{false};
     /** Set by stop() after the handler ended its waiting requests: sessions answer what already
-        arrived, send their pending output and close (PROTOCOL.md section 3.6 rule 2). */
+        arrived, send their pending output and close. */
     std::atomic<bool> closing{false};
 
     mutable std::mutex mutex;
@@ -341,7 +341,7 @@ private:
         }
     }
 
-    /** PROTOCOL.md section 3.5. Returns true when the connection became a session. */
+    /** Runs the checks before authentication. Returns true when the connection became a session. */
     bool runBeforeAuthentication()
     {
         const auto& limits = shared_->limits;
@@ -400,7 +400,7 @@ private:
         return result;
     }
 
-    /** PROTOCOL.md sections 3.5 rule 3 and 4.2. Returns true when the connection became a session. */
+    /** Handles session.hello. Returns true when the connection became a session. */
     bool handleHello(const std::string& line)
     {
         const auto parsed = parseJson(line);
@@ -483,7 +483,7 @@ private:
                 idle = channel_->inFlight.empty();
                 idleDeadline = channel_->lastActivity + idleTimeout;
             }
-            // Idle: no request in flight and no complete line for idleTimeoutMs (section 3.4 rule 4).
+            // Idle: no request in flight and no complete line for idleTimeoutMs.
             if (broken || (idle && Clock::now() >= idleDeadline)) {
                 closeConnection(false);
                 return;
@@ -517,7 +517,7 @@ private:
     }
 
     /**
-     * PROTOCOL.md section 3.6 rule 2, after the handler ended its waiting requests: answers the
+     * After the handler ended its waiting requests, answers the
      * complete lines that already arrived with SHUTTING_DOWN (handleLine does so while the server
      * stops), without waiting for more, then sends the pending output and closes, all within
      * kStopFlushMs.
@@ -565,7 +565,7 @@ private:
         }
         buffer_.erase(0, start);
         scanned_ = buffer_.size();
-        // Answer as soon as more than maxLineBytes arrived without an LF (section 3.4 rule 3).
+        // Answer as soon as more than maxLineBytes arrived without an LF.
         if (buffer_.size() > maxLine)
             return lineTooLong();
         return Next::Continue;
@@ -577,7 +577,7 @@ private:
         return Next::CloseAfterResponse;
     }
 
-    /** PROTOCOL.md section 3.3 rule 5, in its order. */
+    /** Applies the request checks in order. */
     Next handleLine(std::string_view line)
     {
         if (isJsonWhitespaceOnly(line))
@@ -782,7 +782,7 @@ bool ControlServer::start(std::string& error)
         return false;
     }
 
-    // The listener accepts connections now; only then is the discovery file written (section 5.2).
+    // The listener accepts connections now; only then is the discovery file written.
     ControlDiscoveryRecord record;
     record.pid = shared_->pid;
     record.processStartTimeMs = controlProcessStartTimeMs();
@@ -820,7 +820,7 @@ void ControlServer::stop()
 void ControlServer::shutDown()
 {
     stopped_ = true;
-    // PROTOCOL.md section 3.6 rule 2, in its order: from here on new requests are answered with
+    // From here on new requests are answered with
     // SHUTTING_DOWN; the handler ends its waiting requests with SHUTTING_DOWN; only then do the
     // sessions send their last responses and close.
     shared_->stopping = true;
@@ -882,7 +882,7 @@ void ControlServer::admit(ControlSocket connection)
         return;
     {
         std::lock_guard<std::mutex> lock(shared_->mutex);
-        // Section 3.5 rule 1: close at once, without a byte, when enough connections already wait.
+        // Close at once, without a byte, when enough connections already wait.
         if (shared_->pendingConnections >= shared_->limits.maxPreAuthConnections)
             return;
         ++shared_->pendingConnections;

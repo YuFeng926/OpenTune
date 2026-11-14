@@ -49,7 +49,7 @@ JsonValue volumeDbJson(double linear)
     return db ? controlJsonNumber(*db, 3) : JsonValue();
 }
 
-/** The members of a track that differ between two captures (PROTOCOL.md section 14.3), including audible, which
+/** The members of a track that differ between two captures, including audible, which
     follows the solo flags of the other tracks; withAudible false leaves it out. */
 JsonValue trackFields(const ControlTrackState& was, const ControlTrackState& now, bool withAudible = true)
 {
@@ -159,7 +159,7 @@ bool parseColour(const JsonValue* value, std::uint32_t& out)
     return true;
 }
 
-/** The trackId member of common.schema.json#/$defs/trackId: an integer of 0 or more. */
+/** The trackId member: an integer of 0 or more. */
 bool readTrackId(ControlParamReader& reader, int& out)
 {
     const JsonValue* value = reader.member("trackId");
@@ -182,7 +182,7 @@ bool readBoolean(ControlParamReader& reader, const char* name, std::optional<boo
     return true;
 }
 
-/** methods/track.set.schema.json $defs.trackSetting: closed, at least one member besides trackId, and not both
+/** A track setting: closed, at least one member besides trackId, and not both
     volumeDb and volumeLinear. */
 bool parseTrackSetting(const JsonValue& item, TrackSetting& out, std::string& why)
 {
@@ -297,7 +297,7 @@ JsonValue revertSetting(const ControlTrackState& was, const ControlTrackState& n
 
 Result<JsonValue> runSet(ControlOpContext& context, const SetParams& params)
 {
-    // The handles first, then the busy state (section 13.1 rule 4), then the validation of the list itself.
+    // The handles first, then the busy state, then the validation of the list itself.
     for (const auto& setting : params.tracks)
         if (auto unknown = controlCheckTrackSlot(context, setting.trackId))
             return *unknown;
@@ -408,13 +408,13 @@ Result<JsonValue> runAdd(ControlOpContext& context, const AddParams& params)
         return controlOpError("UNSUPPORTED", "capability_missing", "the editor cannot show more tracks");
     const auto after = controlCaptureTracks(context, shownTracks(context));
     describeTracks(before, after, envelope);
-    // No undo entry and nothing to revert (PROTOCOL.md section 15.2 rule 6): the + button has no undo, and no request
+    // No undo entry and nothing to revert: the + button has no undo, and no request
     // restores the previous count (track.delete removes the track with its clips, one track per request, and needs the
     // end user's consent, so it is no revert recipe). The count is project state (saved with the project since upstream
     // 2c01847): the editor's panel writes it to the arrangement and marks the project when it changes
     // (visibleTrackCountChanged, reached through the bridge's setVisibleTrackCount()), as the + button does, so the
     // result's dirty flag turns true without this operation marking the project itself. Hence IRREVERSIBLE, with the
-    // first track shown as its subject (vectors/track/add-ok.json).
+    // first track shown as its subject.
     envelope.setNotUndoable("no_upstream_undo");
     envelope.addWarning("IRREVERSIBLE", controlTrackRef(visible.value()));
     auto result = envelope.committed(context);
@@ -669,13 +669,13 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     const auto epoch = controlContentEpoch(context);
     history->markContentsRemoved(leftProject, epoch);
 
-    // The barrier in the undo and redo histories (section 15.3 rule 6): an entry is possibly stale when it addresses
+    // The barrier in the undo and redo histories: an entry is possibly stale when it addresses
     // the deleted track or a shown track after it, which removeTrackAndShift() moved down. A hidden track keeps its
     // position and its clips, so an entry that addresses only hidden tracks stays valid. visible is the number of
     // shown tracks before the deletion.
     const auto stale = history->onTrackDeleted(processor.getUndoManager(), params.trackId, visible, epoch);
 
-    // Removed: the clips, then the contents that left with them (section 14.4 rule 6).
+    // Removed: the clips, then the contents that left with them.
     for (const auto& ref : removed)
         envelope.addRemoved("placement", placementRef(ref.placementId), JsonValue::string(placementLabel(ref)));
     for (const auto& key : leftProject) {

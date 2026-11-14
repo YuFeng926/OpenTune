@@ -6,7 +6,7 @@ namespace OpenTune {
 class ControlMethodTable;
 
 /**
- * Registers prefs.set (capability prefs.write; methods/prefs.set.schema.json).
+ * Registers prefs.set (capability prefs.write).
  *
  * prefs.set changes the processing preferences that OpenTune's preferences window changes: the frequency of A4
  * (tuningHz), the editing scheme, the hybrid (light pitch correction) switch, the experimental features, the vocoder

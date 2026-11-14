@@ -6,8 +6,7 @@
 
 namespace OpenTune {
 
-/** Path syntax the rules apply to. Both are selectable on every platform so that tests can cover
-    the Windows rules on POSIX hosts and the other way round. */
+/** Path syntax the validation and joining rules apply to. */
 enum class ControlPathStyle {
     Windows,
     Posix
@@ -17,7 +16,7 @@ enum class ControlPathStyle {
 ControlPathStyle controlNativePathStyle();
 
 /**
- * Checks the raw text of an absolute path given to the control API (PROTOCOL.md section 20.1),
+ * Checks the raw text of an absolute path given to the control API,
  * before any file-system access. The path is never normalised: it is accepted exactly as given or
  * rejected.
  *

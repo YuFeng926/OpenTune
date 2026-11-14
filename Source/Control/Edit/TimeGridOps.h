@@ -37,8 +37,7 @@ class OpenTuneAudioProcessor;
  * A move that was limited is applied as far as it was allowed. The new grid is validated by
  * TimeGridSnapshot::makeFromHandles(), like every grid the time tool makes; a grid it rejects is not applied.
  *
- * The upstream functions that are still mirrored (the commit and its description) are registered in
- * Source/Control/mirror-map.json (see MIRRORS.md) and listed in Source/Control/README.md (Time grid).
+ * commit() applies the planned moves through OpenTune's time-grid edit operation.
  *
  * Threading: the planning functions are pure; commit() runs on the message thread.
  */

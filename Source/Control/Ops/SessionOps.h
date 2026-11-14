@@ -12,7 +12,7 @@ namespace OpenTune {
 ControlProcessingRuntime controlProcessingRuntime();
 
 /**
- * The session methods the dispatcher runs: session.info (methods/session.info.schema.json). The
+ * The session methods the dispatcher runs: session.info. The
  * listener answers session.hello itself, before a session exists.
  *
  * session.info reports the build, the runtime, the audio device (through the editor's bridge), the

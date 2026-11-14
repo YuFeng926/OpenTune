@@ -8,9 +8,9 @@
 namespace OpenTune {
 
 /**
- * The identity of an existing file or directory (PROTOCOL.md section 20.3 rule 1): on Windows the volume
+ * The identity of an existing file or directory: on Windows the volume
  * serial number and the file id of a handle opened on the path, on POSIX systems st_dev and st_ino. Two
- * existing files are the same file exactly when their identities are equal (rule 2), whatever the strings
+ * existing files are the same file exactly when their identities are equal, whatever the strings
  * that name them (letter case, short names, links, junctions, mount points, hard links).
  */
 struct ControlFileId
@@ -37,7 +37,7 @@ enum class ControlFileIdStatus {
         is not the same file as one on an available volume. */
     Unavailable,
     /** The identity cannot be determined for another reason (for example a directory that cannot be
-        opened); section 20.3 rule 4. */
+        opened). */
     Failed
 };
 
@@ -60,11 +60,11 @@ ControlFileIdStatus controlClassifyOsError(unsigned long code) noexcept;
 ControlFileIdStatus controlFileIdentity(const std::string& utf8Path, ControlFileId& out);
 
 /**
- * Whether two absolute paths name the same file (PROTOCOL.md section 20.3 rules 2 and 3): two existing
+ * Whether two absolute paths name the same file: two existing
  * files by their identities; two paths at which nothing exists when their parent directories exist with
  * equal identities and their last segments are equal as the file system compares names (on Windows without
  * regard to case); an existing file and a path without a file never. nullopt when an identity that the
- * decision needs cannot be determined (rule 4): the caller refuses with IO_ERROR(read_failed).
+ * decision needs cannot be determined: the caller refuses with IO_ERROR(read_failed).
  *
  * Any thread.
  */
@@ -84,7 +84,7 @@ public:
 
     /**
      * Whether `utf8Other` names the same file as the target. nullopt when an identity that the decision
-     * needs cannot be determined (rule 4), and always when the identity of the target cannot. A path whose
+     * needs cannot be determined, and always when the identity of the target cannot. A path whose
      * volume is not available (ControlFileIdStatus::Unavailable) is such a case too: the same share can be
      * reachable through another name, so it is never taken as a different file.
      */
@@ -111,7 +111,7 @@ enum class ControlRenameResult {
 };
 
 /**
- * Moves a file to a path in the same directory with one rename (PROTOCOL.md section 20.4). With replace,
+ * Moves a file to a path in the same directory with one rename. With replace,
  * a rename that replaces an existing target (Windows MoveFileExW with MOVEFILE_REPLACE_EXISTING, POSIX
  * rename). Without it, a rename that fails atomically when the target exists, never a test followed by a
  * rename (Windows MoveFileExW without MOVEFILE_REPLACE_EXISTING; POSIX link to the target, then unlink of

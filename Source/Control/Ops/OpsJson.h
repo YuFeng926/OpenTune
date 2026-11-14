@@ -15,13 +15,13 @@ namespace OpenTune {
  * state (controlProcessingJson only the process-wide tuning atomic), so they may run on any thread.
  */
 
-/** The wire name of a scale (common.schema.json#/$defs/scaleName). */
+/** The wire name of a scale. */
 const char* controlScaleName(Scale scale);
 
-/** The key of a content (common.schema.json#/$defs/key); null until the analysis determined one. */
+/** The key of a content; null until the analysis determined one. */
 JsonValue controlKeyJson(const DetectedKey& key);
 
-/** The pitch shift of a content (common.schema.json#/$defs/pitchShift). */
+/** The pitch shift of a content. */
 JsonValue controlPitchShiftJson(const PitchShiftSettings& settings);
 
 /** The language tag session.info and prefs.get report (en, zh, ja, ru, es). */

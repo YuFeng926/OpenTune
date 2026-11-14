@@ -21,7 +21,7 @@ class OpenTuneAudioProcessor;
  * Every function below uses the real OpenTune function. Threading: message thread (prefs.get, prefs.set and its job).
  */
 
-/** The longest text of processing.options (prefs.get.schema.json), in code points. */
+/** The longest text of a processing option, in code points. */
 constexpr std::size_t kControlOptionTextCodePoints = 64;
 /** The most members of one array of processing.options. */
 constexpr std::size_t kControlOptionCount = 64;
@@ -38,7 +38,7 @@ struct ControlVocoderState
 };
 
 /**
- * processing.options of prefs.get (methods/prefs.get.schema.json): {vocoderWeight, f0Model, renderingPriority}, each an
+ * processing.options of prefs.get: {vocoderWeight, f0Model, renderingPriority}, each an
  * array of strings.
  *
  * - vocoderWeight: the file names that the preferences window lists, in its order (ModelFactory::

@@ -14,7 +14,7 @@ namespace OpenTune {
 
 namespace {
 
-/** Longest path (common.schema.json path). */
+/** Longest path returned by the API. */
 constexpr std::size_t kMaxPathCodePoints = 4096;
 constexpr std::int64_t kLogDefaultLines = 200;
 constexpr std::int64_t kLogMaxLines = 1000;

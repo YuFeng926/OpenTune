@@ -42,7 +42,7 @@ constexpr std::uint32_t kDefaultVocoderWaitMs = 60000;
 
 // ---- Params ---------------------------------------------------------------------------------------
 
-/** methods/prefs.set.schema.json $defs.params: the members that are present. */
+/** Parses prefs.set params, retaining only the members that are present. */
 struct PrefsRequest
 {
     std::optional<float> tuningHz;
@@ -462,7 +462,7 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, cons
     if (delta.tuning)
         envelope.addWarning("NOT_RETROACTIVE", preferenceRef("tuningHz"));
     if (delta.priority && !*request.cpuFirst) {
-        // BACKEND_FALLBACK (PROTOCOL.md section 12.7 rule 7): this call changed the priority to gpuFirst, and the
+        // BACKEND_FALLBACK: this call changed the priority to gpuFirst, and the
         // backend that OpenTune reports now, when the job ends, is the CPU, so the GPU is not in use. The backend is
         // read once, here, and the job does not wait for it: a job that did not wait for the vocoder (it was not
         // ready before the change) can still read the backend from before the change, which the rule allows. A change
@@ -738,8 +738,8 @@ private:
     /** What the job waits for did not happen in time (the editor applying the scheme, the vocoder being ready again):
         the job takes its changes back, so that no half-applied set of preferences stays, and fails with the error of
         the wait that ran out. A preference that another write changed meanwhile keeps that write's value; the detail
-        names it, and executed is true because the job's change was not rolled back completely (PROTOCOL.md section
-        17.4 rule 3). The same holds for the notes that the editor generated for the clip open in the piano roll when it
+        names it, and executed is true because the job's change was not rolled back completely. The same holds for the
+        notes that the editor generated for the clip open in the piano roll when it
         applied openDyne: they have no undo entry and stay, the project stays marked as changed, and the detail names
         the content (a handle, never a file name). */
     void abandon(ControlOpContext& context, ControlJobStep& jobStep, const char* kind, const char* reason,
@@ -843,7 +843,7 @@ private:
 
 // ---- prefs.set -----------------------------------------------------------------------------------------
 
-/** Why a start of a job failed, as the error of the method (PROTOCOL.md section 12). */
+/** Error returned when starting a job is refused. */
 Error startRefusal(const std::string& refusal)
 {
     return refusal == "job_limit" ? controlOpError("BUSY", "job_limit", "every retained job is still active")
@@ -889,7 +889,7 @@ Result<JsonValue> runPrefsSet(ControlOpContext& context, const PrefsRequest& par
     if (delta.needsJob()) {
         // OpenTune applies a new editing scheme to its editor asynchronously, and replaces the vocoder asynchronously
         // after a new weight or rendering priority: a job makes all the changes, and the call itself changes nothing
-        // (PROTOCOL.md section 14.2 rule 3).
+        // The call itself changes nothing before handing off the work.
         auto* jobs = context.jobs();
         if (jobs == nullptr)
             return controlOpError("INTERNAL", "", "the jobs registry is not available");

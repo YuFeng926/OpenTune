@@ -15,7 +15,7 @@ struct MethodCapability
     const char* capability;
 };
 
-// Every method of protocol version 1 (PROTOCOL.md section 22 and methods/index.json).
+// Every method defined by protocol version 1.
 constexpr MethodCapability kMethods[] = {
     {"session.hello", "session.v1"},
     {"session.info", "session.v1"},
@@ -98,7 +98,7 @@ bool isVersionNumber(std::string_view text)
     return text.size() == 1 || text[0] != '0';
 }
 
-// common.schema.json#/$defs/protocolVersion: MAJOR.MINOR.
+// A protocol version has the form MAJOR.MINOR.
 bool parseProtocolVersion(std::string_view text, std::string& major)
 {
     const std::size_t dot = text.find('.');
@@ -112,7 +112,7 @@ bool parseProtocolVersion(std::string_view text, std::string& major)
     return true;
 }
 
-// methods/session.hello.schema.json#/$defs/params, given that token and protocol already passed.
+// Validates session.hello params after the token and protocol version have passed.
 bool validateHelloParams(const JsonValue& params, std::string& detail)
 {
     for (std::size_t i = 0; i < params.size(); ++i) {

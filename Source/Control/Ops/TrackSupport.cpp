@@ -48,7 +48,7 @@ std::vector<ControlTrackState> controlCaptureTracks(ControlOpContext& context, i
 Result<int> controlEditorVisibleTrackCount(ControlOpContext& context)
 {
     auto* bridge = context.bridge();
-    // PROTOCOL.md section 7 rule 6: without an editor window the track methods fail with no_editor_window.
+    // Without an editor window the track methods fail with no_editor_window.
     if (bridge == nullptr)
         return controlOpError("UNSUPPORTED", "no_editor_window",
                               "the number of shown tracks belongs to the editor window, and no editor exists");

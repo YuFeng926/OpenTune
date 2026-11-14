@@ -41,7 +41,7 @@ namespace OpenTune {
 namespace {
 
 constexpr std::size_t kMaxPathCodePoints = 4096;
-/** PROTOCOL.md section 19 rule 7: the longest wait for analysis and rendering. */
+/** The longest wait for analysis and rendering. */
 constexpr int kWaitLimitMs = 120000;
 /** Retry a dropped time-stretch rebuild this many times at the same content and time-grid revisions. */
 constexpr int kMaxStretchRequests = 3;
@@ -52,9 +52,9 @@ constexpr int kStuckBlocksMs = 500;
 constexpr int kStretchRetryIdleMs = 500;
 /** Samples per slice of the probe of a published render for rendered audio (publishedRenderHasAudio). */
 constexpr int kPublishedAudioProbeSamples = 1 << 16;
-/** Section 19 rule 3: the last name that ifExists rename tries is "<stem> (999).wav". */
+/** The last name that ifExists rename tries is "<stem> (999).wav". */
 constexpr int kLastRenameNumber = 999;
-/** The extension an export writes (section 20.1), compared without regard to case. */
+/** The extension an export writes, compared without regard to case. */
 constexpr std::string_view kWavExtension = ".wav";
 
 /**
@@ -128,8 +128,7 @@ struct ExportParams
     IfExists ifExists = IfExists::Error;
     bool allowDry = false;
 
-    /** The params after defaults, as one string: equal strings mean equal normalized params (section 19
-        rule 5). */
+    /** The params after defaults, as one string: equal strings mean equal normalized params. */
     std::string digest() const
     {
         auto json = JsonValue::object();
@@ -217,8 +216,8 @@ bool readAllowDry(ControlParamReader& reader, bool& out)
     return true;
 }
 
-/** methods/export.start.schema.json $defs.params, on the connection thread. The path gets the checks of
-    PROTOCOL.md section 20.1 on the message thread, as method-specific validation with its own reasons. */
+/** Parses export.start params on the connection thread. The path is checked on the message thread with
+    method-specific validation and errors. */
 bool parseExport(const JsonValue& params, ExportParams& out, std::string& why)
 {
     ControlParamReader reader(params);
@@ -248,7 +247,7 @@ bool hasWavExtension(const std::string& path)
     return true;
 }
 
-/** "<stem> (n).wav" next to the target, <stem> being its file name without .wav (section 19 rule 3). */
+/** "<stem> (n).wav" next to the target, <stem> being its file name without .wav. */
 std::string numberedPath(const std::string& path, int number)
 {
     return path.substr(0, path.size() - kWavExtension.size()) + " (" + std::to_string(number) + ").wav";
@@ -468,7 +467,7 @@ ExportPlan buildPlan(ControlOpContext& context, const ExportTarget& target)
 }
 
 /**
- * The token of the export's inputs (section 19 rule 8): the mix token of the plan and, per content, the
+ * The token of the export's inputs: the mix token of the plan and, per content, the
  * versions that its render is made of (the revision token of notes, pitch and content, the time grid and
  * the pitch shift). versions receives the versions of the contents, in the plan's order.
  */
@@ -496,7 +495,7 @@ std::string inputsToken(ControlOpContext& context, const ExportPlan& plan,
 // ---- Loaded media ----------------------------------------------------------------------------------
 
 /** The source file of every source OpenTune holds (SourceStore), active or retired, since an undo step
-    can bring a retired one back: the loaded media that an export never writes (section 19 rule 2). */
+    can bring a retired one back: loaded media that an export never writes. */
 std::vector<std::string> loadedMediaPaths(ControlOpContext& context)
 {
     std::vector<std::string> paths;
@@ -517,12 +516,12 @@ std::vector<std::string> loadedMediaPaths(ControlOpContext& context)
     return paths;
 }
 
-/** Section 19 rule 2 by file identity (section 20.3): the error when the target is loaded media or when an
-    identity that the check needs cannot be determined; nullopt otherwise. */
+/** The error when the target is loaded media or when a required file identity cannot be determined;
+    nullopt otherwise. */
 std::optional<ControlJobError> loadedMediaError(const std::vector<std::string>& media, const std::string& target)
 {
     // The identity of the target is read once. A loaded media file whose identity cannot be read for any
-    // reason but "does not exist" (including an unavailable volume) rejects the export (rule 4): the same
+    // reason but "does not exist" (including an unavailable volume) rejects the export: the same
     // file may still be reachable through the target path, and overwrite would replace it.
     ControlSameFileProbe probe(target);
     for (const auto& path : media) {
@@ -569,8 +568,8 @@ private:
  * exportTrackAudio or exportMasterMixAudio of OpenTuneAudioProcessor, which wait for the render worker
  * (drainRenderWorker) and write 44.1 kHz 32-bit float WAV. Then it reads the header of the file back.
  * The destructor joins the thread; OpenTune's export cannot be interrupted, so that waits for the write.
- * This is the one known exception to the bounded joins of the shutdown contract (Source/Control/README.md):
- * the editor's own export thread is joined the same way. The worst case is the time that the render worker
+ * This is the one known exception to bounded joins during shutdown; the editor's own export thread is joined the same
+ * way. The worst case is the time that the render worker
  * needs to drain the process's whole render queue plus the time to write the file, and it depends on the
  * number and length of the pending renders and on the speed of the disk.
  */
@@ -683,7 +682,7 @@ private:
 
 // ---- The job --------------------------------------------------------------------------------------
 
-/** How one content of the export stands (section 19 rule 6). */
+/** How one content of the export stands. */
 struct Readiness
 {
     enum class State {
@@ -699,7 +698,7 @@ struct Readiness
 };
 
 /**
- * The work of one export job, on the message thread (section 19).
+ * The work of one export job, on the message thread.
  *
  * - While it waits, each event rebuilds the plan (the user may change the project meanwhile) and
  *   decides for every content: analysis not finished: wait; no voiced audio or nothing to render: export it
@@ -723,7 +722,7 @@ struct Readiness
  *   writer on a temporary file in the target directory.
  * - Once the file is written: the inputs are compared with the recorded ones (REVISION_CONFLICT
  *   (changed_during_export) when they changed), cancellability ends, loaded media are checked again for
- *   the name used, and the final rename moves the file into place (section 20.4).
+ *   the name used, and the final rename moves the file into place.
  * - Every failure and cancellation deletes the temporary file and leaves the target untouched (executed
  *   false). The processor's message-thread export state is released when the job ends or its work is destroyed.
  */
@@ -816,7 +815,7 @@ private:
     }
 
     /**
-     * A content that section 19 rule 6 exports uncorrected (dry), whose time grid is not the identity and that has no
+     * A content exported uncorrected (dry), whose time grid is not the identity and that has no
      * render to stretch (classify, Stretch::NoRender): OpenTune builds the stretched audio only from a settled render
      * (ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled), so it has no uncorrected audio of the content
      * for the file, and waiting does not change that. The job ends at once instead of at the wait limit, whatever made
@@ -835,8 +834,8 @@ private:
     }
 
     /**
-     * Section 19 rule 6 for a content whose time grid is not the identity: OpenTune plays and exports such a
-     * content from its time-stretch output (the Stage2 rebuild, Stage2TimeStretchRebuilder), not from its render,
+     * For a content whose time grid is not the identity, OpenTune plays and exports it from its time-stretch output
+     * (the Stage2 rebuild, Stage2TimeStretchRebuilder), not from its render,
      * and its export reads that output only when it was built at the content's current content and time-grid
      * revisions (readExportPlaybackAudio in Utils/PlaybackAudioReader.h); otherwise the content would be silent or
      * old in the file. The content is ready only once that output is current, which the export's own read
@@ -915,7 +914,7 @@ private:
     }
 
     /**
-     * Section 19 rule 6, "analysis found no voiced audio": the analysis has F0 frames and at least one of them is
+     * "Analysis found no voiced audio": the analysis has F0 frames and at least one of them is
      * above 0 Hz. An analysis that ended Ready without any (what a silent file gives) has none. The same test as the
      * readiness gate of the other writes (controlCheckContentReady, NOT_READY(f0_empty)).
      */
@@ -1175,7 +1174,7 @@ private:
         setProgress(step, static_cast<double>(ready) / total, "waiting", ready, total);
     }
 
-    /** Section 19 rule 8, in the tick that found every content ready: records the inputs and revisions and
+    /** In the tick that found every content ready, records the inputs and revisions and
         starts the writer on a temporary file in the target directory. */
     void startWriting(ControlOpContext& context, const ExportPlan& plan, JsonValue dry, std::function<void()> wake)
     {
@@ -1247,13 +1246,13 @@ private:
             fail(step, {"IO_ERROR", "write_failed", "OpenTune could not write the export file", false});
             return;
         }
-        // Section 19 rule 8: what the file is made of must not have changed since it was recorded.
+        // What the file is made of must not have changed since it was recorded.
         if (inputsToken(context, buildPlan(context, target_)) != recordedInputs_) {
             fail(step, {"REVISION_CONFLICT", "changed_during_export",
                         "a content or clip of the export changed while the file was written", false});
             return;
         }
-        // Section 12.3: cancellable until the final rename.
+        // Cancellable until the final rename.
         if (!step.endCancellability()) {
             finishCancelled(step);
             return;
@@ -1279,7 +1278,7 @@ private:
         step.succeed(std::move(result));
     }
 
-    /** Sections 19 rules 2 and 3 and 20.4: the names that ifExists allows, each checked against the loaded
+    /** The names that ifExists allows, each checked against the loaded
         media right before its rename. nullopt on success, with finalPath the name written. */
     std::optional<ControlJobError> moveIntoPlace(ControlOpContext& context, std::string& finalPath)
     {
@@ -1394,14 +1393,14 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
         return controlOpError("INTERNAL", "", "the jobs registry is not available");
     const auto digest = params.digest();
 
-    // Section 19 rule 5: the same normalized params as an export job that still runs return that job,
+    // The same normalized params as an export job that still runs return that job,
     // before any check of state (that job holds the export admission).
     if (const auto existing = jobs->findActiveByDigest("export", digest); !existing.empty()) {
         ControlWriteEnvelope envelope(context);
         return envelope.handedToJob(context, jobs->jobRef(existing));
     }
 
-    // Handles, then busy state (including an active export), then the method's own checks (section 13.1 rule 4).
+    // Handles, then busy state (including an active export), then the method's own checks.
     auto& processor = context.processor();
     const auto* arrangement = processor.getStandaloneArrangement();
     if (arrangement == nullptr)
@@ -1421,7 +1420,7 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
     }
     if (auto busy = controlCheckBusy(context))
         return *busy;
-    // Section 20.1: the raw text, before any file-system access.
+    // Check the raw path text before any file-system access.
     const auto reason = controlCheckAbsolutePath(params.path, controlNativePathStyle());
     if (!reason.empty())
         return controlOpError("INVALID_ARGUMENT", reason, "the path is not an absolute path in the accepted form");
@@ -1429,17 +1428,17 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
         return controlOpError("INVALID_ARGUMENT", "path_bad_extension", "an export writes only .wav files");
     if (buildPlan(context, target).contents.empty())
         return controlOpError("INVALID_ARGUMENT", "nothing_to_export", "the export holds no clip with audio");
-    // Section 19 rule 2 by file identity; the job checks again right before its final rename.
+    // Check loaded media by file identity; the job checks again right before its final rename.
     if (const auto error = loadedMediaError(loadedMediaPaths(context), params.path))
         return controlOpError(error->kind, error->reason, error->detail);
     if (!fileOf(params.path).getParentDirectory().isDirectory())
         return controlOpError("IO_ERROR", "write_failed", "the directory of the target does not exist");
-    // Section 19 rule 3: with ifExists error an existing target fails at once and nothing is rendered.
+    // With ifExists error, an existing target fails at once and nothing is rendered.
     if (params.ifExists == IfExists::Error && fileOf(params.path).exists())
         return controlOpError("ALREADY_EXISTS", "target_exists", "a file exists at the target");
 
     // The shared message-thread busy state that the editor's export keeps too, taken here on the
-    // message thread after every check, held until the job ends (section 19 rule 4).
+    // message thread after every check, held until the job ends.
     if (!processor.tryBeginExport())
         return controlOpError("BUSY", "export_in_progress", "an export is running");
     ExportBusyGuard busyAdmission(processor);

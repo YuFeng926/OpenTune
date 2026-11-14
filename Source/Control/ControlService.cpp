@@ -94,7 +94,7 @@ ControlService::~ControlService()
 
 void ControlService::scheduleStart()
 {
-    // Not enabled at run time: nothing is posted, written or logged (PROTOCOL.md section 6.2).
+    // Not enabled at run time: nothing is posted, written or logged.
     if (!options_.enabled || startScheduled_ || stopCalled_)
         return;
     startScheduled_ = true;

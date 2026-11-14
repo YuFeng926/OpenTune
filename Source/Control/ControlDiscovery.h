@@ -11,7 +11,7 @@
 
 namespace OpenTune {
 
-/** Build identity published in the discovery file and session results (PROTOCOL.md section 5.3). */
+/** Build identity published in the discovery file and session results. */
 struct ControlBuildIdentity
 {
     /** OpenTune version string, 1 to 64 characters. */
@@ -30,7 +30,7 @@ struct ControlBuildIdentity
     fixed explanation. */
 std::string controlValidateBuildIdentity(const ControlBuildIdentity& identity);
 
-/** Content of one discovery file (schemas/discovery-file.schema.json). */
+/** Content of one discovery file. */
 struct ControlDiscoveryRecord
 {
     std::int64_t pid = 0;
@@ -51,7 +51,7 @@ std::string controlDiscoveryFileContent(const ControlDiscoveryRecord& record);
 /** The ready file text {"pid":..,"instanceId":".."} (no secrets). */
 std::string controlReadyFileContent(std::int64_t pid, std::string_view instanceId);
 
-/** Platforms whose default discovery directories differ (PROTOCOL.md section 5.1). */
+/** Platforms whose default discovery directories differ. */
 enum class ControlPlatform {
     Windows,
     MacOS,
@@ -61,7 +61,7 @@ enum class ControlPlatform {
 ControlPlatform controlCurrentPlatform();
 
 /**
- * Chooses the discovery directory D (PROTOCOL.md section 5.1): --control-api-dir= when given,
+ * Chooses the discovery directory: --control-api-dir= when given,
  * otherwise <OPENTUNE_DATA_DIR>/control/instances, otherwise the platform default. Returns an empty
  * string and sets error when no directory can be determined. Options must already be valid.
  * Pure function; thread-safe.
@@ -102,7 +102,7 @@ public:
 
     /** Creates missing directories of D (mode 0700 on POSIX) and, on POSIX, checks that D is a
         directory and not a symbolic link, owned by the effective user and not writable by group or
-        others (PROTOCOL.md section 5.2 rule 1). */
+        others. */
     bool prepareDirectory(std::string& error);
 
     /** Writes <D>/<pid>.json. Call only after the listener accepts connections. */

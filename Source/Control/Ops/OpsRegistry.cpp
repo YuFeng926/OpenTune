@@ -38,8 +38,8 @@ namespace {
 constexpr std::string_view kErrorContextPrefix = "otcp:";
 constexpr std::string_view kErrorAfterChangePrefix = "otcp!";
 
-/** A capability without methods of its own, which an instance reports together with the capability it extends
-    (PROTOCOL.md section 22): ui.onboardingClose says that ui.dismiss can close an onboarding overlay that is already
+/** A feature capability without methods of its own, reported with the capability it extends:
+    ui.onboardingClose says that ui.dismiss can close an onboarding overlay that is already
     showing, which UiOps does wherever it can reach the editor. */
 struct FeatureCapability
 {

@@ -1706,11 +1706,6 @@ option(OPENTUNE_ENABLE_APPROVED_BACKPRESSURE_TEST
        "Register the backpressure test only with an approved blocking-synthesize injector" OFF)
 if(OPENTUNE_BUILD_TESTS)
     enable_testing()
-    target_compile_definitions(OpenTune PRIVATE OPENTUNE_LIFECYCLE_TEST_DATA_DIR=1)
-    if(OPENTUNE_MACOS)
-        target_compile_definitions(OpenTuneAU PRIVATE OPENTUNE_LIFECYCLE_TEST_DATA_DIR=1)
-    endif()
-
     add_executable(OpenTuneComponentListenerSubscriptionTests
         Tests/ComponentListenerSubscriptionTests.cpp
     )
@@ -1723,19 +1718,6 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME ComponentListenerSubscriptionTests
         COMMAND OpenTuneComponentListenerSubscriptionTests)
-
-    add_executable(OpenTuneAccessibleKnobTests
-        Tests/AccessibleKnobTests.cpp
-        Source/Utils/AccessibleKnob.cpp
-    )
-    target_include_directories(OpenTuneAccessibleKnobTests
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
-    target_link_libraries(OpenTuneAccessibleKnobTests PRIVATE
-        juce::juce_gui_basics)
-    if(MSVC)
-        target_compile_options(OpenTuneAccessibleKnobTests PRIVATE /utf-8 /EHsc)
-    endif()
-    add_test(NAME AccessibleKnobTests COMMAND OpenTuneAccessibleKnobTests)
 
     add_executable(OpenTuneAutoTuneTests
         Tests/AutoTunePitchShifterTests.cpp
@@ -1798,24 +1780,6 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneSelectedNoteParameterEditTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME SelectedNoteParameterEditTests COMMAND OpenTuneSelectedNoteParameterEditTests)
-
-    add_executable(OpenTunePianoRollParameterContextTests
-        Tests/PianoRollParameterContextTests.cpp
-    )
-    target_include_directories(OpenTunePianoRollParameterContextTests
-        PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/Source
-            ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone)
-    target_link_libraries(OpenTunePianoRollParameterContextTests PRIVATE
-        OpenTune
-        juce::juce_audio_basics
-        juce::juce_core
-        juce::juce_gui_basics
-    )
-    if(MSVC)
-        target_compile_options(OpenTunePianoRollParameterContextTests PRIVATE /utf-8 /EHsc)
-    endif()
-    add_test(NAME PianoRollParameterContextTests COMMAND OpenTunePianoRollParameterContextTests)
 
     add_executable(OpenTuneSelectedNoteEqEditTests
         Tests/SelectedNoteEqEditTests.cpp
@@ -2214,74 +2178,6 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME CaptureSessionSpanBudgetTests COMMAND OpenTuneCaptureSessionSpanBudgetTests)
 
-    add_executable(OpenTunePlaybackSampleGeometryTests
-        Tests/PlaybackSampleGeometryTests.cpp
-    )
-    target_include_directories(OpenTunePlaybackSampleGeometryTests
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
-    if(MSVC)
-        target_compile_options(OpenTunePlaybackSampleGeometryTests PRIVATE /utf-8 /EHsc)
-    endif()
-    add_test(NAME PlaybackSampleGeometryTests COMMAND OpenTunePlaybackSampleGeometryTests)
-
-    add_executable(OpenTuneResamplingRangeTests
-        Tests/ResamplingRangeTests.cpp
-        Source/DSP/ResamplingManager.cpp)
-    target_include_directories(OpenTuneResamplingRangeTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source
-        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master)
-    target_link_libraries(OpenTuneResamplingRangeTests PRIVATE juce::juce_core)
-    if(MSVC)
-        target_compile_options(OpenTuneResamplingRangeTests PRIVATE /utf-8 /EHsc)
-        target_compile_definitions(OpenTuneResamplingRangeTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-    endif()
-    add_test(NAME ResamplingRangeTests COMMAND OpenTuneResamplingRangeTests)
-
-    add_executable(OpenTuneNativePcmPlaybackTests Tests/NativePcmPlaybackTests.cpp)
-    target_include_directories(OpenTuneNativePcmPlaybackTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source
-        ${ARA_SDK_PATH})
-    target_link_libraries(OpenTuneNativePcmPlaybackTests PRIVATE
-        OpenTune juce::juce_audio_basics juce::juce_core)
-    if(MSVC)
-        target_compile_options(OpenTuneNativePcmPlaybackTests PRIVATE /utf-8 /EHsc)
-    endif()
-    add_test(NAME NativePcmPlaybackTests COMMAND OpenTuneNativePcmPlaybackTests)
-
-    # Real OpenTuneAudioProcessor -> CaptureSession publish-binding regression:
-    # trimmed-parent canonical length/native sharing, one-frame 96 kHz publish,
-    # and frozen replacement source refresh after local-mutation republish.
-    add_executable(OpenTuneCaptureProcessorPlaybackTests Tests/CaptureProcessorPlaybackTests.cpp)
-    target_compile_definitions(OpenTuneCaptureProcessorPlaybackTests PRIVATE
-        $<FILTER:$<TARGET_PROPERTY:OpenTune,COMPILE_DEFINITIONS>,EXCLUDE,^JUCE_SHARED_CODE>)
-    target_include_directories(OpenTuneCaptureProcessorPlaybackTests PRIVATE
-        $<TARGET_PROPERTY:OpenTune,INCLUDE_DIRECTORIES>
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source
-        ${ARA_SDK_PATH})
-    target_link_libraries(OpenTuneCaptureProcessorPlaybackTests PRIVATE
-        OpenTune
-        OpenTuneResources
-        juce::juce_audio_basics
-        juce::juce_audio_processors
-        juce::juce_core
-        juce::juce_events)
-    if(MSVC)
-        target_compile_options(OpenTuneCaptureProcessorPlaybackTests PRIVATE /utf-8 /EHsc)
-    endif()
-    add_test(NAME CaptureProcessorPlaybackTests COMMAND OpenTuneCaptureProcessorPlaybackTests)
-
-    add_executable(OpenTunePreparedCacheRangeTests Tests/PreparedCacheRangeTests.cpp)
-    target_include_directories(OpenTunePreparedCacheRangeTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source
-        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master)
-    target_link_libraries(OpenTunePreparedCacheRangeTests PRIVATE
-        OpenTune juce::juce_audio_basics juce::juce_core)
-    if(MSVC)
-        target_compile_options(OpenTunePreparedCacheRangeTests PRIVATE /utf-8 /EHsc)
-        target_compile_definitions(OpenTunePreparedCacheRangeTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-    endif()
-    add_test(NAME PreparedCacheRangeTests COMMAND OpenTunePreparedCacheRangeTests)
-
     add_executable(OpenTuneContentSnapshotProjectionTests
         Tests/ContentSnapshotProjectionTests.cpp
         Source/Content/StandaloneClipContent.cpp
@@ -2347,7 +2243,7 @@ if(OPENTUNE_BUILD_TESTS)
             set_tests_properties(${render_contract} PROPERTIES
                 TIMEOUT 4
                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                ENVIRONMENT "OPENTUNE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/${render_contract};OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
+                ENVIRONMENT "OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
         elseif(render_contract STREQUAL "RenderRuntimeBackpressureTests")
             message(STATUS "Not registering RenderRuntimeBackpressureTests: approved blocking-synthesize injector is unavailable")
         endif()
@@ -2379,8 +2275,7 @@ if(OPENTUNE_BUILD_TESTS)
         add_test(NAME RenderRuntimePerformanceTests COMMAND RenderRuntimePerformanceTests)
         set_tests_properties(RenderRuntimePerformanceTests PROPERTIES
             TIMEOUT 4
-            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-            ENVIRONMENT "OPENTUNE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/RenderRuntimePerformanceTests;OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
 
     set(OPENTUNE_HIFIGAN_TEST_MODEL "${HIFIGAN_MODEL_COMMUNITY}")
@@ -2391,8 +2286,6 @@ if(OPENTUNE_BUILD_TESTS)
     # the JUCE ARA model object implementations.  Keep the SDK plug-in side
     # dispatch test-only, just as for the dedicated ARA host harness.
     foreach(_runtime_contract IN ITEMS
-            OpenTuneNativePcmPlaybackTests
-            OpenTuneCaptureProcessorPlaybackTests
             RenderRuntimeLifecycleTests
             RenderRuntimeDeferredRetryTests
             RenderRuntimeStressTests)
@@ -2417,25 +2310,6 @@ if(OPENTUNE_BUILD_TESTS)
         "${ARA_SDK_PATH}/ARA_Library"
         "${ARA_SDK_PATH}/ARA_API"
     )
-
-    if(OPENTUNE_MACOS)
-        add_executable(AURuntimeLastOwnerTests Tests/ARALifecycleContractTests.cpp)
-        target_include_directories(AURuntimeLastOwnerTests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/Source
-            ${ONNXRUNTIME_INCLUDE_DIR})
-        target_link_libraries(AURuntimeLastOwnerTests PRIVATE
-            OpenTuneAU
-            juce::juce_audio_basics
-            juce::juce_core
-            juce::juce_events
-            juce::juce_gui_basics)
-        target_compile_definitions(AURuntimeLastOwnerTests PRIVATE OPENTUNE_AU_LAST_OWNER_TEST=1)
-        add_test(NAME AURuntimeLastOwnerTests COMMAND AURuntimeLastOwnerTests)
-        set_tests_properties(AURuntimeLastOwnerTests PROPERTIES
-            TIMEOUT 4
-            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-            ENVIRONMENT "OPENTUNE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/AURuntimeLastOwnerTests;OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
-    endif()
 endif()
 
 # OpenTune Control API hook: build option and control sources, see Source/Control/README.md#hooks

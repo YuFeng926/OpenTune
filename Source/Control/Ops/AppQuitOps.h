@@ -6,7 +6,7 @@ namespace OpenTune {
 class ControlMethodTable;
 
 /**
- * Registers app.quit (capability app.quit; methods/app.quit.schema.json).
+ * Registers app.quit (capability app.quit).
  *
  * The call ends OpenTune the way the window's close button does (the JUCE Standalone window: the plug-in state is
  * saved, then the application quits through JUCEApplicationBase::quit()), so the normal shutdown runs: the control
@@ -19,8 +19,8 @@ class ControlMethodTable;
  *    close the window (ControlUiBridge::canQuit()): only the editor's window can end the Standalone application;
  * 3. BUSY, the five reasons of every write (controlCheckBusy()) and then any job that is not finished: its kind says
  *    the reason (import: import_in_progress, export: export_in_progress, projectOpen, projectSave and projectCopy:
- *    project_operation, any other kind: job_in_progress); with several jobs the reasons of section 13.2 come first, in
- *    the order of that section, and job_in_progress last. BUSY comes before UNSAVED_CHANGES: the user's open dialog
+ *    project_operation, any other kind: job_in_progress); with several jobs the specific reasons come first in the
+ *    order import, export, project operation, and job_in_progress last. BUSY comes before UNSAVED_CHANGES: the user's open dialog
  *    or running operation must not be answered with a question about what to discard;
  * 4. UNSAVED_CHANGES(project_dirty) when the project has unsaved changes and discardUnsaved is not true. The flag is
  *    the one that project.open checks (ProjectSession::isDirty(), read through ControlUiBridge::projectInfo()).

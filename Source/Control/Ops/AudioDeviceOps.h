@@ -6,8 +6,7 @@ namespace OpenTune {
 class ControlMethodTable;
 
 /**
- * Registers audio.get and audio.set (capability audio.device; methods/audio.get.schema.json and
- * methods/audio.set.schema.json).
+ * Registers audio.get and audio.set (capability audio.device).
  *
  * Both work on the Standalone application's audio device manager, which only the editor owns and which they reach
  * through ControlUiBridge::audioDevice(); they repeat the steps of OpenTune's audio settings page
