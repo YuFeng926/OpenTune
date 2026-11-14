@@ -367,7 +367,7 @@
       "code": "undo_unsafe_build",
       "scope": "UNSUPPORTED",
       "since": "1.0",
-      "description": "The top undo (or redo) entry is a clip split, merge or delete, which OpenTune cannot undo correctly; this API refuses to apply it."
+      "description": "The top undo (or redo) entry is a clip delete, which OpenTune cannot undo correctly; this API refuses to apply it."
     },
     {
       "code": "upstream_absent",

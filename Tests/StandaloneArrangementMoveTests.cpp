@@ -283,6 +283,38 @@ bool testUnchangedMoveDoesNotPublish()
         && arrangement.loadPlaybackSnapshot()->epoch == before;
 }
 
+bool testInsertPlacementUsesActiveIndex()
+{
+    StandaloneArrangement arrangement;
+    auto retired = makePlacement(5, 0.0);
+    auto first = makePlacement(6, 2.0);
+    auto second = makePlacement(7, 4.0);
+    if (!arrangement.insertPlacement(0, retired)
+        || !arrangement.insertPlacement(0, first)
+        || !arrangement.insertPlacement(0, second)
+        || !arrangement.retirePlacement(0, retired.placementId))
+        return false;
+
+    auto middle = makePlacement(8, 3.0);
+    auto last = makePlacement(9, 6.0);
+    if (!arrangement.insertPlacement(0, 1, middle)
+        || !arrangement.insertPlacement(0, 3, last))
+        return false;
+
+    const std::vector<uint64_t> expected{first.placementId, middle.placementId,
+                                         second.placementId, last.placementId};
+    if (arrangement.getNumPlacements(0) != static_cast<int>(expected.size()))
+        return false;
+    for (int index = 0; index < static_cast<int>(expected.size()); ++index) {
+        StandaloneArrangement::Placement placement;
+        if (!arrangement.getPlacementByIndex(0, index, placement)
+            || placement.placementId != expected[static_cast<size_t>(index)]
+            || arrangement.findPlacementIndexById(0, placement.placementId) != index)
+            return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -293,7 +325,8 @@ int main()
         && testTrimmedSliceDoesNotInheritAcrossSourceGap()
         && testOverlappingIndependentPlacementDoesNotBreakInheritance()
         && testFullWindowRetainsAuthoritativeSourceEnd()
-        && testIdentityAndNonIdentityNeverShareGeometry();
+        && testIdentityAndNonIdentityNeverShareGeometry()
+        && testInsertPlacementUsesActiveIndex();
     if (!passed)
         std::cerr << "StandaloneArrangementMoveTests failed\n";
     return passed ? 0 : 1;

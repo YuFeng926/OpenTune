@@ -2,6 +2,12 @@
 
 All notable changes to the OTCP specification are recorded here. Versions follow `MAJOR.MINOR.PATCH` (README.md, "Versions"); each released version is tagged `spec-v<version>`.
 
+## Unreleased
+
+### Changed
+
+- `arrangement.edit` split and merge operations are safely undoable and redoable with their original placement IDs retained and revived. Clip deletion remains unsafe and retains its confirmation requirement and `UPSTREAM_UNDO_DEFECT` and `IRREVERSIBLE` warnings.
+
 ## [1.0.0] - 2026-11-01
 
 First release of protocol major 1. The text is that of `1.0.0-rc.9`, except for the status, four sentences that referred to the release candidate and one example (below). The wire version stays `1.0`, and no method, param, result member, capability, error kind, reason or warning is added, removed or changed, so a client or server of rc.9 is a client or server of 1.0.0. From this version on, the rules of PROTOCOL.md section 2 apply to every change: a patch changes only wording, examples and vectors, a minor version only adds, and a removal, a rename or a change of meaning or unit needs a new major version.

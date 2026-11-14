@@ -247,7 +247,7 @@ void afterChange(ControlOpContext& context)
         bridge->onStructureChanged();
 }
 
-/** The revert recipe of a split or a merge: arrangement.edit with the one op, at the arrangement as it is now. null
+/** A revert recipe using one arrangement.edit op at the current arrangement revision. null
     when the instance does not report arrangement.v1 (PROTOCOL.md section 15.2 rule 2). */
 JsonValue editRecipe(ControlOpContext& context, JsonValue op, bool requiresConsent)
 {
@@ -685,7 +685,6 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
             data.appendMember("appliedTimelineSec", controlJsonSeconds(point.value()));
             envelope.addWarning("SPLIT_SNAPPED", placementRef(clip.placementId), std::move(data));
         }
-        envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(clip.placementId));
     };
     if (params.dryRun) {
         // The two new clips get their placementIds when they are made; the prediction names the clip they replace.
@@ -709,7 +708,7 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     std::vector<ControlOriginAction::Inner> inner;
     inner.push_back(
         innerOf(std::make_unique<SplitPlacementAction>(processor, *outcome), "SplitPlacementAction", {clip.trackId}));
-    pushEntry(context, history, std::move(inner));
+    const auto pushed = pushEntry(context, history, std::move(inner));
     afterChange(context);
 
     const auto after = controlLivePlacements(context);
@@ -720,11 +719,7 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     const auto trailing = controlPlacementId(context, outcome->trailingPlacementId);
     addIdMapEntry(envelope, "split", {clip.placementId}, {leading, trailing});
     addWarnings();
-    auto merge = JsonValue::object();
-    merge.appendMember("op", JsonValue::string("merge"));
-    merge.appendMember("leadingPlacementId", JsonValue::string(leading));
-    merge.appendMember("trailingPlacementId", JsonValue::string(trailing));
-    envelope.setNotUndoable("upstream_undo_defect", editRecipe(context, std::move(merge), false));
+    envelope.setUndoable(pushed.undoId, pushed.description, pushed.names);
     return envelope.committed(context);
 }
 
@@ -748,7 +743,6 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     };
     if (params.dryRun) {
         addRemoved();
-        envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(leading.placementId));
         return envelope.predicted(context);
     }
 
@@ -766,7 +760,7 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     std::vector<ControlOriginAction::Inner> inner;
     inner.push_back(innerOf(std::make_unique<MergePlacementAction>(processor, *outcome), "MergePlacementAction",
                             {leading.trackId}));
-    pushEntry(context, history, std::move(inner));
+    const auto pushed = pushEntry(context, history, std::move(inner));
     afterChange(context);
 
     const auto after = controlLivePlacements(context);
@@ -774,51 +768,7 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     addCreatedClip(envelope, after, outcome->mergedPlacementId);
     const auto merged = controlPlacementId(context, outcome->mergedPlacementId);
     addIdMapEntry(envelope, "merge", {leading.placementId, trailing.placementId}, {merged});
-    envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(leading.placementId));
-    // Splitting the merged clip at the former boundary takes it back, with new placementIds, but a split snaps to an
-    // analysis frame boundary. checkSplit() takes an absolute timeline position (as runSplit() passes it) and says
-    // where the cut would fall on the merged clip:
-    //  - it cuts elsewhere than the boundary: no request restores the former clips (PROTOCOL.md section 15.2), so
-    //    IRREVERSIBLE with no revert;
-    //  - the check fails for a lasting reason (time grid edited, boundary near an edge, ...): the split cannot be
-    //    done either, IRREVERSIBLE with the check's kind and reason in data;
-    //  - the check fails with NOT_READY (the pitch analysis of the merged content is still pending): a passing
-    //    state, so the split recipe is given as usual and answers NOT_READY itself until the analysis is done.
-    //    That recipe is optimistic: the cut point could not be checked yet, so once the analysis is ready the split
-    //    may snap to another frame than the former boundary (the split then reports SPLIT_SNAPPED) or be refused
-    //    (split_out_of_range). It is not guaranteed to restore the former clips' boundary.
-    const double boundary = trailing.placement.timelineStartSeconds;
-    const auto* mergedClip = findIn(after, outcome->mergedPlacementId);
-    bool giveRecipe = false;
-    std::string cutKind;
-    std::string cutReason;
-    if (mergedClip != nullptr) {
-        const auto cut = checkSplit(context, *mergedClip, boundary);
-        if (cut.ok()) {
-            giveRecipe = std::abs(cut.value() - boundary) <= kSplitComparisonTolerance;
-        } else {
-            const auto reply = controlMapError(cut.error());
-            cutKind = reply.kind;
-            cutReason = reply.reason;
-            giveRecipe = cutKind == "NOT_READY";
-        }
-    }
-    if (giveRecipe) {
-        auto split = JsonValue::object();
-        split.appendMember("op", JsonValue::string("split"));
-        split.appendMember("placementId", JsonValue::string(merged));
-        split.appendMember("atTimelineSec", controlJsonSeconds(boundary));
-        envelope.setNotUndoable("upstream_undo_defect", editRecipe(context, std::move(split), false));
-    } else {
-        auto data = JsonValue::object();
-        data.appendMember("reason", JsonValue::string("split_cannot_restore_boundary"));
-        if (!cutKind.empty()) {
-            data.appendMember("checkKind", JsonValue::string(cutKind));
-            data.appendMember("checkReason", JsonValue::string(cutReason));
-        }
-        envelope.addWarning("IRREVERSIBLE", placementRef(merged), std::move(data));
-        envelope.setNotUndoable("upstream_undo_defect");
-    }
+    envelope.setUndoable(pushed.undoId, pushed.description, pushed.names);
     return envelope.committed(context);
 }
 

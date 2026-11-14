@@ -1,3 +1,71 @@
+#if defined(OPENTUNE_AU_LAST_OWNER_TEST)
+
+#include <juce_gui_basics/juce_gui_basics.h>
+#include "Runtime/ProcessRenderRuntime.h"
+#include "LifecycleTestTrace.h"
+#include "LifecycleWatchdog.h"
+#include "LifecycleMessagePump.h"
+#include <cstdio>
+#include <atomic>
+
+namespace
+{
+bool checkOwnerLifecycle(bool value, const char* reason)
+{
+    if (!value)
+        std::fprintf(stderr,
+                     "{\"event\":\"au_last_owner_lifecycle\",\"result\":\"failure\",\"reason\":\"%s\"}\n",
+                     reason);
+    return value;
+}
+}
+
+int main()
+{
+    juce::ScopedJuceInitialiser_GUI juceInitialiser;
+    auto& runtime = OpenTune::ProcessRenderRuntime::getInstance();
+    auto* messageManager = juce::MessageManager::getInstance();
+    const bool onMessageThread = messageManager->isThisTheMessageThread();
+    const int ownersBeforeRetain = runtime.ownerCount();
+    runtime.retainOwner();
+    const int ownersAfterRetain = runtime.ownerCount();
+    const bool workerStarted = runtime.isControlWorkerJoinable();
+
+    runtime.releaseOwner();
+    const int ownersAfterRelease = runtime.ownerCount();
+    const bool workerAwaitingFinalJoin = runtime.isControlWorkerJoinable();
+    std::atomic<bool> workerJoinedAtMessageBarrier{false};
+    std::atomic<bool> messageBarrierDispatched{false};
+    juce::MessageManager::callAsync([&runtime, &workerJoinedAtMessageBarrier, &messageBarrierDispatched] {
+        workerJoinedAtMessageBarrier.store(!runtime.isControlWorkerJoinable(), std::memory_order_release);
+        messageBarrierDispatched.store(true, std::memory_order_release);
+    });
+    const bool messagesDispatched = OpenTuneTest::dispatchMessagesUntil(
+        [&messageBarrierDispatched] { return messageBarrierDispatched.load(std::memory_order_acquire); },
+        static_cast<int>(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs - 500));
+
+    bool passed = true;
+    passed = checkOwnerLifecycle(messagesDispatched, "message_barrier_not_dispatched") && passed;
+    passed = checkOwnerLifecycle(onMessageThread, "owner_transition_not_on_message_thread") && passed;
+    passed = checkOwnerLifecycle(ownersBeforeRetain == 0, "initial_owner_count_not_zero") && passed;
+    passed = checkOwnerLifecycle(ownersAfterRetain == 1, "retain_did_not_create_single_owner") && passed;
+    passed = checkOwnerLifecycle(workerStarted, "AU_control_worker_not_started") && passed;
+    passed = checkOwnerLifecycle(ownersAfterRelease == 0, "last_owner_release_not_zero") && passed;
+    passed = checkOwnerLifecycle(workerAwaitingFinalJoin, "worker_joined_before_message_completion") && passed;
+    passed = checkOwnerLifecycle(workerJoinedAtMessageBarrier.load(std::memory_order_acquire),
+                                 "last_owner_worker_not_joined") && passed;
+    OpenTuneTest::trace("AURuntimeLastOwnerTests", "owner_transition", {
+        {"ownersBeforeRetain", OpenTuneTest::jsonNumber(ownersBeforeRetain)},
+        {"ownersAfterRetain", OpenTuneTest::jsonNumber(ownersAfterRetain)},
+        {"ownersAfterRelease", OpenTuneTest::jsonNumber(ownersAfterRelease)},
+        {"workerAwaitingFinalJoin", workerAwaitingFinalJoin ? "true" : "false"},
+        {"workerJoinedAtMessageBarrier", workerJoinedAtMessageBarrier.load(std::memory_order_acquire) ? "true" : "false"}
+    });
+    return passed ? 0 : 1;
+}
+
+#else
+
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
 #include <ARA_Library/Dispatch/ARAHostDispatch.h>
@@ -591,3 +659,5 @@ int main(int argc, char** argv)
 {
     return OpenTuneTest::run(argc, argv, "ARALifecycleContractTests", runChild);
 }
+
+#endif

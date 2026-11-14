@@ -342,8 +342,9 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
 - **Undo identification.** `edit.undo` and `edit.redo` apply the top entry only when it is the entry the
   client names (`expectedUndoId`), else `UNDO_CONFLICT(top_mismatch)` and nothing changes, so a client never
   undoes the user's edit by accident; `force` (only on the end user's explicit request) applies whatever is
-  on top. An empty history is `UNDO_CONFLICT(history_empty)`; a clip split, merge or delete on top is
-  `UNSUPPORTED(undo_unsafe_build)`, also with `force` (OpenTune frees what their undo needs).
+  on top. Split and merge actions retain the affected placement objects, so undo/redo restores them with their
+  original `placementId`s. An empty history is `UNDO_CONFLICT(history_empty)`; a clip deletion on top is
+  `UNSUPPORTED(undo_unsafe_build)`, also with `force` (OpenTune frees what its undo needs).
 - **Entries made in the UI** have no `undoId` until a call with `force` applies one; `ControlHistory` then
   gives it one and recognises it by its object, class, description and position in the history. OpenTune's
   history has no identity of its own for entries: if the user discards such an entry in the UI and makes
@@ -1067,7 +1068,11 @@ the trailing clip of a merge, the slot of `toTrackId`), then busy, then `expecte
   and projects that value to a canonical sample address inside the audio buffer. Both parts remain longer than 0.1 s.
   `merge` requires a shared native source identity and exactly adjacent authoritative source windows. It checks what `mergePlacements()` checks before
   it changes anything (`merge_not_possible`, `NOT_READY` while an analysis runs) and reports its later refusals the same
-  way. `delete` needs `confirm` (`confirm_required`) and removes the clips with `deletePlacement()`, in one undo entry.
+  way. `delete` needs `confirm` (`confirm_required`) and removes the clips with `deletePlacement()`; its undo-history
+  entry is unsafe and cannot be applied.
+- `SplitPlacementAction` and `MergePlacementAction` retain the affected placement objects across reclamation. Undo/redo
+  restores the same placements under their original `placementId`s, so these entries remain safe and use the normal
+  `edit.undo` / `edit.redo` steps.
 - `dryRun` predicts the changes and warnings without changing anything; a split or merge prediction names the clips it
   replaces, since the new clips get their placementIds when they are made.
 - `split` (two clips) and `merge` (one clip), not their `dryRun`, and not when a check refuses them, and the copy
@@ -1082,13 +1087,12 @@ clip as it is). The contents are made first, so a failure leaves the arrangement
 distances from the earliest one. As in the UI there is no undo entry (`ui_parity`); the revert recipe deletes the
 copies with `arrangement.edit` and `requiresConsent`. A copy at the source's own start carries `STACKED_ON_SOURCE`.
 
-OpenTune behaviours that the methods report and do not fix:
+Known OpenTune behaviours, reported as they are:
 
-- The undo actions of split, merge and delete (`SplitPlacementAction`, `MergePlacementAction`,
-  `DeletePlacementAction`) do not bring the clips back: the clips they would restore are reclaimed on the next message
-  turn. The API marks these entries unsafe (`edit.undo` refuses them with `UNSUPPORTED(undo_unsafe_build)`), reports
-  `UPSTREAM_UNDO_DEFECT` and gives a revert recipe instead: merge the two parts of a split, split a merged clip at the
-  former boundary. A delete has no revert recipe (`IRREVERSIBLE`).
+- `SplitPlacementAction` and `MergePlacementAction` retain the placements they need across reclamation, so undo and redo
+  restore the original placement IDs. `DeletePlacementAction` does not retain a deleted clip; reclamation on the next
+  message turn makes its undo unsafe. The API refuses that deletion entry with `UNSUPPORTED(undo_unsafe_build)`, also
+  with `force`, reports `UPSTREAM_UNDO_DEFECT`, and provides no revert recipe; the result carries `IRREVERSIBLE`.
 - `deletePlacement()` retires the content of a deleted clip even when another clip still shows it; `removed` lists the
   contents that left the project.
 
@@ -1851,7 +1855,8 @@ as the UI pushes them (the upstream actions, unwrapped). `Undo` covers undo and 
 states (also with OpenTune's own `UndoManager::undo()`, as the UI's Ctrl+Z), `top_mismatch` with the user's edit left
 intact, `force` and the undoIds of UI entries, the redo through the revert recipe, changes without an undo entry
 (`UNDO_NO_EFFECT`, the cleared redo history, the later key kept), a full history whose entries moved (the undoId of a UI
-entry is no longer confirmed), a clip split on top and a project opened since; `SetKey` the key aspect only, the revert
+entry is no longer confirmed), a UI clip split undone and redone with its original placement IDs after reclamation,
+and a project opened since; `SetKey` the key aspect only, the revert
 recipe round trip, `key_changed`, the no-op, the UI's scale and the readiness gate; `AutoTune` the hand-computed removed
 and dropped notes, created notes inside the range and in key, several ranges as one step, `dryRun` (its `sideEffects`
 equal those of the commit, for `regenerate` and `notesOnly`), the params defaults and the checks before the change (also
@@ -1925,10 +1930,10 @@ tracks, busy flags, dirty flag, notifications). `Arrangement` runs every op of `
 hidden track, a no-op), trims (both edges, the refusals, `FADES_RECLAMPED`), gain and fades (`CLAMPED`),
 several ops in one undo entry, a failing later op that changes
 nothing, `dryRun`, the order of the checks, an unrelated change that keeps the revision, the params, split (the
-refusals, `SPLIT_SNAPPED`) with its revert recipe and the merge's, the merge refusals, and delete (`confirm`, the
-removed contents, the refused undo). `ArrangementUndo` undoes and redoes a trim that
-shortened the fades, undoes a call of several ops, and checks the refused undo of a split and its revert
-recipe. `ArrangementCopy` runs both modes (gain and fades copied, the revert recipe sent with consent, a hidden
+refusals, `SPLIT_SNAPPED`) and merge (including their refusals), and delete (`confirm`, the removed contents,
+`UPSTREAM_UNDO_DEFECT`, `IRREVERSIBLE`, and refusal of its unsafe undo entry). `ArrangementUndo` undoes and redoes a trim
+that shortened the fades, undoes a call of several ops, and undoes and redoes split and merge after reclamation with
+their original placement IDs. `ArrangementCopy` runs both modes (gain and fades copied, the revert recipe sent with consent, a hidden
 track, several sources), the tokens and the checks. `ArrangementVectors` runs every `arrangement/*` vector and
 `track/delete-arrangement-changed`; all of them must pass. `ClipIdSkip` tests `controlSkipUsedClipIds()` on the
 repository itself (nothing at epoch 0 or for 0 clips, ids with holes, runs of free ids for one, two and three clips, a

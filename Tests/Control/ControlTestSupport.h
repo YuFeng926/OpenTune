@@ -843,7 +843,8 @@ public:
         }
         if (expected.isArray()) {
             if (!actual.isArray() || actual.size() != expected.size()) {
-                failure = where + ": array of another length";
+                failure = where + ": expected array length " + std::to_string(expected.size())
+                    + ", got " + (actual.isArray() ? std::to_string(actual.size()) : "non-array");
                 return false;
             }
             for (std::size_t i = 0; i < expected.size(); ++i)

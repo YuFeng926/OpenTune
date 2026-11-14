@@ -640,6 +640,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     // Pure in-memory state is safe to expose before runtime initialization.
 #if JucePlugin_Build_Standalone
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
+    undoManager_.setHistoryPrunedCallback([this] { scheduleReclaimSweep(); });
 #endif
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
     // OpenTune Control API hook: the service starts after this constructor, guarded by its liveness token, see Source/Control/README.md#hooks
@@ -3268,12 +3269,15 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
 
     const auto retiredPlacements = standaloneArrangement_->getRetiredPlacements();
     for (const auto& entry : retiredPlacements) {
+        if (undoManager_.retainsRetiredPlacement(entry.trackId, entry.placementId))
+            continue;
         standaloneArrangement_->deletePlacementById(entry.trackId, entry.placementId, nullptr, nullptr);
     }
 
     const auto retiredClips = standaloneContentRepository_->getRetiredClips();
     for (const auto& key : retiredClips) {
-        if (standaloneArrangement_->referencesContentAnyState(key)) {
+        if (standaloneArrangement_->referencesContentAnyState(key)
+            || undoManager_.retainsRetiredContent(key)) {
             continue;
         }
 

@@ -519,14 +519,50 @@ void checkUserEditOnTop(EditFixture& f)
     CONTROL_CHECK(memberOf(memberOf(f.history(), "undoTop"), "undoId").text() == uiId);
 }
 
-/** A clip split on top is refused, also with force (UNSUPPORTED(undo_unsafe_build)); the history says so. */
-void checkUnsafeTop(EditFixture& f)
+/** A UI split remains undoable through the API, including the forced step needed for an entry without an id. */
+void checkUiSplitUndo(EditFixture& f)
 {
+    auto* arrangement = f.processor->getStandaloneArrangement();
+    StandaloneArrangement::Placement original;
+    if (!CONTROL_CHECK(arrangement->getPlacementById(0, f.clip.placementId, original)))
+        return;
     CONTROL_CHECK(pushUiSplit(*f.processor, 0));
+    StandaloneArrangement::Placement left;
+    StandaloneArrangement::Placement right;
+    CONTROL_CHECK(arrangement->getNumPlacements(0) == 2 && arrangement->getPlacementByIndex(0, 0, left)
+                  && arrangement->getPlacementByIndex(0, 1, right));
     const auto top = memberOf(f.history(), "undoTop");
-    CONTROL_CHECK(memberOf(top, "unsafe").asBoolean() && memberOf(top, "origin").text() == "ui");
-    CONTROL_CHECK(f.api.fails("edit.undo", jsonOf(R"({"force":true})"), "UNSUPPORTED", "undo_unsafe_build"));
-    CONTROL_CHECK(memberOf(f.history(), "undoCount").asDouble() >= 1);
+    CONTROL_CHECK(memberOf(top, "origin").text() == "ui" && !memberOf(top, "unsafe").asBoolean()
+                  && memberOf(top, "undoId").isNull());
+
+    const auto samePlacement = [](const StandaloneArrangement::Placement& actual,
+                                  const StandaloneArrangement::Placement& expected) {
+        return actual.placementId == expected.placementId && actual.contentKey == expected.contentKey
+               && actual.timelineStartSeconds == expected.timelineStartSeconds
+               && actual.durationSeconds == expected.durationSeconds && actual.clipInSeconds == expected.clipInSeconds
+               && actual.gain == expected.gain && actual.fadeInDuration == expected.fadeInDuration
+               && actual.fadeOutDuration == expected.fadeOutDuration;
+    };
+    f.processor->runReclaimSweepOnMessageThread();
+    const auto undone = f.api.result("edit.undo", jsonOf(R"({"force":true})"));
+    const auto uiId = memberOf(memberOf(undone, "entry"), "undoId").text();
+    StandaloneArrangement::Placement restored;
+    CONTROL_CHECK(memberOf(undone, "applied").asBoolean() && !uiId.empty()
+                  && arrangement->getPlacementById(0, original.placementId, restored)
+                  && samePlacement(restored, original)
+                  && !arrangement->getPlacementById(0, left.placementId, restored)
+                  && !arrangement->getPlacementById(0, right.placementId, restored));
+
+    f.processor->runReclaimSweepOnMessageThread();
+    const auto redone = f.undo(uiId, "edit.redo");
+    StandaloneArrangement::Placement restoredLeft;
+    StandaloneArrangement::Placement restoredRight;
+    CONTROL_CHECK(memberOf(redone, "applied").asBoolean()
+                  && arrangement->getPlacementById(0, left.placementId, restoredLeft)
+                  && samePlacement(restoredLeft, left)
+                  && arrangement->getPlacementById(0, right.placementId, restoredRight)
+                  && samePlacement(restoredRight, right)
+                  && !arrangement->getPlacementById(0, original.placementId, restored));
 }
 
 /** Opening a project clears OpenTune's history: undo then has nothing to undo, and old ids name nothing. */
@@ -679,7 +715,7 @@ void scenarioUndoImpl()
     checkUserEditOnTop(f);
     checkChangesWithoutEntry(f);
     const auto lastId = memberOf(memberOf(f.history(), "undoTop"), "undoId").text();
-    checkUnsafeTop(f);
+    checkUiSplitUndo(f);
     checkProjectOpenClearsHistory(f, lastId.empty() ? "u:01234567:1" : lastId);
     checkHistoryCapacityRule();
     checkFullHistory(f);
@@ -2428,7 +2464,7 @@ const char* const kMustRunEditVectors[] = {
     "edit/undo-no-effect-after-notes-only",
     "edit/undo-ok",
     "edit/undo-top-mismatch",
-    "edit/undo-unsafe-build",
+    "edit/undo-ui-split",
 };
 
 const std::set<std::string> kEditVectorMethods = {"edit.getHistory",       "edit.undo",        "edit.redo",

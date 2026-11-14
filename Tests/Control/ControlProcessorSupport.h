@@ -193,15 +193,8 @@ inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor, int timeoutM
  * Takes one owner of OpenTune's process-wide render runtime (ProcessRenderRuntime::retainOwner) for the rest of the
  * test process; startedProcessor() calls it before it constructs the first processor of a scenario.
  *
- * Why: the runtime shuts down whenever its last owner, a processor, goes away, and starts again with the next one.
- * That shutdown (releaseOwner, shutdownLocked) waits on workerExitCv_ under shutdownMutex_ until the control worker
- * has set workerExitDispatchAttempted_; the worker sets it and notifies without that mutex, so the notification can
- * fall between the waiter's check and its wait and be lost, and the destruction of the processor then never returns.
- * In the application the runtime starts once and shuts down at exit; a scenario that creates and destroys many
- * processors (those of the vectors) took that chance at every processor, and the slower timing under a thread
- * sanitizer makes the window wide enough to hit. With this owner the count never falls to zero between processors,
- * so no shutdown runs. It is never released, so that the test process never takes that chance either: the runtime's
- * control worker ends with the process.
+ * The process-scoped owner keeps the shared runtime retained between the processors of a scenario. The AU-specific
+ * owner-count shutdown and final join are exercised separately by AURuntimeLastOwnerTests, linked to OpenTuneAU.
  *
  * Only scenarios that start the control API take it: starting the runtime initialises OpenTune's logger (it logs
  * when a model file is missing), and the scenarios that construct a processor without the API (Disabled and the

@@ -10,7 +10,10 @@
  */
 #pragma once
 
+#include "../Content/ContentKey.h"
 #include <juce_core/juce_core.h>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -23,6 +26,16 @@ public:
     virtual void undo() = 0;
     virtual void redo() = 0;
     virtual juce::String getDescription() const = 0;
+    virtual bool retainsRetiredPlacement(int trackId, uint64_t placementId) const
+    {
+        juce::ignoreUnused(trackId, placementId);
+        return false;
+    }
+    virtual bool retainsRetiredContent(ContentKey key) const
+    {
+        juce::ignoreUnused(key);
+        return false;
+    }
 };
 
 class UndoManager {
@@ -33,13 +46,26 @@ public:
     bool canUndo() const;
     bool canRedo() const;
     void clear();
+    void setHistoryPrunedCallback(std::function<void()> callback)
+    {
+        historyPrunedCallback_ = std::move(callback);
+    }
+    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const;
+    bool retainsRetiredContent(ContentKey key) const;
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
     // OpenTune Control API hook: read the history and clear the redo history, see Source/Control/README.md#hooks
     UndoAction* peekUndo() const { return canUndo() ? actions_[static_cast<std::size_t>(cursor_ - 1)].get() : nullptr; }
     UndoAction* peekRedo() const { return canRedo() ? actions_[static_cast<std::size_t>(cursor_)].get() : nullptr; }
     int size() const { return static_cast<int>(actions_.size()); }
     int cursor() const { return cursor_; }
-    void clearRedo() { if (!isPerformingUndoRedo_) actions_.erase(actions_.begin() + cursor_, actions_.end()); }
+    void clearRedo()
+    {
+        if (!isPerformingUndoRedo_ && cursor_ < static_cast<int>(actions_.size())) {
+            actions_.erase(actions_.begin() + cursor_, actions_.end());
+            if (historyPrunedCallback_)
+                historyPrunedCallback_();
+        }
+    }
 #endif
 
 private:
@@ -47,6 +73,7 @@ private:
     int cursor_{0};  // 指向下一个可 redo 的位置（即当前栈顶 + 1）
     static constexpr int maxSize_{500};  // 最大历史层数
     bool isPerformingUndoRedo_{false};  // 防止 undo/redo 执行期间递归 addAction
+    std::function<void()> historyPrunedCallback_;
 };
 
 } // namespace OpenTune

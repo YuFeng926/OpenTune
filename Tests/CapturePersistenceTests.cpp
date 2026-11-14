@@ -1,7 +1,9 @@
 #include "../Source/Plugin/Capture/CaptureSession.h"
+#include "../Source/Utils/PitchCurve.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <vector>
 
@@ -9,6 +11,8 @@ namespace {
 
 using OpenTune::ContentKey;
 using OpenTune::DomainKind;
+using OpenTune::F0FrameRange;
+using OpenTune::PitchCurve;
 using OpenTune::Capture::CaptureSession;
 using OpenTune::Capture::ProcessorBindings;
 
@@ -26,6 +30,18 @@ std::shared_ptr<juce::AudioBuffer<float>> makeAudio(int samples)
     return audio;
 }
 
+bool sameRanges(const std::vector<F0FrameRange>& left, const std::vector<F0FrameRange>& right)
+{
+    if (left.size() != right.size())
+        return false;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        if (left[i].startFrame != right[i].startFrame
+            || left[i].endFrameExclusive != right[i].endFrameExclusive)
+            return false;
+    }
+    return true;
+}
+
 bool testEmptyArchive()
 {
     CaptureSession source({});
@@ -33,6 +49,24 @@ bool testEmptyArchive()
 
     CaptureSession restored({});
     return restored.deserialize(archive) && restored.listSegments().empty();
+}
+
+bool testErasedRangesRoundTrip()
+{
+    CaptureSession source({});
+    source.testInjectEditedSegment(0.0, 1.0, 11, makeAudio(256), 44100.0);
+    auto curve = std::make_shared<PitchCurve>();
+    curve->setOriginalF0(std::vector<float>(16, 220.0f));
+    const std::vector<F0FrameRange> expected{{3, 5}, {8, 12}};
+    curve->replaceErasedRangesInRange(0, 16, expected);
+    source.testSegments().front()->content->applyPitchCurve(std::move(curve));
+
+    const auto archive = source.serialize();
+    CaptureSession restored({});
+    if (!restored.deserialize(archive) || restored.testSegments().size() != 1)
+        return false;
+    const auto& pitchCurve = restored.testSegments().front()->content->content().analysis.pitchCurve;
+    return pitchCurve != nullptr && sameRanges(pitchCurve->getSnapshot()->getErasedRanges(), expected);
 }
 
 bool testReplaceRetireSemantics()
@@ -118,6 +152,12 @@ int main()
     if (!testEmptyArchive())
     {
         std::fputs("FAIL: empty capture archive\n", stderr);
+        return 1;
+    }
+
+    if (!testErasedRangesRoundTrip())
+    {
+        std::fputs("FAIL: capture erased F0 ranges serialize/deserialize\n", stderr);
         return 1;
     }
 

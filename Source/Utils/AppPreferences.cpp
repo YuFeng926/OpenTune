@@ -63,6 +63,10 @@ juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storag
     // OpenTune Control API hook: OPENTUNE_DATA_DIR replaces the per-user OpenTune folder, see Source/Control/README.md#hooks
     if (const auto dataDirectory = controlDataDirectory(); dataDirectory != juce::File{})
         return dataDirectory;
+#elif defined(OPENTUNE_LIFECYCLE_TEST_DATA_DIR)
+    const auto dataDirectory = juce::SystemStats::getEnvironmentVariable("OPENTUNE_DATA_DIR", {});
+    if (dataDirectory.isNotEmpty() && juce::File::isAbsolutePath(dataDirectory))
+        return juce::File(dataDirectory);
 #endif
 
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)

@@ -421,6 +421,8 @@ juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry
     if (!mat.correctionSegments.empty()) {
         tree.addChild(segmentsToValueTree(mat.correctionSegments), -1, nullptr);
     }
+    if (!mat.erasedRanges.empty())
+        tree.addChild(erasedRangesToValueTree(mat.erasedRanges), -1, nullptr);
 
     // TimeGrid
     tree.addChild(timeGridToValueTree(mat.timeGrid), -1, nullptr);
@@ -497,6 +499,7 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
 
     // CorrectedSegments
     m.correctionSegments = segmentsFromValueTree(tree.getChildWithName("CorrectedSegments"));
+    m.erasedRanges = erasedRangesFromValueTree(tree.getChildWithName("ErasedRanges"));
 
     // TimeGrid
     auto tgTree = tree.getChildWithName("TimeGrid");
@@ -755,6 +758,33 @@ std::vector<ProjectContentEntry::SegmentEntry> ProjectPersistence::segmentsFromV
         segments.push_back(seg);
     }
     return segments;
+}
+
+juce::ValueTree ProjectPersistence::erasedRangesToValueTree(const std::vector<F0FrameRange>& ranges)
+{
+    juce::ValueTree tree("ErasedRanges");
+    for (const auto& range : ranges) {
+        juce::ValueTree item("Range");
+        item.setProperty("startFrame", range.startFrame, nullptr);
+        item.setProperty("endFrameExclusive", range.endFrameExclusive, nullptr);
+        tree.addChild(item, -1, nullptr);
+    }
+    return tree;
+}
+
+std::vector<F0FrameRange> ProjectPersistence::erasedRangesFromValueTree(const juce::ValueTree& tree)
+{
+    std::vector<F0FrameRange> ranges;
+    if (!tree.isValid())
+        return ranges;
+    ranges.reserve(static_cast<size_t>(tree.getNumChildren()));
+    for (int i = 0; i < tree.getNumChildren(); ++i) {
+        const auto child = tree.getChild(i);
+        if (child.hasType("Range"))
+            ranges.push_back({static_cast<int>(child.getProperty("startFrame", 0)),
+                              static_cast<int>(child.getProperty("endFrameExclusive", 0))});
+    }
+    return ranges;
 }
 
 // ============================================================================

@@ -139,7 +139,7 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
                                   + " history is not the expected entry; the history changed since it was read");
     if (entry.unsafe)
         return controlOpError("UNSUPPORTED", "undo_unsafe_build",
-                              std::string("the top entry is a clip split, merge or delete, which OpenTune cannot ")
+                              std::string("the top entry deletes a clip, which OpenTune cannot ")
                                   + what + " correctly");
     // Rule 6: an entry the API recorded before a track deletion that moved a track it addresses is applied only with
     // force. An entry of the UI (which has an undoId here only because a call with force applied it before) is

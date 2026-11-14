@@ -465,8 +465,22 @@ bool StandaloneArrangement::insertPlacement(int trackId, int insertIndex, Placem
         nextPlacementId_ = juce::jmax(nextPlacementId_, placement.placementId + 1);
     }
 
-    insertIndex = juce::jlimit(0, static_cast<int>(track.placements.size()), insertIndex);
-    track.placements.insert(track.placements.begin() + insertIndex, placement);
+    int activePlacementCount = 0;
+    for (const auto& existing : track.placements)
+        if (!existing.isRetired)
+            ++activePlacementCount;
+    insertIndex = juce::jlimit(0, activePlacementCount, insertIndex);
+
+    int rawInsertIndex = 0;
+    int activeIndex = 0;
+    for (; rawInsertIndex < static_cast<int>(track.placements.size()); ++rawInsertIndex) {
+        if (track.placements[static_cast<size_t>(rawInsertIndex)].isRetired)
+            continue;
+        if (activeIndex == insertIndex)
+            break;
+        ++activeIndex;
+    }
+    track.placements.insert(track.placements.begin() + rawInsertIndex, placement);
     if (track.selectedPlacementId == 0) {
         track.selectedPlacementId = placement.placementId;
     }

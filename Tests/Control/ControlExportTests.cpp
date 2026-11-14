@@ -881,8 +881,12 @@ void scenarioExportFailures()
         int failedBlocks = 0;
         CONTROL_CHECK(pumpMessagesUntil(
             [&] {
-                if (const auto cache = renderService->getRenderCache(clip.key))
-                    failedBlocks += completePendingRender(*cache, false);
+                if (const auto cache = renderService->getRenderCache(clip.key)) {
+                    const int completed = completePendingRender(*cache, false);
+                    failedBlocks += completed;
+                    if (completed > 0)
+                        renderService->notifyWorkStateChanged();
+                }
                 return isTerminal(jobOf(service, jobId));
             },
             kDriveTimeoutMs));
@@ -924,7 +928,8 @@ void scenarioExportFailures()
             [&] {
                 // The render worker stays held back until the job writes, which waits for the worker
                 // (drainRenderWorker); meanwhile the scenario renders every block that is queued.
-                completePendingRender(*cache, true);
+                if (completePendingRender(*cache, true) > 0)
+                    renderService->notifyWorkStateChanged();
                 if (!resumed && memberOf(memberOf(jobOf(service, jobId), "progress"), "phase").text() == "writing") {
                     renderService->resumeRenderWorker();
                     resumed = true;
@@ -984,6 +989,7 @@ void scenarioExportFailures()
         const auto clip = addClip(*processor, media, "removed", 5, 0.0, 1.0, Analysis::Running);
         const auto jobId = startExport(api, clipParams(handles.placement(clip.placementId), outPath("removed.wav")));
         CONTROL_CHECK(processor->getStandaloneArrangement()->deletePlacementById(5, clip.placementId));
+        service.wakeJobs();
         const auto job = waitJob(api, jobId);
         CONTROL_CHECK(failedWith(job, "REVISION_CONFLICT", "changed_during_export"));
         CONTROL_CHECK(!juceFileOf(outPath("removed.wav")).exists() && !processor->isExportBusy());
@@ -996,6 +1002,7 @@ void scenarioExportFailures()
         const auto jobId = startExport(api, R"({"kind":"track","target":{"trackId":11},"path":)"
                                                 + quoted(outPath("vanishing.wav")) + "}");
         CONTROL_CHECK(processor->getStandaloneArrangement()->deletePlacementById(11, clip.placementId));
+        service.wakeJobs();
         const auto job = waitJob(api, jobId);
         CONTROL_CHECK(failedWith(job, "INVALID_ARGUMENT", "nothing_to_export"));
         CONTROL_CHECK(!memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());

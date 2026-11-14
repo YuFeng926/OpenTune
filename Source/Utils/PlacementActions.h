@@ -19,6 +19,8 @@ public:
     SplitPlacementAction(OpenTuneAudioProcessor& processor, const SplitOutcome& outcome);
     void undo() override;
     void redo() override;
+    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const override;
+    bool retainsRetiredContent(ContentKey key) const override;
     juce::String getDescription() const override { return LOC(kSplitClip); }
 
 private:
@@ -40,6 +42,8 @@ public:
     MergePlacementAction(OpenTuneAudioProcessor& processor, const MergeOutcome& outcome);
     void undo() override;
     void redo() override;
+    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const override;
+    bool retainsRetiredContent(ContentKey key) const override;
     juce::String getDescription() const override { return LOC(kMergeClips); }
 
 private:

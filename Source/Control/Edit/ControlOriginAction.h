@@ -97,11 +97,13 @@ public:
     void undo() override;
     void redo() override;
     juce::String getDescription() const override { return description_; }
+    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const override;
+    bool retainsRetiredContent(ContentKey key) const override;
 
     const std::string& undoId() const noexcept { return undoId_; }
     /** The class names of the inner actions, in order. */
     std::vector<std::string> innerActionNames() const;
-    /** True when an inner action is a clip split, merge or delete (section 15.4 rule 1). */
+    /** True when an inner action cannot safely restore a deleted clip. */
     bool unsafe() const;
     /** False when the last undo() or redo() applied none of the inner actions: every one was masked, or the
         pitch shift it puts back through commitPitchShiftEdit() applied nothing (see the class comment). The step
@@ -339,8 +341,7 @@ private:
     ControlPitchShiftLedger pitchShiftLedger_;
 };
 
-/** True for the undo actions OpenTune cannot undo correctly: a clip split, merge or delete
-    (SplitPlacementAction, MergePlacementAction, DeletePlacementAction; section 15.4 rule 1). */
+/** True for the undo action OpenTune cannot undo correctly: DeletePlacementAction (section 15.4 rule 1). */
 bool controlIsUnsafeUndoAction(const UndoAction& action);
 
 /** The OpenTune class name of an upstream undo action, for innerActions ("UndoAction" when unknown). */

@@ -1,0 +1,218 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-split-undo-redo",
+  "type": "scenario",
+  "description": "A split through arrangement.edit is recorded as safe. edit.getHistory reports unsafe false, then edit.undo restores the original placement identity and edit.redo revives the split placements with their original IDs (PROTOCOL.md sections 15.3 and 15.4).",
+  "capability": "arrangement.v1",
+  "extraCapabilities": ["history.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "arrangement.edit",
+        "params": {
+          "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+          "ops": [
+            {
+              "op": "split",
+              "placementId": { "$ref": "clip.placementId" },
+              "atTimelineSec": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "applied": true,
+          "created": [
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$capture": "left", "$any": "string" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$capture": "right", "$any": "string" } },
+              "label": { "$any": true }
+            }
+          ],
+          "removed": [
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "clip.placementId" } },
+              "label": { "$any": true }
+            }
+          ],
+          "undo": {
+            "undoable": true,
+            "undoId": { "$capture": "splitUndoId", "$any": "string" },
+            "description": { "$any": "string" },
+            "innerActions": ["SplitPlacementAction"],
+            "steps": 1
+          },
+          "warnings": []
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "edit.getHistory",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "history": {
+            "undoTop": {
+              "undoId": { "$ref": "splitUndoId" },
+              "origin": "control",
+              "possiblyStale": false,
+              "unsafe": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "edit.undo",
+        "params": { "expectedUndoId": { "$ref": "splitUndoId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "created": [
+            {
+              "entity": "content",
+              "ref": { "contentId": { "$ref": "clip.contentId" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "clip.placementId" } },
+              "label": { "$any": true }
+            }
+          ],
+          "removed": [
+            {
+              "entity": "content",
+              "ref": { "contentId": { "$any": "string" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "content",
+              "ref": { "contentId": { "$any": "string" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "left" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "right" } },
+              "label": { "$any": true }
+            }
+          ],
+          "warnings": [],
+          "entry": {
+            "undoId": { "$ref": "splitUndoId" },
+            "origin": "control",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "edit.redo",
+        "params": { "expectedUndoId": { "$ref": "splitUndoId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "applied": true,
+          "noOp": false,
+          "created": [
+            {
+              "entity": "content",
+              "ref": { "contentId": { "$any": "string" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "content",
+              "ref": { "contentId": { "$any": "string" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "left" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "right" } },
+              "label": { "$any": true }
+            }
+          ],
+          "removed": [
+            {
+              "entity": "content",
+              "ref": { "contentId": { "$ref": "clip.contentId" } },
+              "label": { "$any": true }
+            },
+            {
+              "entity": "placement",
+              "ref": { "placementId": { "$ref": "clip.placementId" } },
+              "label": { "$any": true }
+            }
+          ],
+          "warnings": [],
+          "entry": {
+            "undoId": { "$ref": "splitUndoId" },
+            "origin": "control",
+            "possiblyStale": false,
+            "unsafe": false
+          }
+        }
+      }
+    }
+  ]
+}

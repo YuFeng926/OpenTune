@@ -81,6 +81,10 @@ void AppLogger::initialize()
     // OpenTune Control API hook: OPENTUNE_DATA_DIR replaces the per-user OpenTune folder, see Source/Control/README.md#hooks
     if (const auto dataDirectory = controlDataDirectory(); dataDirectory != juce::File{})
         logDir = dataDirectory.getChildFile("Logs");
+#elif defined(OPENTUNE_LIFECYCLE_TEST_DATA_DIR)
+    const auto dataDirectory = juce::SystemStats::getEnvironmentVariable("OPENTUNE_DATA_DIR", {});
+    if (dataDirectory.isNotEmpty() && juce::File::isAbsolutePath(dataDirectory))
+        logDir = juce::File(dataDirectory).getChildFile("Logs");
 #endif
     if (!logDir.createDirectory()) {
         logDir = juce::File::getSpecialLocation(juce::File::tempDirectory)

@@ -7,6 +7,7 @@
 #include "../Source/Runtime/ProcessRenderRuntime.h"
 #include "LifecycleTestTrace.h"
 #include "LifecycleWatchdog.h"
+#include "LifecycleMessagePump.h"
 #include "../Source/Utils/TimeCoordinate.h"
 #include <juce_events/juce_events.h>
 #include <atomic>
@@ -172,7 +173,6 @@ private:
                 settled = transaction->acked.load(std::memory_order_acquire);
             }
             settled_.store(settled, std::memory_order_release);
-            juce::MessageManager::getInstance()->stopDispatchLoop();
         });
     }
 
@@ -964,12 +964,15 @@ int runChild(int argc, char** argv)
     probe.postFirstCommand();
     runtime.releaseOwner();
     probe.postSubsequentCommands();
-    juce::MessageManager::getInstance()->runDispatchLoop();
+    bool lifecyclePassed = true;
+    const bool messagesDispatched = OpenTuneTest::dispatchMessagesUntil(
+        [&probe] { return probe.settled(); },
+        static_cast<int>(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs - 500));
+    lifecyclePassed = checkLifecycle(messagesDispatched, "control_completion_not_dispatched") && lifecyclePassed;
 
     const auto workerIdentityAfterCommands =
         OpenTune::ProcessRenderRuntimeTestAccess::controlWorkerIdentity(runtime);
     const auto unchanged = static_cast<int>(OpenTune::ProcessRenderRuntime::ControlResult::Unchanged);
-    bool lifecyclePassed = true;
     lifecyclePassed = checkLifecycle(probe.firstCalls() == 1,
                                      "accepted_command_before_zero_owner_not_settled") && lifecyclePassed;
     lifecyclePassed = checkLifecycle(probe.firstResult() == unchanged,

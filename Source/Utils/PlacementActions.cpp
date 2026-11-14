@@ -31,6 +31,7 @@ void SplitPlacementAction::undo()
 
     // Revive the original
     repo->reviveClip(originalContentKey_);
+    processor_.requestFullContentRender(originalContentKey_);
     arrangement->revivePlacement(trackId_, originalPlacementId_);
 }
 
@@ -45,9 +46,23 @@ void SplitPlacementAction::redo()
 
     // Revive the two new ones
     repo->reviveClip(leadingContentKey_);
+    processor_.requestFullContentRender(leadingContentKey_);
     repo->reviveClip(trailingContentKey_);
+    processor_.requestFullContentRender(trailingContentKey_);
     arrangement->revivePlacement(trackId_, leadingPlacementId_);
     arrangement->revivePlacement(trackId_, trailingPlacementId_);
+}
+
+bool SplitPlacementAction::retainsRetiredPlacement(int trackId, uint64_t placementId) const
+{
+    return trackId == trackId_
+        && (placementId == originalPlacementId_ || placementId == leadingPlacementId_
+            || placementId == trailingPlacementId_);
+}
+
+bool SplitPlacementAction::retainsRetiredContent(ContentKey key) const
+{
+    return key == originalContentKey_ || key == leadingContentKey_ || key == trailingContentKey_;
 }
 
 // ============================================================================
@@ -77,7 +92,9 @@ void MergePlacementAction::undo()
 
     // Revive originals
     repo->reviveClip(leadingContentKey_);
+    processor_.requestFullContentRender(leadingContentKey_);
     repo->reviveClip(trailingContentKey_);
+    processor_.requestFullContentRender(trailingContentKey_);
     arrangement->revivePlacement(trackId_, leadingPlacementId_);
     arrangement->revivePlacement(trackId_, trailingPlacementId_);
 }
@@ -95,7 +112,20 @@ void MergePlacementAction::redo()
 
     // Revive merged
     repo->reviveClip(mergedContentKey_);
+    processor_.requestFullContentRender(mergedContentKey_);
     arrangement->revivePlacement(trackId_, mergedPlacementId_);
+}
+
+bool MergePlacementAction::retainsRetiredPlacement(int trackId, uint64_t placementId) const
+{
+    return trackId == trackId_
+        && (placementId == leadingPlacementId_ || placementId == trailingPlacementId_
+            || placementId == mergedPlacementId_);
+}
+
+bool MergePlacementAction::retainsRetiredContent(ContentKey key) const
+{
+    return key == leadingContentKey_ || key == trailingContentKey_ || key == mergedContentKey_;
 }
 
 // ============================================================================

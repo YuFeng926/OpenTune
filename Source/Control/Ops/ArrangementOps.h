@@ -15,13 +15,13 @@ namespace OpenTune {
  *   setGain (GainChangeAction) and setFade (FadeChangeAction). Every op is checked against a model of the arrangement
  *   first, so that a call that fails changes nothing; the ops then run in order and form one undo entry (a
  *   ControlOriginAction around OpenTune's actions). A trim records the clip's fades in a FadeChangeAction before the
- * trim when it shortens them, so that undoing it restores them (the UI's trim undo does not). split, merge and delete
- * call the processor functions of the arrangement view's keys (splitPlacementAtSeconds, mergePlacements,
- * deletePlacement) and push the same undo actions as the UI; OpenTune's reclaim sweep discards the retired clips on the
- * next message turn, so undoing them does not restore the clips: the result reports upstream_undo_defect, and edit.undo
- * refuses such an entry. A split's revert recipe merges the two clips again, a merge's splits the clip at the former
- * boundary; a deletion has none (IRREVERSIBLE) and needs confirm. With dryRun nothing changes and the result predicts
- * the in-place changes; for split and merge it names the clips that would be replaced, not the new ones.
+ *   trim when it shortens them, so that undoing it restores them (the UI's trim undo does not). Split and merge call the
+ *   processor functions of the arrangement view's keys (splitPlacementAtSeconds, mergePlacements) and push the same undo
+ *   actions as the UI; their retired placements and contents remain available while the actions are in history, so undo
+ *   and redo restore the original identities. Delete pushes the UI action and needs confirm; OpenTune frees the retired
+ *   clip before its undo can restore it, so the result reports upstream_undo_defect, edit.undo refuses the entry, and no
+ *   revert recipe is available (IRREVERSIBLE). With dryRun nothing changes and the result predicts the in-place changes;
+ *   for split and merge it names the clips that would be replaced, not the new ones.
  * - arrangement.copy (methods/arrangement.copy.schema.json) copies clips as pasting (mode window,
  *   OpenTuneAudioProcessor::copyContentRange()) and duplicating (mode full, cloneContent()) do: every copy gets a new
  *   content and keeps the gain and fades of its source. No undo entry, as in the UI (ui_parity); the revert recipe

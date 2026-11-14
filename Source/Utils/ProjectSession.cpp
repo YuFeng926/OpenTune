@@ -166,6 +166,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
                 segEntry.f0Data = seg.f0Data;
                 entry.correctionSegments.push_back(segEntry);
             }
+            entry.erasedRanges = pcSnap->getErasedRanges();
         }
 
         // TimeGrid: owner invariant 保证 timeGrid 恒非空，无条件写出
@@ -512,6 +513,14 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
                     static_cast<PitchCorrectionSegment::Source>(seg.source),
                     parameters);
             }
+        }
+        if (!contentEntry.erasedRanges.empty()) {
+            const auto endFrame = std::max_element(
+                contentEntry.erasedRanges.begin(), contentEntry.erasedRanges.end(),
+                [](const auto& a, const auto& b) {
+                    return a.endFrameExclusive < b.endFrameExclusive;
+                })->endFrameExclusive;
+            pitchCurve->replaceErasedRangesInRange(0, endFrame, contentEntry.erasedRanges);
         }
         clip->applyPitchCurve(pitchCurve);
 

@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "arrangement/edit-split-merge",
   "type": "scenario",
-  "description": "op merge joins the two clips a split made, as the split's revert recipe does. Merge has the same OpenTune undo defect as split (warning UPSTREAM_UNDO_DEFECT); its revert recipe splits the clip again at the former boundary.",
+  "description": "op merge joins the two clips a split made. Both operations are undoable and redoable through retained actions that restore or revive the original placement IDs, with no UPSTREAM_UNDO_DEFECT warning or revert recipe.",
   "capability": "arrangement.v1",
   "since": "1.0",
   "session": "authenticated",
@@ -65,7 +65,15 @@
               "$capture": "afterSplit",
               "$any": "string"
             }
-          }
+          },
+          "undo": {
+            "undoable": true,
+            "undoId": { "$capture": "splitUndoId", "$any": "string" },
+            "description": { "$any": "string" },
+            "innerActions": ["SplitPlacementAction"],
+            "steps": 1
+          },
+          "warnings": []
         }
       }
     },
@@ -124,29 +132,13 @@
             }
           ],
           "undo": {
-            "undoable": false,
-            "reason": "upstream_undo_defect",
-            "revert": {
-              "method": "arrangement.edit",
-              "params": {
-                "expectedArrangementRevision": { "$any": "string" },
-                "ops": [
-                  {
-                    "op": "split",
-                    "placementId": { "$any": "string" },
-                    "atTimelineSec": { "$approx": 5 }
-                  }
-                ]
-              }
-            }
+            "undoable": true,
+            "undoId": { "$any": "string" },
+            "description": { "$any": "string" },
+            "innerActions": ["MergePlacementAction"],
+            "steps": 1
           },
-          "warnings": [
-            {
-              "code": "UPSTREAM_UNDO_DEFECT",
-              "subject": { "placementId": { "$any": "string" } },
-              "data": null
-            }
-          ]
+          "warnings": []
         }
       }
     }

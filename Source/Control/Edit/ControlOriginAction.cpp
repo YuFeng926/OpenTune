@@ -58,6 +58,20 @@ void ControlOriginAction::redo()
     onRedoSide_ = false;
 }
 
+bool ControlOriginAction::retainsRetiredPlacement(int trackId, uint64_t placementId) const
+{
+    return std::any_of(inner_.begin(), inner_.end(), [trackId, placementId](const Inner& inner) {
+        return inner.action != nullptr && inner.action->retainsRetiredPlacement(trackId, placementId);
+    });
+}
+
+bool ControlOriginAction::retainsRetiredContent(ContentKey key) const
+{
+    return std::any_of(inner_.begin(), inner_.end(), [key](const Inner& inner) {
+        return inner.action != nullptr && inner.action->retainsRetiredContent(key);
+    });
+}
+
 bool ControlOriginAction::applyAndFollow(Inner& inner, bool undo)
 {
     const bool executed = apply(inner, undo);
@@ -377,10 +391,7 @@ void ControlHistory::remove(ControlOriginAction* action)
 
 bool controlIsUnsafeUndoAction(const UndoAction& action)
 {
-    // After these, OpenTune's reclaim sweep frees objects their undo needs (PROTOCOL.md section 15.4 rule 1).
-    return dynamic_cast<const SplitPlacementAction*>(&action) != nullptr
-           || dynamic_cast<const MergePlacementAction*>(&action) != nullptr
-           || dynamic_cast<const DeletePlacementAction*>(&action) != nullptr;
+    return dynamic_cast<const DeletePlacementAction*>(&action) != nullptr;
 }
 
 std::string controlUndoActionName(const UndoAction& action)

@@ -1309,6 +1309,13 @@ std::vector<PitchCorrectionSegment> segmentsOf(OpenTuneAudioProcessor& processor
     return snapshot->pitchCurve->getCorrectionSegments();
 }
 
+bool hasSingleErasedRange(const std::vector<F0FrameRange>& ranges, F0FrameRange expected)
+{
+    return ranges.size() == 1
+        && ranges.front().startFrame == expected.startFrame
+        && ranges.front().endFrameExclusive == expected.endFrameExclusive;
+}
+
 /** The corrected value of a frame in the segments; 0 where no segment covers it. */
 float segmentValueAt(const std::vector<PitchCorrectionSegment>& segments, int frame)
 {
@@ -1361,13 +1368,18 @@ bool setSegmentParameters(OpenTuneAudioProcessor& processor, const ContentKey& k
 bool completeReanalysis(OpenTuneAudioProcessor& processor, const ContentKey& key, const PitchCurveSnapshot& analysis)
 {
     auto* owner = processor.getStandaloneContentRepository()->findClip(key);
+    const auto current = processor.getContentSnapshot(key);
     const auto reopened = segmentsOf(processor, key);
-    if (owner == nullptr)
+    if (owner == nullptr || current == nullptr || current->pitchCurve == nullptr)
         return false;
+    const auto& erasedRanges = current->pitchCurve->getErasedRanges();
     auto curve = std::make_shared<PitchCurve>();
     curve->setHopSize(analysis.getHopSize());
     curve->setSampleRate(analysis.getSampleRate());
     curve->setOriginalF0(analysis.getOriginalF0());
+    if (!erasedRanges.empty())
+        curve->replaceErasedRangesInRange(
+            0, static_cast<int>(analysis.getOriginalF0().size()), erasedRanges);
     if (!reopened.empty()) {
         curve->replaceCorrectionSegments(reopened);
         // The same call, in the same order, as the production path in requestContentRefresh. It runs here, so the
@@ -1407,8 +1419,7 @@ void checkNotesEqual(const JsonValue& before, const JsonValue& after, bool expec
 } // namespace
 
 /**
- * A tuned project saved and opened again keeps the tuning: the correction segments with the four parameters they were
- * written with, the notes marked as corrected, and the corrected pitch line on the voiced frames of the tuned notes.
+ * A tuned project saved and opened again keeps its tuning and erased F0 ranges through reanalysis.
  *
  * Opening restores the segments while the original F0 is not yet analysed again (the curve is empty); upstream used
  * to drop every saved frame there, and the project came back with the red line only (upstream commit 0afb6c8 keeps
@@ -1433,13 +1444,26 @@ void scenarioProjectReopenKeepsTuning()
     ApiSession api;
     if (!api.open(service))
         return;
-    const auto placed = handlesAt(api, 2.0);
-    if (!CONTROL_CHECK(placed.has_value()))
-        return;
     const auto analysis = processor->getContentSnapshot(clip.key);
     if (!CONTROL_CHECK(analysis != nullptr && analysis->hasUsableOriginalF0()))
         return;
-    const auto analysedCurve = analysis->pitchCurve;
+    const F0FrameRange erasedRange{10, 15};
+    const std::vector<F0FrameRange> expectedErasedRanges{erasedRange};
+    auto curveWithErasures = PitchCurve::fromSnapshot(analysis->pitchCurve);
+    curveWithErasures->replaceErasedRangesInRange(
+        0, static_cast<int>(curveWithErasures->size()), expectedErasedRanges);
+    auto* owner = processor->getStandaloneContentRepository()->findClip(clip.key);
+    if (!CONTROL_CHECK(owner != nullptr))
+        return;
+    owner->applyPitchCurve(std::move(curveWithErasures));
+    const auto analysed = processor->getContentSnapshot(clip.key);
+    if (!CONTROL_CHECK(analysed != nullptr && analysed->pitchCurve != nullptr
+                       && hasSingleErasedRange(analysed->pitchCurve->getErasedRanges(), erasedRange)))
+        return;
+    const auto analysedCurve = analysed->pitchCurve;
+    const auto placed = handlesAt(api, 2.0);
+    if (!CONTROL_CHECK(placed.has_value()))
+        return;
 
     // Tune: move the first note and set the four parameters of the first two.
     const std::string ops = R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":65.5},)"
@@ -1454,6 +1478,9 @@ void scenarioProjectReopenKeepsTuning()
 
     const auto savedSegments = segmentsOf(*processor, clip.key);
     const auto savedTuning = readTuning(api, placed->contentId);
+    const auto beforeSave = processor->getContentSnapshot(clip.key);
+    CONTROL_CHECK(beforeSave != nullptr && beforeSave->pitchCurve != nullptr
+                  && hasSingleErasedRange(beforeSave->pitchCurve->getErasedRanges(), erasedRange));
     // The scenario can tell a tuned line from the red one: the notes are marked, and the lines differ in them.
     CONTROL_CHECK(!savedSegments.empty());
     for (int index = 0; index < 3; ++index)
@@ -1490,6 +1517,10 @@ void scenarioProjectReopenKeepsTuning()
     if (!CONTROL_CHECK(keys.size() == 1))
         return;
     const auto key = keys.front();
+    const auto restoredContent = processor->getContentSnapshot(key);
+    if (!CONTROL_CHECK(restoredContent != nullptr && restoredContent->pitchCurve != nullptr
+                       && hasSingleErasedRange(restoredContent->pitchCurve->getErasedRanges(), erasedRange)))
+        return;
 
     // Right after the open: the segments are there with their parameters and their corrected frames, before any
     // analysis has been done again.
@@ -1521,6 +1552,9 @@ void scenarioProjectReopenKeepsTuning()
         note("the analysis did not run (no F0 model): completing it with the F0 of the content before the save");
         CONTROL_CHECK(completeReanalysis(*processor, key, *analysedCurve));
     }
+    const auto reanalysed = processor->getContentSnapshot(key);
+    CONTROL_CHECK(reanalysed != nullptr && reanalysed->pitchCurve != nullptr
+                  && hasSingleErasedRange(reanalysed->pitchCurve->getErasedRanges(), erasedRange));
 
     // What the API reports now equals what it reported before the save.
     const auto now = handlesAt(api, 2.0);

@@ -239,6 +239,26 @@ std::string refAt(const JsonValue& result, const char* member, std::size_t index
     return memberOf(memberOf(list.at(index), "ref"), refMember).text();
 }
 
+/** The numeric id at the end of a placement or content handle, 0 for text that is not a handle. */
+std::uint64_t idOfHandle(const std::string& handle)
+{
+    const auto colon = handle.rfind(':');
+    if (colon == std::string::npos || colon + 1 >= handle.size())
+        return 0;
+    return std::strtoull(handle.c_str() + colon + 1, nullptr, 10);
+}
+
+bool samePlacement(const Located& actual, int trackId, const StandaloneArrangement::Placement& expected)
+{
+    return actual.trackId == trackId && actual.placement.placementId == expected.placementId
+           && actual.placement.contentKey == expected.contentKey
+           && near(actual.placement.timelineStartSeconds, expected.timelineStartSeconds)
+           && near(actual.placement.durationSeconds, expected.durationSeconds)
+           && near(actual.placement.clipInSeconds, expected.clipInSeconds) && near(actual.placement.gain, expected.gain)
+           && near(actual.placement.fadeInDuration, expected.fadeInDuration)
+           && near(actual.placement.fadeOutDuration, expected.fadeOutDuration);
+}
+
 // ---- Scenario: the ops of arrangement.edit ----------------------------------------------------------------
 
 void checkMoves(Fixture& f, const Clip& a, const Clip& b)
@@ -450,34 +470,18 @@ void checkSplitAndMerge(Fixture& f, const Clip& a, const Clip& c, const Clip& pe
 
     // Between two analysis frames: the cut snaps to the nearest one (SPLIT_SNAPPED).
     result = f.edit(f.op("split", c, "\"atTimelineSec\":23.004"));
-    CONTROL_CHECK(warningCodes(result) == "SPLIT_SNAPPED,UPSTREAM_UNDO_DEFECT");
+    CONTROL_CHECK(warningCodes(result) == "SPLIT_SNAPPED"
+                  && memberOf(memberOf(result, "undo"), "undoable").asBoolean());
     const auto snapped = memberOf(warningOf(result, "SPLIT_SNAPPED"), "data");
     CONTROL_CHECK(near(memberOf(snapped, "requestedTimelineSec"), 23.004)
                   && near(memberOf(snapped, "appliedTimelineSec"), 23.0));
     CONTROL_CHECK(entities(result, "created") == "placement,placement" && entities(result, "removed") == "placement"
                   && refAt(result, "removed", 0, "placementId") == f.pid(c));
     CONTROL_CHECK(memberOf(memberOf(result, "idMap").at(0), "relation").text() == "split");
-    const auto undo = memberOf(result, "undo");
-    CONTROL_CHECK(!memberOf(undo, "undoable").asBoolean() && memberOf(undo, "reason").text() == "upstream_undo_defect");
-    CONTROL_CHECK(memberOf(memberOf(f.history(), "undoTop"), "unsafe").asBoolean());
     const auto left = refAt(result, "created", 0, "placementId");
     const auto right = refAt(result, "created", 1, "placementId");
-
-    // The revert recipe merges the two clips again, and the merge's recipe splits the merged clip again.
-    const auto revert = memberOf(undo, "revert");
-    CONTROL_CHECK(memberOf(revert, "method").text() == "arrangement.edit"
-                  && memberOf(revert, "requiresConsent").isNull());
-    result = f.api.result("arrangement.edit", memberOf(revert, "params"));
-    CONTROL_CHECK(entities(result, "removed") == "placement,placement" && entities(result, "created") == "placement"
-                  && refAt(result, "removed", 0, "placementId") == left
-                  && refAt(result, "removed", 1, "placementId") == right);
-    CONTROL_CHECK(memberOf(memberOf(result, "idMap").at(0), "relation").text() == "merge"
-                  && warningCodes(result) == "UPSTREAM_UNDO_DEFECT");
-    const auto mergeRevert = memberOf(memberOf(result, "undo"), "revert");
-    const auto& split = memberOf(memberOf(mergeRevert, "params"), "ops").at(0);
-    CONTROL_CHECK(memberOf(split, "op").text() == "split" && near(memberOf(split, "atTimelineSec"), 23.0));
-    result = f.api.result("arrangement.edit", memberOf(mergeRevert, "params"));
-    CONTROL_CHECK(entities(result, "created") == "placement,placement");
+    const auto top = memberOf(f.history(), "undoTop");
+    CONTROL_CHECK(!memberOf(top, "unsafe").asBoolean());
 
     // Clips that cannot be merged: on different tracks, not adjacent, of different sources.
     const auto merge = [](const std::string& leading, const std::string& trailing) {
@@ -485,25 +489,15 @@ void checkSplitAndMerge(Fixture& f, const Clip& a, const Clip& c, const Clip& pe
                + ",\"trailingPlacementId\":" + quoted(trailing) + "}";
     };
     CONTROL_CHECK(f.editFails(merge(f.pid(a), f.pid(pending)), "INVALID_ARGUMENT", "merge_not_possible"));
-    const auto pieces = memberOf(result, "created");
-    const auto first = memberOf(memberOf(pieces.at(0), "ref"), "placementId").text();
-    const auto second = memberOf(memberOf(pieces.at(1), "ref"), "placementId").text();
-    CONTROL_CHECK(f.editFails(merge(second, first), "INVALID_ARGUMENT", "merge_not_possible"));
-    CONTROL_CHECK(f.editFails(merge(f.pid(a), first), "INVALID_ARGUMENT", "merge_not_possible"));
-    CONTROL_CHECK(f.editFails(merge(first, first), "INVALID_ARGUMENT", "merge_not_possible"));
+    CONTROL_CHECK(f.editFails(merge(right, left), "INVALID_ARGUMENT", "merge_not_possible"));
+    CONTROL_CHECK(f.editFails(merge(f.pid(a), left), "INVALID_ARGUMENT", "merge_not_possible"));
+    CONTROL_CHECK(f.editFails(merge(left, left), "INVALID_ARGUMENT", "merge_not_possible"));
 
-    // A merge whose former boundary the merged clip cannot be split at again (the leading part is trimmed to 0.05 s,
-    // less than the 0.1 s a split leaves on each side): IRREVERSIBLE and no revert recipe.
-    CONTROL_CHECK(
-        f.edit("{\"op\":\"trim\",\"placementId\":" + quoted(first) + ",\"edge\":\"start\",\"toTimelineSec\":22.95}")
-            .isObject());
-    result = f.edit(merge(first, second));
-    CONTROL_CHECK(warningCodes(result) == "UPSTREAM_UNDO_DEFECT,IRREVERSIBLE");
-    const auto irreversible = memberOf(warningOf(result, "IRREVERSIBLE"), "data");
-    CONTROL_CHECK(memberOf(irreversible, "reason").text() == "split_cannot_restore_boundary"
-                  && memberOf(irreversible, "checkReason").text() == "split_out_of_range");
-    CONTROL_CHECK(!memberOf(memberOf(result, "undo"), "undoable").asBoolean()
-                  && memberOf(memberOf(result, "undo"), "revert").isNull());
+    result = f.edit(merge(left, right));
+    CONTROL_CHECK(entities(result, "removed") == "placement,placement" && entities(result, "created") == "placement"
+                  && memberOf(memberOf(result, "idMap").at(0), "relation").text() == "merge"
+                  && warningCodes(result).empty() && memberOf(memberOf(result, "undo"), "undoable").asBoolean());
+    CONTROL_CHECK(!memberOf(memberOf(f.history(), "undoTop"), "unsafe").asBoolean());
 }
 
 void checkDelete(Fixture& f, const Clip& a, const Clip& b)
@@ -553,7 +547,7 @@ void checkSplitBetweenSamples(Fixture& f)
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     const auto result = f.edit(f.op("split", clip, "\"atTimelineSec\":0.10625"));
     CONTROL_CHECK(entities(result, "created") == "placement,placement"
-                  && warningCodes(result) == "UPSTREAM_UNDO_DEFECT");
+                  && warningCodes(result).empty() && memberOf(memberOf(result, "undo"), "undoable").asBoolean());
 }
 
 void scenarioArrangementImpl()
@@ -575,7 +569,7 @@ void scenarioArrangementImpl()
     checkDelete(f, a, b);
 }
 
-// ---- Scenario: undo entries and revert recipes ----------------------------------------------------------
+// ---- Scenario: undo entries and placement restoration -------------------------------------------------
 
 void scenarioArrangementUndoImpl()
 {
@@ -583,9 +577,24 @@ void scenarioArrangementUndoImpl()
     if (!CONTROL_CHECK(f.open()))
         return;
     const auto a = f.addClip("a", 0, 2.0);
-    f.addClip("c", 1, 2.0);
+    const auto c = f.addClip("c", 1, 2.0);
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     CONTROL_CHECK(f.arrangement().setPlacementFade(0, a.placementId, 0.0, 3.0));
+    CONTROL_CHECK(f.arrangement().setPlacementTrim(1, c.placementId, 0.5, 5.5));
+    CONTROL_CHECK(f.arrangement().setPlacementGain(1, c.placementId, 0.5f));
+    CONTROL_CHECK(f.arrangement().setPlacementFade(1, c.placementId, 0.25, 0.75));
+    auto* renderService = f.processor->getContentRenderService();
+    const auto hasPendingRender = [renderService](ContentKey key) {
+        const auto cache = renderService->getRenderCache(key);
+        return cache != nullptr && !cache->getPendingJobs().empty();
+    };
+    const auto playbackSourceMatchesContent = [&f, renderService](ContentKey key) {
+        const auto content = f.processor->getContentSnapshot(key);
+        PlaybackReadSource source;
+        return content != nullptr && renderService->getPlaybackReadSource(key, source)
+            && source.contentSnapshot != nullptr
+            && source.contentSnapshot->contentRevision == content->contentRevision;
+    };
 
     // Undoing a trim restores the fades it shortened, redoing it shortens them again.
     auto result = f.edit(f.op("trim", a, "\"edge\":\"end\",\"toTimelineSec\":4"));
@@ -630,20 +639,88 @@ void scenarioArrangementUndoImpl()
     CONTROL_CHECK(back.trackId == 0 && near(back.placement.timelineStartSeconds, 2.0) && near(back.placement.gain, 1.0)
                   && near(back.placement.fadeInDuration, 0.0) && near(back.placement.fadeOutDuration, 3.0));
 
-    // Split and merge push the UI's entries, which edit.undo refuses: OpenTune's undo does not bring the clips back.
-    result = f.edit(f.op("split", a, "\"atTimelineSec\":5"));
-    auto top = memberOf(f.history(), "undoTop");
-    CONTROL_CHECK(memberOf(top, "origin").text() == "control" && memberOf(top, "unsafe").asBoolean());
-    CONTROL_CHECK(
-        f.api.fails("edit.undo", json(undoParams(memberOf(top, "undoId").text())), "UNSUPPORTED", "undo_unsafe_build"));
-    CONTROL_CHECK(f.api.fails("edit.undo", json(R"({"force":true})"), "UNSUPPORTED", "undo_unsafe_build"));
-    result = f.api.result("arrangement.edit", memberOf(memberOf(memberOf(result, "undo"), "revert"), "params"));
-    top = memberOf(f.history(), "undoTop");
-    CONTROL_CHECK(memberOf(top, "unsafe").asBoolean() && entities(result, "created") == "placement");
-    const auto merged = f.locate(std::stoull(
-        refAt(result, "created", 0, "placementId").substr(refAt(result, "created", 0, "placementId").rfind(':') + 1)));
-    CONTROL_CHECK(merged.trackId == 0 && near(merged.placement.timelineStartSeconds, 2.0)
-                  && near(merged.placement.durationSeconds, 6.0));
+    // Split and merge survive reclamation: undo restores the same placements and redo revives the same replacements.
+    const auto original = f.locate(c.placementId);
+    result = f.edit(f.op("split", c, "\"atTimelineSec\":5"));
+    CONTROL_CHECK(warningCodes(result).empty() && memberOf(memberOf(result, "undo"), "undoable").asBoolean());
+    const auto splitTop = memberOf(f.history(), "undoTop");
+    CONTROL_CHECK(memberOf(splitTop, "origin").text() == "control" && !memberOf(splitTop, "unsafe").asBoolean()
+                  && innerActions(result) == "SplitPlacementAction");
+    const auto leftHandle = refAt(result, "created", 0, "placementId");
+    const auto rightHandle = refAt(result, "created", 1, "placementId");
+    const auto leftId = idOfHandle(leftHandle);
+    const auto rightId = idOfHandle(rightHandle);
+    const auto left = f.locate(leftId);
+    const auto right = f.locate(rightId);
+    CONTROL_CHECK(left.trackId == 1 && right.trackId == 1 && !(left.placement.contentKey == c.key)
+                  && !(right.placement.contentKey == c.key)
+                  && !(left.placement.contentKey == right.placement.contentKey));
+
+    renderService->pauseRenderWorker();
+    f.processor->runReclaimSweepOnMessageThread();
+    const auto splitId = memberOf(memberOf(result, "undo"), "undoId").text();
+    f.processor->invalidateAllContentCaches();
+    CONTROL_CHECK(!hasPendingRender(c.key));
+    const auto splitUndo = f.api.result("edit.undo", json(undoParams(splitId)));
+    CONTROL_CHECK(memberOf(splitUndo, "applied").asBoolean() && samePlacement(f.locate(c.placementId), 1, original.placement)
+                  && f.locate(leftId).trackId < 0 && f.locate(rightId).trackId < 0
+                  && hasPendingRender(c.key) && playbackSourceMatchesContent(c.key));
+    f.processor->runReclaimSweepOnMessageThread();
+    f.processor->invalidateAllContentCaches();
+    CONTROL_CHECK(!hasPendingRender(left.placement.contentKey) && !hasPendingRender(right.placement.contentKey));
+    const auto splitRedo = f.api.result("edit.redo", json(undoParams(splitId)));
+    CONTROL_CHECK(memberOf(splitRedo, "applied").asBoolean() && samePlacement(f.locate(leftId), 1, left.placement)
+                  && samePlacement(f.locate(rightId), 1, right.placement) && f.locate(c.placementId).trackId < 0
+                  && hasPendingRender(left.placement.contentKey) && hasPendingRender(right.placement.contentKey)
+                  && playbackSourceMatchesContent(left.placement.contentKey)
+                  && playbackSourceMatchesContent(right.placement.contentKey));
+
+    const auto merge = [](const std::string& leading, const std::string& trailing) {
+        return "{\"op\":\"merge\",\"leadingPlacementId\":" + quoted(leading)
+               + ",\"trailingPlacementId\":" + quoted(trailing) + "}";
+    };
+    result = f.edit(merge(leftHandle, rightHandle));
+    CONTROL_CHECK(warningCodes(result).empty() && memberOf(memberOf(result, "undo"), "undoable").asBoolean()
+                  && innerActions(result) == "MergePlacementAction");
+    const auto mergedHandle = refAt(result, "created", 0, "placementId");
+    const auto mergedId = idOfHandle(mergedHandle);
+    const auto merged = f.locate(mergedId);
+    CONTROL_CHECK(merged.trackId == 1 && !(merged.placement.contentKey == left.placement.contentKey)
+                  && !(merged.placement.contentKey == right.placement.contentKey));
+
+    f.processor->runReclaimSweepOnMessageThread();
+    const auto mergeId = memberOf(memberOf(result, "undo"), "undoId").text();
+    f.processor->invalidateAllContentCaches();
+    CONTROL_CHECK(!hasPendingRender(left.placement.contentKey) && !hasPendingRender(right.placement.contentKey));
+    const auto mergeUndo = f.api.result("edit.undo", json(undoParams(mergeId)));
+    CONTROL_CHECK(memberOf(mergeUndo, "applied").asBoolean() && samePlacement(f.locate(leftId), 1, left.placement)
+                  && samePlacement(f.locate(rightId), 1, right.placement) && f.locate(mergedId).trackId < 0
+                  && hasPendingRender(left.placement.contentKey) && hasPendingRender(right.placement.contentKey)
+                  && playbackSourceMatchesContent(left.placement.contentKey)
+                  && playbackSourceMatchesContent(right.placement.contentKey));
+    f.processor->runReclaimSweepOnMessageThread();
+    f.processor->invalidateAllContentCaches();
+    CONTROL_CHECK(!hasPendingRender(merged.placement.contentKey));
+    const auto mergeRedo = f.api.result("edit.redo", json(undoParams(mergeId)));
+    CONTROL_CHECK(memberOf(mergeRedo, "applied").asBoolean() && samePlacement(f.locate(mergedId), 1, merged.placement)
+                  && f.locate(leftId).trackId < 0 && f.locate(rightId).trackId < 0
+                  && hasPendingRender(merged.placement.contentKey)
+                  && playbackSourceMatchesContent(merged.placement.contentKey));
+
+    renderService->resumeRenderWorker();
+    CONTROL_CHECK(settleBackgroundWork(*f.processor));
+    f.processor->getUndoManager().clear();
+    auto* arrangement = f.processor->getStandaloneArrangement();
+    auto* repository = f.processor->getStandaloneContentRepository();
+    CONTROL_CHECK(pumpMessagesUntil([&] {
+        StandaloneArrangement::Placement retired;
+        return !arrangement->getPlacementById(1, c.placementId, retired)
+               && !arrangement->getPlacementById(1, leftId, retired)
+               && !arrangement->getPlacementById(1, rightId, retired)
+               && repository->findClip(c.key) == nullptr
+               && repository->findClip(left.placement.contentKey) == nullptr
+               && repository->findClip(right.placement.contentKey) == nullptr;
+    }, kReadTimeoutMs));
 }
 
 // ---- Scenario: arrangement.copy -----------------------------------------------------------------------------
@@ -824,16 +901,6 @@ bool counterPastEveryClipId(OpenTuneAudioProcessor& processor)
     repository->retireClip(probe);
     repository->releaseClip(probe);
     return probe.objectId > highest;
-}
-
-/** The numeric id at the end of a handle (c:<instance>:<epoch>:<id>, p:...), 0 for text that is not a handle (so a
-    scenario whose earlier call failed goes on to fail its checks instead of throwing). */
-std::uint64_t idOfHandle(const std::string& handle)
-{
-    const auto colon = handle.rfind(':');
-    if (colon == std::string::npos || colon + 1 >= handle.size())
-        return 0;
-    return std::strtoull(handle.c_str() + colon + 1, nullptr, 10);
 }
 
 std::string mergeOp(const std::string& leading, const std::string& trailing)
@@ -1247,7 +1314,7 @@ const char* const kMustRunVectors[] = {
     "arrangement/edit-split-merge",
     "arrangement/edit-split-not-ready",
     "arrangement/edit-split-out-of-range",
-    "arrangement/edit-split-undo-refused",
+    "arrangement/edit-split-undo-redo",
     "arrangement/edit-split",
     "arrangement/edit-trim-fades",
     "arrangement/edit-trim-out-of-range",

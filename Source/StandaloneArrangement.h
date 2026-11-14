@@ -180,6 +180,7 @@ public:
     void clear();
 
     bool insertPlacement(int trackId, Placement& placement);
+    /** Inserts at a zero-based index in the active (non-retired) placement sequence. */
     bool insertPlacement(int trackId, int insertIndex, Placement& placement);
     bool deletePlacementById(int trackId, uint64_t placementId, Placement* deletedOut = nullptr, int* deletedIndexOut = nullptr);
     struct PlacementMove {
