@@ -859,10 +859,9 @@ bool PianoRollToolHandler::handleNoteArrowKey(const juce::KeyPress& key)
     const bool isHomeOrEnd = keyCode == juce::KeyPress::homeKey || keyCode == juce::KeyPress::endKey;
     const bool openDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
 
-    // Enter mirrors the OpenDyne double-click on a note: with the modulation or drift tool
-    // it toggles 100% / 0%, otherwise it snaps the note to the pitch grid. Without a selected
-    // note Enter stays "Stop" as documented, so it is not consumed here.
-    if (plain && keyCode == juce::KeyPress::returnKey && openDyne)
+    // OpenDyne uses Enter for the selected note's default action; EQ opens from Enter in both schemes.
+    if (plain && keyCode == juce::KeyPress::returnKey
+        && (openDyne || currentTool_ == ToolId::Eq))
         return applyNoteDefaultActionByKeyboard();
 
     // Extra mouse-free keys (Ctrl/Alt+Up/Down, Home, End, I, R, X, J) do not override a binding

@@ -215,6 +215,69 @@ bool checkAccessibilityDeleteProjectsTheNoteReusingIndexZero()
         && displayedRetuneSpeed == 0.73f;
 }
 
+bool checkAccessibilityEqEnterOpensInBothSchemes()
+{
+    for (const auto scheme : { AudioEditingScheme::Scheme::CorrectedF0Primary,
+                               AudioEditingScheme::Scheme::NotesPrimary }) {
+        Fixture fixture;
+        fixture.notes = { makeNote(0.1, 0.3, 0.2f) };
+        fixture.publishNotes();
+        fixture.state.noteSelection.setSingle(0, 1);
+        fixture.accessibilityMode = true;
+        fixture.scheme = scheme;
+
+        auto context = fixture.makeContext();
+        context.transportShortcutsEnabled = false;
+        context.clearNoteDraft = [] {};
+        int openedIndex = -1;
+        int openCount = 0;
+        context.openEqFromKeyboard = [&](int index) {
+            openedIndex = index;
+            ++openCount;
+        };
+
+        PianoRollToolHandler handler(std::move(context));
+        handler.setTool(ToolId::Eq);
+        const bool handled = handler.keyPressed(juce::KeyPress(juce::KeyPress::returnKey, {}, 0));
+
+        if (!handled || openCount != 1 || openedIndex != 0
+            || fixture.notes[0].pitch != 220.0f || fixture.notes[0].retuneSpeed != 0.2f)
+            return false;
+    }
+    return true;
+}
+
+bool checkAccessibilityEqEnterRequiresEqToolAndSelection()
+{
+    Fixture fixture;
+    fixture.notes = { makeNote(0.1, 0.3, 0.2f) };
+    fixture.publishNotes();
+    fixture.accessibilityMode = true;
+
+    auto context = fixture.makeContext();
+    context.transportShortcutsEnabled = false;
+    context.clearNoteDraft = [] {};
+    int openCount = 0;
+    context.openEqFromKeyboard = [&](int) { ++openCount; };
+
+    PianoRollToolHandler handler(std::move(context));
+    handler.setTool(ToolId::Eq);
+    const bool noSelectionHandled = handler.keyPressed(
+        juce::KeyPress(juce::KeyPress::returnKey, {}, 0));
+    if (noSelectionHandled || openCount != 0)
+        return false;
+
+    fixture.state.noteSelection.setSingle(0, 1);
+    handler.setTool(ToolId::Select);
+    const bool otherToolHandled = handler.keyPressed(
+        juce::KeyPress(juce::KeyPress::returnKey, {}, 0));
+
+    return !otherToolHandled
+        && openCount == 0
+        && fixture.notes[0].pitch == 220.0f
+        && fixture.notes[0].retuneSpeed == 0.2f;
+}
+
 } // namespace
 
 int main()
@@ -231,6 +294,14 @@ int main()
     }
     if (!checkAccessibilityDeleteProjectsTheNoteReusingIndexZero()) {
         std::cerr << "Accessibility delete parameter projection failed\n";
+        return 1;
+    }
+    if (!checkAccessibilityEqEnterOpensInBothSchemes()) {
+        std::cerr << "Accessibility EQ Enter scheme handling failed\n";
+        return 1;
+    }
+    if (!checkAccessibilityEqEnterRequiresEqToolAndSelection()) {
+        std::cerr << "Accessibility EQ Enter scope failed\n";
         return 1;
     }
     return 0;
