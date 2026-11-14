@@ -4,13 +4,13 @@
 namespace OpenTune {
 namespace StandaloneApp {
 
-/** Requests the Standalone application's one exit sequence. Message thread.
+/** Starts the Standalone application's exit sequence after its caller has resolved project changes. Message thread.
  *
- * The OS quit request (systemRequestedQuit), the window's close button and the editor's save-and-return all enter
- * here, and ControlEditorBridge::requestQuit() enters through the window's close button handler. The coordinator
- * saves the plug-in state once, then destroys the window, the plug-in holder and the processor on the message
- * thread, requests the process runtime's asynchronous final close and keeps the dispatch loop live until that
- * completion ends the application.
+ * The window close and system quit first ask the editor to resolve a dirty project. The editor's save-and-return and
+ * ControlEditorBridge enter here after their own flow or explicit discard authorization. This coordinator saves the
+ * plug-in state once, then destroys the window, plug-in holder and processor on the message thread, requests the
+ * process runtime's asynchronous final close and keeps the dispatch loop live until that completion ends the
+ * application.
  */
 void requestQuit();
 

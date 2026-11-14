@@ -12,7 +12,8 @@ class ControlMethodTable;
  *
  * prefs.set changes the processing preferences that OpenTune's preferences window changes: the frequency of A4
  * (tuningHz), the editing scheme, the hybrid (light pitch correction) switch, the experimental features, the vocoder
- * weight, the rendering priority and the pitch model. It makes the same calls as the window does (AppPreferences
+ * weight, the rendering priority and the pitch model. It also changes the user-global accessibilityModeEnabled UI
+ * preference. It makes the same calls as the window does (AppPreferences
  * setters, and the processor functions the window calls next: invalidateAllContentCaches() for the hybrid switch,
  * setVocoderModelWeight(), resetInferenceBackend() and setF0ModelType()) and then asks the editor to apply the
  * preferences (ControlUiBridge::onPreferencesChanged()).
@@ -44,7 +45,8 @@ class ControlMethodTable;
  *   or when the editor had generated notes for the open clip (they have no undo entry and stay, the project stays
  *   marked as changed, and the detail says so): then executed is true.
  *
- * No cosmetic preference can be set (the params schema is closed).
+ * accessibilityModeEnabled is the one UI preference exposed by prefs.set; other UI preferences remain outside the
+ * closed params schema.
  *
  * Threading: parse on the connection thread; run, the job and everything it touches on the message thread.
  */

@@ -181,6 +181,9 @@ public:
     // LanguageChangeListener
     void languageChanged(Language newLanguage) override;
 
+    /** Resolves unsaved project changes before starting the Standalone exit sequence. Returns true when exit starts. */
+    bool requestExit(bool discardUnsaved = false);
+
 private:
     struct PendingImport;
 
@@ -236,7 +239,8 @@ private:
     /// 异步保存工程。消息线程捕获目标快照，单线程池执行 I/O。
     void saveProject(juce::File targetFile,
                      bool openChooserAfterSave = false,
-                     juce::File openAfterSave = {});
+                     juce::File openAfterSave = {},
+                     std::function<void()> onSaved = {});
 
     /// 异步打开工程：worker 预处理，消息线程提交运行时状态。
     void openProjectFile(const juce::File& file);

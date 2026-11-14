@@ -243,8 +243,9 @@ public:
     /** Records the request and does not end the process; onQuitRequest lets a test look at the instance at the moment
         the real bridge would close the window. A bridge that cannot quit does nothing and returns false, and so does a
         window that is asked and does not close (refusesClose; the request is counted in refusedQuitRequests). */
-    bool requestQuit() override
+    bool requestQuit(bool discardUnsaved) override
     {
+        lastDiscardUnsavedAuthorization = discardUnsaved;
         if (!quits)
             return false;
         if (refusesClose) {
@@ -267,6 +268,7 @@ public:
     bool refusesClose = false;
     /** The number of requestQuit() calls that closed the window. */
     int quitRequests = 0;
+    bool lastDiscardUnsavedAuthorization = false;
     /** The number of requestQuit() calls that found nothing to close (refusesClose). */
     int refusedQuitRequests = 0;
     /** Called inside requestQuit(), on the message thread, after the request was counted (also for a refused one). */

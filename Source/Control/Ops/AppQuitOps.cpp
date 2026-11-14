@@ -122,7 +122,7 @@ JsonValue quitWarnings(bool discarded)
  * The result cannot be taken back, so the step makes that state explainable instead: the log names it, and says that
  * the client was told `quitting: true`.
  */
-void endInstance(const ControlOpEnvironment& environment)
+void endInstance(const ControlOpEnvironment& environment, bool discardUnsaved)
 {
     ControlOpContext context(environment);
     // ControlService::stop(): idempotent, so the normal shutdown that follows finds it done.
@@ -131,7 +131,7 @@ void endInstance(const ControlOpEnvironment& environment)
     const char* notClosed = nullptr;
     if (bridge == nullptr)
         notClosed = "the editor is gone";
-    else if (!bridge->requestQuit())
+    else if (!bridge->requestQuit(discardUnsaved))
         notClosed = "the editor did not close it";
     if (notClosed != nullptr)
         AppLogger::logNoThrow(
@@ -182,7 +182,9 @@ Result<JsonValue> runQuit(ControlOpContext& context, const QuitParams& params)
 
     // From here the call cannot fail: the dispatcher enters the stopping state when this function returns, writes the
     // result and then runs the exit step.
-    context.endInstanceAfterReply([environment = context.environment()] { endInstance(environment); });
+    context.endInstanceAfterReply([environment = context.environment(), discardUnsaved = params.discardUnsaved] {
+        endInstance(environment, discardUnsaved);
+    });
     return result;
 }
 

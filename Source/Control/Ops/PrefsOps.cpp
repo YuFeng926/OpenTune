@@ -80,6 +80,7 @@ struct PrefsRequest
     /** f0Model: a name of processing.options.f0Model (checked when the call runs), and the type it names. */
     std::optional<std::string> f0Model;
     std::optional<F0ModelType> f0Type;
+    std::optional<bool> accessibilityModeEnabled;
 };
 
 /** A4 as the wire carries it: three decimals, like controlJsonNumber(tuningHz, 3) in prefs.get and session.info. */
@@ -131,7 +132,7 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
     ControlParamReader reader(params);
     std::optional<double> tuning;
     if (!reader.onlyMembers({"tuningHz", "editingScheme", "hybridMode", "experimentalFeatures", "vocoderWeight",
-                             "renderingPriority", "f0Model"})
+                             "renderingPriority", "f0Model", "accessibilityModeEnabled"})
         || !reader.optionalNumber("tuningHz", static_cast<double>(TuningConfig::kMinTuningHz),
                                   static_cast<double>(TuningConfig::kMaxTuningHz), tuning)) {
         why = reader.why();
@@ -148,14 +149,15 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
         || !readBoolean(reader, "experimentalFeatures", out.experimentalFeatures)
         || !readOptionName(reader, "vocoderWeight", out.vocoderWeight)
         || !readEnumPair(reader, "renderingPriority", "gpuFirst", "cpuFirst", out.cpuFirst)
-        || !readOptionName(reader, "f0Model", out.f0Model)) {
+        || !readOptionName(reader, "f0Model", out.f0Model)
+        || !readBoolean(reader, "accessibilityModeEnabled", out.accessibilityModeEnabled)) {
         why = reader.why();
         return false;
     }
     if (tuning)
         out.tuningHz = roundedTuning(*tuning);
     if (!out.tuningHz && !out.notesPrimary && !out.hybridMode && !out.experimentalFeatures && !out.vocoderWeight
-        && !out.cpuFirst && !out.f0Model) {
+        && !out.cpuFirst && !out.f0Model && !out.accessibilityModeEnabled) {
         why = "params must have at least one member";
         return false;
     }
@@ -174,6 +176,7 @@ struct PrefsState
     std::string vocoderWeight = kDefaultVocoderWeight;
     bool cpuFirst = false;
     std::string f0Model = "fcpe";
+    bool accessibilityModeEnabled = false;
 };
 
 PrefsState readState(OpenTuneAudioProcessor& processor)
@@ -189,6 +192,7 @@ PrefsState readState(OpenTuneAudioProcessor& processor)
     state.vocoderWeight = shared.vocoderModelWeight;
     state.cpuFirst = shared.renderingPriority == RenderingPriority::CpuFirst;
     state.f0Model = controlF0ModelName(shared.f0ModelType);
+    state.accessibilityModeEnabled = shared.accessibilityModeEnabled;
     return state;
 }
 
@@ -202,8 +206,12 @@ struct PrefsDelta
     bool vocoder = false;
     bool priority = false;
     bool f0 = false;
+    bool accessibilityMode = false;
 
-    bool any() const noexcept { return tuning || scheme || hybrid || experimental || vocoder || priority || f0; }
+    bool any() const noexcept
+    {
+        return tuning || scheme || hybrid || experimental || vocoder || priority || f0 || accessibilityMode;
+    }
     /** The editor applies the scheme asynchronously, and the runtime replaces the vocoder asynchronously after a new
         weight or a new rendering priority: a call that changes one of them is a job. */
     bool needsJob() const noexcept { return scheme || vocoder || priority; }
@@ -219,6 +227,8 @@ PrefsDelta computeDelta(const PrefsState& state, const PrefsRequest& request)
     delta.vocoder = request.vocoderWeight && *request.vocoderWeight != state.vocoderWeight;
     delta.priority = request.cpuFirst && *request.cpuFirst != state.cpuFirst;
     delta.f0 = request.f0Model && *request.f0Model != state.f0Model;
+    delta.accessibilityMode = request.accessibilityModeEnabled
+                              && *request.accessibilityModeEnabled != state.accessibilityModeEnabled;
     return delta;
 }
 
@@ -240,6 +250,8 @@ PrefsState stateAfter(const PrefsState& before, const PrefsRequest& request, con
         after.cpuFirst = *request.cpuFirst;
     if (delta.f0)
         after.f0Model = *request.f0Model;
+    if (delta.accessibilityMode)
+        after.accessibilityModeEnabled = *request.accessibilityModeEnabled;
     return after;
 }
 
@@ -306,6 +318,8 @@ std::optional<Error> applyDelta(ControlOpContext& context, const PrefsRequest& r
         preferences.setRenderingPriority(*request.cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst);
         controlResetInferenceBackend(processor, *request.cpuFirst);
     }
+    if (delta.accessibilityMode)
+        preferences.setAccessibilityModeEnabled(*request.accessibilityModeEnabled);
     if (delta.any())
         if (auto* bridge = context.bridge())
             bridge->onPreferencesChanged();
@@ -357,6 +371,8 @@ void restoreState(ControlOpContext* context, OpenTuneAudioProcessor& processor, 
         if (context != nullptr)
             controlResetInferenceBackend(processor, before.cpuFirst);
     }
+    if (delta.accessibilityMode)
+        preferences.setAccessibilityModeEnabled(before.accessibilityModeEnabled);
     if (context != nullptr && delta.any())
         if (auto* bridge = context->bridge())
             bridge->onPreferencesChanged();
@@ -399,7 +415,7 @@ std::optional<JsonValue> wireWeight(const std::string& weight)
  * switch and for every change of the vocoder weight, and the undo descriptor
  * (no undo entry, as in OpenTune; the revert recipe is the same call with the previous values, or null when none of
  * them can be sent). The members come in the order of the schema: the original four, then vocoderWeight,
- * renderingPriority and f0Model. Nothing is recorded for a delta that changes nothing.
+ * renderingPriority, f0Model and accessibilityModeEnabled. Nothing is recorded for a delta that changes nothing.
  */
 void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, const PrefsState& before,
                  const PrefsRequest& request, const PrefsDelta& delta)
@@ -455,6 +471,13 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, cons
                             JsonValue::string(*request.f0Model), JsonValue());
         names.append(JsonValue::string("f0Model"));
         revert.appendMember("f0Model", JsonValue::string(before.f0Model));
+    }
+    if (delta.accessibilityMode) {
+        addPreferenceChange(envelope, "accessibilityModeEnabled", "Accessibility mode",
+                            JsonValue::boolean(before.accessibilityModeEnabled),
+                            JsonValue::boolean(*request.accessibilityModeEnabled), JsonValue());
+        names.append(JsonValue::string("accessibilityModeEnabled"));
+        revert.appendMember("accessibilityModeEnabled", JsonValue::boolean(before.accessibilityModeEnabled));
     }
     auto data = JsonValue::object();
     data.appendMember("preferences", std::move(names));
@@ -768,6 +791,8 @@ private:
         settle(&PrefsDelta::vocoder, &PrefsState::vocoderWeight, "vocoderWeight", current, restore, kept);
         settle(&PrefsDelta::priority, &PrefsState::cpuFirst, "renderingPriority", current, restore, kept);
         settle(&PrefsDelta::f0, &PrefsState::f0Model, "f0Model", current, restore, kept);
+        settle(&PrefsDelta::accessibilityMode, &PrefsState::accessibilityModeEnabled, "accessibilityModeEnabled",
+               current, restore, kept);
         restoreState(context, processor, restoreTo_, restore);
         return kept;
     }

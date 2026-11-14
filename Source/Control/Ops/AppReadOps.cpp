@@ -49,6 +49,7 @@ Result<JsonValue> runPrefsGet(ControlOpContext& context, const ControlNoParams&)
     result.appendMember("onboardingShown", JsonValue::boolean(shared.onboardingShown));
     result.appendMember("language", JsonValue::string(controlLanguageTag(shared.language)));
     result.appendMember("recentProjects", std::move(recent));
+    result.appendMember("accessibilityModeEnabled", JsonValue::boolean(shared.accessibilityModeEnabled));
     return result;
 }
 

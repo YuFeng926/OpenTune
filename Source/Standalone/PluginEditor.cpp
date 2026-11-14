@@ -1149,7 +1149,8 @@ bool OpenTuneAudioProcessorEditor::rejectProjectOperationIfBusy()
 
 void OpenTuneAudioProcessorEditor::saveProject(juce::File targetFile,
                                                bool openChooserAfterSave,
-                                               juce::File openAfterSave)
+                                               juce::File openAfterSave,
+                                               std::function<void()> onSaved)
 {
     if (rejectProjectOperationIfBusy())
         return;
@@ -1166,12 +1167,14 @@ void OpenTuneAudioProcessorEditor::saveProject(juce::File targetFile,
         [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this),
          task = std::move(task), generation, path,
          openChooserAfterSave,
-         openAfterSave = std::move(openAfterSave)]() mutable {
+         openAfterSave = std::move(openAfterSave),
+         onSaved = std::move(onSaved)]() mutable {
         auto result = ProjectSession::executeSaveToFile(task);
         juce::MessageManager::callAsync(
             [safeThis, result, generation, path,
              openChooserAfterSave,
-             openAfterSave = std::move(openAfterSave)]() mutable {
+             openAfterSave = std::move(openAfterSave),
+             onSaved = std::move(onSaved)]() mutable {
             if (safeThis == nullptr)
                 return;
 
@@ -1201,6 +1204,8 @@ void OpenTuneAudioProcessorEditor::saveProject(juce::File targetFile,
             if (openChooserAfterSave)
                 safeThis->launchOpenProjectChooser();
             safeThis->projectOperationBusy_ = false;
+            if (onSaved)
+                onSaved();
         });
     });
 }
@@ -2504,7 +2509,67 @@ void OpenTuneAudioProcessorEditor::saveAndReturnRequested()
     // The one Standalone exit coordinator saves the plug-in state once, destroys the window, holder and processor
     // on the message thread, and ends the application after the process runtime's final close. It defers its work
     // to the next message, so this editor stays alive until this handler returns.
-    StandaloneApp::requestQuit();
+    requestExit();
+}
+
+bool OpenTuneAudioProcessorEditor::requestExit(bool discardUnsaved)
+{
+    if (discardUnsaved || !projectSession_.isDirty())
+    {
+        StandaloneApp::requestQuit();
+        return true;
+    }
+
+    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+    ConfirmDialogContent::launch(
+        new ConfirmDialogContent(
+            LOC_RAW("Current project has unsaved changes"),
+            LOC_RAW("Save changes to the current project before exiting?"),
+            { { LOC_RAW("Save"), [safeThis] {
+                    if (safeThis == nullptr)
+                        return;
+
+                    auto quitAfterSave = [safeThis] {
+                        if (safeThis != nullptr && !safeThis->projectSession_.isDirty())
+                            StandaloneApp::requestQuit();
+                    };
+
+                    if (safeThis->projectSession_.hasProjectPath())
+                    {
+                        safeThis->saveProject(juce::File(), false, {}, std::move(quitAfterSave));
+                        return;
+                    }
+
+                    PlatformFileDialogs::chooseSaveTarget(
+                        LOC(kSaveProject), juce::File(), ".otproj", "Projects",
+                        [safeThis, quitAfterSave = std::move(quitAfterSave)](const juce::File& file) mutable {
+                            if (safeThis == nullptr)
+                                return;
+
+                            auto saveToFile = [safeThis, file, quitAfterSave = std::move(quitAfterSave)]() mutable {
+                                if (safeThis != nullptr)
+                                    safeThis->saveProject(file, false, {}, std::move(quitAfterSave));
+                            };
+
+                            if (file.existsAsFile())
+                            {
+                                ConfirmDialogContent::launch(
+                                    new ConfirmDialogContent(
+                                        LOC(kOverwriteExistingProject),
+                                        LOC(kOverwriteExistingProjectMessage),
+                                        { { LOC_RAW("Overwrite"), std::move(saveToFile), true },
+                                          { LOC(kCancel), nullptr, false } }),
+                                    &safeThis->contentRoot_);
+                                return;
+                            }
+
+                            saveToFile();
+                        });
+                }, true },
+              { LOC_RAW("Do Not Save"), [] { StandaloneApp::requestQuit(); }, false },
+              { LOC(kCancel), nullptr, false } }),
+        &contentRoot_);
+    return false;
 }
 
 void OpenTuneAudioProcessorEditor::importAudioRequested()

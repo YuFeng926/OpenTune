@@ -60,7 +60,7 @@ public:
     juce::ThreadPool* projectWorkerPool() override;
     juce::AudioDeviceManager* audioDevice() override;
     bool canQuit() const override;
-    bool requestQuit() override;
+    bool requestQuit(bool discardUnsaved) override;
 
     // ---- Tracks and transport (ControlEditorBridgeTracks.cpp) ----
     bool setVisibleTrackCount(int count) override;

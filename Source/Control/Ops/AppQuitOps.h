@@ -8,10 +8,10 @@ class ControlMethodTable;
 /**
  * Registers app.quit (capability app.quit; methods/app.quit.schema.json).
  *
- * The call ends OpenTune the way the window's close button does (the stock JUCE StandaloneFilterWindow: the plug-in
- * state is saved, then the application quits through JUCEApplicationBase::quit()), so the normal shutdown runs: the
- * control service stops, the listener closes and the discovery file is deleted. The call never saves the project,
- * never asks the user and never forces anything.
+ * The call ends OpenTune the way the window's close button does (the JUCE Standalone window: the plug-in state is
+ * saved, then the application quits through JUCEApplicationBase::quit()), so the normal shutdown runs: the control
+ * service stops, the listener closes and the discovery file is deleted. The call never saves the project or asks the
+ * user; a dirty project requires explicit discardUnsaved authorization, which reaches the final close path.
  *
  * It checks, in this order, and changes nothing when one check fails (executed false):
  * 1. SHUTTING_DOWN, answered by the dispatcher before the method starts;
@@ -34,8 +34,9 @@ class ControlMethodTable;
  * (ControlOpContext::endInstanceAfterReply()), which answers every other request with SHUTTING_DOWN from then on and
  * runs the step on the message thread only once the result is written to the connection (ControlDispatcher). The step
  * stops the control service (connections close, the discovery file goes) and then asks the bridge to close the window
- * (ControlUiBridge::requestQuit()). The call never stops the service itself while it runs on behalf of a request: the
- * network thread that waits for it holds no lease, and the service joins that very thread when it stops.
+ * (ControlUiBridge::requestQuit()), with the discard authorization already checked above. The call never stops the
+ * service itself while it runs on behalf of a request: the network thread that waits for it holds no lease, and the
+ * service joins that very thread when it stops.
  *
  * Two cases leave the client with a result that the instance cannot honour, because the result is written before they
  * can be known: the editor is gone or its window does not close when the exit step runs, and the exit step cannot be

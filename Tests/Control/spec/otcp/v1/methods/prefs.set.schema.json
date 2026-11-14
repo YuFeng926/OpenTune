@@ -54,6 +54,10 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64
+        },
+        "accessibilityModeEnabled": {
+          "description": "The root-level UI accessibility mode preference returned by prefs.get. It is appended after the seven processing preferences in changes, GLOBAL_PREFERENCE, and the revert recipe. A request changing only this field is synchronous.",
+          "type": "boolean"
         }
       }
     },

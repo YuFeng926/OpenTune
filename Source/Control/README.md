@@ -58,7 +58,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
 | `Ops/WorkspaceOps.*`, `../Standalone/ControlEditorBridgeWorkspace.cpp`, `../Standalone/ControlEditorBridgeViewSwitch.h` | `ui.setWorkspace`: the two view buttons of the transport bar through the bridge, view state only apart from the tempo that the focus change can rewrite (see "Workspace"). The header is the rule that takes the changed mark of a view switch back, a function of plain values that the unit tests run. |
 | `Ops/SelectionOps.*`, `../Standalone/ControlEditorBridgeSelection.cpp` | `ui.setSelection`: the effects of a click on a clip predicted, then the click and double click through the arrangement view's hook, and the effects observed (see "Selection"). |
-| `Ops/AppQuitOps.*`, `../Standalone/ControlEditorBridge.cpp` (`canQuit()`, `requestQuit()`) | `app.quit`: the checks, the result, and the end of the instance after the reply is written (the dispatcher's after-reply step); the editor's side calls the window's own close button handler (see "Quit"). |
+| `Ops/AppQuitOps.*`, `../Standalone/ControlEditorBridge.cpp` (`canQuit()`, `requestQuit(bool)`) | `app.quit`: the checks, the result, and the end of the instance after the reply is written (the dispatcher's after-reply step); the editor's side carries the explicit discard authorization into its exit flow (see "Quit"). |
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
@@ -571,7 +571,7 @@ an undo or redo (`afterUndoRedo()`), the refresh after a time-grid edit (`onTime
 piano roll clip, selection, visible track count), the focus of an imported clip
 (`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
 the project session and its worker pool, the audio device manager, and the window's close (`canQuit()` and
-`requestQuit()`, for `app.quit`, see "Quit"). The project flows are in
+`requestQuit(bool)`, for `app.quit`, see "Quit"). The project flows are in
 `ControlEditorBridgeProject.cpp` (see "Project files"), the dialogs and the onboarding in
 `ControlEditorBridgeModals.cpp` (see "Dialogs and onboarding"), the preferences and the audio device in
 `ControlEditorBridgePrefs.cpp` (see "Preferences and audio device"). Tracks follow in files of their own.
@@ -1400,14 +1400,16 @@ a stored vocoder weight whose name the wire cannot carry (not valid UTF-8, empty
 left out of the recipe, and when that was the only member that changed the recipe is `null` (reason still `ui_parity`,
 and with it the warning `IRREVERSIBLE`), never a `prefs.set` call without params.
 
-**prefs.set** changes seven processing preferences, in this order wherever the result lists them (`changes`, the
-`GLOBAL_PREFERENCE` names, the revert recipe): `tuningHz` (A4), `editingScheme`, `hybridMode`, `experimentalFeatures`,
-`vocoderWeight`, `renderingPriority` (`gpuFirst` or `cpuFirst`), and `f0Model`. No cosmetic preference can be set; the params schema is closed, so any other member is
-`INVALID_ARGUMENT(invalid_params)`. Each change repeats what the preferences window does for its control (the
-`AppPreferences` setter and the processor call that follows it; for the hybrid switch `invalidateAllContentCaches()`,
-which is why the result carries `reRenderQueued`) and then calls `ControlUiBridge::onPreferencesChanged()` once, which is
-the editor's `syncSharedAppPreferences()`. Values equal to the current ones change nothing (a no-op when none differs).
-The tuning does not recompute existing results (`NOT_RETROACTIVE`).
+**prefs.set** changes seven processing preferences, in this order: `tuningHz` (A4), `editingScheme`, `hybridMode`,
+`experimentalFeatures`, `vocoderWeight`, `renderingPriority` (`gpuFirst` or `cpuFirst`), and `f0Model`. It also changes
+the root-level UI preference `accessibilityModeEnabled`, appended after those seven in `changes`, the
+`GLOBAL_PREFERENCE` names and the revert recipe. `prefs.get` reports it beside `processing`, not inside it. Other UI
+preferences are not settable; the params schema is closed, so any other member is `INVALID_ARGUMENT(invalid_params)`.
+Each change uses the preferences window's `AppPreferences` setter and any processor call that follows it (for the
+hybrid switch `invalidateAllContentCaches()`, which is why the result carries `reRenderQueued`), then calls
+`ControlUiBridge::onPreferencesChanged()` once for the request, which is the editor's `syncSharedAppPreferences()`.
+Values equal to the current ones change nothing (a no-op when none differs). The tuning does not recompute existing
+results (`NOT_RETROACTIVE`).
 
 - **What is on offer.** `prefs.get` reports it in `processing.options` (`session.info` does not): `vocoderWeight`
   (the built-in weights whose file exists, then the files of the `vocoder_weights` folder, the list the window shows;
@@ -1472,7 +1474,7 @@ The tuning does not recompute existing results (`NOT_RETROACTIVE`).
   load the weight) leaves them, keeps the project marked as changed, says in the detail that generated notes were kept
   (naming the content by its handle, never a file) and reports `executed` true as well. Otherwise `executed` is false:
   no half-applied set of preferences stays.
-- **Everything else is applied at once** (the tuning, the hybrid and experimental switches, the pitch model) and returns the envelope.
+- **Everything else is applied at once** (the tuning, the hybrid and experimental switches, the pitch model and accessibility mode) and returns the envelope.
 - **Busy.** Like every write, `prefs.set` answers `BUSY` first (`modal_open` while the preferences window is open).
 
 **Backend fallback.** `renderingPriority` is a request. When a call changes it to `gpuFirst` and the inference backend
@@ -1597,13 +1599,12 @@ reply was still being written, so the order is part of the single entry point an
 thread holds no lease while it waits, as for every method.
 
 **The exit step** (`endInstance()` in `AppQuitOps.cpp`, message thread): `ControlService::stop()` (the connections get
-their bounded flush and close, the listener closes, the discovery file is deleted), then `ControlUiBridge::requestQuit()`.
-The editor's side, `ControlEditorBridge::requestQuit()`, calls `closeButtonPressed()` of the top-level
-`juce::StandaloneFilterWindow` through its `juce::DocumentWindow` base. That is the close button's own handler, which
-does the two steps (`StandalonePluginHolder::savePluginState()` and `JUCEApplicationBase::quit()`), so nothing of it is
-repeated in `Source/Control` and there is no mirror or hook to register: the function that would drift is the
-one called. The processor's destructor then runs the normal shutdown, with `ControlService::stop()` already done (it is
-idempotent). `canQuit()` is true when a standalone holder and that window exist. If `requestQuit()` fails after the reply
+their bounded flush and close, the listener closes, the discovery file is deleted), then `ControlUiBridge::requestQuit(discardUnsaved)`.
+The editor's side, `ControlEditorBridge::requestQuit(bool)`, passes the checked authorization to the editor's exit flow.
+The flow saves the plugin state and calls `JUCEApplicationBase::quit()` through the Standalone coordinator, so nothing
+of the teardown is repeated in `Source/Control`. The processor's destructor then runs the normal shutdown, with
+`ControlService::stop()` already done (it is idempotent). `canQuit()` is true when a standalone holder and that window
+exist. If `requestQuit(bool)` fails after the reply
 (the window is gone) the control API stays stopped, the application keeps running and the failure is logged. If the exit
 step cannot be queued at all (`post()` fails in `runAfterReply()`), the log says why: the message queue refused it
 while the service was alive (the listener and the discovery file stay until the application closes itself and its own

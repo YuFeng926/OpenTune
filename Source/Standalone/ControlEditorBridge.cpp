@@ -185,17 +185,11 @@ bool ControlEditorBridge::canQuit() const
     return standaloneWindowOf(editor_) != nullptr;
 }
 
-bool ControlEditorBridge::requestQuit()
+bool ControlEditorBridge::requestQuit(bool discardUnsaved)
 {
-    // DocumentWindow::closeButtonPressed(), virtual: the window's own close button handler. The Standalone window
-    // routes that handler into the application's one exit coordinator, which saves the plug-in state once, destroys
-    // the window, holder and processor on the message thread, and ends the application after the process runtime's
-    // final close. Calling the window's handler keeps this side free of a copy of the exit sequence.
-    auto* window = standaloneWindowOf(editor_);
-    if (window == nullptr)
+    if (standaloneWindowOf(editor_) == nullptr)
         return false;
-    window->closeButtonPressed();
-    return true;
+    return editor_.requestExit(discardUnsaved);
 }
 
 } // namespace OpenTune

@@ -382,6 +382,7 @@ void resetPreferences(OpenTuneAudioProcessor& processor, bool notesPrimary = fal
     preferences.setVocoderModelWeight(kDefaultVocoderWeight);
     preferences.setRenderingPriority(RenderingPriority::GpuFirst);
     preferences.setF0ModelType(F0ModelType::FCPE);
+    preferences.setAccessibilityModeEnabled(false);
 }
 
 /** A clip with a ready analysis and no notes, on track 0 from 2 s to 8 s. */
@@ -516,6 +517,8 @@ void checkSynchronousChanges(ApiSession& api, OpenTuneAudioProcessor& processor,
 {
     const auto baseline = api.result("prefs.get");
     CONTROL_CHECK(numberIs(memberOf(memberOf(baseline, "processing"), "tuningHz"), 440.0));
+    CONTROL_CHECK(!memberOf(baseline, "accessibilityModeEnabled").asBoolean());
+    CONTROL_CHECK(memberOf(baseline, "processing").find("accessibilityModeEnabled") == nullptr);
 
     // The tuning: the process-wide A4 frequency changes with the preference;
     // results refer to it from now on.
@@ -578,21 +581,62 @@ void checkSynchronousChanges(ApiSession& api, OpenTuneAudioProcessor& processor,
         CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
     }
 
+    // Accessibility mode is a root-level UI preference with synchronous set,
+    // revert and no-op behavior like the other global preferences.
+    {
+        const int notifications = bridge.preferenceNotifications;
+        const auto enabled = api.result("prefs.set", json(R"({"accessibilityModeEnabled":true})"));
+        CONTROL_CHECK(memberOf(enabled, "applied").asBoolean() && !memberOf(enabled, "noOp").asBoolean()
+                      && memberOf(enabled, "job").isNull() && memberOf(enabled, "changes").size() == 1);
+        CONTROL_CHECK((globalPreferences(enabled) == std::vector<std::string>{"accessibilityModeEnabled"}));
+        CONTROL_CHECK(!memberOf(fieldOf(changeAt(enabled, 0), "accessibilityModeEnabled"), "before").asBoolean()
+                      && memberOf(fieldOf(changeAt(enabled, 0), "accessibilityModeEnabled"), "after").asBoolean());
+        CONTROL_CHECK(processor.getAppPreferences().getState().shared.accessibilityModeEnabled);
+        CONTROL_CHECK(memberOf(api.result("prefs.get"), "accessibilityModeEnabled").asBoolean());
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications + 1);
+
+        const auto disabled = api.result("prefs.set", json(R"({"accessibilityModeEnabled":false})"));
+        CONTROL_CHECK(memberOf(disabled, "applied").asBoolean() && memberOf(disabled, "changes").size() == 1
+                      && !memberOf(fieldOf(changeAt(disabled, 0), "accessibilityModeEnabled"), "after").asBoolean());
+        CONTROL_CHECK(!processor.getAppPreferences().getState().shared.accessibilityModeEnabled);
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications + 2);
+
+        const auto restoredEnabled = replayRevert(api, disabled);
+        CONTROL_CHECK(memberOf(restoredEnabled, "applied").asBoolean()
+                      && processor.getAppPreferences().getState().shared.accessibilityModeEnabled);
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications + 3);
+        const auto restoredDisabled = replayRevert(api, enabled);
+        CONTROL_CHECK(memberOf(restoredDisabled, "applied").asBoolean()
+                      && !processor.getAppPreferences().getState().shared.accessibilityModeEnabled);
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications + 4);
+
+        const auto same = api.result("prefs.set", json(R"({"accessibilityModeEnabled":false})"));
+        CONTROL_CHECK(memberOf(same, "noOp").asBoolean() && memberOf(same, "changes").size() == 0
+                      && memberOf(same, "warnings").size() == 0);
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications + 4);
+    }
+
     // One call that changes several: the changes and the warning follow the order
     // of the schema, and the one revert recipe takes all of them back.
     {
-        const auto result =
-            api.result("prefs.set", json(R"({"experimentalFeatures":true,"hybridMode":false,"tuningHz":435.5})"));
-        CONTROL_CHECK(memberOf(result, "changes").size() == 3);
-        CONTROL_CHECK(
-            (globalPreferences(result) == std::vector<std::string>{"tuningHz", "hybridMode", "experimentalFeatures"}));
+        const int notifications = bridge.preferenceNotifications;
+        const auto result = api.result("prefs.set", json(R"({
+            "experimentalFeatures":true,"hybridMode":false,"tuningHz":435.5,"accessibilityModeEnabled":true
+        })"));
+        CONTROL_CHECK(memberOf(result, "changes").size() == 4);
+        CONTROL_CHECK((globalPreferences(result) == std::vector<std::string>{"tuningHz", "hybridMode",
+                                                                            "experimentalFeatures",
+                                                                            "accessibilityModeEnabled"}));
         CONTROL_CHECK(TuningConfig::currentTuningHz() == 435.5f);
         const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
-        CONTROL_CHECK(params.size() == 3 && numberIs(memberOf(params, "tuningHz"), 440.0)
+        CONTROL_CHECK(params.size() == 4 && numberIs(memberOf(params, "tuningHz"), 440.0)
                       && memberOf(params, "hybridMode").asBoolean()
-                      && !memberOf(params, "experimentalFeatures").asBoolean());
+                      && !memberOf(params, "experimentalFeatures").asBoolean()
+                      && !memberOf(params, "accessibilityModeEnabled").asBoolean());
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications + 1);
         replayRevert(api, result);
         CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+        CONTROL_CHECK(!memberOf(api.result("prefs.get"), "accessibilityModeEnabled").asBoolean());
     }
 
     // A call with some members equal to the current values changes only the
@@ -612,10 +656,12 @@ void checkSynchronousChanges(ApiSession& api, OpenTuneAudioProcessor& processor,
               R"({"editingScheme":"openJazz"})", R"({"hybridMode":"yes"})", R"({"experimentalFeatures":1})",
               R"({"vocoderWeight":""})", R"({"vocoderWeight":5})", R"({"renderingPriority":"fast"})",
               R"({"renderingPriority":1})", R"({"f0Model":""})", R"({"f0Model":true})",
-              R"({"referenceAlignMode":"game"})", R"({"hybridMode":true,"theme":"dark"})"})
+              R"({"accessibilityModeEnabled":1})", R"({"referenceAlignMode":"game"})",
+              R"({"accessibilityMode":true})", R"({"hybridMode":true,"theme":"dark"})"})
             CONTROL_CHECK(api.fails("prefs.set", json(params), "INVALID_ARGUMENT", "invalid_params"));
         CONTROL_CHECK(bridge.preferenceNotifications == notifications);
         CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+        CONTROL_CHECK(!memberOf(api.result("prefs.get"), "accessibilityModeEnabled").asBoolean());
     }
 
     // BUSY: a modal dialog is open; nothing changes, also not for a change of the

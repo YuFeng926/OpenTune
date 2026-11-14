@@ -7,6 +7,7 @@
 // After the modules it uses, as in PluginEditor.cpp.
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 
+#include "PluginEditor.h"
 #include "Runtime/ProcessRenderRuntime.h"
 
 #include <memory>
@@ -18,8 +19,8 @@ namespace StandaloneApp {
 namespace {
 
 /** The Standalone window: the stock window owns the plug-in holder, the holder owns the processor, and the holder's
-    destruction is what releases the processor's runtime owner. Only the close button differs: it enters the exit
-    coordinator instead of saving and ending the application by itself. */
+    destruction is what releases the processor's runtime owner. The close button asks the editor to resolve project
+    changes before entering the exit coordinator. */
 class OpenTuneStandaloneWindow final : public juce::StandaloneFilterWindow
 {
 public:
@@ -32,6 +33,13 @@ public:
 
     void closeButtonPressed() override
     {
+        if (auto* processor = getAudioProcessor())
+            if (auto* editor = dynamic_cast<OpenTuneAudioProcessorEditor*>(processor->getActiveEditor()))
+            {
+                editor->requestExit();
+                return;
+            }
+
         OpenTune::StandaloneApp::requestQuit();
     }
 };
@@ -103,6 +111,19 @@ public:
 
     void systemRequestedQuit() override
     {
+        if (mainWindow != nullptr)
+        {
+            mainWindow->closeButtonPressed();
+            return;
+        }
+
+        if (pluginHolder != nullptr && pluginHolder->processor != nullptr)
+            if (auto* editor = dynamic_cast<OpenTuneAudioProcessorEditor*>(pluginHolder->processor->getActiveEditor()))
+            {
+                editor->requestExit();
+                return;
+            }
+
         requestQuit();
     }
 

@@ -267,12 +267,11 @@ public:
         false (a bridge that cannot quit). Message thread. */
     virtual bool canQuit() const { return false; }
 
-    /** Ends the application as the close button of the window does: the window saves the plugin state it saves
-        whenever it closes (not the project file) and quits through the application's normal shutdown. It asks
-        nothing about unsaved changes, which the caller has checked already. Returns when the quit is under way (the
-        application ends after the message loop returns to its owner), so that nothing of the editor may be used
-        afterwards. Returns false, doing nothing, when canQuit() is false. Message thread. */
-    virtual bool requestQuit() { return false; }
+    /** Ends the application through its normal shutdown. discardUnsaved carries the caller's explicit authorization
+        to discard a dirty project to the final close path, without another prompt. With false, the editor requires a
+        clean project and uses its normal unsaved-changes flow if that state changed after the caller checked it.
+        Returns true when the quit is under way, false when it was not started. Message thread. */
+    virtual bool requestQuit(bool discardUnsaved) { return false; }
 
     // ---- Preferences and audio device ---------------------------------------------------------
 

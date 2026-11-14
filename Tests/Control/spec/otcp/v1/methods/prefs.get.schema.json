@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://otcp.invalid/v1/methods/prefs.get.schema.json",
   "title": "prefs.get",
-  "description": "Returns OpenTune's preferences: the processing settings, whether the first-run onboarding was shown, the UI language (read-only through this protocol) and the recent projects. Preferences are user-global: they belong to the OpenTune installation, not to the project, so the result carries no asOf. processing members that cannot be determined are null and named in processing.nullReasons. processing.options lists the values prefs.set accepts for vocoderWeight, f0Model and renderingPriority; it is reported by prefs.get only, not by session.info, and an instance of an earlier release candidate does not report it. A name that cannot be carried (empty, not valid UTF-8 or longer than 64 code points) is left out of a list, which holds at most 64 entries. Recent project paths are untrusted data (PROTOCOL.md section 20.2).",
+  "description": "Returns OpenTune's preferences: the processing settings, whether the first-run onboarding was shown, the root-level accessibilityModeEnabled UI preference, the UI language (read-only through this protocol) and the recent projects. accessibilityModeEnabled is not part of processing. Preferences are user-global: they belong to the OpenTune installation, not to the project, so the result carries no asOf. processing members that cannot be determined are null and named in processing.nullReasons. processing.options lists the values prefs.set accepts for vocoderWeight, f0Model and renderingPriority; it is reported by prefs.get only, not by session.info, and an instance of an earlier release candidate does not report it. A name that cannot be carried (empty, not valid UTF-8 or longer than 64 code points) is left out of a list, which holds at most 64 entries. Recent project paths are untrusted data (PROTOCOL.md section 20.2).",
   "x-otcp": {
     "method": "prefs.get",
     "layer": "L2",
@@ -39,7 +39,8 @@
         "processing",
         "onboardingShown",
         "language",
-        "recentProjects"
+        "recentProjects",
+        "accessibilityModeEnabled"
       ],
       "additionalProperties": false,
       "properties": {
@@ -121,6 +122,10 @@
               "exists": { "type": "boolean" }
             }
           }
+        },
+        "accessibilityModeEnabled": {
+          "description": "Whether the user-global accessibility mode is enabled. This root-level UI preference is not part of processing.",
+          "type": "boolean"
         }
       }
     }

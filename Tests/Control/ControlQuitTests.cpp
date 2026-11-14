@@ -665,6 +665,7 @@ void scenarioAppQuit()
     CONTROL_CHECK(afterReply.events().empty());
     const auto result = quitAndWait(f, jsonOf(R"({"discardUnsaved":true})"));
     checkQuitResult(result, true, nullptr);
+    CONTROL_CHECK(bridge.lastDiscardUnsavedAuthorization);
     CONTROL_CHECK(afterReply.inOrder());
     CONTROL_CHECK(bridge.project.dirty && bridge.dirtyMarks == 0);
     CONTROL_CHECK(dispatcher->threadProbe().otherThreadAccesses.load() == 0);
@@ -722,6 +723,7 @@ void scenarioAppQuitResult()
         if (!f.open())
             return;
         checkQuitResult(quitAndWait(f), false, nullptr);
+        CONTROL_CHECK(!f.bridge.lastDiscardUnsavedAuthorization);
     }
     // The consent given for a project without changes discards nothing.
     {
@@ -729,6 +731,7 @@ void scenarioAppQuitResult()
         if (!f.open())
             return;
         checkQuitResult(quitAndWait(f, jsonOf(R"({"discardUnsaved":true})")), false, nullptr);
+        CONTROL_CHECK(f.bridge.lastDiscardUnsavedAuthorization);
     }
     // Changes discarded: the flag, and the warning IRREVERSIBLE with the project as its subject.
     {
@@ -737,6 +740,7 @@ void scenarioAppQuitResult()
             return;
         f.bridge.project.dirty = true;
         checkQuitResult(quitAndWait(f, jsonOf(R"({"discardUnsaved":true})")), true, nullptr);
+        CONTROL_CHECK(f.bridge.lastDiscardUnsavedAuthorization);
     }
     // A saved project: its file, an untrusted path that is returned as it is, also with non-ASCII characters.
     const auto directory = isolatedDataDirectory() / std::filesystem::u8path("quit-results");
@@ -751,8 +755,10 @@ void scenarioAppQuitResult()
         if (dirty) {
             CONTROL_CHECK(refuses(f, R"({"discardUnsaved":false})", "UNSAVED_CHANGES", "project_dirty"));
             checkQuitResult(quitAndWait(f, jsonOf(R"({"discardUnsaved":true})")), true, &path);
+            CONTROL_CHECK(f.bridge.lastDiscardUnsavedAuthorization);
         } else {
             checkQuitResult(quitAndWait(f, jsonOf(R"({"discardUnsaved":false})")), false, &path);
+            CONTROL_CHECK(!f.bridge.lastDiscardUnsavedAuthorization);
         }
         // The project file is never written, the flag never changed.
         CONTROL_CHECK(f.bridge.project.dirty == dirty && f.bridge.dirtyMarks == 0 && f.bridge.projectSaves == 0);

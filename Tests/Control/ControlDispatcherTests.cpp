@@ -1072,7 +1072,8 @@ void checkPrefs(ApiSession& api, OpenTuneAudioProcessor& processor)
     // Preferences are not project state.
     CONTROL_CHECK(result.find("asOf") == nullptr && result.find("derived") == nullptr);
     CONTROL_CHECK(
-        (memberNames(result) == std::set<std::string>{"processing", "onboardingShown", "language", "recentProjects"}));
+        (memberNames(result) == std::set<std::string>{"processing", "onboardingShown", "language", "recentProjects",
+                                                       "accessibilityModeEnabled"}));
     const auto& processing = memberOf(result, "processing");
     CONTROL_CHECK((memberNames(processing)
                        == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight", "f0Model",
