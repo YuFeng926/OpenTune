@@ -457,12 +457,14 @@ private:
     void wait(ControlJobStep& step)
     {
         const int limitMs = seedWaitLimitOverrideMs() > 0 ? seedWaitLimitOverrideMs() : kSeedWaitLimitMs;
-        if (std::chrono::steady_clock::now() - started_ >= std::chrono::milliseconds(limitMs)) {
+        const auto deadline = started_ + std::chrono::milliseconds(limitMs);
+        if (std::chrono::steady_clock::now() >= deadline) {
             step.fail({"NOT_READY", "timing_analysis_timeout",
                        "OpenTune's timing analysis of the content did not finish within the wait limit", false});
             return;
         }
         step.setProgress(std::nullopt, "analysing", std::nullopt, std::nullopt);
+        step.wakeAt(deadline);
     }
 
     void seed(ControlOpContext& context, ControlJobStep& step, const ControlContentRef& ref)

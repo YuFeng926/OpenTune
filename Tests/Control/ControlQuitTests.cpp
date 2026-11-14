@@ -282,6 +282,7 @@ std::shared_ptr<HeldJob> startHeldJob(QuitFixture& f, const std::string& kind)
 bool finishHeldJob(QuitFixture& f, const std::shared_ptr<HeldJob>& held)
 {
     held->release = true;
+    f.service().jobs()->wake();
     return pumpMessagesUntil([&f, held] { return jobState(f, held->id) == "succeeded"; }, kReadTimeoutMs);
 }
 

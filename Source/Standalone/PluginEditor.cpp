@@ -2756,6 +2756,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
             if (!result.success)
             {
                 safeThis->isImportInProgress_ = false;
+                safeThis->notifyControlBusyStateChanged();
                 safeThis->releaseImportBatchSlot(pendingImport.batchId);
                 safeThis->processNextImportInQueue();
                 ConfirmDialogContent::showMessage(
@@ -2795,6 +2796,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                             if (safeThis == nullptr)
                                 return;
                             safeThis->isImportInProgress_ = false;
+                            safeThis->notifyControlBusyStateChanged();
                             safeThis->releaseImportBatchSlot(batchId);
                             safeThis->processNextImportInQueue();
                             ConfirmDialogContent::showMessage(
@@ -2822,6 +2824,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     if (!committedPlacement.isValid())
                     {
                         safeThis->isImportInProgress_ = false;
+                        safeThis->notifyControlBusyStateChanged();
                         safeThis->releaseImportBatchSlot(pendingImport.batchId);
                         safeThis->processNextImportInQueue();
                         ConfirmDialogContent::showMessage(
@@ -2838,6 +2841,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     }
 
                     safeThis->isImportInProgress_ = false;
+                    safeThis->notifyControlBusyStateChanged();
                     safeThis->releaseImportBatchSlot(pendingImport.batchId);
 
                     safeThis->arrangementView_.requestContentRedraw();
@@ -2904,6 +2908,14 @@ void OpenTuneAudioProcessorEditor::processNextImportInQueue()
     importQueue_.erase(importQueue_.begin());
 
     startPendingImport(std::move(next));
+}
+
+void OpenTuneAudioProcessorEditor::notifyControlBusyStateChanged()
+{
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    if (controlEditorBridge_ != nullptr)
+        controlEditorBridge_->busyStateChanged();
+#endif
 }
 
 double OpenTuneAudioProcessorEditor::computeTrackAppendStartSeconds(int trackId) const

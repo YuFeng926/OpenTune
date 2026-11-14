@@ -4,6 +4,9 @@
 #include "ControlJson.h"
 #include "ControlProtocol.h"
 
+#include <juce_events/juce_events.h>
+
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -62,6 +65,10 @@ public:
     void cancel(JsonValue result = JsonValue(), bool changedState = false);
     /** True once one of succeed(), fail() or cancel() was called. */
     bool finished() const noexcept { return finished_; }
+    /** Schedules one message-thread step at deadline, unless an event wakes the registry first. */
+    void wakeAt(std::chrono::steady_clock::time_point deadline);
+    /** A thread-safe wake callback for work completed outside the message thread. */
+    std::function<void()> wakeCallback() const;
 
 private:
     friend class ControlJobs;
@@ -72,15 +79,15 @@ private:
     bool finished_ = false;
 };
 
-/** The work of a job. The registry calls it on the message thread, once per tick, until it ends the
+/** The work of a job. The registry calls it on the message thread when started or woken, until it ends the
     job, and destroys it on the message thread afterwards or when the registry stops. Each call must
     return quickly and should not run a nested message loop; long work belongs on a thread of the
     work's own, which its destructor joins. */
 using ControlJobWork = std::function<void(ControlJobStep& step)>;
 
 /**
- * The jobs of one instance (PROTOCOL.md section 12): the registry that job.get and job.cancel read, the
- * tick that advances every running job on the message thread, retention and the long poll of job.get.
+ * The jobs of one instance (PROTOCOL.md section 12): the registry that job.get and job.cancel read, event-driven
+ * job work on the message thread, retention and the long poll of job.get.
  *
  * - Ids are j:<instanceIdShort>:<seq>, seq from 1. A job is created queued, becomes running at its first
  *   step and ends succeeded, failed or cancelled; terminal states never change again.
@@ -101,14 +108,14 @@ using ControlJobWork = std::function<void(ControlJobStep& step)>;
  * the accessors from any thread. The work runs on the message thread only. Destroy the registry after
  * stop() (any thread then), or on the message thread.
  *
- * Re-entrancy: when a step runs a nested message loop, the tick's timer may fire inside it; that nested
- * tick does nothing. stop() called from such a loop stops the timer but leaves its destruction to the
- * registry's destructor, because the timer's callback has not returned yet; the works of the jobs that
+ * Re-entrancy: when a step runs a nested message loop, a queued async update may run inside it; that nested
+ * update does nothing and the outer dispatch schedules another update after the step returns. stop() called
+ * from such a loop cancels queued updates; the works of the jobs that
  * the interrupted tick was running are destroyed when it returns, and none of them is called again. The
  * registry itself must not be destroyed inside such a loop: the interrupted tick returns into it (debug
  * builds assert this).
  */
-class ControlJobs
+class ControlJobs : private juce::AsyncUpdater
 {
 public:
     /** How a lookup ended. */
@@ -138,7 +145,7 @@ public:
     explicit ControlJobs(const ControlLimits& limits);
     /** Calls stop() when it was not called; see the class threading rules. Never inside the nested
         message loop of a step (see Re-entrancy). */
-    ~ControlJobs();
+    ~ControlJobs() override;
 
     ControlJobs(const ControlJobs&) = delete;
     ControlJobs& operator=(const ControlJobs&) = delete;
@@ -147,7 +154,7 @@ public:
     void setInstanceShort(std::string instanceShort);
 
     /**
-     * Creates a job of the kind (a camelName of section 12.3) and starts the tick. idempotencyKey and
+     * Creates a job of the kind (a camelName of section 12.3) and queues its first step. idempotencyKey and
      * paramsDigest, when given, let findByKey() find the job while it is retained. Message thread.
      */
     Started start(const std::string& kind, bool cancellable, ControlJobWork work,
@@ -188,6 +195,11 @@ public:
      */
     void stop();
 
+    /** Wakes active work after a state change. Any thread. */
+    void wake() noexcept;
+    /** A callback safe to retain beyond this registry's lifetime. Any thread. */
+    std::function<void()> wakeCallback() const;
+
     /** True once stop() was called. Any thread. */
     bool isStopped() const;
     /** Number of retained jobs, and of those that are not terminal. Any thread; for tests. */
@@ -207,14 +219,14 @@ private:
     friend class ControlJobStep;
     struct Job;
     struct Waiter;
-    class Ticker;
+    struct WakeState;
 
     /** Wall-clock time of the timestamps. */
     std::int64_t now() const;
     /** Monotonic time of retention. */
     std::int64_t steadyNow() const;
-    /** Advances every active job once; returns whether one is still active. Message thread. */
-    bool tick();
+    /** Advances every active job once. Message thread. */
+    void tick();
     /** A terminal job retained beyond its time, which every reader treats as gone (section 12.4). */
     bool expiredLocked(const Job& job, std::int64_t steadyNowMs) const;
     void evictLocked(std::int64_t steadyNowMs);
@@ -223,6 +235,8 @@ private:
     void finishLocked(Job& job, const char* state, std::optional<ControlJobError> error, JsonValue result);
     void ensureWaiterThreadLocked();
     void waiterLoop();
+    void wakeUnderWakeStateLock() noexcept;
+    void handleAsyncUpdate() override;
 
     ControlLimits limits_;
     Clock clock_;
@@ -234,12 +248,13 @@ private:
     std::map<std::uint64_t, std::unique_ptr<Job>> jobs_;
     std::vector<Waiter> waiters_;
     std::thread waiterThread_;
+    std::shared_ptr<WakeState> wakeState_;
     bool stopped_ = false;
-    /** Message thread only. */
-    std::unique_ptr<Ticker> ticker_;
     /** Number of tick() calls running on the message thread (more than one only in a nested message
         loop). Message thread only. */
     int tickDepth_ = 0;
+    /** A nested async callback was consumed while an outer tick still owned the work. Message thread only. */
+    bool deferredUpdate_ = false;
 };
 
 } // namespace OpenTune

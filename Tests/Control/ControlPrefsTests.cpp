@@ -35,13 +35,16 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace OpenTune {
@@ -260,6 +263,13 @@ public:
         Never
     };
 
+    ~PrefsBridge() override
+    {
+        for (auto& worker : wakeWorkers_)
+            if (worker.joinable())
+                worker.join();
+    }
+
     juce::AudioDeviceManager* audioDevice() override { return manager; }
 
     void onPreferencesChanged() override
@@ -271,6 +281,15 @@ public:
         hasPending = true;
         if (apply == Apply::Immediate)
             applyPending();
+        else if (apply == Apply::AfterDelay && processor != nullptr) {
+            auto jobs = processor->getControlService().jobs();
+            const auto delay = std::chrono::milliseconds(applyDelayMs);
+            if (jobs != nullptr)
+                wakeWorkers_.emplace_back([jobs = std::move(jobs), delay] {
+                    std::this_thread::sleep_for(delay);
+                    jobs->wake();
+                });
+        }
     }
 
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override
@@ -329,6 +348,8 @@ public:
     mutable bool appliedNotesPrimary = false;
 
 private:
+    std::vector<std::thread> wakeWorkers_;
+
     void applyPending() const
     {
         const bool was = appliedNotesPrimary;
@@ -1054,6 +1075,14 @@ public:
     FakeRuntime& operator=(const FakeRuntime&) = delete;
     ~FakeRuntime()
     {
+        {
+            std::lock_guard<std::mutex> lock(eventMutex_);
+            stopEvents_ = true;
+        }
+        eventChanged_.notify_all();
+        for (auto& worker : eventWorkers_)
+            if (worker.joinable())
+                worker.join();
         controlSetPrefsBackendForTesting({});
         controlSetPrefsApplyTimeoutForTesting(0);
         controlSetPrefsVocoderWaitForTesting(0);
@@ -1064,15 +1093,16 @@ public:
         ControlPrefsBackend backend;
         backend.modelsDirectory = [dir = models.u8string()] { return dir; };
         backend.vocoderState = [this] { return state(); };
-        backend.setVocoderWeight = [this](OpenTuneAudioProcessor&, const std::string& weight) {
+        backend.setVocoderWeight = [this](OpenTuneAudioProcessor& processor, const std::string& weight) {
             calls.push_back("weight:" + weight);
             if (!vocoderAccepts)
                 return false;
-            command();
+            command(&processor);
             return true;
         };
-        backend.resetInferenceBackend = [this](OpenTuneAudioProcessor&, bool forceCpu) {
-            command();
+        backend.resetInferenceBackend = [this](OpenTuneAudioProcessor& processor, bool forceCpu) {
+            processor_ = &processor;
+            command(processor_);
             pendingBackend_ = backendFor(forceCpu);
             calls.push_back(forceCpu ? "priority:cpuFirst" : "priority:gpuFirst");
         };
@@ -1141,6 +1171,8 @@ public:
         failNextLoad = false;
         neverReady = false;
         present = true;
+        invalidatePendingEvents();
+        wakeJobs();
     }
 
     /** The runtime is in the middle of a reconfiguration that never ends. */
@@ -1151,6 +1183,8 @@ public:
         queuedMs = 0;
         commandFails_ = false;
         commandAtMs = juce::Time::getMillisecondCounter();
+        invalidatePendingEvents();
+        wakeJobs();
     }
 
     bool present = true;
@@ -1173,14 +1207,60 @@ public:
     mutable int backendReads = 0;
 
 private:
-    void command()
+    void command(OpenTuneAudioProcessor* processor)
     {
+        processor_ = processor;
+        auto jobs = processor_ != nullptr ? processor_->getControlService().jobs() : nullptr;
+        const auto generation = invalidatePendingEvents();
         commandAtMs = juce::Time::getMillisecondCounter();
         commandFails_ = failNextLoad;
         failNextLoad = false;
+        if (jobs == nullptr)
+            return;
+
+        const auto queued = std::chrono::milliseconds(queuedMs);
+        const auto loading = std::chrono::milliseconds(loadingMs);
+        eventWorkers_.emplace_back([this, jobs = std::move(jobs), generation, queued, loading] {
+            const auto waitFor = [this, generation](std::chrono::milliseconds duration) {
+                std::unique_lock<std::mutex> lock(eventMutex_);
+                return eventChanged_.wait_for(lock, duration, [this, generation] {
+                    return stopEvents_ || eventGeneration_.load(std::memory_order_acquire) != generation;
+                });
+            };
+            if (waitFor(queued))
+                return;
+            jobs->wake();
+            if (waitFor(loading))
+                return;
+            jobs->wake();
+        });
+    }
+
+    void wakeJobs() const
+    {
+        if (processor_ != nullptr)
+            processor_->getControlService().wakeJobs();
+    }
+
+    std::uint64_t invalidatePendingEvents()
+    {
+        std::uint64_t generation = 0;
+        {
+            std::lock_guard<std::mutex> lock(eventMutex_);
+            generation = eventGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        }
+        eventChanged_.notify_all();
+        return generation;
     }
 
     const char* backendFor(bool cpuFirst) const { return cpuFirst || !gpuAvailable ? "cpu" : "directml"; }
+
+    mutable OpenTuneAudioProcessor* processor_ = nullptr;
+    std::mutex eventMutex_;
+    std::condition_variable eventChanged_;
+    std::atomic<std::uint64_t> eventGeneration_{0};
+    bool stopEvents_ = false;
+    std::vector<std::thread> eventWorkers_;
 
     std::optional<std::uint32_t> commandAtMs;
     bool commandFails_ = false;

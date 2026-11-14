@@ -15,8 +15,6 @@ namespace {
 
 using SteadyClock = std::chrono::steady_clock;
 
-/** Interval of the tick that advances running jobs on the message thread. */
-constexpr int kTickIntervalMs = 20;
 /** Longest detail of an error object (PROTOCOL.md section 17.1). */
 constexpr std::size_t kMaxDetailBytes = 1024;
 
@@ -117,6 +115,7 @@ struct ControlJobs::Job
     std::string idempotencyKey;
     std::string paramsDigest;
     std::shared_ptr<ControlJobWork> work;
+    std::optional<SteadyClock::time_point> wakeAt;
 
     bool terminal() const { return isTerminalState(state); }
 };
@@ -129,22 +128,19 @@ struct ControlJobs::Waiter
     WaitResponder respond;
 };
 
-/** The message-thread timer that advances running jobs; runs only while a job is active. */
-class ControlJobs::Ticker : public juce::Timer
+struct ControlJobs::WakeState
 {
-public:
-    explicit Ticker(ControlJobs& jobs) : jobs_(jobs) {}
-    ~Ticker() override { stopTimer(); }
+    explicit WakeState(ControlJobs& jobsIn) : jobs(&jobsIn) {}
 
-    void timerCallback() override
+    void wake()
     {
-        // stop() called from a nested message loop inside tick() leaves this object alive (see stop()).
-        if (!jobs_.tick())
-            stopTimer();
+        std::lock_guard<std::mutex> lock(mutex);
+        if (jobs != nullptr)
+            jobs->wakeUnderWakeStateLock();
     }
 
-private:
-    ControlJobs& jobs_;
+    std::mutex mutex;
+    ControlJobs* jobs;
 };
 
 // ---- ControlJobStep -----------------------------------------------------------------------------
@@ -225,6 +221,31 @@ void ControlJobStep::cancel(JsonValue result, bool changedState)
     jobs_.changed_.notify_all();
 }
 
+void ControlJobStep::wakeAt(std::chrono::steady_clock::time_point deadline)
+{
+    const bool immediate = deadline <= SteadyClock::now();
+    {
+        std::lock_guard<std::mutex> lock(jobs_.mutex_);
+        const auto it = jobs_.jobs_.find(seq_);
+        if (it == jobs_.jobs_.end() || it->second->terminal())
+            return;
+        if (immediate) {
+            it->second->wakeAt.reset();
+        } else {
+            it->second->wakeAt = deadline;
+            jobs_.ensureWaiterThreadLocked();
+            jobs_.changed_.notify_all();
+        }
+    }
+    if (immediate)
+        jobs_.wake();
+}
+
+std::function<void()> ControlJobStep::wakeCallback() const
+{
+    return jobs_.wakeCallback();
+}
+
 // ---- ControlJobs --------------------------------------------------------------------------------
 
 ControlJobs::ControlJobs(const ControlLimits& limits)
@@ -234,6 +255,7 @@ ControlJobs::ControlJobs(const ControlLimits& limits)
         return static_cast<std::int64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count());
     })
+    , wakeState_(std::make_shared<WakeState>(*this))
 {}
 
 ControlJobs::~ControlJobs()
@@ -244,6 +266,8 @@ ControlJobs::~ControlJobs()
     // ControlService stops the registry on the message thread first; this only covers a registry that a
     // test creates and destroys on the message thread.
     stop();
+    std::lock_guard<std::mutex> lock(wakeState_->mutex);
+    wakeState_->jobs = nullptr;
 }
 
 void ControlJobs::setInstanceShort(std::string instanceShort)
@@ -307,12 +331,31 @@ ControlJobs::Started ControlJobs::start(const std::string& kind, bool cancellabl
         job->work = std::make_shared<ControlJobWork>(std::move(work));
         started.jobId = job->jobId;
         jobs_.emplace(job->seq, std::move(job));
+        ensureWaiterThreadLocked();
     }
-    if (ticker_ == nullptr)
-        ticker_ = std::make_unique<Ticker>(*this);
-    if (!ticker_->isTimerRunning())
-        ticker_->startTimer(kTickIntervalMs);
+    wake();
     return started;
+}
+
+void ControlJobs::wake() noexcept
+{
+    std::lock_guard<std::mutex> lock(wakeState_->mutex);
+    wakeUnderWakeStateLock();
+}
+
+void ControlJobs::wakeUnderWakeStateLock() noexcept
+{
+    if (!isStopped())
+        triggerAsyncUpdate();
+}
+
+std::function<void()> ControlJobs::wakeCallback() const
+{
+    std::weak_ptr<WakeState> weak = wakeState_;
+    return [weak] {
+        if (const auto state = weak.lock())
+            state->wake();
+    };
 }
 
 std::string ControlJobs::findByKey(const std::string& kind, const std::string& idempotencyKey,
@@ -405,6 +448,7 @@ void ControlJobs::finishLocked(Job& job, const char* state, std::optional<Contro
     job.finishedAtMs = now();
     job.finishedSteadyMs = steadyNow();
     job.updatedAtMs = job.finishedAtMs;
+    job.wakeAt.reset();
 }
 
 ControlJobs::Lookup ControlJobs::get(const std::string& jobId, JsonValue& job) const
@@ -472,6 +516,7 @@ void ControlJobs::waiterLoop()
     std::unique_lock<std::mutex> lock(mutex_);
     for (;;) {
         std::vector<Ready> ready;
+        bool jobsDue = false;
         const auto nowTime = SteadyClock::now();
         auto next = SteadyClock::time_point::max();
         for (auto it = waiters_.begin(); it != waiters_.end();) {
@@ -490,9 +535,21 @@ void ControlJobs::waiterLoop()
             }
             it = waiters_.erase(it);
         }
-        if (!ready.empty()) {
+        for (auto& [seq, job] : jobs_) {
+            if (job->terminal() || !job->wakeAt)
+                continue;
+            if (*job->wakeAt <= nowTime) {
+                job->wakeAt.reset();
+                jobsDue = true;
+            } else {
+                next = std::min(next, *job->wakeAt);
+            }
+        }
+        if (!ready.empty() || jobsDue) {
             // Responding only queues a line on the connection; never under the registry's mutex.
             lock.unlock();
+            if (jobsDue)
+                wake();
             for (auto& entry : ready)
                 entry.respond(entry.lookup, std::move(entry.job));
             ready.clear();
@@ -511,6 +568,7 @@ void ControlJobs::waiterLoop()
 ControlJobs::Cancel ControlJobs::cancel(const std::string& jobId, JsonValue& job)
 {
     Cancel outcome = Cancel::NotFound;
+    bool requested = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (stopped_)
@@ -528,20 +586,37 @@ ControlJobs::Cancel ControlJobs::cancel(const std::string& jobId, JsonValue& job
             found->cancelRequested = true;
             found->updatedAtMs = now();
             outcome = Cancel::Requested;
+            requested = true;
         }
         job = jobJsonLocked(*found);
     }
     changed_.notify_all();
+    if (requested)
+        wake();
     return outcome;
 }
 
-bool ControlJobs::tick()
+void ControlJobs::handleAsyncUpdate()
 {
-    // A step that runs a nested message loop lets the timer fire inside it. The outer tick is still in
-    // that step, so the nested tick calls no work (no step is ever re-entered).
     if (tickDepth_ > 0) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return !stopped_;
+        deferredUpdate_ = true;
+        return;
+    }
+    deferredUpdate_ = false;
+    tick();
+    if (deferredUpdate_ && !isStopped()) {
+        deferredUpdate_ = false;
+        triggerAsyncUpdate();
+    }
+}
+
+void ControlJobs::tick()
+{
+    // A step that runs a nested message loop can dispatch an async update. The outer step keeps ownership of
+    // its work; the consumed update is queued again after the outer tick returns.
+    if (tickDepth_ > 0) {
+        deferredUpdate_ = true;
+        return;
     }
     struct DepthGuard
     {
@@ -556,10 +631,11 @@ bool ControlJobs::tick()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (stopped_)
-            return false;
+            return;
         for (auto& [seq, job] : jobs_) {
             if (job->terminal() || job->work == nullptr)
                 continue;
+            job->wakeAt.reset();
             if (job->state == kQueued) {
                 job->state = kRunning;
                 job->updatedAtMs = now();
@@ -571,7 +647,7 @@ bool ControlJobs::tick()
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (stopped_)
-                return false;
+                return;
         }
         ControlJobStep step(*this, seq);
         try {
@@ -592,9 +668,7 @@ bool ControlJobs::tick()
             work.reset();
         }
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    return std::any_of(jobs_.begin(), jobs_.end(),
-                       [](const auto& entry) { return !entry.second->terminal() && entry.second->work != nullptr; });
+    changed_.notify_all();
 }
 
 void ControlJobs::stop()
@@ -613,12 +687,9 @@ void ControlJobs::stop()
     changed_.notify_all();
     if (waiterThread_.joinable() && waiterThread_.get_id() != std::this_thread::get_id())
         waiterThread_.join();
-    if (ticker_ != nullptr) {
-        ticker_->stopTimer();
-        // Called from a nested message loop inside a step, the ticker's timerCallback() has not returned
-        // yet and still uses the ticker: it is destroyed with the registry instead.
-        if (tickDepth_ == 0)
-            ticker_.reset();
+    {
+        std::lock_guard<std::mutex> lock(wakeState_->mutex);
+        cancelPendingUpdate();
     }
     // The work of every job is destroyed here, except the works the interrupted tick still holds (they go
     // when it returns); whatever threads a work owns are joined by its destructor.

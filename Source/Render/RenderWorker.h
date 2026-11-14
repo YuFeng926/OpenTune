@@ -65,6 +65,7 @@ public:
             bool closed{false};
             std::condition_variable cv;
             std::condition_variable* workerCv{nullptr};
+            std::function<void()> stateChangedCallback;
         };
 
         std::shared_ptr<Control> control;
@@ -77,6 +78,8 @@ public:
     RenderWorker& operator=(const RenderWorker&) = delete;
 
     void attachExecutionLease(RenderExecutionLease lease);
+    void setStateChangedCallback(std::function<void()> callback);
+    void notifyStateChanged() const;
     /**
      * detachExecutionLease — 终止执行租约（析构路径专用）。
      * 立即清空 lease 与排队 job，并等待正在执行的 renderJobCallback 和
@@ -158,6 +161,7 @@ private:
     int inFlight_{0};
     std::shared_ptr<AsyncState::Control> asyncControl_;
     std::function<void()> stage1CapacityCallback_;
+    std::function<void()> stateChangedCallback_;
 };
 
 } // namespace OpenTune

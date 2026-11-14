@@ -182,6 +182,7 @@ bool ControlService::startListening()
     dispatcher->setRedactionSecrets(server->secrets());
     dispatcher_ = std::move(dispatcher);
     jobs_ = std::move(jobs);
+    processor_.setControlJobWakeCallback(jobs_->wakeCallback());
     discoveryFile_ = server->discoveryFilePath();
     port_ = server->port();
     if (options_.readyFile) {
@@ -236,6 +237,17 @@ void ControlService::withdrawReadyFile()
     if (file.loadFileAsString().toStdString() == readyFileContent_ && !file.deleteFile())
         log("control API: the ready file could not be deleted");
     readyFileContent_.clear();
+}
+
+void ControlService::wakeJobs() const noexcept
+{
+    if (jobs_ != nullptr)
+        jobs_->wake();
+}
+
+std::function<void()> ControlService::jobWakeCallback() const
+{
+    return jobs_ != nullptr ? jobs_->wakeCallback() : std::function<void()>{};
 }
 
 void ControlService::log(const std::string& message) const

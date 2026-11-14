@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <thread>
 
@@ -264,11 +265,14 @@ std::string labelSeconds(double seconds)
 class PreparedFile
 {
 public:
-    PreparedFile(OpenTuneAudioProcessor& processor, std::string path) : path_(std::move(path))
+    PreparedFile(OpenTuneAudioProcessor& processor, std::string path, std::function<void()> wake)
+        : path_(std::move(path))
+        , wake_(std::move(wake))
     {
         thread_ = std::thread([this, &processor] {
             run(processor);
             done_ = true;
+            wake_();
         });
     }
 
@@ -350,6 +354,7 @@ private:
     }
 
     std::string path_;
+    std::function<void()> wake_;
     std::atomic<bool> done_{false};
     std::atomic<bool> abandoned_{false};
     std::thread thread_;
@@ -385,8 +390,8 @@ struct ImportItem
  * Source/Standalone/PluginEditor.cpp), then focuses the last clip and requests the pitch analysis of every
  * committed clip, and ends when every analysis has finished.
  *
- * - The commit waits while the editor is busy (UI priority). Cancellation stops before the next commit
- *   without waiting for the UI; clips committed before stay, and the result reports them.
+ * - The commit waits while the editor is busy (UI priority), then resumes on the UI's release event. Cancellation stops
+ *   before the next commit without waiting for the UI; clips committed before stay, and the result reports them.
  * - OpenTuneAudioProcessor::commitPreparedImportAsPlacement() is the editor's commit. After a project was
  *   opened, OpenTune gives a new clip an id that a clip of the project may already have, and the commit
  *   fails; each failed attempt uses up that id. The job therefore repeats the commit, at most once per
@@ -423,11 +428,12 @@ class ImportJob
 {
 public:
     ImportJob(ControlOpEnvironment environment, const ImportParams& params, int targetTrack,
-              std::unique_ptr<ControlWriteEnvelope> envelope)
+              std::unique_ptr<ControlWriteEnvelope> envelope, std::function<void()> wake)
         : environment_(std::move(environment))
         , params_(params)
         , targetTrack_(targetTrack)
         , envelope_(std::move(envelope))
+        , wake_(std::move(wake))
         , analysis_(analysisOverride())
     {
         for (const auto& path : params_.paths) {
@@ -494,8 +500,17 @@ private:
                     return;
                 }
                 // UI priority: nothing is committed under the user's hands; the next tick tries again.
-                if (controlCheckBusy(context).has_value())
+                if (controlCheckBusy(context).has_value()) {
+                    if (!watchingModal_)
+                        if (auto* bridge = context.bridge()) {
+                            const auto busy = bridge->queryBusy().value_or(ControlUiBridge::BusyState{});
+                            if (busy.modalOpen) {
+                                bridge->watchBusyState(wake_);
+                                watchingModal_ = true;
+                            }
+                        }
                     return;
+                }
                 commit(context, item, *file_);
             }
             file_.reset();
@@ -508,7 +523,7 @@ private:
             enterAnalysis(context);
             return;
         }
-        file_ = std::make_unique<PreparedFile>(context.processor(), items_[next_].path);
+        file_ = std::make_unique<PreparedFile>(context.processor(), items_[next_].path, wake_);
     }
 
     void commit(ControlOpContext& context, ImportItem& item, PreparedFile& file)
@@ -662,7 +677,10 @@ private:
             if (!item.notesBy.empty()) {
                 request.generateNotesWholeContentOnReady = true;
                 auto generated = item.notesGenerated;
-                request.onNotesGenerated = [generated] { generated->store(true); };
+                request.onNotesGenerated = [generated, wake = wake_] {
+                    generated->store(true);
+                    wake();
+                };
             }
             // OpenTuneAudioProcessor::requestContentRefresh(): the editor's analysis request after an
             // import, which also runs the requested note generation once the analysis is ready.
@@ -849,6 +867,7 @@ private:
     ImportParams params_;
     int targetTrack_;
     std::unique_ptr<ControlWriteEnvelope> envelope_;
+    std::function<void()> wake_;
     ControlImportAnalysis analysis_;
     std::vector<ImportItem> items_;
     std::size_t next_ = 0;
@@ -859,6 +878,7 @@ private:
     std::vector<int> revealedTracks_;
     Phase phase_ = Phase::Import;
     bool cancelled_ = false;
+    bool watchingModal_ = false;
 };
 
 // ---- import.start ---------------------------------------------------------------------------------
@@ -926,7 +946,8 @@ Result<JsonValue> runImportStart(ControlOpContext& context, const ImportParams& 
 
     // The envelope of the job's result starts here: its revisionDiff and dirty flag cover the whole job.
     auto jobEnvelope = std::make_unique<ControlWriteEnvelope>(context);
-    auto job = std::make_shared<ImportJob>(context.environment(), params, target, std::move(jobEnvelope));
+    auto job = std::make_shared<ImportJob>(context.environment(), params, target, std::move(jobEnvelope),
+                                           jobs->wakeCallback());
     const auto started =
         jobs->start("import", true, [job](ControlJobStep& step) { job->step(step); }, params.idempotencyKey, digest);
     if (started.jobId.empty())

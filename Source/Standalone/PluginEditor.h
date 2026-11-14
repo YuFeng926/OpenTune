@@ -229,6 +229,7 @@ private:
     void queuePendingImport(PendingImport pendingImport);
     void startPendingImport(PendingImport pendingImport);
     void processNextImportInQueue();  // 处理导入队列中的下一个文件
+    void notifyControlBusyStateChanged();
     void launchBackgroundUiTask(std::function<void()> task);
     void waitForBackgroundUiTasks();
     double computeTrackAppendStartSeconds(int trackId) const;

@@ -26,6 +26,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <set>
 #include <vector>
@@ -469,6 +470,7 @@ void scenarioJobs()
                                     + quoted(runningId) + "}}");
                 first = connection.readLine();
                 running->release = true;
+                jobs->wake();
                 second = connection.readLine();
                 heldMs = millisecondsSince(started);
             },
@@ -524,6 +526,7 @@ void scenarioJobs()
         CONTROL_CHECK(memberOf(again, "cancelRequested").asBoolean()
                       && memberOf(memberOf(again, "job"), "state").text() == "running");
         analysing->holdCancellation = false;
+        jobs->wake();
         const auto job = waitJob(api, analysingId);
         CONTROL_CHECK(memberOf(job, "state").text() == "cancelled" && !memberOf(job, "cancellable").asBoolean());
         CONTROL_CHECK(errorKindOf(memberOf(job, "error")).text() == "CANCELLED"
@@ -531,7 +534,43 @@ void scenarioJobs()
         CONTROL_CHECK(!memberOf(memberOf(memberOf(job, "error"), "data"), "executed").asBoolean());
     }
     saving->release = true;
+    jobs->wake();
     CONTROL_CHECK(memberOf(waitJob(api, savingId), "state").text() == "succeeded");
+
+    // A worker completion can wake the registry through its lifetime-safe callback.
+    auto workerReleased = std::make_shared<FixtureJob>();
+    const auto workerReleasedId = jobs->start("import", true, fixtureWork(workerReleased)).jobId;
+    CONTROL_CHECK(pumpMessagesUntil([&workerReleased] { return workerReleased->steps.load() > 0; }, kReadTimeoutMs));
+    const auto wake = jobs->wakeCallback();
+    std::thread worker([workerReleased, wake] {
+        workerReleased->release = true;
+        wake();
+    });
+    worker.join();
+    CONTROL_CHECK(pumpMessagesUntil(
+        [&jobs, &workerReleasedId] {
+            JsonValue job;
+            return jobs->get(workerReleasedId, job) == ControlJobs::Lookup::Found
+                   && memberOf(job, "state").text() == "succeeded";
+        },
+        kReadTimeoutMs));
+
+    // An explicit deadline advances a job once, without periodic polling.
+    auto delayedSteps = std::make_shared<std::atomic<int>>(0);
+    const auto delayedId = jobs->start("timeGridSeed", true, [delayedSteps](ControlJobStep& step) {
+        if (++*delayedSteps == 1)
+            step.wakeAt(std::chrono::steady_clock::now() + std::chrono::milliseconds(10));
+        else
+            step.succeed(JsonValue::object());
+    }).jobId;
+    CONTROL_CHECK(pumpMessagesUntil(
+        [&jobs, &delayedId] {
+            JsonValue job;
+            return jobs->get(delayedId, job) == ControlJobs::Lookup::Found
+                   && memberOf(job, "state").text() == "succeeded";
+        },
+        kReadTimeoutMs));
+    CONTROL_CHECK(delayedSteps->load() == 2);
 
     // Retention (section 12.4) on a registry of its own with an injected clock: 64 retained jobs at most;
     // terminal jobs that finished first are evicted first; active jobs never; terminal jobs leave after
@@ -596,9 +635,8 @@ void scenarioJobs()
         registry.stop();
     }
 
-    // stop() from a nested message loop inside a step: the timer that fires inside the loop calls no work,
-    // the stop does not destroy the timer under its own callback, the interrupted work goes once its step
-    // returned, and no work runs afterwards.
+    // stop() from a nested message loop inside a step: the interrupted work goes once its step returned,
+    // and no work runs afterwards.
     {
         const ControlLimits limits;
         ControlJobs registry(limits);
@@ -624,7 +662,7 @@ void scenarioJobs()
         ControlJobWork work = [record, marker, target](ControlJobStep&) {
             if (++record->steps > 1)
                 return;
-            // A nested message loop longer than several ticks, then the stop from inside it.
+            // A nested message loop, then the stop from inside it.
             pumpMessagesFor(kQuietPumpMs);
             record->stepsInsideLoop = record->steps.load();
             juce::MessageManager::callAsync([target] { target->stop(); });
@@ -1221,11 +1259,27 @@ void scenarioImportAfterOpen()
 
 void scenarioImportCancel()
 {
+    class ImportUiBridge : public TestUiBridge
+    {
+    public:
+        std::optional<BusyState> queryBusy() const override
+        {
+            auto state = TestUiBridge::queryBusy();
+            if (state && modalWhileJobActive && jobs != nullptr && jobs->activeCount() > 0)
+                state->modalOpen = true;
+            return state;
+        }
+
+        std::shared_ptr<ControlJobs> jobs;
+        bool modalWhileJobActive = false;
+    };
+
     auto processor = startedProcessor();
     auto& service = processor->getControlService();
     if (!service.isRunning())
         return;
-    TestUiBridge bridge;
+    ImportUiBridge bridge;
+    bridge.jobs = service.jobs();
     bridge.visibleTracks = 4;
     ScopedBridge registered(service, bridge);
     SyntheticAnalysis analysis;
@@ -1278,6 +1332,19 @@ void scenarioImportCancel()
     // under the user's hands.
     CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
                   && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
+
+    // An import paused by a modal resumes when that modal's close callback wakes its job.
+    bridge.modalWhileJobActive = true;
+    const auto modalStart = api.result(
+        "import.start", json(R"({"items":[{"path":)" + quoted(writeTone(media, "modal", 1.0))
+                              + R"(}],"layout":"single","trackId":0})"));
+    const auto modalJobId = memberOf(memberOf(modalStart, "job"), "jobId").text();
+    CONTROL_CHECK(pumpMessagesUntil([&bridge] { return static_cast<bool>(bridge.busyStateWake); }, kReadTimeoutMs));
+    CONTROL_CHECK(memberOf(memberOf(api.result("job.get", json(R"({"jobId":)" + quoted(modalJobId) + "}")), "job"),
+                           "state").text() == "running");
+    bridge.modalWhileJobActive = false;
+    bridge.fireBusyStateChanged();
+    CONTROL_CHECK(memberOf(waitJob(api, modalJobId), "state").text() == "succeeded");
 }
 
 // ---- The revert recipe of an import ---------------------------------------------------------------

@@ -46,6 +46,13 @@ public:
     }
 
     std::optional<BusyState> queryBusy() const override { return busy; }
+    void watchBusyState(std::function<void()> wake) override { busyStateWake = std::move(wake); }
+    void fireBusyStateChanged()
+    {
+        auto wake = std::move(busyStateWake);
+        if (wake)
+            wake();
+    }
 
     void onStructureChanged() override { ++structureChanges; }
     void onUndoRedoApplied() override { ++undoRedoNotifications; }
@@ -100,6 +107,7 @@ public:
     /** Injected state. */
     ProjectInfo project;
     BusyState busy;
+    std::function<void()> busyStateWake;
     ViewState view;
     std::vector<std::uint64_t> selection;
     int visibleTracks = 1;

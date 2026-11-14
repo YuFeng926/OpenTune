@@ -12,6 +12,7 @@
 #include "../Inference/TimeStretchCache.h"
 #include <juce_core/juce_core.h>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace OpenTune {
@@ -61,6 +62,8 @@ public:
 
     void attachExecutionLease(ExecutionLease lease);
     void detachExecutionLease(void* owner);
+    void setStateChangedCallback(std::function<void()> callback);
+    void notifyWorkStateChanged();
     // Message thread: forwards a shared backend change to the attached lease.
     void notifyBackendChanged();
     // notes/silentGaps 从 job.contentSnapshot 读取，不复制、不额外传参。

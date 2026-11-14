@@ -41,6 +41,7 @@
 #include "Utils/PitchShiftEditAction.h"
 #include "Utils/TimeGridEditAction.h"
 #include "Render/Stage2TimeStretchRebuilder.h"
+#include "Render/ContentRenderService.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
 #include <atomic>
@@ -602,6 +603,9 @@ void OpenTuneAudioProcessor::analysisFinished(
     }
 
     setContentReferenceFeatures(key, result);
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    controlService_->wakeJobs();
+#endif
 
     const auto pendingIt = pendingTimeToolSeedKeys_.find(key);
     if (pendingIt == pendingTimeToolSeedKeys_.end())
@@ -3381,12 +3385,24 @@ void OpenTuneAudioProcessor::setContentChangedCallback(ContentChangedCallback ca
 }
 #endif
 
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+void OpenTuneAudioProcessor::setControlJobWakeCallback(std::function<void()> callback)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->setStateChangedCallback(std::move(callback));
+}
+#endif
+
 void OpenTuneAudioProcessor::notifyContentChanged(ContentKey key)
 {
 #if JucePlugin_Build_Standalone
     JUCE_ASSERT_MESSAGE_THREAD
     if (contentChangedCallback_)
         contentChangedCallback_(key);
+#if defined(OPENTUNE_ENABLE_CONTROL_API)
+    controlService_->wakeJobs();
+#endif
 #else
     juce::ignoreUnused(key);
 #endif

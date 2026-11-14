@@ -403,17 +403,19 @@ Result<JsonValue> startSave(ControlOpContext& context, const ProjectParts& parts
     task->targetFile = shared->temporary;
 
     auto job = std::make_shared<SaveJob>(context.environment(), spec, shared);
+    auto wake = jobs->wakeCallback();
     const auto started = jobs->start(kJobKindSave, false, [job](ControlJobStep& step) { job->step(step); });
     if (started.jobId.empty())
         return startRefusal(started.refusal);
     parts.bridge->setProjectOperationRunning(true);
     // ProjectSession::executeSaveToFile(): the editor's own file I/O (media copy and project write), a static function
     // that touches no state of the session.
-    parts.pool->addJob([shared, task] {
+    parts.pool->addJob([shared, task, wake = std::move(wake)] {
         shared->written = ProjectSession::executeSaveToFile(*task).ok();
         shared->done = true;
         if (shared->abandoned.load())
             shared->temporary.deleteFile();
+        wake();
     });
     ControlWriteEnvelope envelope(context);
     return envelope.handedToJob(context, jobs->jobRef(started.jobId));
@@ -645,17 +647,19 @@ Result<JsonValue> startCopy(ControlOpContext& context, const ProjectParts& parts
     task->targetFile = shared->temporary;
 
     auto job = std::make_shared<CopyJob>(context.environment(), target, shared);
+    auto wake = jobs->wakeCallback();
     const auto started = jobs->start(kJobKindCopy, false, [job](ControlJobStep& step) { job->step(step); });
     if (started.jobId.empty())
         return startRefusal(started.refusal);
     parts.bridge->setProjectOperationRunning(true);
     // ProjectSession::executeSaveToFile(): the editor's own file I/O (media copy and project write), a static function
     // that touches no state of the session.
-    parts.pool->addJob([shared, task] {
+    parts.pool->addJob([shared, task, wake = std::move(wake)] {
         shared->written = ProjectSession::executeSaveToFile(*task).ok();
         shared->done = true;
         if (shared->abandoned.load())
             shared->temporary.deleteFile();
+        wake();
     });
     ControlWriteEnvelope envelope(context);
     return envelope.handedToJob(context, jobs->jobRef(started.jobId));
@@ -1046,6 +1050,7 @@ Result<JsonValue> runOpen(ControlOpContext& context, const PathParams& params)
 
     auto shared = std::make_shared<OpenShared>();
     auto job = std::make_shared<OpenJob>(context.environment(), params.consent, shared);
+    auto wake = jobs->wakeCallback();
     const auto started = jobs->start(kJobKindOpen, true, [job](ControlJobStep& step) { job->step(step); });
     if (started.jobId.empty())
         return startRefusal(started.refusal);
@@ -1055,9 +1060,10 @@ Result<JsonValue> runOpen(ControlOpContext& context, const PathParams& params)
     // language of its error texts is resolved here, on the message thread, as startOpenProject resolves it.
     auto* session = parts.value().session;
     const auto openLanguage = LocalizationManager::getInstance().resolveLanguage();
-    parts.value().pool->addJob([shared, session, file, openLanguage] {
+    parts.value().pool->addJob([shared, session, file, openLanguage, wake = std::move(wake)] {
         shared->prepared.emplace(session->prepareOpen(file, openLanguage));
         shared->done = true;
+        wake();
     });
     ControlWriteEnvelope envelope(context);
     return envelope.handedToJob(context, jobs->jobRef(started.jobId));

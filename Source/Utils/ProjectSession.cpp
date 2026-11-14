@@ -72,7 +72,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
 
     // Header
     snap.header.projectFormatVersion = ProjectPersistence::kCurrentProjectFormatVersion;
-    snap.header.appVersion = "1.5.0";
+    snap.header.appVersion = OPENTUNE_VERSION;
     snap.header.projectName = getProjectName();
 
     // 工程身份固化：首次保存时生成，后续保存复用

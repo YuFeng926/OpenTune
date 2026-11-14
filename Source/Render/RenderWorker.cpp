@@ -80,6 +80,29 @@ void RenderWorker::attachExecutionLease(RenderExecutionLease lease)
         capacityCallback();
 }
 
+void RenderWorker::setStateChangedCallback(std::function<void()> callback)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stateChangedCallback_ = callback;
+    }
+    {
+        std::lock_guard<std::mutex> lock(asyncControl_->mutex);
+        asyncControl_->stateChangedCallback = std::move(callback);
+    }
+}
+
+void RenderWorker::notifyStateChanged() const
+{
+    std::function<void()> changed;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        changed = stateChangedCallback_;
+    }
+    if (changed)
+        changed();
+}
+
 void RenderWorker::detachExecutionLease(void* owner)
 {
     std::deque<RenderJob> discardedJobs;
@@ -460,6 +483,7 @@ void RenderWorker::completeAsyncJob(const std::shared_ptr<AsyncState>& state) no
     if (state->control == nullptr)
         return;
     std::condition_variable* workerCv = nullptr;
+    std::function<void()> changed;
     {
         std::lock_guard<std::mutex> lk(state->control->mutex);
         auto count = state->control->count.load(std::memory_order_acquire);
@@ -467,10 +491,13 @@ void RenderWorker::completeAsyncJob(const std::shared_ptr<AsyncState>& state) no
             return;
         state->control->count.store(count - 1, std::memory_order_release);
         workerCv = state->control->workerCv;
+        changed = state->control->stateChangedCallback;
     }
     if (workerCv != nullptr)
         workerCv->notify_all();
     state->control->cv.notify_all();
+    if (changed)
+        changed();
 }
 
 bool RenderWorker::isAsyncJobClosed(const std::shared_ptr<AsyncState>& state) noexcept
@@ -618,11 +645,15 @@ void RenderWorker::loop()
             RenderWorker& worker;
             ~InFlightGuard() noexcept
             {
+                std::function<void()> changed;
                 {
                     std::lock_guard<std::mutex> lk(worker.mutex_);
                     --worker.inFlight_;
+                    changed = worker.stateChangedCallback_;
                 }
                 worker.cv_.notify_all();
+                if (changed)
+                    changed();
             }
         } guard{*this};
 

@@ -38,8 +38,10 @@ void ControlEditorBridge::setProjectOperationRunning(bool running)
     // for the duration of their own project operation.
     editor_.projectOperationBusy_ = running;
     // As at the ends of startOpenProject: a first-run overlay that the operation held back can start now.
-    if (!running)
+    if (!running) {
         editor_.maybeStartOnboarding();
+        busyStateChanged();
+    }
 }
 
 } // namespace OpenTune

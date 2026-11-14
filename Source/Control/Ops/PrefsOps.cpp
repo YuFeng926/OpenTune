@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <iterator>
 #include <memory>
@@ -684,14 +685,29 @@ public:
             finish(context, jobStep);
             return;
         }
-        const auto waitedMs = juce::Time::getMillisecondCounter() - startedAtMs_;
-        if (!applied && waitedMs >= applyTimeoutMs()) {
-            abandon(context, jobStep, "INTERNAL", "", "the editor did not apply the editing scheme in time");
-        } else if (!vocoderBack && waitedMs >= vocoderWaitMs()) {
-            abandon(context, jobStep, "MODEL_UNAVAILABLE", "vocoder_not_ready",
-                    "the vocoder was not ready again in time after the vocoder weight or the rendering priority "
-                    "changed");
+        const auto now = std::chrono::steady_clock::now();
+        std::optional<std::chrono::steady_clock::time_point> deadline;
+        if (!applied) {
+            const auto applyDeadline = startedAt_ + std::chrono::milliseconds(applyTimeoutMs());
+            if (now >= applyDeadline) {
+                abandon(context, jobStep, "INTERNAL", "", "the editor did not apply the editing scheme in time");
+                return;
+            }
+            deadline = applyDeadline;
         }
+        if (!vocoderBack) {
+            const auto vocoderDeadline = startedAt_ + std::chrono::milliseconds(vocoderWaitMs());
+            if (now >= vocoderDeadline) {
+                abandon(context, jobStep, "MODEL_UNAVAILABLE", "vocoder_not_ready",
+                        "the vocoder was not ready again in time after the vocoder weight or the rendering priority "
+                        "changed");
+                return;
+            }
+            if (!deadline || vocoderDeadline < *deadline)
+                deadline = vocoderDeadline;
+        }
+        if (deadline)
+            jobStep.wakeAt(*deadline);
     }
 
 private:
@@ -725,7 +741,7 @@ private:
         }
         if (auto refused = applyDelta(context, request_, delta_))
             return refused;
-        startedAtMs_ = juce::Time::getMillisecondCounter();
+        startedAt_ = std::chrono::steady_clock::now();
         started_ = true;
         pendingJobs().push_back(this);
         return std::nullopt;
@@ -841,7 +857,7 @@ private:
     PrefsState restoreTo_;
     NotesWatch watch_;
     std::optional<ControlWriteEnvelope> envelope_;
-    std::uint32_t startedAtMs_ = 0;
+    std::chrono::steady_clock::time_point startedAt_;
     /** The vocoder was ready before the job changed the vocoder weight or the rendering priority: the job waits for it
         to be ready again. */
     bool waitsForVocoder_ = false;

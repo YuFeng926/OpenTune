@@ -24,6 +24,7 @@ ControlEditorBridge::ControlEditorBridge(OpenTuneAudioProcessorEditor& editor)
     // OpenTuneAudioProcessor::getControlService(): the processor's control service reaches the editor only
     // through the bridge it has registered.
     editor_.processorRef_.getControlService().setUiBridge(this);
+    editor_.addMouseListener(this, true);
     // OpenTuneAudioProcessorEditor::startDemoTourIfFirstRun(): the first-run demo project would replace the project the
     // client starts from, and it writes outside OPENTUNE_DATA_DIR. The flag stops it for this run only; the preference
     // stays as it is, so a later run without the API still shows the tour.
@@ -33,6 +34,7 @@ ControlEditorBridge::ControlEditorBridge(OpenTuneAudioProcessorEditor& editor)
 
 ControlEditorBridge::~ControlEditorBridge()
 {
+    editor_.removeMouseListener(this);
     auto& service = editor_.processorRef_.getControlService();
     if (service.uiBridge() == this)
         service.setUiBridge(nullptr);
@@ -190,6 +192,26 @@ bool ControlEditorBridge::requestQuit(bool discardUnsaved)
     if (standaloneWindowOf(editor_) == nullptr)
         return false;
     return editor_.requestExit(discardUnsaved);
+}
+
+void ControlEditorBridge::busyStateChanged()
+{
+    editor_.processorRef_.getControlService().wakeJobs();
+}
+
+void ControlEditorBridge::mouseUp(const juce::MouseEvent&)
+{
+    editor_.processorRef_.getControlService().wakeJobs();
+}
+
+void ControlEditorBridge::watchBusyState(std::function<void()> wake)
+{
+    auto* manager = juce::ModalComponentManager::getInstanceWithoutCreating();
+    if (manager == nullptr)
+        return;
+    for (int index = 0; index < manager->getNumModalComponents(); ++index)
+        if (auto* component = manager->getModalComponent(index))
+            manager->attachCallback(component, juce::ModalCallbackFunction::create([wake](int) { wake(); }));
 }
 
 } // namespace OpenTune

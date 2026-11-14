@@ -26,6 +26,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -579,15 +580,17 @@ class ExportWriter
 {
 public:
     ExportWriter(OpenTuneAudioProcessor& processor, ExportKind kind, int trackId, std::uint64_t placementId,
-                 juce::File file)
+                 juce::File file, std::function<void()> wake)
         : kind_(kind)
         , trackId_(trackId)
         , placementId_(placementId)
         , file_(std::move(file))
+        , wake_(std::move(wake))
     {
         thread_ = std::thread([this, &processor] {
             run(processor);
             done_ = true;
+            wake_();
         });
     }
 
@@ -675,6 +678,7 @@ private:
     int trackId_;
     std::uint64_t placementId_;
     juce::File file_;
+    std::function<void()> wake_;
     std::atomic<bool> done_{false};
     std::thread thread_;
 };
@@ -699,7 +703,7 @@ struct Readiness
 /**
  * The work of one export job, on the message thread (section 19).
  *
- * - While it waits, each tick builds the plan again (the user may change the project meanwhile) and
+ * - While it waits, each event rebuilds the plan (the user may change the project meanwhile) and
  *   decides for every content: analysis not finished: wait; no voiced audio or nothing to render: export it
  *   uncorrected and list it in dryContents; analysis failed otherwise: ANALYSIS_FAILED(f0_failed), or dry
  *   with allowDry; render work pending: wait (a content with nothing to render does not wait for blocks out
@@ -893,8 +897,11 @@ private:
             // The worker finished the rebuild the job asked for, and the output is still not current.
             if (!progress.stretchIdleSince)
                 progress.stretchIdleSince = now;
-            if (now - *progress.stretchIdleSince < std::chrono::milliseconds(kStretchRetryIdleMs))
+            const auto retryAt = *progress.stretchIdleSince + std::chrono::milliseconds(kStretchRetryIdleMs);
+            if (now < retryAt) {
+                noteWakeAt(retryAt);
                 return Stretch::Pending;
+            }
             if (progress.stretchRequests >= kControlExportMaxStretchRequests)
                 return Stretch::GaveUp;
         }
@@ -959,7 +966,12 @@ private:
         const auto now = std::chrono::steady_clock::now();
         if (!progress.stuckSince)
             progress.stuckSince = now;
-        return now - *progress.stuckSince >= std::chrono::milliseconds(kControlExportStuckBlocksMs);
+        const auto stuckAt = *progress.stuckSince + std::chrono::milliseconds(kControlExportStuckBlocksMs);
+        if (now < stuckAt) {
+            noteWakeAt(stuckAt);
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -1112,6 +1124,7 @@ private:
 
     void stepWaiting(ControlOpContext& context, ControlJobStep& step)
     {
+        nextWakeAt_.reset();
         if (step.cancelRequested()) {
             finishCancelled(step);
             return;
@@ -1148,13 +1161,14 @@ private:
         // service is deferred (renderRetriesDeferred): the file would not be written. Keep waiting, up to the
         // wait limit, for the runtime to resume it.
         if (ready == total && !renderRetriesDeferred(context.processor())) {
-            startWriting(context, plan, std::move(dry));
+            startWriting(context, plan, std::move(dry), step.wakeCallback());
             if (writer_ != nullptr)
                 setProgress(step, std::nullopt, "writing", std::nullopt, std::nullopt);
             else
                 fail(step, {"IO_ERROR", "write_failed", "the target directory cannot be written", false});
             return;
         }
+        scheduleWaitWake(step);
         if (std::chrono::steady_clock::now() - started_ >= waitLimit_) {
             fail(step, {"NOT_READY", "export_wait_timeout",
                         "analysis and rendering of the export did not settle within the wait limit", false});
@@ -1165,7 +1179,7 @@ private:
 
     /** Section 19 rule 8, in the tick that found every content ready: records the inputs and revisions and
         starts the writer on a temporary file in the target directory. */
-    void startWriting(ControlOpContext& context, const ExportPlan& plan, JsonValue dry)
+    void startWriting(ControlOpContext& context, const ExportPlan& plan, JsonValue dry, std::function<void()> wake)
     {
         std::vector<ControlContentVersions> versions;
         recordedInputs_ = inputsToken(context, plan, &versions);
@@ -1190,7 +1204,21 @@ private:
         auto& processor = context.processor();
         writer_ = std::make_unique<ExportWriter>(processor, target_.kind,
                                                  target_.kind == ExportKind::Clip ? plan.clipTrackId : target_.trackId,
-                                                 target_.placementId, temporary_);
+                                                 target_.placementId, temporary_, std::move(wake));
+    }
+
+    void scheduleWaitWake(ControlJobStep& step)
+    {
+        auto deadline = started_ + waitLimit_;
+        if (nextWakeAt_ && *nextWakeAt_ < deadline)
+            deadline = *nextWakeAt_;
+        step.wakeAt(deadline);
+    }
+
+    void noteWakeAt(std::chrono::steady_clock::time_point deadline)
+    {
+        if (!nextWakeAt_ || deadline < *nextWakeAt_)
+            nextWakeAt_ = deadline;
     }
 
     void stepWriting(ControlOpContext& context, ControlJobStep& step)
@@ -1346,6 +1374,7 @@ private:
     ExportBusyGuard busyAdmission_;
     std::chrono::steady_clock::time_point started_;
     std::chrono::milliseconds waitLimit_;
+    std::optional<std::chrono::steady_clock::time_point> nextWakeAt_;
     std::map<ContentKey, ContentProgress> contentProgress_;
     std::unique_ptr<ExportWriter> writer_;
     juce::File temporary_;

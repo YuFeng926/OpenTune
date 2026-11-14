@@ -103,6 +103,10 @@ public:
     std::shared_ptr<ControlDispatcher> dispatcher() const noexcept { return dispatcher_; }
     /** The jobs once the API started (they stay after stop(), stopped); nullptr when it never started. */
     std::shared_ptr<ControlJobs> jobs() const noexcept { return jobs_; }
+    /** Wake active jobs after a processor or editor state event. Message thread or worker thread. */
+    void wakeJobs() const noexcept;
+    /** A callback safe to retain beyond the jobs registry's lifetime. */
+    std::function<void()> jobWakeCallback() const;
     /** What the instance knows about OpenTune's undo history (Edit/ControlOriginAction.h) once the API
         started; nullptr before. Message thread. */
     std::shared_ptr<ControlHistory> history() const noexcept { return history_; }

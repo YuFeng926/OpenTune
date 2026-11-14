@@ -195,7 +195,7 @@ public:
                             const std::shared_ptr<CompletionGate>& gate);
     void pruneDeferredJobsForCache(const std::shared_ptr<RenderCache>& cache);
     void pruneStaleDeferredJobsForCache(const std::shared_ptr<RenderCache>& cache);
-    void pruneDeferredJobsForService(const ContentRenderService* service);
+    void pruneDeferredJobsForService(ContentRenderService* service);
     void renderQueueCapacityAvailable();
     bool hasDeferredRetriesForService(const ContentRenderService* service) const;
     bool flushDeferredRetriesForService(const ContentRenderService* service);

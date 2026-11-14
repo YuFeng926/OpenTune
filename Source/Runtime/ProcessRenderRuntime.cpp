@@ -895,6 +895,8 @@ void ProcessRenderRuntime::completeClaimedControlTransaction(
     if (transaction->crs
         && transaction->paused.exchange(false, std::memory_order_acq_rel))
         transaction->crs->resumeRenderWorker();
+    if (transaction->crs)
+        transaction->crs->notifyWorkStateChanged();
     transaction->crs.reset();
     {
         std::lock_guard<std::mutex> ackLock(transaction->mutex);
@@ -1714,6 +1716,10 @@ void ProcessRenderRuntime::pruneDeferredJobsForCache(
         deferredRetries_.erase(it, deferredRetries_.end());
     }
     const bool removed = !released.empty();
+    if (removed)
+        for (const auto& retry : released)
+            if (auto service = retry.crs.lock())
+                service->notifyWorkStateChanged();
     released.clear();
     if (removed)
         postDeferredRetryEvent();
@@ -1744,12 +1750,16 @@ void ProcessRenderRuntime::pruneStaleDeferredJobsForCache(
         deferredRetries_.erase(it, deferredRetries_.end());
     }
     const bool removed = !released.empty();
+    if (removed)
+        for (const auto& retry : released)
+            if (auto service = retry.crs.lock())
+                service->notifyWorkStateChanged();
     released.clear();
     if (removed)
         postDeferredRetryEvent();
 }
 
-void ProcessRenderRuntime::pruneDeferredJobsForService(const ContentRenderService* service)
+void ProcessRenderRuntime::pruneDeferredJobsForService(ContentRenderService* service)
 {
     std::vector<DeferredRetry> released;
     {
@@ -1766,8 +1776,11 @@ void ProcessRenderRuntime::pruneDeferredJobsForService(const ContentRenderServic
     }
     const bool removed = !released.empty();
     released.clear();
-    if (removed)
+    if (removed) {
+        if (service != nullptr)
+            service->notifyWorkStateChanged();
         postDeferredRetryEvent();
+    }
 }
 
 bool ProcessRenderRuntime::resumeDeferredRetries(
@@ -1834,6 +1847,7 @@ bool ProcessRenderRuntime::resumeDeferredRetries(
         std::vector<DeferredRetry> released;
         std::vector<RenderJob> readyJobs;
         std::unique_lock<std::mutex> gateLock;
+        bool removedCandidate = false;
         if (candidate.completion.gate != nullptr)
             gateLock = std::unique_lock<std::mutex>(candidate.completion.gate->mutex);
         const bool gateClosed = candidate.completion.gate != nullptr
@@ -1859,6 +1873,7 @@ bool ProcessRenderRuntime::resumeDeferredRetries(
                     released.push_back(std::move(*it));
                     deferredRetries_.erase(it);
                     removedAny = true;
+                    removedCandidate = true;
                 }
             };
 
@@ -1914,6 +1929,8 @@ bool ProcessRenderRuntime::resumeDeferredRetries(
             gateLock.unlock();
         released.clear();
         readyJobs.clear();
+        if (removedCandidate && crs != nullptr)
+            crs->notifyWorkStateChanged();
     }
     snapshot.clear();
     if (removedAny)

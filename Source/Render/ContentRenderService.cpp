@@ -172,6 +172,16 @@ void ContentRenderService::detachExecutionLease(void* owner)
     renderWorker_.detachExecutionLease(owner);
 }
 
+void ContentRenderService::setStateChangedCallback(std::function<void()> callback)
+{
+    renderWorker_.setStateChangedCallback(std::move(callback));
+}
+
+void ContentRenderService::notifyWorkStateChanged()
+{
+    renderWorker_.notifyStateChanged();
+}
+
 void ContentRenderService::notifyBackendChanged()
 {
     renderWorker_.notifyBackendChanged();

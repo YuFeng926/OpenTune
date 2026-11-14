@@ -1133,6 +1133,7 @@ public:
         return ready;
     }
     ControlService& getControlService() noexcept { return *controlService_; }
+    void setControlJobWakeCallback(std::function<void()> callback);
 
 private:
     std::unique_ptr<ControlService> controlService_;

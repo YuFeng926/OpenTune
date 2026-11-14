@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -308,6 +309,9 @@ public:
     {
         return std::nullopt;
     }
+
+    /** Registers a one-shot wake for current busy UI state to end. */
+    virtual void watchBusyState(std::function<void()> wake) { (void) wake; }
 };
 
 } // namespace OpenTune

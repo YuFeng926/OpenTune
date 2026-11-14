@@ -4,6 +4,8 @@
 #include "Control/ControlUiBridge.h"
 #include "ControlEditorBridgeViewSwitch.h"
 
+#include <juce_gui_basics/juce_gui_basics.h>
+
 #include <memory>
 
 namespace OpenTune {
@@ -31,7 +33,7 @@ class ControlTrackColourWatch;
  *
  * Threading: message thread, like the editor.
  */
-class ControlEditorBridge final : public ControlUiBridge
+class ControlEditorBridge final : public ControlUiBridge, private juce::MouseListener
 {
 public:
     explicit ControlEditorBridge(OpenTuneAudioProcessorEditor& editor);
@@ -61,6 +63,7 @@ public:
     juce::AudioDeviceManager* audioDevice() override;
     bool canQuit() const override;
     bool requestQuit(bool discardUnsaved) override;
+    void busyStateChanged();
 
     // ---- Tracks and transport (ControlEditorBridgeTracks.cpp) ----
     bool setVisibleTrackCount(int count) override;
@@ -85,10 +88,13 @@ public:
     // ---- Preferences and audio device (ControlEditorBridgePrefs.cpp) ----
     void onPreferencesChanged() override;
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override;
+    void watchBusyState(std::function<void()> wake) override;
     std::optional<AsioRateRestoreFailure> prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager,
                                                                    const std::string& reason) override;
 
 private:
+    void mouseUp(const juce::MouseEvent& event) override;
+
     /** What a view switch must leave as it was: the project's changed mark and how often it was set, the tempo and time
         signature of the transport bar, and where the keyboard focus was (ControlEditorBridgeViewSwitch.h). */
     using ViewSwitchBaseline = ControlViewSwitchBaseline;
