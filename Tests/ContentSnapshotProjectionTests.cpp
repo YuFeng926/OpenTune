@@ -581,6 +581,40 @@ bool testF0TimelineClampAndHalfOpenRange()
     return clamped.startFrame == 0 && clamped.endFrameExclusive == 10;
 }
 
+bool testContentRangeFrameConversionAndExactOverlap()
+{
+    constexpr int hopSize = 256;
+    constexpr double sampleRate = 16000.0;
+    constexpr int frameCount = 10;
+
+    if (OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.023, 0.023)
+        || OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.064, 0.032)
+        || OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.16, 0.18))
+        return false;
+
+    const auto partial = OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.15, 0.18);
+    const auto largeEnd = OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.15, 1.0e100);
+    const auto boundary = OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.032, 0.064);
+    const auto selection = OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.0201, 0.0495);
+    const auto noteEndingAtStart = OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.019, 0.0201);
+    const auto noteStartingAtEnd = OpenTune::f0FrameRangeForSeconds(hopSize, sampleRate, frameCount, 0.0495, 0.052);
+    return partial && partial->startFrame == 9 && partial->endFrameExclusive == 10
+           && largeEnd && largeEnd->startFrame == 9 && largeEnd->endFrameExclusive == 10
+           && boundary && boundary->startFrame == 2 && boundary->endFrameExclusive == 4
+           && selection && noteEndingAtStart && noteStartingAtEnd
+           && OpenTune::halfOpenRangesOverlap(0.0201, 0.023, 0.0201, 0.0495)
+           && !OpenTune::halfOpenRangesOverlap(0.019, 0.0201, 0.0201, 0.0495)
+           && !OpenTune::halfOpenRangesOverlap(0.0495, 0.052, 0.0201, 0.0495)
+           && OpenTune::halfOpenRangesOverlap(noteEndingAtStart->startFrame,
+                                               noteEndingAtStart->endFrameExclusive,
+                                               selection->startFrame,
+                                               selection->endFrameExclusive)
+           && OpenTune::halfOpenRangesOverlap(noteStartingAtEnd->startFrame,
+                                               noteStartingAtEnd->endFrameExclusive,
+                                               selection->startFrame,
+                                               selection->endFrameExclusive);
+}
+
 bool testF0TimelineNearestSplitBoundary()
 {
     OpenTune::F0Timeline timeline(160, 16000.0, 100);
@@ -902,6 +936,12 @@ int main()
     if (!testF0TimelineClampAndHalfOpenRange())
     {
         std::fputs("FAIL: F0Timeline clamp and half-open range\n", stderr);
+        return 1;
+    }
+
+    if (!testContentRangeFrameConversionAndExactOverlap())
+    {
+        std::fputs("FAIL: content range frame conversion and exact overlap\n", stderr);
         return 1;
     }
 

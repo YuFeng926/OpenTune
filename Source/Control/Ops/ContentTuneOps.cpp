@@ -249,8 +249,9 @@ bool readRanges(ControlParamReader& reader, std::vector<std::pair<double, double
         const JsonValue* end = range.isObject() ? range.find("endContentSec") : nullptr;
         if (start == nullptr || end == nullptr || range.size() != 2 || !start->isNumber() || !end->isNumber()
             || !std::isfinite(start->asDouble()) || !std::isfinite(end->asDouble()) || start->asDouble() < 0.0
-            || end->asDouble() < 0.0)
-            return reader.fail("every range must be {startContentSec, endContentSec} of non-negative seconds");
+            || end->asDouble() < 0.0 || end->asDouble() < start->asDouble())
+            return reader.fail(
+                "every range must be {startContentSec, endContentSec} of non-negative seconds with end >= start");
         out.emplace_back(start->asDouble(), end->asDouble());
     }
     return true;
@@ -369,13 +370,6 @@ bool sameNote(const Note& a, const Note& b)
            && a.pitchDriftScale == b.pitchDriftScale && a.isVoiced == b.isVoiced;
 }
 
-/** A committed range of regenerate, in content seconds as the shared content command merges. */
-struct CommittedRange
-{
-    double startSec = 0.0;
-    double endSec = 0.0;
-};
-
 /**
  * The notes before the call that regenerate replaced (removed) and the notes after it that are new (created):
  * the shared regenerate command removes every note that overlaps a committed range and copies the
@@ -383,14 +377,17 @@ struct CommittedRange
  * range is replaced even when the generator happens to make an equal one.
  */
 void diffNotes(const std::vector<Note>& before, const std::vector<Note>& after,
-               const std::vector<CommittedRange>& committed, std::vector<std::size_t>& removed,
-               std::vector<std::size_t>& created)
+               const PitchCurveSnapshot& curve, const std::vector<F0FrameRange>& committed,
+               std::vector<std::size_t>& removed, std::vector<std::size_t>& created)
 {
     std::vector<const Note*> kept;
     for (std::size_t i = 0; i < before.size(); ++i) {
         const auto& note = before[i];
-        const bool overlaps = std::any_of(committed.begin(), committed.end(), [&note](const CommittedRange& range) {
-            return note.endTime > range.startSec && note.startTime < range.endSec;
+        const auto noteRange = f0FrameRangeForSeconds(curve.getHopSize(), curve.getSampleRate(),
+                                                      static_cast<int>(curve.size()), note.startTime, note.endTime);
+        const bool overlaps = noteRange && std::any_of(committed.begin(), committed.end(), [&noteRange](const auto& range) {
+            return halfOpenRangesOverlap(noteRange->startFrame, noteRange->endFrameExclusive,
+                                         range.startFrame, range.endFrameExclusive);
         });
         if (overlaps)
             removed.push_back(i);
@@ -466,23 +463,21 @@ void appendAutoTuneMembers(JsonValue& result, TuneMode mode, const std::optional
     result.appendMember("noteCount", std::move(noteCount));
 }
 
-/** Frame ranges of the requested content ranges on the content's analysis timeline, as the piano roll resolves
-    a selection (F0Timeline::rangeForTimes, then rangeForFrames); the whole content without ranges. Empty ranges
-    are left out. */
+/** Frame ranges of the requested content ranges on the content's analysis timeline; the whole content without
+    ranges. Empty and fully out-of-timeline ranges are left out. */
 std::vector<F0FrameRange> frameRanges(const PitchCurveSnapshot& curve, const AutoTuneParams& params)
 {
-    const F0Timeline f0tl{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())};
     std::vector<F0FrameRange> out;
     if (params.ranges.empty()) {
-        out.push_back(f0tl.rangeForFrames(0, f0tl.endFrameExclusive()));
+        if (curve.size() > 0)
+            out.push_back({0, static_cast<int>(curve.size())});
     } else {
         for (const auto& [start, end] : params.ranges) {
-            const auto times = f0tl.rangeForTimes(start, end);
-            out.push_back(f0tl.rangeForFrames(times.startFrame, times.endFrameExclusive));
+            if (const auto range = f0FrameRangeForSeconds(curve.getHopSize(), curve.getSampleRate(),
+                                                          static_cast<int>(curve.size()), start, end))
+                out.push_back(*range);
         }
     }
-    out.erase(std::remove_if(out.begin(), out.end(), [](const F0FrameRange& range) { return range.isEmpty(); }),
-              out.end());
     return out;
 }
 
@@ -499,13 +494,12 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     const auto scaleSnap = makeScaleSnapConfig(key);
     const auto& curve = *ref.snapshot->pitchCurve;
     const auto ranges = frameRanges(curve, params);
-    const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())};
     const auto beforeNotes = ref.snapshot->notes;
     const auto beforeWorld = controlCaptureWorldVersions(context);
 
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
-    std::vector<CommittedRange> committed;
+    std::vector<F0FrameRange> committed;
     std::vector<Note> afterNotes = beforeNotes;
     const juce::String description = autoTuneDescription();
     EditableContentSnapshot planning = *ref.snapshot;
@@ -523,7 +517,7 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
             editRange.startFrame = std::min(editRange.startFrame, range.startFrame);
             editRange.endFrameExclusive = std::max(editRange.endFrameExclusive, range.endFrameExclusive);
         }
-        committed.push_back({timeline.timeAtFrame(range.startFrame), timeline.timeAtFrame(range.endFrameExclusive)});
+        committed.push_back(range);
     }
     std::string revisionAfter = versions.revision();
     if (!committed.empty()) {
@@ -565,7 +559,7 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
 
     std::vector<std::size_t> removed;
     std::vector<std::size_t> created;
-    diffNotes(beforeNotes, afterNotes, committed, removed, created);
+    diffNotes(beforeNotes, afterNotes, curve, committed, removed, created);
     // Notes that overlap a range but do not lie inside one are dropped, not regenerated: the commit removes
     // every note that overlaps the range and generates only inside it (an OpenTune behaviour).
     auto dropped = JsonValue::array();
@@ -575,8 +569,11 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     for (const auto stored : removed) {
         const auto index = beforeIndex[stored];
         const auto& note = beforeNotes[stored];
-        const bool inside = std::any_of(committed.begin(), committed.end(), [&note](const CommittedRange& range) {
-            return note.startTime >= range.startSec && note.endTime <= range.endSec;
+        const auto noteRange = f0FrameRangeForSeconds(curve.getHopSize(), curve.getSampleRate(),
+                                                      static_cast<int>(curve.size()), note.startTime, note.endTime);
+        const bool inside = noteRange && std::any_of(committed.begin(), committed.end(), [&noteRange](const auto& range) {
+            return noteRange->startFrame >= range.startFrame
+                   && noteRange->endFrameExclusive <= range.endFrameExclusive;
         });
         if (inside || dropped.size() >= kMaxListedEntries)
             continue;
@@ -693,18 +690,19 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
     // makeScaleSnapConfig(); chromatic (no scale snap) quantizes to semitones, as the button's ScaleSnapConfig{}.
     const auto scaleSnap = makeScaleSnapConfig(key).value_or(ScaleSnapConfig{});
     const auto& curve = *ref.snapshot->pitchCurve;
-    const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), static_cast<int>(curve.size())};
     const auto beforeNotes = ref.snapshot->notes;
     std::optional<std::vector<std::size_t>> targets;
     if (!params.ranges.empty()) {
         targets.emplace();
-        const auto ranges = frameRanges(curve, params);
+        std::vector<std::pair<double, double>> activeRanges;
+        for (const auto& [start, end] : params.ranges)
+            if (f0FrameRangeForSeconds(curve.getHopSize(), curve.getSampleRate(),
+                                       static_cast<int>(curve.size()), start, end))
+                activeRanges.emplace_back(start, end);
         for (std::size_t index = 0; index < beforeNotes.size(); ++index) {
             const auto& note = beforeNotes[index];
-            if (std::any_of(ranges.begin(), ranges.end(), [&](const F0FrameRange& range) {
-                    const double start = timeline.timeAtFrame(range.startFrame);
-                    const double end = timeline.timeAtFrame(range.endFrameExclusive);
-                    return note.endTime > start && note.startTime < end;
+            if (std::any_of(activeRanges.begin(), activeRanges.end(), [&](const auto& range) {
+                    return halfOpenRangesOverlap(note.startTime, note.endTime, range.first, range.second);
                 }))
                 targets->push_back(index);
         }
