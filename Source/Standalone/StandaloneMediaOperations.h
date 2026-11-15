@@ -3,9 +3,12 @@
 
 #include "PluginProcessor.h"
 #include "StandaloneArrangement.h"
+#include "Content/EditableContentSnapshot.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace OpenTune::StandaloneMediaOperations {
@@ -72,9 +75,38 @@ struct ExportPlan {
     double outputEndSec = 0.0;
     std::vector<ExportClip> clips;
     std::vector<ContentKey> contents;
+    struct ContentInput {
+        ContentKey key;
+        SourceWindow sourceWindow;
+        NativePcmSource nativeSource;
+        std::uint64_t contentRevision = 0;
+        std::uint64_t audioRevision = 0;
+        std::uint64_t notesRevision = 0;
+        std::uint64_t pitchRevision = 0;
+        std::uint64_t timeGridRevision = 0;
+        double audioSampleRate = 0.0;
+        std::int64_t firstCanonicalSample = 0;
+        PitchShiftSettings pitchShiftSettings;
+        OriginalF0State originalF0State = OriginalF0State::NotRequested;
+        std::string originalF0FailureReason;
+        bool noteTopologyInitialized = false;
+        bool hasUsableOriginalF0 = false;
+        bool available = false;
+    };
+    std::vector<ContentInput> contentInputs;
 };
 
+enum class ExportPlanStatus {
+    Current,
+    Changed,
+    TargetGone,
+    ContentUnavailable
+};
+
+/** Build and validate plans on the message thread. Current means the plan still matches
+    the live target, mix, contents and the exact source/content inputs captured for playback. */
 ExportPlan buildExportPlan(OpenTuneAudioProcessor& processor, const ExportTarget& target);
+ExportPlanStatus validateExportPlan(OpenTuneAudioProcessor& processor, const ExportPlan& plan);
 bool writeExportWav(const ExportPlan& plan,
                     const juce::File& file,
                     Language language,

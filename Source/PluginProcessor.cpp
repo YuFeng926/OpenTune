@@ -4999,6 +4999,8 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
         lastAcceptedSource = eventTime;
     }
 
+    if (handles.size() == 1)
+        return false;
     pushHandle(durationSeconds,
                durationSeconds,
                HandleKind::ClipEnd);
@@ -5008,7 +5010,24 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
         return false;
     }
 
-    return setContentTimeGrid(key, std::move(seededGrid));
+    const auto& beforeHandles = existingGrid->handles();
+    const auto& afterHandles = seededGrid->handles();
+    const bool unchanged = beforeHandles.size() == afterHandles.size()
+        && std::equal(beforeHandles.begin(), beforeHandles.end(), afterHandles.begin(),
+                      [](const TimeHandle& before, const TimeHandle& after) {
+                          return before.id == after.id
+                              && before.source_seconds == after.source_seconds
+                              && before.output_seconds == after.output_seconds
+                              && before.kind == after.kind
+                              && before.confidence == after.confidence;
+                      });
+    if (unchanged)
+        return true;
+    if (!setContentTimeGrid(key, std::move(seededGrid)))
+        return false;
+    undoManager_.clearRedo();
+    notifyContentEditCompleted(key);
+    return true;
 }
 
 OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus

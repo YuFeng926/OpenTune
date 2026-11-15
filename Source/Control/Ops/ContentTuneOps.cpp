@@ -157,6 +157,7 @@ Result<JsonValue> runSetKey(ControlOpContext& context, const SetKeyParams& param
     if (!keyEdit->changed)
         return envelope.committed(context);
 
+    // setDetectedKey() already clears redo and notifies the product owner; this masks API-origin history entries.
     history.value()->onChangeWithoutEntry(context.processor().getUndoManager(), ref.key, ControlContentAspect::Key);
 
     auto fields = JsonValue::object();

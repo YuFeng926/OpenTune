@@ -17,9 +17,7 @@
 #include "Utils/TuningConfig.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
-#include <limits>
 
 namespace OpenTune {
 
@@ -29,9 +27,6 @@ namespace {
 constexpr std::size_t kMaxListedNotes = 200;
 /** A target that moves by less than this many semitones does not change (the reads round to 4 decimals). */
 constexpr double kPitchTolerance = 1e-4;
-/** Two scale pitches equally far from a target within the resolution of the reads count as a tie: the notes
-    hold float frequencies, so a target of exactly x.5 semitones is not exactly x.5 in them. */
-constexpr double kTieTolerance = kPitchTolerance;
 /** A parameter that moves by less than this does not change (PianoRollComponent::editParameter()). */
 constexpr double kParameterTolerance = 1e-6;
 
@@ -246,35 +241,6 @@ bool parseEditNotes(const JsonValue& params, EditNotesParams& out, std::string& 
 
 // ---- content.editNotes: the ops --------------------------------------------------------------------------
 
-/** The nearest pitch of the scale to midi, an exact tie going up. */
-double nearestScalePitch(double midi, const std::array<bool, 12>& inScale)
-{
-    const double base = std::floor(midi);
-    double best = base;
-    double bestDistance = std::numeric_limits<double>::infinity();
-    // Candidates ascend, so the higher of two equally near pitches comes last and wins.
-    for (int step = -12; step <= 13; ++step) {
-        const double candidate = base + step;
-        const int pitchClass = ((static_cast<int>(candidate) % 12) + 12) % 12;
-        if (!inScale[static_cast<std::size_t>(pitchClass)])
-            continue;
-        const double distance = std::abs(candidate - midi);
-        if (distance <= bestDistance + kTieTolerance) {
-            best = candidate;
-            bestDistance = std::min(bestDistance, distance);
-        }
-    }
-    return best;
-}
-
-/** The pitch classes of a key, as the scale snap of AUTO maps it (makeScaleSnapConfig(): chromatic is every
-    pitch class). */
-std::array<bool, 12> pitchClassesOf(const DetectedKey& key)
-{
-    const auto snap = makeScaleSnapConfig(key).value_or(ScaleSnapConfig{});
-    return buildPitchClassMask(snap.mode, snap.root);
-}
-
 /** Sets the note's target to midi with no cent offset, unless it is there already. The base pitch is
     PitchUtils::midiToFreq() of midi at the instance's tuning, the conversion OpenTune uses for note pitches; it
     gives 0 Hz for MIDI 0 (and below), so targetMidi 0 leaves the note without a base pitch: its target reads as
@@ -299,9 +265,8 @@ bool setParameter(float& field, const std::optional<double>& value)
     return true;
 }
 
-/** Applies one op to one note; true when it changed the note. A note without a base pitch is edited like any
-    other, as the piano roll's pitch drag and snap edit it (see setTarget()). */
-bool applyOp(const NoteOp& op, Note& note, const std::array<bool, 12>* scale, float tuningHz)
+/** Applies a direct note edit; scale snapping is handled by the shared content planner. */
+bool applyOp(const NoteOp& op, Note& note, float tuningHz)
 {
     bool changed = false;
     switch (op.kind) {
@@ -316,9 +281,7 @@ bool applyOp(const NoteOp& op, Note& note, const std::array<bool, 12>* scale, fl
             }
             break;
         case NoteOpKind::SnapToScale:
-            changed = scale != nullptr
-                      && setTarget(note, nearestScalePitch(controlNoteTargetMidi(note, tuningHz), *scale), tuningHz);
-            break;
+            break; // handled by planAutoSnap()
         case NoteOpKind::SetParams: {
             // Every given parameter, as the knobs and the modulation and drift tools set them.
             const bool retune = setParameter(note.retuneSpeed, op.retuneSpeed);
@@ -429,41 +392,52 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
     std::vector<Note> working = before;
     juce::String description;
     std::size_t plannedOps = 0;
-    F0FrameRange affectedRange;
+    F0FrameRange editRangeUnion;
     for (std::size_t i = 0; i < params.ops.size(); ++i) {
         const auto& op = params.ops[i];
-        std::array<bool, 12> scale{};
-        if (op.kind == NoteOpKind::SnapToScale)
-            scale = pitchClassesOf(op.clipKey ? snapshot.detectedKey : *op.key);
         const auto previous = working;
-        std::vector<std::size_t> changed;
-        for (const auto position : selections[i])
-            if (applyOp(op, working[position], &scale, tuningHz))
-                changed.push_back(position);
-        if (changed.empty())
-            continue;
-        // The frame range of the notes that changed; where it is empty the piano roll commits nothing.
-        const auto editRange = commands->noteFrameRange(*planning.pitchCurve, working, changed);
-        if (editRange.isEmpty()) {
-            working = previous;
-            continue;
+        F0FrameRange editRange;
+        std::optional<ContentNoteCorrectionPlan> correction;
+        if (op.kind == NoteOpKind::SnapToScale) {
+            const std::optional<std::vector<std::size_t>> targets{selections[i]};
+            const auto scaleSnap = makeScaleSnapConfig(op.clipKey ? snapshot.detectedKey : *op.key)
+                                       .value_or(ScaleSnapConfig{});
+            auto snap = commands->planAutoSnap(planning, targets, scaleSnap, NoteGeneratorParams{});
+            if (snap.status != ContentAutoSnapPlan::Status::Commit)
+                continue;
+            editRange = commands->noteFrameRange(*planning.pitchCurve, working, selections[i]);
+            if (editRange.isEmpty())
+                continue;
+            correction = std::move(snap.correction);
+        } else {
+            std::vector<std::size_t> changed;
+            for (const auto position : selections[i])
+                if (applyOp(op, working[position], tuningHz))
+                    changed.push_back(position);
+            if (changed.empty())
+                continue;
+            // Keep the original note edit range; the correction planner expands it for the commit.
+            editRange = commands->noteFrameRange(*planning.pitchCurve, working, changed);
+            if (editRange.isEmpty()) {
+                working = previous;
+                continue;
+            }
+            correction = commands->planNoteCorrection(planning, working, editRange, NoteGeneratorParams{});
+            if (!correction) {
+                working = previous;
+                continue;
+            }
         }
-        const auto correction = commands->planNoteCorrection(
-            planning, working, editRange, NoteGeneratorParams{});
-        if (!correction) {
-            working = previous;
-            continue;
-        }
-        planning.notes = correction->notes;
+        working = correction->notes;
+        planning.notes = working;
         planning.pitchCurve = correction->correctedCurve;
         if (plannedOps == 0)
             description = descriptionOf(op);
         if (plannedOps++ == 0) {
-            affectedRange = correction->affectedRange;
+            editRangeUnion = editRange;
         } else {
-            affectedRange.startFrame = std::min(affectedRange.startFrame, correction->affectedRange.startFrame);
-            affectedRange.endFrameExclusive =
-                std::max(affectedRange.endFrameExclusive, correction->affectedRange.endFrameExclusive);
+            editRangeUnion.startFrame = std::min(editRangeUnion.startFrame, editRange.startFrame);
+            editRangeUnion.endFrameExclusive = std::max(editRangeUnion.endFrameExclusive, editRange.endFrameExclusive);
         }
     }
 
@@ -471,7 +445,7 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
     std::string revisionAfter = versions.revision();
     if (plannedOps != 0) {
         const auto correction = commands->planNoteCorrection(
-            planning, planning.notes, affectedRange, NoteGeneratorParams{});
+            planning, planning.notes, editRangeUnion, NoteGeneratorParams{});
         if (!correction)
             return controlOpError("INTERNAL", "", "OpenTune did not plan the note edit");
         after = correction->notes;
@@ -583,8 +557,7 @@ Result<JsonValue> runSetPitchShift(ControlOpContext& context, const SetPitchShif
         manager, *shift, manager.cursor() - 1, controlContentEpoch(context), context.instanceShort());
     const std::vector<std::string> names{controlUndoActionName(*shift)};
 
-    // The effect from two captures, as for an undo step: the pitchShift change and reRenderQueued; `revision`
-    // stays (ControlPitchShiftLedger).
+    // Pitch-shift-only edits keep the content revision; the pitchShift token reflects the change.
     controlDescribeEffect(context, before, controlCaptureEditState(context), envelope);
     envelope.addWarning("KEY_NOT_TRANSPOSED", contentRef(ref.contentId));
     envelope.setUndoable(undoId, description.toStdString(), names);

@@ -723,7 +723,6 @@ PlacementDeleteCommit commitPlacementDelete(OpenTuneAudioProcessor& processor,
         arrangement->setSelectionState(result.selectionAfter);
         result.undoAction = std::make_unique<DeletePlacementAction>(processor, result.outcomes,
                                                                    result.selectionBefore, result.selectionAfter);
-        processor.notifyPlacementChanged();
     }
     return result;
 }

@@ -164,11 +164,11 @@ public:
 
     // 仅生成音符唯一入口：generate → validate → 拓扑提交。
     // 全内容范围（0..f0Count，内部从同一 snapshot 派生）。不写 correction segments、
-    // 不吸附、不请求 render。不创建 undo、不 mark dirty。
+    // 不吸附、不请求 render、不创建 undo；owner 清 redo 并发送编辑完成通知。
     virtual bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) = 0;
 
-    // TimeGrid anchor seed entry (async preheat + seed). UI calls this command
-    // only; the processor keeps its analysisFinished/F0 callback chain unchanged.
+    // TimeGrid anchor seed entry (async preheat + seed). Actual grid changes are
+    // finalized by the processor owner, including redo invalidation and edit notification.
     virtual bool ensureTimeToolAnchorSeed(ContentKey key) = 0;
 
     // 一次替换整个 AutomationLane，只推进 notesRevision（gain 仅 playback 读

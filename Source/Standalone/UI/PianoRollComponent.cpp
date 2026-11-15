@@ -4595,8 +4595,7 @@ void PianoRollComponent::ensureOpenDyneNotesIfNeeded()
     const auto curveSnap = snap->pitchCurve;
     if (curveSnap == nullptr || curveSnap->getOriginalF0().empty())
         return;  // F0 未就绪（提取中或失败）
-    if (contentCommands_->generateNotesOnly(editedContentKey_, getCurrentAutoTuneParams()))
-        listeners_.call([](Listener& listener) { listener.contentEdited(); });
+    contentCommands_->generateNotesOnly(editedContentKey_, getCurrentAutoTuneParams());
     // 提交置位 noteTopologyInitialized 并推进 notesRevision → onNotesRevisionChanged 自动刷新缓存并重绘
 }
 

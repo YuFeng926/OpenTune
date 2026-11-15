@@ -479,12 +479,13 @@ private:
                        "OpenTune placed no handle in the content's time grid", changed});
             return;
         }
-        // A change without an undo entry: earlier entries of the API no longer put
-        // the grid back, and the redo history is cleared.
+        if (after->timeGridRevision == gridBefore) {
+            finish(step, envelope.committed(context));
+            return;
+        }
+        // Mask API entries that can no longer restore this grid; the owner already cleared redo.
         if (history != nullptr)
             history->onChangeWithoutEntry(processor.getUndoManager(), key_, ControlContentAspect::TimeGrid);
-        // The time grid is saved with the project; the UI does not mark the project after seeding.
-        controlMarkDirty(context);
         if (auto* bridge = context.bridge())
             bridge->onTimeGridChanged();
         const auto handles = TimeGridOps::innerHandles(*after->timeGrid);

@@ -830,6 +830,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     processorRef_.setContentEditCompletedCallback([this](ContentKey) {
         projectSession_.markDirty();
     });
+    processorRef_.setPlacementChangedCallback([this] {
+        projectSession_.markDirty();
+        arrangementView_.requestContentRedraw();
+    });
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     processorRef_.setExportReadinessChangedCallback([safeThis] {
         juce::MessageManager::callAsync([safeThis] {
@@ -1018,6 +1022,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
     parameterPanel_.commitPendingEdits();
+    processorRef_.setPlacementChangedCallback({});
     processorRef_.setContentChangedCallback({});
     processorRef_.setContentEditCompletedCallback({});
     processorRef_.setExportReadinessChangedCallback({});

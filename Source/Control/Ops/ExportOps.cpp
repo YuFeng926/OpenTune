@@ -41,9 +41,7 @@ constexpr std::string_view kWavExtension = ".wav";
 using ExportKind = StandaloneMediaOperations::ExportKind;
 using ExportTarget = StandaloneMediaOperations::ExportTarget;
 
-struct ExportPlan : StandaloneMediaOperations::ExportPlan {
-    std::string mixToken;
-};
+using ExportPlan = StandaloneMediaOperations::ExportPlan;
 
 enum class IfExists {
     Error,
@@ -220,65 +218,6 @@ std::string numberedPath(const std::string& path, int number)
     return path.substr(0, path.size() - kWavExtension.size()) + " (" + std::to_string(number) + ").wav";
 }
 
-// ---- What the file is made of --------------------------------------------------------------------
-
-ExportPlan buildPlan(ControlOpContext& context, const ExportTarget& target)
-{
-    ExportPlan plan;
-    static_cast<StandaloneMediaOperations::ExportPlan&>(plan) =
-        StandaloneMediaOperations::buildExportPlan(context.processor(), target);
-    ControlTokenHasher hasher('x');
-    hasher.add(static_cast<int>(target.kind)).add(plan.outputEndSec);
-    for (const auto& clip : plan.clips) {
-        const auto& playback = clip.playback;
-        hasher.add(clip.trackId)
-            .add(clip.placementId)
-            .add(static_cast<int>(playback.contentKey.domainKind))
-            .add(playback.contentKey.objectId)
-            .add(playback.contentKey.sourceWindowDiscriminator)
-            .add(playback.timelineStartSeconds)
-            .add(playback.durationSeconds)
-            .add(playback.clipInSeconds)
-            .add(static_cast<double>(playback.gain))
-            .add(playback.fadeInDuration)
-            .add(playback.fadeOutDuration)
-            .add(static_cast<double>(clip.trackVolume))
-            .add(playback.sampleGeometry.playbackRate)
-            .add(playback.sampleGeometry.offsetSamples)
-            .add(playback.sampleGeometry.playbackBeginSample)
-            .add(playback.sampleGeometry.playbackEndSample)
-            .add(playback.outputAnchorSeconds);
-    }
-    plan.mixToken = hasher.token();
-    return plan;
-}
-
-/**
- * The token of the export's inputs: the mix token of the plan and, per content, the
- * versions that its render is made of (the revision token of notes, pitch and content, the time grid and
- * the pitch shift). versions receives the versions of the contents, in the plan's order.
- */
-std::string inputsToken(ControlOpContext& context, const ExportPlan& plan,
-                        std::vector<ControlContentVersions>* versions = nullptr)
-{
-    ControlTokenHasher hasher('e');
-    hasher.add(std::string_view(plan.mixToken));
-    for (const auto& key : plan.contents) {
-        const auto snapshot = controlLiveSnapshot(context, key);
-        if (snapshot == nullptr) {
-            hasher.add(std::string_view("gone"));
-            continue;
-        }
-        auto current = controlContentVersions(context, controlContentId(context, key), *snapshot);
-        hasher.add(std::string_view(current.revision()))
-            .add(std::string_view(current.grid))
-            .add(std::string_view(current.pitchShift));
-        if (versions != nullptr)
-            versions->push_back(std::move(current));
-    }
-    return hasher.token();
-}
-
 // ---- Loaded media ----------------------------------------------------------------------------------
 
 /** The source file of every source OpenTune holds (SourceStore), active or retired, since an undo step
@@ -381,6 +320,7 @@ public:
     ExportWriter& operator=(const ExportWriter&) = delete;
 
     bool done() const noexcept { return done_.load(); }
+    const StandaloneMediaOperations::ExportPlan& plan() const noexcept { return plan_; }
 
     // Valid once done() is true.
     bool written = false;
@@ -497,7 +437,7 @@ private:
             finishCancelled(step);
             return;
         }
-        const auto plan = buildPlan(context, target_);
+        const auto plan = StandaloneMediaOperations::buildExportPlan(context.processor(), target_);
         if (plan.targetGone) {
             fail(step, {"REVISION_CONFLICT", "changed_during_export", "the clip of the export was removed", false});
             return;
@@ -526,6 +466,22 @@ private:
         }
         const int total = static_cast<int>(plan.contents.size());
         if (ready == total) {
+            const auto status = StandaloneMediaOperations::validateExportPlan(context.processor(), plan);
+            if (status == StandaloneMediaOperations::ExportPlanStatus::TargetGone) {
+                fail(step, {"REVISION_CONFLICT", "changed_during_export", "the clip of the export was removed", false});
+                return;
+            }
+            if (status == StandaloneMediaOperations::ExportPlanStatus::ContentUnavailable) {
+                Readiness unavailable;
+                unavailable.state = Readiness::State::Fail;
+                unavailable.failure = StandaloneMediaOperations::ExportFailure::ContentUnavailable;
+                fail(step, readinessError(unavailable));
+                return;
+            }
+            if (status == StandaloneMediaOperations::ExportPlanStatus::Changed) {
+                setProgress(step, static_cast<double>(ready) / total, "waiting", ready, total);
+                return;
+            }
             startWriting(context, plan, std::move(dry), step.wakeCallback());
             if (writer_ != nullptr)
                 setProgress(step, std::nullopt, "writing", std::nullopt, std::nullopt);
@@ -536,12 +492,16 @@ private:
         setProgress(step, static_cast<double>(ready) / total, "waiting", ready, total);
     }
 
-    /** In the tick that found every content ready, records the inputs and revisions and
+    /** In the tick that found every content ready and the plan current, records result metadata and
         starts the writer on a temporary file in the target directory. */
     void startWriting(ControlOpContext& context, const ExportPlan& plan, JsonValue dry, std::function<void()> wake)
     {
         std::vector<ControlContentVersions> versions;
-        recordedInputs_ = inputsToken(context, plan, &versions);
+        for (const auto& key : plan.contents) {
+            const auto snapshot = controlLiveSnapshot(context, key);
+            if (snapshot != nullptr)
+                versions.push_back(controlContentVersions(context, controlContentId(context, key), *snapshot));
+        }
         contents_ = JsonValue::array();
         for (const auto& version : versions) {
             auto entry = JsonValue::object();
@@ -560,8 +520,7 @@ private:
         // volumes; OpenTune's export writes .wav files only.
         temporary_ =
             directory.getNonexistentChildFile("." + target.getFileNameWithoutExtension() + ".export", ".wav", false);
-        writer_ = std::make_unique<ExportWriter>(
-            static_cast<StandaloneMediaOperations::ExportPlan>(plan), temporary_, std::move(wake));
+        writer_ = std::make_unique<ExportWriter>(plan, temporary_, std::move(wake));
     }
 
     void stepWriting(ControlOpContext& context, ControlJobStep& step)
@@ -583,8 +542,9 @@ private:
             fail(step, {"IO_ERROR", "write_failed", "OpenTune could not write the export file", false});
             return;
         }
-        // What the file is made of must not have changed since it was recorded.
-        if (inputsToken(context, buildPlan(context, target_)) != recordedInputs_) {
+        // Validate the exact plan passed to the worker against current product state.
+        if (StandaloneMediaOperations::validateExportPlan(context.processor(), writer_->plan())
+            != StandaloneMediaOperations::ExportPlanStatus::Current) {
             fail(step, {"REVISION_CONFLICT", "changed_during_export",
                         "a content or clip of the export changed while the file was written", false});
             return;
@@ -709,7 +669,6 @@ private:
     ExportBusyGuard busyAdmission_;
     std::unique_ptr<ExportWriter> writer_;
     juce::File temporary_;
-    std::string recordedInputs_;
     JsonValue contents_ = JsonValue::array();
     JsonValue dryContents_ = JsonValue::array();
     JsonValue processing_;
@@ -760,7 +719,7 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
         return controlOpError("INVALID_ARGUMENT", reason, "the path is not an absolute path in the accepted form");
     if (!hasWavExtension(params.path))
         return controlOpError("INVALID_ARGUMENT", "path_bad_extension", "an export writes only .wav files");
-    if (buildPlan(context, target).contents.empty())
+    if (StandaloneMediaOperations::buildExportPlan(context.processor(), target).contents.empty())
         return controlOpError("INVALID_ARGUMENT", "nothing_to_export", "the export holds no clip with audio");
     // Check loaded media by file identity; the job checks again right before its final rename.
     if (const auto error = loadedMediaError(loadedMediaPaths(context), params.path))

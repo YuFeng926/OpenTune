@@ -141,6 +141,128 @@ void updateOutputEnd(ExportPlan& plan, const ExportClip& clip)
                                  clip.playback.timelineStartSeconds + clip.playback.durationSeconds);
 }
 
+ExportPlan::ContentInput contentInputOf(ContentKey key, const PlaybackReadSource& source)
+{
+    ExportPlan::ContentInput input;
+    input.key = key;
+    const auto& snapshot = source.contentSnapshot;
+    if (snapshot == nullptr)
+        return input;
+
+    input.sourceWindow = snapshot->sourceWindow;
+    input.nativeSource = source.nativeSource;
+    input.contentRevision = snapshot->contentRevision;
+    input.audioRevision = snapshot->audioRevision;
+    input.notesRevision = snapshot->notesRevision;
+    input.pitchRevision = snapshot->pitchRevision;
+    input.timeGridRevision = snapshot->timeGridRevision;
+    input.audioSampleRate = snapshot->audioSampleRate;
+    input.firstCanonicalSample = source.firstCanonicalSample;
+    input.pitchShiftSettings = snapshot->pitchShiftSettings;
+    input.originalF0State = snapshot->originalF0State;
+    input.originalF0FailureReason = snapshot->originalF0FailureReason;
+    input.noteTopologyInitialized = snapshot->noteTopologyInitialized;
+    input.hasUsableOriginalF0 = snapshot->hasUsableOriginalF0();
+    input.available = source.hasAudio();
+    return input;
+}
+
+ExportPlan::ContentInput contentInputOf(ContentKey key, const EditableContentSnapshot& snapshot)
+{
+    ExportPlan::ContentInput input;
+    input.key = key;
+    input.sourceWindow = snapshot.sourceWindow;
+    input.nativeSource = snapshot.nativeSource;
+    input.contentRevision = snapshot.contentRevision;
+    input.audioRevision = snapshot.audioRevision;
+    input.notesRevision = snapshot.notesRevision;
+    input.pitchRevision = snapshot.pitchRevision;
+    input.timeGridRevision = snapshot.timeGridRevision;
+    input.audioSampleRate = snapshot.audioSampleRate;
+    input.firstCanonicalSample = snapshot.firstCanonicalSample;
+    input.pitchShiftSettings = snapshot.pitchShiftSettings;
+    input.originalF0State = snapshot.originalF0State;
+    input.originalF0FailureReason = snapshot.originalF0FailureReason;
+    input.noteTopologyInitialized = snapshot.noteTopologyInitialized;
+    input.hasUsableOriginalF0 = snapshot.hasUsableOriginalF0();
+    input.available = snapshot.nativeSource.buffer != nullptr
+                      && snapshot.nativeSource.buffer->getNumSamples() > 0;
+    return input;
+}
+
+void captureExportInputs(ExportPlan& plan)
+{
+    plan.contentInputs.clear();
+    plan.contentInputs.reserve(plan.contents.size());
+    for (const auto& key : plan.contents) {
+        const auto clip = std::find_if(plan.clips.begin(), plan.clips.end(), [&key](const ExportClip& candidate) {
+            return candidate.playback.contentKey == key;
+        });
+        if (clip == plan.clips.end()) {
+            ExportPlan::ContentInput missing;
+            missing.key = key;
+            plan.contentInputs.push_back(std::move(missing));
+            continue;
+        }
+        plan.contentInputs.push_back(contentInputOf(key, clip->playback.source));
+    }
+}
+
+bool sameSourceWindow(const SourceWindow& lhs, const SourceWindow& rhs)
+{
+    return lhs.sourceId == rhs.sourceId && lhs.sourcePersistentId == rhs.sourcePersistentId
+           && lhs.sourceStartSeconds == rhs.sourceStartSeconds && lhs.sourceEndSeconds == rhs.sourceEndSeconds;
+}
+
+bool sameContentInput(const ExportPlan::ContentInput& lhs, const ExportPlan::ContentInput& rhs)
+{
+    return lhs.available == rhs.available && lhs.key == rhs.key
+           && sameSourceWindow(lhs.sourceWindow, rhs.sourceWindow) && lhs.nativeSource == rhs.nativeSource
+           && lhs.contentRevision == rhs.contentRevision && lhs.audioRevision == rhs.audioRevision
+           && lhs.notesRevision == rhs.notesRevision && lhs.pitchRevision == rhs.pitchRevision
+           && lhs.timeGridRevision == rhs.timeGridRevision && lhs.audioSampleRate == rhs.audioSampleRate
+           && lhs.firstCanonicalSample == rhs.firstCanonicalSample
+           && lhs.pitchShiftSettings == rhs.pitchShiftSettings && lhs.originalF0State == rhs.originalF0State
+           && lhs.originalF0FailureReason == rhs.originalF0FailureReason
+           && lhs.noteTopologyInitialized == rhs.noteTopologyInitialized
+           && lhs.hasUsableOriginalF0 == rhs.hasUsableOriginalF0;
+}
+
+bool samePlaybackGeometry(const PlaybackSampleGeometry::Placement& lhs,
+                          const PlaybackSampleGeometry::Placement& rhs)
+{
+    return lhs.playbackRate == rhs.playbackRate && lhs.offsetSamples == rhs.offsetSamples
+           && lhs.playbackBeginSample == rhs.playbackBeginSample
+           && lhs.playbackEndSample == rhs.playbackEndSample;
+}
+
+bool sameExportClip(const ExportClip& lhs, const ExportClip& rhs)
+{
+    const auto& a = lhs.playback;
+    const auto& b = rhs.playback;
+    return lhs.trackId == rhs.trackId && lhs.placementId == rhs.placementId && lhs.trackVolume == rhs.trackVolume
+           && a.contentKey == b.contentKey && a.timelineStartSeconds == b.timelineStartSeconds
+           && a.durationSeconds == b.durationSeconds && a.clipInSeconds == b.clipInSeconds && a.gain == b.gain
+           && a.fadeInDuration == b.fadeInDuration && a.fadeOutDuration == b.fadeOutDuration
+           && samePlaybackGeometry(a.sampleGeometry, b.sampleGeometry)
+           && a.outputAnchorSeconds == b.outputAnchorSeconds;
+}
+
+bool sameExportPlanMix(const ExportPlan& lhs, const ExportPlan& rhs)
+{
+    if (lhs.target.kind != rhs.target.kind || lhs.target.trackId != rhs.target.trackId
+        || lhs.target.placementId != rhs.target.placementId || lhs.targetGone != rhs.targetGone
+        || lhs.clipTrackId != rhs.clipTrackId || lhs.clipStartSec != rhs.clipStartSec
+        || lhs.outputEndSec != rhs.outputEndSec || lhs.contents != rhs.contents
+        || lhs.clips.size() != rhs.clips.size())
+        return false;
+
+    for (std::size_t i = 0; i < lhs.clips.size(); ++i)
+        if (!sameExportClip(lhs.clips[i], rhs.clips[i]))
+            return false;
+    return true;
+}
+
 void renderExportPlacement(const StandaloneArrangement::PlaybackPlacement& placement,
                            float trackGain,
                            double outputOriginSeconds,
@@ -290,7 +412,44 @@ ExportPlan buildExportPlan(OpenTuneAudioProcessor& processor, const ExportTarget
             break;
         }
     }
+    captureExportInputs(plan);
     return plan;
+}
+
+ExportPlanStatus validateExportPlan(OpenTuneAudioProcessor& processor, const ExportPlan& plan)
+{
+    if (plan.targetGone)
+        return ExportPlanStatus::TargetGone;
+
+    auto currentPlan = buildExportPlan(processor, plan.target);
+    if (currentPlan.targetGone)
+        return ExportPlanStatus::TargetGone;
+
+    const auto* repository = processor.getStandaloneContentRepository();
+    for (const auto& expected : plan.contentInputs) {
+        if (!expected.available)
+            return ExportPlanStatus::ContentUnavailable;
+        const auto* clip = repository != nullptr ? repository->findClip(expected.key) : nullptr;
+        if (clip == nullptr || clip->isRetired())
+            return ExportPlanStatus::ContentUnavailable;
+        const auto snapshot = processor.getContentSnapshot(expected.key);
+        if (snapshot == nullptr)
+            return ExportPlanStatus::ContentUnavailable;
+        if (!sameContentInput(expected, contentInputOf(expected.key, *snapshot)))
+            return ExportPlanStatus::Changed;
+    }
+
+    if (!sameExportPlanMix(plan, currentPlan))
+        return ExportPlanStatus::Changed;
+    if (plan.contentInputs.size() != currentPlan.contentInputs.size())
+        return ExportPlanStatus::Changed;
+    for (std::size_t i = 0; i < plan.contentInputs.size(); ++i) {
+        if (!currentPlan.contentInputs[i].available)
+            return ExportPlanStatus::ContentUnavailable;
+        if (!sameContentInput(plan.contentInputs[i], currentPlan.contentInputs[i]))
+            return ExportPlanStatus::Changed;
+    }
+    return ExportPlanStatus::Current;
 }
 
 bool writeExportWav(const ExportPlan& plan,

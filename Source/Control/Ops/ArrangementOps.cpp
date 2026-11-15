@@ -213,10 +213,9 @@ PushedEntry pushEntry(ControlOpContext& context, const std::shared_ptr<ControlHi
     return pushed;
 }
 
-/** After a change of the arrangement: the project is marked as changed and the editor redraws the arrangement. */
+/** After a change of the arrangement, let the editor synchronize its active selection. */
 void afterChange(ControlOpContext& context)
 {
-    controlMarkDirty(context);
     if (auto* bridge = context.bridge())
         bridge->onStructureChanged();
 }

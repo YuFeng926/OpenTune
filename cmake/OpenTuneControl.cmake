@@ -140,8 +140,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # accepts, and the vocoder state and processor calls that the prefs.set job waits on and makes.
         Source/Control/Ops/PrefsModels.cpp
         Source/Control/Ops/PrefsModels.h
-        # Clip ids: how the methods that make clips (import, split, merge, copy, track duplicate) get past the ids that
-        # a project that was opened leaves in use ahead of OpenTune's clip id counter.
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
