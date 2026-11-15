@@ -72,8 +72,8 @@ bool parseJobGet(const JsonValue& params, JobGetParams& out, std::string& why)
 
 void runJobGet(ControlJobs& jobs, const JobGetParams& params, ControlMethod::Reply reply)
 {
-    // ControlJobs::waitAsync(): answers at once, or later from the registry's waiter thread when the job
-    // becomes terminal, waitMs passes or the registry stops. The connection thread does not wait.
+    // ControlJobs::waitAsync(): answers at once, or later on the message thread when the job becomes terminal,
+    // waitMs passes or the registry stops. The connection thread does not wait.
     jobs.waitAsync(params.jobId, params.waitMs, [reply = std::move(reply)](ControlJobs::Lookup lookup, JsonValue job) {
         switch (lookup) {
             case ControlJobs::Lookup::Found: {
@@ -111,32 +111,32 @@ bool parseJobCancel(const JsonValue& params, JobCancelParams& out, std::string& 
 
 void runJobCancel(ControlJobs& jobs, const JobCancelParams& params, ControlMethod::Reply reply)
 {
-    // The registry decides under its mutex; the job's work sees a request at its next step on the message thread.
-    JsonValue job;
-    bool requested = false;
-    switch (jobs.cancel(params.jobId, job)) {
-        case ControlJobs::Cancel::NotFound:
-            reply(jobNotFound());
-            return;
-        case ControlJobs::Cancel::Stopped:
-            reply(shuttingDown());
-            return;
-        case ControlJobs::Cancel::NotCancellable:
-            reply(controlOpError("UNSUPPORTED", "job_not_cancellable",
-                                 "the job cannot be cancelled now; it continues unchanged"));
-            return;
-        case ControlJobs::Cancel::Terminal:
-            requested = false;
-            break;
-        case ControlJobs::Cancel::Requested:
-        case ControlJobs::Cancel::AlreadyRequested:
-            requested = true;
-            break;
-    }
-    auto result = JsonValue::object();
-    result.appendMember("cancelRequested", JsonValue::boolean(requested));
-    result.appendMember("job", std::move(job));
-    reply(std::move(result));
+    jobs.cancelAsync(params.jobId, [reply = std::move(reply)](ControlJobs::Cancel cancel, JsonValue job) {
+        bool requested = false;
+        switch (cancel) {
+            case ControlJobs::Cancel::NotFound:
+                reply(jobNotFound());
+                return;
+            case ControlJobs::Cancel::Stopped:
+                reply(shuttingDown());
+                return;
+            case ControlJobs::Cancel::NotCancellable:
+                reply(controlOpError("UNSUPPORTED", "job_not_cancellable",
+                                     "the job cannot be cancelled now; it continues unchanged"));
+                return;
+            case ControlJobs::Cancel::Terminal:
+                requested = false;
+                break;
+            case ControlJobs::Cancel::Requested:
+            case ControlJobs::Cancel::AlreadyRequested:
+                requested = true;
+                break;
+        }
+        auto result = JsonValue::object();
+        result.appendMember("cancelRequested", JsonValue::boolean(requested));
+        result.appendMember("job", std::move(job));
+        reply(std::move(result));
+    });
 }
 
 } // namespace

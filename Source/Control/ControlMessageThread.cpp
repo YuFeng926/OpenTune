@@ -8,6 +8,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <iterator>
+#include <list>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -46,6 +48,23 @@ struct AsyncCallState
     std::function<void(ControlMessageThread::CallResult)> completion;
 };
 
+struct PostedCallState;
+using PostedCalls = std::list<std::shared_ptr<PostedCallState>>;
+
+struct PostedCallState
+{
+    enum class Phase {
+        Queued,
+        Running,
+        Stopped
+    };
+
+    Phase phase = Phase::Queued;
+    PostedCalls::iterator pending;
+    std::function<void()> fn;
+    std::function<void()> onStopped;
+};
+
 void completeAsync(std::function<void(ControlMessageThread::CallResult)> completion,
                    ControlMessageThread::CallResult result) noexcept
 {
@@ -53,6 +72,16 @@ void completeAsync(std::function<void(ControlMessageThread::CallResult)> complet
         return;
     try {
         completion(result);
+    } catch (...) {
+    }
+}
+
+void runPosted(std::function<void()> fn) noexcept
+{
+    if (!fn)
+        return;
+    try {
+        fn();
     } catch (...) {
     }
 }
@@ -70,8 +99,10 @@ struct ControlMessageThread::Shared
     int waiting = 0;
     AsyncDeadlines deadlines;
     std::deque<AsyncCompletion> ready;
+    PostedCalls posts;
     std::thread deadlineThread;
     std::thread::id deadlineThreadId;
+    bool deadlineThreadExited = true;
     std::mutex deadlineJoinMutex;
 };
 
@@ -84,14 +115,71 @@ ControlMessageThread::~ControlMessageThread()
 
 bool ControlMessageThread::post(std::function<void()> fn)
 {
-    if (!fn || !shared_->alive.load())
+    return post(std::move(fn), {});
+}
+
+bool ControlMessageThread::post(std::function<void()> fn, std::function<void()> onStopped)
+{
+    if (!fn) {
+        runPosted(std::move(onStopped));
         return false;
+    }
+
     auto shared = shared_;
+    auto state = std::make_shared<PostedCallState>();
+    state->fn = std::move(fn);
+    state->onStopped = std::move(onStopped);
+    std::function<void()> rejected;
+    bool queued = false;
+    {
+        std::lock_guard<std::mutex> lock(shared->mutex);
+        if (!shared->alive.load()) {
+            state->phase = PostedCallState::Phase::Stopped;
+            rejected = std::move(state->onStopped);
+        } else {
+            shared->posts.push_back(state);
+            state->pending = std::prev(shared->posts.end());
+            queued = true;
+        }
+    }
+    if (!queued) {
+        runPosted(std::move(rejected));
+        return false;
+    }
+
     // juce::MessageManager::callAsync: the only way the control API reaches the message thread.
-    return juce::MessageManager::callAsync([shared, fn = std::move(fn)] {
-        if (shared->alive.load())
-            fn();
+    const bool posted = juce::MessageManager::callAsync([shared, state] {
+        std::function<void()> run;
+        std::function<void()> reject;
+        {
+            std::lock_guard<std::mutex> lock(shared->mutex);
+            if (state->phase != PostedCallState::Phase::Queued)
+                return;
+            shared->posts.erase(state->pending);
+            if (shared->alive.load()) {
+                state->phase = PostedCallState::Phase::Running;
+                run = std::move(state->fn);
+            } else {
+                state->phase = PostedCallState::Phase::Stopped;
+                reject = std::move(state->onStopped);
+            }
+        }
+        runPosted(std::move(run));
+        runPosted(std::move(reject));
     });
+
+    if (!posted) {
+        {
+            std::lock_guard<std::mutex> lock(shared->mutex);
+            if (state->phase == PostedCallState::Phase::Queued) {
+                shared->posts.erase(state->pending);
+                state->phase = PostedCallState::Phase::Stopped;
+                rejected = std::move(state->onStopped);
+            }
+        }
+        runPosted(std::move(rejected));
+    }
+    return posted;
 }
 
 void ControlMessageThread::submit(std::function<void()> fn, int timeoutMs,
@@ -119,10 +207,12 @@ void ControlMessageThread::submit(std::function<void()> fn, int timeoutMs,
             ++shared->waiting;
             try {
                 if (!shared->deadlineThread.joinable()) {
+                    shared->deadlineThreadExited = false;
                     shared->deadlineThread = std::thread(&ControlMessageThread::timeoutLoop, shared);
                     shared->deadlineThreadId = shared->deadlineThread.get_id();
                 }
             } catch (...) {
+                shared->deadlineThreadExited = true;
                 shared->deadlines.erase(state->deadline);
                 state->hasDeadline = false;
                 --shared->waiting;
@@ -209,8 +299,12 @@ void ControlMessageThread::timeoutLoop(std::shared_ptr<Shared> shared)
             lock.lock();
             continue;
         }
-        if (!shared->alive.load())
+        if (!shared->alive.load()) {
+            shared->deadlineThreadExited = true;
+            lock.unlock();
+            shared->changed.notify_all();
             return;
+        }
         if (shared->deadlines.empty()) {
             shared->changed.wait(lock);
             continue;
@@ -243,13 +337,22 @@ void ControlMessageThread::timeoutLoop(std::shared_ptr<Shared> shared)
 
 void ControlMessageThread::stop()
 {
+    auto shared = shared_;
     std::vector<std::function<void(CallResult)>> completions;
+    std::vector<std::function<void()>> postStops;
     std::thread::id deadlineThreadId;
     {
-        std::lock_guard<std::mutex> lock(shared_->mutex);
-        deadlineThreadId = shared_->deadlineThreadId;
-        if (shared_->alive.exchange(false)) {
-            for (auto& [deadline, state] : shared_->deadlines) {
+        std::lock_guard<std::mutex> lock(shared->mutex);
+        deadlineThreadId = shared->deadlineThreadId;
+        if (shared->alive.exchange(false)) {
+            for (const auto& state : shared->posts) {
+                state->phase = PostedCallState::Phase::Stopped;
+                if (state->onStopped)
+                    postStops.push_back(std::move(state->onStopped));
+                state->fn = {};
+            }
+            shared->posts.clear();
+            for (auto& [deadline, state] : shared->deadlines) {
                 (void)deadline;
                 state->hasDeadline = false;
                 if (state->phase == AsyncCallState::Phase::Queued) {
@@ -258,16 +361,29 @@ void ControlMessageThread::stop()
                     completions.push_back(std::move(state->completion));
                 }
             }
-            shared_->deadlines.clear();
+            shared->deadlines.clear();
         }
     }
-    shared_->changed.notify_all();
+    shared->changed.notify_all();
+    for (auto& onStopped : postStops)
+        runPosted(std::move(onStopped));
     for (auto& completion : completions)
         completeAsync(std::move(completion), CallResult::Stopped);
-    if (deadlineThreadId != std::this_thread::get_id()) {
-        std::lock_guard<std::mutex> joinLock(shared_->deadlineJoinMutex);
-        if (shared_->deadlineThread.joinable())
-            shared_->deadlineThread.join();
+
+    std::thread deadlineThread;
+    {
+        std::lock_guard<std::mutex> joinLock(shared->deadlineJoinMutex);
+        if (shared->deadlineThread.joinable())
+            deadlineThread = std::move(shared->deadlineThread);
+    }
+    if (deadlineThread.joinable()) {
+        if (deadlineThread.get_id() == std::this_thread::get_id())
+            deadlineThread.detach();
+        else
+            deadlineThread.join();
+    } else if (deadlineThreadId != std::thread::id{} && deadlineThreadId != std::this_thread::get_id()) {
+        std::unique_lock<std::mutex> lock(shared->mutex);
+        shared->changed.wait(lock, [&] { return shared->deadlineThreadExited; });
     }
 }
 

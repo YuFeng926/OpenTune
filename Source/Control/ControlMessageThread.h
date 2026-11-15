@@ -54,10 +54,13 @@ public:
      * queue refuses the message (juce::MessageManager::callAsync returned false).
      */
     bool post(std::function<void()> fn);
+    /** Queues fn. If stop() or the message queue prevents fn from running, onStopped runs exactly once on the
+        thread that stopped or rejected the post; it must not access message-thread-owned state. */
+    bool post(std::function<void()> fn, std::function<void()> onStopped);
 
     /** Queues fn for the message thread. A queued function that has not started by timeoutMs never runs; a started
-        function reports its actual result. Accepted work completes on the shared worker, or on the message thread
-        when stop() has ended that worker. Rejected and stopped queued work completes on the calling thread. The timeout
+        function reports its actual result. Accepted work completes on the shared worker or message thread; queued
+        work completed by stop() completes on its caller thread. Rejected work completes on the submitting thread. The timeout
         starts after the message queue accepts the function. */
     void submit(std::function<void()> fn, int timeoutMs, std::function<void(CallResult)> completion);
 

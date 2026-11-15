@@ -2,20 +2,18 @@
 #pragma once
 
 #include "ControlJson.h"
+#include "ControlMessageThread.h"
 #include "ControlProtocol.h"
 
 #include <juce_events/juce_events.h>
 
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace OpenTune {
@@ -85,8 +83,8 @@ private:
 using ControlJobWork = std::function<void(ControlJobStep& step)>;
 
 /**
- * The jobs of one instance: the registry that job.get and job.cancel read, event-driven
- * job work on the message thread, retention and the long poll of job.get.
+ * The jobs of one instance. All registry state and job work belong to the message thread; connection
+ * threads submit asynchronous commands through ControlMessageThread.
  *
  * - Ids are j:<instanceIdShort>:<seq>, seq from 1. A job is created queued, becomes running at its first
  *   step and ends succeeded, failed or cancelled; terminal states never change again.
@@ -95,17 +93,15 @@ using ControlJobWork = std::function<void(ControlJobStep& step)>;
  *   Jobs that are not terminal are never evicted; when all retained jobs are active, start() refuses with
  *   BUSY(job_limit). Retention is measured with a monotonic clock, so that a change of the system time
  *   never evicts a job early; the timestamps of the job object are wall-clock time.
- * - job.get with waitMs holds its response on a thread of the registry, never on the message thread and
- *   never on the connection thread: the response comes when the job becomes terminal, or when waitMs
- *   passes, or with SHUTTING_DOWN when the registry stops. The waiting holds no lock or lease of the
- *   processor.
+ * - job.get with waitMs keeps its request pending without blocking the message or connection thread.
+ *   The message thread responds when the job becomes terminal, waitMs passes, or the registry stops.
  * - Cancellation: a job created cancellable stays so until it ends, until its work calls
  *   ControlJobStep::endCancellability(), or until job.cancel requests cancellation; the work sees the
  *   request at its next step and stops there.
  *
- * Threading: start(), findByKey() and stop() on the message thread; get(), waitAsync(), cancel() and
- * the accessors from any thread. The work runs on the message thread only. Destroy the registry after
- * stop() (any thread then), or on the message thread.
+ * Threading: registry accessors and job work run on the message thread. waitAsync(), cancelAsync() and
+ * wake() accept calls from any thread and marshal them to the message thread. stop() and destruction
+ * run on the message thread.
  *
  * Re-entrancy: when a step runs a nested message loop, a queued async update may run inside it; that nested
  * update does nothing and the outer dispatch schedules another update after the step returns. stop() called
@@ -138,7 +134,7 @@ public:
         std::string jobId;
         std::string refusal;
     };
-    explicit ControlJobs(const ControlLimits& limits);
+    ControlJobs(const ControlLimits& limits, std::shared_ptr<ControlMessageThread> messageThread);
     /** Calls stop() when it was not called; see the class threading rules. Never inside the nested
         message loop of a step (see Re-entrancy). */
     ~ControlJobs() override;
@@ -146,7 +142,7 @@ public:
     ControlJobs(const ControlJobs&) = delete;
     ControlJobs& operator=(const ControlJobs&) = delete;
 
-    /** The instance part of the job ids; set once the listener generated the instance id. Any thread. */
+    /** The instance part of the job ids; set once the listener generated the instance id. Message thread. */
     void setInstanceShort(std::string instanceShort);
 
     /**
@@ -165,29 +161,32 @@ public:
         (export.start). Message thread. */
     std::string findActiveByDigest(const std::string& kind, const std::string& paramsDigest) const;
 
-    /** The job object. Any thread. */
+    /** The job object. Message thread. */
     Lookup get(const std::string& jobId, JsonValue& job) const;
-    /** {jobId, kind, state} of a job, or null. Any thread. */
+    /** {jobId, kind, state} of a job, or null. Message thread. */
     JsonValue jobRef(const std::string& jobId) const;
 
-    /** Responder of waitAsync(): called exactly once, from the calling thread or the registry's waiter
-        thread, with the lookup result and the job object. */
+    /** Responder of waitAsync(): called exactly once with the lookup result and the job object. */
     using WaitResponder = std::function<void(Lookup, JsonValue job)>;
     /**
      * job.get responds at once when waitMs is 0, the job is terminal or unknown;
-     * otherwise when the job becomes terminal or waitMs passed, whichever comes first, and with Stopped
-     * when stop() is called meanwhile. Any thread; never blocks.
+     * otherwise when the job becomes terminal or waitMs passes, whichever comes first, and with Stopped
+     * when stop() is called meanwhile. Registry access and normal responses run on the message thread; a
+     * response for a command the message queue cannot accept runs on the submitting thread. Any thread;
+     * never blocks.
      */
     void waitAsync(const std::string& jobId, int waitMs, WaitResponder respond);
 
-    /** Cancels a job and returns its state right after the request. Any thread. */
-    Cancel cancel(const std::string& jobId, JsonValue& job);
+    /** Cancels a job and returns its state after the owner processes the request. A rejected command responds
+        on the submitting thread. Any thread. */
+    using CancelResponder = std::function<void(Cancel, JsonValue job)>;
+    void cancelAsync(const std::string& jobId, CancelResponder respond);
 
     /**
-     * Stops the registry: waiting job.get requests are answered with Stopped at once, the tick stops,
-     * the waiter thread is joined, and the work of every job is destroyed on this thread (called from a
-     * nested message loop inside a step: the works of the interrupted tick when it returns); no work runs
-     * afterwards. start() refuses from now on. Message thread; idempotent.
+     * Stops the registry: waiting job.get requests are answered with Stopped at once, the deadline
+     * scheduler stops, and the work of every job is destroyed on this thread (called from a nested message
+     * loop inside a step: the works of the interrupted tick when it returns); no work is scheduled afterwards.
+     * start() refuses from now on. Message thread; idempotent.
      */
     void stop();
 
@@ -196,17 +195,19 @@ public:
     /** A callback safe to retain beyond this registry's lifetime. Any thread. */
     std::function<void()> wakeCallback() const;
 
-    /** True once stop() was called. Any thread. */
+    /** True once stop() was called. Message thread. */
     bool isStopped() const;
     /** The kinds of the jobs that are not terminal (queued or running), one entry per job, in the order the jobs were
-        started. app.quit refuses while there is one. Any thread. */
+        started. app.quit refuses while there is one. Message thread. */
     std::vector<std::string> activeKinds() const;
 
 private:
     friend class ControlJobStep;
     struct Job;
     struct Waiter;
+    struct ReadyWaiter;
     struct WakeState;
+    struct DeadlineScheduler;
 
     /** Wall-clock time of the timestamps. */
     std::int64_t now() const;
@@ -215,25 +216,29 @@ private:
     /** Advances every active job once. Message thread. */
     void tick();
     /** A terminal job retained beyond its time, which every reader treats as gone. */
-    bool expiredLocked(const Job& job, std::int64_t steadyNowMs) const;
-    void evictLocked(std::int64_t steadyNowMs);
-    Job* findLocked(const std::string& jobId) const;
-    JsonValue jobJsonLocked(const Job& job) const;
-    void finishLocked(Job& job, const char* state, std::optional<ControlJobError> error, JsonValue result);
-    void ensureWaiterThreadLocked();
-    void waiterLoop();
-    void wakeUnderWakeStateLock() noexcept;
+    bool expired(const Job& job, std::int64_t steadyNowMs) const;
+    void evict(std::int64_t steadyNowMs);
+    Job* find(const std::string& jobId) const;
+    JsonValue jobJson(const Job& job) const;
+    void finish(Job& job, const char* state, std::optional<ControlJobError> error, JsonValue result);
+    void waitAsyncOnOwner(const std::string& jobId, int waitMs, WaitResponder respond);
+    void cancelAsyncOnOwner(const std::string& jobId, CancelResponder respond);
+    void deadlineReached();
+    void rescheduleDeadline();
+    void resolveWaiters(std::uint64_t seq, Lookup lookup, const JsonValue& job);
+    void dispatchReadyWaiters();
+    void wakeOnOwner() noexcept;
     void handleAsyncUpdate() override;
 
     ControlLimits limits_;
-    mutable std::mutex mutex_;
-    std::condition_variable changed_;
+    std::shared_ptr<ControlMessageThread> messageThread_;
     std::string instanceShort_ = "00000000";
     std::uint64_t nextSeq_ = 1;
     std::map<std::uint64_t, std::unique_ptr<Job>> jobs_;
     std::vector<Waiter> waiters_;
-    std::thread waiterThread_;
+    std::vector<ReadyWaiter> readyWaiters_;
     std::shared_ptr<WakeState> wakeState_;
+    std::unique_ptr<DeadlineScheduler> deadlineScheduler_;
     bool stopped_ = false;
     /** Number of tick() calls running on the message thread (more than one only in a nested message
         loop). Message thread only. */

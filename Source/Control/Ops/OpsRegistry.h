@@ -184,7 +184,7 @@ ControlErrorReply controlMapError(const Error& error);
  * run on the connection thread, never wait for the message thread and so never answer TIMEOUT:
  * - runOffMainThread (app.getLog) gets only the instance facts (an immutable snapshot) and what parse
  *   kept, never the processor or the editor bridge, so it cannot read or change project content;
- * - runWithoutMessageThread (job.get, job.cancel) gets the jobs registry and may answer later.
+ * - runWithoutMessageThread (job.get, job.cancel) submits an asynchronous command to the jobs registry and may answer later.
  */
 struct ControlMethod
 {
@@ -203,8 +203,8 @@ struct ControlMethod
     /** Answers the request exactly once, possibly later and from another thread. */
     using Reply = std::function<void(Result<JsonValue>)>;
     /** Instead of run, for a method with mainThread false (job.get, job.cancel): runs on the connection
-        thread with the jobs registry and reaches no OpenTune state. It copies what it needs of parsed
-        before it returns, and never waits for the message thread or blocks the connection thread. */
+        thread and submits a command to the jobs registry. It copies what it needs of parsed before it
+        returns, and never waits for the message thread or blocks the connection thread. */
     std::function<void(ControlJobs& jobs, const void* parsed, Reply reply)> runWithoutMessageThread;
 };
 
@@ -259,7 +259,7 @@ ControlMethod controlWriteMethod(std::string name, bool (*parse)(const JsonValue
 }
 
 /** A method that never waits for the message thread (x-otcp.mainThread false) from typed functions:
-    parse and run on the connection thread, run with the jobs registry. */
+    parse and run on the connection thread; run submits work to the jobs registry. */
 template <typename Params>
 ControlMethod controlJobMethod(std::string name, bool (*parse)(const JsonValue&, Params&, std::string&),
                                void (*run)(ControlJobs&, const Params&, ControlMethod::Reply))

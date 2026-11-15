@@ -46,9 +46,9 @@ class OpenTuneAudioProcessor;
  *    quits the application.
  *
  * Methods whose schema says mainThread false and that have ControlMethod::runWithoutMessageThread
- * (job.get, job.cancel) skip step 4 as well: they run on the connection thread with the jobs registry
- * only, and job.get with waitMs answers later from the registry's own thread, so the connection keeps
- * serving the session's other requests meanwhile.
+ * (job.get, job.cancel) skip step 4 as well: they parse and submit an asynchronous registry command from
+ * the connection thread. The registry reads and mutates jobs only on the message thread; job.get with
+ * waitMs leaves the connection available for the session's other requests meanwhile.
  *
  * Every access to OpenTune state goes through ControlOpContext, which refuses any thread other than the
  * message thread, always (not only in debug builds). Methods that run off the message thread get no

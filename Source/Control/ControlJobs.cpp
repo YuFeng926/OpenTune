@@ -4,9 +4,13 @@
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <limits>
+#include <mutex>
+#include <thread>
 #include <utility>
 
 namespace OpenTune {
@@ -90,8 +94,7 @@ JsonValue controlErrorObjectJson(const ControlJobError& error)
     return object;
 }
 
-/** One job. Every member is guarded by ControlJobs::mutex_; work is only called and released on the
-    message thread. */
+/** One job. Every member is owned by the message thread; work is called and released there too. */
 struct ControlJobs::Job
 {
     std::uint64_t seq = 0;
@@ -128,33 +131,127 @@ struct ControlJobs::Waiter
     WaitResponder respond;
 };
 
-struct ControlJobs::WakeState
+struct ControlJobs::ReadyWaiter
 {
-    explicit WakeState(ControlJobs& jobsIn) : jobs(&jobsIn) {}
+    WaitResponder respond;
+    Lookup lookup;
+    JsonValue job;
+};
 
-    void wake()
+struct ControlJobs::WakeState : std::enable_shared_from_this<WakeState>
+{
+    explicit WakeState(ControlJobs& jobsIn, std::shared_ptr<ControlMessageThread> messageThreadIn)
+        : owner(&jobsIn), messageThread(std::move(messageThreadIn))
+    {}
+
+    void requestWake()
     {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (jobs != nullptr)
-            jobs->wakeUnderWakeStateLock();
+        if (juce::MessageManager::existsAndIsCurrentThread()) {
+            if (owner != nullptr)
+                owner->wakeOnOwner();
+            return;
+        }
+        if (wakeQueued.exchange(true))
+            return;
+
+        const std::weak_ptr<WakeState> weak = shared_from_this();
+        const auto clearQueued = [weak] {
+            if (const auto state = weak.lock())
+                state->wakeQueued = false;
+        };
+        messageThread->post([weak] {
+            if (const auto state = weak.lock()) {
+                state->wakeQueued = false;
+                if (state->owner != nullptr)
+                    state->owner->wakeOnOwner();
+            }
+        }, clearQueued);
+    }
+
+    ControlJobs* owner;
+    std::shared_ptr<ControlMessageThread> messageThread;
+    std::atomic<bool> wakeQueued{false};
+};
+
+struct ControlJobs::DeadlineScheduler
+{
+    explicit DeadlineScheduler(std::function<void()> dueIn) : due(std::move(dueIn)) {}
+
+    ~DeadlineScheduler() { stop(); }
+
+    void schedule(std::optional<SteadyClock::time_point> next)
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (stopping)
+                return;
+            deadline = next;
+            ++revision;
+            if (deadline && !worker.joinable())
+                worker = std::thread(&DeadlineScheduler::run, this);
+        }
+        changed.notify_all();
+    }
+
+    void stop()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (stopping)
+                return;
+            stopping = true;
+            deadline.reset();
+            ++revision;
+        }
+        changed.notify_all();
+        if (worker.joinable())
+            worker.join();
+    }
+
+    void run()
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        while (!stopping) {
+            if (!deadline) {
+                changed.wait(lock, [this] { return stopping || deadline.has_value(); });
+                continue;
+            }
+
+            const auto scheduledRevision = revision;
+            const auto scheduledDeadline = *deadline;
+            if (changed.wait_until(lock, scheduledDeadline,
+                                   [this, scheduledRevision] { return stopping || revision != scheduledRevision; }))
+                continue;
+
+            deadline.reset();
+            ++revision;
+            lock.unlock();
+            due();
+            lock.lock();
+        }
     }
 
     std::mutex mutex;
-    ControlJobs* jobs;
+    std::condition_variable changed;
+    std::thread worker;
+    std::optional<SteadyClock::time_point> deadline;
+    std::uint64_t revision = 0;
+    bool stopping = false;
+    std::function<void()> due;
 };
 
 // ---- ControlJobStep -----------------------------------------------------------------------------
 
 bool ControlJobStep::cancelRequested() const
 {
-    std::lock_guard<std::mutex> lock(jobs_.mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     const auto it = jobs_.jobs_.find(seq_);
     return it != jobs_.jobs_.end() && it->second->cancelRequested;
 }
 
 bool ControlJobStep::endCancellability()
 {
-    std::lock_guard<std::mutex> lock(jobs_.mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     const auto it = jobs_.jobs_.find(seq_);
     if (it == jobs_.jobs_.end() || it->second->cancelRequested)
         return false;
@@ -166,7 +263,7 @@ bool ControlJobStep::endCancellability()
 void ControlJobStep::setProgress(std::optional<double> fraction, const char* phase, std::optional<int> itemsDone,
                                  std::optional<int> itemsTotal)
 {
-    std::lock_guard<std::mutex> lock(jobs_.mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     const auto it = jobs_.jobs_.find(seq_);
     if (it == jobs_.jobs_.end() || it->second->terminal())
         return;
@@ -180,65 +277,51 @@ void ControlJobStep::setProgress(std::optional<double> fraction, const char* pha
 
 void ControlJobStep::succeed(JsonValue result)
 {
-    {
-        std::lock_guard<std::mutex> lock(jobs_.mutex_);
-        const auto it = jobs_.jobs_.find(seq_);
-        if (finished_ || it == jobs_.jobs_.end())
-            return;
-        jobs_.finishLocked(*it->second, kSucceeded, std::nullopt,
-                           result.isObject() ? std::move(result) : JsonValue::object());
-        finished_ = true;
-    }
-    jobs_.changed_.notify_all();
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    const auto it = jobs_.jobs_.find(seq_);
+    if (finished_ || it == jobs_.jobs_.end())
+        return;
+    jobs_.finish(*it->second, kSucceeded, std::nullopt,
+                 result.isObject() ? std::move(result) : JsonValue::object());
+    finished_ = true;
 }
 
 void ControlJobStep::fail(ControlJobError error, JsonValue result)
 {
-    {
-        std::lock_guard<std::mutex> lock(jobs_.mutex_);
-        const auto it = jobs_.jobs_.find(seq_);
-        if (finished_ || it == jobs_.jobs_.end())
-            return;
-        jobs_.finishLocked(*it->second, kFailed, std::move(error), std::move(result));
-        finished_ = true;
-    }
-    jobs_.changed_.notify_all();
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    const auto it = jobs_.jobs_.find(seq_);
+    if (finished_ || it == jobs_.jobs_.end())
+        return;
+    jobs_.finish(*it->second, kFailed, std::move(error), std::move(result));
+    finished_ = true;
 }
 
 void ControlJobStep::cancel(JsonValue result, bool changedState)
 {
-    {
-        std::lock_guard<std::mutex> lock(jobs_.mutex_);
-        const auto it = jobs_.jobs_.find(seq_);
-        if (finished_ || it == jobs_.jobs_.end())
-            return;
-        jobs_.finishLocked(
-            *it->second, kCancelled,
-            ControlJobError{"CANCELLED", "cancelled_by_request", "job.cancel was called for the job", changedState},
-            std::move(result));
-        finished_ = true;
-    }
-    jobs_.changed_.notify_all();
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    const auto it = jobs_.jobs_.find(seq_);
+    if (finished_ || it == jobs_.jobs_.end())
+        return;
+    jobs_.finish(
+        *it->second, kCancelled,
+        ControlJobError{"CANCELLED", "cancelled_by_request", "job.cancel was called for the job", changedState},
+        std::move(result));
+    finished_ = true;
 }
 
 void ControlJobStep::wakeAt(std::chrono::steady_clock::time_point deadline)
 {
-    const bool immediate = deadline <= SteadyClock::now();
-    {
-        std::lock_guard<std::mutex> lock(jobs_.mutex_);
-        const auto it = jobs_.jobs_.find(seq_);
-        if (it == jobs_.jobs_.end() || it->second->terminal())
-            return;
-        if (immediate) {
-            it->second->wakeAt.reset();
-        } else {
-            it->second->wakeAt = deadline;
-            jobs_.ensureWaiterThreadLocked();
-            jobs_.changed_.notify_all();
-        }
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    const auto it = jobs_.jobs_.find(seq_);
+    if (it == jobs_.jobs_.end() || it->second->terminal())
+        return;
+    if (deadline <= SteadyClock::now()) {
+        it->second->wakeAt.reset();
+        jobs_.wakeOnOwner();
+    } else {
+        it->second->wakeAt = deadline;
+        jobs_.rescheduleDeadline();
     }
-    if (immediate)
-        jobs_.wake();
 }
 
 std::function<void()> ControlJobStep::wakeCallback() const
@@ -248,25 +331,33 @@ std::function<void()> ControlJobStep::wakeCallback() const
 
 // ---- ControlJobs --------------------------------------------------------------------------------
 
-ControlJobs::ControlJobs(const ControlLimits& limits)
+ControlJobs::ControlJobs(const ControlLimits& limits, std::shared_ptr<ControlMessageThread> messageThread)
     : limits_(limits)
-    , wakeState_(std::make_shared<WakeState>(*this))
-{}
+    , messageThread_(std::move(messageThread))
+    , wakeState_(std::make_shared<WakeState>(*this, messageThread_))
+{
+    jassert(messageThread_ != nullptr);
+    const std::weak_ptr<WakeState> weakWake = wakeState_;
+    const auto messageThreadForDeadline = messageThread_;
+    deadlineScheduler_ = std::make_unique<DeadlineScheduler>([weakWake, messageThreadForDeadline] {
+        messageThreadForDeadline->post([weakWake] {
+            if (const auto state = weakWake.lock(); state && state->owner != nullptr)
+                state->owner->deadlineReached();
+        });
+    });
+}
 
 ControlJobs::~ControlJobs()
 {
-    // Never inside a step's nested message loop: the interrupted tick would return into a destroyed
-    // registry (see the class comment).
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     jassert(tickDepth_ == 0);
-    // ControlService stops the registry on the message thread first.
     stop();
-    std::lock_guard<std::mutex> lock(wakeState_->mutex);
-    wakeState_->jobs = nullptr;
+    wakeState_->owner = nullptr;
 }
 
 void ControlJobs::setInstanceShort(std::string instanceShort)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     instanceShort_ = std::move(instanceShort);
 }
 
@@ -281,7 +372,7 @@ std::int64_t ControlJobs::steadyNow() const
         std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count());
 }
 
-bool ControlJobs::expiredLocked(const Job& job, std::int64_t steadyNowMs) const
+bool ControlJobs::expired(const Job& job, std::int64_t steadyNowMs) const
 {
     return job.terminal() && job.finishedSteadyMs + limits_.jobRetentionMs <= steadyNowMs;
 }
@@ -291,65 +382,61 @@ ControlJobs::Started ControlJobs::start(const std::string& kind, bool cancellabl
 {
     jassert(juce::MessageManager::existsAndIsCurrentThread());
     Started started;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (stopped_) {
-            started.refusal = "stopping";
-            return started;
-        }
-        const auto nowMs = now();
-        evictLocked(steadyNow());
-        if (static_cast<int>(jobs_.size()) >= limits_.jobRetentionCount) {
-            started.refusal = "job_limit";
-            return started;
-        }
-        auto job = std::make_unique<Job>();
-        job->seq = nextSeq_++;
-        job->jobId = "j:" + instanceShort_ + ":" + std::to_string(job->seq);
-        job->kind = kind;
-        job->cancellable = cancellable;
-        job->createdAtMs = nowMs;
-        job->updatedAtMs = nowMs;
-        job->idempotencyKey = idempotencyKey;
-        job->paramsDigest = paramsDigest;
-        job->work = std::make_shared<ControlJobWork>(std::move(work));
-        started.jobId = job->jobId;
-        jobs_.emplace(job->seq, std::move(job));
-        ensureWaiterThreadLocked();
+    if (stopped_) {
+        started.refusal = "stopping";
+        return started;
     }
-    wake();
+    const auto nowMs = now();
+    evict(steadyNow());
+    if (static_cast<int>(jobs_.size()) >= limits_.jobRetentionCount) {
+        started.refusal = "job_limit";
+        return started;
+    }
+    auto job = std::make_unique<Job>();
+    job->seq = nextSeq_++;
+    job->jobId = "j:" + instanceShort_ + ":" + std::to_string(job->seq);
+    job->kind = kind;
+    job->cancellable = cancellable;
+    job->createdAtMs = nowMs;
+    job->updatedAtMs = nowMs;
+    job->idempotencyKey = idempotencyKey;
+    job->paramsDigest = paramsDigest;
+    job->work = std::make_shared<ControlJobWork>(std::move(work));
+    started.jobId = job->jobId;
+    jobs_.emplace(job->seq, std::move(job));
+    wakeOnOwner();
     return started;
 }
 
 void ControlJobs::wake() noexcept
 {
-    std::lock_guard<std::mutex> lock(wakeState_->mutex);
-    wakeUnderWakeStateLock();
+    wakeState_->requestWake();
 }
 
-void ControlJobs::wakeUnderWakeStateLock() noexcept
+void ControlJobs::wakeOnOwner() noexcept
 {
-    if (!isStopped())
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    if (!stopped_)
         triggerAsyncUpdate();
 }
 
 std::function<void()> ControlJobs::wakeCallback() const
 {
-    std::weak_ptr<WakeState> weak = wakeState_;
+    const std::weak_ptr<WakeState> weak = wakeState_;
     return [weak] {
         if (const auto state = weak.lock())
-            state->wake();
+            state->requestWake();
     };
 }
 
 std::string ControlJobs::findByKey(const std::string& kind, const std::string& idempotencyKey,
                                    std::string& paramsDigest) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     // Retention decides what is still there; a job evicted by age is evicted at the next start().
     const auto steadyNowMs = steadyNow();
     for (const auto& [seq, job] : jobs_) {
-        if (!expiredLocked(*job, steadyNowMs) && !job->idempotencyKey.empty() && job->kind == kind
+        if (!expired(*job, steadyNowMs) && !job->idempotencyKey.empty() && job->kind == kind
             && job->idempotencyKey == idempotencyKey) {
             paramsDigest = job->paramsDigest;
             return job->jobId;
@@ -360,20 +447,20 @@ std::string ControlJobs::findByKey(const std::string& kind, const std::string& i
 
 std::string ControlJobs::findActiveByDigest(const std::string& kind, const std::string& paramsDigest) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     for (const auto& [seq, job] : jobs_)
         if (!job->terminal() && job->kind == kind && !paramsDigest.empty() && job->paramsDigest == paramsDigest)
             return job->jobId;
     return {};
 }
 
-void ControlJobs::evictLocked(std::int64_t steadyNowMs)
+void ControlJobs::evict(std::int64_t steadyNowMs)
 {
     // Terminal jobs older than the retention time first, then, while the registry is full, the
     // terminal jobs that finished first (on a tie the lower sequence number, the first in the map).
     // Jobs that are not terminal stay.
     for (auto it = jobs_.begin(); it != jobs_.end();) {
-        if (expiredLocked(*it->second, steadyNowMs))
+        if (expired(*it->second, steadyNowMs))
             it = jobs_.erase(it);
         else
             ++it;
@@ -390,18 +477,18 @@ void ControlJobs::evictLocked(std::int64_t steadyNowMs)
     }
 }
 
-ControlJobs::Job* ControlJobs::findLocked(const std::string& jobId) const
+ControlJobs::Job* ControlJobs::find(const std::string& jobId) const
 {
     const auto it = jobs_.find(sequenceOf(jobId));
     if (it == jobs_.end() || it->second->jobId != jobId)
         return nullptr;
     // A job retained beyond its time is gone for every reader.
-    if (expiredLocked(*it->second, steadyNow()))
+    if (expired(*it->second, steadyNow()))
         return nullptr;
     return it->second.get();
 }
 
-JsonValue ControlJobs::jobJsonLocked(const Job& job) const
+JsonValue ControlJobs::jobJson(const Job& job) const
 {
     auto progress = JsonValue::object();
     progress.appendMember("fraction", job.fraction ? fractionJson(*job.fraction) : JsonValue());
@@ -423,7 +510,7 @@ JsonValue ControlJobs::jobJsonLocked(const Job& job) const
     return json;
 }
 
-void ControlJobs::finishLocked(Job& job, const char* state, std::optional<ControlJobError> error, JsonValue result)
+void ControlJobs::finish(Job& job, const char* state, std::optional<ControlJobError> error, JsonValue result)
 {
     job.state = state;
     job.error = std::move(error);
@@ -433,24 +520,26 @@ void ControlJobs::finishLocked(Job& job, const char* state, std::optional<Contro
     job.finishedSteadyMs = steadyNow();
     job.updatedAtMs = job.finishedAtMs;
     job.wakeAt.reset();
+    resolveWaiters(job.seq, Lookup::Found, jobJson(job));
+    rescheduleDeadline();
 }
 
 ControlJobs::Lookup ControlJobs::get(const std::string& jobId, JsonValue& job) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     if (stopped_)
         return Lookup::Stopped;
-    const Job* found = findLocked(jobId);
+    const Job* found = find(jobId);
     if (found == nullptr)
         return Lookup::NotFound;
-    job = jobJsonLocked(*found);
+    job = jobJson(*found);
     return Lookup::Found;
 }
 
 JsonValue ControlJobs::jobRef(const std::string& jobId) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const Job* found = findLocked(jobId);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    const Job* found = find(jobId);
     if (found == nullptr)
         return JsonValue();
     auto ref = JsonValue::object();
@@ -462,122 +551,161 @@ JsonValue ControlJobs::jobRef(const std::string& jobId) const
 
 void ControlJobs::waitAsync(const std::string& jobId, int waitMs, WaitResponder respond)
 {
-    Lookup lookup = Lookup::NotFound;
-    JsonValue job;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (stopped_) {
-            lookup = Lookup::Stopped;
-        } else if (const Job* found = findLocked(jobId)) {
-            if (waitMs > 0 && !found->terminal()) {
-                waiters_.push_back(
-                    {found->seq, SteadyClock::now() + std::chrono::milliseconds(waitMs), std::move(respond)});
-                ensureWaiterThreadLocked();
-                changed_.notify_all();
-                return;
-            }
-            lookup = Lookup::Found;
-            job = jobJsonLocked(*found);
-        }
+    if (juce::MessageManager::existsAndIsCurrentThread()) {
+        waitAsyncOnOwner(jobId, waitMs, std::move(respond));
+        return;
     }
-    respond(lookup, std::move(job));
+
+    auto pending = std::make_shared<WaitResponder>(std::move(respond));
+    const std::weak_ptr<WakeState> weak = wakeState_;
+    messageThread_->post([weak, jobId, waitMs, pending] {
+        if (const auto state = weak.lock(); state && state->owner != nullptr)
+            state->owner->waitAsyncOnOwner(jobId, waitMs, std::move(*pending));
+        else
+            (*pending)(Lookup::Stopped, JsonValue());
+    }, [pending] {
+        (*pending)(Lookup::Stopped, JsonValue());
+    });
 }
 
-void ControlJobs::ensureWaiterThreadLocked()
+void ControlJobs::waitAsyncOnOwner(const std::string& jobId, int waitMs, WaitResponder respond)
 {
-    if (!waiterThread_.joinable())
-        waiterThread_ = std::thread(&ControlJobs::waiterLoop, this);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    if (stopped_) {
+        respond(Lookup::Stopped, JsonValue());
+        return;
+    }
+    const Job* found = find(jobId);
+    if (found == nullptr) {
+        respond(Lookup::NotFound, JsonValue());
+        return;
+    }
+    if (waitMs > 0 && !found->terminal()) {
+        waiters_.push_back({found->seq, SteadyClock::now() + std::chrono::milliseconds(waitMs),
+                            std::move(respond)});
+        rescheduleDeadline();
+        return;
+    }
+    respond(Lookup::Found, jobJson(*found));
 }
 
-void ControlJobs::waiterLoop()
+void ControlJobs::cancelAsync(const std::string& jobId, CancelResponder respond)
 {
-    struct Ready
-    {
-        WaitResponder respond;
-        Lookup lookup;
-        JsonValue job;
-    };
-    std::unique_lock<std::mutex> lock(mutex_);
-    for (;;) {
-        std::vector<Ready> ready;
-        bool jobsDue = false;
-        const auto nowTime = SteadyClock::now();
-        auto next = SteadyClock::time_point::max();
-        for (auto it = waiters_.begin(); it != waiters_.end();) {
-            const auto found = jobs_.find(it->seq);
-            const Job* job = found != jobs_.end() ? found->second.get() : nullptr;
-            if (stopped_) {
-                ready.push_back({std::move(it->respond), Lookup::Stopped, JsonValue()});
-            } else if (job == nullptr) {
-                ready.push_back({std::move(it->respond), Lookup::NotFound, JsonValue()});
-            } else if (job->terminal() || it->deadline <= nowTime) {
-                ready.push_back({std::move(it->respond), Lookup::Found, jobJsonLocked(*job)});
-            } else {
-                next = std::min(next, it->deadline);
-                ++it;
-                continue;
-            }
-            it = waiters_.erase(it);
-        }
-        for (auto& [seq, job] : jobs_) {
-            if (job->terminal() || !job->wakeAt)
-                continue;
-            if (*job->wakeAt <= nowTime) {
-                job->wakeAt.reset();
-                jobsDue = true;
-            } else {
-                next = std::min(next, *job->wakeAt);
-            }
-        }
-        if (!ready.empty() || jobsDue) {
-            // Responding only queues a line on the connection; never under the registry's mutex.
-            lock.unlock();
-            if (jobsDue)
-                wake();
-            for (auto& entry : ready)
-                entry.respond(entry.lookup, std::move(entry.job));
-            ready.clear();
-            lock.lock();
+    if (juce::MessageManager::existsAndIsCurrentThread()) {
+        cancelAsyncOnOwner(jobId, std::move(respond));
+        return;
+    }
+
+    auto pending = std::make_shared<CancelResponder>(std::move(respond));
+    const std::weak_ptr<WakeState> weak = wakeState_;
+    messageThread_->post([weak, jobId, pending] {
+        if (const auto state = weak.lock(); state && state->owner != nullptr)
+            state->owner->cancelAsyncOnOwner(jobId, std::move(*pending));
+        else
+            (*pending)(Cancel::Stopped, JsonValue());
+    }, [pending] {
+        (*pending)(Cancel::Stopped, JsonValue());
+    });
+}
+
+void ControlJobs::cancelAsyncOnOwner(const std::string& jobId, CancelResponder respond)
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    Cancel outcome = Cancel::NotFound;
+    if (stopped_) {
+        respond(Cancel::Stopped, JsonValue());
+        return;
+    }
+    Job* found = find(jobId);
+    if (found == nullptr) {
+        respond(Cancel::NotFound, JsonValue());
+        return;
+    }
+    if (found->terminal()) {
+        outcome = Cancel::Terminal;
+    } else if (found->cancelRequested) {
+        outcome = Cancel::AlreadyRequested;
+    } else if (!found->cancellable) {
+        outcome = Cancel::NotCancellable;
+    } else {
+        found->cancelRequested = true;
+        found->updatedAtMs = now();
+        outcome = Cancel::Requested;
+    }
+    auto job = jobJson(*found);
+    respond(outcome, std::move(job));
+    if (outcome == Cancel::Requested)
+        wakeOnOwner();
+}
+
+void ControlJobs::resolveWaiters(std::uint64_t seq, Lookup lookup, const JsonValue& job)
+{
+    for (auto it = waiters_.begin(); it != waiters_.end();) {
+        if (it->seq != seq) {
+            ++it;
             continue;
         }
-        if (stopped_)
-            return;
-        if (next == SteadyClock::time_point::max())
-            changed_.wait(lock);
-        else
-            changed_.wait_until(lock, next);
+        readyWaiters_.push_back({std::move(it->respond), lookup, job});
+        it = waiters_.erase(it);
     }
 }
 
-ControlJobs::Cancel ControlJobs::cancel(const std::string& jobId, JsonValue& job)
+void ControlJobs::dispatchReadyWaiters()
 {
-    Cancel outcome = Cancel::NotFound;
-    bool requested = false;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (stopped_)
-            return Cancel::Stopped;
-        Job* found = findLocked(jobId);
-        if (found == nullptr)
-            return Cancel::NotFound;
-        if (found->terminal()) {
-            outcome = Cancel::Terminal;
-        } else if (found->cancelRequested) {
-            outcome = Cancel::AlreadyRequested;
-        } else if (!found->cancellable) {
-            outcome = Cancel::NotCancellable;
-        } else {
-            found->cancelRequested = true;
-            found->updatedAtMs = now();
-            outcome = Cancel::Requested;
-            requested = true;
-        }
-        job = jobJsonLocked(*found);
+    auto ready = std::move(readyWaiters_);
+    readyWaiters_.clear();
+    for (auto& entry : ready)
+        entry.respond(entry.lookup, std::move(entry.job));
+}
+
+void ControlJobs::rescheduleDeadline()
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    if (stopped_)
+        return;
+    std::optional<SteadyClock::time_point> next;
+    for (const auto& waiter : waiters_)
+        if (!next || waiter.deadline < *next)
+            next = waiter.deadline;
+    for (const auto& [seq, job] : jobs_) {
+        (void)seq;
+        if (job->wakeAt && (!next || *job->wakeAt < *next))
+            next = job->wakeAt;
     }
-    changed_.notify_all();
-    if (requested)
-        wake();
-    return outcome;
+    deadlineScheduler_->schedule(next);
+}
+
+void ControlJobs::deadlineReached()
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    if (stopped_)
+        return;
+
+    const auto current = SteadyClock::now();
+    bool jobsDue = false;
+    for (auto& [seq, job] : jobs_) {
+        (void)seq;
+        if (job->wakeAt && *job->wakeAt <= current) {
+            job->wakeAt.reset();
+            jobsDue = true;
+        }
+    }
+    for (auto it = waiters_.begin(); it != waiters_.end();) {
+        if (it->deadline > current) {
+            ++it;
+            continue;
+        }
+        const auto found = jobs_.find(it->seq);
+        if (found == jobs_.end())
+            readyWaiters_.push_back({std::move(it->respond), Lookup::NotFound, JsonValue()});
+        else
+            readyWaiters_.push_back({std::move(it->respond), Lookup::Found, jobJson(*found->second)});
+        it = waiters_.erase(it);
+    }
+    rescheduleDeadline();
+    dispatchReadyWaiters();
+    if (jobsDue)
+        wakeOnOwner();
 }
 
 void ControlJobs::handleAsyncUpdate()
@@ -588,7 +716,7 @@ void ControlJobs::handleAsyncUpdate()
     }
     deferredUpdate_ = false;
     tick();
-    if (deferredUpdate_ && !isStopped()) {
+    if (deferredUpdate_ && !stopped_) {
         deferredUpdate_ = false;
         triggerAsyncUpdate();
     }
@@ -596,12 +724,6 @@ void ControlJobs::handleAsyncUpdate()
 
 void ControlJobs::tick()
 {
-    // A step that runs a nested message loop can dispatch an async update. The outer step keeps ownership of
-    // its work; the consumed update is queued again after the outer tick returns.
-    if (tickDepth_ > 0) {
-        deferredUpdate_ = true;
-        return;
-    }
     struct DepthGuard
     {
         int& depth;
@@ -611,28 +733,24 @@ void ControlJobs::tick()
         DepthGuard& operator=(const DepthGuard&) = delete;
     } depthGuard(tickDepth_);
 
+    if (stopped_)
+        return;
+
     std::vector<std::pair<std::uint64_t, std::shared_ptr<ControlJobWork>>> active;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& [seq, job] : jobs_) {
+        if (job->terminal() || job->work == nullptr)
+            continue;
+        job->wakeAt.reset();
+        if (job->state == kQueued) {
+            job->state = kRunning;
+            job->updatedAtMs = now();
+        }
+        active.emplace_back(seq, job->work);
+    }
+
+    for (auto& [seq, work] : active) {
         if (stopped_)
             return;
-        for (auto& [seq, job] : jobs_) {
-            if (job->terminal() || job->work == nullptr)
-                continue;
-            job->wakeAt.reset();
-            if (job->state == kQueued) {
-                job->state = kRunning;
-                job->updatedAtMs = now();
-            }
-            active.emplace_back(seq, job->work);
-        }
-    }
-    for (auto& [seq, work] : active) {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (stopped_)
-                return;
-        }
         ControlJobStep step(*this, seq);
         try {
             (*work)(step);
@@ -641,54 +759,47 @@ void ControlJobs::tick()
                 step.fail({"INTERNAL", "", "the job failed", true});
         }
         if (step.finished()) {
-            // The work is destroyed here, on the message thread, outside the registry's mutex.
-            std::shared_ptr<ControlJobWork> released;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (const auto it = jobs_.find(seq); it != jobs_.end())
-                    released = std::move(it->second->work);
-            }
-            released.reset();
+            const auto it = jobs_.find(seq);
+            if (it != jobs_.end())
+                it->second->work.reset();
             work.reset();
         }
     }
-    changed_.notify_all();
+    rescheduleDeadline();
+    dispatchReadyWaiters();
 }
 
 void ControlJobs::stop()
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    if (stopped_)
+        return;
+    stopped_ = true;
+    deadlineScheduler_->stop();
+
     std::vector<std::shared_ptr<ControlJobWork>> works;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!stopped_) {
-            stopped_ = true;
-            for (auto& [seq, job] : jobs_)
-                if (job->work != nullptr)
-                    works.push_back(std::move(job->work));
-        }
+    for (auto& [seq, job] : jobs_) {
+        (void)seq;
+        if (job->work != nullptr)
+            works.push_back(std::move(job->work));
     }
-    // The waiter thread answers every waiting job.get with Stopped, then ends.
-    changed_.notify_all();
-    if (waiterThread_.joinable() && waiterThread_.get_id() != std::this_thread::get_id())
-        waiterThread_.join();
-    {
-        std::lock_guard<std::mutex> lock(wakeState_->mutex);
-        cancelPendingUpdate();
-    }
-    // The work of every job is destroyed here, except the works the interrupted tick still holds (they go
-    // when it returns); whatever threads a work owns are joined by its destructor.
+    for (auto& waiter : waiters_)
+        readyWaiters_.push_back({std::move(waiter.respond), Lookup::Stopped, JsonValue()});
+    waiters_.clear();
+    cancelPendingUpdate();
+    dispatchReadyWaiters();
     works.clear();
 }
 
 bool ControlJobs::isStopped() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     return stopped_;
 }
 
 std::vector<std::string> ControlJobs::activeKinds() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     std::vector<std::string> kinds;
     // jobs_ is ordered by the sequence number, which is the order the jobs were started in.
     for (const auto& entry : jobs_)

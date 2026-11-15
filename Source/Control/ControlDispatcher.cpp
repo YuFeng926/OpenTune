@@ -131,8 +131,8 @@ void ControlDispatcher::handleRequest(ControlRequest request, ControlCompletion 
         return;
     }
     if (!method->mainThread && method->runWithoutMessageThread) {
-        // job.get and job.cancel use the jobs registry only, never the message thread. The reply may come
-        // later from the registry's thread; it captures only the completion.
+        // job.get and job.cancel marshal registry access to the message thread. Their reply may come later;
+        // the connection thread never waits for the registry.
         if (setup_.jobs == nullptr) {
             completion.respondError("INTERNAL", {}, "the method is not available", false);
             return;

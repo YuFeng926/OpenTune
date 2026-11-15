@@ -154,7 +154,7 @@ bool ControlService::startListening()
     setup.build = config.build;
     setup.uiBridge = [this] { return uiBridge_; };
     // The jobs live as long as the dispatcher can reach them; stop() stops them before the listener.
-    auto jobs = std::make_shared<ControlJobs>(config.limits);
+    auto jobs = std::make_shared<ControlJobs>(config.limits, messageThread_);
     setup.jobs = jobs;
     // The undo entries the API records keep it alive beyond the service (OpenTune's UndoManager outlives it).
     history_ = std::make_shared<ControlHistory>();
