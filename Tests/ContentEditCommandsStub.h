@@ -12,15 +12,22 @@ public:
     ContentCommitSnapshot commitNoteTopologyPatch(ContentKey, ContentNoteRangePatch) override { return {}; }
     ContentCommitSnapshot commitNotesAndSegments(
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames) override { return {}; }
+    ContentCommitSnapshot commitNotesAndSegmentsInRanges(
+        ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>,
+        const std::vector<ContentEditRangeFrames>&) override { return {}; }
     ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames,
         std::vector<float>, std::optional<std::vector<F0FrameRange>>) override { return {}; }
     ContentEditCommitResult commitNotesAndSegmentsUndoable(
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames,
         const juce::String&) override { return {}; }
+    ContentEditCommitResult commitNotesAndSegmentsUndoableInRanges(
+        ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>,
+        const std::vector<ContentEditRangeFrames>&, const juce::String&) override { return {}; }
     std::unique_ptr<PianoRollEditAction> createPianoRollEditAction(
         ContentKey, const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&,
-        ContentCommitSnapshot, ContentEditRangeFrames, const juce::String&) const override { return {}; }
+        ContentCommitSnapshot, const std::vector<ContentEditRangeFrames>&,
+        const juce::String&) const override { return {}; }
     std::optional<ContentNoteCorrectionPlan> planNoteCorrection(
         const EditableContentSnapshot&, const std::vector<Note>&, F0FrameRange,
         const NoteGeneratorParams&) const override { return std::nullopt; }

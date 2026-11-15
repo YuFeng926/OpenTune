@@ -46,7 +46,15 @@ bool runRenderCacheCompletionContract()
 
     cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
     auto jobs = cache.getPendingJobs();
-    if (! checkRenderContract(jobs.size() == 1 && cache.claimPendingJob(jobs.front()), "success_claim_failed"))
+    if (! checkRenderContract(jobs.size() == 1, "success_pending_setup_failed"))
+        return false;
+    const auto pendingRevision = jobs.front().targetRevision;
+    cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+    jobs = cache.getPendingJobs();
+    if (! checkRenderContract(jobs.size() == 1
+                                  && jobs.front().targetRevision == pendingRevision
+                                  && cache.claimPendingJob(jobs.front()),
+                              "duplicate_full_plan_lost_pending_claim"))
         return false;
     if (! checkRenderContract(cache.completeChunkRenderWithAudio(0, 256, std::vector<float>(audio),
                                                                   jobs.front().targetRevision)

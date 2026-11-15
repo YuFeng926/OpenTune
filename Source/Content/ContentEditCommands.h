@@ -13,6 +13,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace OpenTune {
@@ -81,6 +82,12 @@ public:
         std::vector<PitchCorrectionSegment> segments,
         ContentEditRangeFrames affectedRange) = 0;
 
+    virtual ContentCommitSnapshot commitNotesAndSegmentsInRanges(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        const std::vector<ContentEditRangeFrames>& affectedRanges) = 0;
+
     virtual ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
         ContentKey key,
         std::vector<Note> notes,
@@ -96,12 +103,19 @@ public:
         ContentEditRangeFrames affectedRange,
         const juce::String& description) = 0;
 
+    virtual ContentEditCommitResult commitNotesAndSegmentsUndoableInRanges(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        const std::vector<ContentEditRangeFrames>& affectedRanges,
+        const juce::String& description) = 0;
+
     virtual std::unique_ptr<PianoRollEditAction> createPianoRollEditAction(
         ContentKey key,
         const std::vector<Note>& beforeNotes,
         const std::vector<PitchCorrectionSegment>& beforeSegments,
         ContentCommitSnapshot after,
-        ContentEditRangeFrames affectedRange,
+        const std::vector<ContentEditRangeFrames>& affectedRanges,
         const juce::String& description) const = 0;
 
     virtual std::optional<ContentNoteCorrectionPlan> planNoteCorrection(

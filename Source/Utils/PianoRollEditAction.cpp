@@ -11,7 +11,7 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
                                          std::vector<Note> afterNotesInRange,
                                          std::vector<PitchCorrectionSegment> beforeSegments,
                                          std::vector<PitchCorrectionSegment> afterSegments,
-                                         ContentEditRangeFrames affectedRange,
+                                         std::vector<ContentEditRangeFrames> affectedRanges,
                                          std::vector<float> beforeOriginalF0InRange,
                                          std::vector<float> afterOriginalF0InRange,
                                          std::vector<F0FrameRange> beforeErasedRanges,
@@ -27,26 +27,31 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
     , afterOriginalF0_(std::move(afterOriginalF0InRange))
     , beforeErasedRanges_(std::move(beforeErasedRanges))
     , afterErasedRanges_(std::move(afterErasedRanges))
-    , affectedRange_(affectedRange)
+    , affectedRanges_(std::move(affectedRanges))
 {
-    jassert(affectedRange_.startFrame >= 0);
-    jassert(affectedRange_.endFrameExclusive >= affectedRange_.startFrame);
+    jassert(!affectedRanges_.empty());
+    for (const auto& range : affectedRanges_) {
+        jassert(range.startFrame >= 0);
+        jassert(range.endFrameExclusive >= range.startFrame);
+    }
+    jassert((beforeOriginalF0_.empty() && afterOriginalF0_.empty() && !hasErasedRangePatch_)
+            || affectedRanges_.size() == 1);
 }
 
 void PianoRollEditAction::undo()
 {
     if (!beforeOriginalF0_.empty() || hasErasedRangePatch_)
-        commands_->commitNotesAndSegmentsWithOriginalF0(contentKey_, beforeNotes_, beforeSegments_, affectedRange_, beforeOriginalF0_, beforeErasedRanges_);
+        commands_->commitNotesAndSegmentsWithOriginalF0(contentKey_, beforeNotes_, beforeSegments_, affectedRanges_.front(), beforeOriginalF0_, beforeErasedRanges_);
     else
-        commands_->commitNotesAndSegments(contentKey_, beforeNotes_, beforeSegments_, affectedRange_);
+        commands_->commitNotesAndSegmentsInRanges(contentKey_, beforeNotes_, beforeSegments_, affectedRanges_);
 }
 
 void PianoRollEditAction::redo()
 {
     if (!afterOriginalF0_.empty() || hasErasedRangePatch_)
-        commands_->commitNotesAndSegmentsWithOriginalF0(contentKey_, afterNotes_, afterSegments_, affectedRange_, afterOriginalF0_, afterErasedRanges_);
+        commands_->commitNotesAndSegmentsWithOriginalF0(contentKey_, afterNotes_, afterSegments_, affectedRanges_.front(), afterOriginalF0_, afterErasedRanges_);
     else
-        commands_->commitNotesAndSegments(contentKey_, afterNotes_, afterSegments_, affectedRange_);
+        commands_->commitNotesAndSegmentsInRanges(contentKey_, afterNotes_, afterSegments_, affectedRanges_);
 }
 
 } // namespace OpenTune

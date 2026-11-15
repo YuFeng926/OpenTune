@@ -6,25 +6,19 @@
 #include "SessionOps.h"
 #include "WriteEnvelope.h"
 
-#include "Control/ControlFileIdentity.h"
 #include "Control/ControlJobs.h"
 #include "Control/ControlPathPolicy.h"
 #include "PluginProcessor.h"
-#include "SourceStore.h"
 #include "Standalone/StandaloneMediaOperations.h"
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
 
-#include <juce_audio_formats/juce_audio_formats.h>
-
-#include <algorithm>
-#include <atomic>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -33,15 +27,15 @@ namespace OpenTune {
 namespace {
 
 constexpr std::size_t kMaxPathCodePoints = 4096;
-/** The last name that ifExists rename tries is "<stem> (999).wav". */
-constexpr int kLastRenameNumber = 999;
 /** The extension an export writes, compared without regard to case. */
 constexpr std::string_view kWavExtension = ".wav";
 
 using ExportKind = StandaloneMediaOperations::ExportKind;
 using ExportTarget = StandaloneMediaOperations::ExportTarget;
-
-using ExportPlan = StandaloneMediaOperations::ExportPlan;
+using ExportFailure = StandaloneMediaOperations::ExportFailure;
+using ExportOperation = StandaloneMediaOperations::ExportOperation;
+using ExportOperationProgress = StandaloneMediaOperations::ExportOperationProgress;
+using ExportOperationState = StandaloneMediaOperations::ExportOperationState;
 
 enum class IfExists {
     Error,
@@ -78,6 +72,19 @@ const char* ifExistsName(IfExists ifExists)
 juce::File fileOf(const std::string& utf8Path)
 {
     return juce::File(juce::String::fromUTF8(utf8Path.c_str()));
+}
+
+StandaloneMediaOperations::ExportDestinationPolicy destinationPolicy(IfExists ifExists)
+{
+    switch (ifExists) {
+        case IfExists::Error:
+            return StandaloneMediaOperations::ExportDestinationPolicy::FailIfExists;
+        case IfExists::Rename:
+            return StandaloneMediaOperations::ExportDestinationPolicy::Rename;
+        case IfExists::Overwrite:
+            return StandaloneMediaOperations::ExportDestinationPolicy::Overwrite;
+    }
+    return StandaloneMediaOperations::ExportDestinationPolicy::FailIfExists;
 }
 
 // ---- Params ---------------------------------------------------------------------------------------
@@ -212,168 +219,11 @@ bool hasWavExtension(const std::string& path)
     return true;
 }
 
-/** "<stem> (n).wav" next to the target, <stem> being its file name without .wav. */
-std::string numberedPath(const std::string& path, int number)
-{
-    return path.substr(0, path.size() - kWavExtension.size()) + " (" + std::to_string(number) + ").wav";
-}
-
-// ---- Loaded media ----------------------------------------------------------------------------------
-
-/** The source file of every source OpenTune holds (SourceStore), active or retired, since an undo step
-    can bring a retired one back: loaded media that an export never writes. */
-std::vector<std::string> loadedMediaPaths(ControlOpContext& context)
-{
-    std::vector<std::string> paths;
-    const auto* sources = context.processor().getSourceStore();
-    if (sources == nullptr)
-        return paths;
-    auto ids = sources->getAllActiveSourceIds();
-    const auto retired = sources->getRetiredSourceIds();
-    ids.insert(ids.end(), retired.begin(), retired.end());
-    for (const auto id : ids) {
-        SourceStore::SourceSnapshot source;
-        if (!sources->getSnapshot(id, source))
-            continue;
-        auto path = source.sourceFilePath.toStdString();
-        if (!path.empty() && std::find(paths.begin(), paths.end(), path) == paths.end())
-            paths.push_back(std::move(path));
-    }
-    return paths;
-}
-
-/** The error when the target is loaded media or when a required file identity cannot be determined;
-    nullopt otherwise. */
-std::optional<ControlJobError> loadedMediaError(const std::vector<std::string>& media, const std::string& target)
-{
-    // The identity of the target is read once. A loaded media file whose identity cannot be read for any
-    // reason but "does not exist" (including an unavailable volume) rejects the export: the same
-    // file may still be reachable through the target path, and overwrite would replace it.
-    ControlSameFileProbe probe(target);
-    for (const auto& path : media) {
-        const auto same = probe.sameAs(path);
-        if (!same)
-            return ControlJobError{"IO_ERROR", "read_failed",
-                                   "the identity of the target or of a loaded media file cannot be determined", false};
-        if (*same)
-            return ControlJobError{"INVALID_ARGUMENT", "target_is_loaded_media",
-                                   "the target is a loaded source file or a media file of the project", false};
-    }
-    return std::nullopt;
-}
-
-/** The shared message-thread export busy state of the processor, released once. The admission was
-    taken on the message thread in runExportStart; the guard only releases it. */
-class ExportBusyGuard
-{
-public:
-    ExportBusyGuard() = default;
-    explicit ExportBusyGuard(OpenTuneAudioProcessor& processor) : processor_(&processor) {}
-    ExportBusyGuard(ExportBusyGuard&& other) noexcept : processor_(std::exchange(other.processor_, nullptr)) {}
-    ExportBusyGuard& operator=(ExportBusyGuard&&) = delete;
-    ExportBusyGuard(const ExportBusyGuard&) = delete;
-    ExportBusyGuard& operator=(const ExportBusyGuard&) = delete;
-    ~ExportBusyGuard() { release(); }
-
-    void release() noexcept
-    {
-        if (processor_ != nullptr)
-            processor_->finishExport();
-        processor_ = nullptr;
-    }
-
-private:
-    OpenTuneAudioProcessor* processor_ = nullptr;
-};
-
-// ---- The file, written on a thread of its own ------------------------------------------------------
-
-/** Writes the shared export plan to a file on a worker thread, then reads the resulting WAV header.
- * The destructor joins the thread; OpenTune's export cannot be interrupted, so that waits for the write.
- * This is the one known exception to bounded joins during shutdown; the editor's own export thread is joined the same
- * way. The worst case is the time that the render worker
- * needs to drain the process's whole render queue plus the time to write the file, and it depends on the
- * number and length of the pending renders and on the speed of the disk.
- */
-class ExportWriter
-{
-public:
-    ExportWriter(StandaloneMediaOperations::ExportPlan plan, juce::File file, std::function<void()> wake)
-        : plan_(std::move(plan))
-        , file_(std::move(file))
-        , wake_(std::move(wake))
-    {
-        thread_ = std::thread([this] {
-            run();
-            done_ = true;
-            wake_();
-        });
-    }
-
-    ~ExportWriter()
-    {
-        if (thread_.joinable())
-            thread_.join();
-    }
-
-    ExportWriter(const ExportWriter&) = delete;
-    ExportWriter& operator=(const ExportWriter&) = delete;
-
-    bool done() const noexcept { return done_.load(); }
-    const StandaloneMediaOperations::ExportPlan& plan() const noexcept { return plan_; }
-
-    // Valid once done() is true.
-    bool written = false;
-    int channelCount = 0;
-    double sampleRateHz = 0.0;
-    std::int64_t frameCount = 0;
-    std::string sampleFormat;
-
-private:
-    void run() noexcept
-    {
-        try {
-            juce::String error;
-            written = StandaloneMediaOperations::writeExportWav(plan_, file_, kErrorTextLanguage, error);
-            if (written)
-                readBack();
-        } catch (...) {
-            written = false;
-        }
-    }
-
-    void readBack()
-    {
-        written = false;
-        juce::AudioFormatManager formats;
-        formats.registerBasicFormats();
-        const std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file_));
-        if (reader == nullptr)
-            return;
-        channelCount = static_cast<int>(reader->numChannels);
-        sampleRateHz = reader->sampleRate;
-        frameCount = reader->lengthInSamples;
-        sampleFormat = (reader->usesFloatingPointData ? "float" : "int") + std::to_string(reader->bitsPerSample);
-        written = channelCount > 0 && sampleRateHz > 0.0 && frameCount >= 0;
-    }
-
-    // The owner uses this language only for its write error text; API failures are encoded separately.
-    static constexpr Language kErrorTextLanguage = Language::English;
-
-    StandaloneMediaOperations::ExportPlan plan_;
-    juce::File file_;
-    std::function<void()> wake_;
-    std::atomic<bool> done_{false};
-    std::thread thread_;
-};
-
 // ---- The job --------------------------------------------------------------------------------------
 
-using Readiness = StandaloneMediaOperations::ExportReadiness;
-
-ControlJobError readinessError(const Readiness& readiness)
+ControlJobError exportFailureError(ExportFailure failure, bool atStart = false)
 {
-    switch (readiness.failure) {
+    switch (failure) {
         case StandaloneMediaOperations::ExportFailure::AnalysisFailed:
             return {"ANALYSIS_FAILED", "f0_failed",
                     "the pitch analysis of a content of the export failed; allowDry exports it uncorrected", false};
@@ -392,112 +242,87 @@ ControlJobError readinessError(const Readiness& readiness)
                     "a content of the export would be exported uncorrected, but its time grid is stretched and "
                     "OpenTune has no render to build stretched audio from",
                     false};
+        case StandaloneMediaOperations::ExportFailure::Busy:
+            return {"BUSY", "export_in_progress", "an export is running", false};
+        case StandaloneMediaOperations::ExportFailure::TargetGone:
+            return {"REVISION_CONFLICT", "changed_during_export", "the clip of the export was removed", false};
+        case StandaloneMediaOperations::ExportFailure::NothingToExport:
+            return {"INVALID_ARGUMENT", "nothing_to_export", "the export holds no clip with audio", false};
+        case StandaloneMediaOperations::ExportFailure::Changed:
+            return {"REVISION_CONFLICT", "changed_during_export",
+                    "a content or clip of the export changed while the file was written", false};
+        case StandaloneMediaOperations::ExportFailure::LoadedMedia:
+            return {"INVALID_ARGUMENT", "target_is_loaded_media",
+                    "the target is a loaded source file or a media file of the project", false};
+        case StandaloneMediaOperations::ExportFailure::FileIdentity:
+            return {"IO_ERROR", "read_failed",
+                    "the identity of the target or of a loaded media file cannot be determined", false};
+        case StandaloneMediaOperations::ExportFailure::DestinationUnavailable:
+            return {"IO_ERROR", "write_failed",
+                    atStart ? "the directory of the target does not exist" : "the target directory cannot be written",
+                    false};
+        case StandaloneMediaOperations::ExportFailure::TargetExists:
+            return {"ALREADY_EXISTS", "target_exists", "a file exists at the target", false};
+        case StandaloneMediaOperations::ExportFailure::WriteFailed:
+            return {"IO_ERROR", "write_failed", "OpenTune could not write the export file", false};
         case StandaloneMediaOperations::ExportFailure::None:
             break;
     }
-    return {"INTERNAL", "", "export readiness failed without a reason", false};
+    return {"INTERNAL", "", "export failed without a reason", false};
 }
 
-/** API job coordination, file policy and result encoding; media selection, readiness and WAV output live in the owner. */
+/** API job progress and result encoding; the owner handles the complete export lifecycle. */
 class ExportJob
 {
 public:
-    ExportJob(ControlOpEnvironment environment, const ExportParams& params, const ExportTarget& target,
-              ExportBusyGuard busyAdmission)
+    ExportJob(ControlOpEnvironment environment, OpenTuneAudioProcessor& processor, const ExportParams& params,
+              const ExportTarget& target)
         : environment_(std::move(environment))
-        , params_(params)
-        , readiness_(params.allowDry)
-        , target_(target)
-        , busyAdmission_(std::move(busyAdmission))
+        , requestedPath_(params.path)
+        , operation_(processor, target, fileOf(params.path), destinationPolicy(params.ifExists), params.allowDry,
+                     Language::English)
     {}
-
-    ~ExportJob()
-    {
-        writer_.reset();
-        removeTemporary();
-        busyAdmission_.release();
-    }
 
     ExportJob(const ExportJob&) = delete;
     ExportJob& operator=(const ExportJob&) = delete;
 
+    ExportFailure start() { return operation_.start(); }
+
     void step(ControlJobStep& step)
     {
         ControlOpContext context(environment_);
-        if (writer_ == nullptr)
-            stepWaiting(context, step);
-        else
-            stepWriting(context, step);
+        operation_.setWakeCallback(step.wakeCallback());
+        const auto progress = operation_.advance(step.cancelRequested(), [&step] { return step.endCancellability(); });
+        switch (progress.state) {
+            case ExportOperationState::Waiting:
+                setProgress(step, static_cast<double>(progress.readyContents) / progress.totalContents,
+                            "waiting", progress.readyContents, progress.totalContents);
+                return;
+            case ExportOperationState::Writing:
+                if (!resultMetadataCaptured_)
+                    captureResultMetadata(context, progress);
+                setProgress(step, std::nullopt, "writing", std::nullopt, std::nullopt);
+                return;
+            case ExportOperationState::Succeeded:
+                succeed(step);
+                return;
+            case ExportOperationState::Failed:
+                fail(step, exportFailureError(progress.failure));
+                return;
+            case ExportOperationState::Cancelled:
+                step.cancel(JsonValue(), false);
+                return;
+            case ExportOperationState::NotStarted:
+                fail(step, {"INTERNAL", "", "export operation was not started", false});
+                return;
+        }
     }
 
 private:
-    void stepWaiting(ControlOpContext& context, ControlJobStep& step)
-    {
-        if (step.cancelRequested()) {
-            finishCancelled(step);
-            return;
-        }
-        const auto plan = StandaloneMediaOperations::buildExportPlan(context.processor(), target_);
-        if (plan.targetGone) {
-            fail(step, {"REVISION_CONFLICT", "changed_during_export", "the clip of the export was removed", false});
-            return;
-        }
-        if (plan.contents.empty()) {
-            fail(step, {"INVALID_ARGUMENT", "nothing_to_export", "the export holds no clip with audio", false});
-            return;
-        }
-        int ready = 0;
-        auto dry = JsonValue::array();
-        for (const auto& key : plan.contents) {
-            const auto readiness = readiness_.classify(context.processor(), key);
-            if (readiness.state == Readiness::State::Fail) {
-                fail(step, readinessError(readiness));
-                return;
-            }
-            if (readiness.state == Readiness::State::Wait)
-                continue;
-            ++ready;
-            if (readiness.state == Readiness::State::Dry) {
-                auto entry = JsonValue::object();
-                entry.appendMember("contentId", JsonValue::string(controlContentId(context, key)));
-                entry.appendMember("reason", JsonValue::string(readiness.dryReason));
-                dry.append(std::move(entry));
-            }
-        }
-        const int total = static_cast<int>(plan.contents.size());
-        if (ready == total) {
-            const auto status = StandaloneMediaOperations::validateExportPlan(context.processor(), plan);
-            if (status == StandaloneMediaOperations::ExportPlanStatus::TargetGone) {
-                fail(step, {"REVISION_CONFLICT", "changed_during_export", "the clip of the export was removed", false});
-                return;
-            }
-            if (status == StandaloneMediaOperations::ExportPlanStatus::ContentUnavailable) {
-                Readiness unavailable;
-                unavailable.state = Readiness::State::Fail;
-                unavailable.failure = StandaloneMediaOperations::ExportFailure::ContentUnavailable;
-                fail(step, readinessError(unavailable));
-                return;
-            }
-            if (status == StandaloneMediaOperations::ExportPlanStatus::Changed) {
-                setProgress(step, static_cast<double>(ready) / total, "waiting", ready, total);
-                return;
-            }
-            startWriting(context, plan, std::move(dry), step.wakeCallback());
-            if (writer_ != nullptr)
-                setProgress(step, std::nullopt, "writing", std::nullopt, std::nullopt);
-            else
-                fail(step, {"IO_ERROR", "write_failed", "the target directory cannot be written", false});
-            return;
-        }
-        setProgress(step, static_cast<double>(ready) / total, "waiting", ready, total);
-    }
-
-    /** In the tick that found every content ready and the plan current, records result metadata and
-        starts the writer on a temporary file in the target directory. */
-    void startWriting(ControlOpContext& context, const ExportPlan& plan, JsonValue dry, std::function<void()> wake)
+    void captureResultMetadata(ControlOpContext& context, const ExportOperationProgress& progress)
     {
         std::vector<ControlContentVersions> versions;
-        for (const auto& key : plan.contents) {
+        for (const auto& key : operation_.plan().contents) {
             const auto snapshot = controlLiveSnapshot(context, key);
             if (snapshot != nullptr)
                 versions.push_back(controlContentVersions(context, controlContentId(context, key), *snapshot));
@@ -509,101 +334,34 @@ private:
             entry.appendMember("revision", JsonValue::string(version.revision()));
             contents_.append(std::move(entry));
         }
-        dryContents_ = std::move(dry);
+        for (const auto& dry : progress.dryContents) {
+            auto entry = JsonValue::object();
+            entry.appendMember("contentId", JsonValue::string(controlContentId(context, dry.key)));
+            entry.appendMember("reason", JsonValue::string(dry.reason));
+            dryContents_.append(std::move(entry));
+        }
         processing_ = processingJson(context);
-        startTimelineSec_ = target_.kind == ExportKind::Clip ? plan.clipStartSec : 0.0;
-        const auto target = fileOf(params_.path);
-        const auto directory = target.getParentDirectory();
-        if (!directory.isDirectory())
-            return;
-        // A name of its own in the target directory, so that the final rename never moves data between
-        // volumes; OpenTune's export writes .wav files only.
-        temporary_ =
-            directory.getNonexistentChildFile("." + target.getFileNameWithoutExtension() + ".export", ".wav", false);
-        writer_ = std::make_unique<ExportWriter>(plan, temporary_, std::move(wake));
+        startTimelineSec_ = operation_.plan().target.kind == ExportKind::Clip ? operation_.plan().clipStartSec : 0.0;
+        resultMetadataCaptured_ = true;
     }
 
-    void stepWriting(ControlOpContext& context, ControlJobStep& step)
+    void succeed(ControlJobStep& step)
     {
-        // OpenTune's export cannot be interrupted: a cancellation waits for the write and then deletes it.
-        if (!writer_->done())
-            return;
-        const bool written = writer_->written;
-        const int channelCount = writer_->channelCount;
-        const double sampleRateHz = writer_->sampleRateHz;
-        const std::int64_t frameCount = writer_->frameCount;
-        const std::string sampleFormat = writer_->sampleFormat;
-        if (step.cancelRequested()) {
-            finishCancelled(step);
-            return;
-        }
-        if (!written) {
-            AppLogger::logNoThrow("control API: export.start: OpenTune could not write the export file");
-            fail(step, {"IO_ERROR", "write_failed", "OpenTune could not write the export file", false});
-            return;
-        }
-        // Validate the exact plan passed to the worker against current product state.
-        if (StandaloneMediaOperations::validateExportPlan(context.processor(), writer_->plan())
-            != StandaloneMediaOperations::ExportPlanStatus::Current) {
-            fail(step, {"REVISION_CONFLICT", "changed_during_export",
-                        "a content or clip of the export changed while the file was written", false});
-            return;
-        }
-        // Cancellable until the final rename.
-        if (!step.endCancellability()) {
-            finishCancelled(step);
-            return;
-        }
-        std::string finalPath;
-        if (auto error = moveIntoPlace(context, finalPath)) {
-            fail(step, *error);
-            return;
-        }
-        temporary_ = juce::File();
+        const auto& info = operation_.wavInfo();
+        auto outputPath = operation_.destination().getFullPathName().toStdString();
+        if (operation_.destination() == fileOf(requestedPath_))
+            outputPath = requestedPath_;
         auto result = JsonValue::object();
-        result.appendMember("path", JsonValue::string(finalPath));
-        result.appendMember("sampleRateHz", controlJsonNumber(sampleRateHz, 3));
-        result.appendMember("channelCount", JsonValue::integer(channelCount));
-        result.appendMember("sampleFormat", JsonValue::string(sampleFormat));
-        result.appendMember("durationSec", controlJsonSeconds(static_cast<double>(frameCount) / sampleRateHz));
+        result.appendMember("path", JsonValue::string(outputPath));
+        result.appendMember("sampleRateHz", controlJsonNumber(info.sampleRateHz, 3));
+        result.appendMember("channelCount", JsonValue::integer(info.channelCount));
+        result.appendMember("sampleFormat", JsonValue::string(info.sampleFormat));
+        result.appendMember("durationSec", controlJsonSeconds(static_cast<double>(info.frameCount) / info.sampleRateHz));
         result.appendMember("startTimelineSec", controlJsonSeconds(startTimelineSec_));
         result.appendMember("contents", contents_);
         result.appendMember("dryContents", dryContents_);
         result.appendMember("processing", processing_);
-        writer_.reset();
-        busyAdmission_.release();
         step.succeed(std::move(result));
-    }
-
-    /** The names that ifExists allows, each checked against the loaded
-        media right before its rename. nullopt on success, with finalPath the name written. */
-    std::optional<ControlJobError> moveIntoPlace(ControlOpContext& context, std::string& finalPath)
-    {
-        const auto media = loadedMediaPaths(context);
-        const auto from = temporary_.getFullPathName().toStdString();
-        const int lastNumber = params_.ifExists == IfExists::Rename ? kLastRenameNumber : 1;
-        for (int number = 1; number <= lastNumber; ++number) {
-            const auto candidate = number == 1 ? params_.path : numberedPath(params_.path, number);
-            if (auto error = loadedMediaError(media, candidate))
-                return error;
-            switch (controlRenameFile(from, candidate, params_.ifExists == IfExists::Overwrite)) {
-                case ControlRenameResult::DoneSourceRemains:
-                    // The target holds the data, so the export succeeded; only the temporary name is left
-                    // over. Remove it again now, and say so in the log if that fails too (no path).
-                    if (!temporary_.deleteFile() && temporary_.exists())
-                        AppLogger::logNoThrow("control API: export.start: the temporary file could not be removed");
-                    [[fallthrough]];
-                case ControlRenameResult::Done:
-                    finalPath = candidate;
-                    return std::nullopt;
-                case ControlRenameResult::TargetExists:
-                    break; // rename: the next name; error: the loop ends
-                case ControlRenameResult::Failed:
-                    return ControlJobError{"IO_ERROR", "write_failed", "the file could not be moved to the target",
-                                           false};
-            }
-        }
-        return ControlJobError{"ALREADY_EXISTS", "target_exists", "a file exists at the target", false};
     }
 
     static JsonValue processingJson(ControlOpContext& context)
@@ -636,43 +394,22 @@ private:
         step.setProgress(fraction, phase, itemsDone, itemsTotal);
     }
 
-    void removeTemporary()
-    {
-        if (temporary_ != juce::File())
-            temporary_.deleteFile();
-        temporary_ = juce::File();
-    }
-
     void fail(ControlJobStep& step, const ControlJobError& error)
     {
-        writer_.reset();
-        removeTemporary();
-        busyAdmission_.release();
         if (error.kind != "INVALID_ARGUMENT" || !error.reason.empty())
             AppLogger::logNoThrow("control API: export.start: the export failed with " + juce::String(error.kind) + "("
                                   + juce::String(error.reason) + ")");
         step.fail(error);
     }
 
-    void finishCancelled(ControlJobStep& step)
-    {
-        writer_.reset();
-        removeTemporary();
-        busyAdmission_.release();
-        step.cancel(JsonValue(), false);
-    }
-
     ControlOpEnvironment environment_;
-    ExportParams params_;
-    StandaloneMediaOperations::ExportReadinessTracker readiness_;
-    ExportTarget target_;
-    ExportBusyGuard busyAdmission_;
-    std::unique_ptr<ExportWriter> writer_;
-    juce::File temporary_;
+    std::string requestedPath_;
+    ExportOperation operation_;
     JsonValue contents_ = JsonValue::array();
     JsonValue dryContents_ = JsonValue::array();
     JsonValue processing_;
     double startTimelineSec_ = 0.0;
+    bool resultMetadataCaptured_ = false;
     std::string lastPhase_;
     std::optional<double> lastFraction_;
 };
@@ -719,23 +456,12 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
         return controlOpError("INVALID_ARGUMENT", reason, "the path is not an absolute path in the accepted form");
     if (!hasWavExtension(params.path))
         return controlOpError("INVALID_ARGUMENT", "path_bad_extension", "an export writes only .wav files");
-    if (StandaloneMediaOperations::buildExportPlan(context.processor(), target).contents.empty())
-        return controlOpError("INVALID_ARGUMENT", "nothing_to_export", "the export holds no clip with audio");
-    // Check loaded media by file identity; the job checks again right before its final rename.
-    if (const auto error = loadedMediaError(loadedMediaPaths(context), params.path))
-        return controlOpError(error->kind, error->reason, error->detail);
-    if (!fileOf(params.path).getParentDirectory().isDirectory())
-        return controlOpError("IO_ERROR", "write_failed", "the directory of the target does not exist");
-    // With ifExists error, an existing target fails at once and nothing is rendered.
-    if (params.ifExists == IfExists::Error && fileOf(params.path).exists())
-        return controlOpError("ALREADY_EXISTS", "target_exists", "a file exists at the target");
-
-    // The shared message-thread busy state that the editor's export keeps too, taken here on the
-    // message thread after every check, held until the job ends.
-    if (!processor.tryBeginExport())
-        return controlOpError("BUSY", "export_in_progress", "an export is running");
-    ExportBusyGuard busyAdmission(processor);
-    auto job = std::make_shared<ExportJob>(context.environment(), params, target, std::move(busyAdmission));
+    auto job = std::make_shared<ExportJob>(context.environment(), processor, params, target);
+    const auto startFailure = job->start();
+    if (startFailure != ExportFailure::None) {
+        const auto error = exportFailureError(startFailure, true);
+        return controlOpError(error.kind, error.reason, error.detail);
+    }
     const auto started =
         jobs->start("export", true, [job](ControlJobStep& step) { job->step(step); }, std::string(), digest);
     if (started.jobId.empty())

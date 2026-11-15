@@ -406,10 +406,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         invalidateLiveNotes(beforeNotes, cachedNotes_);
         requestContentRedraw();
         overlay_->repaint();
-        if (result.status == OpenTuneAudioProcessor::NoteResizeCommitStatus::Applied
-            && !result.pitchCurveEdited) {
-            listeners_.call([](Listener& listener) { listener.contentEdited(); });
-        }
         return result.status == OpenTuneAudioProcessor::NoteResizeCommitStatus::Applied;
     };
     // ── OpenDyne 契约回调（Pitch/Scissors/Gain 域） ──
@@ -1716,7 +1712,7 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
     const auto after = readEditedSnapshot();
     auto action = contentCommands_->createPianoRollEditAction(
         editedContentKey_, beforeUndoNotes_, beforeUndoSegments_, after,
-        ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive},
+        std::vector<ContentEditRangeFrames>{{affectedRange.startFrame, affectedRange.endFrameExclusive}},
         description.isNotEmpty() ? description : LOC(kEdit));
     if (action == nullptr)
         return;
@@ -3392,9 +3388,6 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
             lastKnownNotesRevision_ = committedSnapshot->notesRevision;
             lastKnownPitchRevision_ = committedSnapshot->pitchRevision;
             requestContentRedraw();
-            listeners_.call([affectedRange](Listener& l) {
-                l.pitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
-            });
         }
         return result;
     }
@@ -3450,8 +3443,6 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
             result.status = AudioEditingScheme::ParameterEditStatus::Failed;
             return result;
         }
-        const int notifyEndFrame = std::max(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
-        listeners_.call([affectedRange, notifyEndFrame](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, notifyEndFrame); });
         result.status = AudioEditingScheme::ParameterEditStatus::Applied;
         result.changed = true;
         return result;

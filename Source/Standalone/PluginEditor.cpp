@@ -55,19 +55,14 @@
 #include <algorithm>
 #include <mutex>
 #include <unordered_map>
-#include <thread>
 #include <future>
 #include <chrono>
 
 namespace OpenTune {
 
 struct OpenTuneAudioProcessorEditor::PendingExport {
-    StandaloneMediaOperations::ExportPlan plan;
-    juce::File file;
+    std::unique_ptr<StandaloneMediaOperations::ExportOperation> operation;
     juce::String targetName;
-    Language language = Language::English;
-    StandaloneMediaOperations::ExportReadinessTracker readiness{false};
-    bool writing = false;
 };
 
 namespace {
@@ -833,6 +828,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     processorRef_.setPlacementChangedCallback([this] {
         projectSession_.markDirty();
         arrangementView_.requestContentRedraw();
+        triggerAsyncUpdate();
     });
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     processorRef_.setExportReadinessChangedCallback([safeThis] {
@@ -1074,36 +1070,14 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
         + juce::String(static_cast<int>(backgroundTaskCount))
         + " elapsedMs=" + juce::String(juce::Time::getMillisecondCounter() - backgroundTasksStart));
 
-    // Safely join export worker thread if it exists. The worker's own completion callback releases
-    // the processor's shared export busy state on the message thread; when this editor started the
-    // worker and its callback is gone with the editor (or the callback has not run yet), the
-    // destructor joins first and releases the admission it holds. It never clears an admission the
-    // API holds: exportWorkerOwnedByEditor_ is only true while this editor's own admission is out.
-    const auto exportJoinable = exportWorker_.joinable();
-    const auto exportInProgress = exportWorkerOwnedByEditor_;
-    AppLogger::log("ShutdownDiag: exportThreadJoin begin joinable="
-        + juce::String(exportJoinable ? "true" : "false")
-        + " exportInProgress=" + juce::String(exportInProgress ? "true" : "false"));
-    const auto exportJoinStart = juce::Time::getMillisecondCounter();
-    if (exportWorker_.joinable())
-    {
-        exportWorker_.join();
-    }
-    if (exportWorkerOwnedByEditor_)
-    {
-        // Only this editor's own admission; tryBeginExport was taken for it and was not released
-        // yet (the callback that releases it is gone with the editor or would arrive after join).
-        exportWorkerOwnedByEditor_ = false;
-        processorRef_.finishExport();
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    const bool hadPendingExport = pendingExport_ != nullptr;
+#endif
+    pendingExport_.reset();
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    if (hadPendingExport)
         processorRef_.getControlService().wakeJobs();
 #endif
-    }
-    pendingExport_.reset();
-    AppLogger::log("ShutdownDiag: exportThreadJoin joinable="
-        + juce::String(exportJoinable ? "true" : "false")
-        + " exportInProgress=" + juce::String(exportInProgress ? "true" : "false")
-        + " elapsedMs=" + juce::String(juce::Time::getMillisecondCounter() - exportJoinStart));
 
     const auto projectJobCount = projectWorkerPool_.getNumJobs();
     AppLogger::log("ShutdownDiag: projectWorkerPool.removeAllJobs begin jobCount="
@@ -3127,37 +3101,30 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                 }
             }
 
-            if (!safeThis->processorRef_.tryBeginExport())
-            {
+            auto pending = std::make_unique<PendingExport>();
+            pending->targetName = targetName;
+            pending->operation = std::make_unique<StandaloneMediaOperations::ExportOperation>(
+                safeThis->processorRef_, target, file,
+                file.existsAsFile()
+                    ? StandaloneMediaOperations::ExportDestinationPolicy::Overwrite
+                    : StandaloneMediaOperations::ExportDestinationPolicy::FailIfExists,
+                false, LocalizationManager::getInstance().resolveLanguage(),
+                [safeThis] {
+                    if (safeThis != nullptr)
+                        safeThis->notifyControlBusyStateChanged();
+                });
+            pending->operation->setWakeCallback([safeThis] {
+                juce::MessageManager::callAsync([safeThis] {
+                    if (safeThis != nullptr)
+                        safeThis->triggerAsyncUpdate();
+                });
+            });
+            if (pending->operation->start() == StandaloneMediaOperations::ExportFailure::Busy) {
                 ConfirmDialogContent::showMessage(
-                    &safeThis->contentRoot_,
-                    LOC(kExportAudio),
-                    LOC(kExportInProgress));
+                    &safeThis->contentRoot_, LOC(kExportAudio), LOC(kExportInProgress));
                 return;
             }
-            safeThis->exportWorkerOwnedByEditor_ = true;
-            safeThis->notifyControlBusyStateChanged();
-
-            auto plan = StandaloneMediaOperations::buildExportPlan(safeThis->processorRef_, target);
-            if (plan.targetGone || plan.clips.empty())
-            {
-                safeThis->processorRef_.finishExport();
-                safeThis->exportWorkerOwnedByEditor_ = false;
-                safeThis->notifyControlBusyStateChanged();
-                ConfirmDialogContent::showMessage(
-                    &safeThis->contentRoot_,
-                    LOC(kExportFailed),
-                    target.kind == StandaloneMediaOperations::ExportKind::Clip
-                        ? LOC(kNoAudioClipSelected)
-                        : LOC_RAW("No audio clips to export"));
-                return;
-            }
-
-            safeThis->pendingExport_ = std::make_unique<PendingExport>();
-            safeThis->pendingExport_->plan = std::move(plan);
-            safeThis->pendingExport_->file = file;
-            safeThis->pendingExport_->targetName = targetName;
-            safeThis->pendingExport_->language = LocalizationManager::getInstance().resolveLanguage();
+            safeThis->pendingExport_ = std::move(pending);
             safeThis->advancePendingExport();
             };
 
@@ -3176,60 +3143,88 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
 
 void OpenTuneAudioProcessorEditor::advancePendingExport()
 {
-    if (pendingExport_ == nullptr || pendingExport_->writing)
+    if (pendingExport_ == nullptr)
         return;
 
-    int ready = 0;
-    for (const auto& key : pendingExport_->plan.contents) {
-        const auto state = pendingExport_->readiness.classify(processorRef_, key);
-        if (state.state == StandaloneMediaOperations::ExportReadiness::State::Fail) {
-            const auto message = state.failure == StandaloneMediaOperations::ExportFailure::AnalysisFailed
-                ? LOC_RAW("Pitch analysis failed")
-                : state.failure == StandaloneMediaOperations::ExportFailure::RenderChunkFailed
-                    ? LOC_RAW("Audio rendering failed")
-                    : state.failure == StandaloneMediaOperations::ExportFailure::DryStretched
-                        ? LOC_RAW("Stretched audio is not available")
-                        : LOC_RAW("Audio is not ready for export");
+    const auto progress = pendingExport_->operation->advance(false);
+    switch (progress.state)
+    {
+        case StandaloneMediaOperations::ExportOperationState::NotStarted:
+        case StandaloneMediaOperations::ExportOperationState::Waiting:
+        case StandaloneMediaOperations::ExportOperationState::Writing:
+            return;
+        case StandaloneMediaOperations::ExportOperationState::Succeeded:
+            finishPendingExport(true, {});
+            return;
+        case StandaloneMediaOperations::ExportOperationState::Failed:
+        {
+            auto message = pendingExport_->operation->error();
+            if (message.isEmpty())
+            {
+                switch (progress.failure)
+                {
+                    case StandaloneMediaOperations::ExportFailure::Busy:
+                        message = LOC(kExportInProgress);
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::AnalysisFailed:
+                        message = LOC_RAW("Pitch analysis failed");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::RenderChunkFailed:
+                    case StandaloneMediaOperations::ExportFailure::RenderUnavailable:
+                        message = LOC_RAW("Audio rendering failed");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::DryStretched:
+                        message = LOC_RAW("Stretched audio is not available");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::StretchFailed:
+                        message = LOC_RAW("Time stretch failed");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::TargetGone:
+                        message = LOC(kNoAudioClipSelected);
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::NothingToExport:
+                        message = LOC_RAW("No audio clips to export");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::Changed:
+                        message = LOC_RAW("Content changed during export");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::LoadedMedia:
+                        message = LOC_RAW("The destination is used by project media");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::FileIdentity:
+                        message = LOC_RAW("Could not check the destination file");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::DestinationUnavailable:
+                        message = LOC_RAW("The export destination is unavailable");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::TargetExists:
+                        message = LOC(kOverwriteExistingFile);
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::WriteFailed:
+                        message = LOC_RAW("Audio export failed");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::ContentUnavailable:
+                        message = LOC_RAW("Audio content is unavailable");
+                        break;
+                    case StandaloneMediaOperations::ExportFailure::None:
+                        message = LOC_RAW("Audio export failed");
+                        break;
+                }
+            }
             finishPendingExport(false, message);
             return;
         }
-        if (state.state == StandaloneMediaOperations::ExportReadiness::State::Ready
-            || state.state == StandaloneMediaOperations::ExportReadiness::State::Dry)
-            ++ready;
+        case StandaloneMediaOperations::ExportOperationState::Cancelled:
+            finishPendingExport(false, LOC_RAW("Audio export cancelled"));
+            return;
     }
-    if (ready != static_cast<int>(pendingExport_->plan.contents.size()))
-        return;
-
-    auto plan = std::move(pendingExport_->plan);
-    const auto file = pendingExport_->file;
-    const auto language = pendingExport_->language;
-    pendingExport_->writing = true;
-    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
-    exportWorker_ = std::thread([safeThis, plan = std::move(plan), file, language]() mutable {
-        juce::String error;
-        bool succeeded = false;
-        try {
-            succeeded = StandaloneMediaOperations::writeExportWav(plan, file, language, error);
-        } catch (...) {
-            error = LOC_RAW("Audio export failed");
-        }
-        juce::MessageManager::callAsync([safeThis, succeeded, error] {
-            if (safeThis != nullptr)
-                safeThis->finishPendingExport(succeeded, error);
-        });
-    });
 }
 
 void OpenTuneAudioProcessorEditor::finishPendingExport(bool succeeded, const juce::String& error)
 {
-    if (exportWorker_.joinable())
-        exportWorker_.join();
-    if (exportWorkerOwnedByEditor_) {
-        exportWorkerOwnedByEditor_ = false;
-        processorRef_.finishExport();
-        notifyControlBusyStateChanged();
-    }
-    const auto file = pendingExport_ != nullptr ? pendingExport_->file : juce::File();
+    const auto file = pendingExport_ != nullptr
+        ? pendingExport_->operation->destination()
+        : juce::File();
     const auto targetName = pendingExport_ != nullptr ? pendingExport_->targetName : juce::String();
     pendingExport_.reset();
 
@@ -3804,7 +3799,7 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
     const DetectedKey newKey = OpenTune::makeDetectedKeyFromUi(newRoot, newScaleType);
 
     if (activeContentKey.isValid()) {
-        processorRef_.setContentDetectedKey(activeContentKey, newKey);
+        processorRef_.getContentCommands()->setDetectedKey(activeContentKey, newKey);
     }
     applyScaleToUi(newRoot, newScaleType);
 
@@ -3814,7 +3809,6 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
         + " root=" + juce::String(newRoot)
         + " scale=" + juce::String(newScaleType));
 
-    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged(TimelineDisplayMode mode)

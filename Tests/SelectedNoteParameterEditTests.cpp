@@ -222,6 +222,14 @@ public:
         ++commits;
         return {};
     }
+    ContentCommitSnapshot commitNotesAndSegmentsInRanges(
+        ContentKey key, std::vector<Note> notes, std::vector<PitchCorrectionSegment> segments,
+        const std::vector<ContentEditRangeFrames>& ranges) override
+    {
+        if (ranges.size() != 1)
+            return {};
+        return commitNotesAndSegments(key, std::move(notes), std::move(segments), ranges.front());
+    }
     ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames,
         std::vector<float>, std::optional<std::vector<F0FrameRange>>) override { return {}; }
@@ -245,7 +253,8 @@ bool checkEditActionUsesBoundContentKey()
                                         PitchCorrectionSegment::Source::NoteBased);
 
     PianoRollEditAction action(
-        commands, key, "Edit note", {before}, {after}, {beforeSegment}, {afterSegment}, {12, 14});
+        commands, key, "Edit note", {before}, {after}, {beforeSegment}, {afterSegment},
+        std::vector<ContentEditRangeFrames>{{12, 14}});
     action.undo();
     if (commands->commits != 1 || commands->lastKey != key
         || !sameNotes(commands->lastNotes, {before})

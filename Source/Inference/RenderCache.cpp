@@ -782,6 +782,7 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
                     else if (contentUnchanged && newChunk.status == Chunk::Status::Pending)
                     {
                         // Already queued for same revision: no-op
+                        newPendingChunks.insert(planned.startSample);
                     }
                     else if (contentUnchanged && newChunk.status == Chunk::Status::Running)
                     {

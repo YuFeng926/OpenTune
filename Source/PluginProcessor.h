@@ -756,6 +756,11 @@ public:
                                         std::vector<Note> notes,
                                         std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange);
+    ContentCommitSnapshot commitContentNotesAndSegmentsInRanges(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        const std::vector<ContentEditRangeFrames>& affectedRanges);
     ContentCommitSnapshot commitContentNotesAndSegmentsWithOriginalF0(
         ContentKey key,
         std::vector<Note> notes,
@@ -909,7 +914,7 @@ private:
         ContentKey key,
         std::vector<Note> notes,
         std::vector<PitchCorrectionSegment> segments,
-        ContentEditRangeFrames affectedRange,
+        std::vector<ContentEditRangeFrames> affectedRanges,
         std::vector<float> originalF0InRange,
         std::optional<std::vector<F0FrameRange>> erasedRanges);
     // 调式检测唯一入口（F0 提交成功链调用）：origin==Manual 的内容永不自动覆盖

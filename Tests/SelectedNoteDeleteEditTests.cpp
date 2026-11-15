@@ -203,6 +203,16 @@ public:
         segmentCommits.push_back({ key, std::move(notes), std::move(segments), range });
         return {};
     }
+    ContentCommitSnapshot commitNotesAndSegmentsInRanges(
+        ContentKey key, std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        const std::vector<ContentEditRangeFrames>& ranges) override
+    {
+        lastKey = key;
+        for (const auto& range : ranges)
+            segmentCommits.push_back({ key, notes, segments, range });
+        return {};
+    }
     ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames,
         std::vector<float>, std::optional<std::vector<F0FrameRange>>) override { return {}; }
@@ -238,7 +248,7 @@ bool checkUndoActionsUseBoundKey()
     };
     PianoRollEditAction curveAction(
         commands, key, "Delete note", curve.beforeNotes, curve.afterNotes,
-        curve.beforeSegments, curve.afterSegments, range);
+        curve.beforeSegments, curve.afterSegments, { range });
 
     curveAction.undo();
     const auto& before = commands->segmentCommits.back();

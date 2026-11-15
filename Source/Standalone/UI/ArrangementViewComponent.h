@@ -328,17 +328,24 @@ private:
 
     // === 多选支持 ===
     using PlacementSelectionKey = StandaloneArrangement::PlacementSelectionKey;
-    std::set<PlacementSelectionKey> selectedPlacements_;
-    bool isMultiSelectMode_{false};
+    using PlacementSelectionState = StandaloneArrangement::SelectionState;
     PlacementSelectionKey shiftAnchor_;
     bool hasShiftAnchor_{false};
 
-    bool isPlacementSelected(int trackId, uint64_t placementId) const;
-    void togglePlacementSelection(int trackId, uint64_t placementId);
-    void clearPlacementSelection();
-    void selectPlacementsInRange(const PlacementSelectionKey& from, const PlacementSelectionKey& to);
-    void selectAllPlacementsInTrack(int trackId);
-    void commitPlacementSelection(PlacementSelectionKey primary);
+    PlacementSelectionState getArrangementSelectionState() const;
+    void syncPrimarySelection(const PlacementSelectionState& selection);
+    bool isPlacementSelected(const std::set<PlacementSelectionKey>& selection,
+                             int trackId, uint64_t placementId) const;
+    void togglePlacementSelection(std::set<PlacementSelectionKey>& selection,
+                                  int trackId, uint64_t placementId);
+    void clearPlacementSelection(std::set<PlacementSelectionKey>& selection);
+    void selectPlacementsInRange(std::set<PlacementSelectionKey>& selection,
+                                 const PlacementSelectionKey& from,
+                                 const PlacementSelectionKey& to);
+    void selectAllPlacementsInTrack(std::set<PlacementSelectionKey>& selection, int trackId);
+    void commitPlacementSelection(PlacementSelectionState selection,
+                                  PlacementSelectionKey primary);
+    void commitEmptyPlacementSelection(PlacementSelectionState selection);
     void commitEmptyPlacementSelection();
 
     // === 多选拖拽状态 ===

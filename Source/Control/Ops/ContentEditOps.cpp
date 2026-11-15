@@ -392,7 +392,7 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
     std::vector<Note> working = before;
     juce::String description;
     std::size_t plannedOps = 0;
-    F0FrameRange editRangeUnion;
+    std::vector<ContentEditRangeFrames> correctionRanges;
     for (std::size_t i = 0; i < params.ops.size(); ++i) {
         const auto& op = params.ops[i];
         const auto previous = working;
@@ -428,35 +428,47 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
                 continue;
             }
         }
+        if (correction->affectedRange.isEmpty()) {
+            working = previous;
+            continue;
+        }
         working = correction->notes;
         planning.notes = working;
         planning.pitchCurve = correction->correctedCurve;
         if (plannedOps == 0)
             description = descriptionOf(op);
-        if (plannedOps++ == 0) {
-            editRangeUnion = editRange;
-        } else {
-            editRangeUnion.startFrame = std::min(editRangeUnion.startFrame, editRange.startFrame);
-            editRangeUnion.endFrameExclusive = std::max(editRangeUnion.endFrameExclusive, editRange.endFrameExclusive);
-        }
+        correctionRanges.push_back({correction->affectedRange.startFrame,
+                                    correction->affectedRange.endFrameExclusive});
+        ++plannedOps;
     }
 
     std::vector<Note> after = planning.notes;
+    std::sort(correctionRanges.begin(), correctionRanges.end(), [](const auto& a, const auto& b) {
+        return a.startFrame < b.startFrame;
+    });
+    std::vector<ContentEditRangeFrames> affectedRanges;
+    for (const auto& range : correctionRanges) {
+        if (!affectedRanges.empty() && range.startFrame <= affectedRanges.back().endFrameExclusive) {
+            affectedRanges.back().endFrameExclusive =
+                std::max(affectedRanges.back().endFrameExclusive, range.endFrameExclusive);
+        } else {
+            affectedRanges.push_back(range);
+        }
+    }
+
+    std::vector<PitchCorrectionSegment> segments;
+    if (plannedOps != 0 && planning.pitchCurve != nullptr) {
+        for (const auto& segment : planning.pitchCurve->getCorrectionSegments())
+            if (std::any_of(affectedRanges.begin(), affectedRanges.end(), [&segment](const auto& range) {
+                    return segment.startFrame < range.endFrameExclusive && segment.endFrame > range.startFrame;
+                }))
+                segments.push_back(segment);
+    }
     std::string revisionAfter = versions.revision();
     if (plannedOps != 0) {
-        const auto correction = commands->planNoteCorrection(
-            planning, planning.notes, editRangeUnion, NoteGeneratorParams{});
-        if (!correction)
-            return controlOpError("INTERNAL", "", "OpenTune did not plan the note edit");
-        after = correction->notes;
-        planning.notes = after;
-        planning.pitchCurve = correction->correctedCurve;
         if (!params.dryRun) {
-            auto edit = commands->commitNotesAndSegmentsUndoable(
-                ref.key, correction->notes, correction->segments,
-                ContentEditRangeFrames{correction->affectedRange.startFrame,
-                                       correction->affectedRange.endFrameExclusive},
-                description);
+            auto edit = commands->commitNotesAndSegmentsUndoableInRanges(
+                ref.key, after, segments, affectedRanges, description);
             if (edit.snapshot == nullptr || edit.undoAction == nullptr)
                 return controlOpError("INTERNAL", "", "OpenTune did not commit the note edit");
 

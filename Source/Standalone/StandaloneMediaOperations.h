@@ -6,6 +6,7 @@
 #include "Content/EditableContentSnapshot.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -77,19 +78,11 @@ struct ExportPlan {
     std::vector<ContentKey> contents;
     struct ContentInput {
         ContentKey key;
-        SourceWindow sourceWindow;
-        NativePcmSource nativeSource;
         std::uint64_t contentRevision = 0;
-        std::uint64_t audioRevision = 0;
         std::uint64_t notesRevision = 0;
         std::uint64_t pitchRevision = 0;
         std::uint64_t timeGridRevision = 0;
-        double audioSampleRate = 0.0;
-        std::int64_t firstCanonicalSample = 0;
-        PitchShiftSettings pitchShiftSettings;
         OriginalF0State originalF0State = OriginalF0State::NotRequested;
-        std::string originalF0FailureReason;
-        bool noteTopologyInitialized = false;
         bool hasUsableOriginalF0 = false;
         bool available = false;
     };
@@ -119,7 +112,16 @@ enum class ExportFailure {
     RenderChunkFailed,
     RenderUnavailable,
     StretchFailed,
-    DryStretched
+    DryStretched,
+    Busy,
+    TargetGone,
+    NothingToExport,
+    Changed,
+    LoadedMedia,
+    FileIdentity,
+    DestinationUnavailable,
+    TargetExists,
+    WriteFailed
 };
 
 struct ExportReadiness {
@@ -143,6 +145,71 @@ public:
     ExportReadinessTracker& operator=(const ExportReadinessTracker&) = delete;
 
     ExportReadiness classify(OpenTuneAudioProcessor& processor, ContentKey key);
+
+private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
+
+enum class ExportDestinationPolicy {
+    FailIfExists,
+    Rename,
+    Overwrite
+};
+
+struct ExportDryContent {
+    ContentKey key;
+    const char* reason = "";
+};
+
+enum class ExportOperationState {
+    NotStarted,
+    Waiting,
+    Writing,
+    Succeeded,
+    Failed,
+    Cancelled
+};
+
+struct ExportOperationProgress {
+    ExportOperationState state = ExportOperationState::NotStarted;
+    ExportFailure failure = ExportFailure::None;
+    int readyContents = 0;
+    int totalContents = 0;
+    std::vector<ExportDryContent> dryContents;
+};
+
+struct ExportWavInfo {
+    int channelCount = 0;
+    double sampleRateHz = 0.0;
+    std::int64_t frameCount = 0;
+    std::string sampleFormat;
+};
+
+/** Owns the message-thread export lifecycle and the worker that writes and commits its WAV. */
+class ExportOperation {
+public:
+    ExportOperation(OpenTuneAudioProcessor& processor,
+                    ExportTarget target,
+                    juce::File destination,
+                    ExportDestinationPolicy destinationPolicy,
+                    bool allowDry,
+                    Language language,
+                    std::function<void()> busyChanged = {});
+    ~ExportOperation();
+
+    ExportOperation(const ExportOperation&) = delete;
+    ExportOperation& operator=(const ExportOperation&) = delete;
+
+    ExportFailure start();
+    ExportOperationProgress advance(bool cancelRequested,
+                                    std::function<bool()> beforeCommit = {});
+    void setWakeCallback(std::function<void()> wake);
+
+    const ExportPlan& plan() const noexcept;
+    const ExportWavInfo& wavInfo() const noexcept;
+    const juce::File& destination() const noexcept;
+    const juce::String& error() const noexcept;
 
 private:
     struct State;

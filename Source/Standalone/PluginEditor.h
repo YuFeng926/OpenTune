@@ -15,7 +15,6 @@
 #include <optional>
 #include <vector>
 #include <unordered_map>
-#include <thread>
 #include <mutex>
 #include "PluginProcessor.h"
 #include "UI/ToolIds.h"
@@ -398,14 +397,6 @@ private:
     bool projectOperationBusy_{false};
     // 加载工程回写轨道头时，避免把恢复动作记成新的未保存修改。
     bool applyingLoadedProjectUi_{false};
-    // Export worker thread management (independent: export may be long-running)
-    std::thread exportWorker_;
-    // Message-thread lifecycle fact, not a busy state: this editor started the export worker now in
-    // exportWorker_, so its destructor must join it and release the processor's shared export busy
-    // state on its behalf (the worker's own completion callback may already be gone with the editor).
-    // The shared admission itself lives on the processor (tryBeginExport / finishExport / isExportBusy),
-    // so the API and the UI see one busy state and there is no second global source.
-    bool exportWorkerOwnedByEditor_ = false;
     std::unique_ptr<PendingExport> pendingExport_;
 
     // Detached-safe background tasks (import/deferred post-process)

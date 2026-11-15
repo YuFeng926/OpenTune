@@ -51,6 +51,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <mutex>
 #include <numeric>
 
@@ -798,7 +799,8 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 startFrame, endFrameExclusive, static_cast<int>(before->pitchCurve->size()));
             auto action = createPianoRollEditAction(
                 key, before->notes, before->pitchCurve->getCorrectionSegments(), after,
-                ContentEditRangeFrames{affected.startFrame, affected.endFrameExclusive}, description);
+                std::vector<ContentEditRangeFrames>{
+                    {affected.startFrame, affected.endFrameExclusive}}, description);
             if (action == nullptr)
                 return {};
             auto* actionPtr = action.get();
@@ -849,6 +851,16 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             return proc_.commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
         }
 
+        ContentCommitSnapshot commitNotesAndSegmentsInRanges(
+            ContentKey key,
+            std::vector<Note> notes,
+            std::vector<PitchCorrectionSegment> segments,
+            const std::vector<ContentEditRangeFrames>& affectedRanges) override
+        {
+            return proc_.commitContentNotesAndSegmentsInRanges(
+                key, std::move(notes), std::move(segments), affectedRanges);
+        }
+
         ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
             ContentKey key,
             std::vector<Note> notes,
@@ -869,22 +881,32 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             ContentEditRangeFrames affectedRange,
             const juce::String& description) override
         {
+            return commitNotesAndSegmentsUndoableInRanges(
+                key, std::move(notes), std::move(segments),
+                std::vector<ContentEditRangeFrames>{affectedRange}, description);
+        }
+
+        ContentEditCommitResult commitNotesAndSegmentsUndoableInRanges(
+            ContentKey key,
+            std::vector<Note> notes,
+            std::vector<PitchCorrectionSegment> segments,
+            const std::vector<ContentEditRangeFrames>& affectedRanges,
+            const juce::String& description) override
+        {
+            if (affectedRanges.empty())
+                return {};
+
             const auto before = proc_.getContentSnapshot(key);
             if (before == nullptr || before->pitchCurve == nullptr)
                 return {};
-
-            const auto range = secondsRange(*before->pitchCurve, affectedRange);
-            auto scopedNotes = notesInRange(notes, range.first, range.second);
-            auto scopedSegments = segmentsInRange(
-                segments, affectedRange.startFrame, affectedRange.endFrameExclusive);
-            auto committed = proc_.commitContentNotesAndSegments(
-                key, std::move(scopedNotes), std::move(scopedSegments), affectedRange);
-            if (committed == nullptr)
+            auto committed = proc_.commitContentNotesAndSegmentsInRanges(
+                key, std::move(notes), std::move(segments), affectedRanges);
+            if (committed == nullptr || committed->pitchCurve == nullptr)
                 return {};
 
             auto action = createPianoRollEditAction(
-                key, before->notes, before->pitchCurve->getCorrectionSegments(), committed,
-                affectedRange, description);
+                key, before->notes, before->pitchCurve->getCorrectionSegments(),
+                committed, affectedRanges, description);
             if (action == nullptr)
                 return {};
             auto* actionPtr = action.get();
@@ -898,21 +920,19 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             const std::vector<Note>& beforeNotes,
             const std::vector<PitchCorrectionSegment>& beforeSegments,
             ContentCommitSnapshot after,
-            ContentEditRangeFrames affectedRange,
+            const std::vector<ContentEditRangeFrames>& affectedRanges,
             const juce::String& description) const override
         {
-            if (after == nullptr || after->pitchCurve == nullptr)
+            if (after == nullptr || after->pitchCurve == nullptr || affectedRanges.empty())
                 return {};
-            const auto range = secondsRange(*after->pitchCurve, affectedRange);
             return std::make_unique<PianoRollEditAction>(
                 proc_.getContentCommands(), key,
                 description.isNotEmpty() ? description : LOC_RAW("Edit"),
-                notesInRange(beforeNotes, range.first, range.second),
-                notesInRange(after->notes, range.first, range.second),
-                segmentsInRange(beforeSegments, affectedRange.startFrame, affectedRange.endFrameExclusive),
-                segmentsInRange(after->pitchCurve->getCorrectionSegments(),
-                                affectedRange.startFrame, affectedRange.endFrameExclusive),
-                affectedRange);
+                notesInRanges(beforeNotes, *after->pitchCurve, affectedRanges),
+                notesInRanges(after->notes, *after->pitchCurve, affectedRanges),
+                segmentsInRanges(beforeSegments, affectedRanges),
+                segmentsInRanges(after->pitchCurve->getCorrectionSegments(), affectedRanges),
+                affectedRanges);
         }
 
         std::optional<ContentNoteCorrectionPlan> planNoteCorrection(
@@ -1223,6 +1243,34 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             return result;
         }
 
+        static std::vector<NoteRangeSeconds> secondsRanges(
+            const PitchCurveSnapshot& curve,
+            const std::vector<ContentEditRangeFrames>& ranges)
+        {
+            std::vector<NoteRangeSeconds> result;
+            result.reserve(ranges.size());
+            for (const auto& range : ranges) {
+                const auto seconds = secondsRange(curve, range);
+                result.push_back({seconds.first, seconds.second});
+            }
+            return result;
+        }
+
+        static std::vector<Note> notesInRanges(
+            const std::vector<Note>& notes,
+            const PitchCurveSnapshot& curve,
+            const std::vector<ContentEditRangeFrames>& ranges)
+        {
+            const auto timeRanges = secondsRanges(curve, ranges);
+            std::vector<Note> result;
+            for (const auto& note : notes)
+                if (std::any_of(timeRanges.begin(), timeRanges.end(), [&note](const NoteRangeSeconds& range) {
+                        return note.startTime < range.endSeconds && note.endTime > range.startSeconds;
+                    }))
+                    result.push_back(note);
+            return result;
+        }
+
         static std::vector<PitchCorrectionSegment> segmentsInRange(
             const std::vector<PitchCorrectionSegment>& segments, int start, int end)
         {
@@ -1241,6 +1289,20 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 clipped.f0Data.assign(segment.f0Data.begin() + offset,
                                       segment.f0Data.begin() + offset + clipEnd - clipStart);
                 result.push_back(std::move(clipped));
+            }
+            return result;
+        }
+
+        static std::vector<PitchCorrectionSegment> segmentsInRanges(
+            const std::vector<PitchCorrectionSegment>& segments,
+            const std::vector<ContentEditRangeFrames>& ranges)
+        {
+            std::vector<PitchCorrectionSegment> result;
+            for (const auto& range : ranges) {
+                auto clipped = segmentsInRange(segments, range.startFrame, range.endFrameExclusive);
+                result.insert(result.end(),
+                              std::make_move_iterator(clipped.begin()),
+                              std::make_move_iterator(clipped.end()));
             }
             return result;
         }
@@ -5242,7 +5304,18 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
                                                              ContentEditRangeFrames affectedRange)
 {
     return commitContentNotesAndSegmentsInternal(
-        key, std::move(notesInRange), std::move(segments), affectedRange, {}, std::nullopt);
+        key, std::move(notesInRange), std::move(segments),
+        std::vector<ContentEditRangeFrames>{affectedRange}, {}, std::nullopt);
+}
+
+ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInRanges(
+    ContentKey key,
+    std::vector<Note> notes,
+    std::vector<PitchCorrectionSegment> segments,
+    const std::vector<ContentEditRangeFrames>& affectedRanges)
+{
+    return commitContentNotesAndSegmentsInternal(
+        key, std::move(notes), std::move(segments), affectedRanges, {}, std::nullopt);
 }
 
 ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsWithOriginalF0(
@@ -5254,7 +5327,8 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsWithO
     std::optional<std::vector<F0FrameRange>> erasedRanges)
 {
     return commitContentNotesAndSegmentsInternal(
-        key, std::move(notesInRange), std::move(segments), affectedRange,
+        key, std::move(notesInRange), std::move(segments),
+        std::vector<ContentEditRangeFrames>{affectedRange},
         std::move(originalF0InRange), std::move(erasedRanges));
 }
 
@@ -5312,22 +5386,13 @@ SelectedNoteParameterEditResult OpenTuneAudioProcessor::editSelectedNoteParamete
         patch->affectedRange.startFrame,
         patch->affectedRange.endFrameExclusive
     };
-    result.contentSnapshot = contentCommands_->commitNotesAndSegments(
-        patch->contentKey, patch->afterNotes, patch->afterSegments, affectedRange);
-    if (result.contentSnapshot == nullptr) {
+    const auto edit = contentCommands_->commitNotesAndSegmentsUndoable(
+        patch->contentKey, patch->afterNotes, patch->afterSegments, affectedRange, undoDescription);
+    if (edit.snapshot == nullptr || edit.undoAction == nullptr) {
         result.status = AudioEditingScheme::ParameterEditStatus::Failed;
         return result;
     }
-
-    undoManager_.addAction(std::make_unique<PianoRollEditAction>(
-        contentCommands_,
-        patch->contentKey,
-        std::move(undoDescription),
-        patch->beforeNotes,
-        patch->afterNotes,
-        patch->beforeSegments,
-        patch->afterSegments,
-        affectedRange));
+    result.contentSnapshot = edit.snapshot;
     return result;
 }
 
@@ -5423,7 +5488,8 @@ SelectedNoteDeleteResult OpenTuneAudioProcessor::deleteSelectedPianoRollNotes(
         undoManager_.addAction(std::make_unique<PianoRollEditAction>(
             contentCommands_, key, std::move(undoDescription),
             std::move(curveEdit.beforeNotes), std::move(curveEdit.afterNotes),
-            std::move(curveEdit.beforeSegments), std::move(curveEdit.afterSegments), affectedRange));
+            std::move(curveEdit.beforeSegments), std::move(curveEdit.afterSegments),
+            std::vector<ContentEditRangeFrames>{affectedRange}));
     }
 
     result.status = SelectedNoteDeleteStatus::Applied;
@@ -5540,8 +5606,8 @@ DrawNoteCommitResult OpenTuneAudioProcessor::drawNote(
             contentCommands_, key, std::move(undoDescription),
             std::move(plan.beforeNotesInPitchRange), std::move(afterNotes),
             std::move(plan.beforeSegments), std::move(afterSegments),
-            ContentEditRangeFrames{ plan.affectedRange.startFrame,
-                                    plan.affectedRange.endFrameExclusive }));
+            std::vector<ContentEditRangeFrames>{{plan.affectedRange.startFrame,
+                                                 plan.affectedRange.endFrameExclusive}}));
     }
 
     result.status = DrawNoteCommitStatus::Applied;
@@ -5594,6 +5660,7 @@ OpenTuneAudioProcessor::NoteResizeCommitResult OpenTuneAudioProcessor::resizePia
         undoManager_.addAction(std::make_unique<PianoRollNotePatchAction>(
             contentCommands_, key, std::move(undoDescription),
             std::move(beforePatch), std::move(afterPatch)));
+        notifyContentEditCompleted(key);
         result.status = NoteResizeCommitStatus::Applied;
         return result;
     }
@@ -5606,36 +5673,22 @@ OpenTuneAudioProcessor::NoteResizeCommitResult OpenTuneAudioProcessor::resizePia
                               static_cast<int>(curve->size()));
     const double rangeStartSeconds = timeline.timeAtFrame(affectedRange.startFrame);
     const double rangeEndSeconds = timeline.timeAtFrame(affectedRange.endFrameExclusive);
-    auto beforeNotes = filterNotesToRange(
-        snapshot->notes, rangeStartSeconds, rangeEndSeconds);
-    auto beforeSegments = clipSegmentsToFrameRange(
-        curve->getCorrectionSegments(),
-        affectedRange.startFrame,
-        affectedRange.endFrameExclusive);
     const ContentEditRangeFrames ownerRange{
         affectedRange.startFrame,
         affectedRange.endFrameExclusive
     };
-    result.contentSnapshot = contentCommands_->commitNotesAndSegments(
+    const auto edit = contentCommands_->commitNotesAndSegmentsUndoable(
         key,
         filterNotesToRange(plan.afterNotes, rangeStartSeconds, rangeEndSeconds),
         clipSegmentsToFrameRange(segments, affectedRange.startFrame, affectedRange.endFrameExclusive),
-        ownerRange);
-    if (result.contentSnapshot == nullptr) {
+        ownerRange,
+        undoDescription);
+    if (edit.snapshot == nullptr || edit.undoAction == nullptr) {
         result.contentSnapshot = snapshot;
         return result;
     }
 
-    auto afterNotes = filterNotesToRange(
-        result.contentSnapshot->notes, rangeStartSeconds, rangeEndSeconds);
-    auto afterSegments = clipSegmentsToFrameRange(
-        result.contentSnapshot->pitchCurve->getCorrectionSegments(),
-        affectedRange.startFrame,
-        affectedRange.endFrameExclusive);
-    undoManager_.addAction(std::make_unique<PianoRollEditAction>(
-        contentCommands_, key, std::move(undoDescription),
-        std::move(beforeNotes), std::move(afterNotes),
-        std::move(beforeSegments), std::move(afterSegments), ownerRange));
+    result.contentSnapshot = edit.snapshot;
     result.status = NoteResizeCommitStatus::Applied;
     result.affectedRange = affectedRange;
     result.pitchCurveEdited = true;
@@ -5748,8 +5801,8 @@ EraserStrokeEditResult OpenTuneAudioProcessor::editEraserStroke(
         contentCommands_, key, std::move(undoDescription),
         result.beforeNotes, result.contentSnapshot->notes,
         plan.beforeSegments, plan.afterSegments,
-        ContentEditRangeFrames{ plan.affectedRange.startFrame,
-                                plan.affectedRange.endFrameExclusive },
+        std::vector<ContentEditRangeFrames>{{plan.affectedRange.startFrame,
+                                             plan.affectedRange.endFrameExclusive}},
         plan.beforeOriginalF0, std::move(afterOriginalF0),
         plan.beforeErasedRanges, std::move(afterErasedRanges));
     action->setErasedRangePatch();
@@ -5824,7 +5877,8 @@ ManualCorrectionEditResult OpenTuneAudioProcessor::applyManualCorrection(
     undoManager_.addAction(std::make_unique<PianoRollEditAction>(
         contentCommands_, key, std::move(undoDescription),
         std::move(beforeNotes), std::move(afterNotes),
-        std::move(beforeSegments), std::move(afterSegments), affectedRange));
+        std::move(beforeSegments), std::move(afterSegments),
+        std::vector<ContentEditRangeFrames>{affectedRange}));
 
     result.status = ManualCorrectionEditStatus::Applied;
     result.contentSnapshot = std::move(committedSnapshot);
@@ -5835,39 +5889,53 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInter
     ContentKey key,
     std::vector<Note> notesInRange,
     std::vector<PitchCorrectionSegment> segments,
-    ContentEditRangeFrames affectedRange,
+    std::vector<ContentEditRangeFrames> affectedRanges,
     std::vector<float> originalF0InRange,
     std::optional<std::vector<F0FrameRange>> erasedRanges)
 {
     auto snap = getContentSnapshot(key);
-    if (!snap || !snap->pitchCurve) return {};
+    if (!snap || !snap->pitchCurve || affectedRanges.empty()) return {};
 
-    // Range-scoped notes merge (mergeNotesRange semantics, same as
-    // commitContentNoteTopologyPatch; the helper filters incoming notes by range)
+    // Remove and replace notes overlapping any affected range, preserving notes
+    // in the gaps between disjoint ranges.
     const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
                                  / snap->pitchCurve->getSampleRate();
-    const double rangeStartSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
-    const double rangeEndSec   = static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame;
+    std::vector<NoteRangeSeconds> secondsRanges;
+    secondsRanges.reserve(affectedRanges.size());
+    for (const auto& range : affectedRanges)
+        secondsRanges.push_back({static_cast<double>(range.startFrame) * secondsPerFrame,
+                                 static_cast<double>(range.endFrameExclusive) * secondsPerFrame});
+    const auto overlapsAffectedRanges = [&secondsRanges](const Note& note) {
+        return std::any_of(secondsRanges.begin(), secondsRanges.end(), [&note](const NoteRangeSeconds& range) {
+            return note.endTime > range.startSeconds && note.startTime < range.endSeconds;
+        });
+    };
 
-    auto normalizedNotes = mergeNotesRange(
-        snap->notes,
-        NoteRangeSeconds{ rangeStartSec, rangeEndSec },
-        filterNotesToRange(notesInRange, rangeStartSec, rangeEndSec));
+    std::vector<Note> mergedNotes;
+    mergedNotes.reserve(snap->notes.size() + notesInRange.size());
+    for (const auto& note : snap->notes)
+        if (!overlapsAffectedRanges(note))
+            mergedNotes.push_back(note);
+    for (const auto& note : notesInRange)
+        if (overlapsAffectedRanges(note))
+            mergedNotes.push_back(note);
+    auto normalizedNotes = normalizeStoredNotes(std::move(mergedNotes));
 
-    // Range-scoped segments merge with split-preserve for boundary-crossing segments.
-    // When a segment crosses the affected range boundary, the outside parts are kept.
-    // Example: old segment [0,100], edit range [40,60] → keep [0,40] and [60,100], replace [40,60].
-    auto mergedSegments = replaceSegmentsInFrameRange(
-        snap->pitchCurve->getCorrectionSegments(),
-        clipSegmentsToFrameRange(segments, affectedRange.startFrame, affectedRange.endFrameExclusive),
-        affectedRange.startFrame,
-        affectedRange.endFrameExclusive);
+    auto mergedSegments = snap->pitchCurve->getCorrectionSegments();
+    for (const auto& range : affectedRanges) {
+        mergedSegments = replaceSegmentsInFrameRange(
+            mergedSegments,
+            clipSegmentsToFrameRange(segments, range.startFrame, range.endFrameExclusive),
+            range.startFrame,
+            range.endFrameExclusive);
+    }
 
     auto newCurve = PitchCurve::fromSnapshot(snap->pitchCurve);
     if (!originalF0InRange.empty())
-        newCurve->setOriginalF0Range(static_cast<size_t>(affectedRange.startFrame), originalF0InRange);
+        newCurve->setOriginalF0Range(static_cast<size_t>(affectedRanges.front().startFrame), originalF0InRange);
     if (erasedRanges)
-        newCurve->replaceErasedRangesInRange(affectedRange.startFrame, affectedRange.endFrameExclusive, *erasedRanges);
+        newCurve->replaceErasedRangesInRange(
+            affectedRanges.front().startFrame, affectedRanges.front().endFrameExclusive, *erasedRanges);
     newCurve->replaceCorrectionSegments(mergedSegments);
     if (!newCurve) return {};
 
@@ -5910,7 +5978,12 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInter
     }
     if (ok) {
         notifyContentChanged(key);
-        onContentLocalMutationCompleted(key, affectedRange);
+        auto renderRange = affectedRanges.front();
+        for (const auto& range : affectedRanges) {
+            renderRange.startFrame = std::min(renderRange.startFrame, range.startFrame);
+            renderRange.endFrameExclusive = std::max(renderRange.endFrameExclusive, range.endFrameExclusive);
+        }
+        onContentLocalMutationCompleted(key, renderRange);
         auto committedSnap = getContentSnapshot(key);
         jassert(committedSnap != nullptr);
         return committedSnap;
