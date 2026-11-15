@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "Content/ContentEditCommands.h"
 #include "Utils/ProjectSession.h"
 
 #if JucePlugin_Build_Standalone
@@ -277,24 +278,28 @@ public:
 
     // ---- Selection ----------------------------------------------------------------------------
 
-    /** True when select() and scaleForSelection() are supported. Default: false. */
-    virtual bool canSelect() const { return false; }
-
-    /** Selects as the arrangement view does when the user clicks. With a placementId, the clip on trackId becomes the
-        only selected clip and trackId the active track, as a click on the clip does: the piano roll shows the clip
-        (in the openDyne scheme it generates the notes of a clip whose notes were never generated) and the transport
-        bar shows the clip's key; with openEditor also as a double click, which switches to the piano roll (a switch can
-        rewrite the tempo, see setWorkspace(), which the caller reads from the processor). With no clip
-        (placementId 0), trackId becomes the active track with no clip selected and the piano roll shows nothing.
-        Returns false, changing nothing, when not supported. */
-    virtual bool select(int /*trackId*/, std::uint64_t /*placementId*/, bool /*openEditor*/) { return false; }
-
-    /** The scale the transport bar would show once the clip is selected (the content's detected key, or the
-        editor's default); nullopt when not supported. */
-    virtual std::optional<UiScale> scaleForSelection(int /*trackId*/, std::uint64_t /*placementId*/) const
+    /** A selection owner plan shared by dry-run and execution. */
+    struct SelectionPlan
     {
-        return std::nullopt;
-    }
+        int trackId = -1;
+        std::uint64_t placementId = 0;
+        bool openEditor = false;
+        int activeTrackAfter = -1;
+        std::vector<std::uint64_t> selectedPlacementIdsAfter;
+        std::optional<UiScale> scaleAfter;
+        std::string workspaceAfter;
+        std::optional<ContentKey> generatedNotesKey;
+        std::optional<ContentNoteRangePatch> generatedNotes;
+        bool commitPendingBpm = false;
+        double bpmAfter = 0.0;
+    };
+
+    /** Plans the editor's complete selection operation. */
+    virtual std::optional<SelectionPlan> planSelection(int /*trackId*/, std::uint64_t /*placementId*/,
+                                                        bool /*openEditor*/) const { return std::nullopt; }
+
+    /** Executes the supplied editor plan, including its view and content side effects. */
+    virtual bool select(SelectionPlan /*plan*/) { return false; }
 
     // ---- Workspace ----------------------------------------------------------------------------
 

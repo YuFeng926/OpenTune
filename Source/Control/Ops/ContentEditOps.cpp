@@ -12,9 +12,7 @@
 #include "Utils/LocalizationManager.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PitchShiftEditAction.h"
-#include "Utils/PitchUtils.h"
 #include "Utils/ScaleUiMapping.h"
-#include "Utils/TuningConfig.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,10 +23,6 @@ namespace {
 
 /** Changes lists at most this many notes. */
 constexpr std::size_t kMaxListedNotes = 200;
-/** A target that moves by less than this many semitones does not change (the reads round to 4 decimals). */
-constexpr double kPitchTolerance = 1e-4;
-/** A parameter that moves by less than this does not change (PianoRollComponent::editParameter()). */
-constexpr double kParameterTolerance = 1e-6;
 
 Result<std::shared_ptr<ControlHistory>> historyOf(ControlOpContext& context)
 {
@@ -241,63 +235,6 @@ bool parseEditNotes(const JsonValue& params, EditNotesParams& out, std::string& 
 
 // ---- content.editNotes: the ops --------------------------------------------------------------------------
 
-/** Sets the note's target to midi with no cent offset, unless it is there already. The base pitch is
-    PitchUtils::midiToFreq() of midi at the instance's tuning, the conversion OpenTune uses for note pitches; it
-    gives 0 Hz for MIDI 0 (and below), so targetMidi 0 leaves the note without a base pitch: its target reads as
-    MIDI 0, a cent shift changes only its offset (Note::getAdjustedPitch() stays 0), and a later setTargetPitch
-    gives it a base pitch again. */
-bool setTarget(Note& note, double midi, float tuningHz)
-{
-    const float pitch = PitchUtils::midiToFreq(static_cast<float>(midi), tuningHz);
-    if (note.pitchOffset == 0.0f
-        && std::abs(controlNoteTargetMidi(note, tuningHz) - PitchUtils::freqToMidi(pitch, tuningHz)) < kPitchTolerance)
-        return false;
-    note.pitch = pitch;
-    note.pitchOffset = 0.0f;
-    return true;
-}
-
-bool setParameter(float& field, const std::optional<double>& value)
-{
-    if (!value || std::abs(static_cast<double>(field) - *value) <= kParameterTolerance)
-        return false;
-    field = static_cast<float>(*value);
-    return true;
-}
-
-/** Applies a direct note edit; scale snapping is handled by the shared content planner. */
-bool applyOp(const NoteOp& op, Note& note, float tuningHz)
-{
-    bool changed = false;
-    switch (op.kind) {
-        case NoteOpKind::SetTargetPitch:
-            changed = setTarget(note, op.targetMidi, tuningHz);
-            break;
-        case NoteOpKind::ShiftCents:
-            // pitchOffset is in semitones; the target moves with it (Note::getAdjustedPitch()).
-            if (std::abs(op.deltaCents) > kParameterTolerance) {
-                note.pitchOffset += static_cast<float>(op.deltaCents / 100.0);
-                changed = true;
-            }
-            break;
-        case NoteOpKind::SnapToScale:
-            break; // handled by planAutoSnap()
-        case NoteOpKind::SetParams: {
-            // Every given parameter, as the knobs and the modulation and drift tools set them.
-            const bool retune = setParameter(note.retuneSpeed, op.retuneSpeed);
-            const bool depth = setParameter(note.vibratoDepth, op.vibratoDepth);
-            const bool rate = setParameter(note.vibratoRate, op.vibratoRateHz);
-            const bool drift = setParameter(note.pitchDriftScale, op.pitchDriftScale);
-            changed = retune || depth || rate || drift;
-            break;
-        }
-    }
-    // As the piano roll marks an edited note (its render marker).
-    if (changed)
-        note.dirty = true;
-    return changed;
-}
-
 /** The undo description the UI gives the same edit: the pitch move and the snap of the pitch tool
     (PianoRollToolHandler), the parameter knobs (PianoRollComponent::editParameter()) and the drift tool. The UI
     takes the text with LOC_RAW (the language of the window it belongs to) at the time of the edit; so does this,
@@ -385,7 +322,6 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
 
     auto& processor = context.processor();
     auto commands = processor.getContentCommands();
-    const float tuningHz = TuningConfig::currentTuningHz();
     const auto beforeWorld = controlCaptureWorldVersions(context);
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
@@ -410,10 +346,34 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
                 continue;
             correction = std::move(snap.correction);
         } else {
-            std::vector<std::size_t> changed;
-            for (const auto position : selections[i])
-                if (applyOp(op, working[position], tuningHz))
-                    changed.push_back(position);
+            ContentNoteValueEditRequest request;
+            for (const auto position : selections[i]) {
+                ContentNoteValueEdit edit;
+                edit.position = position;
+                switch (op.kind) {
+                    case NoteOpKind::SetTargetPitch:
+                        edit.kind = ContentNoteValueEdit::Kind::TargetPitch;
+                        edit.targetMidi = op.targetMidi;
+                        break;
+                    case NoteOpKind::ShiftCents:
+                        edit.kind = ContentNoteValueEdit::Kind::ShiftCents;
+                        edit.deltaCents = op.deltaCents;
+                        break;
+                    case NoteOpKind::SetParams:
+                        edit.kind = ContentNoteValueEdit::Kind::Parameters;
+                        edit.retuneSpeed = op.retuneSpeed;
+                        edit.vibratoDepth = op.vibratoDepth;
+                        edit.vibratoRate = op.vibratoRateHz;
+                        edit.pitchDriftScale = op.pitchDriftScale;
+                        break;
+                    case NoteOpKind::SnapToScale:
+                        break;
+                }
+                request.edits.push_back(std::move(edit));
+            }
+            auto valuePlan = commands->planNoteValueEdit(working, request);
+            working = std::move(valuePlan.notes);
+            auto changed = std::move(valuePlan.changedPositions);
             if (changed.empty())
                 continue;
             // Keep the original note edit range; the correction planner expands it for the commit.

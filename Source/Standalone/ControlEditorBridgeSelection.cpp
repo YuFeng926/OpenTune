@@ -4,33 +4,19 @@
 
 #include "PluginEditor.h"
 
-#include "Utils/ScaleUiMapping.h"
+#include <utility>
 
 namespace OpenTune {
 
-bool ControlEditorBridge::canSelect() const
+std::optional<ControlUiBridge::SelectionPlan> ControlEditorBridge::planSelection(
+    int trackId, std::uint64_t placementId, bool openEditor) const
 {
-    return true;
+    return editor_.planPlacementSelectionContext(trackId, placementId, openEditor);
 }
 
-bool ControlEditorBridge::select(int trackId, std::uint64_t placementId, bool openEditor)
+bool ControlEditorBridge::select(SelectionPlan plan)
 {
-    return editor_.selectPlacementContext(trackId, placementId, openEditor);
-}
-
-std::optional<ControlUiBridge::UiScale> ControlEditorBridge::scaleForSelection(int trackId,
-                                                                               std::uint64_t placementId) const
-{
-    // resolveScaleForPlacementContent(): the scale that applyResolvedScaleForPlacementContent() shows once the clip is
-    // selected.
-    const int placementIndex = editor_.processorRef_.findPlacementIndexById(trackId, placementId);
-    if (placementIndex < 0)
-        return std::nullopt;
-    const auto key = editor_.resolveScaleForPlacementContent(trackId, placementIndex);
-    UiScale scale;
-    scale.rootNote = static_cast<int>(key.root);
-    scale.scaleType = scaleToUiScaleType(key.scale);
-    return scale;
+    return editor_.applyPlacementSelectionPlan(std::move(plan), true, false);
 }
 
 } // namespace OpenTune

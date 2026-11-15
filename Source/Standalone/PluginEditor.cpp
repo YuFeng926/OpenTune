@@ -2391,6 +2391,91 @@ void OpenTuneAudioProcessorEditor::syncActiveSelectionFromProcessor()
     arrangementView_.requestContentRedraw();
 }
 
+std::optional<ControlUiBridge::SelectionPlan> OpenTuneAudioProcessorEditor::planPlacementSelectionContext(
+    int trackId, uint64_t placementId, bool openEditor) const
+{
+    if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS)
+        return std::nullopt;
+
+    StandaloneArrangement::Placement placement;
+    int placementIndex = -1;
+    if (placementId != 0) {
+        placementIndex = processorRef_.findPlacementIndexById(trackId, placementId);
+        if (placementIndex < 0 || !getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement))
+            return std::nullopt;
+    }
+
+    ControlUiBridge::SelectionPlan plan;
+    plan.trackId = trackId;
+    plan.placementId = placementId;
+    plan.openEditor = openEditor;
+    plan.activeTrackAfter = trackId;
+    if (placementId != 0)
+        plan.selectedPlacementIdsAfter.push_back(placementId);
+    plan.scaleAfter = ControlUiBridge::UiScale{lastResolvedScaleRootNote_, lastResolvedScaleType_};
+    if (placementId != 0) {
+        const auto key = resolveScaleForPlacementContent(trackId, placementIndex);
+        plan.scaleAfter = ControlUiBridge::UiScale{
+            static_cast<int>(key.root), scaleToUiScaleType(key.scale)};
+
+        const auto snapshot = processorRef_.getContentSnapshot(placement.contentKey);
+        if (pianoRoll_.isOpenDyne() && snapshot != nullptr && !snapshot->noteTopologyInitialized
+            && snapshot->pitchCurve != nullptr && !snapshot->pitchCurve->getOriginalF0().empty()) {
+            if (auto commands = processorRef_.getContentCommands())
+                plan.generatedNotes = commands->planGenerateNotesOnly(
+                    *snapshot, pianoRoll_.getCurrentAutoTuneParams());
+            if (plan.generatedNotes)
+                plan.generatedNotesKey = placement.contentKey;
+        }
+    }
+
+    plan.workspaceAfter = openEditor && isWorkspaceView_ ? "pianoRoll"
+                                                          : (isWorkspaceView_ ? "arrangement" : "pianoRoll");
+    plan.bpmAfter = processorRef_.getBpm();
+    if (openEditor && isWorkspaceView_)
+        if (const auto pendingBpm = transportBar_.bpmCommittedOnFocusLoss()) {
+            plan.commitPendingBpm = true;
+            plan.bpmAfter = *pendingBpm;
+        }
+    return plan;
+}
+
+bool OpenTuneAudioProcessorEditor::applyPlacementSelectionPlan(
+    ControlUiBridge::SelectionPlan plan,
+    bool commitArrangementSelection,
+    bool synchronizeSelectionContext)
+{
+    if (plan.commitPendingBpm)
+        transportBar_.commitBpmOnFocusLoss();
+
+    if (plan.generatedNotes && plan.generatedNotesKey) {
+        auto commands = processorRef_.getContentCommands();
+        if (!commands || !commands->commitGeneratedNotesOnly(
+                *plan.generatedNotesKey, std::move(*plan.generatedNotes)))
+            return false;
+    }
+
+    bool arrangementCommitted = false;
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    if (commitArrangementSelection) {
+        arrangementView_.commitControlSelection(plan.trackId, plan.placementId);
+        arrangementCommitted = true;
+    }
+#else
+    jassert(!commitArrangementSelection);
+#endif
+    if (!arrangementCommitted && synchronizeSelectionContext)
+        applyPlacementSelectionContext(plan.trackId, plan.placementId);
+
+    if (plan.openEditor && isWorkspaceView_) {
+        const int placementIndex = processorRef_.findPlacementIndexById(plan.trackId, plan.placementId);
+        if (placementIndex < 0)
+            return false;
+        openSelectedPlacementInPianoRoll();
+    }
+    return true;
+}
+
 void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, uint64_t placementId)
 {
     parameterPanel_.commitPendingEdits();
@@ -2426,24 +2511,6 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     syncPianoRollFromPlacementSelection(trackId, placementIndex);
     syncParameterPanelFromSelection(true);
 }
-
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-bool OpenTuneAudioProcessorEditor::selectPlacementContext(int trackId, uint64_t placementId, bool openEditor)
-{
-    if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS)
-        return false;
-    const int placementIndex = placementId != 0 ? processorRef_.findPlacementIndexById(trackId, placementId) : -1;
-    if (placementId != 0 && placementIndex < 0)
-        return false;
-
-    arrangementView_.commitControlSelection(trackId, placementId);
-    if (placementId == 0)
-        applyPlacementSelectionContext(trackId, 0);
-    else if (openEditor)
-        placementDoubleClicked(trackId, placementIndex);
-    return true;
-}
-#endif
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
@@ -4224,7 +4291,10 @@ void OpenTuneAudioProcessorEditor::trackColorRandomizeRequested(int trackId)
 
 void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64_t placementId)
 {
-    applyPlacementSelectionContext(trackId, placementId);
+    if (auto plan = planPlacementSelectionContext(trackId, placementId, false))
+        applyPlacementSelectionPlan(std::move(*plan), false, true);
+    else
+        applyPlacementSelectionContext(trackId, placementId);
 
     // 更新 reference context
     if (demoTourStep_ != DemoTourStep::None)
@@ -4278,6 +4348,16 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
         || getStandaloneSelectedPlacementIndex(processorRef_, trackId) != placementIndex)
         placementSelectionChanged(trackId, processorRef_.getPlacementId(trackId, placementIndex));
 
+    const auto placementId = processorRef_.getPlacementId(trackId, placementIndex);
+    auto plan = planPlacementSelectionContext(trackId, placementId, true);
+    if (!plan)
+        return;
+
+    applyPlacementSelectionPlan(std::move(*plan), false, false);
+}
+
+void OpenTuneAudioProcessorEditor::openSelectedPlacementInPianoRoll()
+{
     if (!isWorkspaceView_)
         return;
 

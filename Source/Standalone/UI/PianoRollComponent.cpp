@@ -473,6 +473,10 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             && appPreferences_->getWholeNoteMoveSnapMode() == WholeNoteMoveSnapMode::StandardPitch;
     };
     toolCtx.getEditableContentSnapshot = [this]() { return readEditedSnapshot(); };
+    toolCtx.planNoteValueEdit = [this](const std::vector<Note>& notes,
+                                       const ContentNoteValueEditRequest& request) {
+        return contentCommands_->planNoteValueEdit(notes, request);
+    };
     toolCtx.planNoteCorrection = [this](const std::vector<Note>& notes, F0FrameRange editRange) {
         const auto snapshot = readEditedSnapshot();
         if (contentCommands_ == nullptr || snapshot == nullptr)

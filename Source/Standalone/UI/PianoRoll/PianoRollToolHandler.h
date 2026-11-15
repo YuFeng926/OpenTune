@@ -155,6 +155,8 @@ public:
         std::function<bool()> shouldSnapWholeNoteMoveToStandardPitch;
 
         std::function<std::shared_ptr<const EditableContentSnapshot>()> getEditableContentSnapshot;
+        std::function<ContentNoteValueEditPlan(const std::vector<Note>&,
+                                               const ContentNoteValueEditRequest&)> planNoteValueEdit;
         std::function<std::optional<ContentNoteCorrectionPlan>(const std::vector<Note>&, F0FrameRange)>
             planNoteCorrection;
         std::function<bool(const std::vector<std::size_t>&, const ScaleSnapConfig&, const juce::String&)>

@@ -202,9 +202,12 @@ private:
     void syncActiveContentFromProcessor(int trackId, int placementIndex, bool initializeSelection);
     void syncActiveSelectionFromProcessor();
     void applyPlacementSelectionContext(int trackId, uint64_t placementId);
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-    bool selectPlacementContext(int trackId, uint64_t placementId, bool openEditor);
-#endif
+    std::optional<ControlUiBridge::SelectionPlan> planPlacementSelectionContext(
+        int trackId, uint64_t placementId, bool openEditor) const;
+    bool applyPlacementSelectionPlan(ControlUiBridge::SelectionPlan plan,
+                                     bool commitArrangementSelection,
+                                     bool synchronizeSelectionContext);
+    void openSelectedPlacementInPianoRoll();
     bool setWorkspaceFromCommand(bool arrangement);
     ControlTrackCommandResult addTrackSlots(int count);
     ControlTrackCommandResult duplicateTrack(int trackId, bool shareContent);

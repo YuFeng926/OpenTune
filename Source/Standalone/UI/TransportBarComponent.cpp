@@ -386,6 +386,27 @@ double BpmValueField::getValue() const
     return text_.getDoubleValue();
 }
 
+std::optional<double> BpmValueField::valueCommittedOnFocusLoss() const
+{
+    if (!hasKeyboardFocus(true))
+        return std::nullopt;
+
+    const auto text = inlineEditor_ != nullptr ? inlineEditor_->getText().trim() : text_.trim();
+    if (text.isEmpty())
+        return std::nullopt;
+    return juce::jlimit(1.0, 999.0, text.getDoubleValue());
+}
+
+void BpmValueField::commitOnFocusLoss()
+{
+    if (!hasKeyboardFocus(true))
+        return;
+    if (inlineEditor_ != nullptr)
+        finishInlineEdit(true);
+    else
+        commit();
+}
+
 void BpmValueField::setTimeSignature(int numerator, int denominator)
 {
     timeSigNum_ = numerator;

@@ -97,9 +97,9 @@ public:
     std::optional<UiScale> uiScale() const override;
 
     // ---- Selection (ControlEditorBridgeSelection.cpp) ----
-    bool canSelect() const override;
-    bool select(int trackId, std::uint64_t placementId, bool openEditor) override;
-    std::optional<UiScale> scaleForSelection(int trackId, std::uint64_t placementId) const override;
+    std::optional<SelectionPlan> planSelection(int trackId, std::uint64_t placementId,
+                                               bool openEditor) const override;
+    bool select(SelectionPlan plan) override;
 
     // ---- Workspace (ControlEditorBridgeWorkspace.cpp) ----
     bool setWorkspace(bool arrangement) override;

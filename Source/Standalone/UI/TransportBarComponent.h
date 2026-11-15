@@ -13,6 +13,7 @@
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <optional>
 #include <vector>
 #include <functional>
 #include "UIColors.h"
@@ -87,6 +88,8 @@ public:
     BpmValueField();
     void setValue(double value);
     double getValue() const;
+    std::optional<double> valueCommittedOnFocusLoss() const;
+    void commitOnFocusLoss();
     void setTimeSignature(int numerator, int denominator);
     void setReadOnly(bool readOnly);
     void paint(juce::Graphics& g) override;
@@ -244,6 +247,8 @@ public:
 
     void setBpm(double bpm);
     double getBpm() const;
+    std::optional<double> bpmCommittedOnFocusLoss() const { return bpmField_.valueCommittedOnFocusLoss(); }
+    void commitBpmOnFocusLoss() { bpmField_.commitOnFocusLoss(); }
 
     void setTimeSignature(int numerator, int denominator);
 

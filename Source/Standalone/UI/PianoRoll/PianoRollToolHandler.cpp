@@ -1423,31 +1423,38 @@ void PianoRollToolHandler::adjustSelectedNotesModDriftByKeyboard(int direction, 
     const auto event = modulation ? KeyboardNoteEvent::ModulationChanged : KeyboardNoteEvent::DriftChanged;
     const float step = static_cast<float>(direction) * (fine ? 0.01f : 0.05f);
 
-    std::vector<Note> work = notes;
-    std::vector<int> changed;
+    ContentNoteValueEditRequest request;
     for (int index : selected) {
-        auto& note = work[static_cast<size_t>(index)];
+        const auto& note = notes[static_cast<size_t>(index)];
+        ContentNoteValueEdit edit;
+        edit.kind = ContentNoteValueEdit::Kind::Parameters;
+        edit.position = static_cast<std::size_t>(index);
         if (modulation) {
             // A negative value means "follow the global Retune Speed knob".
             const float effective = note.retuneSpeed >= 0.0f ? note.retuneSpeed : ctx_.getRetuneSpeed();
             const float target = juce::jlimit(0.0f, 1.0f, effective + step);
             if (std::abs(target - effective) <= 0.001f)
                 continue;
-            note.retuneSpeed = target;
+            edit.retuneSpeed = target;
         } else {
             // Drift is not clamped to +/-100%, as with the mouse (Melodyne allows 224%, -112%, etc.).
             // Up increases the number that the screen reader announces.
-            note.pitchDriftScale += step;
+            edit.pitchDriftScale = note.pitchDriftScale + step;
         }
-        note.dirty = true;
-        changed.push_back(index);
+        request.edits.push_back(std::move(edit));
     }
 
-    if (changed.empty()) {
+    if (request.edits.empty()) {
         // At the end of the range (0% or 100% modulation) just announce the current value.
         notifyKeyboardNote(event, notes, selected.front());
         return;
     }
+    auto plan = ctx_.planNoteValueEdit(notes, request);
+    auto work = std::move(plan.notes);
+    std::vector<int> changed;
+    changed.reserve(plan.changedPositions.size());
+    for (const auto position : plan.changedPositions)
+        changed.push_back(static_cast<int>(position));
     if (commitKeyboardNoteEdit(work, changed,
                                modulation ? LOC_RAW("Modulation depth") : LOC_RAW("Drift correction")))
         notifyKeyboardNote(event, work, changed.front());
@@ -1478,16 +1485,27 @@ bool PianoRollToolHandler::applyNoteDefaultActionByKeyboard()
     }
 
     if (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift) {
-        std::vector<Note> work = notes;
-        std::vector<int> changed;
         const bool modulation = currentTool_ == ToolId::PitchModulation;
+        ContentNoteValueEditRequest request;
         for (int index : selected) {
-            auto& note = work[static_cast<size_t>(index)];
-            float& value = modulation ? note.retuneSpeed : note.pitchDriftScale;
-            value = value > 0.5f ? 0.0f : 1.0f;   // toggle 100% / 0%, as the double-click does
-            note.dirty = true;
-            changed.push_back(index);
+            const auto& note = notes[static_cast<size_t>(index)];
+            ContentNoteValueEdit edit;
+            edit.kind = ContentNoteValueEdit::Kind::Parameters;
+            edit.position = static_cast<std::size_t>(index);
+            const float current = modulation ? note.retuneSpeed : note.pitchDriftScale;
+            const double target = current > 0.5f ? 0.0 : 1.0;
+            if (modulation)
+                edit.retuneSpeed = target;
+            else
+                edit.pitchDriftScale = target;
+            request.edits.push_back(std::move(edit));
         }
+        auto plan = ctx_.planNoteValueEdit(notes, request);
+        auto work = std::move(plan.notes);
+        std::vector<int> changed;
+        changed.reserve(plan.changedPositions.size());
+        for (const auto position : plan.changedPositions)
+            changed.push_back(static_cast<int>(position));
         const auto event = modulation ? KeyboardNoteEvent::ModulationChanged : KeyboardNoteEvent::DriftChanged;
         if (commitKeyboardNoteEdit(work, changed,
                                    modulation ? LOC_RAW("Modulation depth") : LOC_RAW("Drift correction")))
@@ -1546,12 +1564,12 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction, bool 
         ? ctx_.getActiveScaleSnap().value_or(ScaleSnapConfig{})
         : ScaleSnapConfig{};
 
-    std::vector<Note> workingNotes = notes;
+    ContentNoteValueEditRequest valueRequest;
     double rangeStart = std::numeric_limits<double>::max();
     double rangeEnd = std::numeric_limits<double>::lowest();
     std::vector<std::pair<int, float>> changedOffsets;
     for (int noteIndex : selectedIndices) {
-        auto& note = workingNotes[static_cast<size_t>(noteIndex)];
+        const auto& note = notes[static_cast<size_t>(noteIndex)];
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
         const float initialOffset = note.pitchOffset;
         const float currentMidi = baseMidi + initialOffset;
@@ -1589,8 +1607,11 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction, bool 
         if (std::abs(finalOffset - initialOffset) <= 0.001f)
             continue;
 
-        note.pitchOffset = finalOffset;
-        note.dirty = true;
+        ContentNoteValueEdit edit;
+        edit.kind = ContentNoteValueEdit::Kind::SetPitchOffset;
+        edit.position = static_cast<std::size_t>(noteIndex);
+        edit.pitchOffset = finalOffset;
+        valueRequest.edits.push_back(std::move(edit));
         changedOffsets.emplace_back(noteIndex, initialOffset);
         rangeStart = std::min(rangeStart, note.startTime);
         rangeEnd = std::max(rangeEnd, note.endTime);
@@ -1608,6 +1629,9 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction, bool 
         notifyKeyboardNote(KeyboardNoteEvent::EditFailed, notes, -1);
         return;
     }
+
+    auto valuePlan = ctx_.planNoteValueEdit(notes, valueRequest);
+    auto workingNotes = std::move(valuePlan.notes);
 
     ctx_.beginNoteDraft();
     auto& draft = ctx_.getNoteDraft();
@@ -2654,10 +2678,13 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
         // 1 半音像素高度 ≈ 25% 参数变化（与 VolumeEnvelope 的 12dB/半音对齐视觉）
         const float paramDelta = -deltaY * 0.25f / 12.0f;
 
+        ContentNoteValueEditRequest valueRequest;
         for (int noteIndex : state.noteDrag.draggedNoteIndices) {
-            auto& note = notes[static_cast<size_t>(noteIndex)];
             // 相对变化：每个 note 以 baseline 为唯一输入起点（Melodyne 行为）
             const auto& baseline = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)];
+            ContentNoteValueEdit edit;
+            edit.kind = ContentNoteValueEdit::Kind::Parameters;
+            edit.position = static_cast<std::size_t>(noteIndex);
             if (currentTool_ == ToolId::PitchModulation) {
                 // baseline 有效值：raw >=0 取自身，否则回退全局 retuneSpeed
                 const float baselineEffective = baseline.retuneSpeed >= 0.0f
@@ -2667,8 +2694,8 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
                 state.modDriftPreviewValue = target;
                 // 仅实际变化才写字段；否则保持 baseline raw（尤其 -1 = 跟随全局）
                 if (std::abs(target - baselineEffective) > 0.001f) {
-                    note.retuneSpeed = target;
-                    note.dirty = true;
+                    edit.retuneSpeed = target;
+                    valueRequest.edits.push_back(std::move(edit));
                 }
             } else {
                 // 允许超出±100%（Melodyne支持224%、-112%等），DSP端不做钳位
@@ -2676,11 +2703,12 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
                 const float target = baseline.pitchDriftScale - paramDelta;
                 state.modDriftPreviewValue = target;
                 if (std::abs(target - baseline.pitchDriftScale) > 0.001f) {
-                    note.pitchDriftScale = target;
-                    note.dirty = true;
+                    edit.pitchDriftScale = target;
+                    valueRequest.edits.push_back(std::move(edit));
                 }
             }
         }
+        notes = ctx_.planNoteValueEdit(draftBaselineNotes(ctx_), valueRequest).notes;
 
         // 预览：以拖拽后的 retuneSpeed/pitchDriftScale 经唯一
         // updateNoteBasedCorrectionPreview（内部走权威 applyCorrectionToRange）
@@ -2740,8 +2768,9 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
     // 循环不变量：拖拽期间活动调式不变，量化配置只取一次
     const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
 
+    ContentNoteValueEditRequest valueRequest;
     for (int noteIndex : state.noteDrag.draggedNoteIndices) {
-        auto& note = notes[static_cast<size_t>(noteIndex)];
+        const auto& note = notes[static_cast<size_t>(noteIndex)];
         const float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
         // 连续基准 MIDI（不提前取整）：SNAP 目标全程保持连续语义
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
@@ -2760,10 +2789,14 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
         // 仅实际变化才写 pitchOffset/dirty，否则保留 baseline
         const float finalOffset = snappedMidi - baseMidi;
         if (std::abs(finalOffset - initialOffset) > 0.001f) {
-            note.pitchOffset = finalOffset;
-            note.dirty = true;
+            ContentNoteValueEdit edit;
+            edit.kind = ContentNoteValueEdit::Kind::SetPitchOffset;
+            edit.position = static_cast<std::size_t>(noteIndex);
+            edit.pitchOffset = finalOffset;
+            valueRequest.edits.push_back(std::move(edit));
         }
     }
+    notes = ctx_.planNoteValueEdit(draftBaselineNotes(ctx_), valueRequest).notes;
 
     updateNoteBasedCorrectionPreview(notes);
     if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, notes);
@@ -2980,12 +3013,16 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         ctx_.beginNoteDraft();
         auto& draft = ctx_.getNoteDraft();
         draft.contentDirty = true;
-        auto work = draft.workingNotes;
+        ContentNoteValueEdit edit;
+        edit.kind = ContentNoteValueEdit::Kind::Parameters;
+        edit.position = static_cast<std::size_t>(clickedNoteIndex);
         if (currentTool_ == ToolId::PitchModulation)
-            work[static_cast<size_t>(clickedNoteIndex)].retuneSpeed = newVal;
+            edit.retuneSpeed = newVal;
         else
-            work[static_cast<size_t>(clickedNoteIndex)].pitchDriftScale = newVal;
-        work[static_cast<size_t>(clickedNoteIndex)].dirty = true;
+            edit.pitchDriftScale = newVal;
+        ContentNoteValueEditRequest request;
+        request.edits.push_back(std::move(edit));
+        auto work = ctx_.planNoteValueEdit(notes, request).notes;
         draft.workingNotes = work;
         ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
             ? LOC_RAW("Modulation depth")

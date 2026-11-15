@@ -7,7 +7,6 @@
 #include "TransportOps.h"
 #include "WriteEnvelope.h"
 
-#include "Content/ContentEditCommands.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Control/ControlUiBridge.h"
 #include "PluginProcessor.h"
@@ -156,34 +155,18 @@ Before captureBefore(ControlOpContext& context, ControlUiBridge& bridge, const T
     return before;
 }
 
-// ---- The prediction --------------------------------------------------------------------------------
+// ---- The selection owner's preview -----------------------------------------------------------------
 
-Outcome predict(ControlOpContext& context, ControlUiBridge& bridge, const Target& target, const Before& before,
-                bool openEditor)
+Outcome plannedOutcome(const ControlUiBridge::SelectionPlan& plan)
 {
     Outcome outcome;
-    outcome.selection.activeTrack = target.trackId;
-    if (target.placementId != 0)
-        outcome.selection.selected.push_back(target.placementId);
-    // The scale the editor resolves for the clip (resolveScaleForPlacementContent); selecting a track leaves it.
-    outcome.scale = before.scale;
-    if (target.placementId != 0 && before.scale.has_value())
-        if (const auto scale = bridge.scaleForSelection(target.trackId, target.placementId))
-            outcome.scale = scale;
-    // placementDoubleClicked switches to the piano roll when the arrangement is shown.
-    outcome.workspace = openEditor && before.workspace == "arrangement" ? "pianoRoll" : before.workspace;
-    // Not predicted: whether the switch rewrites the tempo depends on where the keyboard focus is (the transport bar's
-    // BPM field), which the call does not know before it switches. A committed call reports what it observed.
-    outcome.bpm = before.bpm;
-    if (target.placementId != 0 && before.snapshot != nullptr && !before.topologyInitialized
-        && bridge.editingSchemeApplied(true).value_or(false)) {
-        NoteGeneratorParams params;
-        if (bridge.currentNoteGenerationParams(params)) {
-            const auto commands = context.processor().getContentCommands();
-            if (const auto patch = commands->planGenerateNotesOnly(*before.snapshot, params))
-                outcome.noteCount = patch->afterNotesInRange.size();
-        }
-    }
+    outcome.selection.activeTrack = plan.activeTrackAfter;
+    outcome.selection.selected = plan.selectedPlacementIdsAfter;
+    if (plan.generatedNotes)
+        outcome.noteCount = plan.generatedNotes->afterNotesInRange.size();
+    outcome.scale = plan.scaleAfter;
+    outcome.workspace = plan.workspaceAfter;
+    outcome.bpm = plan.bpmAfter;
     return outcome;
 }
 
@@ -336,8 +319,6 @@ Result<JsonValue> runSetSelection(ControlOpContext& context, const SelectionPara
     auto* bridge = context.bridge();
     if (bridge == nullptr)
         return noEditor();
-    if (!bridge->canSelect())
-        return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer the selection");
     Target target;
     if (params.placement) {
         const auto placement = controlResolvePlacement(context, *params.placement);
@@ -356,8 +337,11 @@ Result<JsonValue> runSetSelection(ControlOpContext& context, const SelectionPara
         return *busy;
 
     const auto before = captureBefore(context, *bridge, target);
+    auto plan = bridge->planSelection(target.trackId, target.placementId, params.openEditor);
+    if (!plan)
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer the selection");
     if (params.dryRun) {
-        const auto predicted = predict(context, *bridge, target, before, params.openEditor);
+        const auto predicted = plannedOutcome(*plan);
         ControlWriteEnvelope envelope(context);
         record(context, envelope, target, before, predicted);
         return envelope.predicted(context);
@@ -366,7 +350,7 @@ Result<JsonValue> runSetSelection(ControlOpContext& context, const SelectionPara
     ControlWriteEnvelope envelope(context);
     // With openEditor the editor switches the view, which may rewrite the tempo even when the call fails afterwards
     // (see controlViewSwitchError()); before.bpm is the tempo read before the editor was asked.
-    if (!bridge->select(target.trackId, target.placementId, params.openEditor))
+    if (!bridge->select(std::move(*plan)))
         return controlViewSwitchError(context, before.bpm, "INTERNAL", "", "the editor did not take the selection");
     const auto observed = observe(context, *bridge, target, before);
     if (record(context, envelope, target, before, observed))

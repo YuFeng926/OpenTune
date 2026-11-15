@@ -55,6 +55,7 @@ public:
         ContentKey, int, int, const NoteGeneratorParams&, const std::optional<ScaleSnapConfig>&,
         const juce::String&) override { return {}; }
     bool generateNotesOnly(ContentKey, const NoteGeneratorParams&) override { return false; }
+    bool commitGeneratedNotesOnly(ContentKey, ContentNoteRangePatch) override { return false; }
     bool ensureTimeToolAnchorSeed(ContentKey) override { return false; }
     ContentCommitSnapshot commitVolumeEnvelope(ContentKey, AutomationLane) override { return {}; }
     void republishPlaybackSource(ContentKey) override {}

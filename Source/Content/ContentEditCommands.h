@@ -37,6 +37,28 @@ struct ContentNoteRangePatch {
     std::vector<Note> afterNotesInRange;
 };
 
+struct ContentNoteValueEdit {
+    enum class Kind { TargetPitch, ShiftCents, SetPitchOffset, Parameters };
+    Kind kind = Kind::TargetPitch;
+    std::size_t position = 0;
+    double targetMidi = 0.0;
+    double deltaCents = 0.0;
+    double pitchOffset = 0.0;
+    std::optional<double> retuneSpeed;
+    std::optional<double> vibratoDepth;
+    std::optional<double> vibratoRate;
+    std::optional<double> pitchDriftScale;
+};
+
+struct ContentNoteValueEditRequest {
+    std::vector<ContentNoteValueEdit> edits;
+};
+
+struct ContentNoteValueEditPlan {
+    std::vector<Note> notes;
+    std::vector<std::size_t> changedPositions;
+};
+
 struct ContentNoteCorrectionPlan {
     F0FrameRange affectedRange;
     std::vector<Note> notes;
@@ -180,6 +202,12 @@ public:
     // 全内容范围（0..f0Count，内部从同一 snapshot 派生）。不写 correction segments、
     // 不吸附、不请求 render、不创建 undo；owner 清 redo 并发送编辑完成通知。
     virtual bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) = 0;
+    virtual bool commitGeneratedNotesOnly(ContentKey key, ContentNoteRangePatch patch) = 0;
+
+    // Shared note-field rules used by editor tools and Control API operation planning.
+    ContentNoteValueEditPlan planNoteValueEdit(
+        const std::vector<Note>& notes,
+        const ContentNoteValueEditRequest& request) const;
 
     // TimeGrid anchor seed entry (async preheat + seed). Actual grid changes are
     // finalized by the processor owner, including redo invalidation and edit notification.
