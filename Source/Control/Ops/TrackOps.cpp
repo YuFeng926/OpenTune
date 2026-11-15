@@ -9,6 +9,7 @@
 #include "Control/ControlUiBridge.h"
 #include "Control/Edit/ControlOriginAction.h"
 #include "PluginProcessor.h"
+#include "Utils/TrackConstants.h"
 
 #include <algorithm>
 #include <cmath>
@@ -19,8 +20,6 @@ namespace OpenTune {
 
 namespace {
 
-/** The range of OpenTune's volume knob (VolumeKnob in Source/Standalone/UI/TrackPanelComponent.h): linear 0 to 4. */
-constexpr double kMaxVolumeLinear = 4.0;
 /** Longest list of tracks the schema allows in one track.set. */
 constexpr std::size_t kMaxTracksPerSet = 64;
 
@@ -253,15 +252,12 @@ bool parseSet(const JsonValue& params, SetParams& out, std::string& why)
     return true;
 }
 
-/** The linear volume a setting asks for, limited to the knob's range; clamped is set with the requested and the
-    applied value of the member the caller named, in that member's unit. */
+/** The requested linear volume and original wire value for a track setting. */
 struct RequestedVolume
 {
     double linear = 1.0;
-    bool clamped = false;
     const char* field = "";
     double requested = 0.0;
-    double applied = 0.0;
 };
 
 RequestedVolume requestedVolume(const TrackSetting& setting)
@@ -271,20 +267,10 @@ RequestedVolume requestedVolume(const TrackSetting& setting)
         volume.field = "volumeDb";
         volume.requested = *setting.volumeDb;
         volume.linear = std::pow(10.0, *setting.volumeDb / 20.0);
-        if (!(volume.linear <= kMaxVolumeLinear)) {
-            volume.clamped = true;
-            volume.linear = kMaxVolumeLinear;
-            volume.applied = *controlLinearToDb(kMaxVolumeLinear);
-        }
     } else {
         volume.field = "volumeLinear";
         volume.requested = *setting.volumeLinear;
         volume.linear = *setting.volumeLinear;
-        if (volume.linear > kMaxVolumeLinear) {
-            volume.clamped = true;
-            volume.linear = kMaxVolumeLinear;
-            volume.applied = kMaxVolumeLinear;
-        }
     }
     return volume;
 }
@@ -335,20 +321,26 @@ Result<JsonValue> runSet(ControlOpContext& context, const SetParams& params)
     const auto before = controlCaptureTracks(context, visible);
 
     for (const auto& setting : params.tracks) {
-        std::optional<float> volumeLinear;
+        std::optional<double> volumeLinear;
+        std::optional<RequestedVolume> requested;
         if (setting.volumeDb || setting.volumeLinear) {
-            const auto volume = requestedVolume(setting);
-            volumeLinear = static_cast<float>(volume.linear);
-            if (volume.clamped) {
-                auto data = JsonValue::object();
-                data.appendMember("field", JsonValue::string(volume.field));
-                data.appendMember("requested", controlJsonNumber(volume.requested, 6));
-                data.appendMember("applied", controlJsonNumber(volume.applied, 6));
-                envelope.addWarning("CLAMPED", controlTrackRef(setting.trackId), std::move(data));
-            }
+            requested = requestedVolume(setting);
+            volumeLinear = requested->linear;
         }
         if (!bridge->setTrackMix(setting.trackId, setting.muted, setting.solo, volumeLinear, setting.colourRgb))
             return controlOpError("INTERNAL", "", "the editor did not apply the track settings");
+
+        if (requested && requested->linear > static_cast<double>(kMaxTrackVolumeLinear)) {
+            const auto appliedLinear = arrangement->getTrackVolume(setting.trackId);
+            auto data = JsonValue::object();
+            data.appendMember("field", JsonValue::string(requested->field));
+            data.appendMember("requested", controlJsonNumber(requested->requested, 6));
+            const auto applied = setting.volumeDb
+                ? controlLinearToDb(appliedLinear)
+                : std::optional<double>(appliedLinear);
+            data.appendMember("applied", applied ? controlJsonNumber(*applied, 6) : JsonValue());
+            envelope.addWarning("CLAMPED", controlTrackRef(setting.trackId), std::move(data));
+        }
     }
     const auto after = controlCaptureTracks(context, visible);
 

@@ -213,7 +213,7 @@ private:
     ControlTrackCommandResult duplicateTrack(int trackId, bool shareContent);
     ControlTrackCommandResult deleteTrack(int trackId);
     bool setTrackMix(int trackId, std::optional<bool> muted, std::optional<bool> solo,
-                     std::optional<float> volumeLinear, std::optional<std::uint32_t> colourRgb);
+                     std::optional<double> volumeLinear, std::optional<std::uint32_t> colourRgb);
     void syncTrackMixToPanel();
     void applyTransportPlay();
     void applyTransportPause();

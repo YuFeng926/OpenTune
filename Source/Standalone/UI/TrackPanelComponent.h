@@ -305,8 +305,8 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = kDefaultVisibleTracks; // 默认�
             setSliderStyle(juce::Slider::RotaryVerticalDrag);
             setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
             
-            // Gain range: 0.0 to 4.0 (approx +12dB)
-            setRange(0.0, 4.0, 0.001);
+            // Gain range: 0.0 to approximately +12dB.
+            setRange(0.0, kMaxTrackVolumeLinear, 0.001);
             setSkewFactorFromMidPoint(1.0); // 1.0 (0dB) is at the center
             
             setValue(1.0, juce::dontSendNotification);

@@ -3984,7 +3984,7 @@ void OpenTuneAudioProcessorEditor::trackVolumeChanged(int trackId, float volume)
 }
 
 bool OpenTuneAudioProcessorEditor::setTrackMix(int trackId, std::optional<bool> muted, std::optional<bool> solo,
-                                                std::optional<float> volumeLinear,
+                                                std::optional<double> volumeLinear,
                                                 std::optional<std::uint32_t> colourRgb)
 {
     auto* arrangement = processorRef_.getStandaloneArrangement();

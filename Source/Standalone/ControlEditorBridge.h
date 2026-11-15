@@ -79,7 +79,7 @@ public:
     ControlTrackCommandResult duplicateTrack(int trackId, bool shareContent) override;
     ControlTrackCommandResult deleteTrack(int trackId) override;
     bool setTrackMix(int trackId, std::optional<bool> muted, std::optional<bool> solo,
-                     std::optional<float> volumeLinear, std::optional<std::uint32_t> colourRgb) override;
+                     std::optional<double> volumeLinear, std::optional<std::uint32_t> colourRgb) override;
     bool transportPlay() override;
     bool transportPause() override;
     bool transportStop() override;

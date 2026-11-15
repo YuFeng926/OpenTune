@@ -206,14 +206,15 @@ bool StandaloneArrangement::isTrackSolo(int trackId) const
     return tracks_[static_cast<size_t>(trackId)].isSolo;
 }
 
-bool StandaloneArrangement::setTrackVolume(int trackId, float volume)
+bool StandaloneArrangement::setTrackVolume(int trackId, double volume)
 {
     if (!isValidTrackId(trackId)) {
         return false;
     }
 
     const juce::ScopedWriteLock lock(stateLock_);
-    tracks_[static_cast<size_t>(trackId)].volume = std::max(0.0f, volume);
+    tracks_[static_cast<size_t>(trackId)].volume = static_cast<float>(
+        std::clamp(volume, 0.0, static_cast<double>(kMaxTrackVolumeLinear)));
     publishPlaybackSnapshotLocked();
     return true;
 }

@@ -215,7 +215,7 @@ public:
     }
     virtual ControlTrackCommandResult deleteTrack(int /*trackId*/) { return ControlTrackCommandResult::Failed; }
     virtual bool setTrackMix(int /*trackId*/, std::optional<bool> /*muted*/, std::optional<bool> /*solo*/,
-                             std::optional<float> /*volumeLinear*/, std::optional<std::uint32_t> /*colourRgb*/)
+                             std::optional<double> /*volumeLinear*/, std::optional<std::uint32_t> /*colourRgb*/)
     {
         return false;
     }

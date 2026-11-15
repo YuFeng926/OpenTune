@@ -175,7 +175,7 @@ public:
     bool isTrackMuted(int trackId) const;
     bool setTrackSolo(int trackId, bool solo);
     bool isTrackSolo(int trackId) const;
-    bool setTrackVolume(int trackId, float volume);
+    bool setTrackVolume(int trackId, double volume);
     float getTrackVolume(int trackId) const;
     // 删除轨道并将后续轨道上移填补空位，清空最后一个可见槽位
     // visibleCount: 当前可见轨道数（调用方负责之后减少 visibleTrackCount）

@@ -2212,12 +2212,19 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/StandaloneArrangementMoveTests.cpp
     )
     target_include_directories(OpenTuneStandaloneArrangementMoveTests
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${ONNXRUNTIME_INCLUDE_DIR})
     target_link_libraries(OpenTuneStandaloneArrangementMoveTests PRIVATE
         OpenTuneStandalone
+        OpenTuneResources
         juce::juce_audio_basics
         juce::juce_core
     )
+    if(OPENTUNE_ENABLE_CONTROL_API)
+        target_compile_definitions(OpenTuneStandaloneArrangementMoveTests PRIVATE
+            JucePlugin_Build_Standalone=1)
+    endif()
     if(MSVC)
         target_compile_options(OpenTuneStandaloneArrangementMoveTests PRIVATE /utf-8 /EHsc)
     endif()

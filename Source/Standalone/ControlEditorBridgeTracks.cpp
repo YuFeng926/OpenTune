@@ -22,7 +22,7 @@ ControlTrackCommandResult ControlEditorBridge::deleteTrack(int trackId)
 }
 
 bool ControlEditorBridge::setTrackMix(int trackId, std::optional<bool> muted, std::optional<bool> solo,
-                                      std::optional<float> volumeLinear, std::optional<std::uint32_t> colourRgb)
+                                      std::optional<double> volumeLinear, std::optional<std::uint32_t> colourRgb)
 {
     return editor_.setTrackMix(trackId, muted, solo, volumeLinear, colourRgb);
 }
