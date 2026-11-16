@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <unordered_set>
 #include <utility>
 
@@ -119,6 +120,13 @@ struct ControlSessionChannel
     bool broken = false;
     std::string pending;
     std::size_t pendingSent = 0;
+    struct SendNotice
+    {
+        std::size_t end;
+        ControlCompletion::SendCallback callback;
+    };
+    std::deque<SendNotice> notices;
+    bool finalReply = false;
     std::unordered_set<std::string> inFlight;
     Clock::time_point lastActivity = Clock::now();
     int maxLineBytes = 0;
@@ -126,50 +134,94 @@ struct ControlSessionChannel
     std::size_t unsentBytesLocked() const { return pending.size() - pendingSent; }
 
     /** Sends as much of the pending output as the socket takes without blocking. */
-    void flushLocked()
+    void flush()
     {
-        while (socket != nullptr && !broken && pendingSent < pending.size()) {
-            const long sent = socket->send(pending.data() + pendingSent, pending.size() - pendingSent);
-            if (sent == ControlSocket::wouldBlock)
-                break;
-            if (sent < 0) {
-                broken = true;
-                break;
+        std::vector<std::pair<ControlCompletion::SendCallback, ControlCompletion::SendResult>> ready;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            while (socket != nullptr && !broken && pendingSent < pending.size()) {
+                const long sent = socket->send(pending.data() + pendingSent, pending.size() - pendingSent);
+                if (sent == ControlSocket::wouldBlock)
+                    break;
+                if (sent <= 0) {
+                    broken = true;
+                    break;
+                }
+                pendingSent += static_cast<std::size_t>(sent);
             }
-            pendingSent += static_cast<std::size_t>(sent);
+            while (!notices.empty() && (notices.front().end <= pendingSent || broken)) {
+                const auto result = notices.front().end <= pendingSent ? ControlCompletion::SendResult::Written
+                                                                       : ControlCompletion::SendResult::Failed;
+                ready.emplace_back(std::move(notices.front().callback), result);
+                notices.pop_front();
+            }
+            if (pendingSent == pending.size()) {
+                pending.clear();
+                pendingSent = 0;
+            } else if (pendingSent > kOutputHighWaterBytes) {
+                for (auto& notice : notices)
+                    notice.end -= pendingSent;
+                pending.erase(0, pendingSent);
+                pendingSent = 0;
+            }
         }
-        if (pendingSent == pending.size()) {
-            pending.clear();
-            pendingSent = 0;
-        } else if (pendingSent > kOutputHighWaterBytes) {
-            pending.erase(0, pendingSent);
-            pendingSent = 0;
-        }
+        for (auto& [callback, result] : ready)
+            callback(result);
     }
 
-    void sendLineLocked(std::string_view line)
+    void queueLineLocked(std::string_view line)
     {
         if (!open || broken)
             return;
         pending.append(line.data(), line.size());
         pending += '\n';
-        flushLocked();
     }
 
     void sendLine(std::string_view line)
     {
-        std::lock_guard<std::mutex> lock(mutex);
-        sendLineLocked(line);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            queueLineLocked(line);
+        }
+        flush();
     }
 
     /** Ends a request's in-flight slot and sends its response. */
-    void complete(const std::string& idKey, const std::string& line)
+    void complete(const std::string& idKey, const std::string& line, ControlCompletion::SendCallback sent)
     {
-        std::lock_guard<std::mutex> lock(mutex);
-        inFlight.erase(idKey);
-        if (inFlight.empty())
-            lastActivity = Clock::now();
-        sendLineLocked(line);
+        ControlCompletion::SendResult result = ControlCompletion::SendResult::Closed;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            inFlight.erase(idKey);
+            if (inFlight.empty())
+                lastActivity = Clock::now();
+            queueLineLocked(line);
+            if (sent && open && !broken) {
+                finalReply = true;
+                notices.push_back({pending.size(), std::move(sent)});
+                sent = {};
+            }
+            if (broken)
+                result = ControlCompletion::SendResult::Failed;
+        }
+        flush();
+        if (sent)
+            sent(result);
+    }
+
+    void close()
+    {
+        std::deque<SendNotice> closed;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            open = false;
+            socket = nullptr;
+            pending.clear();
+            pendingSent = 0;
+            closed.swap(notices);
+        }
+        for (auto& notice : closed)
+            notice.callback(ControlCompletion::SendResult::Closed);
     }
 };
 
@@ -187,11 +239,11 @@ struct ControlCompletion::State
             deliver(controlErrorResponse(id, "INTERNAL", {}, "the request ended without a response", true));
     }
 
-    void deliver(std::string line)
+    void deliver(std::string line, ControlCompletion::SendCallback sent = {})
     {
         if (line.size() > static_cast<std::size_t>(channel->maxLineBytes))
             line = controlErrorResponse(id, "INTERNAL", {}, "the response would exceed maxLineBytes", true);
-        channel->complete(idKey, line);
+        channel->complete(idKey, line, std::move(sent));
     }
 
     std::shared_ptr<ControlSessionChannel> channel;
@@ -207,6 +259,14 @@ void ControlCompletion::respondResult(const JsonValue& result) const
     if (state_ == nullptr || state_->done.exchange(true))
         return;
     state_->deliver(controlResultResponse(state_->id, result));
+}
+
+void ControlCompletion::respondFinalResult(const JsonValue& result, SendCallback sent) const
+{
+    const auto state = state_;
+    if (state == nullptr || state->done.exchange(true))
+        return;
+    state->deliver(controlResultResponse(state->id, result), std::move(sent));
 }
 
 void ControlCompletion::respondError(std::string_view kind, std::string_view reason, std::string_view detail,
@@ -248,11 +308,7 @@ public:
         completions that arrive later (from any thread) find it closed and discard their responses. */
     ~ControlConnectionWorker()
     {
-        std::lock_guard<std::mutex> lock(channel_->mutex);
-        channel_->open = false;
-        channel_->socket = nullptr;
-        channel_->pending.clear();
-        channel_->pendingSent = 0;
+        channel_->close();
     }
 
     ControlConnectionWorker(const ControlConnectionWorker&) = delete;
@@ -302,9 +358,9 @@ private:
                 if (stopping())
                     deadline = std::min(deadline, stopDeadline());
                 std::size_t unsent = 0;
+                channel_->flush();
                 {
                     std::lock_guard<std::mutex> lock(channel_->mutex);
-                    channel_->flushLocked();
                     unsent = channel_->broken ? 0 : channel_->unsentBytesLocked();
                 }
                 if (unsent == 0 || Clock::now() >= deadline)
@@ -312,12 +368,7 @@ private:
                 socket_.poll(false, true, millisecondsUntil(deadline));
             }
         }
-        {
-            std::lock_guard<std::mutex> lock(channel_->mutex);
-            channel_->socket = nullptr;
-            channel_->pending.clear();
-            channel_->pendingSent = 0;
-        }
+        channel_->close();
         socket_.shutdownSend();
         if (!stopping())
             drainBeforeClose();
@@ -452,8 +503,8 @@ private:
         {
             std::lock_guard<std::mutex> lock(channel_->mutex);
             channel_->lastActivity = Clock::now();
-            channel_->sendLineLocked(controlResultResponse(request.id, helloResult()));
         }
+        channel_->sendLine(controlResultResponse(request.id, helloResult()));
         return true;
     }
 
@@ -475,13 +526,19 @@ private:
             std::size_t unsent = 0;
             bool broken = false;
             bool idle = false;
+            bool finalReply = false;
             Clock::time_point idleDeadline;
             {
                 std::lock_guard<std::mutex> lock(channel_->mutex);
                 unsent = channel_->unsentBytesLocked();
                 broken = channel_->broken;
                 idle = channel_->inFlight.empty();
+                finalReply = channel_->finalReply;
                 idleDeadline = channel_->lastActivity + idleTimeout;
+            }
+            if (finalReply) {
+                closeConnection(true);
+                return;
             }
             // Idle: no request in flight and no complete line for idleTimeoutMs.
             if (broken || (idle && Clock::now() >= idleDeadline)) {
@@ -496,8 +553,7 @@ private:
                 return;
             }
             if ((ready & ControlSocket::writable) != 0) {
-                std::lock_guard<std::mutex> lock(channel_->mutex);
-                channel_->flushLocked();
+                channel_->flush();
             }
             if ((ready & ControlSocket::readable) == 0 || (!wantRead && (ready & ControlSocket::hangUp) == 0))
                 continue;
@@ -602,19 +658,21 @@ private:
             return Next::Continue;
         }
         const std::string idKey = request.id.key();
+        std::string refused;
         {
             std::lock_guard<std::mutex> lock(channel_->mutex);
             if (channel_->inFlight.count(idKey) != 0) {
                 // id null, so that it cannot be mistaken for the response of the request in flight.
-                channel_->sendLineLocked(controlErrorResponse({}, "INVALID_ARGUMENT", "duplicate_id",
-                                                              "a request with this id is still in flight", false));
-                return Next::Continue;
+                refused = controlErrorResponse({}, "INVALID_ARGUMENT", "duplicate_id",
+                                               "a request with this id is still in flight", false);
+            } else if (static_cast<int>(channel_->inFlight.size()) >= shared_->limits.maxInFlightPerSession) {
+                refused = controlErrorResponse(request.id, "BUSY", "request_limit",
+                                               "too many requests in flight on this session", false, true);
             }
-            if (static_cast<int>(channel_->inFlight.size()) >= shared_->limits.maxInFlightPerSession) {
-                channel_->sendLineLocked(controlErrorResponse(
-                    request.id, "BUSY", "request_limit", "too many requests in flight on this session", false, true));
-                return Next::Continue;
-            }
+        }
+        if (!refused.empty()) {
+            channel_->sendLine(refused);
+            return Next::Continue;
         }
         if (stopping()) {
             sendError(request.id, "SHUTTING_DOWN", {}, "the control API is stopping");

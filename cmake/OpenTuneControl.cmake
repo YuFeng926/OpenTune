@@ -70,7 +70,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/ControlLogTail.cpp
         Source/Control/ControlLogTail.h
         # Jobs, import, export and the editor bridge: the event-driven jobs registry (work steps on the
-        # message thread, long poll on a thread of its own, retention), the shared write envelope and busy
+        # message thread, asynchronous waiters and retention), the shared write envelope and busy
         # checks, job.get and job.cancel, and import.start. The editor's side of the bridge is below.
         Source/Control/ControlJobs.cpp
         Source/Control/ControlJobs.h
@@ -165,6 +165,27 @@ if(OPENTUNE_ENABLE_CONTROL_API)
     if(WIN32)
         # Winsock for the listener, BCrypt for the system CSPRNG.
         target_link_libraries(OpenTuneStandalone PRIVATE ws2_32 bcrypt)
+    endif()
+
+    if(OPENTUNE_BUILD_TESTS)
+        add_executable(OpenTuneControlLifecycleTests
+            Tests/Control/ControlLifecycleTests.cpp
+            ${OPENTUNE_CONTROL_CHANNEL_SOURCES}
+            Source/Control/ControlJson.cpp
+            Source/Control/ControlApiOptions.cpp
+            Source/Control/ControlPathPolicy.cpp
+            Source/Control/ControlMessageThread.cpp
+            Source/Control/ControlJobs.cpp)
+        target_include_directories(OpenTuneControlLifecycleTests PRIVATE Source)
+        target_compile_definitions(OpenTuneControlLifecycleTests PRIVATE
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+            JUCE_MODAL_LOOPS_PERMITTED=1)
+        target_link_libraries(OpenTuneControlLifecycleTests PRIVATE juce::juce_events)
+        if(WIN32)
+            target_link_libraries(OpenTuneControlLifecycleTests PRIVATE ws2_32 bcrypt)
+        endif()
+        add_test(NAME ControlLifecycleTests COMMAND OpenTuneControlLifecycleTests)
+        set_tests_properties(ControlLifecycleTests PROPERTIES TIMEOUT 30)
     endif()
 
     # Build identity published in the discovery file. By default the commit

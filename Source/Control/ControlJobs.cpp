@@ -131,16 +131,20 @@ struct ControlJobs::Waiter
     WaitResponder respond;
 };
 
-struct ControlJobs::ReadyWaiter
+struct ControlJobs::Operation
 {
-    WaitResponder respond;
-    Lookup lookup;
-    JsonValue job;
+    explicit Operation(ControlJobs& ownerIn) : owner(ownerIn) { ++owner.operationDepth_; }
+    ~Operation()
+    {
+        if (--owner.operationDepth_ == 0)
+            owner.dispatchReadyWaiters();
+    }
+    ControlJobs& owner;
 };
 
 struct ControlJobs::WakeState : std::enable_shared_from_this<WakeState>
 {
-    explicit WakeState(ControlJobs& jobsIn, std::shared_ptr<ControlMessageThread> messageThreadIn)
+    explicit WakeState(ControlJobs& jobsIn, ControlMessageThread::Handle messageThreadIn)
         : owner(&jobsIn), messageThread(std::move(messageThreadIn))
     {}
 
@@ -159,7 +163,7 @@ struct ControlJobs::WakeState : std::enable_shared_from_this<WakeState>
             if (const auto state = weak.lock())
                 state->wakeQueued = false;
         };
-        messageThread->post([weak] {
+        messageThread.post([weak] {
             if (const auto state = weak.lock()) {
                 state->wakeQueued = false;
                 if (state->owner != nullptr)
@@ -169,7 +173,7 @@ struct ControlJobs::WakeState : std::enable_shared_from_this<WakeState>
     }
 
     ControlJobs* owner;
-    std::shared_ptr<ControlMessageThread> messageThread;
+    ControlMessageThread::Handle messageThread;
     std::atomic<bool> wakeQueued{false};
 };
 
@@ -331,16 +335,14 @@ std::function<void()> ControlJobStep::wakeCallback() const
 
 // ---- ControlJobs --------------------------------------------------------------------------------
 
-ControlJobs::ControlJobs(const ControlLimits& limits, std::shared_ptr<ControlMessageThread> messageThread)
+ControlJobs::ControlJobs(const ControlLimits& limits, ControlMessageThread::Handle messageThread)
     : limits_(limits)
-    , messageThread_(std::move(messageThread))
-    , wakeState_(std::make_shared<WakeState>(*this, messageThread_))
+    , wakeState_(std::make_shared<WakeState>(*this, messageThread))
 {
-    jassert(messageThread_ != nullptr);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     const std::weak_ptr<WakeState> weakWake = wakeState_;
-    const auto messageThreadForDeadline = messageThread_;
-    deadlineScheduler_ = std::make_unique<DeadlineScheduler>([weakWake, messageThreadForDeadline] {
-        messageThreadForDeadline->post([weakWake] {
+    deadlineScheduler_ = std::make_unique<DeadlineScheduler>([weakWake, messageThread] {
+        messageThread.post([weakWake] {
             if (const auto state = weakWake.lock(); state && state->owner != nullptr)
                 state->owner->deadlineReached();
         });
@@ -350,9 +352,9 @@ ControlJobs::ControlJobs(const ControlLimits& limits, std::shared_ptr<ControlMes
 ControlJobs::~ControlJobs()
 {
     jassert(juce::MessageManager::existsAndIsCurrentThread());
-    jassert(tickDepth_ == 0);
-    stop();
+    jassert(operationDepth_ == 0);
     wakeState_->owner = nullptr;
+    stop();
 }
 
 void ControlJobs::setInstanceShort(std::string instanceShort)
@@ -410,7 +412,7 @@ ControlJobs::Started ControlJobs::start(const std::string& kind, bool cancellabl
 
 void ControlJobs::wake() noexcept
 {
-    wakeState_->requestWake();
+    wakeOnOwner();
 }
 
 void ControlJobs::wakeOnOwner() noexcept
@@ -551,33 +553,15 @@ JsonValue ControlJobs::jobRef(const std::string& jobId) const
 
 void ControlJobs::waitAsync(const std::string& jobId, int waitMs, WaitResponder respond)
 {
-    if (juce::MessageManager::existsAndIsCurrentThread()) {
-        waitAsyncOnOwner(jobId, waitMs, std::move(respond));
-        return;
-    }
-
-    auto pending = std::make_shared<WaitResponder>(std::move(respond));
-    const std::weak_ptr<WakeState> weak = wakeState_;
-    messageThread_->post([weak, jobId, waitMs, pending] {
-        if (const auto state = weak.lock(); state && state->owner != nullptr)
-            state->owner->waitAsyncOnOwner(jobId, waitMs, std::move(*pending));
-        else
-            (*pending)(Lookup::Stopped, JsonValue());
-    }, [pending] {
-        (*pending)(Lookup::Stopped, JsonValue());
-    });
-}
-
-void ControlJobs::waitAsyncOnOwner(const std::string& jobId, int waitMs, WaitResponder respond)
-{
     jassert(juce::MessageManager::existsAndIsCurrentThread());
+    Operation operation(*this);
     if (stopped_) {
-        respond(Lookup::Stopped, JsonValue());
+        readyWaiters_.push_back([respond = std::move(respond)] { respond(Lookup::Stopped, JsonValue()); });
         return;
     }
     const Job* found = find(jobId);
     if (found == nullptr) {
-        respond(Lookup::NotFound, JsonValue());
+        readyWaiters_.push_back([respond = std::move(respond)] { respond(Lookup::NotFound, JsonValue()); });
         return;
     }
     if (waitMs > 0 && !found->terminal()) {
@@ -586,39 +570,23 @@ void ControlJobs::waitAsyncOnOwner(const std::string& jobId, int waitMs, WaitRes
         rescheduleDeadline();
         return;
     }
-    respond(Lookup::Found, jobJson(*found));
+    readyWaiters_.push_back([respond = std::move(respond), job = jobJson(*found)]() mutable {
+        respond(Lookup::Found, std::move(job));
+    });
 }
 
 void ControlJobs::cancelAsync(const std::string& jobId, CancelResponder respond)
 {
-    if (juce::MessageManager::existsAndIsCurrentThread()) {
-        cancelAsyncOnOwner(jobId, std::move(respond));
-        return;
-    }
-
-    auto pending = std::make_shared<CancelResponder>(std::move(respond));
-    const std::weak_ptr<WakeState> weak = wakeState_;
-    messageThread_->post([weak, jobId, pending] {
-        if (const auto state = weak.lock(); state && state->owner != nullptr)
-            state->owner->cancelAsyncOnOwner(jobId, std::move(*pending));
-        else
-            (*pending)(Cancel::Stopped, JsonValue());
-    }, [pending] {
-        (*pending)(Cancel::Stopped, JsonValue());
-    });
-}
-
-void ControlJobs::cancelAsyncOnOwner(const std::string& jobId, CancelResponder respond)
-{
     jassert(juce::MessageManager::existsAndIsCurrentThread());
+    Operation operation(*this);
     Cancel outcome = Cancel::NotFound;
     if (stopped_) {
-        respond(Cancel::Stopped, JsonValue());
+        readyWaiters_.push_back([respond = std::move(respond)] { respond(Cancel::Stopped, JsonValue()); });
         return;
     }
     Job* found = find(jobId);
     if (found == nullptr) {
-        respond(Cancel::NotFound, JsonValue());
+        readyWaiters_.push_back([respond = std::move(respond)] { respond(Cancel::NotFound, JsonValue()); });
         return;
     }
     if (found->terminal()) {
@@ -632,10 +600,11 @@ void ControlJobs::cancelAsyncOnOwner(const std::string& jobId, CancelResponder r
         found->updatedAtMs = now();
         outcome = Cancel::Requested;
     }
-    auto job = jobJson(*found);
-    respond(outcome, std::move(job));
     if (outcome == Cancel::Requested)
         wakeOnOwner();
+    readyWaiters_.push_back([respond = std::move(respond), outcome, job = jobJson(*found)]() mutable {
+        respond(outcome, std::move(job));
+    });
 }
 
 void ControlJobs::resolveWaiters(std::uint64_t seq, Lookup lookup, const JsonValue& job)
@@ -645,7 +614,9 @@ void ControlJobs::resolveWaiters(std::uint64_t seq, Lookup lookup, const JsonVal
             ++it;
             continue;
         }
-        readyWaiters_.push_back({std::move(it->respond), lookup, job});
+        readyWaiters_.push_back([respond = std::move(it->respond), lookup, job]() mutable {
+            respond(lookup, std::move(job));
+        });
         it = waiters_.erase(it);
     }
 }
@@ -654,8 +625,9 @@ void ControlJobs::dispatchReadyWaiters()
 {
     auto ready = std::move(readyWaiters_);
     readyWaiters_.clear();
-    for (auto& entry : ready)
-        entry.respond(entry.lookup, std::move(entry.job));
+    // From this point only independent snapshots are touched. A responder may delete the registry.
+    for (auto& respond : ready)
+        respond();
 }
 
 void ControlJobs::rescheduleDeadline()
@@ -678,6 +650,7 @@ void ControlJobs::rescheduleDeadline()
 void ControlJobs::deadlineReached()
 {
     jassert(juce::MessageManager::existsAndIsCurrentThread());
+    Operation operation(*this);
     if (stopped_)
         return;
 
@@ -696,24 +669,25 @@ void ControlJobs::deadlineReached()
             continue;
         }
         const auto found = jobs_.find(it->seq);
-        if (found == jobs_.end())
-            readyWaiters_.push_back({std::move(it->respond), Lookup::NotFound, JsonValue()});
-        else
-            readyWaiters_.push_back({std::move(it->respond), Lookup::Found, jobJson(*found->second)});
+        const auto lookup = found == jobs_.end() ? Lookup::NotFound : Lookup::Found;
+        auto job = found == jobs_.end() ? JsonValue() : jobJson(*found->second);
+        readyWaiters_.push_back([respond = std::move(it->respond), lookup, job = std::move(job)]() mutable {
+            respond(lookup, std::move(job));
+        });
         it = waiters_.erase(it);
     }
     rescheduleDeadline();
-    dispatchReadyWaiters();
     if (jobsDue)
         wakeOnOwner();
 }
 
 void ControlJobs::handleAsyncUpdate()
 {
-    if (tickDepth_ > 0) {
+    if (operationDepth_ > 0) {
         deferredUpdate_ = true;
         return;
     }
+    Operation operation(*this);
     deferredUpdate_ = false;
     tick();
     if (deferredUpdate_ && !stopped_) {
@@ -724,15 +698,6 @@ void ControlJobs::handleAsyncUpdate()
 
 void ControlJobs::tick()
 {
-    struct DepthGuard
-    {
-        int& depth;
-        explicit DepthGuard(int& d) : depth(d) { ++depth; }
-        ~DepthGuard() { --depth; }
-        DepthGuard(const DepthGuard&) = delete;
-        DepthGuard& operator=(const DepthGuard&) = delete;
-    } depthGuard(tickDepth_);
-
     if (stopped_)
         return;
 
@@ -766,12 +731,12 @@ void ControlJobs::tick()
         }
     }
     rescheduleDeadline();
-    dispatchReadyWaiters();
 }
 
 void ControlJobs::stop()
 {
     jassert(juce::MessageManager::existsAndIsCurrentThread());
+    Operation operation(*this);
     if (stopped_)
         return;
     stopped_ = true;
@@ -784,10 +749,9 @@ void ControlJobs::stop()
             works.push_back(std::move(job->work));
     }
     for (auto& waiter : waiters_)
-        readyWaiters_.push_back({std::move(waiter.respond), Lookup::Stopped, JsonValue()});
+        readyWaiters_.push_back([respond = std::move(waiter.respond)] { respond(Lookup::Stopped, JsonValue()); });
     waiters_.clear();
     cancelPendingUpdate();
-    dispatchReadyWaiters();
     works.clear();
 }
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "ControlServer.h"
+#include "ControlMessageThread.h"
 #include "Ops/OpsRegistry.h"
 
 #include <atomic>
@@ -15,7 +16,6 @@
 namespace OpenTune {
 
 class ControlJobs;
-class ControlMessageThread;
 class ControlUiBridge;
 class OpenTuneAudioProcessor;
 
@@ -39,15 +39,14 @@ class OpenTuneAudioProcessor;
  *    gives (the only place where OpenTune errors become protocol errors). `executed` is what the
  *    operation stated (controlOpError or controlOpErrorAfterChange); for any other failure of a write
  *    it is true, because the write may have changed state;
- * 6. for a method that ends the instance (app.quit: ControlOpContext::endInstanceAfterReply), only after the
- *    result was written to the connection, posts the method's exit step to the message thread. The dispatcher is
+ * 6. for a method that ends the instance (app.quit: ControlOpContext::endInstanceAfterReply), after the
+ *    complete reply including LF is written or sending ends with failure/closure, posts the exit step. The dispatcher is
  *    in the stopping state from the moment the method returned its result, so that every other request is answered
  *    with SHUTTING_DOWN; the exit step stops the control service (connections close, the discovery file goes) and
  *    quits the application.
  *
- * Methods whose schema says mainThread false and that have ControlMethod::runWithoutMessageThread
- * (job.get, job.cancel) skip step 4 as well: they parse and submit an asynchronous registry command from
- * the connection thread. The registry reads and mutates jobs only on the message thread; job.get with
+ * Methods with ControlMethod::runJobCommand (job.get, job.cancel) use post() for asynchronous registry
+ * commands. The dispatcher reaches the registry only on the message thread; job.get with
  * waitMs leaves the connection available for the session's other requests meanwhile.
  *
  * Every access to OpenTune state goes through ControlOpContext, which refuses any thread other than the
@@ -71,7 +70,7 @@ public:
         /** Initialised (ensureRuntimeInitialized()) before the listener starts; reached only on the
             message thread, while the liveness token of messageThread is alive. */
         OpenTuneAudioProcessor* processor = nullptr;
-        std::shared_ptr<ControlMessageThread> messageThread;
+        ControlMessageThread::Handle messageThread;
         /** The limits of the listener; session.info reports them, dispatchTimeoutMs bounds the wait. */
         ControlLimits limits;
         /** The build identity of the listener, for session.info. */
@@ -80,7 +79,7 @@ public:
         std::function<ControlUiBridge*()> uiBridge;
         /** The jobs of the instance (job.get, job.cancel and the methods that start jobs); stopped by
             ControlService::stop() before the listener. */
-        std::shared_ptr<ControlJobs> jobs;
+        ControlJobs* jobs = nullptr;
         /** What the instance knows about OpenTune's undo history (edit.*, and every write that records an
             undo entry); message thread only. */
         std::shared_ptr<ControlHistory> history;
@@ -110,9 +109,8 @@ private:
 
     void execute(const ControlMethod& method, const void* parsed, Outcome& outcome);
     void executeOffMainThread(const ControlMethod& method, const void* parsed, Outcome& outcome);
-    static void respond(const Outcome& outcome, const ControlCompletion& completion);
-    /** Posts the exit step of a method that ended the instance, after respond() returned. Non-message thread. */
-    void runAfterReply(Outcome& outcome);
+    static void respond(Outcome& outcome, const ControlCompletion& completion,
+                        ControlMessageThread::Handle messageThread);
     /** Sets the stopping flag and wakes the waiters of the facts; idempotent, any thread. */
     void enterStopping();
     std::shared_ptr<const ControlInstanceFacts> currentFacts() const;

@@ -99,16 +99,16 @@ using ControlJobWork = std::function<void(ControlJobStep& step)>;
  *   ControlJobStep::endCancellability(), or until job.cancel requests cancellation; the work sees the
  *   request at its next step and stops there.
  *
- * Threading: registry accessors and job work run on the message thread. waitAsync(), cancelAsync() and
- * wake() accept calls from any thread and marshal them to the message thread. stop() and destruction
- * run on the message thread.
+ * Threading: registry operations, stop() and destruction run on the message thread. Connection
+ * commands are posted by ControlDispatcher. Cross-thread producers retain wakeCallback().
  *
  * Re-entrancy: when a step runs a nested message loop, a queued async update may run inside it; that nested
  * update does nothing and the outer dispatch schedules another update after the step returns. stop() called
  * from such a loop cancels queued updates; the works of the jobs that
- * the interrupted tick was running are destroyed when it returns, and none of them is called again. The
- * registry itself must not be destroyed inside such a loop: the interrupted tick returns into it (debug
- * builds assert this).
+ * the interrupted tick was running are destroyed when it returns, and none of them is called again.
+ * Replies are independent snapshots delivered after the outermost operation has finished its state,
+ * work destruction and scheduling. A responder may synchronously destroy the registry. Direct
+ * destruction from inside a work step remains invalid: the step must first return.
  */
 class ControlJobs : private juce::AsyncUpdater
 {
@@ -134,7 +134,7 @@ public:
         std::string jobId;
         std::string refusal;
     };
-    ControlJobs(const ControlLimits& limits, std::shared_ptr<ControlMessageThread> messageThread);
+    ControlJobs(const ControlLimits& limits, ControlMessageThread::Handle messageThread);
     /** Calls stop() when it was not called; see the class threading rules. Never inside the nested
         message loop of a step (see Re-entrancy). */
     ~ControlJobs() override;
@@ -171,14 +171,12 @@ public:
     /**
      * job.get responds at once when waitMs is 0, the job is terminal or unknown;
      * otherwise when the job becomes terminal or waitMs passes, whichever comes first, and with Stopped
-     * when stop() is called meanwhile. Registry access and normal responses run on the message thread; a
-     * response for a command the message queue cannot accept runs on the submitting thread. Any thread;
-     * never blocks.
+     * when stop() is called meanwhile. Message thread; never blocks. Responses follow the outermost
+     * owner operation's cleanup and may destroy the owner.
      */
     void waitAsync(const std::string& jobId, int waitMs, WaitResponder respond);
 
-    /** Cancels a job and returns its state after the owner processes the request. A rejected command responds
-        on the submitting thread. Any thread. */
+    /** Cancels a job and delivers its snapshot after owner cleanup. Message thread. */
     using CancelResponder = std::function<void(Cancel, JsonValue job)>;
     void cancelAsync(const std::string& jobId, CancelResponder respond);
 
@@ -190,7 +188,7 @@ public:
      */
     void stop();
 
-    /** Wakes active work after a state change. Any thread. */
+    /** Wakes active work after a state change. Message thread. */
     void wake() noexcept;
     /** A callback safe to retain beyond this registry's lifetime. Any thread. */
     std::function<void()> wakeCallback() const;
@@ -205,7 +203,7 @@ private:
     friend class ControlJobStep;
     struct Job;
     struct Waiter;
-    struct ReadyWaiter;
+    struct Operation;
     struct WakeState;
     struct DeadlineScheduler;
 
@@ -221,8 +219,6 @@ private:
     Job* find(const std::string& jobId) const;
     JsonValue jobJson(const Job& job) const;
     void finish(Job& job, const char* state, std::optional<ControlJobError> error, JsonValue result);
-    void waitAsyncOnOwner(const std::string& jobId, int waitMs, WaitResponder respond);
-    void cancelAsyncOnOwner(const std::string& jobId, CancelResponder respond);
     void deadlineReached();
     void rescheduleDeadline();
     void resolveWaiters(std::uint64_t seq, Lookup lookup, const JsonValue& job);
@@ -231,18 +227,16 @@ private:
     void handleAsyncUpdate() override;
 
     ControlLimits limits_;
-    std::shared_ptr<ControlMessageThread> messageThread_;
     std::string instanceShort_ = "00000000";
     std::uint64_t nextSeq_ = 1;
     std::map<std::uint64_t, std::unique_ptr<Job>> jobs_;
     std::vector<Waiter> waiters_;
-    std::vector<ReadyWaiter> readyWaiters_;
+    std::vector<std::function<void()>> readyWaiters_;
     std::shared_ptr<WakeState> wakeState_;
     std::unique_ptr<DeadlineScheduler> deadlineScheduler_;
     bool stopped_ = false;
-    /** Number of tick() calls running on the message thread (more than one only in a nested message
-        loop). Message thread only. */
-    int tickDepth_ = 0;
+    /** Outermost operation owns cleanup and result delivery, including nested message-loop calls. */
+    int operationDepth_ = 0;
     /** A nested async callback was consumed while an outer tick still owned the work. Message thread only. */
     bool deferredUpdate_ = false;
 };

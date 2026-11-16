@@ -3,86 +3,58 @@
 
 #include <functional>
 #include <memory>
+#include <thread>
+#include <utility>
 
 namespace OpenTune {
 
-/**
- * Message-thread marshalling of the control API, guarded by a liveness token.
- *
- * OpenTune changes content only on the message thread. The control API reaches the message thread
- * only through this class: post() and submit() queue functions with juce::MessageManager::callAsync.
- * submit() uses one shared deadline and completion worker for asynchronous calls. Every queued function
- * captures the liveness token of this object (a flag in state shared with the queued functions, not the
- * object itself) and runs only while the token is alive. stop() kills the token: functions still in the
- * queue then return without doing anything when the message loop reaches them. The owner is destroyed on
- * the message thread, so a queued function that observes a live token keeps the owner alive until it returns.
- *
- * Why the check is enough: queued functions and owner destruction both run on the message thread, so a function that
- * found the token alive keeps its owner alive until it returns (unless it destroys the owner).
- *
- * Threading: post(), submit(), stop(), isStopped(), isAlive() and waitingCalls() from any thread;
- * destruction on the message thread.
- */
+/** Message-thread owner of the dispatch deadline worker. Connections retain only a Handle.
+    Queued operations use the shared liveness state; their business owners belong to the message
+    thread and remain alive until an executing operation returns. Completions retain result snapshots
+    and connection state only. Construction, handle(), close(), stop() and destruction: message thread. */
 class ControlMessageThread
 {
+    struct Shared;
+
 public:
-    /** How an asynchronous submission ended. */
-    enum class CallResult {
-        /** The function ran and returned. */
-        Done,
-        /** The function ran and threw; the exception was caught on the message thread. */
-        Failed,
-        /** The timeout passed before the function started. It never runs. */
-        TimedOut,
-        /** stop() was called before the function started. It never runs. */
-        Stopped,
-        /** Nothing was queued: no function, the message queue refused it (for example while the
-            application quits). */
-        NotPosted
+    enum class CallResult { Done, Failed, TimedOut, Stopped, NotPosted };
+
+    /** Copyable submission state, safe to retain and release on any thread after the owner stops. */
+    class Handle
+    {
+    public:
+        Handle() = default;
+        /** Queues a message-thread operation. onStopped runs exactly once if it cannot start,
+            on the rejecting/stopping thread; it must only use independent reply state. */
+        bool post(std::function<void()> fn, std::function<void()> onStopped = {}) const;
+        /** Fixes a deadline at submission. Queued work times out; started work reports its actual
+            result. Completion runs on the deadline worker, message thread or rejecting thread. */
+        void submit(std::function<void()> fn, int timeoutMs, std::function<void(CallResult)> completion) const;
+        bool isAlive() const;
+        int waitingCalls() const;
+
+    private:
+        friend class ControlMessageThread;
+        explicit Handle(std::shared_ptr<Shared> shared) : shared_(std::move(shared)) {}
+        std::shared_ptr<Shared> shared_;
     };
 
     ControlMessageThread();
-    /** Calls stop(). */
     ~ControlMessageThread();
-
     ControlMessageThread(const ControlMessageThread&) = delete;
     ControlMessageThread& operator=(const ControlMessageThread&) = delete;
 
-    /**
-     * Queues fn for the message thread. fn runs only if the token is still alive when the message loop
-     * reaches it; it must not throw. Returns false, and drops fn, after stop() or when the message
-     * queue refuses the message (juce::MessageManager::callAsync returned false).
-     */
-    bool post(std::function<void()> fn);
-    /** Queues fn. If stop() or the message queue prevents fn from running, onStopped runs exactly once on the
-        thread that stopped or rejected the post; it must not access message-thread-owned state. */
-    bool post(std::function<void()> fn, std::function<void()> onStopped);
-
-    /** Queues fn for the message thread. A queued function that has not started by timeoutMs never runs; a started
-        function reports its actual result. Accepted work completes on the shared worker or message thread; queued
-        work completed by stop() completes on its caller thread. Rejected work completes on the submitting thread. The timeout
-        starts after the message queue accepts the function. */
-    void submit(std::function<void()> fn, int timeoutMs, std::function<void(CallResult)> completion);
-
-    /** Kills the token (queued functions become no-ops) and completes queued submissions with Stopped. Idempotent. */
+    /** Starts the worker on first use and returns the shared submission handle. */
+    Handle handle();
+    /** Closes submission and settles queued requests. Idempotent; running operations finish normally. */
+    void close();
+    /** Closes submission and joins the worker. Idempotent. */
     void stop();
 
-    /** True after stop(). */
-    bool isStopped() const;
-
-    /** True until stop(): the liveness token is alive. Read-only, the complement of isStopped(). A failed post() tells
-        the two reasons apart with it: false means the service has been stopped, so nothing is left to clean up; true
-        means the message queue refused the message (juce::MessageManager::callAsync returned false, for example while
-        the application quits) and the service is still up. */
-    bool isAlive() const;
-
-    /** Number of asynchronous submissions awaiting a terminal result. */
-    int waitingCalls() const;
-
 private:
-    struct Shared;
     static void timeoutLoop(std::shared_ptr<Shared> shared);
     std::shared_ptr<Shared> shared_;
+    std::thread deadlineThread_;
 };
 
 } // namespace OpenTune

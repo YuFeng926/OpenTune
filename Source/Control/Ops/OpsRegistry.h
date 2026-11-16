@@ -108,7 +108,7 @@ public:
      * For a method that ends the instance (app.quit), called once, when the method is about to return its result:
      * the dispatcher answers every other request with SHUTTING_DOWN from the moment the method returns, so that
      * nothing can change what the caller has just checked, and, once it has written the result to the connection,
-     * posts action to the message thread, where it runs at most once after the response is written. Without effect
+     * posts action to the message thread after the send reaches Written, Failed or Closed. Without effect
      * when the method returns an error, and in the context of a job's
      * step. Throws ControlThreadViolation off the message thread.
      */
@@ -180,17 +180,17 @@ ControlErrorReply controlMapError(const Error& error);
  *
  * run runs on the message thread with what parse kept, and returns the result object or an Error.
  *
- * A method whose schema says x-otcp.mainThread false has one of two functions instead of run, and both
- * run on the connection thread, never wait for the message thread and so never answer TIMEOUT:
+ * A method whose schema says x-otcp.mainThread false has one of two functions instead of run:
  * - runOffMainThread (app.getLog) gets only the instance facts (an immutable snapshot) and what parse
  *   kept, never the processor or the editor bridge, so it cannot read or change project content;
- * - runWithoutMessageThread (job.get, job.cancel) submits an asynchronous command to the jobs registry and may answer later.
+ * - runJobCommand (job.get, job.cancel) runs on the message thread after the dispatcher posts it.
+ *   It may answer later; the connection thread stays available and the command never answers TIMEOUT.
  */
 struct ControlMethod
 {
     std::string name;
     /** Runs on the message thread (x-otcp.mainThread of the schema): run is set when true,
-        runOffMainThread or runWithoutMessageThread when false. */
+        runOffMainThread or runJobCommand when false. */
     bool mainThread = true;
     /** Changes state (x-otcp.write is not "no"): decides `executed` of an error that does not state it
         (an exception, or an OpenTune error that is not a controlOpError). */
@@ -202,10 +202,8 @@ struct ControlMethod
     std::function<Result<JsonValue>(const ControlInstanceFacts& facts, const void* parsed)> runOffMainThread;
     /** Answers the request exactly once, possibly later and from another thread. */
     using Reply = std::function<void(Result<JsonValue>)>;
-    /** Instead of run, for a method with mainThread false (job.get, job.cancel): runs on the connection
-        thread and submits a command to the jobs registry. It copies what it needs of parsed before it
-        returns, and never waits for the message thread or blocks the connection thread. */
-    std::function<void(ControlJobs& jobs, const void* parsed, Reply reply)> runWithoutMessageThread;
+    /** Message-thread registry command. Replies carry independent result and connection state. */
+    std::function<void(ControlJobs& jobs, const void* parsed, Reply reply)> runJobCommand;
 };
 
 /**
@@ -258,8 +256,7 @@ ControlMethod controlWriteMethod(std::string name, bool (*parse)(const JsonValue
     return method;
 }
 
-/** A method that never waits for the message thread (x-otcp.mainThread false) from typed functions:
-    parse and run on the connection thread; run submits work to the jobs registry. */
+/** An asynchronous registry method: connection-thread parsing, message-thread execution. */
 template <typename Params>
 ControlMethod controlJobMethod(std::string name, bool (*parse)(const JsonValue&, Params&, std::string&),
                                void (*run)(ControlJobs&, const Params&, ControlMethod::Reply))
@@ -274,7 +271,7 @@ ControlMethod controlJobMethod(std::string name, bool (*parse)(const JsonValue&,
         parsed = std::move(value);
         return true;
     };
-    method.runWithoutMessageThread = [run](ControlJobs& jobs, const void* parsed, ControlMethod::Reply reply) {
+    method.runJobCommand = [run](ControlJobs& jobs, const void* parsed, ControlMethod::Reply reply) {
         run(jobs, *static_cast<const Params*>(parsed), std::move(reply));
     };
     return method;

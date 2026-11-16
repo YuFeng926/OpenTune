@@ -83,12 +83,12 @@ struct ControlService::LogGate
 ControlService::ControlService(OpenTuneAudioProcessor& processor)
     : processor_(processor)
     , options_(parseControlApiOptions(commandLineArguments(), controlSystemEnvironment))
-    , messageThread_(std::make_shared<ControlMessageThread>())
     , logGate_(std::make_shared<LogGate>())
 {}
 
 ControlService::~ControlService()
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     stop();
 }
 
@@ -100,7 +100,7 @@ void ControlService::scheduleStart()
     startScheduled_ = true;
     // `this` is safe: the function runs only while the liveness token is alive, and stop() (called by
     // the destructor at the latest) kills it on the message thread, where the function runs too.
-    if (!messageThread_->post([this] { start(); }))
+    if (!messageThread_.handle().post([this] { start(); }))
         log("control API: not started: the start could not be queued on the message thread");
 }
 
@@ -149,13 +149,14 @@ bool ControlService::startListening()
     // only on the message thread, while the liveness token is alive, so `this` is safe in the accessor.
     ControlDispatcher::Setup setup;
     setup.processor = &processor_;
-    setup.messageThread = messageThread_;
+    setup.messageThread = messageThread_.handle();
     setup.limits = config.limits;
     setup.build = config.build;
     setup.uiBridge = [this] { return uiBridge_; };
-    // The jobs live as long as the dispatcher can reach them; stop() stops them before the listener.
-    auto jobs = std::make_shared<ControlJobs>(config.limits, messageThread_);
-    setup.jobs = jobs;
+    // The service alone owns the registry. Connection dispatchers retain only its borrowed pointer,
+    // used inside a message-thread post while the submission token is alive.
+    auto jobs = std::make_unique<ControlJobs>(config.limits, setup.messageThread);
+    setup.jobs = jobs.get();
     // The undo entries the API records keep it alive beyond the service (OpenTune's UndoManager outlives it).
     history_ = std::make_shared<ControlHistory>();
     setup.history = history_;
@@ -191,17 +192,21 @@ bool ControlService::startListening()
 
 void ControlService::stop() noexcept
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     if (stopCalled_)
         return;
     stopCalled_ = true;
     try {
         // 1. Stop flag: from now on requests are answered with SHUTTING_DOWN.
         // 2. Wake every thread waiting for the message thread; queued functions become no-ops.
-        messageThread_->stop();
+        if (dispatcher_ != nullptr)
+            dispatcher_->serverStopping();
+        messageThread_.close();
         // 3. The jobs: waiting job.get requests are answered with SHUTTING_DOWN, no job work runs again,
         //    and the work of every job is destroyed on this thread, joining whatever thread it owns.
         if (jobs_ != nullptr)
             jobs_->stop();
+        messageThread_.stop();
         // 4. The listener: its own stop flag and SHUTTING_DOWN for new requests, then the sessions and
         //    the listener close, the threads are joined with a bounded wait and the discovery file is
         //    deleted (ControlServer::stop()).

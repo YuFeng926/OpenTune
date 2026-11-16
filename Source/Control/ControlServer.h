@@ -36,8 +36,16 @@ class ControlCompletion
 public:
     ControlCompletion() = default;
 
+    enum class SendResult { Written, Failed, Closed };
+    using SendCallback = std::function<void(SendResult)>;
+
     /** Sends {"result": result}; result must be an object. */
     void respondResult(const JsonValue& result) const;
+
+    /** Final response of the connection. Calls sent once after the whole line including LF is written,
+        or with Failed/Closed when sending ends. Runs outside the channel mutex. The connection uses
+        its existing bounded final flush and closes, including when the peer stops reading. */
+    void respondFinalResult(const JsonValue& result, SendCallback sent) const;
 
     /** Sends an error response (see controlErrorResponse for the rules on detail). */
     void respondError(std::string_view kind, std::string_view reason, std::string_view detail, bool executed,

@@ -40,7 +40,7 @@ void logFailure(const std::string& method, const char* what)
 
 ControlDispatcher::ControlDispatcher(Setup setup) : setup_(std::move(setup))
 {
-    jassert(setup_.processor != nullptr && setup_.messageThread != nullptr);
+    jassert(setup_.processor != nullptr && setup_.messageThread.isAlive());
     registerControlMethods(methods_);
     capabilities_ = methods_.capabilities();
     auto facts = std::make_shared<ControlInstanceFacts>();
@@ -130,21 +130,28 @@ void ControlDispatcher::handleRequest(ControlRequest request, ControlCompletion 
         completion.respondError("INVALID_ARGUMENT", "invalid_params", why, false);
         return;
     }
-    if (!method->mainThread && method->runWithoutMessageThread) {
-        // job.get and job.cancel marshal registry access to the message thread. Their reply may come later;
-        // the connection thread never waits for the registry.
-        if (setup_.jobs == nullptr) {
-            completion.respondError("INTERNAL", {}, "the method is not available", false);
-            return;
-        }
-        method->runWithoutMessageThread(*setup_.jobs, parsed.get(), [completion](Result<JsonValue> result) {
-            if (result.ok()) {
-                completion.respondResult(result.value());
+    if (method->runJobCommand) {
+        const auto stopped = [completion] {
+            completion.respondError("SHUTTING_DOWN", {}, "the control API is stopping", false);
+        };
+        setup_.messageThread.post([this, run = method->runJobCommand, parsed, completion, stopped] {
+            if (stopping_.load()) {
+                stopped();
                 return;
             }
-            const auto reply = controlMapError(result.error());
-            completion.respondError(reply.kind, reply.reason, reply.detail, reply.executed.value_or(false));
-        });
+            if (setup_.jobs == nullptr) {
+                completion.respondError("INTERNAL", {}, "the method is not available", false);
+                return;
+            }
+            run(*setup_.jobs, parsed.get(), [completion](Result<JsonValue> result) {
+                if (result.ok()) {
+                    completion.respondResult(result.value());
+                    return;
+                }
+                const auto reply = controlMapError(result.error());
+                completion.respondError(reply.kind, reply.reason, reply.detail, reply.executed.value_or(false));
+            });
+        }, stopped);
         return;
     }
 
@@ -154,21 +161,20 @@ void ControlDispatcher::handleRequest(ControlRequest request, ControlCompletion 
         // thread, and never waits for the message thread, so a busy main thread never delays it and it
         // never answers TIMEOUT.
         executeOffMainThread(*method, parsed.get(), *outcome);
-        respond(*outcome, completion);
+        respond(*outcome, completion, setup_.messageThread);
         return;
     }
-    setup_.messageThread->submit(
+    setup_.messageThread.submit(
         [this, method, parsed, outcome] { execute(*method, parsed.get(), *outcome); }, setup_.limits.dispatchTimeoutMs,
-        [this, method, outcome, completion](ControlMessageThread::CallResult callResult) {
+        [name = method->name, write = method->write, messageThread = setup_.messageThread, outcome, completion]
+        (ControlMessageThread::CallResult callResult) {
             switch (callResult) {
                 case ControlMessageThread::CallResult::Done:
-                    respond(*outcome, completion);
-                    // A method that ends the instance posts its exit step only after its reply was delivered.
-                    runAfterReply(*outcome);
+                    respond(*outcome, completion, messageThread);
                     return;
                 case ControlMessageThread::CallResult::Failed:
-                    logFailure(method->name, "failed on the message thread");
-                    completion.respondError("INTERNAL", {}, "the method failed", method->write);
+                    logFailure(name, "failed on the message thread");
+                    completion.respondError("INTERNAL", {}, "the method failed", write);
                     return;
                 case ControlMessageThread::CallResult::TimedOut:
                     completion.respondError("TIMEOUT", "dispatch_timeout",
@@ -198,7 +204,7 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
     const auto facts = currentFacts();
     try {
         ControlOpContext context(*setup_.processor, setup_.uiBridge ? setup_.uiBridge() : nullptr, *facts,
-                                 setup_.jobs.get(), setup_.uiBridge, setup_.history);
+                                 setup_.jobs, setup_.uiBridge, setup_.history);
         auto result = method.run(context, parsed);
         if (result.ok()) {
             outcome.result = std::move(result).value();
@@ -267,54 +273,22 @@ void ControlDispatcher::executeOffMainThread(const ControlMethod& method, const 
     }
 }
 
-void ControlDispatcher::respond(const Outcome& outcome, const ControlCompletion& completion)
+void ControlDispatcher::respond(Outcome& outcome, const ControlCompletion& completion,
+                                ControlMessageThread::Handle messageThread)
 {
-    if (outcome.result)
-        completion.respondResult(*outcome.result);
-    else
-        completion.respondError(outcome.error.kind, outcome.error.reason, outcome.error.detail, outcome.executed);
-}
-
-void ControlDispatcher::runAfterReply(Outcome& outcome)
-{
-    if (!outcome.afterReply)
-        return;
-    // ControlMessageThread::post(): the action runs on the message thread, in the message loop, and never inside the
-    // method that produced the reply. It does nothing when the service has stopped meanwhile: the
-    // application is then ending anyway.
-    if (!setup_.messageThread->post(std::move(outcome.afterReply))) {
-        // The state this leaves behind: the dispatcher is in its stopping state (enterStopping() ran when the method
-        // returned) and the client has the result with `quitting: true`, but the exit step never runs. post() fails
-        // for one of two reasons, which isAlive() tells apart:
-        //  - the liveness token is dead: the service has been stopped on the message thread, which leaves nothing to
-        //    clean up (the listener, the connections and the discovery file are gone or going), so the step has
-        //    nothing left to do;
-        //  - the token is alive and the message queue refused the message, for example while the application quits:
-        //    the service, the listener, the open connections and the discovery file stay as they are, until the
-        //    application's own shutdown stops the service (the first statement of the processor's destructor); until
-        //    it does, every request is answered with SHUTTING_DOWN.
-        //
-        // isAlive() is read after post() failed, and the token never comes back to life. So an alive token at that
-        // point was alive when post() failed, and the first log below ("refused by the message queue") is exact. A dead
-        // token is usually the first case, but it can also be the second one: the queue refused the step while the
-        // token was alive, and the service stopped before isAlive() was read. The log then says that the service is
-        // already stopping. That is still true when it is written (the service is stopping and there is nothing left to
-        // stop), so the line is harmless; only the reason that post() failed may have been the queue's refusal.
-        //
-        // There is no cleanup this completion thread can do. ControlService::stop() is owned by the message thread,
-        // which has just refused to take work, so the case is only logged with what the client was told and what is
-        // left running.
-        if (setup_.messageThread->isAlive())
-            AppLogger::logNoThrow(
-                "control API: the exit step of a method that ends the instance was refused by the message queue: the "
-                "client was told that the instance quits and every request now gets SHUTTING_DOWN, but the listener "
-                "and the discovery file stay until the application closes itself and its own shutdown stops the "
-                "control service");
+    if (outcome.result) {
+        std::function<void(ControlCompletion::SendResult)> sent;
+        if (outcome.afterReply) {
+            sent = [messageThread, action = std::move(outcome.afterReply)](ControlCompletion::SendResult) mutable {
+                messageThread.post(std::move(action));
+            };
+        }
+        if (sent)
+            completion.respondFinalResult(*outcome.result, std::move(sent));
         else
-            AppLogger::logNoThrow(
-                "control API: the exit step of a method that ends the instance was not queued because the control "
-                "service is already stopping: the client was told that the instance quits and every request now gets "
-                "SHUTTING_DOWN, and there is nothing left to stop");
+            completion.respondResult(*outcome.result);
+    } else {
+        completion.respondError(outcome.error.kind, outcome.error.reason, outcome.error.detail, outcome.executed);
     }
 }
 

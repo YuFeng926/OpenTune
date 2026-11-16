@@ -224,11 +224,10 @@ ControlErrorReply controlMapError(const Error& error)
 void ControlMethodTable::add(ControlMethod method)
 {
     jassert(controlMethodCapability(method.name) != nullptr && find(method.name) == nullptr);
-    // A method runs either on the message thread (run only) or off it with exactly one of runOffMainThread
-    // (the instance facts: app.getLog) and runWithoutMessageThread (the jobs registry: job.get, job.cancel),
-    // without run; writes never run off it.
+    // mainThread selects deadline-bound run. Other methods use either connection-thread facts
+    // (app.getLog) or a posted registry command (job.get/job.cancel); both are protocol reads.
     const bool withFacts = static_cast<bool>(method.runOffMainThread);
-    const bool withJobs = static_cast<bool>(method.runWithoutMessageThread);
+    const bool withJobs = static_cast<bool>(method.runJobCommand);
     jassert(method.mainThread ? (method.run && !withFacts && !withJobs)
                               : (withFacts != withJobs && !method.run && !method.write));
     juce::ignoreUnused(withFacts, withJobs);

@@ -42,8 +42,7 @@ struct AsyncCallState
     };
 
     Phase phase = Phase::Queued;
-    bool posting = true;
-    bool hasDeadline = false;
+    Clock::time_point expiresAt;
     AsyncDeadlines::iterator deadline;
     std::function<void(ControlMessageThread::CallResult)> completion;
 };
@@ -100,10 +99,6 @@ struct ControlMessageThread::Shared
     AsyncDeadlines deadlines;
     std::deque<AsyncCompletion> ready;
     PostedCalls posts;
-    std::thread deadlineThread;
-    std::thread::id deadlineThreadId;
-    bool deadlineThreadExited = true;
-    std::mutex deadlineJoinMutex;
 };
 
 ControlMessageThread::ControlMessageThread() : shared_(std::make_shared<Shared>()) {}
@@ -113,12 +108,15 @@ ControlMessageThread::~ControlMessageThread()
     stop();
 }
 
-bool ControlMessageThread::post(std::function<void()> fn)
+ControlMessageThread::Handle ControlMessageThread::handle()
 {
-    return post(std::move(fn), {});
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    if (shared_->alive.load() && !deadlineThread_.joinable())
+        deadlineThread_ = std::thread(&ControlMessageThread::timeoutLoop, shared_);
+    return Handle(shared_);
 }
 
-bool ControlMessageThread::post(std::function<void()> fn, std::function<void()> onStopped)
+bool ControlMessageThread::Handle::post(std::function<void()> fn, std::function<void()> onStopped) const
 {
     if (!fn) {
         runPosted(std::move(onStopped));
@@ -182,109 +180,82 @@ bool ControlMessageThread::post(std::function<void()> fn, std::function<void()> 
     return posted;
 }
 
-void ControlMessageThread::submit(std::function<void()> fn, int timeoutMs,
-                                  std::function<void(CallResult)> completion)
+void ControlMessageThread::Handle::submit(std::function<void()> fn, int timeoutMs,
+                                         std::function<void(CallResult)> completion) const
 {
     auto shared = shared_;
     auto state = std::make_shared<AsyncCallState>();
+    state->expiresAt = Clock::now() + std::chrono::milliseconds(std::max(timeoutMs, 0));
     state->completion = std::move(completion);
 
     std::function<void(CallResult)> immediateCompletion;
     CallResult immediateResult = CallResult::NotPosted;
-    bool completeImmediately = false;
     {
-        std::lock_guard<std::mutex> lock(shared->mutex);
+        // Publish the queued message and its deadline under the same state lock. Neither the message
+        // thread nor the deadline worker can claim the request before registration is complete.
+        std::unique_lock<std::mutex> lock(shared->mutex);
         if (!fn) {
             immediateCompletion = std::move(state->completion);
-            completeImmediately = true;
         } else if (!shared->alive.load()) {
             immediateCompletion = std::move(state->completion);
             immediateResult = CallResult::Stopped;
-            completeImmediately = true;
         } else {
-            state->deadline = shared->deadlines.emplace(Clock::time_point::max(), state);
-            state->hasDeadline = true;
+            state->deadline = shared->deadlines.emplace(state->expiresAt, state);
             ++shared->waiting;
-            try {
-                if (!shared->deadlineThread.joinable()) {
-                    shared->deadlineThreadExited = false;
-                    shared->deadlineThread = std::thread(&ControlMessageThread::timeoutLoop, shared);
-                    shared->deadlineThreadId = shared->deadlineThread.get_id();
+            const bool posted = juce::MessageManager::callAsync([shared, state, fn = std::move(fn)] {
+                std::function<void(CallResult)> expiredCompletion;
+                bool expired = false;
+                {
+                    std::lock_guard<std::mutex> lock(shared->mutex);
+                    if (state->phase != AsyncCallState::Phase::Queued)
+                        return;
+                    shared->deadlines.erase(state->deadline);
+                    expired = Clock::now() >= state->expiresAt;
+                    if (expired) {
+                        state->phase = AsyncCallState::Phase::TimedOut;
+                        --shared->waiting;
+                        expiredCompletion = std::move(state->completion);
+                    } else {
+                        state->phase = AsyncCallState::Phase::Running;
+                    }
                 }
-            } catch (...) {
-                shared->deadlineThreadExited = true;
+                shared->changed.notify_all();
+                if (expired) {
+                    completeAsync(std::move(expiredCompletion), CallResult::TimedOut);
+                    return;
+                }
+
+                bool threw = false;
+                try {
+                    fn();
+                } catch (...) {
+                    threw = true;
+                }
+
+                std::function<void(CallResult)> stoppedCompletion;
+                {
+                    std::lock_guard<std::mutex> lock(shared->mutex);
+                    state->phase = AsyncCallState::Phase::Finished;
+                    --shared->waiting;
+                    const auto result = threw ? CallResult::Failed : CallResult::Done;
+                    if (shared->alive.load())
+                        shared->ready.push_back({std::move(state->completion), result});
+                    else
+                        stoppedCompletion = std::move(state->completion);
+                }
+                shared->changed.notify_all();
+                completeAsync(std::move(stoppedCompletion), threw ? CallResult::Failed : CallResult::Done);
+            });
+            if (!posted) {
                 shared->deadlines.erase(state->deadline);
-                state->hasDeadline = false;
+                state->phase = AsyncCallState::Phase::Finished;
                 --shared->waiting;
                 immediateCompletion = std::move(state->completion);
-                completeImmediately = true;
             }
-        }
-    }
-    if (completeImmediately) {
-        completeAsync(std::move(immediateCompletion), immediateResult);
-        return;
-    }
-
-    const bool posted = juce::MessageManager::callAsync([shared, state, fn = std::move(fn)] {
-        {
-            std::lock_guard<std::mutex> lock(shared->mutex);
-            if (!shared->alive.load() || state->phase != AsyncCallState::Phase::Queued)
-                return;
-            state->phase = AsyncCallState::Phase::Running;
-            if (state->hasDeadline) {
-                shared->deadlines.erase(state->deadline);
-                state->hasDeadline = false;
-            }
-        }
-        shared->changed.notify_all();
-
-        bool threw = false;
-        try {
-            fn();
-        } catch (...) {
-            threw = true;
-        }
-
-        std::function<void(CallResult)> stoppedCompletion;
-        {
-            std::lock_guard<std::mutex> lock(shared->mutex);
-            state->phase = AsyncCallState::Phase::Finished;
-            --shared->waiting;
-            const auto result = threw ? CallResult::Failed : CallResult::Done;
-            if (shared->alive.load())
-                shared->ready.push_back({std::move(state->completion), result});
-            else
-                stoppedCompletion = std::move(state->completion);
-        }
-        shared->changed.notify_all();
-        completeAsync(std::move(stoppedCompletion), threw ? CallResult::Failed : CallResult::Done);
-    });
-
-    std::function<void(CallResult)> postFailureCompletion;
-    {
-        std::lock_guard<std::mutex> lock(shared->mutex);
-        if (!posted && state->phase == AsyncCallState::Phase::Queued) {
-            if (state->hasDeadline) {
-                shared->deadlines.erase(state->deadline);
-                state->hasDeadline = false;
-            }
-            state->phase = AsyncCallState::Phase::Finished;
-            --shared->waiting;
-            postFailureCompletion = std::move(state->completion);
-        } else if (posted) {
-            if (state->phase == AsyncCallState::Phase::Queued) {
-                if (state->hasDeadline)
-                    shared->deadlines.erase(state->deadline);
-                const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(timeoutMs, 0));
-                state->deadline = shared->deadlines.emplace(deadline, state);
-                state->hasDeadline = true;
-            }
-            state->posting = false;
         }
     }
     shared->changed.notify_all();
-    completeAsync(std::move(postFailureCompletion), CallResult::NotPosted);
+    completeAsync(std::move(immediateCompletion), immediateResult);
 }
 
 void ControlMessageThread::timeoutLoop(std::shared_ptr<Shared> shared)
@@ -300,9 +271,6 @@ void ControlMessageThread::timeoutLoop(std::shared_ptr<Shared> shared)
             continue;
         }
         if (!shared->alive.load()) {
-            shared->deadlineThreadExited = true;
-            lock.unlock();
-            shared->changed.notify_all();
             return;
         }
         if (shared->deadlines.empty()) {
@@ -312,10 +280,6 @@ void ControlMessageThread::timeoutLoop(std::shared_ptr<Shared> shared)
 
         const auto first = shared->deadlines.begin();
         const auto state = first->second;
-        if (state->posting) {
-            shared->changed.wait(lock);
-            continue;
-        }
         if (Clock::now() < first->first) {
             const auto deadline = first->first;
             shared->changed.wait_until(lock, deadline);
@@ -323,9 +287,6 @@ void ControlMessageThread::timeoutLoop(std::shared_ptr<Shared> shared)
         }
 
         shared->deadlines.erase(first);
-        state->hasDeadline = false;
-        if (state->phase != AsyncCallState::Phase::Queued)
-            continue;
         state->phase = AsyncCallState::Phase::TimedOut;
         --shared->waiting;
         auto completion = std::move(state->completion);
@@ -335,15 +296,14 @@ void ControlMessageThread::timeoutLoop(std::shared_ptr<Shared> shared)
     }
 }
 
-void ControlMessageThread::stop()
+void ControlMessageThread::close()
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     auto shared = shared_;
     std::vector<std::function<void(CallResult)>> completions;
     std::vector<std::function<void()>> postStops;
-    std::thread::id deadlineThreadId;
     {
         std::lock_guard<std::mutex> lock(shared->mutex);
-        deadlineThreadId = shared->deadlineThreadId;
         if (shared->alive.exchange(false)) {
             for (const auto& state : shared->posts) {
                 state->phase = PostedCallState::Phase::Stopped;
@@ -354,12 +314,9 @@ void ControlMessageThread::stop()
             shared->posts.clear();
             for (auto& [deadline, state] : shared->deadlines) {
                 (void)deadline;
-                state->hasDeadline = false;
-                if (state->phase == AsyncCallState::Phase::Queued) {
-                    state->phase = AsyncCallState::Phase::Stopped;
-                    --shared_->waiting;
-                    completions.push_back(std::move(state->completion));
-                }
+                state->phase = AsyncCallState::Phase::Stopped;
+                --shared->waiting;
+                completions.push_back(std::move(state->completion));
             }
             shared->deadlines.clear();
         }
@@ -369,35 +326,24 @@ void ControlMessageThread::stop()
         runPosted(std::move(onStopped));
     for (auto& completion : completions)
         completeAsync(std::move(completion), CallResult::Stopped);
-
-    std::thread deadlineThread;
-    {
-        std::lock_guard<std::mutex> joinLock(shared->deadlineJoinMutex);
-        if (shared->deadlineThread.joinable())
-            deadlineThread = std::move(shared->deadlineThread);
-    }
-    if (deadlineThread.joinable()) {
-        if (deadlineThread.get_id() == std::this_thread::get_id())
-            deadlineThread.detach();
-        else
-            deadlineThread.join();
-    } else if (deadlineThreadId != std::thread::id{} && deadlineThreadId != std::this_thread::get_id()) {
-        std::unique_lock<std::mutex> lock(shared->mutex);
-        shared->changed.wait(lock, [&] { return shared->deadlineThreadExited; });
-    }
 }
 
-bool ControlMessageThread::isStopped() const
+void ControlMessageThread::stop()
 {
-    return !shared_->alive.load();
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    // A close responder may destroy this owner. Finish using its members before delivery.
+    auto worker = std::move(deadlineThread_);
+    close();
+    if (worker.joinable())
+        worker.join();
 }
 
-bool ControlMessageThread::isAlive() const
+bool ControlMessageThread::Handle::isAlive() const
 {
-    return shared_->alive.load();
+    return shared_ && shared_->alive.load();
 }
 
-int ControlMessageThread::waitingCalls() const
+int ControlMessageThread::Handle::waitingCalls() const
 {
     std::lock_guard<std::mutex> lock(shared_->mutex);
     return shared_->waiting;

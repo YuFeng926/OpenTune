@@ -76,7 +76,7 @@ public:
      * SHUTTING_DOWN from now on); kills the liveness token, which wakes every thread waiting for the
      * message thread and turns every function still queued for it into a no-op; stops the jobs (waiting
      * job.get requests are answered with SHUTTING_DOWN, no job work runs again, and the work of every job
-     * is destroyed, joining whatever thread it owns); stops the listener
+     * is destroyed after active steps return); joins the dispatch deadline worker; stops the listener
      * (its own stop flag, SHUTTING_DOWN for new requests, then sessions and listener close, threads are
      * joined with a bounded wait, the discovery file is deleted); deletes the ready file if it still
      * holds what this instance wrote; closes the log gate. Message thread; idempotent and re-entrant
@@ -93,7 +93,7 @@ public:
     /** Path of the discovery file written by start(); empty when the API never started. stop() deletes
         the file but the path stays available. */
     const std::string& discoveryFilePath() const noexcept { return discoveryFile_; }
-    /** Wake active jobs after a processor or editor state event. Message thread or worker thread. */
+    /** Wake active jobs after a processor or editor state event. Message thread. */
     void wakeJobs() const noexcept;
     /** A callback safe to retain beyond the jobs registry's lifetime. */
     std::function<void()> jobWakeCallback() const;
@@ -115,12 +115,12 @@ private:
 
     OpenTuneAudioProcessor& processor_;
     ControlApiOptions options_;
-    std::shared_ptr<ControlMessageThread> messageThread_;
+    ControlMessageThread messageThread_;
     std::shared_ptr<LogGate> logGate_;
     std::shared_ptr<ControlHistory> history_;
     std::unique_ptr<ControlServer> server_;
     std::shared_ptr<ControlDispatcher> dispatcher_;
-    std::shared_ptr<ControlJobs> jobs_;
+    std::unique_ptr<ControlJobs> jobs_;
     ControlUiBridge* uiBridge_ = nullptr;
     std::string discoveryFile_;
     /** Content of the ready file as this instance wrote it; empty when it wrote none. */
