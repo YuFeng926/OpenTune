@@ -5,6 +5,9 @@
 
 #include <mutex>
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <vector>
 
 #include "AudioEditingScheme.h"
@@ -79,6 +82,7 @@ struct SharedPreferencesState {
     TuningConfig::TuningSettings tuning = TuningConfig::TuningSettings::getDefault();
     WholeNoteMoveSnapMode wholeNoteMoveSnapMode = WholeNoteMoveSnapMode::Scale;
     bool noteTransposePreviewEnabled = false;  ///< 拖动音符移调时试听预览
+    bool accessibilityModeEnabled = false;  ///< 无障碍模式（读屏播报等，默认关闭）
 };
 
 struct StandalonePreferencesState {
@@ -139,6 +143,9 @@ public:
     void setNoteTransposePreviewEnabled(bool enabled);
     bool getNoteTransposePreviewEnabled() const;
 
+    void setAccessibilityModeEnabled(bool enabled);
+    bool getAccessibilityModeEnabled() const;
+
     void setF0ModelType(F0ModelType type);
     F0ModelType getF0ModelType() const;
 
@@ -169,5 +176,107 @@ private:
     void initialiseStorage();
     void saveLocked();
 };
+
+struct ProcessingPreferencePatch
+{
+    std::optional<float> tuningHz;
+    std::optional<AudioEditingScheme::Scheme> audioEditingScheme;
+    std::optional<bool> lightPitchCorrectionEnabled;
+    std::optional<bool> experimentalFeaturesEnabled;
+    std::optional<VocoderModelWeight> vocoderModelWeight;
+    std::optional<RenderingPriority> renderingPriority;
+    std::optional<F0ModelType> f0ModelType;
+    std::optional<bool> accessibilityModeEnabled;
+};
+
+struct ProcessingPreferenceState
+{
+    float tuningHz = TuningConfig::kDefaultTuningHz;
+    AudioEditingScheme::Scheme audioEditingScheme = AudioEditingScheme::Scheme::CorrectedF0Primary;
+    bool lightPitchCorrectionEnabled = true;
+    bool experimentalFeaturesEnabled = false;
+    VocoderModelWeight vocoderModelWeight = kDefaultVocoderWeight;
+    RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
+    F0ModelType f0ModelType = F0ModelType::FCPE;
+    bool accessibilityModeEnabled = false;
+};
+
+struct ProcessingPreferenceDelta
+{
+    bool tuning = false;
+    bool scheme = false;
+    bool hybrid = false;
+    bool experimental = false;
+    bool vocoder = false;
+    bool priority = false;
+    bool f0 = false;
+    bool accessibilityMode = false;
+
+    bool any() const noexcept;
+    bool needsJob() const noexcept;
+    bool needsRuntimeCompletion() const noexcept;
+};
+
+ProcessingPreferenceDelta diffProcessingPreferenceStates(const ProcessingPreferenceState& before,
+                                                         const ProcessingPreferenceState& after);
+
+enum class ProcessingPreferenceRuntimeStatus
+{
+    Changed,
+    Unchanged,
+    Failed
+};
+
+using ProcessingPreferenceRuntimeCallback =
+    std::function<void(ProcessingPreferenceRuntimeStatus, const juce::String&)>;
+
+struct ProcessingPreferenceRuntimeCompletion
+{
+    bool failed = false;
+    bool backendChanged = false;
+    juce::String failureReason;
+};
+
+struct ProcessingPreferenceRuntimeOperations
+{
+    std::function<bool(F0ModelType, juce::String&)> setF0ModelType;
+    std::function<bool(const VocoderModelWeight&, std::optional<bool>, ProcessingPreferenceRuntimeCallback)>
+        setVocoderModelWeight;
+    std::function<bool(bool, ProcessingPreferenceRuntimeCallback)> resetInferenceBackend;
+    std::function<void()> invalidateAllContentCaches;
+};
+
+struct ProcessingPreferenceApplyResult
+{
+    enum class Status
+    {
+        Applied,
+        NoChange,
+        F0ModelRejected,
+        RuntimeCommandRejected,
+        F0RestoreRejected
+    };
+
+    ProcessingPreferenceState before;
+    ProcessingPreferenceDelta delta;
+    Status status = Status::NoChange;
+    juce::String failureReason;
+
+    bool succeeded() const noexcept
+    {
+        return status == Status::Applied || status == Status::NoChange;
+    }
+};
+
+ProcessingPreferenceState readProcessingPreferenceState(const AppPreferences& preferences);
+ProcessingPreferenceDelta computeProcessingPreferenceDelta(const ProcessingPreferenceState& state,
+                                                           const ProcessingPreferencePatch& patch);
+/** Shared product entry for the preferences UI and prefs.set. Message-thread only. */
+ProcessingPreferenceApplyResult applyProcessingPreferencePatch(
+    AppPreferences& preferences,
+    const ProcessingPreferencePatch& patch,
+    const ProcessingPreferenceRuntimeOperations& runtimeOperations,
+    std::function<void()> onPreferencesChanged = {},
+    std::function<void(ProcessingPreferenceRuntimeCompletion)> onRuntimeCompletion = {});
 
 } // namespace OpenTune

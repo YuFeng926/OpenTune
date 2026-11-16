@@ -1,8 +1,7 @@
-#include "Content/ContentEditCommands.h"
+#include "ContentEditCommandsStub.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PianoRollNotePatchAction.h"
-#include "Utils/PitchShiftEditAction.h"
 #include "Utils/SelectedNoteDeleteEdit.h"
 #include <iostream>
 #include <memory>
@@ -13,6 +12,7 @@
 namespace {
 
 using namespace OpenTune;
+using namespace OpenTune::TestSupport;
 
 Note makeNote(const F0Timeline& timeline, int startFrame, int endFrameExclusive, float pitch)
 {
@@ -173,7 +173,7 @@ bool checkNoTargetAndInvalidInput()
                == SelectedNoteDeleteStatus::InvalidSelection;
 }
 
-class RecordingCommands final : public ContentEditCommands
+class RecordingCommands final : public ContentEditCommandsStub
 {
 public:
     struct SegmentCommit
@@ -203,20 +203,21 @@ public:
         segmentCommits.push_back({ key, std::move(notes), std::move(segments), range });
         return {};
     }
+    ContentCommitSnapshot commitNotesAndSegmentsInRanges(
+        ContentKey key, std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        const std::vector<ContentEditRangeFrames>& ranges) override
+    {
+        lastKey = key;
+        for (const auto& range : ranges)
+            segmentCommits.push_back({ key, notes, segments, range });
+        return {};
+    }
     ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames,
         std::vector<float>, std::optional<std::vector<F0FrameRange>>) override { return {}; }
     bool setTimeGrid(ContentKey, std::shared_ptr<const TimeGridSnapshot>) override { return false; }
-    bool setDetectedKey(ContentKey, const DetectedKey&) override { return false; }
     bool applyPitchShiftState(ContentKey, const PitchShiftEditState&) override { return false; }
-    std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
-        ContentKey, const PitchShiftSettings&) override { return {}; }
-    bool autoTuneContentRange(ContentKey, int, int, const NoteGeneratorParams&,
-                              const std::optional<ScaleSnapConfig>&) override { return false; }
-    bool generateNotesOnly(ContentKey, const NoteGeneratorParams&) override { return false; }
-    bool ensureTimeToolAnchorSeed(ContentKey) override { return false; }
-    ContentCommitSnapshot commitVolumeEnvelope(ContentKey, AutomationLane) override { return {}; }
-    void republishPlaybackSource(ContentKey) override {}
 };
 
 bool checkUndoActionsUseBoundKey()
@@ -247,7 +248,7 @@ bool checkUndoActionsUseBoundKey()
     };
     PianoRollEditAction curveAction(
         commands, key, "Delete note", curve.beforeNotes, curve.afterNotes,
-        curve.beforeSegments, curve.afterSegments, range);
+        curve.beforeSegments, curve.afterSegments, { range });
 
     curveAction.undo();
     const auto& before = commands->segmentCommits.back();

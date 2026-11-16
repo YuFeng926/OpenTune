@@ -9,10 +9,15 @@ ContentKey StandaloneContentRepository::createClip(StandaloneClipId forcedId)
 {
     juce::ScopedWriteLock wl(lock_);
 
-    const StandaloneClipId clipId = (forcedId != 0) ? forcedId : nextClipId_++;
-
-    if (clips_.find(clipId) != clips_.end())
+    StandaloneClipId clipId = forcedId;
+    if (clipId == 0) {
+        // 工程恢复的 ID 与自动分配共用仓库；已退休但仍保留的 ID 同样占用。
+        while (nextClipId_ == 0 || clips_.find(nextClipId_) != clips_.end())
+            ++nextClipId_;
+        clipId = nextClipId_++;
+    } else if (clips_.find(clipId) != clips_.end()) {
         return {};  // ID 已存在
+    }
 
     auto content = std::make_unique<StandaloneClipContent>(clipId);
     const ContentKey key = content->contentKey();
@@ -129,6 +134,10 @@ void StandaloneContentRepository::clear()
     juce::ScopedWriteLock wl(lock_);
     clips_.clear();
     nextClipId_ = 1;
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // Invalidate handles from the previous project session.
+    contentEpoch_.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 } // namespace OpenTune

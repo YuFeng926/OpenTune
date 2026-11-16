@@ -793,6 +793,17 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Utils/NoteGeneratorTypes.h
         Source/Utils/PianoKeyAudition.cpp
         Source/Utils/PianoKeyAudition.h
+        Source/Utils/NoteAudition.cpp
+        Source/Utils/NoteAudition.h
+        Source/Utils/NoteSpeech.h
+        Source/Utils/ScreenReaderAnnouncer.cpp
+        Source/Utils/ScreenReaderAnnouncer.h
+        Source/Utils/AccessibleComboBox.h
+        Source/Utils/AccessibleKnob.h
+        Source/Utils/AccessibleKnob.cpp
+        Source/Utils/AccessibleToggleButton.h
+        Source/Utils/ContextMenuKey.cpp
+        Source/Utils/ContextMenuKey.h
         Source/Utils/AppLogger.cpp
         Source/Utils/AppLogger.h
         Source/Utils/ExternalEditSession.cpp
@@ -904,11 +915,23 @@ set(OPENTUNE_STANDALONE_SOURCES
 
         Source/Audio/AudioFormatRegistry.cpp
         Source/Audio/AudioFormatRegistry.h
+        Source/Control/ControlApiOptions.cpp
+        Source/Control/ControlApiOptions.h
+        Source/Control/ControlDataDirectory.cpp
+        Source/Control/ControlDataDirectory.h
+        Source/Control/ControlJson.cpp
+        Source/Control/ControlJson.h
+        Source/Control/ControlPathPolicy.cpp
+        Source/Control/ControlPathPolicy.h
+        Source/Utils/AudioDeviceSettings.cpp
+        Source/Utils/AudioDeviceSettings.h
 
         Source/SourceStore.cpp
         Source/SourceStore.h
         Source/StandaloneArrangement.cpp
         Source/StandaloneArrangement.h
+        Source/Standalone/StandaloneMediaOperations.cpp
+        Source/Standalone/StandaloneMediaOperations.h
 
 
         Source/Utils/ProjectModel.cpp
@@ -940,6 +963,8 @@ set(OPENTUNE_STANDALONE_SOURCES
 set(OPENTUNE_NON_STANDALONE_SOURCES
         Source/Plugin/Vst3ProcessorStateCodec.cpp
         Source/Plugin/Vst3ProcessorStateCodec.h
+        Source/Plugin/ReaperHostBridge.cpp
+        Source/Plugin/ReaperHostBridge.h
         Source/Content/CaptureSegmentContent.h
         Source/Content/CaptureSegmentContent.cpp
 )
@@ -967,6 +992,8 @@ endif()
 # Standalone application files live on the final wrapper; the SharedCode target
 # only defines createOpenTuneEditor which these TUs implement.
 set(OPENTUNE_STANDALONE_APP_SOURCES
+    Source/Standalone/StandaloneApp.cpp
+    Source/Standalone/StandaloneApp.h
     Source/Utils/D3D12AgilityBootstrap.cpp
     Source/Standalone/EditorFactoryStandalone.cpp
     Source/Standalone/PluginEditor.cpp
@@ -984,6 +1011,9 @@ set(OPENTUNE_STANDALONE_APP_SOURCES
 )
 
 target_sources(OpenTuneStandalone_Standalone PRIVATE ${OPENTUNE_STANDALONE_APP_SOURCES})
+target_compile_definitions(OpenTuneStandalone_Standalone PRIVATE
+    JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
+)
 
 set(OPENTUNE_VST3_APP_SOURCES
     Source/Utils/D3D12AgilityBootstrap.cpp
@@ -1937,6 +1967,17 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME PitchLaneVisualPolicyTests COMMAND OpenTunePitchLaneVisualPolicyTests)
 
+    # Spoken note pitch text for screen readers - standard library only
+    add_executable(OpenTuneNoteSpeechTests
+        Tests/NoteSpeechTests.cpp
+    )
+    target_include_directories(OpenTuneNoteSpeechTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    if(MSVC)
+        target_compile_options(OpenTuneNoteSpeechTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME NoteSpeechTests COMMAND OpenTuneNoteSpeechTests)
+
     add_executable(OpenTuneHostTransportTests
         Tests/HostTransportTests.cpp
     )
@@ -2121,6 +2162,8 @@ if(OPENTUNE_BUILD_TESTS)
     add_executable(OpenTuneCapturePersistenceTests
         Tests/CapturePersistenceTests.cpp
     )
+    target_include_directories(OpenTuneCapturePersistenceTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     target_link_libraries(OpenTuneCapturePersistenceTests PRIVATE
         OpenTune
         juce::juce_audio_basics
@@ -2135,6 +2178,8 @@ if(OPENTUNE_BUILD_TESTS)
     add_executable(OpenTuneCaptureSessionSpanBudgetTests
         Tests/CaptureSessionSpanBudgetTests.cpp
     )
+    target_include_directories(OpenTuneCaptureSessionSpanBudgetTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     target_link_libraries(OpenTuneCaptureSessionSpanBudgetTests PRIVATE
         OpenTune
         juce::juce_audio_basics
@@ -2167,12 +2212,19 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/StandaloneArrangementMoveTests.cpp
     )
     target_include_directories(OpenTuneStandaloneArrangementMoveTests
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${ONNXRUNTIME_INCLUDE_DIR})
     target_link_libraries(OpenTuneStandaloneArrangementMoveTests PRIVATE
         OpenTuneStandalone
+        OpenTuneResources
         juce::juce_audio_basics
         juce::juce_core
     )
+    if(OPENTUNE_ENABLE_CONTROL_API)
+        target_compile_definitions(OpenTuneStandaloneArrangementMoveTests PRIVATE
+            JucePlugin_Build_Standalone=1)
+    endif()
     if(MSVC)
         target_compile_options(OpenTuneStandaloneArrangementMoveTests PRIVATE /utf-8 /EHsc)
     endif()
@@ -2278,3 +2330,7 @@ if(OPENTUNE_BUILD_TESTS)
         "${ARA_SDK_PATH}/ARA_API"
     )
 endif()
+
+# Optional local Control API entry point for Standalone.
+option(OPENTUNE_ENABLE_CONTROL_API "Build the local control API (OTCP v1) into OpenTune Standalone" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneControl.cmake")

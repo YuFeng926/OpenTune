@@ -25,6 +25,7 @@
 #include "TimelineViewportCamera.h"
 #include "TimelineViewportPolicy.h"
 #include "TimelineCompositeCache.h"
+#include "../../StandaloneArrangement.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../Utils/KeyShortcutConfig.h"
 #include "../../Utils/TimelineDisplayMode.h"
@@ -151,6 +152,11 @@ public:
     double viewportXToAbsoluteTime(int x) const;
     int getRulerHeight() const noexcept { return rulerHeight_; }
     juce::Rectangle<int> getClipBounds(int trackId, int placementIndex) const { return getPlacementBounds(trackId, placementIndex); }
+
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: public selection commit, see Source/Control/README.md#hooks
+    void commitControlSelection(int trackId, uint64_t placementId);
+#endif
 
 private:
     bool matchesShortcut(KeyShortcutConfig::ShortcutId id, const juce::KeyPress& key) const;
@@ -321,27 +327,25 @@ private:
 
 
     // === 多选支持 ===
-    struct PlacementSelectionKey {
-        int trackId;
-        uint64_t placementId;
-        bool operator<(const PlacementSelectionKey& other) const {
-            return std::tie(trackId, placementId) < std::tie(other.trackId, other.placementId);
-        }
-        bool operator==(const PlacementSelectionKey& other) const {
-            return trackId == other.trackId && placementId == other.placementId;
-        }
-    };
-    std::set<PlacementSelectionKey> selectedPlacements_;
-    bool isMultiSelectMode_{false};
+    using PlacementSelectionKey = StandaloneArrangement::PlacementSelectionKey;
+    using PlacementSelectionState = StandaloneArrangement::SelectionState;
     PlacementSelectionKey shiftAnchor_;
     bool hasShiftAnchor_{false};
 
-    bool isPlacementSelected(int trackId, uint64_t placementId) const;
-    void togglePlacementSelection(int trackId, uint64_t placementId);
-    void clearPlacementSelection();
-    void selectPlacementsInRange(const PlacementSelectionKey& from, const PlacementSelectionKey& to);
-    void selectAllPlacementsInTrack(int trackId);
-    void commitPlacementSelection(PlacementSelectionKey primary);
+    PlacementSelectionState getArrangementSelectionState() const;
+    void syncPrimarySelection(const PlacementSelectionState& selection);
+    bool isPlacementSelected(const std::set<PlacementSelectionKey>& selection,
+                             int trackId, uint64_t placementId) const;
+    void togglePlacementSelection(std::set<PlacementSelectionKey>& selection,
+                                  int trackId, uint64_t placementId);
+    void clearPlacementSelection(std::set<PlacementSelectionKey>& selection);
+    void selectPlacementsInRange(std::set<PlacementSelectionKey>& selection,
+                                 const PlacementSelectionKey& from,
+                                 const PlacementSelectionKey& to);
+    void selectAllPlacementsInTrack(std::set<PlacementSelectionKey>& selection, int trackId);
+    void commitPlacementSelection(PlacementSelectionState selection,
+                                  PlacementSelectionKey primary);
+    void commitEmptyPlacementSelection(PlacementSelectionState selection);
     void commitEmptyPlacementSelection();
 
     // === 多选拖拽状态 ===
@@ -402,6 +406,7 @@ private:
     DragOperation currentDragOp_{DragOperation::None};
     double trimStartClipInSeconds_{0.0};
     double trimStartDurationSeconds_{0.0};
+    StandaloneArrangement::Placement dragStartPlacement_;
     double fadeStartInDuration_{0.0};
     double fadeStartOutDuration_{0.0};
     uint64_t dragOperationPlacementId_{0};

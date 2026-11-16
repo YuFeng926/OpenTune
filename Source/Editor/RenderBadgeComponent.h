@@ -42,6 +42,29 @@ public:
 #endif
     }
 
+    // Accessibility: readable by NVDA object navigation ("Rendering (2/5)") instead of an
+    // unnamed object; hidden while empty. Not spoken by itself: that was too talkative.
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        class BadgeAccessibilityHandler final : public juce::AccessibilityHandler {
+        public:
+            explicit BadgeAccessibilityHandler(RenderBadgeComponent& owner)
+                : juce::AccessibilityHandler(owner, juce::AccessibilityRole::staticText), owner_(owner) {}
+
+            juce::String getTitle() const override { return owner_.text_; }
+
+            juce::AccessibleState getCurrentState() const override
+            {
+                auto state = juce::AccessibilityHandler::getCurrentState();
+                return owner_.text_.isEmpty() ? state.withIgnored() : state;
+            }
+
+        private:
+            RenderBadgeComponent& owner_;
+        };
+
+        return std::make_unique<BadgeAccessibilityHandler>(*this);
+    }
 #if JUCE_IOS
     static constexpr int kWidth = 280;
     static constexpr int kHeight = 58;

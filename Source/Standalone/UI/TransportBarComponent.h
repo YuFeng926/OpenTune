@@ -13,10 +13,12 @@
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <optional>
 #include <vector>
 #include <functional>
 #include "UIColors.h"
 #include "../../Utils/TimelineDisplayMode.h"
+#include "../../Utils/AccessibleComboBox.h"
 
 namespace OpenTune {
 
@@ -64,6 +66,8 @@ public:
 
     juce::String getTooltip() override { return tooltip_; }
     void setTooltip(const juce::String& t) { tooltip_ = t; }
+    // Accessibility: read as text ("Time 00:12.345") instead of an unnamed object.
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
 private:
     void drawChar(juce::Graphics& g, juce::juce_wchar c, juce::Rectangle<float> area);
@@ -84,6 +88,8 @@ public:
     BpmValueField();
     void setValue(double value);
     double getValue() const;
+    std::optional<double> valueCommittedOnFocusLoss() const;
+    void commitOnFocusLoss();
     void setTimeSignature(int numerator, int denominator);
     void setReadOnly(bool readOnly);
     void paint(juce::Graphics& g) override;
@@ -96,6 +102,8 @@ public:
 
     std::function<void(double)> onCommit;
     std::function<void(int, int)> onTimeSignatureCommit;  // num, denom
+    // Accessibility: read as text ("Tempo 120 BPM, 4/4") instead of an unnamed object.
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
 private:
     void timerCallback() override;
@@ -239,6 +247,8 @@ public:
 
     void setBpm(double bpm);
     double getBpm() const;
+    std::optional<double> bpmCommittedOnFocusLoss() const { return bpmField_.valueCommittedOnFocusLoss(); }
+    void commitBpmOnFocusLoss() { bpmField_.commitOnFocusLoss(); }
 
     void setTimeSignature(int numerator, int denominator);
 
@@ -300,8 +310,8 @@ private:
     UnifiedToolbarButton tapButton_;
 
     // Scale controls
-    juce::ComboBox scaleRootSelector_;
-    juce::ComboBox scaleTypeSelector_;
+    a11y::AccessibleComboBox scaleRootSelector_;
+    a11y::AccessibleComboBox scaleTypeSelector_;
     juce::TextButton externalEditButton_;
     juce::TextButton saveAndReturnButton_;
 

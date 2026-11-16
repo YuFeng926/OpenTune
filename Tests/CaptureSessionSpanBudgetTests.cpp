@@ -371,8 +371,18 @@ bool testReclaimWaitsForPublishedViewReaders()
     bool releaseCallback = false;
     std::atomic<int> retiredCount { 0 };
 
+    OpenTune::PlaybackReadSource source;
     ProcessorBindings bindings;
-    bindings.replaceWithRendered = [&](juce::AudioBuffer<float>&, int, int, ContentKey, int64_t, double) {
+    bindings.getPlaybackReadSource = [&source](ContentKey key,
+                                               OpenTune::PlaybackReadSource& out) {
+        if (key != source.contentKey || source.contentSnapshot == nullptr)
+            return false;
+        out = source;
+        return true;
+    };
+    bindings.replaceWithRendered = [&](juce::AudioBuffer<float>&, int, int,
+                                       const OpenTune::PlaybackReadSource&,
+                                       int64_t, double, double) {
         std::unique_lock<std::mutex> lock(gateMutex);
         if (callbackEntered)
             return;
@@ -386,7 +396,19 @@ bool testReclaimWaitsForPublishedViewReaders()
 
     CaptureSession session(std::move(bindings));
     session.prepareToPlay(48000.0, 512, 2);
-    session.testInjectEditedSegment(0.0, 1.0, 1, nullptr, 48000.0);
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(2, 512);
+    audio->clear();
+    session.testInjectEditedSegment(0.0, 1.0, 1, audio, 48000.0);
+    auto* edited = findById(session, 1);
+    if (edited == nullptr || !edited->content)
+        return false;
+    source.contentKey = edited->contentKey;
+    source.contentSnapshot = edited->content->snapshotContent();
+    source.nativeSource = source.contentSnapshot->nativeSource;
+    source.canonicalBuffer = source.contentSnapshot->audioBuffer;
+    source.canonicalSampleRate = source.contentSnapshot->audioSampleRate;
+    source.firstCanonicalSample = source.contentSnapshot->firstCanonicalSample;
+    session.refreshPublishedReplacementGeometry();
 
     // An empty take is dropped at finalize and parked for reclaim.
     session.armNewCapture();
@@ -432,15 +454,37 @@ bool testReclaimWaitsForPublishedViewReaders()
 bool testEditedStillReplacesPlaybackWhileProcessingDoesNot()
 {
     int replaceCalls = 0;
+    OpenTune::PlaybackReadSource source;
     ProcessorBindings b;
-    b.replaceWithRendered = [&](juce::AudioBuffer<float>&, int, int, ContentKey, int64_t, double) {
+    b.getPlaybackReadSource = [&source](ContentKey key,
+                                        OpenTune::PlaybackReadSource& out) {
+        if (key != source.contentKey || source.contentSnapshot == nullptr)
+            return false;
+        out = source;
+        return true;
+    };
+    b.replaceWithRendered = [&](juce::AudioBuffer<float>&, int, int,
+                                const OpenTune::PlaybackReadSource&,
+                                int64_t, double, double) {
         ++replaceCalls;
     };
     CaptureSession session(std::move(b));
     session.prepareToPlay(48000.0, 512, 2);
 
     // Edited segment → replacement playback still happens.
-    session.testInjectEditedSegment(0.0, 1.0, 1, nullptr, 48000.0);
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(2, 512);
+    audio->clear();
+    session.testInjectEditedSegment(0.0, 1.0, 1, audio, 48000.0);
+    auto* edited = findById(session, 1);
+    if (edited == nullptr || !edited->content)
+        return false;
+    source.contentKey = edited->contentKey;
+    source.contentSnapshot = edited->content->snapshotContent();
+    source.nativeSource = source.contentSnapshot->nativeSource;
+    source.canonicalBuffer = source.contentSnapshot->audioBuffer;
+    source.canonicalSampleRate = source.contentSnapshot->audioSampleRate;
+    source.firstCanonicalSample = source.contentSnapshot->firstCanonicalSample;
+    session.refreshPublishedReplacementGeometry();
     juce::AudioBuffer<float> buffer(2, 512);
     buffer.clear();
     session.processBlock(buffer, 0, 48000.0, true);

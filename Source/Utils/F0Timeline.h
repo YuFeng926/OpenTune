@@ -14,6 +14,12 @@ struct F0FrameRange {
     bool isEmpty() const noexcept { return endFrameExclusive <= startFrame; }
 };
 
+template <typename T>
+constexpr bool halfOpenRangesOverlap(T aStart, T aEnd, T bStart, T bEnd) noexcept
+{
+    return aStart < bEnd && bStart < aEnd;
+}
+
 class F0Timeline {
 public:
     F0Timeline() = default;
@@ -45,12 +51,12 @@ public:
 
     int frameAtOrBefore(double seconds) const noexcept {
         assert(!isEmpty());
-        return clamp(static_cast<int>(std::floor(seconds / secondsPerFrame_)), 0, endFrameExclusive_ - 1);
+        return clampFrameCoordinate(std::floor(seconds / secondsPerFrame_), endFrameExclusive_ - 1);
     }
 
     int exclusiveFrameAt(double seconds) const noexcept {
         assert(!isEmpty());
-        return clamp(static_cast<int>(std::ceil(seconds / secondsPerFrame_)), 0, endFrameExclusive_);
+        return clampFrameCoordinate(std::ceil(seconds / secondsPerFrame_), endFrameExclusive_);
     }
 
     F0FrameRange rangeForTimes(double startSeconds, double endSeconds) const noexcept {
@@ -80,6 +86,14 @@ public:
 
 private:
     static int clamp(int v, int lo, int hi) noexcept { return v < lo ? lo : (v > hi ? hi : v); }
+
+    static int clampFrameCoordinate(double frame, int maxFrame) noexcept {
+        if (frame <= 0.0)
+            return 0;
+        if (frame >= static_cast<double>(maxFrame))
+            return maxFrame;
+        return static_cast<int>(frame);
+    }
 
     double secondsPerFrame_ = 1.0;
     int endFrameExclusive_ = 0;

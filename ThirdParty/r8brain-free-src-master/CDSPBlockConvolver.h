@@ -212,6 +212,21 @@ public:
 		return(( MaxInLen * UpFactor + DownFactor - 1 ) / DownFactor );
 	}
 
+	int getUpFactor() const
+	{
+		return( UpFactor );
+	}
+
+	int getDownFactor() const
+	{
+		return( DownFactor );
+	}
+
+	int getFilterLatency() const
+	{
+		return( Filter -> getLatency() );
+	}
+
 	virtual void clear()
 	{
 		memset( &PrevInput[ 0 ], 0,

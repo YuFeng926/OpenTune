@@ -428,19 +428,6 @@ uint64_t hashCombine(uint64_t seed, uint64_t value) noexcept
     return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
 }
 
-bool setStandalonePlacementGain(OpenTuneAudioProcessor& processor,
-                                int trackId,
-                                uint64_t placementId,
-                                float gain)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr
-        && trackId >= 0
-        && trackId < OpenTuneAudioProcessor::MAX_TRACKS
-        && placementId != 0
-        && arrangement->setPlacementGain(trackId, placementId, gain);
-}
-
 } // namespace
 
 constexpr double kArrangementDefaultSpanSeconds = 60.0 * 5.0;
@@ -1224,9 +1211,10 @@ void ArrangementViewComponent::buildCompositeForeground(
     // Content layer: clips + waveform
     const ArrangementVerticalWindow vwin{trackHeight, worldTopY, tileBounds.getHeight()};
     auto& arrangement = *processor_.getStandaloneArrangement();
+    const auto selection = arrangement.getSelectionState();
     auto clips = collectVisibleArrangementClips(arrangement, processor_, tileStartSec, tileEndSec, vwin, camera_.pixelsPerSecond,
-        tileBounds.getWidth(), [this](int trackId, uint64_t placementId) {
-            return isPlacementSelected(trackId, placementId);
+        tileBounds.getWidth(), [this, &selection](int trackId, uint64_t placementId) {
+            return isPlacementSelected(selection.placements, trackId, placementId);
         });
     paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
 }
@@ -1475,9 +1463,10 @@ ArrangementViewComponent::resolveMoveDragParticipants(const HitTestResult& hit) 
         return true;
     };
 
-    if (isPlacementSelected(hit.trackId, hitPlacementId))
+    const auto selection = getArrangementSelectionState();
+    if (isPlacementSelected(selection.placements, hit.trackId, hitPlacementId))
     {
-        for (const auto& key : selectedPlacements_)
+        for (const auto& key : selection.placements)
             if (!addState(key.trackId, key.placementId))
                 return {};
     }
@@ -1532,14 +1521,11 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
     const int trackDelta = trackIdForViewportY(e.y) - moveDragPrimaryStart_.trackId;
 
     std::vector<MultiMovePlacementAction::Entry> undoEntries;
-    std::vector<StandaloneArrangement::PlacementMove> moves;
     std::set<PlacementSelectionKey> movedSelection;
     PlacementSelectionKey primaryAfterMove{-1, 0};
 
     for (const auto& state : moveDragStartStates_) {
         const auto target = resolveMoveDragTarget(state, deltaSeconds, trackDelta);
-
-        moves.push_back({state.trackId, target.trackId, state.placementId, target.startSeconds});
 
         undoEntries.push_back({state.trackId, target.trackId, state.placementId, state.startSeconds, target.startSeconds});
         movedSelection.insert({target.trackId, state.placementId});
@@ -1550,19 +1536,18 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
         }
     }
 
-    auto* arrangement = processor_.getStandaloneArrangement();
-    if (arrangement->applyPlacementMoves(moves) != StandaloneArrangement::PlacementMoveResult::Applied)
+    std::unique_ptr<UndoAction> moveAction;
+    if (!applyPlacementMoveBatch(processor_, undoEntries,
+                                 PlacementKey{primaryAfterMove.trackId, primaryAfterMove.placementId}, moveAction)
+        || moveAction == nullptr)
         return;
 
-    const PlacementKey primaryBefore{moveDragPrimaryStart_.trackId, moveDragPrimaryStart_.placementId};
-    const PlacementKey primaryAfter{primaryAfterMove.trackId, primaryAfterMove.placementId};
-    processor_.getUndoManager().addAction(
-        std::make_unique<MultiMovePlacementAction>(processor_, std::move(undoEntries),
-                                                     primaryBefore, primaryAfter));
+    processor_.getUndoManager().addAction(std::move(moveAction));
 
-    selectedPlacements_ = std::move(movedSelection);
     jassert(primaryAfterMove.trackId >= 0 && primaryAfterMove.placementId != 0);
-    commitPlacementSelection(primaryAfterMove);
+    auto selection = getArrangementSelectionState();
+    selection.placements = std::move(movedSelection);
+    commitPlacementSelection(std::move(selection), primaryAfterMove);
     listeners_.call([this](Listener& l) {
         l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
     });
@@ -1627,6 +1612,7 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
         - viewportXToAbsoluteTime(dragStartPos_.x);
     const int trackDelta = trackIdForViewportY(dragCurrentPos_.y) - moveDragPrimaryStart_.trackId;
     auto& arrangement = *processor_.getStandaloneArrangement();
+    const auto selection = getArrangementSelectionState();
 
     for (const auto& state : moveDragStartStates_) {
         const auto target = resolveMoveDragTarget(state, deltaSeconds, trackDelta);
@@ -1662,7 +1648,7 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
             placement.gain,
             placement.fadeInDuration,
             placement.fadeOutDuration,
-            isPlacementSelected(state.trackId, state.placementId),
+            isPlacementSelected(selection.placements, state.trackId, state.placementId),
             true,
             placement.clipInSeconds,
             target.startSeconds,
@@ -2106,6 +2092,9 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
 
 void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 {
+    auto selection = getArrangementSelectionState();
+    syncPrimarySelection(selection);
+
     grabKeyboardFocus();
 
     if (e.mods.isMiddleButtonDown()
@@ -2163,7 +2152,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
         {
-            commitEmptyPlacementSelection();
+            commitEmptyPlacementSelection(std::move(selection));
         }
         else
         {
@@ -2178,53 +2167,54 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 
     if (e.mods.isCtrlDown() && !e.mods.isShiftDown())
     {
-        togglePlacementSelection(hit.trackId, hitPlacementId);
+        togglePlacementSelection(selection.placements, hit.trackId, hitPlacementId);
 
         PlacementSelectionKey primary;
-        if (isPlacementSelected(hit.trackId, hitPlacementId))
+        if (isPlacementSelected(selection.placements, hit.trackId, hitPlacementId))
             primary = PlacementSelectionKey{hit.trackId, hitPlacementId};
-        else if (!selectedPlacements_.empty())
-            primary = *selectedPlacements_.begin();
+        else if (!selection.placements.empty())
+            primary = *selection.placements.begin();
         else
         {
-            commitEmptyPlacementSelection();
+            commitEmptyPlacementSelection(std::move(selection));
             return;
         }
-        commitPlacementSelection(primary);
+        commitPlacementSelection(std::move(selection), primary);
         return;
     }
 
     if (e.mods.isShiftDown() && hasShiftAnchor_)
     {
         PlacementSelectionKey toKey{hit.trackId, hitPlacementId};
-        selectPlacementsInRange(shiftAnchor_, toKey);
-        commitPlacementSelection(toKey);
+        selectPlacementsInRange(selection.placements, shiftAnchor_, toKey);
+        commitPlacementSelection(std::move(selection), toKey);
         return;
     }
 
     if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
     {
-        if (!isPlacementSelected(hit.trackId, hitPlacementId))
+        if (!isPlacementSelected(selection.placements, hit.trackId, hitPlacementId))
         {
-            clearPlacementSelection();
+            clearPlacementSelection(selection.placements);
         }
         // Always ensure clicked placement is in the selection
-        if (!isPlacementSelected(hit.trackId, hitPlacementId))
+        if (!isPlacementSelected(selection.placements, hit.trackId, hitPlacementId))
         {
-            selectedPlacements_.insert(PlacementSelectionKey{hit.trackId, hitPlacementId});
+            selection.placements.insert(PlacementSelectionKey{hit.trackId, hitPlacementId});
         }
         shiftAnchor_ = PlacementSelectionKey{hit.trackId, hitPlacementId};
         hasShiftAnchor_ = true;
     }
 
     // Commit primary selection (all branches converge here)
-    commitPlacementSelection(PlacementSelectionKey{hit.trackId, hitPlacementId});
+    commitPlacementSelection(std::move(selection), PlacementSelectionKey{hit.trackId, hitPlacementId});
 
     dragStartPos_ = e.getPosition();
     getStandalonePlacementStartSeconds(processor_, selectedTrack_, selectedPlacementId_, dragStartPlacementSeconds_);
     getStandalonePlacementGain(processor_, selectedTrack_, selectedPlacementId_, dragStartPlacementGain_);
     dragStartPlacementId_ = selectedPlacementId_;
     dragStartTrackId_ = selectedTrack_;
+    getStandalonePlacementById(processor_, selectedTrack_, selectedPlacementId_, dragStartPlacement_);
 
     // Check Fade handles first (before trim 鈥?to give priority to 16x16 fade handle areas
     // over 8px edge hit zones that would otherwise absorb clicks in the top corners)
@@ -2340,42 +2330,21 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         const double bpm = processor_.getBpm();
         const SnapSettings snap = processor_.getSnapSettings();
         const double snappedDelta = SnapUtils::snapDelta(deltaSeconds, bpm, snap);
-
-        auto* arr = processor_.getStandaloneArrangement();
-        if (!arr || dragOperationPlacementId_ == 0) return;
-
-        StandaloneArrangement::Placement placement;
-        if (!arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) return;
-
-        if (currentDragOp_ == DragOperation::TrimLeft) {
-            double newDuration = trimStartDurationSeconds_ - snappedDelta;
-            constexpr double minDur = 0.01;
-            if (newDuration < minDur)
-                newDuration = minDur;
-
-            const auto contentSnapshot = processor_.getContentSnapshot(placement.contentKey);
-            if (contentSnapshot == nullptr)
-                return;
-
-            const double outputStart = contentSnapshot->timeGrid->tauForward(trimStartClipInSeconds_);
-            const double outputCut = outputStart + (trimStartDurationSeconds_ - newDuration);
-            const double newClipIn = contentSnapshot->timeGrid->tauInverse(outputCut);
-
-            // Shift timelineStart to keep right edge static
-            double newStart = dragStartPlacementSeconds_ + snappedDelta;
-            if (newStart < 0.0) newStart = 0.0;
-            arr->setPlacementTrimAndTimelineStart(dragStartTrackId_, dragOperationPlacementId_,
-                                                   newClipIn, newDuration, newStart);
-        } else { // TrimRight
-            double newDuration = trimStartDurationSeconds_ + snappedDelta;
-            constexpr double minDur = 0.01;
-            if (newDuration < minDur) newDuration = minDur;
-            arr->setPlacementTrim(dragStartTrackId_, dragOperationPlacementId_, trimStartClipInSeconds_, newDuration);
-        }
-
-        listeners_.call([this](Listener& l) {
-            l.placementTimingChanged(dragStartTrackId_, selectedPlacementIndex_);
-        });
+        if (dragOperationPlacementId_ == 0)
+            return;
+        const auto contentSnapshot = processor_.getContentSnapshot(dragStartPlacement_.contentKey);
+        if (contentSnapshot == nullptr)
+            return;
+        const bool trimStart = currentDragOp_ == DragOperation::TrimLeft;
+        const double edge = trimStart
+                                ? std::max(0.0, dragStartPlacementSeconds_ + snappedDelta)
+                                : dragStartPlacementSeconds_ + trimStartDurationSeconds_ + snappedDelta;
+        const auto plan = planPlacementTrim(dragStartPlacement_, *contentSnapshot, dragStartTrackId_,
+                                            trimStart, edge);
+        if (plan && applyPlacementEdit(processor_, *plan))
+            listeners_.call([this](Listener& l) {
+                l.placementTimingChanged(dragStartTrackId_, selectedPlacementIndex_);
+            });
         return;
     }
 
@@ -2383,23 +2352,22 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         const double pixelsPerSec = camera_.pixelsPerSecond;
         const double deltaSeconds = static_cast<double>(e.x - dragStartPos_.x) / pixelsPerSec;
 
-        auto* arr = processor_.getStandaloneArrangement();
-        if (!arr || dragOperationPlacementId_ == 0) return;
-
-        StandaloneArrangement::Placement placement;
-        if (!arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) return;
-
-        const double maxFade = placement.durationSeconds * 0.9;
+        if (dragOperationPlacementId_ == 0)
+            return;
         if (currentDragOp_ == DragOperation::FadeIn) {
-            double newFade = fadeStartInDuration_ + deltaSeconds;
-            if (newFade < 0.0) newFade = 0.0;
-            if (newFade > maxFade) newFade = maxFade;
-            arr->setPlacementFade(dragStartTrackId_, dragOperationPlacementId_, newFade, placement.fadeOutDuration);
+            const auto plan = planPlacementFade(dragStartPlacement_, dragStartTrackId_,
+                                                fadeStartInDuration_ + deltaSeconds, std::nullopt);
+            if (applyPlacementEdit(processor_, plan))
+                listeners_.call([this](Listener& l) {
+                    l.placementTimingChanged(dragStartTrackId_, selectedPlacementIndex_);
+                });
         } else {
-            double newFade = fadeStartOutDuration_ - deltaSeconds; // opposite direction for right side
-            if (newFade < 0.0) newFade = 0.0;
-            if (newFade > maxFade) newFade = maxFade;
-            arr->setPlacementFade(dragStartTrackId_, dragOperationPlacementId_, placement.fadeInDuration, newFade);
+            const auto plan = planPlacementFade(dragStartPlacement_, dragStartTrackId_, std::nullopt,
+                                                fadeStartOutDuration_ - deltaSeconds);
+            if (applyPlacementEdit(processor_, plan))
+                listeners_.call([this](Listener& l) {
+                    l.placementTimingChanged(dragStartTrackId_, selectedPlacementIndex_);
+                });
         }
         return;
     }
@@ -2423,47 +2391,41 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     else if (isAdjustingGain_)
     {
         auto delta = e.getPosition() - dragStartPos_;
-        double factor = std::pow(10.0, (-static_cast<double>(delta.y)) / 200.0);
-        setStandalonePlacementGain(processor_, selectedTrack_, selectedPlacementId_, static_cast<float>(dragStartPlacementGain_ * factor));
-
-        }
+        const auto plan = planPlacementGain(dragStartPlacement_, selectedTrack_,
+                                            placementGainFromDrag(dragStartPlacementGain_, delta.y));
+        if (plan && applyPlacementEdit(processor_, *plan))
+            listeners_.call([this](Listener& l) {
+                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+            });
+    }
 }
 
 void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
 {
-    // Record Trim undo
-    if ((currentDragOp_ == DragOperation::TrimLeft || currentDragOp_ == DragOperation::TrimRight) && dragOperationPlacementId_ != 0) {
-        auto* arr = processor_.getStandaloneArrangement();
-        if (arr) {
-            StandaloneArrangement::Placement placement;
-            if (arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) {
-                if (placement.clipInSeconds != trimStartClipInSeconds_ || placement.durationSeconds != trimStartDurationSeconds_) {
-                    processor_.getUndoManager().addAction(
-                        std::make_unique<TrimPlacementAction>(processor_, dragStartTrackId_, dragOperationPlacementId_,
-                                                               trimStartClipInSeconds_, trimStartDurationSeconds_,
-                                                               placement.clipInSeconds, placement.durationSeconds,
-                                                               dragStartPlacementSeconds_, placement.timelineStartSeconds));
-                }
-            }
-        }
-    }
+    const auto editedPlacementId = currentDragOp_ == DragOperation::Gain
+                                       ? dragStartPlacementId_
+                                       : dragOperationPlacementId_;
+    if (editedPlacementId != 0
+        && (currentDragOp_ == DragOperation::TrimLeft || currentDragOp_ == DragOperation::TrimRight
+            || currentDragOp_ == DragOperation::FadeIn || currentDragOp_ == DragOperation::FadeOut
+            || currentDragOp_ == DragOperation::Gain)) {
+        StandaloneArrangement::Placement after;
+        if (getStandalonePlacementById(processor_, dragStartTrackId_, editedPlacementId, after)) {
+            PlacementEditPlan edit;
+            edit.trackBefore = dragStartTrackId_;
+            edit.trackAfter = dragStartTrackId_;
+            edit.before = dragStartPlacement_;
+            edit.after = after;
+            if (currentDragOp_ == DragOperation::TrimLeft || currentDragOp_ == DragOperation::TrimRight)
+                edit.kind = PlacementEditPlan::Kind::Trim;
+            else if (currentDragOp_ == DragOperation::FadeIn || currentDragOp_ == DragOperation::FadeOut)
+                edit.kind = PlacementEditPlan::Kind::Fade;
+            else
+                edit.kind = PlacementEditPlan::Kind::Gain;
 
-    // Record Fade undo + notify dirty
-    if ((currentDragOp_ == DragOperation::FadeIn || currentDragOp_ == DragOperation::FadeOut) && dragOperationPlacementId_ != 0) {
-        auto* arr = processor_.getStandaloneArrangement();
-        if (arr) {
-            StandaloneArrangement::Placement placement;
-            if (arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) {
-                if (placement.fadeInDuration != fadeStartInDuration_ || placement.fadeOutDuration != fadeStartOutDuration_) {
-                    processor_.getUndoManager().addAction(
-                        std::make_unique<FadeChangeAction>(processor_, dragStartTrackId_, dragOperationPlacementId_,
-                                                           fadeStartInDuration_, fadeStartOutDuration_,
-                                                           placement.fadeInDuration, placement.fadeOutDuration));
-                    listeners_.call([this](Listener& l) {
-                        l.placementTimingChanged(dragStartTrackId_, selectedPlacementIndex_);
-                    });
-                }
-            }
+            const auto selection = processor_.getStandaloneArrangement()->getSelectionState();
+            for (auto& action : placementEditUndoActions(processor_, edit, selection, selection))
+                processor_.getUndoManager().addAction(std::move(action));
         }
     }
 
@@ -2483,19 +2445,8 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
         // else: click only, fall through to cleanup below
     }
 
-    if (isAdjustingGain_ && dragStartPlacementId_ != 0) {
-        float currentGain = 1.0f;
-        getStandalonePlacementGain(processor_, selectedTrack_, dragStartPlacementId_, currentGain);
-        if (currentGain != dragStartPlacementGain_) {
-            processor_.getUndoManager().addAction(
-                std::make_unique<GainChangeAction>(processor_, selectedTrack_, dragStartPlacementId_,
-                                                    dragStartPlacementGain_, currentGain));
-            listeners_.call([this](Listener& l) {
-                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
-            });
-            invalidateStableScene();
-        }
-    }
+    if (isAdjustingGain_)
+        invalidateStableScene();
 
     isDraggingPlacement_ = false;
     isAdjustingGain_ = false;
@@ -2705,6 +2656,10 @@ bool ArrangementViewComponent::handlePointerShortcut(const KeyShortcutConfig::Ke
 
 bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 {
+    auto selection = getArrangementSelectionState();
+    syncPrimarySelection(selection);
+    auto& selectedPlacements = selection.placements;
+
     const bool placementNudge =
         matchesShortcut(KeyShortcutConfig::ShortcutId::NudgeLeft, key)
         || matchesShortcut(KeyShortcutConfig::ShortcutId::NudgeRight, key);
@@ -2713,14 +2668,14 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
     if (matchesShortcut(KeyShortcutConfig::ShortcutId::SelectAll, key))
     {
-        selectAllPlacementsInTrack(selectedTrack_);
-        if (!selectedPlacements_.empty()) {
-            const auto& firstKey = *selectedPlacements_.begin();
+        selectAllPlacementsInTrack(selectedPlacements, selectedTrack_);
+        if (!selectedPlacements.empty()) {
+            const auto& firstKey = *selectedPlacements.begin();
             hasShiftAnchor_ = true;
             shiftAnchor_ = firstKey;
-            commitPlacementSelection(firstKey);
+            commitPlacementSelection(std::move(selection), firstKey);
         } else {
-            commitEmptyPlacementSelection();
+            commitEmptyPlacementSelection(std::move(selection));
         }
         return true;
     }
@@ -2728,10 +2683,10 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
     // CopyClips 鈥?Ctrl+C
     if (matchesShortcut(KeyShortcutConfig::ShortcutId::Copy, key))
     {
-        if (!selectedPlacements_.empty())
+        if (!selectedPlacements.empty())
         {
             std::vector<PlacementClipEntry> entries;
-            for (const auto& sel : selectedPlacements_)
+            for (const auto& sel : selectedPlacements)
             {
                 StandaloneArrangement::Placement placement;
                 if (getStandalonePlacementById(processor_, sel.trackId, sel.placementId, placement))
@@ -2761,37 +2716,25 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         {
             double pasteTime = playHeadState_.getPresentedPositionSeconds();
             if (pasteTime < 0.0) pasteTime = 0.0;
-
+            std::vector<PlacementCopyRequest> requests;
+            requests.reserve(clipboard.entries().size());
             for (const auto& entry : clipboard.entries())
             {
-                auto* arr = processor_.getStandaloneArrangement();
-                if (!arr) break;
-
-                // Copy content range
-                ContentKey newContentKey = processor_.copyContentRange(
-                    entry.sourceContentKey, entry.clipInSeconds, entry.durationSeconds);
-                if (!newContentKey.isValid()) continue;
-
-                StandaloneArrangement::Placement newPlacement;
-                newPlacement.placementId = 0; // will be assigned by insertPlacement
-                newPlacement.contentKey = newContentKey;
-                newPlacement.timelineStartSeconds = pasteTime;
-                newPlacement.durationSeconds = entry.durationSeconds;
-                newPlacement.gain = entry.gain;
-                newPlacement.fadeInDuration = entry.fadeInDuration;
-                newPlacement.fadeOutDuration = entry.fadeOutDuration;
-                newPlacement.name = entry.name;
-                newPlacement.clipInSeconds = 0.0; // copy starts from beginning of new content
-
-                if (!arr->insertPlacement(selectedTrack_, newPlacement)) {
-                    // Rollback 鈥?delete the orphan content
-                    processor_.getStandaloneContentRepository()->retireClip(newContentKey);
-                    continue;
-                }
+                StandaloneArrangement::Placement source;
+                source.contentKey = entry.sourceContentKey;
+                source.clipInSeconds = entry.clipInSeconds;
+                source.durationSeconds = entry.durationSeconds;
+                source.gain = entry.gain;
+                source.fadeInDuration = entry.fadeInDuration;
+                source.fadeOutDuration = entry.fadeOutDuration;
+                source.name = entry.name;
+                requests.push_back({std::move(source), selectedTrack_, pasteTime, false});
                 pasteTime += entry.durationSeconds; // chain placements sequentially
             }
 
-            invalidateStableScene();
+            const auto copies = commitPlacementCopies(processor_, requests);
+            if (copies.failure == PlacementCopyCommit::Failure::None && !copies.copies.empty())
+                invalidateStableScene();
             }
         return true;
     }
@@ -2804,36 +2747,23 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             StandaloneArrangement::Placement placement;
             if (getStandalonePlacementById(processor_, selectedTrack_, selectedPlacementId_, placement))
             {
-                ContentKey newContentKey = processor_.cloneContent(
-                    placement.contentKey, placement.name + " Copy");
-                if (newContentKey.isValid())
+                auto copies = commitPlacementCopies(processor_,
+                    {{placement, selectedTrack_, placement.timelineStartSeconds, true, true}});
+                if (copies.failure == PlacementCopyCommit::Failure::None && !copies.copies.empty())
                 {
-                    auto* arr = processor_.getStandaloneArrangement();
-                    if (arr)
-                    {
-                        StandaloneArrangement::Placement dup = placement;
-                        dup.placementId = 0;
-                        dup.contentKey = newContentKey;
+                    const int dupTrack = selectedTrack_;
+                    const auto duplicateId = copies.copies.front().placement.placementId;
+                    clearPlacementSelection(selectedPlacements);
+                    selectedPlacements.insert(PlacementSelectionKey{dupTrack, duplicateId});
+                    hasShiftAnchor_ = true;
+                    shiftAnchor_ = PlacementSelectionKey{dupTrack, duplicateId};
+                    commitPlacementSelection(std::move(selection),
+                                             PlacementSelectionKey{dupTrack, duplicateId});
 
-                        const int count = arr->getNumPlacements(selectedTrack_);
-                        if (!arr->insertPlacement(selectedTrack_, count, dup)) {
-                            // Rollback 鈥?delete the orphan content
-                            processor_.getStandaloneContentRepository()->retireClip(newContentKey);
-                            return true;
-                        }
-
-                        const int dupTrack = selectedTrack_;
-                        clearPlacementSelection();
-                        selectedPlacements_.insert(PlacementSelectionKey{dupTrack, dup.placementId});
-                        hasShiftAnchor_ = true;
-                        shiftAnchor_ = PlacementSelectionKey{dupTrack, dup.placementId};
-                        commitPlacementSelection(PlacementSelectionKey{dupTrack, dup.placementId});
-
-                        listeners_.call([this](Listener& l) {
-                            l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
-                        });
-                        invalidateStableScene();
-                    }
+                    listeners_.call([this](Listener& l) {
+                        l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+                    });
+                    invalidateStableScene();
                 }
             }
         }
@@ -2850,50 +2780,37 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
         // Copy selected placements to a vector to avoid iterator invalidation during split
         std::vector<std::pair<int, uint64_t>> toSplit;
-        std::vector<SplitOutcome> outcomes;
-        for (const auto& sel : selectedPlacements_)
+        for (const auto& sel : selectedPlacements)
             toSplit.emplace_back(sel.trackId, sel.placementId);
 
         for (const auto& [trackId, placementId] : toSplit)
         {
-            int idx = processor_.findPlacementIndexById(trackId, placementId);
-            if (idx < 0) continue;
-
             StandaloneArrangement::Placement placement;
             if (!getStandalonePlacementById(processor_, trackId, placementId, placement)) continue;
 
-            // Only split if playhead is within this placement's timeline range
-            double start = placement.timelineStartSeconds;
-            double end = placement.timelineEndSeconds();
-            if (splitSeconds <= start || splitSeconds >= end) continue;
-
-            auto splitOutcome = processor_.splitPlacementAtSeconds(trackId, idx, splitSeconds);
-            if (splitOutcome.has_value())
+            const auto snapshot = processor_.getContentSnapshot(placement.contentKey);
+            if (snapshot == nullptr) continue;
+            const auto plan = planPlacementSplit(placement, *snapshot, splitSeconds);
+            if (plan.issue != PlacementSplitIssue::None) continue;
+            auto split = commitPlacementSplit(processor_, trackId, placementId, plan);
+            if (split)
             {
                 processor_.getUndoManager().addAction(
-                    std::make_unique<SplitPlacementAction>(processor_, *splitOutcome));
-                outcomes.push_back(*splitOutcome);
+                    std::move(split->undoAction));
                 anySplit = true;
             }
         }
 
         if (anySplit)
         {
-            // Rebuild selection from split outcomes: each split's trailing placement
-            selectedPlacements_.clear();
-            PlacementSelectionKey primary{-1, 0};
-            for (const auto& outcome : outcomes)
-            {
-                if (outcome.trailingPlacementId != 0)
-                {
-                    selectedPlacements_.insert(PlacementSelectionKey{outcome.trackId, outcome.trailingPlacementId});
-                    primary = PlacementSelectionKey{outcome.trackId, outcome.trailingPlacementId};
-                }
-            }
+            auto updatedSelection = getArrangementSelectionState();
+            const PlacementSelectionKey primary{
+                updatedSelection.activeTrackId,
+                updatedSelection.selectedPlacementIds[static_cast<size_t>(updatedSelection.activeTrackId)]};
             if (primary.trackId >= 0 && primary.placementId != 0)
-                commitPlacementSelection(primary);
+                commitPlacementSelection(std::move(updatedSelection), primary);
             else
-                commitEmptyPlacementSelection();
+                commitEmptyPlacementSelection(std::move(updatedSelection));
 
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
@@ -2919,17 +2836,25 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             return true;
         }
 
-        auto mergeOutcome = processor_.mergePlacements(selectedTrack_, leadingPlacement.placementId, trailingPlacement.placementId, selectedPlacementIndex_);
-        if (mergeOutcome.has_value()) {
+        const auto leadingSnapshot = processor_.getContentSnapshot(leadingPlacement.contentKey);
+        const auto trailingSnapshot = processor_.getContentSnapshot(trailingPlacement.contentKey);
+        if (leadingSnapshot == nullptr || trailingSnapshot == nullptr)
+            return true;
+        const auto plan = planPlacementMerge(selectedTrack_, leadingPlacement, *leadingSnapshot,
+                                             selectedTrack_, trailingPlacement, *trailingSnapshot);
+        if (plan.issue != PlacementMergeIssue::None)
+            return true;
+        auto merge = commitPlacementMerge(processor_, plan);
+        if (merge) {
             processor_.getUndoManager().addAction(
-                std::make_unique<MergePlacementAction>(processor_, *mergeOutcome));
+                std::move(merge->undoAction));
 
-            selectedPlacements_.clear();
-            if (mergeOutcome->mergedPlacementId != 0) {
-                selectedPlacements_.insert(PlacementSelectionKey{selectedTrack_, mergeOutcome->mergedPlacementId});
-                commitPlacementSelection(PlacementSelectionKey{selectedTrack_, mergeOutcome->mergedPlacementId});
+            auto updatedSelection = getArrangementSelectionState();
+            if (merge->outcome.mergedPlacementId != 0) {
+                commitPlacementSelection(std::move(updatedSelection),
+                    PlacementSelectionKey{selectedTrack_, merge->outcome.mergedPlacementId});
             } else {
-                commitEmptyPlacementSelection();
+                commitEmptyPlacementSelection(std::move(updatedSelection));
             }
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
@@ -2941,29 +2866,15 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
     if (matchesShortcut(KeyShortcutConfig::ShortcutId::Delete, key))
     {
-        bool anyDeleted = false;
+        std::vector<PlacementKey> toDelete;
+        toDelete.reserve(selectedPlacements.size());
+        for (const auto& sel : selectedPlacements)
+            toDelete.push_back({sel.trackId, sel.placementId});
+        auto deletion = commitPlacementDelete(processor_, toDelete);
 
-        // Copy to avoid iterator invalidation
-        std::vector<std::pair<int, uint64_t>> toDelete;
-        for (const auto& sel : selectedPlacements_)
-            toDelete.emplace_back(sel.trackId, sel.placementId);
-
-        for (const auto& [trackId, placementId] : toDelete)
+        if (!deletion.outcomes.empty())
         {
-            int idx = processor_.findPlacementIndexById(trackId, placementId);
-            if (idx < 0) continue;
-
-            auto deleteOutcome = processor_.deletePlacement(trackId, idx);
-            if (deleteOutcome.has_value())
-            {
-                processor_.getUndoManager().addAction(
-                    std::make_unique<DeletePlacementAction>(processor_, *deleteOutcome));
-                anyDeleted = true;
-            }
-        }
-
-        if (anyDeleted)
-        {
+            processor_.getUndoManager().addAction(std::move(deletion.undoAction));
             invalidateStableScene();
             commitEmptyPlacementSelection();
         }
@@ -2973,21 +2884,16 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
     // Nudge Left 鈥?move selected placements earlier by 10ms
     if (matchesShortcut(KeyShortcutConfig::ShortcutId::NudgeLeft, key))
     {
-        auto* arr = processor_.getStandaloneArrangement();
-        if (!arr) return true;
-
         std::vector<MultiMovePlacementAction::Entry> movedEntries;
-        movedEntries.reserve(selectedPlacements_.size());
-        for (const auto& sel : selectedPlacements_)
+        movedEntries.reserve(selectedPlacements.size());
+        for (const auto& sel : selectedPlacements)
         {
             StandaloneArrangement::Placement placement;
-            if (arr->getPlacementById(sel.trackId, sel.placementId, placement))
+            if (getStandalonePlacementById(processor_, sel.trackId, sel.placementId, placement))
             {
                 const double oldStart = placement.timelineStartSeconds;
                 const double newStart = std::max(0.0, oldStart - 0.01);
                 if (std::abs(newStart - oldStart) <= 1.0e-9)
-                    continue;
-                if (!arr->setPlacementTimelineStartSeconds(sel.trackId, sel.placementId, newStart))
                     continue;
                 movedEntries.push_back({sel.trackId, sel.trackId, sel.placementId, oldStart, newStart});
             }
@@ -2996,35 +2902,31 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         if (!movedEntries.empty())
         {
             const PlacementKey nudgeKey{selectedTrack_, selectedPlacementId_};
-            processor_.getUndoManager().addAction(
-                std::make_unique<MultiMovePlacementAction>(processor_, std::move(movedEntries),
-                                                             nudgeKey, nudgeKey));
-            listeners_.call([this](Listener& l) {
-                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
-            });
-            invalidateStableScene();
+            std::unique_ptr<UndoAction> action;
+            if (applyPlacementMoveBatch(processor_, movedEntries, nudgeKey, action) && action) {
+                processor_.getUndoManager().addAction(std::move(action));
+                listeners_.call([this](Listener& l) {
+                    l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+                });
+                invalidateStableScene();
             }
+        }
         return true;
     }
 
     // Nudge Right 鈥?move selected placements later by 10ms
     if (matchesShortcut(KeyShortcutConfig::ShortcutId::NudgeRight, key))
     {
-        auto* arr = processor_.getStandaloneArrangement();
-        if (!arr) return true;
-
         std::vector<MultiMovePlacementAction::Entry> movedEntries;
-        movedEntries.reserve(selectedPlacements_.size());
-        for (const auto& sel : selectedPlacements_)
+        movedEntries.reserve(selectedPlacements.size());
+        for (const auto& sel : selectedPlacements)
         {
             StandaloneArrangement::Placement placement;
-            if (arr->getPlacementById(sel.trackId, sel.placementId, placement))
+            if (getStandalonePlacementById(processor_, sel.trackId, sel.placementId, placement))
             {
                 const double oldStart = placement.timelineStartSeconds;
                 const double newStart = std::max(0.0, oldStart + 0.01);
                 if (std::abs(newStart - oldStart) <= 1.0e-9)
-                    continue;
-                if (!arr->setPlacementTimelineStartSeconds(sel.trackId, sel.placementId, newStart))
                     continue;
                 movedEntries.push_back({sel.trackId, sel.trackId, sel.placementId, oldStart, newStart});
             }
@@ -3033,14 +2935,15 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         if (!movedEntries.empty())
         {
             const PlacementKey nudgeKey{selectedTrack_, selectedPlacementId_};
-            processor_.getUndoManager().addAction(
-                std::make_unique<MultiMovePlacementAction>(processor_, std::move(movedEntries),
-                                                             nudgeKey, nudgeKey));
-            listeners_.call([this](Listener& l) {
-                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
-            });
-            invalidateStableScene();
+            std::unique_ptr<UndoAction> action;
+            if (applyPlacementMoveBatch(processor_, movedEntries, nudgeKey, action) && action) {
+                processor_.getUndoManager().addAction(std::move(action));
+                listeners_.call([this](Listener& l) {
+                    l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+                });
+                invalidateStableScene();
             }
+        }
         return true;
     }
 
@@ -3065,32 +2968,61 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 // 澶氶€夊疄鐜?
 // ============================================================================
 
-bool ArrangementViewComponent::isPlacementSelected(int trackId, uint64_t placementId) const
+ArrangementViewComponent::PlacementSelectionState
+ArrangementViewComponent::getArrangementSelectionState() const
 {
-    return selectedPlacements_.count(PlacementSelectionKey{trackId, placementId}) > 0;
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    return arrangement != nullptr ? arrangement->getSelectionState() : PlacementSelectionState{};
 }
 
-void ArrangementViewComponent::togglePlacementSelection(int trackId, uint64_t placementId)
+void ArrangementViewComponent::syncPrimarySelection(const PlacementSelectionState& selection)
 {
-    PlacementSelectionKey key{trackId, placementId};
-    auto it = selectedPlacements_.find(key);
-    if (it != selectedPlacements_.end())
+    selectedTrack_ = -1;
+    selectedPlacementIndex_ = -1;
+    selectedPlacementId_ = 0;
+
+    const auto placementId = selection.selectedPlacementIds[static_cast<size_t>(selection.activeTrackId)];
+    if (placementId != 0)
     {
-        selectedPlacements_.erase(it);
+        selectedTrack_ = selection.activeTrackId;
+        selectedPlacementId_ = placementId;
+        selectedPlacementIndex_ = processor_.findPlacementIndexById(selectedTrack_, placementId);
+    }
+}
+
+bool ArrangementViewComponent::isPlacementSelected(
+    const std::set<PlacementSelectionKey>& selection,
+    int trackId,
+    uint64_t placementId) const
+{
+    return selection.count(PlacementSelectionKey{trackId, placementId}) > 0;
+}
+
+void ArrangementViewComponent::togglePlacementSelection(
+    std::set<PlacementSelectionKey>& selection,
+    int trackId,
+    uint64_t placementId)
+{
+    const PlacementSelectionKey key{trackId, placementId};
+    const auto it = selection.find(key);
+    if (it != selection.end())
+    {
+        selection.erase(it);
     }
     else
-    {
-        selectedPlacements_.insert(key);
-    }
+        selection.insert(key);
 }
 
-void ArrangementViewComponent::clearPlacementSelection()
+void ArrangementViewComponent::clearPlacementSelection(
+    std::set<PlacementSelectionKey>& selection)
 {
-    selectedPlacements_.clear();
+    selection.clear();
     hasShiftAnchor_ = false;
 }
 
-void ArrangementViewComponent::selectPlacementsInRange(const PlacementSelectionKey& from,
+void ArrangementViewComponent::selectPlacementsInRange(
+                                                       std::set<PlacementSelectionKey>& selection,
+                                                       const PlacementSelectionKey& from,
                                                        const PlacementSelectionKey& to)
 {
     if (from.trackId == to.trackId)
@@ -3109,7 +3041,7 @@ void ArrangementViewComponent::selectPlacementsInRange(const PlacementSelectionK
             getStandalonePlacementStartSeconds(processor_, from.trackId, placementId, placementStartSeconds);
             if (placementStartSeconds >= minTime && placementStartSeconds <= maxTime)
             {
-                selectedPlacements_.insert(PlacementSelectionKey{from.trackId, placementId});
+                selection.insert(PlacementSelectionKey{from.trackId, placementId});
             }
         }
     }
@@ -3133,35 +3065,40 @@ void ArrangementViewComponent::selectPlacementsInRange(const PlacementSelectionK
                 getStandalonePlacementStartSeconds(processor_, trackId, placementId, placementStartSeconds);
                 if (placementStartSeconds >= minTime && placementStartSeconds <= maxTime)
                 {
-                    selectedPlacements_.insert(PlacementSelectionKey{trackId, placementId});
+                    selection.insert(PlacementSelectionKey{trackId, placementId});
                 }
             }
         }
     }
 }
 
-void ArrangementViewComponent::selectAllPlacementsInTrack(int trackId)
+void ArrangementViewComponent::selectAllPlacementsInTrack(
+    std::set<PlacementSelectionKey>& selection,
+    int trackId)
 {
     if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS) return;
 
-    clearPlacementSelection();
+    clearPlacementSelection(selection);
 
     const int placementCount = getStandalonePlacementCount(processor_, trackId);
     for (int i = 0; i < placementCount; ++i)
     {
         const uint64_t placementId = processor_.getPlacementId(trackId, i);
-        selectedPlacements_.insert(PlacementSelectionKey{trackId, placementId});
+        selection.insert(PlacementSelectionKey{trackId, placementId});
     }
 }
 
-void ArrangementViewComponent::commitPlacementSelection(PlacementSelectionKey primary)
+void ArrangementViewComponent::commitPlacementSelection(
+    PlacementSelectionState selection,
+    PlacementSelectionKey primary)
 {
-    selectedTrack_ = primary.trackId;
-    selectedPlacementId_ = primary.placementId;
-    selectedPlacementIndex_ = processor_.findPlacementIndexById(primary.trackId, primary.placementId);
+    selection.activeTrackId = primary.trackId;
+    selection.selectedPlacementIds[static_cast<size_t>(primary.trackId)] = primary.placementId;
 
     if (auto* arrangement = processor_.getStandaloneArrangement())
-        arrangement->selectPlacement(selectedTrack_, selectedPlacementId_);
+        arrangement->setSelectionState(selection);
+
+    syncPrimarySelection(selection);
 
     listeners_.call([this](Listener& l) {
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
@@ -3169,22 +3106,49 @@ void ArrangementViewComponent::commitPlacementSelection(PlacementSelectionKey pr
 
     // Selection is baked into tile shells — rebuild the stable scene
     invalidateStableScene();
-    }
+}
+
+void ArrangementViewComponent::commitEmptyPlacementSelection(PlacementSelectionState selection)
+{
+    selection.placements.clear();
+    selection.selectedPlacementIds.fill(0);
+    hasShiftAnchor_ = false;
+
+    if (auto* arrangement = processor_.getStandaloneArrangement())
+        arrangement->setSelectionState(selection);
+
+    syncPrimarySelection(selection);
+
+    listeners_.call([this](Listener& l) {
+        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
+    });
+    // Selection is baked into tile shells — rebuild the stable scene
+    invalidateStableScene();
+}
 
 void ArrangementViewComponent::commitEmptyPlacementSelection()
 {
-    selectedPlacements_.clear();
-    selectedTrack_ = -1;
-    selectedPlacementIndex_ = -1;
-    selectedPlacementId_ = 0;
-    hasShiftAnchor_ = false;
+    commitEmptyPlacementSelection(getArrangementSelectionState());
+}
 
-    listeners_.call([this](Listener& l) {
-        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
-    });
-    // Selection is baked into tile shells — rebuild the stable scene
-    invalidateStableScene();
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+// OpenTune Control API hook: public selection commit, see Source/Control/README.md#hooks
+void ArrangementViewComponent::commitControlSelection(int trackId, uint64_t placementId)
+{
+    // What a plain click does: on a clip that is not selected (mouseDown), or on an empty area (placementId 0).
+    if (placementId == 0)
+    {
+        commitEmptyPlacementSelection();
+        return;
     }
+    auto selection = getArrangementSelectionState();
+    clearPlacementSelection(selection.placements);
+    selection.placements.insert(PlacementSelectionKey{trackId, placementId});
+    shiftAnchor_ = PlacementSelectionKey{trackId, placementId};
+    hasShiftAnchor_ = true;
+    commitPlacementSelection(std::move(selection), PlacementSelectionKey{trackId, placementId});
+}
+#endif
 
 // ============================================================================
 // ViewMapper construction
@@ -3208,7 +3172,10 @@ ViewMapper ArrangementViewComponent::makeViewMapper() const noexcept
 uint64_t ArrangementViewComponent::computeSelectionRevision() const noexcept
 {
     uint64_t h = 0;
-    for (const auto& key : selectedPlacements_) {
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    if (arrangement == nullptr)
+        return h;
+    for (const auto& key : arrangement->getSelectedPlacements()) {
         h ^= std::hash<uint64_t>{}(key.placementId) + 0x9e3779b9ULL + (h << 6) + (h >> 2);
         h ^= std::hash<int>{}(key.trackId) + 0x9e3779b9ULL + (h << 6) + (h >> 2);
     }

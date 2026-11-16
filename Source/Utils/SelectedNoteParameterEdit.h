@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioEditingScheme.h"
+#include "Content/ContentEditCommands.h"
 #include "Content/ContentKey.h"
 #include "F0Timeline.h"
 #include "Note.h"
@@ -34,6 +35,7 @@ struct SelectedNoteParameterEditResult
 };
 
 std::optional<SelectedNoteParameterPatch> planSelectedNoteParameterEdit(
+    const ContentEditCommands& commands,
     ContentKey contentKey,
     const EditableContentSnapshot& snapshot,
     const std::vector<int>& selectedNoteIndices,

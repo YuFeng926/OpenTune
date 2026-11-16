@@ -2,10 +2,11 @@
 
 #include "../Content/ContentKey.h"
 #include "../Content/EditableContentSnapshot.h"
+#include "../Content/NativePcmSource.h"
 #include "../Inference/RenderCache.h"
 #include "../Inference/TimeStretchCache.h"
 #include <juce_audio_basics/juce_audio_basics.h>
-#include <cmath>
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -13,14 +14,15 @@ namespace OpenTune {
 
 /**
  * Immutable prepared dry buffer at a specific playback sample rate.
- * When sampleRate == canonical 44.1kHz, buffer may alias the owner's canonical buffer.
- * canonicalBuffer shared_ptr equality provides address-reuse-safe identity.
+ * The buffer uses the original source grid at sampleRate. Equal native and
+ * playback rates share the original PCM storage.
  */
 struct PlaybackPreparedDry
 {
     double sampleRate{0.0};
     std::shared_ptr<const juce::AudioBuffer<float>> buffer;
-    std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer;  // identity of source audioBuffer for republish reuse
+    int64_t firstPreparedSample{0};
+    NativePcmSource nativeSource;
 };
 
 /**
@@ -31,7 +33,9 @@ struct PlaybackPreparedDry
  * and TimeStretchCache are derived overlays keyed by the same ContentKey; they
  * never become persisted source truth.
  *
- * audioBuffer/audioSampleRate represent 44.1kHz (or owner canonical rate) content truth.
+ * nativeSource retains the original PCM and its actual sampling grid.
+ * canonicalBuffer/canonicalSampleRate are derived editing inputs; the first
+ * element is firstCanonicalSample on the source's canonical grid.
  * preparedDry represents the active playback sample rate dry buffer.
  * contentSnapshot carries the only editable truth (notes/timeGrid/envelope/revisions).
  *
@@ -56,8 +60,10 @@ struct PlaybackReadSource
     std::shared_ptr<const EditableContentSnapshot> contentSnapshot;
 
     std::shared_ptr<RenderCache> renderCache;
-    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-    double audioSampleRate{0.0};
+    NativePcmSource nativeSource;
+    std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer;
+    double canonicalSampleRate{0.0};
+    int64_t firstCanonicalSample{0};
     TimeStretchCache* timeStretchCache{nullptr};
 
     // Immutable prepared dry at active playback rate
@@ -83,15 +89,17 @@ struct PlaybackReadSource
         swap(a.contentKey, b.contentKey);
         swap(a.contentSnapshot, b.contentSnapshot);
         swap(a.renderCache, b.renderCache);
-        swap(a.audioBuffer, b.audioBuffer);
-        swap(a.audioSampleRate, b.audioSampleRate);
+        swap(a.nativeSource, b.nativeSource);
+        swap(a.canonicalBuffer, b.canonicalBuffer);
+        swap(a.canonicalSampleRate, b.canonicalSampleRate);
+        swap(a.firstCanonicalSample, b.firstCanonicalSample);
         swap(a.timeStretchCache, b.timeStretchCache);
         swap(a.preparedDry, b.preparedDry);
     }
 
     bool hasAudio() const noexcept
     {
-        return audioBuffer != nullptr && audioBuffer->getNumSamples() > 0;
+        return nativeSource.buffer != nullptr && nativeSource.buffer->getNumSamples() > 0;
     }
 
 };
@@ -104,43 +112,25 @@ struct PlaybackReadSource
 inline PlaybackReadSource makePlaybackReadSource(
     ContentKey key,
     std::shared_ptr<const EditableContentSnapshot> contentSnapshot,
-    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-    double audioSampleRate,
+    NativePcmSource nativeSource,
+    std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
+    double canonicalSampleRate,
+    int64_t firstCanonicalSample,
     std::shared_ptr<RenderCache> renderCache,
     TimeStretchCache& timeStretchCache)
 {
-    if (contentSnapshot == nullptr)
-        return {};
-
-    // Snapshot construction normally supplies this invariant. Normalize here as
-    // the single playback publication boundary for legacy/incomplete owners.
-    const double contentDuration = contentSnapshot->sourceWindow.isValid()
-        ? contentSnapshot->sourceWindow.durationSeconds()
-        : (audioBuffer != nullptr && audioSampleRate > 0.0
-            ? static_cast<double>(audioBuffer->getNumSamples()) / audioSampleRate
-            : 0.0);
-    const bool invalidTimeGrid = contentSnapshot->timeGrid == nullptr
-        || contentSnapshot->timeGrid->empty();
-    const bool mismatchedDuration = contentSnapshot->timeGrid != nullptr
-        && !contentSnapshot->timeGrid->empty()
-        && contentDuration > 0.0
-        && std::abs(contentSnapshot->timeGrid->totalDurationSeconds() - contentDuration) > 1.0e-6;
-    if (invalidTimeGrid || mismatchedDuration) {
-        auto normalized = std::make_shared<EditableContentSnapshot>(*contentSnapshot);
-        normalized->timeGrid = contentDuration > 0.0
-            ? TimeGridSnapshot::makeIdentity(contentDuration)
-            : TimeGridSnapshot::bootstrapIdentity();
-        if (normalized->timeGrid == nullptr)
-            normalized->timeGrid = TimeGridSnapshot::bootstrapIdentity();
-        contentSnapshot = std::move(normalized);
-    }
+    jassert(contentSnapshot != nullptr && contentSnapshot->timeGrid != nullptr
+        && !contentSnapshot->timeGrid->empty());
+    jassert(nativeSource.buffer != nullptr && nativeSource.sampleRate > 0.0);
 
     PlaybackReadSource source;
     source.contentKey = key;
     source.contentSnapshot = std::move(contentSnapshot);
     source.renderCache = std::move(renderCache);
-    source.audioBuffer = std::move(audioBuffer);
-    source.audioSampleRate = audioSampleRate;
+    source.nativeSource = std::move(nativeSource);
+    source.canonicalBuffer = std::move(canonicalBuffer);
+    source.canonicalSampleRate = canonicalSampleRate;
+    source.firstCanonicalSample = firstCanonicalSample;
     source.timeStretchCache = &timeStretchCache;
     return source;
 }

@@ -1,5 +1,7 @@
 #include "CaptureContentSlice.h"
 #include "F0Timeline.h"
+#include "PlaybackSampleGeometry.h"
+#include "TimeCoordinate.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -123,28 +125,28 @@ ContentState sliceContentState(const ContentState& source,
 {
     ContentState sliced;
 
-    if (source.audioBuffer != nullptr) {
-        const int64_t totalSamples = static_cast<int64_t>(source.audioBuffer->getNumSamples());
-        const int64_t clampedStart = std::clamp<int64_t>(offsetSamples, 0, totalSamples);
-        const int64_t clampedEnd = std::clamp<int64_t>(offsetSamples + count, clampedStart, totalSamples);
-        if (clampedEnd > clampedStart) {
-            auto bufferCopy = std::make_shared<juce::AudioBuffer<float>>(
-                source.audioBuffer->getNumChannels(),
-                static_cast<int>(clampedEnd - clampedStart));
-            for (int channel = 0; channel < bufferCopy->getNumChannels(); ++channel) {
-                bufferCopy->copyFrom(channel,
-                                     0,
-                                     *source.audioBuffer,
-                                     channel,
-                                     static_cast<int>(clampedStart),
-                                     bufferCopy->getNumSamples());
-            }
-            sliced.audioBuffer = std::move(bufferCopy);
+    const int64_t totalSamples = source.audioBuffer != nullptr
+        ? static_cast<int64_t>(source.audioBuffer->getNumSamples())
+        : 0;
+    const int64_t clampedStart = std::clamp<int64_t>(offsetSamples, 0, totalSamples);
+    const int64_t clampedEnd = std::clamp<int64_t>(offsetSamples + count, clampedStart, totalSamples);
+    if (source.audioBuffer != nullptr && clampedEnd > clampedStart) {
+        auto bufferCopy = std::make_shared<juce::AudioBuffer<float>>(
+            source.audioBuffer->getNumChannels(),
+            static_cast<int>(clampedEnd - clampedStart));
+        for (int channel = 0; channel < bufferCopy->getNumChannels(); ++channel) {
+            bufferCopy->copyFrom(channel,
+                                 0,
+                                 *source.audioBuffer,
+                                 channel,
+                                 static_cast<int>(clampedStart),
+                                 bufferCopy->getNumSamples());
         }
+        sliced.audioBuffer = std::move(bufferCopy);
     }
 
-    const double offsetSeconds = static_cast<double>(offsetSamples) / sampleRate;
-    const double endSeconds = static_cast<double>(offsetSamples + count) / sampleRate;
+    const double offsetSeconds = static_cast<double>(clampedStart) / sampleRate;
+    const double endSeconds = static_cast<double>(clampedEnd) / sampleRate;
 
     sliced.notes = sliceNotesToLocalRange(source.notes, offsetSeconds, endSeconds);
     sliced.analysis.silentGaps.clear();
@@ -174,11 +176,23 @@ ContentState sliceContentState(const ContentState& source,
     sliced.analysis.detectedKey = source.analysis.detectedKey;
     sliced.pitchShiftSettings = source.pitchShiftSettings;
     sliced.noteTopologyInitialized = source.noteTopologyInitialized;
+    // 保留原始 native 共享描述；来源窗口按父权威起点加本次操作秒偏移更新，
+    // canonical 原点只从绝对秒投影一次，不累加已取整的 canonical 增量。
     sliced.sourceWindow = source.sourceWindow;
-    sliced.timeGrid = source.timeGrid != nullptr && source.timeGrid->isIdentity()
-        ? source.timeGrid
-        : TimeGridSnapshot::bootstrapIdentity();
+    const double slicedStartSeconds = source.sourceWindow.sourceStartSeconds + offsetSeconds;
+    sliced.sourceWindow.sourceStartSeconds = slicedStartSeconds;
+    sliced.sourceWindow.sourceEndSeconds = slicedStartSeconds
+        + static_cast<double>(std::max<int64_t>(0, clampedEnd - clampedStart)) / sampleRate;
+    sliced.nativeSource = source.nativeSource;
+    sliced.firstCanonicalSample = PlaybackSampleGeometry::projectToSample(
+        slicedStartSeconds * TimeCoordinate::kRenderSampleRate);
     sliced.sampleRate = sampleRate;
+
+    // 显式使用切片权威区间初始化时长网格。
+    const double slicedDurationSeconds =
+        static_cast<double>(std::max<int64_t>(0, clampedEnd - clampedStart)) / sampleRate;
+    if (auto grid = TimeGridSnapshot::makeIdentity(slicedDurationSeconds))
+        sliced.timeGrid = std::move(grid);
 
     return sliced;
 }

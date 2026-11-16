@@ -5,6 +5,7 @@
 #include "ComponentListenerSubscription.h"
 #include "../Utils/PitchShiftSettings.h"
 #include "../Utils/LocalizationManager.h"
+#include "../Utils/ScreenReaderAnnouncer.h"
 #include "../Standalone/UI/UIColors.h"
 
 namespace OpenTune {
@@ -37,6 +38,8 @@ public:
         semitoneSlider_.setColour(juce::Slider::textBoxTextColourId, UIColors::textPrimary);
         semitoneSlider_.setColour(juce::Slider::textBoxBackgroundColourId, UIColors::backgroundDark);
         semitoneSlider_.setColour(juce::Slider::textBoxOutlineColourId, UIColors::panelBorder);
+        semitoneSlider_.setTitle(LOC_RAW("Semitones"));
+        semitoneSlider_.pageStep = 12.0; // Page Up/Down: one octave
         addAndMakeVisible(semitoneSlider_);
 
         // -- Semitone label --
@@ -56,7 +59,14 @@ public:
         centsSlider_.setColour(juce::Slider::textBoxTextColourId, UIColors::textPrimary);
         centsSlider_.setColour(juce::Slider::textBoxBackgroundColourId, UIColors::backgroundDark);
         centsSlider_.setColour(juce::Slider::textBoxOutlineColourId, UIColors::panelBorder);
+        centsSlider_.setTitle(LOC_RAW("Cents"));
+        centsSlider_.pageStep = 10.0;
         addAndMakeVisible(centsSlider_);
+
+        // The sliders carry the names; the captions would be read a second time.
+        semitoneLabel_.setAccessible(false);
+        centsLabel_.setAccessible(false);
+        keepValueBoxesOutOfTabOrder();
 
         // -- Cents label --
         centsLabel_.setText(LOC_RAW("Cents"), juce::dontSendNotification);
@@ -82,6 +92,7 @@ public:
                 closeParentDialog();
                 callback();
             }
+            announceResult(PitchShiftSettings::identity());
         };
         addAndMakeVisible(resetButton_);
 
@@ -101,6 +112,7 @@ public:
                 closeParentDialog();
                 callback(settings);
             }
+            announceResult(settings);
         };
         addAndMakeVisible(confirmButton_);
     }
@@ -137,6 +149,7 @@ public:
             parentSubscription_.watch(*parent);
         else
             parentSubscription_.reset();
+        dialogParent_ = parent;
     }
 
     // ============================================================================
@@ -194,6 +207,40 @@ public:
                 dialogWindow->setContentComponentSize(contentWidth, contentHeight);
             }
         }
+
+        // Moving into the window can recreate the value boxes (look-and-feel change),
+        // and launchAsync gives focus to the window first, so finish this a tick later.
+        juce::Component::SafePointer<PitchShiftDialogContent> safeThis(this);
+        juce::MessageManager::callAsync([safeThis] {
+            if (safeThis == nullptr || !safeThis->isShowing())
+                return;
+            safeThis->keepValueBoxesOutOfTabOrder();
+            // Only the first time: parentHierarchyChanged fires more than once, and a repeated
+            // grab would make NVDA repeat the focus or pull focus back from another control.
+            if (!safeThis->initialFocusDone_) {
+                safeThis->initialFocusDone_ = true;
+                safeThis->semitoneSlider_.grabKeyboardFocus();
+            }
+        });
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        // Keys bubble up here from the focused slider or button.
+        if (key == juce::KeyPress::spaceKey) {
+            for (auto* button : { &resetButton_, &confirmButton_ }) {
+                if (button->hasKeyboardFocus(false)) {
+                    button->triggerClick();
+                    return true;
+                }
+            }
+        }
+        // Enter on a slider confirms, as the default button of a dialog.
+        if (key == juce::KeyPress::returnKey) {
+            confirmButton_.triggerClick();
+            return true;
+        }
+        return false;
     }
 
 private:
@@ -203,8 +250,52 @@ private:
 
     juce::Label semitoneLabel_;
     juce::Label centsLabel_;
-    juce::Slider semitoneSlider_;
-    juce::Slider centsSlider_;
+    // Keyboard slider: arrows change by 1, Page Up/Down by pageStep, Home/End go to the limits,
+    // Backspace to 0. Enter stays the dialog's OK, as in every dialog.
+    // The new value is spoken, because NVDA does not read JUCE's own value change here.
+    class StepSlider final : public juce::Slider
+    {
+    public:
+        double pageStep = 10.0;
+
+        StepSlider() { setWantsKeyboardFocus(true); }
+
+        bool keyPressed(const juce::KeyPress& key) override
+        {
+            if (key.getModifiers().isAnyModifierKeyDown())
+                return juce::Slider::keyPressed(key);
+
+            const int code = key.getKeyCode();
+            double target = getValue();
+            if (code == juce::KeyPress::upKey || code == juce::KeyPress::rightKey)        target += 1.0;
+            else if (code == juce::KeyPress::downKey || code == juce::KeyPress::leftKey)  target -= 1.0;
+            else if (code == juce::KeyPress::pageUpKey)                                   target += pageStep;
+            else if (code == juce::KeyPress::pageDownKey)                                 target -= pageStep;
+            // Home is the top and End the bottom, as in the EQ knobs (user's choice).
+            else if (code == juce::KeyPress::homeKey)                                     target = getMaximum();
+            else if (code == juce::KeyPress::endKey)                                      target = getMinimum();
+            else if (code == juce::KeyPress::backspaceKey)                                target = 0.0;
+            else
+                return juce::Slider::keyPressed(key);
+
+            target = juce::jlimit(getMinimum(), getMaximum(), target);
+            // At a limit stay silent instead of repeating the same value.
+            if (target != getValue()) {
+                setValue(target, juce::sendNotificationSync);
+                a11y::announce(*this, signedText(getValue()));
+            }
+            return true;
+        }
+    };
+
+    static juce::String signedText(double value)
+    {
+        const int v = juce::roundToInt(value);
+        return v > 0 ? "+" + juce::String(v) : juce::String(v);
+    }
+
+    StepSlider semitoneSlider_;
+    StepSlider centsSlider_;
     juce::TextButton resetButton_;
     juce::TextButton confirmButton_;
     std::function<void(const PitchShiftSettings&)> onConfirm_;
@@ -212,6 +303,30 @@ private:
     bool actionTriggered_ = false;
     bool closing_ = false;
     ComponentListenerSubscription parentSubscription_{*this};
+    juce::Component::SafePointer<juce::Component> dialogParent_;
+    bool initialFocusDone_ = false;
+
+    // The editable value box is a Label that takes focus and opens an unnamed text
+    // editor: a second Tab stop per slider. The mouse can still edit it.
+    void keepValueBoxesOutOfTabOrder()
+    {
+        for (auto* slider : { &semitoneSlider_, &centsSlider_ })
+            for (auto* child : slider->getChildren())
+                if (auto* valueBox = dynamic_cast<juce::Label*>(child))
+                    valueBox->setWantsKeyboardFocus(false);
+    }
+
+    // The dialog closes without a trace, so say what was applied. keepAll queues it
+    // after the focus speech of the editor.
+    void announceResult(const PitchShiftSettings& settings)
+    {
+        if (dialogParent_ == nullptr || !dialogParent_->isShowing())
+            return;
+        a11y::announce(*dialogParent_,
+                       LOC(kPitchShift) + ": " + LOC_RAW("Semitones") + " " + signedText(settings.semitone)
+                           + ", " + LOC_RAW("Cents") + " " + signedText(settings.cents),
+                       a11y::SpeechQueue::keepAll);
+    }
 
     void componentBeingDeleted(juce::Component& comp) override
     {

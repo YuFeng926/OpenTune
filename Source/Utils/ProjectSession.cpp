@@ -10,8 +10,9 @@
 #include "AppPreferences.h"
 #include "ProjectPersistence.h"
 #include "LocalizationManager.h"
-#include "TimeCoordinate.h"
+#include "PlaybackSampleGeometry.h"
 #include "VisibleTrackCount.h"
+#include <algorithm>
 #include <set>
 
 namespace OpenTune {
@@ -65,22 +66,28 @@ uint64_t ProjectSession::getDirtyGeneration() const noexcept { return dirtyGener
 // 快照抓取
 // ============================================================================
 
-ProjectSnapshot ProjectSession::captureSnapshot() const
+ProjectSnapshot ProjectSession::captureSnapshot(SaveTask::Mode mode) const
 {
     ProjectSnapshot snap;
 
     // Header
     snap.header.projectFormatVersion = ProjectPersistence::kCurrentProjectFormatVersion;
-    snap.header.appVersion = "1.5.0";
+    snap.header.appVersion = OPENTUNE_VERSION;
     snap.header.projectName = getProjectName();
 
-    // 工程身份固化：首次保存时生成，后续保存复用
-    if (cachedProjectId_.isEmpty()) {
-        cachedProjectId_ = ProjectSnapshot::generateProjectId();
-        cachedCreatedAt_ = ProjectSnapshot::generateTimestamp();
+    // SaveCopy gets a complete identity in its file without initializing the active session's identity.
+    auto projectId = cachedProjectId_;
+    auto createdAt = cachedCreatedAt_;
+    if (projectId.isEmpty()) {
+        projectId = ProjectSnapshot::generateProjectId();
+        createdAt = ProjectSnapshot::generateTimestamp();
+        if (mode == SaveTask::Mode::Save) {
+            cachedProjectId_ = projectId;
+            cachedCreatedAt_ = createdAt;
+        }
     }
-    snap.header.projectId = cachedProjectId_;
-    snap.header.createdAt = cachedCreatedAt_;
+    snap.header.projectId = projectId;
+    snap.header.createdAt = createdAt;
     snap.header.lastSavedAt = ProjectSnapshot::generateTimestamp();
 
     // Core stores
@@ -165,6 +172,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
                 segEntry.f0Data = seg.f0Data;
                 entry.correctionSegments.push_back(segEntry);
             }
+            entry.erasedRanges = pcSnap->getErasedRanges();
         }
 
         // TimeGrid: owner invariant 保证 timeGrid 恒非空，无条件写出
@@ -280,44 +288,43 @@ static std::shared_ptr<juce::AudioBuffer<float>> loadAudioFile(const juce::File&
     return buffer;
 }
 
-static std::shared_ptr<const juce::AudioBuffer<float>> rebuildStandaloneClipAudioFromSourceWindow(
-    const std::shared_ptr<const juce::AudioBuffer<float>>& sourceBuffer,
-    const SourceWindow& sourceWindow,
-    double sourceSampleRate)
+static std::shared_ptr<const juce::AudioBuffer<float>> cropCanonicalRange(
+    const std::shared_ptr<const juce::AudioBuffer<float>>& canonicalBuffer,
+    int64_t startSample,
+    int64_t endSampleExclusive)
 {
-    if (sourceBuffer == nullptr
-        || sourceBuffer->getNumChannels() <= 0
-        || sourceBuffer->getNumSamples() <= 0
-        || sourceSampleRate <= 0.0
-        || !sourceWindow.isValid()) {
+    if (canonicalBuffer == nullptr
+        || canonicalBuffer->getNumChannels() <= 0
+        || canonicalBuffer->getNumSamples() <= 0
+        || startSample < 0
+        || endSampleExclusive <= startSample
+        || startSample >= canonicalBuffer->getNumSamples()) {
         return nullptr;
     }
 
-    const int64_t totalSamples = sourceBuffer->getNumSamples();
-    const int64_t startSample = TimeCoordinate::secondsToSamplesNearest(
-        sourceWindow.sourceStartSeconds, sourceSampleRate);
-    const int64_t endSample = TimeCoordinate::secondsToSamplesNearest(
-        sourceWindow.sourceEndSeconds, sourceSampleRate);
-
-    if (startSample < 0 || endSample > totalSamples || endSample <= startSample)
+    const int64_t totalSamples = canonicalBuffer->getNumSamples();
+    const int64_t endSample = juce::jmin(totalSamples, endSampleExclusive);
+    if (endSample <= startSample)
         return nullptr;
 
+    // 全覆盖范围共享 prepared canonical 存储；子区间才复制切片。
     if (startSample == 0 && endSample == totalSamples)
-        return sourceBuffer;
+        return canonicalBuffer;
 
-    const auto windowSamples = static_cast<int>(endSample - startSample);
-    auto windowedBuffer = std::make_shared<juce::AudioBuffer<float>>(sourceBuffer->getNumChannels(), windowSamples);
-    for (int channel = 0; channel < sourceBuffer->getNumChannels(); ++channel) {
-        windowedBuffer->copyFrom(
+    const auto rangeSamples = static_cast<int>(endSample - startSample);
+    auto rangeBuffer = std::make_shared<juce::AudioBuffer<float>>(
+        canonicalBuffer->getNumChannels(), rangeSamples);
+    for (int channel = 0; channel < canonicalBuffer->getNumChannels(); ++channel) {
+        rangeBuffer->copyFrom(
             channel,
             0,
-            *sourceBuffer,
+            *canonicalBuffer,
             channel,
             static_cast<int>(startSample),
-            windowSamples);
+            rangeSamples);
     }
 
-    return windowedBuffer;
+    return rangeBuffer;
 }
 } // namespace
 
@@ -353,27 +360,33 @@ Result<ProjectSession::PreparedOpen> ProjectSession::prepareOpen(const juce::Fil
             continue;
         }
 
-        OpenTuneAudioProcessor::PreparedImport preparedImport;
-        if (!processorRef_.prepareImport(std::move(*audioBuffer), loadedSampleRate,
-                                         sourceEntry.displayName, audioFile.getFullPathName(),
-                                         preparedImport, "project-open")) {
-            AppLogger::log("ProjectSession: prepareImport rejected source "
-                + juce::String(sourceEntry.sourceId) + " (" + sourceEntry.displayName + "), skipping");
-            continue;
-        }
-
         PreparedProjectSource preparedSource;
         preparedSource.sourceId = sourceEntry.sourceId;
-        preparedSource.preparedImport = std::move(preparedImport);
+        preparedSource.displayName = sourceEntry.displayName;
+        preparedSource.sourceFilePath = audioFile.getFullPathName();
+        preparedSource.audioBuffer = std::move(audioBuffer);
+        preparedSource.sampleRate = loadedSampleRate;
         preparedOpen.sources.push_back(std::move(preparedSource));
     }
 
     return Result<PreparedOpen>::success(std::move(preparedOpen));
 }
 
-Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
+ProjectSession::OpenCommitPolicy ProjectSession::captureOpenCommitPolicy(bool discardUnsaved) const noexcept
+{
+    return { dirtyGeneration_, dirty_, discardUnsaved };
+}
+
+Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen, const OpenCommitPolicy& policy)
 {
     const auto& snapshot = preparedOpen.snapshot;
+
+    if (dirtyGeneration_ != policy.dirtyGeneration
+        || (policy.wasDirty && !policy.discardUnsaved)
+        || (dirty_ && !policy.discardUnsaved)) {
+        return Result<void>::failure(
+            Error(ErrorCode::OperationCancelled, "The project changed while it was opening", "project_dirty"));
+    }
 
     // 清空当前状态
     auto* sourceStore = processorRef_.getSourceStore();
@@ -386,6 +399,17 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         return Result<void>::failure(
             Error::fromCode(ErrorCode::InvalidParameter,
                 Loc::get(preparedOpen.language, Loc::Keys::kProjectCoreStoresUnavailable).toStdString()));
+    }
+
+    for (auto& preparedSource : preparedOpen.sources) {
+        preparedSource.importPrepared = processorRef_.prepareImport(
+            std::move(*preparedSource.audioBuffer), preparedSource.sampleRate,
+            preparedSource.displayName, preparedSource.sourceFilePath,
+            preparedSource.preparedImport, "project-open");
+        if (!preparedSource.importPrepared) {
+            AppLogger::log("ProjectSession: prepareImport rejected source "
+                + juce::String(preparedSource.sourceId) + " (" + preparedSource.displayName + "), skipping");
+        }
     }
 
     if (auto* crs = processorRef_.getContentRenderService())
@@ -402,17 +426,17 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
     if (auto* crs = processorRef_.getContentRenderService())
         crs->clearAll();
 
-    // 1. 重建 Sources
+    // 1. 重建 Sources（SourceStore 始终保存原率原始 PCM 与实际采样率）
     for (auto& preparedSource : preparedOpen.sources) {
+        if (!preparedSource.importPrepared)
+            continue;
         auto& prepared = preparedSource.preparedImport;
-        auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(
-            std::move(prepared.storedAudioBuffer));
 
         SourceStore::CreateSourceRequest req;
         req.displayName = prepared.displayName;
         req.sourceFilePath = prepared.sourceFilePath;
-        req.audioBuffer = storedAudioBuffer;
-        req.sampleRate = TimeCoordinate::kRenderSampleRate;
+        req.audioBuffer = prepared.nativeSource.buffer;
+        req.sampleRate = prepared.nativeSource.sampleRate;
 
         if (sourceStore->createSource(req, preparedSource.sourceId) == 0) {
             AppLogger::log("ProjectSession: Failed to create source "
@@ -423,14 +447,9 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
 
     // 2. 重建 Clips (from StandaloneContentRepository)
     for (const auto& contentEntry : snapshot.contents) {
-        // Get source buffer for this clip
-        std::shared_ptr<const juce::AudioBuffer<float>> sourceBuf;
-        double sourceSampleRate = TimeCoordinate::kRenderSampleRate;
-
-        if (contentEntry.sourceId == 0
-            || !sourceStore->getAudioBuffer(contentEntry.sourceId, sourceBuf)) {
-            AppLogger::log("ProjectSession: Source " + juce::String(contentEntry.sourceId)
-                + " not found for clip " + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
+        if (contentEntry.sourceId == 0 || !contentEntry.sourceWindow.isValid()) {
+            AppLogger::log("ProjectSession: Invalid source window for clip "
+                + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
             continue;
         }
 
@@ -438,26 +457,37 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         if (!sourceStore->getSnapshot(contentEntry.sourceId, sourceSnapshot)
             || sourceSnapshot.sampleRate <= 0.0) {
             AppLogger::log("ProjectSession: Source " + juce::String(contentEntry.sourceId)
-                + " has invalid sample rate for clip "
-                + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
-            continue;
-        }
-        sourceSampleRate = sourceSnapshot.sampleRate;
-
-        // 旧工程秒值在 sourceRate 已知处对齐到 source sample 网格并回写 seconds；
-        // slice 与 clip content 共用同一对齐结果。
-        const auto alignedWindow = alignSourceWindowToSampleGrid(contentEntry.sourceWindow, sourceSampleRate);
-        if (!alignedWindow.has_value()) {
-            AppLogger::log("ProjectSession: Invalid source window for clip "
+                + " not found for clip "
                 + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
             continue;
         }
 
-        // 创建 clip，强制使用原 ID
-        auto windowedBuffer = rebuildStandaloneClipAudioFromSourceWindow(
-            sourceBuf,
-            *alignedWindow,
-            sourceSampleRate);
+        // 复用 prepareImport 准备好的 per-source canonical，而不是每个 clip 重做整段 SRC。
+        const auto preparedIt = std::find_if(
+            preparedOpen.sources.begin(), preparedOpen.sources.end(),
+            [&contentEntry](const PreparedProjectSource& source) {
+                return source.sourceId == contentEntry.sourceId && source.importPrepared;
+            });
+        if (preparedIt == preparedOpen.sources.end()
+            || preparedIt->preparedImport.canonicalAudioBuffer == nullptr
+            || preparedIt->preparedImport.canonicalSampleRate <= 0.0) {
+            AppLogger::log("ProjectSession: Prepared audio missing for source "
+                + juce::String(contentEntry.sourceId) + ", skipping");
+            continue;
+        }
+
+        const auto& prepared = preparedIt->preparedImport;
+        const double canonicalRate = prepared.canonicalSampleRate;
+
+        // 与 prepareImport 保持相同的最小存储长度：正时长窗口至少保留一个
+        // canonical 样本。全覆盖由 cropCanonicalRange 共享 prepared 存储；秒值保持原样。
+        const int64_t canonicalBegin = PlaybackSampleGeometry::projectToSample(
+            contentEntry.sourceWindow.sourceStartSeconds * canonicalRate) - prepared.canonicalFirstSample;
+        const int64_t canonicalEnd = std::max(canonicalBegin + 1,
+            PlaybackSampleGeometry::projectToSample(
+                contentEntry.sourceWindow.sourceEndSeconds * canonicalRate) - prepared.canonicalFirstSample);
+        auto windowedBuffer = cropCanonicalRange(
+            prepared.canonicalAudioBuffer, canonicalBegin, canonicalEnd);
         if (windowedBuffer == nullptr) {
             AppLogger::log("ProjectSession: Invalid source window for clip "
                 + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
@@ -473,9 +503,12 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         auto* clip = contentRepo->findClip(clipKey);
         if (!clip) { continue; }
 
-        // 应用音频数据
-        clip->content().sourceWindow = *alignedWindow;
-        clip->applyAudioBuffer(windowedBuffer, sourceSampleRate);
+        // 应用音频数据（保存的窗口秒值与 native 来源原样恢复）
+        clip->content().sourceWindow = contentEntry.sourceWindow;
+        clip->content().nativeSource = prepared.nativeSource;
+        clip->content().firstCanonicalSample =
+            prepared.canonicalFirstSample + canonicalBegin;
+        clip->applyAudioBuffer(windowedBuffer, canonicalRate);
 
         // 应用 notes
         clip->applyNotes(contentEntry.notes);
@@ -506,9 +539,18 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
                     parameters);
             }
         }
+        if (!contentEntry.erasedRanges.empty()) {
+            const auto endFrame = std::max_element(
+                contentEntry.erasedRanges.begin(), contentEntry.erasedRanges.end(),
+                [](const auto& a, const auto& b) {
+                    return a.endFrameExclusive < b.endFrameExclusive;
+                })->endFrameExclusive;
+            pitchCurve->replaceErasedRangesInRange(0, endFrame, contentEntry.erasedRanges);
+        }
         clip->applyPitchCurve(pitchCurve);
 
-        // 恢复 TimeGrid
+        // 恢复保存的 TimeGrid（原样恢复，不按窗口时长改写）；
+        // handles 缺失时保留 applyAudioBuffer 按权威窗口时长建立的 identity。
         if (!contentEntry.timeGrid.handles.empty()) {
             std::vector<TimeHandle> handles;
             for (const auto& he : contentEntry.timeGrid.handles) {
@@ -525,29 +567,7 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
                 AppLogger::log("ProjectSession: Invalid time grid for clip "
                     + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId))
                     + ", keeping audio-derived identity");
-            } else if (tgSnapshot->isIdentity()) {
-                // identity grid 必须与对齐后的 sourceWindow 同 duration；
-                // 重建使 grid duration 与 content sourceWindow duration 一致。
-                auto alignedGrid = TimeGridSnapshot::makeIdentity(alignedWindow->durationSeconds());
-                if (alignedGrid == nullptr) {
-                    AppLogger::log("ProjectSession: Failed to rebuild identity time grid for clip "
-                        + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)));
-                } else {
-                    clip->applyTimeGrid(std::move(alignedGrid));
-                }
-            } else if (std::abs(tgSnapshot->totalDurationSeconds() - alignedWindow->durationSeconds()) > 1e-6) {
-                // 非 identity grid 的 time-warp 事实必须与对齐后窗口时长一致
-                // （复用 createStandaloneClipOwner 的 duration epsilon 合同）。
-                // 不一致时拒绝 applyTimeGrid，保留 applyAudioBuffer 已建立的
-                // audio-derived identity，避免 content 同时携带两个时长事实。
-                AppLogger::log("ProjectSession: Time grid duration mismatch for clip "
-                    + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId))
-                    + " (grid=" + juce::String(tgSnapshot->totalDurationSeconds(), 9)
-                    + ", window=" + juce::String(alignedWindow->durationSeconds(), 9)
-                    + "), keeping audio-derived identity");
             } else {
-                // 非 identity grid 是内容自身的 time-warp 事实，按既有策略原样恢复，
-                // 不用 sourceWindow duration 改写。
                 clip->applyTimeGrid(std::move(tgSnapshot));
             }
         }
@@ -668,11 +688,12 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
 
             if (auto snap = processorRef_.getContentSnapshot(key))
             {
-                if (snap->audioBuffer && snap->audioBuffer->getNumSamples() > 0)
+                if (snap->nativeSource.buffer && snap->audioBuffer && snap->audioBuffer->getNumSamples() > 0)
                 {
                     auto* crs = processorRef_.getContentRenderService();
                     auto readSource = makePlaybackReadSource(
-                        key, snap, snap->audioBuffer, snap->audioSampleRate,
+                        key, snap, snap->nativeSource, snap->audioBuffer, snap->audioSampleRate,
+                        snap->firstCanonicalSample,
                         crs->getOrCreateRenderCache(key), crs->getTimeStretchCache());
                     crs->publishPlaybackSource(key, std::move(readSource));
                 }
@@ -688,6 +709,9 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         }
     }
 
+    // Restored placements were inserted before their CRS source views existed.
+    processorRef_.refreshStandalonePlaybackSnapshot();
+
     currentProjectFile_ = preparedOpen.projectFile;
     cachedProjectId_ = snapshot.header.projectId;
     cachedCreatedAt_ = snapshot.header.createdAt;
@@ -697,25 +721,33 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
     return Result<void>::success();
 }
 
-void ProjectSession::setCurrentProjectFile(const juce::File& file)
-{
-    currentProjectFile_ = file;
-}
-
 // ============================================================================
 // 分步保存
 // ============================================================================
 
-ProjectSession::SaveTask ProjectSession::prepareSave(const juce::File& targetFile)
+ProjectSession::SaveTask ProjectSession::prepareSave(const juce::File& targetFile, SaveTask::Mode mode)
 {
     SaveTask task;
-    task.snapshot = captureSnapshot();
+    task.snapshot = captureSnapshot(mode);
     task.snapshot.header.projectName = targetFile.getFileNameWithoutExtension();
     task.targetFile = targetFile;
     task.mediaDirectory = targetFile.getParentDirectory().getChildFile(
         targetFile.getFileNameWithoutExtension() + "_Media");
     task.language = LocalizationManager::getInstance().resolveLanguage();
+    task.mode = mode;
+    task.dirtyGeneration = dirtyGeneration_;
     return task;
+}
+
+void ProjectSession::commitSave(const juce::File& file, SaveTask::Mode mode, uint64_t snapshotGeneration)
+{
+    if (mode == SaveTask::Mode::Copy)
+        return;
+
+    currentProjectFile_ = file;
+    if (dirtyGeneration_ == snapshotGeneration)
+        clearDirty();
+    pushRecentProject(file);
 }
 
 Result<void> ProjectSession::executeSaveToFile(SaveTask& task)

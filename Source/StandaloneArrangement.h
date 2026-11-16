@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include <juce_core/juce_core.h>
@@ -24,10 +25,14 @@
 
 #include "Content/ContentKey.h"
 #include "Content/StandaloneClipContent.h"
+#include "Render/PlaybackReadSource.h"
 #include "Utils/LocalizationManager.h"
+#include "Utils/PlaybackSampleGeometry.h"
 #include "Utils/TrackConstants.h"
 
 namespace OpenTune {
+
+class ContentRenderService;
 
 class StandaloneArrangement {
 public:
@@ -71,7 +76,29 @@ public:
         std::atomic<float> currentRmsDb{-100.0f};
     };
 
-    // 音频线程消费的轻量放置投影 — 仅含播放必需的数字字段，不含 String/UI/业务字段
+    struct PlacementSelectionKey {
+        int trackId = -1;
+        uint64_t placementId = 0;
+
+        bool operator<(const PlacementSelectionKey& other) const noexcept
+        {
+            return trackId != other.trackId ? trackId < other.trackId : placementId < other.placementId;
+        }
+
+        bool operator==(const PlacementSelectionKey& other) const noexcept
+        {
+            return trackId == other.trackId && placementId == other.placementId;
+        }
+    };
+
+    struct SelectionState {
+        int activeTrackId = 0;
+        std::array<uint64_t, kTrackCount> selectedPlacementIds{};
+        std::set<PlacementSelectionKey> placements;
+    };
+
+    // 音频线程消费的放置投影。source/geometry 在内容发布或编排变更时冻结，
+    // 音频线程只做整数区间求交与地址平移，不再从秒重建读取坐标。
     struct PlaybackPlacement {
         ContentKey contentKey;
         double timelineStartSeconds{0.0};
@@ -80,6 +107,25 @@ public:
         float gain{1.0f};
         double fadeInDuration{0.0};
         double fadeOutDuration{0.0};
+
+        // 冻结的播放源视图；未配置 ContentRenderService 时保持空视图。
+        PlaybackReadSource source;
+        // 按播放率冻结的固定映射 (H, D, A, Z)。
+        PlaybackSampleGeometry::Placement sampleGeometry;
+        // tauForward(clipIn)：自动化求值的内容本地输出时间锚点。
+        double outputAnchorSeconds{0.0};
+
+        bool hasPlayableSource() const noexcept
+        {
+            return source.hasAudio()
+                && source.contentSnapshot != nullptr
+                && source.contentSnapshot->timeGrid != nullptr;
+        }
+
+        bool hasPlayableView() const noexcept
+        {
+            return sampleGeometry.playbackRate > 0.0 && hasPlayableSource();
+        }
     };
 
     // 音频线程消费的轨道快照（不可变）
@@ -107,6 +153,17 @@ public:
 
     PlaybackSnapshotHandle loadPlaybackSnapshot() const;
 
+    // 在给定采样率上建立一批放置的固定映射 (H, D, A, Z)。
+    // 每个放置先按权威 P/E/clipIn 独立投影，再按实际读取域端点把连续
+    // 切片接到真正的前驱上并继承同一个 D。实时发布与导出共用此逻辑。
+    static void buildPlaybackGeometry(std::vector<PlaybackPlacement>& placements,
+                                      double sampleRate);
+
+    // 播放准备：绑定 ContentRenderService 与当前设备播放率并重建冻结视图。
+    void configurePlaybackSources(ContentRenderService* renderService, double playbackSampleRate);
+    // 内容发布（republish/TimeGrid/渲染请求）后重建冻结的来源视图与几何。
+    void refreshPlaybackSnapshot();
+
     void setLanguage(Language language);
 
     int getNumTracks() const noexcept { return kTrackCount; }
@@ -118,7 +175,7 @@ public:
     bool isTrackMuted(int trackId) const;
     bool setTrackSolo(int trackId, bool solo);
     bool isTrackSolo(int trackId) const;
-    bool setTrackVolume(int trackId, float volume);
+    bool setTrackVolume(int trackId, double volume);
     float getTrackVolume(int trackId) const;
     // 删除轨道并将后续轨道上移填补空位，清空最后一个可见槽位
     // visibleCount: 当前可见轨道数（调用方负责之后减少 visibleTrackCount）
@@ -142,10 +199,16 @@ public:
     int getSelectedPlacementIndex(int trackId) const;
     bool selectPlacement(int trackId, uint64_t placementId);
     bool setSelectedPlacementIndex(int trackId, int placementIndex);
+    std::set<PlacementSelectionKey> getSelectedPlacements() const;
+    bool setSelectedPlacements(std::set<PlacementSelectionKey> placements);
+    SelectionState getSelectionState() const;
+    bool setSelectionState(const SelectionState& state);
     void clear();
 
     bool insertPlacement(int trackId, Placement& placement);
+    /** Inserts at a zero-based index in the active (non-retired) placement sequence. */
     bool insertPlacement(int trackId, int insertIndex, Placement& placement);
+    bool insertPlacements(int trackId, std::vector<Placement>& placements);
     bool deletePlacementById(int trackId, uint64_t placementId, Placement* deletedOut = nullptr, int* deletedIndexOut = nullptr);
     struct PlacementMove {
         int sourceTrackId = -1;
@@ -164,6 +227,9 @@ public:
     bool setPlacementTrimAndTimelineStart(int trackId, uint64_t placementId,
                                           double clipInSeconds, double durationSeconds,
                                           double timelineStartSeconds);
+    bool setPlacementTrimState(int trackId, uint64_t placementId,
+                               double clipInSeconds, double durationSeconds, double timelineStartSeconds,
+                               double fadeInDuration, double fadeOutDuration);
 
     // 软删除/恢复接口，供 UndoAction 和垃圾回收使用
     bool retirePlacement(int trackId, uint64_t placementId);
@@ -189,6 +255,7 @@ private:
 
     mutable juce::ReadWriteLock stateLock_;
     std::array<Track, kTrackCount> tracks_;
+    std::set<PlacementSelectionKey> selectedPlacements_;
     Language language_ = Language::Chinese;
     int activeTrackId_{0};
     int visibleTrackCount_{kDefaultVisibleTracks};
@@ -196,6 +263,12 @@ private:
     uint64_t nextPlacementId_{1};
 
     PlaybackSnapshotHandle playbackSnapshot_;
+
+    // Playback source provider configured at prepareToPlay. Frozen source views
+    // and sample geometry are captured into the published snapshot on every
+    // arrangement or content publication; the audio thread reads them lock-free.
+    ContentRenderService* playbackSourceService_{nullptr};
+    double playbackSampleRate_{0.0};
 
     // Writer-side delayed destruction: retired snapshots are held until
     // use_count()==1 (no audio-thread references remain), then swept on the

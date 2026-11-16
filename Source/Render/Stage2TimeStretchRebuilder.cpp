@@ -7,6 +7,7 @@
 #include "../Inference/TimeStretchCache.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/PlaybackAudioReader.h"
+#include "../Utils/PlaybackSampleGeometry.h"
 
 #include <algorithm>
 #include <vector>
@@ -25,6 +26,8 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
     if (!contentKey.isValid()) return false;
 
     if (!request.contentSnapshot
+        || request.contentSnapshot->timeGrid == nullptr
+        || request.contentSnapshot->timeGrid->empty()
         || !request.audioBuffer
         || request.audioBuffer->getNumChannels() <= 0
         || request.audioBuffer->getNumSamples() <= 0
@@ -46,7 +49,8 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
             && published.contentSnapshot->contentRevision == snapshot.contentRevision
             && published.contentSnapshot->timeGridRevision == snapshot.timeGridRevision
             && published.contentSnapshot->audioRevision == snapshot.audioRevision
-            && published.audioBuffer == request.audioBuffer;
+            && published.canonicalBuffer == request.audioBuffer
+            && published.canonicalSampleRate == request.audioSampleRate;
     };
 
     if (!isCurrentPublishedRequest())
@@ -127,6 +131,11 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
     const uint64_t contentRev = snapshot.contentRevision;
     const uint64_t timeGridRev = snapshot.timeGridRevision;
 
+    // Stage2 output lives on the TimeGrid local output grid. The origin comes
+    // from the authoritative TimeGrid handle, never from buffer lengths.
+    const int64_t firstCanonicalOutputSample = PlaybackSampleGeometry::projectToSample(
+        snapshot.timeGrid->handles().front().output_seconds * sampleRate);
+
     if (!isCurrentPublishedRequest())
         return false;
 
@@ -135,7 +144,8 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
                                     contentRev,
                                     timeGridRev,
                                     sampleRate,
-                                    buildGen);
+                                    buildGen,
+                                    firstCanonicalOutputSample);
 
     AppLogger::log("Stage2Worker: rebuilt objectId="
                    + juce::String(static_cast<juce::int64>(contentKey.objectId))

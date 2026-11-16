@@ -7,11 +7,11 @@
 #include "../Source/Runtime/ProcessRenderRuntime.h"
 #include "LifecycleTestTrace.h"
 #include "LifecycleWatchdog.h"
-#include "../Source/Utils/TimeCoordinate.h"
+#include "../Source/Utils/PlaybackSampleGeometry.h"
 #include <juce_events/juce_events.h>
+#include <atomic>
 #include <cstdio>
 #include <memory>
-#include <thread>
 #include <vector>
 
 namespace
@@ -46,7 +46,15 @@ bool runRenderCacheCompletionContract()
 
     cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
     auto jobs = cache.getPendingJobs();
-    if (! checkRenderContract(jobs.size() == 1 && cache.claimPendingJob(jobs.front()), "success_claim_failed"))
+    if (! checkRenderContract(jobs.size() == 1, "success_pending_setup_failed"))
+        return false;
+    const auto pendingRevision = jobs.front().targetRevision;
+    cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+    jobs = cache.getPendingJobs();
+    if (! checkRenderContract(jobs.size() == 1
+                                  && jobs.front().targetRevision == pendingRevision
+                                  && cache.claimPendingJob(jobs.front()),
+                              "duplicate_full_plan_lost_pending_claim"))
         return false;
     if (! checkRenderContract(cache.completeChunkRenderWithAudio(0, 256, std::vector<float>(audio),
                                                                   jobs.front().targetRevision)
@@ -377,13 +385,22 @@ bool runRenderCacheCapacityContract()
         {
             const size_t bytesBeforeEdit =
                 OpenTune::RenderCache::renderCacheCurrentBytes().load(std::memory_order_acquire);
-            const int64_t preparedChunkStart = OpenTune::TimeCoordinate::sampleRateProject(
-                256, OpenTune::RenderCache::kSampleRate, 48000.0);
+            using OpenTune::PlaybackSampleGeometry::projectToSample;
+            const int64_t preparedFirstEnd = projectToSample(
+                static_cast<double>(256) * 48000.0 / OpenTune::RenderCache::kSampleRate);
+            const int64_t preparedPlanEnd = projectToSample(
+                static_cast<double>(512) * 48000.0 / OpenTune::RenderCache::kSampleRate);
+            const int64_t preparedChunkStart = preparedFirstEnd;
+            // Both adjacent canonical chunks intersect the other chunk's real
+            // FIR support, so the local edit invalidates and rebuilds both
+            // prepared chunks. Their output lengths are Q(globalEnd) spans.
             const size_t changedChunkPcmBytes =
-                static_cast<size_t>(OpenTune::TimeCoordinate::sampleRateProject(
-                    256, OpenTune::RenderCache::kSampleRate, 48000.0)) * sizeof(float);
-            limit.store(bytesBeforeEdit + 256 * sizeof(float) + changedChunkPcmBytes,
-                        std::memory_order_release);
+                static_cast<size_t>(preparedFirstEnd) * sizeof(float);
+            const size_t neighborChunkPcmBytes =
+                static_cast<size_t>(preparedPlanEnd - preparedFirstEnd) * sizeof(float);
+            const size_t expectedCurrentBytes = bytesBeforeEdit + 256 * sizeof(float)
+                + changedChunkPcmBytes + neighborChunkPcmBytes;
+            limit.store(expectedCurrentBytes, std::memory_order_release);
 
             cache.reconcileFullPlanAndRequest(plan, 0, 256, 2);
             jobs = cache.getPendingJobs();
@@ -395,8 +412,8 @@ bool runRenderCacheCapacityContract()
                     0, 256, std::vector<float>(256, 3.0f), jobs.front().targetRevision)
                     == OpenTune::RenderCache::ChunkRenderResult::Published;
             }
-            passed = checkRenderContract(edited, "local_edit_reallocated_unchanged_prepared_pcm")
-                && passed;
+            passed = checkRenderContract(
+                edited, "local_edit_neighbor_prepared_rebuild_exceeded_budget") && passed;
 
             if (edited)
             {
@@ -406,11 +423,11 @@ bool runRenderCacheCapacityContract()
                     unchangedChunk, 0, 64, preparedChunkStart + 32, 48000, 2);
                 passed = checkRenderContract(
                     unchangedChunk.getSample(0, 0) != 0.0f,
-                    "unchanged_prepared_chunk_rejected_current_revision") && passed;
+                    "neighbor_prepared_chunk_rejected_current_revision") && passed;
                 passed = checkRenderContract(
                     OpenTune::RenderCache::renderCacheCurrentBytes().load(std::memory_order_acquire)
-                        == bytesBeforeEdit + 256 * sizeof(float) + changedChunkPcmBytes,
-                    "local_edit_pcm_budget_used_for_unchanged_chunk") && passed;
+                        == expectedCurrentBytes,
+                    "local_edit_neighbor_prepared_pcm_not_accounted") && passed;
             }
         }
         cache.clear();
@@ -647,11 +664,7 @@ int runChild(int argc, char** argv)
         OpenTune::RenderJob::Kind::Stage1Render, key, snapshot, cache, audio, 44100.0,
         0, audio->getNumSamples(), -1, snapshot->contentRevision});
     const auto pending = cache->getPendingJobs();
-    if (pending.size() != 1)
-    {
-        std::fprintf(stderr, "{\"event\":\"lifecycle_boundary\",\"result\":\"failure\"}\n");
-        return 1;
-    }
+    const bool initialRenderPending = pending.size() == 1;
 
     service->drainRenderWorker();
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "render_drain_complete", {
@@ -662,17 +675,15 @@ int runChild(int argc, char** argv)
     service->detachExecutionLease(&owner);
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "lease_detached");
 
-    runtime.resetVocoder(nullptr, [](OpenTune::ProcessRenderRuntime::ControlResult,
-                                     juce::String) {});
-    std::thread firstShutdown([&runtime] {
-        runtime.releaseOwner();
-        juce::MessageManager::callAsync([] {
-            juce::MessageManager::getInstance()->stopDispatchLoop();
-        });
+    int resetCallbackCalls = 0;
+    runtime.resetVocoder(nullptr, [&resetCallbackCalls](OpenTune::ProcessRenderRuntime::ControlResult,
+                                                        juce::String) {
+        ++resetCallbackCalls;
     });
-    juce::MessageManager::getInstance()->runDispatchLoop();
-    firstShutdown.join();
-    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "first_runtime_shutdown_complete", {
+    runtime.releaseOwner();
+    const bool zeroOwnerWorkerAlive =
+        runtime.ownerCount() == 0 && runtime.isControlWorkerJoinable();
+    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "zero_owner_runtime_persisted", {
         {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
         {"controlQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.controlQueueDepth()))},
         {"deferredRetryCount", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.deferredRetryCount()))},
@@ -685,25 +696,33 @@ int runChild(int argc, char** argv)
         {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
     });
 
-    // A host may create a new instance after the previous last instance was
-    // released.  The process singleton must reopen its control worker rather
-    // than inherit the prior shutdown state.
     runtime.retainOwner();
-    std::thread secondShutdown([&runtime] {
-        runtime.releaseOwner();
-        juce::MessageManager::callAsync([] {
-            juce::MessageManager::getInstance()->stopDispatchLoop();
-        });
+    runtime.releaseOwner();
+    const bool ownerCycleStayedOpen =
+        runtime.ownerCount() == 0 && runtime.isControlWorkerJoinable();
+    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "runtime_owner_cycle_complete", {
+        {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
+        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
     });
-    juce::MessageManager::getInstance()->runDispatchLoop();
-    secondShutdown.join();
-    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "second_runtime_shutdown_complete");
+
+    runtime.shutdownAndJoin();
+    OpenTuneTest::trace("RenderRuntimeLifecycleTests", "runtime_shutdown_and_join_complete", {
+        {"resetCallbackCalls", OpenTuneTest::jsonNumber(resetCallbackCalls)},
+        {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
+        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
+    });
 
     service.reset();
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "owner_destructor_complete");
 
     const auto finalStats = cache->getChunkStats();
-    if (finalStats.pending != 0
+    if (!initialRenderPending
+        || !zeroOwnerWorkerAlive
+        || !ownerCycleStayedOpen
+        || resetCallbackCalls != 1
+        || runtime.ownerCount() != 0
+        || runtime.isControlWorkerJoinable()
+        || finalStats.pending != 0
         || finalStats.running != 0
         || (!cache->isCanonicalSettled() && failed.load(std::memory_order_relaxed) == 0)
         || (failed.load(std::memory_order_relaxed) != 0

@@ -831,6 +831,72 @@ public:
 		return( (int) ceil( MaxInLen * DstSampleRate / SrcSampleRate ) + 1 );
 	}
 
+	bool isWholeStepping() const
+	{
+		return( IsWhole );
+	}
+
+	double getSrcSampleRate() const
+	{
+		return( SrcSampleRate );
+	}
+
+	double getDstSampleRate() const
+	{
+		return( DstSampleRate );
+	}
+
+	int getInStep() const
+	{
+		R8BASSERT( IsWhole );
+
+		return( InStep );
+	}
+
+	int getOutStep() const
+	{
+		R8BASSERT( IsWhole );
+
+		return( OutStep );
+	}
+
+	int getFilterLeftLen() const
+	{
+		return( fll );
+	}
+
+	int getFilterRightLen() const
+	{
+		return( fl2 );
+	}
+
+	/**
+	 * @brief Sets the initial global interpolation phase.
+	 *
+	 * @param aLatency Initial integer latency, in input samples.
+	 * @param aWholePhase Initial whole-number phase, in output steps.
+	 * @param aFractionalPhase Initial fractional phase, in the range [0; 1).
+	 */
+
+	void setInitialPhase( const int aLatency, const int aWholePhase,
+		const double aFractionalPhase )
+	{
+		R8BASSERT( aLatency >= 0 );
+		R8BASSERT( aFractionalPhase >= 0.0 && aFractionalPhase < 1.0 );
+
+		Latency = aLatency;
+		LatencyFrac = 0.0;
+
+		if( IsWhole )
+		{
+			InitFracPosW = aWholePhase;
+		}
+		else
+		{
+			InitFracPos = aFractionalPhase;
+		}
+	}
+
 	virtual void clear()
 	{
 		LatencyLeft = Latency;

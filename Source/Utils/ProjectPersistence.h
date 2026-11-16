@@ -55,7 +55,7 @@ public:
     // 常量
     // ============================================================================
 
-    static constexpr int kCurrentProjectFormatVersion = 7; // v7: EqFilter.paletteSlot (v6 dynamic EQ filters migrated with deterministic slot assignment)
+    static constexpr int kCurrentProjectFormatVersion = 8; // v8: persist erased pitch-analysis ranges
     static constexpr int kMinimumProjectFormatVersion = 3;
     static constexpr const char* kRootNodeName = "OpenTuneProject";
     static constexpr const char* kProjectFormatVersionAttr = "projectFormatVersion";
@@ -77,6 +77,7 @@ private:
     // 子节点反序列化
     static std::vector<Note> notesFromValueTree(const juce::ValueTree& tree, int formatVersion);
     static std::vector<ProjectContentEntry::SegmentEntry> segmentsFromValueTree(const juce::ValueTree& tree);
+    static std::vector<F0FrameRange> erasedRangesFromValueTree(const juce::ValueTree& tree);
     static ProjectContentEntry::TimeGridEntry timeGridFromValueTree(const juce::ValueTree& tree);
     static std::vector<ProjectPlacementEntry> placementsFromValueTree(const juce::ValueTree& tree);
     static std::vector<ProjectContentEntry::SilentGapEntry> silentGapsFromValueTree(const juce::ValueTree& tree);
@@ -86,6 +87,7 @@ private:
     // 子节点序列化
     static juce::ValueTree notesToValueTree(const std::vector<Note>& notes, const juce::String& nodeName);
     static juce::ValueTree segmentsToValueTree(const std::vector<ProjectContentEntry::SegmentEntry>& segments);
+    static juce::ValueTree erasedRangesToValueTree(const std::vector<F0FrameRange>& ranges);
     static juce::ValueTree timeGridToValueTree(const ProjectContentEntry::TimeGridEntry& tg);
     static juce::ValueTree placementsToValueTree(const std::vector<ProjectPlacementEntry>& placements);
     static juce::ValueTree silentGapsToValueTree(const std::vector<ProjectContentEntry::SilentGapEntry>& gaps);

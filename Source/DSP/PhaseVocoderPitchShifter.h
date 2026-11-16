@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 
 namespace OpenTune {
@@ -22,11 +23,14 @@ public:
     // positive adjacent controls are interpolated in log-frequency space.
     // A long uninterrupted correction requires phase-history replay from its
     // preceding neutral frame; no mutable cross-job cache is involved.
+    // @p stopRequested, when non-null, is polled from long frame loops; the
+    // function returns an empty vector as soon as it is observed set.
     std::vector<float> render(
         const float* source, int sourceSampleCount,
         int outputStartSample, int outputSampleCount,
         const float* originalF0, const float* correctedF0,
-        int numF0Frames, double f0FrameRate) const;
+        int numF0Frames, double f0FrameRate,
+        const std::atomic<bool>* stopRequested = nullptr) const;
 
 private:
     double sampleRate_;

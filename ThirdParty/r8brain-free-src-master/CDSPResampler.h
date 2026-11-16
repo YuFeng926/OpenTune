@@ -483,6 +483,35 @@ public:
 		return( getInLenBeforeOutPos( ReqOutSamples - 1 ) + 1 );
 	}
 
+	/**
+	 * @brief Returns the number of actual processing steps.
+	 */
+
+	int getStepCount() const
+	{
+		return( StepCount );
+	}
+
+	/**
+	 * @brief Returns a processing step for inspection.
+	 *
+	 * @param index Step index, in the range 0 to `getStepCount() - 1`.
+	 */
+
+	CDSPProcessor* getProcessingStep( const int index )
+	{
+		R8BASSERT( index >= 0 && index < StepCount );
+
+		return( Steps[ index ]);
+	}
+
+	const CDSPProcessor* getProcessingStep( const int index ) const
+	{
+		R8BASSERT( index >= 0 && index < StepCount );
+
+		return( Steps[ index ]);
+	}
+
 	virtual int getLatency() const
 	{
 		return( 0 );

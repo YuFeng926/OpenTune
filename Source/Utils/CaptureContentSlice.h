@@ -44,8 +44,10 @@ std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(
 
 /// 按 [offsetSamples, offsetSamples+count) 裁剪一份 ContentState：
 /// 音频/notes/silentGaps/pitchCurve/volumeEnvelope 同步裁剪并平移为 0 起点；
-/// detectedKey/pitchShiftSettings/noteTopologyInitialized/sourceWindow 原样保留；
-/// timeGrid 非 identity 时降级为 bootstrap identity；
+/// detectedKey/pitchShiftSettings/noteTopologyInitialized/nativeSource 原样保留；
+/// sourceWindow 从父权威起点加本次操作秒偏移更新，首尾均为绝对秒；
+/// firstCanonicalSample 只由切片绝对起点投影一次，不累加已取整的 canonical 增量；
+/// timeGrid 以切片权威时长重建 identity；
 /// revision 字段由调用方（owner 的 apply 方法）重新生成。
 ContentState sliceContentState(const ContentState& source,
                                int64_t offsetSamples,

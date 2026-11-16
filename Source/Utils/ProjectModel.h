@@ -23,6 +23,7 @@
 #include "DetectedKey.h"
 #include "../Utils/Note.h"
 #include "../Utils/AutomationLane.h"
+#include "../Utils/F0Timeline.h"
 #include "../Utils/SourceWindow.h"
 #include "../Content/ContentKey.h"
 
@@ -114,6 +115,7 @@ struct ProjectContentEntry {
         std::vector<float> f0Data;
     };
     std::vector<SegmentEntry> correctionSegments;
+    std::vector<F0FrameRange> erasedRanges;
 
     // TimeGrid (v7 vocal-time-stretch)
     struct TimeGridEntry {

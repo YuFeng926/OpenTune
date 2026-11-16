@@ -3,6 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <complex>
@@ -62,7 +63,8 @@ std::vector<float> PhaseVocoderPitchShifter::render(
     const float* source, int sourceSampleCount,
     int outputStartSample, int outputSampleCount,
     const float* originalF0, const float* correctedF0,
-    int numF0Frames, double f0FrameRate) const
+    int numF0Frames, double f0FrameRate,
+    const std::atomic<bool>* stopRequested) const
 {
     assert(sampleRate_ > 0.0);
     assert(sourceSampleCount >= 0);
@@ -75,7 +77,12 @@ std::vector<float> PhaseVocoderPitchShifter::render(
     assert(numF0Frames == 0 || (originalF0 != nullptr && correctedF0 != nullptr));
     assert(f0FrameRate > 0.0);
 
-    if (outputSampleCount == 0)
+    const auto cancelled = [stopRequested]() {
+        return stopRequested != nullptr
+            && stopRequested->load(std::memory_order_relaxed);
+    };
+
+    if (outputSampleCount == 0 || cancelled())
         return {};
 
     const int64_t outputStart = outputStartSample;
@@ -85,6 +92,8 @@ std::vector<float> PhaseVocoderPitchShifter::render(
     bool allNeutral = true;
     for (int i = 0; i < numF0Frames; ++i)
     {
+        if ((i & 0xFFF) == 0 && cancelled())
+            return {};
         if (originalF0[i] > 0.0f && correctedF0[i] > 0.0f)
         {
             const double logRatio = std::log(
@@ -98,7 +107,19 @@ std::vector<float> PhaseVocoderPitchShifter::render(
 
     // Whole-control identity bypasses the STFT and is sample-exact.
     if (allNeutral)
-        return std::vector<float>(source + outputStart, source + outputEnd);
+    {
+        std::vector<float> identity(static_cast<size_t>(outputSampleCount));
+        for (int i = 0; i < outputSampleCount; ++i)
+        {
+            if ((i & 0xFFF) == 0 && cancelled())
+                return {};
+            identity[static_cast<size_t>(i)] = source[static_cast<size_t>(outputStart + i)];
+        }
+        return identity;
+    }
+
+    if (cancelled())
+        return {};
 
     assert(numF0Frames > 0);
 
@@ -162,6 +183,8 @@ std::vector<float> PhaseVocoderPitchShifter::render(
     int64_t anchorFrame = firstContentFrame;
     for (int64_t frame = firstOutputFrame; frame >= firstContentFrame; --frame)
     {
+        if ((frame - firstOutputFrame) % 4096 == 0 && cancelled())
+            return {};
         if (std::exp(logRatioAtSample(static_cast<double>(frame) * hopSize)) == 1.0)
         {
             anchorFrame = frame;
@@ -471,6 +494,8 @@ std::vector<float> PhaseVocoderPitchShifter::render(
 
         for (int64_t frame = primingFrame + 1; frame < anchorFrame; ++frame)
         {
+            if (cancelled())
+                return {};
             analyzeFrame(frame);
             const int64_t firstSample = frame * hopSize - halfFft;
             if (activeTransientSample >= 0
@@ -488,6 +513,8 @@ std::vector<float> PhaseVocoderPitchShifter::render(
 
     for (int64_t frame = anchorFrame; frame <= lastOutputFrame; ++frame)
     {
+        if (cancelled())
+            return {};
         analyzeFrame(frame);
         computeDeviations();
 
@@ -527,6 +554,8 @@ std::vector<float> PhaseVocoderPitchShifter::render(
 
     for (size_t i = 0; i < accumulated.size(); ++i)
     {
+        if ((i & 0xFFF) == 0 && cancelled())
+            return {};
         assert(normalization[i] > 0.0f);
         accumulated[i] /= normalization[i];
     }

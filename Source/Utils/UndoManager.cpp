@@ -7,6 +7,8 @@ void UndoManager::addAction(std::unique_ptr<UndoAction> action)
     if (isPerformingUndoRedo_ || action == nullptr)
         return;
 
+    const bool discardedRedo = cursor_ < static_cast<int>(actions_.size());
+    const bool discardedOldest = static_cast<int>(actions_.size()) == maxSize_;
     // Erase anything after cursor (discard redo history)
     actions_.erase(actions_.begin() + cursor_, actions_.end());
 
@@ -21,6 +23,8 @@ void UndoManager::addAction(std::unique_ptr<UndoAction> action)
 
     // cursor_ always points past the last action
     cursor_ = static_cast<int>(actions_.size());
+    if ((discardedRedo || discardedOldest) && historyPrunedCallback_)
+        historyPrunedCallback_();
 }
 
 UndoAction* UndoManager::undo()
@@ -59,8 +63,27 @@ bool UndoManager::canRedo() const
 
 void UndoManager::clear()
 {
+    const bool hadActions = !actions_.empty();
     actions_.clear();
     cursor_ = 0;
+    if (hadActions && historyPrunedCallback_)
+        historyPrunedCallback_();
+}
+
+bool UndoManager::retainsRetiredPlacement(int trackId, uint64_t placementId) const
+{
+    for (const auto& action : actions_)
+        if (action->retainsRetiredPlacement(trackId, placementId))
+            return true;
+    return false;
+}
+
+bool UndoManager::retainsRetiredContent(ContentKey key) const
+{
+    for (const auto& action : actions_)
+        if (action->retainsRetiredContent(key))
+            return true;
+    return false;
 }
 
 } // namespace OpenTune

@@ -1,14 +1,20 @@
-// Vst3ModulePin.cpp — Windows VST3 模块常驻（进程寿命后端的加载期前提）
+// Vst3ModulePin.cpp — VST3 模块生命周期挂点（进程寿命后端的加载期前提）
 //
 // 进程寿命后端要求推理单例（ProcessF0Runtime / ProcessRenderRuntime）在全部
-// 插件实例卸载后仍存活，供后续实例直接复用 ORT Env / Session。Windows 宿主
-// 可在任意时刻 FreeLibrary 卸载 .vst3 模块，模块卸载会连同函数内静态对象与
-// CRT 一并销毁，因此必须把 OpenTune.vst3 模块 pin 到进程寿命。
+// 插件实例卸载后仍存活，供后续实例直接复用 ORT Env / Session。
 //
-// 唯一挂点是本 TU 的静态初始化器（DLL 加载期、CRT 初始化时执行）：
-//   GetModuleHandleExW(FROM_ADDRESS | PIN) 只对已加载的模块设置 pin 标志，
-//   不加载任何模块、不触碰 loader lock 之外的路径，是官方文档支持的在模块
-//   加载期调用的操作。禁止新增 DllMain；本文件不创建任何线程。
+// Windows：宿主可在任意时刻 FreeLibrary 卸载 .vst3 模块，模块卸载会连同函数
+// 内静态对象与 CRT 一并销毁，因此本 TU 的静态初始化器在加载期用
+// GetModuleHandleExW(FROM_ADDRESS | PIN) 把模块 pin 到进程寿命。该调用只对
+// 已加载模块设置 pin 标志，是官方文档支持在模块加载期执行的操作。禁止新增
+// DllMain；本文件不创建任何线程。pin 结果由 openTuneVst3PinSucceeded() 暴露，
+// JUCE 的 VST3 initModule 在返回 true 之前检查它。
+//
+// macOS/Linux/BSD：模块可以卸载，最后一次 bundleExit / ModuleExit 是同步
+// pre-unload 点。JUCE patch 在该点调用 openTuneVst3Shutdown()，同步关闭进程
+// 渲染运行时并 join worker；shutdownAndJoin 在返回前还会排空运行时已接受的
+// 消息线程投递，保证模块卸载后不存在仍指向本模块的回调。Windows 的 shutdown
+// helper 是 no-op，因为模块 pin 已把清理留给进程终止。
 //
 // 本文件只编译进 OpenTune_VST3 target（见 CMakeLists.txt）。Standalone 是
 // 独立进程，进程寿命天然成立，不 pin。
@@ -32,16 +38,18 @@ void* vst3ModulePinAnchor()
     return nullptr;
 }
 
+bool g_vst3ModulePinSucceeded = false;
+
 struct Vst3ModulePin
 {
     Vst3ModulePin()
     {
         HMODULE module = nullptr;
-        ::GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-            reinterpret_cast<LPCWSTR>(&vst3ModulePinAnchor),
-            &module);
-        (void)module;
+        g_vst3ModulePinSucceeded =
+            ::GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                reinterpret_cast<LPCWSTR>(&vst3ModulePinAnchor),
+                &module) != FALSE;
     }
 };
 
@@ -53,3 +61,29 @@ Vst3ModulePin g_vst3ModulePin;
 } // namespace OpenTune
 
 #endif // _WIN32
+
+#if !defined(_WIN32)
+#include "../Runtime/ProcessRenderRuntime.h"
+#endif
+
+#if defined(_WIN32)
+extern "C" bool openTuneVst3PinSucceeded() noexcept;
+#endif
+extern "C" bool openTuneVst3Shutdown() noexcept;
+
+#if defined(_WIN32)
+extern "C" bool openTuneVst3PinSucceeded() noexcept
+{
+    return OpenTune::g_vst3ModulePinSucceeded;
+}
+#endif
+
+extern "C" bool openTuneVst3Shutdown() noexcept
+{
+#if defined(_WIN32)
+    return true;
+#else
+    OpenTune::ProcessRenderRuntime::getInstance().shutdownAndJoin();
+    return true;
+#endif
+}

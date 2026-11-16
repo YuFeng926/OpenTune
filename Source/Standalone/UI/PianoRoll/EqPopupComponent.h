@@ -12,11 +12,57 @@
 #include "Utils/SpectrumDisplayData.h"
 #include "EqGraphRenderer.h"
 #include "EqBandInteraction.h"
+#include "Utils/AccessibleComboBox.h"
+#include "Utils/AccessibleToggleButton.h"
 #include <memory>
 
 namespace OpenTune {
 
 class LargeKnobLookAndFeel;
+
+// Accessibility: the knob, type list and confirmation below hand their keys to the EQ
+// window first, so one keyboard model runs the whole window and nothing leaks to the notes.
+class EqKnob : public juce::Slider
+{
+public:
+    std::function<bool(const juce::KeyPress&)> onKey;
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        return onKey != nullptr ? onKey(key) : juce::Slider::keyPressed(key);
+    }
+};
+
+class EqTypeBox : public a11y::AccessibleComboBox
+{
+public:
+    std::function<bool(const juce::KeyPress&)> onKey;
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        return onKey != nullptr ? onKey(key) : a11y::AccessibleComboBox::keyPressed(key);
+    }
+
+    // The stock list keys, for the window to call when it wants them.
+    bool listKeyPressed(const juce::KeyPress& key) { return a11y::AccessibleComboBox::keyPressed(key); }
+};
+
+class EqConfirmPanel : public juce::Component
+{
+public:
+    std::function<bool(const juce::KeyPress&)> onKey;
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        return onKey != nullptr && onKey(key);
+    }
+
+    // A named group: NVDA says "Remove EQ?" when focus enters it.
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::group);
+    }
+};
 
 class EqPopupComponent : public juce::Component,
                           public juce::Timer {
@@ -50,6 +96,13 @@ public:
     bool isPreviewMode() const { return isPreview_; }
     void toggleMaximize();
 
+    // Accessibility: opened from the keyboard. Shows the full editor and focuses the window.
+    void startKeyboardEditing();
+    bool keyPressed(const juce::KeyPress& key) override;
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
+    // Commits a knob change from the arrow keys that is still waiting (see scheduleCommit).
+    void flushPendingCommit();
+
 private:
     enum class ButtonId { None = -1, Maximize = 0, Bypass, Remove, Minimize };
     void paintButton(juce::Graphics& g, ButtonId id, juce::Rectangle<float> bounds, bool hovered) const;
@@ -79,6 +132,32 @@ private:
     int hitTestFilterTypeButton(juce::Point<float> pos) const;
 
     void dismissRemoveConfirmation();
+    void showRemoveConfirmation();
+    juce::Rectangle<float> removeDialogBounds() const;
+    void setFilterType(int filterIndex, EqFilterType newType);
+
+    // Keyboard model. Grid: Left/Right pick the band, Up/Down pick the row,
+    // Tab adjusts the row with arrows, a second Tab types a number.
+    enum class KeyRow { Type, Frequency, Gain, Q, BypassBand, RemoveBand, AddBand, BypassEq, RemoveEq, Count };
+    int keyBand() const;
+    void ensureKeyBand();
+    void selectKeyBand(int index);
+    void focusGrid();
+    void enterKeyRow();
+    void activateKeyRow();
+    void addBandFromKeyboard();
+    void removeBandFromKeyboard();
+    void requestClose();
+    void requestRemoveEq();
+    bool handleKnobKey(EqKnob& knob, const juce::KeyPress& key);
+    bool handleTypeKey(const juce::KeyPress& key);
+    bool handleConfirmKey(const juce::KeyPress& key);
+    double steppedKnobValue(const EqKnob& knob, const juce::KeyPress& key) const;
+    juce::String describeRow(KeyRow row) const;
+    juce::String describeBandAndRow() const;
+    juce::String describeAllBands() const;
+    static juce::String filterTypeName(EqFilterType type);
+    void scheduleCommit();
 
     void paintBypassIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
     void paintRemoveIcon(juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour color) const;
@@ -107,10 +186,25 @@ private:
 
     // 卡片内旋钮控件
     std::unique_ptr<LargeKnobLookAndFeel> cardKnobLookAndFeel_;
-    juce::Slider frequencySlider_;
-    juce::Slider gainSlider_;
-    juce::Slider qSlider_;
+    EqKnob frequencySlider_;
+    EqKnob gainSlider_;
+    EqKnob qSlider_;
     bool updatingCardControls_ = false;
+
+    // Accessibility: invisible real controls over the painted type row and confirmation,
+    // so the screen reader sees them; the mouse still works on the painting below.
+    EqTypeBox typeBox_;
+    EqConfirmPanel confirmPanel_;
+    juce::TextButton confirmButton_;
+    juce::TextButton cancelButton_;
+    a11y::AccessibleToggleButton dontShowToggle_;
+
+    KeyRow keyRow_ = KeyRow::Type;
+    bool keyboardAdjusting_ = false;   // knob changes from arrows wait before the commit
+    bool commitPending_ = false;
+    double commitDeadlineMs_ = 0.0;
+    bool editorJustClosed_ = false;    // the key that closed the number field must not act again
+    bool gridAfterEditor_ = false;     // Tab in the number field: keep it and go back to the grid
 
     std::vector<double> hoverBandAmounts_ = std::vector<double>(EqSettings::kMaxFilters, 0.0);
     static constexpr double kHoverFadeInTime = 0.50;

@@ -1,47 +1,10 @@
 #include "SelectedNoteParameterEdit.h"
 #include "Content/EditableContentSnapshot.h"
 #include <algorithm>
-#include <cmath>
 #include <utility>
 
 namespace OpenTune {
 namespace {
-
-float clampParameter(AudioEditingScheme::ParameterId id, float value)
-{
-    switch (id) {
-        case AudioEditingScheme::ParameterId::RetuneSpeed:
-            return std::clamp(value, 0.0f, 1.0f);
-        case AudioEditingScheme::ParameterId::VibratoDepth:
-            return std::clamp(value, 0.0f, 100.0f);
-        case AudioEditingScheme::ParameterId::VibratoRate:
-            return std::clamp(value, 3.0f, 12.0f);
-        case AudioEditingScheme::ParameterId::NoteSplit:
-            break;
-    }
-    return value;
-}
-
-void setNoteParameter(Note& note, AudioEditingScheme::ParameterId id, float value)
-{
-    switch (id) {
-        case AudioEditingScheme::ParameterId::RetuneSpeed: note.retuneSpeed = value; break;
-        case AudioEditingScheme::ParameterId::VibratoDepth: note.vibratoDepth = value; break;
-        case AudioEditingScheme::ParameterId::VibratoRate: note.vibratoRate = value; break;
-        case AudioEditingScheme::ParameterId::NoteSplit: break;
-    }
-}
-
-float getNoteParameter(const Note& note, AudioEditingScheme::ParameterId id)
-{
-    switch (id) {
-        case AudioEditingScheme::ParameterId::RetuneSpeed: return note.retuneSpeed;
-        case AudioEditingScheme::ParameterId::VibratoDepth: return note.vibratoDepth;
-        case AudioEditingScheme::ParameterId::VibratoRate: return note.vibratoRate;
-        case AudioEditingScheme::ParameterId::NoteSplit: return 0.0f;
-    }
-    return 0.0f;
-}
 
 std::vector<Note> notesInRange(const std::vector<Note>& notes, double startSeconds, double endSeconds)
 {
@@ -81,6 +44,7 @@ std::vector<PitchCorrectionSegment> segmentsInRange(
 } // namespace
 
 std::optional<SelectedNoteParameterPatch> planSelectedNoteParameterEdit(
+    const ContentEditCommands& commands,
     ContentKey contentKey,
     const EditableContentSnapshot& snapshot,
     const std::vector<int>& selectedNoteIndices,
@@ -102,40 +66,48 @@ std::optional<SelectedNoteParameterPatch> planSelectedNoteParameterEdit(
     if (timeline.isEmpty())
         return std::nullopt;
 
+    ContentNoteValueEditRequest request;
+    for (const int noteIndex : selectedNoteIndices) {
+        if (noteIndex >= 0 && noteIndex < static_cast<int>(snapshot.notes.size()))
+            request.edits.push_back(ContentNoteValueEdit{
+                ContentNoteValueEdit::Kind::Parameters,
+                static_cast<std::size_t>(noteIndex)});
+    }
+    if (request.edits.empty())
+        return std::nullopt;
+
+    switch (parameterId) {
+        case AudioEditingScheme::ParameterId::RetuneSpeed:
+            for (auto& edit : request.edits) edit.retuneSpeed = value;
+            break;
+        case AudioEditingScheme::ParameterId::VibratoDepth:
+            for (auto& edit : request.edits) edit.vibratoDepth = value;
+            break;
+        case AudioEditingScheme::ParameterId::VibratoRate:
+            for (auto& edit : request.edits) edit.vibratoRate = value;
+            break;
+        case AudioEditingScheme::ParameterId::NoteSplit: return std::nullopt;
+    }
+    auto valuePlan = commands.planNoteValueEdit(snapshot.notes, request);
     SelectedNoteParameterPatch patch;
     patch.contentKey = contentKey;
-    auto afterNotes = snapshot.notes;
-    const float clampedValue = clampParameter(parameterId, value);
-    double dirtyStartTime = 1e30;
-    double dirtyEndTime = -1e30;
-    bool anySelected = false;
-
-    for (const int noteIndex : selectedNoteIndices) {
-        if (noteIndex < 0 || noteIndex >= static_cast<int>(afterNotes.size()))
-            continue;
-
-        auto& note = afterNotes[static_cast<size_t>(noteIndex)];
-        anySelected = true;
-        if (std::abs(clampedValue - getNoteParameter(note, parameterId)) > 1e-6f)
-            patch.changed = true;
-        setNoteParameter(note, parameterId, clampedValue);
-        note.dirty = true;
-        dirtyStartTime = std::min(dirtyStartTime, note.startTime);
-        dirtyEndTime = std::max(dirtyEndTime, note.endTime);
-    }
-
-    if (!anySelected)
-        return std::nullopt;
+    patch.changed = !valuePlan.changedPositions.empty();
     if (!patch.changed)
         return patch;
 
+    double dirtyStartTime = 1e30;
+    double dirtyEndTime = -1e30;
+    for (const auto position : valuePlan.changedPositions) {
+        dirtyStartTime = std::min(dirtyStartTime, valuePlan.notes[position].startTime);
+        dirtyEndTime = std::max(dirtyEndTime, valuePlan.notes[position].endTime);
+    }
     const auto editRange = timeline.rangeForTimes(dirtyStartTime, dirtyEndTime);
     if (editRange.isEmpty())
         return patch;
 
     auto derivedCurve = PitchCurve::fromSnapshot(curveSnapshot);
     const auto derivedSnapshot = derivedCurve->applyCorrectionToRange(
-        afterNotes,
+        valuePlan.notes,
         editRange.startFrame,
         editRange.endFrameExclusive,
         static_cast<float>(snapshot.pitchShiftSettings.getPitchRatio()),
@@ -148,7 +120,7 @@ std::optional<SelectedNoteParameterPatch> planSelectedNoteParameterEdit(
     const double affectedStartSeconds = timeline.timeAtFrame(patch.affectedRange.startFrame);
     const double affectedEndSeconds = timeline.timeAtFrame(patch.affectedRange.endFrameExclusive);
     patch.beforeNotes = notesInRange(snapshot.notes, affectedStartSeconds, affectedEndSeconds);
-    patch.afterNotes = notesInRange(afterNotes, affectedStartSeconds, affectedEndSeconds);
+    patch.afterNotes = notesInRange(valuePlan.notes, affectedStartSeconds, affectedEndSeconds);
     patch.beforeSegments = segmentsInRange(
         curveSnapshot->getCorrectionSegments(),
         patch.affectedRange.startFrame,

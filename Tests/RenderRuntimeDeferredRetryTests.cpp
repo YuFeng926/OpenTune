@@ -88,6 +88,20 @@ bool check(bool value, const char* reason)
     return value;
 }
 
+/** Test fixtures publish 44.1 kHz native PCM: canonical and native share the
+ *  same grid, so the first canonical sample is source sample zero. */
+OpenTune::PlaybackReadSource makeTestPlaybackSource(
+    const OpenTune::ContentKey& key,
+    const std::shared_ptr<const OpenTune::EditableContentSnapshot>& content,
+    const std::shared_ptr<const juce::AudioBuffer<float>>& audio,
+    const std::shared_ptr<OpenTune::RenderCache>& cache,
+    OpenTune::TimeStretchCache& timeStretchCache)
+{
+    return OpenTune::makePlaybackReadSource(
+        key, content, OpenTune::NativePcmSource{audio, 44100.0, 0, 0},
+        audio, 44100.0, 0, cache, timeStretchCache);
+}
+
 bool runDeferredRetryContract()
 {
     using namespace OpenTune;
@@ -129,7 +143,7 @@ bool runDeferredRetryContract()
                 return false;
         }
         service->publishPlaybackSource(
-            key, makePlaybackReadSource(key, content, audio, 44100.0,
+            key, makeTestPlaybackSource(key, content, audio,
                                         cache, service->getTimeStretchCache()));
         RenderJob job;
         job.kind = RenderJob::Kind::Stage1Render;
@@ -219,7 +233,7 @@ bool runDeferredRetryContract()
     const auto replacementKey = keys.back();
     service->publishPlaybackSource(
         replacementKey,
-        makePlaybackReadSource(replacementKey, replacement, audio, 44100.0,
+        makeTestPlaybackSource(replacementKey, replacement, audio,
                                caches.back(), service->getTimeStretchCache()));
     if (!deferRunningChunk(replacementKey, caches.back(), replacement,
                            ProcessRenderRuntime::kDeferredSnapshotBudgetBytes)
@@ -419,7 +433,7 @@ bool runDeferredDescriptorBudgetResumeContract()
         content->timeGrid = TimeGridSnapshot::makeIdentity(1.0);
         content->notes.reserve(noteCapacity);
         service->publishPlaybackSource(
-            key, makePlaybackReadSource(key, content, audio, 44100.0,
+            key, makeTestPlaybackSource(key, content, audio,
                                         cacheOut, service->getTimeStretchCache()));
 
         RenderJob job;
@@ -513,10 +527,10 @@ bool runPlanNotSynchronizedRetryContract()
         return false;
 
     service->publishPlaybackSource(
-        key, makePlaybackReadSource(key, oldSnapshot, audio, 44100.0,
+        key, makeTestPlaybackSource(key, oldSnapshot, audio,
                                     cache, service->getTimeStretchCache()));
     service->publishPlaybackSource(
-        key, makePlaybackReadSource(key, newSnapshot, audio, 44100.0,
+        key, makeTestPlaybackSource(key, newSnapshot, audio,
                                     cache, service->getTimeStretchCache()));
 
     RenderJob job;
@@ -624,7 +638,7 @@ bool runExportDrainDeferredBatchContract()
     if (otherPending.size() != 1 || !otherCache->claimPendingJob(otherPending.front()))
         return check(false, "export_scope_running_chunk_setup_failed");
     otherService->publishPlaybackSource(
-        otherKey, makePlaybackReadSource(otherKey, snapshot, audio, 44100.0,
+        otherKey, makeTestPlaybackSource(otherKey, snapshot, audio,
                                          otherCache, otherService->getTimeStretchCache()));
     RenderJob otherJob;
     otherJob.kind = RenderJob::Kind::Stage1Render;
@@ -668,7 +682,7 @@ bool runExportDrainDeferredBatchContract()
             return check(false, "export_batch_running_chunk_setup_failed");
 
         service->publishPlaybackSource(
-            key, makePlaybackReadSource(key, snapshot, audio, 44100.0,
+            key, makeTestPlaybackSource(key, snapshot, audio,
                                         cache, service->getTimeStretchCache()));
         RenderJob job;
         job.kind = RenderJob::Kind::Stage1Render;
@@ -735,7 +749,7 @@ bool runExportDrainNoProgressContracts()
             return check(false, "blocked_export_running_chunk_setup_failed");
 
         service->publishPlaybackSource(
-            key, makePlaybackReadSource(key, snapshot, audio, 44100.0,
+            key, makeTestPlaybackSource(key, snapshot, audio,
                                         cache, service->getTimeStretchCache()));
         RenderJob job;
         job.kind = RenderJob::Kind::Stage1Render;
@@ -764,7 +778,7 @@ bool runExportDrainNoProgressContracts()
             auto newerSnapshot = std::make_shared<EditableContentSnapshot>(*snapshot);
             newerSnapshot->contentRevision = 2;
             service->publishPlaybackSource(
-                key, makePlaybackReadSource(key, newerSnapshot, audio, 44100.0,
+                key, makeTestPlaybackSource(key, newerSnapshot, audio,
                                             cache, service->getTimeStretchCache()));
         }
         if (blocker != Blocker::Lease)

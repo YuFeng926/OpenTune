@@ -1,5 +1,8 @@
 #include "AppLogger.h"
 #include "LocalizationManager.h"
+#if JucePlugin_Build_Standalone
+#include "Control/ControlDataDirectory.h"
+#endif
 
 namespace OpenTune {
 
@@ -74,6 +77,10 @@ void AppLogger::initialize()
     juce::File logDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
         .getChildFile("OpenTune")
         .getChildFile("Logs");
+#if JucePlugin_Build_Standalone
+    if (const auto dataDirectory = controlDataDirectory(); dataDirectory != juce::File{})
+        logDir = dataDirectory.getChildFile("Logs");
+#endif
     if (!logDir.createDirectory()) {
         logDir = juce::File::getSpecialLocation(juce::File::tempDirectory)
             .getChildFile("OpenTune")

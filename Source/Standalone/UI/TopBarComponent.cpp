@@ -56,6 +56,14 @@ void TopBarComponent::setSidePanelsVisible(bool trackPanelVisible, bool paramete
     repaint();
 }
 
+void TopBarComponent::setSidePanelTogglesAccessible(bool accessible)
+{
+    for (auto* button : { &trackPanelToggleButton_, &parameterPanelToggleButton_ }) {
+        button->setWantsKeyboardFocus(accessible);
+        button->setAccessible(accessible);
+    }
+}
+
 void TopBarComponent::setTrackPanelToggleVisible(bool visible)
 {
     trackPanelToggleVisible_ = visible;

@@ -10,7 +10,9 @@
 #include "../UIColors.h"
 #include "../../../Utils/LocalizationManager.h"
 #include "../../../Utils/EqFilterEditOps.h"
+#include "../../../Utils/ScreenReaderAnnouncer.h"
 #include <cmath>
+#include <utility>
 
 namespace OpenTune {
 
@@ -67,6 +69,64 @@ EqPopupComponent::EqPopupComponent()
     qSlider_.onValueChange = [this] { cardSliderChanged(2); };
     addAndMakeVisible(qSlider_);
     qSlider_.setVisible(false);
+
+    // Accessibility: the window itself is the keyboard grid. A mouse click must not take
+    // focus from the notes, so mouse users keep their piano roll keys.
+    setWantsKeyboardFocus(true);
+    setMouseClickGrabsKeyboardFocus(false);
+
+    frequencySlider_.setTitle(LOC_RAW("Frequency"));
+    gainSlider_.setTitle(LOC_RAW("Gain"));
+    qSlider_.setTitle("Q");
+    for (auto* knob : { &frequencySlider_, &gainSlider_, &qSlider_ })
+    {
+        knob->setWantsKeyboardFocus(true);
+        knob->setMouseClickGrabsKeyboardFocus(false);
+        knob->onKey = [this, knob](const juce::KeyPress& key) { return handleKnobKey(*knob, key); };
+    }
+
+    // Type list over the painted type buttons: invisible and click-through, the painted
+    // buttons keep working for the mouse.
+    for (int i = 0; i <= static_cast<int>(EqSettings::kMaxFilterType); ++i)
+        typeBox_.addItem(filterTypeName(static_cast<EqFilterType>(i)), i + 1);
+    typeBox_.setTitle(LOC_RAW("Type"));
+    typeBox_.setWantsKeyboardFocus(true);
+    typeBox_.setAlpha(0.0f);
+    typeBox_.setInterceptsMouseClicks(false, false);
+    typeBox_.onKey = [this](const juce::KeyPress& key) { return handleTypeKey(key); };
+    typeBox_.onChange = [this] {
+        if (!updatingCardControls_ && typeBox_.getSelectedId() > 0)
+            setFilterType(cardBand_, static_cast<EqFilterType>(typeBox_.getSelectedId() - 1));
+    };
+    addChildComponent(typeBox_);
+
+    // Remove confirmation: real buttons for the screen reader over the painted dialog.
+    confirmPanel_.setTitle(LOC_RAW("Remove EQ?"));
+    confirmPanel_.setAlpha(0.0f);
+    confirmPanel_.setInterceptsMouseClicks(false, false);
+    confirmPanel_.onKey = [this](const juce::KeyPress& key) { return handleConfirmKey(key); };
+    confirmButton_.setButtonText(LOC_RAW("Confirm"));
+    // The question goes first in the button's name ("Remove EQ? Confirm, button"): NVDA skips
+    // the group name, and an announcement after the focus came after "Confirm button".
+    confirmButton_.setTitle(LOC_RAW("Remove EQ?") + " " + LOC_RAW("Confirm"));
+    cancelButton_.setButtonText(LOC(kCancel));
+    dontShowToggle_.setButtonText(LOC_RAW("Don't show again"));
+    confirmButton_.onClick = [this] { requestRemoveEq(); };
+    cancelButton_.onClick = [this] {
+        dismissRemoveConfirmation();
+        keyRow_ = KeyRow::RemoveEq;
+        focusGrid();
+    };
+    dontShowToggle_.onClick = [this] {
+        suppressRemoveConfirmation_ = dontShowToggle_.getToggleState();
+        if (onRemoveConfirmationSuppressed)
+            onRemoveConfirmationSuppressed(suppressRemoveConfirmation_);
+        repaint();
+    };
+    confirmPanel_.addAndMakeVisible(confirmButton_);
+    confirmPanel_.addAndMakeVisible(cancelButton_);
+    confirmPanel_.addAndMakeVisible(dontShowToggle_);
+    addChildComponent(confirmPanel_);
 }
 
 EqPopupComponent::~EqPopupComponent()
@@ -304,6 +364,7 @@ void EqPopupComponent::configureCardControls(int filterIndex)
     gainSlider_.setEnabled(hasGain);
     gainSlider_.setAlpha(hasGain ? 1.0f : 0.3f);
     gainSlider_.setValue(f.gainDb, juce::dontSendNotification);
+    typeBox_.setSelectedId(static_cast<int>(f.type) + 1, juce::dontSendNotification);
 
     // Q 始终显示
     qSlider_.setValue(f.q, juce::dontSendNotification);
@@ -320,6 +381,7 @@ void EqPopupComponent::configureCardControls(int filterIndex)
     frequencySlider_.setVisible(true);
     gainSlider_.setVisible(true);
     qSlider_.setVisible(true);
+    typeBox_.setVisible(true);
 
     layoutCardControls();
 }
@@ -329,6 +391,7 @@ void EqPopupComponent::hideCardControls()
     frequencySlider_.setVisible(false);
     gainSlider_.setVisible(false);
     qSlider_.setVisible(false);
+    typeBox_.setVisible(false);
 }
 
 void EqPopupComponent::layoutCardControls()
@@ -346,6 +409,11 @@ void EqPopupComponent::layoutCardControls()
         slider->setBounds(static_cast<int>(x), static_cast<int>(sliderY),
                           static_cast<int>(kCardColumnWidth), static_cast<int>(kCardSliderHeight));
     }
+
+    // The type list covers the whole painted row of type buttons.
+    const auto firstType = cardFilterTypeButtonBounds(card, 0);
+    const auto lastType = cardFilterTypeButtonBounds(card, static_cast<int>(EqSettings::kMaxFilterType));
+    typeBox_.setBounds(firstType.getUnion(lastType).getSmallestIntegerContainer());
 }
 
 void EqPopupComponent::cardSliderChanged(int parameterIndex)
@@ -372,7 +440,12 @@ void EqPopupComponent::cardSliderChanged(int parameterIndex)
 
     renderer_.setSettings(settings_);
     layoutCardControls();
-    commitSettings();
+    // Arrow keys change the knob many times a second: commit once they stop,
+    // so a held key is one undo step and one render.
+    if (keyboardAdjusting_)
+        scheduleCommit();
+    else
+        commitSettings();
     repaint();
 }
 
@@ -875,6 +948,7 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
     if (event.mods.isRightButtonDown())
         return;
 
+    flushPendingCommit();
     const auto pos = event.position;
 
     // Remove 确认弹窗交互
@@ -897,6 +971,7 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
             if (checkRect.contains(pos))
             {
                 suppressRemoveConfirmation_ = !suppressRemoveConfirmation_;
+                dontShowToggle_.setToggleState(suppressRemoveConfirmation_, juce::dontSendNotification);
                 if (onRemoveConfirmationSuppressed)
                     onRemoveConfirmationSuppressed(suppressRemoveConfirmation_);
                 repaint();
@@ -956,16 +1031,7 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
         if (typeIdx >= 0 && typeIdx < 5 && cardBand_ >= 0
             && cardBand_ < static_cast<int>(settings_.filters.size()))
         {
-            auto& f = settings_.filters[cardBand_];
-            const auto newType = static_cast<EqFilterType>(typeIdx);
-            if (f.type != newType)
-            {
-                setEqFilterType(f, newType);
-                renderer_.setSettings(settings_);
-                configureCardControls(cardBand_);
-                commitSettings();
-                repaint();
-            }
+            setFilterType(cardBand_, static_cast<EqFilterType>(typeIdx));
             return;
         }
 
@@ -996,9 +1062,7 @@ void EqPopupComponent::mouseDown(const juce::MouseEvent& event)
                 }
                 else
                 {
-                    showingRemoveConfirmation_ = true;
-                    hideCardControls();
-                    repaint();
+                    showRemoveConfirmation();
                 }
                 return;
             case ButtonId::Minimize:
@@ -1277,6 +1341,9 @@ void EqPopupComponent::timerCallback()
     renderer_.advanceSpectrumColorCycle(dt);
     updateHoverBandFade(dt);
 
+    if (commitPending_ && juce::Time::getMillisecondCounterHiRes() >= commitDeadlineMs_)
+        flushPendingCommit();
+
     // 频谱动画每帧刷新（60fps 流畅动画）
     repaint();
 }
@@ -1401,8 +1468,693 @@ bool EqPopupComponent::removeFilterAt(int index)
 void EqPopupComponent::dismissRemoveConfirmation()
 {
     showingRemoveConfirmation_ = false;
+    confirmPanel_.setVisible(false);
     updateCardState();
     repaint();
+}
+
+void EqPopupComponent::showRemoveConfirmation()
+{
+    showingRemoveConfirmation_ = true;
+    hideCardControls();
+    dontShowToggle_.setToggleState(suppressRemoveConfirmation_, juce::dontSendNotification);
+    // Same rectangles as the painted dialog in paint() and the clicks in mouseDown().
+    const auto dialog = removeDialogBounds();
+    confirmPanel_.setBounds(dialog.getSmallestIntegerContainer());
+    const float w = dialog.getWidth();
+    const float h = dialog.getHeight();
+    dontShowToggle_.setBounds(juce::Rectangle<float>(10.0f, 28.0f, w - 20.0f, 14.0f).getSmallestIntegerContainer());
+    confirmButton_.setBounds(juce::Rectangle<float>(10.0f, h - 24.0f, 80.0f, 18.0f).getSmallestIntegerContainer());
+    cancelButton_.setBounds(juce::Rectangle<float>(w - 90.0f, h - 24.0f, 80.0f, 18.0f).getSmallestIntegerContainer());
+    confirmPanel_.setVisible(true);
+    repaint();
+}
+
+juce::Rectangle<float> EqPopupComponent::removeDialogBounds() const
+{
+    const auto area = getLocalBounds().toFloat();
+    const float dialogW = 200.0f;
+    const float dialogH = 70.0f;
+    return { (area.getWidth() - dialogW) * 0.5f, (area.getHeight() - dialogH) * 0.5f, dialogW, dialogH };
+}
+
+void EqPopupComponent::setFilterType(int filterIndex, EqFilterType newType)
+{
+    if (filterIndex < 0 || filterIndex >= static_cast<int>(settings_.filters.size()))
+        return;
+
+    auto& f = settings_.filters[filterIndex];
+    if (f.type == newType)
+        return;
+
+    setEqFilterType(f, newType);
+    renderer_.setSettings(settings_);
+    configureCardControls(filterIndex);
+    commitSettings();
+    repaint();
+}
+
+// ============================================================================
+// Accessibility: keyboard model
+// ============================================================================
+
+namespace {
+
+// Keys with Ctrl or Alt that the window does not use go on to the host (Alt+F4, Ctrl+S).
+// Navigation and edit keys stay here: in the piano roll they would change the notes
+// behind the window, and undo would leave the window showing stale values.
+bool passesToHost(const juce::KeyPress& key)
+{
+    const auto mods = key.getModifiers();
+    if (!mods.isCtrlDown() && !mods.isAltDown() && !mods.isCommandDown())
+        return false;
+
+    const int code = key.getKeyCode();
+    for (int kept : { juce::KeyPress::upKey, juce::KeyPress::downKey, juce::KeyPress::leftKey,
+                      juce::KeyPress::rightKey, juce::KeyPress::homeKey, juce::KeyPress::endKey,
+                      juce::KeyPress::pageUpKey, juce::KeyPress::pageDownKey, juce::KeyPress::deleteKey,
+                      juce::KeyPress::insertKey, juce::KeyPress::returnKey, juce::KeyPress::backspaceKey,
+                      juce::KeyPress::tabKey })
+        if (code == kept)
+            return false;
+
+    if (mods.isCtrlDown() || mods.isCommandDown())
+    {
+        const auto letter = juce::CharacterFunctions::toUpperCase(static_cast<juce::juce_wchar>(code));
+        for (juce::juce_wchar kept : { 'Z', 'Y', 'A', 'C', 'V', 'X', 'D' })
+            if (letter == kept)
+                return false;
+    }
+    return true;
+}
+
+bool isPlainKey(const juce::KeyPress& key, int code)
+{
+    return key.getKeyCode() == code && !key.getModifiers().isAnyModifierKeyDown();
+}
+
+} // namespace
+
+juce::String EqPopupComponent::filterTypeName(EqFilterType type)
+{
+    switch (type)
+    {
+    case EqFilterType::LowCut:    return LOC_RAW("Low cut");
+    case EqFilterType::LowShelf:  return LOC_RAW("Low shelf");
+    case EqFilterType::Peak:      return LOC_RAW("Peak");
+    case EqFilterType::HighShelf: return LOC_RAW("High shelf");
+    case EqFilterType::HighCut:   return LOC_RAW("High cut");
+    }
+    return {};
+}
+
+std::unique_ptr<juce::AccessibilityHandler> EqPopupComponent::createAccessibilityHandler()
+{
+    // The title is computed on request, so NVDA+Up Arrow reads the current band and row.
+    class EqAccessibilityHandler final : public juce::AccessibilityHandler {
+    public:
+        explicit EqAccessibilityHandler(EqPopupComponent& owner)
+            : juce::AccessibilityHandler(owner, juce::AccessibilityRole::list), owner_(owner) {}
+
+        juce::String getTitle() const override
+        {
+            juce::String title = "EQ";
+            if (!owner_.settings_.active)
+                title << ", " << LOC_RAW("bypassed");
+            const auto line = owner_.describeBandAndRow();
+            if (line.isNotEmpty())
+                title << ", " << line;
+            return title;
+        }
+
+    private:
+        EqPopupComponent& owner_;
+    };
+
+    return std::make_unique<EqAccessibilityHandler>(*this);
+}
+
+void EqPopupComponent::startKeyboardEditing()
+{
+    keyRow_ = KeyRow::Type;
+    ensureKeyBand();
+    focusGrid();
+}
+
+int EqPopupComponent::keyBand() const
+{
+    const int count = static_cast<int>(settings_.filters.size());
+    if (count == 0)
+        return -1;
+    return juce::jlimit(0, count - 1, selectedFilterIndex_);
+}
+
+void EqPopupComponent::ensureKeyBand()
+{
+    // The small preview has no band card; the keyboard always works in the full editor.
+    if (isPreview_)
+        toggleMaximize();
+    if (showingRemoveConfirmation_)
+        return;
+
+    const int band = keyBand();
+    if (band >= 0 && (selectedFilterIndex_ != band || cardBand_ != band))
+    {
+        selectedFilterIndex_ = band;
+        updateCardState();
+        repaint();
+    }
+}
+
+void EqPopupComponent::selectKeyBand(int index)
+{
+    selectedFilterIndex_ = index;
+    updateCardState();
+    repaint();
+    a11y::announce(*this, describeBandAndRow());
+}
+
+void EqPopupComponent::focusGrid()
+{
+    // Grabbing focus that is already here makes NVDA repeat the whole title.
+    if (!hasKeyboardFocus(false))
+        grabKeyboardFocus();
+}
+
+juce::String EqPopupComponent::describeRow(KeyRow row) const
+{
+    const int band = keyBand();
+    if (band < 0)
+        return {};
+
+    const auto& f = settings_.filters[static_cast<size_t>(band)];
+    const auto onOff = [](bool on) { return on ? LOC_RAW("On") : LOC(kOff); };
+    switch (row)
+    {
+    case KeyRow::Type:
+        return LOC_RAW("Type") + ", " + filterTypeName(f.type);
+    case KeyRow::Frequency:
+        return LOC_RAW("Frequency") + ", " + juce::String(juce::roundToInt(f.frequencyHz)) + " Hz";
+    case KeyRow::Gain:
+    {
+        if (f.type == EqFilterType::LowCut || f.type == EqFilterType::HighCut)
+            return Loc::format(LOC_RAW("Gain, not used by {0}"), filterTypeName(f.type));
+        // Round first so a tiny negative value is not read as "minus 0.0".
+        float gain = std::round(f.gainDb * 10.0f) / 10.0f;
+        if (std::abs(gain) < 0.05f)
+            gain = 0.0f;
+        const juce::String number = juce::String(gain > 0.0f ? "+" : "") + juce::String(gain, 1);
+        return LOC_RAW("Gain") + ", " + Loc::format(LOC_RAW("{0} dB"), number);
+    }
+    case KeyRow::Q:
+        return "Q, " + juce::String(f.q, 2);
+    case KeyRow::BypassBand:
+        return LOC_RAW("Bypass band") + ", " + onOff(f.bypassed);
+    case KeyRow::RemoveBand:
+        return LOC_RAW("Remove band");
+    case KeyRow::AddBand:
+        return LOC_RAW("Add band");
+    case KeyRow::BypassEq:
+        return LOC_RAW("Bypass EQ") + ", " + onOff(!settings_.active);
+    case KeyRow::RemoveEq:
+        return LOC_RAW("Remove EQ");
+    case KeyRow::Count:
+        break;
+    }
+    return {};
+}
+
+juce::String EqPopupComponent::describeAllBands() const
+{
+    juce::String text = Loc::format(LOC_RAW("Bands: {0}"), juce::String(static_cast<int>(settings_.filters.size())));
+    if (!settings_.active)
+        text << ", " << LOC_RAW("EQ bypassed");
+    for (size_t i = 0; i < settings_.filters.size(); ++i)
+    {
+        const auto& f = settings_.filters[i];
+        text << ". " << juce::String(static_cast<int>(i) + 1) << ": " << filterTypeName(f.type)
+             << ", " << juce::String(juce::roundToInt(f.frequencyHz)) << " Hz";
+        if (f.type != EqFilterType::LowCut && f.type != EqFilterType::HighCut)
+        {
+            const float gain = std::abs(f.gainDb) < 0.05f ? 0.0f : f.gainDb;
+            text << ", " << Loc::format(LOC_RAW("{0} dB"), juce::String(gain > 0.0f ? "+" : "") + juce::String(gain, 1));
+        }
+        text << ", Q " << juce::String(f.q, 2);
+        if (f.bypassed)
+            text << ", " << LOC_RAW("bypassed");
+    }
+    return text;
+}
+
+juce::String EqPopupComponent::describeBandAndRow() const
+{
+    const int band = keyBand();
+    if (band < 0)
+        return {};
+
+    const auto& f = settings_.filters[static_cast<size_t>(band)];
+    juce::String text = Loc::format(LOC_RAW("Band {0} of {1}"), juce::String(band + 1),
+                                    juce::String(static_cast<int>(settings_.filters.size())));
+    // The Type row says the type itself.
+    if (keyRow_ != KeyRow::Type)
+        text << ", " << filterTypeName(f.type);
+    if (f.bypassed)
+        text << ", " << LOC_RAW("bypassed");
+    text << ", " << describeRow(keyRow_);
+    return text;
+}
+
+bool EqPopupComponent::keyPressed(const juce::KeyPress& key)
+{
+    flushPendingCommit();
+    if (passesToHost(key))
+        return false;
+    // While the confirmation is open its buttons own the keys.
+    if (showingRemoveConfirmation_)
+        return true;
+
+    const int code = key.getKeyCode();
+    const auto mods = key.getModifiers();
+    const bool isButtonRow = keyRow_ >= KeyRow::BypassBand;
+
+    if (code == juce::KeyPress::escapeKey)
+    {
+        requestClose();
+        return true;
+    }
+    if (code == juce::KeyPress::spaceKey)
+    {
+        if (isButtonRow && !mods.isAnyModifierKeyDown())
+        {
+            activateKeyRow();
+            return true;
+        }
+        return false; // play/stop in the piano roll, to hear the result
+    }
+
+    ensureKeyBand();
+    const int count = static_cast<int>(settings_.filters.size());
+    const int band = keyBand();
+
+    if (isPlainKey(key, juce::KeyPress::leftKey) || isPlainKey(key, juce::KeyPress::rightKey)
+        || isPlainKey(key, juce::KeyPress::homeKey) || isPlainKey(key, juce::KeyPress::endKey))
+    {
+        const int target = code == juce::KeyPress::leftKey  ? band - 1
+                         : code == juce::KeyPress::rightKey ? band + 1
+                         : code == juce::KeyPress::homeKey  ? 0
+                                                            : count - 1;
+        // At the edge nothing changes and nothing is said.
+        if (target >= 0 && target < count && target != band)
+            selectKeyBand(target);
+        return true;
+    }
+    if (isPlainKey(key, juce::KeyPress::upKey) || isPlainKey(key, juce::KeyPress::downKey))
+    {
+        const int row = static_cast<int>(keyRow_) + (code == juce::KeyPress::upKey ? -1 : 1);
+        if (row >= 0 && row < static_cast<int>(KeyRow::Count))
+        {
+            keyRow_ = static_cast<KeyRow>(row);
+            a11y::announce(*this, describeRow(keyRow_));
+        }
+        return true;
+    }
+    if (code == juce::KeyPress::tabKey && !mods.isShiftDown())
+    {
+        enterKeyRow();
+        return true;
+    }
+    if (isPlainKey(key, juce::KeyPress::returnKey))
+    {
+        if (isButtonRow)
+            activateKeyRow();
+        else
+            enterKeyRow();
+        return true;
+    }
+    if (isPlainKey(key, juce::KeyPress::insertKey))
+    {
+        addBandFromKeyboard();
+        return true;
+    }
+    if (isPlainKey(key, juce::KeyPress::deleteKey))
+    {
+        removeBandFromKeyboard();
+        return true;
+    }
+    // I: all bands at once, like I on a note reads all its details.
+    if ((code == 'I' || code == 'i') && !mods.isAnyModifierKeyDown())
+    {
+        a11y::announce(*this, describeAllBands());
+        return true;
+    }
+    // Everything else stays in the window, so it cannot edit the notes behind it.
+    return true;
+}
+
+void EqPopupComponent::enterKeyRow()
+{
+    ensureKeyBand();
+    switch (keyRow_)
+    {
+    case KeyRow::Type:
+        typeBox_.grabKeyboardFocus();
+        break;
+    case KeyRow::Frequency:
+        frequencySlider_.grabKeyboardFocus();
+        break;
+    case KeyRow::Gain:
+        if (gainSlider_.isEnabled())
+            gainSlider_.grabKeyboardFocus();
+        else
+            a11y::announce(*this, describeRow(KeyRow::Gain));
+        break;
+    case KeyRow::Q:
+        qSlider_.grabKeyboardFocus();
+        break;
+    default:
+        break; // buttons have nothing to adjust; Enter or Space presses them
+    }
+}
+
+void EqPopupComponent::activateKeyRow()
+{
+    ensureKeyBand();
+    const int band = keyBand();
+    if (band < 0)
+        return;
+
+    switch (keyRow_)
+    {
+    case KeyRow::BypassBand:
+    {
+        toggleEqFilterBypass(settings_.filters[static_cast<size_t>(band)]);
+        renderer_.setSettings(settings_);
+        commitSettings();
+        repaint();
+        a11y::announce(*this, describeRow(keyRow_));
+        break;
+    }
+    case KeyRow::RemoveBand:
+        removeBandFromKeyboard();
+        break;
+    case KeyRow::AddBand:
+        addBandFromKeyboard();
+        break;
+    case KeyRow::BypassEq:
+        toggleEqActive(settings_);
+        renderer_.setSettings(settings_);
+        commitSettings();
+        repaint();
+        a11y::announce(*this, describeRow(keyRow_));
+        break;
+    case KeyRow::RemoveEq:
+        if (suppressRemoveConfirmation_)
+        {
+            requestRemoveEq();
+        }
+        else
+        {
+            showRemoveConfirmation();
+            confirmButton_.grabKeyboardFocus();
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+void EqPopupComponent::addBandFromKeyboard()
+{
+    if (static_cast<int>(settings_.filters.size()) >= EqSettings::kMaxFilters)
+    {
+        a11y::announce(*this, Loc::format(LOC_RAW("Maximum {0} bands"), juce::String(EqSettings::kMaxFilters)));
+        return;
+    }
+
+    // Same as a double click in the middle of the graph: a Peak at 1000 Hz, 0 dB, Q 1.
+    settings_.filters.push_back(makeEqFilter(1000.0, 0.0));
+    EqGraphRenderer::assignPaletteSlots(settings_);
+    selectedFilterIndex_ = static_cast<int>(settings_.filters.size()) - 1;
+    keyRow_ = KeyRow::Type;
+
+    renderer_.setSettings(settings_);
+    commitSettings();
+    updateCardState();
+    repaint();
+    a11y::announce(*this, Loc::format(LOC_RAW("Band {0} added"), juce::String(selectedFilterIndex_ + 1))
+                              + ", " + describeRow(keyRow_));
+}
+
+void EqPopupComponent::removeBandFromKeyboard()
+{
+    ensureKeyBand();
+    const int band = keyBand();
+    if (band < 0)
+        return;
+
+    // As with the mouse, removing the last band removes the whole EQ.
+    if (settings_.filters.size() <= 1)
+    {
+        requestRemoveEq();
+        return;
+    }
+
+    if (removeFilterAt(band))
+        return;
+    selectedFilterIndex_ = juce::jmin(band, static_cast<int>(settings_.filters.size()) - 1);
+    updateCardState();
+    repaint();
+    a11y::announce(*this, Loc::format(LOC_RAW("Band {0} removed"), juce::String(band + 1))
+                              + ", " + describeBandAndRow());
+}
+
+void EqPopupComponent::requestClose()
+{
+    flushPendingCommit();
+    // The owner deletes this window, so not from inside its own key handler.
+    juce::Component::SafePointer<EqPopupComponent> safeThis(this);
+    juce::MessageManager::callAsync([safeThis] {
+        if (safeThis != nullptr && safeThis->onClose)
+            safeThis->onClose();
+    });
+}
+
+void EqPopupComponent::requestRemoveEq()
+{
+    flushPendingCommit();
+    juce::Component::SafePointer<EqPopupComponent> safeThis(this);
+    juce::MessageManager::callAsync([safeThis] {
+        if (safeThis != nullptr && safeThis->onRemoveEq)
+            safeThis->onRemoveEq();
+    });
+}
+
+double EqPopupComponent::steppedKnobValue(const EqKnob& knob, const juce::KeyPress& key) const
+{
+    const int code = key.getKeyCode();
+    const bool fine = key.getModifiers().isAltDown();
+    const double value = knob.getValue();
+    const double lo = knob.getMinimum();
+    const double hi = knob.getMaximum();
+
+    int direction = 0;
+    bool big = false;
+    if (code == juce::KeyPress::upKey || code == juce::KeyPress::rightKey)
+        direction = 1;
+    else if (code == juce::KeyPress::downKey || code == juce::KeyPress::leftKey)
+        direction = -1;
+    else if (code == juce::KeyPress::pageUpKey)
+        direction = 1, big = true;
+    else if (code == juce::KeyPress::pageDownKey)
+        direction = -1, big = true;
+    // Home is the top and End the bottom, as the user expects from REAPER faders.
+    else if (code == juce::KeyPress::homeKey)
+        return hi;
+    else if (code == juce::KeyPress::endKey)
+        return lo;
+    else
+        return value;
+
+    double next = value;
+    if (&knob == &frequencySlider_)
+    {
+        // A semitone sounds like the same step at any frequency; Alt is 1 Hz, Page keys an octave.
+        next = fine ? value + direction
+                    : std::round(value * std::pow(2.0, direction * (big ? 1.0 : 1.0 / 12.0)));
+        if (next == value)
+            next = value + direction;
+    }
+    else if (&knob == &gainSlider_)
+    {
+        next = value + direction * (big ? 3.0 : fine ? 0.1 : 0.5);
+    }
+    else
+    {
+        next = value + direction * (big ? 1.0 : fine ? 0.01 : 0.1);
+    }
+    return juce::jlimit(lo, hi, next);
+}
+
+bool EqPopupComponent::handleKnobKey(EqKnob& knob, const juce::KeyPress& key)
+{
+    if (passesToHost(key))
+        return false;
+
+    const int code = key.getKeyCode();
+    const auto mods = key.getModifiers();
+
+    // The key that closed the number field bubbles up here as well; it is done already.
+    if (editorJustClosed_)
+        return true;
+
+    juce::Label* valueBox = nullptr;
+    for (auto* child : knob.getChildren())
+        if (auto* label = dynamic_cast<juce::Label*>(child))
+            valueBox = label;
+
+    if (valueBox != nullptr && valueBox->isBeingEdited())
+    {
+        // The field takes the other keys itself. Tab keeps the number and closes the
+        // circle grid -> knob -> field -> grid; Shift+Tab keeps it and goes back to the knob;
+        // Esc drops it.
+        if (code == juce::KeyPress::tabKey)
+        {
+            gridAfterEditor_ = !mods.isShiftDown();
+            valueBox->hideEditor(false);
+        }
+        else if (code == juce::KeyPress::escapeKey)
+            valueBox->hideEditor(true);
+        return true;
+    }
+
+    if (isPlainKey(key, juce::KeyPress::spaceKey))
+        return false; // play/stop
+
+    if (code == juce::KeyPress::escapeKey || (code == juce::KeyPress::tabKey && mods.isShiftDown()))
+    {
+        flushPendingCommit();
+        focusGrid();
+        return true;
+    }
+
+    if (code == juce::KeyPress::tabKey || code == juce::KeyPress::returnKey)
+    {
+        flushPendingCommit();
+        if (valueBox != nullptr)
+        {
+            juce::Component::SafePointer<EqPopupComponent> safeThis(this);
+            juce::Component::SafePointer<EqKnob> safeKnob(&knob);
+            valueBox->onEditorHide = [safeThis, safeKnob] {
+                if (safeThis == nullptr)
+                    return;
+                safeThis->editorJustClosed_ = true;
+                juce::MessageManager::callAsync([safeThis, safeKnob] {
+                    if (safeThis == nullptr)
+                        return;
+                    safeThis->editorJustClosed_ = false;
+                    const bool toGrid = std::exchange(safeThis->gridAfterEditor_, false);
+                    if (safeKnob == nullptr || !safeKnob->isShowing())
+                        return;
+                    // Back to the knob for more arrows (or to the grid after Tab),
+                    // unless a click took focus elsewhere.
+                    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+                    const bool focusIsFree = focused == nullptr || focused == safeKnob.getComponent()
+                                          || safeKnob->isParentOf(focused);
+                    if (!focusIsFree)
+                        return;
+                    if (toGrid)
+                        safeThis->focusGrid();
+                    else if (!safeKnob->hasKeyboardFocus(false))
+                        safeKnob->grabKeyboardFocus();
+                });
+            };
+        }
+        knob.showTextBox();
+        return true;
+    }
+
+    // Backspace: the default, the same value as a double click (1000 Hz, 0 dB, Q 1).
+    double next = isPlainKey(key, juce::KeyPress::backspaceKey) && knob.isDoubleClickReturnEnabled()
+                      ? juce::jlimit(knob.getMinimum(), knob.getMaximum(), knob.getDoubleClickReturnValue())
+                      : steppedKnobValue(knob, key);
+    // At the edge the value does not change and NVDA says nothing.
+    if (next != knob.getValue())
+    {
+        keyboardAdjusting_ = true;
+        // NVDA speaks the new value of the focused slider itself.
+        knob.setValue(next, juce::sendNotificationSync);
+        keyboardAdjusting_ = false;
+    }
+    return true;
+}
+
+bool EqPopupComponent::handleTypeKey(const juce::KeyPress& key)
+{
+    if (passesToHost(key))
+        return false;
+
+    const int code = key.getKeyCode();
+    if (isPlainKey(key, juce::KeyPress::spaceKey))
+        return false; // play/stop
+
+    // The type has no number to type in, so Tab goes back to the grid like Esc.
+    if (code == juce::KeyPress::escapeKey || code == juce::KeyPress::tabKey || code == juce::KeyPress::returnKey)
+    {
+        focusGrid();
+        return true;
+    }
+
+    // Arrows, Home and End choose the type (NVDA speaks it). Alt+Down would open the
+    // drop-down menu, so keys with modifiers are only eaten.
+    if (!key.getModifiers().isAnyModifierKeyDown())
+        typeBox_.listKeyPressed(key);
+    return true;
+}
+
+bool EqPopupComponent::handleConfirmKey(const juce::KeyPress& key)
+{
+    if (passesToHost(key))
+        return false;
+
+    const int code = key.getKeyCode();
+    if (code == juce::KeyPress::escapeKey)
+    {
+        cancelButton_.onClick();
+        return true;
+    }
+
+    juce::Button* const order[] = { &confirmButton_, &cancelButton_, &dontShowToggle_ };
+    int current = 0;
+    for (int i = 0; i < 3; ++i)
+        if (order[i]->hasKeyboardFocus(false))
+            current = i;
+
+    // Tab and Shift+Tab go round the three controls of the dialog only.
+    if (code == juce::KeyPress::tabKey)
+    {
+        order[(current + (key.getModifiers().isShiftDown() ? 2 : 1)) % 3]->grabKeyboardFocus();
+        return true;
+    }
+    if (code == juce::KeyPress::spaceKey || code == juce::KeyPress::returnKey)
+    {
+        order[current]->triggerClick();
+        return true;
+    }
+    return true;
+}
+
+void EqPopupComponent::scheduleCommit()
+{
+    commitPending_ = true;
+    commitDeadlineMs_ = juce::Time::getMillisecondCounterHiRes() + 400.0;
+}
+
+void EqPopupComponent::flushPendingCommit()
+{
+    if (!commitPending_)
+        return;
+    commitPending_ = false;
+    commitSettings();
 }
 
 } // namespace OpenTune

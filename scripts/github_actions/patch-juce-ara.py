@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply the reproducible JUCE source patches required by this repository.
 
-Three patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
+The patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
 
 1. The ARA 2.3.0 include rename required by BUILDING.md
    (modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp).
@@ -14,7 +14,8 @@ Three patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
    - the existing setAudioDeviceSetup(setup, treatAsChosenDevice) becomes a thin
      wrapper over a new private setAudioDeviceSetupInternal(setup,
      treatAsChosenDevice, updateLastDeviceTypeConfigs).
-   - a JUCE_UNIT_TESTS case covering the temporary-setup semantics.
+   - empty-device setups retain every requested configuration field.
+   - JUCE_UNIT_TESTS cases covering temporary and empty-device setups.
 3. The StandaloneFilterWindow title bar gains the maximise button, so the
    standalone app shows minimise/maximise/close instead of the upstream
    minimise/close pair
@@ -25,10 +26,16 @@ Three patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
    DefWindowProc resets the cursor to the system arrow on every non-client
    move; the theme cursors from CursorThemeManager would never stay visible
    there without this patch.
+5. The VST3 client module lifecycle hooks used by Source/Utils/Vst3ModulePin.cpp
+   (modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp):
+   - Windows initModule returns the result of openTuneVst3PinSucceeded(), so a
+     failed module pin fails module initialization.
+   - shutdownModule routes to openTuneVst3Shutdown(), and macOS bundleExit only
+     calls it when the last bundle reference exits.
 
 The patches are needle-based: if the pinned upstream content does not contain
 the expected context exactly once, the script fails loudly instead of guessing.
-After patching, the JUCE checkout must be dirty in exactly the five expected
+After patching, the JUCE checkout must be dirty in exactly the six expected
 files and nothing else.
 """
 
@@ -50,9 +57,11 @@ STANDALONE_RELATIVE = pathlib.Path(
     "modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h")
 WINDOWING_RELATIVE = pathlib.Path(
     "modules/juce_gui_basics/native/juce_Windowing_windows.cpp")
+VST3_RELATIVE = pathlib.Path(
+    "modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp")
 
 EXPECTED_FILES = [ARA_RELATIVE, ADM_H_RELATIVE, ADM_CPP_RELATIVE,
-                  STANDALONE_RELATIVE, WINDOWING_RELATIVE]
+                  STANDALONE_RELATIVE, WINDOWING_RELATIVE, VST3_RELATIVE]
 
 # ---------------------------------------------------------------------------
 # Patch 1: ARA include rename.
@@ -128,7 +137,23 @@ ADM_CPP_CACHE_NEW = b'''        updateCurrentSetup();
         if (updateLastDeviceTypeConfigs)
             for (int i = 0; i < availableDeviceTypes.size(); ++i)'''
 
-# 3) Unit test for the temporary-setup semantics, inserted after the
+# 3) Keep the complete requested configuration when closing the device.
+ADM_CPP_EMPTY_SETUP_OLD = b'''        deleteCurrentDevice();
+
+        if (treatAsChosenDevice)
+            updateXml();
+
+        return {};'''
+
+ADM_CPP_EMPTY_SETUP_NEW = b'''        deleteCurrentDevice();
+        currentSetup = newSetup;
+
+        if (treatAsChosenDevice)
+            updateXml();
+
+        return {};'''
+
+# 4) Unit tests for temporary and empty-device setups, inserted after the
 #    "long sequence of configuration changes" test.
 ADM_CPP_TEST_ANCHOR = b'''            closeDeviceByRequestingEmptyNames       (manager);
         }
@@ -216,6 +241,45 @@ ADM_CPP_TEST_NEW = b'''            closeDeviceByRequestingEmptyNames       (mana
             expectEquals (current.sampleRate, 48000.0);
         }
 
+        beginTest ("An empty-device setup retains the complete requested configuration");
+        {
+            AudioDeviceManager manager;
+            initialiseManager (manager);
+            manager.setCurrentAudioDeviceType (mockAName, true);
+            expect (manager.getCurrentAudioDevice() != nullptr);
+            const auto savedState = manager.createStateXml();
+            expect (savedState != nullptr);
+
+            auto closedSetup = manager.getAudioDeviceSetup();
+            closedSetup.inputDeviceName.clear();
+            closedSetup.outputDeviceName.clear();
+            closedSetup.sampleRate = 48000.0;
+            closedSetup.bufferSize = 512;
+            closedSetup.inputChannels.clear();
+            closedSetup.outputChannels.clear();
+            closedSetup.useDefaultInputChannels = false;
+            closedSetup.useDefaultOutputChannels = false;
+
+            expect (manager.setAudioDeviceSetupTemporarily (closedSetup).isEmpty());
+            expect (manager.getCurrentAudioDevice() == nullptr);
+            expect (manager.getAudioDeviceSetup() == closedSetup);
+            const auto savedAfterTemporary = manager.createStateXml();
+            expect (savedAfterTemporary != nullptr);
+            if (savedState != nullptr && savedAfterTemporary != nullptr)
+                expectEquals (savedAfterTemporary->toString(), savedState->toString());
+
+            expect (manager.setAudioDeviceSetup (closedSetup, true).isEmpty());
+            expect (manager.getCurrentAudioDevice() == nullptr);
+            expect (manager.getAudioDeviceSetup() == closedSetup);
+            const auto savedAfterClose = manager.createStateXml();
+            expect (savedAfterClose != nullptr);
+            if (savedAfterClose != nullptr)
+            {
+                expectEquals (savedAfterClose->getStringAttribute ("audioInputDeviceName"), String());
+                expectEquals (savedAfterClose->getStringAttribute ("audioOutputDeviceName"), String());
+            }
+        }
+
         beginTest ("AudioDeviceManager updates its current settings before notifying callbacks when device restarts itself");'''
 
 # ---------------------------------------------------------------------------
@@ -248,6 +312,87 @@ WINDOWING_SETCURSOR_NEW = b'''            //====================================
 
             case WM_NCMOUSEMOVE:
             case WM_MOUSEMOVE:'''
+
+# ---------------------------------------------------------------------------
+# Patch 5: VST3 module lifecycle hooks.
+# ---------------------------------------------------------------------------
+# The Windows module pin must be validated before initModule reports success;
+# the macOS last-bundle shutdown must run the process render runtime's
+# synchronous shutdown before bundleExit returns.
+VST3_MODULE_OLD = b'''//==============================================================================
+bool initModule();
+bool initModule()
+{
+    return true;
+}
+
+bool shutdownModule();
+bool shutdownModule()
+{
+    return true;
+}
+'''
+
+VST3_MODULE_NEW = b'''//==============================================================================
+#if JUCE_WINDOWS
+extern "C" bool openTuneVst3PinSucceeded() noexcept;
+#endif
+extern "C" bool openTuneVst3Shutdown() noexcept;
+
+bool initModule();
+bool initModule()
+{
+   #if JUCE_WINDOWS
+    return openTuneVst3PinSucceeded();
+   #else
+    return true;
+   #endif
+}
+
+bool shutdownModule();
+bool shutdownModule()
+{
+    return openTuneVst3Shutdown();
+}
+'''
+
+VST3_BUNDLE_EXIT_OLD = b''' JUCE_EXPORTED_FUNCTION bool bundleExit();
+ JUCE_EXPORTED_FUNCTION bool bundleExit()
+ {
+     if (shutdownModule())
+     {
+         if (--numBundleRefs == 0)
+         {
+             for (int i = 0; i < bundleRefs.size(); ++i)
+                 CFRelease (bundleRefs.getUnchecked (i));
+
+             bundleRefs.clear();
+         }
+
+         return true;
+     }
+
+     return false;
+ }
+'''
+
+VST3_BUNDLE_EXIT_NEW = b''' JUCE_EXPORTED_FUNCTION bool bundleExit();
+ JUCE_EXPORTED_FUNCTION bool bundleExit()
+ {
+     if (numBundleRefs == 1 && ! shutdownModule())
+         return false;
+
+     if (--numBundleRefs == 0)
+     {
+         for (int i = 0; i < bundleRefs.size(); ++i)
+             CFRelease (bundleRefs.getUnchecked (i));
+
+         bundleRefs.clear();
+     }
+
+     return true;
+ }
+'''
 
 
 def git(*args: str) -> bytes:
@@ -306,6 +451,7 @@ def main() -> None:
         ADM_CPP_RELATIVE: [
             (ADM_CPP_WRAPPER_OLD, ADM_CPP_WRAPPER_NEW, "setup wrapper split"),
             (ADM_CPP_CACHE_OLD, ADM_CPP_CACHE_NEW, "per-device-type cache guard"),
+            (ADM_CPP_EMPTY_SETUP_OLD, ADM_CPP_EMPTY_SETUP_NEW, "complete empty-device setup"),
             (ADM_CPP_TEST_ANCHOR, ADM_CPP_TEST_NEW, "temporary setup unit test"),
         ],
         STANDALONE_RELATIVE: [
@@ -314,6 +460,10 @@ def main() -> None:
         ],
         WINDOWING_RELATIVE: [
             (WINDOWING_SETCURSOR_OLD, WINDOWING_SETCURSOR_NEW, "WM_SETCURSOR handler"),
+        ],
+        VST3_RELATIVE: [
+            (VST3_MODULE_OLD, VST3_MODULE_NEW, "VST3 module lifecycle hooks"),
+            (VST3_BUNDLE_EXIT_OLD, VST3_BUNDLE_EXIT_NEW, "macOS last-bundle shutdown guard"),
         ],
     }
 
@@ -361,7 +511,7 @@ def main() -> None:
 
     print("JUCE patches applied: ARA include + AudioDeviceManager temporary setup "
           "+ Standalone title bar maximise button + WM_SETCURSOR handler "
-          "(exactly 5 files dirty)")
+          "+ VST3 module lifecycle hooks (exactly 6 files dirty)")
 
 
 if __name__ == "__main__":

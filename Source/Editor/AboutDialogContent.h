@@ -29,7 +29,8 @@ public:
 
         juce::DialogWindow::LaunchOptions options;
         options.content.setOwned(content);
-        options.dialogTitle = {};
+        // The title bar is hidden, but the window name is what NVDA reads on open.
+        options.dialogTitle = LOC(kAbout);
         options.dialogBackgroundColour = UIColors::backgroundDark;
         options.escapeKeyTriggersCloseButton = false;
         options.useNativeTitleBar = false;
@@ -45,12 +46,18 @@ public:
     explicit AboutDialogContent(const juce::String& markdown)
         : parentSubscription_(*this)
     {
-        setWantsKeyboardFocus(true);
+        // Accessibility: the content itself is not a focus stop (NVDA read it as "unknown").
+        // Every text line and link is, so Tab reads the page in order; keys bubble up here.
+        setWantsKeyboardFocus(false);
 
         buildItems(markdown);
         viewport_.setViewedComponent(&body_, false);
         viewport_.setScrollBarsShown(true, false);
         viewport_.setScrollBarThickness(8);
+        viewport_.getVerticalScrollBar().setAccessible(false);
+        // JUCE Viewport is a Tab stop by default; NVDA read it as "unknown" (user test).
+        // Tab scrolls the focused line into view, so the viewport needs no focus.
+        viewport_.setWantsKeyboardFocus(false);
         addAndMakeVisible(viewport_);
 
         closeButton_.setButtonText(LOC(kClose));
@@ -85,12 +92,45 @@ public:
 
     bool keyPressed(const juce::KeyPress& key) override
     {
+        // Enter and Space press the focused link or Close, as in standard Windows dialogs;
+        // Enter on a text line closes the dialog as before.
+        if (key == juce::KeyPress::returnKey || key == juce::KeyPress::spaceKey)
+        {
+            if (auto* button = dynamic_cast<juce::Button*>(juce::Component::getCurrentlyFocusedComponent());
+                button != nullptr && isParentOf(button))
+            {
+                button->triggerClick();
+                return true;
+            }
+        }
         if (key == juce::KeyPress::escapeKey || key == juce::KeyPress::returnKey)
         {
             closeDialog();
             return true;
         }
         return false;
+    }
+
+    // Tab can land on a line scrolled out of view: bring it into the viewport.
+    void focusOfChildComponentChanged(FocusChangeType) override
+    {
+        auto* focused = juce::Component::getCurrentlyFocusedComponent();
+        if (focused == nullptr || !body_.isParentOf(focused))
+            return;
+
+        const auto area = body_.getLocalArea(focused, focused->getLocalBounds());
+        const int viewTop = viewport_.getViewPositionY();
+        const int viewHeight = viewport_.getViewHeight();
+        if (area.getY() < viewTop)
+            viewport_.setViewPosition(0, area.getY());
+        else if (area.getBottom() > viewTop + viewHeight)
+            viewport_.setViewPosition(0, area.getBottom() - viewHeight);
+    }
+
+    // Plain group without a name: NVDA skips it instead of saying "unknown".
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::group);
     }
 
     void parentHierarchyChanged() override
@@ -129,6 +169,14 @@ private:
         TextRun(const juce::String& text, Style style) : text_(text), style_(style)
         {
             setInterceptsMouseClicks(false, false);
+            // The text is only painted: expose it as a focusable line so NVDA reads it on Tab.
+            setTitle(text);
+            setWantsKeyboardFocus(true);
+        }
+
+        std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+        {
+            return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::staticText);
         }
 
         int preferredWidth() const
@@ -216,6 +264,9 @@ private:
             return;
 
         auto& run = texts_.emplace_back(std::make_unique<TextRun>(trimmed, line.style));
+        // JUCE orders Tab by y then x, and centred text sits lower than a link on the
+        // same row, so keep the reading order explicitly.
+        run->setExplicitFocusOrder(nextFocusOrder_++);
         body_.addAndMakeVisible(*run);
         line.items.push_back({ run.get(), run.get(), nullptr });
     }
@@ -237,6 +288,7 @@ private:
             }
         };
 
+        button->setExplicitFocusOrder(nextFocusOrder_++);
         body_.addAndMakeVisible(*button);
         line.items.push_back({ button.get(), nullptr, button.get() });
     }
@@ -368,8 +420,17 @@ private:
     {
         juce::Component::SafePointer<AboutDialogContent> safeThis(this);
         juce::MessageManager::callAsync([safeThis] {
-            if (safeThis != nullptr && safeThis->isShowing())
-                safeThis->grabKeyboardFocus();
+            if (safeThis == nullptr || !safeThis->isShowing() || safeThis->initialFocusDone_)
+                return;
+            // This runs more than once while the dialog opens; focus only the first time,
+            // or NVDA repeats the window name and the line.
+            safeThis->initialFocusDone_ = true;
+
+            // Focus the first line (the heading): NVDA reads the window name and the line.
+            juce::Component* target = &safeThis->closeButton_;
+            if (!safeThis->lines_.empty() && !safeThis->lines_.front().items.empty())
+                target = safeThis->lines_.front().items.front().component;
+            target->grabKeyboardFocus();
         });
     }
 
@@ -380,6 +441,8 @@ private:
     juce::Viewport viewport_;
     juce::TextButton closeButton_;
     bool closing_ = false;
+    bool initialFocusDone_ = false;
+    int nextFocusOrder_ = 1;
     ComponentListenerSubscription parentSubscription_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AboutDialogContent)

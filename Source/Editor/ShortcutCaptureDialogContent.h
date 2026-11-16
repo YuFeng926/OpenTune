@@ -6,6 +6,7 @@
 #include "../Standalone/UI/UIColors.h"
 #include "../Utils/KeyShortcutConfig.h"
 #include "../Utils/LocalizationManager.h"
+#include "../Utils/ScreenReaderAnnouncer.h"
 
 namespace OpenTune
 {
@@ -50,6 +51,8 @@ public:
           dialogSubscription_ (*this)
     {
         setWantsKeyboardFocus (true);
+        // The capture area must keep focus (every key is captured), so it needs a name.
+        setTitle (LOC (kShortcutCapturePressKey));
 
         // 消息区按实际文案测量，至少 4 行（buildCaptureMessage 固定 4 行），
         // 避免俄/西语等较长译文把“当前绑定”一行挤掉。
@@ -83,7 +86,8 @@ public:
 
         juce::DialogWindow::LaunchOptions options;
         options.content.setOwned (content);
-        options.dialogTitle = {};
+        // The title bar is hidden, but the window name is what NVDA reads on open.
+        options.dialogTitle = title;
         options.dialogBackgroundColour = UIColors::backgroundDark;
         options.escapeKeyTriggersCloseButton = false; // Esc 也作为绑定被内容组件捕获
         options.useNativeTitleBar = false;
@@ -267,10 +271,29 @@ private:
         juce::Component::SafePointer<ShortcutCaptureDialogContent> safeThis (this);
         juce::MessageManager::callAsync ([safeThis]
         {
-            if (safeThis != nullptr)
+            if (safeThis == nullptr)
+                return;
+            // Called more than once while the dialog opens: a repeated grab made NVDA repeat it.
+            if (! safeThis->hasKeyboardFocus (false))
                 safeThis->grabKeyboardFocus();
+
+            // The message (shortcut name and current binding) is only painted: speak it
+            // once, queued after the focus speech.
+            if (! safeThis->messageAnnounced_ && safeThis->isShowing() && safeThis->message_.isNotEmpty())
+            {
+                safeThis->messageAnnounced_ = true;
+                a11y::announce (*safeThis, safeThis->message_, a11y::SpeechQueue::keepAll);
+            }
         });
     }
+
+    // A named group: NVDA read the plain component as "unknown".
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        return std::make_unique<juce::AccessibilityHandler> (*this, juce::AccessibilityRole::group);
+    }
+
+    bool messageAnnounced_ = false;
 
     /** 按当前字体与对话框宽度测量消息区，保证至少 4 行完整显示。 */
     void measureMessage()

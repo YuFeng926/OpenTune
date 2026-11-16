@@ -1,7 +1,6 @@
-#include "Content/ContentEditCommands.h"
+#include "ContentEditCommandsStub.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Utils/PianoRollEditAction.h"
-#include "Utils/PitchShiftEditAction.h"
 #include "Utils/SelectedNoteParameterEdit.h"
 #include <algorithm>
 #include <cmath>
@@ -15,16 +14,19 @@
 namespace {
 
 using namespace OpenTune;
+using namespace OpenTune::TestSupport;
 
 bool sameNote(const Note& left, const Note& right)
 {
     return left.startTime == right.startTime
         && left.endTime == right.endTime
         && left.pitch == right.pitch
+        && left.pitchOffset == right.pitchOffset
         && left.originalPitch == right.originalPitch
         && left.retuneSpeed == right.retuneSpeed
         && left.vibratoDepth == right.vibratoDepth
         && left.vibratoRate == right.vibratoRate
+        && left.pitchDriftScale == right.pitchDriftScale
         && left.dirty == right.dirty;
 }
 
@@ -137,8 +139,10 @@ bool checkPurePlanForParameter(AudioEditingScheme::ParameterId id, float value,
     const auto snapshot = makeSnapshot();
     const ContentKey key{DomainKind::StandaloneClip, 77, 0};
     const std::vector<int> selectedIndices{0};
+    const ContentEditCommandsStub commands;
     const auto patch = planSelectedNoteParameterEdit(
-        key, snapshot, selectedIndices, snapshot.notesRevision, id, value,
+        commands, key, snapshot, selectedIndices,
+        snapshot.notesRevision, id, value,
         retuneDefault, depthDefault, rateDefault);
     if (!patch || !patch->changed || patch->contentKey != key)
         return false;
@@ -194,13 +198,63 @@ bool checkStaleNotesRevisionRejected()
 {
     const auto snapshot = makeSnapshot();
     const ContentKey key{DomainKind::StandaloneClip, 77, 0};
+    const ContentEditCommandsStub commands;
     const auto patch = planSelectedNoteParameterEdit(
-        key, snapshot, {0}, snapshot.notesRevision + 1,
+        commands, key, snapshot, {0}, snapshot.notesRevision + 1,
         AudioEditingScheme::ParameterId::RetuneSpeed, 0.8f, 0.15f, 0.0f, 7.5f);
     return !patch;
 }
 
-class RecordingCommands final : public ContentEditCommands
+bool checkSharedNoteValuePlanner()
+{
+    const ContentEditCommandsStub commands;
+    const auto snapshot = makeSnapshot();
+
+    ContentNoteValueEditRequest targetRequest;
+    ContentNoteValueEdit target{ContentNoteValueEdit::Kind::TargetPitch, 0};
+    target.targetMidi = 69.0;
+    targetRequest.edits.push_back(target);
+    const auto targetPlan = commands.planNoteValueEdit(snapshot.notes, targetRequest);
+    if (targetPlan.changedPositions != std::vector<std::size_t>{0}
+        || std::abs(targetPlan.notes[0].getAdjustedPitch() - 440.0f) > 0.01f
+        || targetPlan.notes[0].pitchOffset != 0.0f
+        || !targetPlan.notes[0].dirty)
+        return false;
+
+    ContentNoteValueEditRequest centsRequest;
+    ContentNoteValueEdit cents{ContentNoteValueEdit::Kind::ShiftCents, 0};
+    cents.deltaCents = 25.0;
+    centsRequest.edits.push_back(cents);
+    const auto centsPlan = commands.planNoteValueEdit(snapshot.notes, centsRequest);
+    if (centsPlan.notes[0].pitchOffset != 0.25f || !centsPlan.notes[0].dirty)
+        return false;
+
+    ContentNoteValueEditRequest offsetRequest;
+    ContentNoteValueEdit offset{ContentNoteValueEdit::Kind::SetPitchOffset, 0};
+    offset.pitchOffset = -0.5;
+    offsetRequest.edits.push_back(offset);
+    const auto offsetPlan = commands.planNoteValueEdit(snapshot.notes, offsetRequest);
+    if (offsetPlan.changedPositions != std::vector<std::size_t>{0}
+        || offsetPlan.notes[0].pitchOffset != -0.5f
+        || !offsetPlan.notes[0].dirty)
+        return false;
+
+    ContentNoteValueEditRequest parameterRequest;
+    ContentNoteValueEdit parameters{ContentNoteValueEdit::Kind::Parameters, 0};
+    parameters.retuneSpeed = 1.2;
+    parameters.vibratoDepth = 120.0;
+    parameters.vibratoRate = 2.0;
+    parameters.pitchDriftScale = 2.5;
+    parameterRequest.edits.push_back(parameters);
+    const auto parameterPlan = commands.planNoteValueEdit(snapshot.notes, parameterRequest);
+    return parameterPlan.changedPositions == std::vector<std::size_t>{0}
+        && parameterPlan.notes[0].retuneSpeed == 1.0f
+        && parameterPlan.notes[0].vibratoDepth == 100.0f
+        && parameterPlan.notes[0].vibratoRate == 3.0f
+        && parameterPlan.notes[0].pitchDriftScale == 2.5f;
+}
+
+class RecordingCommands final : public ContentEditCommandsStub
 {
 public:
     ContentKey lastKey;
@@ -222,20 +276,19 @@ public:
         ++commits;
         return {};
     }
+    ContentCommitSnapshot commitNotesAndSegmentsInRanges(
+        ContentKey key, std::vector<Note> notes, std::vector<PitchCorrectionSegment> segments,
+        const std::vector<ContentEditRangeFrames>& ranges) override
+    {
+        if (ranges.size() != 1)
+            return {};
+        return commitNotesAndSegments(key, std::move(notes), std::move(segments), ranges.front());
+    }
     ContentCommitSnapshot commitNotesAndSegmentsWithOriginalF0(
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames,
         std::vector<float>, std::optional<std::vector<F0FrameRange>>) override { return {}; }
     bool setTimeGrid(ContentKey, std::shared_ptr<const TimeGridSnapshot>) override { return false; }
-    bool setDetectedKey(ContentKey, const DetectedKey&) override { return false; }
     bool applyPitchShiftState(ContentKey, const PitchShiftEditState&) override { return false; }
-    std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
-        ContentKey, const PitchShiftSettings&) override { return {}; }
-    bool autoTuneContentRange(ContentKey, int, int, const NoteGeneratorParams&,
-                              const std::optional<ScaleSnapConfig>&) override { return false; }
-    bool generateNotesOnly(ContentKey, const NoteGeneratorParams&) override { return false; }
-    bool ensureTimeToolAnchorSeed(ContentKey) override { return false; }
-    ContentCommitSnapshot commitVolumeEnvelope(ContentKey, AutomationLane) override { return {}; }
-    void republishPlaybackSource(ContentKey) override {}
 };
 
 bool checkEditActionUsesBoundContentKey()
@@ -254,7 +307,8 @@ bool checkEditActionUsesBoundContentKey()
                                         PitchCorrectionSegment::Source::NoteBased);
 
     PianoRollEditAction action(
-        commands, key, "Edit note", {before}, {after}, {beforeSegment}, {afterSegment}, {12, 14});
+        commands, key, "Edit note", {before}, {after}, {beforeSegment}, {afterSegment},
+        std::vector<ContentEditRangeFrames>{{12, 14}});
     action.undo();
     if (commands->commits != 1 || commands->lastKey != key
         || !sameNotes(commands->lastNotes, {before})
@@ -277,6 +331,7 @@ int main()
                                       35.0f, 0.15f, 0.0f, 7.5f)
         || !checkPurePlanForParameter(AudioEditingScheme::ParameterId::VibratoRate,
                                       9.0f, 0.15f, 0.0f, 7.5f)
+        || !checkSharedNoteValuePlanner()
         || !checkStaleNotesRevisionRejected()
         || !checkEditActionUsesBoundContentKey()) {
         std::cerr << "Selected-note parameter edit regression failed\n";

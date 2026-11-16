@@ -49,8 +49,10 @@
 #include "Utils/SilentGapDetector.h"
 #include "Utils/TimeCoordinate.h"
 #include "Utils/UndoManager.h"
+#include "Plugin/ReaperHostBridge.h"   // declarations only; the .cpp is built for the plugin
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
+#include "Utils/NoteAudition.h"
 #include "Audio/NotePitchAudition.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlayHeadState.h"
@@ -90,6 +92,10 @@ struct SplitOutcome {
     uint64_t trailingPlacementId{0};
     ContentKey leadingContentKey;
     ContentKey trailingContentKey;
+#if JucePlugin_Build_Standalone
+    StandaloneArrangement::SelectionState selectionBefore;
+    StandaloneArrangement::SelectionState selectionAfter;
+#endif
 };
 
 struct MergeOutcome {
@@ -101,6 +107,10 @@ struct MergeOutcome {
     ContentKey trailingContentKey;
     uint64_t mergedPlacementId{0};
     ContentKey mergedContentKey;
+#if JucePlugin_Build_Standalone
+    StandaloneArrangement::SelectionState selectionBefore;
+    StandaloneArrangement::SelectionState selectionAfter;
+#endif
 };
 
 struct DeleteOutcome {
@@ -114,6 +124,7 @@ struct DeleteOutcome {
 
 #if JucePlugin_Enable_ARA
 class OpenTuneDocumentController;
+struct AuditionRoute;
 #endif
 
 // ============================================================================
@@ -160,6 +171,10 @@ struct PluginPianoRollSessionState
 };
 
 struct PluginProcessorTransportTestAccessor;  // forward decl for test access to transport fields
+
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+class ControlService;
+#endif
 
 #if !JucePlugin_Build_Standalone
 namespace Capture {
@@ -260,11 +275,20 @@ public:
 #if JucePlugin_Build_Standalone
     /**
      * PreparedImport - 导入预处理结果（在后台线程完成）
+     *
+     * nativeSource 保留媒体实际采样率的完整不可变原始 PCM，sourceWindow 的
+     * duration 是唯一权威来源时长（由原始帧数/率一次取得）。
+     * canonicalAudioBuffer 是 44.1 kHz 编辑输入；实际率与渲染率相同时直接
+     * alias nativeSource.buffer。canonicalFirstSample 是 canonical buffer
+     * sample 0 在全局 source sample 网格上的位置。
      */
     struct PreparedImport {
         juce::String displayName;
         juce::String sourceFilePath;  // 原始导入文件路径（空字符串表示无文件来源，如 ARA）
-        juce::AudioBuffer<float> storedAudioBuffer;
+        NativePcmSource nativeSource;
+        std::shared_ptr<const juce::AudioBuffer<float>> canonicalAudioBuffer;
+        double canonicalSampleRate{0.0};
+        int64_t canonicalFirstSample{0};
         std::vector<SilentGap> silentGaps;
         SourceWindow sourceWindow;
     };
@@ -290,16 +314,16 @@ public:
         }
     };
 
-    bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
-                       double inSampleRate,
-                       const juce::String& displayName,
-                       const juce::String& sourceFilePath,
-                       PreparedImport& out,
-                       const char* entrySourceTag = "standalone-import");
+    static bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
+                              double inSampleRate,
+                              const juce::String& displayName,
+                              const juce::String& sourceFilePath,
+                              PreparedImport& out,
+                              const char* entrySourceTag = "standalone-import");
 
     CommittedPlacement commitPreparedImportAsPlacement(PreparedImport&& prepared,
                                                        const ImportPlacement& placement,
-                                                       uint64_t sourceId = 0);
+                                                       bool selectPlacement);
 
     // Clipboard for arrangement clip copy/paste
     PlacementClipboard& getClipClipboard() { return clipClipboard_; }
@@ -325,7 +349,7 @@ public:
         // 仅生成音符（不写修正曲线、不吸附），不请求 render。
         bool generateNotesWholeContentOnReady{false};
         NoteGeneratorParams noteGenerationParams;
-        // 音符生成成功后的回调（message-thread，导入派生事务的 dirty 推进）。
+        // 音符生成成功后的 message-thread completion event.
         std::function<void()> onNotesGenerated;
     };
 
@@ -433,6 +457,7 @@ private:
     juce::File externalEditSessionDir_;
     ContentKey externalEditContentKey_;
     bool externalEditCorruptCurveShown_ = false;
+    int externalEditAppliedCount_ = 0;
 #endif
 
 
@@ -535,11 +560,6 @@ private:
     // observes via relaxed load. Persisted in OTST v11 / OTSS v3.
     std::atomic<int> uiZoomPercent_{100};
     int trackHeight_{120};
-    
-#if JucePlugin_Build_Standalone
-    // 导出错误信息
-    juce::String lastExportError_;
-#endif
 
     // 由宿主生命周期入口（prepareToPlay / createEditor / didBindToARA）调用，
     // 绝不从 processBlock 调用；并发由 call_once 协调。
@@ -561,7 +581,7 @@ private:
     void replayDeferredState() noexcept;
 
 #if JucePlugin_Build_Standalone
-    ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
+    ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId);
 #endif
 
     ContentRenderService* resolveMutableLocalContentRenderService(ContentKey key) const noexcept;
@@ -584,22 +604,26 @@ public:
 
     /**
      * 重置推理后端（切换 GPU/CPU 时调用，UI 线程）：
-     * 暂停 render worker → 向进程寿命 control worker 投递命令（Session 销毁、
-     * AccelerationDetector reset/detect、重建全部在其上执行）→ 立即返回。
-     * 完成后经消息线程回调：先执行 beforeResume，再恢复 render worker。
+     * 向进程寿命 control worker 投递命令（暂停/恢复 render worker、Session 销毁、
+     * AccelerationDetector reset/detect、重建全部在其上串行执行）→ 立即返回。
+     * worker 完成操作、恢复 render worker 并结算事务后，经消息线程投递 completion。
      * gate 关闭后回调直接丢弃。
      */
-    void resetInferenceBackend(bool forceCpu, std::function<void()> beforeResume = {});
+    bool resetInferenceBackend(bool forceCpu, ProcessingPreferenceRuntimeCallback completion = {});
 
     /**
-     * 切换声码器模型权重（UI 线程）：暂停 render worker → 向进程寿命 control
-     * worker 投递命令（严格先销毁旧 Session 再按当前配置重建）→ 立即返回。
-     * 模型切换完成后才清 RenderCache/TimeStretchCache 并恢复 render worker。
-     * gate 关闭后回调直接丢弃。调用方负责持久化偏好。
+     * 切换声码器模型权重（UI 线程）：向进程寿命 control worker 投递命令
+     * （严格先销毁旧 Session 再按当前配置重建）→ 立即返回。返回 true 表示
+     * control queue 已接受该命令，共享偏好命令在接受后完成持久化。
+     * 模型切换完成后由共享 backend 变更通知统一清理
+     * RenderCache/TimeStretchCache。gate 关闭后回调直接丢弃。
      */
-    void setVocoderModelWeight(const VocoderModelWeight& weight);
+    bool setVocoderModelWeight(const VocoderModelWeight& weight,
+                               ProcessingPreferenceRuntimeCallback completion = {},
+                               std::optional<bool> forceCpu = std::nullopt);
 
     bool setF0ModelType(F0ModelType type, juce::String* failureReason = nullptr);
+    ProcessingPreferenceRuntimeOperations getProcessingPreferenceRuntimeOperations();
 
     /** 清除缓存并重新渲染所有 clip（UI 线程调用）。 */
     void invalidateAllContentCaches();
@@ -625,6 +649,8 @@ public:
     {
         return externalEditSessionDir_.getFullPathName().isNotEmpty();
     }
+    // Accessibility: grows on every applied external edit, so an open editor can speak it.
+    int getExternalEditAppliedCount() const noexcept { return externalEditAppliedCount_; }
     // 启动（或重新拉起）外部编辑会话；成功时处理器接管会话状态。
     bool externalEditLaunchRequested(ContentKey key, const EditableContentSnapshot& snapshot);
 
@@ -704,8 +730,12 @@ public:
     void onContentLocalMutationCompleted(ContentKey key,
                                          ContentEditRangeFrames affectedRange);
     void onContentFullMutationCompleted(ContentKey key);
+    void notifyContentEditCompleted(ContentKey key);
 
     void requestFullContentRender(ContentKey key);
+    // Message thread: invalidates owner-derived content after a shared backend
+    // change. Reached once per change through the CRS execution lease.
+    void handleSharedBackendChanged();
 
     void handleStage1ChunkSettled(
         ContentKey key,
@@ -726,6 +756,11 @@ public:
                                         std::vector<Note> notes,
                                         std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange);
+    ContentCommitSnapshot commitContentNotesAndSegmentsInRanges(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        const std::vector<ContentEditRangeFrames>& affectedRanges);
     ContentCommitSnapshot commitContentNotesAndSegmentsWithOriginalF0(
         ContentKey key,
         std::vector<Note> notes,
@@ -850,6 +885,10 @@ public:
     // 无渲染发布入口：按 content domain 调现有装配函数，只读最新 snapshot、
     // 发布携带该 snapshot（AutomationLane/TimeGrid/revision）的不可变播放源。
     void republishPlaybackSource(ContentKey key);
+#if JucePlugin_Build_Standalone
+    // 来源发布完成后重建 Standalone 编排快照中的冻结来源视图与固定几何。
+    void refreshStandalonePlaybackSnapshot();
+#endif
     bool setContentTimeGrid(ContentKey key,
                             std::shared_ptr<const TimeGridSnapshot> grid);
     bool applyTimeGridEdit(ContentKey key,
@@ -862,7 +901,7 @@ public:
     void recordOriginalF0FailureEvent(ContentKey key, const juce::String& reason);
     std::deque<OriginalF0FailureEvent> takeOriginalF0FailureEvents();
     bool applyContentPitchShiftState(ContentKey key, const PitchShiftEditState& state);
-    std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
+    PitchShiftEditAction* commitPitchShiftEdit(
         ContentKey key,
         const PitchShiftSettings& newSettings);
 private:
@@ -875,31 +914,23 @@ private:
         ContentKey key,
         std::vector<Note> notes,
         std::vector<PitchCorrectionSegment> segments,
-        ContentEditRangeFrames affectedRange,
+        std::vector<ContentEditRangeFrames> affectedRanges,
         std::vector<float> originalF0InRange,
         std::optional<std::vector<F0FrameRange>> erasedRanges);
     // 调式检测唯一入口（F0 提交成功链调用）：origin==Manual 的内容永不自动覆盖
     void updateContentKeyFromOriginalF0(ContentKey key);
-    // AUTO 提交底层：合并/吸附后的音符 + 派生曲线一次性写回。
+    // AUTO 提交底层：计划后的完整音符 + 派生曲线一次性写回。
     // 唯一核心调用方是 autoTuneContentRangeByContentKey；不创建 undo、不 mark dirty。
-    bool commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
-                                                   std::vector<Note> generatedNotes,
-                                                   int startFrame,
-                                                   int endFrameExclusive,
-                                                   float retuneSpeed,
-                                                   float vibratoDepth,
-                                                   float vibratoRate);
+    bool commitAutoTunePlanByContentKey(ContentKey key,
+                                        std::vector<Note> mergedNotes,
+                                        int startFrame,
+                                        int endFrameExclusive,
+                                        float retuneSpeed,
+                                        float vibratoDepth,
+                                        float vibratoRate);
 
-    // 从不可变 PitchCurveSnapshot 的 OriginalF0 生成音符（generate + validate）。
-    // nullopt = 输入无效/生成失败；空 vector = 生成成功但无音符（全静音是合法结果）。
-    // 不写 correction segments、不吸附、不请求 render。
-    std::optional<std::vector<Note>> generateNotesFromOriginalF0(
-        const std::shared_ptr<const PitchCurveSnapshot>& curveSnapshot,
-        int startFrame, int endFrameExclusive, const NoteGeneratorParams& params);
 public:
-    // 普通 AUTO 唯一核心：读 snapshot OriginalF0 → generateNotesFromOriginalF0
-    // (energy=nullptr，与现有手动 AUTO 行为一致；nullopt/空 → 返回 false) →
-    // scaleSnap apply → commitAutoTuneGeneratedNotesByContentKey。
+    // 普通 AUTO 唯一核心：ContentEditCommands 统一计划生成、吸附与范围合并，再提交完整结果。
     // 不创建 undo、不 mark dirty——事务与 dirty 归属调用方。scaleSnap 为空表示不做音阶吸附。
     bool autoTuneContentRangeByContentKey(
         ContentKey key,
@@ -908,8 +939,7 @@ public:
         const NoteGeneratorParams& params,
         const std::optional<ScaleSnapConfig>& scaleSnap);
 
-    // 仅生成音符唯一入口（单一快照）：读一次 getContentSnapshot →
-    // generateNotesFromOriginalF0(0..f0Count) → 拓扑提交（commitContentNoteTopologyPatch）。
+    // 仅生成音符唯一入口：ContentEditCommands 统一计划后拓扑提交。
     // 不写 correction segments、不吸附、不请求 render。不创建 undo、不 mark dirty。
     // 空音符（全静音）是合法结果：仍提交拓扑 patch 清除该 range 音符。
     bool generateNotesOnlyByContentKey(ContentKey key, const NoteGeneratorParams& params);
@@ -923,15 +953,6 @@ public:
     std::optional<DeleteOutcome> deletePlacement(int trackId, int placementIndex);
     void runReclaimSweepOnMessageThread();   // public for test synchronous invocation
     void scheduleReclaimSweep();
-
-    bool exportPlacementAudio(int trackId, int placementIndex, const juce::File& file, Language language);
-    // 导出整个轨道的音频（时长以最晚Clip结束为准）
-    bool exportTrackAudio(int trackId, const juce::File& file, Language language);
-    // 导出总线混音（所有轨道）
-    bool exportMasterMixAudio(const juce::File& file, Language language);
-    
-    // 导出错误信息
-    juce::String getLastExportError() const { return lastExportError_; }
 #endif
 
     // Rendering & Buffering
@@ -1003,6 +1024,36 @@ public:
 
     UndoManager& getUndoManager() { return undoManager_; }
     PianoKeyAudition& getPianoKeyAudition() { return pianoKeyAudition_; }
+    NoteAudition& getNoteAudition() { return *noteAudition_; }
+    /** Message-thread terminal render notification (complete/failure/cancel). */
+    using RenderTerminalCallback = std::function<void(ContentKey, bool)>;
+    void setRenderTerminalCallback(RenderTerminalCallback callback);
+    using PlacementChangedCallback = std::function<void()>;
+    void setPlacementChangedCallback(PlacementChangedCallback callback);
+    void notifyPlacementChanged();
+#if JucePlugin_Build_Standalone
+    /** Invalidation hint only; consumers must read the latest state after the current commit stack returns. */
+    using ContentChangedCallback = std::function<void(ContentKey)>;
+    void setContentChangedCallback(ContentChangedCallback callback);
+    using ContentEditCompletedCallback = std::function<void(ContentKey)>;
+    void setContentEditCompletedCallback(ContentEditCompletedCallback callback);
+    using ExportReadinessChangedCallback = std::function<void()>;
+    void setExportReadinessChangedCallback(ExportReadinessChangedCallback callback);
+#endif
+#if !JucePlugin_Build_Standalone
+    // Accessibility: REAPER's transport state and positions (see ReaperHostBridge).
+    juce::VST3ClientExtensions* getVST3ClientExtensions() override { return &reaperHost_; }
+    std::optional<ReaperHostBridge::Transport> getReaperTransport() const { return reaperHost_.getTransport(); }
+#else
+    std::optional<ReaperHostBridge::Transport> getReaperTransport() const { return std::nullopt; }
+#endif
+    // Rendered (corrected) audio of a content. In ARA it is owned by the DocumentController,
+    // not by this plugin instance, so resolve it through the shared service lookup.
+    std::shared_ptr<const RenderCache> getReadableRenderCache(ContentKey key) const
+    {
+        const auto* renderService = resolveReadableContentRenderService(key);
+        return renderService != nullptr ? renderService->getRenderCache(key) : nullptr;
+    }
 
     /**
      * 音符移调试听（UI 线程调用）：按给定时间窗与目标频率请求一次
@@ -1013,11 +1064,35 @@ public:
     void stopNotePitchAudition();
 
 private:
+    void notifyContentChanged(ContentKey key);
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
+    std::shared_ptr<NoteAudition> noteAudition_ = std::make_shared<NoteAudition>();
     NotePitchAudition notePitchAudition_;
+    PlacementChangedCallback placementChangedCallback_;
+#if JucePlugin_Build_Standalone
+    ContentChangedCallback contentChangedCallback_;
+    ContentEditCompletedCallback contentEditCompletedCallback_;
+    ExportReadinessChangedCallback exportReadinessChangedCallback_;
+    void updateContentRenderStateChangedCallback();
+#endif
+    struct RenderTerminalSink { RenderTerminalCallback callback; };
+    std::shared_ptr<RenderTerminalSink> renderTerminalSink_ = std::make_shared<RenderTerminalSink>();
+    // Message-thread only: render generation of the last
+    // successful terminal per content. A multi-chunk render settles every
+    // queued chunk callback against the same fully settled cache, so success is
+    // claimed once per key+render generation.
+    std::unordered_map<ContentKey, uint64_t> lastCompletedRenderGeneration_;
+    void notifyRenderTerminal(ContentKey key, bool completed, uint64_t renderGeneration = 0);
+    void mixDocumentAuditions(juce::AudioBuffer<float>& buffer, int numSamples, double sampleRate) noexcept;
+#if !JucePlugin_Build_Standalone
+    ReaperHostBridge reaperHost_;
+#endif
 #if JucePlugin_Enable_ARA
     juce::ARAPlaybackRegion* notePitchAuditionTargetRegion_ = nullptr;
+    std::atomic<AuditionRoute*> auditionRoute_{nullptr};
+    std::atomic<PlayHeadState*> sharedPlayHeadStateForAudio_{nullptr};
+    uint64_t renderTerminalSubscription_{0};
 #endif
     OutputSpectrumAnalyzer outputSpectrumAnalyzer_;
 
@@ -1050,6 +1125,58 @@ private:
     // Message-thread only: setStateInformation and the replay entry points all
     // run on the message thread, so no locking is required.
     juce::MemoryBlock pendingState_;
+
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+public:
+    // External Control API lifecycle.
+    // Message thread. The sequence of the host entry points: initialise, then replay the deferred state.
+    bool ensureRuntimeInitialized() noexcept
+    {
+        const bool ready = initializeRuntimeState();
+        if (ready)
+            replayDeferredState();
+        return ready;
+    }
+    ControlService& getControlService() noexcept { return *controlService_; }
+    void setControlJobWakeCallback(std::function<void()> callback);
+
+private:
+    std::function<void()> controlJobWakeCallback_;
+    std::unique_ptr<ControlService> controlService_;
+#endif
+
+#if JucePlugin_Build_Standalone
+public:
+    // Standalone export busy state, shared by the editor's export and (with the Control API)
+    // export.start (Source/Control/Ops/ExportOps.cpp). One export of either side at a time, held
+    // from the last admission before a worker starts to the moment its file is written or the
+    // attempt fails. Message thread only — every tryBeginExport / finishExport / query runs on the
+    // message thread; a plain bool, not a lock, so a repeated finishExport or a finish without a
+    // begin is an assertable contract breach. Deliberately not gated by OPENTUNE_ENABLE_CONTROL_API,
+    // so UI-only builds share the same state.
+    bool tryBeginExport() noexcept
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        if (exportBusy_)
+            return false;
+        exportBusy_ = true;
+        return true;
+    }
+    void finishExport() noexcept
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        jassert(exportBusy_);
+        exportBusy_ = false;
+    }
+    bool isExportBusy() const noexcept
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        return exportBusy_;
+    }
+
+private:
+    bool exportBusy_ = false;
+#endif
 
 public:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessor)

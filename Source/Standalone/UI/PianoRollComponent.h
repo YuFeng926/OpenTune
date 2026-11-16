@@ -30,6 +30,8 @@
 #include "Utils/NoteGeneratorTypes.h"
 #include "Utils/PitchControlConfig.h"
 #include "Utils/KeyShortcutConfig.h"
+#include "Utils/ContextMenuKey.h"
+#include "Utils/ScreenReaderAnnouncer.h"
 #include "Utils/ZoomSensitivityConfig.h"
 #include <cmath>
 #include <memory>
@@ -56,6 +58,8 @@
 namespace OpenTune {
 
 class PianoKeyAudition;
+class NoteAudition;
+class RenderCache;
 class AppPreferences;
 class OpenTuneAudioProcessor;
 struct PlayHeadState;
@@ -96,6 +100,8 @@ public:
     class Listener
     {
     public:
+        enum class ParameterTargetChangePolicy { Commit, Cancel };
+
         virtual ~Listener() = default;
         virtual bool playheadPositionChangeRequested(double timeSeconds) = 0;
         // Drag preview. The default commits immediately so standalone keeps a live seek.
@@ -115,6 +121,8 @@ public:
         virtual bool pointerShortcutRequested(KeyShortcutConfig::ShortcutId /*id*/) { return false; }
         virtual void currentToolChanged(ToolId tool) { (void)tool; }
         virtual void timelineDisplayModeChanged(TimelineDisplayMode mode) { (void)mode; }
+        virtual void parameterTargetWillChange(ParameterTargetChangePolicy policy) { (void)policy; }
+        virtual void parameterTargetDidChange() {}
     };
 
     enum class ScrollMode
@@ -142,12 +150,12 @@ public:
     void setEditedContent(ContentKey contentKey,
                            std::shared_ptr<const PitchCurveSnapshot> curve,
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                           int sampleRate,
+                           double sampleRate,
                            bool activePlacementChanged = false);
     bool setEditedContentAndProjection(ContentKey contentKey,
                                        std::shared_ptr<const PitchCurveSnapshot> curve,
                                        std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                                       int sampleRate,
+                                       double sampleRate,
                                        const ContentTimelineProjection& projection,
                                        bool activePlacementChanged = false);
     void requestInitialF0View(ContentKey contentKey);
@@ -172,18 +180,28 @@ public:
     void onNotesRevisionChanged();
     void onPitchRevisionChanged();
     void setPianoKeyAudition(PianoKeyAudition* audition) { pianoKeyAudition_ = audition; }
+    void setNoteAudition(NoteAudition* audition) { noteAudition_ = audition; }
+    /** Access to a content's rendered (corrected) audio, for keyboard note audition. */
+    using RenderCacheProvider = std::function<std::shared_ptr<const RenderCache>(ContentKey)>;
+    void setRenderCacheProvider(RenderCacheProvider provider) { renderCacheProvider_ = std::move(provider); }
+    /** The plugin has no use for Esc in the piano roll: let the host have it. */
+    void setEscapePassesToHost(bool passes) noexcept { escapePassesToHost_ = passes; }
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
     /** 注入 AppPreferences 指针（两个 Editor 构造/同步时直接注入，无中转层）。
      *  用于 EQ popup 和音符整体移动吸附偏好。 */
     void setAppPreferences(AppPreferences* prefs) noexcept { appPreferences_ = prefs; }
+    /** Re-evaluate the accessibility preference; stops audition when it is turned off. */
+    void applyAccessibilityMode();
 
     using ReadContentSnapshotFn = std::function<std::shared_ptr<const EditableContentSnapshot>(ContentKey)>;
     void setReadContentSnapshot(ReadContentSnapshotFn fn) { readContentSnapshot_ = std::move(fn); }
 
     void setContentCommands(std::shared_ptr<ContentEditCommands> commands);
-    void setProcessor(OpenTuneAudioProcessor* processor) noexcept { processor_ = processor; }
+    void setProcessor(OpenTuneAudioProcessor* processor);
 
     ContentKey editedContentKey() const { return editedContentKey_; }
+    double audioSampleRate() const noexcept { return audioBufferSampleRate_; }
     ContentTimelineProjection activeContentProjection() const noexcept;
     WaveformMipmapCache& getWaveformMipmapCache() noexcept { return waveformMipmapCache_; }
 
@@ -250,6 +268,19 @@ public:
     bool getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const;
 
     AudioEditingScheme::ParameterEditResult editParameter(AudioEditingScheme::ParameterId id, float value);
+    // Accessibility: where the user is in the song while REAPER is paused or stopped
+    // (project seconds), and the same in the clip's source seconds. Empty while playing
+    // or in other hosts. See trackReaperTransport.
+    struct SongPosition {
+        enum class Source { Paused, EditCursor };
+        double seconds = 0.0;
+        Source source = Source::EditCursor;
+    };
+    std::optional<SongPosition> currentSongPosition() const;
+    std::optional<double> stoppedEditCursorSourceTime() const;
+    // Accessibility: what a parameter knob change did, for speech ("Applied to notes: 3").
+    juce::String describeParameterEdit(AudioEditingScheme::ParameterId id,
+                                       const AudioEditingScheme::ParameterEditResult& result) const;
     void setCreationDefault(AudioEditingScheme::ParameterId id, float value);
 
     NoteGeneratorParams getCurrentAutoTuneParams() const noexcept
@@ -331,7 +362,7 @@ public:
     /** 为当前选中组打开 EQ 预览弹窗：只读选中组与主音符，主音符 eq 有值显示它，
      *  无值显示 EqSettings 默认；打开零 draft、零提交。主音符 index 由
      *  ToolHandler 唯一判定并经 toolCtx.openEqPreview 直通。 */
-    void openEqPopupForSelection(int primaryIndex);
+    void openEqPopupForSelection(int primaryIndex, bool fromKeyboard = false);
 
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
     void updateScrollBars();
@@ -449,6 +480,7 @@ private:
     void mouseMagnify(const juce::MouseEvent& e, float scaleFactor) override;
 public:
     bool keyPressed(const juce::KeyPress& key) override;
+    bool keyStateChanged(bool isKeyDown) override;
 
     /// Re-read notes from the content store, update the cache, and return the snapshot used.
     std::shared_ptr<const EditableContentSnapshot> refreshEditedContentNotes();
@@ -514,11 +546,11 @@ private:
     PianoRollToolHandler::Context buildToolHandlerContext();
     void initializeToolHandler();
     void applyEditedContentCurve(std::shared_ptr<const PitchCurveSnapshot> curve);
-    void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
+    void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, double sampleRate);
     void applyEditedContent(ContentKey contentKey,
                             std::shared_ptr<const PitchCurveSnapshot> curve,
                             std::shared_ptr<const juce::AudioBuffer<float>> buffer,
-                            int sampleRate,
+                            double sampleRate,
                             bool activePlacementChanged,
                             bool deferRedraw);
     std::optional<PianoRollRenderer::ContentRenderItem> buildContentRenderItem(
@@ -534,8 +566,8 @@ private:
                                              const std::vector<Note>& notes,
                                              const std::vector<PitchCorrectionSegment>& segments,
                                              F0FrameRange affectedRange);
-    AutoTuneApplyResult applyAutoSnapToAllNotes(const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot,
-                                                const F0Timeline& f0tl);
+    AutoTuneApplyResult applyAutoSnapToAllNotes(
+        const std::shared_ptr<const EditableContentSnapshot>& contentSnapshot);
     bool selectNotesOverlappingFrames(int startFrame, int endFrameExclusive);
     juce::Rectangle<int> getNoteBounds(const Note& note) const;
     juce::Rectangle<int> getNotesBounds(const std::vector<Note>& notes) const;
@@ -545,6 +577,8 @@ private:
     void invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes);
     void invalidateSelectionFeedback();
     void invalidateInteractionPreview(const juce::Rectangle<int>& bounds);
+    void parameterTargetWillChange(Listener::ParameterTargetChangePolicy policy);
+    void parameterTargetDidChange();
 
     float getTotalHeight() const;
 
@@ -591,6 +625,8 @@ private:
     // OpenDyne 右键工具选择弹出条
     std::unique_ptr<juce::Component> toolSelectionBar_;
     void showToolSelectionBar(juce::Point<int> screenPos);
+    void showToolMenuFromKeyboard();
+    a11y::ApplicationsKeyWatcher applicationsKey_;
     void dismissToolPopup();
 
     InteractionState interactionState_;
@@ -692,6 +728,10 @@ private:
     ReadContentSnapshotFn readContentSnapshot_;
     std::shared_ptr<ContentEditCommands> contentCommands_;
     OpenTuneAudioProcessor* processor_ = nullptr;
+    // Accessibility: REAPER transport as last seen (trackReaperTransport) and the last halt.
+    void trackReaperTransport();
+    int lastReaperPlayState_ = 0;
+    std::optional<double> haltEditCursor_;   // edit cursor when playback paused or stopped
 
     std::shared_ptr<const EditableContentSnapshot> readSnapshotFor(ContentKey key) const {
         return readContentSnapshot_ ? readContentSnapshot_(key) : nullptr;
@@ -740,6 +780,37 @@ private:
     static constexpr int dragThreshold_ = 5;
     
     PianoKeyAudition* pianoKeyAudition_ = nullptr;
+    NoteAudition* noteAudition_ = nullptr;
+
+    // Accessibility: per-note UIA children and speech for the keyboard-selected note.
+    class NoteAccessibilityItem;
+    std::vector<std::unique_ptr<NoteAccessibilityItem>> noteAccessibilityItems_;
+    void syncNoteAccessibilityItems();
+    void clearNoteAccessibilityItems();
+    void handleKeyboardNote(PianoRollToolHandler::KeyboardNoteEvent event, const std::vector<Note>& notes, int index);
+    enum class NoteDetail { Navigation, Target, Full };
+    juce::String describeKeyboardNote(const std::vector<Note>& notes, int index, NoteDetail detail) const;
+    /** @param renderCacheToOverlay settled canonical render to overlay; when null the
+     *  best available cache is used for navigation audition. */
+    void auditionNote(const Note& note, const RenderCache* renderCacheToOverlay = nullptr);
+    juce::String keyboardToolName(ToolId tool) const;
+    juce::String modulationPercentText(const Note& note) const;
+    juce::String driftPercentText(const Note& note) const;
+    juce::String volumeText(const Note& note) const;
+    juce::String describeEditedSelection(const std::vector<Note>& notes, int index,
+                                         const std::function<juce::String(int)>& valueAt) const;
+    void scheduleAuditionAfterRender(int noteIndex);
+    void playPendingAudition(bool renderFailed);
+    void cancelPendingAudition();
+    void handleRenderTerminal(ContentKey key, bool completed);
+    void announceForAccessibility(const juce::String& text,
+                                  a11y::SpeechQueue queue = a11y::SpeechQueue::replacePrevious);
+    bool accessibilityModeEnabled() const noexcept;
+    bool escapePassesToHost_ = false;
+    RenderCacheProvider renderCacheProvider_;
+    ContentKey pendingAuditionContentKey_;
+    int pendingAuditionNoteIndex_ = -1;
+    bool accessibilityModeApplied_ = false;
     int pressedPianoKey_ = -1;
 
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;

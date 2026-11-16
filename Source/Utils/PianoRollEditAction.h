@@ -23,7 +23,7 @@ public:
                         std::vector<Note> afterNotesInRange,
                         std::vector<PitchCorrectionSegment> beforeSegments,
                         std::vector<PitchCorrectionSegment> afterSegments,
-                        ContentEditRangeFrames affectedRange,
+                        std::vector<ContentEditRangeFrames> affectedRanges,
                         std::vector<float> beforeOriginalF0InRange = {},
                         std::vector<float> afterOriginalF0InRange = {},
                         std::vector<F0FrameRange> beforeErasedRanges = {},
@@ -43,7 +43,7 @@ private:
     std::vector<float> beforeOriginalF0_, afterOriginalF0_;
     std::vector<F0FrameRange> beforeErasedRanges_, afterErasedRanges_;
     bool hasErasedRangePatch_ = false;
-    ContentEditRangeFrames affectedRange_;
+    std::vector<ContentEditRangeFrames> affectedRanges_;
 };
 
 } // namespace OpenTune

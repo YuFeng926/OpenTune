@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+#include "PrefsModels.h"
+
+#include "Inference/ModelFactory.h"
+#include "Runtime/ProcessRenderRuntime.h"
+#include "Utils/AccelerationDetector.h"
+#include "Utils/ModelPathResolver.h"
+
+#include <algorithm>
+
+namespace OpenTune {
+
+namespace {
+
+/** Keeps the names that the wire can carry and cuts the list at kControlOptionCount. */
+std::vector<std::string> limitedNames(const std::vector<std::string>& names)
+{
+    std::vector<std::string> out;
+    for (const auto& name : names) {
+        if (out.size() >= kControlOptionCount)
+            break;
+        if (name.empty() || !isValidUtf8(name) || utf8CodePointCount(name) > kControlOptionTextCodePoints)
+            continue;
+        out.push_back(name);
+    }
+    return out;
+}
+
+JsonValue textArray(const std::vector<std::string>& names)
+{
+    auto array = JsonValue::array();
+    for (const auto& name : names)
+        array.append(JsonValue::string(name));
+    return array;
+}
+
+} // namespace
+
+std::vector<std::string> controlVocoderWeightOptions()
+{
+    // ModelFactory::getAvailableVocoderWeights(): the built-in weights of the models directory and the files of its
+    // vocoder_weights folder, which is what the preferences window lists (SharedAudioPage).
+    std::vector<std::string> names;
+    for (const auto& weight : ModelFactory::getAvailableVocoderWeights(ModelPathResolver::getModelsDirectory()))
+        names.push_back(weight.fileName);
+    return limitedNames(names);
+}
+
+std::vector<F0ModelInfo> controlF0Models()
+{
+    // ModelFactory::getAvailableF0Models(): the pitch models, each with whether its file exists.
+    return ModelFactory::getAvailableF0Models(ModelPathResolver::getModelsDirectory());
+}
+
+std::vector<std::string> controlF0ModelOptions()
+{
+    std::vector<std::string> names;
+    for (const auto& model : controlF0Models())
+        if (model.isAvailable)
+            names.push_back(model.name);
+    return limitedNames(names);
+}
+
+std::string controlF0ModelName(F0ModelType type)
+{
+    for (const auto& model : controlF0Models())
+        if (model.type == type)
+            return model.name;
+    return "fcpe"; // F0ModelType has FCPE only
+}
+
+JsonValue controlPrefsOptionsJson()
+{
+    auto options = JsonValue::object();
+    options.appendMember("vocoderWeight", textArray(controlVocoderWeightOptions()));
+    options.appendMember("f0Model", textArray(controlF0ModelOptions()));
+    options.appendMember("renderingPriority", textArray({"gpuFirst", "cpuFirst"}));
+    return options;
+}
+
+ControlVocoderState controlVocoderState()
+{
+    // ProcessRenderRuntime: the process-wide vocoder and its control worker, polled without a hook. The worker's
+    // queue and active transaction are read first: a command is queued before the vocoder is flagged as
+    // reconfiguring, and the active transaction ends only after the completion ran on the message thread, so a worker
+    // that is idle has finished every command queued before this call, and the two flags read after it are the state
+    // that the commands left (read the other way round, a reconfiguration that ends between the reads could pair a
+    // flag from before it with an idle worker after it).
+    auto& render = ProcessRenderRuntime::getInstance();
+    ControlVocoderState state;
+    state.controlIdle = render.controlQueueDepth() == 0 && !render.hasActiveTransaction();
+    state.reconfiguring = render.isVocoderReconfiguring();
+    state.ready = render.isVocoderReady();
+    return state;
+}
+
+const char* controlInferenceBackendName()
+{
+    // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected).
+    switch (AccelerationDetector::getInstance().getSelection().backend) {
+        case AccelerationDetector::AccelBackend::DirectML:
+            return "directml";
+        case AccelerationDetector::AccelBackend::CoreML:
+            return "coreml";
+        case AccelerationDetector::AccelBackend::CPU:
+            break;
+    }
+    return "cpu";
+}
+
+} // namespace OpenTune

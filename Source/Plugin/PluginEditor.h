@@ -70,6 +70,9 @@ public:
     void vibratoDepthChanged(float value) override;
     void vibratoRateChanged(float value) override;
     void noteSplitChanged(float value) override;
+    // Accessibility: say what a knob change did, when it came from the keyboard.
+    void announceParameterEdit(AudioEditingScheme::ParameterId id,
+                               const AudioEditingScheme::ParameterEditResult& result);
     void toolSelected(int toolId) override;
 
     void importAudioRequested() override;
@@ -117,6 +120,8 @@ public:
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void escapeKeyPressed() override;
     void currentToolChanged(ToolId tool) override;
+    void parameterTargetWillChange(PianoRollComponent::Listener::ParameterTargetChangePolicy policy) override;
+    void parameterTargetDidChange() override;
 
 private:
     struct PianoRollContentSync
@@ -157,7 +162,7 @@ private:
     PianoRollContentSync resolveCurrentContentSync();
     std::vector<juce::ARAPlaybackRegion*> resolveContentScopeRegions() const;
     void readScopeAudio();
-    void syncParameterPanelFromSelection();
+    void syncParameterPanelFromSelection(bool forceClipParameterProjection = false);
     PianoRollContentSync syncContentProjectionToPianoRoll();
     void rememberPresentedPianoRollViewport();
     void showPreferencesDialog();
@@ -213,6 +218,11 @@ private:
     // 读取音频后 latch：F0 提取 + note 生成全部完成前保持"正在处理音频"遮罩
     bool originalF0OverlayLatched_ = false;
     std::vector<ContentKey> originalF0OverlayTargetContentKeys_;
+    // Accessibility: "Rendering done" is spoken only for renders at least this long.
+    static constexpr juce::uint32 kRenderDoneSpeechMinMs = 1000;
+    bool renderBadgeWasShown_ = false;
+    int lastExternalEditAppliedCount_ = -1;
+    juce::uint32 renderStartedMs_ = 0;
     // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator commits late.
     // Tracks last-seen ContentKey for revision baseline only (not session last-active).

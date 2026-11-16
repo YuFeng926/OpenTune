@@ -1,8 +1,7 @@
-#include "Content/ContentEditCommands.h"
+#include "ContentEditCommandsStub.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Utils/VolumeEnvelopeRegionEdit.h"
 #include "Utils/VolumeEnvelopeEditAction.h"
-#include "Utils/PitchShiftEditAction.h"
 #include <iostream>
 #include <memory>
 #include <utility>
@@ -11,6 +10,7 @@
 namespace {
 
 using namespace OpenTune;
+using namespace OpenTune::TestSupport;
 
 EditableContentSnapshot makeSnapshot()
 {
@@ -157,7 +157,7 @@ bool checkStatuses()
     return true;
 }
 
-class RecordingCommands final : public ContentEditCommands
+class RecordingCommands final : public ContentEditCommandsStub
 {
 public:
     ContentKey lastKey;
@@ -171,21 +171,13 @@ public:
         ContentKey, std::vector<Note>, std::vector<PitchCorrectionSegment>, ContentEditRangeFrames,
         std::vector<float>, std::optional<std::vector<F0FrameRange>>) override { return {}; }
     bool setTimeGrid(ContentKey, std::shared_ptr<const TimeGridSnapshot>) override { return false; }
-    bool setDetectedKey(ContentKey, const DetectedKey&) override { return false; }
     bool applyPitchShiftState(ContentKey, const PitchShiftEditState&) override { return false; }
-    std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
-        ContentKey, const PitchShiftSettings&) override { return {}; }
-    bool autoTuneContentRange(ContentKey, int, int, const NoteGeneratorParams&,
-                              const std::optional<ScaleSnapConfig>&) override { return false; }
-    bool generateNotesOnly(ContentKey, const NoteGeneratorParams&) override { return false; }
-    bool ensureTimeToolAnchorSeed(ContentKey) override { return false; }
     ContentCommitSnapshot commitVolumeEnvelope(ContentKey key, AutomationLane envelope) override
     {
         lastKey = key;
         committed.push_back(envelope);
         return {};
     }
-    void republishPlaybackSource(ContentKey) override {}
 };
 
 bool checkUndoRedoUsesBoundContentKey()

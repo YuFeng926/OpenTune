@@ -119,6 +119,16 @@ public:
 		return(( MaxInLen + 1 ) >> 1 );
 	}
 
+	int getFilterLeftLen() const
+	{
+		return( fll );
+	}
+
+	int getFilterRightLen() const
+	{
+		return( fl2 );
+	}
+
 	virtual void clear()
 	{
 		LatencyLeft = Latency;

@@ -7,6 +7,7 @@
 #include "ComponentListenerSubscription.h"
 #include "../Standalone/UI/UIColors.h"
 #include "../Utils/LocalizationManager.h"
+#include "../Utils/ScreenReaderAnnouncer.h"
 
 namespace OpenTune {
 
@@ -60,7 +61,9 @@ public:
           parentSubscription_(*this),
           dialogSubscription_(*this)
     {
-        setWantsKeyboardFocus(true);
+        // Accessibility: the content used to take focus itself and NVDA read it as
+        // "unknown". Now only the buttons take focus; keys still bubble up to keyPressed.
+        setWantsKeyboardFocus(false);
 
         // 创建按钮并确定默认按钮（先有按钮才能按最佳宽度决定弹窗宽度）
         for (size_t i = 0; i < buttonSpecs_.size(); ++i) {
@@ -115,7 +118,8 @@ public:
     {
         juce::DialogWindow::LaunchOptions options;
         options.content.setOwned(content);
-        options.dialogTitle = {};
+        // The title bar is hidden, but the window name is what NVDA reads on open.
+        options.dialogTitle = content->title_;
         options.dialogBackgroundColour = UIColors::backgroundDark;
         options.escapeKeyTriggersCloseButton = false; // Esc 由内容处理（dismiss 路径）
         options.useNativeTitleBar = false;
@@ -143,10 +147,15 @@ public:
                                const juce::String& summary,
                                const juce::String& diagnosticText)
     {
+        juce::Component::SafePointer<juce::Component> safeParent(parent);
         auto* content = new ConfirmDialogContent(title, summary,
             {
-                { LOC(kCopy), [diagnosticText] {
+                { LOC(kCopy), [diagnosticText, safeParent] {
                     juce::SystemClipboard::copyTextToClipboard(diagnosticText);
+                    // The dialog closes on Copy, so confirm it from the editor.
+                    if (safeParent != nullptr && safeParent->isShowing())
+                        a11y::announce(*safeParent, LOC_RAW("Copied to clipboard"),
+                                       a11y::SpeechQueue::keepAll);
                 } },
                 { LOC(kOK), nullptr, true }
             });
@@ -236,6 +245,15 @@ public:
             dismiss();
             return true;
         }
+        // Space presses the focused button, as in standard Windows dialogs.
+        if (key == juce::KeyPress::spaceKey) {
+            for (auto* btn : buttons_) {
+                if (btn->hasKeyboardFocus(false)) {
+                    btn->triggerClick();
+                    return true;
+                }
+            }
+        }
         if (key == juce::KeyPress::returnKey) {
             // 按 Enter 触发默认按钮
             if (defaultButtonIdx_ >= 0 && defaultButtonIdx_ < static_cast<int>(buttons_.size())) {
@@ -311,6 +329,7 @@ private:
     int defaultButtonIdx_ = 0;
 
     bool closing_ = false;
+    bool messageAnnounced_ = false;
     bool verticalButtons_ = false;
     bool centreButtons_ = false;
     int messageHeight_ = 24;
@@ -428,9 +447,32 @@ private:
     {
         juce::Component::SafePointer<ConfirmDialogContent> safeThis(this);
         juce::MessageManager::callAsync([safeThis] {
-            if (safeThis != nullptr && safeThis->isShowing())
-                safeThis->grabKeyboardFocus();
+            if (safeThis == nullptr || !safeThis->isShowing())
+                return;
+
+            // Focus the default button: NVDA reads the window name (the title) and the button.
+            const int idx = safeThis->defaultButtonIdx_;
+            juce::Component* target = safeThis.getComponent();
+            if (idx >= 0 && idx < safeThis->buttons_.size())
+                target = safeThis->buttons_[idx];
+            // takeKeyboardFocus runs more than once while the dialog opens; grabbing the
+            // already focused button again made NVDA repeat "dialog, OK button".
+            if (!target->hasKeyboardFocus(false))
+                target->grabKeyboardFocus();
+
+            // The message is only painted, so speak it once. keepAll queues it after
+            // the focus speech instead of cutting it off.
+            if (!safeThis->messageAnnounced_ && safeThis->message_.isNotEmpty()) {
+                safeThis->messageAnnounced_ = true;
+                a11y::announce(*target, safeThis->message_, a11y::SpeechQueue::keepAll);
+            }
         });
+    }
+
+    // Plain group without a name: NVDA skips it instead of saying "unknown".
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::group);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ConfirmDialogContent)

@@ -47,34 +47,20 @@ void resetDraftNotesToBaseline(PianoRollToolHandler::Context& ctx)
     ctx.getNoteDraft().workingNotes = ctx.getNoteDraft().baselineNotes;
 }
 
-// ============================================================================
-// buildNoteBasedCorrectionState — note-based correction 唯一状态构建器
-//
-// 实时预览（updateNoteBasedCorrectionPreview）与提交（commitNoteBasedCorrection）
-// 共用：复制当前 EditableContentSnapshot，替换 notes 与 scratch curve 后经权威
-// applyCorrectionToRange（含全局 pitch-shift 比例）烘焙的 pitchCurve。
-// ============================================================================
 std::shared_ptr<const EditableContentSnapshot> buildNoteBasedCorrectionState(
     PianoRollToolHandler::Context& ctx,
     const std::vector<Note>& notes,
     F0FrameRange editRange)
 {
     const auto contentSnapshot = ctx.getEditableContentSnapshot();
-    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr)
+    if (contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr || !ctx.planNoteCorrection)
         return nullptr;
-
+    const auto plan = ctx.planNoteCorrection(notes, editRange);
+    if (!plan)
+        return nullptr;
     auto snap = std::make_shared<EditableContentSnapshot>(*contentSnapshot);
-    snap->notes = notes;
-
-    auto scratchCurve = PitchCurve::fromSnapshot(contentSnapshot->pitchCurve);
-    snap->pitchCurve = scratchCurve->applyCorrectionToRange(
-        notes,
-        editRange.startFrame,
-        editRange.endFrameExclusive,
-        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
-        ctx.getRetuneSpeed(),
-        ctx.getVibratoDepth(),
-        ctx.getVibratoRate());
+    snap->notes = plan->notes;
+    snap->pitchCurve = plan->correctedCurve;
     return snap;
 }
 
@@ -84,31 +70,17 @@ bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
                                const std::function<bool(const std::vector<PitchCorrectionSegment>&,
                                                         F0FrameRange)>& commit = {})
 {
-    const auto f0tl = ctx.getF0Timeline();
-    const auto snap = buildNoteBasedCorrectionState(ctx, notes, editRange);
-    if (snap == nullptr)
+    const auto plan = ctx.planNoteCorrection ? ctx.planNoteCorrection(notes, editRange) : std::nullopt;
+    if (!plan)
         return false;
 
-    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(editRange.startFrame,
-                                                                          editRange.endFrameExclusive,
-                                                                          f0tl.endFrameExclusive());
-
-    // Extract segments overlapping the affected range (range-scoped, not full)
-    auto allSegments = snap->pitchCurve->getCorrectionSegments();
-    std::vector<PitchCorrectionSegment> segmentsInRange;
-    for (const auto& seg : allSegments) {
-        if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
-            segmentsInRange.push_back(seg);
-    }
-
     const bool committed = commit
-        ? commit(segmentsInRange, affectedRange)
-        : ctx.commitNotesAndSegments(notes, segmentsInRange, affectedRange) != nullptr;
+        ? commit(plan->segments, plan->affectedRange)
+        : ctx.commitNotesAndSegments(plan->notes, plan->segments, plan->affectedRange) != nullptr;
     if (!committed) {
         return false;
     }
 
-    ctx.notifyPitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
     return true;
 }
 
@@ -136,6 +108,43 @@ const std::vector<Note>& draftBaselineNotes(const PianoRollToolHandler::Context&
 PianoRollToolHandler::PianoRollToolHandler(Context context)
     : ctx_(std::move(context))
 {}
+
+PianoRollToolHandler::ParameterTargetSelection PianoRollToolHandler::beginParameterTargetChange()
+{
+    // Input dispatch commits pending parameters before reading notes or planning edits.
+    const auto& state = ctx_.getState();
+    return { state.noteSelection.selectedIndices, state.frameSelection.ranges };
+}
+
+void PianoRollToolHandler::finishParameterTargetChange(const ParameterTargetSelection& before, bool forceSync)
+{
+    const auto& state = ctx_.getState();
+    if (forceSync || before.noteIndices != state.noteSelection.selectedIndices
+        || before.frameRanges != state.frameSelection.ranges) {
+        if (ctx_.parameterTargetDidChange)
+            ctx_.parameterTargetDidChange();
+    }
+}
+
+void PianoRollToolHandler::beginMouseParameterTargetChange()
+{
+    if (!mouseParameterTargetBefore_.has_value()) {
+        const auto& state = ctx_.getState();
+        mouseParameterTargetBefore_ = {
+            state.noteSelection.selectedIndices,
+            state.frameSelection.ranges
+        };
+    }
+}
+
+void PianoRollToolHandler::finishMouseParameterTargetChange()
+{
+    if (!mouseParameterTargetBefore_.has_value())
+        return;
+    const auto before = std::move(*mouseParameterTargetBefore_);
+    mouseParameterTargetBefore_.reset();
+    finishParameterTargetChange(before);
+}
 
 void PianoRollToolHandler::setTool(ToolId tool)
 {
@@ -305,6 +314,8 @@ void PianoRollToolHandler::armTimelineSeek(const juce::MouseEvent& e, bool commi
 
 void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
 {
+    if (ctx_.parameterTargetWillChange)
+        ctx_.parameterTargetWillChange();
     ctx_.grabKeyboardFocus();
     ctx_.getState().emptySpaceIntent.clear();
 
@@ -483,6 +494,8 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
 
 void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    if (ctx_.parameterTargetWillChange)
+        ctx_.parameterTargetWillChange();
     if (currentTool_ == ToolId::TimeTool) {
         handleTimeToolMouseDoubleClick(e);
     } else if ((currentTool_ == ToolId::Pitch || currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift)
@@ -507,7 +520,10 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
     }
 
     if (e.mods.isPopupMenu())
+    {
+        finishMouseParameterTargetChange();
         return;
+    }
 
     // 空区点击/拖拽完成（消除 EmptySpaceMouseIntent 平行路径）
     if (ctx_.getState().emptySpaceIntent.active) {
@@ -531,10 +547,12 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
                 && !AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme())) {
                 handleDrawNoteUp(e);
             }
+            finishMouseParameterTargetChange();
             return;
         }
 
         // 纯单击空白：取消当前选中 + 清除框选残留状态 + 移动播放头
+        beginMouseParameterTargetChange();
         deselectAllNotes();
         ctx_.getState().frameSelection.clear();
         auto& sel = ctx_.getState().selection;
@@ -543,6 +561,7 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
         sel.f0SelectionAnchorFrame = -1;
         sel.f0SelectionCurrentFrame = -1;
         if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+        finishMouseParameterTargetChange();
 
         if (intent.mouseDownTime >= 0.0 && ctx_.notifyPlayheadChange) {
             ctx_.notifyPlayheadChange(intent.mouseDownTime, true);
@@ -555,6 +574,7 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
     // 框选完成时（含 Pitch 工具空区拖拽启动的框选），统一走 Select up 处理提交选择。
     if (ctx_.getState().selection.isSelectingArea) {
         handleSelectUp(e);
+        finishMouseParameterTargetChange();
         return;
     }
 
@@ -594,12 +614,18 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
         default:
             break;
     }
+    finishMouseParameterTargetChange();
 }
 
 bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key,
                                       const KeyShortcutConfig::KeyBinding* pointerShortcut)
 {
-    if (handleNoteArrowKey(key))
+    if (ctx_.parameterTargetWillChange)
+        ctx_.parameterTargetWillChange();
+    const bool accessibilityMode = ctx_.accessibilityModeEnabled
+        && ctx_.accessibilityModeEnabled();
+    if (accessibilityMode ? handleNoteArrowKey(key)
+                          : handleNoteArrowKeyPreAccessibility(key))
         return true;
 
     const auto& shortcutSettings = ctx_.getShortcutSettings();
@@ -613,27 +639,27 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key,
     const bool isOpenDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
     if (isOpenDyne) {
         if (matches(KeyShortcutConfig::ShortcutId::ToolODSelect)) {
-            ctx_.setCurrentTool(ToolId::Select);
+            switchToolFromKeyboard(ToolId::Select);
             return true;
         }
         if (matches(KeyShortcutConfig::ShortcutId::ToolODPitch)) {
-            ctx_.setCurrentTool(ToolId::Pitch);
+            switchToolFromKeyboard(ToolId::Pitch);
             return true;
         }
         if (matches(KeyShortcutConfig::ShortcutId::ToolODPitchModulation)) {
-            ctx_.setCurrentTool(ToolId::PitchModulation);
+            switchToolFromKeyboard(ToolId::PitchModulation);
             return true;
         }
         if (matches(KeyShortcutConfig::ShortcutId::ToolODPitchDrift)) {
-            ctx_.setCurrentTool(ToolId::PitchDrift);
+            switchToolFromKeyboard(ToolId::PitchDrift);
             return true;
         }
         if (matches(KeyShortcutConfig::ShortcutId::ToolODVolumeEnvelope)) {
-            ctx_.setCurrentTool(ToolId::VolumeEnvelope);
+            switchToolFromKeyboard(ToolId::VolumeEnvelope);
             return true;
         }
         if (matches(KeyShortcutConfig::ShortcutId::ToolODScissors)) {
-            ctx_.setCurrentTool(ToolId::Scissors);
+            switchToolFromKeyboard(ToolId::Scissors);
             return true;
         }
     }
@@ -647,15 +673,20 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key,
             && !contentSnapshot->pitchCurve->isEmpty();
         
         if (!hasNotes && !hasCurve) {
+            notifyKeyboardNote(KeyboardNoteEvent::NoNotes, notes, -1);
             return true;
         }
-        
+
         if (hasNotes) {
+            const auto before = beginParameterTargetChange();
             selectAllNotes(notes);
+            finishParameterTargetChange(before);
         }
-        
+
         // F0 范围从 noteSelection 按需派生，无需同步。
         if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+        // Accessibility: without this, selecting all from the keyboard gives no feedback.
+        notifyKeyboardNote(hasNotes ? KeyboardNoteEvent::AllSelected : KeyboardNoteEvent::NoNotes, notes, -1);
         return true;
     }
 
@@ -666,35 +697,35 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key,
     // ToolTimeTool/ToolAutoTune 与通用 SelectAll/Delete/CancelSelection 两 scheme 共用。
     if (!isOpenDyne) {
         if (matches(KeyShortcutConfig::ShortcutId::ToolDrawNote)) {
-            ctx_.setCurrentTool(ToolId::DrawNote);
+            switchToolFromKeyboard(ToolId::DrawNote);
             return true;
         }
 
         if (matches(KeyShortcutConfig::ShortcutId::ToolSelect)) {
-            ctx_.setCurrentTool(ToolId::Select);
+            switchToolFromKeyboard(ToolId::Select);
             return true;
         }
 
         if (matches(KeyShortcutConfig::ShortcutId::ToolLineAnchor)) {
-            ctx_.setCurrentTool(ToolId::LineAnchor);
+            switchToolFromKeyboard(ToolId::LineAnchor);
             return true;
         }
     }
 
     // EQ 工具两种模式共用（ShortcutId::Eq 可配置，默认 E）
     if (matches(KeyShortcutConfig::ShortcutId::Eq)) {
-        ctx_.setCurrentTool(ToolId::Eq);
+        switchToolFromKeyboard(ToolId::Eq);
         return true;
     }
 
     // HandDraw 两种模式共用
     if (matches(KeyShortcutConfig::ShortcutId::ToolHandDraw)) {
-        ctx_.setCurrentTool(ToolId::HandDraw);
+        switchToolFromKeyboard(ToolId::HandDraw);
         return true;
     }
 
     if (matches(KeyShortcutConfig::ShortcutId::ToolTimeTool)) {
-        ctx_.setCurrentTool(ToolId::TimeTool);
+        switchToolFromKeyboard(ToolId::TimeTool);
         return true;
     }
 
@@ -727,15 +758,13 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key,
         return true;
     }
 
-    if (matches(KeyShortcutConfig::ShortcutId::CancelSelection)) {
-        ctx_.notifyEscapeKey();
-        return true;
-    }
+    if (matches(KeyShortcutConfig::ShortcutId::CancelSelection))
+        return ctx_.notifyEscapeKey == nullptr || ctx_.notifyEscapeKey();
 
     return false;
 }
 
-bool PianoRollToolHandler::handleNoteArrowKey(const juce::KeyPress& key)
+bool PianoRollToolHandler::handleNoteArrowKeyPreAccessibility(const juce::KeyPress& key)
 {
     if (key.getModifiers().isAnyModifierKeyDown())
         return false;
@@ -774,19 +803,754 @@ bool PianoRollToolHandler::handleNoteArrowKey(const juce::KeyPress& key)
     }
 
     if (adjacentIndex >= 0) {
+        const auto before = beginParameterTargetChange();
         ctx_.getState().noteSelection.setSingle(adjacentIndex, static_cast<int>(notes.size()));
         if (ctx_.invalidateSelectionFeedback)
             ctx_.invalidateSelectionFeedback();
+        finishParameterTargetChange(before);
     }
     return true;
 }
 
-void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction)
+bool PianoRollToolHandler::handleNoteArrowKey(const juce::KeyPress& key)
+{
+    const auto mods = key.getModifiers();
+    const int keyCode = key.getKeyCode();
+    const bool plain = !mods.isAnyModifierKeyDown();
+    const bool shiftOnly = mods.isShiftDown() && !mods.isCtrlDown() && !mods.isAltDown() && !mods.isCommandDown();
+    const bool altOnly = mods.isAltDown() && !mods.isShiftDown() && !mods.isCtrlDown() && !mods.isCommandDown();
+    // Values change with Ctrl+Up/Down (as in Melodyne), Ctrl+Shift for a fine step, so a plain
+    // arrow pressed while exploring changes nothing. Ctrl+Alt+Up/Down stays the vertical zoom.
+    const bool ctrlOnly = (mods.isCtrlDown() || mods.isCommandDown()) && !mods.isShiftDown() && !mods.isAltDown();
+    const bool ctrlShift = (mods.isCtrlDown() || mods.isCommandDown()) && mods.isShiftDown() && !mods.isAltDown();
+    const bool upOrDown = keyCode == juce::KeyPress::upKey || keyCode == juce::KeyPress::downKey;
+    const bool isInfoKey = keyCode == 'I' || keyCode == 'i';
+    const bool isResetKey = keyCode == 'R' || keyCode == 'r';
+    const bool isSplitKey = keyCode == 'X' || keyCode == 'x';
+    const bool isMergeKey = keyCode == 'J' || keyCode == 'j';
+    const bool isHomeOrEnd = keyCode == juce::KeyPress::homeKey || keyCode == juce::KeyPress::endKey;
+    const bool openDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
+
+    // OpenDyne uses Enter for the selected note's default action; EQ opens from Enter in both schemes.
+    if (plain && keyCode == juce::KeyPress::returnKey
+        && (openDyne || currentTool_ == ToolId::Eq))
+        return applyNoteDefaultActionByKeyboard();
+
+    // Extra mouse-free keys (Ctrl/Alt+Up/Down, Home, End, I, R, X, J) do not override a binding
+    // the user assigned to something else in the shortcut settings.
+    const bool leftOrRight = keyCode == juce::KeyPress::leftKey || keyCode == juce::KeyPress::rightKey;
+    // Ctrl+Left/Right move the end of the note, Ctrl+Shift+Left/Right its start.
+    const bool resizeKey = leftOrRight && mods.isCtrlDown() && !mods.isAltDown();
+    const bool extraKey = ((altOnly || ctrlOnly || ctrlShift) && upOrDown) || (shiftOnly && leftOrRight) || resizeKey
+        || (shiftOnly && (isSplitKey || isInfoKey))
+        || (plain && (isInfoKey || isResetKey || isSplitKey || isMergeKey || isHomeOrEnd));
+    if (extraKey
+        && KeyShortcutConfig::findShortcutForBinding(ctx_.getShortcutSettings(),
+                                                     KeyShortcutConfig::KeyBinding(keyCode, mods),
+                                                     openDyne ? KeyShortcutConfig::kPianoRollOpenDyneScope
+                                                              : KeyShortcutConfig::kPianoRollOpenTuneScope)
+               != KeyShortcutConfig::ShortcutId::Count)
+        return false;
+
+    if (upOrDown && (plain || altOnly || ctrlOnly || ctrlShift)) {
+        const int direction = keyCode == juce::KeyPress::upKey ? 1 : -1;
+        const bool modDrift = openDyne && (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift);
+        const bool volume = openDyne && currentTool_ == ToolId::VolumeEnvelope;
+        // A plain arrow, or Alt where there are no semitones, only says which keys edit.
+        if (plain || (altOnly && (modDrift || volume))) {
+            notifyKeyboardNote(KeyboardNoteEvent::ArrowHint, committedNotes(ctx_), -1);
+            return true;
+        }
+        // Like mouse dragging: the arrows change whatever the current tool edits.
+        if (modDrift)
+            adjustSelectedNotesModDriftByKeyboard(direction, ctrlShift);   // 5%, fine 1%
+        else if (volume)
+            adjustSelectedNotesVolumeByKeyboard(direction, ctrlShift);     // 1 dB, fine 0.1 dB
+        else if (altOnly)
+            // Alt: a semitone even when the key/scale grid would skip notes outside the scale.
+            moveSelectedNotesPitchByKeyboard(direction, false, false, true);
+        else
+            // Ctrl: next step of the pitch grid; Ctrl+Shift: 1 cent without the grid.
+            moveSelectedNotesPitchByKeyboard(direction, ctrlShift);
+        return true;
+    }
+    if (resizeKey) {
+        resizeSelectedNoteByKeyboard(mods.isShiftDown(), keyCode == juce::KeyPress::rightKey ? 1 : -1);
+        return true;
+    }
+    if (shiftOnly && isSplitKey) {
+        splitSelectedNoteByKeyboard(true);
+        return true;
+    }
+    if (shiftOnly && isInfoKey) {
+        notifyKeyboardNote(KeyboardNoteEvent::PositionInfo, committedNotes(ctx_), -1);
+        return true;
+    }
+    // Shift+Left/Right extend the selection, like Shift+click on a note.
+    if (shiftOnly && leftOrRight) {
+        extendSelectionByKeyboard(keyCode == juce::KeyPress::rightKey);
+        return true;
+    }
+    if (!plain)
+        return false;
+
+    if (isSplitKey) {
+        splitSelectedNoteByKeyboard();
+        return true;
+    }
+    if (isMergeKey) {
+        mergeSelectedNoteWithNext();
+        return true;
+    }
+
+    const auto& notes = committedNotes(ctx_);
+    const int noteCount = static_cast<int>(notes.size());
+
+    if (isInfoKey) {
+        const auto selected = collectSelectedNoteIndices(notes);
+        if (noteCount == 0)
+            notifyKeyboardNote(KeyboardNoteEvent::NoNotes, notes, -1);
+        else if (selected.empty())
+            notifyKeyboardNote(KeyboardNoteEvent::NoSelection, notes, -1);
+        else
+            notifyKeyboardNote(KeyboardNoteEvent::Info, notes, selected.front());
+        return true;
+    }
+
+    // R: back to the sung pitch. Ctrl+Z only goes back step by step, so after many edits
+    // there was no quick way to return one note to how it was sung.
+    if (isResetKey) {
+        moveSelectedNotesPitchByKeyboard(0, false, true);
+        return true;
+    }
+
+    if (!isHomeOrEnd && keyCode != juce::KeyPress::leftKey && keyCode != juce::KeyPress::rightKey)
+        return false;
+
+    if (noteCount == 0) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoNotes, notes, -1);
+        return true;
+    }
+
+    // First / last note by start time; array order is not treated as time order.
+    const auto edgeNote = [&notes, noteCount](bool last) {
+        int edge = 0;
+        for (int index = 1; index < noteCount; ++index) {
+            const double startTime = notes[static_cast<size_t>(index)].startTime;
+            const double edgeTime = notes[static_cast<size_t>(edge)].startTime;
+            if (last ? startTime > edgeTime : startTime < edgeTime)
+                edge = index;
+        }
+        return edge;
+    };
+
+    if (isHomeOrEnd) {
+        selectNoteFromKeyboard(notes, edgeNote(keyCode == juce::KeyPress::endKey));
+        return true;
+    }
+
+    const auto selectedIndices = collectSelectedNoteIndices(notes);
+    // The place in the song moved since the last arrow (playback paused somewhere else, or the
+    // edit cursor was moved in REAPER): start from there, as without a selection. Unknown
+    // positions (during playback) are not remembered, so a pause after them still counts.
+    const auto cursor = ctx_.getEditCursorSourceTime ? ctx_.getEditCursorSourceTime() : std::nullopt;
+    // Nothing remembered yet (the window was just opened): follow the cursor too.
+    const bool cursorMoved = cursor && (!lastArrowCursor_ || std::abs(*cursor - *lastArrowCursor_) > 1.0e-6);
+    if (cursor)
+        lastArrowCursor_ = cursor;
+    // The note at the cursor is already the selected one: move on to its neighbour as usual,
+    // otherwise the arrow would only repeat the same note and seem to do nothing.
+    const auto cursorIsInSelection = [&] {
+        for (int index : selectedIndices) {
+            const auto& note = notes[static_cast<size_t>(index)];
+            if (note.startTime <= *cursor && *cursor < note.endTime)
+                return true;
+        }
+        return false;
+    };
+    if (selectedIndices.empty() || (cursorMoved && !cursorIsInSelection())) {
+        // Start from REAPER's edit cursor when it is known, so the user lands where they are
+        // in the song: Right takes the note under the cursor or the next one, Left the note
+        // under the cursor or the previous one. Past the last or before the first note, the
+        // nearest note. Without a cursor: the first note.
+        if (cursor) {
+            const bool right = keyCode == juce::KeyPress::rightKey;
+            int target = -1;
+            for (int index = 0; index < noteCount; ++index) {
+                const auto& note = notes[static_cast<size_t>(index)];
+                const bool candidate = right ? note.endTime > *cursor : note.startTime < *cursor;
+                if (!candidate)
+                    continue;
+                const double startTime = note.startTime;
+                if (target < 0 || (right ? startTime < notes[static_cast<size_t>(target)].startTime
+                                         : startTime > notes[static_cast<size_t>(target)].startTime))
+                    target = index;
+            }
+            selectNoteFromKeyboard(notes, target >= 0 ? target : edgeNote(right));
+            return true;
+        }
+        // Without a selection the arrows used to do nothing, and there was no mouse-free way to select.
+        selectNoteFromKeyboard(notes, edgeNote(false));
+        return true;
+    }
+
+    const bool moveRight = keyCode == juce::KeyPress::rightKey;
+    // All notes selected (Ctrl+A): the selection has no neighbours, so the arrows would be silent.
+    // Right goes to the first note, Left to the last one.
+    if (noteCount > 1 && static_cast<int>(selectedIndices.size()) == noteCount) {
+        selectNoteFromKeyboard(notes, edgeNote(!moveRight));
+        return true;
+    }
+
+    double boundaryTime = notes[static_cast<size_t>(selectedIndices.front())].startTime;
+    for (int index : selectedIndices) {
+        const double startTime = notes[static_cast<size_t>(index)].startTime;
+        boundaryTime = moveRight ? std::max(boundaryTime, startTime)
+                                 : std::min(boundaryTime, startTime);
+    }
+
+    int adjacentIndex = -1;
+    for (int index = 0; index < static_cast<int>(notes.size()); ++index) {
+        const double startTime = notes[static_cast<size_t>(index)].startTime;
+        if (moveRight && startTime > boundaryTime
+            && (adjacentIndex < 0 || startTime < notes[static_cast<size_t>(adjacentIndex)].startTime)) {
+            adjacentIndex = index;
+        } else if (!moveRight && startTime < boundaryTime
+                   && (adjacentIndex < 0 || startTime > notes[static_cast<size_t>(adjacentIndex)].startTime)) {
+            adjacentIndex = index;
+        }
+    }
+
+    // Stay silent at the ends of the list.
+    if (adjacentIndex >= 0)
+        selectNoteFromKeyboard(notes, adjacentIndex);
+    return true;
+}
+
+// Keyboard version of dragging a note edge with the Select tool (handleSelectDrag/Up):
+// 10 ms per press, the same minimum length and the same rule for the touching neighbour,
+// which yields its boundary but keeps its own minimum length.
+void PianoRollToolHandler::resizeSelectedNoteByKeyboard(bool startEdge, int direction)
+{
+    const auto& notes = committedNotes(ctx_);
+    const auto selected = collectSelectedNoteIndices(notes);
+    if (selected.empty()) {
+        notifyKeyboardNote(notes.empty() ? KeyboardNoteEvent::NoNotes : KeyboardNoteEvent::NoSelection, notes, -1);
+        return;
+    }
+    if (selected.size() != 1) {
+        notifyKeyboardNote(KeyboardNoteEvent::SingleNoteNeeded, notes, -1);
+        return;
+    }
+
+    constexpr double step = 0.01;
+    const int idx = selected.front();
+    const auto beforeNotes = notes;
+    const auto& old = beforeNotes[static_cast<size_t>(idx)];
+    const auto editRange = sourceEditRange();
+    const auto edge = startEdge ? NoteResizeEdge::Left : NoteResizeEdge::Right;
+    const double clampedTime = juce::jlimit(editRange.startSeconds, editRange.endSeconds,
+                                            (startEdge ? old.startTime : old.endTime) + direction * step);
+
+    // The same planner as the mouse: minimum length, the neighbour yields down to its own minimum.
+    const auto plan = planNoteResizeEdit(beforeNotes, idx, edge, clampedTime, kNoteResizeMinDuration);
+    const auto& changed = plan.afterNotes[static_cast<size_t>(idx)];
+    // Limit reached (minimum length, neighbour or clip edge): stay silent, as at list ends.
+    if (changed.startTime == old.startTime && changed.endTime == old.endTime)
+        return;
+
+    // Same transaction as a mouse resize (revision check, one undo step).
+    const auto expectedRevision = ctx_.getNotesRevision ? ctx_.getNotesRevision() : 0;
+    const auto commitResize = [this, expectedRevision, idx, edge, clampedTime]
+        (const std::vector<PitchCorrectionSegment>& segments, F0FrameRange affectedRange) {
+        return ctx_.commitNoteResize
+            && ctx_.commitNoteResize(expectedRevision, idx, edge, clampedTime, kNoteResizeMinDuration,
+                                     segments, affectedRange, LOC_RAW("Resize note"));
+    };
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    const F0FrameRange f0Range = ctx_.getF0Timeline().rangeForTimes(plan.dirtyStartTime, plan.dirtyEndTime);
+    const bool committed = (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !f0Range.isEmpty())
+                               ? commitNoteBasedCorrection(ctx_, plan.afterNotes, f0Range, commitResize)
+                               : commitResize({}, {});
+    if (!committed) {
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
+        return;
+    }
+    if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, committedNotes(ctx_));
+    notifyKeyboardNote(KeyboardNoteEvent::NoteResized, committedNotes(ctx_), idx);
+}
+
+// Shift+Left/Right, as in Windows lists: the anchor stays, the other end moves one note.
+// Moving back towards the anchor shrinks the range.
+void PianoRollToolHandler::extendSelectionByKeyboard(bool moveRight)
+{
+    const auto& notes = committedNotes(ctx_);
+    const int noteCount = static_cast<int>(notes.size());
+    if (noteCount == 0) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoNotes, notes, -1);
+        return;
+    }
+
+    // Time order: array order is not treated as time order.
+    std::vector<int> order(static_cast<size_t>(noteCount));
+    for (int i = 0; i < noteCount; ++i)
+        order[static_cast<size_t>(i)] = i;
+    std::stable_sort(order.begin(), order.end(), [&notes](int a, int b) {
+        return notes[static_cast<size_t>(a)].startTime < notes[static_cast<size_t>(b)].startTime;
+    });
+    std::vector<int> position(static_cast<size_t>(noteCount));
+    for (int i = 0; i < noteCount; ++i)
+        position[static_cast<size_t>(order[static_cast<size_t>(i)])] = i;
+    const auto posOf = [&position](int index) { return position[static_cast<size_t>(index)]; };
+
+    const auto selected = collectSelectedNoteIndices(notes);
+    if (selected.empty()) {
+        const int first = order[static_cast<size_t>(moveRight ? 0 : noteCount - 1)];
+        keyboardRangeAnchor_ = keyboardRangeActive_ = first;
+        const auto before = beginParameterTargetChange();
+        ctx_.getState().noteSelection.setSingle(first, noteCount);
+        if (ctx_.invalidateSelectionFeedback)
+            ctx_.invalidateSelectionFeedback();
+        notifyKeyboardNote(KeyboardNoteEvent::Selected, notes, first);
+        finishParameterTargetChange(before);
+        return;
+    }
+
+    // Keep the anchor only while the selection is still exactly the range made with Shift;
+    // after a click, an edit or plain arrows start again from the current selection.
+    bool rangeStillValid = keyboardRangeAnchor_ >= 0 && keyboardRangeAnchor_ < noteCount
+                        && keyboardRangeActive_ >= 0 && keyboardRangeActive_ < noteCount;
+    if (rangeStillValid) {
+        const int lo = std::min(posOf(keyboardRangeAnchor_), posOf(keyboardRangeActive_));
+        const int hi = std::max(posOf(keyboardRangeAnchor_), posOf(keyboardRangeActive_));
+        rangeStillValid = static_cast<int>(selected.size()) == hi - lo + 1;
+        for (int index : selected)
+            rangeStillValid = rangeStillValid && posOf(index) >= lo && posOf(index) <= hi;
+    }
+    if (!rangeStillValid) {
+        int minPos = noteCount, maxPos = -1;
+        for (int index : selected) {
+            minPos = std::min(minPos, posOf(index));
+            maxPos = std::max(maxPos, posOf(index));
+        }
+        keyboardRangeAnchor_ = order[static_cast<size_t>(moveRight ? minPos : maxPos)];
+        keyboardRangeActive_ = order[static_cast<size_t>(moveRight ? maxPos : minPos)];
+    }
+
+    // Stay silent at the ends of the list.
+    const int next = posOf(keyboardRangeActive_) + (moveRight ? 1 : -1);
+    if (next < 0 || next >= noteCount)
+        return;
+    keyboardRangeActive_ = order[static_cast<size_t>(next)];
+
+    const int lo = std::min(posOf(keyboardRangeAnchor_), next);
+    const int hi = std::max(posOf(keyboardRangeAnchor_), next);
+    std::vector<int> range;
+    for (int p = lo; p <= hi; ++p)
+        range.push_back(order[static_cast<size_t>(p)]);
+    const auto before = beginParameterTargetChange();
+    ctx_.getState().noteSelection.setFromIndices(std::move(range), noteCount);
+    if (ctx_.invalidateSelectionFeedback)
+        ctx_.invalidateSelectionFeedback();
+    finishParameterTargetChange(before);
+    notifyKeyboardNote(KeyboardNoteEvent::RangeSelected, notes, keyboardRangeActive_);
+}
+
+void PianoRollToolHandler::selectNoteFromKeyboard(const std::vector<Note>& notes, int index)
+{
+    const auto before = beginParameterTargetChange();
+    ctx_.getState().noteSelection.setSingle(index, static_cast<int>(notes.size()));
+    if (ctx_.invalidateSelectionFeedback)
+        ctx_.invalidateSelectionFeedback();
+    notifyKeyboardNote(KeyboardNoteEvent::Selected, notes, index);
+    finishParameterTargetChange(before);
+}
+
+void PianoRollToolHandler::notifyKeyboardNote(KeyboardNoteEvent event, const std::vector<Note>& notes, int index)
+{
+    if (ctx_.accessibilityModeEnabled && !ctx_.accessibilityModeEnabled())
+        return;
+    if (ctx_.notifyKeyboardNote)
+        ctx_.notifyKeyboardNote(event, notes, index);
+}
+
+// X: split the selected note where its sung pitch changes the most - usually where two sung
+// notes were merged into one. Without a clear pitch change the note is split in half.
+// Shift+X splits at REAPER's edit cursor instead, when it is inside the note (the cursor
+// is read from REAPER while stopped, see ReaperHostBridge). The split itself uses the
+// scissors planner (planScissorsSplit).
+void PianoRollToolHandler::splitSelectedNoteByKeyboard(bool atEditCursor)
+{
+    const auto beforeNotes = committedNotes(ctx_);
+    if (beforeNotes.empty()) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoNotes, beforeNotes, -1);
+        return;
+    }
+    const auto selected = collectSelectedNoteIndices(beforeNotes);
+    if (selected.empty()) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoSelection, beforeNotes, -1);
+        return;
+    }
+
+    const int index = selected.front();
+    const Note& original = beforeNotes[static_cast<size_t>(index)];
+
+    // Parts shorter than 20 ms are useless.
+    static constexpr double kMinPartSeconds = 0.02;
+    if (original.getDuration() < 2.0 * kMinPartSeconds) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoteTooShort, beforeNotes, index);
+        return;
+    }
+
+    double splitTime = 0.5 * (original.startTime + original.endTime);
+    bool foundPitchChange = false;
+    const auto f0tl = ctx_.getF0Timeline();
+    const auto originalF0 = ctx_.getOriginalF0 ? ctx_.getOriginalF0() : std::vector<float>{};
+    if (atEditCursor) {
+        const auto cursor = ctx_.getEditCursorSourceTime ? ctx_.getEditCursorSourceTime() : std::nullopt;
+        if (!cursor) {
+            notifyKeyboardNote(KeyboardNoteEvent::CursorUnknown, beforeNotes, index);
+            return;
+        }
+        if (*cursor <= original.startTime + kMinPartSeconds || *cursor >= original.endTime - kMinPartSeconds) {
+            notifyKeyboardNote(KeyboardNoteEvent::CursorOutsideNote, beforeNotes, index);
+            return;
+        }
+        splitTime = *cursor;
+    } else if (!originalF0.empty() && !f0tl.isEmpty()) {
+        const auto range = f0tl.rangeForTimes(original.startTime, original.endTime);
+        const int frameCount = static_cast<int>(originalF0.size());
+        // Mean sung pitch (MIDI) of the voiced frames in [from, to) inside the note.
+        const auto meanMidi = [&](int from, int to) -> std::optional<float> {
+            float sum = 0.0f;
+            int count = 0;
+            for (int frame = std::max(from, range.startFrame);
+                 frame < std::min({ to, range.endFrameExclusive, frameCount }); ++frame) {
+                const float hz = originalF0[static_cast<size_t>(frame)];
+                if (hz > 0.0f) {
+                    sum += PitchUtils::freqToMidi(hz);
+                    ++count;
+                }
+            }
+            if (count < 2)
+                return std::nullopt;
+            return sum / static_cast<float>(count);
+        };
+
+        // Compare the mean pitch just before and just after each frame (~45 ms each side
+        // at the usual hop) and pick the frame with the largest jump.
+        constexpr int kWindowFrames = 4;
+        float bestJump = 0.0f;
+        int bestFrame = -1;
+        for (int frame = range.startFrame + 1; frame < range.endFrameExclusive; ++frame) {
+            const double time = f0tl.timeAtFrame(frame);
+            if (time <= original.startTime + kMinPartSeconds || time >= original.endTime - kMinPartSeconds)
+                continue;
+            const auto before = meanMidi(frame - kWindowFrames, frame);
+            const auto after = meanMidi(frame, frame + kWindowFrames);
+            if (!before || !after)
+                continue;
+            const float jump = std::abs(*after - *before);
+            if (jump > bestJump) {
+                bestJump = jump;
+                bestFrame = frame;
+            }
+        }
+        // Less than half a semitone is vibrato or drift, not a second note.
+        if (bestFrame >= 0 && bestJump >= 0.5f) {
+            splitTime = f0tl.timeAtFrame(bestFrame);
+            foundPitchChange = true;
+        }
+    }
+
+    // The parts and their pitch centres come from the scissors planner, applied to the
+    // selected note only (the scissors cut every note under the line).
+    const auto plan = planScissorsSplit({ original }, splitTime, loadEffectiveF0(), f0tl);
+    if (plan.cutCount == 0 || plan.afterNotes.size() != 2) {
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, beforeNotes, -1);
+        return;
+    }
+
+    std::vector<Note> newNotes;
+    newNotes.reserve(beforeNotes.size() + 1);
+    for (int i = 0; i < static_cast<int>(beforeNotes.size()); ++i) {
+        if (i == index)
+            newNotes.insert(newNotes.end(), plan.afterNotes.begin(), plan.afterNotes.end());
+        else
+            newNotes.push_back(beforeNotes[static_cast<size_t>(i)]);
+    }
+
+    // Same transaction as the scissors: revision check, notes replaced, one undo step.
+    const auto before = beginParameterTargetChange();
+    if (!ctx_.commitScissorsNotes || !ctx_.commitScissorsNotes(newNotes, LOC_RAW("Split note"))) {
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
+        return;
+    }
+
+    // Select the left part so Right arrow leads straight to the right part.
+    ctx_.getState().noteSelection.setSingle(index, static_cast<int>(newNotes.size()));
+    finishParameterTargetChange(before, true);
+    if (ctx_.invalidateSelectionFeedback)
+        ctx_.invalidateSelectionFeedback();
+    notifyKeyboardNote(atEditCursor       ? KeyboardNoteEvent::SplitAtCursor
+                       : foundPitchChange ? KeyboardNoteEvent::Split
+                                          : KeyboardNoteEvent::SplitInHalf,
+                       newNotes, index);
+}
+
+// J: merge the selected note with the next one if they touch. Same as double-clicking
+// the boundary with the scissors (handleScissorsToolMerge).
+void PianoRollToolHandler::mergeSelectedNoteWithNext()
+{
+    const auto beforeNotes = committedNotes(ctx_);
+    if (beforeNotes.empty()) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoNotes, beforeNotes, -1);
+        return;
+    }
+    const auto selected = collectSelectedNoteIndices(beforeNotes);
+    if (selected.empty()) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoSelection, beforeNotes, -1);
+        return;
+    }
+
+    const int index = selected.front();
+    const Note& left = beforeNotes[static_cast<size_t>(index)];
+    int nextIndex = -1;
+    for (int i = 0; i < static_cast<int>(beforeNotes.size()); ++i) {
+        const double startTime = beforeNotes[static_cast<size_t>(i)].startTime;
+        if (startTime > left.startTime
+            && (nextIndex < 0 || startTime < beforeNotes[static_cast<size_t>(nextIndex)].startTime))
+            nextIndex = i;
+    }
+
+    // "Touching" means a gap of at most 20 ms; notes across a pause are not merged, as with the mouse.
+    constexpr double kTouchToleranceSeconds = 0.02;
+    if (nextIndex < 0
+        || beforeNotes[static_cast<size_t>(nextIndex)].startTime - left.endTime > kTouchToleranceSeconds) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoAdjacentNote, beforeNotes, index);
+        return;
+    }
+
+    const Note& right = beforeNotes[static_cast<size_t>(nextIndex)];
+    // The scissors planner merges at a boundary. The gap may be up to the touch tolerance,
+    // so the boundary is its middle and the planner's tolerance covers both note edges.
+    const double boundary = 0.5 * (left.endTime + right.startTime);
+    const double tolerance = 0.5 * std::abs(right.startTime - left.endTime) + 1.0e-6;
+    const auto plan = planScissorsMerge({ left, right }, boundary, tolerance,
+                                        loadEffectiveF0(), ctx_.getF0Timeline());
+    if (plan.mergeCount == 0 || plan.afterNotes.size() != 1) {
+        notifyKeyboardNote(KeyboardNoteEvent::NoAdjacentNote, beforeNotes, index);
+        return;
+    }
+
+    std::vector<Note> newNotes;
+    newNotes.reserve(beforeNotes.size());
+    int mergedIndex = -1;
+    for (int i = 0; i < static_cast<int>(beforeNotes.size()); ++i) {
+        if (i == nextIndex)
+            continue;
+        if (i == index) {
+            mergedIndex = static_cast<int>(newNotes.size());
+            newNotes.push_back(plan.afterNotes.front());
+        } else {
+            newNotes.push_back(beforeNotes[static_cast<size_t>(i)]);
+        }
+    }
+
+    // Same transaction as the scissors: revision check, notes replaced, one undo step.
+    const auto before = beginParameterTargetChange();
+    if (!ctx_.commitScissorsNotes || !ctx_.commitScissorsNotes(newNotes, LOC_RAW("Merge notes"))) {
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
+        return;
+    }
+
+    ctx_.getState().noteSelection.setSingle(mergedIndex, static_cast<int>(newNotes.size()));
+    finishParameterTargetChange(before, true);
+    if (ctx_.invalidateSelectionFeedback)
+        ctx_.invalidateSelectionFeedback();
+    notifyKeyboardNote(KeyboardNoteEvent::Merged, newNotes, mergedIndex);
+}
+
+// Shared commit path for keyboard note edits: the same commitNoteBasedCorrection
+// as the mouse, over the range of the changed notes.
+bool PianoRollToolHandler::commitKeyboardNoteEdit(const std::vector<Note>& work,
+                                                  const std::vector<int>& changedIndices,
+                                                  const juce::String& undoDescription)
+{
+    double rangeStart = std::numeric_limits<double>::max();
+    double rangeEnd = std::numeric_limits<double>::lowest();
+    for (int index : changedIndices) {
+        rangeStart = std::min(rangeStart, work[static_cast<size_t>(index)].startTime);
+        rangeEnd = std::max(rangeEnd, work[static_cast<size_t>(index)].endTime);
+    }
+
+    const F0FrameRange editRange = ctx_.getF0Timeline().rangeForTimes(rangeStart, rangeEnd);
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (changedIndices.empty() || editRange.isEmpty()
+        || contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr) {
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
+        return false;
+    }
+
+    ctx_.beginNoteDraft();
+    auto& draft = ctx_.getNoteDraft();
+    draft.contentDirty = true;
+    draft.workingNotes = work;
+    ctx_.setUndoDescription(undoDescription);
+    const bool committed = commitNoteBasedCorrection(ctx_, work, editRange);
+    ctx_.clearNoteDraft();
+    if (!committed) {
+        ctx_.setUndoDescription({});
+        // Every caller is a keyboard edit, so the failure is said here once.
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
+    }
+    return committed;
+}
+
+// Up/Down with the Pitch Modulation or Pitch Drift tool: 5% steps, 1% with Alt.
+// Values and their meaning match mouse dragging (dragNotePitch).
+void PianoRollToolHandler::adjustSelectedNotesModDriftByKeyboard(int direction, bool fine)
+{
+    const auto& notes = committedNotes(ctx_);
+    const auto selected = collectSelectedNoteIndices(notes);
+    if (selected.empty()) {
+        notifyKeyboardNote(notes.empty() ? KeyboardNoteEvent::NoNotes : KeyboardNoteEvent::NoSelection,
+                           notes, -1);
+        return;
+    }
+
+    const bool modulation = currentTool_ == ToolId::PitchModulation;
+    const auto event = modulation ? KeyboardNoteEvent::ModulationChanged : KeyboardNoteEvent::DriftChanged;
+    const float step = static_cast<float>(direction) * (fine ? 0.01f : 0.05f);
+
+    ContentNoteValueEditRequest request;
+    for (int index : selected) {
+        const auto& note = notes[static_cast<size_t>(index)];
+        ContentNoteValueEdit edit;
+        edit.kind = ContentNoteValueEdit::Kind::Parameters;
+        edit.position = static_cast<std::size_t>(index);
+        if (modulation) {
+            // A negative value means "follow the global Retune Speed knob".
+            const float effective = note.retuneSpeed >= 0.0f ? note.retuneSpeed : ctx_.getRetuneSpeed();
+            const float target = juce::jlimit(0.0f, 1.0f, effective + step);
+            if (std::abs(target - effective) <= 0.001f)
+                continue;
+            edit.retuneSpeed = target;
+        } else {
+            // Drift is not clamped to +/-100%, as with the mouse (Melodyne allows 224%, -112%, etc.).
+            // Up increases the number that the screen reader announces.
+            edit.pitchDriftScale = note.pitchDriftScale + step;
+        }
+        request.edits.push_back(std::move(edit));
+    }
+
+    if (request.edits.empty()) {
+        // At the end of the range (0% or 100% modulation) just announce the current value.
+        notifyKeyboardNote(event, notes, selected.front());
+        return;
+    }
+    auto plan = ctx_.planNoteValueEdit(notes, request);
+    auto work = std::move(plan.notes);
+    std::vector<int> changed;
+    changed.reserve(plan.changedPositions.size());
+    for (const auto position : plan.changedPositions)
+        changed.push_back(static_cast<int>(position));
+    if (commitKeyboardNoteEdit(work, changed,
+                               modulation ? LOC_RAW("Modulation depth") : LOC_RAW("Drift correction")))
+        notifyKeyboardNote(event, work, changed.front());
+}
+
+// Enter: like double-clicking a note (handlePitchToolDoubleClick) but for the selected notes.
+// Returns false when nothing is selected so Enter keeps working as "Stop".
+bool PianoRollToolHandler::applyNoteDefaultActionByKeyboard()
+{
+    const auto& notes = committedNotes(ctx_);
+    const auto selected = collectSelectedNoteIndices(notes);
+    if (selected.empty())
+        return false;
+
+    // EQ: a click on a note opens the EQ window, so Enter does the same instead of snapping the pitch.
+    if (currentTool_ == ToolId::Eq) {
+        const int anchor = ctx_.getState().noteSelection.anchorIndex;
+        const bool anchorSelected = std::find(selected.begin(), selected.end(), anchor) != selected.end();
+        if (ctx_.openEqFromKeyboard)
+            ctx_.openEqFromKeyboard(anchorSelected ? anchor : selected.front());
+        return true;
+    }
+
+    // Volume Envelope: the double-click resets the note to 0 dB.
+    if (currentTool_ == ToolId::VolumeEnvelope) {
+        resetSelectedNotesVolumeByKeyboard();
+        return true;
+    }
+
+    if (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift) {
+        const bool modulation = currentTool_ == ToolId::PitchModulation;
+        ContentNoteValueEditRequest request;
+        for (int index : selected) {
+            const auto& note = notes[static_cast<size_t>(index)];
+            ContentNoteValueEdit edit;
+            edit.kind = ContentNoteValueEdit::Kind::Parameters;
+            edit.position = static_cast<std::size_t>(index);
+            const float current = modulation ? note.retuneSpeed : note.pitchDriftScale;
+            const double target = current > 0.5f ? 0.0 : 1.0;
+            if (modulation)
+                edit.retuneSpeed = target;
+            else
+                edit.pitchDriftScale = target;
+            request.edits.push_back(std::move(edit));
+        }
+        auto plan = ctx_.planNoteValueEdit(notes, request);
+        auto work = std::move(plan.notes);
+        std::vector<int> changed;
+        changed.reserve(plan.changedPositions.size());
+        for (const auto position : plan.changedPositions)
+            changed.push_back(static_cast<int>(position));
+        const auto event = modulation ? KeyboardNoteEvent::ModulationChanged : KeyboardNoteEvent::DriftChanged;
+        if (commitKeyboardNoteEdit(work, changed,
+                                   modulation ? LOC_RAW("Modulation depth") : LOC_RAW("Drift correction")))
+            notifyKeyboardNote(event, work, changed.front());
+        return true;
+    }
+
+    // Other tools: snap the note to the pitch grid (Pitch Snap). As with the double-click,
+    // snapping starts from the note's base pitch, ignoring the current offset.
+    if (pitchGridMode_ == PitchGridMode::NoSnap) {
+        notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, notes, selected.front());
+        return true;
+    }
+    const auto activeScale = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    const ScaleSnapConfig snap = pitchGridMode_ == PitchGridMode::KeyScale
+        ? activeScale.value_or(ScaleSnapConfig{})
+        : ScaleSnapConfig{};
+    std::vector<std::size_t> targets;
+    targets.reserve(selected.size());
+    for (const int index : selected)
+        targets.push_back(static_cast<std::size_t>(index));
+    if (ctx_.applyAutoSnap && ctx_.applyAutoSnap(targets, snap, LOC_RAW("Pitch snap")))
+        notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, committedNotes(ctx_), selected.front());
+    else
+        notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, notes, selected.front());
+    return true;
+}
+
+void PianoRollToolHandler::switchToolFromKeyboard(ToolId tool)
+{
+    ctx_.setCurrentTool(tool);
+    if (ctx_.notifyToolChangedFromKeyboard)
+        ctx_.notifyToolChangedFromKeyboard(tool);
+}
+
+void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction, bool fineCents, bool resetToSung,
+                                                             bool semitoneIgnoringScale)
 {
     const auto& notes = committedNotes(ctx_);
     const auto selectedIndices = collectSelectedNoteIndices(notes);
-    if (selectedIndices.empty())
+    if (selectedIndices.empty()) {
+        notifyKeyboardNote(notes.empty() ? KeyboardNoteEvent::NoNotes : KeyboardNoteEvent::NoSelection,
+                           notes, -1);
         return;
+    }
 
     const bool openDyne = AudioEditingScheme::usesNotesPrimaryScheme(ctx_.getAudioEditingScheme());
     const bool standardPitch = !openDyne
@@ -800,17 +1564,28 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction)
         ? ctx_.getActiveScaleSnap().value_or(ScaleSnapConfig{})
         : ScaleSnapConfig{};
 
-    std::vector<Note> workingNotes = notes;
+    ContentNoteValueEditRequest valueRequest;
     double rangeStart = std::numeric_limits<double>::max();
     double rangeEnd = std::numeric_limits<double>::lowest();
     std::vector<std::pair<int, float>> changedOffsets;
     for (int noteIndex : selectedIndices) {
-        auto& note = workingNotes[static_cast<size_t>(noteIndex)];
+        const auto& note = notes[static_cast<size_t>(noteIndex)];
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
         const float initialOffset = note.pitchOffset;
         const float currentMidi = baseMidi + initialOffset;
         float targetMidi = currentMidi;
-        if (noSnap) {
+        if (resetToSung) {
+            // originalPitch is the sung pitch; notes without it have nothing to return to.
+            if (note.originalPitch > 0.0f)
+                targetMidi = PitchUtils::freqToMidi(note.originalPitch);
+        } else if (fineCents) {
+            targetMidi += static_cast<float>(direction) * 0.01f;
+        } else if (semitoneIgnoringScale) {
+            // To the next whole semitone, whatever the grid mode.
+            targetMidi = direction > 0
+                ? std::floor(currentMidi) + 1.0f
+                : std::ceil(currentMidi) - 1.0f;
+        } else if (noSnap) {
             targetMidi += static_cast<float>(direction) * 0.01f;
         } else if (scaleSnapEnabled) {
             const float firstCandidate = direction > 0
@@ -832,19 +1607,31 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction)
         if (std::abs(finalOffset - initialOffset) <= 0.001f)
             continue;
 
-        note.pitchOffset = finalOffset;
-        note.dirty = true;
+        ContentNoteValueEdit edit;
+        edit.kind = ContentNoteValueEdit::Kind::SetPitchOffset;
+        edit.position = static_cast<std::size_t>(noteIndex);
+        edit.pitchOffset = finalOffset;
+        valueRequest.edits.push_back(std::move(edit));
         changedOffsets.emplace_back(noteIndex, initialOffset);
         rangeStart = std::min(rangeStart, note.startTime);
         rangeEnd = std::max(rangeEnd, note.endTime);
     }
-    if (changedOffsets.empty())
+    if (changedOffsets.empty()) {
+        // Resetting a note that is already at its sung pitch: still say the pitch, so R is not silent.
+        if (resetToSung)
+            notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, notes, selectedIndices.front());
         return;
+    }
 
     const F0FrameRange editRange = ctx_.getF0Timeline().rangeForTimes(rangeStart, rangeEnd);
     const auto contentSnapshot = ctx_.getEditableContentSnapshot();
-    if (editRange.isEmpty() || contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr)
+    if (editRange.isEmpty() || contentSnapshot == nullptr || contentSnapshot->pitchCurve == nullptr) {
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, notes, -1);
         return;
+    }
+
+    auto valuePlan = ctx_.planNoteValueEdit(notes, valueRequest);
+    auto workingNotes = std::move(valuePlan.notes);
 
     ctx_.beginNoteDraft();
     auto& draft = ctx_.getNoteDraft();
@@ -855,6 +1642,7 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction)
     ctx_.clearNoteDraft();
     if (!committed) {
         ctx_.setUndoDescription({});
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
         return;
     }
 
@@ -862,6 +1650,8 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction)
         ctx_.notifyNoteOffsetChanged(static_cast<size_t>(noteIndex), oldOffset,
                                      workingNotes[static_cast<size_t>(noteIndex)].pitchOffset);
     }
+    // workingNotes rather than committedNotes: it is guaranteed to hold the new pitch.
+    notifyKeyboardNote(KeyboardNoteEvent::PitchMoved, workingNotes, changedOffsets.front().first);
 }
 
 bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
@@ -1035,6 +1825,7 @@ void PianoRollToolHandler::cancelActiveMouseGesture()
     state.resetTransient();
     ctx_.clearNoteDraft();
     pendingEqPrimaryIndex_ = -1;
+    finishMouseParameterTargetChange();
 }
 
 void PianoRollToolHandler::handleDeleteKey()
@@ -1042,15 +1833,23 @@ void PianoRollToolHandler::handleDeleteKey()
 {
     const auto& notes = committedNotes(ctx_);
     const auto selectedIndices = collectSelectedNoteIndices(notes);
-    if (selectedIndices.empty())
+    if (selectedIndices.empty()) {
+        // Otherwise Delete did nothing and said nothing.
+        notifyKeyboardNote(notes.empty() ? KeyboardNoteEvent::NoNotes : KeyboardNoteEvent::NoSelection,
+                           notes, -1);
         return;
+    }
 
+    const auto before = beginParameterTargetChange();
     auto result = ctx_.deleteSelectedPianoRollNotes(
         selectedIndices, ctx_.getNotesRevision(), LOC_RAW("Delete note"));
-    if (result.status == SelectedNoteDeleteStatus::StaleRevision)
+    if (result.status != SelectedNoteDeleteStatus::Applied) {
+        // Delete also sits on Backspace and "1": a press that did nothing must be heard too.
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
+        if (result.status != SelectedNoteDeleteStatus::StaleRevision)
+            finishParameterTargetChange(before);
         return;
-    if (result.status != SelectedNoteDeleteStatus::Applied)
-        return;
+    }
 
     if (result.pitchCurveEdited) {
         ctx_.notifyPitchCurveEdited(result.affectedRange.startFrame,
@@ -1058,6 +1857,22 @@ void PianoRollToolHandler::handleDeleteKey()
     }
     if (ctx_.invalidateLiveNotes)
         ctx_.invalidateLiveNotes(result.beforeNotes, result.contentSnapshot->notes);
+
+    // Accessibility: keep the place in the note list. The note after the removed ones
+    // (or the last note) becomes selected, so the arrows go on from here.
+    const bool accessibilityMode = ctx_.accessibilityModeEnabled
+        && ctx_.accessibilityModeEnabled();
+    const auto& afterNotes = committedNotes(ctx_);
+    if (accessibilityMode && !afterNotes.empty()) {
+        const int firstRemoved = *std::min_element(selectedIndices.begin(), selectedIndices.end());
+        const int neighbour = juce::jmin(firstRemoved, static_cast<int>(afterNotes.size()) - 1);
+        ctx_.getState().noteSelection.setSingle(neighbour, static_cast<int>(afterNotes.size()));
+        if (ctx_.invalidateSelectionFeedback)
+            ctx_.invalidateSelectionFeedback();
+    }
+    finishParameterTargetChange(before, true);
+    // Delete also sits on Backspace and "1", so an accidental press must be heard.
+    notifyKeyboardNote(KeyboardNoteEvent::Removed, afterNotes, static_cast<int>(selectedIndices.size()));
 }
 
 void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
@@ -1079,6 +1894,9 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
     const int clickedNoteIndex = hit.noteIndex >= 0 && hit.edge == NoteResizeEdge::None
         ? hit.noteIndex
         : -1;
+
+    if (hit.noteIndex >= 0)
+        beginMouseParameterTargetChange();
 
     bool isCtrlDown = e.mods.isCtrlDown() || e.mods.isCommandDown();
 
@@ -1102,6 +1920,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
         }
 
         if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+        finishMouseParameterTargetChange();
         return;
     }
 
@@ -1122,6 +1941,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
             ctx_.getState().frameSelection.clear();   // 纯点击替换全部选择
         }
 
+        finishMouseParameterTargetChange();
         if (noteSelection.isSelected(clickedNoteIndex)) {
             // OpenDyne Main/Select 与普通模式一致：允许对选中音符进行 pitch 拖拽。
             beginNotePitchDrag(notes, clickedNoteIndex);
@@ -1141,6 +1961,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
             if (findF0ContiguousStretch(f0Frame, segStart, segEnd)) {
                 auto& sel = ctx_.getState().selection;
                 auto& fs = ctx_.getState().frameSelection;
+                beginMouseParameterTargetChange();
                 if (isCtrlDown) {
                     // Ctrl：复选追加该段，不进入拖拽
                     fs.addRange(segStart, segEnd);
@@ -1175,6 +1996,7 @@ void PianoRollToolHandler::beginAreaSelection(const juce::MouseEvent& e)
     if (!sourceTime)
         return;
 
+    beginMouseParameterTargetChange();
     deselectAllNotes();
     ctx_.getState().frameSelection.clear();
     ctx_.getState().noteDrag.draggedNoteIndices.clear();
@@ -1400,6 +2222,7 @@ void PianoRollToolHandler::handleEraserUp()
         return;
     }
 
+    const auto before = beginParameterTargetChange();
     const auto result = ctx_.editEraserStroke(
         F0FrameRange{ eraser.startFrame, eraser.endFrameExclusive },
         eraser.noteIndices,
@@ -1413,6 +2236,8 @@ void PianoRollToolHandler::handleEraserUp()
         ctx_.notifyPitchCurveEdited(result.affectedRange.startFrame,
                                     result.affectedRange.endFrameExclusive - 1);
     }
+    if (result.status != EraserStrokeEditStatus::StaleRevision)
+        finishParameterTargetChange(before, result.status == EraserStrokeEditStatus::Applied);
 
     clearFeedbackState();
 }
@@ -1444,6 +2269,7 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
     
     if (existingNoteIndex >= 0) {
         bool isCtrlDown = e.mods.isCtrlDown() || e.mods.isCommandDown();
+        beginMouseParameterTargetChange();
         auto& noteSelection = ctx_.getState().noteSelection;
         const int noteCount = static_cast<int>(committedNotes.size());
         if (isCtrlDown) {
@@ -1455,6 +2281,7 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
             }
         }
         if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+        finishMouseParameterTargetChange();
     }
     
     ctx_.setDrawNoteToolPendingDrag(true);
@@ -1851,10 +2678,13 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
         // 1 半音像素高度 ≈ 25% 参数变化（与 VolumeEnvelope 的 12dB/半音对齐视觉）
         const float paramDelta = -deltaY * 0.25f / 12.0f;
 
+        ContentNoteValueEditRequest valueRequest;
         for (int noteIndex : state.noteDrag.draggedNoteIndices) {
-            auto& note = notes[static_cast<size_t>(noteIndex)];
             // 相对变化：每个 note 以 baseline 为唯一输入起点（Melodyne 行为）
             const auto& baseline = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)];
+            ContentNoteValueEdit edit;
+            edit.kind = ContentNoteValueEdit::Kind::Parameters;
+            edit.position = static_cast<std::size_t>(noteIndex);
             if (currentTool_ == ToolId::PitchModulation) {
                 // baseline 有效值：raw >=0 取自身，否则回退全局 retuneSpeed
                 const float baselineEffective = baseline.retuneSpeed >= 0.0f
@@ -1864,8 +2694,8 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
                 state.modDriftPreviewValue = target;
                 // 仅实际变化才写字段；否则保持 baseline raw（尤其 -1 = 跟随全局）
                 if (std::abs(target - baselineEffective) > 0.001f) {
-                    note.retuneSpeed = target;
-                    note.dirty = true;
+                    edit.retuneSpeed = target;
+                    valueRequest.edits.push_back(std::move(edit));
                 }
             } else {
                 // 允许超出±100%（Melodyne支持224%、-112%等），DSP端不做钳位
@@ -1873,11 +2703,12 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
                 const float target = baseline.pitchDriftScale - paramDelta;
                 state.modDriftPreviewValue = target;
                 if (std::abs(target - baseline.pitchDriftScale) > 0.001f) {
-                    note.pitchDriftScale = target;
-                    note.dirty = true;
+                    edit.pitchDriftScale = target;
+                    valueRequest.edits.push_back(std::move(edit));
                 }
             }
         }
+        notes = ctx_.planNoteValueEdit(draftBaselineNotes(ctx_), valueRequest).notes;
 
         // 预览：以拖拽后的 retuneSpeed/pitchDriftScale 经唯一
         // updateNoteBasedCorrectionPreview（内部走权威 applyCorrectionToRange）
@@ -1937,8 +2768,9 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
     // 循环不变量：拖拽期间活动调式不变，量化配置只取一次
     const auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
 
+    ContentNoteValueEditRequest valueRequest;
     for (int noteIndex : state.noteDrag.draggedNoteIndices) {
-        auto& note = notes[static_cast<size_t>(noteIndex)];
+        const auto& note = notes[static_cast<size_t>(noteIndex)];
         const float initialOffset = draftBaselineNotes(ctx_)[static_cast<size_t>(noteIndex)].pitchOffset;
         // 连续基准 MIDI（不提前取整）：SNAP 目标全程保持连续语义
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
@@ -1957,10 +2789,14 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
         // 仅实际变化才写 pitchOffset/dirty，否则保留 baseline
         const float finalOffset = snappedMidi - baseMidi;
         if (std::abs(finalOffset - initialOffset) > 0.001f) {
-            note.pitchOffset = finalOffset;
-            note.dirty = true;
+            ContentNoteValueEdit edit;
+            edit.kind = ContentNoteValueEdit::Kind::SetPitchOffset;
+            edit.position = static_cast<std::size_t>(noteIndex);
+            edit.pitchOffset = finalOffset;
+            valueRequest.edits.push_back(std::move(edit));
         }
     }
+    notes = ctx_.planNoteValueEdit(draftBaselineNotes(ctx_), valueRequest).notes;
 
     updateNoteBasedCorrectionPreview(notes);
     if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, notes);
@@ -2117,6 +2953,7 @@ void PianoRollToolHandler::handlePitchToolMouseDown(const juce::MouseEvent& e)
     if (clickedNoteIndex < 0)
         return;
 
+    beginMouseParameterTargetChange();
     auto& noteSelection = ctx_.getState().noteSelection;
     const int noteCount = static_cast<int>(notes.size());
     if (noteSelection.isSelected(clickedNoteIndex) && !noteSelection.isAllSelected(noteCount)) {
@@ -2127,6 +2964,7 @@ void PianoRollToolHandler::handlePitchToolMouseDown(const juce::MouseEvent& e)
         ctx_.getState().frameSelection.clear();
     }
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
+    finishMouseParameterTargetChange();
 
     if (!noteSelection.isSelected(clickedNoteIndex))
         return;
@@ -2175,12 +3013,16 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         ctx_.beginNoteDraft();
         auto& draft = ctx_.getNoteDraft();
         draft.contentDirty = true;
-        auto work = draft.workingNotes;
+        ContentNoteValueEdit edit;
+        edit.kind = ContentNoteValueEdit::Kind::Parameters;
+        edit.position = static_cast<std::size_t>(clickedNoteIndex);
         if (currentTool_ == ToolId::PitchModulation)
-            work[static_cast<size_t>(clickedNoteIndex)].retuneSpeed = newVal;
+            edit.retuneSpeed = newVal;
         else
-            work[static_cast<size_t>(clickedNoteIndex)].pitchDriftScale = newVal;
-        work[static_cast<size_t>(clickedNoteIndex)].dirty = true;
+            edit.pitchDriftScale = newVal;
+        ContentNoteValueEditRequest request;
+        request.edits.push_back(std::move(edit));
+        auto work = ctx_.planNoteValueEdit(notes, request).notes;
         draft.workingNotes = work;
         ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
             ? LOC_RAW("Modulation depth")
@@ -2199,46 +3041,14 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
 
     // Pitch Tool (F2×1) 双击：按 Pitch Grid 模式吸附（与拖拽吸附同一三态语义）
     // NoSnap：不吸附；Chromatic：吸附到最近半音；KeyScale：吸附到活动音阶（无配置时按半音）
-    auto scaleSnap = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
-
-    const Note& original = notes[static_cast<size_t>(clickedNoteIndex)];
-    // SNAP 按基准音高重投影：pitchOffset 不进入量化输入（与按钮入口一致）
-    const float baseMidi = PitchUtils::freqToMidi(original.pitch);
-    float snappedMidi = baseMidi;
-    switch (pitchGridMode_) {
-        case PitchGridMode::NoSnap:
-            return;   // 自由模式：不吸附
-        case PitchGridMode::Chromatic:
-            snappedMidi = std::round(baseMidi);  // 吸附到最近半音
-            break;
-        case PitchGridMode::KeyScale: {
-            // 吸附到活动音阶；无配置时用默认 Chromatic（quantize 内部 round 半音）
-            const ScaleSnapConfig snap = scaleSnap.value_or(ScaleSnapConfig{});
-            snappedMidi = snap.quantizeMidiToActiveScale(baseMidi);
-            break;
-        }
-    }
-    const float snappedOffset = snappedMidi - baseMidi;
-    if (std::abs(snappedOffset - original.pitchOffset) < 0.001f)
+    if (pitchGridMode_ == PitchGridMode::NoSnap)
         return;
-
-    ctx_.beginNoteDraft();
-    auto& draft = ctx_.getNoteDraft();
-    draft.contentDirty = true;
-    auto work = draft.workingNotes;
-    work[static_cast<size_t>(clickedNoteIndex)].pitchOffset = snappedOffset;
-    work[static_cast<size_t>(clickedNoteIndex)].dirty = true;
-    draft.workingNotes = work;
-    ctx_.setUndoDescription(LOC_RAW("Pitch snap"));
-
-    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
-    const auto f0tl = ctx_.getF0Timeline();
-    const F0FrameRange noteRange = f0tl.rangeForTimes(original.startTime, original.endTime);
-    if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr && !noteRange.isEmpty()) {
-        commitNoteBasedCorrection(ctx_, work, noteRange);
-    } else {
-        ctx_.clearNoteDraft();   // 音高编辑失败不退化提交
-    }
+    const auto activeScale = ctx_.getActiveScaleSnap ? ctx_.getActiveScaleSnap() : std::nullopt;
+    const ScaleSnapConfig snap = pitchGridMode_ == PitchGridMode::KeyScale
+        ? activeScale.value_or(ScaleSnapConfig{})
+        : ScaleSnapConfig{};
+    if (ctx_.applyAutoSnap)
+        ctx_.applyAutoSnap({static_cast<std::size_t>(clickedNoteIndex)}, snap, LOC_RAW("Pitch snap"));
 }
 
 void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEvent& e)
@@ -2259,6 +3069,7 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolMouseDown(const juce::MouseEv
     if (clickedNoteIndex < 0)
         return;
 
+    beginMouseParameterTargetChange();
     auto& state = ctx_.getState();
     if (!state.noteSelection.isSelected(clickedNoteIndex) || state.noteSelection.isAllSelected(static_cast<int>(notes.size()))) {
         state.noteSelection.setSingle(clickedNoteIndex, static_cast<int>(notes.size()));
@@ -2342,6 +3153,7 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolDoubleClick(const juce::Mouse
     state.isVolumeDragging = false;
     volumeDragSelectedIndices_.clear();
     state.volumePreviewEnvelope.clear();
+    const auto before = beginParameterTargetChange();
     state.noteSelection.setSingle(noteIndex, static_cast<int>(notes.size()));
     state.frameSelection.clear();
     if (ctx_.invalidateSelectionFeedback)
@@ -2350,6 +3162,58 @@ void PianoRollToolHandler::handleVolumeEnvelopeToolDoubleClick(const juce::Mouse
     if (ctx_.resetVolumeEnvelopeRegion)
         ctx_.resetVolumeEnvelopeRegion(noteIndex, ctx_.getNotesRevision(),
                                        LOC(kToolVolumeEnvelope));
+    finishParameterTargetChange(before);
+}
+
+// Keyboard version of the Volume Envelope drag: every selected note keeps its own level
+// and gets the same step, exactly like buildVolumeEnvelopeDragPreview.
+void PianoRollToolHandler::adjustSelectedNotesVolumeByKeyboard(int direction, bool fine)
+{
+    const auto& notes = committedNotes(ctx_);
+    const auto selected = collectSelectedNoteIndices(notes);
+    if (selected.empty()) {
+        notifyKeyboardNote(notes.empty() ? KeyboardNoteEvent::NoNotes : KeyboardNoteEvent::NoSelection, notes, -1);
+        return;
+    }
+    if (!ctx_.editVolumeEnvelopeRegions)
+        return;
+
+    // Same transaction as the mouse drag: every selected note keeps its own level and
+    // gets the same step (1 dB, Alt 0.1 dB).
+    const float step = static_cast<float>(direction) * (fine ? 0.1f : 1.0f);
+    const auto result = ctx_.editVolumeEnvelopeRegions(selected, ctx_.getNotesRevision(), step,
+                                                       LOC(kToolVolumeEnvelope));
+    if (result.status == VolumeEnvelopeRegionEditStatus::StaleRevision
+        || result.status == VolumeEnvelopeRegionEditStatus::Failed) {
+        notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
+        return;
+    }
+    // NoChange: at the limit; stay silent, as at list ends.
+    if (result.status != VolumeEnvelopeRegionEditStatus::Applied)
+        return;
+    notifyKeyboardNote(KeyboardNoteEvent::VolumeChanged, committedNotes(ctx_), selected.front());
+}
+
+// Enter with the Volume Envelope tool, like its double-click: back to 0 dB.
+void PianoRollToolHandler::resetSelectedNotesVolumeByKeyboard()
+{
+    const auto& notes = committedNotes(ctx_);
+    const auto selected = collectSelectedNoteIndices(notes);
+    if (selected.empty() || !ctx_.resetVolumeEnvelopeRegion)
+        return;
+
+    // The double-click resets one note; the keyboard resets each selected note the same way.
+    // A note already at 0 dB gives NoChange and nothing is committed, but the level is still said.
+    for (int index : selected) {
+        const auto result = ctx_.resetVolumeEnvelopeRegion(index, ctx_.getNotesRevision(), LOC(kToolVolumeEnvelope));
+        // After a failure the other indices may point at different notes: stop here.
+        if (result.status == VolumeEnvelopeRegionEditStatus::StaleRevision
+            || result.status == VolumeEnvelopeRegionEditStatus::Failed) {
+            notifyKeyboardNote(KeyboardNoteEvent::EditFailed, committedNotes(ctx_), -1);
+            return;
+        }
+    }
+    notifyKeyboardNote(KeyboardNoteEvent::VolumeChanged, committedNotes(ctx_), selected.front());
 }
 
 void PianoRollToolHandler::updateScissorsPreview(const juce::MouseEvent& e)
@@ -2452,9 +3316,11 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
         return;
     }
 
-    // 提交事务：Processor 校验 revision、全量替换 notes 并记录 undo。
-    if (!ctx_.commitScissorsNotes(plan.afterNotes, LOC_RAW("Split note")))
+    // 提交事务前交接旧参数目标；提交可能重排 notes 并清除旧选择。
+    const auto before = beginParameterTargetChange();
+    if (!ctx_.commitScissorsNotes(plan.afterNotes, LOC_RAW("Split note"))) {
         return;
+    }
 
     // 记录本次点击的时间和位置，用于自定义双击合并检测
     scissorsLastClickTime_ = now;
@@ -2466,6 +3332,7 @@ void PianoRollToolHandler::handleScissorsToolUp(const juce::MouseEvent& e)
         state.noteSelection.setSingle(plan.lastRightIndex,
                                       static_cast<int>(plan.afterNotes.size()));
     }
+    finishParameterTargetChange(before, true);
     if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 
     // 不切换工具 —— 保持 Scissors，与 Melodyne 一致。
@@ -2522,9 +3389,11 @@ bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
     if (plan.mergeCount == 0)
         return false;
 
-    // 提交事务：Processor 校验 revision、全量替换 notes 并记录 undo。
-    if (!ctx_.commitScissorsNotes(plan.afterNotes, LOC_RAW("Merge notes")))
+    const auto before = beginParameterTargetChange();
+    if (!ctx_.commitScissorsNotes(plan.afterNotes, LOC_RAW("Merge notes"))) {
         return false;
+    }
+    finishParameterTargetChange(before, true);
     if (ctx_.invalidateSelectionFeedback)
         ctx_.invalidateSelectionFeedback();
 
@@ -2645,6 +3514,7 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
         ctx_.getVibratoDepth(),
         ctx_.getVibratoRate()
     };
+    const auto before = beginParameterTargetChange();
     const auto result = ctx_.commitDrawNote(
         input, ctx_.getNotesRevision(), LOC_RAW("Draw note"));
 
@@ -2655,6 +3525,8 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
             result.contentSnapshot->notes, midTime, result.insertedNote.getAdjustedPitch(), 1.0f);
     }
     ctx_.applyDrawNoteResult(result, beforeNotes, selectedNoteIndex);
+    if (result.status == DrawNoteCommitStatus::Applied)
+        finishParameterTargetChange(before, true);
 }
 
 void PianoRollToolHandler::showToolContextMenu(const juce::MouseEvent& e)
@@ -3260,6 +4132,7 @@ void PianoRollToolHandler::handleEqToolMouseDown(const juce::MouseEvent& e)
     if (clickedNoteIndex < 0)
         return;
 
+    beginMouseParameterTargetChange();
     auto& noteSelection = ctx_.getState().noteSelection;
     const int noteCount = static_cast<int>(notes.size());
     if (noteSelection.isSelected(clickedNoteIndex)) {

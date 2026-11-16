@@ -80,6 +80,74 @@ std::shared_ptr<const TimeGridSnapshot> planTimeGridDrag(
     return snapshot;
 }
 
+std::shared_ptr<const TimeGridSnapshot> planTimeGridMoves(
+    const std::shared_ptr<const TimeGridSnapshot>& original,
+    const std::vector<TimeGridHandleMove>& moves)
+{
+    if (original == nullptr)
+        return nullptr;
+    const auto& handles = original->handles();
+    std::vector<double> outputs;
+    outputs.reserve(handles.size());
+    for (const auto& handle : handles)
+        outputs.push_back(handle.output_seconds);
+
+    std::vector<std::pair<std::size_t, double>> requested;
+    for (const auto& move : moves)
+        for (std::size_t i = 1; i + 1 < handles.size(); ++i)
+            if (handles[i].id == move.handleId) {
+                requested.emplace_back(i, move.outputSeconds);
+                break;
+            }
+    if (requested.empty())
+        return nullptr;
+
+    if (requested.size() == 1) {
+        const auto [index, output] = requested.front();
+        const double lower = outputs[index - 1] + TimeGridSnapshot::kMinOutputSpacingSeconds;
+        const double upper = outputs[index + 1] - TimeGridSnapshot::kMinOutputSpacingSeconds;
+        if (lower > upper)
+            return nullptr;
+        bool validationRejected = false;
+        const auto moved = planTimeGridDrag(
+            original, handles[index].id, handles[index].output_seconds, output,
+            handles[index].id, {}, false, validationRejected);
+        if (moved == nullptr)
+            return nullptr;
+        for (std::size_t i = 0; i < handles.size(); ++i)
+            if (moved->handles()[i].output_seconds != outputs[i])
+                return moved;
+        return nullptr;
+    }
+
+    auto targets = outputs;
+    for (const auto& [index, output] : requested)
+        targets[index] = output;
+    auto limited = targets;
+    for (const auto& [index, output] : requested) {
+        juce::ignoreUnused(output);
+        const double lower = targets[index - 1] + TimeGridSnapshot::kMinOutputSpacingSeconds;
+        const double upper = targets[index + 1] - TimeGridSnapshot::kMinOutputSpacingSeconds;
+        if (lower <= upper)
+            limited[index] = juce::jlimit(lower, upper, targets[index]);
+    }
+    for (std::size_t i = 1; i + 1 < limited.size(); ++i) {
+        const double lower = limited[i - 1] + TimeGridSnapshot::kMinOutputSpacingSeconds;
+        const double upper = limited[i + 1] - TimeGridSnapshot::kMinOutputSpacingSeconds;
+        if (lower > upper)
+            return nullptr;
+        limited[i] = juce::jlimit(lower, upper, limited[i]);
+    }
+
+    std::vector<TimeHandle> next(handles.begin(), handles.end());
+    bool changed = false;
+    for (std::size_t i = 0; i < next.size(); ++i) {
+        changed = changed || limited[i] != outputs[i];
+        next[i].output_seconds = limited[i];
+    }
+    return changed ? TimeGridSnapshot::makeFromHandles(std::move(next)) : nullptr;
+}
+
 TimeGridInsertResult planTimeGridInsert(
     const std::shared_ptr<const TimeGridSnapshot>& original,
     double clickedOutputSeconds)

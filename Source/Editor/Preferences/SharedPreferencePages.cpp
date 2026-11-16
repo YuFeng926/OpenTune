@@ -4,6 +4,9 @@
 #include "Editor/ShortcutCaptureDialogContent.h"
 #include "Standalone/UI/UIColors.h"
 #include "Inference/ModelFactory.h"
+#include "Utils/AccessibleComboBox.h"
+#include "Utils/AccessibleKnob.h"
+#include "Utils/AccessibleToggleButton.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/LocalizationManager.h"
 #include "Utils/ModelPathResolver.h"
@@ -161,28 +164,24 @@ private:
     AppPreferences& appPreferences_;
     std::function<void()> onPreferencesChanged_;
     juce::Label themeLabel_;
-    juce::ComboBox themeSelector_;
+    a11y::AccessibleComboBox themeSelector_;
     juce::Label languageLabel_;
-    juce::ComboBox languageSelector_;
+    a11y::AccessibleComboBox languageSelector_;
 };
 
 class SharedAudioPage final : public juce::Component
 {
 public:
     SharedAudioPage(AppPreferences& appPreferences,
+                    ProcessingPreferenceRuntimeOperations runtimeOperations,
                     std::function<void()> onPreferencesChanged,
-                    std::function<void(bool)> onRenderingPriorityChanged,
-                    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
-                    std::function<bool(F0ModelType)> onF0ModelChanged,
-                    std::function<void(bool)> onLightPitchCorrectionChanged,
+                    std::function<void(const juce::String&)> onF0ModelChangeFailed,
                     std::function<void()> onReplayOnboarding,
                     bool isVst3Plugin)
         : appPreferences_(appPreferences)
+        , runtimeOperations_(std::move(runtimeOperations))
         , onPreferencesChanged_(std::move(onPreferencesChanged))
-        , onRenderingPriorityChanged_(std::move(onRenderingPriorityChanged))
-        , onVocoderModelWeightChanged_(std::move(onVocoderModelWeightChanged))
-        , onF0ModelChanged_(std::move(onF0ModelChanged))
-        , onLightPitchCorrectionChanged_(std::move(onLightPitchCorrectionChanged))
+        , onF0ModelChangeFailed_(std::move(onF0ModelChangeFailed))
         , onReplayOnboarding_(std::move(onReplayOnboarding))
         , isVst3Plugin_(isVst3Plugin)
     {
@@ -211,13 +210,14 @@ public:
             static_cast<int>(state.shared.renderingPriority) + 1,
             juce::dontSendNotification);
         renderingPrioritySelector_.onChange = [this] {
-            const auto priority = static_cast<RenderingPriority>(
-                renderingPrioritySelector_.getSelectedId() - 1);
-            appPreferences_.setRenderingPriority(priority);
-            if (onRenderingPriorityChanged_) {
-                onRenderingPriorityChanged_(priority == RenderingPriority::CpuFirst);
-            }
-            notifyChanged();
+            ProcessingPreferencePatch patch;
+            patch.renderingPriority = static_cast<RenderingPriority>(renderingPrioritySelector_.getSelectedId() - 1);
+            const auto result = applyProcessingPreferencePatch(
+                appPreferences_, patch, runtimeOperations_, onPreferencesChanged_);
+            if (!result.succeeded())
+                renderingPrioritySelector_.setSelectedId(
+                    static_cast<int>(appPreferences_.getState().shared.renderingPriority) + 1,
+                    juce::dontSendNotification);
         };
         initialiseComboBox(renderingPrioritySelector_);
         addAndMakeVisible(renderingPrioritySelector_);
@@ -251,11 +251,21 @@ public:
             if (id <= 0 || id > static_cast<int>(vocoderWeights_.size()))
                 return;
             const auto& weight = vocoderWeights_[static_cast<size_t>(id) - 1].fileName;
-            appPreferences_.setVocoderModelWeight(weight);
-            if (onVocoderModelWeightChanged_)
-                onVocoderModelWeightChanged_(weight);
-            if (onPreferencesChanged_)
-                onPreferencesChanged_();
+            ProcessingPreferencePatch patch;
+            patch.vocoderModelWeight = weight;
+            const auto result = applyProcessingPreferencePatch(
+                appPreferences_, patch, runtimeOperations_, onPreferencesChanged_);
+            if (!result.succeeded()) {
+                const auto storedWeight = appPreferences_.getState().shared.vocoderModelWeight;
+                int storedId = 0;
+                for (size_t i = 0; i < vocoderWeights_.size(); ++i) {
+                    if (vocoderWeights_[i].fileName == storedWeight) {
+                        storedId = static_cast<int>(i) + 1;
+                        break;
+                    }
+                }
+                vocoderWeightSelector_.setSelectedId(storedId, juce::dontSendNotification);
+            }
         };
 
         initialiseLabel(f0ModelLabel_, LOC_RAW("Pitch Detection Model"));
@@ -287,14 +297,18 @@ public:
 
         f0ModelSelector_.onChange = [this] {
             const auto type = static_cast<F0ModelType>(f0ModelSelector_.getSelectedId() - 1);
-            const auto previousType = appPreferences_.getF0ModelType();
-            if (onF0ModelChanged_ && !onF0ModelChanged_(type)) {
-                f0ModelSelector_.setSelectedId(static_cast<int>(previousType) + 1,
-                                               juce::dontSendNotification);
+            ProcessingPreferencePatch patch;
+            patch.f0ModelType = type;
+            const auto result = applyProcessingPreferencePatch(
+                appPreferences_, patch, runtimeOperations_, onPreferencesChanged_);
+            if (!result.succeeded()) {
+                if (onF0ModelChangeFailed_)
+                    onF0ModelChangeFailed_(result.failureReason);
+                f0ModelSelector_.setSelectedId(
+                    static_cast<int>(appPreferences_.getF0ModelType()) + 1,
+                    juce::dontSendNotification);
                 return;
             }
-            appPreferences_.setF0ModelType(type);
-            notifyChanged();
         };
 
         if (!isVst3Plugin_) {
@@ -303,8 +317,9 @@ public:
             experimentalFeaturesToggle_.setToggleState(state.shared.experimentalFeaturesEnabled,
                                                        juce::dontSendNotification);
             experimentalFeaturesToggle_.onClick = [this] {
-                appPreferences_.setExperimentalFeaturesEnabled(experimentalFeaturesToggle_.getToggleState());
-                notifyChanged();
+                ProcessingPreferencePatch patch;
+                patch.experimentalFeaturesEnabled = experimentalFeaturesToggle_.getToggleState();
+                applyProcessingPreferencePatch(appPreferences_, patch, runtimeOperations_, onPreferencesChanged_);
             };
             addAndMakeVisible(experimentalFeaturesToggle_);
 
@@ -320,11 +335,9 @@ public:
         lightPitchCorrectionToggle_.setToggleState(state.shared.lightPitchCorrectionEnabled,
                                                    juce::dontSendNotification);
         lightPitchCorrectionToggle_.onClick = [this] {
-            const bool enabled = lightPitchCorrectionToggle_.getToggleState();
-            appPreferences_.setLightPitchCorrectionEnabled(enabled);
-            if (onLightPitchCorrectionChanged_)
-                onLightPitchCorrectionChanged_(enabled);
-            notifyChanged();
+            ProcessingPreferencePatch patch;
+            patch.lightPitchCorrectionEnabled = lightPitchCorrectionToggle_.getToggleState();
+            applyProcessingPreferencePatch(appPreferences_, patch, runtimeOperations_, onPreferencesChanged_);
         };
         addAndMakeVisible(lightPitchCorrectionToggle_);
 
@@ -385,39 +398,30 @@ public:
     }
 
 private:
-    void notifyChanged()
-    {
-        if (onPreferencesChanged_) {
-            onPreferencesChanged_();
-        }
-    }
-
     AppPreferences& appPreferences_;
+    ProcessingPreferenceRuntimeOperations runtimeOperations_;
     std::function<void()> onPreferencesChanged_;
-    std::function<void(bool)> onRenderingPriorityChanged_;
-    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged_;
-    std::function<bool(F0ModelType)> onF0ModelChanged_;
-    std::function<void(bool)> onLightPitchCorrectionChanged_;
+    std::function<void(const juce::String&)> onF0ModelChangeFailed_;
     std::function<void()> onReplayOnboarding_;
     bool isVst3Plugin_ = false;
     int contentHeight_ = 0;
     std::vector<VocoderWeightInfo> vocoderWeights_;
     juce::Label renderingPriorityLabel_;
-    juce::ComboBox renderingPrioritySelector_;
+    a11y::AccessibleComboBox renderingPrioritySelector_;
     juce::TextButton replayOnboardingButton_;
     juce::Label vocoderWeightLabel_;
-    juce::ComboBox vocoderWeightSelector_;
+    a11y::AccessibleComboBox vocoderWeightSelector_;
     juce::Label f0ModelLabel_;
-    juce::ComboBox f0ModelSelector_;
-    juce::ToggleButton experimentalFeaturesToggle_;
+    a11y::AccessibleComboBox f0ModelSelector_;
+    a11y::AccessibleToggleButton experimentalFeaturesToggle_;
     juce::Label experimentalFeaturesHintLabel_;
-    juce::ToggleButton lightPitchCorrectionToggle_;
+    a11y::AccessibleToggleButton lightPitchCorrectionToggle_;
 };
 
 class SharedEditingPage final : public juce::Component
 {
 public:
-    static constexpr int kContentHeight = 428; // 20 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 10 + 34 + 18 + 34 + 10 + 34 + 10 + 34 + 10 + 28 + 20
+    static constexpr int kContentHeight = 472; // Includes the accessibility mode toggle.
 
     SharedEditingPage(AppPreferences& appPreferences,
                       std::function<void()> onPreferencesChanged,
@@ -437,12 +441,13 @@ public:
         schemeSelector_.setSelectedId(state.shared.audioEditingScheme == AudioEditingScheme::Scheme::NotesPrimary ? 2 : 1,
                                       juce::dontSendNotification);
         schemeSelector_.onChange = [this] {
-            const auto scheme = schemeSelector_.getSelectedId() == 2
+            auto patch = ProcessingPreferencePatch{};
+            patch.audioEditingScheme = schemeSelector_.getSelectedId() == 2
                 ? AudioEditingScheme::Scheme::NotesPrimary
                 : AudioEditingScheme::Scheme::CorrectedF0Primary;
-            appPreferences_.setAudioEditingScheme(scheme);
-            wholeNoteMoveSnapSelector_.setEnabled(scheme != AudioEditingScheme::Scheme::NotesPrimary);
-            notifyChanged();
+            applyProcessingPreferencePatch(appPreferences_, patch, {}, onPreferencesChanged_);
+            wholeNoteMoveSnapSelector_.setEnabled(
+                *patch.audioEditingScheme != AudioEditingScheme::Scheme::NotesPrimary);
         };
         initialiseComboBox(schemeSelector_);
         addAndMakeVisible(schemeSelector_);
@@ -453,7 +458,10 @@ public:
                                    ZoomSensitivityConfig::kMaxHorizontalZoomFactor,
                                    0.01);
         horizontalSlider_.setValue(zoomSettings_.horizontalZoomFactor, juce::dontSendNotification);
-        horizontalSlider_.onValueChange = [this] {
+        // Accessibility: key steps (normal, Alt, Page) and the Backspace default, as all sliders.
+        horizontalSlider_.setKeySteps(0.05, 0.01, 0.2);
+        horizontalSlider_.setResetValue(ZoomSensitivityConfig::kDefaultHorizontalZoomFactor);
+        horizontalSlider_.onCommit = [this] {
             zoomSettings_.horizontalZoomFactor = static_cast<float>(horizontalSlider_.getValue());
             persistZoom();
         };
@@ -466,7 +474,9 @@ public:
                                  ZoomSensitivityConfig::kMaxVerticalZoomFactor,
                                  0.01);
         verticalSlider_.setValue(zoomSettings_.verticalZoomFactor, juce::dontSendNotification);
-        verticalSlider_.onValueChange = [this] {
+        verticalSlider_.setKeySteps(0.05, 0.01, 0.2);
+        verticalSlider_.setResetValue(ZoomSensitivityConfig::kDefaultVerticalZoomFactor);
+        verticalSlider_.onCommit = [this] {
             zoomSettings_.verticalZoomFactor = static_cast<float>(verticalSlider_.getValue());
             persistZoom();
         };
@@ -479,7 +489,9 @@ public:
                                ZoomSensitivityConfig::kMaxScrollSpeed,
                                1.0);
         scrollSlider_.setValue(zoomSettings_.scrollSpeed, juce::dontSendNotification);
-        scrollSlider_.onValueChange = [this] {
+        scrollSlider_.setKeySteps(5.0, 1.0, 30.0);
+        scrollSlider_.setResetValue(ZoomSensitivityConfig::kDefaultScrollSpeed);
+        scrollSlider_.onCommit = [this] {
             zoomSettings_.scrollSpeed = static_cast<float>(scrollSlider_.getValue());
             persistZoom();
         };
@@ -490,11 +502,12 @@ public:
         addAndMakeVisible(tuningLabel_);
         tuningSlider_.setRange(TuningConfig::kMinTuningHz, TuningConfig::kMaxTuningHz, 1.0);
         tuningSlider_.setValue(appPreferences_.getState().shared.tuning.tuningHz, juce::dontSendNotification);
-        tuningSlider_.onValueChange = [this] {
-            TuningConfig::TuningSettings tuning;
-            tuning.tuningHz = static_cast<float>(tuningSlider_.getValue());
-            appPreferences_.setTuning(tuning);
-            notifyChanged();
+        tuningSlider_.setKeySteps(1.0, 1.0, 10.0);
+        tuningSlider_.setResetValue(TuningConfig::kDefaultTuningHz);
+        tuningSlider_.onCommit = [this] {
+            ProcessingPreferencePatch patch;
+            patch.tuningHz = static_cast<float>(tuningSlider_.getValue());
+            applyProcessingPreferencePatch(appPreferences_, patch, {}, onPreferencesChanged_);
         };
         initialiseSlider(tuningSlider_);
         addAndMakeVisible(tuningSlider_);
@@ -559,6 +572,18 @@ public:
         };
         initialiseToggleButton(noteTransposePreviewToggle_);
         addAndMakeVisible(noteTransposePreviewToggle_);
+
+        accessibilityModeToggle_.setButtonText(LOC(kAccessibilityMode));
+        accessibilityModeToggle_.setTooltip(LOC(kAccessibilityModeHelp));
+        accessibilityModeToggle_.setToggleState(state.shared.accessibilityModeEnabled,
+                                                juce::dontSendNotification);
+        accessibilityModeToggle_.onClick = [this] {
+            ProcessingPreferencePatch patch;
+            patch.accessibilityModeEnabled = accessibilityModeToggle_.getToggleState();
+            applyProcessingPreferencePatch(appPreferences_, patch, {}, onPreferencesChanged_);
+        };
+        initialiseToggleButton(accessibilityModeToggle_);
+        addAndMakeVisible(accessibilityModeToggle_);
     }
 
     void paint(juce::Graphics& g) override
@@ -611,6 +636,10 @@ public:
         noteTransposePreviewToggle_.setBounds(row.removeFromLeft(labelWidth + 300));
 
         bounds.removeFromTop(10);
+        row = bounds.removeFromTop(rowHeight);
+        accessibilityModeToggle_.setBounds(row.removeFromLeft(labelWidth + 300));
+
+        bounds.removeFromTop(10);
         auto resetRow = bounds.removeFromTop(28);
         resetButton_.setBounds(resetRow.removeFromLeft(150));
     }
@@ -634,21 +663,22 @@ private:
     bool isVst3Plugin_ = false;
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSettings_;
     juce::Label schemeLabel_;
-    juce::ComboBox schemeSelector_;
+    a11y::AccessibleComboBox schemeSelector_;
     juce::Label horizontalLabel_;
-    juce::Slider horizontalSlider_;
+    a11y::AccessibleKnob horizontalSlider_;
     juce::Label verticalLabel_;
-    juce::Slider verticalSlider_;
+    a11y::AccessibleKnob verticalSlider_;
     juce::Label scrollLabel_;
-    juce::Slider scrollSlider_;
+    a11y::AccessibleKnob scrollSlider_;
     juce::Label tuningLabel_;
-    juce::Slider tuningSlider_;
+    a11y::AccessibleKnob tuningSlider_;
     juce::TextButton resetButton_;
     juce::Label gridStyleLabel_;
-    juce::ComboBox gridStyleSelector_;
+    a11y::AccessibleComboBox gridStyleSelector_;
     juce::Label wholeNoteMoveSnapLabel_;
-    juce::ComboBox wholeNoteMoveSnapSelector_;
-    juce::ToggleButton noteTransposePreviewToggle_;
+    a11y::AccessibleComboBox wholeNoteMoveSnapSelector_;
+    a11y::AccessibleToggleButton noteTransposePreviewToggle_;
+    a11y::AccessibleToggleButton accessibilityModeToggle_;
 };
 
 class SharedVisualPage final : public juce::Component
@@ -778,7 +808,9 @@ public:
 
         backgroundBrightnessSlider_.setRange(0.0, 2.0, 0.01);
         backgroundBrightnessSlider_.setValue(visualPreferences.backgroundBrightness, juce::dontSendNotification);
-        backgroundBrightnessSlider_.onValueChange = [this] {
+        backgroundBrightnessSlider_.setKeySteps(0.05, 0.01, 0.25);
+        backgroundBrightnessSlider_.setResetValue(1.0);
+        backgroundBrightnessSlider_.onCommit = [this] {
             appPreferences_.setBackgroundBrightness(static_cast<float>(backgroundBrightnessSlider_.getValue()));
             notifyChanged();
         };
@@ -910,10 +942,10 @@ private:
     AppPreferences& appPreferences_;
     std::function<void()> onPreferencesChanged_;
     juce::Label noteNameModeLabel_;
-    juce::ComboBox noteNameModeSelector_;
-    juce::ToggleButton showUnvoicedFramesToggle_;
+    a11y::AccessibleComboBox noteNameModeSelector_;
+    a11y::AccessibleToggleButton showUnvoicedFramesToggle_;
     juce::Label backgroundBrightnessLabel_;
-    juce::Slider backgroundBrightnessSlider_;
+    a11y::AccessibleKnob backgroundBrightnessSlider_;
     juce::Label correctedF0ColourLabel_;
     ColourSwatchButton correctedF0ColourButton_;
     juce::Label originalF0ColourLabel_;
@@ -1292,20 +1324,16 @@ std::vector<TabbedPreferencesDialog::PageSpec> SharedPreferencePages::create(
 
 RenderingPriorityPage SharedPreferencePages::createRenderingPriorityComponent(
     AppPreferences& appPreferences,
+    ProcessingPreferenceRuntimeOperations runtimeOperations,
     std::function<void()> onPreferencesChanged,
-    std::function<void(bool forceCpu)> onRenderingPriorityChanged,
-    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged,
-    std::function<bool(F0ModelType)> onF0ModelChanged,
-    std::function<void(bool)> onLightPitchCorrectionChanged,
+    std::function<void(const juce::String&)> onF0ModelChangeFailed,
     std::function<void()> onReplayOnboarding,
     bool isVst3Plugin)
 {
     auto component = std::make_unique<SharedAudioPage>(appPreferences,
+                                                       std::move(runtimeOperations),
                                                        std::move(onPreferencesChanged),
-                                                       std::move(onRenderingPriorityChanged),
-                                                       std::move(onVocoderModelWeightChanged),
-                                                       std::move(onF0ModelChanged),
-                                                       std::move(onLightPitchCorrectionChanged),
+                                                       std::move(onF0ModelChangeFailed),
                                                        std::move(onReplayOnboarding),
                                                        isVst3Plugin);
     const int height = component->getContentHeight();

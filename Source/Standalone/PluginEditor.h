@@ -15,7 +15,6 @@
 #include <optional>
 #include <vector>
 #include <unordered_map>
-#include <thread>
 #include <mutex>
 #include "PluginProcessor.h"
 #include "UI/ToolIds.h"
@@ -45,6 +44,8 @@
 #include "Utils/ScaleUiMapping.h"
 #include "Audio/AsyncAudioLoader.h"
 #include "Editor/OnboardingOverlayComponent.h"
+#include "Control/ControlUiBridge.h"
+#include "StandaloneMediaOperations.h"
 
 namespace OpenTune {
 
@@ -62,7 +63,7 @@ struct ImportDropTarget {
 
     Kind kind = Kind::FallbackActiveTrack;
     int trackId = 0;
-    double timelineStartSeconds = 0.0;
+    std::optional<double> timelineStartSeconds;
     juce::String rejectReason;  // Only for Kind::Reject
 
     bool isActionable() const { return kind != Kind::Reject; }
@@ -78,7 +79,8 @@ class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public PianoRollComponent::Listener,
                                       public juce::FileDragAndDropTarget,
                                       public LanguageChangeListener,  // 语言变化监听
-                                      private juce::Timer
+                                      private juce::Timer,
+                                      private juce::AsyncUpdater
 {
 public:
     explicit OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor&);
@@ -171,6 +173,8 @@ public:
     void contentEdited() override;
     void escapeKeyPressed() override;
     void currentToolChanged(ToolId tool) override;
+    void parameterTargetWillChange(PianoRollComponent::Listener::ParameterTargetChangePolicy policy) override;
+    void parameterTargetDidChange() override;
 
     // Keyboard handling
     bool keyPressed(const juce::KeyPress& key) override;
@@ -178,20 +182,52 @@ public:
     // LanguageChangeListener
     void languageChanged(Language newLanguage) override;
 
+    /** Resolves unsaved project changes before starting the Standalone exit sequence. Returns true when exit starts. */
+    bool requestExit(bool discardUnsaved = false);
+
 private:
     struct PendingImport;
+    struct PendingExport;
 
     bool shouldAcceptUndoRedoShortcut();
-    void performUndoRedoAction(bool isUndo);
+    UndoAction* performUndoRedoAction(bool isUndo,
+                                      const std::function<bool(UndoAction*)>& validateTop = {});
 
     // 调式状态辅助
     DetectedKey resolveScaleForPlacementContent(int trackId, int placementIndex, juce::String* sourceOut = nullptr) const;
     void applyScaleToUi(int rootNote, int scaleType);
+    void applyResolvedScaleToUi(const DetectedKey& key);
     void applyResolvedScaleForPlacementContent(int trackId, int placementIndex);
     void syncPianoRollFromPlacementSelection(int trackId, int placementIndex);
+    void syncActiveContentFromProcessor(int trackId, int placementIndex, bool initializeSelection);
+    void syncActiveSelectionFromProcessor();
     void applyPlacementSelectionContext(int trackId, uint64_t placementId);
+    std::optional<ControlUiBridge::SelectionPlan> planPlacementSelectionContext(
+        int trackId, uint64_t placementId, bool openEditor) const;
+    bool applyPlacementSelectionPlan(ControlUiBridge::SelectionPlan plan,
+                                     bool commitArrangementSelection,
+                                     bool synchronizeSelectionContext);
+    void openSelectedPlacementInPianoRoll();
+    bool setWorkspaceFromCommand(bool arrangement);
+    ControlTrackCommandResult addTrackSlots(int count);
+    ControlTrackCommandResult duplicateTrack(int trackId, bool shareContent);
+    ControlTrackCommandResult deleteTrack(int trackId);
+    bool setTrackMix(int trackId, std::optional<bool> muted, std::optional<bool> solo,
+                     std::optional<double> volumeLinear, std::optional<std::uint32_t> colourRgb);
+    void syncTrackMixToPanel();
+    void applyTransportPlay();
+    void applyTransportPause();
+    void applyTransportStop();
+    void applyTransportSeek(double timeSeconds);
+    void applyTransportPlayFromLastStart();
+    void applyTransportPauseAtLastStart();
+    void applyLoopEnabled(bool enabled);
+    void applyBpm(double bpm);
+    void applyTimeSignature(int numerator, int denominator);
+    bool dismissOnboarding();
 
     void timerCallback() override;
+    void handleAsyncUpdate() override;
     // §7.3：心跳对比 Processor uiZoom（唯一真相），不同则重设 transform 与 resize limits。
     void applyUiZoomIfNeeded();
     // §5.1：挂入默认 StandaloneFilterWindow 且 peer 可用后，按 OpenTune.settings 恢复外层窗口几何（仅一次）。
@@ -203,15 +239,25 @@ private:
                                    double pixelsPerSecond) override;
     void applyThemeToEditor(ThemeId themeId);
     RenderStatusSnapshot getRenderStatusSnapshot() const;
-    void syncParameterPanelFromSelection();
+    void syncParameterPanelFromSelection(bool forceClipParameterProjection = false);
     void updateTitleWithProjectPath();
     void syncRecentProjectsToMenu();
     void refreshAllUIFromProject();
-    void launchOpenProjectChooser();
+    void finishProjectSave();
+    void finishProjectOpen();
+    void launchOpenProjectChooser(bool discardUnsaved = false);
     void saveProjectAsThenOpenProject();
     void playFromStartToggleRequested();  // 播放/暂停并回到起始位置
     void importAudioFileToTrack(int trackId, const juce::File& file,
-                                double timelineStartSeconds = -1.0);  // -1 = auto-append
+                                std::optional<double> timelineStartSeconds = std::nullopt);
+    StandaloneMediaOperations::ImportCommitResult commitImportedAudio(
+        OpenTuneAudioProcessor::PreparedImport&& prepared,
+        const StandaloneMediaOperations::ImportPlacementRequest& request,
+        bool focus,
+        bool generateNotes,
+        std::function<void()> onNotesGenerated = {});
+    void advancePendingExport();
+    void finishPendingExport(bool succeeded, const juce::String& error);
     ImportDropTarget resolveImportDropTarget(int globalX, int globalY) const;
     void applyImportDropTarget(ImportDropTarget target, const juce::File& file);
     void updateImportDropPreview(ImportDropTarget target);
@@ -219,21 +265,26 @@ private:
     void queuePendingImport(PendingImport pendingImport);
     void startPendingImport(PendingImport pendingImport);
     void processNextImportInQueue();  // 处理导入队列中的下一个文件
+    void notifyControlBusyStateChanged();
     void launchBackgroundUiTask(std::function<void()> task);
     void waitForBackgroundUiTasks();
-    double computeTrackAppendStartSeconds(int trackId) const;
     void releaseImportBatchSlot(int batchId);
 
     bool rejectProjectOperationIfBusy();
+    ProjectSession::SaveTask prepareProjectSave(const juce::File& file, ProjectSession::SaveTask::Mode mode);
+    void commitProjectSave(const juce::File& file, ProjectSession::SaveTask::Mode mode,
+                           uint64_t snapshotGeneration);
+    ProjectSession::OpenCommitPolicy prepareProjectOpen(bool discardUnsaved);
 
     /// 异步保存工程。消息线程捕获目标快照，单线程池执行 I/O。
     void saveProject(juce::File targetFile,
                      bool openChooserAfterSave = false,
-                     juce::File openAfterSave = {});
+                     juce::File openAfterSave = {},
+                     std::function<void()> onSaved = {});
 
     /// 异步打开工程：worker 预处理，消息线程提交运行时状态。
-    void openProjectFile(const juce::File& file);
-    void startOpenProject(const juce::File& file);
+    void openProjectFile(const juce::File& file, bool discardUnsaved = false);
+    void startOpenProject(const juce::File& file, bool discardUnsaved = false);
 
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences& appPreferences_;
@@ -275,10 +326,9 @@ private:
     
     // 多文件导入队列（解决并发导入问题）
     struct PendingImport {
-        OpenTuneAudioProcessor::ImportPlacement placement;
+        StandaloneMediaOperations::ImportPlacementRequest placementRequest;
         juce::File file;
         int batchId{0};
-        bool appendSequentially{false};
     };
     std::vector<PendingImport> importQueue_;
     std::unordered_map<int, double> importBatchNextStartSeconds_;
@@ -320,17 +370,8 @@ private:
 
     ThemeId appliedThemeId_ = ThemeId::Aurora;
     Language appliedLanguage_ = Language::Chinese;
-    ContentKey lastPianoRollContentKey_;
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
-    int lastPianoRollSampleRate_ = 0;
-    std::shared_ptr<const PitchCurveSnapshot> lastPianoRollCurve_;
-    std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
-    // Notes-revision tracking so the timer can pull fresh notes when an
-    // async note generator commits to the active content
-    // without changing ContentKey / curve / buffer.
-    uint64_t lastPianoRollNotesRevision_ = 0;
-    uint64_t lastPianoRollTimeGridRevision_ = 0;
-    uint64_t lastPianoRollPitchRevision_ = 0;
+    ContentKey pendingContentChangedKey_;
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;
     int lastSyncedTimeSigDenom_ = 0;
@@ -359,12 +400,7 @@ private:
     bool projectOperationBusy_{false};
     // 加载工程回写轨道头时，避免把恢复动作记成新的未保存修改。
     bool applyingLoadedProjectUi_{false};
-    // Export worker thread management (independent: export may be long-running)
-    std::thread exportWorker_;
-    // Export running flag. NOT derivable from exportWorker_.joinable(): a
-    // finished-but-unjoined thread is still joinable, so the atomic is the
-    // only correct "export completed" signal.
-    std::atomic<bool> exportInProgress_{false};
+    std::unique_ptr<PendingExport> pendingExport_;
 
     // Detached-safe background tasks (import/deferred post-process)
     std::vector<std::future<void>> backgroundTasks_;
@@ -376,6 +412,15 @@ private:
     static constexpr int TRACK_PANEL_WIDTH = 180;      // 左侧 Track Inspector (Reduced from 220)
     static constexpr int PARAMETER_PANEL_WIDTH = 240;  // 右侧 Properties Panel
     static constexpr int OVERVIEW_STRIP_HEIGHT = 60;
+
+    void afterUndoRedo();
+    void closeTrackColourPicker(juce::CallOutBox* picker, int trackId, juce::Colour selected, bool modalFinished);
+    std::vector<juce::CallOutBox*> committedTrackColourPickers_;
+
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    friend class ControlEditorBridge;
+    std::unique_ptr<class ControlEditorBridge> controlEditorBridge_;
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessorEditor)
 };

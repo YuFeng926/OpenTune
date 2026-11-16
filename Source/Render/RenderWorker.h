@@ -26,6 +26,10 @@ struct RenderExecutionLease
     void* owner{nullptr};
     std::function<void(RenderJob&)> renderJobCallback;
     std::function<void(const RenderJob&, const juce::String&)> renderFailureCallback;
+    // Called on the message thread once per shared backend change. The owner
+    // invalidates its derived content here; the lease is installed and removed
+    // with attachExecutionLease/detachExecutionLease.
+    std::function<void()> backendChangedCallback;
 
     bool isValid() const noexcept
     {
@@ -61,6 +65,7 @@ public:
             bool closed{false};
             std::condition_variable cv;
             std::condition_variable* workerCv{nullptr};
+            std::function<void()> stateChangedCallback;
         };
 
         std::shared_ptr<Control> control;
@@ -73,6 +78,8 @@ public:
     RenderWorker& operator=(const RenderWorker&) = delete;
 
     void attachExecutionLease(RenderExecutionLease lease);
+    void setStateChangedCallback(std::function<void()> callback);
+    void notifyStateChanged() const;
     /**
      * detachExecutionLease — 终止执行租约（析构路径专用）。
      * 立即清空 lease 与排队 job，并等待正在执行的 renderJobCallback 和
@@ -80,6 +87,10 @@ public:
      * 使用其 session 的 vocoder completion 并行。
      */
     void detachExecutionLease(void* owner);
+    // Message thread: informs the current lease owner that shared backend state
+    // changed. The callback copy is taken under the queue mutex; the call runs
+    // outside it.
+    void notifyBackendChanged();
 
     // Reconcile 缓存计划与物理 Stage1 队列的同步必须在同一队列锁临界区内完成：
     // worker loop 也在同一 mutex 下 claim，避免出现「旧 queued job + reconcile
@@ -150,6 +161,7 @@ private:
     int inFlight_{0};
     std::shared_ptr<AsyncState::Control> asyncControl_;
     std::function<void()> stage1CapacityCallback_;
+    std::function<void()> stateChangedCallback_;
 };
 
 } // namespace OpenTune

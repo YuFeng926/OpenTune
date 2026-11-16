@@ -15,6 +15,7 @@ struct ParameterPanelSyncContext {
     float clipVibratoRate = 0.0f;
 
     bool wasShowingSelectionParameters = false;
+    bool forceClipParameterProjection = false;
 };
 
 struct ParameterPanelSyncDecision {
@@ -54,7 +55,7 @@ inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
         return decision;
     }
 
-    if (!context.wasShowingSelectionParameters) {
+    if (!context.wasShowingSelectionParameters && !context.forceClipParameterProjection) {
         return decision;
     }
 
