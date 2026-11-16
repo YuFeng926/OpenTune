@@ -1,0 +1,27 @@
+{
+  "name": "opentune-mcp",
+  "version": "0.1.0",
+  "description": "Local MCP stdio adapter for the OpenTune Control API",
+  "license": "AGPL-3.0-or-later",
+  "repository": { "type": "git", "url": "https://github.com/YuFeng926/OpenTune.git", "directory": "Integrations/opentune-mcp" },
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "bin": { "opentune-mcp": "dist/main.js" },
+  "files": ["dist", "examples", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "node --test tests/*.test.ts",
+    "test:integration": "node --test tests/integration.test.ts",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
+  }
+}

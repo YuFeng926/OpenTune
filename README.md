@@ -56,6 +56,8 @@ GPU 加速推理：Windows DirectML / macOS CoreML
 
 各平台详细安装步骤（Windows 解压运行、macOS DMG 安装脚本与 Gatekeeper 处理、VST3 安装位置）及运行时文件结构，见 [INSTALL.md](INSTALL.md)。
 
+通过 OpenCode、Claude Code 和 Codex CLI 操作本机 OpenTune，见 [MCP 服务安装与配置](Integrations/opentune-mcp/README.md)。
+
 
 ## 🔨 构建说明
 环境要求、三方依赖准备、构建命令、构建产物与常见问题排查，见 [BUILDING.md](BUILDING.md)。

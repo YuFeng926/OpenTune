@@ -56,6 +56,8 @@ Please visit the [Releases](https://github.com/YuFeng926/OpenTune/releases) page
 
 For detailed per-platform installation steps (Windows ZIP, macOS DMG install script and Gatekeeper handling, VST3 install location) and the runtime file structure, see [INSTALL.en.md](INSTALL.en.md).
 
+To control local OpenTune from OpenCode, Claude Code, or Codex CLI, see the [MCP setup guide (Chinese)](Integrations/opentune-mcp/README.md).
+
 
 ## 🔨 Build Instructions
 For system requirements, third-party dependency preparation, build commands, build artifacts, and troubleshooting, see [BUILDING.en.md](BUILDING.en.md).
