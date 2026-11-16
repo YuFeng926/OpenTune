@@ -252,6 +252,7 @@ extract_notice_paragraph() {
             text = ""
             collecting = 0
         }
+        { sub(/\r$/, "") }
         /^## 完整版/ { in_full = 1; next }
         /^## / {
             if (in_full && in_lang) flush()
