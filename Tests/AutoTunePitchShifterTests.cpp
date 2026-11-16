@@ -1968,6 +1968,149 @@ void testOctaveRepairRejectsUnreachableTarget()
                "a 220 Hz source inside the light contract");
 }
 
+// A real 220 Hz input with originalF0 == correctedF0 == 220 Hz but a detector
+// period of 210 samples (210 Hz) requests 220 * 210 / 44100 = +80.5 cents.
+// Holding the previous rate would leave the output +80.5 cents away from the
+// target, outside the light contract, so the light render is rejected.
+void testOctaveRepairRejectsDetectorRateAbove75Cents()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr double kFreq = 220.0;
+    constexpr float kDetectorPeriod = 210.0f;
+
+    const double requestedRate =
+        kFreq * static_cast<double>(kDetectorPeriod) / kSampleRate;
+    expectTrue(!OpenTune::isPitchShiftRateWithinLightContract(requestedRate),
+               "above 75: detector rate is outside the light contract");
+    expectTrue(!OpenTune::isPitchShiftRateWithinLightContract(
+                   requestedRate * 0.5)
+                   && !OpenTune::isPitchShiftRateWithinLightContract(
+                       requestedRate * 2.0),
+               "above 75: detector rate is not octave-repairable");
+
+    const Shifter::OctaveRepairResult result =
+        runFixedToneOctaveRepair(kDetectorPeriod);
+
+    expectTrue(!result.success || result.audio.empty(),
+               "above 75: unrepairable hold miss is not published");
+}
+
+// A 500-cent target step with a detector period that keeps reporting the
+// previous note requests 293.66 * 200 / 44100 = +500 cents. The target and
+// original tracks step together, so the runtime routes the chunk into the
+// light path; the shifter must not publish the stale-period render.
+void testTargetStepWithStalePeriodRejectsLightRender()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kNumSamples = 8192;
+    constexpr int kHistorySamples = 256;
+    constexpr int kFrameRate = 100;
+    constexpr int kStepFrame = 10;
+    constexpr double kLowFreq = 220.0;
+    constexpr double kHighFreq = 293.66;
+
+    const std::vector<float> input = makeSineSegment(
+        200.0, kSampleRate, 0, kNumSamples, 0.5);
+    const std::vector<float> history = makeSineSegment(
+        200.0, kSampleRate, -kHistorySamples, kHistorySamples, 0.5);
+    const std::vector<float> tail = makeSineSegment(
+        200.0, kSampleRate, kNumSamples, Shifter::kLookaheadSamples, 0.5);
+
+    const int numF0Frames = 32;
+    const double samplesPerFrame = static_cast<double>(kSampleRate) / kFrameRate;
+    std::vector<float> originalF0(static_cast<size_t>(numF0Frames));
+    std::vector<float> correctedF0(static_cast<size_t>(numF0Frames));
+    for (int k = 0; k < numF0Frames; ++k) {
+        const bool afterStep = k >= kStepFrame;
+        originalF0[static_cast<size_t>(k)] =
+            static_cast<float>(afterStep ? kHighFreq : kLowFreq);
+        correctedF0[static_cast<size_t>(k)] = originalF0[static_cast<size_t>(k)];
+    }
+    expectTrue(!OpenTune::chunkNeedsVocoder(
+                   correctedF0.data(), numF0Frames, originalF0, 0),
+               "target step: both tracks step together inside the light contract");
+    expectTrue(static_cast<double>(kStepFrame) * samplesPerFrame
+                   < static_cast<double>(kNumSamples),
+               "target step: setup places the step inside the chunk");
+
+    const auto detected = makeLockedDetector(
+        kNumSamples, static_cast<float>(kSampleRate / kLowFreq));
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const Shifter::OctaveRepairResult result =
+        shifter.shiftChunkWithOctaveRepair(
+            input.data(), kNumSamples, originalF0.data(), correctedF0.data(),
+            numF0Frames, static_cast<double>(kFrameRate), 0.0,
+            tail.data(), Shifter::kLookaheadSamples,
+            history.data(), kHistorySamples,
+            detected.data(), kNumSamples, false);
+
+    expectTrue(!result.success || result.audio.empty(),
+               "target step: stale-period request is not published");
+}
+
+// Low-frequency target change that the measurement window cannot see: the
+// target moves 100 -> 103 Hz, then 100 -> 97 Hz while the detector period
+// moves 441 -> 500. Holding 1.03 leaves the output ~104 cents above the 97 Hz
+// target; no measurement window fits the 454-sample target period, so only
+// the render-side contract can reject it.
+void testLowFrequencyHoldRejectsUnverifiableTarget()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kNumSamples = 8192;
+    constexpr int kHistorySamples = 256;
+    constexpr int kFrameRate = 100;
+    constexpr int kStepFrame = 10;
+    constexpr double kOriginalF0 = 100.0;
+    constexpr double kFirstTargetF0 = 103.0;
+    constexpr double kSecondTargetF0 = 97.0;
+
+    const std::vector<float> input = makeSineSegment(
+        kOriginalF0, kSampleRate, 0, kNumSamples, 0.5);
+    const std::vector<float> history = makeSineSegment(
+        kOriginalF0, kSampleRate, -kHistorySamples, kHistorySamples, 0.5);
+    const std::vector<float> tail = makeSineSegment(
+        kOriginalF0, kSampleRate, kNumSamples, Shifter::kLookaheadSamples, 0.5);
+
+    const int numF0Frames = 32;
+    const double samplesPerFrame = static_cast<double>(kSampleRate) / kFrameRate;
+    std::vector<float> originalF0(static_cast<size_t>(numF0Frames),
+                                  static_cast<float>(kOriginalF0));
+    std::vector<float> correctedF0(static_cast<size_t>(numF0Frames));
+    for (int k = 0; k < numF0Frames; ++k) {
+        correctedF0[static_cast<size_t>(k)] = static_cast<float>(
+            k >= kStepFrame ? kSecondTargetF0 : kFirstTargetF0);
+    }
+    expectTrue(!OpenTune::chunkNeedsVocoder(
+                   correctedF0.data(), numF0Frames, originalF0, 0),
+               "low frequency: both targets stay inside the light contract");
+
+    const int stepSample = static_cast<int>(
+        static_cast<double>(kStepFrame) * samplesPerFrame);
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> detected(
+        static_cast<size_t>(kNumSamples));
+    for (int i = 0; i < kNumSamples; ++i) {
+        auto& frame = detected[static_cast<size_t>(i)];
+        frame.valid = true;
+        frame.trackingUpdated = (i % 5 == 0);
+        frame.periodSamples = static_cast<float>(i < stepSample
+            ? kSampleRate / kOriginalF0
+            : kSampleRate / (kOriginalF0 * 0.882));
+    }
+
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const Shifter::OctaveRepairResult result =
+        shifter.shiftChunkWithOctaveRepair(
+            input.data(), kNumSamples, originalF0.data(), correctedF0.data(),
+            numF0Frames, static_cast<double>(kFrameRate), 0.0,
+            tail.data(), Shifter::kLookaheadSamples,
+            history.data(), kHistorySamples,
+            detected.data(), kNumSamples, false);
+
+    expectTrue(!result.success || result.audio.empty(),
+               "low frequency: unverifiable held target is not published");
+}
+
 void testLightPitchRoutingBounds()
 {
     const std::vector<float> original = {220.0f, 220.0f, 220.0f, 0.0f, 220.0f};
@@ -1987,6 +2130,60 @@ void testLightPitchRoutingBounds()
                "routing: unvoiced frame stays in AutoTune");
     expectTrue(OpenTune::chunkNeedsVocoder(corrected + 4, 1, original, 4),
                "routing: global F0 start offset is respected");
+}
+
+// Hop-held detector samples between tracking-update events carry a stale
+// period. The stale 230-sample period is outside ±75 cents (220 Hz target ->
+// +238 cents) and appears only on trackingUpdated == false samples, while
+// trackingUpdated == true samples keep the legal 200-sample period
+// (-3.9 cents). shiftChunk must judge the rate contract on the update events
+// and keep rendering instead of returning an empty chunk.
+void testShiftChunkSkipsStaleHeldPeriodForRateContract()
+{
+    constexpr int kSampleRate = 44100;
+    constexpr int kNumSamples = 8192;
+    constexpr int kHistorySamples = 256;
+    constexpr double kFreq = 220.0;
+    constexpr float kUpdatedPeriod = 200.0f;
+    constexpr float kStalePeriod = 230.0f;
+
+    const double updatedRate =
+        kFreq * static_cast<double>(kUpdatedPeriod) / kSampleRate;
+    const double staleRate =
+        kFreq * static_cast<double>(kStalePeriod) / kSampleRate;
+    expectTrue(OpenTune::isPitchShiftRateWithinLightContract(updatedRate),
+               "stale held: update-event periods stay inside the ±75 contract");
+    expectTrue(!OpenTune::isPitchShiftRateWithinLightContract(staleRate),
+               "stale held: setup stale period is outside the ±75 contract");
+
+    const std::vector<float> input = makeSineSegment(
+        kFreq, kSampleRate, 0, kNumSamples, 0.5);
+    const std::vector<float> history = makeSineSegment(
+        kFreq, kSampleRate, -kHistorySamples, kHistorySamples, 0.5);
+    const std::vector<float> tail = makeSineSegment(
+        kFreq, kSampleRate, kNumSamples, Shifter::kLookaheadSamples, 0.5);
+
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> detected(
+        static_cast<size_t>(kNumSamples));
+    for (int i = 0; i < kNumSamples; ++i) {
+        auto& frame = detected[static_cast<size_t>(i)];
+        frame.valid = true;
+        frame.trackingUpdated = (i % 5 == 0);
+        frame.periodSamples =
+            frame.trackingUpdated ? kUpdatedPeriod : kStalePeriod;
+    }
+
+    const float f0 = static_cast<float>(kFreq);
+    Shifter shifter(static_cast<double>(kSampleRate));
+    const std::vector<float> out = shifter.shiftChunk(
+        input.data(), kNumSamples, &f0, &f0, 1, 100.0, 0.0,
+        tail.data(), Shifter::kLookaheadSamples,
+        history.data(), kHistorySamples,
+        detected.data(), kNumSamples);
+
+    expectTrue(static_cast<int>(out.size()) == kNumSamples,
+               "stale held: stale non-update periods must not reject the chunk");
+    expectTrue(allFinite(out), "stale held: all outputs finite");
 }
 
 } // namespace
@@ -2025,7 +2222,11 @@ int main()
     testOctaveRepairScalesHalfPeriod();
     testOctaveRepairPreservesRealTransposition();
     testOctaveRepairRejectsUnreachableTarget();
+    testOctaveRepairRejectsDetectorRateAbove75Cents();
+    testTargetStepWithStalePeriodRejectsLightRender();
+    testLowFrequencyHoldRejectsUnverifiableTarget();
     testLightPitchRoutingBounds();
+    testShiftChunkSkipsStaleHeldPeriodForRateContract();
 
     if (g_failures == 0) {
         std::printf("All AutoTunePitchShifter tests passed.\n");

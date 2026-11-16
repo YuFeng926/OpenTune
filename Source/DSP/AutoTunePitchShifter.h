@@ -19,11 +19,13 @@ namespace OpenTune {
 /// pointer crosses the input pointer. Five samples of lookahead are consumed
 /// so output time is aligned with the published input window.
 ///
-/// shiftChunk only serves the lightweight contract: every requested resample
-/// rate must stay within ±75 cents. It validates the complete input
-/// before rendering; if any sample would request a rate outside the contract
-/// it returns an empty vector and renders nothing. The repair entry point
-/// resolves detector octave ambiguity before reporting a validation failure.
+/// shiftChunk only serves the lightweight contract: every resample-rate
+/// update must stay within ±75 cents. With a detector shadow only samples
+/// with trackingUpdated == true apply a rate update; hop-held samples keep
+/// the held rate, so contract validation covers exactly those update points.
+/// The input is validated before rendering; a violating request returns an
+/// empty vector and renders nothing. The repair entry point resolves detector
+/// octave ambiguity before reporting a validation failure.
 class AutoTunePitchShifter {
 public:
     explicit AutoTunePitchShifter(double sampleRate);
@@ -31,11 +33,10 @@ public:
     static constexpr int kLookaheadSamples = 5;
 
     /// @return numSamples resampled samples, or an empty vector (with no
-    ///         audio rendered) when any requested resample rate falls outside
+    ///         audio rendered) when any resample-rate update falls outside
     ///         the ±75 cent lightweight contract. numSamples == 0 also
     ///         returns an empty vector. Callers use
-    ///         shiftChunkWithOctaveRepair to resolve a wrong detector octave
-    ///         before treating the request as a failure.
+    ///         shiftChunkWithOctaveRepair to resolve a wrong detector octave.
     std::vector<float> shiftChunk(
         const float* input, int numSamples,
         const float* originalF0, const float* correctedF0,
@@ -58,12 +59,14 @@ public:
     };
 
     /// Renders the chunk and repairs a wrong detector octave in one pass.
-    /// The corrected F0 target is fixed. Contiguous samples whose requested
-    /// rate leaves the ±75 cent contract are retried with the detector period
-    /// scaled by 1/2 or 2; the candidate that keeps the target and the
-    /// adjacent target residual continuous is published. A failed repair
-    /// returns success == false; the caller reports the AutoTune validation
-    /// failure and does not fall back to another renderer.
+    /// The corrected F0 target is fixed. The ±75 cent contract bounds every
+    /// rate update: a tracking update or forced span-boundary update whose
+    /// requested rate leaves the contract keeps the held rate, and a repair
+    /// candidate that still requests such a rate is rejected. Contiguous
+    /// samples whose requested rate leaves the contract are retried with the
+    /// detector period scaled by 1/2 or 2; the candidate that keeps the
+    /// target and the adjacent target residual continuous is published.
+    /// A failed repair returns success == false.
     OctaveRepairResult shiftChunkWithOctaveRepair(
         const float* input, int numSamples,
         const float* originalF0, const float* correctedF0,
@@ -97,6 +100,9 @@ private:
     double outputAddr_ = 0.0;
     double inputAddr_ = 0.0;
     double resampleRate_ = 1.0;
+    /// Set when a contract hold would move the output more than ±75 cents
+    /// away from the requested target. The render is then discarded.
+    bool rateHoldExceeded_ = false;
 
     static constexpr double kDecayPerTrackingUpdate = 0.995;
 
@@ -105,6 +111,8 @@ private:
     void feedSample(float sample);
     /// updateResampleRate == false keeps the currently held smoothed rate
     /// (detector shadow hop-held samples between tracking update events).
+    /// A tracking update whose target rate leaves the ±75 cent contract also
+    /// keeps the held rate; the contract bounds every applied rate.
     float processSample(double cyclePeriod, double targetResampleRate,
                         bool updateResampleRate = true,
                         bool snapMode = false);
