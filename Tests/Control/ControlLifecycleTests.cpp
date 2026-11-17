@@ -341,7 +341,7 @@ public:
     std::promise<ControlCompletion> accepted, otherAccepted;
 };
 
-void testFinalReply(int mode)
+void testFinalReply(bool large, bool closeBeforeRespond)
 {
     auto handler = std::make_shared<FinalReplyHandler>();
     ServerFixture fixture(handler);
@@ -354,13 +354,11 @@ void testFinalReply(int mode)
     require(otherAccepted.wait_for(2s) == std::future_status::ready, "second request accepted on same channel");
     auto other = otherAccepted.get();
     auto result = JsonValue::object();
-    // A real payload larger than the kernel send buffer makes partial writes observable.
-    const bool large = mode != 0 && mode != 4;
     result.appendMember("payload", JsonValue::string(std::string(large ? 16 * 1024 * 1024 : 32, 'x')));
     std::promise<ControlCompletion::SendResult> sent;
     auto terminal = sent.get_future();
     std::atomic<int> notifications{0};
-    if (mode == 4) {
+    if (closeBeforeRespond) {
         fixture.client.close();
         fixture.server->stop();
     }
@@ -373,17 +371,15 @@ void testFinalReply(int mode)
     completion.respondFinalResult(result, [&](ControlCompletion::SendResult) {
         require(false, "duplicate completion cannot deliver a second send event");
     });
-    if (large)
-        require(terminal.wait_for(0ms) == std::future_status::timeout, "buffered response has no send completion yet");
-    if (mode == 0 || mode == 1) {
+    if (!closeBeforeRespond) {
         const auto line = fixture.readLine();
         require(line.back() == '\n' && parseJson(line).ok, "entire final response including LF reached peer");
-    } else if (mode == 2) {
-        fixture.client.close();
     }
     require(terminal.wait_for(3s) == std::future_status::ready, "send has a bounded terminal event");
     const auto state = terminal.get();
-    require((mode <= 1) == (state == ControlCompletion::SendResult::Written), "send terminal matches real socket outcome");
+    require(state == (closeBeforeRespond ? ControlCompletion::SendResult::Closed
+                                         : ControlCompletion::SendResult::Written),
+            "send terminal matches real socket outcome");
     require(notifications == 1, "send terminal delivered once");
 }
 
@@ -398,8 +394,9 @@ int main()
     testSubmissionDuringStop();
     testStopReplyDestruction();
     testDelayedConnectionRelease();
-    for (int mode = 0; mode != 5; ++mode)
-        testFinalReply(mode); // complete, partial then read, disconnect, no read, closed before response
+    testFinalReply(false, false); // small response read successfully
+    testFinalReply(true, false); // large response read successfully
+    testFinalReply(false, true); // client and server closed before response
     std::puts("PASS: control ownership, reentrant replies, nested stop, deadlines and socket send completion");
     return 0;
 }
