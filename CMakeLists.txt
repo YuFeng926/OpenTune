@@ -881,6 +881,7 @@ set(OPENTUNE_COMMON_SOURCES
         # Content Layer (shared contracts only; Standalone/Capture domains are
         # attached to exactly one SharedCode target below)
         Source/Content/ContentKey.h
+        Source/Content/ContentEditCommands.cpp
         Source/Content/DomainContentOwner.h
         Source/Content/AnalysisState.h
         Source/Content/ContentState.h
