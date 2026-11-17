@@ -16,8 +16,9 @@ namespace OpenTune {
 /// correctedF0; a value <= 0 expresses no correction request and keeps the
 /// target rate at 1. The output pointer is resampled with a floating-point
 /// rate and one floating-point cycle period is inserted or removed when the
-/// pointer crosses the input pointer. Five samples of lookahead are consumed
-/// so output time is aligned with the published input window.
+/// pointer crosses the input pointer. Seventy-five samples of lookahead cover
+/// the FIR support and cycle-fade drift while keeping output aligned with the
+/// published input window.
 ///
 /// shiftChunk only serves the lightweight contract: every resample-rate
 /// update must stay within ±75 cents. With a detector shadow only samples
@@ -30,7 +31,9 @@ class AutoTunePitchShifter {
 public:
     explicit AutoTunePitchShifter(double sampleRate);
 
-    static constexpr int kLookaheadSamples = 5;
+    static constexpr int kLookaheadSamples = 75; // 67 FIR support + 8 drift headroom.
+    // At the ±75-cent rate limit, 64 samples drift by less than three samples.
+    static constexpr int kCycleJumpFadeSamples = 64;
 
     /// @return numSamples resampled samples, or an empty vector (with no
     ///         audio rendered) when any resample-rate update falls outside
@@ -102,6 +105,8 @@ private:
     double outputAddr_ = 0.0;
     double inputAddr_ = 0.0;
     double resampleRate_ = 1.0;
+    int cycleJumpFadePosition_ = -1;
+    double cycleJumpFadeSourceOffset_ = 0.0;
     /// Set when a contract hold would move the output more than ±75 cents
     /// away from the requested target. The render is then discarded.
     bool rateHoldExceeded_ = false;

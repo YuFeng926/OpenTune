@@ -2431,8 +2431,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             if (targetWithinLightContract)
             {
                 // Supply the source context needed by the pitch resampler:
-                // preceding waveform history for cycle jumps and five future
-                // samples for zero-latency interpolation.
+                // preceding waveform history for cycle transitions and future
+                // samples for aligned band-limited interpolation.
                 float shifterLookahead[AutoTunePitchShifter::kLookaheadSamples] = {};
                 int shifterLookaheadSamples = 0;
                 const float* shifterLookbehind = nullptr;

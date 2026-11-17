@@ -192,11 +192,60 @@ double meanAbsDiffRange(const std::vector<float>& a, const std::vector<float>& b
     return sum / static_cast<double>(endIndex - beginIndex);
 }
 
-// ---------------------------------------------------------------------------
-// 1. Identity ramp (correctedF0 == originalF0) must reproduce the input
-//    sample-by-sample within 1e-5. This explicitly rejects a 5-sample delayed
-//    output: cancelling that latency is the whole point of the lookahead feed.
-// ---------------------------------------------------------------------------
+// Integrate Hann-windowed DFT bins over disjoint windows. Goertzel keeps this
+// spectral regression self-contained; Parseval supplies the total energy.
+double bandEnergyRatio(const std::vector<float>& samples, int begin, int end,
+                       double sampleRate, double lowHz, double highHz)
+{
+    constexpr int windowSize = 1024;
+    double bandEnergy = 0.0;
+    double totalEnergy = 0.0;
+    const int firstBin = static_cast<int>(std::ceil(lowHz * windowSize / sampleRate));
+    const int lastBin = std::min(windowSize / 2 - 1,
+        static_cast<int>(std::floor(highHz * windowSize / sampleRate)));
+    double window[windowSize];
+    double frame[windowSize];
+    for (int i = 0; i < windowSize; ++i)
+        window[i] = 0.5 - 0.5 * std::cos(kTwoPi * i / windowSize);
+    for (int start = begin; start + windowSize <= end; start += windowSize) {
+        for (int i = 0; i < windowSize; ++i) {
+            frame[i] = samples[static_cast<size_t>(start + i)] * window[i];
+            totalEnergy += windowSize * frame[i] * frame[i];
+        }
+        for (int bin = firstBin; bin <= lastBin; ++bin) {
+            const double coefficient = 2.0 * std::cos(kTwoPi * bin / windowSize);
+            double previous = 0.0;
+            double previous2 = 0.0;
+            for (const double sample : frame) {
+                const double next = sample + coefficient * previous - previous2;
+                previous2 = previous;
+                previous = next;
+            }
+            bandEnergy += 2.0 * (previous * previous + previous2 * previous2
+                - coefficient * previous * previous2);
+        }
+    }
+    return bandEnergy / totalEnergy;
+}
+
+double toneAmplitude(const std::vector<float>& samples, int begin, int end,
+                     double sampleRate, double frequency)
+{
+    double real = 0.0;
+    double imag = 0.0;
+    double weightSum = 0.0;
+    for (int i = begin; i < end; ++i) {
+        const double weight = 0.5 - 0.5 * std::cos(kTwoPi * (i - begin) / (end - begin));
+        const double phase = kTwoPi * frequency * i / sampleRate;
+        real += weight * samples[static_cast<size_t>(i)] * std::cos(phase);
+        imag += weight * samples[static_cast<size_t>(i)] * std::sin(phase);
+        weightSum += weight;
+    }
+    return 2.0 * std::hypot(real, imag) / weightSum;
+}
+
+// Identity correction must reproduce every input sample. Feeding interpolation
+// lookahead must preserve the published sample alignment.
 void testIdentityRampSampleAlignment()
 {
     constexpr int kSampleRate = 44100;
@@ -208,7 +257,7 @@ void testIdentityRampSampleAlignment()
     const float* lookahead = input.data() + kNumSamples;
 
     // Guard the test itself: the signal must actually change across a
-    // 5-sample offset, otherwise alignment below could not detect latency.
+    // lookahead offset, otherwise alignment below could not detect latency.
     double fiveStepVariation = 0.0;
     for (int i = kLook; i < kNumSamples; ++i) {
         fiveStepVariation += std::fabs(static_cast<double>(
@@ -216,7 +265,7 @@ void testIdentityRampSampleAlignment()
     }
     fiveStepVariation /= static_cast<double>(kNumSamples - kLook);
     expectTrue(fiveStepVariation > 0.05,
-               "identity setup: test signal must vary over a 5-sample offset");
+               "identity setup: test signal must vary over the lookahead offset");
 
     Shifter shifter(static_cast<double>(kSampleRate));
     const float f0 = 220.0f;
@@ -233,11 +282,11 @@ void testIdentityRampSampleAlignment()
             out[static_cast<size_t>(i)] - input[static_cast<size_t>(i)])));
     }
     // Exact passthrough lands at ~0 here (integer read addresses), while any
-    // residual group delay such as the 5 lookahead samples would produce
+    // residual group delay such as the lookahead samples would produce
     // O(0.1..1) sample errors on this noise signal. Tolerance 1e-5.
     expectTrue(maxErr <= 1e-5,
                "identity: output[i] must match input[i] within 1e-5 "
-               "(rejects a 5-sample delayed result)");
+               "(rejects a lookahead-delayed result)");
 
     // Discrimination proof: the delayed hypothesis must fail badly on this
     // signal, demonstrating the assertion above really rejects latency.
@@ -301,7 +350,7 @@ void testNonIdentityShiftKeepsLengthFiniteAndSmooth(bool shiftUp)
     const std::vector<float> input =
         makeSine(220.0, kSampleRate, kNumSamples, kInputAmp);
     const float originalF0 = 220.0f;
-    // Both corrections remain below the production 50-cent vocoder gate.
+    // Both corrections remain inside the production 75-cent contract.
     const float correctedF0 = shiftUp ? 226.0f : 214.0f;
     const int historySamples = 220;
     const std::vector<float> history = makeSineSegment(
@@ -327,8 +376,7 @@ void testNonIdentityShiftKeepsLengthFiniteAndSmooth(bool shiftUp)
     expectTrue(static_cast<int>(out.size()) == kNumSamples, lengthMsg);
     expectTrue(allFinite(out), finiteMsg);
 
-    // Every output sample is an interpolation/blend of past input, so the
-    // magnitude cannot leave the input envelope by any meaningful amount.
+    // This band-limited sine should retain its original amplitude.
     expectTrue(maxAbs(out) <= kInputAmp + 0.05, outlierMsg);
 
     // Sample-to-sample slope of a 220 Hz sine at amp 0.5 is ~0.016. A large
@@ -422,6 +470,138 @@ void testFloatingCyclePeriodProducesTargetRate()
     const double expected = correctedF0 * duration;
     expectTrue(std::fabs(static_cast<double>(crossings) - expected) < expected * 0.03,
                "floating cycle period: output frequency follows corrected F0");
+}
+
+void testCycleTransitionsSuppressAddedHighFrequencies()
+{
+    constexpr int sampleRate = 44100;
+    constexpr int count = sampleRate * 2;
+    constexpr int history = 1024;
+    constexpr float sourceF0 = 200.0f;
+    constexpr float period = 220.5f;
+    std::vector<float> stream(history + count + Shifter::kLookaheadSamples);
+    for (int i = 0; i < static_cast<int>(stream.size()); ++i) {
+        const double t = static_cast<double>(i - history) / sampleRate;
+        double voice = 0.0;
+        for (int harmonic = 1; harmonic <= 20; ++harmonic)
+            voice += 0.2 / harmonic * std::sin(kTwoPi * sourceF0 * harmonic * t + 0.17 * harmonic);
+        voice *= 1.0 + 0.35 * std::sin(kTwoPi * 7.0 * t);
+        // Incommensurate, band-limited components model nonperiodic breath.
+        // The exact fundamental period leaves adjacent cycles different.
+        for (int partial = 0; partial < 17; ++partial)
+            voice += 0.006 * std::sin(kTwoPi * (731.3 + 173.17 * partial) * t + 0.71 * partial * partial);
+        stream[static_cast<size_t>(i)] = static_cast<float>(voice);
+    }
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> periods(count);
+    for (int i = 0; i < count; ++i)
+        periods[static_cast<size_t>(i)] = {period, true, i % 5 == 0};
+    const std::vector<float> input(stream.begin() + history, stream.begin() + history + count);
+    const double inputHigh = bandEnergyRatio(input, sampleRate / 2, count - 1024,
+                                            sampleRate, 8000.0, 22000.0);
+    expectTrue(inputHigh < 1e-10, "spectral setup: source is confined below 4 kHz");
+    for (const double cents : {-50.0, 50.0}) {
+        const float targetF0 = static_cast<float>(sourceF0 * std::exp2(cents / 1200.0));
+        Shifter shifter(sampleRate);
+        const auto output = shifter.shiftChunk(
+            stream.data() + history, count, &sourceF0, &targetF0, 1, 100.0, 0.0,
+            stream.data() + history + count, Shifter::kLookaheadSamples,
+            stream.data(), history, periods.data(), count, true);
+        expectTrue(output.size() == static_cast<size_t>(count), "spectral shift: duration preserved");
+        if (output.size() != static_cast<size_t>(count))
+            continue;
+        const double high = bandEnergyRatio(output, sampleRate / 2, count - 1024,
+                                            sampleRate, 8000.0, 22000.0);
+        std::printf("Cycle transition %+.0f cents: added 8-22 kHz %.1f dB\n", cents, 10.0 * std::log10(high));
+        expectTrue(high < 1e-8, "cycle transitions: added 8-22 kHz energy stays below -80 dB");
+        const double fundamental = toneAmplitude(output, sampleRate / 2, count - 1024,
+                                                 sampleRate, targetF0);
+        expectTrue(fundamental > 0.18 && fundamental < 0.22,
+                   "cycle transitions: target fundamental retains its amplitude and pitch");
+    }
+}
+
+void testResamplingPreservesHighHarmonicsAndRejectsAliases()
+{
+    constexpr int sampleRate = 44100;
+    constexpr int count = sampleRate;
+    constexpr int history = 1024;
+    constexpr float sourceF0 = 200.0f;
+    std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> periods(count);
+    for (int i = 0; i < count; ++i)
+        periods[static_cast<size_t>(i)] = {220.5f, true, i % 5 == 0};
+    for (const double highFrequency : {16000.0, 21800.0}) {
+        std::vector<float> stream(history + count + Shifter::kLookaheadSamples);
+        for (int i = 0; i < static_cast<int>(stream.size()); ++i) {
+            const double t = static_cast<double>(i - history) / sampleRate;
+            stream[static_cast<size_t>(i)] = static_cast<float>(
+                0.2 * std::sin(kTwoPi * sourceF0 * t)
+                + 0.1 * std::sin(kTwoPi * highFrequency * t));
+        }
+        for (const double cents : {-74.0, 74.0}) {
+            const float targetF0 = static_cast<float>(sourceF0 * std::exp2(cents / 1200.0));
+            const double rate = targetF0 / static_cast<double>(sourceF0);
+            Shifter shifter(sampleRate);
+            const auto output = shifter.shiftChunk(
+                stream.data() + history, count, &sourceF0, &targetF0, 1, 100.0, 0.0,
+                stream.data() + history + count, Shifter::kLookaheadSamples,
+                stream.data(), history, periods.data(), count, true);
+            expectTrue(output.size() == static_cast<size_t>(count), "band-limited shift: duration preserved");
+            if (output.size() != static_cast<size_t>(count))
+                continue;
+            if (highFrequency == 16000.0) {
+                const double amplitude = toneAmplitude(output, 8192, count - 1024,
+                                                       sampleRate, highFrequency * rate);
+                expectTrue(amplitude > 0.094 && amplitude < 0.106,
+                           "band-limited shift: 16 kHz harmonic gain stays within 0.55 dB");
+            } else if (cents > 0.0) {
+                const double alias = toneAmplitude(output, 8192, count - 1024,
+                                                   sampleRate, sampleRate - highFrequency * rate);
+                std::printf("Upshift 21.8 kHz alias attenuation: %.1f dB\n", 20.0 * std::log10(alias / 0.1));
+                expectTrue(alias < 0.0032, "band-limited shift: above-Nyquist alias suppressed by 30 dB");
+            }
+        }
+    }
+}
+
+void testCycleTransitionRateReversals()
+{
+    constexpr int sampleRate = 44100;
+    constexpr int count = 12000;
+    constexpr int history = 2048;
+    constexpr int samplesPerFrame = 40;
+    constexpr int frameCount = count / samplesPerFrame;
+    for (const float period : {16.0f, 880.0f}) {
+        const double sourceFrequency = sampleRate / static_cast<double>(period);
+        const auto stream = makeSineSegment(sourceFrequency, sampleRate, -history,
+            history + count + Shifter::kLookaheadSamples, 0.3);
+        std::vector<float> original(frameCount, static_cast<float>(sourceFrequency));
+        std::vector<float> target(frameCount);
+        for (int frame = 0; frame < frameCount; ++frame) {
+            const double cents = frame % 4 == 0 ? 74.0 : -74.0;
+            target[static_cast<size_t>(frame)] = static_cast<float>(sourceFrequency * std::exp2(cents / 1200.0));
+        }
+        std::vector<OpenTune::AutoTunePeriodDetector::DetectedPeriod> periods(count);
+        for (int i = 0; i < count; ++i)
+            periods[static_cast<size_t>(i)] = {period, true, i % 5 == 0};
+        Shifter shifter(sampleRate);
+        const auto output = shifter.shiftChunk(
+            stream.data() + history, count, original.data(), target.data(), frameCount,
+            static_cast<double>(sampleRate) / samplesPerFrame, 0.0,
+            stream.data() + history + count, Shifter::kLookaheadSamples,
+            stream.data(), history, periods.data(), count, true);
+        expectTrue(output.size() == static_cast<size_t>(count), "rate reversal: duration preserved");
+        if (output.size() != static_cast<size_t>(count))
+            continue;
+        double position = -1.0;
+        double maxError = 0.0;
+        for (int i = 0; i < count; ++i) {
+            position += target[static_cast<size_t>(i / samplesPerFrame)] * static_cast<double>(period) / sampleRate;
+            const double expected = 0.3 * std::sin(kTwoPi * position / period);
+            maxError = std::max(maxError, std::fabs(output[static_cast<size_t>(i)] - expected));
+        }
+        expectTrue(maxError < 0.001,
+                   "rate reversal: overlapping cycle requests preserve phase and amplitude");
+    }
 }
 
 void testNonIdentityDoesNotMoveChunkStart()
@@ -520,8 +700,8 @@ void testF0FramePhaseUsesLaterFrames()
 }
 
 // ---------------------------------------------------------------------------
-// 5. Clip-final chunks with missing tail lookahead (0 or fewer than 5
-//    available samples): output length preserved and fully finite.
+// 5. Clip-final chunks with missing tail lookahead: output length preserved
+//    and fully finite.
 // ---------------------------------------------------------------------------
 void testTailChunksWithShortLookahead()
 {
@@ -554,9 +734,9 @@ void testTailChunksWithShortLookahead()
             input.data(), kNumSamples, &originalF0, &correctedF0, 1, 100.0,
             0.0, tail, 2, history.data(), historySamples);
         expectTrue(static_cast<int>(out.size()) == kNumSamples,
-                   "tail (2 of 5 lookahead): length preserved");
+                   "tail (2 lookahead): length preserved");
         expectTrue(allFinite(out),
-                   "tail (2 of 5 lookahead): all outputs finite");
+                   "tail (2 lookahead): all outputs finite");
     }
 }
 
@@ -2382,6 +2562,9 @@ int main()
     testNonIdentityShiftKeepsLengthFiniteAndSmooth(false);
     testNonIntegerPeriodInputsStayFinite();
     testFloatingCyclePeriodProducesTargetRate();
+    testCycleTransitionsSuppressAddedHighFrequencies();
+    testResamplingPreservesHighHarmonicsAndRejectsAliases();
+    testCycleTransitionRateReversals();
     testNonIdentityDoesNotMoveChunkStart();
     testF0FramePhaseUsesLaterFrames();
     testTailChunksWithShortLookahead();

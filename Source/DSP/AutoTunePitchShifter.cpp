@@ -3,11 +3,82 @@
 #include "PitchShiftRateContract.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 
 namespace OpenTune {
+
+namespace {
+
+constexpr int kFirRadius = 64;
+constexpr int kFirResolution = 256;
+constexpr int kFirSupportSamples = 67;
+constexpr int kCycleFadeDriftHeadroom = 8;
+constexpr int kLastKernelTableIndex = kFirRadius * kFirResolution;
+constexpr double kPi = 3.14159265358979323846;
+
+std::array<float, kLastKernelTableIndex + 2> makeSincKernelTable() {
+    std::array<float, kLastKernelTableIndex + 2> table{};
+    for (int i = 0; i <= kLastKernelTableIndex; ++i) {
+        if (i == 0) {
+            table[static_cast<size_t>(i)] = 1.0f;
+        }
+        else if (i % kFirResolution == 0) {
+            table[static_cast<size_t>(i)] = 0.0f;
+        }
+        else {
+            const double distance = static_cast<double>(i)
+                / static_cast<double>(kFirResolution);
+            const double window = 0.42
+                + 0.5 * std::cos(kPi * distance / kFirRadius)
+                + 0.08 * std::cos(2.0 * kPi * distance / kFirRadius);
+            const double sinc = std::sin(kPi * distance) / (kPi * distance);
+            table[static_cast<size_t>(i)] =
+                static_cast<float>(sinc * window);
+        }
+    }
+    table[static_cast<size_t>(kLastKernelTableIndex + 1)] = 0.0f;
+    return table;
+}
+
+const auto kSincKernelTable = makeSincKernelTable();
+
+std::array<float, AutoTunePitchShifter::kCycleJumpFadeSamples>
+makeCycleJumpFadeWeights() {
+    std::array<float, AutoTunePitchShifter::kCycleJumpFadeSamples> weights{};
+    for (int i = 0; i < AutoTunePitchShifter::kCycleJumpFadeSamples; ++i) {
+        const double phase = static_cast<double>(i)
+            / static_cast<double>(AutoTunePitchShifter::kCycleJumpFadeSamples - 1);
+        weights[static_cast<size_t>(i)] = static_cast<float>(
+            0.5 - 0.5 * std::cos(kPi * phase));
+    }
+    return weights;
+}
+
+const auto kCycleJumpFadeWeights = makeCycleJumpFadeWeights();
+
+float lookupSincKernel(double distance) {
+    if (distance >= static_cast<double>(kFirRadius))
+        return 0.0f;
+
+    const double tablePosition = distance * kFirResolution;
+    const int index = static_cast<int>(tablePosition);
+    const float fraction = static_cast<float>(tablePosition - index);
+    const float first = kSincKernelTable[static_cast<size_t>(index)];
+    const float second = kSincKernelTable[static_cast<size_t>(index + 1)];
+    return first + (second - first) * fraction;
+}
+
+float mixCycleJumpFade(float source, float destination, int position) {
+    const float destinationWeight =
+        kCycleJumpFadeWeights[static_cast<size_t>(position)];
+    return source * (1.0f - destinationWeight)
+        + destination * destinationWeight;
+}
+
+} // namespace
 
 AutoTunePitchShifter::AutoTunePitchShifter(double sampleRate)
     : sampleRate_(sampleRate)
@@ -15,24 +86,40 @@ AutoTunePitchShifter::AutoTunePitchShifter(double sampleRate)
 }
 
 bool AutoTunePitchShifter::isReadable(double addr) const {
-    const auto first = static_cast<int64_t>(std::floor(addr));
+    const auto center = static_cast<int64_t>(std::floor(addr));
     const auto oldest = static_cast<int64_t>(std::floor(
         std::max(0.0, inputAddr_ - static_cast<double>(bufferSize_))));
-    return first >= oldest && static_cast<double>(first + 1) < inputAddr_;
+    return center - kFirSupportSamples >= oldest
+        && static_cast<double>(center + kFirSupportSamples) < inputAddr_;
 }
 
 float AutoTunePitchShifter::readInterpolated(double addr) const {
     assert(isReadable(addr));
 
-    double wrapped = std::fmod(addr, static_cast<double>(bufferSize_));
-    if (wrapped < 0.0)
-        wrapped += static_cast<double>(bufferSize_);
+    const auto center = static_cast<int64_t>(std::floor(addr));
+    const auto firstTap = center - kFirSupportSamples;
+    int ringIndex = static_cast<int>(firstTap % bufferSize_);
+    const double cutoff = std::min(1.0, 1.0 / resampleRate_);
+    double weightedSum = 0.0;
+    double weightSum = 0.0;
 
-    const int idx0 = static_cast<int>(wrapped);
-    const int idx1 = (idx0 + 1) % bufferSize_;
-    const float frac = static_cast<float>(wrapped - static_cast<double>(idx0));
-    return buffer_[static_cast<size_t>(idx0)] * (1.0f - frac)
-         + buffer_[static_cast<size_t>(idx1)] * frac;
+    for (int offset = -kFirSupportSamples;
+         offset <= kFirSupportSamples; ++offset) {
+        const auto tapAddress = center + offset;
+        const double distance = std::fabs(
+            addr - static_cast<double>(tapAddress)) * cutoff;
+        const float weight = lookupSincKernel(distance);
+        if (weight != 0.0f) {
+            weightedSum += static_cast<double>(buffer_[static_cast<size_t>(ringIndex)])
+                * static_cast<double>(weight);
+            weightSum += static_cast<double>(weight);
+        }
+
+        if (++ringIndex == bufferSize_)
+            ringIndex = 0;
+    }
+
+    return static_cast<float>(weightedSum / weightSum);
 }
 
 void AutoTunePitchShifter::feedSample(float sample) {
@@ -74,21 +161,47 @@ float AutoTunePitchShifter::processSample(double cyclePeriod,
 
     outputAddr_ += resampleRate_;
 
-    if (cyclePeriod > 0.0) {
+    bool cycleJumped = false;
+    double jumpSourceAddr = 0.0;
+    if (cyclePeriod > 0.0 && cycleJumpFadePosition_ < 0) {
         if (resampleRate_ > 1.0 && outputAddr_ > inputAddr_) {
+            jumpSourceAddr = outputAddr_;
             outputAddr_ -= cyclePeriod;
+            cycleJumped = true;
             assert(isReadable(outputAddr_ - kLookaheadSamples));
         }
         else if (resampleRate_ <= 1.0
                  && outputAddr_ + cyclePeriod < inputAddr_) {
+            jumpSourceAddr = outputAddr_;
             outputAddr_ += cyclePeriod;
+            cycleJumped = true;
             assert(isReadable(outputAddr_ - kLookaheadSamples));
         }
     }
 
     const double readAddr = outputAddr_ - kLookaheadSamples;
     assert(isReadable(readAddr));
-    const float sample = readInterpolated(readAddr);
+    if (cycleJumped) {
+        cycleJumpFadeSourceOffset_ = jumpSourceAddr - outputAddr_;
+        cycleJumpFadePosition_ = 1;
+        const double sourceAddr = jumpSourceAddr - kLookaheadSamples;
+        assert(isReadable(sourceAddr));
+        return readInterpolated(sourceAddr);
+    }
+
+    float sample = readInterpolated(readAddr);
+    if (cycleJumpFadePosition_ >= 0) {
+        const double sourceAddr = readAddr + cycleJumpFadeSourceOffset_;
+        assert(isReadable(sourceAddr));
+        sample = mixCycleJumpFade(
+            readInterpolated(sourceAddr), sample, cycleJumpFadePosition_);
+
+        ++cycleJumpFadePosition_;
+        if (cycleJumpFadePosition_ == kCycleJumpFadeSamples) {
+            cycleJumpFadePosition_ = -1;
+            cycleJumpFadeSourceOffset_ = 0.0;
+        }
+    }
     return sample;
 }
 
@@ -206,13 +319,17 @@ std::vector<float> AutoTunePitchShifter::shiftChunkInternal(
     }
 
     const int requiredBufferSize = static_cast<int>(std::ceil(largestCyclePeriod))
-        + kLookaheadSamples + 2;
+        + kLookaheadSamples + kFirSupportSamples
+        + kCycleFadeDriftHeadroom + 2;
     bufferSize_ = requiredBufferSize;
     buffer_.assign(static_cast<size_t>(bufferSize_), 0.0f);
     writePos_ = 0;
-    inputAddr_ = 0.0;
+    // The initial ring is zero extension before the supplied lookbehind.
+    inputAddr_ = static_cast<double>(bufferSize_);
     outputAddr_ = static_cast<double>(kLookaheadSamples - 1);
     resampleRate_ = 1.0;
+    cycleJumpFadePosition_ = -1;
+    cycleJumpFadeSourceOffset_ = 0.0;
 
     for (int i = 0; i < numLookbehindSamples; ++i)
         feedSample(lookbehind[i]);
