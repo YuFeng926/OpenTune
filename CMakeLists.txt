@@ -1718,6 +1718,11 @@ option(OPENTUNE_ENABLE_APPROVED_BACKPRESSURE_TEST
        "Register the backpressure test only with an approved blocking-synthesize injector" OFF)
 if(OPENTUNE_BUILD_TESTS)
     enable_testing()
+    target_compile_definitions(OpenTune PRIVATE OPENTUNE_LIFECYCLE_TEST_DATA_DIR=1)
+    if(OPENTUNE_MACOS)
+        target_compile_definitions(OpenTuneAU PRIVATE OPENTUNE_LIFECYCLE_TEST_DATA_DIR=1)
+    endif()
+
     add_executable(OpenTuneComponentListenerSubscriptionTests
         Tests/ComponentListenerSubscriptionTests.cpp
     )
@@ -2262,7 +2267,7 @@ if(OPENTUNE_BUILD_TESTS)
             set_tests_properties(${render_contract} PROPERTIES
                 TIMEOUT 4
                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                ENVIRONMENT "OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
+                ENVIRONMENT "OPENTUNE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/${render_contract};OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
         elseif(render_contract STREQUAL "RenderRuntimeBackpressureTests")
             message(STATUS "Not registering RenderRuntimeBackpressureTests: approved blocking-synthesize injector is unavailable")
         endif()
@@ -2294,7 +2299,8 @@ if(OPENTUNE_BUILD_TESTS)
         add_test(NAME RenderRuntimePerformanceTests COMMAND RenderRuntimePerformanceTests)
         set_tests_properties(RenderRuntimePerformanceTests PROPERTIES
             TIMEOUT 4
-            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            ENVIRONMENT "OPENTUNE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/RenderRuntimePerformanceTests;OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
     endif()
 
     set(OPENTUNE_HIFIGAN_TEST_MODEL "${HIFIGAN_MODEL_COMMUNITY}")

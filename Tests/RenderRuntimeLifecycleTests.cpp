@@ -660,11 +660,13 @@ int runChild(int argc, char** argv)
         runtime.processChunkRenderJob(std::move(strongService), job, false, std::move(completion));
         OpenTuneTest::trace("RenderRuntimeLifecycleTests", "job_completion_posted");
     }});
+    service->pauseRenderWorker();
     service->enqueueRender(OpenTune::RenderJob{
         OpenTune::RenderJob::Kind::Stage1Render, key, snapshot, cache, audio, 44100.0,
         0, audio->getNumSamples(), -1, snapshot->contentRevision});
     const auto pending = cache->getPendingJobs();
     const bool initialRenderPending = pending.size() == 1;
+    service->resumeRenderWorker();
 
     service->drainRenderWorker();
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "render_drain_complete", {
