@@ -58,7 +58,9 @@ public:
         double continuityCents = 0.0;
     };
 
-    /// Renders the chunk and repairs a wrong detector octave in one pass.
+    /// Renders the chunk and validates detector-octave repair candidates.
+    /// With a detector source, voiced correction requests require confirmed
+    /// periods throughout the requested range. Missing evidence reports failure.
     /// The corrected F0 target is fixed. The ±75 cent contract bounds every
     /// rate update: a tracking update or forced span-boundary update whose
     /// requested rate leaves the contract keeps the held rate, and a repair

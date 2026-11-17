@@ -23,9 +23,8 @@ constexpr double kCoarseEpsilon = 0.4;
 constexpr double kPeriodicityEpsilon = 0.1;
 constexpr double kMinimumEnergy = 1.0e-6;
 constexpr double kReferenceSampleRate = 44100.0;
-// EH tie margin relative to candidate energy: hint ordering applies only
-// when the waveform evidence of two qualified candidates is indistinguishable
-// at this scale.
+// EH tie margin relative to candidate energy when waveform evidence is
+// indistinguishable at this scale.
 constexpr double kPeriodicityTieMargin = 0.005;
 
 struct EHValue {
@@ -105,6 +104,16 @@ std::optional<PeriodCandidate> chooseCandidate(
     if (!second.has_value())
         return first;
 
+    if (hintPeriod > 0.0)
+    {
+        const double firstDistance = std::fabs(std::log2(
+            static_cast<double>(first->lag) / hintPeriod));
+        const double secondDistance = std::fabs(std::log2(
+            static_cast<double>(second->lag) / hintPeriod));
+        if (firstDistance != secondDistance)
+            return firstDistance < secondDistance ? first : second;
+    }
+
     const double tieMargin = kPeriodicityTieMargin
         * std::max(first->energy, second->energy);
     if (std::fabs(first->score - second->score) > tieMargin)
@@ -112,28 +121,7 @@ std::optional<PeriodCandidate> chooseCandidate(
         return first->score < second->score ? first : second;
     }
 
-    if (hintPeriod > 0.0)
-    {
-        const double firstDistance = std::fabs(
-            static_cast<double>(first->lag) - hintPeriod);
-        const double secondDistance = std::fabs(
-            static_cast<double>(second->lag) - hintPeriod);
-        if (firstDistance != secondDistance)
-            return firstDistance < secondDistance ? first : second;
-    }
-
     return first->lag <= second->lag ? first : second;
-}
-
-bool hasOctaveDivergence(double period, double hintPeriod)
-{
-    constexpr double kUpperLow = 1.8;
-    constexpr double kUpperHigh = 2.2;
-    constexpr double kLowerLow = 0.45;
-    constexpr double kLowerHigh = 0.55;
-    const double ratio = period / hintPeriod;
-    return (ratio > kUpperLow && ratio < kUpperHigh)
-        || (ratio > kLowerLow && ratio < kLowerHigh);
 }
 
 const std::array<double, AutoTunePeriodDetector::kCoarseFilterTaps>&
@@ -418,22 +406,12 @@ AutoTunePeriodDetector::analyze(
         std::optional<PeriodCandidate> seed = shortSeed;
         if (shortSeed.has_value() && largeSeed.has_value())
         {
-            if (shortSeed->lag == largeSeed->lag)
-            {
+            if (hintPeriod > 0.0)
+                seed = chooseCandidate(shortSeed, largeSeed, hintPeriod);
+            else if (shortSeed->lag == largeSeed->lag)
                 seed = shortSeed;
-            }
-            else if (hintPeriod > 0.0)
-            {
-                const double shortDistance = std::fabs(
-                    static_cast<double>(shortSeed->lag) - hintPeriod);
-                const double largeDistance = std::fabs(
-                    static_cast<double>(largeSeed->lag) - hintPeriod);
-                seed = shortDistance <= largeDistance ? shortSeed : largeSeed;
-            }
             else
-            {
                 seed = largeSeed;
-            }
         }
         else if (largeSeed.has_value())
         {
@@ -509,14 +487,6 @@ AutoTunePeriodDetector::analyze(
                     bestIndex = j;
             }
 
-            // Lmin == 1 or Lmin == N is a tracking failure in Figure 5A.
-            if (bestIndex == 0 || bestIndex == kTrackingLagCount - 1)
-            {
-                failTracking(endIndex, initializedFromRecovery);
-                result[static_cast<size_t>(i)] = held;
-                continue;
-            }
-
             // Figure 5B moves the eight-lag window by exactly one index.
             // Each slide re-centers the nominal center lag; only that lag
             // (newBase + kTrackingCenterIndex) must stay in [16, 880], not
@@ -524,47 +494,41 @@ AutoTunePeriodDetector::analyze(
             if (bestIndex < kTrackingCenterIndex)
             {
                 const int newBase = ehOffset - 1;
-                if (newBase + kTrackingCenterIndex < kMinFullLag)
+                if (newBase + kTrackingCenterIndex >= kMinFullLag)
                 {
-                    failTracking(endIndex, initializedFromRecovery);
-                    result[static_cast<size_t>(i)] = held;
-                    continue;
+                    for (int j = kTrackingLagCount - 1; j > 0; --j)
+                        tracking[static_cast<size_t>(j)] =
+                            tracking[static_cast<size_t>(j - 1)];
+                    const auto eh = computeEHAt(samples, endIndex, newBase);
+                    if (!eh.has_value())
+                    {
+                        failTracking(endIndex, initializedFromRecovery);
+                        result[static_cast<size_t>(i)] = held;
+                        continue;
+                    }
+                    tracking[0] = *eh;
+                    ehOffset = newBase;
                 }
-                for (int j = kTrackingLagCount - 1; j > 0; --j)
-                    tracking[static_cast<size_t>(j)] =
-                        tracking[static_cast<size_t>(j - 1)];
-                const auto eh = computeEHAt(samples, endIndex, newBase);
-                if (!eh.has_value())
-                {
-                    failTracking(endIndex, initializedFromRecovery);
-                    result[static_cast<size_t>(i)] = held;
-                    continue;
-                }
-                tracking[0] = *eh;
-                ehOffset = newBase;
             }
             else if (bestIndex > kTrackingCenterIndex + 1)
             {
                 const int newBase = ehOffset + 1;
-                if (newBase + kTrackingCenterIndex > kMaxFullLag)
+                if (newBase + kTrackingCenterIndex <= kMaxFullLag)
                 {
-                    failTracking(endIndex, initializedFromRecovery);
-                    result[static_cast<size_t>(i)] = held;
-                    continue;
+                    for (int j = 0; j < kTrackingLagCount - 1; ++j)
+                        tracking[static_cast<size_t>(j)] =
+                            tracking[static_cast<size_t>(j + 1)];
+                    const auto eh = computeEHAt(
+                        samples, endIndex, newBase + kTrackingLagCount - 1);
+                    if (!eh.has_value())
+                    {
+                        failTracking(endIndex, initializedFromRecovery);
+                        result[static_cast<size_t>(i)] = held;
+                        continue;
+                    }
+                    tracking[kTrackingLagCount - 1] = *eh;
+                    ehOffset = newBase;
                 }
-                for (int j = 0; j < kTrackingLagCount - 1; ++j)
-                    tracking[static_cast<size_t>(j)] =
-                        tracking[static_cast<size_t>(j + 1)];
-                const auto eh = computeEHAt(
-                    samples, endIndex, newBase + kTrackingLagCount - 1);
-                if (!eh.has_value())
-                {
-                    failTracking(endIndex, initializedFromRecovery);
-                    result[static_cast<size_t>(i)] = held;
-                    continue;
-                }
-                tracking[kTrackingLagCount - 1] = *eh;
-                ehOffset = newBase;
             }
 
             bestIndex = 0;
@@ -574,83 +538,100 @@ AutoTunePeriodDetector::analyze(
                     < tracking[static_cast<size_t>(bestIndex)].value())
                     bestIndex = j;
             }
-            if (bestIndex == 0 || bestIndex == kTrackingLagCount - 1)
-            {
-                failTracking(endIndex, initializedFromRecovery);
-                result[static_cast<size_t>(i)] = held;
-                continue;
-            }
-
             const EHValue& best = tracking[static_cast<size_t>(bestIndex)];
-            if (!std::isfinite(best.value())
-                || best.energy < kMinimumEnergy
-                || best.value() > kPeriodicityEpsilon * best.energy)
-            {
-                failTracking(endIndex, initializedFromRecovery);
-                result[static_cast<size_t>(i)] = held;
-                continue;
-            }
-
             double refined = static_cast<double>(ehOffset + bestIndex);
-            const double vm1 = tracking[static_cast<size_t>(bestIndex - 1)].value();
-            const double v0 = best.value();
-            const double vp1 = tracking[static_cast<size_t>(bestIndex + 1)].value();
-            const double denominator = vm1 - 2.0 * v0 + vp1;
-            if (std::isfinite(denominator) && denominator != 0.0)
+            if (bestIndex > 0 && bestIndex < kTrackingLagCount - 1)
             {
-                const double delta = 0.5 * (vm1 - vp1) / denominator;
-                if (std::isfinite(delta))
-                    refined += delta;
+                const double vm1 = tracking[static_cast<size_t>(bestIndex - 1)].value();
+                const double v0 = best.value();
+                const double vp1 = tracking[static_cast<size_t>(bestIndex + 1)].value();
+                const double denominator = vm1 - 2.0 * v0 + vp1;
+                if (std::isfinite(denominator) && denominator != 0.0)
+                {
+                    const double delta = 0.5 * (vm1 - vp1) / denominator;
+                    if (std::isfinite(delta))
+                        refined += delta;
+                }
             }
 
-            if (refined < kMinFullLag || refined > kMaxFullLag)
+            // Confirm the tracked period from the current E/H window and its
+            // octave alternatives from bounded full-rate waveform checks.
+            const double hintPeriod = hintPeriodAt(endIndex);
+            // Fractional periods and estimation differences between two-period
+            // E/H windows can make a neighboring lag qualify where the rounded
+            // lag fails. Confirm the center and both immediate neighbors.
+            constexpr int kTrackingConfirmHalfWindow = 1;
+            std::array<std::optional<PeriodCandidate>, 3> candidates{};
+            const bool currentQualified = bestIndex > 0
+                && bestIndex < kTrackingLagCount - 1
+                && refined >= kMinFullLag && refined <= kMaxFullLag
+                && std::isfinite(best.value())
+                && best.energy >= kMinimumEnergy
+                && best.value() <= kPeriodicityEpsilon * best.energy;
+            if (currentQualified)
+            {
+                candidates[0] = PeriodCandidate{
+                    ehOffset + bestIndex, best.value(), best.energy};
+            }
+
+            for (int candidateIndex = 1; candidateIndex < 3; ++candidateIndex)
+            {
+                const double scale = candidateIndex == 1 ? 0.5 : 2.0;
+                const double candidatePeriod = refined * scale;
+                const int centerLag = static_cast<int>(std::lround(candidatePeriod));
+                if (candidatePeriod < kMinFullLag
+                    || candidatePeriod > kMaxFullLag
+                    || centerLag < kMinFullLag
+                    || centerLag > kMaxFullLag)
+                    continue;
+                candidates[static_cast<size_t>(candidateIndex)] =
+                    confirmFullRateCandidate(
+                        samples, endIndex, centerLag,
+                        kTrackingConfirmHalfWindow);
+            }
+
+            int selectedIndex = -1;
+            for (int candidateIndex = 0; candidateIndex < 3; ++candidateIndex)
+            {
+                if (!candidates[static_cast<size_t>(candidateIndex)].has_value())
+                    continue;
+                if (selectedIndex < 0)
+                {
+                    selectedIndex = candidateIndex;
+                    continue;
+                }
+
+                const auto selected = chooseCandidate(
+                    candidates[static_cast<size_t>(selectedIndex)],
+                    candidates[static_cast<size_t>(candidateIndex)],
+                    hintPeriod);
+                if (selected->lag
+                    == candidates[static_cast<size_t>(candidateIndex)]->lag)
+                    selectedIndex = candidateIndex;
+            }
+
+            if (selectedIndex < 0)
             {
                 failTracking(endIndex, initializedFromRecovery);
             }
-            else
+            else if (selectedIndex != 0)
             {
-                // Stable-tracking octave check: when the hint and the tracked
-                // period clearly disagree by an octave, confirm both around
-                // the same waveform position with the shared full-rate
-                // helper.  The tracked period is kept when its waveform
-                // evidence wins; a qualified hint-side candidate re-seats the
-                // tracking window.  A stale hint cannot reject the waveform.
-                const double hintPeriod = hintPeriodAt(endIndex);
-                if (hintPeriod > 0.0
-                    && hasOctaveDivergence(refined, hintPeriod))
-                {
-                    constexpr int kConfirmHalfWindow =
-                        kDecimFactor / 2;
-                    const auto currentCandidate = confirmFullRateCandidate(
-                        samples, endIndex,
-                        static_cast<int>(std::lround(refined)),
-                        kConfirmHalfWindow);
-                    const auto hintCandidate = confirmFullRateCandidate(
-                        samples, endIndex,
-                        static_cast<int>(std::lround(hintPeriod)),
-                        kConfirmHalfWindow);
-                    const auto selected = chooseCandidate(
-                        currentCandidate, hintCandidate, hintPeriod);
+                const int selectedLag =
+                    candidates[static_cast<size_t>(selectedIndex)]->lag;
+                const double selectedPeriod = refined
+                    * (selectedIndex == 1 ? 0.5 : 2.0);
+                if (initializeTracking(
+                        endIndex, selectedLag - kTrackingCenterIndex))
+                    refined = selectedPeriod;
+                else
+                    failTracking(endIndex, initializedFromRecovery);
+            }
 
-                    if (selected.has_value()
-                        && (!currentCandidate.has_value()
-                            || selected->lag != currentCandidate->lag))
-                    {
-                        if (initializeTracking(
-                                endIndex,
-                                selected->lag - kTrackingCenterIndex))
-                            refined = static_cast<double>(selected->lag);
-                        else
-                            failTracking(endIndex, initializedFromRecovery);
-                    }
-                }
-
-                if (trackingInitialized)
-                {
-                    held.periodSamples = static_cast<float>(refined);
-                    held.valid = true;
-                    rateUpdated = true;
-                }
+            if (trackingInitialized)
+            {
+                held.periodSamples = static_cast<float>(refined);
+                held.valid = true;
+                rateUpdated = true;
             }
         }
 

@@ -295,6 +295,15 @@ AutoTunePitchShifter::shiftChunkWithOctaveRepair(
     const auto correctedAt = [&](int sampleIndex) {
         return static_cast<double>(correctedF0[frameAt(sampleIndex)]);
     };
+    for (int i = 0; i < numSamples; ++i) {
+        const int frame = frameAt(i);
+        if (correctedF0[frame] > 0.0f && originalF0[frame] > 0.0f) {
+            const auto& det = detectorPeriods[i];
+            if (!det.valid || !(det.periodSamples > 0.0f))
+                return result;
+        }
+    }
+
     const auto rateAt = [&](int sampleIndex,
                             const AutoTunePeriodDetector::DetectedPeriod* periods) {
         const auto& det = periods[sampleIndex];

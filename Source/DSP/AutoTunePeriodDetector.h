@@ -6,13 +6,13 @@ namespace OpenTune {
 
 /// Chunk-local render-rate period detector with a coarse-then-confirm flow:
 /// coarse LPF/downsampling acquisition, full-rate fundamental confirmation,
-/// and an eight-lag E/H tracking window.
+/// and an eight-lag E/H tracking window with waveform-confirmed octave choices.
 class AutoTunePeriodDetector {
 public:
     /// One detection result per input sample (hop-held).
     struct DetectedPeriod {
         float periodSamples = 0.0f; ///< Refined period in full-rate samples.
-        bool valid = false;          ///< false => caller must stay neutral.
+        bool valid = false;          ///< A waveform-confirmed period is available.
         /// True only when this sample completed a tracking-window evaluation
         /// (acquisition initialization or the every-5-samples tracking
         /// update). Hop-held repeats report false so consumers refresh the
@@ -23,8 +23,8 @@ public:
     /// Analyzes prefix (samples immediately preceding input[0]) + input and
     /// returns exactly numInputSamples results, one per input sample.
     /// @param fcpeF0Hint  Optional per-frame FCPE F0 array (Hz, >0 = voiced).
-    ///                    Breaks ties between waveform-qualified period
-    ///                    candidates.  May be nullptr when no AI F0 is present.
+    ///                    Prioritizes the closest waveform-qualified period
+    ///                    candidate. May be nullptr when no AI F0 is present.
     /// @param f0HintFrameRate  Frame rate of fcpeF0Hint (e.g. 100.0).
     /// @param firstSampleFramePhase  Float frame position of input[0] in the
     ///                    supplied fcpeF0Hint array.  May address the global
