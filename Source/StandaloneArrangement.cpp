@@ -120,9 +120,15 @@ void StandaloneArrangement::setLanguage(Language language)
     }
 }
 
-StandaloneArrangement::PlaybackSnapshotHandle StandaloneArrangement::loadPlaybackSnapshot() const
+StandaloneArrangement::PlaybackSnapshotRead StandaloneArrangement::loadPlaybackSnapshot() const
 {
-    return std::atomic_load(&playbackSnapshot_);
+    return playbackSnapshot_.read();
+}
+
+void StandaloneArrangement::collectPlaybackSnapshots()
+{
+    const juce::ScopedWriteLock lock(stateLock_);
+    playbackSnapshot_.collect();
 }
 
 void StandaloneArrangement::configurePlaybackSources(ContentRenderService* renderService,
@@ -1016,6 +1022,7 @@ void StandaloneArrangement::buildPlaybackGeometry(std::vector<PlaybackPlacement>
 
 void StandaloneArrangement::publishPlaybackSnapshotLocked()
 {
+    playbackSnapshot_.collect();
     auto snapshot = std::make_shared<PlaybackSnapshot>();
     snapshot->epoch = nextPlaybackEpoch_++;
 
@@ -1058,20 +1065,8 @@ void StandaloneArrangement::publishPlaybackSnapshotLocked()
         snapshot->anySoloed = snapshot->anySoloed || sourceTrack.isSolo;
     }
 
-    // Publish lock-free via atomic exchange.
-    // Audio thread reads via atomic_load, never blocks.
-    // Retire old snapshot into the writer-side list; sweep entries
-    // whose use_count()==1 (only the list holds a reference) —
-    // guaranteeing free/malloc never hits the RT path.
-    auto old = std::atomic_exchange(&playbackSnapshot_,
-                                    std::shared_ptr<const PlaybackSnapshot>(snapshot));
-    if (old) {
-        retiredSnapshots_.push_back(std::move(old));
-    }
-    retiredSnapshots_.erase(
-        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredSnapshots_.end());
+    RealtimeSnapshot<PlaybackSnapshot>::Owner owner = std::move(snapshot);
+    playbackSnapshot_.publish(std::move(owner));
 }
 
 bool StandaloneArrangement::retirePlacement(int trackId, uint64_t placementId)

@@ -59,6 +59,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# The pinned JUCE patches use control-side quiescence for OpenTune's audio chain.
+add_compile_definitions(JUCE_OPENTUNE_REALTIME_AUDIO=1)
+
 # ==============================================================================
 # MSVC Runtime (Static Linking - No external dependencies)
 # ==============================================================================
@@ -1724,6 +1727,26 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_definitions(OpenTuneAU PRIVATE OPENTUNE_LIFECYCLE_TEST_DATA_DIR=1)
     endif()
 
+    add_executable(OpenTuneOutputSpectrumAnalyzerTests Tests/OutputSpectrumAnalyzerTests.cpp)
+    target_include_directories(OpenTuneOutputSpectrumAnalyzerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneOutputSpectrumAnalyzerTests PRIVATE juce::juce_dsp)
+    add_test(NAME OutputSpectrumAnalyzerTests COMMAND OpenTuneOutputSpectrumAnalyzerTests)
+
+    add_executable(OpenTunePlayHeadStateTests Tests/PlayHeadStateTests.cpp)
+    target_include_directories(OpenTunePlayHeadStateTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTunePlayHeadStateTests PRIVATE juce::juce_audio_processors)
+    add_test(NAME PlayHeadStateTests COMMAND OpenTunePlayHeadStateTests)
+
+    add_executable(OpenTuneRealtimeSnapshotTests Tests/RealtimeSnapshotTests.cpp)
+    target_include_directories(OpenTuneRealtimeSnapshotTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    add_test(NAME RealtimeSnapshotTests COMMAND OpenTuneRealtimeSnapshotTests)
+
+    if(MSVC)
+        target_compile_options(OpenTuneOutputSpectrumAnalyzerTests PRIVATE /utf-8 /EHsc)
+        target_compile_options(OpenTunePlayHeadStateTests PRIVATE /utf-8 /EHsc)
+        target_compile_options(OpenTuneRealtimeSnapshotTests PRIVATE /utf-8 /EHsc)
+    endif()
+
     add_executable(OpenTuneComponentListenerSubscriptionTests
         Tests/ComponentListenerSubscriptionTests.cpp
     )
@@ -2216,6 +2239,7 @@ if(OPENTUNE_BUILD_TESTS)
 
     add_executable(OpenTuneStandaloneArrangementMoveTests
         Tests/StandaloneArrangementMoveTests.cpp
+        Tests/HeadlessEditorFactory.cpp
     )
     target_include_directories(OpenTuneStandaloneArrangementMoveTests
         PRIVATE
@@ -2326,6 +2350,7 @@ if(OPENTUNE_BUILD_TESTS)
     # test-only link; the shipping targets do not enable JUCE_PLUGINHOST_ARA or
     # JUCE_PLUGINHOST_VST3.
     target_sources(ARALifecycleContractTests PRIVATE
+        Tests/HeadlessEditorFactory.cpp
         "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAHostDispatch.cpp"
         "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
         "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
@@ -2336,6 +2361,9 @@ if(OPENTUNE_BUILD_TESTS)
         "${ARA_SDK_PATH}/ARA_Library"
         "${ARA_SDK_PATH}/ARA_API"
     )
+    target_link_libraries(ARALifecycleContractTests PRIVATE OpenTuneResources)
+
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneRealtimeTests.cmake")
 endif()
 
 # Optional local Control API entry point for Standalone.

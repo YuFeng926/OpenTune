@@ -11,9 +11,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iterator>
 #include <limits>
 #include <mutex>
+#include <thread>
 
 #include "CDSPResampler.h"
 #include "../DSP/PhaseVocoderPitchShifter.h"
@@ -259,19 +259,20 @@ NotePitchAudition::NotePitchAudition()
 
 NotePitchAudition::~NotePitchAudition()
 {
-    stopRequested_.store(true, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(requestMutex_);
+        stopRequested_.store(true, std::memory_order_release);
+        const uint64_t generation =
+            controlGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        stopGeneration_.store(generation, std::memory_order_release);
         hasPending_ = false;
         pending_ = Request{};
     }
     signalThreadShouldExit();
     wakeup_.signal();
 
-    // The worker owns requestMutex_/pending_ and the render call. Wait for it
-    // to reach the exit predicate: the object must not be destroyed while the
-    // thread still touches it.
     waitForThreadToExit(-1);
+    reclaimReturnedSlots();
 }
 
 void NotePitchAudition::request(PlaybackReadSource source,
@@ -282,15 +283,20 @@ void NotePitchAudition::request(PlaybackReadSource source,
 {
     {
         std::lock_guard<std::mutex> lock(requestMutex_);
+        const uint64_t generation =
+            controlGeneration_.load(std::memory_order_relaxed) + 1;
+        stopRequested_.store(true, std::memory_order_release);
+        controlGeneration_.store(generation, std::memory_order_release);
         pending_.source = std::move(source);
         pending_.startSeconds = startSeconds;
         pending_.endSeconds = endSeconds;
         pending_.targetHz = targetHz;
         pending_.outputSampleRate = outputSampleRate;
         pending_.targetRegion = nextTargetRegion_.load(std::memory_order_acquire);
+        pending_.generation = generation;
         hasPending_ = true;
     }
-    stopRequested_.store(false, std::memory_order_release);
+    reclaimReturnedSlots();
     if (!isThreadRunning())
         startThread(juce::Thread::Priority::low);
     wakeup_.signal();
@@ -298,20 +304,24 @@ void NotePitchAudition::request(PlaybackReadSource source,
 
 void NotePitchAudition::stop()
 {
-    stopRequested_.store(true, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(requestMutex_);
+        stopRequested_.store(true, std::memory_order_release);
+        const uint64_t generation =
+            controlGeneration_.load(std::memory_order_relaxed) + 1;
+        controlGeneration_.store(generation, std::memory_order_release);
+        stopGeneration_.store(generation, std::memory_order_release);
         hasPending_ = false;
         pending_ = Request{};
     }
-    fadeOutAll_.store(true, std::memory_order_release);
+    reclaimReturnedSlots();
     wakeup_.signal();
 }
 
 bool NotePitchAudition::isActive() const noexcept
 {
     for (const auto& voice : voices_) {
-        if (voice.snippet && (voice.gain > 0.0f || voice.targetGain > 0.0f))
+        if (voice.slotIndex >= 0 && (voice.gain > 0.0f || voice.targetGain > 0.0f))
             return true;
     }
     return false;
@@ -320,7 +330,8 @@ bool NotePitchAudition::isActive() const noexcept
 bool NotePitchAudition::isContentActive(const ContentKey& key) const noexcept
 {
     for (const auto& voice : voices_) {
-        if (voice.snippet && voice.snippet->contentKey == key
+        if (voice.slotIndex >= 0
+                && slots_[static_cast<size_t>(voice.slotIndex)].snippet.contentKey == key
                 && (voice.gain > 0.0f || voice.targetGain > 0.0f))
             return true;
     }
@@ -337,38 +348,135 @@ const void* NotePitchAudition::activeTargetRegion() const noexcept
     return activeTargetRegion_.load(std::memory_order_acquire);
 }
 
-void NotePitchAudition::pruneRetired()
+int NotePitchAudition::claimBuildSlot() noexcept
 {
-    retired_.erase(
-        std::remove_if(retired_.begin(), retired_.end(),
-            [](const std::shared_ptr<const Snippet>& s) {
-                return !s || s.use_count() == 1;
-            }),
-        retired_.end());
+    for (int i = 0; i < kNumSlots; ++i) {
+        auto& slot = slots_[static_cast<size_t>(i)];
+        for (const SlotState available : {SlotState::Free, SlotState::Returned}) {
+            uint8_t expected = static_cast<uint8_t>(available);
+            if (!slot.state.compare_exchange_strong(
+                    expected, static_cast<uint8_t>(SlotState::Building),
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                continue;
+            slot.snippet = Snippet{};
+            return i;
+        }
+    }
+
+    for (int i = 0; i < kNumSlots; ++i) {
+        auto& slot = slots_[static_cast<size_t>(i)];
+        uint8_t expected = static_cast<uint8_t>(SlotState::Pending);
+        if (!slot.state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+        slot.snippet = Snippet{};
+        return i;
+    }
+    return -1;
+}
+
+void NotePitchAudition::discardPendingSlots() noexcept
+{
+    for (auto& slot : slots_) {
+        uint8_t expected = static_cast<uint8_t>(SlotState::Pending);
+        if (!slot.state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+        slot.snippet = Snippet{};
+        slot.state.store(static_cast<uint8_t>(SlotState::Free),
+                         std::memory_order_release);
+    }
+}
+
+void NotePitchAudition::returnSlot(int slotIndex) noexcept
+{
+    slots_[static_cast<size_t>(slotIndex)].state.store(
+        static_cast<uint8_t>(SlotState::Returned), std::memory_order_release);
+}
+
+void NotePitchAudition::releaseVoice(Voice& voice) noexcept
+{
+    if (voice.slotIndex >= 0)
+        returnSlot(voice.slotIndex);
+    voice = Voice{};
+}
+
+void NotePitchAudition::processRejectedResult()
+{
+    const uint64_t rejected = rejectedGeneration_.exchange(0, std::memory_order_acq_rel);
+    if (rejected <= workerRejectedGeneration_)
+        return;
+
+    workerRejectedGeneration_ = rejected;
+    std::lock_guard<std::mutex> lock(requestMutex_);
+    if (hasPending_ && pending_.generation == rejected) {
+        hasPending_ = false;
+        pending_ = Request{};
+    }
+}
+
+void NotePitchAudition::reclaimReturnedSlots() noexcept
+{
+    for (auto& slot : slots_) {
+        uint8_t expected = static_cast<uint8_t>(SlotState::Returned);
+        if (!slot.state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+        slot.snippet = Snippet{};
+        slot.state.store(static_cast<uint8_t>(SlotState::Free),
+                         std::memory_order_release);
+    }
 }
 
 void NotePitchAudition::run()
 {
+    Request request;
+    bool hasRequest = false;
+
     while (!threadShouldExit()) {
-        wakeup_.wait();
+        processRejectedResult();
+        reclaimReturnedSlots();
+
+        if (!hasRequest) {
+            std::lock_guard<std::mutex> lock(requestMutex_);
+            if (hasPending_) {
+                request = std::move(pending_);
+                pending_ = Request{};
+                hasPending_ = false;
+                if (request.generation == controlGeneration_.load(std::memory_order_acquire)) {
+                    stopRequested_.store(false, std::memory_order_release);
+                    hasRequest = true;
+                }
+            }
+        }
+
+        if (!hasRequest) {
+            wakeup_.wait();
+            continue;
+        }
 
         if (threadShouldExit())
             break;
 
-        Request request;
-        bool valid = false;
-        {
-            std::lock_guard<std::mutex> lock(requestMutex_);
-            valid = hasPending_;
-            if (valid) {
-                request = std::move(pending_);
-                hasPending_ = false;
-                pending_ = Request{};
-            }
+        if (request.generation != controlGeneration_.load(std::memory_order_acquire)) {
+            request = Request{};
+            hasRequest = false;
+            continue;
         }
 
-        if (stopRequested_.load(std::memory_order_acquire) || !valid) {
-            pruneRetired();
+        const int slotIndex = claimBuildSlot();
+        if (slotIndex < 0) {
+            if (threadShouldExit()
+                    || request.generation != controlGeneration_.load(std::memory_order_acquire)
+                    || stopRequested_.load(std::memory_order_acquire)) {
+                request = Request{};
+                hasRequest = false;
+                continue;
+            }
+            std::this_thread::yield();
             continue;
         }
 
@@ -407,33 +515,34 @@ void NotePitchAudition::run()
                 &stopRequested_);
         }
 
-        // Drop the result if stop was requested or a newer pending request
-        // exists (single pending slot identity).
-        bool superseded = false;
-        {
-            std::lock_guard<std::mutex> lock(requestMutex_);
-            superseded = hasPending_;
-        }
-        if (stopRequested_.load(std::memory_order_acquire) || superseded
+        auto& slot = slots_[static_cast<size_t>(slotIndex)];
+        const bool stale = request.generation
+            != controlGeneration_.load(std::memory_order_acquire);
+        if (stale || stopRequested_.load(std::memory_order_acquire)
                 || preview.mono.empty() || preview.sampleRate <= 0.0) {
-            pruneRetired();
+            slot.snippet = Snippet{};
+            slot.state.store(static_cast<uint8_t>(SlotState::Free), std::memory_order_release);
+            request = Request{};
+            hasRequest = false;
             continue;
         }
 
-        // Publish: retire the previously published snippet (producer keeps a
-        // reference so the audio thread never frees the last one), then store
-        // the new snippet atomically.
-        {
-            auto newSnippet = std::make_shared<const Snippet>(
-                Snippet{std::move(preview.mono), preview.sampleRate,
-                        source.contentKey, request.targetRegion});
-            auto previous = std::atomic_load(&published_);
-            if (previous)
-                retired_.push_back(std::move(previous));
-            std::atomic_store(&published_,
-                std::static_pointer_cast<const Snippet>(newSnippet));
+        discardPendingSlots();
+        if (request.generation != controlGeneration_.load(std::memory_order_acquire)
+                || stopRequested_.load(std::memory_order_acquire)) {
+            slot.snippet = Snippet{};
+            slot.state.store(static_cast<uint8_t>(SlotState::Free), std::memory_order_release);
+            request = Request{};
+            hasRequest = false;
+            continue;
         }
-        pruneRetired();
+
+        slot.snippet = Snippet{std::move(preview.mono), preview.sampleRate,
+                               source.contentKey, request.targetRegion};
+        slot.generation = request.generation;
+        slot.state.store(static_cast<uint8_t>(SlotState::Pending), std::memory_order_release);
+        request = Request{};
+        hasRequest = false;
     }
 }
 
@@ -444,70 +553,96 @@ void NotePitchAudition::mixIntoBuffer(juce::AudioBuffer<float>& output,
     if (numSamples <= 0 || outputSampleRate <= 0.0)
         return;
 
-    // Pick up a newly published snippet (or an ignored rate mismatch). A
-    // snippet counts as new only if this player has not already consumed it,
-    // which also prevents retriggering after stop() fades the voices out.
-    const auto published = std::atomic_load(&published_);
-    if (published && published != seenSnippet_) {
-        seenSnippet_ = published;
-        if (published->sampleRate != outputSampleRate) {
-            // prepare/rate changes stop the audition: ignore this snippet.
-            std::atomic_store(&published_, std::shared_ptr<const Snippet>());
-        } else {
-            // Start a new voice and fade the previous voice out over 10 ms.
-            // Prefer the inactive/zero-gain voice as the incoming slot so the
-            // currently audible voice keeps sounding during rapid retriggers.
-            Voice* incoming = nullptr;
-            for (auto& voice : voices_) {
-                if (!voice.snippet || voice.gain <= 0.0f) {
-                    incoming = &voice;
-                    break;
-                }
-            }
-            if (incoming == nullptr) {
-                incoming = (voices_[0].gain <= voices_[1].gain)
-                    ? &voices_[0] : &voices_[1];
-            }
-            Voice& previous = (incoming == &voices_[0]) ? voices_[1] : voices_[0];
-            previous.targetGain = 0.0f;
-            incoming->snippet = published;
-            incoming->position = 0.0;
-            incoming->gain = 1.0f;
-            incoming->targetGain = 1.0f;
-            activeTargetRegion_.store(incoming->snippet->targetRegion,
-                                      std::memory_order_release);
-            fadeOutAll_.store(false, std::memory_order_release);
-        }
-    }
-
-    // Stop request applies to this block: ramp voices down immediately instead
-    // of mixing one full-gain block first.
-    if (fadeOutAll_.load(std::memory_order_acquire)) {
+    const uint64_t generation = controlGeneration_.load(std::memory_order_acquire);
+    const uint64_t stopGeneration = stopGeneration_.load(std::memory_order_acquire);
+    if (stopGeneration > appliedStopGeneration_) {
         for (auto& voice : voices_) {
-            if (voice.snippet)
+            if (voice.slotIndex >= 0 && voice.generation < stopGeneration)
                 voice.targetGain = 0.0f;
         }
+        appliedStopGeneration_ = stopGeneration;
+    }
+
+    int incomingSlot = -1;
+    for (int i = 0; i < kNumSlots; ++i) {
+        auto& slot = slots_[static_cast<size_t>(i)];
+        uint8_t expected = static_cast<uint8_t>(SlotState::Pending);
+        if (!slot.state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::AudioOwned),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+
+        if (slot.generation < generation) {
+            returnSlot(i);
+            continue;
+        }
+        if (slot.generation > generation) {
+            slot.state.store(static_cast<uint8_t>(SlotState::Pending), std::memory_order_release);
+            continue;
+        }
+        if (slot.snippet.sampleRate != outputSampleRate) {
+            const uint64_t previous = rejectedGeneration_.load(std::memory_order_relaxed);
+            if (slot.generation > previous)
+                rejectedGeneration_.store(slot.generation, std::memory_order_release);
+            returnSlot(i);
+            continue;
+        }
+        if (incomingSlot < 0)
+            incomingSlot = i;
+        else
+            returnSlot(i);
+    }
+
+    if (incomingSlot >= 0) {
+        Voice* incoming = nullptr;
+        for (auto& voice : voices_) {
+            if (voice.slotIndex < 0 || voice.gain <= 0.0f) {
+                incoming = &voice;
+                break;
+            }
+        }
+        if (incoming == nullptr)
+            incoming = voices_[0].gain <= voices_[1].gain ? &voices_[0] : &voices_[1];
+
+        Voice& previous = incoming == &voices_[0] ? voices_[1] : voices_[0];
+        if (previous.slotIndex >= 0)
+            previous.targetGain = 0.0f;
+        releaseVoice(*incoming);
+        incoming->slotIndex = incomingSlot;
+        incoming->generation = slots_[static_cast<size_t>(incomingSlot)].generation;
+        incoming->position = 0;
+        incoming->gain = 1.0f;
+        incoming->targetGain = 1.0f;
+        activeTargetRegion_.store(
+            slots_[static_cast<size_t>(incomingSlot)].snippet.targetRegion,
+            std::memory_order_release);
     }
 
     const double fadeRate =
         1.0 / std::max(1.0, kVoiceFadeSeconds * outputSampleRate);
 
     for (auto& voice : voices_) {
-        if (!voice.snippet || voice.gain <= 0.0f)
+        if (voice.slotIndex < 0)
             continue;
-        const auto& mono = voice.snippet->mono;
+        const auto& snippet = slots_[static_cast<size_t>(voice.slotIndex)].snippet;
+        if (snippet.sampleRate != outputSampleRate) {
+            releaseVoice(voice);
+            continue;
+        }
+        if (voice.gain <= 0.0f) {
+            if (voice.targetGain == 0.0f)
+                releaseVoice(voice);
+            continue;
+        }
+        const auto& mono = snippet.mono;
         const int totalSamples = static_cast<int>(mono.size());
-        const double snippetRate = voice.snippet->sampleRate;
 
         for (int i = 0; i < numSamples; ++i) {
             if (voice.position >= totalSamples)
                 break;
-            // Advance the voice position on its own snippet rate grid.
-            const int index = static_cast<int>(voice.position);
-            if (index >= totalSamples)
-                break;
+            const int index = voice.position;
             const float sample = mono[static_cast<size_t>(index)];
-            voice.position += snippetRate / outputSampleRate;
+            ++voice.position;
 
             // Per-sample linear gain ramp toward the target.
             if (voice.gain < voice.targetGain)
@@ -524,30 +659,9 @@ void NotePitchAudition::mixIntoBuffer(juce::AudioBuffer<float>& output,
             }
         }
 
-        if (voice.position >= totalSamples) {
-            voice.snippet.reset();
-            voice.position = 0.0;
-            voice.gain = 0.0f;
-            voice.targetGain = 0.0f;
-        }
-    }
-
-    if (fadeOutAll_.load(std::memory_order_acquire)) {
-        for (auto& voice : voices_) {
-            if (voice.snippet)
-                voice.targetGain = 0.0f;
-        }
-        const bool allSilent = std::all_of(std::begin(voices_), std::end(voices_),
-            [](const Voice& v) { return !v.snippet || v.gain <= 0.0f; });
-        if (allSilent) {
-            for (auto& voice : voices_) {
-                voice.snippet.reset();
-                voice.position = 0.0;
-                voice.gain = 0.0f;
-                voice.targetGain = 0.0f;
-            }
-            fadeOutAll_.store(false, std::memory_order_release);
-        }
+        if (voice.position >= totalSamples
+                || (voice.gain <= 0.0f && voice.targetGain == 0.0f))
+            releaseVoice(voice);
     }
 
     if (!isActive())

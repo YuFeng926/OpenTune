@@ -212,10 +212,14 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
         if (renderer != nullptr)
             renderer->detachDocumentController(*this);
     }
+    collectPlaybackSnapshots();
     playbackRenderers_.clear();
 
     if (contentRenderService_)
+    {
         contentRenderService_->clearAll();
+        collectPlaybackSnapshots();
+    }
 
     ProcessRenderRuntime::getInstance().releaseOwner();
 }
@@ -1345,6 +1349,17 @@ void OpenTuneDocumentController::unregisterPlaybackRenderer(OpenTunePlaybackRend
 {
     playbackRenderers_.erase(std::remove(playbackRenderers_.begin(), playbackRenderers_.end(), &renderer),
                              playbackRenderers_.end());
+    collectPlaybackSnapshots();
+}
+
+void OpenTuneDocumentController::collectPlaybackSnapshots()
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    for (auto* renderer : playbackRenderers_)
+        if (renderer != nullptr)
+            renderer->collectPlaybackSnapshots();
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->collectPlaybackSnapshots();
 }
 
 void OpenTuneDocumentController::didUpdateMusicalContextProperties(juce::ARAMusicalContext* musicalContext)
@@ -2016,6 +2031,7 @@ void OpenTuneDocumentController::refreshRegisteredRenderers(const std::vector<Op
     for (auto* renderer : renderers)
         if (renderer != nullptr)
             renderer->refreshRenderPlanFromDocument();
+    collectPlaybackSnapshots();
 }
 
 bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
@@ -2576,6 +2592,7 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
 void OpenTuneDocumentController::commitF0Completion(F0CompletionRecord record)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    collectPlaybackSnapshots();
     auto* mod = findAudioModificationByContentKey(record.key);
     if (mod == nullptr
         || mod->wrapperGeneration != record.wrapperGeneration

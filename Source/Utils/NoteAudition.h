@@ -1,8 +1,11 @@
 #pragma once
 
+#include <array>
+#include <atomic>
+#include <cstdint>
+
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
-#include <memory>
 
 namespace OpenTune {
 
@@ -12,8 +15,8 @@ namespace OpenTune {
  * mixed into the plugin output just like the piano key audition.
  *
  * play/stop are called on the message thread, mixIntoBuffer on the audio thread.
- * The audio thread never allocates or frees memory: it parks the old clip
- * in retired_, and the message thread frees it on its next call.
+ * PCM moves through three fixed slots; only the message thread constructs or
+ * destroys it, while the audio thread transfers slot ownership atomically.
  */
 class NoteAudition {
 public:
@@ -29,23 +32,41 @@ public:
     static constexpr double kMaxDurationSeconds = 4.0;
 
 private:
+    enum class SlotState : uint8_t { Free, Building, Pending, Playing, Returned };
+
     struct Clip {
         juce::AudioBuffer<float> mono;
         double sampleRate = 44100.0;
     };
 
-    void takePendingClip();
+    struct Slot {
+        Clip clip;
+        std::atomic<uint8_t> state{static_cast<uint8_t>(SlotState::Free)};
+        uint64_t generation = 0;
+    };
 
-    juce::SpinLock lock_;
-    std::unique_ptr<Clip> pending_;   // guarded by lock_
-    std::unique_ptr<Clip> retired_;   // guarded by lock_
-    bool stopRequested_ = false;      // guarded by lock_
+    int claimBuildSlot() noexcept;
+    void returnSlot(int slotIndex) noexcept;
+    void reclaimReturnedSlots() noexcept;
+
+    static constexpr int kSlotCount = 3;
+    std::array<Slot, kSlotCount> slots_{};
+    std::atomic<uint64_t> controlGeneration_{0};
+    std::atomic<uint64_t> stopGeneration_{0};
+    uint64_t appliedStopGeneration_ = 0;
 
     // Audio thread only.
-    std::unique_ptr<Clip> playing_;
+    int playingSlot_ = -1;
     double position_ = 0.0;
+
+    friend struct AuditionRealtimeTestAccess;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NoteAudition)
 };
+
+static_assert(std::atomic<uint8_t>::is_always_lock_free,
+              "NoteAudition slot state must be lock-free");
+static_assert(std::atomic<uint64_t>::is_always_lock_free,
+              "NoteAudition generations must be lock-free");
 
 } // namespace OpenTune

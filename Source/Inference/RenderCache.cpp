@@ -83,41 +83,21 @@ std::shared_ptr<const std::vector<float>> makeTrackedPcm(
         reservedBytes = requestedBytes;
     }
 
+    std::vector<float>* raw = nullptr;
     try {
-        auto* raw = new std::vector<float>(std::move(audio));
-        const size_t actualBytes = raw->capacity() * sizeof(float);
-
-        if (actualBytes > requestedBytes) {
-            const size_t extraBytes = actualBytes - requestedBytes;
-            if (!reserveRenderCacheBytes(extraBytes)) {
-                delete raw;
-                releaseRenderCacheBytes(reservedBytes);
-                return {};
-            }
-            reservedBytes += extraBytes;
-        } else if (actualBytes < requestedBytes) {
-            releaseRenderCacheBytes(requestedBytes - actualBytes);
-            reservedBytes = actualBytes;
-        }
-
-        recordRenderCachePeak(RenderCache::renderCacheCurrentBytes().load(std::memory_order_relaxed));
-
-        try {
-            return std::shared_ptr<const std::vector<float>>(
-                raw, [actualBytes](const std::vector<float>* value) {
-                    delete value;
-                    releaseRenderCacheBytes(actualBytes);
-                });
-        } catch (...) {
-            delete raw;
-            releaseRenderCacheBytes(actualBytes);
-            reservedBytes = 0;
-            throw;
-        }
+        raw = new std::vector<float>(std::move(audio));
     } catch (...) {
         releaseRenderCacheBytes(reservedBytes);
         throw;
     }
+
+    recordRenderCachePeak(RenderCache::renderCacheCurrentBytes().load(std::memory_order_relaxed));
+    // shared_ptr invokes its deleter if allocating the control block fails.
+    return std::shared_ptr<const std::vector<float>>(
+        raw, [reservedBytes](const std::vector<float>* value) {
+            delete value;
+            releaseRenderCacheBytes(reservedBytes);
+        });
 }
 
 } // namespace
@@ -149,7 +129,7 @@ std::atomic<size_t>& RenderCache::renderCachePeakBytes() {
 
 RenderCache::RenderCache() {
     std::shared_ptr<const PublishedRenderSnapshot> emptySnapshot = std::make_shared<PublishedRenderSnapshot>();
-    std::atomic_store(&publishedSnapshot_, emptySnapshot);
+    publishedSnapshot_.publish(std::move(emptySnapshot));
 }
 
 RenderCache::~RenderCache() {
@@ -167,10 +147,7 @@ bool RenderCache::markFailureNotificationForContentRevision(uint64_t contentRevi
     return true;
 }
 
-void RenderCache::publishLocked(
-    std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases) {
-    pruneRetiredSnapshotsLocked(releases);
-
+void RenderCache::publishLocked() {
     auto snapshot = std::make_shared<PublishedRenderSnapshot>();
     snapshot->chunks.reserve(chunks_.size());
     for (const auto& [key, chunk] : chunks_) {
@@ -185,27 +162,8 @@ void RenderCache::publishLocked(
         pc.audioRevision = chunk.audioRevision;
         snapshot->chunks.push_back(pc);
     }
-    auto oldSnapshot = std::atomic_load(&publishedSnapshot_);
-    std::atomic_store(&publishedSnapshot_, std::shared_ptr<const PublishedRenderSnapshot>(std::move(snapshot)));
-    if (oldSnapshot != nullptr) {
-        retiredSnapshots_.push_back(std::move(oldSnapshot));
-    }
-    pruneRetiredSnapshotsLocked(releases);
-}
-
-void RenderCache::pruneRetiredSnapshotsLocked(
-    std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases) const {
-    auto end = std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
-        [&releases](std::shared_ptr<const PublishedRenderSnapshot>& snapshot) {
-            if (snapshot == nullptr)
-                return true;
-            if (snapshot.use_count() == 1) {
-                releases.push_back(std::move(snapshot));
-                return true;
-            }
-            return false;
-        });
-    retiredSnapshots_.erase(end, retiredSnapshots_.end());
+    publishedSnapshot_.publish(std::move(snapshot));
+    publishedSnapshot_.collect();
 }
 
 // ============================================================================
@@ -236,10 +194,14 @@ void RenderCache::setCanonicalSource(
     int64_t firstCanonicalSample,
     NativePcmSource nativeSource)
 {
-    std::lock_guard<std::mutex> lg(preparedBuildMutex_);
-    canonicalBuffer_ = std::move(canonicalBuffer);
-    firstCanonicalSample_ = firstCanonicalSample;
-    nativeSource_ = std::move(nativeSource);
+    std::lock_guard<std::mutex> transactionGuard(snapshotTransactionMutex_);
+    {
+        std::lock_guard<std::mutex> lg(preparedBuildMutex_);
+        canonicalBuffer_ = std::move(canonicalBuffer);
+        firstCanonicalSample_ = firstCanonicalSample;
+        nativeSource_ = std::move(nativeSource);
+    }
+    rebuildPrepared();
 }
 
 // Fetches canonical-rate PCM for a global canonical range that lies outside the
@@ -339,32 +301,34 @@ std::vector<float> RenderCache::resampleCanonicalRange(
 
 bool RenderCache::rebuildPrepared(double requestedSampleRate)
 {
-    std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> releases;
     std::lock_guard<std::mutex> lg(preparedBuildMutex_);
 
     const double targetSr = requestedSampleRate > 0.0
         ? requestedSampleRate : preparedSampleRate_;
-    auto canonicalSnap = std::atomic_load(&publishedSnapshot_);
-    auto oldPrep = std::atomic_load(&preparedSnapshot_);
 
-    // 增量复用仅当目标率与旧 prepared 快照精确相等时成立；换率必须全量重建。
-    const bool rateUnchanged = oldPrep != nullptr && oldPrep->sampleRate == targetSr;
+    std::shared_ptr<const PublishedRenderSnapshot> canonicalSnapshot;
+    {
+        const juce::SpinLock::ScopedLockType guard(lock_);
+        canonicalSnapshot = publishedSnapshot_.latestOwner();
+    }
+    const auto oldPrepared = preparedSnapshot_.latestOwner();
+
+    const bool rateUnchanged = oldPrepared != nullptr && oldPrepared->sampleRate == targetSr;
     std::map<int64_t, const PublishedPreparedChunk*> previous;
     if (rateUnchanged) {
-        for (const auto& pc : oldPrep->chunks)
-            previous.emplace(pc.startSample, &pc);
+        for (const auto& chunk : oldPrepared->chunks)
+            previous.emplace(chunk.startSample, &chunk);
     }
 
-    // Build prepared snapshot: empty canonical → publish empty prepared with target rate
-    auto prepSnap = std::make_shared<PublishedPreparedSnapshot>();
-    prepSnap->sampleRate = targetSr;
+    auto preparedSnapshot = std::make_shared<PublishedPreparedSnapshot>();
+    preparedSnapshot->sampleRate = targetSr;
 
-    if (targetSr > 0.0 && canonicalSnap && !canonicalSnap->chunks.empty()) {
+    if (targetSr > 0.0 && canonicalSnapshot && !canonicalSnapshot->chunks.empty()) {
         using PlaybackSampleGeometry::projectToSample;
         const bool aliasCanonical = targetSr == kSampleRate;
-        prepSnap->chunks.reserve(canonicalSnap->chunks.size());
+        preparedSnapshot->chunks.reserve(canonicalSnapshot->chunks.size());
 
-        for (const auto& chunk : canonicalSnap->chunks) {
+        for (const auto& chunk : canonicalSnapshot->chunks) {
             if (!chunk.audio || chunk.audio->empty()) continue;
 
             // Canonical chunk indices stay content-local; the global canonical
@@ -389,7 +353,7 @@ bool RenderCache::rebuildPrepared(double requestedSampleRate)
                 pc.audio = chunk.audio;
                 pc.audioRevision = chunk.audioRevision;
                 pc.sourceRevision = chunk.contentRevision;
-                prepSnap->chunks.push_back(std::move(pc));
+                preparedSnapshot->chunks.push_back(std::move(pc));
                 continue;
             }
 
@@ -410,7 +374,7 @@ bool RenderCache::rebuildPrepared(double requestedSampleRate)
             dependencies.canonicalBuffer = canonicalBuffer_;
             dependencies.firstCanonicalSample = firstCanonicalSample_;
             dependencies.nativeSource = nativeSource_;
-            for (const auto& edit : canonicalSnap->chunks) {
+            for (const auto& edit : canonicalSnapshot->chunks) {
                 if (!edit.audio || edit.audio->empty())
                     continue;
                 const int64_t editGlobalBegin = firstCanonicalSample_ + edit.startSample;
@@ -434,7 +398,7 @@ bool RenderCache::rebuildPrepared(double requestedSampleRate)
                 pc.audioRevision = chunk.audioRevision;
                 pc.sourceRevision = chunk.contentRevision;
                 pc.dependencies = std::move(dependencies);
-                prepSnap->chunks.push_back(std::move(pc));
+                preparedSnapshot->chunks.push_back(std::move(pc));
                 continue;
             }
 
@@ -445,7 +409,7 @@ bool RenderCache::rebuildPrepared(double requestedSampleRate)
             std::vector<float> resampled;
             try {
                 resampled = resampleCanonicalRange(
-                    *canonicalSnap, support, pc.startSample, outputLength, targetSr);
+                    *canonicalSnapshot, support, pc.startSample, outputLength, targetSr);
             } catch (...) {
                 releaseRenderCacheBytes(reservedBytes);
                 throw;
@@ -458,26 +422,12 @@ bool RenderCache::rebuildPrepared(double requestedSampleRate)
             pc.sourceRevision = chunk.contentRevision;
             pc.dependencies = std::move(dependencies);
 
-            prepSnap->chunks.push_back(std::move(pc));
+            preparedSnapshot->chunks.push_back(std::move(pc));
         }
     }
 
-    auto oldSnap = std::atomic_exchange(&preparedSnapshot_,
-        std::shared_ptr<const PublishedPreparedSnapshot>(std::move(prepSnap)));
-    if (oldSnap) retiredPreparedSnapshots_.push_back(std::move(oldSnap));
-
-    // Prune retired prepared snapshots
-    retiredPreparedSnapshots_.erase(
-        std::remove_if(retiredPreparedSnapshots_.begin(), retiredPreparedSnapshots_.end(),
-            [&releases](std::shared_ptr<const PublishedPreparedSnapshot>& p) {
-                if (p.use_count() <= 1) {
-                    releases.push_back(std::move(p));
-                    return true;
-                }
-                return false;
-            }),
-        retiredPreparedSnapshots_.end());
-
+    preparedSnapshot_.publish(std::move(preparedSnapshot));
+    preparedSnapshot_.collect();
     if (requestedSampleRate > 0.0)
         preparedSampleRate_ = targetSr;
     return true;
@@ -488,14 +438,15 @@ bool RenderCache::rebuildPrepared(double requestedSampleRate)
 // ============================================================================
 
 bool RenderCache::prepareForPlaybackSampleRate(double targetSr) {
-    if (targetSr <= 0.0) return false;
+    if (!(targetSr > 0.0)) return false;
+    std::lock_guard<std::mutex> transactionGuard(snapshotTransactionMutex_);
     return rebuildPrepared(targetSr);
 }
 
 RenderCache::PreparedSnapshotRollback RenderCache::capturePreparedSnapshot() const
 {
     std::lock_guard<std::mutex> lg(preparedBuildMutex_);
-    const auto current = std::atomic_load(&preparedSnapshot_);
+    const auto& current = preparedSnapshot_.latestOwner();
     return {std::shared_ptr<const void>(current),
             current != nullptr ? current->sampleRate : preparedSampleRate_, true};
 }
@@ -505,7 +456,7 @@ bool RenderCache::restorePreparedSnapshot(PreparedSnapshotRollback&& rollback)
     if (!rollback.valid)
         return false;
 
-    std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> releases;
+    std::lock_guard<std::mutex> transactionGuard(snapshotTransactionMutex_);
     std::lock_guard<std::mutex> lg(preparedBuildMutex_);
     std::shared_ptr<const PublishedPreparedSnapshot> restored;
     if (rollback.snapshot != nullptr) {
@@ -513,31 +464,9 @@ bool RenderCache::restorePreparedSnapshot(PreparedSnapshotRollback&& rollback)
             rollback.snapshot,
             static_cast<const PublishedPreparedSnapshot*>(rollback.snapshot.get()));
     }
-    auto old = std::atomic_exchange(&preparedSnapshot_, restored);
-    if (old)
-        retiredPreparedSnapshots_.push_back(std::move(old));
+    preparedSnapshot_.publish(restored);
     preparedSampleRate_ = rollback.sampleRate;
-
-    if (restored != nullptr) {
-        const auto retiredIt = std::find_if(
-            retiredPreparedSnapshots_.begin(), retiredPreparedSnapshots_.end(),
-            [&restored](const auto& snapshot) {
-                return snapshot.get() == restored.get();
-            });
-        if (retiredIt != retiredPreparedSnapshots_.end())
-            retiredPreparedSnapshots_.erase(retiredIt);
-    }
-
-    retiredPreparedSnapshots_.erase(
-        std::remove_if(retiredPreparedSnapshots_.begin(), retiredPreparedSnapshots_.end(),
-            [&releases](std::shared_ptr<const PublishedPreparedSnapshot>& snapshot) {
-                if (snapshot.use_count() <= 1) {
-                    releases.push_back(std::move(snapshot));
-                    return true;
-                }
-                return false;
-            }),
-        retiredPreparedSnapshots_.end());
+    preparedSnapshot_.collect();
     rollback.snapshot.reset();
     rollback.valid = false;
     return true;
@@ -564,11 +493,9 @@ void RenderCache::overlayPreparedAudio(juce::AudioBuffer<float>& destination,
     const int writableSamples = std::min(numSamples, destinationSamples - destStartSample);
     if (writableSamples <= 0) return;
 
-    auto snap = std::atomic_load(&preparedSnapshot_);
-    if (!snap || snap->chunks.empty()) return;
-
-    // Prepared rate must match target rate exactly.
-    if (snap->sampleRate != targetSampleRate) return;
+    auto snap = preparedSnapshot_.read();
+    if (!snap) return;
+    if (snap->sampleRate != targetSampleRate || snap->chunks.empty()) return;
 
     const int64_t requestStart = readStartSample;
     const int64_t requestEnd = requestStart + writableSamples;
@@ -625,7 +552,7 @@ void RenderCache::overlayCanonicalAudio(juce::AudioBuffer<float>& destination,
     const int writableSamples = std::min(numSamples, destinationSamples - destStartSample);
     if (writableSamples <= 0) return;
 
-    auto canonicalSnap = std::atomic_load(&publishedSnapshot_);
+    auto canonicalSnap = publishedSnapshot_.read();
     if (!canonicalSnap || canonicalSnap->chunks.empty()) return;
 
     const int64_t requestStart = readStartSample;
@@ -665,32 +592,31 @@ void RenderCache::overlayCanonicalAudio(juce::AudioBuffer<float>& destination,
 }
 
 void RenderCache::clear() {
+    std::lock_guard<std::mutex> transactionGuard(snapshotTransactionMutex_);
     std::map<int64_t, Chunk> chunksToRelease;
-    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
         chunksToRelease = std::move(chunks_);
         pendingChunks_.clear();
-        publishLocked(snapshotReleases);
+        publishLocked();
     }
 
-    std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> preparedReleases;
     {
         std::lock_guard<std::mutex> lg(preparedBuildMutex_);
+        preparedSnapshot_.clear();
+        preparedSnapshot_.collect();
+    }
+}
 
-        auto oldSnap = std::atomic_exchange(&preparedSnapshot_,
-            std::shared_ptr<const PublishedPreparedSnapshot>());
-        if (oldSnap) retiredPreparedSnapshots_.push_back(std::move(oldSnap));
-        retiredPreparedSnapshots_.erase(
-            std::remove_if(retiredPreparedSnapshots_.begin(), retiredPreparedSnapshots_.end(),
-                [&preparedReleases](std::shared_ptr<const PublishedPreparedSnapshot>& p) {
-                    if (p.use_count() <= 1) {
-                        preparedReleases.push_back(std::move(p));
-                        return true;
-                    }
-                    return false;
-                }),
-            retiredPreparedSnapshots_.end());
+void RenderCache::collectPlaybackSnapshots()
+{
+    {
+        const juce::SpinLock::ScopedLockType guard(lock_);
+        publishedSnapshot_.collect();
+    }
+    {
+        std::lock_guard<std::mutex> lg(preparedBuildMutex_);
+        preparedSnapshot_.collect();
     }
 }
 
@@ -942,6 +868,7 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
                                                                            int64_t endSampleExclusive,
                                                                            std::vector<float>&& audio,
                                                                            uint64_t revision) {
+    collectPlaybackSnapshots();
     if (audio.empty() || revision == 0 || endSampleExclusive <= startSample) {
         jassert(audio.empty() == false && revision != 0 && endSampleExclusive > startSample);
         AppLogger::log("RenderCache::completeChunkRenderWithAudio INVALID_INPUT"
@@ -977,6 +904,7 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
     if (!immutableAudio)
         return ChunkRenderResult::MemoryLimitExceeded;
 
+    std::lock_guard<std::mutex> transactionGuard(snapshotTransactionMutex_);
     bool staleAfterAllocation = false;
     Chunk::Status previousStatus = Chunk::Status::Running;
     uint64_t previousRunningRevision = revision;
@@ -1016,31 +944,39 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
     // Partial chunk completion must not update the audio-thread-visible snapshot.
     bool shouldPublish = false;
     std::shared_ptr<const PublishedRenderSnapshot> previousSnapshot;
-    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
+    std::shared_ptr<const PublishedRenderSnapshot> transactionSnapshot;
+    uint64_t transactionRenderGeneration = 0;
     {
         const juce::SpinLock::ScopedLockType guard2(lock_);
         shouldPublish = isCanonicalSettledLocked_();
         if (shouldPublish) {
-            previousSnapshot = std::atomic_load(&publishedSnapshot_);
-            publishLocked(snapshotReleases);
+            previousSnapshot = publishedSnapshot_.latestOwner();
+            publishLocked();
+            transactionSnapshot = publishedSnapshot_.latestOwner();
+            transactionRenderGeneration = renderGeneration_;
         }
     }
     if (shouldPublish && !rebuildPrepared()) {
         std::shared_ptr<const std::vector<float>> failedAudio;
         {
             const juce::SpinLock::ScopedLockType guard3(lock_);
-            auto it = chunks_.find(startSample);
-            if (it != chunks_.end()
-                && it->second.status == Chunk::Status::Idle
-                && it->second.publishedRevision == revision) {
-                failedAudio = std::move(it->second.audio);
-                it->second.audio = std::move(oldAudio);
-                it->second.status = previousStatus;
-                it->second.runningRevision = previousRunningRevision;
-                it->second.publishedRevision = previousPublishedRevision;
-                std::atomic_store(&publishedSnapshot_, previousSnapshot);
+            if (renderGeneration_ == transactionRenderGeneration
+                && publishedSnapshot_.latestOwner() == transactionSnapshot) {
+                auto it = chunks_.find(startSample);
+                if (it != chunks_.end()
+                    && it->second.status == Chunk::Status::Idle
+                    && it->second.publishedRevision == revision) {
+                    failedAudio = std::move(it->second.audio);
+                    it->second.audio = std::move(oldAudio);
+                    it->second.status = previousStatus;
+                    it->second.runningRevision = previousRunningRevision;
+                    it->second.publishedRevision = previousPublishedRevision;
+                    publishedSnapshot_.publish(previousSnapshot);
+                    publishedSnapshot_.collect();
+                }
             }
         }
+        collectPlaybackSnapshots();
         return ChunkRenderResult::MemoryLimitExceeded;
     }
 
@@ -1048,10 +984,12 @@ RenderCache::ChunkRenderResult RenderCache::completeChunkRenderWithAudio(int64_t
         + juce::String(shouldPublish ? "PUBLISHED" : "SETTLED")
         + " start=" + juce::String(startSeconds, 3)
         + " revision=" + juce::String(static_cast<juce::int64>(revision)));
+    collectPlaybackSnapshots();
     return ChunkRenderResult::Published;
 }
 
 bool RenderCache::completeChunkRenderFailure(int64_t startSample, uint64_t revision) {
+    collectPlaybackSnapshots();
     const double startSeconds = projectRenderSeconds(startSample);
     std::shared_ptr<const std::vector<float>> oldAudio;
     {
@@ -1090,6 +1028,7 @@ bool RenderCache::completeChunkRenderFailure(int64_t startSample, uint64_t revis
     }
 
     // Failure must NOT trigger rebuildPrepared: the old snapshot stays visible.
+    collectPlaybackSnapshots();
     return true;
 }
 
@@ -1119,10 +1058,9 @@ bool RenderCache::requeueRunningChunk(int64_t startSample, uint64_t runningRevis
 
 RenderCache::ChunkStats RenderCache::getChunkStats() const {
     ChunkStats stats;
-    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
-        pruneRetiredSnapshotsLocked(snapshotReleases);
+        publishedSnapshot_.collect();
         for (const auto& [key, chunk] : chunks_) {
             juce::ignoreUnused(key);
             switch (chunk.status) {
@@ -1139,10 +1077,9 @@ RenderCache::ChunkStats RenderCache::getChunkStats() const {
 
 RenderCache::StateSnapshot RenderCache::getStateSnapshot() const {
     StateSnapshot snapshot;
-    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
     {
         const juce::SpinLock::ScopedLockType guard(lock_);
-        pruneRetiredSnapshotsLocked(snapshotReleases);
+        publishedSnapshot_.collect();
         snapshot.renderGeneration = renderGeneration_;
         snapshot.canonicalSettled = isCanonicalSettledLocked_();
         for (const auto& [key, chunk] : chunks_) {
@@ -1201,6 +1138,8 @@ bool RenderCache::isCanonicalSettled() const
 }
 
 RenderCache::ChunkRenderResult RenderCache::markChunkAsBlank(int64_t startSample, uint64_t revision) {
+    std::lock_guard<std::mutex> transactionGuard(snapshotTransactionMutex_);
+    collectPlaybackSnapshots();
     const double startSeconds = projectRenderSeconds(startSample);
     int64_t endSample = 0;
     std::shared_ptr<const std::vector<float>> oldAudio;
@@ -1236,31 +1175,44 @@ RenderCache::ChunkRenderResult RenderCache::markChunkAsBlank(int64_t startSample
     // Partial chunk completion must not update the audio-thread-visible snapshot.
     bool shouldPublish = false;
     std::shared_ptr<const PublishedRenderSnapshot> previousSnapshot;
-    std::vector<std::shared_ptr<const PublishedRenderSnapshot>> snapshotReleases;
+    std::shared_ptr<const PublishedRenderSnapshot> transactionSnapshot;
+    uint64_t transactionRenderGeneration = 0;
     {
         const juce::SpinLock::ScopedLockType guard2(lock_);
         shouldPublish = isCanonicalSettledLocked_();
         if (shouldPublish) {
-            previousSnapshot = std::atomic_load(&publishedSnapshot_);
-            publishLocked(snapshotReleases);
+            previousSnapshot = publishedSnapshot_.latestOwner();
+            publishLocked();
+            transactionSnapshot = publishedSnapshot_.latestOwner();
+            transactionRenderGeneration = renderGeneration_;
         }
     }
     if (shouldPublish && !rebuildPrepared()) {
-        const juce::SpinLock::ScopedLockType guard3(lock_);
-        auto it = chunks_.find(startSample);
-        if (it != chunks_.end() && it->second.status == Chunk::Status::Blank) {
-            it->second.status = Chunk::Status::Running;
-            it->second.runningRevision = revision;
-            it->second.publishedRevision = 0;
-            it->second.audio = std::move(oldAudio);
-            std::atomic_store(&publishedSnapshot_, previousSnapshot);
+        {
+            const juce::SpinLock::ScopedLockType guard3(lock_);
+            if (renderGeneration_ == transactionRenderGeneration
+                && publishedSnapshot_.latestOwner() == transactionSnapshot) {
+                auto it = chunks_.find(startSample);
+                if (it != chunks_.end()
+                    && it->second.endSampleExclusive == endSample
+                    && it->second.status == Chunk::Status::Blank) {
+                    it->second.status = Chunk::Status::Running;
+                    it->second.runningRevision = revision;
+                    it->second.publishedRevision = 0;
+                    it->second.audio = std::move(oldAudio);
+                    publishedSnapshot_.publish(previousSnapshot);
+                    publishedSnapshot_.collect();
+                }
+            }
         }
+        collectPlaybackSnapshots();
         return ChunkRenderResult::MemoryLimitExceeded;
     }
 
     AppLogger::log("RenderCache::markChunkAsBlank start=" + juce::String(startSeconds, 3)
         + " endSampleExclusive=" + juce::String(endSample)
         + " revision=" + juce::String(static_cast<juce::int64>(revision)));
+    collectPlaybackSnapshots();
     return ChunkRenderResult::Published;
 }
 

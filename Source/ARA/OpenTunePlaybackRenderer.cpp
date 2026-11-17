@@ -7,10 +7,19 @@
 #include "../Utils/PlaybackSampleGeometry.h"
 
 #include <algorithm>
+#include <exception>
+#include <thread>
 
 namespace OpenTune {
 
 namespace {
+
+void requireMessageThread()
+{
+    auto* messageManager = juce::MessageManager::getInstance();
+    if (messageManager == nullptr || !messageManager->isThisTheMessageThread())
+        std::terminate();
+}
 
 bool sameContinuityProvenance(const PlaybackReadSource& lhs,
                               const PlaybackReadSource& rhs) noexcept
@@ -84,10 +93,10 @@ OpenTunePlaybackRenderer::OpenTunePlaybackRenderer(ARA::PlugIn::DocumentControll
                                                    OpenTuneDocumentController* docController)
     : juce::ARAPlaybackRenderer(araDc)
     , documentController_(docController)
+    , contentRenderService_(docController != nullptr
+                                ? docController->getContentRenderServiceShared()
+                                : nullptr)
 {
-    std::atomic_store_explicit(&contentRenderServiceSnapshot_,
-                                docController ? docController->getContentRenderServiceShared() : nullptr,
-                                std::memory_order_release);
     if (docController != nullptr)
         notePitchAudition_.store(&docController->getNotePitchAudition(),
                                  std::memory_order_release);
@@ -95,35 +104,72 @@ OpenTunePlaybackRenderer::OpenTunePlaybackRenderer(ARA::PlugIn::DocumentControll
 
 OpenTunePlaybackRenderer::~OpenTunePlaybackRenderer()
 {
-    // After owner-driven detach, destructor becomes no-op.
-    // Only unregister when documentController_ is still live (relationship not revoked).
+    requireMessageThread();
+    clearPlaybackSnapshotsAndWait();
     if (documentController_ != nullptr)
-        documentController_->unregisterPlaybackRenderer(*this);
-}
-
-void OpenTunePlaybackRenderer::detachDocumentController(OpenTuneDocumentController& owner)
-{
-    // Atomically clear documentController_ only for the matching owner.
-    // Per architecture: teardown is owner-driven. Renderer cannot call into destroyed DC.
-    if (documentController_ == &owner)
     {
-        // 1. Clear audition pointer FIRST so audio thread stops querying it
-        notePitchAudition_.store(nullptr, std::memory_order_release);
-        // 2. Publish empty render plan to stop audio thread from entering render loop
-        currentPlan_.store(std::make_shared<RenderPlan>(), std::memory_order_release);
-        // 3. Clear CRS snapshot atomically so audio thread sees nullptr
-        std::atomic_store_explicit(&contentRenderServiceSnapshot_,
-                                   std::shared_ptr<ContentRenderService>(),
-                                   std::memory_order_release);
-        // 4. Finally clear documentController_ pointer
+        documentController_->unregisterPlaybackRenderer(*this);
         documentController_ = nullptr;
     }
 }
 
+void OpenTunePlaybackRenderer::detachDocumentController(OpenTuneDocumentController& owner)
+{
+    if (documentController_ == &owner)
+    {
+        requireMessageThread();
+        clearPlaybackSnapshotsAndWait();
+        documentController_ = nullptr;
+    }
+}
+
+OpenTunePlaybackRenderer::LifecycleReadGuard::LifecycleReadGuard(
+    OpenTunePlaybackRenderer& renderer) noexcept
+    : renderer_(renderer.enterLifecycle() ? &renderer : nullptr)
+{
+}
+
+OpenTunePlaybackRenderer::LifecycleReadGuard::~LifecycleReadGuard()
+{
+    if (renderer_ != nullptr)
+        renderer_->leaveLifecycle();
+}
+
+bool OpenTunePlaybackRenderer::enterLifecycle() noexcept
+{
+    const uint32_t previous = lifecycleGate_.fetch_add(1, std::memory_order_acquire);
+    if ((previous & lifecycleClosingBit_) != 0)
+    {
+        lifecycleGate_.fetch_sub(1, std::memory_order_release);
+        return false;
+    }
+    return true;
+}
+
+void OpenTunePlaybackRenderer::leaveLifecycle() noexcept
+{
+    lifecycleGate_.fetch_sub(1, std::memory_order_release);
+}
+
+void OpenTunePlaybackRenderer::closeLifecycleAndWait()
+{
+    lifecycleGate_.fetch_or(lifecycleClosingBit_, std::memory_order_acq_rel);
+    while ((lifecycleGate_.load(std::memory_order_acquire) & lifecycleReaderMask_) != 0)
+        std::this_thread::yield();
+}
+
+void OpenTunePlaybackRenderer::finishPendingRenderPlanPublication()
+{
+    while (currentPlan_.hasPending())
+        if (!currentPlan_.collect())
+            std::this_thread::yield();
+}
+
 void OpenTunePlaybackRenderer::didAddPlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
 {
+    requireMessageThread();
     auto* jucePlaybackRegion = toJucePlaybackRegion(playbackRegion);
-    auto plan = currentPlan_.load(std::memory_order_acquire);
+    const auto& plan = currentPlan_.latestOwner();
     auto playbackRegions = plan != nullptr ? plan->playbackRegions
                                            : std::vector<juce::ARAPlaybackRegion*>{};
     if (jucePlaybackRegion != nullptr
@@ -133,27 +179,60 @@ void OpenTunePlaybackRenderer::didAddPlaybackRegion(ARA::PlugIn::PlaybackRegion*
         playbackRegions.push_back(jucePlaybackRegion);
     }
 
-    publishRenderPlanFor(std::move(playbackRegions));
+    publishRenderPlanFor(std::move(playbackRegions),
+                         hostSampleRate_.load(std::memory_order_acquire));
 }
 
 void OpenTunePlaybackRenderer::willRemovePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
 {
+    requireMessageThread();
     auto* jucePlaybackRegion = toJucePlaybackRegion(playbackRegion);
-    auto plan = currentPlan_.load(std::memory_order_acquire);
+    const auto& plan = currentPlan_.latestOwner();
     auto playbackRegions = plan != nullptr ? plan->playbackRegions
                                            : std::vector<juce::ARAPlaybackRegion*>{};
     playbackRegions.erase(std::remove(playbackRegions.begin(),
                                       playbackRegions.end(),
                                       jucePlaybackRegion),
                           playbackRegions.end());
-    publishRenderPlanFor(std::move(playbackRegions));
+    publishRenderPlanFor(std::move(playbackRegions),
+                         hostSampleRate_.load(std::memory_order_acquire));
 }
 
 void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
 {
-    auto plan = currentPlan_.load(std::memory_order_acquire);
+    requireMessageThread();
+    const auto& plan = currentPlan_.latestOwner();
     publishRenderPlanFor(plan != nullptr ? plan->playbackRegions
-                                         : std::vector<juce::ARAPlaybackRegion*>{});
+                                         : std::vector<juce::ARAPlaybackRegion*>{},
+                         hostSampleRate_.load(std::memory_order_acquire));
+}
+
+void OpenTunePlaybackRenderer::collectPlaybackSnapshots()
+{
+    requireMessageThread();
+    currentPlan_.collect();
+    finishPendingRenderPlanPublication();
+
+    const double requestedSampleRate =
+        pendingRenderPlanSampleRate_.exchange(0.0, std::memory_order_acq_rel);
+    if (requestedSampleRate <= 0.0 || documentController_ == nullptr)
+        return;
+
+    // Preparing the shared source views and freezing this renderer's plan are
+    // one message-thread transaction. Another renderer cannot replace the
+    // prepared rate between these two operations.
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->preparePlaybackSampleRate(requestedSampleRate);
+
+    const auto& plan = currentPlan_.latestOwner();
+    publishRenderPlanFor(plan != nullptr ? plan->playbackRegions
+                                         : std::vector<juce::ARAPlaybackRegion*>{},
+                         requestedSampleRate);
+}
+
+void OpenTunePlaybackRenderer::handleAsyncUpdate()
+{
+    collectPlaybackSnapshots();
 }
 
 std::shared_ptr<OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRenderer::buildRenderPlan(
@@ -168,8 +247,7 @@ std::shared_ptr<OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRenderer::
     if (documentController_ == nullptr)
         return nextPlan;
 
-    auto crs = std::atomic_load_explicit(&contentRenderServiceSnapshot_,
-                                         std::memory_order_acquire);
+    auto* crs = contentRenderService_.get();
     const auto projections = documentController_->getPlaybackRegionProjectionsFor(nextPlan->playbackRegions);
     nextPlan->items.reserve(projections.size());
 
@@ -263,82 +341,22 @@ void OpenTunePlaybackRenderer::assignContinuityAndPlacements(
     }
 }
 
-void OpenTunePlaybackRenderer::publishRenderPlanFor(std::vector<juce::ARAPlaybackRegion*> playbackRegions)
+void OpenTunePlaybackRenderer::publishRenderPlanFor(
+    std::vector<juce::ARAPlaybackRegion*> playbackRegions,
+    double targetSampleRate)
 {
-    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-
-    for (;;)
-    {
-        // Capture the publication point before reading the document. A rate
-        // reprojection that wins while the build runs invalidates this build.
-        auto expected = currentPlan_.load(std::memory_order_acquire);
-        const double targetSampleRate = hostSampleRate_.load(std::memory_order_acquire);
-        auto next = buildRenderPlan(playbackRegions, targetSampleRate);
-
-        // The host rate changed during the build; rebuild from the new rate.
-        if (hostSampleRate_.load(std::memory_order_acquire) != targetSampleRate)
-            continue;
-
-        // CRS preparation for a rate change may still be in flight. Keep the
-        // region topology but never expose a plan whose source views belong to
-        // another grid; the pending reprojection publishes the matching plan.
-        next->sourceViewsPrepared = targetSampleRate <= 0.0
-            || sourcesPreparedAtRate(next->items, targetSampleRate);
-
-        if (currentPlan_.compareExchange(next, expected))
-            return;
-
-        // A reprojection won with a newer rate/source view; rebuild against it.
-        playbackRegions = next->playbackRegions;
-    }
-}
-
-void OpenTunePlaybackRenderer::reprojectRenderPlanForSampleRate(
-    double sampleRate,
-    const std::shared_ptr<ContentRenderService>& crs)
-{
-    if (sampleRate <= 0.0)
+    requireMessageThread();
+    if (documentController_ == nullptr)
         return;
 
-    for (;;)
-    {
-        auto previous = currentPlan_.load(std::memory_order_acquire);
-        auto next = std::make_shared<RenderPlan>();
-        next->targetSampleRate = sampleRate;
-        if (previous != nullptr)
-            next->playbackRegions = previous->playbackRegions;
+    auto next = buildRenderPlan(std::move(playbackRegions), targetSampleRate);
 
-        if (previous != nullptr && crs != nullptr)
-        {
-            next->items.reserve(previous->items.size());
-            for (const auto& frozen : previous->items)
-            {
-                PlaybackReadSource preparedSource;
-                if (!crs->getPlaybackReadSource(frozen.contentKey, preparedSource))
-                    continue;
+    // Keep topology available while CRS source views catch up to the rate.
+    next->sourceViewsPrepared = targetSampleRate <= 0.0
+        || sourcesPreparedAtRate(next->items, targetSampleRate);
 
-                PlaybackRegionRenderItem item = frozen;
-                const auto anchors = makeRegionAnchors(preparedSource, item.startInModificationTime);
-                item.placementAnchorSeconds = anchors.placementAnchorSeconds;
-                item.semanticAnchorSeconds = anchors.semanticAnchorSeconds;
-                item.source = std::move(preparedSource);
-                next->items.push_back(std::move(item));
-            }
-
-            // Continuity groups are resolved independently of physical
-            // adjacency, so overlapping regions cannot break shared D.
-            assignContinuityAndPlacements(next->items, sampleRate);
-
-            // A source view still on another grid means preparation did not
-            // complete; never publish a rate-mismatched plan.
-            if (!sourcesPreparedAtRate(next->items, sampleRate))
-                return;
-        }
-
-        auto expected = previous;
-        if (currentPlan_.compareExchange(next, expected))
-            break;
-    }
+    currentPlan_.publish(std::move(next));
+    finishPendingRenderPlanPublication();
 }
 
 void OpenTunePlaybackRenderer::prepareToPlay(double sampleRate,
@@ -347,6 +365,10 @@ void OpenTunePlaybackRenderer::prepareToPlay(double sampleRate,
                                              juce::AudioProcessor::ProcessingPrecision precision,
                                              AlwaysNonRealtime alwaysNonRealtime)
 {
+    LifecycleReadGuard lifecycle(*this);
+    if (!lifecycle)
+        return;
+
     juce::ignoreUnused(precision, alwaysNonRealtime);
 
     hostSampleRate_.store(sampleRate, std::memory_order_release);
@@ -358,19 +380,31 @@ void OpenTunePlaybackRenderer::prepareToPlay(double sampleRate,
                               true,
                               true);
 
-    // 设备率切换 → 准备所有 CRS caches（各 cache 使用自有 resampler）
-    auto crs = std::atomic_load_explicit(&contentRenderServiceSnapshot_, std::memory_order_acquire);
-    if (crs != nullptr)
-    {
-        crs->preparePlaybackSampleRate(sampleRate);
-        // This call may arrive off the message thread. Only frozen plan
-        // semantics and CRS source views are touched here.
-        reprojectRenderPlanForSampleRate(sampleRate, crs);
-    }
+    pendingRenderPlanSampleRate_.store(sampleRate, std::memory_order_release);
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        collectPlaybackSnapshots();
+    else
+        triggerAsyncUpdate();
+}
+
+void OpenTunePlaybackRenderer::clearPlaybackSnapshotsAndWait()
+{
+    requireMessageThread();
+    closeLifecycleAndWait();
+    cancelPendingUpdate();
+
+    currentPlan_.clear();
+    currentPlan_.collect();
+    pendingRenderPlanSampleRate_.store(0.0, std::memory_order_release);
+    notePitchAudition_.store(nullptr, std::memory_order_release);
+    contentRenderService_.reset();
 }
 
 void OpenTunePlaybackRenderer::releaseResources()
 {
+    LifecycleReadGuard lifecycle(*this);
+    if (!lifecycle)
+        return;
     playbackScratch_.setSize(0, 0);
 }
 
@@ -378,6 +412,13 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
                                              juce::AudioProcessor::Realtime realtime,
                                              const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
+    LifecycleReadGuard lifecycle(*this);
+    if (!lifecycle)
+    {
+        buffer.clear();
+        return true;
+    }
+
     const int numSamples = buffer.getNumSamples();
     buffer.clear();
 
@@ -388,8 +429,8 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
     if (numSamples <= 0 || !timeInSamples.hasValue())
         return true;
 
-    const auto plan = currentPlan_.load(std::memory_order_acquire);
-    if (plan == nullptr || plan->items.empty())
+    const auto plan = currentPlan_.read();
+    if (!plan || plan->items.empty())
         return true;
 
     const double planSampleRate = plan->targetSampleRate;
@@ -433,11 +474,11 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
             + static_cast<double>(overlap.begin - item.placement.playbackBeginSample)
                 / planSampleRate;
 
-        const PlaybackReadRequest request(item.source,
+        const PlaybackReadRequest request{item.source,
                                           address.preparedGlobalIndex,
                                           planSampleRate,
                                           samplesToCopy,
-                                          outputStartSeconds);
+                                          outputStartSeconds};
 
         playbackScratch_.clear();
         const int copied = readPlaybackAudio(request, playbackScratch_, 0);

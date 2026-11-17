@@ -1,7 +1,8 @@
 #pragma once
 
+#include <array>
 #include <atomic>
-#include <memory>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 
@@ -47,17 +48,12 @@ NotePitchPreview renderNotePitchPreview(
  * NotePitchAudition - output-side, non-persistent note transposition audition.
  *
  * A background thread renders audition snippets from an immutable
- * PlaybackReadSource snapshot (copied at request time; no
- * ContentRenderService/DocumentController pointers reach the worker, no
- * RenderCache/TimeStretchCache writes, no disk I/O). One pending request slot:
- * latest wins, no queue. The thread starts lazily on the first request; the
- * destructor signals stop and joins.
+ * PlaybackReadSource snapshot. Four fixed PCM slots support two audio voices,
+ * one pending result, and one worker build. Requests are latest-wins.
  *
  * Threading: request()/stop() are called from the message thread (or any
- * producer thread); mixIntoBuffer() is called from the audio thread. Published
- * snippets cross threads via C++17 std::atomic_load/std::atomic_store free
- * functions on std::shared_ptr.
- * Rate changes are handled externally by calling stop().
+ * producer thread); mixIntoBuffer() is called from the audio thread. PCM slot
+ * ownership crosses threads through lock-free atomic state transitions.
  */
 class NotePitchAudition : private juce::Thread
 {
@@ -96,14 +92,19 @@ public:
     const void* activeTargetRegion() const noexcept;
 
 private:
-    /// Published snippet payload (audio thread reads it lock-free via
-    /// shared_ptr; the producer prunes retired copies so the audio thread
-    /// never frees the last reference).
+    enum class SlotState : uint8_t { Free, Building, Pending, AudioOwned, Returned };
+
     struct Snippet {
         std::vector<float> mono;
         double sampleRate = 0.0;
         ContentKey contentKey;
         const void* targetRegion = nullptr;
+    };
+
+    struct Slot {
+        Snippet snippet;
+        std::atomic<uint8_t> state{static_cast<uint8_t>(SlotState::Free)};
+        uint64_t generation = 0;
     };
 
     struct Request {
@@ -113,49 +114,62 @@ private:
         float targetHz = 0.0f;
         double outputSampleRate = 0.0;
         const void* targetRegion = nullptr;
+        uint64_t generation = 0;
     };
 
-    void run() override;
+    struct Voice;
 
-    void pruneRetired();
+    void run() override;
+    int claimBuildSlot() noexcept;
+    void discardPendingSlots() noexcept;
+    void returnSlot(int slotIndex) noexcept;
+    void releaseVoice(Voice& voice) noexcept;
+    void processRejectedResult();
+    void reclaimReturnedSlots() noexcept;
 
     juce::WaitableEvent wakeup_;
     std::mutex requestMutex_;
     Request pending_;
     bool hasPending_ = false;
 
-    /// Set by stop(); the producer drops results when it observes it.
     std::atomic<bool> stopRequested_{false};
+    std::atomic<uint64_t> controlGeneration_{0};
+    std::atomic<uint64_t> stopGeneration_{0};
+    std::atomic<uint64_t> rejectedGeneration_{0};
+    uint64_t workerRejectedGeneration_ = 0;
 
     std::atomic<const void*> nextTargetRegion_{nullptr};
     std::atomic<const void*> activeTargetRegion_{nullptr};
 
     // Audio-thread state -----------------------------------------------------
     struct Voice {
-        std::shared_ptr<const Snippet> snippet;
-        double position = 0.0;
+        int slotIndex = -1;
+        uint64_t generation = 0;
+        int position = 0;
         float gain = 0.0f;
         float targetGain = 0.0f;
     };
 
+    static constexpr int kNumSlots = 4;
     static constexpr int kNumVoices = 2;
     static constexpr double kVoiceFadeSeconds = 0.01;
 
-    /// Producer copies previously published snippets into retired_ so the
-    /// audio thread never frees the last reference.
-    std::vector<std::shared_ptr<const Snippet>> retired_;
-    std::atomic<bool> fadeOutAll_{false};
-    /// C++17 std::atomic_load/std::atomic_store free functions on shared_ptr.
-    /// Audio thread reads via std::atomic_load; the producer publishes via
-    /// std::atomic_store.
-    std::shared_ptr<const Snippet> published_;
-    /// Audio-thread-only copy of the last published snippet this player has
-    /// consumed (started or explicitly rejected). Released only on the audio
-    /// thread.
-    std::shared_ptr<const Snippet> seenSnippet_;
+    std::array<Slot, kNumSlots> slots_{};
     Voice voices_[kNumVoices]{};
+    uint64_t appliedStopGeneration_ = 0;
+
+    friend struct AuditionRealtimeTestAccess;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NotePitchAudition)
 };
+
+static_assert(std::atomic<uint8_t>::is_always_lock_free,
+              "NotePitchAudition slot state must be lock-free");
+static_assert(std::atomic<bool>::is_always_lock_free,
+              "NotePitchAudition cancellation state must be lock-free");
+static_assert(std::atomic<uint64_t>::is_always_lock_free,
+              "NotePitchAudition generations must be lock-free");
+static_assert(std::atomic<const void*>::is_always_lock_free,
+              "NotePitchAudition region pointers must be lock-free");
 
 } // namespace OpenTune

@@ -67,8 +67,10 @@ cd ..
 > not shipped with this repository) still includes the 2.2.0 file
 > `ARA_Library/Utilities/ARAChannelArrangement.cpp`, which ARA 2.3.0 renamed to `ARAChannelFormat.cpp`.
 > Do not edit the file by hand; after cloning JUCE 8.0.12 run the platform-specific command above.
-> The script applies the ARA include rename, the AudioDeviceManager temporary-setup patch,
-> the standalone title-bar maximise button patch, and the Windows `WM_SETCURSOR` cursor patch.
+> The script maintains the ARA include, temporary device setup, standalone title bar, Windows cursor,
+> VST3 module lifecycle, and realtime callback handoff patches. CMake enables
+> `JUCE_OPENTUNE_REALTIME_AUDIO`; the VST3 callback patch is generated as a build-directory overlay.
+> Re-run the command above after updating the patch script, then build.
 
 ### 3. r8brain and SoundTouch
 
@@ -250,6 +252,16 @@ cmake --build --preset windows-ara-ninja-release
 >
 > Alternatively, run `chcp 65001` first. `scripts/build-ninja.ps1` already runs
 > `chcp 65001` in its configure and build child processes.
+
+Windows realtime callback checks use shared audit counters in the test build:
+
+```powershell
+cmake --preset windows-ara-ninja -DOPENTUNE_BUILD_TESTS=ON
+cmake --build --preset windows-ara-ninja-release --parallel 1 --target RealtimeCallbackTests StandaloneRealtimeCallbackTests RealtimeVST3Tests OpenTuneAuditionRealtimeTests OpenTunePlaybackCacheRealtimeTests
+ctest --test-dir build-ara-ninja -R "^(RealtimeCallbackTests|StandaloneRealtimeCallbackTests|RealtimeVST3Tests|AuditionRealtimeTests|PlaybackCacheRealtimeTests)$" -V
+```
+
+The tests first verify that the audit hooks detect allocations, deallocations, lock attempts, waits, and file I/O, then require zero counts for all five categories in real callbacks. The VST3 test compiles the shipping wrapper overlay; the Standalone test runs through AudioDeviceManager, AudioProcessorPlayer, and the real Processor. Reports identify each callback scope and its counters. Rebuild with `OPENTUNE_BUILD_TESTS=OFF` for release distribution.
 
 Before packaging a Release build, validate the Standalone artifact. The
 validation and packaging scripts are maintained locally and are not

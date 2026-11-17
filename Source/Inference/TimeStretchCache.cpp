@@ -10,14 +10,27 @@
 
 namespace OpenTune {
 
-size_t TimeStretchCache::entryTotalBytes(const Entry& e) {
-    if (!e.canonicalAudio || e.canonicalAudio->empty()) return 0;
-    size_t total = e.canonicalAudio->size() * sizeof(float);
-    if (e.preparedAudio && !e.preparedAudio->empty() && e.preparedAudio != e.canonicalAudio) {
-        total += e.preparedAudio->size() * sizeof(float);
-    }
-    return total;
+namespace {
+
+std::shared_ptr<const std::vector<float>> makeTrackedPcm(std::vector<float>&& audio)
+{
+    auto* pcm = new std::vector<float>(std::move(audio));
+    const size_t bytes = pcm->size() * sizeof(float);
+    auto& current = RenderCache::globalCacheCurrentBytes();
+    const size_t currentBytes = current.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+    auto& peak = RenderCache::globalCachePeakBytes();
+    size_t observed = peak.load(std::memory_order_relaxed);
+    while (currentBytes > observed
+           && !peak.compare_exchange_weak(observed, currentBytes, std::memory_order_relaxed)) {}
+
+    return std::shared_ptr<const std::vector<float>>(
+        pcm, [bytes](const std::vector<float>* value) {
+            delete value;
+            RenderCache::globalCacheCurrentBytes().fetch_sub(bytes, std::memory_order_relaxed);
+        });
 }
+
+} // namespace
 
 TimeStretchCache::TimeStretchCache() = default;
 TimeStretchCache::~TimeStretchCache() { clear(); }
@@ -51,12 +64,11 @@ void TimeStretchCache::prepareEntry(Entry& entry, double targetSr)
         || outputLength > static_cast<int64_t>(std::numeric_limits<int>::max()))
         return;
 
-    entry.preparedAudio = std::make_shared<const std::vector<float>>(
-        preparedResampler_.resampleRange(
-            entry.canonicalAudio->data(), entry.canonicalAudio->size(),
-            entry.sampleRate, targetSr,
-            entry.firstCanonicalOutputSample, preparedBegin,
-            static_cast<int>(outputLength)));
+    entry.preparedAudio = makeTrackedPcm(preparedResampler_.resampleRange(
+        entry.canonicalAudio->data(), entry.canonicalAudio->size(),
+        entry.sampleRate, targetSr,
+        entry.firstCanonicalOutputSample, preparedBegin,
+        static_cast<int>(outputLength)));
     entry.preparedSampleRate = targetSr;
     entry.firstPreparedOutputSample = preparedBegin;
 }
@@ -66,8 +78,10 @@ uint32_t TimeStretchCache::beginBuild(ContentKey key)
     if (!key.isValid()) return 0;
 
     std::lock_guard<std::mutex> lg(mutex_);
-    auto [it, _] = invalidationGen_.try_emplace(key, 0);
-    return it->second;
+    readerMap_.collect();
+    const uint32_t generation = ++nextBuildGeneration_;
+    buildGenerationByKey_[key] = generation;
+    return generation;
 }
 
 void TimeStretchCache::store(ContentKey key,
@@ -81,14 +95,15 @@ void TimeStretchCache::store(ContentKey key,
     if (!key.isValid() || sampleRate <= 0.0) return;
 
     std::lock_guard<std::mutex> lg(mutex_);
+    readerMap_.collect();
 
-    auto genIt = invalidationGen_.find(key);
-    if (genIt == invalidationGen_.end() || genIt->second != buildGeneration) {
+    auto genIt = buildGenerationByKey_.find(key);
+    if (genIt == buildGenerationByKey_.end() || genIt->second != buildGeneration) {
         return;
     }
 
     auto entry = std::make_shared<Entry>();
-    entry->canonicalAudio = std::make_shared<const std::vector<float>>(std::move(audio));
+    entry->canonicalAudio = makeTrackedPcm(std::move(audio));
     entry->contentRevision = contentRevision;
     entry->timeGridRevision = timeGridRevision;
     entry->sampleRate = sampleRate;
@@ -96,34 +111,14 @@ void TimeStretchCache::store(ContentKey key,
     entry->published = true;
     prepareEntry(*entry, targetSampleRate_);
 
-    const size_t newBytes = entryTotalBytes(*entry);
-
-    auto it = entries_.find(key);
-    if (it != entries_.end() && it->second != nullptr && it->second->published) {
-        const size_t oldBytes = entryTotalBytes(*it->second);
-        if (oldBytes > 0) {
-            RenderCache::globalCacheCurrentBytes().fetch_sub(oldBytes, std::memory_order_relaxed);
-        }
-    }
-
     entries_[key] = std::move(entry);
+    publishReaderMapLocked();
+}
 
-    const size_t newCurrent = RenderCache::globalCacheCurrentBytes()
-                                .fetch_add(newBytes, std::memory_order_relaxed) + newBytes;
-    size_t peak = RenderCache::globalCachePeakBytes().load(std::memory_order_relaxed);
-    while (newCurrent > peak
-           && !RenderCache::globalCachePeakBytes()
-                  .compare_exchange_weak(peak, newCurrent, std::memory_order_relaxed)) {}
-
-    // Publish once
-    auto snapshot = std::make_shared<const std::map<ContentKey, std::shared_ptr<const Entry>>>(entries_);
-    auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
-    if (old)
-        retiredSnapshots_.push_back(std::move(old));
-    retiredSnapshots_.erase(
-        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredSnapshots_.end());
+void TimeStretchCache::publishReaderMapLocked()
+{
+    readerMap_.publish(std::make_shared<const ReaderMap>(entries_));
+    readerMap_.collect();
 }
 
 // ============================================================================
@@ -135,18 +130,10 @@ void TimeStretchCache::prepareForPlaybackSampleRate(double targetSr)
     if (targetSr <= 0.0) return;
 
     std::lock_guard<std::mutex> lg(mutex_);
-
-    // Compute old total bytes for all published entries before rebuild
-    size_t oldTotal = 0;
-    for (auto& [_, entry] : entries_) {
-        if (entry && entry->published) {
-            oldTotal += entryTotalBytes(*entry);
-        }
-    }
+    readerMap_.collect();
 
     targetSampleRate_ = targetSr;
 
-    // Re-prepare all published entries
     for (auto& [key, entry] : entries_) {
         juce::ignoreUnused(key);
         if (!entry || !entry->published || !entry->canonicalAudio || entry->canonicalAudio->empty()) continue;
@@ -160,38 +147,10 @@ void TimeStretchCache::prepareForPlaybackSampleRate(double targetSr)
         newEntry->firstCanonicalOutputSample = entry->firstCanonicalOutputSample;
         newEntry->published = true;
         prepareEntry(*newEntry, targetSr);
-
         entry = std::move(newEntry);
     }
 
-    // Compute new total bytes and adjust global counter in one shot
-    size_t newTotal = 0;
-    for (auto& [_, entry] : entries_) {
-        if (entry && entry->published) {
-            newTotal += entryTotalBytes(*entry);
-        }
-    }
-
-    if (oldTotal > 0) {
-        RenderCache::globalCacheCurrentBytes().fetch_sub(oldTotal, std::memory_order_relaxed);
-    }
-    const size_t newCurrent = (newTotal > 0)
-        ? RenderCache::globalCacheCurrentBytes().fetch_add(newTotal, std::memory_order_relaxed) + newTotal
-        : RenderCache::globalCacheCurrentBytes().load(std::memory_order_relaxed);
-    size_t peak = RenderCache::globalCachePeakBytes().load(std::memory_order_relaxed);
-    while (newCurrent > peak
-           && !RenderCache::globalCachePeakBytes()
-                  .compare_exchange_weak(peak, newCurrent, std::memory_order_relaxed)) {}
-
-    // Publish once
-    auto snapshot = std::make_shared<const std::map<ContentKey, std::shared_ptr<const Entry>>>(entries_);
-    auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
-    if (old)
-        retiredSnapshots_.push_back(std::move(old));
-    retiredSnapshots_.erase(
-        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredSnapshots_.end());
+    publishReaderMapLocked();
 }
 
 // ============================================================================
@@ -218,7 +177,7 @@ int TimeStretchCache::sliceForOutputRange(ContentKey key,
     const int writableSamples = std::min(numSamples, destinationSamples - destinationStartSample);
     if (writableSamples <= 0) return 0;
 
-    auto snap = std::atomic_load(&readerMap_);
+    auto snap = readerMap_.read();
     if (!snap) return 0;
     auto it = snap->find(key);
     if (it == snap->end() || !it->second || !it->second->published) return 0;
@@ -278,7 +237,7 @@ int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
     if (writableSamples <= 0)
         return 0;
 
-    auto snap = std::atomic_load(&readerMap_);
+    auto snap = readerMap_.read();
     if (!snap)
         return 0;
     const auto it = snap->find(key);
@@ -318,48 +277,28 @@ int TimeStretchCache::sliceCanonicalForOutputRange(ContentKey key,
 void TimeStretchCache::invalidate(ContentKey key)
 {
     std::lock_guard<std::mutex> lg(mutex_);
+    readerMap_.collect();
     auto it = entries_.find(key);
-    if (it != entries_.end() && it->second != nullptr) {
-        const size_t oldBytes = entryTotalBytes(*it->second);
-        if (oldBytes > 0 && it->second->published) {
-            RenderCache::globalCacheCurrentBytes().fetch_sub(oldBytes, std::memory_order_relaxed);
-        }
+    if (it != entries_.end() && it->second != nullptr)
         it->second = std::make_shared<Entry>();
-    }
-    ++invalidationGen_[key];
-
-    auto snapshot = std::make_shared<const std::map<ContentKey, std::shared_ptr<const Entry>>>(entries_);
-    auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
-    if (old)
-        retiredSnapshots_.push_back(std::move(old));
-    retiredSnapshots_.erase(
-        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredSnapshots_.end());
+    buildGenerationByKey_.erase(key);
+    publishReaderMapLocked();
 }
 
 void TimeStretchCache::clear()
 {
     std::lock_guard<std::mutex> lg(mutex_);
-    for (auto& [_, e] : entries_) {
-        if (e && e->published) {
-            const size_t bytes = entryTotalBytes(*e);
-            if (bytes > 0) {
-                RenderCache::globalCacheCurrentBytes().fetch_sub(bytes, std::memory_order_relaxed);
-            }
-        }
-    }
+    readerMap_.collect();
     entries_.clear();
-    invalidationGen_.clear();
+    buildGenerationByKey_.clear();
+    readerMap_.clear();
+    readerMap_.collect();
+}
 
-    auto snapshot = std::make_shared<const std::map<ContentKey, std::shared_ptr<const Entry>>>();
-    auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
-    if (old)
-        retiredSnapshots_.push_back(std::move(old));
-    retiredSnapshots_.erase(
-        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredSnapshots_.end());
+void TimeStretchCache::collectPlaybackSnapshots()
+{
+    std::lock_guard<std::mutex> lg(mutex_);
+    readerMap_.collect();
 }
 
 } // namespace OpenTune

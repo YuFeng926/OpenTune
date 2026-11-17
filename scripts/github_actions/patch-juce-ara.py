@@ -1,517 +1,203 @@
 #!/usr/bin/env python3
-"""Apply the reproducible JUCE source patches required by this repository.
-
-The patches are applied to the pinned JUCE 8.0.12 checkout in JUCE-master:
-
-1. The ARA 2.3.0 include rename required by BUILDING.md
-   (modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp).
-2. The AudioDeviceManager temporary-setup API used by
-   Source/Standalone/StandaloneAudioDeviceSync.cpp
-   (modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.{h,cpp}):
-   - new public AudioDeviceManager::setAudioDeviceSetupTemporarily() which
-     applies a setup to the running device without touching the per-device-type
-     cache (lastDeviceTypeConfigs) or the persisted state (createStateXml()).
-   - the existing setAudioDeviceSetup(setup, treatAsChosenDevice) becomes a thin
-     wrapper over a new private setAudioDeviceSetupInternal(setup,
-     treatAsChosenDevice, updateLastDeviceTypeConfigs).
-   - empty-device setups retain every requested configuration field.
-   - JUCE_UNIT_TESTS cases covering temporary and empty-device setups.
-3. The StandaloneFilterWindow title bar gains the maximise button, so the
-   standalone app shows minimise/maximise/close instead of the upstream
-   minimise/close pair
-   (modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h).
-4. The Windows peer handles WM_SETCURSOR by re-applying the JUCE cursor
-   (modules/juce_gui_basics/native/juce_Windowing_windows.cpp). The
-   DocumentWindow title bar is reported to Windows as HTCAPTION, so
-   DefWindowProc resets the cursor to the system arrow on every non-client
-   move; the theme cursors from CursorThemeManager would never stay visible
-   there without this patch.
-5. The VST3 client module lifecycle hooks used by Source/Utils/Vst3ModulePin.cpp
-   (modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp):
-   - Windows initModule returns the result of openTuneVst3PinSucceeded(), so a
-     failed module pin fails module initialization.
-   - shutdownModule routes to openTuneVst3Shutdown(), and macOS bundleExit only
-     calls it when the last bundle reference exits.
-
-The patches are needle-based: if the pinned upstream content does not contain
-the expected context exactly once, the script fails loudly instead of guessing.
-After patching, the JUCE checkout must be dirty in exactly the six expected
-files and nothing else.
-"""
+"""Apply the complete repository patch to the pinned JUCE checkout."""
 
 import pathlib
+import re
 import subprocess
-import sys
+import tempfile
+from typing import NoReturn
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 JUCE = ROOT / "JUCE-master"
 JUCE_COMMIT = "29396c22c93392d6738e021b83196283d6e4d850"
+PATCH_FILE = ROOT / "scripts" / "github_actions" / "juce-opentune.patch"
+GATE_PATH = "modules/juce_core/threads/juce_OpenTuneCallbackGate.h"
 
-ARA_RELATIVE = pathlib.Path(
-    "modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp")
-ADM_H_RELATIVE = pathlib.Path(
-    "modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.h")
-ADM_CPP_RELATIVE = pathlib.Path(
-    "modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.cpp")
-STANDALONE_RELATIVE = pathlib.Path(
-    "modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h")
-WINDOWING_RELATIVE = pathlib.Path(
-    "modules/juce_gui_basics/native/juce_Windowing_windows.cpp")
-VST3_RELATIVE = pathlib.Path(
-    "modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp")
-
-EXPECTED_FILES = [ARA_RELATIVE, ADM_H_RELATIVE, ADM_CPP_RELATIVE,
-                  STANDALONE_RELATIVE, WINDOWING_RELATIVE, VST3_RELATIVE]
-
-# ---------------------------------------------------------------------------
-# Patch 1: ARA include rename.
-# ---------------------------------------------------------------------------
-ARA_OLD = b"#include <ARA_Library/Utilities/ARAChannelArrangement.cpp>"
-ARA_NEW = b"#include <ARA_Library/Utilities/ARAChannelFormat.cpp>"
-
-# ---------------------------------------------------------------------------
-# Patch 2a: juce_AudioDeviceManager.h.
-# ---------------------------------------------------------------------------
-ADM_H_TEMPORARY_DECL = b'''    String setAudioDeviceSetup (const AudioDeviceSetup& newSetup, bool treatAsChosenDevice);
-
-    /** Changes the current device or its settings without recording the change.
-
-        This behaves like setAudioDeviceSetup() with treatAsChosenDevice set to false,
-        but additionally leaves the per-device-type cached setups untouched, so the
-        device type currently in use keeps the settings that were last chosen by the
-        user. Use this to apply short-lived settings (for example moving a device to
-        the system sample rate just before closing it) that should not become the
-        starting point for a later switch back to this device type, and that must not
-        be picked up by createStateXml().
-
-        @param newSetup             the settings that you'd like to use, interpreted in
-                                    the same way as for setAudioDeviceSetup().
-        @returns an error message if anything went wrong, or an empty string if it worked ok.
-
-        @see setAudioDeviceSetup, getAudioDeviceSetup
-    */
-    String setAudioDeviceSetupTemporarily (const AudioDeviceSetup& newSetup);'''
-
-ADM_H_INTERNAL_DECL = b'''    void stopDevice();
-
-    String setAudioDeviceSetupInternal (const AudioDeviceSetup& newSetup, bool treatAsChosenDevice, bool updateLastDeviceTypeConfigs);
-
-    void updateXml();'''
-
-# ---------------------------------------------------------------------------
-# Patch 2b: juce_AudioDeviceManager.cpp.
-# ---------------------------------------------------------------------------
-# 1) Split the old implementation body out of setAudioDeviceSetup into the new
-#    internal helper, and add the temporary wrapper.
-ADM_CPP_WRAPPER_OLD = b'''String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup,
-                                                bool treatAsChosenDevice)
-{
-    jassert'''
-
-ADM_CPP_WRAPPER_NEW = b'''String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup,
-                                                bool treatAsChosenDevice)
-{
-    return setAudioDeviceSetupInternal (newSetup, treatAsChosenDevice, true);
+PATCHED_PATHS = {
+    "modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.cpp",
+    "modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.h",
+    "modules/juce_audio_devices/native/juce_ASIO_windows.cpp",
+    "modules/juce_audio_devices/native/juce_WASAPI_windows.cpp",
+    "modules/juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h",
+    "modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp",
+    "modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp",
+    "modules/juce_audio_utils/players/juce_AudioProcessorPlayer.cpp",
+    "modules/juce_audio_utils/players/juce_AudioProcessorPlayer.h",
+    "modules/juce_core/threads/juce_OpenTuneCallbackGate.h",
+    "modules/juce_core/threads/juce_SpinLock.h",
+    "modules/juce_core/threads/juce_Thread.cpp",
+    "modules/juce_gui_basics/native/juce_Windowing_windows.cpp",
 }
 
-String AudioDeviceManager::setAudioDeviceSetupTemporarily (const AudioDeviceSetup& newSetup)
-{
-    // Applies the setup to the running device only: neither the per-device-type
-    // cache nor the persisted user settings observe this change.
-    return setAudioDeviceSetupInternal (newSetup, false, false);
-}
 
-String AudioDeviceManager::setAudioDeviceSetupInternal (const AudioDeviceSetup& newSetup,
-                                                        bool treatAsChosenDevice,
-                                                        bool updateLastDeviceTypeConfigs)
-{
-    jassert'''
-
-# 2) Only persist the setup into the per-device-type cache when asked to.
-ADM_CPP_CACHE_OLD = b'''        updateCurrentSetup();
-
-        for (int i = 0; i < availableDeviceTypes.size(); ++i)'''
-
-ADM_CPP_CACHE_NEW = b'''        updateCurrentSetup();
-
-        if (updateLastDeviceTypeConfigs)
-            for (int i = 0; i < availableDeviceTypes.size(); ++i)'''
-
-# 3) Keep the complete requested configuration when closing the device.
-ADM_CPP_EMPTY_SETUP_OLD = b'''        deleteCurrentDevice();
-
-        if (treatAsChosenDevice)
-            updateXml();
-
-        return {};'''
-
-ADM_CPP_EMPTY_SETUP_NEW = b'''        deleteCurrentDevice();
-        currentSetup = newSetup;
-
-        if (treatAsChosenDevice)
-            updateXml();
-
-        return {};'''
-
-# 4) Unit tests for temporary and empty-device setups, inserted after the
-#    "long sequence of configuration changes" test.
-ADM_CPP_TEST_ANCHOR = b'''            closeDeviceByRequestingEmptyNames       (manager);
-        }
-
-        beginTest ("AudioDeviceManager updates its current settings before notifying callbacks when device restarts itself");'''
-
-ADM_CPP_TEST_NEW = b'''            closeDeviceByRequestingEmptyNames       (manager);
-        }
-
-        beginTest ("A temporary setup does not pollute the per-device-type cache or the saved state");
-        {
-            AudioDeviceManager manager;
-            initialiseManager (manager);
-
-            // The user explicitly chooses a rate; this must become the persisted setting.
-            auto userSetup = manager.getAudioDeviceSetup();
-            userSetup.sampleRate = 44100.0;
-            userSetup.bufferSize = 256;
-            userSetup.inputDeviceName = "a";
-            userSetup.outputDeviceName = "x";
-            userSetup.useDefaultInputChannels = true;
-            userSetup.useDefaultOutputChannels = true;
-
-            expect (manager.setAudioDeviceSetup (userSetup, true).isEmpty());
-
-            const auto savedState = manager.createStateXml();
-            expect (savedState != nullptr);
-            if (savedState != nullptr)
-                expectEquals (savedState->getStringAttribute ("audioDeviceRate"),
-                              String (44100.0));
-
-            // A temporary setup moves the running device to another supported rate
-            // (the mocks expose 44100.0 and 48000.0)...
-            auto tempSetup = manager.getAudioDeviceSetup();
-            tempSetup.sampleRate = 48000.0;
-            expect (manager.setAudioDeviceSetupTemporarily (tempSetup).isEmpty());
-
-            // ...which the running device reports...
-            auto current = manager.getAudioDeviceSetup();
-            expectEquals (current.sampleRate, 48000.0);
-
-            // ...but the saved user state was not touched.
-            const auto savedStateAfterTemp = manager.createStateXml();
-            expect (savedStateAfterTemp != nullptr);
-            if (savedStateAfterTemp != nullptr)
-                expectEquals (savedStateAfterTemp->getStringAttribute ("audioDeviceRate"),
-                              String (44100.0));
-
-            // Switching device types and back restores the user's chosen rate.
-            manager.setCurrentAudioDeviceType (mockBName, true);
-            expectEquals (manager.getCurrentAudioDeviceType(), mockBName);
-            expect (manager.getCurrentAudioDevice() != nullptr);
-
-            manager.setCurrentAudioDeviceType (mockAName, true);
-            expectEquals (manager.getCurrentAudioDeviceType(), mockAName);
-
-            current = manager.getAudioDeviceSetup();
-            expectEquals (current.sampleRate, 44100.0);
-            expectEquals (current.bufferSize, 256);
-            expectEquals (current.inputDeviceName, String ("a"));
-            expectEquals (current.outputDeviceName, String ("x"));
-
-            // The saved state still holds the user's rate.
-            const auto savedStateAfterSwitch = manager.createStateXml();
-            expect (savedStateAfterSwitch != nullptr);
-            if (savedStateAfterSwitch != nullptr)
-                expectEquals (savedStateAfterSwitch->getStringAttribute ("audioDeviceRate"),
-                              String (44100.0));
-
-            // The legacy API with treatAsChosenDevice=false still updates the
-            // per-device-type cache, while leaving createStateXml unchanged.
-            auto legacySetup = manager.getAudioDeviceSetup();
-            legacySetup.sampleRate = 48000.0;
-            expect (manager.setAudioDeviceSetup (legacySetup, false).isEmpty());
-
-            const auto savedStateAfterLegacySetup = manager.createStateXml();
-            expect (savedStateAfterLegacySetup != nullptr);
-            if (savedStateAfterLegacySetup != nullptr)
-                expectEquals (savedStateAfterLegacySetup->getStringAttribute ("audioDeviceRate"),
-                              String (44100.0));
-
-            manager.setCurrentAudioDeviceType (mockBName, true);
-            manager.setCurrentAudioDeviceType (mockAName, true);
-            current = manager.getAudioDeviceSetup();
-            expectEquals (current.sampleRate, 48000.0);
-        }
-
-        beginTest ("An empty-device setup retains the complete requested configuration");
-        {
-            AudioDeviceManager manager;
-            initialiseManager (manager);
-            manager.setCurrentAudioDeviceType (mockAName, true);
-            expect (manager.getCurrentAudioDevice() != nullptr);
-            const auto savedState = manager.createStateXml();
-            expect (savedState != nullptr);
-
-            auto closedSetup = manager.getAudioDeviceSetup();
-            closedSetup.inputDeviceName.clear();
-            closedSetup.outputDeviceName.clear();
-            closedSetup.sampleRate = 48000.0;
-            closedSetup.bufferSize = 512;
-            closedSetup.inputChannels.clear();
-            closedSetup.outputChannels.clear();
-            closedSetup.useDefaultInputChannels = false;
-            closedSetup.useDefaultOutputChannels = false;
-
-            expect (manager.setAudioDeviceSetupTemporarily (closedSetup).isEmpty());
-            expect (manager.getCurrentAudioDevice() == nullptr);
-            expect (manager.getAudioDeviceSetup() == closedSetup);
-            const auto savedAfterTemporary = manager.createStateXml();
-            expect (savedAfterTemporary != nullptr);
-            if (savedState != nullptr && savedAfterTemporary != nullptr)
-                expectEquals (savedAfterTemporary->toString(), savedState->toString());
-
-            expect (manager.setAudioDeviceSetup (closedSetup, true).isEmpty());
-            expect (manager.getCurrentAudioDevice() == nullptr);
-            expect (manager.getAudioDeviceSetup() == closedSetup);
-            const auto savedAfterClose = manager.createStateXml();
-            expect (savedAfterClose != nullptr);
-            if (savedAfterClose != nullptr)
-            {
-                expectEquals (savedAfterClose->getStringAttribute ("audioInputDeviceName"), String());
-                expectEquals (savedAfterClose->getStringAttribute ("audioOutputDeviceName"), String());
-            }
-        }
-
-        beginTest ("AudioDeviceManager updates its current settings before notifying callbacks when device restarts itself");'''
-
-# ---------------------------------------------------------------------------
-# Patch 3: StandaloneFilterWindow title bar.
-# ---------------------------------------------------------------------------
-# Upstream only asks for minimise and close. The standalone app can be resized
-# up to the editor's resize limits, so it must expose the maximise button that
-# fills the work area.
-STANDALONE_CTOR_OLD = b"        : DocumentWindow (title, backgroundColour, DocumentWindow::minimiseButton | DocumentWindow::closeButton),"
-STANDALONE_CTOR_NEW = b"        : DocumentWindow (title, backgroundColour, DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton),"
-
-STANDALONE_BUTTONS_OLD = b"        setTitleBarButtonsRequired (DocumentWindow::minimiseButton | DocumentWindow::closeButton, false);"
-STANDALONE_BUTTONS_NEW = b"        setTitleBarButtonsRequired (DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton, false);"
-
-# ---------------------------------------------------------------------------
-# Patch 4: Windows WM_SETCURSOR.
-# ---------------------------------------------------------------------------
-# The DocumentWindow title bar is reported as HTCAPTION, so Windows treats it as
-# a non-client area and DefWindowProc resets the cursor to the system arrow on
-# every move. Re-apply the JUCE cursor instead of letting the default handling
-# overwrite the theme cursor.
-WINDOWING_SETCURSOR_OLD = b'''            //==============================================================================
-            case WM_NCMOUSEMOVE:
-            case WM_MOUSEMOVE:'''
-
-WINDOWING_SETCURSOR_NEW = b'''            //==============================================================================
-            case WM_SETCURSOR:
-                Desktop::getInstance().getMainMouseSource().forceMouseCursorUpdate();
-                return TRUE;
-
-            case WM_NCMOUSEMOVE:
-            case WM_MOUSEMOVE:'''
-
-# ---------------------------------------------------------------------------
-# Patch 5: VST3 module lifecycle hooks.
-# ---------------------------------------------------------------------------
-# The Windows module pin must be validated before initModule reports success;
-# the macOS last-bundle shutdown must run the process render runtime's
-# synchronous shutdown before bundleExit returns.
-VST3_MODULE_OLD = b'''//==============================================================================
-bool initModule();
-bool initModule()
-{
-    return true;
-}
-
-bool shutdownModule();
-bool shutdownModule()
-{
-    return true;
-}
-'''
-
-VST3_MODULE_NEW = b'''//==============================================================================
-#if JUCE_WINDOWS
-extern "C" bool openTuneVst3PinSucceeded() noexcept;
-#endif
-extern "C" bool openTuneVst3Shutdown() noexcept;
-
-bool initModule();
-bool initModule()
-{
-   #if JUCE_WINDOWS
-    return openTuneVst3PinSucceeded();
-   #else
-    return true;
-   #endif
-}
-
-bool shutdownModule();
-bool shutdownModule()
-{
-    return openTuneVst3Shutdown();
-}
-'''
-
-VST3_BUNDLE_EXIT_OLD = b''' JUCE_EXPORTED_FUNCTION bool bundleExit();
- JUCE_EXPORTED_FUNCTION bool bundleExit()
- {
-     if (shutdownModule())
-     {
-         if (--numBundleRefs == 0)
-         {
-             for (int i = 0; i < bundleRefs.size(); ++i)
-                 CFRelease (bundleRefs.getUnchecked (i));
-
-             bundleRefs.clear();
-         }
-
-         return true;
-     }
-
-     return false;
- }
-'''
-
-VST3_BUNDLE_EXIT_NEW = b''' JUCE_EXPORTED_FUNCTION bool bundleExit();
- JUCE_EXPORTED_FUNCTION bool bundleExit()
- {
-     if (numBundleRefs == 1 && ! shutdownModule())
-         return false;
-
-     if (--numBundleRefs == 0)
-     {
-         for (int i = 0; i < bundleRefs.size(); ++i)
-             CFRelease (bundleRefs.getUnchecked (i));
-
-         bundleRefs.clear();
-     }
-
-     return true;
- }
-'''
+def fail(message: str) -> NoReturn:
+    raise SystemExit(message)
 
 
-def git(*args: str) -> bytes:
+def git(*args):
     result = subprocess.run(
         ["git", "-C", str(JUCE), *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     if result.returncode:
-        sys.exit(result.stderr.decode("utf-8", errors="replace").strip())
+        fail(result.stderr.decode("utf-8", errors="replace").strip())
     return result.stdout
 
 
-def git_checked_status() -> list:
-    return git("status", "--porcelain",
-               "--untracked-files=all", "--ignored=matching").splitlines()
+def patch_entries(patch):
+    headers = list(re.finditer(rb"(?m)^diff --git a/([^\r\n]+) b/([^\r\n]+)$", patch))
+    entries = []
+
+    for index, header in enumerate(headers):
+        relative = header.group(1).decode("ascii")
+        other = header.group(2).decode("ascii")
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(patch)
+        section = patch[header.start():end]
+
+        if relative != other or relative not in PATCHED_PATHS:
+            fail(f"Unexpected JUCE patch path: {relative}")
+
+        is_new = re.search(rb"(?m)^new file mode \d+$", section) is not None
+        if is_new != (relative == GATE_PATH):
+            fail(f"Unexpected file operation in JUCE patch: {relative}")
+
+        entries.append((relative, is_new))
+
+    if {relative for relative, _ in entries} != PATCHED_PATHS or len(entries) != len(PATCHED_PATHS):
+        fail("The JUCE patch does not contain the exact supported file set")
+
+    for hook in (b"OPENTUNE_REALTIME_AUDIT_SPINLOCK();",
+                 b"OPENTUNE_REALTIME_AUDIT_SPIN_WAIT();"):
+        if patch.count(hook) != 1:
+            fail("The JUCE patch must contain both realtime SpinLock audit hooks")
+
+    return entries
 
 
-def expected_status() -> list:
-    return [b" M " + rel.as_posix().encode("ascii") for rel in EXPECTED_FILES]
+def build_targets(entries, patch):
+    with tempfile.TemporaryDirectory(prefix="opentune-juce-patch-") as directory:
+        staging = pathlib.Path(directory)
+
+        for relative, is_new in entries:
+            destination = staging.joinpath(*relative.split("/"))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+
+            if not is_new:
+                destination.write_bytes(normalized(git("show", f"HEAD:{relative}")))
+
+        result = subprocess.run(
+            ["git", "apply", "--whitespace=nowarn", "-"],
+            cwd=staging,
+            input=patch,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode:
+            fail(result.stderr.decode("utf-8", errors="replace").strip())
+
+        return {
+            relative: staging.joinpath(*relative.split("/")).read_bytes()
+            for relative, _ in entries
+        }
 
 
-def normalized(data: bytes) -> bytes:
+def normalized(data):
     return data.replace(b"\r\n", b"\n")
 
 
-def check_newlines(data: bytes, relative: pathlib.Path) -> None:
-    lf_only = data.replace(b"\r\n", b"").count(b"\n")
-    crlf = data.count(b"\r\n")
-    if lf_only and crlf:
-        sys.exit(
-            f"JUCE {relative.as_posix()} contains mixed line endings "
-            "(both LF and CRLF); refusing to rewrite it. Normalize the file "
-            "manually before running this script.")
+def merged_file(current, base, target):
+    with tempfile.TemporaryDirectory(prefix="opentune-juce-merge-") as directory:
+        temporary = pathlib.Path(directory)
+        current_path = temporary / "current"
+        base_path = temporary / "base"
+        target_path = temporary / "target"
+        current_path.write_bytes(current)
+        base_path.write_bytes(base)
+        target_path.write_bytes(target)
+
+        result = subprocess.run(
+            ["git", "merge-file", "-p", str(current_path), str(base_path), str(target_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode:
+            return None
+
+        return normalized(result.stdout)
 
 
-def replace_once(data: bytes, old: bytes, new: bytes, label: str) -> bytes:
-    if data.count(old) != 1:
-        sys.exit(f"Pinned JUCE source does not contain the expected {label} exactly once")
-    return data.replace(old, new, 1)
+def has_staged_changes(relative):
+    result = subprocess.run(
+        ["git", "-C", str(JUCE), "diff", "--cached", "--quiet", "HEAD", "--", relative],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode > 1:
+        fail(result.stderr.decode("utf-8", errors="replace").strip())
+    return result.returncode == 1
 
 
-def main() -> None:
+def prepare_changes(targets, entries):
+    new_paths = {relative for relative, is_new in entries if is_new}
+    changes = {}
+
+    for relative, target_bytes in targets.items():
+        target = normalized(target_bytes)
+        path = JUCE.joinpath(*relative.split("/"))
+
+        if path.is_file():
+            current_bytes = path.read_bytes()
+            current = normalized(current_bytes)
+        elif path.exists():
+            fail(f"JUCE patch target is not a file: {relative}")
+        else:
+            current_bytes = None
+            current = None
+
+        if current == target:
+            continue
+
+        if relative in new_paths:
+            if current is not None:
+                fail(f"JUCE callback gate differs from the repository patch: {relative}")
+        else:
+            if current is None:
+                fail(f"JUCE patch target is missing: {relative}")
+
+            base = normalized(git("show", f"HEAD:{relative}"))
+            if current != base and merged_file(current, base, target) != target:
+                fail(f"JUCE {relative} contains changes outside the complete repository patch")
+
+        if has_staged_changes(relative):
+            fail(f"JUCE {relative} has staged changes; unstaged target files are left untouched")
+
+        newline = b"\r\n" if current_bytes is not None and b"\r\n" in current_bytes else b"\n"
+        changes[relative] = target.replace(b"\n", newline)
+
+    return changes
+
+
+def main():
     head = git("rev-parse", "HEAD").decode("ascii").strip()
     if head != JUCE_COMMIT:
-        sys.exit(f"Expected JUCE {JUCE_COMMIT}, found {head}")
+        fail(f"Expected JUCE {JUCE_COMMIT}, found {head}")
 
-    transforms = {
-        ARA_RELATIVE: [(ARA_OLD, ARA_NEW, "ARA include")],
-        ADM_H_RELATIVE: [
-            (b"    String setAudioDeviceSetup (const AudioDeviceSetup& newSetup, bool treatAsChosenDevice);",
-             ADM_H_TEMPORARY_DECL, "temporary setup declaration"),
-            (b"    void stopDevice();\n\n    void updateXml();",
-             ADM_H_INTERNAL_DECL, "internal declaration"),
-        ],
-        ADM_CPP_RELATIVE: [
-            (ADM_CPP_WRAPPER_OLD, ADM_CPP_WRAPPER_NEW, "setup wrapper split"),
-            (ADM_CPP_CACHE_OLD, ADM_CPP_CACHE_NEW, "per-device-type cache guard"),
-            (ADM_CPP_EMPTY_SETUP_OLD, ADM_CPP_EMPTY_SETUP_NEW, "complete empty-device setup"),
-            (ADM_CPP_TEST_ANCHOR, ADM_CPP_TEST_NEW, "temporary setup unit test"),
-        ],
-        STANDALONE_RELATIVE: [
-            (STANDALONE_CTOR_OLD, STANDALONE_CTOR_NEW, "title-bar button set"),
-            (STANDALONE_BUTTONS_OLD, STANDALONE_BUTTONS_NEW, "title-bar required buttons"),
-        ],
-        WINDOWING_RELATIVE: [
-            (WINDOWING_SETCURSOR_OLD, WINDOWING_SETCURSOR_NEW, "WM_SETCURSOR handler"),
-        ],
-        VST3_RELATIVE: [
-            (VST3_MODULE_OLD, VST3_MODULE_NEW, "VST3 module lifecycle hooks"),
-            (VST3_BUNDLE_EXIT_OLD, VST3_BUNDLE_EXIT_NEW, "macOS last-bundle shutdown guard"),
-        ],
-    }
+    if not PATCH_FILE.is_file():
+        fail(f"JUCE patch file not found: {PATCH_FILE}")
 
-    outputs = {}
-    status_before = []
-    for relative, replacements in transforms.items():
-        target = JUCE / relative
-        if not target.is_file():
-            sys.exit(f"JUCE file not found: {target}")
+    patch = normalized(PATCH_FILE.read_bytes())
+    entries = patch_entries(patch)
+    targets = build_targets(entries, patch)
+    changes = prepare_changes(targets, entries)
 
-        upstream = normalized(git("show", f"HEAD:{relative.as_posix()}"))
-        expected = upstream
-        for old, new, label in replacements:
-            expected = replace_once(expected, old, new, label)
+    for relative, contents in changes.items():
+        JUCE.joinpath(*relative.split("/")).write_bytes(contents)
 
-        original = target.read_bytes()
-        check_newlines(original, relative)
-        current = normalized(original)
-        if current != upstream and current != expected:
-            sys.exit(f"JUCE {relative.as_posix()} differs from the pinned source and expected patch")
-
-        outputs[relative] = (target, original, upstream, expected)
-        if current != upstream:
-            status_before.append(b" M " + relative.as_posix().encode("ascii"))
-
-    status = git_checked_status()
-    if sorted(status) != sorted(status_before):
-        sys.exit(
-            "JUCE checkout contains changes beyond the expected patches; git status is:\n"
-            + "\n".join(s.decode("utf-8", errors="replace") for s in status))
-
-    # Validate every input before writing any file, so source drift cannot leave
-    # a partially patched dependency checkout.
-    for relative, (target, original, upstream, expected) in outputs.items():
-        if normalized(original) == expected:
-            continue
-        newline = b"\r\n" if b"\r\n" in original else b"\n"
-        target.write_bytes(expected.replace(b"\n", newline))
-
-    status_after = git_checked_status()
-    if sorted(status_after) != sorted(expected_status()):
-        sys.exit(
-            "JUCE checkout contains changes beyond the expected patches; git status is:\n"
-            + "\n".join(s.decode("utf-8", errors="replace") for s in status_after))
-
-    print("JUCE patches applied: ARA include + AudioDeviceManager temporary setup "
-          "+ Standalone title bar maximise button + WM_SETCURSOR handler "
-          "+ VST3 module lifecycle hooks (exactly 6 files dirty)")
+    if changes:
+        print(f"Complete JUCE repository patch applied ({len(changes)} files)")
+    else:
+        print("Complete JUCE repository patch is already applied")
 
 
 if __name__ == "__main__":

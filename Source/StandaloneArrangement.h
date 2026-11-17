@@ -6,9 +6,8 @@
  * 本类不持有音频数据本身——音频编辑内容由 content owner 管理。
  *
  * 线程安全：stateLock_ (ReadWriteLock) 保护所有 Track/Placement 状态；
- *          PlaybackSnapshot 通过 std::atomic_load/exchange(shared_ptr) 无锁发布。
- * 设计：音频线程只通过 loadPlaybackSnapshot() atomic_load 读取不可变快照，零锁竞争。
- *         旧快照推入 retiredSnapshots_ 列表，写入方按 use_count()==1 sweep 回收。
+ *          PlaybackSnapshot 由 RealtimeSnapshot 无锁发布并由控制线程回收。
+ * 音频线程通过 loadPlaybackSnapshot() 获取不可变快照的短期借用，不持有拥有型句柄。
  */
 #pragma once
 
@@ -28,6 +27,7 @@
 #include "Render/PlaybackReadSource.h"
 #include "Utils/LocalizationManager.h"
 #include "Utils/PlaybackSampleGeometry.h"
+#include "Utils/RealtimeSnapshot.h"
 #include "Utils/TrackConstants.h"
 
 namespace OpenTune {
@@ -143,7 +143,7 @@ public:
         std::array<PlaybackTrack, kTrackCount> tracks;
     };
 
-    using PlaybackSnapshotHandle = std::shared_ptr<const PlaybackSnapshot>;
+    using PlaybackSnapshotRead = RealtimeSnapshot<PlaybackSnapshot>::Read;
 
     StandaloneArrangement();
     ~StandaloneArrangement();
@@ -151,7 +151,8 @@ public:
     StandaloneArrangement(const StandaloneArrangement&) = delete;
     StandaloneArrangement& operator=(const StandaloneArrangement&) = delete;
 
-    PlaybackSnapshotHandle loadPlaybackSnapshot() const;
+    PlaybackSnapshotRead loadPlaybackSnapshot() const;
+    void collectPlaybackSnapshots();
 
     // 在给定采样率上建立一批放置的固定映射 (H, D, A, Z)。
     // 每个放置先按权威 P/E/clipIn 独立投影，再按实际读取域端点把连续
@@ -262,18 +263,13 @@ private:
     uint64_t nextPlaybackEpoch_{1};
     uint64_t nextPlacementId_{1};
 
-    PlaybackSnapshotHandle playbackSnapshot_;
+    RealtimeSnapshot<PlaybackSnapshot> playbackSnapshot_;
 
     // Playback source provider configured at prepareToPlay. Frozen source views
     // and sample geometry are captured into the published snapshot on every
     // arrangement or content publication; the audio thread reads them lock-free.
     ContentRenderService* playbackSourceService_{nullptr};
     double playbackSampleRate_{0.0};
-
-    // Writer-side delayed destruction: retired snapshots are held until
-    // use_count()==1 (no audio-thread references remain), then swept on the
-    // writer thread. This guarantees free/malloc never hits the RT path.
-    mutable std::vector<PlaybackSnapshotHandle> retiredSnapshots_;
 };
 
 

@@ -16,7 +16,7 @@
 // 消息线程投递，保证模块卸载后不存在仍指向本模块的回调。Windows 的 shutdown
 // helper 是 no-op，因为模块 pin 已把清理留给进程终止。
 //
-// 本文件只编译进 OpenTune_VST3 target（见 CMakeLists.txt）。Standalone 是
+// 本文件随 VST3 wrapper 及其测试编译。Standalone 是
 // 独立进程，进程寿命天然成立，不 pin。
 
 #if defined(_WIN32)

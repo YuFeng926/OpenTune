@@ -94,6 +94,7 @@ public:
 
     void clearAll();
     void preparePlaybackSampleRate(double targetSr);
+    void collectPlaybackSnapshots();
 
 private:
     PlaybackSourcePublisher playbackSources_;

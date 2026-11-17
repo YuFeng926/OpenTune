@@ -2074,6 +2074,21 @@ void OpenTuneAudioProcessor::releaseResources() {
 #endif
 }
 
+void OpenTuneAudioProcessor::collectPlaybackSnapshots()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        dc->collectPlaybackSnapshots();
+#endif
+#if JucePlugin_Build_Standalone
+    if (standaloneArrangement_ != nullptr)
+        standaloneArrangement_->collectPlaybackSnapshots();
+#endif
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->collectPlaybackSnapshots();
+}
+
 #if !JucePlugin_Build_Standalone
 Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() noexcept
 {
@@ -2394,26 +2409,6 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 #if JucePlugin_Enable_ARA
     if (isBoundToARA())
     {
-        // 临时诊断：定位 Cubase 12 播放静音后整体删除。
-        {
-            if (numSamples > 0 && !araChannelDiagnosticLogged_.exchange(true, std::memory_order_relaxed))
-            {
-                juce::String layout;
-                for (int bus = 0; bus < getBusCount(false); ++bus)
-                    layout += (getBus(false, bus)->isEnabled() ? "on" : "off");
-                AppLogger::logNoThrow("ARA-CHANNELS: processor="
-                    + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
-                    + " playbackRenderer=" + juce::String(isPlaybackRenderer() ? "1" : "0")
-                    + " editorRenderer=" + juce::String(isEditorRenderer() ? "1" : "0")
-                    + " editorView=" + juce::String(isEditorView() ? "1" : "0")
-                    + " bufferChannels=" + juce::String(buffer.getNumChannels())
-                    + " inChannels=" + juce::String(getTotalNumInputChannels())
-                    + " outChannels=" + juce::String(totalNumOutputChannels)
-                    + " outBusEnabled=" + layout
-                    + " n=" + juce::String(numSamples));
-            }
-        }
-
         // Forward same PositionInfo to ARA. Build a local empty PositionInfo when the
         // host did not provide one; this never enters playHeadState_ (update above was
         // a no-op for nullopt). Metadata snapshot is only refreshed when the host
@@ -2688,117 +2683,119 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    const auto playbackSnapshot = standaloneArrangement_->loadPlaybackSnapshot();
+    {
+        const auto playbackSnapshot = standaloneArrangement_->loadPlaybackSnapshot();
 
-    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
-        if (playbackSnapshot == nullptr) {
-            continue;
-        }
-
-        const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
-        
-        bool shouldPlay = true;
-        if (playbackSnapshot->anySoloed) {
-            if (!track.isSolo) shouldPlay = false;
-        } else {
-            if (track.isMuted) shouldPlay = false;
-        }
-
-        if (!shouldPlay) {
-            jassert(standaloneArrangement_ != nullptr);
-            standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
-            continue;
-        }
-
-        float trackVolume = track.volume;
-        double trackRmsSum = 0.0;
-        int trackSampleCount = 0;
-
-        trackMixScratch_.clear();
-
-        bool trackHasOutput = false;
-
-        for (const auto& placement : track.placements) {
-            if (!isNonRealtime()
-                && notePitchAudition_.isContentActive(placement.contentKey))
-                continue;
-
-            // 快照在 prepare/来源/TimeGrid/编排变化时冻结来源视图与固定几何；
-            // 音频线程只做整数半开区间求交与地址平移。
-            if (!placement.hasPlayableView()
-                || placement.sampleGeometry.playbackRate != deviceSampleRate) {
+        for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
+            if (!playbackSnapshot) {
                 continue;
             }
 
-            const auto& geometry = placement.sampleGeometry;
-            const auto overlap = PlaybackSampleGeometry::intersect(
-                PlaybackSampleGeometry::hostPlaybackSpan(geometry),
-                {blockStartSample, blockEndSample});
-            if (overlap.empty()) {
+            const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
+
+            bool shouldPlay = true;
+            if (playbackSnapshot->anySoloed) {
+                if (!track.isSolo) shouldPlay = false;
+            } else {
+                if (track.isMuted) shouldPlay = false;
+            }
+
+            if (!shouldPlay) {
+                jassert(standaloneArrangement_ != nullptr);
+                standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
                 continue;
             }
 
-            const int64_t samplesToCopy64 = overlap.end - overlap.begin;
-            const int64_t readStartSample = overlap.begin - geometry.offsetSamples;
-            const double outputStartSeconds = placement.outputAnchorSeconds
-                + static_cast<double>(overlap.begin - geometry.playbackBeginSample) / deviceSampleRate;
-            const int offsetInBlock = static_cast<int>(overlap.begin - blockStartSample);
-            const int samplesToCopy = static_cast<int>(samplesToCopy64);
+            float trackVolume = track.volume;
+            double trackRmsSum = 0.0;
+            int trackSampleCount = 0;
 
-            const float placementGain = placement.gain * trackVolume;
-            const double fadeInSeconds = placement.fadeInDuration;
-            const double fadeOutSeconds = placement.fadeOutDuration;
+            trackMixScratch_.clear();
 
-            const ::OpenTune::PlaybackReadRequest readRequest(
-                placement.source, readStartSample, deviceSampleRate,
-                samplesToCopy, outputStartSeconds);
+            bool trackHasOutput = false;
 
-            clipReadScratch_.clear();
-            const int availableReadSamples = readPlaybackAudio(readRequest, clipReadScratch_, 0);
+            for (const auto& placement : track.placements) {
+                if (!isNonRealtime()
+                    && notePitchAudition_.isContentActive(placement.contentKey))
+                    continue;
 
-            for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
-                const float* src = clipReadScratch_.getReadPointer(ch);
-                float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
+                // 快照在 prepare/来源/TimeGrid/编排变化时冻结来源视图与固定几何；
+                // 音频线程只做整数半开区间求交与地址平移。
+                if (!placement.hasPlayableView()
+                    || placement.sampleGeometry.playbackRate != deviceSampleRate) {
+                    continue;
+                }
 
-                for (int s = 0; s < availableReadSamples; ++s) {
-                    // 显式放置锚点 A 加相对样本遍历；每个声道独立求值。
-                    const double fadeSeconds =
-                        static_cast<double>(overlap.begin + s - geometry.playbackBeginSample)
-                        / deviceSampleRate;
-                    const float fade = placementFadeGain(fadeSeconds,
-                                                         placement.durationSeconds,
-                                                         fadeInSeconds,
-                                                         fadeOutSeconds);
-                    dst[s] += src[s] * placementGain * fade;
+                const auto& geometry = placement.sampleGeometry;
+                const auto overlap = PlaybackSampleGeometry::intersect(
+                    PlaybackSampleGeometry::hostPlaybackSpan(geometry),
+                    {blockStartSample, blockEndSample});
+                if (overlap.empty()) {
+                    continue;
+                }
+
+                const int64_t samplesToCopy64 = overlap.end - overlap.begin;
+                const int64_t readStartSample = overlap.begin - geometry.offsetSamples;
+                const double outputStartSeconds = placement.outputAnchorSeconds
+                    + static_cast<double>(overlap.begin - geometry.playbackBeginSample) / deviceSampleRate;
+                const int offsetInBlock = static_cast<int>(overlap.begin - blockStartSample);
+                const int samplesToCopy = static_cast<int>(samplesToCopy64);
+
+                const float placementGain = placement.gain * trackVolume;
+                const double fadeInSeconds = placement.fadeInDuration;
+                const double fadeOutSeconds = placement.fadeOutDuration;
+
+                const ::OpenTune::PlaybackReadRequest readRequest(
+                    placement.source, readStartSample, deviceSampleRate,
+                    samplesToCopy, outputStartSeconds);
+
+                clipReadScratch_.clear();
+                const int availableReadSamples = readPlaybackAudio(readRequest, clipReadScratch_, 0);
+
+                for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
+                    const float* src = clipReadScratch_.getReadPointer(ch);
+                    float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
+
+                    for (int s = 0; s < availableReadSamples; ++s) {
+                        // 显式放置锚点 A 加相对样本遍历；每个声道独立求值。
+                        const double fadeSeconds =
+                            static_cast<double>(overlap.begin + s - geometry.playbackBeginSample)
+                            / deviceSampleRate;
+                        const float fade = placementFadeGain(fadeSeconds,
+                                                             placement.durationSeconds,
+                                                             fadeInSeconds,
+                                                             fadeOutSeconds);
+                        dst[s] += src[s] * placementGain * fade;
+                    }
+                }
+
+                if (availableReadSamples > 0) {
+                    trackHasOutput = true;
                 }
             }
 
-            if (availableReadSamples > 0) {
-                trackHasOutput = true;
-            }
-        }
+            if (trackHasOutput) {
+                for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
+                    const float* src = trackMixScratch_.getReadPointer(ch);
+                    float* dst = buffer.getWritePointer(ch);
 
-        if (trackHasOutput) {
-            for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
-                const float* src = trackMixScratch_.getReadPointer(ch);
-                float* dst = buffer.getWritePointer(ch);
-
-                for (int s = 0; s < numSamples; ++s) {
-                    dst[s] += src[s];
-                    trackRmsSum += src[s] * src[s];
+                    for (int s = 0; s < numSamples; ++s) {
+                        dst[s] += src[s];
+                        trackRmsSum += src[s] * src[s];
+                    }
                 }
+                trackSampleCount = numSamples * totalNumOutputChannels;
             }
-            trackSampleCount = numSamples * totalNumOutputChannels;
-        }
 
-        if (trackSampleCount > 0) {
-            float rms = std::sqrt(static_cast<float>(trackRmsSum / trackSampleCount));
-            float db = (rms > 1e-9f) ? 20.0f * std::log10(rms) : -100.0f;
-            jassert(standaloneArrangement_ != nullptr);
-            standaloneArrangement_->setTrackRmsDb(trackId, db);
-        } else {
-            jassert(standaloneArrangement_ != nullptr);
-            standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
+            if (trackSampleCount > 0) {
+                float rms = std::sqrt(static_cast<float>(trackRmsSum / trackSampleCount));
+                float db = (rms > 1e-9f) ? 20.0f * std::log10(rms) : -100.0f;
+                jassert(standaloneArrangement_ != nullptr);
+                standaloneArrangement_->setTrackRmsDb(trackId, db);
+            } else {
+                jassert(standaloneArrangement_ != nullptr);
+                standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
+            }
         }
     }
 
@@ -3626,6 +3623,7 @@ void OpenTuneAudioProcessor::scheduleReclaimSweep()
 
 void OpenTuneAudioProcessor::handleAsyncUpdate()
 {
+    collectPlaybackSnapshots();
     runReclaimSweepOnMessageThread();
 }
 #endif // JucePlugin_Build_Standalone
@@ -3633,6 +3631,7 @@ void OpenTuneAudioProcessor::handleAsyncUpdate()
 #if !JucePlugin_Build_Standalone
 void OpenTuneAudioProcessor::timerCallback()
 {
+    collectPlaybackSnapshots();
     if (auto* session = getCaptureSession())
         session->tick();
 
@@ -3872,6 +3871,9 @@ void OpenTuneAudioProcessor::notifyContentChanged(ContentKey key)
 {
 #if JucePlugin_Build_Standalone
     JUCE_ASSERT_MESSAGE_THREAD
+#endif
+    collectPlaybackSnapshots();
+#if JucePlugin_Build_Standalone
     if (contentChangedCallback_)
         contentChangedCallback_(key);
     if (exportReadinessChangedCallback_)
@@ -3887,6 +3889,7 @@ void OpenTuneAudioProcessor::notifyContentChanged(ContentKey key)
 void OpenTuneAudioProcessor::notifyRenderTerminal(ContentKey key, bool completed, uint64_t renderGeneration)
 {
     JUCE_ASSERT_MESSAGE_THREAD
+    collectPlaybackSnapshots();
     if (renderTerminalSink_ == nullptr || !renderTerminalSink_->callback)
         return;
     if (completed)
@@ -4136,6 +4139,7 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     auto audioBuffer = readSource.canonicalBuffer;
     if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
 
+    collectPlaybackSnapshots();
     if (!crs->republishPlaybackSource(key, snap))
         return;
 
@@ -6174,6 +6178,7 @@ VolumeEnvelopeRegionEditResult OpenTuneAudioProcessor::resetVolumeEnvelopeRegion
 
 void OpenTuneAudioProcessor::republishPlaybackSource(ContentKey key)
 {
+    collectPlaybackSnapshots();
 #if JucePlugin_Enable_ARA
     if (key.domainKind == DomainKind::ARAAudioModification)
     {

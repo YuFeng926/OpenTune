@@ -556,6 +556,10 @@ void OpenTuneAudioProcessorEditor::maybeStartOnboarding()
 
 void OpenTuneAudioProcessorEditor::timerCallback()
 {
+#if JucePlugin_Enable_ARA
+    if (processorRef_.isBoundToARA())
+        processorRef_.collectPlaybackSnapshots();
+#endif
     applyUiZoomIfNeeded();
 
 #if !JucePlugin_Build_Standalone

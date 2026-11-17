@@ -137,11 +137,13 @@ void PianoKeyAudition::stopVoice(int midiNote, double sampleRate)
 }
 
 // ---------------------------------------------------------------------------
-void PianoKeyAudition::processEvents(double sampleRate)
+int PianoKeyAudition::processEvents(double sampleRate)
 {
     int pos = eventReadPos_.load(std::memory_order_relaxed);
+    const int writeBoundary = eventWritePos_.load(std::memory_order_acquire);
+    int processed = 0;
 
-    while (pos != eventWritePos_.load(std::memory_order_acquire))
+    while (pos != writeBoundary && processed < kEventBufferSize - 1)
     {
         const auto& e = eventBuffer_[static_cast<size_t>(pos)];
 
@@ -152,7 +154,9 @@ void PianoKeyAudition::processEvents(double sampleRate)
 
         pos = (pos + 1) % kEventBufferSize;
         eventReadPos_.store(pos, std::memory_order_release);
+        ++processed;
     }
+    return processed;
 }
 
 // ---------------------------------------------------------------------------

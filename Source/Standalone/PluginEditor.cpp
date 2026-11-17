@@ -2007,6 +2007,7 @@ void OpenTuneAudioProcessorEditor::applyUiZoomIfNeeded()
 
 void OpenTuneAudioProcessorEditor::timerCallback()
 {
+    processorRef_.collectPlaybackSnapshots();
     applyUiZoomIfNeeded();
 
     restoreStandaloneWindowGeometryOnce();

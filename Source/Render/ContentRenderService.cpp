@@ -13,6 +13,7 @@ ContentRenderService::~ContentRenderService()
 {
     if (backendListenerRegistered_)
         ProcessRenderRuntime::getInstance().unregisterBackendChangeListener(this);
+    collectPlaybackSnapshots();
 }
 
 bool ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled(
@@ -150,6 +151,14 @@ void ContentRenderService::removeRenderCache(ContentKey key)
     renderCaches_.remove(key);
     if (cache != nullptr)
         ProcessRenderRuntime::getInstance().pruneDeferredJobsForCache(cache);
+    collectPlaybackSnapshots();
+}
+
+void ContentRenderService::collectPlaybackSnapshots()
+{
+    playbackSources_.collectPlaybackSnapshots();
+    renderCaches_.collectPlaybackSnapshots();
+    timeStretchCache_.collectPlaybackSnapshots();
 }
 
 void ContentRenderService::attachExecutionLease(ExecutionLease lease)
@@ -297,6 +306,7 @@ void ContentRenderService::resumeRenderWorker()
 void ContentRenderService::drainRenderWorker()
 {
     renderWorker_.drain();
+    collectPlaybackSnapshots();
 }
 
 bool ContentRenderService::drainRenderWorkerForExport()
@@ -305,6 +315,7 @@ bool ContentRenderService::drainRenderWorkerForExport()
     for (;;)
     {
         renderWorker_.drain();
+        collectPlaybackSnapshots();
         if (!runtime.hasDeferredRetriesForService(this))
             return true;
         if (!runtime.flushDeferredRetriesForService(this)
@@ -316,6 +327,7 @@ bool ContentRenderService::drainRenderWorkerForExport()
 void ContentRenderService::waitAsyncRenderJobs()
 {
     renderWorker_.waitAsyncIdle();
+    collectPlaybackSnapshots();
 }
 
 std::size_t ContentRenderService::renderQueueDepth() const noexcept
@@ -353,6 +365,7 @@ void ContentRenderService::clearAll()
     ProcessRenderRuntime::getInstance().pruneDeferredJobsForService(this);
     stretchers_.clear();
     timeStretchCache_.clear();
+    collectPlaybackSnapshots();
 }
 
 void ContentRenderService::preparePlaybackSampleRate(double targetSr)
@@ -364,6 +377,7 @@ void ContentRenderService::preparePlaybackSampleRate(double targetSr)
         return;
     playbackSources_.setPlaybackSampleRate(targetSr);
     timeStretchCache_.prepareForPlaybackSampleRate(targetSr);
+    collectPlaybackSnapshots();
 }
 
 } // namespace OpenTune

@@ -434,9 +434,9 @@ bool testIdentityTimeGridIsAlwaysPublishedAndNonIdentityMissIsSilent()
     snapshot = std::make_shared<const OpenTune::EditableContentSnapshot>(
         OpenTune::makeContentSnapshot(state));
     source.contentSnapshot = snapshot;
-    request.source = source;
     destination.clear();
-    return OpenTune::readPlaybackAudio(request, destination, 0) == 0;
+    const OpenTune::PlaybackReadRequest warpedRequest(source, 0, 44100.0, 4, 0.0);
+    return OpenTune::readPlaybackAudio(warpedRequest, destination, 0) == 0;
 }
 
 // TimeStretchCache 的双版本键：(contentRevision, timeGridRevision) 必须同时匹配；

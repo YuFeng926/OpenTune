@@ -5,7 +5,6 @@
 #include <limits>
 
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
-#include "../Source/Editor/EditorFactory.h"
 #include "../Source/Control/ControlUiBridge.h"
 #include "../Source/Control/Ops/OpsRegistry.h"
 #include "../Source/Control/Ops/TrackOps.h"
@@ -15,17 +14,6 @@
 
 #include <memory>
 #include <string>
-#endif
-
-#if defined(OPENTUNE_ENABLE_CONTROL_API)
-namespace OpenTune {
-
-juce::AudioProcessorEditor* createOpenTuneEditor(OpenTuneAudioProcessor&)
-{
-    return nullptr;
-}
-
-} // namespace OpenTune
 #endif
 
 namespace {
@@ -128,6 +116,23 @@ bool testTrackVolumeUsesSharedBounds()
         && near(arrangement.getTrackVolume(0), kMaxTrackVolumeLinear)
         && arrangement.setTrackVolume(0, std::nextafter(4.0, 0.0))
         && near(arrangement.getTrackVolume(0), kMaxTrackVolumeLinear);
+}
+
+bool testPlaybackBorrowRetainsOldViewAndCollectsLatest()
+{
+    StandaloneArrangement arrangement;
+    auto held = arrangement.loadPlaybackSnapshot();
+    const auto initialEpoch = held->epoch;
+    const auto initialVolume = held->tracks[0].volume;
+    for (int i = 1; i <= 12; ++i)
+        arrangement.setTrackVolume(0, static_cast<double>(i) / 4.0);
+
+    if (held->epoch != initialEpoch || held->tracks[0].volume != initialVolume)
+        return false;
+    held = {};
+    arrangement.collectPlaybackSnapshots();
+    const auto latest = arrangement.loadPlaybackSnapshot();
+    return latest->epoch == initialEpoch + 12 && near(latest->tracks[0].volume, 3.0);
 }
 
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
@@ -266,7 +271,8 @@ int main()
     bool passed = testAppliedMovePublishesOnce()
         && testRejectedMoveIsAtomic()
         && testUnchangedMoveDoesNotPublish()
-        && testTrackVolumeUsesSharedBounds();
+        && testTrackVolumeUsesSharedBounds()
+        && testPlaybackBorrowRetainsOldViewAndCollectsLatest();
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
     passed = passed && testTrackSetVolumeWarnings();
 #endif

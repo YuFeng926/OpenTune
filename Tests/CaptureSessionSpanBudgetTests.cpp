@@ -640,6 +640,58 @@ bool testRetireHappensAfterAudioReadersExitOnce()
     return true;
 }
 
+bool testRetireCoalescedPendingSegmentAfterReaderExit()
+{
+    CaptureSession archiveSource({});
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(2, 512);
+    audio->clear();
+    archiveSource.testInjectEditedSegment(0.0, 1.0, 17, audio, 48000.0);
+    const auto segmentArchive = archiveSource.serialize();
+    CaptureSession emptySource({});
+    const auto emptyArchive = emptySource.serialize();
+
+    std::vector<ContentKey> published;
+    std::vector<ContentKey> retired;
+    ProcessorBindings bindings;
+    bindings.publishPlaybackSource =
+        [&](const ContentKey& key,
+            const std::shared_ptr<const OpenTune::EditableContentSnapshot>&,
+            const std::shared_ptr<const juce::AudioBuffer<float>>&,
+            double) {
+            published.push_back(key);
+        };
+    bindings.retireSegment = [&](ContentKey key) { retired.push_back(key); };
+
+    CaptureSession session(std::move(bindings));
+    session.prepareToPlay(48000.0, 512, 2);
+    auto reader = session.testHoldPublishedView();
+    if (!reader)
+        return false;
+
+    for (int i = 0; i < 4; ++i)
+        session.refreshPublishedReplacementGeometry();
+    const uint64_t countAfterRetiredViews = session.testPublishedViewCount();
+
+    if (!session.deserialize(segmentArchive)
+        || session.testPublishedViewCount() != countAfterRetiredViews
+        || published.size() != 1
+        || published.front().objectId != 17) {
+        return false;
+    }
+    if (!session.deserialize(emptyArchive)
+        || session.testPublishedViewCount() != countAfterRetiredViews) {
+        return false;
+    }
+
+    session.tick();
+    if (!retired.empty())
+        return false;
+
+    reader = {};
+    session.tick();
+    return retired.size() == 1 && retired.front().objectId == 17;
+}
+
 bool testPublishCountTracksStructuralChanges()
 {
     CaptureSession session({});
@@ -1132,6 +1184,10 @@ int main()
     }
     if (!testRetireHappensAfterAudioReadersExitOnce()) {
         std::fputs("FAIL: retire happens once after audio readers exit\n", stderr);
+        ++failed;
+    }
+    if (!testRetireCoalescedPendingSegmentAfterReaderExit()) {
+        std::fputs("FAIL: retire coalesced pending segment after reader exit\n", stderr);
         ++failed;
     }
     if (!testPublishCountTracksStructuralChanges()) {

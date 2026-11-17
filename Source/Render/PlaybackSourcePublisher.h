@@ -11,6 +11,8 @@
 
 namespace OpenTune {
 
+// Control/worker-side source registry. Audio callbacks borrow the immutable
+// views already held by their Capture, Standalone, or ARA playback snapshot.
 class PlaybackSourcePublisher
 {
 public:
@@ -27,6 +29,7 @@ public:
     bool get(ContentKey key, PlaybackReadSource& out) const noexcept;
     void remove(ContentKey key);
     void clear();
+    void collectPlaybackSnapshots();
 
     // Preparation thread / offline export. Native identity and global origin
     // travel with the immutable result.
@@ -34,7 +37,8 @@ public:
 
 private:
     void prepareSourceDry(PlaybackReadSource& src, double targetSr);
-    void recomputeActivePreparedBytes();
+    void recomputePreparedBytes();
+    void collectRetiredMapsLocked();
 
     mutable std::mutex writerMutex_;
     mutable std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>> data_;
@@ -43,7 +47,7 @@ private:
     // Writer-owned retirement pool: prevents audio thread from being final destructor of map/PCM.
     mutable std::vector<std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>> retiredMaps_;
 
-    // Active prepared dry byte tracking in global cache.
+    // Active and retired prepared dry byte tracking in global cache.
     // Updated atomically against RenderCache::globalCacheCurrentBytes/globalCachePeakBytes.
     size_t totalPreparedBytes_{0};
 };

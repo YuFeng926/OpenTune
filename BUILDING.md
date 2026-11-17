@@ -65,8 +65,9 @@ cd ..
 > `modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp` 仍 include 2.2.0 的
 > `ARA_Library/Utilities/ARAChannelArrangement.cpp`，而 2.3.0 已将该文件改名为 `ARAChannelFormat.cpp`。
 > 不要手工编辑该文件；克隆 JUCE 8.0.12 后运行上文对应操作系统的 Python 命令，
-> 脚本会同时应用 ARA include 改名、AudioDeviceManager 临时 setup API、Standalone 标题栏最大化按钮
-> 和 Windows `WM_SETCURSOR` 光标四个补丁。
+> 脚本统一维护 ARA include、AudioDeviceManager 临时 setup、Standalone 标题栏、Windows 光标、
+> VST3 模块生命周期和实时回调交接补丁。CMake 启用 `JUCE_OPENTUNE_REALTIME_AUDIO`，
+> VST3 回调补丁继续由构建目录中的 overlay 生成。更新补丁脚本后重新执行上文命令，再运行构建。
 
 ### 3. r8brain 与 SoundTouch
 
@@ -255,6 +256,16 @@ cmake --build --preset windows-ara-ninja-release
 >
 > 也可以先执行 `chcp 65001`。`scripts/build-ninja.ps1` 已在配置和构建子进程中加入
 > `chcp 65001`。
+
+Windows 实时回调验收使用测试构建中的统一审计计数：
+
+```powershell
+cmake --preset windows-ara-ninja -DOPENTUNE_BUILD_TESTS=ON
+cmake --build --preset windows-ara-ninja-release --parallel 1 --target RealtimeCallbackTests StandaloneRealtimeCallbackTests RealtimeVST3Tests OpenTuneAuditionRealtimeTests OpenTunePlaybackCacheRealtimeTests
+ctest --test-dir build-ara-ninja -R "^(RealtimeCallbackTests|StandaloneRealtimeCallbackTests|RealtimeVST3Tests|AuditionRealtimeTests|PlaybackCacheRealtimeTests)$" -V
+```
+
+测试先验证分配、释放、锁获取、等待和文件 I/O 的审计钩子能够捕获违规，再要求真实回调的五项计数全部为零。VST3 测试直接编译发布版本使用的 wrapper overlay；Standalone 测试经过 AudioDeviceManager、AudioProcessorPlayer 和实际 Processor。测试结果包含回调范围和逐项计数。发布构建使用 `OPENTUNE_BUILD_TESTS=OFF` 重新编译。
 
 Release 构建完成后，发布前必须校验 Standalone 产物。校验与打包脚本为本地维护，
 不随仓库分发（`scripts/build-ninja.ps1`、`scripts/validate-windows-release.ps1`、

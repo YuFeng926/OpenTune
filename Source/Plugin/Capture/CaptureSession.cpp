@@ -17,26 +17,6 @@ namespace {
     constexpr double kMaxSegmentSeconds = 600.0;  // host window span per take
     constexpr size_t kSpanMetadataBudgetBytes = 1024 * 1024;  // per-take span metadata budget
 
-    class SegmentViewReaderGuard
-    {
-    public:
-        explicit SegmentViewReaderGuard(std::atomic<int>& readers) noexcept : readers_(readers)
-        {
-            readers_.fetch_add(1, std::memory_order_seq_cst);
-        }
-
-        ~SegmentViewReaderGuard()
-        {
-            readers_.fetch_sub(1, std::memory_order_seq_cst);
-        }
-
-        SegmentViewReaderGuard(const SegmentViewReaderGuard&) = delete;
-        SegmentViewReaderGuard& operator=(const SegmentViewReaderGuard&) = delete;
-
-    private:
-        std::atomic<int>& readers_;
-    };
-
     /** One merged host range produced by finalize. */
     struct HostInterval
     {
@@ -199,16 +179,13 @@ void CaptureSession::processBlock(juce::AudioBuffer<float>& buffer,
                                   double hostSampleRate,
                                   bool isPlaying) noexcept
 {
-    SegmentViewReaderGuard readerGuard(activeSegmentReaders_);
+    auto viewRead = publishedSegments_.read();
 
     if (hostAbsoluteSample >= 0)
         lastHostPlaying_.store(isPlaying, std::memory_order_release);
 
-    // Audio thread reads the raw pointer only: no shared_ptr operations, no owners.
-    // seq_cst keeps the pointer load in the same total order as the reader counter
-    // and the publishing exchange, so a reader that entered after the reclaim check
-    // observes the new view.
-    const SegmentsView* view = publishedSegments_.load(std::memory_order_seq_cst);
+    // The read lease protects the raw view pointer; audio never touches shared_ptr.
+    const SegmentsView* view = viewRead.get();
     if (view == nullptr || view->snapshot.empty())
         return;  // No segments → dry pass-through
 
@@ -383,6 +360,7 @@ void CaptureSession::processBlock(juce::AudioBuffer<float>& buffer,
 void CaptureSession::tick()
 {
     bool anyChange = false;
+    collectPublishedView();
 
     // 0. End the take on a latched user stop, host window overflow, or host stop.
     //    A take that never wrote a sample stays armed and waits for playback.
@@ -516,19 +494,18 @@ void CaptureSession::tick()
 
     }
 
-    // 4. Reclaim sweep: retire removed segments only after all audio readers left
-    //    the retired views, and only for keys absent from the currently published set.
-    if (activeSegmentReaders_.load(std::memory_order_seq_cst) == 0) {
-        retiredViews_.clear();
+    if (anyChange)
+        publishSegmentsView();
+
+    // Retire source keys only after the requested view is actually current and
+    // every reader that could have loaded the previous view has exited.
+    if (collectPublishedView() && !publishedSegments_.hasPending()) {
         if (bindings_.retireSegment) {
             for (const auto& key : pendingRetireKeys_)
                 bindings_.retireSegment(key);
         }
         pendingRetireKeys_.clear();
     }
-
-    if (anyChange)
-        publishSegmentsView();
 }
 
 // ─── Render pipeline callback ──────────────────────────────────────────────
@@ -951,9 +928,10 @@ uint64_t CaptureSession::testInjectSegment(OpenTune::ContentState state,
 
 void CaptureSession::publishSegmentsView()
 {
-    // Message-thread only. Build the new view under the mutex, swap the published
-    // pointer atomically, then move the replaced view into retiredViews_.
-    auto view = std::make_unique<SegmentsView>();
+    // Message-thread only. First drain completed retirements and promote any
+    // coalesced publication, then construct the newest immutable view.
+    collectPublishedView();
+    auto view = std::make_shared<SegmentsView>();
     {
         std::lock_guard<std::mutex> lock(mutableMutex_);
         view->snapshot.reserve(mutableSegments_.size());
@@ -962,26 +940,6 @@ void CaptureSession::publishSegmentsView()
             view->owners.push_back(seg);
             view->snapshot.push_back(seg.get());
         }
-
-        std::vector<ContentKey> nextKeys;
-        nextKeys.reserve(mutableSegments_.size());
-        for (const auto& seg : mutableSegments_)
-            nextKeys.push_back(seg->contentKey);
-
-        // Keys removed by this publication become retire candidates; keys that
-        // reappear in the new view are no longer pending.
-        std::vector<ContentKey> nextPending;
-        nextPending.reserve(pendingRetireKeys_.size() + nextKeys.size());
-        for (const auto& key : pendingRetireKeys_) {
-            if (std::find(nextKeys.begin(), nextKeys.end(), key) == nextKeys.end())
-                nextPending.push_back(key);
-        }
-        for (const auto& key : publishedKeys_) {
-            if (std::find(nextKeys.begin(), nextKeys.end(), key) == nextKeys.end())
-                nextPending.push_back(key);
-        }
-        pendingRetireKeys_ = std::move(nextPending);
-        publishedKeys_ = std::move(nextKeys);
 
         // Replacement entries freeze the published source and its fixed geometry
         // into the same view publication. The audio callback reads this entry
@@ -1020,16 +978,42 @@ void CaptureSession::publishSegmentsView()
             view->replacements.push_back(std::move(replacement));
         }
 
-        // seq_cst ties this store into the same total order as the audio reader
-        // counter: a reader that increments after a reclaim check necessarily loads
-        // the new pointer, never a view that is about to be destroyed.
-        const SegmentsView* previous = publishedSegments_.exchange(view.get(), std::memory_order_seq_cst);
-        if (previous != nullptr)
-            retiredViews_.push_back(std::move(currentView_));
-        currentView_ = std::move(view);
-
-        ++publishedViewCount_;
     }
+
+    std::vector<ContentKey> nextKeys;
+    nextKeys.reserve(view->owners.size());
+    for (const auto& segment : view->owners)
+        nextKeys.push_back(segment->contentKey);
+
+    std::vector<ContentKey> nextPending;
+    nextPending.reserve(pendingRetireKeys_.size() + requestedKeys_.size());
+    for (const auto& key : pendingRetireKeys_) {
+        if (std::find(nextKeys.begin(), nextKeys.end(), key) == nextKeys.end())
+            nextPending.push_back(key);
+    }
+    for (const auto& key : requestedKeys_) {
+        if (std::find(nextKeys.begin(), nextKeys.end(), key) == nextKeys.end())
+            nextPending.push_back(key);
+    }
+
+    pendingRetireKeys_ = std::move(nextPending);
+    requestedKeys_ = std::move(nextKeys);
+
+    publishedSegments_.publish(std::move(view));
+    if (!publishedSegments_.hasPending())
+        ++publishedViewCount_;
+    collectPublishedView();
+}
+
+bool CaptureSession::collectPublishedView()
+{
+    const bool hadPending = publishedSegments_.hasPending();
+    const bool readersClear = publishedSegments_.collect();
+    if (publishedSegments_.hasPending())
+        return false;
+    if (hadPending)
+        ++publishedViewCount_;
+    return readersClear;
 }
 
 bool CaptureSession::finalizePendingCapture(CaptureSegment& pending)

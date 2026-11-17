@@ -16,81 +16,171 @@ void NoteAudition::play(const juce::AudioBuffer<float>& source, double sourceSam
     if (numSamples <= 0)
         return;
 
+    const uint64_t generation = controlGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    const int slotIndex = claimBuildSlot();
+    jassert(slotIndex >= 0);
+    if (slotIndex < 0)
+        return;
+    auto& slot = slots_[static_cast<size_t>(slotIndex)];
+    auto& clip = slot.clip;
+
     // Prepare the clip up front: mono with 5 ms fades to avoid clicks.
-    auto clip = std::make_unique<Clip>();
-    clip->sampleRate = sourceSampleRate;
-    clip->mono.setSize(1, numSamples);
-    clip->mono.clear();
+    clip.sampleRate = sourceSampleRate;
+    clip.mono.setSize(1, numSamples);
+    clip.mono.clear();
     const float channelGain = 1.0f / static_cast<float>(sourceChannels);
     for (int ch = 0; ch < sourceChannels; ++ch)
-        clip->mono.addFrom(0, 0, source, ch, startSample, numSamples, channelGain);
+        clip.mono.addFrom(0, 0, source, ch, startSample, numSamples, channelGain);
 
     const int fade = juce::jmin(numSamples / 2, static_cast<int>(0.005 * sourceSampleRate));
     if (fade > 0) {
-        clip->mono.applyGainRamp(0, 0, fade, 0.0f, 1.0f);
-        clip->mono.applyGainRamp(0, numSamples - fade, fade, 1.0f, 0.0f);
+        clip.mono.applyGainRamp(0, 0, fade, 0.0f, 1.0f);
+        clip.mono.applyGainRamp(0, numSamples - fade, fade, 1.0f, 0.0f);
     }
 
-    std::unique_ptr<Clip> toFree1, toFree2;
-    {
-        const juce::SpinLock::ScopedLockType lock(lock_);
-        toFree1 = std::move(retired_);
-        toFree2 = std::move(pending_);
-        pending_ = std::move(clip);
-        stopRequested_ = false;
+    slot.generation = generation;
+
+    for (auto& candidate : slots_) {
+        uint8_t expected = static_cast<uint8_t>(SlotState::Pending);
+        if (!candidate.state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+        candidate.clip = Clip{};
+        candidate.state.store(static_cast<uint8_t>(SlotState::Free),
+                              std::memory_order_release);
     }
-    // toFree1/toFree2 are released here, on the message thread.
+    reclaimReturnedSlots();
+    slot.state.store(static_cast<uint8_t>(SlotState::Pending), std::memory_order_release);
 }
 
 void NoteAudition::stop()
 {
-    std::unique_ptr<Clip> toFree1, toFree2;
-    {
-        const juce::SpinLock::ScopedLockType lock(lock_);
-        toFree1 = std::move(retired_);
-        toFree2 = std::move(pending_);
-        stopRequested_ = true;
+    const uint64_t generation = controlGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    stopGeneration_.store(generation, std::memory_order_release);
+
+    for (auto& candidate : slots_) {
+        uint8_t expected = static_cast<uint8_t>(SlotState::Pending);
+        if (!candidate.state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+        candidate.clip = Clip{};
+        candidate.state.store(static_cast<uint8_t>(SlotState::Free),
+                              std::memory_order_release);
     }
+    reclaimReturnedSlots();
 }
 
-void NoteAudition::takePendingClip()
+int NoteAudition::claimBuildSlot() noexcept
 {
-    // Never wait for the lock: if the message thread holds it, pick the clip up next block.
-    const juce::SpinLock::ScopedTryLockType tryLock(lock_);
-    if (!tryLock.isLocked())
-        return;
+    for (int i = 0; i < kSlotCount; ++i) {
+        auto& state = slots_[static_cast<size_t>(i)].state;
+        uint8_t expected = static_cast<uint8_t>(SlotState::Free);
+        if (state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return i;
 
-    if (pending_ == nullptr && !stopRequested_)
-        return;
-
-    // The old clip can be retired only if the retired slot is free.
-    // Otherwise wait until the message thread frees it (the clip plays one more block).
-    if (playing_ != nullptr && retired_ != nullptr)
-        return;
-
-    if (playing_ != nullptr)
-        retired_ = std::move(playing_);
-
-    if (stopRequested_) {
-        stopRequested_ = false;
-        return;
+        expected = static_cast<uint8_t>(SlotState::Returned);
+        if (state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return i;
     }
 
-    playing_ = std::move(pending_);
-    position_ = 0.0;
+    for (int i = 0; i < kSlotCount; ++i) {
+        auto& state = slots_[static_cast<size_t>(i)].state;
+        uint8_t expected = static_cast<uint8_t>(SlotState::Pending);
+        if (state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return i;
+    }
+
+    return -1;
+}
+
+void NoteAudition::returnSlot(int slotIndex) noexcept
+{
+    slots_[static_cast<size_t>(slotIndex)].state.store(
+        static_cast<uint8_t>(SlotState::Returned), std::memory_order_release);
+}
+
+void NoteAudition::reclaimReturnedSlots() noexcept
+{
+    for (auto& slot : slots_) {
+        uint8_t expected = static_cast<uint8_t>(SlotState::Returned);
+        if (!slot.state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Building),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+        slot.clip = Clip{};
+        slot.state.store(static_cast<uint8_t>(SlotState::Free),
+                         std::memory_order_release);
+    }
 }
 
 void NoteAudition::mixIntoBuffer(juce::AudioBuffer<float>& output, int numSamples, double outputSampleRate)
 {
-    takePendingClip();
+    const uint64_t generation = controlGeneration_.load(std::memory_order_acquire);
+    const uint64_t stopGeneration = stopGeneration_.load(std::memory_order_acquire);
 
-    if (playing_ == nullptr || outputSampleRate <= 0.0)
+    if (stopGeneration > appliedStopGeneration_ && stopGeneration == generation) {
+        if (playingSlot_ >= 0)
+            returnSlot(playingSlot_);
+        playingSlot_ = -1;
+        position_ = 0.0;
+        appliedStopGeneration_ = stopGeneration;
+    }
+
+    int incomingSlot = -1;
+    for (int i = 0; i < kSlotCount; ++i) {
+        auto& slot = slots_[static_cast<size_t>(i)];
+        uint8_t expected = static_cast<uint8_t>(SlotState::Pending);
+        if (!slot.state.compare_exchange_strong(
+                expected, static_cast<uint8_t>(SlotState::Playing),
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+
+        if (slot.generation < generation) {
+            returnSlot(i);
+            continue;
+        }
+        if (slot.generation > generation) {
+            slot.state.store(static_cast<uint8_t>(SlotState::Pending), std::memory_order_release);
+            continue;
+        }
+
+        if (stopGeneration == generation && stopGeneration > appliedStopGeneration_) {
+            returnSlot(i);
+            continue;
+        }
+        if (incomingSlot < 0) {
+            incomingSlot = i;
+        } else {
+            returnSlot(i);
+        }
+    }
+
+    if (incomingSlot >= 0) {
+        if (playingSlot_ >= 0)
+            returnSlot(playingSlot_);
+        playingSlot_ = incomingSlot;
+        position_ = 0.0;
+    }
+
+    if (playingSlot_ < 0 || outputSampleRate <= 0.0)
         return;
 
-    const auto& clip = *playing_;
+    const auto& clip = slots_[static_cast<size_t>(playingSlot_)].clip;
     const int clipLength = clip.mono.getNumSamples();
-    if (position_ >= static_cast<double>(clipLength - 1))
-        return; // finished - stay silent until the next note
+    if (position_ >= static_cast<double>(clipLength - 1)) {
+        returnSlot(playingSlot_);
+        playingSlot_ = -1;
+        position_ = 0.0;
+        return;
+    }
 
     const float* src = clip.mono.getReadPointer(0);
     const double step = clip.sampleRate / outputSampleRate;
@@ -107,6 +197,12 @@ void NoteAudition::mixIntoBuffer(juce::AudioBuffer<float>& output, int numSample
         for (int ch = 0; ch < outChannels; ++ch)
             output.addSample(ch, i, sample);
         position_ += step;
+    }
+
+    if (position_ >= static_cast<double>(clipLength - 1)) {
+        returnSlot(playingSlot_);
+        playingSlot_ = -1;
+        position_ = 0.0;
     }
 }
 

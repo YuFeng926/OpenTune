@@ -23,6 +23,10 @@
 
 namespace OpenTune {
 
+static_assert(std::atomic<double>::is_always_lock_free);
+static_assert(std::atomic<uint64_t>::is_always_lock_free);
+static_assert(std::atomic<bool>::is_always_lock_free);
+
 // ============================================================================
 // PlayHeadPresentationProjection — single/multi-writer seqlock projection
 // ============================================================================
@@ -228,19 +232,17 @@ struct PlayHeadState
         // observe the same current time do not each advance the generation.
         if (const auto timeSeconds = positionInfo.getTimeInSeconds())
         {
-            double current = timeInSeconds.load(std::memory_order_relaxed);
-            while (current != *timeSeconds)
+            const double current = timeInSeconds.load(std::memory_order_relaxed);
+            if (current != *timeSeconds)
             {
-                if (timeInSeconds.compare_exchange_weak(current, *timeSeconds,
-                                                         std::memory_order_acq_rel,
-                                                         std::memory_order_relaxed))
+                double expected = current;
+                if (timeInSeconds.compare_exchange_strong(expected, *timeSeconds,
+                                                          std::memory_order_acq_rel,
+                                                          std::memory_order_relaxed))
                 {
                     result.timeChanged = true;
                     transportChanged = true;
-                    break;
                 }
-                // CAS failure reloads current. If another writer already
-                // installed the same time, the loop exits without a bump.
             }
         }
 

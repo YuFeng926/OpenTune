@@ -30,6 +30,7 @@ public:
     std::shared_ptr<RenderCache> get(ContentKey key) const;
     void remove(ContentKey key);
     void clear();
+    void collectPlaybackSnapshots();
 
     /** 更新目标率并串行重建所有 cache 的 prepared snapshot。 */
     bool preparePlaybackSampleRate(double targetSr);

@@ -1,3 +1,5 @@
+include("${CMAKE_CURRENT_LIST_DIR}/OpenTuneJuceVST3RealtimeOverlay.cmake")
+
 function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
     if(NOT TARGET juce_audio_plugin_client_VST3)
         message(FATAL_ERROR
@@ -25,7 +27,7 @@ function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
     # dropped before the AudioProcessor can observe the current PositionInfo.
     # The fix keeps the original audio guard untouched (so a pure parameter
     # flush with no ProcessContext still does not synthesize audio) and adds a
-    # transport-only else branch that, under the existing callback lock, builds
+    # transport-only else branch that, under the process admission scope, builds
     # an empty AudioBuffer and calls pluginInstance->processBlock so the
     # processor's own zero-sample early return updates PlayHeadState without
     # touching ClientRemappedBuffer, the ARA renderer or CaptureSession.
@@ -73,51 +75,21 @@ function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
         }
 ]=])
 
-    string(FIND "${vst3_client_source}" "${transport_patched_snippet}" transport_patched_pos)
-    if(NOT transport_patched_pos EQUAL -1)
-        message(STATUS
-            "JUCE VST3 client already supports zero-data transport-only branch; skipping transport patch")
-    else()
-        string(REPLACE "\n" "\r\n" transport_patched_snippet_crlf "${transport_patched_snippet}")
-        string(FIND "${vst3_client_source}" "${transport_patched_snippet_crlf}" transport_patched_crlf_pos)
-        if(NOT transport_patched_crlf_pos EQUAL -1)
-            message(STATUS
-                "JUCE VST3 client already supports zero-data transport-only branch (CRLF); skipping transport patch")
-        else()
-            string(FIND "${vst3_client_source}" "${transport_upstream_snippet}" transport_upstream_pos)
-            if(transport_upstream_pos EQUAL -1)
-                string(REPLACE "\n" "\r\n" transport_upstream_snippet_crlf "${transport_upstream_snippet}")
-                string(FIND "${vst3_client_source}" "${transport_upstream_snippet_crlf}" transport_upstream_crlf_pos)
-                if(transport_upstream_crlf_pos EQUAL -1)
-                    message(FATAL_ERROR
-                        "OpenTune JUCE VST3 client overlay cannot apply zero-data transport patch. "
-                        "Inspect ${vst3_cpp_path}; the audited JUCE process() guard no longer matches.")
-                endif()
-                string(REPLACE "${transport_upstream_snippet_crlf}" "${transport_patched_snippet_crlf}"
-                       vst3_client_source "${vst3_client_source}")
-            else()
-                string(REPLACE "${transport_upstream_snippet}" "${transport_patched_snippet}"
-                       vst3_client_source "${vst3_client_source}")
-            endif()
-        endif()
-    endif()
+    opentune_vst3_overlay_patch(vst3_client_source
+        "zero-data transport branch"
+        "${transport_upstream_snippet}"
+        "${transport_patched_snippet}"
+        "${vst3_cpp_path}")
 
     # ---- Patch 2: ARA 1.x legacy bind -------------------------------------------
-    set(ara_patched_needle
-        "return bindToDocumentControllerWithRoles (controllerRef, 0, 0);")
-    string(FIND "${vst3_client_source}" "${ara_patched_needle}" ara_patched_pos)
-    if(NOT ara_patched_pos EQUAL -1)
-        message(STATUS
-            "JUCE VST3 client already supports legacy ARA bind; skipping ARA patch")
-    else()
-        set(ara_upstream_snippet [=[
+    set(ara_upstream_snippet [=[
     const ARA::ARAPlugInExtensionInstance* PLUGIN_API bindToDocumentController (ARA::ARADocumentControllerRef /*controllerRef*/) SMTG_OVERRIDE
     {
         ARA_VALIDATE_API_STATE (false && "call is deprecated in ARA 2, host must not call this");
         return nullptr;
     }
 ]=])
-        set(ara_patched_snippet [=[
+    set(ara_patched_snippet [=[
     const ARA::ARAPlugInExtensionInstance* PLUGIN_API bindToDocumentController (ARA::ARADocumentControllerRef controllerRef) SMTG_OVERRIDE
     {
         // ARA SDK 2.x deprecates this entry point, but ARA 1.x hosts still call it.
@@ -125,26 +97,11 @@ function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
         return bindToDocumentControllerWithRoles (controllerRef, 0, 0);
     }
 ]=])
-
-        string(FIND "${vst3_client_source}" "${ara_upstream_snippet}" ara_upstream_pos)
-        if(ara_upstream_pos EQUAL -1)
-            string(REPLACE "\n" "\r\n" ara_upstream_snippet_crlf "${ara_upstream_snippet}")
-            string(REPLACE "\n" "\r\n" ara_patched_snippet_crlf "${ara_patched_snippet}")
-            string(FIND "${vst3_client_source}" "${ara_upstream_snippet_crlf}" ara_upstream_crlf_pos)
-
-            if(ara_upstream_crlf_pos EQUAL -1)
-                message(FATAL_ERROR
-                    "OpenTune JUCE VST3 client overlay cannot be generated. Inspect ${vst3_cpp_path}; "
-                    "the vendored JUCE VST3 ARA entry point no longer matches the audited source.")
-            endif()
-
-            string(REPLACE "${ara_upstream_snippet_crlf}" "${ara_patched_snippet_crlf}"
-                   vst3_client_source "${vst3_client_source}")
-        else()
-            string(REPLACE "${ara_upstream_snippet}" "${ara_patched_snippet}"
-                   vst3_client_source "${vst3_client_source}")
-        endif()
-    endif()
+    opentune_vst3_overlay_patch(vst3_client_source
+        "ARA legacy bind"
+        "${ara_upstream_snippet}"
+        "${ara_patched_snippet}"
+        "${vst3_cpp_path}")
 
     # ---- Patch 3: host-active buses when the host skips activateBus -------------
     # Cubase 12 / Nuendo 12 do not call IComponent::activateBus() for ARA plug-in
@@ -191,33 +148,20 @@ function(opentune_use_juce_vst3_client_ara_legacy_bind_overlay juce_root)
         }
 ]=])
 
-    string(FIND "${vst3_client_source}" "${bus_active_patched}" bus_active_patched_pos)
-    if(NOT bus_active_patched_pos EQUAL -1)
-        message(STATUS
-            "JUCE VST3 client already treats accepted buses as host active; skipping bus patch")
-    else()
-        string(FIND "${vst3_client_source}" "${bus_active_needle}" bus_active_pos)
-        if(bus_active_pos EQUAL -1)
-            string(REPLACE "\n" "\r\n" bus_active_needle_crlf "${bus_active_needle}")
-            string(REPLACE "\n" "\r\n" bus_active_patched_crlf "${bus_active_patched}")
-            string(FIND "${vst3_client_source}" "${bus_active_needle_crlf}" bus_active_crlf_pos)
-            if(bus_active_crlf_pos EQUAL -1)
-                message(FATAL_ERROR
-                    "OpenTune JUCE VST3 client overlay cannot apply host-active bus patch. "
-                    "Inspect ${vst3_cpp_path}; the audited setBusArrangements body no longer matches.")
-            endif()
-            string(REPLACE "${bus_active_needle_crlf}" "${bus_active_patched_crlf}"
-                   vst3_client_source "${vst3_client_source}")
-        else()
-            string(REPLACE "${bus_active_needle}" "${bus_active_patched}"
-                   vst3_client_source "${vst3_client_source}")
-        endif()
-    endif()
+    opentune_vst3_overlay_patch(vst3_client_source
+        "host-active bus layout"
+        "${bus_active_needle}"
+        "${bus_active_patched}"
+        "${vst3_cpp_path}")
 
     # ---- Emit patched source and rewire INTERFACE_SOURCES -----------------------
     set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/Generated/OpenTune/JUCE")
     set(generated_vst3_cpp_path "${generated_dir}/juce_audio_plugin_client_VST3.cpp")
     file(MAKE_DIRECTORY "${generated_dir}")
+
+    opentune_apply_juce_vst3_realtime_overlay(
+        vst3_client_source "${juce_root}" "${generated_dir}" "${vst3_cpp_path}")
+
     file(WRITE "${generated_vst3_cpp_path}" "${vst3_client_source}")
 
     get_target_property(vst3_wrapper_sources juce_audio_plugin_client_VST3 INTERFACE_SOURCES)

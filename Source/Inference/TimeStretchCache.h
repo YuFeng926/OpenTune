@@ -7,14 +7,13 @@
  * Canonical slice provided for Stage2/export non-realtime reading.
  *
  * Writer side uses std::mutex; Entry is shared_ptr<const Entry> — published once, never mutated.
- * Audio thread atomic_load(readerMap_) — lock-free read path.
+ * Audio thread borrows readerMap_ through RealtimeSnapshot::Read.
  */
 #pragma once
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
 
-#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -24,6 +23,7 @@
 #include "../Content/ContentKey.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/TimeCoordinate.h"
+#include "../Utils/RealtimeSnapshot.h"
 
 namespace OpenTune {
 
@@ -85,17 +85,17 @@ public:
 
     void invalidate(ContentKey key);
     void clear();
+    void collectPlaybackSnapshots();
 
 private:
     mutable std::mutex mutex_;
     std::map<ContentKey, std::shared_ptr<const Entry>> entries_;
 
-    // Atomic snapshot for lock-free readers. Published after each mutex-protected write.
-    mutable std::shared_ptr<const std::map<ContentKey, std::shared_ptr<const Entry>>> readerMap_;
+    using ReaderMap = std::map<ContentKey, std::shared_ptr<const Entry>>;
+    mutable RealtimeSnapshot<ReaderMap> readerMap_;
 
-    mutable std::vector<std::shared_ptr<const std::map<ContentKey, std::shared_ptr<const Entry>>>> retiredSnapshots_;
-
-    mutable std::map<ContentKey, uint32_t> invalidationGen_;
+    std::map<ContentKey, uint32_t> buildGenerationByKey_;
+    uint32_t nextBuildGeneration_{0};
 
     // Prepared state: serialized by writer mutex_ only.
     double targetSampleRate_{TimeCoordinate::kRenderSampleRate};
@@ -103,8 +103,7 @@ private:
 
     // Range SRC from the complete Stage2 output. mutex_ must be held.
     void prepareEntry(Entry& entry, double targetSr);
-
-    static size_t entryTotalBytes(const Entry& e);
+    void publishReaderMapLocked();
 };
 
 } // namespace OpenTune

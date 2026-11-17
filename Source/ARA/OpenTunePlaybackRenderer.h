@@ -3,9 +3,11 @@
 #include "../Content/ContentKey.h"
 #include "../Render/PlaybackReadSource.h"
 #include "../Utils/PlaybackSampleGeometry.h"
+#include "../Utils/RealtimeSnapshot.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -23,7 +25,9 @@ inline bool shouldRenderPlaybackBlock(juce::AudioProcessor::Realtime realtime,
 class OpenTuneDocumentController;
 class ContentRenderService;
 class NotePitchAudition;
-class OpenTunePlaybackRenderer : public juce::ARAPlaybackRenderer
+struct OpenTunePlaybackRendererTestAccess;
+class OpenTunePlaybackRenderer : public juce::ARAPlaybackRenderer,
+                                 private juce::AsyncUpdater
 {
 public:
     OpenTunePlaybackRenderer(ARA::PlugIn::DocumentController* araDc,
@@ -72,6 +76,7 @@ public:
     void detachDocumentController(OpenTuneDocumentController& owner);
 
     void refreshRenderPlanFromDocument();
+    void collectPlaybackSnapshots();
 
     // Message-thread pure projection: orders items by playback position,
     // resolves each item's actual predecessor, assigns continuity groups, and
@@ -97,51 +102,55 @@ protected:
     void willRemovePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept override;
 
 private:
+    friend struct OpenTunePlaybackRendererTestAccess;
+
+    static constexpr uint32_t lifecycleClosingBit_ = uint32_t{1} << 31;
+    static constexpr uint32_t lifecycleReaderMask_ = lifecycleClosingBit_ - 1;
+    static_assert(std::atomic<uint32_t>::is_always_lock_free,
+                  "ARA playback lifecycle gate must be lock-free");
+    static_assert(std::atomic<double>::is_always_lock_free);
+    static_assert(std::atomic<const NotePitchAudition*>::is_always_lock_free);
+
+    class LifecycleReadGuard
+    {
+    public:
+        explicit LifecycleReadGuard(OpenTunePlaybackRenderer& renderer) noexcept;
+        ~LifecycleReadGuard();
+
+        LifecycleReadGuard(const LifecycleReadGuard&) = delete;
+        LifecycleReadGuard& operator=(const LifecycleReadGuard&) = delete;
+        explicit operator bool() const noexcept { return renderer_ != nullptr; }
+
+    private:
+        OpenTunePlaybackRenderer* renderer_;
+    };
+
+    bool enterLifecycle() noexcept;
+    void leaveLifecycle() noexcept;
+    void closeLifecycleAndWait();
+    void finishPendingRenderPlanPublication();
+    void handleAsyncUpdate() override;
+
     std::atomic<double> hostSampleRate_{0.0};
+    std::atomic<double> pendingRenderPlanSampleRate_{0.0};
+    std::atomic<uint32_t> lifecycleGate_{0};
     int numChannels_ = 2;
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;
 
     OpenTuneDocumentController* documentController_ = nullptr;
-    std::shared_ptr<ContentRenderService> contentRenderServiceSnapshot_;
+    std::shared_ptr<ContentRenderService> contentRenderService_;
     std::atomic<const NotePitchAudition*> notePitchAudition_{nullptr};
 
-    struct AtomicRenderPlan
-    {
-        std::shared_ptr<const RenderPlan> value{std::make_shared<RenderPlan>()};
-
-        std::shared_ptr<const RenderPlan> load(std::memory_order order = std::memory_order_acquire) const noexcept
-        {
-            return std::atomic_load_explicit(&value, order);
-        }
-
-        void store(std::shared_ptr<const RenderPlan> next,
-                   std::memory_order order = std::memory_order_release) noexcept
-        {
-            std::atomic_store_explicit(&value, std::move(next), order);
-        }
-
-        bool compareExchange(std::shared_ptr<const RenderPlan> next,
-                             std::shared_ptr<const RenderPlan>& expected) noexcept
-        {
-            return std::atomic_compare_exchange_strong_explicit(
-                &value, &expected, std::move(next),
-                std::memory_order_acq_rel, std::memory_order_acquire);
-        }
-    };
-
-    AtomicRenderPlan currentPlan_;
+    RealtimeSnapshot<RenderPlan> currentPlan_;
 
     // Message thread: reads DC projections and source views into an immutable plan.
     std::shared_ptr<RenderPlan> buildRenderPlan(
         std::vector<juce::ARAPlaybackRegion*> playbackRegions,
         double targetSampleRate) const;
-    void publishRenderPlanFor(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
-
-    // Non-message caller: reprojects only the frozen plan semantics at a new
-    // target rate and reacquires the prepared source view from CRS.
-    void reprojectRenderPlanForSampleRate(double sampleRate,
-                                          const std::shared_ptr<ContentRenderService>& crs);
+    void publishRenderPlanFor(std::vector<juce::ARAPlaybackRegion*> playbackRegions,
+                              double targetSampleRate);
+    void clearPlaybackSnapshotsAndWait();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTunePlaybackRenderer)
 };

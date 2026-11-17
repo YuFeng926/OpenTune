@@ -13,16 +13,15 @@ namespace OpenTune {
  * TimeGrid output grid for Stage2. outputStartSeconds is the owner's explicit
  * content-local output-time anchor for the first requested sample. */
 struct PlaybackReadRequest {
-    PlaybackReadSource source;
+    const PlaybackReadSource& source;
     int64_t readStartSample{0};
     double targetSampleRate{0.0};
     int numSamples{0};
     double outputStartSeconds{0.0};
 
-    PlaybackReadRequest() = default;
-    PlaybackReadRequest(PlaybackReadSource src, int64_t startSample, double rate,
+    PlaybackReadRequest(const PlaybackReadSource& src, int64_t startSample, double rate,
                         int samples, double outputTime)
-        : source(std::move(src)), readStartSample(startSample), targetSampleRate(rate),
+        : source(src), readStartSample(startSample), targetSampleRate(rate),
           numSamples(samples), outputStartSeconds(outputTime) {}
 };
 

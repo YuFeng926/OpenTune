@@ -505,7 +505,7 @@ ExportPlan buildExportPlan(OpenTuneAudioProcessor& processor, const ExportTarget
         }
         case ExportKind::Master: {
             const auto snapshot = arrangement->loadPlaybackSnapshot();
-            if (snapshot == nullptr)
+            if (!snapshot)
                 break;
             const int count = std::min(arrangement->getNumTracks(), static_cast<int>(snapshot->tracks.size()));
             for (int trackId = 0; trackId < count; ++trackId) {

@@ -137,6 +137,7 @@ public:
                                                 std::function<void(int)> completionCallback);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
+    void collectPlaybackSnapshots();
 
     void didUpdateMusicalContextProperties(juce::ARAMusicalContext* musicalContext) override;
     void didUpdateRegionSequenceProperties(juce::ARARegionSequence* regionSequence) override;
@@ -304,7 +305,7 @@ private:
     PlaybackRegion& ensurePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     PlaybackRegionProjection makeProjection(const PlaybackRegion& region) const;
     std::vector<OpenTunePlaybackRenderer*> publishModelChange();
-    static void refreshRegisteredRenderers(const std::vector<OpenTunePlaybackRenderer*>& renderers);
+    void refreshRegisteredRenderers(const std::vector<OpenTunePlaybackRenderer*>& renderers);
     bool publishPlaybackReadSourceForModification(
         AudioModification& modification,
         NativePcmSource nativeSource,

@@ -75,9 +75,14 @@ private:
     std::atomic<int> pressedNote_{-1};
     bool samplesLoaded_ = false;
 
-    void processEvents(double sampleRate);
+    int processEvents(double sampleRate);
     void startVoice(int midiNote, double sampleRate);
     void stopVoice(int midiNote, double sampleRate);
+
+    friend struct AuditionRealtimeTestAccess;
 };
+
+static_assert(std::atomic<int>::is_always_lock_free,
+              "PianoKeyAudition event indices must be lock-free");
 
 } // namespace OpenTune

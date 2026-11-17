@@ -14,6 +14,7 @@
 #include "../Content/NativePcmSource.h"
 #include "Utils/PlaybackSampleGeometry.h"
 #include "Utils/TimeCoordinate.h"
+#include "Utils/RealtimeSnapshot.h"
 #include "../DSP/ResamplingManager.h"
 
 namespace OpenTune {
@@ -172,6 +173,7 @@ public:
                                 int64_t readStartSample) const;
 
     void clear();
+    void collectPlaybackSnapshots();
 
 private:
     struct PublishedChunk {
@@ -230,8 +232,8 @@ private:
     uint64_t notifiedFailureContentRevision_{0};
     bool hasNotifiedFailureContentRevision_{false};
 
-    std::shared_ptr<const PublishedRenderSnapshot> publishedSnapshot_;
-    std::shared_ptr<const PublishedPreparedSnapshot> preparedSnapshot_;
+    mutable RealtimeSnapshot<PublishedRenderSnapshot> publishedSnapshot_;
+    mutable RealtimeSnapshot<PublishedPreparedSnapshot> preparedSnapshot_;
 
     // Prepared rebuild state: serialized by preparedBuildMutex_ (non-audio thread).
     double preparedSampleRate_{0.0};
@@ -242,12 +244,10 @@ private:
 
     // Writer mutex serializes prepared rebuild + target rate update.
     mutable std::mutex preparedBuildMutex_;
+    // Serializes canonical publish/rebuild/rollback transactions on writer threads.
+    mutable std::mutex snapshotTransactionMutex_;
 
-    // Writer-owned release pool for old published generations.
-    mutable std::vector<std::shared_ptr<const PublishedRenderSnapshot>> retiredSnapshots_;
-    mutable std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> retiredPreparedSnapshots_;
-
-    void publishLocked(std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases);
+    void publishLocked();
     bool rebuildPrepared(double requestedSampleRate = -1.0);
     // Prepared range SRC helpers. Callable only while preparedBuildMutex_ is held.
     void fillCanonicalContextFromNative(std::vector<float>& context,
@@ -260,8 +260,6 @@ private:
         int64_t targetBegin,
         int outputLength,
         double targetSampleRate);
-    void pruneRetiredSnapshotsLocked(
-        std::vector<std::shared_ptr<const PublishedRenderSnapshot>>& releases) const;
     // Settled check callable only when lock_ is already held (avoids recursive lock).
     bool isCanonicalSettledLocked_() const;
 

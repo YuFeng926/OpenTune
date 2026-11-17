@@ -64,6 +64,23 @@ void RenderCacheRegistry::clear()
         entry.second->clear();
 }
 
+void RenderCacheRegistry::collectPlaybackSnapshots()
+{
+    std::vector<std::shared_ptr<RenderCache>> caches;
+    {
+        const juce::ScopedReadLock readLock(lock_);
+        caches.reserve(caches_.size());
+        for (const auto& [key, cache] : caches_) {
+            juce::ignoreUnused(key);
+            if (cache)
+                caches.push_back(cache);
+        }
+    }
+
+    for (const auto& cache : caches)
+        cache->collectPlaybackSnapshots();
+}
+
 bool RenderCacheRegistry::preparePlaybackSampleRate(double targetSr)
 {
     if (targetSr <= 0.0) return false;

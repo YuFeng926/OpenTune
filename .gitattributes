@@ -3,4 +3,6 @@
 *.command text eol=lf
 .github/** text eol=lf
 scripts/github_actions/** text eol=lf
+# Unified diff blank context lines carry a required space.
+scripts/github_actions/*.patch whitespace=-blank-at-eol
 scripts/github_actions/assets/*.dll binary

@@ -21,15 +21,15 @@ PlaybackSourcePublisher::~PlaybackSourcePublisher()
 
 // ---- prepared dry byte tracking ----
 
-void PlaybackSourcePublisher::recomputeActivePreparedBytes()
+void PlaybackSourcePublisher::recomputePreparedBytes()
 {
     auto snap = std::atomic_load(&data_);
 
     std::set<uintptr_t> seenPtrs;
     size_t newTotal = 0;
 
-    if (snap) {
-        for (const auto& pair : *snap) {
+    const auto countMap = [&](const auto& sourceMap) {
+        for (const auto& pair : sourceMap) {
             const auto& src = pair.second;
             const auto& dry = src.preparedDry;
             if (!dry.buffer || dry.buffer == src.nativeSource.buffer) continue;
@@ -44,7 +44,11 @@ void PlaybackSourcePublisher::recomputeActivePreparedBytes()
 
             newTotal += bytes;
         }
-    }
+    };
+    if (snap)
+        countMap(*snap);
+    for (const auto& retired : retiredMaps_)
+        countMap(*retired);
 
     const int64_t delta = static_cast<int64_t>(newTotal) - static_cast<int64_t>(totalPreparedBytes_);
     if (delta > 0) {
@@ -71,7 +75,11 @@ void PlaybackSourcePublisher::setPlaybackSampleRate(double sr)
     playbackSampleRate_ = sr;
 
     auto current = std::atomic_load(&data_);
-    if (!current || current->empty()) return;
+    if (!current || current->empty()) {
+        current.reset();
+        collectRetiredMapsLocked();
+        return;
+    }
 
     auto next = std::make_shared<std::map<ContentKey, PlaybackReadSource>>(*current);
     for (auto& [key, src] : *next) {
@@ -84,17 +92,13 @@ void PlaybackSourcePublisher::setPlaybackSampleRate(double sr)
                 break;
             }
         }
-        prepareSourceDry(src, playbackSampleRate_);
+        prepareSourceDry(src, sr);
     }
     auto old = std::atomic_exchange(&data_,
         std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>(std::move(next)));
     if (old) retiredMaps_.push_back(std::move(old));
-    retiredMaps_.erase(
-        std::remove_if(retiredMaps_.begin(), retiredMaps_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredMaps_.end());
-
-    recomputeActivePreparedBytes();
+    current.reset();
+    collectRetiredMapsLocked();
 }
 
 void PlaybackSourcePublisher::publish(ContentKey key, PlaybackReadSource source)
@@ -116,9 +120,8 @@ void PlaybackSourcePublisher::publish(ContentKey key, PlaybackReadSource source)
         }
     }
 
-    if (playbackSampleRate_ > 0.0) {
+    if (playbackSampleRate_ > 0.0)
         prepareSourceDry(source, playbackSampleRate_);
-    }
 
     // Clear lifetime token before storing in map — avoid map→self cycle.
     source.lifetimeToken.reset();
@@ -130,12 +133,8 @@ void PlaybackSourcePublisher::publish(ContentKey key, PlaybackReadSource source)
     auto old = std::atomic_exchange(&data_,
         std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>(std::move(next)));
     if (old) retiredMaps_.push_back(std::move(old));
-    retiredMaps_.erase(
-        std::remove_if(retiredMaps_.begin(), retiredMaps_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredMaps_.end());
-
-    recomputeActivePreparedBytes();
+    current.reset();
+    collectRetiredMapsLocked();
 }
 
 bool PlaybackSourcePublisher::get(ContentKey key, PlaybackReadSource& out) const noexcept
@@ -159,12 +158,8 @@ void PlaybackSourcePublisher::remove(ContentKey key)
     auto old = std::atomic_exchange(&data_,
         std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>(std::move(next)));
     if (old) retiredMaps_.push_back(std::move(old));
-    retiredMaps_.erase(
-        std::remove_if(retiredMaps_.begin(), retiredMaps_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredMaps_.end());
-
-    recomputeActivePreparedBytes();
+    current.reset();
+    collectRetiredMapsLocked();
 }
 
 void PlaybackSourcePublisher::clear()
@@ -173,15 +168,25 @@ void PlaybackSourcePublisher::clear()
     auto old = std::atomic_exchange(&data_,
         std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>());
     if (old) retiredMaps_.push_back(std::move(old));
-    retiredMaps_.erase(
-        std::remove_if(retiredMaps_.begin(), retiredMaps_.end(),
-            [](const auto& p) { return p.use_count() <= 1; }),
-        retiredMaps_.end());
-
-    recomputeActivePreparedBytes();
+    collectRetiredMapsLocked();
 }
 
 // ---- private helpers ----
+
+void PlaybackSourcePublisher::collectPlaybackSnapshots()
+{
+    std::lock_guard<std::mutex> lg(writerMutex_);
+    collectRetiredMapsLocked();
+}
+
+void PlaybackSourcePublisher::collectRetiredMapsLocked()
+{
+    retiredMaps_.erase(
+        std::remove_if(retiredMaps_.begin(), retiredMaps_.end(),
+            [](const auto& p) { return p.use_count() == 1; }),
+        retiredMaps_.end());
+    recomputePreparedBytes();
+}
 
 void PlaybackSourcePublisher::prepareSourceDry(PlaybackReadSource& src, double targetSr)
 {

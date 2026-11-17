@@ -398,9 +398,9 @@ bool runRenderCacheCapacityContract()
                 static_cast<size_t>(preparedFirstEnd) * sizeof(float);
             const size_t neighborChunkPcmBytes =
                 static_cast<size_t>(preparedPlanEnd - preparedFirstEnd) * sizeof(float);
-            const size_t expectedCurrentBytes = bytesBeforeEdit + 256 * sizeof(float)
+            const size_t rebuildPeakBytes = bytesBeforeEdit + 256 * sizeof(float)
                 + changedChunkPcmBytes + neighborChunkPcmBytes;
-            limit.store(expectedCurrentBytes, std::memory_order_release);
+            limit.store(rebuildPeakBytes, std::memory_order_release);
 
             cache.reconcileFullPlanAndRequest(plan, 0, 256, 2);
             jobs = cache.getPendingJobs();
@@ -424,10 +424,13 @@ bool runRenderCacheCapacityContract()
                 passed = checkRenderContract(
                     unchangedChunk.getSample(0, 0) != 0.0f,
                     "neighbor_prepared_chunk_rejected_current_revision") && passed;
+                cache.collectPlaybackSnapshots();
+                // The rebuild peak includes both generations; collection leaves
+                // the same canonical and prepared spans as before the edit.
                 passed = checkRenderContract(
                     OpenTune::RenderCache::renderCacheCurrentBytes().load(std::memory_order_acquire)
-                        == expectedCurrentBytes,
-                    "local_edit_neighbor_prepared_pcm_not_accounted") && passed;
+                        == bytesBeforeEdit,
+                    "local_edit_collected_pcm_accounting_mismatch") && passed;
             }
         }
         cache.clear();

@@ -6,6 +6,7 @@
 #include "../../Content/EditableContentSnapshot.h"
 #include "../../Render/PlaybackReadSource.h"
 #include "../../Utils/PlaybackSampleGeometry.h"
+#include "../../Utils/RealtimeSnapshot.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
@@ -274,6 +275,12 @@ public:
     /** Test only: number of view publications since construction. */
     uint64_t testPublishedViewCount() const noexcept { return publishedViewCount_; }
 
+    /** Test only: hold a read lease on the current view. */
+    RealtimeSnapshot<SegmentsView>::Read testHoldPublishedView() const
+    {
+        return publishedSegments_.read();
+    }
+
     /** Test only: override the per-take span metadata capacity for the next armed
      *  takes (0 = production budget). Lets tests exercise span-budget exhaustion
      *  with a tiny capacity and observe the full reclaim lifecycle. */
@@ -283,10 +290,12 @@ public:
     }
 
 private:
-    /** Build a new immutable view from current mutableSegments_ and atomically
-     *  exchange it into publishedSegments_. mutableMutex_ must NOT be held; the
-     *  method locks it internally while constructing the new view. */
+    /** Build a new immutable view from current mutableSegments_. mutableMutex_
+     *  must NOT be held; the method locks it internally while constructing it. */
     void publishSegmentsView();
+
+    /** Collect safe views and count actual view publications. */
+    bool collectPublishedView();
 
     /** Finalize a Pending capture: merge spans, read the host window, publish segments. */
     bool finalizePendingCapture(CaptureSegment& pending);
@@ -312,22 +321,12 @@ private:
     uint64_t activeDisplaySegmentId_ = 0;
     uint64_t idCounter_ = 0;
 
-    // Published view for audio thread (lock-free read of raw pointers only).
-    // The audio thread never touches owners or shared_ptr refcounts.
-    std::atomic<const SegmentsView*> publishedSegments_ { nullptr };
+    // Audio reads the raw immutable view through a bounded, lock-free snapshot.
+    RealtimeSnapshot<SegmentsView> publishedSegments_;
 
-    // Message-thread side of the publication lifecycle. currentView_ is the view
-    // currently published (keeps its owners alive); retiredViews_ holds views that
-    // were replaced but may still be read by the audio thread until readers hit 0.
-    std::unique_ptr<const SegmentsView> currentView_;
-    std::vector<std::unique_ptr<const SegmentsView>> retiredViews_;
-
-    // Content keys removed from the published set but not yet retired with the
-    // processor. Keys reappearing in a later view are dropped from this list.
+    // Retire candidates follow requested views, including a coalesced pending view.
     std::vector<ContentKey> pendingRetireKeys_;
-    std::vector<ContentKey> publishedKeys_;
-
-    mutable std::atomic<int> activeSegmentReaders_ { 0 };
+    std::vector<ContentKey> requestedKeys_;
     uint64_t publishedViewCount_ = 0;
 
     // Audio-thread scratch (allocated in prepareToPlay; resized only on message thread).
