@@ -749,11 +749,6 @@ private:
 
     // Undo support
     juce::String pendingUndoDescription_;
-    std::vector<Note> beforeUndoNotes_;
-    std::vector<PitchCorrectionSegment> beforeUndoSegments_;
-    bool undoSnapshotCaptured_{false};
-    void captureBeforeUndoSnapshot();
-    void recordUndoAction(const juce::String& description, F0FrameRange affectedRange);
 
     std::vector<PitchCorrectionSegment> getCurrentSegments() const;
     

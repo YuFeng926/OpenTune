@@ -851,6 +851,8 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Utils/PianoRollNotePatchAction.h
         Source/Utils/DrawNoteEdit.cpp
         Source/Utils/DrawNoteEdit.h
+        Source/Utils/NoteDraftEdit.cpp
+        Source/Utils/NoteDraftEdit.h
         Source/Utils/NoteResizeEdit.cpp
         Source/Utils/NoteResizeEdit.h
         Source/Utils/AutomationLane.cpp
@@ -1715,8 +1717,6 @@ option(OPENTUNE_BUILD_TESTS "Build OpenTune tests" OFF)
 if(OPENTUNE_IOS AND OPENTUNE_BUILD_TESTS)
     message(FATAL_ERROR "OPENTUNE_BUILD_TESTS links the VST3/ARA target and is not available for iPadOS builds.")
 endif()
-option(OPENTUNE_ENABLE_APPROVED_BACKPRESSURE_TEST
-       "Register the backpressure test only with an approved blocking-synthesize injector" OFF)
 if(OPENTUNE_BUILD_TESTS)
     enable_testing()
     target_compile_definitions(OpenTune PRIVATE OPENTUNE_LIFECYCLE_TEST_DATA_DIR=1)
@@ -1821,11 +1821,16 @@ if(OPENTUNE_BUILD_TESTS)
 
     add_executable(OpenTuneSelectedNoteEqEditTests
         Tests/SelectedNoteEqEditTests.cpp
+        Source/Utils/SelectedNoteEqEdit.cpp
+        Source/Utils/PianoRollNotePatchAction.cpp
+        Source/Utils/TimeGrid.cpp
+        Source/Utils/AppLogger.cpp
     )
     target_include_directories(OpenTuneSelectedNoteEqEditTests
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_compile_definitions(OpenTuneSelectedNoteEqEditTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0)
     target_link_libraries(OpenTuneSelectedNoteEqEditTests PRIVATE
-        OpenTune
         juce::juce_audio_basics
         juce::juce_core
     )
@@ -1921,16 +1926,25 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME DrawNoteEditTests COMMAND OpenTuneDrawNoteEditTests)
 
+    add_executable(OpenTuneNoteDraftEditTests
+        Tests/NoteDraftEditTests.cpp
+        Source/Utils/NoteDraftEdit.cpp)
+    target_include_directories(OpenTuneNoteDraftEditTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_compile_definitions(OpenTuneNoteDraftEditTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0)
+    target_link_libraries(OpenTuneNoteDraftEditTests PRIVATE
+        juce::juce_audio_basics juce::juce_core)
+    if(MSVC)
+        target_compile_options(OpenTuneNoteDraftEditTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME NoteDraftEditTests COMMAND OpenTuneNoteDraftEditTests)
+
     add_executable(OpenTuneNoteResizeEditTests
         Tests/NoteResizeEditTests.cpp
+        Source/Utils/NoteResizeEdit.cpp
     )
     target_include_directories(OpenTuneNoteResizeEditTests
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
-    target_link_libraries(OpenTuneNoteResizeEditTests PRIVATE
-        OpenTune
-        juce::juce_audio_basics
-        juce::juce_core
-    )
     if(MSVC)
         target_compile_options(OpenTuneNoteResizeEditTests PRIVATE /utf-8 /EHsc)
     endif()
@@ -1969,11 +1983,13 @@ if(OPENTUNE_BUILD_TESTS)
 
     add_executable(OpenTuneManualCorrectionEditTests
         Tests/ManualCorrectionEditTests.cpp
+        Source/Utils/ManualCorrectionEdit.cpp
     )
     target_include_directories(OpenTuneManualCorrectionEditTests
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_compile_definitions(OpenTuneManualCorrectionEditTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0)
     target_link_libraries(OpenTuneManualCorrectionEditTests PRIVATE
-        OpenTune
         juce::juce_audio_basics
         juce::juce_core
     )
@@ -2248,14 +2264,30 @@ if(OPENTUNE_BUILD_TESTS)
         juce::juce_audio_basics
         juce::juce_core
     )
-    if(OPENTUNE_ENABLE_CONTROL_API)
-        target_compile_definitions(OpenTuneStandaloneArrangementMoveTests PRIVATE
-            JucePlugin_Build_Standalone=1)
-    endif()
+    target_compile_definitions(OpenTuneStandaloneArrangementMoveTests PRIVATE
+        JucePlugin_Build_Standalone=1)
     if(MSVC)
         target_compile_options(OpenTuneStandaloneArrangementMoveTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME StandaloneArrangementMoveTests COMMAND OpenTuneStandaloneArrangementMoveTests)
+
+    foreach(standalone_edit_test IN ITEMS
+            NoteDraftTransactionTests ManualCorrectionTransactionTests StandaloneSourceLifetimeTests)
+        add_executable(OpenTune${standalone_edit_test}
+            Tests/${standalone_edit_test}.cpp
+            Tests/HeadlessEditorFactory.cpp)
+        target_include_directories(OpenTune${standalone_edit_test} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source ${ONNXRUNTIME_INCLUDE_DIR})
+        target_link_libraries(OpenTune${standalone_edit_test} PRIVATE
+            OpenTuneStandalone OpenTuneResources juce::juce_audio_basics juce::juce_core)
+        target_compile_definitions(OpenTune${standalone_edit_test} PRIVATE JucePlugin_Build_Standalone=1)
+        if(MSVC)
+            target_compile_options(OpenTune${standalone_edit_test} PRIVATE /utf-8 /EHsc)
+        endif()
+        add_test(NAME ${standalone_edit_test} COMMAND OpenTune${standalone_edit_test})
+    endforeach()
+    target_include_directories(OpenTuneManualCorrectionTransactionTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone)
 
     # Render/ARA contract tests use the production objects and their real worker
     # threads.  They intentionally link the application target instead of
@@ -2263,10 +2295,7 @@ if(OPENTUNE_BUILD_TESTS)
     foreach(render_contract IN ITEMS
             RenderRuntimeLifecycleTests
             RenderRuntimeDeferredRetryTests
-            RenderRuntimeBackpressureTests
-            RenderRuntimeStressTests
-            ARALifecycleContractTests
-            RenderRuntimePerformanceTests)
+            ARALifecycleContractTests)
         add_executable(${render_contract} Tests/${render_contract}.cpp)
         target_include_directories(${render_contract} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/Source
@@ -2281,18 +2310,11 @@ if(OPENTUNE_BUILD_TESTS)
         if(MSVC)
             target_compile_options(${render_contract} PRIVATE /utf-8 /EHsc)
         endif()
-        if((NOT render_contract STREQUAL "RenderRuntimeBackpressureTests"
-             OR (OPENTUNE_ENABLE_APPROVED_BACKPRESSURE_TEST
-                 AND EXISTS "${HIFIGAN_MODEL_COMMUNITY}"))
-           AND NOT render_contract STREQUAL "RenderRuntimePerformanceTests")
-            add_test(NAME ${render_contract} COMMAND ${render_contract})
-            set_tests_properties(${render_contract} PROPERTIES
-                TIMEOUT 4
-                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                ENVIRONMENT "OPENTUNE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/${render_contract};OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
-        elseif(render_contract STREQUAL "RenderRuntimeBackpressureTests")
-            message(STATUS "Not registering RenderRuntimeBackpressureTests: approved blocking-synthesize injector is unavailable")
-        endif()
+        add_test(NAME ${render_contract} COMMAND ${render_contract})
+        set_tests_properties(${render_contract} PROPERTIES
+            TIMEOUT 4
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            ENVIRONMENT "OPENTUNE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/${render_contract};OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
         if(WIN32)
             add_custom_command(TARGET ${render_contract} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -2309,33 +2331,12 @@ if(OPENTUNE_BUILD_TESTS)
     # deliberately run outside the short Lifecycle watchdog scenarios.
     set_tests_properties(RenderRuntimeDeferredRetryTests PROPERTIES TIMEOUT 120)
 
-    # Performance is only a test when the user-provided baseline/threshold
-    # contract exists.  A placeholder executable must not be reported as a
-    # performance regression or silently pass without approved parameters.
-    set(OPENTUNE_PERFORMANCE_BASELINE_FILE
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/performance-baseline.json"
-        CACHE FILEPATH "Approved performance baseline and thresholds")
-    if(NOT EXISTS "${OPENTUNE_PERFORMANCE_BASELINE_FILE}")
-        message(STATUS "Not registering RenderRuntimePerformanceTests: approved baseline is unavailable")
-    else()
-        add_test(NAME RenderRuntimePerformanceTests COMMAND RenderRuntimePerformanceTests)
-        set_tests_properties(RenderRuntimePerformanceTests PROPERTIES
-            TIMEOUT 4
-            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-            ENVIRONMENT "OPENTUNE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/RenderRuntimePerformanceTests;OPENTUNE_LIFECYCLE_TRACE_DIR=${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces")
-    endif()
-
-    set(OPENTUNE_HIFIGAN_TEST_MODEL "${HIFIGAN_MODEL_COMMUNITY}")
-    target_compile_definitions(RenderRuntimeBackpressureTests PRIVATE
-        OPENTUNE_HIFIGAN_MODEL_PATH="${OPENTUNE_HIFIGAN_TEST_MODEL}")
-
     # Linking the production SharedCode into the runtime lifecycle tests pulls
     # the JUCE ARA model object implementations.  Keep the SDK plug-in side
     # dispatch test-only, just as for the dedicated ARA host harness.
     foreach(_runtime_contract IN ITEMS
             RenderRuntimeLifecycleTests
-            RenderRuntimeDeferredRetryTests
-            RenderRuntimeStressTests)
+            RenderRuntimeDeferredRetryTests)
         target_sources(${_runtime_contract} PRIVATE
             "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
             "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"

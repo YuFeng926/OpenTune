@@ -1,8 +1,10 @@
 #include "DrawNoteEdit.h"
 
+#include "NoteDraftEdit.h"
 #include "PitchUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace OpenTune {
 
@@ -38,61 +40,6 @@ float calculateEffectivePIP(const EditableContentSnapshot& snapshot, const Note&
 
     std::sort(voicedF0.begin(), voicedF0.end());
     return voicedF0[voicedF0.size() / 2];
-}
-
-bool makeNotePatches(const std::vector<Note>& beforeNotes,
-                     const std::vector<Note>& afterNotes,
-                     ContentNoteRangePatch& beforePatch,
-                     ContentNoteRangePatch& afterPatch)
-{
-    auto notesContentEqual = [](const Note& left, const Note& right) {
-        return left.endTime == right.endTime
-            && left.pitch == right.pitch
-            && left.pitchOffset == right.pitchOffset
-            && left.retuneSpeed == right.retuneSpeed
-            && left.pitchDriftScale == right.pitchDriftScale
-            && left.vibratoDepth == right.vibratoDepth
-            && left.vibratoRate == right.vibratoRate
-            && left.eq == right.eq;
-    };
-
-    double dirtyStartTime = 1e30;
-    double dirtyEndTime = -1e30;
-    std::size_t beforeIndex = 0;
-    std::size_t afterIndex = 0;
-    while (beforeIndex < beforeNotes.size() || afterIndex < afterNotes.size()) {
-        const bool hasBefore = beforeIndex < beforeNotes.size();
-        const bool hasAfter = afterIndex < afterNotes.size();
-        if (hasBefore && hasAfter
-            && beforeNotes[beforeIndex].startTime == afterNotes[afterIndex].startTime) {
-            if (!notesContentEqual(beforeNotes[beforeIndex], afterNotes[afterIndex])) {
-                dirtyStartTime = std::min(dirtyStartTime, beforeNotes[beforeIndex].startTime);
-                dirtyEndTime = std::max({ dirtyEndTime,
-                                          beforeNotes[beforeIndex].endTime,
-                                          afterNotes[afterIndex].endTime });
-            }
-            ++beforeIndex;
-            ++afterIndex;
-        } else if (!hasAfter
-                   || (hasBefore && beforeNotes[beforeIndex].startTime < afterNotes[afterIndex].startTime)) {
-            dirtyStartTime = std::min(dirtyStartTime, beforeNotes[beforeIndex].startTime);
-            dirtyEndTime = std::max(dirtyEndTime, beforeNotes[beforeIndex].endTime);
-            ++beforeIndex;
-        } else {
-            dirtyStartTime = std::min(dirtyStartTime, afterNotes[afterIndex].startTime);
-            dirtyEndTime = std::max(dirtyEndTime, afterNotes[afterIndex].endTime);
-            ++afterIndex;
-        }
-    }
-
-    if (dirtyEndTime <= dirtyStartTime)
-        return false;
-
-    beforePatch.affectedRange = { dirtyStartTime, dirtyEndTime };
-    afterPatch.affectedRange = beforePatch.affectedRange;
-    beforePatch.afterNotesInRange = filterNotesToRange(beforeNotes, dirtyStartTime, dirtyEndTime);
-    afterPatch.afterNotesInRange = filterNotesToRange(afterNotes, dirtyStartTime, dirtyEndTime);
-    return true;
 }
 
 } // namespace
@@ -165,10 +112,13 @@ DrawNoteEditPlan planDrawNoteEdit(const EditableContentSnapshot& snapshot,
     finalSequence.setNotesSorted(updatedNotes);
     finalSequence.insertNoteSorted(newNote);
     plan.afterNotes = finalSequence.getNotes();
-    if (!makeNotePatches(snapshot.notes, plan.afterNotes, plan.beforePatch, plan.afterPatch)) {
+    auto noteDraftPlan = planNoteDraftEdit(snapshot.notes, plan.afterNotes);
+    if (noteDraftPlan.status == NoteDraftEditStatus::NoChange) {
         plan.status = DrawNotePlanStatus::NoChange;
         return plan;
     }
+    plan.beforePatch = std::move(noteDraftPlan.beforePatch);
+    plan.afterPatch = std::move(noteDraftPlan.afterPatch);
 
     if (snapshot.pitchCurve != nullptr) {
         const auto& curveSnapshot = snapshot.pitchCurve;

@@ -70,18 +70,13 @@ bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
                                const std::function<bool(const std::vector<PitchCorrectionSegment>&,
                                                         F0FrameRange)>& commit = {})
 {
-    const auto plan = ctx.planNoteCorrection ? ctx.planNoteCorrection(notes, editRange) : std::nullopt;
-    if (!plan)
-        return false;
-
-    const bool committed = commit
-        ? commit(plan->segments, plan->affectedRange)
-        : ctx.commitNotesAndSegments(plan->notes, plan->segments, plan->affectedRange) != nullptr;
-    if (!committed) {
-        return false;
+    if (commit) {
+        const auto plan = ctx.planNoteCorrection ? ctx.planNoteCorrection(notes, editRange) : std::nullopt;
+        return plan && commit(plan->segments, plan->affectedRange);
     }
 
-    return true;
+    const auto expectedNotesRevision = ctx.getNoteDraft().expectedNotesRevision;
+    return ctx.commitNoteCorrectionDraft(expectedNotesRevision, notes, editRange);
 }
 
 const std::vector<Note>& committedNotes(PianoRollToolHandler::Context& ctx)
@@ -458,6 +453,7 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
                 int threshold = ctx_.getDragThreshold();
                 if (dx * dx + dy * dy > threshold * threshold) {
                     ctx_.getState().handDrawPendingDrag = false;
+                    handleDrawCurveTool(e.withNewPosition(dragStartPos_.toFloat()));
                     handleDrawCurveTool(e);
                 }
             } else if (ctx_.getState().drawing.isDrawingF0) {
@@ -1393,9 +1389,7 @@ bool PianoRollToolHandler::commitKeyboardNoteEdit(const std::vector<Note>& work,
     }
 
     ctx_.beginNoteDraft();
-    auto& draft = ctx_.getNoteDraft();
-    draft.contentDirty = true;
-    draft.workingNotes = work;
+    ctx_.getNoteDraft().workingNotes = work;
     ctx_.setUndoDescription(undoDescription);
     const bool committed = commitNoteBasedCorrection(ctx_, work, editRange);
     ctx_.clearNoteDraft();
@@ -1634,9 +1628,7 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction, bool 
     auto workingNotes = std::move(valuePlan.notes);
 
     ctx_.beginNoteDraft();
-    auto& draft = ctx_.getNoteDraft();
-    draft.contentDirty = true;
-    draft.workingNotes = workingNotes;
+    ctx_.getNoteDraft().workingNotes = workingNotes;
     ctx_.setUndoDescription(LOC_RAW("Move note"));
     const bool committed = commitNoteBasedCorrection(ctx_, workingNotes, editRange);
     ctx_.clearNoteDraft();
@@ -2049,55 +2041,45 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
         ctx_.getState().drawing.isDrawingF0 = true;
         ctx_.setDirtyStartTime(-1.0);
         ctx_.setDirtyEndTime(-1.0);
-        lastDrawTime_ = curveTime;
+        ctx_.getState().drawing.handDrawStartFrame = -1;
+        ctx_.getState().drawing.handDrawEndFrameExclusive = -1;
+        lastDrawFrame_ = frameIndex;
         lastDrawF0_ = targetF0;
 
         auto& handDrawBuffer = ctx_.getState().drawing.handDrawBuffer;
         handDrawBuffer.clear();
         handDrawBuffer.resize(originalF0.size(), -1.0f);
-        
     }
 
     auto& handDrawBuffer = ctx_.getState().drawing.handDrawBuffer;
-    
-    const double lastTime = lastDrawTime_;
 
-    auto writeFrame = [&](int f, float v) -> void {
-        if (f < 0 || static_cast<size_t>(f) >= originalF0.size()) {
-            return;
-        }
-        if (!AudioEditingScheme::canEditFrame(scheme, originalF0, f)) {
-            return;
-        }
-        handDrawBuffer[(size_t)f] = v;
-        double frameTime = f0tl.timeAtFrame(f);
-        double dirtyStart = ctx_.getDirtyStartTime();
-        double dirtyEnd = ctx_.getDirtyEndTime();
-        dirtyStart = (dirtyStart < 0.0) ? frameTime : std::min(dirtyStart, frameTime);
-        dirtyEnd = (dirtyEnd < 0.0) ? frameTime : std::max(dirtyEnd, frameTime);
-        ctx_.setDirtyStartTime(dirtyStart);
-        ctx_.setDirtyEndTime(dirtyEnd);
-    };
+    const auto stroke = planManualCorrectionStroke(
+        scheme,
+        originalF0,
+        { lastDrawFrame_, lastDrawF0_ },
+        { frameIndex, targetF0 });
+    auto& drawing = ctx_.getState().drawing;
+    if (stroke.actualRange.isValid()) {
+        drawing.handDrawStartFrame = drawing.handDrawStartFrame < 0
+            ? stroke.actualRange.startFrame
+            : std::min(drawing.handDrawStartFrame, stroke.actualRange.startFrame);
+        drawing.handDrawEndFrameExclusive = std::max(
+            drawing.handDrawEndFrameExclusive, stroke.actualRange.endFrameExclusive);
 
-    const int lastFrame = juce::jlimit(0, f0tl.endFrameExclusive() - 1, f0tl.frameAtOrBefore(lastTime));
-    const float lastF0 = lastDrawF0_;
-    writeFrame(frameIndex, targetF0);
-
-    int startFrame = std::min(lastFrame, frameIndex);
-    int endFrame = std::max(lastFrame, frameIndex);
-
-    if (endFrame > startFrame && lastF0 > 0.0f && targetF0 > 0.0f) {
-        float logA = std::log2(lastF0);
-        float logB = std::log2(targetF0);
-        for (int f = startFrame + 1; f < endFrame; ++f) {
-            float t = static_cast<float>(f - startFrame) / static_cast<float>(endFrame - startFrame);
-            float logV = logA + (logB - logA) * t;
-            float v = std::pow(2.0f, logV);
-            writeFrame(f, v);
+        for (const auto& op : stroke.ops) {
+            for (std::size_t offset = 0; offset < op.f0Data.size(); ++offset) {
+                const int frame = op.startFrame + static_cast<int>(offset);
+                handDrawBuffer[static_cast<std::size_t>(frame)] = op.f0Data[offset];
+                const double frameTime = f0tl.timeAtFrame(frame);
+                const double dirtyStart = ctx_.getDirtyStartTime();
+                const double dirtyEnd = ctx_.getDirtyEndTime();
+                ctx_.setDirtyStartTime(dirtyStart < 0.0 ? frameTime : std::min(dirtyStart, frameTime));
+                ctx_.setDirtyEndTime(dirtyEnd < 0.0 ? frameTime : std::max(dirtyEnd, frameTime));
+            }
         }
     }
 
-    lastDrawTime_ = curveTime;
+    lastDrawFrame_ = frameIndex;
     lastDrawF0_ = targetF0;
     if (ctx_.invalidateInteractionPreview)
         ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
@@ -2421,7 +2403,6 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         if (!ctx_.getNoteDraft().active) {
             ctx_.beginNoteDraft();
         }
-        ctx_.getNoteDraft().contentDirty = true;
 
         auto& draft = ctx_.getNoteDraft();
         if (ctx_.getState().noteResize.noteIndex >= static_cast<int>(draft.baselineNotes.size())) {
@@ -2664,7 +2645,6 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
     if (currentTool_ == ToolId::PitchModulation || currentTool_ == ToolId::PitchDrift) {
         if (!ctx_.getNoteDraft().active)
             ctx_.beginNoteDraft();
-        ctx_.getNoteDraft().contentDirty = true;
 
         // 设置 Modulation/Drift 拖拽预览状态（必须在 invalidateLiveNotes 之前，
         // 组件侧据此扩展 dirty 区域，否则 F0 预览曲线超出 note 高度的部分残留）
@@ -2738,7 +2718,6 @@ void PianoRollToolHandler::dragNotePitch(const juce::MouseEvent& e, bool allowAu
     if (!ctx_.getNoteDraft().active) {
         ctx_.beginNoteDraft();
     }
-    ctx_.getNoteDraft().contentDirty = true;
 
     const float startF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(dragStartPos_.y - ctx_.contentOriginY));
     const float currentF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
@@ -2856,7 +2835,7 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
             ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
                 ? LOC_RAW("Modulation depth")
                 : LOC_RAW("Drift correction"));
-            // applyCorrectionToRange + commitNotesAndSegments 唯一提交链
+            // 提交由 revision-checked correction draft 事务完成。
             committed = commitNoteBasedCorrection(ctx_, notes, editRange);
         }
 
@@ -3011,8 +2990,6 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         float newVal = (currentVal > 0.5f) ? 0.0f : 1.0f;
 
         ctx_.beginNoteDraft();
-        auto& draft = ctx_.getNoteDraft();
-        draft.contentDirty = true;
         ContentNoteValueEdit edit;
         edit.kind = ContentNoteValueEdit::Kind::Parameters;
         edit.position = static_cast<std::size_t>(clickedNoteIndex);
@@ -3023,7 +3000,7 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         ContentNoteValueEditRequest request;
         request.edits.push_back(std::move(edit));
         auto work = ctx_.planNoteValueEdit(notes, request).notes;
-        draft.workingNotes = work;
+        ctx_.getNoteDraft().workingNotes = work;
         ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
             ? LOC_RAW("Modulation depth")
             : LOC_RAW("Drift correction"));
@@ -3404,7 +3381,6 @@ bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
 void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
 // 手绘曲线宸ュ叿榧犳爣閲婃斁澶勭悊锛氬皢缁樺埗鐨凢0鏁版嵁鎻愪氦鍒伴煶楂樹慨姝ｉ槦锟?
 {
-    juce::ignoreUnused(e);
     const auto dirtyBefore = ctx_.getHandDrawPreviewBounds();
 
     if (ctx_.getState().handDrawPendingDrag) {
@@ -3415,27 +3391,20 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
     if (!ctx_.getState().drawing.isDrawingF0) {
         return;
     }
+    handleDrawCurveTool(e);
     
     const auto contentSnapshot = ctx_.getEditableContentSnapshot();
-    auto& handDrawBuffer = ctx_.getState().drawing.handDrawBuffer;
+    auto& drawing = ctx_.getState().drawing;
+    auto& handDrawBuffer = drawing.handDrawBuffer;
     if (contentSnapshot != nullptr && contentSnapshot->pitchCurve != nullptr
-        && ctx_.getDirtyStartTime() >= 0.0 && ctx_.getDirtyEndTime() >= 0.0 && !handDrawBuffer.empty()) {
+        && drawing.handDrawStartFrame >= 0
+        && drawing.handDrawEndFrameExclusive > drawing.handDrawStartFrame
+        && !handDrawBuffer.empty()) {
         const auto& originalF0 = ctx_.getOriginalF0();
-        if (originalF0.empty()) {
-            ctx_.getState().drawing.isDrawingF0 = false;
-            ctx_.setDirtyStartTime(-1.0);
-            ctx_.setDirtyEndTime(-1.0);
-            ctx_.getState().drawing.handDrawBuffer.clear();
-            if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
-            return;
-        }
-        const auto f0tl = ctx_.getF0Timeline();
-        const auto drawnRange = f0tl.rangeForTimes(ctx_.getDirtyStartTime(), ctx_.getDirtyEndTime());
-
         auto ops = planManualCorrectionOps(
             ctx_.getAudioEditingScheme(),
             originalF0,
-            { drawnRange.startFrame, drawnRange.endFrameExclusive },
+            { drawing.handDrawStartFrame, drawing.handDrawEndFrameExclusive },
             [&](int frame) {
                 return frame >= 0 && frame < static_cast<int>(handDrawBuffer.size())
                     ? handDrawBuffer[static_cast<std::size_t>(frame)]
@@ -3457,7 +3426,9 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
     ctx_.getState().drawing.isDrawingF0 = false;
     ctx_.setDirtyStartTime(-1.0);
     ctx_.setDirtyEndTime(-1.0);
-    ctx_.getState().drawing.handDrawBuffer.clear();
+    drawing.handDrawBuffer.clear();
+    drawing.handDrawStartFrame = -1;
+    drawing.handDrawEndFrameExclusive = -1;
     if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
 }
 

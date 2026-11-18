@@ -157,8 +157,8 @@ Result<JsonValue> runSetKey(ControlOpContext& context, const SetKeyParams& param
     if (!keyEdit->changed)
         return envelope.committed(context);
 
-    // setDetectedKey() already clears redo and notifies the product owner; this masks API-origin history entries.
-    history.value()->onChangeWithoutEntry(context.processor().getUndoManager(), ref.key, ControlContentAspect::Key);
+    // setDetectedKey() already clears redo and notifies the product owner.
+    history.value()->onChangeWithoutEntry(context.processor().getUndoManager());
 
     auto fields = JsonValue::object();
     if (previous.root != params.key.root || previous.origin == Origin::Unset)
@@ -635,7 +635,7 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
         // no valid result changes nothing.
         if (!commands->generateNotesOnly(ref.key, generator))
             return controlOpError("INTERNAL", "", "OpenTune's note generator returned no valid result");
-        history.value()->onChangeWithoutEntry(processor.getUndoManager(), ref.key, ControlContentAspect::NotesAndPitch);
+        history.value()->onChangeWithoutEntry(processor.getUndoManager());
         auto committed = controlReadCommittedNotes(context, ref, std::nullopt);
         if (!committed.ok())
             return committed.error();

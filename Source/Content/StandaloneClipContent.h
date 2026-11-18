@@ -32,6 +32,7 @@ public:
     void retireContent(ContentKey key) override;
     void reviveContent(ContentKey key) override;
     void releaseRetiredContent(ContentKey key) override;
+    const StandaloneRetiredContentRecord* getRetiredContent(ContentKey key) const;
 
     /// 是否已退休。
     bool isRetired() const;

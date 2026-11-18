@@ -188,7 +188,7 @@ void FrameSelection::merge(const FrameSelection& other)
 void NoteInteractionDraft::clear()
 {
     active = false;
-    contentDirty = false;
+    expectedNotesRevision = 0;
     baselineNotes.clear();
     workingNotes.clear();
 }
@@ -212,6 +212,10 @@ void InteractionState::resetTransient() noexcept
     noteResize.clear();
     drawing.isDrawingF0 = false;
     drawing.handDrawBuffer.clear();
+    drawing.handDrawStartFrame = -1;
+    drawing.handDrawEndFrameExclusive = -1;
+    drawing.dirtyStartTime = -1.0;
+    drawing.dirtyEndTime = -1.0;
     drawing.isDrawingNote = false;
     drawing.isPlacingAnchors = false;
     drawing.pendingAnchors.clear();

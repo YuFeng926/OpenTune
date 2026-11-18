@@ -33,6 +33,7 @@ public:
     void redo() override;
     void setErasedRangePatch() noexcept { hasErasedRangePatch_ = true; }
     juce::String getDescription() const override { return description_; }
+    bool dependsOnContent(ContentKey key) const noexcept override { return contentKey_ == key; }
 
 private:
     std::shared_ptr<ContentEditCommands> commands_;

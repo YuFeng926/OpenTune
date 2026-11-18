@@ -25,6 +25,7 @@ public:
     void undo() override;
     void redo() override;
     juce::String getDescription() const override { return description_; }
+    bool dependsOnContent(ContentKey key) const noexcept override { return contentKey_ == key; }
 
 private:
     void applyNotes(const std::vector<Note>& notes);

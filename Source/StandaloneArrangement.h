@@ -37,6 +37,7 @@ class ContentRenderService;
 class StandaloneArrangement {
 public:
     static constexpr int kTrackCount = MaxTracks;
+    using TrackIdentity = uint64_t;
 
     // 时间轴上的一个片段摆放，引用 ContentKey 标识的内容域
     struct Placement {
@@ -66,6 +67,7 @@ public:
 
     // 单条轨道：包含 Placement 列表、选择状态、混音参数
     struct Track {
+        TrackIdentity identity{0};
         std::vector<Placement> placements;
         uint64_t selectedPlacementId{0};
         bool isMuted{false};
@@ -79,6 +81,7 @@ public:
     struct PlacementSelectionKey {
         int trackId = -1;
         uint64_t placementId = 0;
+        TrackIdentity trackIdentity = 0;
 
         bool operator<(const PlacementSelectionKey& other) const noexcept
         {
@@ -93,7 +96,9 @@ public:
 
     struct SelectionState {
         int activeTrackId = 0;
+        TrackIdentity activeTrackIdentity = 0;
         std::array<uint64_t, kTrackCount> selectedPlacementIds{};
+        std::array<TrackIdentity, kTrackCount> selectedTrackIdentities{};
         std::set<PlacementSelectionKey> placements;
     };
 
@@ -168,6 +173,11 @@ public:
     void setLanguage(Language language);
 
     int getNumTracks() const noexcept { return kTrackCount; }
+    TrackIdentity getTrackIdentity(int trackId) const;
+    int findTrackIndexByIdentity(TrackIdentity identity) const;
+    bool hasPlacement(TrackIdentity identity, uint64_t placementId) const;
+    bool hasPlacementGlobal(uint64_t placementId) const;
+    bool hasActivePlacement(TrackIdentity identity, uint64_t placementId) const;
 
     int getActiveTrackId() const;
     bool setActiveTrack(int trackId);
@@ -236,9 +246,15 @@ public:
     bool retirePlacement(int trackId, uint64_t placementId);
     bool revivePlacement(int trackId, uint64_t placementId);
     bool referencesContentAnyState(ContentKey contentKey) const;
+    bool referencesContentActive(ContentKey contentKey) const;
 
     // 已 retire 的 Placement 信息，用于垃圾回收判断
-    struct RetiredPlacementEntry { int trackId; uint64_t placementId; ContentKey contentKey; };
+    struct RetiredPlacementEntry {
+        int trackId;
+        TrackIdentity trackIdentity;
+        uint64_t placementId;
+        ContentKey contentKey;
+    };
     std::vector<RetiredPlacementEntry> getRetiredPlacements() const;
 
 private:
@@ -262,6 +278,7 @@ private:
     int visibleTrackCount_{kDefaultVisibleTracks};
     uint64_t nextPlaybackEpoch_{1};
     uint64_t nextPlacementId_{1};
+    TrackIdentity nextTrackIdentity_{1};
 
     RealtimeSnapshot<PlaybackSnapshot> playbackSnapshot_;
 

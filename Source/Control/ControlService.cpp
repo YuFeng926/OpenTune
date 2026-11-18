@@ -241,6 +241,12 @@ void ControlService::wakeJobs() const noexcept
         jobs_->wake();
 }
 
+void ControlService::synchronizeHistory(const UndoManager& manager, std::uint64_t epoch)
+{
+    if (history_ != nullptr)
+        history_->synchronize(manager, epoch);
+}
+
 std::function<void()> ControlService::jobWakeCallback() const
 {
     return jobs_ != nullptr ? jobs_->wakeCallback() : std::function<void()>{};

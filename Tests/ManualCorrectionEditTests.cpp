@@ -12,6 +12,74 @@ bool near(float actual, float expected, float tolerance = 0.001f)
     return std::abs(actual - expected) <= tolerance;
 }
 
+bool checkHandDrawStrokeDirectionAndNonMidpoints()
+{
+    const std::vector<float> originalF0(9, 100.0f);
+    const auto forward = planManualCorrectionStroke(
+        AudioEditingScheme::Scheme::NotesPrimary, originalF0, { 1, 100.0f }, { 7, 6400.0f });
+    const auto reverse = planManualCorrectionStroke(
+        AudioEditingScheme::Scheme::NotesPrimary, originalF0, { 7, 6400.0f }, { 1, 100.0f });
+    if (forward.actualRange.startFrame != 1 || forward.actualRange.endFrameExclusive != 8
+        || reverse.actualRange.startFrame != 1 || reverse.actualRange.endFrameExclusive != 8
+        || forward.ops.size() != 1 || reverse.ops.size() != 1
+        || forward.ops[0].f0Data.size() != 7 || reverse.ops[0].f0Data.size() != 7)
+        return false;
+
+    for (std::size_t i = 0; i < forward.ops[0].f0Data.size(); ++i) {
+        const float expected = 100.0f * std::pow(2.0f, static_cast<float>(i));
+        if (!near(forward.ops[0].f0Data[i], expected)
+            || !near(reverse.ops[0].f0Data[i], expected))
+            return false;
+    }
+    return near(forward.ops[0].f0Data[2], 400.0f);
+}
+
+bool checkHandDrawSingleAndTerminalFrames()
+{
+    const auto single = planManualCorrectionStroke(
+        AudioEditingScheme::Scheme::CorrectedF0Primary,
+        { 100.0f, 110.0f, 120.0f },
+        { 1, 110.0f }, { 1, 220.0f });
+    const auto terminal = planManualCorrectionStroke(
+        AudioEditingScheme::Scheme::CorrectedF0Primary,
+        { 100.0f, 110.0f, 120.0f },
+        { 1, 120.0f }, { 2, 240.0f });
+    return single.actualRange.startFrame == 1 && single.actualRange.endFrameExclusive == 2
+        && single.ops.size() == 1 && single.ops[0].f0Data == std::vector<float>{ 220.0f }
+        && terminal.actualRange.startFrame == 1 && terminal.actualRange.endFrameExclusive == 3
+        && terminal.ops.size() == 1 && terminal.ops[0].endFrameExclusive == 3
+        && near(terminal.ops[0].f0Data.back(), 240.0f);
+}
+
+bool checkHandDrawStrokeClipsToAvailableFrames()
+{
+    const auto clipped = planManualCorrectionStroke(
+        AudioEditingScheme::Scheme::CorrectedF0Primary,
+        { 100.0f, 100.0f, 100.0f },
+        { -1, 100.0f }, { 3, 1600.0f });
+    return clipped.actualRange.startFrame == 0 && clipped.actualRange.endFrameExclusive == 3
+        && clipped.ops.size() == 1
+        && near(clipped.ops[0].f0Data[0], 200.0f)
+        && near(clipped.ops[0].f0Data[1], 400.0f)
+        && near(clipped.ops[0].f0Data[2], 800.0f);
+}
+
+bool checkHandDrawStrokePreservesEditableGaps()
+{
+    const auto stroke = planManualCorrectionStroke(
+        AudioEditingScheme::Scheme::NotesPrimary,
+        { 100.0f, 110.0f, 0.0f, 130.0f, 140.0f },
+        { 0, 100.0f }, { 4, 1600.0f });
+    return stroke.actualRange.startFrame == 0 && stroke.actualRange.endFrameExclusive == 5
+        && stroke.ops.size() == 2
+        && stroke.ops[0].startFrame == 0 && stroke.ops[0].endFrameExclusive == 2
+        && stroke.ops[1].startFrame == 3 && stroke.ops[1].endFrameExclusive == 5
+        && near(stroke.ops[0].f0Data[0], 100.0f)
+        && near(stroke.ops[0].f0Data[1], 200.0f)
+        && near(stroke.ops[1].f0Data[0], 800.0f)
+        && near(stroke.ops[1].f0Data[1], 1600.0f);
+}
+
 bool checkEditableGapsAndOperationMetadata()
 {
     const std::vector<float> originalF0{ 0.0f, 100.0f, 110.0f, 0.0f, 120.0f,
@@ -132,6 +200,22 @@ bool checkEmptyPlans()
 
 int main()
 {
+    if (!checkHandDrawStrokeDirectionAndNonMidpoints()) {
+        std::cerr << "Manual correction hand-draw direction check failed\n";
+        return 1;
+    }
+    if (!checkHandDrawSingleAndTerminalFrames()) {
+        std::cerr << "Manual correction hand-draw boundary check failed\n";
+        return 1;
+    }
+    if (!checkHandDrawStrokeClipsToAvailableFrames()) {
+        std::cerr << "Manual correction hand-draw clipping check failed\n";
+        return 1;
+    }
+    if (!checkHandDrawStrokePreservesEditableGaps()) {
+        std::cerr << "Manual correction hand-draw editable-gap check failed\n";
+        return 1;
+    }
     if (!checkEditableGapsAndOperationMetadata()) {
         std::cerr << "Manual correction editable-gap plan check failed\n";
         return 1;

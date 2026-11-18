@@ -3,6 +3,7 @@
 #include "../Source/Utils/RealtimeAuditScope.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 
 namespace OpenTune::RealtimeAuditTest
@@ -24,4 +25,5 @@ const char* eventName(OpenTune::RealtimeAudit::Event event) noexcept;
 bool isClean(const Result& result) noexcept;
 void reportResult(const Result& result) noexcept;
 void reportHookCoverage(const WindowsHookReport& report) noexcept;
+void setSpinLockWaitSignal(std::atomic<uint32_t>* signal) noexcept;
 }

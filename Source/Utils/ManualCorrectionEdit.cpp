@@ -62,6 +62,53 @@ std::vector<ManualCorrectionOp> planManualCorrectionOps(
     return ops;
 }
 
+ManualCorrectionStrokePlan planManualCorrectionStroke(
+    AudioEditingScheme::Scheme scheme,
+    const std::vector<float>& originalF0,
+    ManualCorrectionStrokePoint first,
+    ManualCorrectionStrokePoint second,
+    PitchCorrectionSegment::Source source,
+    PitchCorrectionSegment::ParameterSnapshot parameterSnapshot)
+{
+    ManualCorrectionStrokePlan plan;
+    if (originalF0.empty())
+        return plan;
+
+    const bool firstIsLeft = first.frame <= second.frame;
+    const int leftFrame = firstIsLeft ? first.frame : second.frame;
+    const int rightFrame = firstIsLeft ? second.frame : first.frame;
+    const float leftF0 = firstIsLeft ? first.f0 : second.f0;
+    const float rightF0 = firstIsLeft ? second.f0 : first.f0;
+
+    const int frameCount = static_cast<int>(originalF0.size());
+    const int startFrame = std::clamp(leftFrame, 0, frameCount);
+    const int endFrameExclusive = rightFrame < 0
+        ? 0
+        : (rightFrame >= frameCount - 1 ? frameCount : rightFrame + 1);
+    if (endFrameExclusive <= startFrame)
+        return plan;
+
+    plan.ops = planManualCorrectionOps(
+        scheme,
+        originalF0,
+        { startFrame, endFrameExclusive },
+        [leftFrame, rightFrame, leftF0, rightF0](int frame) {
+            if (leftFrame == rightFrame)
+                return rightF0;
+            const double frameOffset = static_cast<double>(frame) - static_cast<double>(leftFrame);
+            const double frameSpan = static_cast<double>(rightFrame) - static_cast<double>(leftFrame);
+            const float t = static_cast<float>(frameOffset / frameSpan);
+            return interpolateLogF0(leftF0, rightF0, t);
+        },
+        source,
+        parameterSnapshot);
+
+    if (!plan.ops.empty()) {
+        plan.actualRange = { plan.ops.front().startFrame, plan.ops.back().endFrameExclusive };
+    }
+    return plan;
+}
+
 float interpolateLogF0(float leftF0, float rightF0, float t)
 {
     const float logLeft = std::log2(std::max(leftF0, 1.0f));

@@ -15,9 +15,22 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace OpenTune {
+
+struct UndoReplayState {
+    struct Placement {
+        uint64_t ownerTrackIdentity = 0;
+        bool active = false;
+    };
+
+    std::unordered_set<uint64_t> trackIdentities;
+    std::unordered_map<uint64_t, Placement> placements;
+};
 
 // 撤销操作基类：子类实现 undo()/redo() 对称操作
 class UndoAction {
@@ -26,12 +39,23 @@ public:
     virtual void undo() = 0;
     virtual void redo() = 0;
     virtual juce::String getDescription() const = 0;
-    virtual bool retainsRetiredPlacement(int trackId, uint64_t placementId) const
+    // False leaves state unchanged. Composite actions must simulate on a candidate copy.
+    virtual bool replayStructure(UndoReplayState& state, bool undo) const
     {
-        juce::ignoreUnused(trackId, placementId);
+        juce::ignoreUnused(state, undo);
+        return true;
+    }
+    virtual bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
+    {
+        juce::ignoreUnused(trackIdentity, placementId);
         return false;
     }
     virtual bool retainsRetiredContent(ContentKey key) const
+    {
+        juce::ignoreUnused(key);
+        return false;
+    }
+    virtual bool dependsOnContent(ContentKey key) const
     {
         juce::ignoreUnused(key);
         return false;
@@ -50,21 +74,17 @@ public:
     {
         historyPrunedCallback_ = std::move(callback);
     }
-    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const;
+    bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const;
     bool retainsRetiredContent(ContentKey key) const;
+    int settleStructure(const UndoReplayState& currentState);
+    int pruneActionsDependingOnContents(const std::vector<ContentKey>& contents);
     // Product commands inspect the settled history before applying an undo or redo.
     UndoAction* peekUndo() const { return canUndo() ? actions_[static_cast<std::size_t>(cursor_ - 1)].get() : nullptr; }
     UndoAction* peekRedo() const { return canRedo() ? actions_[static_cast<std::size_t>(cursor_)].get() : nullptr; }
+    int indexOf(const UndoAction* action) const;
     int size() const { return static_cast<int>(actions_.size()); }
     int cursor() const { return cursor_; }
-    void clearRedo()
-    {
-        if (!isPerformingUndoRedo_ && cursor_ < static_cast<int>(actions_.size())) {
-            actions_.erase(actions_.begin() + cursor_, actions_.end());
-            if (historyPrunedCallback_)
-                historyPrunedCallback_();
-        }
-    }
+    void clearRedo();
 
 private:
     std::vector<std::unique_ptr<UndoAction>> actions_;

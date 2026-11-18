@@ -179,14 +179,12 @@ void revealTracks(ControlOpContext& context, ControlWriteEnvelope& envelope, con
     envelope.addSideEffect("tracksRevealed", std::move(effect));
 }
 
-/** One of OpenTune's clip undo actions in a ControlOriginAction. Its content key stays invalid: a clip action puts
-    back no aspect of a content, so no change of a content masks it. */
-ControlOriginAction::Inner innerOf(std::unique_ptr<UndoAction> action, std::string name, std::vector<int> tracks)
+/** One of OpenTune's clip undo actions in a ControlOriginAction. */
+ControlOriginAction::Inner innerOf(std::unique_ptr<UndoAction> action, std::string name)
 {
     ControlOriginAction::Inner inner;
     inner.action = std::move(action);
     inner.name = std::move(name);
-    inner.tracks = std::move(tracks);
     return inner;
 }
 
@@ -207,7 +205,7 @@ PushedEntry pushEntry(ControlOpContext& context, const std::shared_ptr<ControlHi
     const auto description = name.value_or(inner.front().action->getDescription());
     pushed.undoId = history->nextUndoId(context.instanceShort());
     pushed.description = description.toStdString();
-    auto action = std::make_unique<ControlOriginAction>(history, pushed.undoId, description, std::move(inner));
+    auto action = std::make_unique<ControlOriginAction>(pushed.undoId, description, std::move(inner));
     pushed.names = action->innerActionNames();
     history->record(context.processor().getUndoManager(), std::move(action));
     return pushed;
@@ -599,7 +597,7 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     if (!committed)
         return controlOpError("UNSUPPORTED", "upstream_absent", "OpenTune did not split the clip at this position");
     std::vector<ControlOriginAction::Inner> inner;
-    inner.push_back(innerOf(std::move(committed->undoAction), "SplitPlacementAction", {clip.trackId}));
+    inner.push_back(innerOf(std::move(committed->undoAction), "SplitPlacementAction"));
     const auto pushed = pushEntry(context, history, std::move(inner));
     afterChange(context);
 
@@ -648,7 +646,7 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
         return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
                               "OpenTune did not merge the clips: their keys or their pitch analyses do not join");
     std::vector<ControlOriginAction::Inner> inner;
-    inner.push_back(innerOf(std::move(committed->undoAction), "MergePlacementAction", {leading.trackId}));
+    inner.push_back(innerOf(std::move(committed->undoAction), "MergePlacementAction"));
     const auto pushed = pushEntry(context, history, std::move(inner));
     afterChange(context);
 
@@ -682,12 +680,8 @@ Result<JsonValue> runDelete(ControlOpContext& context, const EditParams& params,
         deletion = commitPlacementDelete(processor, keys);
 
         if (deletion.undoAction != nullptr) {
-            std::vector<int> tracks;
-            for (const auto& outcome : deletion.outcomes)
-                if (std::find(tracks.begin(), tracks.end(), outcome.trackId) == tracks.end())
-                    tracks.push_back(outcome.trackId);
             std::vector<ControlOriginAction::Inner> inner;
-            inner.push_back(innerOf(std::move(deletion.undoAction), "DeletePlacementAction", std::move(tracks)));
+            inner.push_back(innerOf(std::move(deletion.undoAction), "DeletePlacementAction"));
             pushed = pushEntry(context, history, std::move(inner));
             afterChange(context);
         }
@@ -838,7 +832,7 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
         }
         for (auto& action : undoActions) {
             const auto name = controlUndoActionName(*action);
-            inner.push_back(innerOf(std::move(action), name, {step.trackBefore, step.trackAfter}));
+            inner.push_back(innerOf(std::move(action), name));
         }
         if (step.trackBefore != step.trackAfter)
             receivingTracks.push_back(step.trackAfter);
